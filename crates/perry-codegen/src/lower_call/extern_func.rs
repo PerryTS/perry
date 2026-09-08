@@ -1234,6 +1234,7 @@ pub fn try_lower_extern_func_call(
     if ctx.import_function_node_submodule.contains_key(name) {
         return Ok(None);
     }
+    super::named_import_installer::install_for_named_import(ctx, name, args);
     // Timers (`setTimeout`/`setInterval`/`setImmediate` and their `clear*`
     // siblings) live in `extern_timers.rs`. Split out under #7210, when the GC
     // rooting fix for their trailing-argument staging buffers pushed this file

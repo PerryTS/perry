@@ -87,8 +87,11 @@ const MANIFEST_ENTRIES = path.join(
 )
 const PERRY_BIN = path.join(REPO_ROOT, 'target', 'release', 'perry')
 
-// Compile can be slow on the FIRST call (it builds the auto-optimized
-// runtime once), then warm calls are sub-second. Runs are tiny.
+// This breadth gate deliberately uses the coherently prebuilt full archives.
+// Auto-optimize coverage lives in the gap-suite shards; rebuilding a different
+// feature union for each matrix row made the first spelling hit this timeout
+// while the second spelling inherited its eventually-warm cargo cache. That
+// produced the nightly's changing, prefix-dependent false regressions.
 const COMPILE_TIMEOUT_MS = 300_000
 const RUN_TIMEOUT_MS = 15_000
 const NODE_TIMEOUT_MS = 15_000
@@ -332,7 +335,8 @@ function oracleFingerprint(nodeBin, probeFile) {
 /** Compile with Perry, run, return the fingerprint (or null on any failure). */
 function perryFingerprint(probeFile, outBin) {
   const compileEnv = { ...process.env, PERRY_ALLOW_UNIMPLEMENTED: '1' }
-  let c = spawnSync(PERRY_BIN, [probeFile, '-o', outBin], {
+  const compileArgs = ['--no-auto-optimize', '--no-cache', probeFile, '-o', outBin]
+  let c = spawnSync(PERRY_BIN, compileArgs, {
     encoding: 'utf8',
     timeout: COMPILE_TIMEOUT_MS,
     env: compileEnv,
@@ -341,7 +345,7 @@ function perryFingerprint(probeFile, outBin) {
   // Mirror run_parity_tests.sh: retry once with the JS-runtime host opt-in
   // when the failure names perry-jsruntime.
   if (c.status !== 0 && /perry-jsruntime/.test(cout)) {
-    c = spawnSync(PERRY_BIN, ['--enable-js-runtime', probeFile, '-o', outBin], {
+    c = spawnSync(PERRY_BIN, ['--enable-js-runtime', ...compileArgs], {
       encoding: 'utf8',
       timeout: COMPILE_TIMEOUT_MS,
       env: compileEnv,

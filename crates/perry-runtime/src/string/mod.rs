@@ -140,6 +140,8 @@ pub use alloc::{
 };
 pub use append::{js_string_append, js_string_append_known_heap};
 pub use base64_codec::{js_atob, js_btoa};
+#[cfg(test)]
+pub(crate) use char_ops::test_string_to_char_array_with_pre_element_alloc_hook;
 pub use char_ops::{
     js_string_at, js_string_char_at, js_string_char_code_at, js_string_code_point_at,
     js_string_end_index_to_i32, js_string_from_char_code, js_string_from_char_code_array,

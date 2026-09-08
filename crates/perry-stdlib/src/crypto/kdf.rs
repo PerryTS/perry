@@ -152,14 +152,21 @@ pub unsafe extern "C" fn js_crypto_scrypt_async(
     options_bits: f64,
     callback_bits: f64,
 ) -> f64 {
-    let buf = js_crypto_scrypt_bytes(password_ptr, salt_ptr, keylen, options_bits);
+    // Derivation and Buffer allocation can collect. Keep both boxed arguments
+    // live and re-read the callback after that work; otherwise the scheduler's
+    // `is_closure_ptr` guard silently drops an evacuated callback and a
+    // promisified scrypt Promise remains pending forever.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let options = scope.root_nanbox_f64(options_bits);
+    let callback = scope.root_nanbox_f64(callback_bits);
+    let buf = js_crypto_scrypt_bytes(password_ptr, salt_ptr, keylen, options.get_nanbox_f64());
     let value = if buf.is_null() {
         f64::from_bits(JSValue::undefined().bits())
     } else {
         f64::from_bits(JSValue::pointer(buf as *const u8).bits())
     };
     schedule_node_style_callback2(
-        callback_bits,
+        callback.get_nanbox_f64(),
         f64::from_bits(JSValue::null().bits()),
         value,
         "SCRYPTREQUEST",
@@ -942,8 +949,15 @@ unsafe fn scrypt_options_object(options_bits: f64) -> Option<*const ObjectHeader
     Some(ptr as *const ObjectHeader)
 }
 
-unsafe fn read_scrypt_option(obj: *const ObjectHeader, name: &str) -> Option<JSValue> {
-    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+unsafe fn read_scrypt_option(
+    options: &perry_runtime::gc::RuntimeHandle<'_>,
+    name: &str,
+) -> Option<JSValue> {
+    // Key allocation can evacuate the options object. Derive its pointer only
+    // from the handle's post-allocation value.
+    let (key, options_bits) =
+        options.across_nanbox(|| js_string_from_bytes(name.as_ptr(), name.len() as u32));
+    let obj = scrypt_options_object(options_bits)?;
     let value = js_object_get_field_by_name(obj, key);
     (!value.is_undefined()).then_some(value)
 }
@@ -957,32 +971,34 @@ fn throw_incompatible_scrypt_options(primary: &str, alias: &str) -> ! {
     )
 }
 
-unsafe fn read_scrypt_options(options_bits: f64) -> (u64, u32, u32, u64) {
-    let Some(obj) = scrypt_options_object(options_bits) else {
+unsafe fn read_scrypt_options(
+    options: &perry_runtime::gc::RuntimeHandle<'_>,
+) -> (u64, u32, u32, u64) {
+    if scrypt_options_object(options.get_nanbox_f64()).is_none() {
         return (
             SCRYPT_DEFAULT_N,
             SCRYPT_DEFAULT_R,
             SCRYPT_DEFAULT_P,
             SCRYPT_DEFAULT_MAXMEM,
         );
-    };
+    }
 
-    let n = read_scrypt_option(obj, "N");
-    let cost = read_scrypt_option(obj, "cost");
+    let n = read_scrypt_option(options, "N");
+    let cost = read_scrypt_option(options, "cost");
     if n.is_some() && cost.is_some() {
         throw_incompatible_scrypt_options("N", "cost");
     }
-    let r = read_scrypt_option(obj, "r");
-    let block_size = read_scrypt_option(obj, "blockSize");
+    let r = read_scrypt_option(options, "r");
+    let block_size = read_scrypt_option(options, "blockSize");
     if r.is_some() && block_size.is_some() {
         throw_incompatible_scrypt_options("r", "blockSize");
     }
-    let p = read_scrypt_option(obj, "p");
-    let parallelization = read_scrypt_option(obj, "parallelization");
+    let p = read_scrypt_option(options, "p");
+    let parallelization = read_scrypt_option(options, "parallelization");
     if p.is_some() && parallelization.is_some() {
         throw_incompatible_scrypt_options("p", "parallelization");
     }
-    let maxmem = read_scrypt_option(obj, "maxmem");
+    let maxmem = read_scrypt_option(options, "maxmem");
 
     let n_name = if n.is_some() { "N" } else { "cost" };
     let r_name = if r.is_some() { "r" } else { "blockSize" };
@@ -1072,11 +1088,13 @@ pub unsafe extern "C" fn js_crypto_scrypt_bytes(
     key_length: f64,
     options_bits: f64,
 ) -> *mut perry_runtime::buffer::BufferHeader {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let options = scope.root_nanbox_f64(options_bits);
     let password = bytes_from_ptr(password_ptr);
     let salt = bytes_from_ptr(salt_ptr);
     let keylen_value = JSValue::from_bits(key_length.to_bits());
     let klen = scrypt_numeric_value(keylen_value, "keylen", i32::MAX as u64) as usize;
-    let (n, r, p, maxmem) = read_scrypt_options(options_bits);
+    let (n, r, p, maxmem) = read_scrypt_options(&options);
     let params = checked_scrypt_params(n, r, p, maxmem)
         .unwrap_or_else(|error| throw_scrypt_param_error(error));
     if klen == 0 {

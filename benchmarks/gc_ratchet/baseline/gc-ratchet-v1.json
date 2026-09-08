@@ -348,18 +348,18 @@
       "metrics": {
         "heap_used_bytes": {
           "samples": [
-            212168,
-            212168,
-            212168,
-            212168,
-            212168,
-            212168,
-            212168
+            438384,
+            438384,
+            438384,
+            438384,
+            438384,
+            438384,
+            438384
           ],
           "sample_count": 7,
-          "median": 212168,
-          "min": 212168,
-          "max": 212168,
+          "median": 438384,
+          "min": 438384,
+          "max": 438384,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -464,26 +464,26 @@
         },
         "copied_objects": {
           "samples": [
-            4977,
-            4977
+            6680,
+            6680
           ],
           "sample_count": 2,
-          "median": 4977,
-          "min": 4977,
-          "max": 4977,
+          "median": 6680,
+          "min": 6680,
+          "max": 6680,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "copied_bytes": {
           "samples": [
-            234536,
-            234536
+            466032,
+            466032
           ],
           "sample_count": 2,
-          "median": 234536,
-          "min": 234536,
-          "max": 234536,
+          "median": 466032,
+          "min": 466032,
+          "max": 466032,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -656,26 +656,26 @@
         },
         "copied_objects": {
           "samples": [
-            34550,
-            34550
+            37357,
+            37357
           ],
           "sample_count": 2,
-          "median": 34550,
-          "min": 34550,
-          "max": 34550,
+          "median": 37357,
+          "min": 37357,
+          "max": 37357,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "copied_bytes": {
           "samples": [
-            1450992,
-            1450992
+            1689944,
+            1689944
           ],
           "sample_count": 2,
-          "median": 1450992,
-          "min": 1450992,
-          "max": 1450992,
+          "median": 1689944,
+          "min": 1689944,
+          "max": 1689944,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -1040,13 +1040,13 @@
         },
         "copied_objects": {
           "samples": [
-            3622,
-            3622
+            2666,
+            2666
           ],
           "sample_count": 2,
-          "median": 3622,
-          "min": 3622,
-          "max": 3622,
+          "median": 2666,
+          "min": 2666,
+          "max": 2666,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -1232,52 +1232,52 @@
         },
         "copied_objects": {
           "samples": [
-            20079,
-            20079
+            14285,
+            14285
           ],
           "sample_count": 2,
-          "median": 20079,
-          "min": 20079,
-          "max": 20079,
+          "median": 14285,
+          "min": 14285,
+          "max": 14285,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "copied_bytes": {
           "samples": [
-            743384,
-            743384
+            534720,
+            534720
           ],
           "sample_count": 2,
-          "median": 743384,
-          "min": 743384,
-          "max": 743384,
+          "median": 534720,
+          "min": 534720,
+          "max": 534720,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "promoted_objects": {
           "samples": [
-            3390,
-            3390
+            6154,
+            6154
           ],
           "sample_count": 2,
-          "median": 3390,
-          "min": 3390,
-          "max": 3390,
+          "median": 6154,
+          "min": 6154,
+          "max": 6154,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "promoted_bytes": {
           "samples": [
-            122120,
-            122120
+            221624,
+            221624
           ],
           "sample_count": 2,
-          "median": 122120,
-          "min": 122120,
-          "max": 122120,
+          "median": 221624,
+          "min": 221624,
+          "max": 221624,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -1424,13 +1424,13 @@
         },
         "copied_objects": {
           "samples": [
-            298,
-            298
+            270,
+            270
           ],
           "sample_count": 2,
-          "median": 298,
-          "min": 298,
-          "max": 298,
+          "median": 270,
+          "min": 270,
+          "max": 270,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -1500,18 +1500,18 @@
       "metrics": {
         "heap_used_bytes": {
           "samples": [
-            1072456,
-            1072456,
-            1072456,
-            1072456,
-            1072456,
-            1072456,
-            1072456
+            1210872,
+            1210872,
+            1210872,
+            1210872,
+            1210872,
+            1210872,
+            1210872
           ],
           "sample_count": 7,
-          "median": 1072456,
-          "min": 1072456,
-          "max": 1072456,
+          "median": 1210872,
+          "min": 1210872,
+          "max": 1210872,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -1616,13 +1616,13 @@
         },
         "copied_objects": {
           "samples": [
-            4991,
-            4991
+            6692,
+            6692
           ],
           "sample_count": 2,
-          "median": 4991,
-          "min": 4991,
-          "max": 4991,
+          "median": 6692,
+          "min": 6692,
+          "max": 6692,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -1642,26 +1642,26 @@
         },
         "promoted_objects": {
           "samples": [
-            4879,
-            4879
+            6144,
+            6144
           ],
           "sample_count": 2,
-          "median": 4879,
-          "min": 4879,
-          "max": 4879,
+          "median": 6144,
+          "min": 6144,
+          "max": 6144,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "promoted_bytes": {
           "samples": [
-            615696,
-            615696
+            840688,
+            840688
           ],
           "sample_count": 2,
-          "median": 615696,
-          "min": 615696,
-          "max": 615696,
+          "median": 840688,
+          "min": 840688,
+          "max": 840688,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -1884,18 +1884,18 @@
       "metrics": {
         "heap_used_bytes": {
           "samples": [
-            212168,
-            212168,
-            212168,
-            212168,
-            212168,
-            212168,
-            212168
+            443344,
+            443344,
+            443344,
+            443344,
+            443344,
+            443344,
+            443344
           ],
           "sample_count": 7,
-          "median": 212168,
-          "min": 212168,
-          "max": 212168,
+          "median": 443344,
+          "min": 443344,
+          "max": 443344,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -2000,26 +2000,26 @@
         },
         "copied_objects": {
           "samples": [
-            4962,
-            4962
+            6665,
+            6665
           ],
           "sample_count": 2,
-          "median": 4962,
-          "min": 4962,
-          "max": 4962,
+          "median": 6665,
+          "min": 6665,
+          "max": 6665,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "copied_bytes": {
           "samples": [
-            230352,
-            230352
+            461848,
+            461848
           ],
           "sample_count": 2,
-          "median": 230352,
-          "min": 230352,
-          "max": 230352,
+          "median": 461848,
+          "min": 461848,
+          "max": 461848,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -2052,13 +2052,13 @@
         },
         "freed_bytes": {
           "samples": [
-            11112472,
-            11112472
+            10023768,
+            10023768
           ],
           "sample_count": 2,
-          "median": 11112472,
-          "min": 11112472,
-          "max": 11112472,
+          "median": 10023768,
+          "min": 10023768,
+          "max": 10023768,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -2076,36 +2076,36 @@
       "metrics": {
         "heap_used_bytes": {
           "samples": [
-            220384,
-            220384,
-            220384,
-            220384,
-            220384,
-            220384,
-            220384
+            446600,
+            446600,
+            446600,
+            446600,
+            446600,
+            446600,
+            446600
           ],
           "sample_count": 7,
-          "median": 220384,
-          "min": 220384,
-          "max": 220384,
+          "median": 446600,
+          "min": 446600,
+          "max": 446600,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "heap_total_bytes": {
           "samples": [
-            16777216,
-            16777216,
-            16777216,
-            16777216,
-            16777216,
-            16777216,
-            16777216
+            22020096,
+            22020096,
+            22020096,
+            22020096,
+            22020096,
+            22020096,
+            22020096
           ],
           "sample_count": 7,
-          "median": 16777216,
-          "min": 16777216,
-          "max": 16777216,
+          "median": 22020096,
+          "min": 22020096,
+          "max": 22020096,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -2192,13 +2192,13 @@
         },
         "copied_objects": {
           "samples": [
-            18660,
-            18660
+            14617,
+            14617
           ],
           "sample_count": 2,
-          "median": 18660,
-          "min": 18660,
-          "max": 18660,
+          "median": 14617,
+          "min": 14617,
+          "max": 14617,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -2218,26 +2218,26 @@
         },
         "promoted_objects": {
           "samples": [
-            4722,
-            4722
+            6099,
+            6099
           ],
           "sample_count": 2,
-          "median": 4722,
-          "min": 4722,
-          "max": 4722,
+          "median": 6099,
+          "min": 6099,
+          "max": 6099,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "promoted_bytes": {
           "samples": [
-            228440,
-            228440
+            446192,
+            446192
           ],
           "sample_count": 2,
-          "median": 228440,
-          "min": 228440,
-          "max": 228440,
+          "median": 446192,
+          "min": 446192,
+          "max": 446192,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -2268,18 +2268,18 @@
       "metrics": {
         "heap_used_bytes": {
           "samples": [
-            212168,
-            212168,
-            212168,
-            212168,
-            212168,
-            212168,
-            212168
+            444360,
+            444360,
+            444360,
+            444360,
+            444360,
+            444360,
+            444360
           ],
           "sample_count": 7,
-          "median": 212168,
-          "min": 212168,
-          "max": 212168,
+          "median": 444360,
+          "min": 444360,
+          "max": 444360,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -2384,26 +2384,26 @@
         },
         "copied_objects": {
           "samples": [
-            4975,
-            4975
+            6676,
+            6676
           ],
           "sample_count": 2,
-          "median": 4975,
-          "min": 4975,
-          "max": 4975,
+          "median": 6676,
+          "min": 6676,
+          "max": 6676,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "copied_bytes": {
           "samples": [
-            230872,
-            230872
+            462184,
+            462184
           ],
           "sample_count": 2,
-          "median": 230872,
-          "min": 230872,
-          "max": 230872,
+          "median": 462184,
+          "min": 462184,
+          "max": 462184,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -2436,13 +2436,13 @@
         },
         "freed_bytes": {
           "samples": [
-            10062936,
-            10062936
+            8974896,
+            8974896
           ],
           "sample_count": 2,
-          "median": 10062936,
-          "min": 10062936,
-          "max": 10062936,
+          "median": 8974896,
+          "min": 8974896,
+          "max": 8974896,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -2576,26 +2576,26 @@
         },
         "copied_objects": {
           "samples": [
-            59405,
-            59405
+            104050,
+            104050
           ],
           "sample_count": 2,
-          "median": 59405,
-          "min": 59405,
-          "max": 59405,
+          "median": 104050,
+          "min": 104050,
+          "max": 104050,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "copied_bytes": {
           "samples": [
-            2327008,
-            2327008
+            4162008,
+            4162008
           ],
           "sample_count": 2,
-          "median": 2327008,
-          "min": 2327008,
-          "max": 2327008,
+          "median": 4162008,
+          "min": 4162008,
+          "max": 4162008,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -5406,548 +5406,310 @@
     }
   },
   "accepted_deterministic_deltas": {
-    "commit": "3e3e652e007ac853bf934daa86fa36c870b0e3e2",
-    "code_tree": "ea7b395f07b51662a4c94ae5a16e61a5f7b5aeaa",
-    "generated_at": "2026-09-06T04:12:57+00:00",
+    "commit": "f207cf6618a62dc839b98db40139dc5530dd53f5",
+    "code_tree": "c6f937fb2d89ec1c750779685e5f25c32e367967",
+    "generated_at": "2026-09-08T11:26:47+00:00",
     "measurement": {
-      "platform": "linux-x86_64",
+      "platform": "darwin-arm64",
       "repeats": 7,
       "traced_runs": 2,
-      "binaries": {
-        "perry": {
-          "size": 117268864,
-          "sha256": "6fde7dcbb9be714705cc0ebe84e5ab8a0549a1b0e12796fc294c7e872fe32cf0"
-        },
-        "libperry_runtime.a": {
-          "size": 108253612,
-          "sha256": "9abf7b9fa1e94f84e6bd1ff4f40c662633491d9267482ebd848e7aa32d14c802"
-        },
-        "libperry_stdlib.a": {
-          "size": 244536102,
-          "sha256": "b4e9a0f948da340032c83fa958f959071a2f7fc5428cf899acca9019a0dee2ab"
-        }
+      "github_actions_artifact": {
+        "repository": "PerryTS/perry",
+        "run_id": 34219151426,
+        "head_sha": "f207cf6618a62dc839b98db40139dc5530dd53f5",
+        "artifact_id": 10053614145,
+        "artifact_name": "gc-ratchet-f207cf6618a62dc839b98db40139dc5530dd53f5",
+        "artifact_sha256": "ca61cd6f6b8becebcf4ea13e669041e78c27b59571514ae9af72a1bb04c7441b",
+        "measurement_sha256": "0f6934cec9e4cade232cabe0296edc28544aa86d2cffd023d8ff4e16c2d21739"
       }
     },
-    "notes": "Recovery of #9829 after scheduled main failures went unwatched from 2026-08-18 to 2026-09-06. Main d36a1af0c205ebdc7cf7f75b351ea34b5bc0fc0b / Actions run 33989581881 had 43 breached cells and an inert probe 10. The set moved 43 -> 48 -> 43 with intervening harness failures; this is one sample of a moving set, not cumulative debt. Accept only the 38 other breached deterministic cells plus 8 cells changed by the included #9833 probe repair. The repaired heap_used cell is already within its original band and is not re-pinned. All 126 original deterministic medians match macOS CI on the remote Linux host; all 46 accepted distributions are stable across the pinning repeats. Evidence grades are explicit: pairwise measurements and window-bracketed changes are not interchangeable. No bands, other deterministic values, RSS, peak RSS, or timing values change. Only 13.heap_total_bytes is excluded after 21 identical-binary runs show 2 MiB reserved-capacity variation with constant live bytes and all GC counters. See evidence/9829-recovery.json and evidence/9829-recovery.md; pinned_host timing for the resized workload requires a separate capture on its original quiet host.",
+    "notes": "Selective recovery of the scheduled main GC ratchet after issue #9952. Actions run 34219151426, job 102037907992, measured commit f207cf661 on darwin-arm64 with 7 repeats and 2 traced runs and emitted exactly 30 shared_ci regressions. Independent scheduled run 34186909751, job 101936988307, measured the same commit and produced byte-identical distributions for all 126 deterministic cells. The first 22 accepted cells are byte-identical to run 34163183523 at 43200e9d4 and are the stable cost of preserving young logs across promotion rollback. The remaining eight cells are the isolated tenuring-policy changes: two large-live-set copying cells from 10a9a4453 and six threshold-floor cells from cea684c0d. Copy only these 30 breached distributions from the immutable run artifact; leave every in-band deterministic cell, RSS, peak RSS, timing value, tolerance, and probe override unchanged.",
     "causes": {
-      "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140": {
-        "pull_request": 8313,
-        "category": "measured: smaller common objects",
-        "evidence": "First-accrual A/B recorded in #9829: 19/19 CI regression cells reproduced byte-exact at dc4bcf287 -> e2e6f4a1c. ObjectHeader and two-field objects shrink, reducing byte traffic and changing nursery occupancy. https://github.com/PerryTS/perry/issues/9829#issuecomment-5555657705"
+      "c81ea90434bdc51148bfe3a194d2e620999d52f8": {
+        "pull_request": 9924,
+        "category": "measured deliberate correctness cost: retain young logs on rollback",
+        "evidence": "The last green scheduled run 34057674815 at 504e180d0 predates c81ea9043. Run 34163183523 at 43200e9d4 first reports these 22 cells, and every one has the exact same full distribution in both later f207cf661 runs 34186909751 and 34219151426. The commit preserves side-table-only young roots when promotion rolls back; dropping them caused the #9907 Set.add corruption."
       },
-      "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b": {
-        "pull_request": 8657,
-        "category": "measured: array growth targets keep their generation",
-        "evidence": "Fresh remote builds of parent c2da03439 and 06e1ab349 confirm the 04/05 copy/promotion jumps, 07 heap capacity increase, and 14 copied_objects 340 -> 330. Old array growth targets are born tenured and young growth avoids an intervening collection. Full deterministic samples are in evidence/9829-recovery.json."
+      "10a9a44537c70ee17ccfe01d3bfed4a9a3740ba6": {
+        "pull_request": 9861,
+        "category": "measured deliberate GC-policy correction: defer first-copy promotion",
+        "evidence": "Across the 43200e9d4 -> f207cf661 boundary, probe 12 moves from 58,175 to 104,050 copied objects and from 2,327,008 to 4,162,008 copied bytes; both independent f207cf661 runs are byte-identical. 10a9a4453 removes the invalid occupancy path that could choose promote-on-first-copy before survival evidence exists."
       },
-      "b3e88f1fb3378fe30b065ed328b73ea0527ab18a": {
-        "pull_request": 8806,
-        "category": "measured: cache exact shape transitions",
-        "evidence": "Fresh parent 066f9d595 / b3e88f1fb builds reproduce all four Aug-26 added CI cells exactly: 01 copied_objects=6684; 06 copied_objects=11714; 09 promoted_objects=6560; 11 copied_objects=6562. This cache changes the metadata root population; later changes also move these same cells."
-      },
-      "fc8c9e9a15902f889df2b1aeb280ca6223f6948a": {
-        "pull_request": 8887,
-        "category": "bracketed: Aug-27/28 allocation and rooting specializations",
-        "evidence": "Candidate within 41e8479a5..6d10e8a1d, not isolated to this commit. The window includes #8878/#8887/#8888 array and call specialization, #8891 metadata edges, and #8900 weak transition targets. By measured d02892491, all five 06_string_retention cells already equal present main exactly (298 copied, 72288 copied bytes, 14 promoted, 1072 promoted bytes, 68136816 freed). Preserve the window-level evidence grade; do not read this as a single-commit bisect."
-      },
-      "e18b24c420c7c2f389607537618699ffc6aa9d1d": {
-        "pull_request": 8900,
-        "category": "measured: weak shape-transition target edges",
-        "evidence": "Fresh parent d02892491 / e18b24c42 builds show 10 copied_objects 8487 -> 7457 and copied_bytes 529144 -> 327328, with lower 13/14 retention. The target keys array is rewritten but no longer retained solely by a transition-cache entry; dead entries are pruned. This explains part, not all, of the Aug-28 window."
-      },
-      "d923b8dcf08f2afed71777c33423362411039cf0": {
-        "pull_request": 9373,
-        "category": "measured: short-concat memo changes large-Eden occupancy",
-        "evidence": "Fresh parent 3fc54c441 / d923b8dcf builds show 13 copied_objects 0 -> 356717, copied_bytes 0 -> 20594360, promoted_objects 531314 -> 365297, heap_total_bytes 58720256 -> 61865984. Reused row tags change nursery occupancy and the collection cohort under the existing policy. #9359 was a false lead: its changes are behind PERRY_GC_VERIFY_MARK. Subsequent values differ; this A/B establishes the crossing, not a claim that every final byte was introduced here."
-      },
-      "aa8d2ade03970ac7eb2065f3eb0e18bb4d2df1c7": {
-        "pull_request": 9628,
-        "category": "bracketed: Sep-3 liveness and retention repair",
-        "evidence": "Within ed7019ea8..218da7e44, the CI row set changes at the same count (42): 09 gains copied_objects/copied_bytes while 05 and 12 heap_used breaches and 14 copied_bytes clear. #9628/#9629 removes false retention from two GC passes. Window attribution, not an isolated A/B. Final classify runs show zero conservative-scan excess for all probes."
-      },
-      "5196d830fd0689937db94598d94662d531d4ee92": {
-        "pull_request": 9706,
-        "category": "bracketed: Sep-4 shape storage and array packing",
-        "evidence": "Within 28c292517..ef79a0211, shape descriptors move to an id-indexed slab (#9706), uncarried descriptors are pruned (#9726), and arena right-sizing/forwarding-stub fixes land (#9717). 07 heap_used rises to 1072456 while copied_objects falls to 4991; 07 packing/promotion-order sensitivity is documented by #9790. The accepted +87616-byte release tail is real, not a conservative-stack artifact. This is a reviewed window-level tradeoff, not proof of one unique causal commit. https://github.com/PerryTS/perry/issues/9829#issuecomment-5555805084"
-      },
-      "22c07ac5b44c5ff6a988257067110c7451da0223": {
-        "pull_request": 9833,
-        "category": "measured: included receiver-store workload repair",
-        "evidence": "Probe change from open PR #9833 is included here (2400000 iterations). Seven-repeat main A/B gives minor_cycles 0 -> 9, copied_objects 0 -> 18660, freed_bytes 0 -> 88858544, and heap_used 464072 -> 244648. The protected fixed probe passes; a non-allocating RHS restores the all-zero collection signature. This dependency is included in this PR, not claimed already merged."
+      "cea684c0d298b808caf9f1f01f9c4e9661ce6c31": {
+        "pull_request": 9861,
+        "category": "measured deliberate GC-policy correction: initialize at threshold floor",
+        "evidence": "The six attributed cells are unchanged in run 34163183523 at 43200e9d4, change by f207cf661, and have byte-identical full distributions in runs 34186909751 and 34219151426. cea684c0d prevents the occupancy rule from claiming its ceiling before any completed round and starts the policy at its floor."
       }
     },
     "cells": [
       {
         "probe": "01_nursery_churn",
-        "metric": "copied_objects",
-        "previous_median": 6354.0,
-        "accepted_median": 4977.0,
+        "metric": "heap_used_bytes",
+        "previous_median": 212168,
+        "accepted_median": 438384,
         "causes": [
-          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
-          "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
-          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a"
+          "c81ea90434bdc51148bfe3a194d2e620999d52f8"
+        ]
+      },
+      {
+        "probe": "01_nursery_churn",
+        "metric": "copied_objects",
+        "previous_median": 4977,
+        "accepted_median": 6680,
+        "causes": [
+          "c81ea90434bdc51148bfe3a194d2e620999d52f8"
         ]
       },
       {
         "probe": "01_nursery_churn",
         "metric": "copied_bytes",
-        "previous_median": 430008.0,
-        "accepted_median": 234536.0,
+        "previous_median": 234536,
+        "accepted_median": 466032,
         "causes": [
-          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
-          "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
-          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a"
+          "c81ea90434bdc51148bfe3a194d2e620999d52f8"
         ]
       },
       {
-        "probe": "01_nursery_churn",
-        "metric": "freed_bytes",
-        "previous_median": 13201144.0,
-        "accepted_median": 11299648.0,
+        "probe": "02_survivor_promotion",
+        "metric": "copied_objects",
+        "previous_median": 34550,
+        "accepted_median": 37357,
         "causes": [
-          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
-          "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
-          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a"
+          "c81ea90434bdc51148bfe3a194d2e620999d52f8"
         ]
       },
       {
         "probe": "02_survivor_promotion",
         "metric": "copied_bytes",
-        "previous_median": 1780080.0,
-        "accepted_median": 1450992.0,
+        "previous_median": 1450992,
+        "accepted_median": 1689944,
         "causes": [
-          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140"
-        ]
-      },
-      {
-        "probe": "03_cross_gen_writes",
-        "metric": "freed_bytes",
-        "previous_median": 11304368.0,
-        "accepted_median": 9240008.0,
-        "causes": [
-          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140"
+          "c81ea90434bdc51148bfe3a194d2e620999d52f8"
         ]
       },
       {
         "probe": "04_dead_after_deep_stack",
         "metric": "copied_objects",
-        "previous_median": 450.0,
-        "accepted_median": 3622.0,
+        "previous_median": 3622,
+        "accepted_median": 2666,
         "causes": [
-          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
-          "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b"
-        ]
-      },
-      {
-        "probe": "04_dead_after_deep_stack",
-        "metric": "copied_bytes",
-        "previous_median": 25832.0,
-        "accepted_median": 149400.0,
-        "causes": [
-          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
-          "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b"
-        ]
-      },
-      {
-        "probe": "04_dead_after_deep_stack",
-        "metric": "promoted_objects",
-        "previous_median": 10.0,
-        "accepted_median": 682.0,
-        "causes": [
-          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
-          "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b"
-        ]
-      },
-      {
-        "probe": "04_dead_after_deep_stack",
-        "metric": "freed_bytes",
-        "previous_median": 83880432.0,
-        "accepted_median": 73346416.0,
-        "causes": [
-          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
-          "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b"
+          "cea684c0d298b808caf9f1f01f9c4e9661ce6c31"
         ]
       },
       {
         "probe": "05_closure_capture",
         "metric": "copied_objects",
-        "previous_median": 5272.0,
-        "accepted_median": 20079.0,
+        "previous_median": 20079,
+        "accepted_median": 14285,
         "causes": [
-          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
-          "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b",
-          "aa8d2ade03970ac7eb2065f3eb0e18bb4d2df1c7"
+          "cea684c0d298b808caf9f1f01f9c4e9661ce6c31"
         ]
       },
       {
         "probe": "05_closure_capture",
         "metric": "copied_bytes",
-        "previous_median": 233384.0,
-        "accepted_median": 743384.0,
+        "previous_median": 743384,
+        "accepted_median": 534720,
         "causes": [
-          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
-          "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b",
-          "aa8d2ade03970ac7eb2065f3eb0e18bb4d2df1c7"
+          "cea684c0d298b808caf9f1f01f9c4e9661ce6c31"
         ]
       },
       {
         "probe": "05_closure_capture",
         "metric": "promoted_objects",
-        "previous_median": 0.0,
-        "accepted_median": 3390.0,
+        "previous_median": 3390,
+        "accepted_median": 6154,
         "causes": [
-          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
-          "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b",
-          "aa8d2ade03970ac7eb2065f3eb0e18bb4d2df1c7"
+          "cea684c0d298b808caf9f1f01f9c4e9661ce6c31"
         ]
       },
       {
         "probe": "05_closure_capture",
         "metric": "promoted_bytes",
-        "previous_median": 0.0,
-        "accepted_median": 122120.0,
+        "previous_median": 122120,
+        "accepted_median": 221624,
         "causes": [
-          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
-          "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b",
-          "aa8d2ade03970ac7eb2065f3eb0e18bb4d2df1c7"
-        ]
-      },
-      {
-        "probe": "05_closure_capture",
-        "metric": "freed_bytes",
-        "previous_median": 32422176.0,
-        "accepted_median": 26862320.0,
-        "causes": [
-          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
-          "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b",
-          "aa8d2ade03970ac7eb2065f3eb0e18bb4d2df1c7"
+          "cea684c0d298b808caf9f1f01f9c4e9661ce6c31"
         ]
       },
       {
         "probe": "06_string_retention",
         "metric": "copied_objects",
-        "previous_median": 11138.0,
-        "accepted_median": 298.0,
+        "previous_median": 298,
+        "accepted_median": 270,
         "causes": [
-          "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
-          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a"
-        ]
-      },
-      {
-        "probe": "06_string_retention",
-        "metric": "copied_bytes",
-        "previous_median": 682240.0,
-        "accepted_median": 72288.0,
-        "causes": [
-          "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
-          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a"
-        ]
-      },
-      {
-        "probe": "06_string_retention",
-        "metric": "promoted_objects",
-        "previous_median": 4960.0,
-        "accepted_median": 14.0,
-        "causes": [
-          "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
-          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a"
-        ]
-      },
-      {
-        "probe": "06_string_retention",
-        "metric": "promoted_bytes",
-        "previous_median": 248512.0,
-        "accepted_median": 1072.0,
-        "causes": [
-          "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
-          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a"
-        ]
-      },
-      {
-        "probe": "06_string_retention",
-        "metric": "freed_bytes",
-        "previous_median": 75244808.0,
-        "accepted_median": 68136816.0,
-        "causes": [
-          "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
-          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a"
+          "cea684c0d298b808caf9f1f01f9c4e9661ce6c31"
         ]
       },
       {
         "probe": "07_array_grow_evacuate",
         "metric": "heap_used_bytes",
-        "previous_median": 984840.0,
-        "accepted_median": 1072456.0,
+        "previous_median": 1072456,
+        "accepted_median": 1210872,
         "causes": [
-          "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b",
-          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a",
-          "5196d830fd0689937db94598d94662d531d4ee92"
-        ]
-      },
-      {
-        "probe": "07_array_grow_evacuate",
-        "metric": "heap_total_bytes",
-        "previous_median": 23068672.0,
-        "accepted_median": 25165824.0,
-        "causes": [
-          "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b",
-          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a",
-          "5196d830fd0689937db94598d94662d531d4ee92"
+          "c81ea90434bdc51148bfe3a194d2e620999d52f8"
         ]
       },
       {
         "probe": "07_array_grow_evacuate",
         "metric": "copied_objects",
-        "previous_median": 6387.0,
-        "accepted_median": 4991.0,
+        "previous_median": 4991,
+        "accepted_median": 6692,
         "causes": [
-          "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b",
-          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a",
-          "5196d830fd0689937db94598d94662d531d4ee92"
+          "c81ea90434bdc51148bfe3a194d2e620999d52f8"
         ]
       },
       {
-        "probe": "08_map_set_sidetables",
-        "metric": "copied_objects",
-        "previous_median": 3017.0,
-        "accepted_median": 2489.0,
+        "probe": "07_array_grow_evacuate",
+        "metric": "promoted_objects",
+        "previous_median": 4879,
+        "accepted_median": 6144,
         "causes": [
-          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140"
+          "c81ea90434bdc51148bfe3a194d2e620999d52f8"
+        ]
+      },
+      {
+        "probe": "07_array_grow_evacuate",
+        "metric": "promoted_bytes",
+        "previous_median": 615696,
+        "accepted_median": 840688,
+        "causes": [
+          "c81ea90434bdc51148bfe3a194d2e620999d52f8"
+        ]
+      },
+      {
+        "probe": "09_try_catch_roots",
+        "metric": "heap_used_bytes",
+        "previous_median": 212168,
+        "accepted_median": 443344,
+        "causes": [
+          "c81ea90434bdc51148bfe3a194d2e620999d52f8"
         ]
       },
       {
         "probe": "09_try_catch_roots",
         "metric": "copied_objects",
-        "previous_median": 0.0,
-        "accepted_median": 4962.0,
+        "previous_median": 4962,
+        "accepted_median": 6665,
         "causes": [
-          "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
-          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a",
-          "d923b8dcf08f2afed71777c33423362411039cf0",
-          "aa8d2ade03970ac7eb2065f3eb0e18bb4d2df1c7"
+          "c81ea90434bdc51148bfe3a194d2e620999d52f8"
         ]
       },
       {
         "probe": "09_try_catch_roots",
         "metric": "copied_bytes",
-        "previous_median": 0.0,
-        "accepted_median": 230352.0,
+        "previous_median": 230352,
+        "accepted_median": 461848,
         "causes": [
-          "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
-          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a",
-          "d923b8dcf08f2afed71777c33423362411039cf0",
-          "aa8d2ade03970ac7eb2065f3eb0e18bb4d2df1c7"
+          "c81ea90434bdc51148bfe3a194d2e620999d52f8"
         ]
       },
       {
         "probe": "09_try_catch_roots",
-        "metric": "promoted_objects",
-        "previous_median": 6240.0,
-        "accepted_median": 0.0,
+        "metric": "freed_bytes",
+        "previous_median": 11112472,
+        "accepted_median": 10023768,
         "causes": [
-          "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
-          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a",
-          "d923b8dcf08f2afed71777c33423362411039cf0",
-          "aa8d2ade03970ac7eb2065f3eb0e18bb4d2df1c7"
+          "c81ea90434bdc51148bfe3a194d2e620999d52f8"
         ]
       },
       {
-        "probe": "09_try_catch_roots",
-        "metric": "promoted_bytes",
-        "previous_median": 421800.0,
-        "accepted_median": 0.0,
+        "probe": "10_store_receiver_across_alloc",
+        "metric": "heap_used_bytes",
+        "previous_median": 220384,
+        "accepted_median": 446600,
         "causes": [
-          "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
-          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a",
-          "d923b8dcf08f2afed71777c33423362411039cf0",
-          "aa8d2ade03970ac7eb2065f3eb0e18bb4d2df1c7"
+          "c81ea90434bdc51148bfe3a194d2e620999d52f8"
         ]
       },
       {
         "probe": "10_store_receiver_across_alloc",
         "metric": "heap_total_bytes",
-        "previous_median": 12582912.0,
-        "accepted_median": 16777216.0,
+        "previous_median": 16777216,
+        "accepted_median": 22020096,
         "causes": [
-          "22c07ac5b44c5ff6a988257067110c7451da0223"
-        ]
-      },
-      {
-        "probe": "10_store_receiver_across_alloc",
-        "metric": "minor_cycles",
-        "previous_median": 1.0,
-        "accepted_median": 9.0,
-        "causes": [
-          "22c07ac5b44c5ff6a988257067110c7451da0223"
-        ]
-      },
-      {
-        "probe": "10_store_receiver_across_alloc",
-        "metric": "step_cycles",
-        "previous_median": 1.0,
-        "accepted_median": 9.0,
-        "causes": [
-          "22c07ac5b44c5ff6a988257067110c7451da0223"
+          "c81ea90434bdc51148bfe3a194d2e620999d52f8"
         ]
       },
       {
         "probe": "10_store_receiver_across_alloc",
         "metric": "copied_objects",
-        "previous_median": 8160.0,
-        "accepted_median": 18660.0,
+        "previous_median": 18660,
+        "accepted_median": 14617,
         "causes": [
-          "22c07ac5b44c5ff6a988257067110c7451da0223"
-        ]
-      },
-      {
-        "probe": "10_store_receiver_across_alloc",
-        "metric": "copied_bytes",
-        "previous_median": 506200.0,
-        "accepted_median": 825520.0,
-        "causes": [
-          "22c07ac5b44c5ff6a988257067110c7451da0223"
+          "c81ea90434bdc51148bfe3a194d2e620999d52f8"
         ]
       },
       {
         "probe": "10_store_receiver_across_alloc",
         "metric": "promoted_objects",
-        "previous_median": 0.0,
-        "accepted_median": 4722.0,
+        "previous_median": 4722,
+        "accepted_median": 6099,
         "causes": [
-          "22c07ac5b44c5ff6a988257067110c7451da0223"
+          "c81ea90434bdc51148bfe3a194d2e620999d52f8"
         ]
       },
       {
         "probe": "10_store_receiver_across_alloc",
         "metric": "promoted_bytes",
-        "previous_median": 0.0,
-        "accepted_median": 228440.0,
+        "previous_median": 228440,
+        "accepted_median": 446192,
         "causes": [
-          "22c07ac5b44c5ff6a988257067110c7451da0223"
+          "c81ea90434bdc51148bfe3a194d2e620999d52f8"
         ]
       },
       {
-        "probe": "10_store_receiver_across_alloc",
-        "metric": "freed_bytes",
-        "previous_median": 8930928.0,
-        "accepted_median": 88858544.0,
+        "probe": "11_collect_at_depth",
+        "metric": "heap_used_bytes",
+        "previous_median": 212168,
+        "accepted_median": 444360,
         "causes": [
-          "22c07ac5b44c5ff6a988257067110c7451da0223"
+          "c81ea90434bdc51148bfe3a194d2e620999d52f8"
         ]
       },
       {
         "probe": "11_collect_at_depth",
         "metric": "copied_objects",
-        "previous_median": 6245.0,
-        "accepted_median": 4975.0,
+        "previous_median": 4975,
+        "accepted_median": 6676,
         "causes": [
-          "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
-          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a",
-          "d923b8dcf08f2afed71777c33423362411039cf0"
+          "c81ea90434bdc51148bfe3a194d2e620999d52f8"
         ]
       },
       {
         "probe": "11_collect_at_depth",
         "metric": "copied_bytes",
-        "previous_median": 422744.0,
-        "accepted_median": 230872.0,
+        "previous_median": 230872,
+        "accepted_median": 462184,
         "causes": [
-          "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
-          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a",
-          "d923b8dcf08f2afed71777c33423362411039cf0"
+          "c81ea90434bdc51148bfe3a194d2e620999d52f8"
+        ]
+      },
+      {
+        "probe": "11_collect_at_depth",
+        "metric": "freed_bytes",
+        "previous_median": 10062936,
+        "accepted_median": 8974896,
+        "causes": [
+          "c81ea90434bdc51148bfe3a194d2e620999d52f8"
+        ]
+      },
+      {
+        "probe": "12_large_live_set",
+        "metric": "copied_objects",
+        "previous_median": 59405,
+        "accepted_median": 104050,
+        "causes": [
+          "10a9a44537c70ee17ccfe01d3bfed4a9a3740ba6"
         ]
       },
       {
         "probe": "12_large_live_set",
         "metric": "copied_bytes",
-        "previous_median": 2851312.0,
-        "accepted_median": 2327008.0,
+        "previous_median": 2327008,
+        "accepted_median": 4162008,
         "causes": [
-          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140"
-        ]
-      },
-      {
-        "probe": "12_large_live_set",
-        "metric": "promoted_bytes",
-        "previous_median": 25395472.0,
-        "accepted_median": 21201208.0,
-        "causes": [
-          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140"
-        ]
-      },
-      {
-        "probe": "12_large_live_set",
-        "metric": "freed_bytes",
-        "previous_median": 76315456.0,
-        "accepted_median": 63732784.0,
-        "causes": [
-          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140"
-        ]
-      },
-      {
-        "probe": "13_large_eden_survivors",
-        "metric": "copied_objects",
-        "previous_median": 0.0,
-        "accepted_median": 377569.0,
-        "causes": [
-          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
-          "e18b24c420c7c2f389607537618699ffc6aa9d1d",
-          "d923b8dcf08f2afed71777c33423362411039cf0"
-        ]
-      },
-      {
-        "probe": "13_large_eden_survivors",
-        "metric": "copied_bytes",
-        "previous_median": 0.0,
-        "accepted_median": 21429712.0,
-        "causes": [
-          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
-          "e18b24c420c7c2f389607537618699ffc6aa9d1d",
-          "d923b8dcf08f2afed71777c33423362411039cf0"
-        ]
-      },
-      {
-        "probe": "13_large_eden_survivors",
-        "metric": "promoted_objects",
-        "previous_median": 541614.0,
-        "accepted_median": 386271.0,
-        "causes": [
-          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
-          "e18b24c420c7c2f389607537618699ffc6aa9d1d",
-          "d923b8dcf08f2afed71777c33423362411039cf0"
-        ]
-      },
-      {
-        "probe": "13_large_eden_survivors",
-        "metric": "promoted_bytes",
-        "previous_median": 30316904.0,
-        "accepted_median": 21777792.0,
-        "causes": [
-          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
-          "e18b24c420c7c2f389607537618699ffc6aa9d1d",
-          "d923b8dcf08f2afed71777c33423362411039cf0"
-        ]
-      },
-      {
-        "probe": "13_large_eden_survivors",
-        "metric": "freed_bytes",
-        "previous_median": 97086288.0,
-        "accepted_median": 108243696.0,
-        "causes": [
-          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
-          "e18b24c420c7c2f389607537618699ffc6aa9d1d",
-          "d923b8dcf08f2afed71777c33423362411039cf0"
-        ]
-      },
-      {
-        "probe": "14_grow_then_churn",
-        "metric": "copied_objects",
-        "previous_median": 307.0,
-        "accepted_median": 330.0,
-        "causes": [
-          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
-          "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b",
-          "e18b24c420c7c2f389607537618699ffc6aa9d1d"
+          "10a9a44537c70ee17ccfe01d3bfed4a9a3740ba6"
         ]
       }
     ]

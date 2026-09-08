@@ -80,6 +80,8 @@ mod collection_proto_thunks;
 mod data_view_registry;
 mod dataview_proto_thunks;
 mod date_proto_thunks;
+#[cfg(test)]
+mod default_class_field_shape_tests;
 mod delete_rest;
 pub(crate) mod descriptors;
 mod disposable_proto_thunks;
@@ -227,7 +229,8 @@ pub(crate) use global_this_tables::*;
 pub use groupby::*;
 pub use instanceof::*;
 pub(crate) use iterator_prototypes::{
-    attach_iterator_prototype, call_overridden_iterator_next, iterator_prototype_for_class_id,
+    attach_iterator_prototype, builtin_iterator_next_is_canonical, call_overridden_iterator_next,
+    iterator_prototype_for_class_id,
 };
 pub use namespace_create::*;
 pub use native_call_method::*;

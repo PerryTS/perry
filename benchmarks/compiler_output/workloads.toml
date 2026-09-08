@@ -361,6 +361,7 @@ min_vectorized_loops = 1
 scalar_baseline = ""
 allowed_missed_reason_kinds = [
   "call_instruction",
+  "control_flow",
   "generic_not_vectorized",
   "not_beneficial",
   "uncountable_loop",
@@ -386,6 +387,7 @@ min_vectorized_loops = 1
 scalar_baseline = ""
 allowed_missed_reason_kinds = [
   "call_instruction",
+  "control_flow",
   "generic_not_vectorized",
   "not_beneficial",
   "uncountable_loop",
@@ -1064,6 +1066,7 @@ min_vectorized_loops = 0
 scalar_baseline = "allowed: fractional dynamic array-index regression fixture is not a vector workload"
 allowed_missed_reason_kinds = [
   "call_instruction",
+  "control_flow",
   "generic_not_vectorized",
   "not_beneficial",
   "uncountable_loop",

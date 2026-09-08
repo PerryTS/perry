@@ -398,6 +398,10 @@ pub(crate) fn combinator_iterable_to_array(
     // (the overwhelming common case) pay one extra side-table probe and
     // keep the existing raw clone.
     if crate::array::js_array_is_array(value).to_bits() == crate::value::TAG_TRUE {
+        if !crate::object::builtin_iterator_next_is_canonical(crate::array::ARRAY_ITERATOR_CLASS_ID)
+        {
+            return Ok(crate::array::js_array_clone_for_spread(value));
+        }
         // #7497: `well_known_symbol` and `own_symbol_property` both allocate
         // (and the latter can run a user getter), so the array being cloned is
         // re-read from a root rather than carried across them in a register.
@@ -417,6 +421,11 @@ pub(crate) fn combinator_iterable_to_array(
     }
     let jsval = JSValue::from_bits(value.to_bits());
     if jsval.is_any_string() {
+        if !crate::object::builtin_iterator_next_is_canonical(
+            crate::string::STRING_ITERATOR_CLASS_ID,
+        ) {
+            return Ok(crate::array::js_array_clone_for_spread(value));
+        }
         return Ok(crate::array::js_array_clone(
             crate::value::js_nanbox_get_pointer(value) as *const crate::array::ArrayHeader,
         ));
@@ -431,7 +440,22 @@ pub(crate) fn combinator_iterable_to_array(
     }
 
     // Side-table iterables.
-    if crate::set::is_registered_set(raw) || crate::map::is_registered_map(raw) {
+    if crate::set::is_registered_set(raw) {
+        if !crate::object::builtin_iterator_next_is_canonical(
+            crate::collection_iter_object::SET_ITERATOR_CLASS_ID,
+        ) {
+            return Ok(crate::array::js_array_clone_for_spread(value));
+        }
+        return Ok(crate::array::js_array_clone(
+            raw as *const crate::array::ArrayHeader,
+        ));
+    }
+    if crate::map::is_registered_map(raw) {
+        if !crate::object::builtin_iterator_next_is_canonical(
+            crate::collection_iter_object::MAP_ITERATOR_CLASS_ID,
+        ) {
+            return Ok(crate::array::js_array_clone_for_spread(value));
+        }
         return Ok(crate::array::js_array_clone(
             raw as *const crate::array::ArrayHeader,
         ));

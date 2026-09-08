@@ -53,6 +53,8 @@ unsafe fn receiver_gc_type(ptr: *const ArrayHeader) -> u8 {
 ///  - `array_proto_iterator_modified`: user code replaced or deleted
 ///    `Array.prototype[Symbol.iterator]`, so the builtin walk is no longer what
 ///    a spread must run.
+///  - `builtin_iterator_next_is_canonical`: user code replaced or decorated
+///    `%ArrayIteratorPrototype%.next`, so an element copy would bypass it.
 ///  - `object_static_prototype`: `Object.setPrototypeOf(array, custom)` can
 ///    replace the inherited iterator without touching Array.prototype.
 ///  - `has_own_symbol_property`: the instance carries its OWN `[Symbol.iterator]`,
@@ -86,6 +88,9 @@ pub(crate) fn dense_spread_source(value: f64) -> Option<*const ArrayHeader> {
         return None;
     }
     if crate::array::array_proto_iterator_modified() {
+        return None;
+    }
+    if !crate::object::builtin_iterator_next_is_canonical(ARRAY_ITERATOR_CLASS_ID) {
         return None;
     }
     if crate::object::prototype_chain::object_static_prototype(arr as usize).is_some() {

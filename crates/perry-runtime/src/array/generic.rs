@@ -1598,39 +1598,22 @@ pub(super) unsafe fn real_array_mutator(
             nanbox_arr(crate::array::js_array_concat_variadic(arr, args_ptr, count))
         }
         "splice" => {
-            // ToIntegerOrInfinity with i32 clamping: NaN → 0, +Infinity →
-            // i32::MAX (clamps to len downstream), -Infinity → i32::MIN
-            // (relative-from-end clamps to 0). The old `is_infinite() → 0`
-            // made `splice(Infinity, 3)` delete from the front (test262
-            // splice/S15.4.4.12_A2.1_T3).
-            let arg_i32 = |i: usize| -> i32 {
-                crate::array::js_array_splice_delete_count(arg_or_undef(args_ptr, args_len, i))
-            };
-            let start = if args_len >= 1 { arg_i32(0) } else { 0 };
-            let delete_count = if args_len == 0 {
-                0
-            } else if args_len == 1 {
-                i32::MAX
+            let start = arg_or_undef(args_ptr, args_len, 0);
+            let delete_count = arg_or_undef(args_ptr, args_len, 1);
+            let items_count = args_len.saturating_sub(2);
+            let items_ptr = if items_count > 0 && !args_ptr.is_null() {
+                args_ptr.add(2)
             } else {
-                arg_i32(1)
-            };
-            let items: Vec<f64> = if args_len > 2 && !args_ptr.is_null() {
-                std::slice::from_raw_parts(args_ptr.add(2), args_len - 2).to_vec()
-            } else {
-                Vec::new()
-            };
-            let items_ptr = if items.is_empty() {
                 ptr::null()
-            } else {
-                items.as_ptr()
             };
             let mut out_arr: *mut ArrayHeader = ptr::null_mut();
-            let deleted = crate::array::js_array_splice(
+            let deleted = crate::array::js_array_splice_values(
                 arr,
                 start,
                 delete_count,
+                args_len.min(2) as u32,
                 items_ptr,
-                items.len() as u32,
+                items_count as u32,
                 &mut out_arr,
             );
             nanbox_arr(deleted)

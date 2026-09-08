@@ -1508,13 +1508,6 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
     // hazard: a handler that returned before `res.end()` leaves a stale `res`
     // (a bare tagged handle id) outstanding, and recycling its id immediately
     // would let the next request re-occupy it and a microtask-deferred
-    // `res.write`/`res.end` corrupt the new request's response. Holding the id
-    // in quarantine for a full tick lets those stale calls spend themselves
-    // against an empty slot first. (A write deferred MORE than a tick past
-    // finalization is a write-after-end use error and out of scope — see
-    // `perry_ffi::drain_quarantined_handles`.)
-    perry_ffi::drain_quarantined_handles();
-
     // Settle `Bun.serve` fetch/error promises before the ordinary in-flight
     // reaper observes their ServerResponse handles.
     count += crate::server::bun_server::process_pending_promises();

@@ -622,20 +622,13 @@ jobs:
         # HTTP accept loop reads a different async reactor from the one the JS
         # event loop drives.
         # #5716: the governance inventory is the explicit shipping set; adding
-        # a crate requires a recorded retain/migration decision. Best-effort
-        # per crate: a wrapper that can't build on this host must not fail the
-        # whole release — packaging below ships whatever was produced.
+        # a crate requires a recorded retain/migration decision. Build one
+        # feature union and fail the leg if any governed wrapper cannot build;
+        # packaging a partial or incoherent archive set is not a release.
         if: runner.os != 'Windows' && matrix.old_glibc_image == '' && matrix.musl_image == ''
-        run: |
-          set -euo pipefail
-          governed_ext_packages=$(./scripts/release_ext_packages.sh)
-          while IFS= read -r name; do
-            echo "::group::build $name"
-            cargo build --profile dist --target ${{ matrix.target }} \
-              -p perry -p perry-runtime-static -p perry-stdlib-static -p "$name" \
-              || echo "  (skipped $name — failed to build on this host)"
-            echo "::endgroup::"
-          done <<< "$governed_ext_packages"
+        # Share the release candidate's unified build on main too. The helper
+        # verifies the produced archives before any packaging can run.
+        run: bash scripts/build_release_ext.sh '${{ matrix.target }}'
 
       # #6351: only GTK4 needs noble. Build the compiler, runtime, stdlib and
       # extension archives in a Debian 11 container so their ABI floor is
@@ -680,7 +673,8 @@ jobs:
             cp "$src/$artifact" "$dst/$artifact"
           done
           for archive in "$src"/libperry_ext_*.a; do
-            [ -f "$archive" ] && cp "$archive" "$dst/"
+            test -s "$archive"
+            cp "$archive" "$dst/"
           done
 
       # Perry needs a musl-BUILT LLVM, but bindgen needs a dynamically linked
@@ -724,6 +718,10 @@ jobs:
           for artifact in perry libperry_runtime.a libperry_runtime_abort.a libperry_stdlib.a; do
             test -s "$src/$artifact"
             cp "$src/$artifact" "$dst/$artifact"
+          done
+          for archive in "$src"/libperry_ext_*.a; do
+            test -s "$archive"
+            cp "$archive" "$dst/"
           done
 
       - name: Build UI library (macOS)

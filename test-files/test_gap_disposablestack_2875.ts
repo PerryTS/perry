@@ -37,3 +37,5 @@ console.log((err.error as Error).message);
 console.log((err.suppressed as Error).message);
 console.log(err instanceof Error);
 console.log(err instanceof SuppressedError);
+console.log(Object.getPrototypeOf(SuppressedError) === Error);
+console.log(Object.getPrototypeOf(SuppressedError.prototype) === Error.prototype);

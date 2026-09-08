@@ -108,6 +108,11 @@ CARGO_TARGET_DIR="$abort_target_dir" CARGO_PROFILE_DIST_PANIC=abort \
 cp "$abort_target_dir/$target/dist/libperry_runtime.a" \
    "$target_dir/$target/dist/libperry_runtime_abort.a"
 
+# Every Unix package ships the governed extension inventory. Build the same
+# feature union and run the same archive/Tokio gate as the macOS and glibc
+# release legs; a clean musl target directory must never package zero wrappers.
+bash scripts/build_release_ext.sh "$target"
+
 # A dynamically linked binary can run on the glibc build host and still fail
 # immediately for users on Alpine. Gate the artifact itself, not just the
 # Cargo exit status.

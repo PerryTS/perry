@@ -80,8 +80,20 @@ jobs:
           # Node the runner downloads + SRI-verifies from external-tools.json.
           node-version-file: .node-version
 
-      - name: Build Perry release binary
-        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
+      - name: Build Perry and full native-module archives
+        # The shape probe uses --no-auto-optimize so every row consumes this
+        # one coherent archive set. The auto-optimize gap shards cover the
+        # feature-pruned path; rebuilding it per matrix row made which spelling
+        # timed out depend on cache warmth.
+        run: |
+          set -euo pipefail
+          package_args=()
+          while IFS= read -r package; do
+            [[ -n "$package" ]] && package_args+=( -p "$package" )
+          done < <(bash scripts/release_ext_packages.sh)
+          cargo build --release \
+            -p perry -p perry-runtime-static -p perry-stdlib-static \
+            "${package_args[@]}"
 
       - name: Node builtin compat matrix guard (--check, pinned oracle)
         # Fails (exit 1) if any baselined cell got strictly worse or a

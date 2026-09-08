@@ -14,13 +14,14 @@
 //! identical, since `Array[@@species]` returns `Array` itself.
 
 use super::ArrayHeader;
+use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 use crate::value::{JSValue, TAG_NULL, TAG_UNDEFINED};
 
 /// The resolved species for an `ArraySpeciesCreate`: either the default
 /// intrinsic (fast plain-array allocation) or a user `Construct` target.
-pub(crate) enum SpeciesChoice {
+enum SpeciesChoice<'scope> {
     Default,
-    Custom(f64),
+    Custom(RuntimeHandle<'scope>),
 }
 
 /// `Type(value) is Object` — a heap pointer that is not a Symbol.
@@ -46,19 +47,20 @@ fn is_constructor(value: f64) -> bool {
 /// `Get(originalArray, "constructor")` — fires an own accessor and walks the
 /// prototype chain (resolving to `Array.prototype.constructor` = the intrinsic
 /// `Array` for an ordinary array). Propagates a poisoned-getter exception.
-unsafe fn read_constructor(original: f64) -> f64 {
+unsafe fn read_constructor(original: &RuntimeHandle<'_>, scope: &RuntimeHandleScope) -> f64 {
     // An own `constructor` ACCESSOR installed directly on the array
     // (`Object.defineProperty(a, 'constructor', { get })`) lives in the
     // descriptor side table, which the generic property read below does not
     // consult for array receivers — fire it here (its throw propagates;
     // test262 {map,filter,splice,concat}/create-ctor-poisoned).
     if crate::object::descriptors_in_use() {
-        let raw = crate::value::js_nanbox_get_pointer(original) as usize;
+        let raw = crate::value::js_nanbox_get_pointer(original.get_nanbox_f64()) as usize;
         if raw != 0 {
             if let Some(acc) = crate::object::get_accessor_descriptor(raw, "constructor") {
                 if acc.get != 0 {
                     return f64::from_bits(
-                        crate::object::invoke_accessor_getter(acc.get, original).bits(),
+                        crate::object::invoke_accessor_getter(acc.get, original.get_nanbox_f64())
+                            .bits(),
                     );
                 }
                 return f64::from_bits(TAG_UNDEFINED);
@@ -66,8 +68,11 @@ unsafe fn read_constructor(original: f64) -> f64 {
         }
     }
     let key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
-    let key_v = f64::from_bits(JSValue::string_ptr(key).bits());
-    crate::object::js_object_get_property_key(original, key_v)
+    let key = scope.root_string_ptr(key);
+    let key_v = key.with_const_ptr(|key: *const crate::StringHeader| {
+        f64::from_bits(JSValue::string_ptr(key as *mut _).bits())
+    });
+    crate::object::js_object_get_property_key(original.get_nanbox_f64(), key_v)
 }
 
 /// `Get(C, @@species)` — runs any species getter, propagating exceptions.
@@ -89,10 +94,13 @@ fn intrinsic_array() -> f64 {
 /// constructor, returning `Default` for the intrinsic / undefined case and
 /// `Custom(S)` for a usable user constructor. Throws on a non-constructor
 /// species; propagates any user getter exception.
-unsafe fn resolve_species(original: f64) -> SpeciesChoice {
+unsafe fn resolve_species<'scope>(
+    original: &RuntimeHandle<'scope>,
+    scope: &'scope RuntimeHandleScope,
+) -> SpeciesChoice<'scope> {
     // ECMA-262 §23.1.5.1: only arrays consult `constructor`; a non-array
     // receiver (the generic `.call(arrayLike)` form) always gets a plain array.
-    if crate::value::js_is_truthy(crate::array::js_array_is_array(original)) == 0 {
+    if crate::value::js_is_truthy(crate::array::js_array_is_array(original.get_nanbox_f64())) == 0 {
         return SpeciesChoice::Default;
     }
     // #6386 fast path: a plain dense `ArrayHeader` (not a proxy / subclass
@@ -106,9 +114,10 @@ unsafe fn resolve_species(original: f64) -> SpeciesChoice {
     // consulted here. Skips the per-call key-string allocation and the
     // full property walk.
     {
-        let jv = JSValue::from_bits(original.to_bits());
+        let current = original.get_nanbox_f64();
+        let jv = JSValue::from_bits(current.to_bits());
         if jv.is_pointer() {
-            let raw = crate::value::js_nanbox_get_pointer(original) as usize;
+            let raw = crate::value::js_nanbox_get_pointer(current) as usize;
             let arr = raw as *const crate::array::ArrayHeader;
             // Proxy check FIRST: a masked proxy id is not a heap pointer, so
             // the GcHeader deref below would read unmapped memory for one.
@@ -128,29 +137,31 @@ unsafe fn resolve_species(original: f64) -> SpeciesChoice {
     }
     // step 3: C = Get(O, "constructor"). step 5: if Type(C) is Object,
     // C = Get(C, @@species); a null species → undefined.
-    let mut c = read_constructor(original);
-    if is_object_value(c) {
-        let s = get_species(c);
-        c = if s.to_bits() == TAG_NULL {
-            f64::from_bits(TAG_UNDEFINED)
-        } else {
-            s
-        };
-    }
+    let c = scope.root_nanbox_f64(read_constructor(original, scope));
+    let selected = if is_object_value(c.get_nanbox_f64()) {
+        let s = scope.root_nanbox_f64(get_species(c.get_nanbox_f64()));
+        if s.get_nanbox_f64().to_bits() == TAG_NULL {
+            return SpeciesChoice::Default;
+        }
+        s
+    } else {
+        c
+    };
     // step 6: undefined → default ArrayCreate.
-    if JSValue::from_bits(c.to_bits()).is_undefined() {
+    if JSValue::from_bits(selected.get_nanbox_f64().to_bits()).is_undefined() {
         return SpeciesChoice::Default;
     }
     // Fast path: the intrinsic Array constructor → plain allocation
     // (observationally identical to Construct(%Array%, « len »)).
-    if c.to_bits() == intrinsic_array().to_bits() {
+    let intrinsic = scope.root_nanbox_f64(intrinsic_array());
+    if selected.get_nanbox_f64().to_bits() == intrinsic.get_nanbox_f64().to_bits() {
         return SpeciesChoice::Default;
     }
     // step 7: a non-constructor (number/string/null/non-callable) → TypeError.
-    if !is_constructor(c) {
+    if !is_constructor(selected.get_nanbox_f64()) {
         throw_not_constructor();
     }
-    SpeciesChoice::Custom(c)
+    SpeciesChoice::Custom(selected)
 }
 
 #[cold]
@@ -184,7 +195,9 @@ pub(crate) unsafe fn array_species_create_with_capacity(
     length: usize,
     capacity_hint: u32,
 ) -> (f64, bool) {
-    match resolve_species(original) {
+    let scope = RuntimeHandleScope::new();
+    let original = scope.root_nanbox_f64(original);
+    match resolve_species(&original, &scope) {
         SpeciesChoice::Default => {
             let out = if capacity_hint > length as u32 {
                 let arr = crate::array::js_array_alloc(capacity_hint);
@@ -201,7 +214,11 @@ pub(crate) unsafe fn array_species_create_with_capacity(
         SpeciesChoice::Custom(c) => {
             let args = [length as f64];
             (
-                crate::object::js_new_function_construct(c, args.as_ptr(), args.len()),
+                crate::object::js_new_function_construct(
+                    c.get_nanbox_f64(),
+                    args.as_ptr(),
+                    args.len(),
+                ),
                 false,
             )
         }
@@ -246,5 +263,47 @@ pub(crate) unsafe fn species_result_set(result: f64, index: usize, value: f64) {
             }
         }
         crate::object::js_object_set_index_polymorphic(raw as i64, index as f64, value);
+    }
+}
+
+/// `CreateDataPropertyOrThrow(result, index, value)` for a container returned
+/// by a custom `@@species` constructor. Unlike [`species_result_set`], this
+/// uses `[[DefineOwnProperty]]`: it rejects frozen/non-extensible results and
+/// replaces a configurable accessor instead of invoking its setter.
+pub(crate) fn species_result_create_data_property(result: f64, index: usize, value: f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let result = scope.root_nanbox_f64(result);
+    let value = scope.root_nanbox_f64(value);
+    let key_text = index.to_string();
+    let key = crate::string::js_string_from_bytes(key_text.as_ptr(), key_text.len() as u32);
+    let key = scope.root_string_ptr(key);
+    let key_value = key.with_const_ptr(|key: *const crate::StringHeader| {
+        f64::from_bits(JSValue::string_ptr(key as *mut _).bits())
+    });
+    if crate::proxy::js_proxy_is_proxy(result.get_nanbox_f64()) == 0 {
+        let obj_addr = crate::value::js_nanbox_get_pointer(result.get_nanbox_f64()) as usize;
+        if let Some(attrs) = crate::object::get_property_attrs(obj_addr, &key_text) {
+            if !attrs.writable() && attrs.configurable() {
+                // Perry's ordinary define path merges attributes onto an
+                // existing data descriptor. CreateDataProperty replaces a
+                // configurable descriptor completely, so restore its default
+                // writability before the define, as Array.from/concat do.
+                crate::object::set_property_attrs(
+                    obj_addr,
+                    key_text.clone(),
+                    crate::object::PropertyAttrs::new(true, true, true),
+                );
+            }
+        }
+    }
+    if !crate::proxy::create_data_property(
+        result.get_nanbox_f64(),
+        key_value,
+        value.get_nanbox_f64(),
+    ) {
+        crate::collection_iter::throw_type_error(&format!(
+            "Cannot define property {}, object is not extensible",
+            index
+        ));
     }
 }

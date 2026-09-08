@@ -82,6 +82,22 @@ pub extern "C" fn js_crypto_random_bytes_buffer(
 /// callback dispatch is deferred.
 #[no_mangle]
 pub unsafe extern "C" fn js_crypto_random_bytes_async(size: f64, callback_bits: f64) -> f64 {
+    random_bytes_async_impl(size, callback_bits, || {})
+}
+
+fn random_bytes_async_impl(
+    size: f64,
+    callback_bits: f64,
+    before_buffer_alloc: impl FnOnce(),
+) -> f64 {
+    // The Buffer allocation can trigger an evacuating collection when the old
+    // arena needs a fresh block. The callback supplied by util.promisify was
+    // just allocated in the movable nursery, so keep it in a runtime handle
+    // and re-read it after that allocation instead of validating a stale
+    // from-space copy.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let callback_handle = scope.root_nanbox_f64(callback_bits);
+    before_buffer_alloc();
     let buf = js_crypto_random_bytes_buffer(size);
     let value = if buf.is_null() {
         f64::from_bits(JSValue::undefined().bits())
@@ -99,7 +115,7 @@ pub unsafe extern "C" fn js_crypto_random_bytes_async(size: f64, callback_bits: 
     // safe no-op instead. `is_closure_ptr` self-rejects the whole handle band
     // and any non-heap address, so a primitive/undefined callback is covered
     // without a separate magnitude floor.
-    let cb_ptr = perry_runtime::value::js_nanbox_get_pointer(callback_bits);
+    let cb_ptr = perry_runtime::value::js_nanbox_get_pointer(callback_handle.get_nanbox_f64());
     if perry_runtime::closure::is_closure_ptr(cb_ptr as usize) {
         let err = f64::from_bits(JSValue::null().bits());
         let args = [err, value];
@@ -858,6 +874,35 @@ mod tests {
         static CB_VALUE_PTR: Cell<bool> = const { Cell::new(false) };
     }
 
+    struct ForcedEvacuationGuard {
+        frame: u64,
+        previous_force_evacuation: i32,
+    }
+
+    impl ForcedEvacuationGuard {
+        fn new() -> Self {
+            // Compiled programs install the runtime-handle scanner at startup;
+            // this standalone stdlib test must do the equivalent before GC.
+            perry_runtime::gc::gc_init();
+            let previous_force_evacuation =
+                perry_runtime::gc::js_gc_force_evacuation_test_override(1);
+            perry_runtime::gc::js_gc_write_barriers_emitted(1);
+            let frame = perry_runtime::gc::js_shadow_frame_push(0);
+            Self {
+                frame,
+                previous_force_evacuation,
+            }
+        }
+    }
+
+    impl Drop for ForcedEvacuationGuard {
+        fn drop(&mut self) {
+            perry_runtime::gc::js_shadow_frame_pop(self.frame);
+            perry_runtime::gc::js_gc_write_barriers_emitted(0);
+            perry_runtime::gc::js_gc_force_evacuation_test_override(self.previous_force_evacuation);
+        }
+    }
+
     extern "C" fn record_cb_thunk(
         _closure: *const perry_runtime::ClosureHeader,
         err: f64,
@@ -969,5 +1014,33 @@ mod tests {
             CB_VALUE_PTR.with(|f| f.get()),
             "randomBytes callback must deliver a Buffer pointer"
         );
+    }
+
+    #[test]
+    fn random_bytes_async_roots_callback_across_buffer_allocation() {
+        let _gc = ForcedEvacuationGuard::new();
+        reset_record();
+        let cb = make_record_callback();
+        let before =
+            perry_runtime::value::js_nanbox_get_pointer(cb) as *const perry_runtime::ClosureHeader;
+
+        random_bytes_async_impl(16.0, cb, || {
+            perry_runtime::gc::gc_collect_minor();
+            assert_ne!(
+                perry_runtime::closure::clean_closure_ptr(before),
+                before,
+                "forced minor collection must move the callback"
+            );
+        });
+
+        assert_ne!(
+            perry_runtime::timer::js_callback_timer_has_pending(),
+            0,
+            "relocated callback must still be scheduled"
+        );
+        perry_runtime::timer::js_callback_timer_tick();
+        assert!(CB_FIRED.with(|f| f.get()), "relocated callback must fire");
+        assert!(CB_ERR_NULLISH.with(|f| f.get()));
+        assert!(CB_VALUE_PTR.with(|f| f.get()));
     }
 }

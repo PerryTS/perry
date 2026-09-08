@@ -1736,11 +1736,24 @@ pub extern "C" fn js_object_define_property(
             .unwrap_or_else(|| existing_attrs.map(|a| a.configurable()).unwrap_or(false));
 
         if let Some(k) = key_rust {
-            set_property_attrs(
-                obj as usize,
-                k,
-                PropertyAttrs::new(writable, enumerable, configurable),
-            );
+            if !has_accessor && !had_existing_accessor && writable && enumerable && configurable {
+                // Absence from the attribute side table already means the
+                // ordinary data-property defaults (all three flags true).
+                // CreateDataProperty/ClassField reaches this arm for every
+                // field of every new instance; recording those defaults also
+                // minted a fresh semantic ShapeId, retaining one descriptor
+                // per construction under the shared keys array (#9942).
+                // Clearing is still necessary when this redefine replaces a
+                // prior customized data descriptor; it performs the one
+                // semantic transition that real change requires.
+                clear_property_attrs(obj as usize, &k);
+            } else {
+                set_property_attrs(
+                    obj as usize,
+                    k,
+                    PropertyAttrs::new(writable, enumerable, configurable),
+                );
+            }
         }
         super::super::arguments_object_after_define(obj, key_str, descriptor_value);
         // Return the object

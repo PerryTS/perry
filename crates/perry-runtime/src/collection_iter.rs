@@ -253,10 +253,17 @@ pub(crate) fn constructor_iter(value: f64) -> ConstructorIter {
     }
     let jsv = JSValue::from_bits(value.to_bits());
     let is_array = crate::array::js_array_is_array(value).to_bits() == crate::value::TAG_TRUE;
-    if is_array {
+    if is_array
+        && crate::object::builtin_iterator_next_is_canonical(crate::array::ARRAY_ITERATOR_CLASS_ID)
+    {
         return ConstructorIter::Array(value);
     }
     if jsv.is_any_string() {
+        if !crate::object::builtin_iterator_next_is_canonical(
+            crate::string::STRING_ITERATOR_CLASS_ID,
+        ) {
+            return ConstructorIter::Iterator(crate::symbol::js_get_iterator(value));
+        }
         let arr_f64 = crate::array::js_for_of_to_array(value);
         return ConstructorIter::Array(arr_f64);
     }

@@ -71,6 +71,7 @@ pub(crate) use func_ref::{
 mod jsx;
 pub(crate) mod method_override;
 pub(crate) use method_override::emit_inline_direct_method_shape_guard;
+mod named_import_installer;
 mod namespace_call;
 mod native;
 mod native_module_dispatch;

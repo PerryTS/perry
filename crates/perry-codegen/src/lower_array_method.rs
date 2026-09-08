@@ -972,15 +972,7 @@ pub(crate) fn lower_array_method(
                 let out_slot = blk.alloca(I64);
                 blk.store(I64, "0", &out_slot);
                 let recv_handle = unbox_to_i64(blk, recv_box);
-                // ToIntegerOrInfinity via the clamping helper: `fptosi` on
-                // ±Infinity/NaN is LLVM poison — `splice(Infinity, 3)` deleted
-                // from index 0 (test262 splice/S15.4.4.12_A2.1_T3). The helper
-                // clamps +Inf → i32::MAX (→ len downstream), -Inf → i32::MIN
-                // (→ 0 after relative-index resolution), NaN → 0.
-                let start_i32 =
-                    blk.call(I32, "js_array_splice_delete_count", &[(DOUBLE, &start_d)]);
-                let count_i32 =
-                    blk.call(I32, "js_array_splice_delete_count", &[(DOUBLE, &count_d)]);
+                let provided_prefix = args.len().min(2).to_string();
                 let (items_ptr, items_count_str) = if item_vals.is_empty() {
                     ("null".to_string(), "0".to_string())
                 } else {
@@ -995,11 +987,12 @@ pub(crate) fn lower_array_method(
                 };
                 let deleted_handle = blk.call(
                     I64,
-                    "js_array_splice",
+                    "js_array_splice_values",
                     &[
                         (I64, &recv_handle),
-                        (I32, &start_i32),
-                        (I32, &count_i32),
+                        (DOUBLE, &start_d),
+                        (DOUBLE, &count_d),
+                        (I32, &provided_prefix),
                         (PTR, &items_ptr),
                         (I32, &items_count_str),
                         (PTR, &out_slot),

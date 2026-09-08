@@ -68,13 +68,16 @@ RUN set -eu; \
 
 FROM ${GLIBC_IMAGE}
 
+# r32: live security indexes named packages already missing from the CDN.
+# Keep this dated snapshot in lockstep with linux-glibc-2.31.Dockerfile;
+# updating it requires an image build on both architectures.
 # The archived slim image has no CA bundle. Debian Release signatures are still
 # checked while bootstrapping ca-certificates; only TLS peer validation is
 # disabled for this first signed archive fetch. This matches the existing
 # glibc-2.31 release image.
 RUN printf '%s\n' \
       'deb [check-valid-until=no] https://archive.debian.org/debian bullseye main' \
-      'deb https://deb.debian.org/debian-security bullseye-security main' \
+      'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20260901T000000Z/ bullseye-security main' \
       > /etc/apt/sources.list \
     && apt-get -o Acquire::https::Verify-Peer=false update \
     && DEBIAN_FRONTEND=noninteractive apt-get \

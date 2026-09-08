@@ -385,6 +385,13 @@
       "why": "#9831: `arena_in_use_bytes()` (a sum of block bump offsets) recorded as each collection ends, read back by the tiny-parse pressure guard to price growth since then. A byte COUNT, never an address or a NaN-boxed value: written only from `note_collection_finished_arena_occupancy` and the test seam, read only by `tiny_parse_pressure_due`/`diag_tiny_parse_forced_collection`. Same shape as its frontier siblings `GC_LAST_COLLECTION_POST_IN_USE_BYTES`/`GC_STEP_BYTES`, with the verdict those still owe."
     },
     {
+      "file": "crates/perry-runtime/src/gc/roots/runtime_handles.rs",
+      "name": "RUNTIME_HANDLE_STACK",
+      "verdict": "covered_elsewhere",
+      "scanner": "scan_runtime_handle_roots_mut and scan_runtime_handle_roots_mut_step (same file), registered from gc_init in crates/perry-runtime/src/gc/mod.rs through reg_budgeted_scanner! with MutableRootScannerSource::RuntimeHandles",
+      "why": "The transient handle stack stores Nanbox, RawTagged, and HeapWord roots. Both scanner forms visit the corresponding mutable slot and rewrite it through RuntimeRootVisitor, so moved values are refreshed in place; gc_init registers the budgeted scanner before mutator work. The gate's same-file registration heuristic cannot see the registration in gc/mod.rs."
+    },
+    {
       "file": "crates/perry-runtime/src/gc/survival_diag.rs",
       "name": "MINOR_SEQ",
       "verdict": "not_a_gc_pointer",
@@ -3224,10 +3231,6 @@
     {
       "file": "crates/perry-runtime/src/gc/mod.rs",
       "name": "AUTO_GC_INIT_SUPPRESSED"
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/mod.rs",
-      "name": "GC_INIT_DONE"
     },
     {
       "file": "crates/perry-runtime/src/gc/mod.rs",

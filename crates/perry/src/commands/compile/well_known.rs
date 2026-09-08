@@ -684,18 +684,12 @@ mod tests {
             .parent()
             .and_then(|p| p.parent())
             .expect("workspace root reachable from CARGO_MANIFEST_DIR");
-        let workflow =
-            std::fs::read_to_string(workspace_root.join(".github/workflows/release-packages.yml"))
-                .expect("read release-packages workflow");
-        let step = workflow
-            .split("- name: Build native ext libraries (Unix)")
-            .nth(1)
-            .and_then(|tail| tail.split("- name: Build UI library (macOS)").next())
-            .expect("native ext release step remains present");
-        let command: String = step
+        let script = std::fs::read_to_string(workspace_root.join("scripts/build_release_ext.sh"))
+            .expect("read coherent release extension build helper");
+        let command: String = script
             .lines()
             .skip_while(|line| !line.trim_start().starts_with("cargo build "))
-            .take_while(|line| !line.contains("|| echo"))
+            .take_while(|line| !line.trim_start().starts_with("echo "))
             .collect::<Vec<_>>()
             .join(" ");
         let tokens: Vec<&str> = command.split_whitespace().collect();
@@ -707,9 +701,11 @@ mod tests {
                  invocation so its bundled runtime matches the shipped archives; got:\n{command}"
             );
         }
+        assert!(script.contains("packages=$(bash scripts/release_ext_packages.sh)"));
+        assert!(script.contains("pkg_args+=(-p \"$package\")"));
         assert!(
-            tokens.windows(2).any(|pair| pair == ["-p", "\"$name\""]),
-            "native ext release command stopped selecting the loop's crate: {command}"
+            command.contains("\"${pkg_args[@]}\""),
+            "native ext release command stopped selecting the governed extension package array: {command}"
         );
     }
 

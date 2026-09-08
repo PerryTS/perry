@@ -38,18 +38,31 @@ const SOURCE: &str = include_str!("../../../test-files/test_gap_iterator_prototy
 
 const EXPECTED: &str = "A-forof 2,4,6\n\
 A-spread 8,10\n\
-A-from 12\n\
-A-manual 14 16 true\n\
+A-from-array 12\n\
+A-from-iterator 14\n\
+A-dynamic-forof 16,18\n\
+A-call-spread 20,22\n\
+A-push-spread 0,24,26\n\
+A-push-local 0,28,30\n\
+A-push-set 0,44,46\n\
+A-arguments-spread 32,34\n\
+A-set-constructor 36,38\n\
+A-manual 40 42 true\n\
 B-forof 1,2,3\n\
 B-spread 4,5\n\
 B-manual 7 8 true\n\
+B-push-holes 4 true true\n\
 C-forof-empty 0\n\
 C-restored 9\n\
 D-map a=101,b=102\n\
+D-map-spread c,103\n\
+D-map-from d,104\n\
 D-map-restored a,1\n\
 D-set s1,s2\n\
+D-set-from s3,s4\n\
 D-set-restored 3\n\
 E-string A,B\n\
+E-string-from C,D\n\
 E-string-restored c,d\n\
 F-same-object 1,2\n\
 F-bound-copy 100,200\n\
@@ -70,7 +83,7 @@ fn perry_bin() -> PathBuf {
 }
 
 #[test]
-fn patched_iterator_prototype_next_drives_every_iteration_form() {
+fn patched_iterator_prototype_next_drives_materializers_and_dynamic_iteration() {
     let dir = tempfile::tempdir().expect("tempdir");
     let entry = dir.path().join("iterator_next_patch.ts");
     let output = dir.path().join("iterator_next_patch_bin");
@@ -83,6 +96,7 @@ fn patched_iterator_prototype_next_drives_every_iteration_form() {
         .arg("-o")
         .arg(&output)
         .arg("--no-cache")
+        .arg("--no-auto-optimize")
         .output()
         .expect("run perry compile");
     assert!(
@@ -107,5 +121,28 @@ fn patched_iterator_prototype_next_drives_every_iteration_form() {
         EXPECTED,
         "output must match node v26.5.1\nstderr:\n{}",
         String::from_utf8_lossy(&run.stderr)
+    );
+
+    let stressed = Command::new(&output)
+        .current_dir(dir.path())
+        .env("PERRY_GC_SCHEDULE_SEED", "9846")
+        .env("PERRY_GC_SCHEDULE_RATE", "1")
+        .env("PERRY_GC_SCHEDULE_ALLOC_KB", "0")
+        .env("PERRY_GC_FORCE_EVACUATE", "1")
+        .env("PERRY_GC_VERIFY_EVACUATION", "1")
+        .env("PERRY_GC_PROTECT_FROMSPACE", "1")
+        .output()
+        .expect("run compiled binary under moving-GC stress");
+    assert!(
+        stressed.status.success(),
+        "GC-stressed binary failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&stressed.stdout),
+        String::from_utf8_lossy(&stressed.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&stressed.stdout),
+        EXPECTED,
+        "GC-stressed output must match node\nstderr:\n{}",
+        String::from_utf8_lossy(&stressed.stderr)
     );
 }

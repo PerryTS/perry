@@ -1006,34 +1006,17 @@ pub extern "C" fn js_array_push_spread_f64(
     if source.is_null() {
         return target;
     }
-    // #7542: call-spread (`f(...arr)`) is `GetIterator(arr)` + drain, so a
-    // patched `Array.prototype[Symbol.iterator]` decides how many arguments the
-    // callee receives. The element copy below never consults the protocol, so
-    // `f(...[1,2,3])` passed 3 arguments where node passes whatever the patched
-    // iterator yields (1).
-    //
-    // Materialize through the protocol and copy THAT, rather than concatenating:
-    // this helper appends into `target` in place and returns it, and callers
-    // rely on that identity. `js_array_clone_for_spread` is the same entry point
-    // `[...arr]` uses, so the two spread forms cannot disagree.
-    let source = if crate::array::array_proto_iterator_modified() {
-        let boxed = crate::value::js_nanbox_pointer(source as i64);
-        let materialized = crate::array::js_array_clone_for_spread(boxed);
-        if materialized.is_null() {
-            return target;
-        }
-        materialized as *const ArrayHeader
-    } else {
-        source
-    };
+    // Each append can collect. Keep both arrays rooted and re-read their
+    // possibly moved addresses for every element.
     let scope = crate::gc::RuntimeHandleScope::new();
+    let target_handle = scope.root_raw_mut_ptr(target);
     let source_handle = scope.root_raw_const_ptr(source);
     unsafe {
         let src_len = (*source).length;
         if src_len == 0 {
-            return target;
+            return target_handle.with_mut_ptr(clean_arr_ptr_mut);
         }
-        let mut current = target;
+        let mut current = ptr::null_mut();
         for i in 0..src_len {
             let source = clean_arr_ptr(source_handle.get_raw_const_ptr::<ArrayHeader>());
             if source.is_null() {
@@ -1041,8 +1024,18 @@ pub extern "C" fn js_array_push_spread_f64(
             }
             let src_elements_ptr =
                 (source as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
-            let value = *src_elements_ptr.add(i as usize);
-            current = js_array_push_f64(current, value);
+            let mut value = *src_elements_ptr.add(i as usize);
+            // Iterator reads turn an absent array element into `undefined`;
+            // appending the backing-store hole marker would leave the new
+            // index absent instead.
+            if value.to_bits() == crate::value::TAG_HOLE {
+                value = f64::from_bits(crate::value::TAG_UNDEFINED);
+            }
+            current = if i == 0 {
+                target_handle.with_mut_ptr(|target| js_array_push_f64(target, value))
+            } else {
+                js_array_push_f64(current, value)
+            };
         }
         current
     }

@@ -41,23 +41,44 @@ mod tests {
     }
 
     #[test]
-    fn stack_top_respects_custom_thread_stack_sizes() {
-        for stack_size in [256 * 1024, 2 * 1024 * 1024] {
-            std::thread::Builder::new()
-                .stack_size(stack_size)
-                .spawn(move || {
-                    let local = 0u8;
-                    let address = std::hint::black_box(&local) as *const u8 as usize;
-                    let top = stack_top();
-                    assert!(top > address, "worker stack bound must enclose its local");
-                    assert!(
-                        top - address <= stack_size,
-                        "bound must belong to this worker"
-                    );
-                })
-                .unwrap()
-                .join()
-                .unwrap();
+    fn stack_top_is_specific_to_concurrent_custom_stack_workers() {
+        // `Builder::stack_size` is a request, not the exact size Linux must
+        // report for the resulting pthread mapping. In particular, the glibc
+        // stack cache may satisfy a request with a larger reusable mapping.
+        // Keep both workers alive together and assert the actual invariant:
+        // each bound encloses its worker and names neither the parent nor its
+        // concurrently live peer.
+        let parent_top = stack_top();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let workers: Vec<_> = [256 * 1024, 2 * 1024 * 1024]
+            .into_iter()
+            .map(|stack_size| {
+                let barrier = barrier.clone();
+                std::thread::Builder::new()
+                    .stack_size(stack_size)
+                    .spawn(move || {
+                        let local = 0u8;
+                        let address = std::hint::black_box(&local) as *const u8 as usize;
+                        let top = stack_top();
+                        barrier.wait();
+                        (address, top)
+                    })
+                    .unwrap()
+            })
+            .collect();
+        barrier.wait();
+        let bounds: Vec<_> = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect();
+
+        for (address, top) in &bounds {
+            assert!(top > address, "worker stack bound must enclose its local");
+            assert_ne!(*top, parent_top, "worker must not reuse the parent bound");
         }
+        assert_ne!(
+            bounds[0].1, bounds[1].1,
+            "live workers need distinct bounds"
+        );
     }
 }

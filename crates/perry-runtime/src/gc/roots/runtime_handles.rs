@@ -28,25 +28,33 @@ pub(crate) fn runtime_handle_stack_hot_addr() -> *mut u8 {
     addr
 }
 
-/// Borrow this thread's transient-handle stack.
-///
-/// On Apple aarch64 the steady-state path reads the address from an already
-/// published `HotTls`. During `HotTls::fill` (and on every other target) it
-/// uses the ordinary thread-local directly, so opening a handle scope cannot
-/// recursively initialize the cache (#9183).
-#[inline(always)]
-fn with_runtime_handle_stack<R>(f: impl FnOnce(&RefCell<Vec<RuntimeHandleSlot>>) -> R) -> R {
+/// Resolve the process runtime's transient-handle stack. Keep this as an
+/// interposable, out-of-line symbol: provider dylibs also contain runtime rlib
+/// code, and an inlined accessor there would select that image's private TLS
+/// while an out-of-line handle method selected the runtime provider's TLS.
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn js_runtime_handle_stack_addr() -> *mut u8 {
     if let Some(hot) = crate::tls_hot::hot_if_published() {
         let stack = hot.runtime_handle_stack.get();
         if stack.is_null() {
-            return RUNTIME_HANDLE_STACK.with(f);
+            return runtime_handle_stack_hot_addr();
         }
-        // SAFETY: `fill` stores this thread's `RUNTIME_HANDLE_STACK` address
-        // before publishing the cache, and the address is stable for the
-        // lifetime of the thread.
-        return f(unsafe { &*(stack as *const RefCell<Vec<RuntimeHandleSlot>>) });
+        return stack;
     }
-    RUNTIME_HANDLE_STACK.with(f)
+    runtime_handle_stack_hot_addr()
+}
+
+/// Borrow this thread's transient-handle stack through the process-authority
+/// symbol above. During `HotTls::fill` it resolves the raw TLS fallback, so
+/// opening a handle scope cannot recursively initialize the cache (#9183).
+#[inline(always)]
+fn with_runtime_handle_stack<R>(f: impl FnOnce(&RefCell<Vec<RuntimeHandleSlot>>) -> R) -> R {
+    let stack = js_runtime_handle_stack_addr();
+    // SAFETY: the exported resolver returns this thread's live
+    // `RUNTIME_HANDLE_STACK` address, whose storage is stable until TLS
+    // destruction.
+    f(unsafe { &*(stack as *const RefCell<Vec<RuntimeHandleSlot>>) })
 }
 
 /// Scoped owner for transient runtime handles.
@@ -232,9 +240,13 @@ impl<'scope> RuntimeHandle<'scope> {
     #[inline]
     pub(super) fn with_slot<R>(&self, f: impl FnOnce(RuntimeHandleSlot) -> R) -> R {
         with_runtime_handle_stack(|stack| {
-            let stack = stack.borrow();
-            let slot = match stack.get(self.index) {
-                Some(slot) => *slot,
+            // End the RefCell borrow before diagnosing a stale handle. Panic
+            // unwinding drops the caller's RuntimeHandleScope, whose Drop
+            // truncates this same Vec; keeping the borrow live caused a second
+            // `RefCell already borrowed` panic and hid the original backtrace.
+            let slot = { stack.borrow().get(self.index).copied() };
+            let slot = match slot {
+                Some(slot) => slot,
                 None => handle_used_after_scope(),
             };
             f(slot)
@@ -244,12 +256,14 @@ impl<'scope> RuntimeHandle<'scope> {
     #[inline]
     pub(super) fn with_slot_mut<R>(&self, f: impl FnOnce(&mut RuntimeHandleSlot) -> R) -> R {
         with_runtime_handle_stack(|stack| {
+            // Diagnose an out-of-scope handle before taking the mutable
+            // borrow for the update. RuntimeHandleScope::drop needs that same
+            // borrow while unwinding.
+            if self.index >= stack.borrow().len() {
+                handle_used_after_scope();
+            }
             let mut stack = stack.borrow_mut();
-            let slot = match stack.get_mut(self.index) {
-                Some(slot) => slot,
-                None => handle_used_after_scope(),
-            };
-            f(slot)
+            f(&mut stack[self.index])
         })
     }
 
