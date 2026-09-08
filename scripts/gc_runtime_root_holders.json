@@ -3234,10 +3234,6 @@
     },
     {
       "file": "crates/perry-runtime/src/gc/mod.rs",
-      "name": "GC_INIT_DONE"
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/mod.rs",
       "name": "GC_SCAVENGE_TEST_OVERRIDE"
     },
     {
