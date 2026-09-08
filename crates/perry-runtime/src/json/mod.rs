@@ -219,11 +219,9 @@ thread_local! {
 
     /// Cached verdict on whether the default `Object.prototype` carries a
     /// `toJSON` property (#6009). One of `PROTO_TOJSON_DIRTY` /
-    /// `PROTO_TOJSON_ABSENT` / `PROTO_TOJSON_PRESENT`. Computed lazily by the
-    /// first `object_get_to_json` fast-path probe of a stringify call and
-    /// invalidated at every top-level stringify entry and after every user
-    /// callback (`toJSON` / replacer) — the only points where user code could
-    /// have added `Object.prototype.toJSON` since the last computation.
+    /// `PROTO_TOJSON_ABSENT` / `PROTO_TOJSON_PRESENT`. General serializer
+    /// entries and callbacks invalidate it; specialized plain-data entries
+    /// reuse it only while the live prototype signature still matches.
     pub(crate) static OBJECT_PROTO_TOJSON_STATE: std::cell::Cell<u8> =
         const { std::cell::Cell::new(0) };
 

@@ -132,7 +132,6 @@ unsafe fn emit_record(obj: *const crate::ObjectHeader, fields: usize) -> Option<
     // final output allocation. Nothing in the stack plan is a heap pointer.
     let scope = crate::gc::RuntimeHandleScope::new();
     let input = scope.root_raw_const_ptr(obj);
-    super::invalidate_object_proto_tojson_state();
     if !super::stringify_tojson_probe::to_json_definitely_absent_after_own_keys(obj.cast()) {
         return None;
     }

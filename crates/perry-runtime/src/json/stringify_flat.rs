@@ -235,9 +235,8 @@ pub(super) unsafe fn try_object(bits: u64) -> Option<JSValue> {
     }
     if fields == 0 {
         // The inline result needs neither an output allocation nor a stack
-        // plan. Refresh the prototype verdict for this call, but decline the
-        // allocating first lookup so the rooted general serializer handles it.
-        super::invalidate_object_proto_tojson_state();
+        // plan. Decline the allocating first lookup so the rooted general
+        // serializer initializes the signature cache.
         return super::stringify_tojson_probe::to_json_definitely_absent_without_gc(obj.cast())
             .then(|| JSValue::short_string_unchecked(b"{}"));
     }
@@ -275,7 +274,6 @@ unsafe fn emit_one_field_object(obj: *const crate::ObjectHeader) -> Option<JSVal
 
     let scope = crate::gc::RuntimeHandleScope::new();
     let input = scope.root_raw_const_ptr(obj);
-    super::invalidate_object_proto_tojson_state();
     if !super::stringify_tojson_probe::to_json_definitely_absent_after_own_keys(obj.cast()) {
         return None;
     }
@@ -373,7 +371,6 @@ unsafe fn emit_two_field_parsed_string_object(
     let input = scope.root_raw_const_ptr(obj);
     service_json_output_sweep_boundary();
     let obj = input.get_raw_const_ptr::<crate::ObjectHeader>();
-    super::invalidate_object_proto_tojson_state();
     if !super::stringify_tojson_probe::to_json_definitely_absent_after_own_keys(obj.cast()) {
         return None;
     }
@@ -469,9 +466,8 @@ unsafe fn emit_object(obj: *const crate::ObjectHeader, fields: usize) -> Option<
     // the stack plan contains lengths and inline bytes, never heap pointers.
     let scope = crate::gc::RuntimeHandleScope::new();
     let input = scope.root_raw_const_ptr(obj);
-    // This early path can run outside a serializer frame. Refresh the
-    // prototype verdict rather than inheriting a previous call's cache.
-    super::invalidate_object_proto_tojson_state();
+    // This early path can run outside a serializer frame. The prototype probe
+    // validates its live signature before reusing a prior call's verdict.
     if !super::stringify_tojson_probe::to_json_definitely_absent_after_own_keys(obj.cast()) {
         return None;
     }

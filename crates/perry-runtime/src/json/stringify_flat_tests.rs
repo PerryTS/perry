@@ -159,6 +159,85 @@ fn flat_empty_output_declines_cold_lookup_and_stays_allocation_free_when_warm() 
 }
 
 #[test]
+fn flat_output_reuses_only_a_matching_object_prototype_signature() {
+    unsafe {
+        let value = parse("{}");
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let input = scope.root_nanbox_u64(value.bits());
+        super::super::invalidate_object_proto_tojson_state();
+        assert!(
+            super::super::stringify_tojson_probe::to_json_definitely_absent(
+                (input.get_nanbox_f64().to_bits() & POINTER_MASK) as *const u8
+            )
+        );
+
+        super::super::stringify_tojson_probe::test_reset_object_proto_tojson_recomputes();
+        super::super::invalidate_object_proto_tojson_state();
+        assert!(try_object(input.get_nanbox_f64().to_bits()).is_some());
+        assert_eq!(
+            super::super::stringify_tojson_probe::test_object_proto_tojson_recomputes(),
+            1
+        );
+        assert!(try_object(input.get_nanbox_f64().to_bits()).is_some());
+        assert_eq!(
+            super::super::stringify_tojson_probe::test_object_proto_tojson_recomputes(),
+            1,
+            "an unchanged live signature must reuse the prior negative verdict"
+        );
+
+        crate::object::prop_plan::prop_plan_epoch_bump();
+        assert!(try_object(input.get_nanbox_f64().to_bits()).is_some());
+        assert_eq!(
+            super::super::stringify_tojson_probe::test_object_proto_tojson_recomputes(),
+            2,
+            "a semantic mutation epoch must force recomputation"
+        );
+    }
+}
+
+#[test]
+fn flat_output_observes_object_prototype_tojson_install_and_delete() {
+    unsafe {
+        let value = parse("{}");
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let input = scope.root_nanbox_u64(value.bits());
+        super::super::invalidate_object_proto_tojson_state();
+        assert!(
+            super::super::stringify_tojson_probe::to_json_definitely_absent(
+                (input.get_nanbox_f64().to_bits() & POINTER_MASK) as *const u8
+            )
+        );
+        assert!(try_object(input.get_nanbox_f64().to_bits()).is_some());
+
+        let key = crate::js_string_from_bytes(b"toJSON".as_ptr(), 6);
+        let key = scope.root_string_ptr(key);
+        let proto_bits = CACHED_OBJECT_PROTO_BITS.with(|cached| cached.get());
+        assert_ne!(proto_bits, 0);
+        let proto = (proto_bits & POINTER_MASK) as *mut crate::ObjectHeader;
+        key.with_const_ptr(|key| {
+            crate::object::js_object_set_field_by_name(
+                proto,
+                key,
+                f64::from_bits(crate::value::TAG_TRUE),
+            )
+        });
+        assert!(
+            try_object(input.get_nanbox_f64().to_bits()).is_none(),
+            "the changed keys signature must reject an inherited toJSON key"
+        );
+
+        let proto_bits = CACHED_OBJECT_PROTO_BITS.with(|cached| cached.get());
+        let proto = (proto_bits & POINTER_MASK) as *mut crate::ObjectHeader;
+        let deleted = key.with_const_ptr(|key| crate::object::js_object_delete_field(proto, key));
+        assert_eq!(deleted, 1);
+        assert!(
+            try_object(input.get_nanbox_f64().to_bits()).is_some(),
+            "the semantic delete epoch must retire the present verdict"
+        );
+    }
+}
+
+#[test]
 fn flat_direct_output_declines_complex_fields_and_reordered_keys() {
     unsafe {
         for text in [

@@ -14,14 +14,34 @@ pub(crate) const PROTO_TOJSON_DIRTY: u8 = 0;
 const PROTO_TOJSON_ABSENT: u8 = 1;
 const PROTO_TOJSON_PRESENT: u8 = 2;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ObjectProtoToJsonSignature {
+    proto_addr: usize,
+    keys_addr: usize,
+    keys_len: u32,
+    obj_flags: u16,
+    class_id: u32,
+    semantic_epoch: u64,
+}
+
+thread_local! {
+    /// Address-bearing fields are comparison tokens only: they are never
+    /// dereferenced from this cache. Moving GC therefore turns a prior entry
+    /// into a signature miss without requiring another collector root.
+    static OBJECT_PROTO_TOJSON_SIGNATURE: std::cell::Cell<Option<ObjectProtoToJsonSignature>> =
+        const { std::cell::Cell::new(None) };
+    #[cfg(test)]
+    static OBJECT_PROTO_TOJSON_RECOMPUTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 /// Invalidate the cached `Object.prototype`-has-`toJSON` verdict. Called at
-/// every top-level stringify entry and after every user callback the
-/// stringify machinery invokes (`toJSON` / replacer) — the only points where
-/// user code could have (un)installed an `Object.prototype.toJSON` since the
-/// verdict was last computed.
+/// general top-level stringify entries and after every user callback the
+/// stringify machinery invokes (`toJSON` / replacer). Specialized plain-data
+/// entries instead validate the complete prototype signature before reuse.
 #[inline]
 pub(crate) fn invalidate_object_proto_tojson_state() {
     OBJECT_PROTO_TOJSON_STATE.with(|c| c.set(PROTO_TOJSON_DIRTY));
+    OBJECT_PROTO_TOJSON_SIGNATURE.with(|c| c.set(None));
 }
 
 /// Scan `keys` (an object's `keys_array`) for any key that could make the
@@ -132,6 +152,8 @@ fn marker_bytes_may_carry_to_json(bytes: &[u8]) -> bool {
 /// only means the probe falls back to the (correct) slow path.
 #[cold]
 unsafe fn compute_object_proto_tojson_state() -> u8 {
+    #[cfg(test)]
+    OBJECT_PROTO_TOJSON_RECOMPUTES.with(|count| count.set(count.get() + 1));
     // Resolve the default `Object.prototype` once per thread and cache the
     // bits — the `Object.prototype` property is non-writable/non-configurable
     // per spec, so re-resolving per call (a globalThis generic-getter walk
@@ -173,14 +195,74 @@ unsafe fn compute_object_proto_tojson_state() -> u8 {
     PROTO_TOJSON_ABSENT
 }
 
+#[cfg(test)]
+pub(super) fn test_reset_object_proto_tojson_recomputes() {
+    OBJECT_PROTO_TOJSON_RECOMPUTES.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(super) fn test_object_proto_tojson_recomputes() -> u64 {
+    OBJECT_PROTO_TOJSON_RECOMPUTES.with(std::cell::Cell::get)
+}
+
+/// Snapshot every part of the default-prototype lookup whose change can alter
+/// the negative verdict. Key-array contents can only change without changing
+/// identity/length through delete or descriptor/prototype operations, all of
+/// which advance the shared semantic property epoch.
+unsafe fn object_proto_tojson_signature() -> Option<ObjectProtoToJsonSignature> {
+    let proto_bits = CACHED_OBJECT_PROTO_BITS.with(|c| c.get());
+    if proto_bits == 0 {
+        return None;
+    }
+    let proto_addr = (proto_bits & POINTER_MASK) as usize;
+    let header = crate::value::addr_class::try_read_tracked_gc_header(proto_addr)?.as_ref();
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+    {
+        return None;
+    }
+    let proto = proto_addr as *const crate::ObjectHeader;
+    let keys = crate::object::object_keys_array(proto);
+    let (keys_addr, keys_len) = if keys.is_null() {
+        (0, 0)
+    } else {
+        let keys_addr = keys as usize;
+        let keys_header = crate::value::addr_class::try_read_tracked_gc_header(keys_addr)?.as_ref();
+        if keys_header.obj_type != crate::gc::GC_TYPE_ARRAY
+            || keys_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+            || (*keys).length > (*keys).capacity
+        {
+            return None;
+        }
+        (keys_addr, (*keys).length)
+    };
+    Some(ObjectProtoToJsonSignature {
+        proto_addr,
+        keys_addr,
+        keys_len,
+        obj_flags: header._reserved,
+        class_id: (*proto).class_id,
+        semantic_epoch: crate::object::prop_plan::prop_plan_semantic_epoch(),
+    })
+}
+
 #[inline]
 unsafe fn object_proto_may_have_to_json() -> bool {
     let state = OBJECT_PROTO_TOJSON_STATE.with(|c| c.get());
     if state != PROTO_TOJSON_DIRTY {
-        return state == PROTO_TOJSON_PRESENT;
+        let now = object_proto_tojson_signature();
+        if now.is_some() && OBJECT_PROTO_TOJSON_SIGNATURE.with(|signature| signature.get()) == now {
+            return state == PROTO_TOJSON_PRESENT;
+        }
     }
     let computed = compute_object_proto_tojson_state();
-    OBJECT_PROTO_TOJSON_STATE.with(|c| c.set(computed));
+    let signature = object_proto_tojson_signature();
+    if signature.is_some() {
+        OBJECT_PROTO_TOJSON_STATE.with(|c| c.set(computed));
+        OBJECT_PROTO_TOJSON_SIGNATURE.with(|c| c.set(signature));
+    } else {
+        invalidate_object_proto_tojson_state();
+    }
     computed == PROTO_TOJSON_PRESENT
 }
 
@@ -250,7 +332,8 @@ fn class_chain_may_have_to_json(class_id: u32) -> bool {
 ///    `Object.create` with a Proxy prototype) — any recorded entry defers to
 ///    the slow path;
 /// 4. a `toJSON` monkey-patched onto the default `Object.prototype` —
-///    `object_proto_may_have_to_json` (verdict cached per stringify call).
+///    `object_proto_may_have_to_json` (verdict cached under a live mutation
+///    signature across callback-free specialized stringify calls).
 ///
 /// Before this probe, every object literal paid ~3 recursive
 /// `js_object_get_field_by_name` miss cascades per stringify call — ~90% of
