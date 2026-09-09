@@ -1,0 +1,23 @@
+{
+  "purpose": "isolated opening-byte scan diagnostic, not JSON.parse acceptance",
+  "host": "perry-macos.fritz.box",
+  "started_utc": "2026-09-09T19:07:33Z",
+  "files": {
+    "run.py": "7c4eda96a21fd0eb3b2c7c6cc41c52eeb63eec259c14750da8daae39229e90f1",
+    "probe.rs": "61e685e82616a8e96220d70d5ba44f8b563147a16f73c5063d546ecb91bb4ee6",
+    "libopen_scan.dylib": "ece4570a30268e080074f9106857567d19e77e47b35a27eed7f326f707b30be2"
+  },
+  "fixtures": {
+    "long_string_1m": {
+      "sha256": "ea77e5d1ebb84c30a920d4de6aee5c5c92c2aba6cf060c30f1933e1e000e9081",
+      "bytes": 1048593,
+      "expected": false
+    },
+    "unicode_1m": {
+      "sha256": "b58eea42a50190b7675886030ef6875b25bb0a6d50632d9cbc5a918ea4ad9bd9",
+      "bytes": 884017,
+      "expected": false
+    }
+  },
+  "finished_utc": "2026-09-09T19:07:39Z"
+}

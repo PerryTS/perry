@@ -1,5 +1,7 @@
 # Next parse investigations
 
+The [opening-scan and entry-frame experiment](OPENING_SCAN.md) now has complete R1 evidence and an R2 follow-up under validation. The [large-container memory diagnosis](GC_MEMORY_GROWTH.md) has separate default/full-GC measurements.
+
 These are hypotheses, not accepted speedups. Bounded lazy-record construction
 and preserved large-output sweep requests landed through #10033 at `e7223f700`.
 The escaped-record correction and its regression checks come before the next
