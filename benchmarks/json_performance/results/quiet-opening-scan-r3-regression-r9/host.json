@@ -1,0 +1,97 @@
+{
+  "started_utc": "2026-09-09T20:36:11Z",
+  "load_before": [
+    2.22314453125,
+    1.86474609375,
+    1.8056640625
+  ],
+  "cases": [
+    [
+      "null",
+      "parse",
+      20000000,
+      2000,
+      9
+    ],
+    [
+      "string_a",
+      "parse",
+      20000000,
+      2000,
+      9
+    ],
+    [
+      "empty_object",
+      "parse",
+      10000000,
+      2000,
+      9
+    ],
+    [
+      "tiny_object",
+      "parse",
+      5000000,
+      2000,
+      9
+    ],
+    [
+      "small_record",
+      "parse",
+      2000000,
+      2000,
+      9
+    ],
+    [
+      "object_1k",
+      "parse",
+      2000000,
+      2000,
+      9
+    ],
+    [
+      "records_array_16k",
+      "sparse",
+      10000,
+      8,
+      9
+    ],
+    [
+      "numbers_1m",
+      "stringify",
+      500,
+      8,
+      9
+    ],
+    [
+      "heterogeneous_1m",
+      "parse",
+      256,
+      8,
+      9
+    ],
+    [
+      "wide_1m",
+      "parse",
+      128,
+      8,
+      9
+    ]
+  ],
+  "workers": {
+    "perry": "ecec9a2a310d63fc3f8a265b5286c456f689ddd0177f3034850b5d11154325c9",
+    "baseline": "a718f0193c1409cebceebeb4882d69835756c44d2b157c38f747d517c1e2aea5",
+    "prior": "7b6862261f69bd825b8e943fa34219ee0966dbb7dfc7df15145deda31f1f5c7b"
+  },
+  "sources": {
+    "run_regression_focus.py": "d45cbb853e7127dc0a95e68955f8e8dea130a784ce2525c829519edaeda36fe8",
+    "run_dispatch_focus.py": "100ba3e1bd5c0cd451d1a3528f95b5f4b8d0ff2f4771796ab8598b36a46fbcc4",
+    "worker.js": "55c11d12296f896212d6abd76bcf8d551d0590b0ad24b262018b7a707369a2f4"
+  },
+  "node_version": "v26.5.1",
+  "finished_utc": "2026-09-09T20:37:30Z",
+  "load_after": [
+    1.87939453125,
+    1.81103515625,
+    1.7861328125
+  ]
+}
