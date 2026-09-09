@@ -1,0 +1,16 @@
+[
+  {
+    "fixture": "small_record",
+    "candidate_vs_reference_percent": 0.17030127461554745,
+    "candidate_vs_prior_percent": -0.22062219917180492,
+    "samples_overlap": true,
+    "peak_delta_kib": 32.0
+  },
+  {
+    "fixture": "object_1k",
+    "candidate_vs_reference_percent": -0.17695279064153802,
+    "candidate_vs_prior_percent": -0.012640661711160739,
+    "samples_overlap": true,
+    "peak_delta_kib": 48.0
+  }
+]

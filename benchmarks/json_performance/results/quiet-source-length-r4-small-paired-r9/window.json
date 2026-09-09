@@ -1,0 +1,23 @@
+{
+  "owner": "json-perf-71855-1788981418",
+  "load_before": [
+    1.57470703125,
+    1.61279296875,
+    1.623046875
+  ],
+  "started_utc": "2026-09-09T19:16:58Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/source-length-r4/run_small_focus.py",
+    "results/quiet-source-length-r4-small-paired-r9"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.84033203125,
+    1.71630859375,
+    1.662109375
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-09T19:18:18Z"
+}

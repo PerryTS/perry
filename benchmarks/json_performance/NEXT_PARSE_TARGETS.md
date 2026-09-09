@@ -65,3 +65,20 @@ UTF-16 recount. Require the entire original string, rather than retaining a
 large source for a tiny substring. Preserve all existing mutation/fallback
 checks and establish canonical output equivalence before considering reuse.
 This is a follow-up hypothesis; no implementation or measured gain is claimed.
+
+## Latest source-length experiments and next scanner candidate
+
+Source-length R4 removes the redundant UTF-16 count and preserves the original
+small constructor's generated body. It passes 286 JSON tests and compiled GC
+witnesses, and [focused changing-input trials](results/quiet-source-length-r4-focus-r9/README.md)
+show 11.26% / 45.29% lower CPU on large ASCII / Unicode strings. A
+[longer small-record comparison](results/quiet-source-length-r4-small-paired-r9/README.md)
+still has a +0.170% median versus corrected R2, with overlapping samples, so the
+change remains experimental. Its branch is codex/json-source-length-r4.
+
+The independent [opening-byte scan probe](results/quiet-open-scan-probe-r9/README.md)
+uses 64-byte blocks and a folded '[' / '{' test, preserving the first 16-byte
+early-positive probe for arrays. Its isolated CPU is about 39% lower on the two
+large-string inputs, with exhaustive byte/boundary checks against the current
+helper. This is not a measured JSON.parse speedup. Test it next as a separate
+runtime candidate on corrected R2, keeping the source-length experiment isolated.

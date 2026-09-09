@@ -1,0 +1,19 @@
+{
+  "files": {
+    "crates/perry-runtime/src/gc/policy.rs": "a701257f2e2310adabe16e33c0afcd935c7cd28e1ddc157b4974b48e2688cc4f",
+    "crates/perry-runtime/src/gc/tests/runtime_roots/callback_scanners.rs": "88dc78f4899814283284619903d8ccf43218e372a47adf1ca670897220e0d103",
+    "crates/perry-runtime/src/json/mod.rs": "fc93ac6b064ad094137b83e69c5e2a93922bf12ba250e1296135a03b54e54ed7",
+    "crates/perry-runtime/src/json/parser.rs": "562d905189d3a3faf41bcbe910640a60af2aa9259a8719556915018260c50f67",
+    "crates/perry-runtime/src/json/parser_source_string.rs": "24832079dc27b5c98d598a46014a7cd7d542b4275bb6899a95b657104d31f480",
+    "crates/perry-runtime/src/json/parser_source_string_tests.rs": "91c8d399d58ff295ad67ff3ee08bd183b5afa82585a2a922980482bbbc8e3d4f",
+    "crates/perry-runtime/src/json/stringify.rs": "ca5a7ee737b76c5ef171c61ab0ad716db56fa3db62948752406fbb23588e2aa5",
+    "crates/perry-runtime/src/json/stringify_scalars.rs": "489fedbcbfa444f396da27c79d317efb800c7872664a9486bf2455ead9920219",
+    "crates/perry-runtime/src/json_tape.rs": "8d056a2dfc510e3ecf684df40ed0e415109f652fe12711a901e70e9c7155b10c",
+    "crates/perry-runtime/src/json_tape/record_materialize.rs": "25a54c9555d1745d939a4a260f2083cd73a3ba2bd69cb19b92277682a8d640b2",
+    "crates/perry-runtime/src/json_tape/string_decode_tests.rs": "3dfcca09636abae9047ef48e39ecf738d023d61ad4308aa3a16d1fb1fedd3b65",
+    "crates/perry-runtime/src/string/json_construction.rs": "ee30d2a6381e547b4a6cd629ea32f385baad6ee692bf13998845ce70559995bd",
+    "crates/perry-runtime/src/string/mod.rs": "dfe4a90f00954f6b7e590a5052e2141774de1aca03c421adbe5d7ff4f1048f20",
+    "scripts/gc_runtime_root_holders.json": "a0a09cccc940b3a176d395c6bf0c5b07f09f911deea94042a32f75e14d91fa35"
+  },
+  "result": "286 JSON tests passed in release mode, single-threaded; frozen source hashes unchanged"
+}

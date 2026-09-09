@@ -1,0 +1,20 @@
+{
+  "started_utc": "2026-09-09T19:16:58Z",
+  "host": "perry-macos.fritz.box",
+  "workers": {
+    "perry": "3c05afe62922899817f55d04e7ec5656b0eaa4bb3b74ce719a0cfa98efc334f0",
+    "baseline": "ccce75e98f9cd686b579673bc01423619fcf57abdcc83d7a85cc2280b39ab4af",
+    "prior": "acd53e900dce2c7778d5c5e8a70b180b66b89b347a66f68981fee67f03cbf37d"
+  },
+  "runner_sha256": "0ddebc87cf849d4c3ae2530d0143327601986b5fa338eed3e2a0d7f1413de47e",
+  "run_rotating_sha256": "24b639895ac95e85ba8808d34c10e74a0000f0fd032d0d86525000f337753c58",
+  "cases": [
+    "small_record",
+    "object_1k"
+  ],
+  "iterations": 3000000,
+  "warmup": 5000,
+  "repetitions": 9,
+  "node_version": "v26.5.1",
+  "finished_utc": "2026-09-09T19:18:18Z"
+}
