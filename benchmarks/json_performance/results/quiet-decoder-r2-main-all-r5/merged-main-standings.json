@@ -1,0 +1,51 @@
+{
+  "main_commit": "e7223f700c8ce69c388210dab394ad7142550527",
+  "wins": {
+    "cpu": [
+      46,
+      50
+    ],
+    "peak": [
+      67,
+      86
+    ],
+    "after": [
+      31,
+      36
+    ]
+  },
+  "cpu_gaps": [
+    {
+      "fixture": "records_array_16k",
+      "operation": "scan",
+      "main_us": 63.28362046798663,
+      "node_us": 41.14811005399846,
+      "bun_us": 35.63615325276421,
+      "main_best_ratio": 1.7758263642857657
+    },
+    {
+      "fixture": "records_array_1m",
+      "operation": "scan",
+      "main_us": 3253.926470588235,
+      "node_us": 2888.573529411765,
+      "bun_us": 2223.6911764705883,
+      "main_best_ratio": 1.4632996276725898
+    },
+    {
+      "fixture": "records_array_20m",
+      "operation": "roundtrip",
+      "main_us": 99398.5,
+      "node_us": 103757.0,
+      "bun_us": 77047.0,
+      "main_best_ratio": 1.2901021454436903
+    },
+    {
+      "fixture": "records_array_8m",
+      "operation": "scan",
+      "main_us": 25183.0,
+      "node_us": 30477.75,
+      "bun_us": 21411.125,
+      "main_best_ratio": 1.1761642604020106
+    }
+  ]
+}
