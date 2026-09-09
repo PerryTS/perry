@@ -1,0 +1,46 @@
+{
+  "owner": "json-perf-81359-1788984158",
+  "load_before": [
+    1.80078125,
+    1.96337890625,
+    1.86083984375
+  ],
+  "started_utc": "2026-09-09T20:02:38Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    "run_regression_focus.py",
+    "--worker",
+    ".work/opening-scan-r1/worker",
+    "--baseline-worker",
+    ".work/decoder-r2/worker",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--case",
+    "null:parse:20000000:2000:9",
+    "--case",
+    "string_a:parse:20000000:2000:9",
+    "--case",
+    "empty_object:parse:10000000:2000:9",
+    "--case",
+    "tiny_object:parse:5000000:2000:9",
+    "--case",
+    "small_record:parse:2000000:2000:9",
+    "--case",
+    "object_1k:parse:2000000:2000:9",
+    "--case",
+    "records_array_16k:sparse:10000:8:9",
+    "--case",
+    "numbers_1m:stringify:500:8:9",
+    "--results-dir",
+    "results/quiet-opening-scan-r1-regression-r9"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    2.0009765625,
+    1.98388671875,
+    1.8701171875
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-09T20:03:16Z"
+}

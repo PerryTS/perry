@@ -1,0 +1,90 @@
+[gc-globalthis-bootstrap] elapsed_us=3049 per_object_slot_masks=1 per_object_typed_layouts=0
+[gc-trigger] site=alloc_point kind=OldReclaim arena_total=37748736 next_base=134217728 armed=false from_space=494568 nursery_cap=17765976 old_in_use=35531952 old_free=0 old_reclaimable=35531952 external_side=0 old_baseline=0 old_band=33554432 old_threshold=50331648 old_pending=false retaining=false malloc=0 next_malloc=100000
+[gc-scan-fallback] site=old_reclaim_alloc_point automatic=true count=1
+[gc-full] site=alloc_point_old_reclaim trigger=OldGenBytes count_at_site=1 old_reclaimable=35531952 old_baseline=0
+[gc-proxy-registry] live=0 tombstones=0 slots=0 reclaimed=0 reclaimed_total=0
+[gc] blocks: general=1 (1 live), non_general=5 (3 live, survivors+longlived+old), freed_bytes=40120 retained_forwarded_stub_bytes=1984 retained_forwarded_stub_objects=8
+[gc-old-free] reusable_bytes=0
+[gc-general-reclaim] examined=1 released=0 rejected: no_snapshot=0 snapshot_moved=0 keep_window=1 has_live=0 in_use=0 aging=0
+[gc-restore-coverage] budgeted_cycle dirty_pages=0 objects_walked=0 objects_skipped=0 pages_added=0
+[gc-young-log] budgeted_full table=object.descriptors mode=full passes=1 logged=1833 visited=1833 kept=1800 table_len=1833 skipped=0
+[gc-young-log] budgeted_full table=shapes.families+indices mode=full passes=1 logged=1373 visited=1373 kept=1207 table_len=1373 skipped=0
+[gc-young-log] budgeted_full table=object.transition_cache mode=full passes=1 logged=16384 visited=16384 kept=1234 table_len=16384 skipped=0
+[gc-young-log] budgeted_full table=box.roots mode=full passes=1 logged=0 visited=0 kept=0 table_len=0 skipped=0
+[gc-young-log] budgeted_full table=closure.dynamic_props mode=full passes=1 logged=1670 visited=1670 kept=1670 table_len=1670 skipped=0
+[gc-young-log] budgeted_full table=object.builtin_closure_metadata mode=full passes=1 logged=1547 visited=1547 kept=1547 table_len=2843 skipped=1296
+[gc-young-log] budgeted_full table=gc.layout_tables mode=full passes=1 logged=1 visited=1 kept=1 table_len=1 skipped=0
+[gc-trigger] site=alloc_point kind=OldReclaim arena_total=55574528 next_base=134217728 armed=false from_space=494696 nursery_cap=26648964 old_in_use=53297928 old_free=0 old_reclaimable=53297928 external_side=0 old_baseline=35531952 old_band=33554432 old_threshold=50331648 old_pending=false retaining=false malloc=0 next_malloc=100000
+[gc-scan-fallback] site=old_reclaim_alloc_point automatic=true count=2
+[gc-full] site=alloc_point_old_reclaim trigger=OldGenBytes count_at_site=2 old_reclaimable=53297928 old_baseline=35531952
+[gc-proxy-registry] live=0 tombstones=0 slots=0 reclaimed=0 reclaimed_total=0
+[gc] blocks: general=1 (1 live), non_general=6 (4 live, survivors+longlived+old), freed_bytes=62592 retained_forwarded_stub_bytes=1984 retained_forwarded_stub_objects=8
+[gc-old-free] reusable_bytes=0
+[gc-general-reclaim] examined=1 released=0 rejected: no_snapshot=0 snapshot_moved=0 keep_window=1 has_live=0 in_use=0 aging=0
+[gc-restore-coverage] budgeted_cycle dirty_pages=0 objects_walked=0 objects_skipped=0 pages_added=0
+[gc-young-log] budgeted_full table=object.descriptors mode=full passes=1 logged=1612 visited=1612 kept=1579 table_len=1612 skipped=0
+[gc-young-log] budgeted_full table=shapes.families+indices mode=full passes=1 logged=1320 visited=1320 kept=1161 table_len=1320 skipped=0
+[gc-young-log] budgeted_full table=object.transition_cache mode=full passes=1 logged=16384 visited=16384 kept=83 table_len=16384 skipped=0
+[gc-young-log] budgeted_full table=box.roots mode=full passes=1 logged=0 visited=0 kept=0 table_len=0 skipped=0
+[gc-young-log] budgeted_full table=closure.dynamic_props mode=full passes=1 logged=1449 visited=1449 kept=1449 table_len=1449 skipped=0
+[gc-young-log] budgeted_full table=object.builtin_closure_metadata mode=full passes=1 logged=1326 visited=1326 kept=1326 table_len=2429 skipped=1103
+[gc-young-log] budgeted_full table=gc.layout_tables mode=full passes=1 logged=1 visited=1 kept=1 table_len=1 skipped=0
+[gc-trigger] site=alloc_point kind=OldReclaim arena_total=91226112 next_base=134217728 armed=false from_space=494952 nursery_cap=44414940 old_in_use=88829880 old_free=0 old_reclaimable=88829880 external_side=0 old_baseline=53297928 old_band=33554432 old_threshold=50331648 old_pending=false retaining=false malloc=0 next_malloc=100000
+[gc-scan-fallback] site=old_reclaim_alloc_point automatic=true count=3
+[gc-full] site=alloc_point_old_reclaim trigger=OldGenBytes count_at_site=3 old_reclaimable=88829880 old_baseline=53297928
+[gc-proxy-registry] live=0 tombstones=0 slots=0 reclaimed=0 reclaimed_total=0
+[gc] blocks: general=1 (1 live), non_general=8 (6 live, survivors+longlived+old), freed_bytes=241384 retained_forwarded_stub_bytes=1984 retained_forwarded_stub_objects=8
+[gc-old-free] reusable_bytes=0
+[gc-general-reclaim] examined=1 released=0 rejected: no_snapshot=0 snapshot_moved=0 keep_window=1 has_live=0 in_use=0 aging=0
+[gc-restore-coverage] budgeted_cycle dirty_pages=0 objects_walked=0 objects_skipped=0 pages_added=0
+[gc-young-log] budgeted_full table=object.descriptors mode=full passes=1 logged=1612 visited=1612 kept=1579 table_len=1612 skipped=0
+[gc-young-log] budgeted_full table=shapes.families+indices mode=full passes=1 logged=370 visited=370 kept=329 table_len=370 skipped=0
+[gc-young-log] budgeted_full table=object.transition_cache mode=full passes=1 logged=16384 visited=16384 kept=79 table_len=16384 skipped=0
+[gc-young-log] budgeted_full table=box.roots mode=full passes=1 logged=0 visited=0 kept=0 table_len=0 skipped=0
+[gc-young-log] budgeted_full table=closure.dynamic_props mode=full passes=1 logged=1449 visited=1449 kept=1449 table_len=1449 skipped=0
+[gc-young-log] budgeted_full table=object.builtin_closure_metadata mode=full passes=1 logged=1326 visited=1326 kept=1326 table_len=2429 skipped=1103
+[gc-young-log] budgeted_full table=gc.layout_tables mode=full passes=1 logged=1 visited=1 kept=1 table_len=1 skipped=0
+[gc-trigger] site=alloc_point kind=OldReclaim arena_total=144703488 next_base=134217728 armed=false from_space=496584 nursery_cap=71063904 old_in_use=142127808 old_free=0 old_reclaimable=142127808 external_side=0 old_baseline=88829880 old_band=44414940 old_threshold=50331648 old_pending=false retaining=false malloc=0 next_malloc=100000
+[gc-scan-fallback] site=old_reclaim_alloc_point automatic=true count=4
+[gc-full] site=alloc_point_old_reclaim trigger=OldGenBytes count_at_site=4 old_reclaimable=142127808 old_baseline=88829880
+[gc-proxy-registry] live=0 tombstones=0 slots=0 reclaimed=0 reclaimed_total=0
+[gc] blocks: general=1 (1 live), non_general=11 (9 live, survivors+longlived+old), freed_bytes=242472 retained_forwarded_stub_bytes=1984 retained_forwarded_stub_objects=8
+[gc-old-free] reusable_bytes=0
+[gc-general-reclaim] examined=1 released=0 rejected: no_snapshot=0 snapshot_moved=0 keep_window=1 has_live=0 in_use=0 aging=0
+[gc-restore-coverage] budgeted_cycle dirty_pages=0 objects_walked=0 objects_skipped=0 pages_added=0
+[gc-young-log] budgeted_full table=object.descriptors mode=full passes=1 logged=1612 visited=1612 kept=1579 table_len=1612 skipped=0
+[gc-young-log] budgeted_full table=shapes.families+indices mode=full passes=1 logged=255 visited=255 kept=214 table_len=255 skipped=0
+[gc-young-log] budgeted_full table=object.transition_cache mode=full passes=1 logged=16384 visited=16384 kept=82 table_len=16384 skipped=0
+[gc-young-log] budgeted_full table=box.roots mode=full passes=1 logged=0 visited=0 kept=0 table_len=0 skipped=0
+[gc-young-log] budgeted_full table=closure.dynamic_props mode=full passes=1 logged=1449 visited=1449 kept=1449 table_len=1449 skipped=0
+[gc-young-log] budgeted_full table=object.builtin_closure_metadata mode=full passes=1 logged=1326 visited=1326 kept=1326 table_len=2429 skipped=1103
+[gc-young-log] budgeted_full table=gc.layout_tables mode=full passes=1 logged=2 visited=2 kept=2 table_len=2 skipped=0
+[gc-tenuring] nursery cap object denomination: allocation census seeded mean_object_bytes 72 -> 50 (587394 objects / 29490760 B in from-space; scale 694 permille, band 11643387 B)
+[box-stats] allocs=0 pool_reuses=0 releases=0 resident_cells=0 registry_len=0 i32_registry_len=0 bool_registry_len=0 flushes=6 published=0
+[gc-charge] exit: sites=2 calls=4 total_us=10127
+[gc-charge]   us=7347 calls=3 units=0 fulls=3 minors=0 site=_RNvNtNtCs9k3JaD5zP7m_13perry_runtime2gc6policy16gc_check_trigger+0x6c8 < _RNvNtNtCs9k3JaD5zP7m_13perry_runtime5arena5block16arena_cell_alloc+0xfc < _RNvNtNtCs9k3JaD5zP7m_13perry_runtime5arena10allocators18arena_alloc_gc_+0x254 < _RNvNtCs9k3JaD5zP7m_13perry_runtime6string20string_storage_alloc+0x48 < js_string_from_bytes_with_capacity+0x30
+[gc-charge]   us=2780 calls=1 units=0 fulls=1 minors=0 site=_RNvNtNtCs9k3JaD5zP7m_13perry_runtime2gc6policy16gc_check_trigger+0x6c8 < _RNvNtNtCs9k3JaD5zP7m_13perry_runtime4json9parse_api10parse_slow+0xb64 < perry_fn_rotating_worker_ts__run$spec_b+0x16e4 < js:run < start+0x1b50
+[gc-incremental] cycle_starts=0 steps=0 completions=0 active_at_exit=false mark_barrier_arms=4 mark_barrier_armed_us=4397 skips(reentrant=0 no_trigger=7 start_blocked=0 resume_blocked=0 nursery_cap_deferred=0) safepoints_blocked_by_budgeted=0 safepoints_blocked(in_alloc=0 unsafe_zone=0 root_lock=0) copying_minors=0 loop_polls=1 poll_arm_events=0 poll_armed_at_exit=0 forwarded_stub_recoveries=0
+[gc-idle-reclaim] enabled=true attempts=0 completions=0 productive=0 freed_bytes=0 old_reclaimed_bytes=0 slices=0 yields=0 start_blocked=0 work_capped=0 post_purges=0 backoff_shift=0
+[gc-idle-compact] enabled=true attempts=0 productive=0 broken_promises=0 released_bytes=0 pause_us_total=0 pause_us_max=0 wake_declined=0 backoff_shift=0
+[gc-arena-right-size] episodes=0 starts=0 released_capacity_bytes=0 low_collections=0 fulls_remaining=0 disarmed=false arena_live=142380504 arena_capacity=144703488
+[gc-step-bounds] step_max_us=0 final_remark_max_us=0 final_remarks=0 weak_records=0 weak_max_records_per_step=0 weak_steps_sliced=0 weak_registry_restarts=0 weak_registry_atomic_finishes=0
+[gc-time] wall_us=113947 step_us=0 remark_us=0 minor_us=0 full_sync_us=0 share_permille=0
+        0.12 real         0.08 user         0.03 sys
+           209862656  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               12957  page reclaims
+                  19  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                   8  voluntary context switches
+                   2  involuntary context switches
+          1376559132  instructions retired
+           381129369  cycles elapsed
+           202262144  peak memory footprint

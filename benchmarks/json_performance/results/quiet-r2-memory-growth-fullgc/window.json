@@ -1,0 +1,23 @@
+{
+  "owner": "json-perf-72122-1788982465",
+  "load_before": [
+    1.56494140625,
+    1.51708984375,
+    1.53564453125
+  ],
+  "started_utc": "2026-09-09T19:34:25Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/r2-memory-growth/run_fullgc.py",
+    "results/quiet-r2-memory-growth-fullgc"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.51953125,
+    1.50830078125,
+    1.5322265625
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-09T19:34:30Z"
+}

@@ -1,0 +1,154 @@
+[
+  {
+    "fixture": "wide_1m",
+    "count": 1,
+    "rss_before_mib": 22.21875,
+    "rss_after_mib": 28.6875,
+    "peak_rss_mib": 29.828125,
+    "counters": {
+      "copying_minors": 0,
+      "cycle_starts": 0,
+      "completions": 0,
+      "arena_live": 0,
+      "arena_capacity": 0,
+      "old_in_use": null,
+      "old_reclaimable": null,
+      "malloc": null,
+      "next_malloc": null,
+      "loop_polls": 1
+    }
+  },
+  {
+    "fixture": "wide_1m",
+    "count": 8,
+    "rss_before_mib": 22.234375,
+    "rss_after_mib": 65.875,
+    "peak_rss_mib": 66.328125,
+    "counters": {
+      "copying_minors": 1,
+      "cycle_starts": 0,
+      "completions": 0,
+      "arena_live": 27876904,
+      "arena_capacity": 32505856,
+      "old_in_use": 13422808,
+      "old_reclaimable": 13422808,
+      "malloc": 0,
+      "next_malloc": 100000,
+      "loop_polls": 4
+    }
+  },
+  {
+    "fixture": "wide_1m",
+    "count": 16,
+    "rss_before_mib": 22.234375,
+    "rss_after_mib": 85.0,
+    "peak_rss_mib": 85.609375,
+    "counters": {
+      "copying_minors": 2,
+      "cycle_starts": 0,
+      "completions": 0,
+      "arena_live": 53078048,
+      "arena_capacity": 60817408,
+      "old_in_use": 35119640,
+      "old_reclaimable": 35119640,
+      "malloc": 0,
+      "next_malloc": 100000,
+      "loop_polls": 5
+    }
+  },
+  {
+    "fixture": "wide_1m",
+    "count": 32,
+    "rss_before_mib": 22.234375,
+    "rss_after_mib": 133.390625,
+    "peak_rss_mib": 133.84375,
+    "counters": {
+      "copying_minors": 2,
+      "cycle_starts": 0,
+      "completions": 0,
+      "arena_live": 58677344,
+      "arena_capacity": 66060288,
+      "old_in_use": 36719720,
+      "old_reclaimable": 36719720,
+      "malloc": 0,
+      "next_malloc": 100000,
+      "loop_polls": 7
+    }
+  },
+  {
+    "fixture": "records_object_20m",
+    "count": 1,
+    "rss_before_mib": 184.40625,
+    "rss_after_mib": 199.171875,
+    "peak_rss_mib": 200.15625,
+    "counters": {
+      "copying_minors": 0,
+      "cycle_starts": 0,
+      "completions": 0,
+      "arena_live": 142380504,
+      "arena_capacity": 144703488,
+      "old_in_use": 142127808,
+      "old_reclaimable": 142127808,
+      "malloc": 0,
+      "next_malloc": 100000,
+      "loop_polls": 1
+    }
+  },
+  {
+    "fixture": "records_object_20m",
+    "count": 8,
+    "rss_before_mib": 184.40625,
+    "rss_after_mib": 450.78125,
+    "peak_rss_mib": 451.71875,
+    "counters": {
+      "copying_minors": 2,
+      "cycle_starts": 0,
+      "completions": 0,
+      "arena_live": 307656800,
+      "arena_capacity": 317718528,
+      "old_in_use": 220925376,
+      "old_reclaimable": 220925376,
+      "malloc": 0,
+      "next_malloc": 100000,
+      "loop_polls": 3
+    }
+  },
+  {
+    "fixture": "records_object_20m",
+    "count": 16,
+    "rss_before_mib": 184.390625,
+    "rss_after_mib": 729.78125,
+    "peak_rss_mib": 730.71875,
+    "counters": {
+      "copying_minors": 4,
+      "cycle_starts": 0,
+      "completions": 0,
+      "arena_live": 605154968,
+      "arena_capacity": 627048448,
+      "old_in_use": 460439464,
+      "old_reclaimable": 460439464,
+      "malloc": 0,
+      "next_malloc": 100000,
+      "loop_polls": 5
+    }
+  },
+  {
+    "fixture": "records_object_20m",
+    "count": 32,
+    "rss_before_mib": 184.390625,
+    "rss_after_mib": 1332.484375,
+    "peak_rss_mib": 1333.421875,
+    "counters": {
+      "copying_minors": 7,
+      "cycle_starts": 0,
+      "completions": 0,
+      "arena_live": 1200151104,
+      "arena_capacity": 1243611136,
+      "old_in_use": 1026443760,
+      "old_reclaimable": 1026443760,
+      "malloc": 0,
+      "next_malloc": 100000,
+      "loop_polls": 8
+    }
+  }
+]
