@@ -1762,6 +1762,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install clang
         run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list  # unused third-party sources; a bad index there fails apt-get update for everyone (run 34384580491)
           sudo apt-get update
           sudo apt-get install -y clang
       - name: Build perry + runtime staticlibs (release)
@@ -1812,6 +1813,7 @@ jobs:
           save-if: false
       - name: Install clang
         run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list  # unused third-party sources; a bad index there fails apt-get update for everyone (run 34384580491)
           sudo apt-get update
           sudo apt-get install -y clang
       - name: Setup Node.js
@@ -1894,6 +1896,7 @@ jobs:
           save-if: false
       - name: Install clang
         run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list  # unused third-party sources; a bad index there fails apt-get update for everyone (run 34384580491)
           sudo apt-get update
           sudo apt-get install -y clang
       - name: Download shared GC matrix build
@@ -1990,6 +1993,7 @@ jobs:
 
       - name: Install clang
         run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list  # unused third-party sources; a bad index there fails apt-get update for everyone (run 34384580491)
           sudo apt-get update
           sudo apt-get install -y clang
 
@@ -2352,6 +2356,7 @@ jobs:
 
       - name: Install clang
         run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list  # unused third-party sources; a bad index there fails apt-get update for everyone (run 34384580491)
           sudo apt-get update
           sudo apt-get install -y clang
 
@@ -3371,6 +3376,7 @@ jobs:
 
       - name: Install mysql client (for fixture health probe)
         run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list  # unused third-party sources; a bad index there fails apt-get update for everyone (run 34384580491)
           sudo apt-get update -qq
           sudo apt-get install -y -qq mysql-client
 
@@ -3664,6 +3670,7 @@ jobs:
       - name: Install GTK4 + GStreamer + Xvfb + PulseAudio headers (Linux)
         if: matrix.os == 'ubuntu-24.04'
         run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list  # unused third-party sources; a bad index there fails apt-get update for everyone (run 34384580491)
           sudo apt-get update
           # libgstreamer1.0-dev + libgstreamer-plugins-base1.0-dev added in
           # v0.5.442 for PR #371 (perry/media streaming playback, #351).
