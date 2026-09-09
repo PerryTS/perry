@@ -20,7 +20,9 @@ pub(crate) unsafe fn string_from_json_bytes(
 
 /// The caller must prove the exact UTF-16 length and keep the unescaped token
 /// stable through allocation, just as for `string_from_json_bytes`.
-#[inline]
+// Keep the shared allocation body inside each constructor; a tail call here
+// adds overhead to ordinary heap strings even when the source proof is unused.
+#[inline(always)]
 pub(crate) unsafe fn string_from_json_bytes_counted(
     batch: &mut Option<crate::arena::ConstructionBatch>,
     bytes: &[u8],
