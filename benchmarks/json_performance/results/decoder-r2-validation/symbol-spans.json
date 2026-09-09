@@ -1,0 +1,50 @@
+[
+  {
+    "build": "main-e722",
+    "symbol": "<perry_runtime::json::parser::DirectParser>::parse_string_value",
+    "address": "0x100240e88",
+    "span_to_next_symbol_bytes": 976
+  },
+  {
+    "build": "main-e722",
+    "symbol": "perry_runtime::json_tape::materialize_string_value",
+    "address": "0x100375268",
+    "span_to_next_symbol_bytes": 484
+  },
+  {
+    "build": "main-e722",
+    "symbol": "perry_runtime::json_tape::parse_string_bytes_static",
+    "address": "0x100375c20",
+    "span_to_next_symbol_bytes": 2228
+  },
+  {
+    "build": "pr10032-decoder-r1",
+    "symbol": "<perry_runtime::json::parser::DirectParser>::parse_string_value",
+    "address": "0x100240e88",
+    "span_to_next_symbol_bytes": 976
+  },
+  {
+    "build": "pr10032-decoder-r1",
+    "symbol": "perry_runtime::json_tape::materialize_string_value",
+    "address": "0x100375314",
+    "span_to_next_symbol_bytes": 1120
+  },
+  {
+    "build": "decoder-r2",
+    "symbol": "<perry_runtime::json::parser::DirectParser>::parse_string_value",
+    "address": "0x100240e88",
+    "span_to_next_symbol_bytes": 976
+  },
+  {
+    "build": "decoder-r2",
+    "symbol": "perry_runtime::json_tape::materialize_string_value",
+    "address": "0x100375314",
+    "span_to_next_symbol_bytes": 1064
+  },
+  {
+    "build": "decoder-r2",
+    "symbol": "perry_runtime::json_tape::parse_string_bytes_static",
+    "address": "0x100375f10",
+    "span_to_next_symbol_bytes": 100
+  }
+]

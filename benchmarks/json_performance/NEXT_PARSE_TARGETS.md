@@ -1,8 +1,16 @@
 # Next parse investigations
 
-These are hypotheses, not implemented changes or measured speedups. The current
-milestone is bounded lazy-record construction and preserved large-output sweep
-requests; the investigations below follow its validation and landing.
+These are hypotheses, not accepted speedups. Bounded lazy-record construction
+and preserved large-output sweep requests landed through #10033 at `e7223f700`.
+The escaped-record correction and its regression checks come before the next
+optimization candidate.
+
+Fresh [merged-main stack samples](results/main-e722-location-profiles/README.md)
+confirm the same broad targets. The Unicode object has 1522 main-thread samples:
+607 at UTF-16 counting, 353 at nesting preflight, 322 at token scanning and 158
+at copying. The small-record sample includes startup and supports location
+diagnosis only; its main-loop stack still shows generic parsing, pressure and
+occupancy queries, template bookkeeping, and string construction.
 
 ## Large Unicode strings
 
@@ -38,13 +46,14 @@ object representation cleanup without proving address-reuse correctness.
 
 [Compressed stack samples and binary provenance](results/output-debt-r4-profiles/provenance.json).
 
-## Integration before publishing
+## Merged baseline
 
 Upstream `d342c816be56c8f8b011144939a66674d1a42027` retains reusable parse
 template ShapeId ownership during a full trace. It changes `json/mod.rs`,
 `json/parse_reuse.rs`, and a GC regression test, and is integrated into the
-measured candidate. The later `f2dc03582` adds release metadata only, so this
-follow-up uses 0.5.1528. Existing trial artifacts remain measurements of their
+measured candidate. The later `f2dc03582` added release metadata only. That
+follow-up landed as 0.5.1528; the escaped-record correction is based on the actual
+`e7223f700` merge. Existing trial artifacts remain measurements of their
 recorded revisions and must not be relabelled as measurements of a later build.
 
 ## Untouched lazy-array roundtrip

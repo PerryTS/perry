@@ -54,8 +54,15 @@ and stdlib. Its workers are pinned independently from the earlier PR binaries.
 R2 (0.5.1529) keeps `parse_string_bytes_static` out of line, restoring the scanner
 call boundary removed by compiler inlining after the duplicate escape decoder
 was deleted. The shared canonical decoder and correctness checks remain.
-Validation and fresh-main comparisons are pending for R2; R1's passing tests do
-not stand in for the rebuilt candidate.
+R2 passes its own 283 JSON tests, matched release build, 14 compiled Node
+comparisons and live GC/retained-output/cadence witnesses. See the
+[rebuilt validation evidence](results/decoder-r2-validation/README.md).
+
+The [longer paired comparison](results/quiet-decoder-r2-focus-r9/README.md)
+passes 18 output comparisons and 162 timing trials. Sparse reads are +0.063%
+against main and -2.38% against R1, with overlapping main samples. The other
+parse/scan cases are within +0.184% and overlap too. RSS differs by at most
+48 KiB. The full original and changing-input matrices remain in progress.
 
 The independent source-length experiment is on
 `codex/json-source-length` at `91030c9d3`; it is not included in this correction.

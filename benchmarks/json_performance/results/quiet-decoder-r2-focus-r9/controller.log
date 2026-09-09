@@ -1,0 +1,6 @@
+FINISHED records_array_16k parse 50000
+FINISHED records_array_16k sparse 50000
+FINISHED records_array_16k scan 10000
+FINISHED escaped_1m parse 1024
+FINISHED records_array_1m parse 1024
+FINISHED long_string_1m stringify 32768

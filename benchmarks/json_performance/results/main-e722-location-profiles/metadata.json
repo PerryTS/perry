@@ -1,0 +1,38 @@
+{
+  "worker_sha256": "dc7e14bd6e76fa28b1e08f2a399e984976b67cdd1172d3a11da96eacaecb0c8e",
+  "source_commit": "e7223f700c8ce69c388210dab394ad7142550527",
+  "purpose": "stack locations, not performance timings",
+  "sample_seconds": 2,
+  "startup_seconds": 0.3,
+  "intentionally_terminated": true,
+  "fixtures": [
+    {
+      "name": "small_record",
+      "command": [
+        "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/main-e722/rotating-worker",
+        "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/rotating/small_record",
+        "parse",
+        "1000000000",
+        "8",
+        "time",
+        "rotating"
+      ],
+      "pid": 61289,
+      "expected_interrupted_exit": -15
+    },
+    {
+      "name": "unicode_1m",
+      "command": [
+        "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/main-e722/rotating-worker",
+        "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/rotating/unicode_1m",
+        "parse",
+        "1000000000",
+        "8",
+        "time",
+        "rotating"
+      ],
+      "pid": 61291,
+      "expected_interrupted_exit": -15
+    }
+  ]
+}
