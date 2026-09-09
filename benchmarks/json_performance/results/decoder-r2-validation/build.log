@@ -1,0 +1,18 @@
+   Compiling perry-runtime v0.5.1529 (/Users/amlug/projects/perry/json-merged-pr10022/crates/perry-runtime)
+warning: function `relevant_box_roots` is never used
+    --> crates/perry-runtime/src/box.rs:1020:4
+     |
+1020 | fn relevant_box_roots() -> Vec<usize> {
+     |    ^^^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `perry-runtime` (lib) generated 1 warning
+   Compiling perry-updater v0.5.1529 (/Users/amlug/projects/perry/json-merged-pr10022/crates/perry-updater)
+   Compiling perry-runtime-static v0.5.1529 (/Users/amlug/projects/perry/json-merged-pr10022/crates/perry-runtime-static)
+   Compiling perry-stdlib v0.5.1529 (/Users/amlug/projects/perry/json-merged-pr10022/crates/perry-stdlib)
+   Compiling perry v0.5.1529 (/Users/amlug/projects/perry/json-merged-pr10022/crates/perry)
+   Compiling perry-stdlib-static v0.5.1529 (/Users/amlug/projects/perry/json-merged-pr10022/crates/perry-stdlib-static)
+    Finished `release` profile [optimized] target(s) in 5m 19s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1, redis v1.6.0
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`

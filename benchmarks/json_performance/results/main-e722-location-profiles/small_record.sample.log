@@ -1,0 +1,5 @@
+Sampling process 61289 for 2 seconds with 1 millisecond of run time between samples
+Couldn't find _sigtramp symbol in expected dylibs
+Found _sigtramp symbol after 10 tries
+Sampling completed, processing symbols...
+Sample analysis of process 61289 written to file /Users/perry/json-codex-yHdsko/benchmarks/json_performance/results/main-e722-location-profiles/small_record.sample.txt

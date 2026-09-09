@@ -1,0 +1,62 @@
+[
+  {
+    "fixture": "records_array_16k",
+    "operation": "parse",
+    "candidate_cpu_us": 18.1655,
+    "main_cpu_us": 18.13218,
+    "r1_cpu_us": 18.2661,
+    "candidate_main_percent": 0.1837616877838233,
+    "peak_main_delta_mib": 0.046875,
+    "samples_overlap": true
+  },
+  {
+    "fixture": "records_array_16k",
+    "operation": "sparse",
+    "candidate_cpu_us": 25.11428,
+    "main_cpu_us": 25.0985,
+    "r1_cpu_us": 25.72598,
+    "candidate_main_percent": 0.06287228320416283,
+    "peak_main_delta_mib": 0.046875,
+    "samples_overlap": true
+  },
+  {
+    "fixture": "records_array_16k",
+    "operation": "scan",
+    "candidate_cpu_us": 77.5738,
+    "main_cpu_us": 77.4415,
+    "r1_cpu_us": 77.8192,
+    "candidate_main_percent": 0.17083863303268831,
+    "peak_main_delta_mib": 0.03125,
+    "samples_overlap": true
+  },
+  {
+    "fixture": "escaped_1m",
+    "operation": "parse",
+    "candidate_cpu_us": 980.8564453125,
+    "main_cpu_us": 980.4599609375,
+    "r1_cpu_us": 981.1533203125,
+    "candidate_main_percent": 0.040438609509441115,
+    "peak_main_delta_mib": 0.046875,
+    "samples_overlap": true
+  },
+  {
+    "fixture": "records_array_1m",
+    "operation": "parse",
+    "candidate_cpu_us": 1187.4658203125,
+    "main_cpu_us": 1186.7490234375,
+    "r1_cpu_us": 1192.3466796875,
+    "candidate_main_percent": 0.06040003916951697,
+    "peak_main_delta_mib": 0.046875,
+    "samples_overlap": true
+  },
+  {
+    "fixture": "long_string_1m",
+    "operation": "stringify",
+    "candidate_cpu_us": 31.068634033203125,
+    "main_cpu_us": 32.045074462890625,
+    "r1_cpu_us": 32.777252197265625,
+    "candidate_main_percent": -3.047084290031077,
+    "peak_main_delta_mib": 0.046875,
+    "samples_overlap": true
+  }
+]
