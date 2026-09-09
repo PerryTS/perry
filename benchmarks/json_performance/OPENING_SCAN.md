@@ -1,7 +1,7 @@
 # Opening-container scan and parse entry experiments
 
-These are follow-ups to the corrected R2 parser in PR #10034. The scanner
-candidate is not accepted as regression-free. Global GC policy, construction
+These are follow-ups to the corrected parser landed through PR #10035. The
+current R3 candidate is undergoing final performance validation in PR #10036. Global GC policy, construction
 allocation and parse-boundary collection scheduling are unchanged.
 
 ## R1: wider scan
@@ -47,9 +47,31 @@ gains, but sparse reads (+0.614%), heterogeneous parsing (+0.467%) and rotating
 wide-object parsing (+0.473%) show separated slower ranges. PR #10036 remains
 draft. The corrected baseline tree has landed on main through #10035.
 
-The next candidate, R3, keeps the initial 16-byte positive check inline and
-outlines the wide search tail from the depth state machine. Its 285 JSON tests
-pass; generated-code and performance validation follow the matched build.
-Acceptance still includes both original parse/stringify rows and the full
-changing-input suite, with default GC and separate retained-output RSS. [Large-container memory diagnosis](GC_MEMORY_GROWTH.md) is a separate
-investigation; neither scan nor outlining is a fix for delayed old reclamation.
+## R3: isolate the long search tail
+
+R3 keeps the initial 16-byte positive check inline and outlines the wide search
+tail from the depth state machine. All 285 release JSON tests, the matched
+release build, compiled Node comparisons and live moving/full-GC witnesses pass.
+The depth scanner shrinks from R2's 3904 to 3676 bytes; its separate tail is
+284 bytes. The lean parse entry and ordinary string-constructor sizes remain
+unchanged. [Validation and codegen](results/opening-scan-r3-validation/README.md).
+
+The [complete original suite against freshly built merged main](results/quiet-opening-scan-r3-main-all-r5/README.md)
+passes all 200 output checks and retains 46/50 CPU, 67/86 peak-RSS and 31/36
+retained-current-RSS wins over the better Node/Bun median. No row has separated
+slower timing ranges, but sparse reads (+0.50%), heterogeneous parse (+0.23%)
+and variable large-string stringify medians (+5.43%/+3.92%) require focused
+replay. Overlap alone is not proof of equality. Full changing-input validation
+against that fresh main build is running; PR #10036 remains draft.
+
+Earlier [long original-worker replay](results/quiet-opening-scan-r3-regression-r9/README.md)
+and [changing-input focus](results/quiet-opening-scan-r3-focus-r9/README.md) used
+the older corrected-R2 reference. The fresh focus retains approximately 7.5%
+ASCII, 4.5% Unicode and 3.4% 1 KB object parse gains without separated slower
+ranges. These reference binaries are identified separately in every result.
+
+[Large-container memory diagnosis](GC_MEMORY_GROWTH.md) is a separate
+investigation; neither scan nor outlining fixes delayed old reclamation.
+[Pristine Linux main CI comparison](results/main-e722-ci-comparison/README.md)
+reproduces the earlier correction PR's seven gap failures and stack-size test
+failure; this does not substitute for CI on the current candidate.

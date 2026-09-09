@@ -1,0 +1,33 @@
+599: gap-suite (3)	Run gap suite (shard 3/6, fast mode)	2026-09-09T20:12:15.6185517Z ^[[0;32mPASS^[[0m  test_gap_2530_nonnull_update
+600: gap-suite (3)	Run gap suite (shard 3/6, fast mode)	2026-09-09T20:12:15.6221379Z [3/125] (00:00:10) test_gap_2530_nonnull_update … PASS
+601: gap-suite (3)	Run gap suite (shard 3/6, fast mode)	2026-09-09T20:12:17.5317243Z ^[[0;31mFAIL^[[0m  test_gap_2899_2779_2777_static_helpers (output mismatch)
+602: gap-suite (3)	Run gap suite (shard 3/6, fast mode)	2026-09-09T20:12:17.5318086Z        Node exit:   0
+603: gap-suite (3)	Run gap suite (shard 3/6, fast mode)	2026-09-09T20:12:17.5318476Z        Perry exit:  0
+604: gap-suite (3)	Run gap suite (shard 3/6, fast mode)	2026-09-09T20:12:17.5336503Z        Node.js:    \x61\.b\[c\]
+605: gap-suite (3)	Run gap suite (shard 3/6, fast mode)	2026-09-09T20:12:17.5355332Z        Perry:  \x61\.b\[c\]
+606: gap-suite (3)	Run gap suite (shard 3/6, fast mode)	2026-09-09T20:12:17.5391459Z [4/125] (00:00:12) test_gap_2899_2779_2777_static_helpers … PARITY_FAIL
+607: gap-suite (3)	Run gap suite (shard 3/6, fast mode)	2026-09-09T20:12:19.7212270Z ^[[0;32mPASS^[[0m  test_gap_3657_dataview_ctor_validation
+608: gap-suite (3)	Run gap suite (shard 3/6, fast mode)	2026-09-09T20:12:19.7247344Z [5/125] (00:00:14) test_gap_3657_dataview_ctor_validation … PASS
+609: gap-suite (3)	Run gap suite (shard 3/6, fast mode)	2026-09-09T20:12:21.8848797Z ^[[0;32mPASS^[[0m  test_gap_3716_uncurry_this
+610: gap-suite (3)	Run gap suite (shard 3/6, fast mode)	2026-09-09T20:12:21.8884756Z [6/125] (00:00:16) test_gap_3716_uncurry_this … PASS
+611: gap-suite (3)	Run gap suite (shard 3/6, fast mode)	2026-09-09T20:12:23.8859512Z ^[[0;32mPASS^[[0m  test_gap_4461_class_expr_var_value
+612: gap-suite (3)	Run gap suite (shard 3/6, fast mode)	2026-09-09T20:12:23.8897436Z [7/125] (00:00:18) test_gap_4461_class_expr_var_value … PASS
+613: gap-suite (3)	Run gap suite (shard 3/6, fast mode)	2026-09-09T20:12:25.9865255Z ^[[0;32mPASS^[[0m  test_gap_5437_class_ref_shadows_captured_local
+614: gap-suite (3)	Run gap suite (shard 3/6, fast mode)	2026-09-09T20:12:25.9901415Z [8/125] (00:00:20) test_gap_5437_class_ref_shadows_captured_local … PASS
+861: gap-suite (3)	Run gap suite (shard 3/6, fast mode)	2026-09-09T20:42:58.1489276Z 
+862: gap-suite (3)	Run gap suite (shard 3/6, fast mode)	2026-09-09T20:42:58.1489533Z Output Mismatches:
+863: gap-suite (3)	Run gap suite (shard 3/6, fast mode)	2026-09-09T20:42:58.1489953Z   - test_gap_2899_2779_2777_static_helpers
+864: gap-suite (3)	Run gap suite (shard 3/6, fast mode)	2026-09-09T20:42:58.1490319Z 
+865: gap-suite (3)	Run gap suite (shard 3/6, fast mode)	2026-09-09T20:42:58.1699717Z Report saved to: /home/runner/work/perry/perry/test-parity/reports/parity_report_20260909_201205.json
+866: gap-suite (3)	Run gap suite (shard 3/6, fast mode)	2026-09-09T20:42:58.1700603Z 
+867: gap-suite (3)	Run gap suite (shard 3/6, fast mode)	2026-09-09T20:42:58.2460664Z 
+868: gap-suite (3)	Run gap suite (shard 3/6, fast mode)	2026-09-09T20:42:58.2462027Z REGRESSIONS — these were expected to pass:
+869: gap-suite (3)	Run gap suite (shard 3/6, fast mode)	2026-09-09T20:42:58.2463029Z   - test_gap_2899_2779_2777_static_helpers: pass -> parity_fail
+870: gap-suite (3)	Run gap suite (shard 3/6, fast mode)	2026-09-09T20:42:58.2463578Z 
+871: gap-suite (3)	Run gap suite (shard 3/6, fast mode)	2026-09-09T20:42:58.2463948Z Fix the regressions, then accept the rest with:
+872: gap-suite (3)	Run gap suite (shard 3/6, fast mode)	2026-09-09T20:42:58.2464738Z   UPDATE_SNAPSHOT=1 ./scripts/run_gap_tests.sh
+873: gap-suite (3)	Run gap suite (shard 3/6, fast mode)	2026-09-09T20:42:58.2465579Z and commit test-parity/gap_snapshot.json.
+874: gap-suite (3)	Run gap suite (shard 3/6, fast mode)	2026-09-09T20:42:58.2530710Z ##[error]Process completed with exit code 1.
+875: gap-suite (3)	Upload gap report	﻿2026-09-09T20:42:58.2612797Z ##[group]Run actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+876: gap-suite (3)	Upload gap report	2026-09-09T20:42:58.2613250Z with:
+877: gap-suite (3)	Upload gap report	2026-09-09T20:42:58.2613482Z   name: gap-suite-report-fast-shard-3

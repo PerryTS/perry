@@ -1,0 +1,45 @@
+689: 2026-09-09T20:14:22.1250102Z PASS  test_gap_cron_cronjob
+690: 2026-09-09T20:14:22.1279954Z [59/124] (00:02:31) test_gap_cron_cronjob … PASS
+691: 2026-09-09T20:14:25.3865160Z FAIL  test_gap_crypto_scrypt_options (output mismatch)
+692: 2026-09-09T20:14:25.3865545Z        Node exit:   0
+693: 2026-09-09T20:14:25.3865745Z        Perry exit:  13
+694: 2026-09-09T20:14:25.3880275Z        Node.js:    scrypt options: ok
+695: 2026-09-09T20:14:25.3896210Z        Perry:  Warning: Detected unsettled top-level await
+696: 2026-09-09T20:14:25.3927149Z [60/124] (00:02:34) test_gap_crypto_scrypt_options … PARITY_FAIL
+697: 2026-09-09T20:14:27.1015801Z PASS  test_gap_date_iso_datetime_local_9449
+698: 2026-09-09T20:14:27.1046261Z [61/124] (00:02:36) test_gap_date_iso_datetime_local_9449 … PASS
+699: 2026-09-09T20:14:28.9708290Z PASS  test_gap_declared_numeric_field_holds_string_7773
+700: 2026-09-09T20:14:28.9738405Z [62/124] (00:02:37) test_gap_declared_numeric_field_holds_string_7773 … PASS
+701: 2026-09-09T20:14:30.6339025Z FAIL  test_gap_disposablestack_2875 (output mismatch)
+702: 2026-09-09T20:14:30.6339408Z        Node exit:   0
+703: 2026-09-09T20:14:30.6339977Z        Perry exit:  0
+704: 2026-09-09T20:14:30.6353582Z        Node.js:    function
+705: 2026-09-09T20:14:30.6369426Z        Perry:  function
+706: 2026-09-09T20:14:30.6400195Z [63/124] (00:02:39) test_gap_disposablestack_2875 … PARITY_FAIL
+707: 2026-09-09T20:14:32.3718064Z PASS  test_gap_dynamic_import_cycle
+708: 2026-09-09T20:14:32.3749351Z [64/124] (00:02:41) test_gap_dynamic_import_cycle … PASS
+709: 2026-09-09T20:14:34.1482370Z PASS  test_gap_dynamic_import_reexport_chunk
+710: 2026-09-09T20:14:34.1512922Z [65/124] (00:02:43) test_gap_dynamic_import_reexport_chunk … PASS
+711: 2026-09-09T20:14:36.7537324Z PASS  test_gap_encoding_timers
+712: 2026-09-09T20:14:36.7567481Z [66/124] (00:02:45) test_gap_encoding_timers … PASS
+713: 2026-09-09T20:18:10.2120662Z PASS  test_gap_events_import_4995
+714: 2026-09-09T20:18:10.2150573Z [67/124] (00:06:19) test_gap_events_import_4995 … PASS
+840: 2026-09-09T20:32:37.2615881Z 
+841: 2026-09-09T20:32:37.2615994Z Output Mismatches:
+842: 2026-09-09T20:32:37.2616231Z   - test_gap_crypto_scrypt_options
+843: 2026-09-09T20:32:37.2616527Z   - test_gap_disposablestack_2875
+844: 2026-09-09T20:32:37.2616686Z 
+845: 2026-09-09T20:32:37.2766046Z Report saved to: /home/runner/work/perry/perry/test-parity/reports/parity_report_20260909_201151.json
+846: 2026-09-09T20:32:37.2766560Z 
+847: 2026-09-09T20:32:37.3353560Z 
+848: 2026-09-09T20:32:37.3354413Z REGRESSIONS — these were expected to pass:
+849: 2026-09-09T20:32:37.3354834Z   - test_gap_crypto_scrypt_options: pass -> parity_fail
+850: 2026-09-09T20:32:37.3355188Z   - test_gap_disposablestack_2875: pass -> parity_fail
+851: 2026-09-09T20:32:37.3355379Z 
+852: 2026-09-09T20:32:37.3355536Z Fix the regressions, then accept the rest with:
+853: 2026-09-09T20:32:37.3355839Z   UPDATE_SNAPSHOT=1 ./scripts/run_gap_tests.sh
+854: 2026-09-09T20:32:37.3356144Z and commit test-parity/gap_snapshot.json.
+855: 2026-09-09T20:32:37.3404686Z ##[error]Process completed with exit code 1.
+856: 2026-09-09T20:32:37.3478435Z ##[group]Run actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+857: 2026-09-09T20:32:37.3478786Z with:
+858: 2026-09-09T20:32:37.3478988Z   name: gap-suite-report-fast-shard-5

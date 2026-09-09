@@ -1,0 +1,2152 @@
+[
+  {
+    "phase": "timing",
+    "fixture": "empty_object",
+    "operation": "parse",
+    "iterations": 2000000,
+    "cpu_change_percent": -2.110795928583342,
+    "peak_change_kib": 128.0,
+    "current_change_kib": 96.0,
+    "candidate_cpu_samples_us": [
+      0.023371,
+      0.0235675,
+      0.023485,
+      0.023466,
+      0.023305
+    ],
+    "reference_cpu_samples_us": [
+      0.024041,
+      0.0241855,
+      0.023972,
+      0.023865,
+      0.023886
+    ],
+    "separated_slower": false,
+    "separated_faster": true
+  },
+  {
+    "phase": "timing",
+    "fixture": "empty_object",
+    "operation": "stringify",
+    "iterations": 2000000,
+    "cpu_change_percent": 0.008517162081611573,
+    "peak_change_kib": 112.0,
+    "current_change_kib": 80.0,
+    "candidate_cpu_samples_us": [
+      0.017622,
+      0.0176725,
+      0.017613,
+      0.0175975,
+      0.017611
+    ],
+    "reference_cpu_samples_us": [
+      0.0176115,
+      0.0175995,
+      0.0176155,
+      0.017626,
+      0.017603
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "escaped_1m",
+    "operation": "parse",
+    "iterations": 157,
+    "cpu_change_percent": -0.721982134001431,
+    "peak_change_kib": 144.0,
+    "current_change_kib": 96.0,
+    "candidate_cpu_samples_us": [
+      980.4394904458599,
+      980.8343949044586,
+      981.8216560509554,
+      982.3312101910828,
+      981.9363057324841
+    ],
+    "reference_cpu_samples_us": [
+      988.7515923566879,
+      989.5541401273886,
+      988.9617834394904,
+      989.6624203821656,
+      986.6114649681529
+    ],
+    "separated_slower": false,
+    "separated_faster": true
+  },
+  {
+    "phase": "timing",
+    "fixture": "escaped_1m",
+    "operation": "stringify",
+    "iterations": 166,
+    "cpu_change_percent": -0.10883539326990155,
+    "peak_change_kib": 192.0,
+    "current_change_kib": 144.0,
+    "candidate_cpu_samples_us": [
+      887.0481927710844,
+      884.1144578313254,
+      885.6807228915662,
+      884.644578313253,
+      884.1987951807229
+    ],
+    "reference_cpu_samples_us": [
+      884.8795180722891,
+      885.6084337349398,
+      884.5963855421687,
+      885.855421686747,
+      885.6084337349398
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "heterogeneous_1m",
+    "operation": "parse",
+    "iterations": 111,
+    "cpu_change_percent": 0.22738481838038282,
+    "peak_change_kib": 160.0,
+    "current_change_kib": 112.0,
+    "candidate_cpu_samples_us": [
+      1405.0,
+      1407.4774774774776,
+      1409.7117117117118,
+      1414.3693693693695,
+      1410.882882882883
+    ],
+    "reference_cpu_samples_us": [
+      1402.6666666666667,
+      1406.5135135135135,
+      1405.855855855856,
+      1409.3153153153153,
+      1407.4864864864865
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "heterogeneous_1m",
+    "operation": "stringify",
+    "iterations": 216,
+    "cpu_change_percent": 0.26346452615224614,
+    "peak_change_kib": 144.0,
+    "current_change_kib": 96.0,
+    "candidate_cpu_samples_us": [
+      717.7083333333334,
+      717.1805555555555,
+      715.8611111111111,
+      717.0694444444445,
+      716.1574074074074
+    ],
+    "reference_cpu_samples_us": [
+      715.0925925925926,
+      716.3333333333334,
+      715.1851851851852,
+      716.3703703703703,
+      714.8472222222222
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "long_string_1m",
+    "operation": "parse",
+    "iterations": 2810,
+    "cpu_change_percent": 0.0,
+    "peak_change_kib": 144.0,
+    "current_change_kib": 80.0,
+    "candidate_cpu_samples_us": [
+      0.3498220640569395,
+      0.3494661921708185,
+      0.3508896797153025,
+      0.3491103202846975,
+      0.3487544483985765
+    ],
+    "reference_cpu_samples_us": [
+      0.3505338078291815,
+      0.3494661921708185,
+      0.3498220640569395,
+      0.3494661921708185,
+      0.34733096085409254
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "long_string_1m",
+    "operation": "stringify",
+    "iterations": 1928,
+    "cpu_change_percent": 5.430209752518977,
+    "peak_change_kib": 160.0,
+    "current_change_kib": 112.0,
+    "candidate_cpu_samples_us": [
+      36.524896265560166,
+      37.97251037344398,
+      35.06120331950208,
+      36.87811203319502,
+      32.04149377593361
+    ],
+    "reference_cpu_samples_us": [
+      34.77178423236514,
+      36.57417012448133,
+      33.095435684647306,
+      34.643672199170126,
+      33.754149377593365
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "null",
+    "operation": "parse",
+    "iterations": 2000000,
+    "cpu_change_percent": 0.07529766106639801,
+    "peak_change_kib": 96.0,
+    "current_change_kib": 64.0,
+    "candidate_cpu_samples_us": [
+      0.0106935,
+      0.01064,
+      0.01063,
+      0.0106325,
+      0.010625
+    ],
+    "reference_cpu_samples_us": [
+      0.0106205,
+      0.010628,
+      0.010643,
+      0.010621,
+      0.0106245
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "null",
+    "operation": "stringify",
+    "iterations": 2000000,
+    "cpu_change_percent": 0.03808073115005861,
+    "peak_change_kib": 112.0,
+    "current_change_kib": 80.0,
+    "candidate_cpu_samples_us": [
+      0.006559,
+      0.0065675,
+      0.006571,
+      0.0065645,
+      0.0065675
+    ],
+    "reference_cpu_samples_us": [
+      0.0065675,
+      0.0065585,
+      0.0065605,
+      0.006565,
+      0.0065805
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "numbers_1m",
+    "operation": "parse",
+    "iterations": 101,
+    "cpu_change_percent": -0.593237220188747,
+    "peak_change_kib": 160.0,
+    "current_change_kib": 112.0,
+    "candidate_cpu_samples_us": [
+      1580.4455445544554,
+      1582.4851485148515,
+      1580.4257425742574,
+      1581.8217821782177,
+      1581.09900990099
+    ],
+    "reference_cpu_samples_us": [
+      1591.3564356435643,
+      1588.6039603960396,
+      1589.9108910891089,
+      1592.5742574257426,
+      1590.5346534653465
+    ],
+    "separated_slower": false,
+    "separated_faster": true
+  },
+  {
+    "phase": "timing",
+    "fixture": "numbers_1m",
+    "operation": "stringify",
+    "iterations": 147,
+    "cpu_change_percent": 0.053036863977218296,
+    "peak_change_kib": 144.0,
+    "current_change_kib": 96.0,
+    "candidate_cpu_samples_us": [
+      1018.4897959183673,
+      1013.8231292517007,
+      1013.4353741496599,
+      1012.8095238095239,
+      1015.4557823129252
+    ],
+    "reference_cpu_samples_us": [
+      1012.6734693877551,
+      1018.6462585034013,
+      1013.2857142857143,
+      1012.5578231292517,
+      1014.625850340136
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "object_1k",
+    "operation": "parse",
+    "iterations": 1981283,
+    "cpu_change_percent": -1.2225851039105673,
+    "peak_change_kib": 128.0,
+    "current_change_kib": 80.0,
+    "candidate_cpu_samples_us": [
+      0.08165870297176123,
+      0.08144722384434733,
+      0.08153504572542136,
+      0.08151637095760676,
+      0.08145328052580071
+    ],
+    "reference_cpu_samples_us": [
+      0.08247130773342325,
+      0.08247282190378659,
+      0.08252531314304923,
+      0.0825823468934019,
+      0.08252682731341257
+    ],
+    "separated_slower": false,
+    "separated_faster": true
+  },
+  {
+    "phase": "timing",
+    "fixture": "object_1k",
+    "operation": "stringify",
+    "iterations": 1015084,
+    "cpu_change_percent": 0.005975908551536513,
+    "peak_change_kib": 176.0,
+    "current_change_kib": 128.0,
+    "candidate_cpu_samples_us": [
+      0.11540325726737886,
+      0.11534808941920077,
+      0.11537271792285171,
+      0.1157411603374696,
+      0.11568205192870738
+    ],
+    "reference_cpu_samples_us": [
+      0.11519933325714916,
+      0.11598448995354078,
+      0.11608201882799847,
+      0.1153963612863566,
+      0.11527814446883214
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "records_array_16k",
+    "operation": "parse",
+    "iterations": 8490,
+    "cpu_change_percent": 0.18449348446694103,
+    "peak_change_kib": 160.0,
+    "current_change_kib": 96.0,
+    "candidate_cpu_samples_us": [
+      18.23545347467609,
+      18.208951707891636,
+      18.23062426383981,
+      18.228739693757362,
+      18.211896348645464
+    ],
+    "reference_cpu_samples_us": [
+      18.195170789163722,
+      18.239458186101295,
+      18.19387514723204,
+      18.19163722025913,
+      18.2
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "records_array_16k",
+    "operation": "roundtrip",
+    "iterations": 6201,
+    "cpu_change_percent": -0.05765350245027223,
+    "peak_change_kib": -320.0,
+    "current_change_kib": -352.0,
+    "candidate_cpu_samples_us": [
+      25.702789872601194,
+      25.718755039509755,
+      25.705531365908726,
+      25.721496532817287,
+      25.73891307853572
+    ],
+    "reference_cpu_samples_us": [
+      25.733591356232864,
+      25.728108369617804,
+      25.73971940009676,
+      25.747782615707145,
+      25.64666989195291
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "records_array_16k",
+    "operation": "scan",
+    "iterations": 3738,
+    "cpu_change_percent": -0.2923594757750281,
+    "peak_change_kib": 144.0,
+    "current_change_kib": 80.0,
+    "candidate_cpu_samples_us": [
+      63.38630283574104,
+      63.21348314606742,
+      63.373729266987695,
+      63.293739967897274,
+      63.318619582664525
+    ],
+    "reference_cpu_samples_us": [
+      63.39218833600856,
+      63.54574638844302,
+      63.38202247191011,
+      63.81273408239701,
+      63.50428036383092
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "records_array_16k",
+    "operation": "sparse",
+    "iterations": 6400,
+    "cpu_change_percent": 0.5038687633419414,
+    "peak_change_kib": 144.0,
+    "current_change_kib": 96.0,
+    "candidate_cpu_samples_us": [
+      24.5259375,
+      24.429375,
+      24.52125,
+      24.49671875,
+      24.41765625
+    ],
+    "reference_cpu_samples_us": [
+      24.40078125,
+      24.4290625,
+      24.37390625,
+      24.3521875,
+      24.36609375
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "records_array_16k",
+    "operation": "stringify",
+    "iterations": 13138,
+    "cpu_change_percent": -0.8288431933142659,
+    "peak_change_kib": 176.0,
+    "current_change_kib": 128.0,
+    "candidate_cpu_samples_us": [
+      11.003196833612423,
+      11.019637692190592,
+      10.959126198812605,
+      10.98325468107779,
+      10.949687928147359
+    ],
+    "reference_cpu_samples_us": [
+      11.136398234130004,
+      11.007611508601006,
+      11.184807428832395,
+      11.06416501750647,
+      11.075049474805907
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "records_array_1m",
+    "operation": "parse",
+    "iterations": 126,
+    "cpu_change_percent": 0.2996550024642719,
+    "peak_change_kib": 160.0,
+    "current_change_kib": 96.0,
+    "candidate_cpu_samples_us": [
+      1209.0873015873017,
+      1213.5714285714287,
+      1213.6984126984128,
+      1211.111111111111,
+      1211.357142857143
+    ],
+    "reference_cpu_samples_us": [
+      1207.4126984126983,
+      1208.2222222222222,
+      1212.1825396825398,
+      1207.7063492063492,
+      1207.7380952380952
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "records_array_1m",
+    "operation": "roundtrip",
+    "iterations": 94,
+    "cpu_change_percent": 0.09515047638251062,
+    "peak_change_kib": 160.0,
+    "current_change_kib": 112.0,
+    "candidate_cpu_samples_us": [
+      1690.3829787234042,
+      1693.2659574468084,
+      1689.8617021276596,
+      1689.8617021276596,
+      1689.8085106382978
+    ],
+    "reference_cpu_samples_us": [
+      1689.9574468085107,
+      1689.3829787234042,
+      1686.904255319149,
+      1687.6808510638298,
+      1688.2553191489362
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "records_array_1m",
+    "operation": "scan",
+    "iterations": 69,
+    "cpu_change_percent": -0.09636545365717675,
+    "peak_change_kib": 160.0,
+    "current_change_kib": 96.0,
+    "candidate_cpu_samples_us": [
+      3232.057971014493,
+      3230.3478260869565,
+      3228.7391304347825,
+      3235.086956521739,
+      3224.5072463768115
+    ],
+    "reference_cpu_samples_us": [
+      3235.1884057971015,
+      3231.782608695652,
+      3236.753623188406,
+      3228.68115942029,
+      3233.463768115942
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "records_array_1m",
+    "operation": "sparse",
+    "iterations": 123,
+    "cpu_change_percent": 0.09553084606537254,
+    "peak_change_kib": 144.0,
+    "current_change_kib": 96.0,
+    "candidate_cpu_samples_us": [
+      1253.3089430894308,
+      1252.2276422764228,
+      1253.0325203252032,
+      1251.5772357723577,
+      1252.1869918699188
+    ],
+    "reference_cpu_samples_us": [
+      1252.4227642276423,
+      1251.0325203252032,
+      1249.1544715447155,
+      1251.0731707317073,
+      1248.7642276422764
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "records_array_1m",
+    "operation": "stringify",
+    "iterations": 234,
+    "cpu_change_percent": -0.6659711696815784,
+    "peak_change_kib": 144.0,
+    "current_change_kib": 96.0,
+    "candidate_cpu_samples_us": [
+      649.3717948717949,
+      647.6666666666666,
+      646.3504273504274,
+      644.3376068376068,
+      646.982905982906
+    ],
+    "reference_cpu_samples_us": [
+      649.7735042735043,
+      651.3205128205128,
+      647.9786324786324,
+      652.2136752136752,
+      652.3504273504274
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "records_array_20m",
+    "operation": "parse",
+    "iterations": 4,
+    "cpu_change_percent": -0.13398810539554384,
+    "peak_change_kib": 144.0,
+    "current_change_kib": 96.0,
+    "candidate_cpu_samples_us": [
+      39551.75,
+      39427.5,
+      39521.0,
+      39502.75,
+      39435.5
+    ],
+    "reference_cpu_samples_us": [
+      39602.0,
+      39539.0,
+      39555.75,
+      39540.5,
+      39576.75
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "records_array_20m",
+    "operation": "roundtrip",
+    "iterations": 2,
+    "cpu_change_percent": -0.09101573560940102,
+    "peak_change_kib": 128.0,
+    "current_change_kib": 80.0,
+    "candidate_cpu_samples_us": [
+      99000.5,
+      98794.0,
+      98855.5,
+      98632.5,
+      98760.5
+    ],
+    "reference_cpu_samples_us": [
+      98749.0,
+      98884.0,
+      99098.5,
+      98987.0,
+      98803.5
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "records_array_20m",
+    "operation": "scan",
+    "iterations": 4,
+    "cpu_change_percent": -0.22326522304936258,
+    "peak_change_kib": 144.0,
+    "current_change_kib": 96.0,
+    "candidate_cpu_samples_us": [
+      40444.25,
+      40510.75,
+      40428.75,
+      40403.25,
+      40475.75
+    ],
+    "reference_cpu_samples_us": [
+      41801.5,
+      40518.0,
+      40534.75,
+      40538.25,
+      40398.0
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "records_array_20m",
+    "operation": "sparse",
+    "iterations": 4,
+    "cpu_change_percent": -0.21293669398406712,
+    "peak_change_kib": 160.0,
+    "current_change_kib": 112.0,
+    "candidate_cpu_samples_us": [
+      39416.25,
+      39521.5,
+      39464.5,
+      39481.5,
+      39490.5
+    ],
+    "reference_cpu_samples_us": [
+      39531.5,
+      39573.25,
+      39565.75,
+      39594.25,
+      39530.5
+    ],
+    "separated_slower": false,
+    "separated_faster": true
+  },
+  {
+    "phase": "timing",
+    "fixture": "records_array_20m",
+    "operation": "stringify",
+    "iterations": 12,
+    "cpu_change_percent": -0.5708365927398096,
+    "peak_change_kib": 128.0,
+    "current_change_kib": 80.0,
+    "candidate_cpu_samples_us": [
+      11757.25,
+      11769.833333333334,
+      11769.083333333334,
+      11729.333333333334,
+      11750.833333333334
+    ],
+    "reference_cpu_samples_us": [
+      11829.666666666666,
+      11816.833333333334,
+      11823.583333333334,
+      11826.416666666666,
+      11824.75
+    ],
+    "separated_slower": false,
+    "separated_faster": true
+  },
+  {
+    "phase": "timing",
+    "fixture": "records_array_8m",
+    "operation": "parse",
+    "iterations": 13,
+    "cpu_change_percent": -0.16528567716603826,
+    "peak_change_kib": 160.0,
+    "current_change_kib": 112.0,
+    "candidate_cpu_samples_us": [
+      10632.076923076924,
+      10639.923076923076,
+      10653.0,
+      10611.846153846154,
+      10660.846153846154
+    ],
+    "reference_cpu_samples_us": [
+      10657.538461538461,
+      10677.538461538461,
+      10650.307692307691,
+      10657.76923076923,
+      10627.384615384615
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "records_array_8m",
+    "operation": "roundtrip",
+    "iterations": 10,
+    "cpu_change_percent": 0.080659849608411,
+    "peak_change_kib": 160.0,
+    "current_change_kib": 112.0,
+    "candidate_cpu_samples_us": [
+      15385.6,
+      15397.4,
+      15380.7,
+      15365.7,
+      15389.7
+    ],
+    "reference_cpu_samples_us": [
+      15373.2,
+      15389.9,
+      15372.8,
+      15380.3,
+      15358.7
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "records_array_8m",
+    "operation": "scan",
+    "iterations": 8,
+    "cpu_change_percent": -0.012001800270045049,
+    "peak_change_kib": 144.0,
+    "current_change_kib": 80.0,
+    "candidate_cpu_samples_us": [
+      24988.75,
+      25051.5,
+      24993.25,
+      25013.25,
+      24965.875
+    ],
+    "reference_cpu_samples_us": [
+      25019.625,
+      24978.75,
+      25028.75,
+      24996.25,
+      24979.875
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "records_array_8m",
+    "operation": "sparse",
+    "iterations": 12,
+    "cpu_change_percent": 0.09202294636694308,
+    "peak_change_kib": 144.0,
+    "current_change_kib": 96.0,
+    "candidate_cpu_samples_us": [
+      11246.25,
+      11296.166666666666,
+      11224.833333333334,
+      11239.416666666666,
+      11239.0
+    ],
+    "reference_cpu_samples_us": [
+      11212.083333333334,
+      11229.083333333334,
+      11213.5,
+      11254.583333333334,
+      11267.083333333334
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "records_array_8m",
+    "operation": "stringify",
+    "iterations": 30,
+    "cpu_change_percent": -0.853960828125544,
+    "peak_change_kib": 160.0,
+    "current_change_kib": 112.0,
+    "candidate_cpu_samples_us": [
+      4717.266666666666,
+      4733.066666666667,
+      4742.2,
+      4741.933333333333,
+      4728.433333333333
+    ],
+    "reference_cpu_samples_us": [
+      4778.9,
+      4790.3,
+      4761.6,
+      4773.833333333333,
+      4755.266666666666
+    ],
+    "separated_slower": false,
+    "separated_faster": true
+  },
+  {
+    "phase": "timing",
+    "fixture": "records_object_1m",
+    "operation": "parse",
+    "iterations": 81,
+    "cpu_change_percent": -0.42573407151601517,
+    "peak_change_kib": 144.0,
+    "current_change_kib": 96.0,
+    "candidate_cpu_samples_us": [
+      2017.9876543209878,
+      2018.3703703703704,
+      2021.3827160493827,
+      2018.5802469135801,
+      2018.283950617284
+    ],
+    "reference_cpu_samples_us": [
+      2026.9135802469136,
+      2032.20987654321,
+      2027.0,
+      2026.6049382716049,
+      2027.4814814814815
+    ],
+    "separated_slower": false,
+    "separated_faster": true
+  },
+  {
+    "phase": "timing",
+    "fixture": "records_object_1m",
+    "operation": "stringify",
+    "iterations": 230,
+    "cpu_change_percent": -0.011370324789983233,
+    "peak_change_kib": 144.0,
+    "current_change_kib": 96.0,
+    "candidate_cpu_samples_us": [
+      649.1608695652174,
+      647.5304347826087,
+      652.9130434782609,
+      650.7521739130435,
+      649.9782608695652
+    ],
+    "reference_cpu_samples_us": [
+      650.0521739130435,
+      649.195652173913,
+      653.2826086956521,
+      654.6608695652174,
+      644.5565217391304
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "records_object_20m",
+    "operation": "parse",
+    "iterations": 4,
+    "cpu_change_percent": -0.16067813765182626,
+    "peak_change_kib": 160.0,
+    "current_change_kib": 112.0,
+    "candidate_cpu_samples_us": [
+      39521.0,
+      39423.75,
+      39338.5,
+      39511.5,
+      39456.5
+    ],
+    "reference_cpu_samples_us": [
+      39552.5,
+      39333.5,
+      39629.5,
+      39520.0,
+      39509.75
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "records_object_20m",
+    "operation": "stringify",
+    "iterations": 12,
+    "cpu_change_percent": -0.9160197600564635,
+    "peak_change_kib": 144.0,
+    "current_change_kib": 96.0,
+    "candidate_cpu_samples_us": [
+      11696.0,
+      11731.0,
+      11676.416666666666,
+      11700.166666666666,
+      11711.75
+    ],
+    "reference_cpu_samples_us": [
+      11827.583333333334,
+      11807.75,
+      11852.5,
+      11798.583333333334,
+      11808.333333333334
+    ],
+    "separated_slower": false,
+    "separated_faster": true
+  },
+  {
+    "phase": "timing",
+    "fixture": "records_object_8m",
+    "operation": "parse",
+    "iterations": 10,
+    "cpu_change_percent": -0.37301309607117306,
+    "peak_change_kib": 144.0,
+    "current_change_kib": 96.0,
+    "candidate_cpu_samples_us": [
+      15945.1,
+      15942.9,
+      15935.5,
+      16003.6,
+      15974.4
+    ],
+    "reference_cpu_samples_us": [
+      15994.7,
+      16004.8,
+      15991.6,
+      16042.2,
+      16022.2
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "records_object_8m",
+    "operation": "stringify",
+    "iterations": 29,
+    "cpu_change_percent": -0.6065577309128489,
+    "peak_change_kib": 128.0,
+    "current_change_kib": 80.0,
+    "candidate_cpu_samples_us": [
+      4786.068965517241,
+      4758.896551724138,
+      4763.379310344828,
+      4777.206896551724,
+      4760.793103448276
+    ],
+    "reference_cpu_samples_us": [
+      4771.862068965517,
+      4828.137931034483,
+      4792.448275862069,
+      4780.206896551724,
+      4819.862068965517
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "small_record",
+    "operation": "parse",
+    "iterations": 1589403,
+    "cpu_change_percent": -1.0966807299344183,
+    "peak_change_kib": 112.0,
+    "current_change_kib": 64.0,
+    "candidate_cpu_samples_us": [
+      0.0977461348695076,
+      0.09796823083887472,
+      0.09793488498511706,
+      0.09787951828453828,
+      0.09810853509147774
+    ],
+    "reference_cpu_samples_us": [
+      0.0990088731429348,
+      0.09898370646085354,
+      0.09908122735391842,
+      0.09943922340652434,
+      0.0990208273169234
+    ],
+    "separated_slower": false,
+    "separated_faster": true
+  },
+  {
+    "phase": "timing",
+    "fixture": "small_record",
+    "operation": "stringify",
+    "iterations": 2000000,
+    "cpu_change_percent": 0.19475048961150598,
+    "peak_change_kib": 160.0,
+    "current_change_kib": 112.0,
+    "candidate_cpu_samples_us": [
+      0.045704,
+      0.046019,
+      0.0456895,
+      0.0457885,
+      0.045849
+    ],
+    "reference_cpu_samples_us": [
+      0.0456995,
+      0.0456585,
+      0.0457735,
+      0.046088,
+      0.0456155
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "string_a",
+    "operation": "parse",
+    "iterations": 2000000,
+    "cpu_change_percent": -0.44653257746369857,
+    "peak_change_kib": 96.0,
+    "current_change_kib": 64.0,
+    "candidate_cpu_samples_us": [
+      0.0128975,
+      0.012826,
+      0.0128145,
+      0.0128195,
+      0.012816
+    ],
+    "reference_cpu_samples_us": [
+      0.01288,
+      0.012877,
+      0.0128805,
+      0.012872,
+      0.0128745
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "string_a",
+    "operation": "stringify",
+    "iterations": 2000000,
+    "cpu_change_percent": 0.010317787866287453,
+    "peak_change_kib": 128.0,
+    "current_change_kib": 96.0,
+    "candidate_cpu_samples_us": [
+      0.00969,
+      0.00971,
+      0.0096875,
+      0.009784,
+      0.009693
+    ],
+    "reference_cpu_samples_us": [
+      0.00969,
+      0.009704,
+      0.0096905,
+      0.009692,
+      0.0096955
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "tiny_object",
+    "operation": "parse",
+    "iterations": 2000000,
+    "cpu_change_percent": -1.4712193551848052,
+    "peak_change_kib": 128.0,
+    "current_change_kib": 80.0,
+    "candidate_cpu_samples_us": [
+      0.0367335,
+      0.0367125,
+      0.036698,
+      0.0367855,
+      0.036736
+    ],
+    "reference_cpu_samples_us": [
+      0.037282,
+      0.03726,
+      0.0373035,
+      0.037308,
+      0.037268
+    ],
+    "separated_slower": false,
+    "separated_faster": true
+  },
+  {
+    "phase": "timing",
+    "fixture": "tiny_object",
+    "operation": "stringify",
+    "iterations": 2000000,
+    "cpu_change_percent": 0.0839086720348714,
+    "peak_change_kib": 144.0,
+    "current_change_kib": 96.0,
+    "candidate_cpu_samples_us": [
+      0.0340225,
+      0.033922,
+      0.033994,
+      0.034029,
+      0.03395
+    ],
+    "reference_cpu_samples_us": [
+      0.0339375,
+      0.033951,
+      0.0339655,
+      0.03399,
+      0.033967
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "unicode_1m",
+    "operation": "parse",
+    "iterations": 2792,
+    "cpu_change_percent": -0.10256410256409554,
+    "peak_change_kib": 128.0,
+    "current_change_kib": 64.0,
+    "candidate_cpu_samples_us": [
+      0.3510028653295129,
+      0.34885386819484243,
+      0.34921203438395415,
+      0.34742120343839544,
+      0.34885386819484243
+    ],
+    "reference_cpu_samples_us": [
+      0.34849570200573066,
+      0.34921203438395415,
+      0.3495702005730659,
+      0.34921203438395415,
+      0.34992836676217765
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "unicode_1m",
+    "operation": "stringify",
+    "iterations": 2495,
+    "cpu_change_percent": 3.9172220682815784,
+    "peak_change_kib": 128.0,
+    "current_change_kib": 80.0,
+    "candidate_cpu_samples_us": [
+      28.559118236472944,
+      29.25450901803607,
+      27.425250501002004,
+      28.602404809619237,
+      28.462925851703407
+    ],
+    "reference_cpu_samples_us": [
+      27.133066132264528,
+      27.48256513026052,
+      27.100200400801604,
+      30.08296593186373,
+      27.971142284569137
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "wide_1m",
+    "operation": "parse",
+    "iterations": 64,
+    "cpu_change_percent": 0.0,
+    "peak_change_kib": 160.0,
+    "current_change_kib": 112.0,
+    "candidate_cpu_samples_us": [
+      2887.984375,
+      2872.3125,
+      2886.8125,
+      2888.984375,
+      2886.28125
+    ],
+    "reference_cpu_samples_us": [
+      2902.25,
+      2886.8125,
+      2879.03125,
+      2883.265625,
+      2894.015625
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "timing",
+    "fixture": "wide_1m",
+    "operation": "stringify",
+    "iterations": 234,
+    "cpu_change_percent": 0.02768848429184345,
+    "peak_change_kib": 176.0,
+    "current_change_kib": 128.0,
+    "candidate_cpu_samples_us": [
+      633.1410256410256,
+      632.4145299145299,
+      634.3034188034188,
+      632.5555555555555,
+      632.9786324786324
+    ],
+    "reference_cpu_samples_us": [
+      632.7564102564103,
+      634.2564102564103,
+      632.3504273504274,
+      633.457264957265,
+      632.8034188034188
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "memory",
+    "fixture": "long_string_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "cpu_change_percent": -5.202312138728327,
+    "peak_change_kib": 112.0,
+    "current_change_kib": 48.0,
+    "candidate_cpu_samples_us": [
+      162.0,
+      164.0,
+      169.0,
+      176.0,
+      161.0
+    ],
+    "reference_cpu_samples_us": [
+      173.0,
+      181.0,
+      170.0,
+      180.0,
+      172.0
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "memory",
+    "fixture": "long_string_1m",
+    "operation": "retain-parse",
+    "iterations": 32,
+    "cpu_change_percent": -5.291005291005291,
+    "peak_change_kib": 96.0,
+    "current_change_kib": 32.0,
+    "candidate_cpu_samples_us": [
+      5.53125,
+      5.6875,
+      5.59375,
+      5.5625,
+      6.28125
+    ],
+    "reference_cpu_samples_us": [
+      6.0625,
+      5.875,
+      5.875,
+      5.90625,
+      6.125
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "memory",
+    "fixture": "long_string_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "cpu_change_percent": -3.703703703703709,
+    "peak_change_kib": 128.0,
+    "current_change_kib": 64.0,
+    "candidate_cpu_samples_us": [
+      130.0,
+      132.0,
+      134.0,
+      127.0,
+      127.0
+    ],
+    "reference_cpu_samples_us": [
+      130.0,
+      140.0,
+      135.0,
+      135.0,
+      131.0
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "memory",
+    "fixture": "long_string_1m",
+    "operation": "retain-stringify",
+    "iterations": 32,
+    "cpu_change_percent": -0.25749494206364076,
+    "peak_change_kib": 128.0,
+    "current_change_kib": 80.0,
+    "candidate_cpu_samples_us": [
+      168.4375,
+      170.8125,
+      169.46875,
+      166.71875,
+      169.8125
+    ],
+    "reference_cpu_samples_us": [
+      169.90625,
+      173.6875,
+      169.53125,
+      169.125,
+      169.90625
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_array_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "cpu_change_percent": 0.6573541495480617,
+    "peak_change_kib": 128.0,
+    "current_change_kib": 64.0,
+    "candidate_cpu_samples_us": [
+      1215.0,
+      1228.0,
+      1225.0,
+      1218.0,
+      1230.0
+    ],
+    "reference_cpu_samples_us": [
+      1238.0,
+      1201.0,
+      1209.0,
+      1244.0,
+      1217.0
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_array_1m",
+    "operation": "retain-parse",
+    "iterations": 16,
+    "cpu_change_percent": 0.33072428618674543,
+    "peak_change_kib": 112.0,
+    "current_change_kib": 48.0,
+    "candidate_cpu_samples_us": [
+      1139.25,
+      1139.9375,
+      1133.4375,
+      1137.625,
+      1135.25
+    ],
+    "reference_cpu_samples_us": [
+      1135.125,
+      1129.5,
+      1132.9375,
+      1134.5,
+      1133.875
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_array_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "cpu_change_percent": -0.37641154328732496,
+    "peak_change_kib": 128.0,
+    "current_change_kib": 80.0,
+    "candidate_cpu_samples_us": [
+      786.0,
+      807.0,
+      808.0,
+      789.0,
+      794.0
+    ],
+    "reference_cpu_samples_us": [
+      796.0,
+      823.0,
+      793.0,
+      797.0,
+      806.0
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_array_1m",
+    "operation": "retain-stringify",
+    "iterations": 16,
+    "cpu_change_percent": -0.638460072422331,
+    "peak_change_kib": 128.0,
+    "current_change_kib": 64.0,
+    "candidate_cpu_samples_us": [
+      649.375,
+      651.6875,
+      649.0,
+      652.375,
+      655.4375
+    ],
+    "reference_cpu_samples_us": [
+      668.625,
+      655.875,
+      653.125,
+      653.4375,
+      660.625
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_array_8m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "cpu_change_percent": 0.29966167230546237,
+    "peak_change_kib": 112.0,
+    "current_change_kib": 48.0,
+    "candidate_cpu_samples_us": [
+      10467.0,
+      10367.0,
+      10540.0,
+      10376.0,
+      10333.0
+    ],
+    "reference_cpu_samples_us": [
+      10345.0,
+      10304.0,
+      10266.0,
+      10533.0,
+      10364.0
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_array_8m",
+    "operation": "retain-parse",
+    "iterations": 4,
+    "cpu_change_percent": 0.23294509151414733,
+    "peak_change_kib": 144.0,
+    "current_change_kib": 80.0,
+    "candidate_cpu_samples_us": [
+      10558.75,
+      10507.0,
+      10542.0,
+      10536.25,
+      10562.75
+    ],
+    "reference_cpu_samples_us": [
+      10517.5,
+      10557.25,
+      10513.25,
+      10504.75,
+      10556.25
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_array_8m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "cpu_change_percent": -0.321220638426023,
+    "peak_change_kib": 128.0,
+    "current_change_kib": 80.0,
+    "candidate_cpu_samples_us": [
+      29824.0,
+      29778.0,
+      29790.0,
+      29917.0,
+      29708.0
+    ],
+    "reference_cpu_samples_us": [
+      29940.0,
+      29908.0,
+      29783.0,
+      29681.0,
+      29886.0
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_array_8m",
+    "operation": "retain-stringify",
+    "iterations": 4,
+    "cpu_change_percent": -0.0015440915337450178,
+    "peak_change_kib": 128.0,
+    "current_change_kib": 80.0,
+    "candidate_cpu_samples_us": [
+      16190.5,
+      16176.75,
+      16188.0,
+      16220.5,
+      16201.75
+    ],
+    "reference_cpu_samples_us": [
+      16240.25,
+      16283.75,
+      16169.5,
+      16190.75,
+      16174.5
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_object_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "cpu_change_percent": -1.0052910052910091,
+    "peak_change_kib": 112.0,
+    "current_change_kib": 48.0,
+    "candidate_cpu_samples_us": [
+      1872.0,
+      1874.0,
+      1869.0,
+      1869.0,
+      1871.0
+    ],
+    "reference_cpu_samples_us": [
+      1881.0,
+      1890.0,
+      1900.0,
+      1896.0,
+      1881.0
+    ],
+    "separated_slower": false,
+    "separated_faster": true
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_object_1m",
+    "operation": "retain-parse",
+    "iterations": 16,
+    "cpu_change_percent": -0.2899220571860761,
+    "peak_change_kib": 144.0,
+    "current_change_kib": 96.0,
+    "candidate_cpu_samples_us": [
+      2963.4375,
+      2966.3125,
+      2963.75,
+      3069.25,
+      2979.8125
+    ],
+    "reference_cpu_samples_us": [
+      2974.9375,
+      2972.1875,
+      2974.375,
+      2996.375,
+      2979.875
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_object_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "cpu_change_percent": -0.4907975460122671,
+    "peak_change_kib": 112.0,
+    "current_change_kib": 48.0,
+    "candidate_cpu_samples_us": [
+      802.0,
+      811.0,
+      811.0,
+      818.0,
+      798.0
+    ],
+    "reference_cpu_samples_us": [
+      823.0,
+      820.0,
+      815.0,
+      807.0,
+      802.0
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_object_1m",
+    "operation": "retain-stringify",
+    "iterations": 16,
+    "cpu_change_percent": -0.9493971328206618,
+    "peak_change_kib": 128.0,
+    "current_change_kib": 64.0,
+    "candidate_cpu_samples_us": [
+      650.5625,
+      659.75,
+      651.9375,
+      653.6875,
+      652.0625
+    ],
+    "reference_cpu_samples_us": [
+      654.625,
+      654.125,
+      662.125,
+      665.125,
+      658.3125
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_object_8m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "cpu_change_percent": -0.2135721667240742,
+    "peak_change_kib": 160.0,
+    "current_change_kib": 48.0,
+    "candidate_cpu_samples_us": [
+      14469.0,
+      14482.0,
+      14484.0,
+      14497.0,
+      14495.0
+    ],
+    "reference_cpu_samples_us": [
+      14515.0,
+      14504.0,
+      14525.0,
+      14486.0,
+      14520.0
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_object_8m",
+    "operation": "retain-parse",
+    "iterations": 4,
+    "cpu_change_percent": -0.3844004916750521,
+    "peak_change_kib": 144.0,
+    "current_change_kib": 96.0,
+    "candidate_cpu_samples_us": [
+      22332.0,
+      22282.25,
+      22234.5,
+      22357.75,
+      22286.5
+    ],
+    "reference_cpu_samples_us": [
+      22330.75,
+      22372.5,
+      22429.75,
+      22367.75,
+      22559.25
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_object_8m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "cpu_change_percent": -0.18442760378244438,
+    "peak_change_kib": 128.0,
+    "current_change_kib": 80.0,
+    "candidate_cpu_samples_us": [
+      29704.0,
+      29843.0,
+      29741.0,
+      29789.0,
+      29767.0
+    ],
+    "reference_cpu_samples_us": [
+      29877.0,
+      29740.0,
+      29778.0,
+      29822.0,
+      29969.0
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_object_8m",
+    "operation": "retain-stringify",
+    "iterations": 4,
+    "cpu_change_percent": -0.08943578356540582,
+    "peak_change_kib": 128.0,
+    "current_change_kib": 80.0,
+    "candidate_cpu_samples_us": [
+      16218.0,
+      16270.75,
+      16170.5,
+      16198.25,
+      16195.25
+    ],
+    "reference_cpu_samples_us": [
+      16212.75,
+      16251.5,
+      16177.5,
+      16208.25,
+      16229.25
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "memory",
+    "fixture": "small_record",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "cpu_change_percent": 3.125,
+    "peak_change_kib": 96.0,
+    "current_change_kib": 64.0,
+    "candidate_cpu_samples_us": [
+      34.0,
+      32.0,
+      33.0,
+      34.0,
+      32.0
+    ],
+    "reference_cpu_samples_us": [
+      33.0,
+      32.0,
+      31.0,
+      33.0,
+      32.0
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "memory",
+    "fixture": "small_record",
+    "operation": "retain-parse",
+    "iterations": 100000,
+    "cpu_change_percent": -1.2627953697503136,
+    "peak_change_kib": 80.0,
+    "current_change_kib": 16.0,
+    "candidate_cpu_samples_us": [
+      0.10293,
+      0.10317,
+      0.10364,
+      0.1033,
+      0.10321
+    ],
+    "reference_cpu_samples_us": [
+      0.10453,
+      0.10454,
+      0.10492,
+      0.10442,
+      0.10422
+    ],
+    "separated_slower": false,
+    "separated_faster": true
+  },
+  {
+    "phase": "memory",
+    "fixture": "small_record",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "cpu_change_percent": -8.333333333333337,
+    "peak_change_kib": 112.0,
+    "current_change_kib": 80.0,
+    "candidate_cpu_samples_us": [
+      11.0,
+      11.0,
+      11.0,
+      11.0,
+      12.0
+    ],
+    "reference_cpu_samples_us": [
+      11.0,
+      15.0,
+      12.0,
+      11.0,
+      12.0
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "memory",
+    "fixture": "small_record",
+    "operation": "retain-stringify",
+    "iterations": 100000,
+    "cpu_change_percent": 0.015028554253082582,
+    "peak_change_kib": 112.0,
+    "current_change_kib": 48.0,
+    "candidate_cpu_samples_us": [
+      0.06623,
+      0.06655,
+      0.06671,
+      0.06673,
+      0.06649
+    ],
+    "reference_cpu_samples_us": [
+      0.06653,
+      0.06642,
+      0.06665,
+      0.06686,
+      0.06654
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "memory",
+    "fixture": "tiny_object",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "cpu_change_percent": 3.125,
+    "peak_change_kib": 80.0,
+    "current_change_kib": 48.0,
+    "candidate_cpu_samples_us": [
+      34.0,
+      33.0,
+      30.0,
+      33.0,
+      31.0
+    ],
+    "reference_cpu_samples_us": [
+      41.0,
+      32.0,
+      31.0,
+      31.0,
+      32.0
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "memory",
+    "fixture": "tiny_object",
+    "operation": "retain-parse",
+    "iterations": 200000,
+    "cpu_change_percent": -1.3721741086491934,
+    "peak_change_kib": 64.0,
+    "current_change_kib": 0.0,
+    "candidate_cpu_samples_us": [
+      0.044365,
+      0.043935,
+      0.04381,
+      0.043845,
+      0.043825
+    ],
+    "reference_cpu_samples_us": [
+      0.044645,
+      0.044455,
+      0.04429,
+      0.044185,
+      0.044755
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "memory",
+    "fixture": "tiny_object",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "cpu_change_percent": 9.090909090909083,
+    "peak_change_kib": 112.0,
+    "current_change_kib": 80.0,
+    "candidate_cpu_samples_us": [
+      12.0,
+      9.0,
+      13.0,
+      13.0,
+      10.0
+    ],
+    "reference_cpu_samples_us": [
+      11.0,
+      11.0,
+      10.0,
+      10.0,
+      11.0
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "memory",
+    "fixture": "tiny_object",
+    "operation": "retain-stringify",
+    "iterations": 200000,
+    "cpu_change_percent": -0.13871105420399932,
+    "peak_change_kib": 128.0,
+    "current_change_kib": 64.0,
+    "candidate_cpu_samples_us": [
+      0.046625,
+      0.046815,
+      0.04671,
+      0.04689,
+      0.046795
+    ],
+    "reference_cpu_samples_us": [
+      0.0468,
+      0.04686,
+      0.046795,
+      0.04697,
+      0.046935
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "memory",
+    "fixture": "unicode_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "cpu_change_percent": -3.9024390243902474,
+    "peak_change_kib": 112.0,
+    "current_change_kib": 48.0,
+    "candidate_cpu_samples_us": [
+      195.0,
+      199.0,
+      202.0,
+      197.0,
+      193.0
+    ],
+    "reference_cpu_samples_us": [
+      204.0,
+      205.0,
+      206.0,
+      209.0,
+      204.0
+    ],
+    "separated_slower": false,
+    "separated_faster": true
+  },
+  {
+    "phase": "memory",
+    "fixture": "unicode_1m",
+    "operation": "retain-parse",
+    "iterations": 32,
+    "cpu_change_percent": -4.545454545454541,
+    "peak_change_kib": 96.0,
+    "current_change_kib": 32.0,
+    "candidate_cpu_samples_us": [
+      6.5,
+      6.5625,
+      6.6875,
+      6.59375,
+      6.5625
+    ],
+    "reference_cpu_samples_us": [
+      6.875,
+      6.9375,
+      6.75,
+      7.03125,
+      6.8125
+    ],
+    "separated_slower": false,
+    "separated_faster": true
+  },
+  {
+    "phase": "memory",
+    "fixture": "unicode_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "cpu_change_percent": 1.7391304347825987,
+    "peak_change_kib": 112.0,
+    "current_change_kib": 48.0,
+    "candidate_cpu_samples_us": [
+      122.0,
+      111.0,
+      126.0,
+      117.0,
+      110.0
+    ],
+    "reference_cpu_samples_us": [
+      111.0,
+      120.0,
+      114.0,
+      117.0,
+      115.0
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "memory",
+    "fixture": "unicode_1m",
+    "operation": "retain-stringify",
+    "iterations": 32,
+    "cpu_change_percent": 0.8423022929340274,
+    "peak_change_kib": 128.0,
+    "current_change_kib": 64.0,
+    "candidate_cpu_samples_us": [
+      65.875,
+      68.15625,
+      64.6875,
+      68.5625,
+      67.34375
+    ],
+    "reference_cpu_samples_us": [
+      66.0625,
+      71.5,
+      66.34375,
+      66.90625,
+      66.78125
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "memory",
+    "fixture": "wide_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "cpu_change_percent": -0.11485451761102938,
+    "peak_change_kib": 128.0,
+    "current_change_kib": 64.0,
+    "candidate_cpu_samples_us": [
+      2627.0,
+      2618.0,
+      2603.0,
+      2609.0,
+      2596.0
+    ],
+    "reference_cpu_samples_us": [
+      2625.0,
+      2611.0,
+      2611.0,
+      2628.0,
+      2612.0
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "memory",
+    "fixture": "wide_1m",
+    "operation": "retain-parse",
+    "iterations": 16,
+    "cpu_change_percent": -0.0938470463775043,
+    "peak_change_kib": 144.0,
+    "current_change_kib": 96.0,
+    "candidate_cpu_samples_us": [
+      3650.8125,
+      3656.8125,
+      3659.4375,
+      3662.1875,
+      3668.8125
+    ],
+    "reference_cpu_samples_us": [
+      3661.0,
+      3662.875,
+      3660.4375,
+      3686.3125,
+      3668.5
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "memory",
+    "fixture": "wide_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "cpu_change_percent": 0.12155591572122759,
+    "peak_change_kib": 144.0,
+    "current_change_kib": 80.0,
+    "candidate_cpu_samples_us": [
+      2485.0,
+      2464.0,
+      2472.0,
+      2471.0,
+      2461.0
+    ],
+    "reference_cpu_samples_us": [
+      2474.0,
+      2468.0,
+      2464.0,
+      2476.0,
+      2465.0
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  },
+  {
+    "phase": "memory",
+    "fixture": "wide_1m",
+    "operation": "retain-stringify",
+    "iterations": 16,
+    "cpu_change_percent": -0.2163061564059876,
+    "peak_change_kib": 128.0,
+    "current_change_kib": 64.0,
+    "candidate_cpu_samples_us": [
+      753.125,
+      759.75,
+      749.25,
+      749.625,
+      748.625
+    ],
+    "reference_cpu_samples_us": [
+      748.875,
+      760.3125,
+      751.25,
+      751.875,
+      749.75
+    ],
+    "separated_slower": false,
+    "separated_faster": false
+  }
+]
