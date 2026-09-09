@@ -943,7 +943,6 @@ fn analyze_written_loop(
 /// through non-loop nesting; nested loops are reached by `scan_written_loops`.
 fn classify_written_block(
     block: &[Stmt],
-    loop_refs: &HashMap<LocalId, usize>,
     block_scoped: &dyn Fn(LocalId) -> bool,
     mutably_captured: &HashSet<LocalId>,
     out: &mut HashSet<LocalId>,
