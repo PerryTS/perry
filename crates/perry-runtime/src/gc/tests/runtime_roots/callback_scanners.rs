@@ -325,10 +325,12 @@ fn test_json_tape_small_record_batch_survives_copied_minor_before_cache_store() 
     let scope = RuntimeHandleScope::new();
     let hdr_handle = scope.root_raw_mut_ptr(hdr);
     // Establish an ascending traversal before arming the completed-record
-    // hook, so the second read must select the batch producer.
+    // hook, so the second read must select the batch producer. This hook is
+    // distinct from the legacy tape walker's object-allocation hook: falling
+    // back must fail the witness instead of looking like batch coverage.
     hdr_handle.with_mut_ptr(|hdr| unsafe { crate::json_tape::lazy_get(hdr, 0) });
     let hook = JsonTapeSafepointHookGuard::new(
-        crate::json_tape::JsonTapeSafepoint::MaterializeObjectRooted,
+        crate::json_tape::JsonTapeSafepoint::SmallRecordBatchRooted,
     );
     let value = hdr_handle.with_mut_ptr(|hdr| unsafe { crate::json_tape::lazy_get(hdr, 1) });
     let original = hook.fired_ptr();

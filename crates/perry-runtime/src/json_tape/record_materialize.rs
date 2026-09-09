@@ -51,7 +51,7 @@ pub(super) unsafe fn try_small_record(
     // This schedules work; the completed record is already a rewritable root.
     crate::gc::gc_schedule_tiny_parse_boundary_collection_if_pressure();
     json_tape_safepoint(
-        JsonTapeSafepoint::MaterializeObjectRooted,
+        JsonTapeSafepoint::SmallRecordBatchRooted,
         JSValue::from_bits(value_handle.get_nanbox_u64()).as_pointer::<u8>() as usize,
     );
     Some(JSValue::from_bits(value_handle.get_nanbox_u64()))

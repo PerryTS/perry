@@ -92,6 +92,7 @@ thread_local! {
 #[cfg_attr(not(test), allow(dead_code))]
 pub enum JsonTapeSafepoint {
     MaterializeObjectRooted,
+    SmallRecordBatchRooted,
     MaterializeArrayRooted,
     LazyArrayRooted,
     LazyGetHeaderRooted,
