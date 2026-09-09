@@ -1,0 +1,10 @@
+main-eee perry_runtime::json::parse_api::parse_slow 7232 bytes 0x100502fc0
+main-eee perry_runtime::json::parse_api::parse_noncontainer 1012 bytes 0x100506370
+main-eee perry_runtime::json::parser::depth_blocks::nesting_depth_exceeds 3768 bytes 0x1006c31d4
+main-eee _js_json_parse 1736 bytes 0x1008429c0
+tape-depth-r2 perry_runtime::json::parse_empty::allocate_empty_object 1856 bytes 0x1004ec900
+tape-depth-r2 perry_runtime::json::parse_api::parse_slow 5624 bytes 0x100505d78
+tape-depth-r2 perry_runtime::json::parse_api::parse_noncontainer 1012 bytes 0x1005083f4
+tape-depth-r2 perry_runtime::json::parser::depth_blocks::nesting_depth_exceeds 3676 bytes 0x1006c4c94
+tape-depth-r2 perry_runtime::json::parser::depth_blocks::contains_open_container_tail 284 bytes 0x1006c5af0
+tape-depth-r2 _js_json_parse 156 bytes 0x100844554

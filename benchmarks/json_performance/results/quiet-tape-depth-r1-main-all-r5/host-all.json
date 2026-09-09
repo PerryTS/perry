@@ -1,0 +1,27 @@
+{
+  "time_utc": "2026-09-09T22:10:10Z",
+  "phase": "all",
+  "load_before": [
+    1.861328125,
+    1.7265625,
+    1.68701171875
+  ],
+  "host": "Darwin perry-macos.fritz.box 25.5.0 Darwin Kernel Version 25.5.0: Mon Apr 27 20:38:00 PDT 2026; root:xnu-12377.121.6~2/RELEASE_ARM64_T8103 arm64",
+  "cpu": "Apple M1",
+  "memory": 8589934592,
+  "versions": {
+    "node": "v26.5.1",
+    "bun": "1.3.14"
+  },
+  "worker_sha256": {
+    "perry": "3fd7d200d4b098bbe0234ca4c316c6b90baa1eb9ce7bad4d3fc041a4f91d31f4",
+    "baseline": "43a90819e68a87d8365526189ff780e5bb9652b1df48573b0c293876dea8ee4d"
+  },
+  "node_v8": "14.6.202.34-node.24",
+  "load_after": [
+    2.2451171875,
+    1.9453125,
+    1.7802734375
+  ],
+  "finished_utc": "2026-09-09T22:15:21Z"
+}

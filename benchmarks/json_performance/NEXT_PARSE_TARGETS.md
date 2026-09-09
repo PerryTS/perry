@@ -77,5 +77,7 @@ trees through iterative materialization, and preserve the old depth/error path
 before any malformed-tape recursive fallback. Typed, throwing and fallible
 entries need consistent admission; force-on object roots also need protection.
 No input borrow may cross the tape callback's collection points. Measure the
-extra per-container depth accounting as well as the pass removed. This is a
-read-only design; no source change or speed claim is part of PR #10036.
+extra per-container depth accounting as well as the pass removed. [Tape-depth R1/R2](TAPE_DEPTH.md) implement this design with six new Rust tests
+and a compiled nine-mode depth/GC witness. R1 has array gains in focused and
+full original measurements, with conflicting Unicode stringify evidence. R2
+keeps the builder separate; its performance evaluation is pending.
