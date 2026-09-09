@@ -1,0 +1,10 @@
+{
+  "merged_correctness_main": "eee3881c464bf91ae900e87a42bed072bbdfc95a",
+  "reviewed_correctness_head": "46ab935f800985d54e50b82df80b35302fd1c9cf",
+  "main_tree_exactly_matches_reviewed_head": true,
+  "pre_rebase_candidate": "66b0d164398d56d5beb8b477ca1eeb5026141dae",
+  "rebased_candidate": "3986f0f86205b03d02eb4d4cdbe34c5067030c54",
+  "candidate_tree_unchanged_by_rebase": true,
+  "measured_checkpoint_branch": "codex/json-opening-scan-r2-measured",
+  "measured_worker_provenance_commit": "f1922b1a97894cb57f2e7a17925ea2007b580714"
+}
