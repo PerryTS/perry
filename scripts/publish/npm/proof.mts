@@ -17,15 +17,36 @@ export async function packTarball(pkgDir: string): Promise<{
     ['pack', '--json', '--ignore-scripts'],
     pkgDir,
   )
-  if (code !== 0) return undefined
+  // stderr is inherited (see runCapture), so npm's own errors are already in
+  // the log. What was NOT visible is the payload we failed to parse — that gap
+  // cost a full release cycle in run 34335433079, where the only symptom was
+  // "npm pack failed" even though pack exited 0 and wrote the tarball.
+  if (code !== 0) {
+    console.error(`npm pack exited ${code} in ${pkgDir}`)
+    return undefined
+  }
   let parsed: unknown
   try {
     parsed = JSON.parse(stdout)
   } catch {
+    console.error(`npm pack --json emitted unparseable output in ${pkgDir}:`)
+    console.error(stdout.slice(0, 2000))
     return undefined
   }
-  const entry = Array.isArray(parsed) ? parsed[0] : undefined
-  if (!entry || typeof entry !== 'object') return undefined
+  // The shape changed at npm 12: v11 emits an ARRAY of entries, v12 an OBJECT
+  // keyed by package name. Accept both.
+  //   v11: [ { filename, shasum, ... } ]
+  //   v12: { "@scope/name": { filename, shasum, ... } }
+  const entry = Array.isArray(parsed)
+    ? parsed[0]
+    : parsed !== null && typeof parsed === 'object'
+      ? Object.values(parsed as Record<string, unknown>)[0]
+      : undefined
+  if (!entry || typeof entry !== 'object') {
+    console.error(`npm pack --json gave no usable entry in ${pkgDir}:`)
+    console.error(stdout.slice(0, 2000))
+    return undefined
+  }
   const filename = (entry as { filename?: unknown }).filename
   const shasum = (entry as { shasum?: unknown }).shasum
   if (typeof filename !== 'string' || typeof shasum !== 'string') return undefined

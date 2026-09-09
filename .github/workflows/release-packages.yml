@@ -2308,7 +2308,16 @@ jobs:
         # 11.5.1 the OIDC handshake fails silently and the registry returns a
         # misleading 404 ("'pkg@ver' is not in this registry") on PUT. See
         # npm/cli#9088.
-        run: npm install -g npm@latest
+        #
+        # `npm@11`, NOT `npm@latest`. The intent here is to clear a FLOOR, and
+        # `@latest` silently opted the most privileged job in the repo into
+        # every future npm major. npm 12.0.2 duly changed `pack --json` from an
+        # array to an object keyed by package name, which broke release run
+        # 34335433079 after all fourteen build legs had already gone green —
+        # the pack itself exited 0. `@11` still clears 11.5.1 by a wide margin.
+        # Raising this to a new major is a deliberate act: check
+        # scripts/publish/npm/proof.mts still parses that major's `pack --json`.
+        run: npm install -g npm@11
 
       - name: Download all build artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
