@@ -1,0 +1,87 @@
+{
+  "head": "46ab935f800985d54e50b82df80b35302fd1c9cf",
+  "run": 34392345218,
+  "gap_regressions": [
+    {
+      "shard": 1,
+      "test": "test_gap_promisify_pipeline_custom_6692",
+      "baseline": "pass",
+      "result": "parity_fail",
+      "pristine_main_result": "parity_fail",
+      "pristine_main_job": 102627477078
+    },
+    {
+      "shard": 1,
+      "test": "test_gap_webcrypto_async_threadpool",
+      "baseline": "pass",
+      "result": "crash",
+      "pristine_main_result": "crash",
+      "pristine_main_job": 102627477078
+    },
+    {
+      "shard": 2,
+      "test": "test_gap_9616_readable_to_web_fs",
+      "baseline": "pass",
+      "result": "parity_fail",
+      "pristine_main_result": "parity_fail",
+      "pristine_main_job": 102627477229
+    },
+    {
+      "shard": 2,
+      "test": "test_gap_iterator_prototype_next_patch",
+      "baseline": "pass",
+      "result": "parity_fail",
+      "pristine_main_result": "parity_fail",
+      "pristine_main_job": 102627477229
+    },
+    {
+      "shard": 3,
+      "test": "test_gap_2899_2779_2777_static_helpers",
+      "baseline": "pass",
+      "result": "parity_fail",
+      "pristine_main_result": "parity_fail",
+      "pristine_main_job": 102627476981
+    },
+    {
+      "shard": 5,
+      "test": "test_gap_crypto_scrypt_options",
+      "baseline": "pass",
+      "result": "parity_fail",
+      "pristine_main_result": "parity_fail",
+      "pristine_main_job": 102627477114
+    },
+    {
+      "shard": 5,
+      "test": "test_gap_disposablestack_2875",
+      "baseline": "pass",
+      "result": "parity_fail",
+      "pristine_main_result": "parity_fail",
+      "pristine_main_job": 102627477114
+    }
+  ],
+  "classification": "All seven named gap regressions reproduce against pristine Linux main e722; the native-stack test and public-baseline freshness failure are also inherited. This is evidence about PR10034 versus its base, not an executed CI result for opening-scan R3.",
+  "other_failures": [
+    "lint: public benchmark artifact freshness (inherited source fingerprint verified)",
+    "cargo-test: native_stack::tests::stack_top_respects_custom_thread_stack_sizes"
+  ],
+  "pristine_main_comparison": {
+    "run": 34398426676,
+    "head": "e7223f700c8ce69c388210dab394ad7142550527",
+    "tier": "pr",
+    "update_gap_snapshot": false,
+    "status": "completed",
+    "prior_main_run": 34383725549,
+    "prior_main_limitation": "LLVM toolchain build failure prevented running gap tests.",
+    "cargo_test": "Same native_stack::tests::stack_top_respects_custom_thread_stack_sizes failure at native_stack.rs:53, 3494 pass /1fail /4ignored; job102624083142. Confirms inherited test failure.",
+    "conclusion": "failure",
+    "gc_stress": "success",
+    "gap_shards": {
+      "1": "failure",
+      "2": "failure",
+      "3": "failure",
+      "4": "success",
+      "5": "failure",
+      "6": "success"
+    }
+  }
+}

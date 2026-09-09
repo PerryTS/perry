@@ -1,0 +1,53 @@
+677: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:23:54.9968156Z ^[[0;32mPASS^[[0m  test_gap_9539_callbackify_thenable_exit_gc
+678: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:23:55.0006785Z [41/125] (00:11:42) test_gap_9539_callbackify_thenable_exit_gc … PASS
+679: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:23:59.5572473Z ^[[0;31mFAIL^[[0m  test_gap_9616_readable_to_web_fs (output mismatch)
+680: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:23:59.5573305Z        Node exit:   0
+681: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:23:59.5573557Z        Perry exit:  1
+682: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:23:59.5590319Z        Node.js:    reader: 150321 true true 150321
+683: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:23:59.5608596Z        Perry:  reader: 150321 true true 150321
+684: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:23:59.5645239Z [42/125] (00:11:47) test_gap_9616_readable_to_web_fs … PARITY_FAIL
+685: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:24:02.1005302Z ^[[0;32mPASS^[[0m  test_gap_9718_initializer_self_binding
+686: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:24:02.1047980Z [43/125] (00:11:50) test_gap_9718_initializer_self_binding … PASS
+687: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:24:04.2119124Z ^[[0;32mPASS^[[0m  test_gap_9784_module_presized_array
+688: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:24:04.2156733Z [44/125] (00:11:52) test_gap_9784_module_presized_array … PASS
+689: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:24:06.3465985Z ^[[0;32mPASS^[[0m  test_gap_9788_iterator_protocol_mutation
+690: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:24:06.3503628Z [45/125] (00:11:54) test_gap_9788_iterator_protocol_mutation … PASS
+691: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:24:08.3225999Z ^[[0;32mPASS^[[0m  test_gap_arguments_dispatch_tower_default
+692: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:24:08.3263503Z [46/125] (00:11:56) test_gap_arguments_dispatch_tower_default … PASS
+771: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:30:30.3642910Z ^[[0;32mPASS^[[0m  test_gap_intl_segmenter_containing_5896
+772: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:30:30.3681844Z [86/125] (00:18:18) test_gap_intl_segmenter_containing_5896 … PASS
+773: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:30:33.6487372Z ^[[0;31mFAIL^[[0m  test_gap_iterator_prototype_next_patch (output mismatch)
+774: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:30:33.6488459Z        Node exit:   1
+775: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:30:33.6488880Z        Perry exit:  0
+776: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:30:33.6510324Z        Node.js:    node:internal/per_context/primordials:449
+777: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:30:33.6531566Z        Perry:  A-forof 2,4,6
+778: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:30:33.6571294Z [87/125] (00:18:21) test_gap_iterator_prototype_next_patch … PARITY_FAIL
+779: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:30:35.7767243Z ^[[0;32mPASS^[[0m  test_gap_json_empty_object
+780: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:30:35.7804670Z [88/125] (00:18:23) test_gap_json_empty_object … PASS
+781: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:30:37.7570962Z ^[[0;32mPASS^[[0m  test_gap_json_map_set
+782: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:30:37.7610189Z [89/125] (00:18:25) test_gap_json_map_set … PASS
+783: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:30:40.0696316Z ^[[0;32mPASS^[[0m  test_gap_json_parse_inline_object
+784: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:30:40.0733996Z [90/125] (00:18:28) test_gap_json_parse_inline_object … PASS
+785: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:30:42.3303434Z ^[[0;32mPASS^[[0m  test_gap_json_record_output
+786: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:30:42.3341994Z [91/125] (00:18:30) test_gap_json_record_output … PASS
+874: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:42:02.5430715Z 
+875: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:42:02.5430838Z Output Mismatches:
+876: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:42:02.5431146Z   - test_gap_9616_readable_to_web_fs
+877: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:42:02.5431569Z   - test_gap_iterator_prototype_next_patch
+878: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:42:02.5431928Z   - test_gap_perfhooks_3088_3008_3010_3011
+879: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:42:02.5432247Z   - test_gap_prop_plan_cache_invalidation
+880: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:42:02.5432449Z 
+881: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:42:02.5679907Z Report saved to: /home/runner/work/perry/perry/test-parity/reports/parity_report_20260909_201212.json
+882: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:42:02.5680810Z 
+883: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:42:02.6474127Z 
+884: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:42:02.6475155Z REGRESSIONS — these were expected to pass:
+885: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:42:02.6476022Z   - test_gap_9616_readable_to_web_fs: pass -> parity_fail
+886: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:42:02.6476818Z   - test_gap_iterator_prototype_next_patch: pass -> parity_fail
+887: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:42:02.6477256Z 
+888: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:42:02.6477565Z Fix the regressions, then accept the rest with:
+889: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:42:02.6478152Z   UPDATE_SNAPSHOT=1 ./scripts/run_gap_tests.sh
+890: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:42:02.6478740Z and commit test-parity/gap_snapshot.json.
+891: gap-suite (2)	Run gap suite (shard 2/6, fast mode)	2026-09-09T20:42:02.6547706Z ##[error]Process completed with exit code 1.
+892: gap-suite (2)	Upload gap report	﻿2026-09-09T20:42:02.6631989Z ##[group]Run actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+893: gap-suite (2)	Upload gap report	2026-09-09T20:42:02.6632471Z with:
+894: gap-suite (2)	Upload gap report	2026-09-09T20:42:02.6632708Z   name: gap-suite-report-fast-shard-2

@@ -1,0 +1,32 @@
+{
+  "owner": "json-perf-92642-1788986767",
+  "load_before": [
+    1.6796875,
+    1.81640625,
+    1.80078125
+  ],
+  "started_utc": "2026-09-09T20:46:07Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    "run_baseline.py",
+    "--phase",
+    "all",
+    "--repeat",
+    "5",
+    "--worker",
+    ".work/opening-scan-r3/worker",
+    "--baseline-worker",
+    ".work/main-eee/worker",
+    "--results-dir",
+    "results/quiet-opening-scan-r3-main-all-r5"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.95751953125,
+    2.0068359375,
+    1.896484375
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-09T20:51:14Z"
+}

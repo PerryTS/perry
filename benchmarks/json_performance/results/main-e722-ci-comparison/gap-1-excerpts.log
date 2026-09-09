@@ -1,0 +1,60 @@
+789: 2026-09-09T20:30:40.1633932Z PASS  test_gap_process_misc_3045plus
+790: 2026-09-09T20:30:40.1663743Z [102/125] (00:18:27) test_gap_process_misc_3045plus … PASS
+791: 2026-09-09T20:30:41.9360188Z FAIL  test_gap_promisify_pipeline_custom_6692 (output mismatch)
+792: 2026-09-09T20:30:41.9360576Z        Node exit:   0
+793: 2026-09-09T20:30:41.9360774Z        Perry exit:  0
+794: 2026-09-09T20:30:41.9375274Z        Node.js:    pipeline custom: function
+795: 2026-09-09T20:30:41.9390956Z        Perry:  pipeline custom: undefined
+796: 2026-09-09T20:30:41.9422421Z [103/125] (00:18:28) test_gap_promisify_pipeline_custom_6692 … PARITY_FAIL
+797: 2026-09-09T20:30:50.2487404Z PASS  test_gap_ratelimiter_memory
+798: 2026-09-09T20:30:50.2517393Z [104/125] (00:18:37) test_gap_ratelimiter_memory … PASS
+799: 2026-09-09T20:30:53.3338152Z PASS  test_gap_reflect_handle_band_objects
+800: 2026-09-09T20:30:53.3368118Z [105/125] (00:18:40) test_gap_reflect_handle_band_objects … PASS
+801: 2026-09-09T20:30:56.0104900Z PASS  test_gap_region_shadow_clear_gc
+802: 2026-09-09T20:30:56.0134681Z [106/125] (00:18:43) test_gap_region_shadow_clear_gc … PASS
+803: 2026-09-09T20:30:59.9076337Z PASS  test_gap_repsel_element_shape_loop_clone
+804: 2026-09-09T20:30:59.9106646Z [107/125] (00:18:46) test_gap_repsel_element_shape_loop_clone … PASS
+835: 2026-09-09T20:31:33.2360172Z PASS  test_gap_v8_heap_snapshot_4916
+836: 2026-09-09T20:31:33.2391227Z [123/125] (00:19:20) test_gap_v8_heap_snapshot_4916 … PASS
+837: 2026-09-09T20:31:46.2425808Z CRASH test_gap_webcrypto_async_threadpool (TIMEOUT (killed after 10s))
+838: 2026-09-09T20:31:46.2444231Z        Perry died after printing 1 line(s); Node exited 0.
+839: 2026-09-09T20:31:46.2466860Z        Last Perry line: subtle.digest crosses macrotask: true
+840: 2026-09-09T20:31:46.2498561Z [124/125] (00:19:33) test_gap_webcrypto_async_threadpool … CRASH
+841: 2026-09-09T20:31:48.0762029Z PASS  test_gap_yieldstar_inherited_iterator_this
+842: 2026-09-09T20:31:48.0792224Z [125/125] (00:19:35) test_gap_yieldstar_inherited_iterator_this … PASS
+843: 2026-09-09T20:31:48.1107258Z 
+844: 2026-09-09T20:31:48.1107694Z ========================================
+845: 2026-09-09T20:31:48.1108109Z    Parity Test Summary
+846: 2026-09-09T20:31:48.1108463Z ========================================
+847: 2026-09-09T20:31:48.1110769Z Parity Pass:   122
+848: 2026-09-09T20:31:48.1111218Z Parity Fail:   2
+854: 2026-09-09T20:31:48.1112834Z 
+855: 2026-09-09T20:31:48.1113177Z CRASHED (signal death / timeout — NOT an output nit):
+856: 2026-09-09T20:31:48.1113647Z   - test_gap_webcrypto_async_threadpool
+857: 2026-09-09T20:31:48.1113881Z 
+858: 2026-09-09T20:31:48.1114025Z Output Mismatches:
+859: 2026-09-09T20:31:48.1114331Z   - test_gap_2514_settracesigint
+860: 2026-09-09T20:31:48.1114688Z   - test_gap_promisify_pipeline_custom_6692
+861: 2026-09-09T20:31:48.1114926Z 
+862: 2026-09-09T20:31:48.1299445Z Report saved to: /home/runner/work/perry/perry/test-parity/reports/parity_report_20260909_201212.json
+863: 2026-09-09T20:31:48.1299953Z 
+864: 2026-09-09T20:31:48.1482014Z 
+865: 2026-09-09T20:31:48.1482923Z *** CRASHES — Perry died from a signal or timed out (NOT an output nit): ***
+866: 2026-09-09T20:31:48.1492297Z   - test_gap_webcrypto_async_threadpool
+867: 2026-09-09T20:31:48.1493876Z 
+868: 2026-09-09T20:31:48.1494361Z A crash is a hard defect. Even when the snapshot already accepts it,
+869: 2026-09-09T20:31:48.1495251Z it is reported here every run. Reproduce on LINUX — several crash classes
+870: 2026-09-09T20:31:48.1496099Z (e.g. handle-band derefs, #6271) are masked on macOS by its 2 TB heap floor.
+871: 2026-09-09T20:31:48.1496473Z 
+872: 2026-09-09T20:31:48.1955186Z 
+873: 2026-09-09T20:31:48.1955848Z REGRESSIONS — these were expected to pass:
+874: 2026-09-09T20:31:48.1956448Z   - test_gap_promisify_pipeline_custom_6692: pass -> parity_fail
+875: 2026-09-09T20:31:48.1957021Z   - test_gap_webcrypto_async_threadpool: pass -> crash
+876: 2026-09-09T20:31:48.1957328Z 
+877: 2026-09-09T20:31:48.1957563Z Fix the regressions, then accept the rest with:
+878: 2026-09-09T20:31:48.1958022Z   UPDATE_SNAPSHOT=1 ./scripts/run_gap_tests.sh
+879: 2026-09-09T20:31:48.1958491Z and commit test-parity/gap_snapshot.json.
+880: 2026-09-09T20:31:48.2004466Z ##[error]Process completed with exit code 1.
+881: 2026-09-09T20:31:48.2066149Z ##[group]Run actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+882: 2026-09-09T20:31:48.2066471Z with:
+883: 2026-09-09T20:31:48.2066663Z   name: gap-suite-report-fast-shard-1
