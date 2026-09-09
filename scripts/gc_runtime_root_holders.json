@@ -2299,6 +2299,12 @@
       "why": "Tiny-JSON completion countdown in a Cell<u8>. It stores only the number of bounded parse completions before the next arena-pressure poll (0..63), never an address or a NaN-boxed value."
     },
     {
+      "file": "crates/perry-runtime/src/json/mod.rs",
+      "name": "PARSE_KEY_CACHE_OVERSIZED",
+      "verdict": "not_a_gc_pointer",
+      "why": "Boolean latch recording whether this thread's JSON.parse key cache exceeded its bounded entry count. It stores only true/false; the process-wide companion is an AtomicUsize count, and neither value can contain a GC address or NaN-boxed value."
+    },
+    {
       "file": "crates/perry-runtime/src/json/parse_empty.rs",
       "name": "EMPTY_JSON_SHAPE_ID",
       "verdict": "not_a_gc_pointer",

@@ -137,8 +137,8 @@ fn large_unescaped_parsed_strings_are_individually_tracked_leaves() {
     unsafe {
         let value = crate::json::js_json_parse(source);
         let string = value.as_string_ptr();
-        let header =
-            (string as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        let header = crate::value::addr_class::try_read_gc_header(string as usize)
+            .expect("parsed string should have a tracked GC header");
         assert!(crate::gc::gc_malloc_header_is_tracked(header));
         assert_eq!((*string).byte_len as usize, payload_len);
         assert_eq!((*string).utf16_len as usize, payload_len);
