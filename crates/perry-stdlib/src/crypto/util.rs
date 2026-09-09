@@ -13,7 +13,6 @@ pub(super) use cbc::{
 };
 pub(super) use ecb::cipher::{
     block_padding::{NoPadding as EcbNoPadding, Pkcs7 as EcbPkcs7},
-    BlockDecryptMut as EcbBlockDecryptMut, BlockEncryptMut as EcbBlockEncryptMut,
     KeyInit as EcbKeyInit,
 };
 pub(super) use hkdf::Hkdf;

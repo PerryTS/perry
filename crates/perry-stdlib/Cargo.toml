@@ -398,8 +398,9 @@ p256 = { version = "0.13", optional = true, default-features = false, features =
 p384 = { version = "0.13", optional = true, default-features = false, features = ["pkcs8", "pem", "ecdsa", "ecdh"] }
 p521 = { version = "0.13", optional = true, default-features = false, features = ["pkcs8", "pem", "ecdsa", "ecdh"] }
 rsa = { version = "0.9", optional = true, default-features = false, features = ["pem", "pkcs5", "sha2"] }
-# #1367 node:crypto X509Certificate — DER/PEM cert parsing. x509-cert 0.3 uses
-# the DER/SPKI 0.8 stack; the direct SPKI 0.7 pin remains for jsonwebtoken.
+# #1367 node:crypto X509Certificate — DER/PEM cert parsing. x509-cert 0.3 and
+# the direct dependency use DER/SPKI 0.8; jsonwebtoken's current RSA and
+# elliptic-curve dependencies retain their transitive SPKI 0.7 stack.
 x509-cert = { version = "0.3", optional = true, default-features = false, features = ["pem"] }
 spki = { version = "0.8", optional = true, default-features = false, features = ["pem", "alloc"] }
 aes = { version = "0.8", optional = true }
