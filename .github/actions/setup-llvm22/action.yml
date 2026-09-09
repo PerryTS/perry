@@ -49,7 +49,34 @@ runs:
         . /etc/os-release
         echo "deb http://apt.llvm.org/${VERSION_CODENAME}/ llvm-toolchain-${VERSION_CODENAME}-22 main" \
           | sudo tee /etc/apt/sources.list.d/llvm22.list >/dev/null
-        sudo apt-get update -qq
+        # Only OUR source needs to be fresh. `apt-get update` exits non-zero if
+        # ANY configured source fails, and GitHub's runner image ships
+        # third-party lists we do not use — dl.google.com's chrome-stable repo
+        # served a "Hash Sum mismatch" on 2026-09-09 and took out 22 jobs of
+        # run 34383689667 across cargo-test, gap-suite, gc-stress, lint, check,
+        # warnings and security-audit, none of which want Chrome.
+        #
+        # So: drop the third-party lists we never install from, retry the
+        # update (transient mirror errors are common), and verify by REACHING
+        # FOR WHAT WE CAME FOR rather than by the exit code — if llvm-toolchain
+        # is resolvable, the update did its job whatever else was noisy.
+        sudo rm -f /etc/apt/sources.list.d/google-chrome.list \
+                   /etc/apt/sources.list.d/microsoft-prod.list \
+                   /etc/apt/sources.list.d/*azure* 2>/dev/null || true
+        update_ok=0
+        for attempt in 1 2 3; do
+          if sudo apt-get update -qq -o Acquire::Retries=3; then update_ok=1; break; fi
+          echo "  apt-get update attempt $attempt failed; retrying"
+          sleep $(( attempt * 5 ))
+        done
+        if [ "$update_ok" -ne 1 ]; then
+          # Not fatal by itself: what matters is whether OUR packages resolve.
+          echo "::warning::apt-get update reported errors; checking whether llvm-22 is resolvable anyway"
+          apt-cache policy llvm-22-dev | sed 's/^/    /'
+          apt-cache policy llvm-22-dev | grep -qE 'Candidate: [0-9]' \
+            || { echo "::error::apt-get update failed AND llvm-22-dev is unresolvable"; exit 1; }
+          echo "  llvm-22-dev resolves — continuing"
+        fi
         # `clang-22` is NOT implied by `llvm-22-dev`: apt ships opt and clang as
         # separate packages, so installing only the dev libraries leaves
         # /usr/lib/llvm-22/bin/opt with no clang beside it. That is exactly what
