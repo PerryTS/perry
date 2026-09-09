@@ -70,6 +70,9 @@ separately without subtraction. The [longer original replay against fresh main](
 retains +0.243% sparse CPU (9/9 pairs slower), +0.197% heterogeneous parse
 (8/9 pairs slower), and variable +4.46%/+1.90% ASCII/Unicode stringify medians.
 Although all ranges overlap, those repeated increases remain unresolved.
+A [27-repetition stringify comparison with a third control](results/quiet-opening-scan-r3-main-stringify-r27/README.md)
+retains higher candidate medians (+2.51%/+2.64%), smaller mean shifts
+(+1.27%/+0.54%) and visible prior-build variation. It does not establish equality.
 PR #10036 stays draft. [Fresh merged-main standings](MERGED_MAIN_EEE.md) report
 all remaining Node/Bun gaps independently of candidate acceptance.
 
