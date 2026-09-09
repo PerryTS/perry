@@ -9,8 +9,8 @@
     {
       "name": "small_record",
       "command": [
-        "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/main-e722/rotating-worker",
-        "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/rotating/small_record",
+        "benchmarks/json_performance/.work/main-e722/rotating-worker",
+        "benchmarks/json_performance/.work/rotating/small_record",
         "parse",
         "1000000000",
         "8",
@@ -23,8 +23,8 @@
     {
       "name": "unicode_1m",
       "command": [
-        "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/main-e722/rotating-worker",
-        "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/rotating/unicode_1m",
+        "benchmarks/json_performance/.work/main-e722/rotating-worker",
+        "benchmarks/json_performance/.work/rotating/unicode_1m",
         "parse",
         "1000000000",
         "8",
@@ -34,5 +34,6 @@
       "pid": 61291,
       "expected_interrupted_exit": -15
     }
-  ]
+  ],
+  "command_path_base": "repository root (absolute host prefix removed; commands otherwise unchanged)"
 }

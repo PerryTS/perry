@@ -1,0 +1,10 @@
+{
+  "worker_sha256": "a718f0193c1409cebceebeb4882d69835756c44d2b157c38f747d517c1e2aea5",
+  "baseline_worker_sha256": "0b2f7d97346839d09c4496f2dfbb683995b5c6bbcf8d49df85a6b794e625e019",
+  "node_version": "v26.5.1",
+  "cases_sha256": "3dfcca09636abae9047ef48e39ecf738d023d61ad4308aa3a16d1fb1fedd3b65",
+  "worker_js_sha256": "55c11d12296f896212d6abd76bcf8d551d0590b0ad24b262018b7a707369a2f4",
+  "driver_sha256": "b999099b4565ba072f9f774e0a6f9f372a5434a16e77ef6148d3845fb18eb11d",
+  "source_commit": "7e825a6d05bfc3132afa337585315f4bd715420c",
+  "purpose": "finite-checksum correctness replay; not performance evidence"
+}
