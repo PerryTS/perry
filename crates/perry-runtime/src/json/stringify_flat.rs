@@ -18,7 +18,7 @@ crate::perry_thread_local! {
 }
 
 #[inline]
-fn service_json_output_sweep_boundary() {
+pub(super) fn service_json_output_sweep_boundary() {
     JSON_OUTPUT_BYTES_SINCE_SWEEP.with(|bytes| {
         if bytes.get() >= JSON_OUTPUT_SWEEP_BUDGET {
             // The caller has rooted its input and has not allocated output.
@@ -31,7 +31,7 @@ fn service_json_output_sweep_boundary() {
 }
 
 #[inline]
-fn note_completed_malloc_json_output(bytes: u32) {
+pub(super) fn note_completed_malloc_json_output(bytes: u32) {
     JSON_OUTPUT_BYTES_SINCE_SWEEP.with(|debt| {
         let total = debt.get().saturating_add(bytes as usize);
         debt.set(total);

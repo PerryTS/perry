@@ -59,7 +59,8 @@ mod alloc;
 mod json_construction;
 pub(crate) use json_construction::{
     object_from_inline_json_fields, object_from_json_fields_preinstalled,
-    try_object_from_inline_json_fields,
+    try_empty_json_object_preinstalled, try_object_from_inline_json_fields,
+    try_object_from_prevalidated_one_field,
 };
 mod arguments;
 #[cfg(test)]

@@ -20,12 +20,27 @@ use super::super::heap_budget::{
     gc_trigger_absolute_ceiling_bytes, gc_trigger_headroom_floor_bytes,
 };
 use super::super::policy::{
-    tiny_parse_pressure_due, tiny_parse_pressure_due_with, tiny_parse_pressure_headroom_bytes,
-    GC_STEP_BYTES, GC_THRESHOLD_INITIAL_BYTES, GC_THRESHOLD_MAX_BYTES,
+    tiny_parse_boundary_poll_next, tiny_parse_pressure_due, tiny_parse_pressure_due_with,
+    tiny_parse_pressure_headroom_bytes, GC_STEP_BYTES, GC_THRESHOLD_INITIAL_BYTES,
+    GC_THRESHOLD_MAX_BYTES, GC_TINY_PARSE_BOUNDARY_POLL_INTERVAL,
     GC_TINY_PARSE_PRESSURE_BASE_BYTES,
 };
 
 const MB: usize = 1024 * 1024;
+
+#[test]
+fn bounded_tiny_parse_poll_has_exact_interval() {
+    let mut remaining = GC_TINY_PARSE_BOUNDARY_POLL_INTERVAL - 1;
+    for completion in 1..=GC_TINY_PARSE_BOUNDARY_POLL_INTERVAL * 2 {
+        let (next, poll) = tiny_parse_boundary_poll_next(remaining);
+        remaining = next;
+        assert_eq!(
+            poll,
+            completion % GC_TINY_PARSE_BOUNDARY_POLL_INTERVAL == 0,
+            "completion {completion}"
+        );
+    }
+}
 
 /// Restores the two live cells the guard reads, so a test that moves them
 /// cannot leak its state into the next one (the suite is single-threaded, but

@@ -317,14 +317,15 @@ pub(crate) unsafe fn object_get_to_json(ptr: *const u8) -> Option<f64> {
     Some(result)
 }
 
-/// Check if an array has an own `toJSON` method (an expando property, e.g.
-/// `arr.toJSON = function() {...}`, stored in the array-named-property side
-/// table since an `ArrayHeader` has no `keys_array`) — the array analog of
-/// `object_get_to_json`. Per ECMA-262 §25.5.2.2, `SerializeJSONProperty` step
+/// Check if an array has a callable `toJSON` method. An own expando lives in
+/// the array-named-property side table because `ArrayHeader` has no
+/// `keys_array`; a user-installed `Object.prototype.toJSON` is resolved
+/// through the ordinary Array/Object prototype chain. Per ECMA-262 §25.5.2.2,
+/// `SerializeJSONProperty` step
 /// 2 applies to ANY object, including arrays, BEFORE the `IsArray` check
 /// (step 10) that would otherwise route straight into `SerializeJSONArray`
 /// (test262 JSON/stringify/value-tojson-result,
-/// value-tojson-array-circular). Returns `None` when there's no callable own
+/// value-tojson-array-circular). Returns `None` when there's no callable
 /// `toJSON` (the caller then serializes the array's elements normally).
 #[inline]
 pub(crate) unsafe fn array_get_to_json(arr: *const crate::ArrayHeader) -> Option<f64> {
@@ -332,7 +333,20 @@ pub(crate) unsafe fn array_get_to_json(arr: *const crate::ArrayHeader) -> Option
     if SUPPRESS_NEXT_TO_JSON.with(|c| c.replace(false)) {
         return None;
     }
-    let method = crate::array::array_named_property_get_by_name(arr, "toJSON")?;
+    let method = match crate::array::array_named_property_get_by_name(arr, "toJSON") {
+        Some(method) => method,
+        None => {
+            // Keep the common array path allocation-free. The signature probe
+            // directly detects Object.prototype key changes; only a positive
+            // verdict pays for the full prototype lookup and key allocation.
+            if !super::stringify_tojson_probe::object_proto_may_have_to_json() {
+                return None;
+            }
+            f64::from_bits(
+                crate::object::array_prototype_property_value("toJSON", arr as usize)?.bits(),
+            )
+        }
+    };
     let method_bits = method.to_bits();
     if (method_bits & 0xFFFF_0000_0000_0000) != POINTER_TAG {
         return None;

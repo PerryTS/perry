@@ -4,6 +4,14 @@
 
 use crate::JSValue;
 
+crate::perry_thread_local! {
+    static EMPTY_JSON_SHAPE_ID: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+pub(crate) fn cached_shape_id() -> u32 {
+    EMPTY_JSON_SHAPE_ID.with(std::cell::Cell::get)
+}
+
 #[inline(always)]
 fn whitespace(byte: u8) -> bool {
     matches!(byte, b' ' | b'\t' | b'\n' | b'\r')
@@ -49,10 +57,21 @@ fn padded_empty_object(mut bytes: &[u8]) -> bool {
 #[inline(never)]
 pub(super) unsafe fn allocate_empty_object() -> JSValue {
     crate::gc::gc_collect_pending_suppressed_parse();
-    let object = crate::object::js_object_alloc(0, 0);
+    let shape_id = EMPTY_JSON_SHAPE_ID.with(std::cell::Cell::get);
+    let object = if shape_id != 0 {
+        crate::object::try_empty_json_object_preinstalled(shape_id)
+            .unwrap_or_else(|| crate::object::js_object_alloc(0, 0))
+    } else {
+        let object = crate::object::js_object_alloc(0, 0);
+        let shape_id = crate::object::shapes::object_shape_stamp(object);
+        debug_assert_ne!(shape_id, 0);
+        EMPTY_JSON_SHAPE_ID.with(|cached| cached.set(shape_id));
+        crate::object::shape_carriers::note_shape_id(shape_id);
+        object
+    };
     crate::object::mark_object_plain_ordinary(object);
     super::parse_scalar::clear_oversized_key_cache();
-    crate::gc::gc_schedule_parse_boundary_collection_if_pressure();
+    crate::gc::gc_schedule_tiny_parse_boundary_collection_if_pressure();
     JSValue::object_ptr(object as *mut u8)
 }
 

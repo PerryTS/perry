@@ -27,6 +27,54 @@ fn expected_object(bytes: &[u8]) -> serde_json::Value {
 }
 
 #[test]
+fn json_one_field_plan_accepts_only_complete_canonical_inline_objects() {
+    for input in [
+        r#"{"a":1}"#,
+        r#"{"":null}"#,
+        r#"{"abcde":false}"#,
+        r#"{"é":"🙂"}"#,
+        r#"{"x":-0}"#,
+    ] {
+        let (key, value) = decode_one_field(input.as_bytes()).unwrap();
+        let expected = expected_object(input.as_bytes());
+        let mut actual = serde_json::Map::new();
+        actual.insert(as_json(key).as_str().unwrap().into(), as_json(value));
+        assert_eq!(serde_json::Value::Object(actual), expected, "{input}");
+    }
+    for input in [
+        "{}",
+        " {\"a\":1}",
+        "{\"a\" :1}",
+        "{\"a\": 1}",
+        "{\"a\":1} ",
+        "{\"a\":1,\"b\":2}",
+        "{\"abcdef\":1}",
+        "{\"a\":{}}",
+        "{\"a\":[]}",
+        "{\"a\":1}x",
+    ] {
+        assert!(decode_one_field(input.as_bytes()).is_none(), "{input:?}");
+    }
+}
+
+#[test]
+fn json_one_field_plan_every_byte_mutation_is_valid_when_accepted() {
+    let seed = br#"{"a":1}"#;
+    for at in 0..seed.len() {
+        for byte in 0..=255u8 {
+            let mut bytes = seed.to_vec();
+            bytes[at] = byte;
+            if let Some((key, value)) = decode_one_field(&bytes) {
+                let expected = expected_object(&bytes);
+                let mut actual = serde_json::Map::new();
+                actual.insert(as_json(key).as_str().unwrap().into(), as_json(value));
+                assert_eq!(serde_json::Value::Object(actual), expected, "{bytes:?}");
+            }
+        }
+    }
+}
+
+#[test]
 fn json_inline_object_plan_matches_independent_parser_and_last_duplicate() {
     for key in ["", "a", "abcde", "é", "🙂", "0", "001"] {
         for value in [

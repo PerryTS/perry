@@ -31,12 +31,15 @@ unsafe fn finish_inline_json_object(
     (*object).parent_class_id = 0;
     // GC_STORE_AUDIT(INIT): fresh inline JSON objects have no metadata edge.
     (*object).meta = ptr::null_mut();
-    assert!(shapes::try_birth_stamp_preinstalled_shape(
-        object,
-        shape_id,
-        keys,
-        count as u32,
-    ));
+    if !shapes::try_birth_stamp_preinstalled_shape(object, shape_id, keys, count as u32) {
+        // A pending moving collection can rewrite a noncanonical cached keys
+        // array without preserving a manually installed/test shape id. The
+        // ordinary canonical cache stays on the single-probe path; recover a
+        // matching descriptor only for the stale-id case.
+        let id = shapes::shape_id_for_keys_ensure(keys, count as u32);
+        set_object_keys_array_with_live(object, keys, count as u32);
+        shapes::birth_stamp_object_shape(object, id, count as u32);
+    }
     mark_object_plain_ordinary(object);
 
     let slots = object
@@ -60,6 +63,78 @@ unsafe fn finish_inline_json_object(
 fn inline_json_object_size(field_count: usize) -> usize {
     let capacity = field_count.max(INLINE_SLOT_FLOOR);
     std::mem::size_of::<ObjectHeader>() + capacity * std::mem::size_of::<JSValue>()
+}
+
+/// Birth the steady-state one-field JSON object from a cache entry whose exact
+/// inline key bits have just matched. The current nursery allocation cannot
+/// collect, so the cache's local ShapeId stays valid through publication.
+///
+/// A caller that serviced pending GC must use the validating path below: test
+/// and embedder-created cache entries are allowed to carry a shape whose keys
+/// edge needs to be reminted after movement.
+#[inline(never)]
+pub(crate) unsafe fn try_object_from_prevalidated_one_field(
+    shape_id: u32,
+    value: JSValue,
+) -> Option<*mut ObjectHeader> {
+    debug_assert_ne!(shape_id, 0);
+    debug_assert!(!value.is_pointer() && !value.is_string());
+    let raw = crate::arena::arena_alloc_gc_no_collect(
+        inline_json_object_size(1),
+        8,
+        crate::gc::GC_TYPE_OBJECT,
+    );
+    if raw.is_null() {
+        return None;
+    }
+    let object = raw.cast::<ObjectHeader>();
+    (*object).class_id = 0;
+    (*object).parent_class_id = shape_id;
+    (*object).meta = ptr::null_mut();
+    mark_object_plain_ordinary(object);
+    let slots = raw
+        .add(std::mem::size_of::<ObjectHeader>())
+        .cast::<JSValue>();
+    slots.write(value);
+    // GC_STORE_AUDIT(INIT): freshly allocated JSON object inline slot.
+    slots.add(1).write(JSValue::undefined());
+    crate::gc::layout_init_pointer_free(raw);
+    #[cfg(debug_assertions)]
+    shapes::debug_assert_object_shape_parity(object);
+    Some(object)
+}
+
+/// Birth a keyless ordinary JSON object with an already-minted local shape.
+/// `arena_alloc_gc_no_collect` serves only the open nursery block, so no
+/// collection or old-generation carrier bookkeeping can intervene.
+#[inline(never)]
+pub(crate) unsafe fn try_empty_json_object_preinstalled(
+    shape_id: u32,
+) -> Option<*mut ObjectHeader> {
+    debug_assert_ne!(shape_id, 0);
+    let raw = crate::arena::arena_alloc_gc_no_collect(
+        inline_json_object_size(0),
+        8,
+        crate::gc::GC_TYPE_OBJECT,
+    );
+    if raw.is_null() {
+        return None;
+    }
+    let object = raw.cast::<ObjectHeader>();
+    (*object).class_id = 0;
+    (*object).parent_class_id = shape_id;
+    (*object).meta = ptr::null_mut();
+    mark_object_plain_ordinary(object);
+    let slots = raw
+        .add(std::mem::size_of::<ObjectHeader>())
+        .cast::<JSValue>();
+    slots.write(JSValue::undefined());
+    // GC_STORE_AUDIT(INIT): freshly allocated JSON object inline slot.
+    slots.add(1).write(JSValue::undefined());
+    crate::gc::layout_init_pointer_free(raw);
+    #[cfg(debug_assertions)]
+    shapes::debug_assert_object_shape_parity(object);
+    Some(object)
 }
 
 /// Try the current nursery block without permitting collection or reserving a

@@ -191,6 +191,7 @@ fn assert_inline_keys_move(fallible: bool, pending: bool) {
             keys: vec![a, b],
             keys_array: keys,
             shape_id,
+            one_field_key_bits: 0,
         });
     });
     gc_unsuppress();

@@ -6,7 +6,10 @@ use super::stringify_flat::{
     bounded_keys_are_dense, emit_piece, key_piece, scalar_piece, slot, Piece,
 };
 use super::*;
-use crate::string::{init_string_header, string_storage_alloc};
+use crate::string::{
+    init_string_header, json_output_storage_alloc, string_storage_alloc,
+    JSON_MALLOC_OUTPUT_THRESHOLD,
+};
 use std::cell::UnsafeCell;
 
 const MAX_FIELDS: usize = 8;
@@ -138,7 +141,9 @@ unsafe fn record_value_piece(bits: u64) -> Option<Piece> {
 /// receiver. The address is only an identity token: moving GC changes it, and
 /// address reuse cannot revive a verdict after an explicit-prototype or
 /// property-semantic change because both advance the shared semantic epoch.
-/// The shape plan has already proved that no own key can expose `toJSON`.
+/// Object.prototype `toJSON` writes advance that epoch at the mutation site,
+/// keeping this hit check to one address and one integer comparison. The shape
+/// plan has already proved that no own key can expose `toJSON`.
 #[inline]
 unsafe fn receiver_to_json_absent(
     obj: *const crate::ObjectHeader,
@@ -174,13 +179,18 @@ pub(super) unsafe fn try_object(bits: u64) -> Option<JSValue> {
     {
         return None;
     }
+    if let Some(result) = emit_repeated_output(obj, header) {
+        return Some(result);
+    }
     let keys = crate::object::object_keys_array(obj);
     if keys.is_null() {
-        return None;
+        return emit_empty_object(obj);
     }
     let fields = (*keys).length as usize;
-    if fields == 0
-        || fields > MAX_FIELDS
+    if fields == 0 {
+        return emit_empty_object(obj);
+    }
+    if fields > MAX_FIELDS
         || fields > (*keys).capacity as usize
         || (header.size as usize) < crate::gc::GC_HEADER_SIZE + OBJECT_BYTES + fields * 8
         || fields
@@ -191,6 +201,25 @@ pub(super) unsafe fn try_object(bits: u64) -> Option<JSValue> {
         return None;
     }
     emit_record(obj, fields)
+}
+
+#[inline]
+unsafe fn emit_empty_object(obj: *const crate::ObjectHeader) -> Option<JSValue> {
+    if !super::stringify_tojson_probe::to_json_definitely_absent_without_gc(obj.cast()) {
+        return None;
+    }
+    REPEATED_OUTPUT.with(|entry| {
+        let cached = &mut *entry.get();
+        cached.receiver = 0;
+        cached.epoch = crate::object::prop_plan::prop_plan_semantic_epoch();
+        cached.shape = crate::object::shapes::object_shape_stamp(obj);
+        cached.fields = 0;
+        cached.bytes = 2;
+        cached.units = 2;
+        cached.data[..2].copy_from_slice(b"{}");
+        cached.receiver = obj as usize;
+    });
+    Some(JSValue::short_string_unchecked(b"{}"))
 }
 
 unsafe fn dense_array(bits: u64) -> Option<(*const crate::ArrayHeader, usize)> {
@@ -299,21 +328,34 @@ unsafe fn key_prefix_plan(
 #[inline(never)]
 unsafe fn emit_repeated_output(
     obj: *const crate::ObjectHeader,
-    fields: usize,
-    prefix: *const KeyPrefixPlan,
+    header: &crate::gc::GcHeader,
 ) -> Option<JSValue> {
     REPEATED_OUTPUT.with(|entry| {
         let cached = &mut *entry.get();
         if cached.receiver != obj as usize {
             return None;
         }
+        let fields = cached.fields as usize;
         if cached.epoch != crate::object::prop_plan::prop_plan_semantic_epoch()
-            || cached.shape != (*prefix).shape
-            || cached.fields as usize != fields
+            || fields > MAX_FIELDS
             || cached.bytes == 0
+            || (header.size as usize) < crate::gc::GC_HEADER_SIZE + OBJECT_BYTES + fields * 8
+            || fields
+                > crate::object::object_live_slot_count(obj)
+                    .max(crate::object::INLINE_SLOT_FLOOR as u32) as usize
+            || crate::object::shapes::object_shape_stamp(obj) != cached.shape
         {
             cached.receiver = 0;
             return None;
+        }
+        if fields == 0 {
+            if cached.bytes != 2 || cached.data[..2] != *b"{}" {
+                cached.receiver = 0;
+                return None;
+            }
+            #[cfg(test)]
+            REPEATED_OUTPUT_HITS.with(|hits| hits.set(hits.get() + 1));
+            return Some(JSValue::short_string_unchecked(b"{}"));
         }
         let mut element = 0usize;
         for i in 0..fields {
@@ -405,14 +447,19 @@ unsafe fn emit_cached_record_uncached(
         units = units.checked_add(vu)?;
     }
 
+    let large_output = bytes >= JSON_MALLOC_OUTPUT_THRESHOLD;
     let scope = crate::gc::RuntimeHandleScope::new();
     let input = scope.root_raw_const_ptr(obj);
+    if large_output {
+        super::stringify_flat::service_json_output_sweep_boundary();
+    }
     if !receiver_to_json_absent(obj, prefix) {
         return None;
     }
-    let (result, output) = string_storage_alloc(bytes);
+    let construction = large_output.then(crate::gc::GcSuppressScope::new);
+    let (result, output) = json_output_storage_alloc(bytes);
     init_string_header(result, units, bytes, bytes, 0, 0);
-    input.with_const_ptr(|obj: *const crate::ObjectHeader| {
+    let value = input.with_const_ptr(|obj: *const crate::ObjectHeader| {
         let mut at = 0usize;
         for i in 0..fields {
             let start = (*prefix).offsets[i] as usize;
@@ -453,7 +500,12 @@ unsafe fn emit_cached_record_uncached(
         output.add(at).write(b'}');
         debug_assert_eq!(at + 1, bytes as usize);
         Some(JSValue::string_ptr(result))
-    })
+    });
+    drop(construction);
+    if large_output {
+        super::stringify_flat::note_completed_malloc_json_output(bytes);
+    }
+    value
 }
 
 #[inline(never)]
@@ -495,15 +547,20 @@ unsafe fn emit_cached_record_memo(
         units = units.checked_add(vu)?;
     }
 
+    let large_output = bytes >= JSON_MALLOC_OUTPUT_THRESHOLD;
     let scope = crate::gc::RuntimeHandleScope::new();
     let input = scope.root_raw_const_ptr(obj);
+    if large_output {
+        super::stringify_flat::service_json_output_sweep_boundary();
+    }
     if !receiver_to_json_absent(obj, prefix) {
         return None;
     }
     let repeated_candidate = bytes as usize <= MAX_REPEATED_OUTPUT_BYTES;
-    let (result, output) = string_storage_alloc(bytes);
+    let construction = large_output.then(crate::gc::GcSuppressScope::new);
+    let (result, output) = json_output_storage_alloc(bytes);
     init_string_header(result, units, bytes, bytes, 0, 0);
-    input.with_const_ptr(|obj: *const crate::ObjectHeader| {
+    let value = input.with_const_ptr(|obj: *const crate::ObjectHeader| {
         let mut at = 0usize;
         let mut signature = (*prefix).shape as u64 ^ fields as u64;
         for i in 0..fields {
@@ -601,7 +658,12 @@ unsafe fn emit_cached_record_memo(
             });
         }
         Some(JSValue::string_ptr(result))
-    })
+    });
+    drop(construction);
+    if large_output {
+        super::stringify_flat::note_completed_malloc_json_output(bytes);
+    }
+    value
 }
 
 #[inline(never)]
@@ -614,9 +676,6 @@ unsafe fn emit_record(obj: *const crate::ObjectHeader, fields: usize) -> Option<
             if (*prefix).memo_cooldown != 0 {
                 (*prefix).memo_cooldown -= 1;
                 return emit_cached_record_uncached(obj, fields, prefix);
-            }
-            if let Some(result) = emit_repeated_output(obj, fields, prefix) {
-                return Some(result);
             }
             return emit_cached_record_memo(obj, fields, prefix);
         }
@@ -671,14 +730,19 @@ unsafe fn emit_record(obj: *const crate::ObjectHeader, fields: usize) -> Option<
     }
     // Root the complete input graph before either prototype initialization or
     // final output allocation. Nothing in the stack plan is a heap pointer.
+    let large_output = bytes >= JSON_MALLOC_OUTPUT_THRESHOLD;
     let scope = crate::gc::RuntimeHandleScope::new();
     let input = scope.root_raw_const_ptr(obj);
+    if large_output {
+        super::stringify_flat::service_json_output_sweep_boundary();
+    }
     if !super::stringify_tojson_probe::to_json_definitely_absent_after_own_keys(obj.cast()) {
         return None;
     }
-    let (result, output) = string_storage_alloc(bytes);
+    let construction = large_output.then(crate::gc::GcSuppressScope::new);
+    let (result, output) = json_output_storage_alloc(bytes);
     init_string_header(result, units, bytes, bytes, 0, 0);
-    input.with_const_ptr(|obj: *const crate::ObjectHeader| {
+    let value = input.with_const_ptr(|obj: *const crate::ObjectHeader| {
         let keys = crate::object::object_keys_array(obj);
         output.write(b'{');
         let mut at = 1usize;
@@ -726,7 +790,12 @@ unsafe fn emit_record(obj: *const crate::ObjectHeader, fields: usize) -> Option<
         output.add(at).write(b'}');
         debug_assert_eq!(at + 1, bytes as usize);
         Some(JSValue::string_ptr(result))
-    })
+    });
+    drop(construction);
+    if large_output {
+        super::stringify_flat::note_completed_malloc_json_output(bytes);
+    }
+    value
 }
 
 #[cfg(test)]

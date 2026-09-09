@@ -79,6 +79,16 @@ pub extern "C" fn js_object_set_field_by_name(
     } else {
         obj
     };
+    // Record the one default-prototype mutation that changes JSON.stringify's
+    // root semantics. Tiny repeated-output caches key their negative toJSON
+    // proof on this semantic epoch, so paying once on the rare mutation keeps
+    // every ordinary stringify hit to a single relaxed epoch load.
+    if !key.is_null()
+        && crate::array::object_prototype_addr_matches(normalized_obj as usize)
+        && unsafe { string_key_eq(key, b"toJSON") }
+    {
+        super::prop_plan::prop_plan_epoch_bump();
+    }
     if !key.is_null()
         && crate::value::addr_class::is_plausible_heap_addr(normalized_obj as usize)
         && crate::object::class_registry::is_class_object_ptr(normalized_obj.cast())

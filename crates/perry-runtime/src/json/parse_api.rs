@@ -225,6 +225,11 @@ unsafe fn parse_result_slow(text_ptr: *const StringHeader, len: usize) -> Result
         return Ok(super::parse_empty::allocate_empty_object());
     }
     if len <= super::parse_inline_object::MAX_BYTES {
+        if let Some(field) = super::parse_inline_object::decode_one_field(bytes) {
+            if let Some(value) = super::parse_inline_object::allocate_one_field(field) {
+                return Ok(value);
+            }
+        }
         if let Some(plan) = super::parse_inline_object::decode(bytes) {
             if let Some(value) = super::parse_inline_object::allocate(&plan) {
                 return Ok(value);
@@ -366,6 +371,11 @@ unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
         return super::parse_empty::allocate_empty_object();
     }
     if len <= super::parse_inline_object::MAX_BYTES {
+        if let Some(field) = super::parse_inline_object::decode_one_field(bytes) {
+            if let Some(value) = super::parse_inline_object::allocate_one_field(field) {
+                return value;
+            }
+        }
         if let Some(plan) = super::parse_inline_object::decode(bytes) {
             if let Some(value) = super::parse_inline_object::allocate(&plan) {
                 return value;

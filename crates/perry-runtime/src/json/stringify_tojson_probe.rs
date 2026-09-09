@@ -247,7 +247,7 @@ unsafe fn object_proto_tojson_signature() -> Option<ObjectProtoToJsonSignature> 
 }
 
 #[inline]
-unsafe fn object_proto_may_have_to_json() -> bool {
+pub(super) unsafe fn object_proto_may_have_to_json() -> bool {
     let state = OBJECT_PROTO_TOJSON_STATE.with(|c| c.get());
     if state != PROTO_TOJSON_DIRTY {
         let now = object_proto_tojson_signature();

@@ -36,6 +36,41 @@ unsafe fn clear_key_prefix_cache() {
     REPEATED_OUTPUT.with(|cache| *cache.get() = EMPTY_REPEATED_OUTPUT);
 }
 
+#[test]
+fn cached_empty_object_reuses_only_an_unchanged_receiver() {
+    unsafe {
+        clear_key_prefix_cache();
+        REPEATED_OUTPUT_HITS.with(|count| count.set(0));
+        let value = parse("{}");
+        let obj = (value.bits() & POINTER_MASK) as *mut crate::ObjectHeader;
+        assert!(super::super::stringify_tojson_probe::to_json_definitely_absent(obj.cast()));
+
+        assert_eq!(
+            try_object(value.bits()).unwrap().bits(),
+            JSValue::short_string_unchecked(b"{}").bits()
+        );
+        assert_eq!(
+            try_object(value.bits()).unwrap().bits(),
+            JSValue::short_string_unchecked(b"{}").bits()
+        );
+        assert_eq!(REPEATED_OUTPUT_HITS.with(std::cell::Cell::get), 1);
+
+        let key = js_string_from_bytes(b"a".as_ptr(), 1);
+        crate::object::js_object_set_field_by_name(obj, key, 1.0);
+        if let Some(output) = try_object(value.bits()) {
+            assert_ne!(output.bits(), JSValue::short_string_unchecked(b"{}").bits());
+        }
+        assert_eq!(REPEATED_OUTPUT_HITS.with(std::cell::Cell::get), 1);
+
+        let other = parse("{}");
+        assert_eq!(
+            try_object(other.bits()).unwrap().bits(),
+            JSValue::short_string_unchecked(b"{}").bits()
+        );
+        assert_eq!(REPEATED_OUTPUT_HITS.with(std::cell::Cell::get), 1);
+    }
+}
+
 struct ArrayPrototypeLatchGuard {
     _guard_tests: std::sync::MutexGuard<'static, ()>,
     recorded: bool,

@@ -257,6 +257,8 @@ pub(crate) struct ParseShapeCacheEntry {
     pub(crate) keys: Vec<*const StringHeader>,
     pub(crate) keys_array: *mut crate::ArrayHeader,
     pub(crate) shape_id: u32,
+    /// Exact NaN-box bits when this is one inline key; zero otherwise.
+    pub(crate) one_field_key_bits: u64,
 }
 
 pub(crate) const PARSE_SHAPE_CACHE_CAP: usize = 256;
@@ -462,10 +464,36 @@ pub(crate) unsafe fn parse_shape_keys_array_with_id(
                 keys: keys.to_vec(),
                 keys_array: arr,
                 shape_id,
+                one_field_key_bits: if let [key] = keys {
+                    let len = (**key).byte_len as usize;
+                    let bytes = std::slice::from_raw_parts(crate::string::string_data(*key), len);
+                    JSValue::try_short_string(bytes).map_or(0, |value| value.bits())
+                } else {
+                    0
+                },
             });
+            // The bounded one-field parser may publish this id without a
+            // descriptor probe. Keep it live even between receiver lifetimes;
+            // the full-trace carrier rebuild below drops ownership on eviction.
+            crate::object::shape_carriers::note_shape_id(shape_id);
         }
         (arr, shape_id)
     })
+}
+
+/// Rebuild transient ShapeId ownership from the exact parse-cache population.
+/// Called during the shape table's post-trace carrier pass before uncarried
+/// descriptors are pruned.
+pub(crate) fn note_parse_shape_cache_carriers() {
+    PARSE_SHAPE_CACHE.with(|cache| {
+        for entry in cache.borrow().iter() {
+            crate::object::shape_carriers::note_shape_id(entry.shape_id);
+        }
+    });
+    let empty = parse_empty::cached_shape_id();
+    if empty != 0 {
+        crate::object::shape_carriers::note_shape_id(empty);
+    }
 }
 
 #[inline]
