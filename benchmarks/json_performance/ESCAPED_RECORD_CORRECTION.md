@@ -69,7 +69,7 @@ fresh main build, Node and Bun. The [original suite](results/quiet-decoder-r2-ma
 validates 200 output checks and 344 measurement groups. Its largest slower CPU
 median is +0.315%, with overlapping samples; RSS differences are at most 80 KiB.
 The [changing-input suite](results/quiet-decoder-r2-main-rotating-r5/README.md)
-validates 380 comparisons and 1140 trials. All CPU sample ranges overlap; the
+validates 380 comparisons and 1140 trials. All parse CPU sample ranges overlap; the
 largest slower parse median is +0.660% for a same-source control and +0.377%
 for changing input. Selection-only controls remain separate. Peak RSS does not
 increase in that suite; current RSS differences are at most 16 KiB.
