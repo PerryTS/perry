@@ -1,5 +1,9 @@
 # JSON construction and reclamation follow-up
 
+Latest: [fresh merged-main 0.5.1528 measurements](MERGED_MAIN_E722.md) and
+[the escaped-record correction in PR #10034](ESCAPED_RECORD_CORRECTION.md).
+The earlier measurements below retain their original revisions and provenance.
+
 The 0.5.1528 release implementation makes record-array traversal 30–78% faster
 and fixes discarded large parsed strings accumulating beyond a GiB. Construction
 uses the existing batch and suppression scope. Completed outputs publish

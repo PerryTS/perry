@@ -62,7 +62,21 @@ The [longer paired comparison](results/quiet-decoder-r2-focus-r9/README.md)
 passes 18 output comparisons and 162 timing trials. Sparse reads are +0.063%
 against main and -2.38% against R1, with overlapping main samples. The other
 parse/scan cases are within +0.184% and overlap too. RSS differs by at most
-48 KiB. The full original and changing-input matrices remain in progress.
+48 KiB.
+
+Both full matrices now pass quiet admission and output validation against the
+fresh main build, Node and Bun. The [original suite](results/quiet-decoder-r2-main-all-r5/README.md)
+validates 200 output checks and 344 measurement groups. Its largest slower CPU
+median is +0.315%, with overlapping samples; RSS differences are at most 80 KiB.
+The [changing-input suite](results/quiet-decoder-r2-main-rotating-r5/README.md)
+validates 380 comparisons and 1140 trials. All CPU sample ranges overlap; the
+largest slower parse median is +0.660% for a same-source control and +0.377%
+for changing input. Selection-only controls remain separate. Peak RSS does not
+increase in that suite; current RSS differences are at most 16 KiB.
+
+These checks find no repeatable slowdown in the measured matrices. They do not
+establish parity on every workload: [fresh merged-main results](MERGED_MAIN_E722.md)
+still show small-object, large-string, full-scan and memory gaps against Node/Bun.
 
 The independent source-length experiment is on
 `codex/json-source-length` at `91030c9d3`; it is not included in this correction.
