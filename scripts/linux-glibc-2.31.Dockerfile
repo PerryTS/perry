@@ -77,6 +77,13 @@ FROM ${OLD_GLIBC_IMAGE}
 #     Error reading from server. Remote end closed connection". Pinning
 #     origin apt.llvm.org at 1001 keeps the bulk on the fast mirror and leaves
 #     snapshot serving only the four small base packages it is needed for.
+#     `Package: *` on purpose, NOT a glob: a first attempt listed
+#     `clang-* llvm-* libclang-* ...` and MISSED libllvm22 (no hyphen) and
+#     libclang1-22 (libclang1-, not libclang-), so those two resolved to
+#     Debian's 1:22.1.8-1~deb11u1 while clang-22 came from apt.llvm.org's
+#     1:22.1.8~++2026...  — versions that cannot satisfy each other. Scoping by
+#     ORIGIN rather than by name is exhaustive by construction; apt.llvm.org
+#     only publishes LLVM packages, so a wildcard here is safe.
 #   * Acquire::Retries=5, because snapshot drops connections under load.
 RUN printf '%s\n' \
       'deb [check-valid-until=no] https://archive.debian.org/debian bullseye main' \
@@ -96,7 +103,7 @@ RUN printf '%s\n' \
       'deb https://apt.llvm.org/bullseye/ llvm-toolchain-bullseye-22 main' \
       > /etc/apt/sources.list.d/llvm22.list \
     && printf '%s\n' \
-      'Package: clang-* llvm-* libclang-* libpolly-* libomp-* lld-* lldb-*' \
+      'Package: *' \
       'Pin: origin apt.llvm.org' \
       'Pin-Priority: 1001' \
       > /etc/apt/preferences.d/llvm-from-upstream \

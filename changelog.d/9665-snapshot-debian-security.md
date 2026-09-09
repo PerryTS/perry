@@ -47,3 +47,17 @@
   Note the dependency resolution itself was already fixed by the snapshot pin —
   this run installed all base packages cleanly and reached the LLVM step, which
   the previous three attempts never did.
+
+- **The apt pin is scoped by ORIGIN, not by package-name glob.** A first attempt
+  listed `clang-* llvm-* libclang-* libpolly-* …` and missed **`libllvm22`** (no
+  hyphen after `llvm`) and **`libclang1-22`** (`libclang1-`, not `libclang-`).
+  Those two then resolved to Debian's `1:22.1.8-1~deb11u1` while `clang-22` came
+  from apt.llvm.org's `1:22.1.8~++2026…`, versions that cannot satisfy each other
+  (run 34316491127). `Package: *` with `Pin: origin apt.llvm.org` is exhaustive
+  by construction, and safe because that origin publishes only LLVM packages.
+
+  **Validated before pinning**, via a stage-mode dispatch on a scratch branch
+  (run 34316715021): the entire build matrix passed — all six `build` legs
+  including **ubuntu-24.04 (191 min) and ubuntu-24.04-arm (159 min)**, plus all
+  eight `build-cross` legs. `await-tests` bypasses the gate in `stage` mode, so a
+  Dockerfile change can be proven in one build instead of costing a full tier.
