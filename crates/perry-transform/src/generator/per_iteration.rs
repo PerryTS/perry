@@ -156,7 +156,7 @@ fn analyze_loop(
         }
     }
 
-    classify_block(loop_body(loop_stmt), &block_scoped, out);
+    classify_block(loop_body(loop_stmt), &inside, &block_scoped, out);
 }
 
 /// Classify the `Stmt::Let`s of one block inside a loop.
@@ -167,21 +167,35 @@ fn analyze_loop(
 /// analyzes in their own right.
 fn classify_block(
     block: &[Stmt],
+    loop_refs: &HashMap<LocalId, usize>,
     block_scoped: &dyn Fn(LocalId) -> bool,
     out: &mut HashSet<LocalId>,
 ) {
+    // Destructuring declares user bindings inside a synthetic Try. A use in
+    // the enclosing block is outside this local suffix and can follow an
+    // await there (#10023). Only un-hoist bindings whose entire live range
+    // is contained in the block being classified.
+    let mut block_refs = HashMap::new();
+    count_local_refs_stmts(block, &mut block_refs);
     for (i, stmt) in block.iter().enumerate() {
         if let Stmt::Let { id, init, .. } = stmt {
             // A `let __tmp = yield …;` IS the state split: the linearizer
             // assigns it in the resumed state, so it must stay a boxed
             // cross-state local.
             let splits_state = init.as_ref().is_some_and(expr_contains_suspend);
-            if !splits_state && block_scoped(*id) && !used_after_suspend(*id, &block[i + 1..]) {
+            if !splits_state
+                && block_scoped(*id)
+                && block_refs.get(id).copied().unwrap_or(0)
+                    == loop_refs.get(id).copied().unwrap_or(0)
+                && !used_after_suspend(*id, &block[i + 1..])
+            {
                 out.insert(*id);
             }
         }
         if !is_loop(stmt) {
-            each_child_stmt_list(stmt, &mut |list| classify_block(list, block_scoped, out));
+            each_child_stmt_list(stmt, &mut |list| {
+                classify_block(list, loop_refs, block_scoped, out)
+            });
         }
     }
 }
@@ -929,6 +943,7 @@ fn analyze_written_loop(
 /// through non-loop nesting; nested loops are reached by `scan_written_loops`.
 fn classify_written_block(
     block: &[Stmt],
+    loop_refs: &HashMap<LocalId, usize>,
     block_scoped: &dyn Fn(LocalId) -> bool,
     mutably_captured: &HashSet<LocalId>,
     out: &mut HashSet<LocalId>,
@@ -1091,6 +1106,56 @@ fn rewrite_cells_in_expr(e: &mut Expr, cells: &HashSet<LocalId>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn synthetic_try_binding_used_after_outer_await_stays_hoisted() {
+        let id = 1;
+        let body = vec![Stmt::While {
+            condition: Expr::Bool(true),
+            body: vec![
+                Stmt::Try {
+                    body: vec![Stmt::Let {
+                        id,
+                        name: "row".into(),
+                        ty: Type::Any,
+                        mutable: false,
+                        init: Some(Expr::Integer(1)),
+                    }],
+                    catch: None,
+                    finally: None,
+                },
+                Stmt::Expr(Expr::Await(Box::new(Expr::Integer(0)))),
+                Stmt::Expr(Expr::LocalGet(id)),
+            ],
+        }];
+        assert!(!collect_per_iteration_ids(&body).contains(&id));
+    }
+
+    #[test]
+    fn nested_binding_used_only_before_suspend_keeps_fresh_declaration() {
+        let id = 1;
+        let body = vec![Stmt::While {
+            condition: Expr::Bool(true),
+            body: vec![
+                Stmt::Try {
+                    body: vec![
+                        Stmt::Let {
+                            id,
+                            name: "row".into(),
+                            ty: Type::Any,
+                            mutable: false,
+                            init: Some(Expr::Integer(1)),
+                        },
+                        Stmt::Expr(Expr::LocalGet(id)),
+                    ],
+                    catch: None,
+                    finally: None,
+                },
+                Stmt::Expr(Expr::Await(Box::new(Expr::Integer(0)))),
+            ],
+        }];
+        assert!(collect_per_iteration_ids(&body).contains(&id));
+    }
 
     #[test]
     fn loop_local_used_after_await_stays_hoisted() {
