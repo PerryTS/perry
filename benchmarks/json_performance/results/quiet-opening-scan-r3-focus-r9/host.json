@@ -1,0 +1,140 @@
+{
+  "started_utc": "2026-09-09T20:40:25Z",
+  "load_before": [
+    1.39794921875,
+    1.7314453125,
+    1.76171875
+  ],
+  "host": "perry-macos.fritz.box",
+  "cpu": "Apple M1",
+  "memory": 8589934592,
+  "worker_sha256": "076e9f0f4d865306f119ca00e33120619d0b8c96a88d76e7485f377662c1b86e",
+  "fixtures": [
+    {
+      "fixture": "small_record",
+      "bytes": 109,
+      "sha256": [
+        "e8d7bd409aeaba5d0aa3ce4046609ff7abdd3b88fc422903982ed7e58bc8f340",
+        "9f123a480f74f4f1e7194b06c35d9456f8134a3b9dffe60be716982b9e57558e",
+        "7462fcc52ae94b41cb36d68ea5c776a61ba8d955c7d4b58002ba0a4bf1fdcbf0",
+        "52152547808237640f1708820d40fafd89b596f846114b2afd3fd2dea2782ac5",
+        "a4ff1a8041b948192852776b4acd9db210338c269018ec7ef1ab83cd8deb4266",
+        "0f73c2f9b20ea603844075c815c5e39447dc054da14d153ac8dbf68c1d468a98",
+        "05e04604275b613987a5eb2a9347b2c6693887b0499fb58f000aee58d2236e35",
+        "3fa279e153cad47e821f24ea1c6740727ecfbd2d00bde660c75572a87c420c0d"
+      ],
+      "distinct_contents": 8
+    },
+    {
+      "fixture": "object_1k",
+      "bytes": 1021,
+      "sha256": [
+        "75f531e0014758b782c6940849abdb74f1bd5c9aa365124ab3c2fd70964b9fc5",
+        "fee77441888eab7671c3acd54a6d03908003400ae5b84021ecd178a4228e4516",
+        "2bb286ab4a30b3e1f4099da9f04f81c25ab786f00a48fac77087313f3bd42292",
+        "578d6177406f2ef6ad4cdef2cd166e4f2a00e079e4a8ede9d6285ac00e9d5f6f",
+        "a5c2b2d02d5d6755a5c8d69032d6abeffea1c6576c8df1bfa3a352fc5caaf1ab",
+        "4b14fe187834c6a2b9401531e94162d001d3569f3357b6f28a5ca1c536d1572f",
+        "bd9e3a9bacc4e96bc89396e16a121d1b0b26de469ec89b290aa3415e55584b81",
+        "c1ef19cd7a2c99b17185e915c9776916051acf0c344e7b08740d4983d1b09af2"
+      ],
+      "distinct_contents": 8
+    },
+    {
+      "fixture": "long_string_1m",
+      "bytes": 1048594,
+      "sha256": [
+        "ea77e5d1ebb84c30a920d4de6aee5c5c92c2aba6cf060c30f1933e1e000e9081",
+        "6c561580cc851c5e12cb6cd1a85577a638715378ae9abea874cec403fbdca611",
+        "e2353dc042003d25b4e337fbd19aa504a070fae11e0da3cd453148ccc237ff70",
+        "cf99d0384a016baf730ef38ae1f3c0b2aaabbe5e0330ef914ea07fc70bdcfea4",
+        "e7abc264a4091a266b9ce48cfc8735b7a5ca5b24c5c834697e388b5dc3594fd3",
+        "41f99201531383bc592f73982edb39ac9c58c669d6aa317a8610ff6a7dfe5637",
+        "59ae0a11c12c973cc1f4fc17aea67168b596a0c60a5776b0a3fea6bf42d74600",
+        "0267aec1d303709011753890f0cf2d310df90be7a1faa0af1070cedcde9d3b03"
+      ],
+      "distinct_contents": 8
+    },
+    {
+      "fixture": "unicode_1m",
+      "bytes": 884018,
+      "sha256": [
+        "b58eea42a50190b7675886030ef6875b25bb0a6d50632d9cbc5a918ea4ad9bd9",
+        "d1144d3b04932f867e65e69a0b1c34594965d29bd8095c2a829c028b6376b149",
+        "602402be6e6fbff81196dbabcdb40b274429a82047481c5b7f34dfdf9ec77008",
+        "75925699fe7c331bfe715a0468cc65b62f2578cbbe73736368ef71a6597da133",
+        "e9c533e0e39f4618d4c70f90ea2789be70e6c8d60b04cf8e2837aff1591afaad",
+        "a76ab72ac01e98e154a81d8805a35b9555dcf6d0f02fe4ee33aeebe8eced641f",
+        "a7d3beeda4ff34f74d8ffd65c7b25887759e328153be8cd3a933f618ca3ae8c9",
+        "9fbc9e4928504cebae6eb3774b07ec941f7eebb66154548765fc5a7323070263"
+      ],
+      "distinct_contents": 8
+    },
+    {
+      "fixture": "wide_1m",
+      "bytes": 977781,
+      "sha256": [
+        "97f24b77b98ccfd85db41fb44f0316e27c87fdff4cec53e9d763a696f3611747",
+        "61bc3aeea8ea3bf941ca3dfacc83483933f2f801d42f29919b7090e2e169eea4",
+        "b93c04f0b4f5ddaa8d7f6d9ef39b1a33a0ca05ddcdeba49509160238f47c8bb4",
+        "051f6bd75aa40269ee0db362f79d7409d95be966654008a40b8399d16fa8269d",
+        "d6c50c9d08594d7957008b9933f5579ff9b5339571fffc47680546028d3da4e9",
+        "a93da8ca093c47beb7b813ce95fc5caa3be3e25649b1c7ab38a613f8dbc63708",
+        "4a172951cf78a83d98fafea9f8cd0ff0243a4c948e69865a1973bbece3c3ee8b",
+        "e2309789e481a9204db22f7fc59eb0ae33473cb169ec8be0d1b57ae68ebcd832"
+      ],
+      "distinct_contents": 8
+    },
+    {
+      "fixture": "heterogeneous_1m",
+      "bytes": 914291,
+      "sha256": [
+        "3cad453a41f7a501e6c34c79df2a76356aa2eb2c53b88b5d5b72c45aad67fd3a",
+        "f039bb8a9d3412a1daa4d678f3343bef8cbb3dd516234017507e7a4fbab6ba99",
+        "66d17691a2aa750d1d6326eb4b75577f971e595d3cc47d6c3fd24baf29b26ffd",
+        "8f7b4b910c9343a5d813f6b41fb0618449baa8e1c951ef23d21f5ddb4f32d126",
+        "ed0b56a08d033ea18d67a39081244069cd77127f6255760c377eb3cd1359d149",
+        "fa3d6d7a4d66f44b71ccf6027195f05b50c2f8a661058b7b03fb95eb80eb7ee2",
+        "c2e59cd37685211b1c03d19163eadef719f15b49713406a6e913f4d54e617e5f",
+        "7263fcc0aa1c3f992498b233f74f8dc556257c6b6a759c5c9e81e4b68a161fa5"
+      ],
+      "distinct_contents": 8
+    }
+  ],
+  "baseline_worker_sha256": "ccce75e98f9cd686b579673bc01423619fcf57abdcc83d7a85cc2280b39ab4af",
+  "engines": [
+    "perry",
+    "node",
+    "bun",
+    "baseline"
+  ],
+  "verification_counts_by_mode": {
+    "rotating": [
+      2,
+      7,
+      9
+    ],
+    "same": [
+      9
+    ],
+    "select": [
+      9
+    ]
+  },
+  "source_sha256": {
+    "run_rotating.py": "24b639895ac95e85ba8808d34c10e74a0000f0fd032d0d86525000f337753c58",
+    "rotating-worker.ts": "7541897acb2c7c35c0f5e762f8b2f28b9783feb26a42db107c1c4eb3af644b24",
+    "rotating-worker.js": "f163f68f3d4c1d13720403ffb96d0afe4306ec0723f2015d3a66ab0c77fa56c8"
+  },
+  "commit": "37efe03fd",
+  "versions": {
+    "node": "v26.5.1",
+    "bun": "1.3.14"
+  },
+  "load_after": [
+    2.41845703125,
+    1.95654296875,
+    1.8369140625
+  ],
+  "finished_utc": "2026-09-09T20:42:57Z"
+}

@@ -1,0 +1,52 @@
+{
+  "owner": "json-perf-90231-1788986171",
+  "load_before": [
+    2.22314453125,
+    1.86474609375,
+    1.8056640625
+  ],
+  "started_utc": "2026-09-09T20:36:11Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    "run_regression_focus.py",
+    "--worker",
+    ".work/opening-scan-r3/worker",
+    "--baseline-worker",
+    ".work/decoder-r2/worker",
+    "--prior-worker",
+    ".work/opening-scan-r2/worker",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--case",
+    "null:parse:20000000:2000:9",
+    "--case",
+    "string_a:parse:20000000:2000:9",
+    "--case",
+    "empty_object:parse:10000000:2000:9",
+    "--case",
+    "tiny_object:parse:5000000:2000:9",
+    "--case",
+    "small_record:parse:2000000:2000:9",
+    "--case",
+    "object_1k:parse:2000000:2000:9",
+    "--case",
+    "records_array_16k:sparse:10000:8:9",
+    "--case",
+    "numbers_1m:stringify:500:8:9",
+    "--case",
+    "heterogeneous_1m:parse:256:8:9",
+    "--case",
+    "wide_1m:parse:128:8:9",
+    "--results-dir",
+    "results/quiet-opening-scan-r3-regression-r9"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.87939453125,
+    1.81103515625,
+    1.7861328125
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-09T20:37:30Z"
+}

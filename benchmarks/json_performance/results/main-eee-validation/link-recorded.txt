@@ -1,0 +1,21 @@
+from pathlib import Path
+import subprocess,hashlib,json,shutil
+root=Path('/Users/amlug/projects/perry/json-merged-pr10022'); b=root/'benchmarks/json_performance'; work=b/'.work/main-eee'
+assert subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()=='eee3881c464bf91ae900e87a42bed072bbdfc95a'
+assert not subprocess.check_output(['git','diff','HEAD','--','crates','Cargo.toml','Cargo.lock','CLAUDE.md'],cwd=root)
+assert 'Finished `release`' in Path('/tmp/json-main-eee-build.log').read_text()
+assert subprocess.check_output([str(root/'target/release/perry'),'--version'],text=True).strip().endswith('0.5.1529')
+work.mkdir(exist_ok=False)
+for obj,name in [(b/'.work/worker.o','worker'),(b/'.work/rotating-worker','rotating-worker'),(b/'.work/large-leaf-lifetime/worker.o','leaf-lifetime')]:
+ with (work/(name+'-link.log')).open('w') as log:
+  subprocess.run(['cc',str(obj),str(root/'target/release/libperry_runtime.a'),'-lc','-Wl,-dead_strip','-Wl,-no_exported_symbols','-o',str(work/name)],stdout=log,stderr=subprocess.STDOUT,check=True)
+files=json.loads((b/'.work/opening-scan-r2/provenance.json').read_text())['files']
+files=[p for p in files if (root/p).exists() and '/.work/opening-scan-r2/' not in p]
+files += [str((work/name).relative_to(root)) for name in ['worker','rotating-worker','leaf-lifetime']]
+meta={'base_commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip(),'source_tree':subprocess.check_output(['git','rev-parse','HEAD^{tree}'],cwd=root,text=True).strip(),'matched_release_build':'cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static passed','package_version':'0.5.1529','runtime_only_bench_link':True,'files':{p:hashlib.sha256((root/p).read_bytes()).hexdigest() for p in files},'prior_worker_comparison':{}}
+for name in ['worker','rotating-worker','leaf-lifetime']:
+ sha=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
+ meta['prior_worker_comparison'][name]={'main':sha(work/name),'corrected_r2_reference':sha(b/'.work/decoder-r2'/name)}
+(work/'provenance.json').write_text(json.dumps(meta,indent=2)+'\n')
+shutil.copy2('/tmp/json-main-eee-build.log',work/'matched-build.log')
+print(json.dumps(meta['prior_worker_comparison'],indent=2))
