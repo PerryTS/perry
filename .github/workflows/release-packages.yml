@@ -213,6 +213,69 @@ jobs:
               exit 0
               ;;
           esac
+          # ---------------------------------------------------------------
+          # Which SHA must carry the green gate?
+          #
+          # Normally the exact candidate. But `test.yml` does not build the
+          # glibc image, read changelog fragments, or run this workflow, so a
+          # candidate that differs from an already-validated ancestor ONLY in
+          # those files is covered by that ancestor's gate. Re-running a ~5h
+          # tier to re-prove untouched code is pure latency, and this campaign
+          # paid it four times over a Dockerfile.
+          #
+          # Fail-closed by construction:
+          #   * the file list comes from GitHub's compare API, computed from
+          #     the commits themselves — not from any dispatch input;
+          #   * ANY path outside the allowlist keeps the exact-SHA requirement;
+          #   * an EMPTY diff is refused too (it should be impossible here, so
+          #     it means the comparison did not do what we think);
+          #   * `.github/workflows/test.yml` is deliberately NOT allowlisted —
+          #     changing the tier's own definition must re-run the tier.
+          GATE_SHA="$SHA"
+          if [ "$MODE" = "cut-release" ]; then
+            gate_green() {
+              local sha="$1" out rid
+              out=$(gh api "/repos/$REPO/actions/workflows/test.yml/runs?head_sha=$sha&per_page=20" 2>/dev/null) || return 1
+              for rid in $(echo "$out" | jq -r '.workflow_runs[]|select(.status=="completed" and .conclusion=="success")|.id' 2>/dev/null); do
+                if gh api "/repos/$REPO/actions/runs/$rid/jobs?per_page=100" \
+                     --jq '.jobs[]|select(.name=="full-suite-gate" and .conclusion=="success")|.name' 2>/dev/null \
+                     | grep -q full-suite-gate; then return 0; fi
+              done
+              return 1
+            }
+            plumbing_only() {
+              local files="$1" f bad=""
+              [ -z "$files" ] && return 1
+              while IFS= read -r f; do
+                [ -z "$f" ] && continue
+                case "$f" in
+                  changelog.d/*|scripts/linux-*.Dockerfile|.github/workflows/release-packages.yml) ;;
+                  *) bad="$bad $f" ;;
+                esac
+              done <<< "$files"
+              [ -n "$bad" ] && { echo "    rejected — not release-plumbing:$bad"; return 1; }
+              return 0
+            }
+            if gate_green "$SHA"; then
+              echo "gate: exact SHA $SHA already has a green full-suite-gate."
+            else
+              echo "gate: no green full-tier run on $SHA — checking ancestors."
+              for cand in $(gh api "/repos/$REPO/commits?sha=$SHA&per_page=15" --jq '.[].sha' 2>/dev/null | tail -n +2); do
+                gate_green "$cand" || continue
+                echo "  ancestor $cand has a green full-suite-gate; comparing trees"
+                files=$(gh api "/repos/$REPO/compare/$cand...$SHA" --jq '.files[]?.filename' 2>/dev/null)
+                if plumbing_only "$files"; then
+                  echo "    accepted — diff is release-plumbing only:"
+                  echo "$files" | sed 's/^/      /'
+                  GATE_SHA="$cand"
+                  break
+                fi
+              done
+              [ "$GATE_SHA" = "$SHA" ] && echo "gate: no usable ancestor — requiring a run on $SHA."
+            fi
+          fi
+          echo "gate: validating against $GATE_SHA"
+
           if [ "$MODE" = "cut-release" ]; then
             # Tag-last: no tag push fired the gate workflows, so make sure a
             # run exists on this exact commit — dispatch one if none is there.
@@ -229,11 +292,11 @@ jobs:
               # dispatch.
               if [ "$wf_file" = "test.yml" ]; then
                 count=$(gh api \
-                  "/repos/$REPO/actions/workflows/$wf_file/runs?head_sha=$SHA&per_page=20" \
+                  "/repos/$REPO/actions/workflows/$wf_file/runs?head_sha=$GATE_SHA&per_page=20" \
                   --jq '[.workflow_runs[] | select(.event == "workflow_dispatch" or .event == "schedule" or .event == "push" and (.head_branch | startswith("v")))] | length')
               else
                 count=$(gh api \
-                  "/repos/$REPO/actions/workflows/$wf_file/runs?head_sha=$SHA&per_page=1" \
+                  "/repos/$REPO/actions/workflows/$wf_file/runs?head_sha=$GATE_SHA&per_page=1" \
                   --jq '.total_count')
               fi
               if [ "$count" = "0" ]; then
@@ -245,7 +308,7 @@ jobs:
                   echo "::error::$REF_NAME moved to $tip (this run is on $SHA) — re-dispatch on a branch pinned at the release candidate."
                   exit 1
                 fi
-                echo "No $wf_file run on $SHA yet — dispatching on $REF_NAME."
+                echo "No $wf_file run on $GATE_SHA yet — dispatching on $REF_NAME."
                 if [ "$wf_file" = "test.yml" ]; then
                   # The tiered CI workflow: `tier=full` is its dispatch default,
                   # but say so explicitly -- this is the release gate.
@@ -290,7 +353,7 @@ jobs:
               # Tests run was green, but a tag-triggered Tests run on the
               # same SHA was newer + still running, locking the gate).
               api_out=$(gh api \
-                "/repos/$REPO/actions/workflows/$wf_file/runs?head_sha=$SHA&per_page=20" \
+                "/repos/$REPO/actions/workflows/$wf_file/runs?head_sha=$GATE_SHA&per_page=20" \
                 2>&1)
               rc=$?
               set -e
