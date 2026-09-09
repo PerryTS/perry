@@ -155,6 +155,8 @@ pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
 /// Build a tape into caller-provided storage. This is the hot-path
 /// variant used by `JSON.parse` so repeated parse-churn workloads do
 /// not allocate and free a fresh tape vector on every iteration.
+// Keep both specializations outside the common parse entry and its stack frame.
+#[inline(never)]
 fn build_tape_into<const CAPTURE_DEPTH: bool>(
     bytes: &[u8],
     entries: &mut Vec<TapeEntry>,
