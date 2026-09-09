@@ -60,9 +60,11 @@ runs:
         # update (transient mirror errors are common), and verify by REACHING
         # FOR WHAT WE CAME FOR rather than by the exit code — if llvm-toolchain
         # is resolvable, the update did its job whatever else was noisy.
-        sudo rm -f /etc/apt/sources.list.d/google-chrome.list \
-                   /etc/apt/sources.list.d/microsoft-prod.list \
-                   /etc/apt/sources.list.d/*azure* 2>/dev/null || true
+        # Match by CONTENT: the ubuntu24/20260907.300 image moved these to
+        # deb822 `.sources` files, so the old `.list` names removed nothing.
+        if _bad=$(sudo grep -rlE 'dl\.google\.com|packages\.microsoft\.com' /etc/apt/sources.list.d/ 2>/dev/null); then
+          printf '%s\n' "$_bad" | sudo xargs -r rm -f
+        fi
         update_ok=0
         for attempt in 1 2 3; do
           if sudo apt-get update -qq -o Acquire::Retries=3; then update_ok=1; break; fi
