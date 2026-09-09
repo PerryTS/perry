@@ -1,0 +1,74 @@
+[
+  {
+    "function": "_js_json_parse",
+    "previous_start": "0x100841a94",
+    "candidate_start": "0x100841a94",
+    "previous_symbol_span": 156,
+    "candidate_symbol_span": 156,
+    "previous_disassembled_instruction_bytes": 112,
+    "candidate_disassembled_instruction_bytes": 112,
+    "previous_instruction_sha256": "b52e71c76b9660f3ba3331db1450361a53e2a872ba257f2ac226f129543410bc",
+    "candidate_instruction_sha256": "b52e71c76b9660f3ba3331db1450361a53e2a872ba257f2ac226f129543410bc",
+    "identical_disassembled_instructions": true
+  },
+  {
+    "function": "perry_runtime::json::parse_api::parse_noncontainer",
+    "previous_start": "0x100505924",
+    "candidate_start": "0x100505924",
+    "previous_symbol_span": 1012,
+    "candidate_symbol_span": 1012,
+    "previous_disassembled_instruction_bytes": 1012,
+    "candidate_disassembled_instruction_bytes": 1012,
+    "previous_instruction_sha256": "ef53183ce9a6902ed71fa2f524d3f0710a3d0ff813277ed73384d6a7cc2d6414",
+    "candidate_instruction_sha256": "ef53183ce9a6902ed71fa2f524d3f0710a3d0ff813277ed73384d6a7cc2d6414",
+    "identical_disassembled_instructions": true
+  },
+  {
+    "function": "perry_runtime::json::parse_api::parse_slow",
+    "previous_start": "0x100503378",
+    "candidate_start": "0x100503378",
+    "previous_symbol_span": 5416,
+    "candidate_symbol_span": 5416,
+    "previous_disassembled_instruction_bytes": 5416,
+    "candidate_disassembled_instruction_bytes": 5416,
+    "previous_instruction_sha256": "b63bcc516ef27e4680235ab560d928f3ee5cdfd79feae02742b75bd3681d47ae",
+    "candidate_instruction_sha256": "b63bcc516ef27e4680235ab560d928f3ee5cdfd79feae02742b75bd3681d47ae",
+    "identical_disassembled_instructions": true
+  },
+  {
+    "function": "perry_runtime::json::parse_empty::allocate_empty_object",
+    "previous_start": "0x1004e9f00",
+    "candidate_start": "0x1004e9f00",
+    "previous_symbol_span": 1856,
+    "candidate_symbol_span": 1856,
+    "previous_disassembled_instruction_bytes": 1856,
+    "candidate_disassembled_instruction_bytes": 1856,
+    "previous_instruction_sha256": "4abf96db8e5bfa970bebee94d0b10c43f03a6760227b96910310afc2080e2498",
+    "candidate_instruction_sha256": "4abf96db8e5bfa970bebee94d0b10c43f03a6760227b96910310afc2080e2498",
+    "identical_disassembled_instructions": true
+  },
+  {
+    "function": "perry_runtime::json::parser::depth_blocks::contains_open_container_tail",
+    "previous_start": "0x1006c3030",
+    "candidate_start": "0x1006c3030",
+    "previous_symbol_span": 284,
+    "candidate_symbol_span": 284,
+    "previous_disassembled_instruction_bytes": 284,
+    "candidate_disassembled_instruction_bytes": 284,
+    "previous_instruction_sha256": "aecc90677473aa97bfbfb30abff8ef2caffabff51ff898075b9b932c387eb89e",
+    "candidate_instruction_sha256": "aecc90677473aa97bfbfb30abff8ef2caffabff51ff898075b9b932c387eb89e",
+    "identical_disassembled_instructions": true
+  },
+  {
+    "function": "perry_runtime::json::parser::depth_blocks::nesting_depth_exceeds",
+    "previous_start": "0x1006c21d4",
+    "candidate_start": "0x1006c21d4",
+    "previous_symbol_span": 3676,
+    "candidate_symbol_span": 3676,
+    "previous_disassembled_instruction_bytes": 3676,
+    "candidate_disassembled_instruction_bytes": 3676,
+    "previous_instruction_sha256": "a4ee1c4e5927e3649a2ff68b11206b6fe481830262824f2b38ffd0f08d1b416d",
+    "candidate_instruction_sha256": "a4ee1c4e5927e3649a2ff68b11206b6fe481830262824f2b38ffd0f08d1b416d",
+    "identical_disassembled_instructions": true
+  }
+]
