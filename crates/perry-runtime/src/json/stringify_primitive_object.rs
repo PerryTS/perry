@@ -21,6 +21,7 @@ pub(super) fn field_is_primitive(bits: u64) -> bool {
 /// The caller has proved that `count` logical slots fit the live inline
 /// allocation. Checking these slots cannot call user code or collect, so the
 /// field base can be borrowed once for the whole preflight too.
+#[cfg(test)]
 pub(super) unsafe fn fields_are_primitive(obj: *const crate::ObjectHeader, count: u32) -> bool {
     let fields = (obj as *const u8)
         .add(std::mem::size_of::<crate::ObjectHeader>())
@@ -36,12 +37,41 @@ pub(super) unsafe fn fields_are_primitive(obj: *const crate::ObjectHeader, count
 /// `field_is_primitive`. Keys and field storage remain live, without callbacks,
 /// managed allocation or a safepoint from that validation through this return.
 /// `order`, if present, is the existing ECMA own-key order for this keys array.
+#[cfg(test)]
 pub(super) unsafe fn emit_validated(
     obj: *const crate::ObjectHeader,
     keys: *const crate::ArrayHeader,
     order: Option<&[u32]>,
     buf: &mut String,
 ) {
+    let emitted = emit::<false>(obj, keys, order, buf);
+    debug_assert!(emitted);
+}
+
+/// Validate and emit in one pass. A late complex field rolls the native output
+/// buffer back to its entry length so the general object walker can take over.
+/// No managed allocation, callback or safepoint occurs during the attempt.
+pub(super) unsafe fn try_emit(
+    obj: *const crate::ObjectHeader,
+    keys: *const crate::ArrayHeader,
+    buf: &mut String,
+) -> bool {
+    emit::<true>(obj, keys, None, buf)
+}
+
+#[inline(always)]
+fn key_needs_ecma_reordering(key: &str) -> bool {
+    key.as_bytes().first().is_some_and(u8::is_ascii_digit)
+        && crate::object::canonical_array_index(key).is_some()
+}
+
+unsafe fn emit<const VALIDATE: bool>(
+    obj: *const crate::ObjectHeader,
+    keys: *const crate::ArrayHeader,
+    order: Option<&[u32]>,
+    buf: &mut String,
+) -> bool {
+    let saved_len = buf.len();
     let fields = (obj as *const u8)
         .add(std::mem::size_of::<crate::ObjectHeader>())
         .cast::<u64>();
@@ -57,6 +87,10 @@ pub(super) unsafe fn emit_validated(
             continue;
         }
         let bits = *fields.add(f);
+        if VALIDATE && !field_is_primitive(bits) {
+            buf.truncate(saved_len);
+            return false;
+        }
         if bits == TAG_UNDEFINED {
             continue;
         }
@@ -66,8 +100,24 @@ pub(super) unsafe fn emit_validated(
         }
         first = false;
         let mut key_sso = [0; crate::value::SHORT_STRING_MAX_LEN];
-        if let Some(key) = super::stringify::object_key_str(key_bits, &mut key_sso) {
+        let key_written = if key_bits & crate::value::TAG_MASK == STRING_TAG {
+            let ptr = (key_bits & POINTER_MASK) as *const StringHeader;
+            if VALIDATE && str_from_header(ptr).is_some_and(key_needs_ecma_reordering) {
+                buf.truncate(saved_len);
+                return false;
+            }
+            write_heap_string(buf, ptr)
+        } else if let Some(key) = super::stringify::object_key_str(key_bits, &mut key_sso) {
+            if VALIDATE && key_needs_ecma_reordering(key) {
+                buf.truncate(saved_len);
+                return false;
+            }
             write_escaped_string(buf, key);
+            true
+        } else {
+            false
+        };
+        if key_written {
             buf.push(':');
         } else {
             let _ = write!(buf, "\"field{}\":", f);
@@ -99,6 +149,7 @@ pub(super) unsafe fn emit_validated(
         }
     }
     buf.push('}');
+    true
 }
 
 #[cfg(test)]

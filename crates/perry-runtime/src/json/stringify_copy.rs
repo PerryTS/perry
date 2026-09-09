@@ -51,6 +51,25 @@ pub(super) unsafe fn copy_bytes(source: *const u8, output: *mut u8, len: usize) 
     }
 }
 
+/// Append valid UTF-8 while keeping short JSON fragments out of the platform
+/// memcpy/memmove entry points. `String::push_str` is retained for longer
+/// payloads where the bulk copy is profitable.
+#[inline(always)]
+pub(super) fn push_str(buf: &mut String, text: &str) {
+    let len = text.len();
+    if len > 32 {
+        buf.push_str(text);
+        return;
+    }
+    let old_len = buf.len();
+    buf.reserve(len);
+    unsafe {
+        let bytes = buf.as_mut_vec();
+        copy_short(text.as_ptr(), bytes.as_mut_ptr().add(old_len), len);
+        bytes.set_len(old_len + len);
+    }
+}
+
 #[cfg(test)]
 #[path = "stringify_copy_tests.rs"]
 mod tests;

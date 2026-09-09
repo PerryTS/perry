@@ -90,3 +90,31 @@ fn primitive_object_preflight_rejects_callback_and_hole_tags() {
         assert!(field_is_primitive(bits));
     }
 }
+
+#[test]
+fn primitive_object_one_pass_attempt_rolls_back_a_complex_late_field() {
+    unsafe {
+        let text = br#"{"a":1,"b":{"x":2}}"#;
+        let source = js_string_from_bytes(text.as_ptr(), text.len() as u32);
+        let value = crate::json::test_json_parse_direct(source);
+        let obj = value.as_pointer::<crate::ObjectHeader>();
+        let keys = crate::object::object_keys_array(obj);
+        let mut output = String::from("prefix");
+        assert!(!try_emit(obj, keys, &mut output));
+        assert_eq!(output, "prefix");
+    }
+}
+
+#[test]
+fn primitive_object_one_pass_attempt_rolls_back_an_array_index_key() {
+    unsafe {
+        let text = br#"{"plain":1,"2":2}"#;
+        let source = js_string_from_bytes(text.as_ptr(), text.len() as u32);
+        let value = crate::json::test_json_parse_direct(source);
+        let obj = value.as_pointer::<crate::ObjectHeader>();
+        let keys = crate::object::object_keys_array(obj);
+        let mut output = String::from("prefix");
+        assert!(!try_emit(obj, keys, &mut output));
+        assert_eq!(output, "prefix");
+    }
+}

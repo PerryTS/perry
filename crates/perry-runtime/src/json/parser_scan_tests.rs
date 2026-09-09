@@ -127,6 +127,116 @@ fn wide_object_duplicates_keep_first_position_and_last_value() {
 }
 
 #[test]
+fn large_unescaped_parsed_strings_are_individually_tracked_leaves() {
+    let payload_len = crate::string::JSON_MALLOC_OUTPUT_THRESHOLD as usize;
+    let mut input = Vec::with_capacity(payload_len + 2);
+    input.push(b'"');
+    input.extend(std::iter::repeat_n(b'x', payload_len));
+    input.push(b'"');
+    let source = crate::js_string_from_bytes(input.as_ptr(), input.len() as u32);
+    unsafe {
+        let value = crate::json::js_json_parse(source);
+        let string = value.as_string_ptr();
+        let header =
+            (string as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        assert!(crate::gc::gc_malloc_header_is_tracked(header));
+        assert_eq!((*string).byte_len as usize, payload_len);
+        assert_eq!((*string).utf16_len as usize, payload_len);
+        let bytes = std::slice::from_raw_parts(crate::string::string_data(string), payload_len);
+        assert!(bytes.iter().all(|&byte| byte == b'x'));
+    }
+}
+
+#[test]
+fn repeated_parse_reuses_only_the_immutable_string_token() {
+    let payload = "x".repeat(512);
+    let input = format!(r#"{{"text":"{payload}"}}"#);
+    let source = crate::js_string_from_bytes(input.as_ptr(), input.len() as u32);
+    unsafe {
+        let first = crate::json::js_json_parse(source);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let first = scope.root_nanbox_u64(first.bits());
+        assert!(crate::json::test_parse_object_template_matches(
+            source,
+            input.len()
+        ));
+        let second = crate::json::js_json_parse(source);
+        assert_ne!(
+            first.get_nanbox_u64(),
+            second.bits(),
+            "mutable objects stay distinct"
+        );
+
+        let first_output = crate::json::js_json_stringify(
+            f64::from_bits(first.get_nanbox_u64()),
+            crate::json::TYPE_UNKNOWN,
+        );
+        let second_output = crate::json::js_json_stringify(
+            f64::from_bits(second.bits()),
+            crate::json::TYPE_UNKNOWN,
+        );
+        assert_eq!(
+            crate::json::str_from_header(first_output),
+            Some(input.as_str())
+        );
+        assert_eq!(
+            crate::json::str_from_header(second_output),
+            Some(input.as_str())
+        );
+    }
+
+    let scalar = format!("\"{payload}\"");
+    let scalar_source = crate::js_string_from_bytes(scalar.as_ptr(), scalar.len() as u32);
+    unsafe {
+        let first = crate::json::js_json_parse(scalar_source);
+        let second = crate::json::js_json_parse(scalar_source);
+        assert_eq!(
+            first.bits(),
+            second.bits(),
+            "string primitives may be shared"
+        );
+    }
+}
+
+#[test]
+fn repeated_small_object_template_rebuilds_nested_arrays() {
+    let input = r#"{"id":42,"name":"long-enough-to-cross-the-small-template-threshold","tags":["alpha","beta"]}"#;
+    let source = crate::js_string_from_bytes(input.as_ptr(), input.len() as u32);
+    unsafe {
+        let first = crate::json::js_json_parse(source);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let first = scope.root_nanbox_u64(first.bits());
+        assert!(crate::json::test_parse_object_template_matches(
+            source,
+            input.len()
+        ));
+        let second = crate::json::js_json_parse(source);
+        let first_object = crate::JSValue::from_bits(first.get_nanbox_u64())
+            .as_pointer::<crate::object::ObjectHeader>();
+        let second_object = second.as_pointer::<crate::object::ObjectHeader>();
+        assert_ne!(first_object, second_object);
+        let first_fields = first_object
+            .cast::<u8>()
+            .add(std::mem::size_of::<crate::object::ObjectHeader>())
+            .cast::<crate::JSValue>();
+        let second_fields = second_object
+            .cast::<u8>()
+            .add(std::mem::size_of::<crate::object::ObjectHeader>())
+            .cast::<crate::JSValue>();
+        assert_ne!(
+            (*first_fields.add(2)).as_pointer::<crate::array::ArrayHeader>(),
+            (*second_fields.add(2)).as_pointer::<crate::array::ArrayHeader>(),
+            "nested mutable arrays must be reconstructed"
+        );
+        let output = crate::json::js_json_stringify(
+            f64::from_bits(second.bits()),
+            crate::json::TYPE_UNKNOWN,
+        );
+        assert_eq!(crate::json::str_from_header(output), Some(input));
+    }
+}
+
+#[test]
 fn nested_wide_object_does_not_break_outer_duplicate_identity() {
     use crate::json::{js_json_parse, js_json_stringify, str_from_header, TYPE_UNKNOWN};
 

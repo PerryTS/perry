@@ -26,7 +26,7 @@ pub(crate) unsafe fn write_number(buf: &mut String, value: f64) {
     if (value.to_bits() & 0xFFFF_0000_0000_0000) == INT32_TAG {
         let n = (value.to_bits() & INT32_MASK) as u32 as i32;
         let mut itoa_buf = itoa::Buffer::new();
-        buf.push_str(itoa_buf.format(n));
+        super::stringify_copy::push_str(buf, itoa_buf.format(n));
         return;
     }
     // #2089: a Date is now a NaN-boxed `DateCell` pointer, handled in
@@ -41,7 +41,7 @@ pub(crate) unsafe fn write_number(buf: &mut String, value: f64) {
         // the exact integer can carry more digits than the shortest round-trip
         // (`2**58`), so those use shortest-round-trip formatting below (#6127).
         let mut itoa_buf = itoa::Buffer::new();
-        buf.push_str(itoa_buf.format(value as i64));
+        super::stringify_copy::push_str(buf, itoa_buf.format(value as i64));
     } else if write_compact_decimal(buf, value) {
         // The guarded decimal spelling already round-trips to this number.
     } else {
@@ -51,7 +51,7 @@ pub(crate) unsafe fn write_number(buf: &mut String, value: f64) {
         // final digit at a tie. Plain `ryu` also uses different exponent
         // thresholds; `ryu-js` implements Number::toString's spelling.
         let mut number = ryu_js::Buffer::new();
-        buf.push_str(number.format_finite(value));
+        super::stringify_copy::push_str(buf, number.format_finite(value));
     }
 }
 
@@ -77,7 +77,7 @@ pub(crate) fn write_compact_decimal(buf: &mut String, value: f64) -> bool {
         buf.push('-');
     }
     let mut integer = itoa::Buffer::new();
-    buf.push_str(integer.format(digits / 1000));
+    super::stringify_copy::push_str(buf, integer.format(digits / 1000));
     buf.push('.');
     let bytes = [
         b'0' + (fraction / 100) as u8,
@@ -92,7 +92,7 @@ pub(crate) fn write_compact_decimal(buf: &mut String, value: f64) -> bool {
         1
     };
     // All three bytes were constructed as ASCII digits.
-    buf.push_str(unsafe { std::str::from_utf8_unchecked(&bytes[..len]) });
+    super::stringify_copy::push_str(buf, unsafe { std::str::from_utf8_unchecked(&bytes[..len]) });
     true
 }
 
@@ -112,7 +112,7 @@ pub(crate) unsafe fn write_escaped_string(buf: &mut String, s: &str) {
     let Some(first_escape) = first_escape else {
         buf.reserve(bytes.len() + 2);
         buf.push('"');
-        buf.push_str(s);
+        super::stringify_copy::push_str(buf, s);
         buf.push('"');
         return;
     };
@@ -237,7 +237,7 @@ pub(crate) unsafe fn write_heap_string(buf: &mut String, ptr: *const StringHeade
     if (*ptr).flags & crate::string::STRING_FLAG_JSON_ESCAPE_FREE != 0 {
         buf.reserve(text.len() + 2);
         buf.push('"');
-        buf.push_str(text);
+        super::stringify_copy::push_str(buf, text);
         buf.push('"');
     } else {
         write_escaped_string(buf, text);
@@ -257,11 +257,11 @@ pub(crate) unsafe fn write_short_string(buf: &mut String, bytes: &[u8]) -> bool 
         write_escaped_string(buf, text);
         return true;
     }
-    let out = buf.as_mut_vec();
-    out.reserve(bytes.len() + 2);
-    out.push(b'"');
-    out.extend_from_slice(bytes);
-    out.push(b'"');
+    let text = std::str::from_utf8_unchecked(bytes);
+    buf.reserve(bytes.len() + 2);
+    buf.push('"');
+    super::stringify_copy::push_str(buf, text);
+    buf.push('"');
     true
 }
 

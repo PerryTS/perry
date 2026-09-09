@@ -319,7 +319,7 @@ pub unsafe extern "C" fn js_json_stringify(value: f64, type_hint: u32) -> *mut S
     // top-level call can't leak in (#5909).
     super::reset_to_json_key();
     stringify_value(value, type_hint, &mut buf);
-    let ptr = json_string_from_output_bytes(buf.as_bytes());
+    let ptr = json_string_from_native_output_bytes(buf.as_bytes());
     restore_stringify_buf(buf);
     match saved_cache {
         Some(s) => restore_shape_cache(s),

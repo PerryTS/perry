@@ -1175,28 +1175,29 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
     };
     let actual_fields = keys_len;
 
-    // #2438: enumerate own keys in ECMA-262 OrdinaryOwnPropertyKeys order —
-    // array-index keys first (ascending numeric), then string keys in
-    // insertion order. `None` means no array-index keys, so insertion order
-    // already matches spec and the loop walks `0..actual_fields` directly.
-    let key_order = crate::object::ecma_own_key_order(keys_arr);
-
     // Nested one-field leaves and wide inline objects can prove primitive
-    // fields by one raw walk, avoiding the generic closure scan's handle retrievals
-    // and repeated retrievals during emission. No pointer/BigInt field,
-    // descriptor or class can reach the borrowed emit interval.
+    // fields while emitting them in one raw walk, avoiding both the generic
+    // closure scan and the separate ordinary-key ordering scan. An array-index
+    // key or complex value rolls the native buffer back before the general
+    // path computes the required ordering. No pointer/BigInt field, descriptor
+    // or class can reach the borrowed emit interval.
     if (actual_fields == 1 || actual_fields > 32)
         && !has_overflow_fields
         && (*obj).class_id == 0
         && !crate::object::object_has_descriptors(ptr as usize)
-        && super::stringify_primitive_object::fields_are_primitive(obj, actual_fields)
+        && super::stringify_primitive_object::try_emit(obj, keys_arr, buf)
     {
-        super::stringify_primitive_object::emit_validated(obj, keys_arr, key_order.as_deref(), buf);
         if depth > MAX_FAST_DEPTH {
             STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
         }
         return;
     }
+
+    // #2438: enumerate own keys in ECMA-262 OrdinaryOwnPropertyKeys order —
+    // array-index keys first (ascending numeric), then string keys in
+    // insertion order. `None` means no array-index keys, so insertion order
+    // already matches spec and the loop walks `0..actual_fields` directly.
+    let key_order = crate::object::ecma_own_key_order(keys_arr);
 
     // Deferred toJSON + closure checks (issue #67 tightening): scan fields
     // once to detect if any field is actually a closure. For data-only

@@ -40,7 +40,7 @@ pub(crate) fn nesting_depth_exceeds(bytes: &[u8], limit: usize) -> bool {
     // bracket byte inside a string is only a conservative false positive.
     if bytes.len() >= 256 && matches!(bytes[0], b'[' | b'{') && limit > 0 {
         let body = &bytes[1..];
-        if !body.contains(&b'{') && !body.contains(&b'[') {
+        if !contains_open_container(body) {
             return false;
         }
     }
@@ -135,4 +135,22 @@ pub(crate) fn nesting_depth_exceeds(bytes: &[u8], limit: usize) -> bool {
         }
     }
     false
+}
+
+#[inline(always)]
+fn contains_open_container(bytes: &[u8]) -> bool {
+    use std::arch::aarch64::*;
+    let mut i = 0usize;
+    unsafe {
+        let array = vdupq_n_u8(b'[');
+        let object = vdupq_n_u8(b'{');
+        while bytes.len() - i >= 16 {
+            let chunk = vld1q_u8(bytes.as_ptr().add(i));
+            if vmaxvq_u8(vorrq_u8(vceqq_u8(chunk, array), vceqq_u8(chunk, object))) != 0 {
+                return true;
+            }
+            i += 16;
+        }
+    }
+    bytes[i..].iter().any(|&b| matches!(b, b'[' | b'{'))
 }

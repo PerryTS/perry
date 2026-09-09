@@ -2,6 +2,39 @@ use super::super::*;
 use super::support::*;
 
 #[test]
+fn large_native_json_output_is_an_individually_tracked_leaf() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _scan = ConservativeScanDisabledGuard::new();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+    let text = format!("[\"{}\"]", "abcdefgh".repeat(128 * 1024));
+    let result = crate::json::json_string_from_native_output_bytes(text.as_bytes());
+
+    assert!(malloc_user_ptr_tracked(result.cast()));
+    unsafe {
+        assert_eq!((*result).utf16_len, text.len() as u32);
+        assert_eq!((*result).byte_len, text.len() as u32);
+        assert_eq!((*result).capacity, text.len() as u32);
+        assert_eq!((*result).flags, 0);
+        assert_eq!(crate::json::str_from_header(result), Some(text.as_str()));
+    }
+
+    let unicode = format!("[\"{}\"]", "é😀".repeat(128 * 1024));
+    let unicode_result = crate::json::json_string_from_native_output_bytes(unicode.as_bytes());
+    assert!(malloc_user_ptr_tracked(unicode_result.cast()));
+    unsafe {
+        assert_eq!(
+            (*unicode_result).utf16_len,
+            unicode.encode_utf16().count() as u32
+        );
+        assert_eq!(
+            crate::json::str_from_header(unicode_result),
+            Some(unicode.as_str())
+        );
+    }
+}
+
+#[test]
 fn large_json_output_is_a_complete_malloc_leaf_and_obeys_runtime_roots() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _scan = ConservativeScanDisabledGuard::new();

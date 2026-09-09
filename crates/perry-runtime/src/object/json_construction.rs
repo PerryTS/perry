@@ -107,7 +107,7 @@ pub(crate) unsafe fn try_object_from_prevalidated_one_field(
 /// Birth a keyless ordinary JSON object with an already-minted local shape.
 /// `arena_alloc_gc_no_collect` serves only the open nursery block, so no
 /// collection or old-generation carrier bookkeeping can intervene.
-#[inline(never)]
+#[inline(always)]
 pub(crate) unsafe fn try_empty_json_object_preinstalled(
     shape_id: u32,
 ) -> Option<*mut ObjectHeader> {
@@ -124,7 +124,6 @@ pub(crate) unsafe fn try_empty_json_object_preinstalled(
     (*object).class_id = 0;
     (*object).parent_class_id = shape_id;
     (*object).meta = ptr::null_mut();
-    mark_object_plain_ordinary(object);
     let slots = raw
         .add(std::mem::size_of::<ObjectHeader>())
         .cast::<JSValue>();

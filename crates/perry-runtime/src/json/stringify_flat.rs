@@ -12,8 +12,9 @@ const MAX_FIELDS: usize = 4;
 const JSON_OUTPUT_SWEEP_BUDGET: usize = 32 * 1024 * 1024;
 
 crate::perry_thread_local! {
-    /// Bytes of malloc-backed exact output completed since the last boundary
-    /// sweep. This is scheduling debt only and never owns a managed pointer.
+    /// Bytes of malloc-backed JSON string leaves completed since the last
+    /// boundary sweep. This is scheduling debt only and never owns a managed
+    /// pointer; large parsed strings and stringify results share the policy.
     static JSON_OUTPUT_BYTES_SINCE_SWEEP: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -31,7 +32,7 @@ pub(super) fn service_json_output_sweep_boundary() {
 }
 
 #[inline]
-pub(super) fn note_completed_malloc_json_output(bytes: u32) {
+pub(crate) fn note_completed_malloc_json_output(bytes: u32) {
     JSON_OUTPUT_BYTES_SINCE_SWEEP.with(|debt| {
         let total = debt.get().saturating_add(bytes as usize);
         debt.set(total);

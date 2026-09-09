@@ -283,6 +283,12 @@ pub(crate) struct DirectParser<'a> {
     /// Keep the shared key cache stable through recursive parsing, then drop
     /// it at the outer parse boundary so wide schemas cannot pin arena blocks.
     saw_wide_object: bool,
+    /// Rooted heap string that owns `input`, or null for standalone parser
+    /// tests and non-string sources.
+    source: *const StringHeader,
+    /// Snapshot the one reusable token once at the parse boundary. A miss then
+    /// costs nothing inside record-heavy string loops.
+    cached_string: Option<ParseStringReuse>,
     batch: Option<crate::arena::ConstructionBatch>,
 }
 
@@ -299,6 +305,8 @@ impl<'a> DirectParser<'a> {
             hot_shape_id: 0,
             warm_record_shape_pending: false,
             saw_wide_object: false,
+            source: std::ptr::null(),
+            cached_string: None,
             batch: None,
         }
     }
@@ -322,6 +330,18 @@ impl<'a> DirectParser<'a> {
         parser
     }
 
+    /// Attach the rooted source identity so immutable string tokens can be
+    /// reused across repeated parses of the same JS string.
+    pub(crate) unsafe fn new_batched_from_string(
+        input: &'a [u8],
+        source: *const StringHeader,
+    ) -> Self {
+        let mut parser = Self::new_batched(input);
+        parser.source = source;
+        parser.cached_string = cached_parse_string(source, input.len());
+        parser
+    }
+
     pub(crate) fn with_shape(input: &'a [u8], shape: ObjectShapeHint) -> Self {
         Self {
             input,
@@ -334,6 +354,8 @@ impl<'a> DirectParser<'a> {
             hot_shape_id: 0,
             warm_record_shape_pending: false,
             saw_wide_object: false,
+            source: std::ptr::null(),
+            cached_string: None,
             batch: None,
         }
     }
@@ -414,8 +436,7 @@ impl<'a> DirectParser<'a> {
     pub(crate) fn finish(&mut self) -> bool {
         self.skip_whitespace();
         if self.saw_wide_object {
-            PARSE_KEY_CACHE.with(|cache| cache.borrow_mut().clear());
-            clear_parse_key_ring();
+            super::parse_scalar::clear_key_cache();
         }
         self.valid && self.pos == self.input.len()
     }
@@ -453,8 +474,19 @@ impl<'a> DirectParser<'a> {
     }
 
     pub(crate) unsafe fn parse_string_value(&mut self) -> JSValue {
+        let token_start = self.pos;
+        if let Some(cached) = self
+            .cached_string
+            .filter(|cached| cached.token_start == token_start)
+        {
+            debug_assert!(cached.token_end <= self.input.len());
+            self.pos = cached.token_end;
+            return JSValue::string_ptr(cached.value as *mut StringHeader);
+        }
         if let Some(s) = self.parse_string_bytes() {
             let b = s.as_bytes();
+            let value_len = b.len();
+            let borrowed = matches!(s, ParsedStr::Borrowed(_));
             // v0.5.216 SSO Step 2: emit inline SSO for values of
             // length ≤ SHORT_STRING_MAX_LEN (5 bytes). Zero heap
             // allocation on the short-string hot path. Consumer
@@ -491,6 +523,16 @@ impl<'a> DirectParser<'a> {
                 // the WTF-8 lone-surrogate flag while allocating the result.
                 ParsedStr::Owned(ref b) => crate::string::js_string_from_builder_bytes(b),
             };
+            if borrowed {
+                remember_parse_string(
+                    self.source,
+                    self.input.len(),
+                    token_start,
+                    self.pos,
+                    ptr,
+                    value_len,
+                );
+            }
             JSValue::string_ptr(ptr)
         } else {
             self.invalid_value()
@@ -921,10 +963,21 @@ impl<'a> DirectParser<'a> {
         self.advance();
         self.skip_whitespace();
 
-        // Only the root object may claim the parse-boundary hint. Nested
-        // objects keep using the parser-local homogeneous-shape cache.
+        // The parse-boundary hint seeds the first root record. After any
+        // object establishes a small shape, let the next object speculate on
+        // that parser-local shape too. Homogeneous record arrays then compare
+        // key bytes directly against six cached pointers instead of entering
+        // the TLS key cache for every field of every record. Any mismatch
+        // drops back to the content-keyed path below.
         let warm_shape = if self.warm_record_shape_pending {
             self.warm_record_shape_pending = false;
+            Some((
+                self.hot_shape_len,
+                self.hot_shape_keys,
+                self.hot_shape_array,
+                self.hot_shape_id,
+            ))
+        } else if self.hot_shape_len != 0 && !self.hot_shape_array.is_null() {
             Some((
                 self.hot_shape_len,
                 self.hot_shape_keys,

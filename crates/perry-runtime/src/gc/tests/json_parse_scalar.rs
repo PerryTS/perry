@@ -118,6 +118,89 @@ fn json_inline_object_parse_roots_keys_and_returns_movable_output() {
     }
 }
 
+#[test]
+fn json_repeated_string_cache_survives_source_evacuation() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _scan = ConservativeScanDisabledGuard::new();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _evacuation = ForcedEvacuationTestGuard::on();
+    let _protection =
+        crate::arena::ProtectionModeGuard::set(crate::arena::FromSpaceProtection::PoisonOnly);
+    register_runtime_handle_root_scanner_for_tests();
+    gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
+    crate::json::test_clear_parse_roots();
+
+    let payload = "x".repeat(512);
+    let text = format!("\"{payload}\"");
+    let scope = RuntimeHandleScope::new();
+    let input = scope.root_string_ptr(crate::js_string_from_bytes(
+        text.as_ptr(),
+        text.len() as u32,
+    ));
+    let input_before = input.with_const_ptr(|input: *const crate::StringHeader| input as usize);
+    let first = input.with_const_ptr(|input| unsafe { crate::json::js_json_parse(input) });
+    let first = scope.root_string_ptr(first.as_string_ptr());
+
+    let _ = gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+    assert_ne!(
+        input_before,
+        input.with_const_ptr(|input: *const crate::StringHeader| input as usize),
+        "the test must exercise cache-key rewriting"
+    );
+
+    let second = input.with_const_ptr(|input| unsafe { crate::json::js_json_parse(input) });
+    assert_eq!(
+        first.with_const_ptr(|value: *const crate::StringHeader| value as usize),
+        second.as_string_ptr() as usize,
+        "the source and cached token must remain a matching rewritten pair"
+    );
+    unsafe {
+        assert_eq!(
+            crate::json::str_from_header(second.as_string_ptr()),
+            Some(payload.as_str())
+        );
+    }
+}
+
+#[test]
+fn json_small_object_template_survives_evacuation() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _scan = ConservativeScanDisabledGuard::new();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _evacuation = ForcedEvacuationTestGuard::on();
+    let _protection =
+        crate::arena::ProtectionModeGuard::set(crate::arena::FromSpaceProtection::PoisonOnly);
+    register_runtime_handle_root_scanner_for_tests();
+    gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
+    crate::json::test_clear_parse_roots();
+
+    let text =
+        r#"{"name":"long-enough-to-cross-the-small-template-threshold","tags":["alpha","beta"]}"#;
+    let scope = RuntimeHandleScope::new();
+    let input = scope.root_string_ptr(crate::js_string_from_bytes(
+        text.as_ptr(),
+        text.len() as u32,
+    ));
+    let input_before = input.with_const_ptr(|input: *const crate::StringHeader| input as usize);
+    let first = input.with_const_ptr(|input| unsafe { crate::json::js_json_parse(input) });
+    let first = scope.root_nanbox_u64(first.bits());
+
+    let _ = gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+    assert_ne!(
+        input_before,
+        input.with_const_ptr(|input: *const crate::StringHeader| input as usize),
+        "the test must exercise template-key rewriting"
+    );
+    let second = input.with_const_ptr(|input| unsafe { crate::json::js_json_parse(input) });
+    assert_ne!(first.get_nanbox_u64(), second.bits());
+    let output = unsafe {
+        crate::json::js_json_stringify(f64::from_bits(second.bits()), crate::json::TYPE_UNKNOWN)
+    };
+    unsafe {
+        assert_eq!(crate::json::str_from_header(output), Some(text));
+    }
+}
+
 impl ParseStateGuard {
     fn new() -> Self {
         Self {

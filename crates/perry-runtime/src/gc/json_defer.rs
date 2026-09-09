@@ -23,7 +23,9 @@ pub(crate) struct JsonParseAllocation(Option<usize>);
 impl JsonParseAllocation {
     #[inline]
     pub(crate) fn begin(input_bytes: usize) -> Self {
+        let allowance = extra_bytes_for_budget(super::gc_heap_budget_bytes());
         if input_bytes < MIN_INPUT_BYTES
+            || input_bytes > allowance
             || !super::gen_gc_enabled()
             || !super::gc_moving_loop_polls_enabled()
             || super::gc_budgeted_cycle_active()

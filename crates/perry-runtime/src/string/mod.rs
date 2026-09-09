@@ -653,7 +653,7 @@ pub(crate) fn string_storage_alloc(capacity: u32) -> (*mut StringHeader, *mut u8
 }
 
 /// JSON results at or above this size use individually tracked storage.
-pub(crate) const JSON_MALLOC_OUTPUT_THRESHOLD: u32 = 1024 * 1024;
+pub(crate) const JSON_MALLOC_OUTPUT_THRESHOLD: u32 = 512 * 1024;
 
 /// Allocate a large, pointer-free JSON result outside old-generation arenas.
 ///

@@ -184,7 +184,7 @@ pub(super) unsafe fn try_emit_with_live(
         arrays[i].write(arr);
     }
     for i in 0..fields.len() {
-        buf.push_str(&template.prefixes[i]);
+        super::stringify_copy::push_str(buf, &template.prefixes[i]);
         let arr = arrays[i].assume_init();
         if !arr.is_null() {
             // No callbacks or managed allocation can invalidate validation.

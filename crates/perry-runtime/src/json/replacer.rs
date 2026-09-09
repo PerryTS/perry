@@ -754,7 +754,7 @@ pub unsafe extern "C" fn js_json_stringify_with_replacer(
         });
     }
 
-    let result = js_string_from_bytes(buf.as_ptr(), buf.len() as u32);
+    let result = json_string_from_native_output_bytes(buf.as_bytes());
     restore_stringify_buf(buf);
     match saved_cache {
         Some(s) => restore_shape_cache(s),
@@ -1868,8 +1868,9 @@ pub unsafe extern "C" fn js_json_stringify_full(
         }
     });
 
-    let result = super::stringify_small::inline_ascii_output(buf.as_bytes())
-        .unwrap_or_else(|| JSValue::string_ptr(json_string_from_output_bytes(buf.as_bytes())));
+    let result = super::stringify_small::inline_ascii_output(buf.as_bytes()).unwrap_or_else(|| {
+        JSValue::string_ptr(json_string_from_native_output_bytes(buf.as_bytes()))
+    });
     restore_stringify_buf(buf);
     match saved_cache {
         Some(s) => restore_shape_cache(s),

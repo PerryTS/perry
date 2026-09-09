@@ -13,11 +13,20 @@ pub(crate) unsafe fn string_from_json_bytes(
         compute_utf16_len(bytes.as_ptr(), len)
     };
     let size = std::mem::size_of::<StringHeader>() + bytes.len();
-    let raw = batch.as_mut().map_or(std::ptr::null_mut(), |b| {
-        b.try_alloc(size, crate::gc::GC_TYPE_STRING)
-    });
+    let large_json_leaf = len >= JSON_MALLOC_OUTPUT_THRESHOLD;
+    let raw = if large_json_leaf {
+        std::ptr::null_mut()
+    } else {
+        batch.as_mut().map_or(std::ptr::null_mut(), |b| {
+            b.try_alloc(size, crate::gc::GC_TYPE_STRING)
+        })
+    };
     let (header, data) = if raw.is_null() {
-        string_storage_alloc(len)
+        if large_json_leaf {
+            json_output_storage_alloc(len)
+        } else {
+            string_storage_alloc(len)
+        }
     } else {
         zero_alignment_padding_tail(raw, size);
         let header = raw.cast::<StringHeader>();
@@ -29,5 +38,8 @@ pub(crate) unsafe fn string_from_json_bytes(
     // escape scan.
     init_string_header(header, utf16_len, len, len, 0, STRING_FLAG_JSON_ESCAPE_FREE);
     std::ptr::copy_nonoverlapping(bytes.as_ptr(), data, bytes.len());
+    if large_json_leaf {
+        crate::json::note_completed_malloc_json_output(len);
+    }
     header
 }

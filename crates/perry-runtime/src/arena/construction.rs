@@ -15,11 +15,12 @@ impl ConstructionBatch {
     /// Publish old-to-young edges from completed JSON slots. The existing
     /// remembered set records pages, so one ordinary barrier for a young edge
     /// on each slot page covers every other inline slot on that page. A page
-    /// with only old/longlived children is left clean. No new collector API or
-    /// remembered-set representation is introduced.
+    /// with only old/longlived children is left clean. Large pointer-free JSON
+    /// strings can be malloc-backed leaves; those edges use the same existing
+    /// remembered-set predicate as ordinary stores.
     ///
     /// Slots must contain only parser-produced JSON values: heap children are
-    /// arena strings, arrays or plain objects, never foreign/malloc cells.
+    /// arena strings, arrays, plain objects, or malloc-backed large strings.
     pub(crate) unsafe fn finish_json_slots(&self, parent: *mut u8, slots: *const u64, len: usize) {
         if !super::pointer_in_old_gen(parent as usize) {
             return;
@@ -32,8 +33,9 @@ impl ConstructionBatch {
             while index < end {
                 let bits = *slots.add(index);
                 let tag = bits & crate::value::TAG_MASK;
+                let child = (bits & crate::value::POINTER_MASK) as usize;
                 if (tag == crate::value::POINTER_TAG || tag == crate::value::STRING_TAG)
-                    && super::pointer_in_nursery((bits & crate::value::POINTER_MASK) as usize)
+                    && crate::gc::remembered_child_needs_tracking(child)
                 {
                     crate::gc::runtime_write_barrier_slot(
                         parent as usize,

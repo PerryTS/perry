@@ -41,6 +41,7 @@ mod stringify_copy;
 mod stringify_data_record;
 mod stringify_escaped_output;
 mod stringify_flat;
+pub(crate) use stringify_flat::note_completed_malloc_json_output;
 mod stringify_nested_records;
 mod stringify_primitive_array;
 mod stringify_primitive_object;
@@ -105,6 +106,9 @@ pub(crate) use stringify_tojson_probe::{
 };
 
 // ─── Circular reference detection ────────────────────────────────────────────
+static PARSE_KEY_CACHE_OVERSIZED_THREADS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 thread_local! {
     /// Stack of object pointers currently being stringified (for circular detection).
     pub(crate) static STRINGIFY_STACK: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
@@ -165,6 +169,9 @@ thread_local! {
     /// key and burns 3× the time + RSS vs the direct parser.
     pub(crate) static PARSE_KEY_CACHE: RefCell<std::collections::HashMap<Vec<u8>, *const StringHeader>> =
         RefCell::new(std::collections::HashMap::new());
+    /// Set exactly when the key cache crosses its boundary limit. Tiny parse
+    /// completions can test this bit without borrowing the hash table.
+    pub(super) static PARSE_KEY_CACHE_OVERSIZED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// Tiny hot-key mirror for homogeneous object parses. Most API JSON
     /// repeats the same handful of property names thousands of times; a
     /// short linear probe avoids hashing + HashMap probing on the steady
@@ -182,6 +189,17 @@ thread_local! {
     /// pages.
     pub(crate) static PARSE_SHAPE_CACHE: RefCell<Vec<ParseShapeCacheEntry>> =
         const { RefCell::new(Vec::new()) };
+
+    /// One reusable immutable string token from the most recently parsed
+    /// source. Both pointers are ordinary GC roots and are rewritten on a
+    /// moving collection. The source length guards the only in-place string
+    /// mutation Perry permits; equal-length string contents are immutable.
+    static PARSE_STRING_CACHE: RefCell<Option<ParseStringCacheEntry>> = const { RefCell::new(None) };
+
+    /// A bounded construction template for repeated parses of the same small
+    /// object source. It owns only immutable strings, a canonical key shape,
+    /// and inline scalar bits; every mutable object/array is born afresh.
+    static PARSE_OBJECT_TEMPLATE: RefCell<Option<ParseObjectTemplate>> = const { RefCell::new(None) };
 
     /// Reentrancy depth counter for JSON.stringify (issue #67). 0 means
     /// no call in progress; ≥1 means a reentrant (toJSON callback) path.
@@ -259,6 +277,306 @@ pub(crate) struct ParseShapeCacheEntry {
     pub(crate) shape_id: u32,
     /// Exact NaN-box bits when this is one inline key; zero otherwise.
     pub(crate) one_field_key_bits: u64,
+}
+
+struct ParseStringCacheEntry {
+    source: *const StringHeader,
+    source_len: u32,
+    token_start: u32,
+    token_end: u32,
+    value: *const StringHeader,
+    direct_depth_validated: bool,
+}
+
+#[derive(Clone, Copy)]
+struct ParseStringReuse {
+    token_start: usize,
+    token_end: usize,
+    value: *const StringHeader,
+}
+
+const PARSE_STRING_REUSE_MIN_BYTES: usize = 256;
+const PARSE_STRING_CACHE_MAX_SOURCE_BYTES: usize = 2 * 1024 * 1024;
+const PARSE_OBJECT_TEMPLATE_MIN_SOURCE_BYTES: usize = 65;
+const PARSE_OBJECT_TEMPLATE_MAX_SOURCE_BYTES: usize = 2048;
+const PARSE_OBJECT_TEMPLATE_MAX_FIELDS: usize = 8;
+const PARSE_OBJECT_TEMPLATE_MAX_ARRAY: usize = 8;
+
+#[derive(Clone, Copy)]
+enum ParseTemplateValue {
+    Inline(JSValue),
+    Array {
+        values: [JSValue; PARSE_OBJECT_TEMPLATE_MAX_ARRAY],
+        len: u8,
+    },
+}
+
+#[derive(Clone, Copy)]
+struct ParseObjectTemplate {
+    source: *const StringHeader,
+    source_len: u16,
+    keys_array: *mut crate::array::ArrayHeader,
+    shape_id: u32,
+    values: [ParseTemplateValue; PARSE_OBJECT_TEMPLATE_MAX_FIELDS],
+    len: u8,
+}
+
+const EMPTY_PARSE_TEMPLATE_VALUE: ParseTemplateValue =
+    ParseTemplateValue::Inline(JSValue::undefined());
+
+#[inline]
+fn cached_parse_string(source: *const StringHeader, source_len: usize) -> Option<ParseStringReuse> {
+    if source.is_null()
+        || source_len > PARSE_STRING_CACHE_MAX_SOURCE_BYTES
+        || source_len > u32::MAX as usize
+    {
+        return None;
+    }
+    PARSE_STRING_CACHE.with(|cache| {
+        let cache = cache.borrow();
+        let entry = cache.as_ref()?;
+        (entry.source == source
+            && entry.source_len == source_len as u32
+            && entry.token_end <= entry.source_len)
+            .then_some(ParseStringReuse {
+                token_start: entry.token_start as usize,
+                token_end: entry.token_end as usize,
+                value: entry.value,
+            })
+    })
+}
+
+#[inline]
+fn remember_parse_string(
+    source: *const StringHeader,
+    source_len: usize,
+    token_start: usize,
+    token_end: usize,
+    value: *const StringHeader,
+    value_len: usize,
+) {
+    if source.is_null()
+        || value.is_null()
+        || value_len < PARSE_STRING_REUSE_MIN_BYTES
+        // This cache is a strong root. Bound both its absolute footprint and
+        // its usefulness: retaining a multi-megabyte records document for one
+        // medium-sized field would trade a little copying for excessive RSS.
+        || source_len > PARSE_STRING_CACHE_MAX_SOURCE_BYTES
+        || value_len < source_len.div_ceil(2)
+        || source_len > u32::MAX as usize
+        || token_start > u32::MAX as usize
+        || token_end > u32::MAX as usize
+    {
+        return;
+    }
+    PARSE_STRING_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache
+            .as_ref()
+            .is_some_and(|entry| entry.source == source && entry.source_len == source_len as u32)
+        {
+            return;
+        }
+        *cache = Some(ParseStringCacheEntry {
+            source,
+            source_len: source_len as u32,
+            token_start: token_start as u32,
+            token_end: token_end as u32,
+            value,
+            direct_depth_validated: false,
+        });
+        crate::gc::runtime_write_barrier_root_nanbox(
+            crate::JSValue::string_ptr(source.cast_mut()).bits(),
+        );
+        crate::gc::runtime_write_barrier_root_nanbox(
+            crate::JSValue::string_ptr(value.cast_mut()).bits(),
+        );
+    });
+}
+
+#[inline]
+fn cached_parse_source_is_direct(source: *const StringHeader, source_len: usize) -> bool {
+    PARSE_STRING_CACHE.with(|cache| {
+        cache.borrow().as_ref().is_some_and(|entry| {
+            entry.source == source
+                && entry.source_len as usize == source_len
+                && entry.direct_depth_validated
+        })
+    })
+}
+
+#[inline]
+fn validate_cached_parse_source(source: *const StringHeader, source_len: usize) {
+    PARSE_STRING_CACHE.with(|cache| {
+        if let Some(entry) = cache.borrow_mut().as_mut() {
+            if entry.source == source && entry.source_len as usize == source_len {
+                entry.direct_depth_validated = true;
+            }
+        }
+    });
+}
+
+#[inline]
+unsafe fn parse_template_value(value: JSValue) -> Option<ParseTemplateValue> {
+    if !value.is_pointer() {
+        return Some(ParseTemplateValue::Inline(value));
+    }
+    let array = value.as_pointer::<crate::array::ArrayHeader>();
+    let header = &*(array
+        .cast::<u8>()
+        .sub(crate::gc::GC_HEADER_SIZE)
+        .cast::<crate::gc::GcHeader>());
+    if header.obj_type != crate::gc::GC_TYPE_ARRAY
+        || (*array).length as usize > PARSE_OBJECT_TEMPLATE_MAX_ARRAY
+    {
+        return None;
+    }
+    let mut values = [JSValue::undefined(); PARSE_OBJECT_TEMPLATE_MAX_ARRAY];
+    for index in 0..(*array).length as usize {
+        let element = crate::array::js_array_get(array, index as u32);
+        if element.is_pointer() {
+            return None;
+        }
+        values[index] = element;
+    }
+    Some(ParseTemplateValue::Array {
+        values,
+        len: (*array).length as u8,
+    })
+}
+
+/// Capture a compact immutable construction plan from a completed small JSON
+/// object. The returned object itself is never cached, so later user mutation
+/// cannot affect subsequent parses.
+unsafe fn remember_parse_object_template(
+    source: *const StringHeader,
+    source_len: usize,
+    result: JSValue,
+) {
+    if source.is_null()
+        || source_len < PARSE_OBJECT_TEMPLATE_MIN_SOURCE_BYTES
+        || source_len > PARSE_OBJECT_TEMPLATE_MAX_SOURCE_BYTES
+        || !result.is_pointer()
+    {
+        return;
+    }
+    let object = result.as_pointer::<crate::object::ObjectHeader>();
+    let header = &*(object
+        .cast::<u8>()
+        .sub(crate::gc::GC_HEADER_SIZE)
+        .cast::<crate::gc::GcHeader>());
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+        return;
+    }
+    let len = crate::object::object_live_slot_count(object) as usize;
+    if len > PARSE_OBJECT_TEMPLATE_MAX_FIELDS {
+        return;
+    }
+    let fields = object
+        .cast::<u8>()
+        .add(std::mem::size_of::<crate::object::ObjectHeader>())
+        .cast::<JSValue>();
+    let mut values = [EMPTY_PARSE_TEMPLATE_VALUE; PARSE_OBJECT_TEMPLATE_MAX_FIELDS];
+    for (index, slot) in values[..len].iter_mut().enumerate() {
+        let Some(value) = parse_template_value(*fields.add(index)) else {
+            return;
+        };
+        *slot = value;
+    }
+    let entry = ParseObjectTemplate {
+        source,
+        source_len: source_len as u16,
+        keys_array: crate::object::object_keys_array(object),
+        shape_id: crate::object::shapes::object_shape_stamp(object),
+        values,
+        len: len as u8,
+    };
+    crate::gc::runtime_write_barrier_root_nanbox(JSValue::string_ptr(source.cast_mut()).bits());
+    crate::gc::runtime_write_barrier_root_raw_ptr(entry.keys_array);
+    for value in &entry.values[..len] {
+        match *value {
+            ParseTemplateValue::Inline(value) => {
+                crate::gc::runtime_write_barrier_root_nanbox(value.bits());
+            }
+            ParseTemplateValue::Array { values, len } => {
+                for value in &values[..len as usize] {
+                    crate::gc::runtime_write_barrier_root_nanbox(value.bits());
+                }
+            }
+        }
+    }
+    PARSE_OBJECT_TEMPLATE.with(|cache| *cache.borrow_mut() = Some(entry));
+}
+
+/// Rebuild only the mutable cells from a cached small-object plan. One pending
+/// collection may run before the plan is reloaded; the cache scanner rewrites
+/// every managed pointer in the meantime.
+unsafe fn try_reuse_parse_object_template(
+    source: *const StringHeader,
+    source_len: usize,
+) -> Option<JSValue> {
+    if source.is_null()
+        || source_len < PARSE_OBJECT_TEMPLATE_MIN_SOURCE_BYTES
+        || source_len > PARSE_OBJECT_TEMPLATE_MAX_SOURCE_BYTES
+    {
+        return None;
+    }
+    let matches = PARSE_OBJECT_TEMPLATE.with(|cache| {
+        cache
+            .borrow()
+            .as_ref()
+            .is_some_and(|entry| entry.source == source && entry.source_len as usize == source_len)
+    });
+    if !matches {
+        return None;
+    }
+
+    crate::gc::gc_collect_pending_suppressed_parse();
+    let entry = PARSE_OBJECT_TEMPLATE.with(|cache| cache.borrow().as_ref().copied())?;
+    let result = {
+        let _no_move = crate::gc::GcSuppressScope::new();
+        let mut batch = crate::arena::ConstructionBatch::new();
+        let mut values = [JSValue::undefined(); PARSE_OBJECT_TEMPLATE_MAX_FIELDS];
+        for (index, planned) in entry.values[..entry.len as usize].iter().enumerate() {
+            values[index] = match *planned {
+                ParseTemplateValue::Inline(value) => value,
+                ParseTemplateValue::Array {
+                    values: elements,
+                    len,
+                } => {
+                    let mut array =
+                        construction_array::ConstructionArray::new(&mut batch, len as u32);
+                    for &element in &elements[..len as usize] {
+                        array.push(&mut batch, element);
+                    }
+                    JSValue::object_ptr(array.finish(&batch).cast())
+                }
+            };
+        }
+        let object = crate::object::object_from_json_fields_preinstalled(
+            &mut batch,
+            entry.keys_array,
+            entry.shape_id,
+            &values[..entry.len as usize],
+        );
+        JSValue::object_ptr(object.cast())
+    };
+    parse_scalar::clear_oversized_key_cache();
+    crate::gc::gc_schedule_tiny_parse_boundary_collection_if_pressure();
+    Some(result)
+}
+
+#[cfg(test)]
+pub(crate) fn test_parse_object_template_matches(
+    source: *const StringHeader,
+    source_len: usize,
+) -> bool {
+    PARSE_OBJECT_TEMPLATE.with(|cache| {
+        cache
+            .borrow()
+            .as_ref()
+            .is_some_and(|entry| entry.source == source && entry.source_len as usize == source_len)
+    })
 }
 
 pub(crate) const PARSE_SHAPE_CACHE_CAP: usize = 256;
@@ -381,11 +699,25 @@ pub(crate) fn cached_parse_key_ptr(key_bytes: &[u8]) -> *const StringHeader {
     }
 
     let ptr = allocate_parse_key(key_bytes);
-    PARSE_KEY_CACHE.with(|c| {
-        c.borrow_mut().insert(key_bytes.to_vec(), ptr);
-    });
+    cache_parse_key(key_bytes.to_vec(), ptr);
     remember_parse_key_ring(ptr);
     ptr
+}
+
+#[inline]
+pub(crate) fn cache_parse_key(key: Vec<u8>, ptr: *const StringHeader) {
+    PARSE_KEY_CACHE.with(|c| {
+        let mut cache = c.borrow_mut();
+        cache.insert(key, ptr);
+        if cache.len() > 4096 {
+            PARSE_KEY_CACHE_OVERSIZED.with(|oversized| {
+                if !oversized.replace(true) {
+                    PARSE_KEY_CACHE_OVERSIZED_THREADS
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            });
+        }
+    });
 }
 
 #[inline]
@@ -544,6 +876,35 @@ pub(crate) fn json_string_from_output_bytes(bytes: &[u8]) -> *mut StringHeader {
     }
 }
 
+/// Publish a completed JSON buffer whose bytes live in native Rust storage.
+///
+/// Large transient stringify results are individually sweepable leaves rather
+/// than old-generation arena residents. The source must not point into the GC
+/// heap: servicing accumulated output debt may collect before the destination
+/// allocation, while the caller's `String`/`Vec` remains stable.
+#[inline]
+pub(crate) fn json_string_from_native_output_bytes(bytes: &[u8]) -> *mut StringHeader {
+    let len = bytes.len() as u32;
+    if len < crate::string::JSON_MALLOC_OUTPUT_THRESHOLD {
+        return json_string_from_output_bytes(bytes);
+    }
+
+    let utf16_len = if bytes.is_ascii() {
+        len
+    } else {
+        crate::string::compute_utf16_len(bytes.as_ptr(), len)
+    };
+    stringify_flat::service_json_output_sweep_boundary();
+    let (ptr, data) = crate::string::json_output_storage_alloc(len);
+    unsafe {
+        crate::string::init_string_header(ptr, utf16_len, len, len, 0, 0);
+        // GC_STORE_AUDIT(POINTER_FREE): completed JSON payload bytes.
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), data, len as usize);
+    }
+    stringify_flat::note_completed_malloc_json_output(len);
+    ptr
+}
+
 /// Receipt for a pushed shape-cache frame. Consumed by `restore_shape_cache`.
 ///
 /// It is not `Copy` and carries a `Drop` that pops the frame, so a JS exception
@@ -664,6 +1025,36 @@ pub fn scan_parse_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
             }
         }
     });
+    PARSE_STRING_CACHE.with(|cache| {
+        if let Some(entry) = cache.borrow_mut().as_mut() {
+            visitor.visit_tagged_raw_const_ptr_slot(&mut entry.source, crate::value::STRING_TAG);
+            visitor.visit_tagged_raw_const_ptr_slot(&mut entry.value, crate::value::STRING_TAG);
+        }
+    });
+    PARSE_OBJECT_TEMPLATE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let Some(entry) = cache.as_mut() else {
+            return;
+        };
+        visitor.visit_tagged_raw_const_ptr_slot(&mut entry.source, crate::value::STRING_TAG);
+        visitor.visit_raw_mut_ptr_slot(&mut entry.keys_array);
+        for value in &mut entry.values[..entry.len as usize] {
+            match value {
+                ParseTemplateValue::Inline(value) => {
+                    let mut bits = value.bits();
+                    visitor.visit_nanbox_u64_slot(&mut bits);
+                    *value = JSValue::from_bits(bits);
+                }
+                ParseTemplateValue::Array { values, len } => {
+                    for value in &mut values[..*len as usize] {
+                        let mut bits = value.bits();
+                        visitor.visit_nanbox_u64_slot(&mut bits);
+                        *value = JSValue::from_bits(bits);
+                    }
+                }
+            }
+        }
+    });
     // #7268: the STRINGIFY-side shape cache keys every template on a raw
     // `ArrayHeader*` and reads the property-name strings back out of it. Its
     // doc comment used to claim no GC could run over the user object graph
@@ -768,9 +1159,10 @@ pub(crate) fn test_stringify_shape_cache_keys() -> Vec<usize> {
 #[cfg(test)]
 pub(crate) fn test_clear_parse_roots() {
     PARSE_ROOTS.with(|r| r.borrow_mut().clear());
-    PARSE_KEY_CACHE.with(|c| c.borrow_mut().clear());
-    PARSE_KEY_RING.with(|ring| ring.borrow_mut().clear());
+    parse_scalar::clear_key_cache();
     PARSE_SHAPE_CACHE.with(|cache| cache.borrow_mut().clear());
+    PARSE_STRING_CACHE.with(|cache| *cache.borrow_mut() = None);
+    PARSE_OBJECT_TEMPLATE.with(|cache| *cache.borrow_mut() = None);
     // #7268: the stringify-side cache is a GC root now, so a template left
     // behind by an earlier test on this thread would hand the next test's
     // collector a pointer into an arena that no longer exists.

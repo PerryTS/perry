@@ -55,7 +55,7 @@ pub(crate) unsafe fn test_json_parse_direct(text_ptr: *const StringHeader) -> JS
 
     crate::gc::gc_suppress();
     let text_root = parse_root_push(JSValue::string_ptr(text_ptr as *mut StringHeader));
-    let mut parser = DirectParser::new_batched(bytes);
+    let mut parser = DirectParser::new_batched_from_string(bytes, text_ptr);
     let result = parser.parse_value();
     let _ = parser.finish();
     parse_root_push(result);
@@ -94,8 +94,15 @@ fn throw_range_error(message: &str) -> ! {
 /// codegen actually calls was one of the other two.
 fn requires_iterative_parse(bytes: &[u8]) -> bool {
     // Every nesting level requires an opening byte, even in malformed input.
-    // Keep the small-input proof here so the large scanner's body is unchanged.
+    // A scalar root is parsed and then `finish` rejects any second token, so
+    // bytes after it can never recurse. Keep both cheap proofs here so large
+    // string roots do not pay a complete nesting scan.
     bytes.len() > crate::json::parser::MAX_RECURSIVE_NESTING_DEPTH
+        && bytes
+            .iter()
+            .copied()
+            .find(|b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
+            .is_some_and(|b| matches!(b, b'{' | b'['))
         && crate::json::parser::nesting_depth_exceeds(
             bytes,
             crate::json::parser::MAX_RECURSIVE_NESTING_DEPTH,
@@ -138,6 +145,7 @@ unsafe fn try_parse_deep_iterative(text_ptr: *const StringHeader, len: usize) ->
         len,
         |tape_entries| {
             crate::gc::gc_collect_pending_suppressed_parse();
+            super::stringify_flat::service_json_output_sweep_boundary();
             crate::gc::gc_check_trigger();
             let gc_allocation = crate::gc::JsonParseAllocation::begin(len);
             crate::gc::gc_suppress();
@@ -163,14 +171,7 @@ unsafe fn try_parse_deep_iterative(text_ptr: *const StringHeader, len: usize) ->
     .flatten();
     parse_root_restore(text_root);
 
-    PARSE_KEY_CACHE.with(|cell| {
-        let cache = cell.borrow();
-        if cache.len() > 4096 {
-            drop(cache);
-            cell.borrow_mut().clear();
-            clear_parse_key_ring();
-        }
-    });
+    super::parse_scalar::clear_oversized_key_cache();
 
     result
 }
@@ -189,6 +190,9 @@ pub unsafe fn js_json_parse_result(text_ptr: *const StringHeader) -> Result<JSVa
     let data_ptr = crate::string::string_data(text_ptr);
     if len == 0 {
         return Err(syntax_error_value("Unexpected end of JSON input"));
+    }
+    if len == 2 && *data_ptr == b'{' && *data_ptr.add(1) == b'}' {
+        return Ok(super::parse_empty::allocate_empty_object());
     }
     if matches!(*data_ptr, b'{' | b'[') {
         return parse_result_slow(text_ptr, len);
@@ -221,6 +225,9 @@ unsafe fn parse_result_slow(text_ptr: *const StringHeader, len: usize) -> Result
     // whose function-wide protection would cross the collection points below.
     let data_ptr = (text_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
     let bytes = std::slice::from_raw_parts(data_ptr, len);
+    if let Some(value) = try_reuse_parse_object_template(text_ptr, len) {
+        return Ok(value);
+    }
     if super::parse_empty::is_empty_object(bytes) {
         return Ok(super::parse_empty::allocate_empty_object());
     }
@@ -236,7 +243,7 @@ unsafe fn parse_result_slow(text_ptr: *const StringHeader, len: usize) -> Result
             }
         }
     }
-    if requires_iterative_parse(bytes) {
+    if !cached_parse_source_is_direct(text_ptr, len) && requires_iterative_parse(bytes) {
         if exceeds_iterative_budget(bytes) {
             return Err(range_error_value(&iterative_budget_message()));
         }
@@ -253,6 +260,7 @@ unsafe fn parse_result_slow(text_ptr: *const StringHeader, len: usize) -> Result
     let text_root = parse_root_push(JSValue::string_ptr(text_ptr as *mut StringHeader));
 
     crate::gc::gc_collect_pending_suppressed_parse();
+    super::stringify_flat::service_json_output_sweep_boundary();
     crate::gc::gc_check_trigger();
     let gc_allocation = crate::gc::JsonParseAllocation::begin(len);
     crate::gc::gc_suppress();
@@ -268,9 +276,14 @@ unsafe fn parse_result_slow(text_ptr: *const StringHeader, len: usize) -> Result
         // Canonical payload accessor, not an open-coded header offset.
         std::slice::from_raw_parts(crate::string::string_data(hdr), len)
     };
-    let mut parser = DirectParser::new_batched(bytes);
+    let source = parse_root_get(text_root).as_string_ptr();
+    let mut parser = DirectParser::new_batched_from_string(bytes, source);
     let result = parser.parse_value();
     let parse_ok = parser.finish();
+    if parse_ok {
+        validate_cached_parse_source(source, len);
+        remember_parse_object_template(source, len, result);
+    }
     parse_root_push(result);
     crate::gc::gc_unsuppress();
     crate::gc::gc_bump_json_malloc_trigger_deferred();
@@ -278,14 +291,7 @@ unsafe fn parse_result_slow(text_ptr: *const StringHeader, len: usize) -> Result
     gc_allocation.finish();
     parse_root_restore(text_root);
 
-    PARSE_KEY_CACHE.with(|c| {
-        let cache = c.borrow();
-        if cache.len() > 4096 {
-            drop(cache);
-            c.borrow_mut().clear();
-            clear_parse_key_ring();
-        }
-    });
+    super::parse_scalar::clear_oversized_key_cache();
 
     if !parse_ok {
         return Err(syntax_error_value("JSON parse error: malformed input"));
@@ -343,6 +349,9 @@ pub unsafe extern "C" fn js_json_parse(text_ptr: *const StringHeader) -> JSValue
     if len == 0 {
         throw_syntax_error("Unexpected end of JSON input");
     }
+    if len == 2 && *data_ptr == b'{' && *data_ptr.add(1) == b'}' {
+        return super::parse_empty::allocate_empty_object();
+    }
     if matches!(*data_ptr, b'{' | b'[') {
         return parse_slow(text_ptr, len);
     }
@@ -367,6 +376,9 @@ unsafe fn parse_noncontainer(text_ptr: *const StringHeader, len: usize) -> JSVal
 unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
     let data_ptr = (text_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
     let bytes = std::slice::from_raw_parts(data_ptr, len);
+    if let Some(value) = try_reuse_parse_object_template(text_ptr, len) {
+        return value;
+    }
     if super::parse_empty::is_empty_object(bytes) {
         return super::parse_empty::allocate_empty_object();
     }
@@ -382,7 +394,7 @@ unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
             }
         }
     }
-    if requires_iterative_parse(bytes) {
+    if !cached_parse_source_is_direct(text_ptr, len) && requires_iterative_parse(bytes) {
         if exceeds_iterative_budget(bytes) {
             throw_range_error(&iterative_budget_message());
         }
@@ -488,6 +500,7 @@ unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
     // already moved away from — so re-deriving from that slot returns the same
     // stale pointer and fixes nothing. Rooting first means the collector
     // rewrites the slot, and the re-read yields the post-move payload.
+    super::stringify_flat::service_json_output_sweep_boundary();
     crate::gc::gc_check_trigger();
 
     // Suppress GC for the duration of the parse. Parse is synchronous and
@@ -504,9 +517,14 @@ unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
         std::slice::from_raw_parts(crate::string::string_data(hdr), len)
     };
 
-    let mut parser = DirectParser::new_batched(bytes);
+    let source = parse_root_get(text_root).as_string_ptr();
+    let mut parser = DirectParser::new_batched_from_string(bytes, source);
     let result = parser.parse_value();
     let parse_ok = parser.finish();
+    if parse_ok {
+        validate_cached_parse_source(source, len);
+        remember_parse_object_template(source, len, result);
+    }
     parse_root_push(result);
 
     // Complete construction and record debt without collecting the result
@@ -522,14 +540,7 @@ unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
     // strings as GC roots so they survive collection. This saves ~10k
     // gc_malloc calls per repeated parse of homogeneous JSON (same keys).
     // Cap at 4096 entries to bound memory for varied-schema workloads.
-    PARSE_KEY_CACHE.with(|c| {
-        let cache = c.borrow();
-        if cache.len() > 4096 {
-            drop(cache);
-            c.borrow_mut().clear();
-            clear_parse_key_ring();
-        }
-    });
+    super::parse_scalar::clear_oversized_key_cache();
 
     if !parse_ok {
         throw_syntax_error("JSON parse error: malformed input");
@@ -594,6 +605,7 @@ unsafe fn try_parse_via_tape(text_root: usize, len: usize) -> Option<JSValue> {
         len,
         |tape_entries| {
             crate::gc::gc_collect_pending_suppressed_parse();
+            super::stringify_flat::service_json_output_sweep_boundary();
             crate::gc::gc_check_trigger();
             let gc_allocation = crate::gc::JsonParseAllocation::begin(len);
             crate::gc::gc_suppress();
@@ -621,14 +633,7 @@ unsafe fn try_parse_via_tape(text_root: usize, len: usize) -> Option<JSValue> {
             crate::gc::gc_bump_json_malloc_trigger_deferred();
             gc_allocation.finish();
 
-            PARSE_KEY_CACHE.with(|c| {
-                let cache = c.borrow();
-                if cache.len() > 4096 {
-                    drop(cache);
-                    c.borrow_mut().clear();
-                    clear_parse_key_ring();
-                }
-            });
+            super::parse_scalar::clear_oversized_key_cache();
             parse_root_get(result_root)
         },
     )
@@ -702,6 +707,7 @@ pub unsafe extern "C" fn js_json_parse_typed_array(
     // root before the collection point and re-derive the source bytes after it.
     let text_root = parse_root_push(JSValue::string_ptr(text_ptr as *mut StringHeader));
     crate::gc::gc_collect_pending_suppressed_parse();
+    super::stringify_flat::service_json_output_sweep_boundary();
     crate::gc::gc_check_trigger();
     let gc_allocation = crate::gc::JsonParseAllocation::begin(len);
     crate::gc::gc_suppress();
@@ -737,14 +743,7 @@ pub unsafe extern "C" fn js_json_parse_typed_array(
     gc_allocation.finish();
     parse_root_restore(text_root);
 
-    PARSE_KEY_CACHE.with(|c| {
-        let cache = c.borrow();
-        if cache.len() > 4096 {
-            drop(cache);
-            c.borrow_mut().clear();
-            clear_parse_key_ring();
-        }
-    });
+    super::parse_scalar::clear_oversized_key_cache();
 
     if !parse_ok {
         throw_syntax_error("JSON parse error: malformed input");
@@ -789,9 +788,7 @@ pub(crate) unsafe fn build_shape_hint(
                 key_bytes.as_ptr(),
                 key_bytes.len() as u32,
             );
-            PARSE_KEY_CACHE.with(|c| {
-                c.borrow_mut().insert(key_bytes.to_vec(), p);
-            });
+            cache_parse_key(key_bytes.to_vec(), p);
             p
         };
         expected_keys.push(ptr);

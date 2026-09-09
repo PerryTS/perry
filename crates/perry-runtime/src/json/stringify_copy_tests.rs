@@ -26,6 +26,20 @@ fn json_piece_copy_preserves_bytes_and_sentinels_at_every_short_alignment() {
     }
 }
 
+#[test]
+fn json_short_string_append_matches_standard_push() {
+    for len in 0..=64 {
+        let text: String = (0..len)
+            .map(|i| char::from(b'a' + (i % 26) as u8))
+            .collect();
+        let mut actual = String::from("prefix:");
+        let mut expected = actual.clone();
+        push_str(&mut actual, &text);
+        expected.push_str(&text);
+        assert_eq!(actual, expected);
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn json_piece_copy_neither_reads_nor_writes_past_guard_pages() {

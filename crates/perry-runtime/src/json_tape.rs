@@ -805,16 +805,12 @@ unsafe fn decode_key_to_interned_string(
                     owned.as_ptr(),
                     owned.len() as u32,
                 );
-                crate::json::PARSE_KEY_CACHE.with(|c| {
-                    c.borrow_mut().insert(owned, p);
-                });
+                crate::json::cache_parse_key(owned, p);
                 return p;
             }
             let p =
                 crate::string::js_string_from_bytes_longlived(slice.as_ptr(), slice.len() as u32);
-            crate::json::PARSE_KEY_CACHE.with(|c| {
-                c.borrow_mut().insert(slice.to_vec(), p);
-            });
+            crate::json::cache_parse_key(slice.to_vec(), p);
             return p;
         }
         Some(ParsedStr::Owned(v)) => v,
@@ -830,9 +826,7 @@ unsafe fn decode_key_to_interned_string(
     }
     let p =
         crate::string::js_string_from_bytes_longlived(key_bytes.as_ptr(), key_bytes.len() as u32);
-    crate::json::PARSE_KEY_CACHE.with(|c| {
-        c.borrow_mut().insert(key_bytes, p);
-    });
+    crate::json::cache_parse_key(key_bytes, p);
     p
 }
 

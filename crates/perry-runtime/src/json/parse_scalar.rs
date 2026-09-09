@@ -65,14 +65,29 @@ pub(super) fn try_parse_scalar(mut bytes: &[u8]) -> Option<JSValue> {
 /// This reads only Rust-owned metadata and does not allocate a managed value.
 #[inline(always)]
 pub(super) fn clear_oversized_key_cache() {
-    if super::PARSE_KEY_CACHE.with(|c| c.borrow().len() > 4096) {
+    if super::PARSE_KEY_CACHE_OVERSIZED_THREADS.load(std::sync::atomic::Ordering::Relaxed) == 0 {
+        return;
+    }
+    clear_oversized_key_cache_slow();
+}
+
+#[cold]
+#[inline(never)]
+fn clear_oversized_key_cache_slow() {
+    if super::PARSE_KEY_CACHE_OVERSIZED.with(std::cell::Cell::get) {
         clear_key_cache();
     }
 }
 
 #[cold]
 #[inline(never)]
-fn clear_key_cache() {
+pub(super) fn clear_key_cache() {
+    super::PARSE_KEY_CACHE_OVERSIZED.with(|oversized| {
+        if oversized.replace(false) {
+            super::PARSE_KEY_CACHE_OVERSIZED_THREADS
+                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    });
     super::PARSE_KEY_CACHE.with(|c| c.borrow_mut().clear());
     super::clear_parse_key_ring();
 }

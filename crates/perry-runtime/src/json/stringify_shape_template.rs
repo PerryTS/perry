@@ -161,6 +161,10 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
     if keys_arr.is_null() {
         return None;
     }
+    let shape_fields = (*keys_arr).length;
+    if shape_fields == 0 || shape_fields > 32 {
+        return None;
+    }
     // #2438: array-index keys must enumerate first in ascending numeric order,
     // which the insertion-ordered prefix template can't express. Bail to the
     // generic slow path (`stringify_object_inner`), which reorders per spec.
@@ -190,11 +194,6 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
     // and `keys_len` already stops at the last real key. Slots at or above the
     // inline limit are read through `template_field_bits`, which routes them to
     // `js_object_get_field`'s overflow fallback.
-    let shape_fields = (*keys_arr).length;
-    if shape_fields == 0 || shape_fields > 32 {
-        return None;
-    }
-
     let keys_elements =
         (keys_arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
     let mut prefixes: Vec<String> = Vec::with_capacity(shape_fields as usize);

@@ -1565,7 +1565,7 @@ pub(super) fn growth_source_can_donate_dirty_pages(old_base: usize) -> bool {
 /// longlived is never swept individually and old is reclaimed only by
 /// full cycles that trace everything.
 #[inline]
-pub(super) fn remembered_child_needs_tracking(child_addr: usize) -> bool {
+pub(crate) fn remembered_child_needs_tracking(child_addr: usize) -> bool {
     match crate::arena::classify_heap_generation(child_addr) {
         crate::arena::HeapGeneration::Nursery => true,
         crate::arena::HeapGeneration::Old | crate::arena::HeapGeneration::Longlived => false,
