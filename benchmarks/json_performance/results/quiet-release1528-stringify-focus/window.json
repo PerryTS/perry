@@ -1,0 +1,34 @@
+{
+  "owner": "json-perf-46388-1788970536",
+  "load_before": [
+    1.51318359375,
+    1.80908203125,
+    1.85009765625
+  ],
+  "started_utc": "2026-09-09T16:15:36Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    "run_regression_focus.py",
+    "--worker",
+    ".work/release1528-r6/worker",
+    "--baseline-worker",
+    ".work/worker-merged-pr10022",
+    "--prior-worker",
+    ".work/integrated-r6/worker",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--filter",
+    "long_string_1m,unicode_1m",
+    "--results-dir",
+    "results/quiet-release1528-stringify-focus"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.6728515625,
+    1.81787109375,
+    1.84912109375
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-09T16:16:28Z"
+}

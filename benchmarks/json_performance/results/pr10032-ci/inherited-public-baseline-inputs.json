@@ -1,0 +1,15 @@
+{
+  "main_commit": "f2dc0358200c2e05a61867e6a10b9c0f9fd116fe",
+  "fingerprints": {
+    "source": {
+      "main": "9507434be47f7bb383c30810bdc5d66d9be65290da529f38b7473860ea98f75e",
+      "pr": "9507434be47f7bb383c30810bdc5d66d9be65290da529f38b7473860ea98f75e",
+      "identical": true
+    },
+    "harness": {
+      "main": "513dba8ff9eaf931edc8a5fc01a0093a1156c31b0b6c9cc1218f710405e315e0",
+      "pr": "513dba8ff9eaf931edc8a5fc01a0093a1156c31b0b6c9cc1218f710405e315e0",
+      "identical": true
+    }
+  }
+}

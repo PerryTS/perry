@@ -1,0 +1,26 @@
+{
+  "quiet_gate_passed": true,
+  "screening_only_not_significance": true,
+  "cpu_ratio_threshold": 1.025,
+  "peak_rss_delta_mib_threshold": 0.75,
+  "screening_flags": [
+    {
+      "fixture": "records_array_1m",
+      "mode": "select",
+      "cpu_ratio": 1.0522984969675662,
+      "peak_rss_delta_mib": 0.09375
+    },
+    {
+      "fixture": "records_object_1m",
+      "mode": "select",
+      "cpu_ratio": 1.0547200579815184,
+      "peak_rss_delta_mib": 0.078125
+    },
+    {
+      "fixture": "numbers_1m",
+      "mode": "select",
+      "cpu_ratio": 1.0367337706401267,
+      "peak_rss_delta_mib": 0.09375
+    }
+  ]
+}

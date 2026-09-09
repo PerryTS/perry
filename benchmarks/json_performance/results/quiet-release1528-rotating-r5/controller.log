@@ -1,0 +1,114 @@
+VERIFY null rotating all engines passed
+VERIFY null same all engines passed
+VERIFY null select all engines passed
+TIMING null rotating 2000000 calls per engine
+TIMING null same 2000000 calls per engine
+TIMING null select 2000000 calls per engine
+VERIFY string_a rotating all engines passed
+VERIFY string_a same all engines passed
+VERIFY string_a select all engines passed
+TIMING string_a rotating 2000000 calls per engine
+TIMING string_a same 2000000 calls per engine
+TIMING string_a select 2000000 calls per engine
+VERIFY empty_object rotating all engines passed
+VERIFY empty_object same all engines passed
+VERIFY empty_object select all engines passed
+TIMING empty_object rotating 2000000 calls per engine
+TIMING empty_object same 2000000 calls per engine
+TIMING empty_object select 2000000 calls per engine
+VERIFY tiny_object rotating all engines passed
+VERIFY tiny_object same all engines passed
+VERIFY tiny_object select all engines passed
+TIMING tiny_object rotating 2000000 calls per engine
+TIMING tiny_object same 2000000 calls per engine
+TIMING tiny_object select 2000000 calls per engine
+VERIFY small_record rotating all engines passed
+VERIFY small_record same all engines passed
+VERIFY small_record select all engines passed
+TIMING small_record rotating 575815 calls per engine
+TIMING small_record same 1538461 calls per engine
+TIMING small_record select 2000000 calls per engine
+VERIFY object_1k rotating all engines passed
+VERIFY object_1k same all engines passed
+VERIFY object_1k select all engines passed
+TIMING object_1k rotating 551470 calls per engine
+TIMING object_1k same 1825928 calls per engine
+TIMING object_1k select 2000000 calls per engine
+VERIFY records_array_16k rotating all engines passed
+VERIFY records_array_16k same all engines passed
+VERIFY records_array_16k select all engines passed
+TIMING records_array_16k rotating 8275 calls per engine
+TIMING records_array_16k same 8275 calls per engine
+TIMING records_array_16k select 2000000 calls per engine
+VERIFY records_array_1m rotating all engines passed
+VERIFY records_array_1m same all engines passed
+VERIFY records_array_1m select all engines passed
+TIMING records_array_1m rotating 133 calls per engine
+TIMING records_array_1m same 133 calls per engine
+TIMING records_array_1m select 2000000 calls per engine
+VERIFY records_object_1m rotating all engines passed
+VERIFY records_object_1m same all engines passed
+VERIFY records_object_1m select all engines passed
+TIMING records_object_1m rotating 70 calls per engine
+TIMING records_object_1m same 71 calls per engine
+TIMING records_object_1m select 2000000 calls per engine
+VERIFY records_array_8m rotating all engines passed
+VERIFY records_array_8m same all engines passed
+VERIFY records_array_8m select all engines passed
+TIMING records_array_8m rotating 14 calls per engine
+TIMING records_array_8m same 14 calls per engine
+TIMING records_array_8m select 2000000 calls per engine
+VERIFY records_object_8m rotating all engines passed
+VERIFY records_object_8m same all engines passed
+VERIFY records_object_8m select all engines passed
+TIMING records_object_8m rotating 9 calls per engine
+TIMING records_object_8m same 9 calls per engine
+TIMING records_object_8m select 2000000 calls per engine
+VERIFY records_array_20m rotating all engines passed
+VERIFY records_array_20m same all engines passed
+VERIFY records_array_20m select all engines passed
+TIMING records_array_20m rotating 8 calls per engine
+TIMING records_array_20m same 8 calls per engine
+TIMING records_array_20m select 712081 calls per engine
+VERIFY records_object_20m rotating all engines passed
+VERIFY records_object_20m same all engines passed
+VERIFY records_object_20m select all engines passed
+TIMING records_object_20m rotating 8 calls per engine
+TIMING records_object_20m same 8 calls per engine
+TIMING records_object_20m select 692520 calls per engine
+VERIFY numbers_1m rotating all engines passed
+VERIFY numbers_1m same all engines passed
+VERIFY numbers_1m select all engines passed
+TIMING numbers_1m rotating 83 calls per engine
+TIMING numbers_1m same 83 calls per engine
+TIMING numbers_1m select 2000000 calls per engine
+VERIFY long_string_1m rotating all engines passed
+VERIFY long_string_1m same all engines passed
+VERIFY long_string_1m select all engines passed
+TIMING long_string_1m rotating 1298 calls per engine
+TIMING long_string_1m same 3129 calls per engine
+TIMING long_string_1m select 2000000 calls per engine
+VERIFY escaped_1m rotating all engines passed
+VERIFY escaped_1m same all engines passed
+VERIFY escaped_1m select all engines passed
+TIMING escaped_1m rotating 158 calls per engine
+TIMING escaped_1m same 158 calls per engine
+TIMING escaped_1m select 2000000 calls per engine
+VERIFY unicode_1m rotating all engines passed
+VERIFY unicode_1m same all engines passed
+VERIFY unicode_1m select all engines passed
+TIMING unicode_1m rotating 1374 calls per engine
+TIMING unicode_1m same 2769 calls per engine
+TIMING unicode_1m select 2000000 calls per engine
+VERIFY wide_1m rotating all engines passed
+VERIFY wide_1m same all engines passed
+VERIFY wide_1m select all engines passed
+TIMING wide_1m rotating 64 calls per engine
+TIMING wide_1m same 64 calls per engine
+TIMING wide_1m select 2000000 calls per engine
+VERIFY heterogeneous_1m rotating all engines passed
+VERIFY heterogeneous_1m same all engines passed
+VERIFY heterogeneous_1m select all engines passed
+TIMING heterogeneous_1m rotating 88 calls per engine
+TIMING heterogeneous_1m same 89 calls per engine
+TIMING heterogeneous_1m select 2000000 calls per engine

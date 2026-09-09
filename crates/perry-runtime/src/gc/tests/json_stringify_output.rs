@@ -168,15 +168,14 @@ fn exercise_large_parse_output_debt(use_result_entry: bool, block_boundary: bool
 
     for iteration in 0..iterations {
         let id = iteration & 1;
-        let source = sources[id].get_raw_const_ptr::<crate::StringHeader>();
         let before_call = gc_collection_count();
-        let value = unsafe {
+        let value = sources[id].with_const_ptr(|source| unsafe {
             if use_result_entry {
                 crate::json::js_json_parse_result(source).unwrap()
             } else {
                 crate::json::js_json_parse(source)
             }
-        };
+        });
         assert_eq!(
             crate::object::js_object_get_field(value.as_pointer(), 0).as_number(),
             id as f64,
