@@ -470,6 +470,12 @@
     },
     {
       "file": "crates/perry-runtime/src/json/stringify_record_output.rs",
+      "name": "KEY_PREFIX_CACHE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Bounded native key-prefix bytes and scalar shape/offset metadata. KeyPrefixPlan.receiver is retained only as an equality token for the semantic proof and is never dereferenced; GC movement changes it into a miss. No managed allocation is reachable from this TLS cache."
+    },
+    {
+      "file": "crates/perry-runtime/src/json/stringify_record_output.rs",
       "name": "RECEIVER_PROOF_MISSES",
       "verdict": "test_only",
       "why": "#[cfg(test)] counter for cached receiver-proof misses; absent from production builds and stores only a tally."
@@ -3958,10 +3964,6 @@
     {
       "file": "crates/perry-runtime/src/json/stringify_flat.rs",
       "name": "JSON_OUTPUT_BYTES_SINCE_SWEEP"
-    },
-    {
-      "file": "crates/perry-runtime/src/json/stringify_record_output.rs",
-      "name": "KEY_PREFIX_CACHE"
     },
     {
       "file": "crates/perry-runtime/src/json/stringify_tojson_probe.rs",
