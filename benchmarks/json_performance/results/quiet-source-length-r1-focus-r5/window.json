@@ -1,0 +1,38 @@
+{
+  "owner": "json-perf-46657-1788972146",
+  "load_before": [
+    1.23095703125,
+    1.33984375,
+    1.45361328125
+  ],
+  "started_utc": "2026-09-09T16:42:26Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    "run_rotating.py",
+    "--worker",
+    ".work/source-length-r1/rotating-worker",
+    "--baseline-worker",
+    ".work/release1528-r6/rotating-worker",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--bun",
+    "/Users/perry/.bun/bin/bun",
+    "--source-commit",
+    "b2111219c1a4353b05f35fc55d9305c55d2cb135",
+    "--filter",
+    "small_record,object_1k,long_string_1m,unicode_1m",
+    "--repeat",
+    "5",
+    "--results-dir",
+    "results/quiet-source-length-r1-focus-r5"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.5400390625,
+    1.38720703125,
+    1.45947265625
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-09T16:43:26Z"
+}

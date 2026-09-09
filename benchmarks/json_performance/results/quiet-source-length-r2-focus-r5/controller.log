@@ -1,0 +1,24 @@
+VERIFY small_record rotating all engines passed
+VERIFY small_record same all engines passed
+VERIFY small_record select all engines passed
+TIMING small_record rotating 579150 calls per engine
+TIMING small_record same 1538461 calls per engine
+TIMING small_record select 2000000 calls per engine
+VERIFY object_1k rotating all engines passed
+VERIFY object_1k same all engines passed
+VERIFY object_1k select all engines passed
+TIMING object_1k rotating 547445 calls per engine
+TIMING object_1k same 1822600 calls per engine
+TIMING object_1k select 2000000 calls per engine
+VERIFY long_string_1m rotating all engines passed
+VERIFY long_string_1m same all engines passed
+VERIFY long_string_1m select all engines passed
+TIMING long_string_1m rotating 1255 calls per engine
+TIMING long_string_1m same 3113 calls per engine
+TIMING long_string_1m select 2000000 calls per engine
+VERIFY unicode_1m rotating all engines passed
+VERIFY unicode_1m same all engines passed
+VERIFY unicode_1m select all engines passed
+TIMING unicode_1m rotating 1416 calls per engine
+TIMING unicode_1m same 2808 calls per engine
+TIMING unicode_1m select 2000000 calls per engine
