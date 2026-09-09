@@ -326,11 +326,11 @@ fn test_json_tape_small_record_batch_survives_copied_minor_before_cache_store() 
     let hdr_handle = scope.root_raw_mut_ptr(hdr);
     // Establish an ascending traversal before arming the completed-record
     // hook, so the second read must select the batch producer.
-    unsafe { crate::json_tape::lazy_get(hdr_handle.get_raw_mut_ptr(), 0) };
+    hdr_handle.with_mut_ptr(|hdr| unsafe { crate::json_tape::lazy_get(hdr, 0) });
     let hook = JsonTapeSafepointHookGuard::new(
         crate::json_tape::JsonTapeSafepoint::MaterializeObjectRooted,
     );
-    let value = unsafe { crate::json_tape::lazy_get(hdr_handle.get_raw_mut_ptr(), 1) };
+    let value = hdr_handle.with_mut_ptr(|hdr| unsafe { crate::json_tape::lazy_get(hdr, 1) });
     let original = hook.fired_ptr();
     assert_ne!(original, 0, "completed-record collection hook must run");
     assert_ne!(
@@ -339,7 +339,7 @@ fn test_json_tape_small_record_batch_survives_copied_minor_before_cache_store() 
         "the completed record must move before lazy_get publishes its cache slot"
     );
     let value_handle = scope.root_nanbox_u64(value.bits());
-    let again = unsafe { crate::json_tape::lazy_get(hdr_handle.get_raw_mut_ptr(), 1) };
+    let again = hdr_handle.with_mut_ptr(|hdr| unsafe { crate::json_tape::lazy_get(hdr, 1) });
     assert_eq!(again.bits(), value_handle.get_nanbox_u64());
     let output =
         unsafe { crate::json::js_json_stringify(f64::from_bits(value_handle.get_nanbox_u64()), 0) };

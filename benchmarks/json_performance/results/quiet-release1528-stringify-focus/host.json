@@ -1,0 +1,41 @@
+{
+  "started_utc": "2026-09-09T16:15:36Z",
+  "load_before": [
+    1.51318359375,
+    1.80908203125,
+    1.85009765625
+  ],
+  "cases": [
+    [
+      "long_string_1m",
+      "stringify",
+      32768,
+      8,
+      9
+    ],
+    [
+      "unicode_1m",
+      "stringify",
+      32768,
+      8,
+      9
+    ]
+  ],
+  "workers": {
+    "perry": "2e05fb0d33bd541c7c7019db4c89a915c2ea0fbb3d592db28fee203ed8f0a063",
+    "baseline": "641228aef444a8d10e0312db2580bb7eef7f87343a592029105bf6a72d8c941a",
+    "prior": "2024394862eb438b33403e8aa30115150a8d2ab955c71d819378f1b45195a7b5"
+  },
+  "sources": {
+    "run_regression_focus.py": "40d404690140c19ff339c44b56be0a3fb592914b710c6a2a45a877f033b8cb78",
+    "run_dispatch_focus.py": "e08b6a92d9135b27255b64bf46f94f03c5855e13f9ac1a3069d0f8bac8882aa6",
+    "worker.js": "55c11d12296f896212d6abd76bcf8d551d0590b0ad24b262018b7a707369a2f4"
+  },
+  "node_version": "v26.5.1",
+  "finished_utc": "2026-09-09T16:16:28Z",
+  "load_after": [
+    1.6728515625,
+    1.81787109375,
+    1.84912109375
+  ]
+}
