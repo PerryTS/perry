@@ -757,3 +757,71 @@ fn owned_tape_callback_transfers_storage_and_recovers_after_large_invalid_input(
     assert_eq!(owned[1].kind, KIND_NUMBER);
     assert_eq!(owned.last().unwrap().kind, KIND_ARR_END);
 }
+
+#[test]
+fn json_tape_depth_capture_counts_structural_and_empty_containers() {
+    let mut cases = vec![
+        (b"0".to_vec(), 0),
+        (b"[]".to_vec(), 1),
+        (br#"[{"x":[]}]"#.to_vec(), 3),
+        (br#"{"x":"[{}]\\\"[","y":{}}"#.to_vec(), 2),
+    ];
+    for depth in [31, 999, 1000, 1001, 2048] {
+        let mut input = Vec::new();
+        for level in 0..depth {
+            input.extend_from_slice(if level % 2 == 0 { b"[" } else { b"{\"x\":" });
+        }
+        input.push(b'0');
+        for level in (0..depth).rev() {
+            input.push(if level % 2 == 0 { b']' } else { b'}' });
+        }
+        cases.push((input, depth));
+    }
+    for (input, expected_depth) in cases {
+        let reference = build_tape(&input).expect("valid reference tape");
+        let data = input.as_ptr();
+        let len = input.len();
+        let captured = unsafe {
+            with_built_tape_depth_raw(data, len, |entries, depth| {
+                drop(input); // No source borrow or access survives into the callback.
+                assert_eq!(depth, expected_depth);
+                entries
+                    .iter()
+                    .map(|e| (e.kind, e.offset, e.link))
+                    .collect::<Vec<_>>()
+            })
+        }
+        .expect("valid depth-captured tape");
+        assert_eq!(
+            captured,
+            reference
+                .entries
+                .iter()
+                .map(|e| (e.kind, e.offset, e.link))
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn json_tape_depth_capture_refuses_budget_and_resets_after_failure() {
+    let input = vec![b'['; crate::json::MAX_ITERATIVE_NESTING_DEPTH + 1];
+    assert!(unsafe {
+        with_built_tape_depth_raw::<()>(input.as_ptr(), input.len(), |_, _| {
+            panic!("an over-budget prefix cannot reach materialization")
+        })
+    }
+    .is_none());
+    for input in [b"[01]".as_slice(), b"[{\"x\":]}", b"[0] trailing"] {
+        assert!(unsafe {
+            with_built_tape_depth_raw::<()>(input.as_ptr(), input.len(), |_, _| {
+                panic!("invalid grammar cannot reach materialization")
+            })
+        }
+        .is_none());
+    }
+    assert_eq!(
+        unsafe { with_built_tape_depth_raw(b"[[]]".as_ptr(), 4, |_, depth| depth) },
+        Some(2)
+    );
+}

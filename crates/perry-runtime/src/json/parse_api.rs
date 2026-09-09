@@ -300,6 +300,8 @@ unsafe fn parse_result_slow(text_ptr: *const StringHeader, len: usize) -> Result
     Ok(result)
 }
 
+const LAZY_MAX_BLOB_BYTES: usize = 16 * 1024 * 1024;
+
 /// JSON.parse(text) -> any
 ///
 /// Uses a direct recursive-descent parser that constructs Perry JSValues
@@ -324,7 +326,6 @@ unsafe fn parse_result_slow(text_ptr: *const StringHeader, len: usize) -> Result
 /// tree-build is faster end-to-end).
 pub(crate) fn tape_route_eligible(len: usize, bytes: &[u8]) -> bool {
     const LAZY_MIN_BLOB_BYTES: usize = 1024;
-    const LAZY_MAX_BLOB_BYTES: usize = 16 * 1024 * 1024;
     match tape_mode_from_env() {
         TapeMode::ForceOn => true,
         TapeMode::ForceOff => false,
@@ -394,25 +395,22 @@ unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
             }
         }
     }
-    if !cached_parse_source_is_direct(text_ptr, len) && requires_iterative_parse(bytes) {
-        if exceeds_iterative_budget(bytes) {
-            throw_range_error(&iterative_budget_message());
-        }
-        return match try_parse_deep_iterative(text_ptr, len) {
-            Some(value) => value,
-            None => throw_syntax_error("JSON parse error: malformed deep document"),
-        };
+    let use_tape = tape_route_eligible(len, bytes);
+    // The tape's explicit stack proves shallow/deep admission in its syntax
+    // pass. Keep the preflight for direct parses and forced oversized tapes:
+    // a huge over-budget input must fail before reserving its native tape.
+    let preflight_depth = !use_tape || len > LAZY_MAX_BLOB_BYTES;
+    if preflight_depth
+        && !cached_parse_source_is_direct(text_ptr, len)
+        && requires_iterative_parse(bytes)
+    {
+        return parse_deep_or_throw(text_ptr, len);
     }
 
     // Pending parse debt can evacuate the input before the later trigger.
     // Root once for both routes and derive every later borrow from this slot.
     let text_root = parse_root_push(JSValue::string_ptr(text_ptr as *mut StringHeader));
     crate::gc::gc_collect_pending_suppressed_parse();
-    let bytes = std::slice::from_raw_parts(
-        crate::string::string_data(parse_root_get(text_root).as_string_ptr()),
-        len,
-    );
-
     // Issue #179 Step 2 Phase 1 → default-on: tape-based lazy parse
     // is now the default for top-level arrays on blobs larger than
     // the size threshold. v0.5.209 runtime adaptive handling (walk
@@ -461,15 +459,21 @@ unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
     // Escape hatch via PERRY_JSON_TAPE=1 (force lazy regardless
     // of size, useful for testing) / =0 (force direct, useful as
     // a correctness fallback).
-    let use_tape = tape_route_eligible(len, bytes);
     if use_tape {
         if let Some(result) = try_parse_via_tape(text_root, len) {
             parse_root_restore(text_root);
             return result;
         }
-        // Malformed input or non-array top-level — fall through to
-        // direct parser, which has the full error-reporting path
-        // and handles non-array roots.
+        // A malformed or over-budget tape must not enter recursion without
+        // the old depth check. Re-derive the source after the entry collection.
+        let text = parse_root_get(text_root).as_string_ptr();
+        let bytes = std::slice::from_raw_parts(crate::string::string_data(text), len);
+        if !preflight_depth && requires_iterative_parse(bytes) {
+            // No collection occurs between releasing this root and the deep
+            // helper installing its own source root.
+            parse_root_restore(text_root);
+            return parse_deep_or_throw(text, len);
+        }
     }
 
     // #64 follow-up: opportunistic pre-parse cleanup. When parse runs in a
@@ -549,6 +553,19 @@ unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
     result
 }
 
+// Shared cold fallback for preflight admission and rejected tape builds.
+#[cold]
+unsafe fn parse_deep_or_throw(text: *const StringHeader, len: usize) -> JSValue {
+    let bytes = std::slice::from_raw_parts(crate::string::string_data(text), len);
+    if exceeds_iterative_budget(bytes) {
+        throw_range_error(&iterative_budget_message());
+    }
+    match try_parse_deep_iterative(text, len) {
+        Some(value) => value,
+        None => throw_syntax_error("JSON parse error: malformed deep document"),
+    }
+}
+
 /// v0.5.210: tape-mode selector. Cached at first JSON.parse so we
 /// pay the env-var lookup once per process, not once per parse.
 #[derive(Copy, Clone)]
@@ -600,10 +617,10 @@ unsafe fn try_parse_via_tape(text_root: usize, len: usize) -> Option<JSValue> {
     // The caller owns the input root. Build the native tape before collecting,
     // as in the original allocation order, but end the input borrow first.
     let text_ptr = parse_root_get(text_root).as_string_ptr();
-    crate::json_tape::with_built_tape_mut_raw(
+    crate::json_tape::with_built_tape_depth_raw(
         crate::string::string_data(text_ptr),
         len,
-        |tape_entries| {
+        |tape_entries, max_depth| {
             crate::gc::gc_collect_pending_suppressed_parse();
             super::stringify_flat::service_json_output_sweep_boundary();
             crate::gc::gc_check_trigger();
@@ -618,25 +635,36 @@ unsafe fn try_parse_via_tape(text_root: usize, len: usize) -> Option<JSValue> {
             // dominates `bench_json_roundtrip` and most realistic JSON.parse
             // workloads). Extending to top-level objects in a follow-up is a
             // straightforward mirror of the same construction.
-            let result = if !tape_entries.is_empty()
+            let deep = max_depth > crate::json::parser::MAX_RECURSIVE_NESTING_DEPTH;
+            let result = if deep {
+                crate::json_tape::materialize_iterative(tape_entries, bytes)
+            } else if !tape_entries.is_empty()
                 && tape_entries[0].kind == crate::json_tape::KIND_ARR_START
             {
                 let len = crate::json_tape::count_array_length(tape_entries, 0);
                 let hdr =
                     crate::json_tape::alloc_lazy_array_from_scratch(tape_entries, 0, len, text_ptr);
-                JSValue::object_ptr(hdr as *mut u8)
+                Some(JSValue::object_ptr(hdr as *mut u8))
             } else {
-                crate::json_tape::materialize_from_idx(tape_entries, bytes, 0)
+                Some(crate::json_tape::materialize_from_idx(
+                    tape_entries,
+                    bytes,
+                    0,
+                ))
             };
-            let result_root = parse_root_push(result);
+            let result_root = result.map(parse_root_push);
             crate::gc::gc_unsuppress();
             super::stringify_flat::finish_parse_gc_accounting();
+            if deep {
+                crate::gc::gc_schedule_parse_boundary_collection_if_pressure();
+            }
             gc_allocation.finish();
 
             super::parse_scalar::clear_oversized_key_cache();
-            parse_root_get(result_root)
+            result_root.map(parse_root_get)
         },
     )
+    .flatten()
 }
 
 // ─── JSON.parse<T[]>: schema-directed typed parse ─────────────────────────────
@@ -826,3 +854,7 @@ pub(crate) fn shape_hash(bytes: &[u8]) -> u64 {
     // Nonzero class_id (0 is reserved for plain objects).
     h | 0x8000_0000_0000_0000
 }
+
+#[cfg(test)]
+#[path = "parse_tape_depth_tests.rs"]
+mod tape_depth_tests;
