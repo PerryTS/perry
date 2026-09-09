@@ -1,0 +1,3 @@
+GC store-site inventory passed (1892 files scanned, 419 audited sites, 99 allowlisted).
+Claim verification: 12 codegen barrier sites bound to 8 IR-witnessed stems (apush, class_field_set, ctor_prologue, idxset.inbounds, idxset.recv_captured, idxset.recv_global, idxset.recv_prop, put.pic); 115 runtime BARRIERED/EXTERNAL_BARRIERED markers source-verified against 29 barrier primitives + 15 chain-verified helpers (granularity: enclosing function).
+UNVERIFIED (human-audited only, by class): INIT=71, POINTER_FREE=160, ROOT=53, STACK=15. These classes have no machine-checkable evidence; do not cite this gate as verifying them.
