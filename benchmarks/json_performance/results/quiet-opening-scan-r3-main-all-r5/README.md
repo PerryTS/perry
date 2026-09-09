@@ -15,8 +15,9 @@ No timing row has separated slower candidate/reference sample ranges. Empty,
 tiny, small and 1 KB object parse medians improve 2.11%, 1.47%, 1.10% and 1.22%.
 However, sparse 13 KB reads are 0.50% slower and heterogeneous 1 MB parsing is
 0.23% slower by median, with overlapping samples. Large ASCII/Unicode stringify
-medians rise 5.43%/3.92% in variable, overlapping samples. Those observations
-are retained for focused replay; overlapping ranges alone do not prove equality.
+medians rise 5.43%/3.92% in variable, overlapping samples. The [longer replay](../quiet-opening-scan-r3-main-regression-r9/README.md)
+retains positive sparse/heterogeneous and variable large-string medians;
+overlapping ranges alone do not prove equality.
 Maximum median peak/current RSS increases are 192/144 KiB.
 
 [Complete CPU/RSS comparisons](comparison.md), [Node/Bun target rows](parity.md),

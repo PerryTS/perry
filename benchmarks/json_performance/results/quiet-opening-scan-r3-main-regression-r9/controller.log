@@ -1,0 +1,7 @@
+FINISHED records_array_16k sparse 20000
+FINISHED heterogeneous_1m parse 512
+FINISHED records_array_1m parse 512
+FINISHED wide_1m parse 128
+FINISHED small_record stringify 5000000
+FINISHED long_string_1m stringify 32768
+FINISHED unicode_1m stringify 32768

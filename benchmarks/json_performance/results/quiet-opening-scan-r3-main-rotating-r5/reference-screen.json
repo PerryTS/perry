@@ -1,0 +1,1256 @@
+[
+  {
+    "fixture": "null",
+    "mode": "rotating",
+    "cpu_change_percent": -1.8892653922383373,
+    "direction": "separated faster",
+    "candidate_cpu_samples_us": [
+      0.0153445,
+      0.0153575,
+      0.0153455,
+      0.015352,
+      0.0153455
+    ],
+    "reference_cpu_samples_us": [
+      0.0156405,
+      0.0156635,
+      0.0156405,
+      0.015641,
+      0.0157045
+    ],
+    "peak_change_kib": 64.0,
+    "current_change_kib": 96.0
+  },
+  {
+    "fixture": "null",
+    "mode": "same",
+    "cpu_change_percent": -0.45554243293403074,
+    "direction": "overlap",
+    "candidate_cpu_samples_us": [
+      0.0117925,
+      0.011795,
+      0.0118095,
+      0.012227,
+      0.0118
+    ],
+    "reference_cpu_samples_us": [
+      0.011849,
+      0.011854,
+      0.0118495,
+      0.0118615,
+      0.0118555
+    ],
+    "peak_change_kib": 48.0,
+    "current_change_kib": 80.0
+  },
+  {
+    "fixture": "null",
+    "mode": "select",
+    "cpu_change_percent": 0.03709985160058604,
+    "direction": "overlap",
+    "candidate_cpu_samples_us": [
+      0.0094775,
+      0.0094295,
+      0.0094375,
+      0.009465,
+      0.009423
+    ],
+    "reference_cpu_samples_us": [
+      0.009432,
+      0.009455,
+      0.009434,
+      0.009423,
+      0.0094485
+    ],
+    "peak_change_kib": 96.0,
+    "current_change_kib": 128.0
+  },
+  {
+    "fixture": "string_a",
+    "mode": "rotating",
+    "cpu_change_percent": -0.7528689423287882,
+    "direction": "separated faster",
+    "candidate_cpu_samples_us": [
+      0.020395,
+      0.020353,
+      0.0204235,
+      0.020367,
+      0.020354
+    ],
+    "reference_cpu_samples_us": [
+      0.020522,
+      0.0205155,
+      0.0205215,
+      0.0205175,
+      0.020574
+    ],
+    "peak_change_kib": 64.0,
+    "current_change_kib": 96.0
+  },
+  {
+    "fixture": "string_a",
+    "mode": "same",
+    "cpu_change_percent": -2.6795564071300015,
+    "direction": "separated faster",
+    "candidate_cpu_samples_us": [
+      0.016805,
+      0.016757,
+      0.0167615,
+      0.0167565,
+      0.016767
+    ],
+    "reference_cpu_samples_us": [
+      0.0172175,
+      0.017284,
+      0.017224,
+      0.017223,
+      0.0172215
+    ],
+    "peak_change_kib": 64.0,
+    "current_change_kib": 96.0
+  },
+  {
+    "fixture": "string_a",
+    "mode": "select",
+    "cpu_change_percent": 0.4030119843037472,
+    "direction": "separated slower",
+    "candidate_cpu_samples_us": [
+      0.009467,
+      0.009491,
+      0.009467,
+      0.009454,
+      0.009461
+    ],
+    "reference_cpu_samples_us": [
+      0.009421,
+      0.0094345,
+      0.009419,
+      0.009429,
+      0.00945
+    ],
+    "peak_change_kib": 96.0,
+    "current_change_kib": 128.0
+  },
+  {
+    "fixture": "empty_object",
+    "mode": "rotating",
+    "cpu_change_percent": -2.1413064929938774,
+    "direction": "separated faster",
+    "candidate_cpu_samples_us": [
+      0.029728,
+      0.0298375,
+      0.0297695,
+      0.029737,
+      0.029751
+    ],
+    "reference_cpu_samples_us": [
+      0.030723,
+      0.0303635,
+      0.0303995,
+      0.030463,
+      0.030402
+    ],
+    "peak_change_kib": -64.0,
+    "current_change_kib": -144.0
+  },
+  {
+    "fixture": "empty_object",
+    "mode": "same",
+    "cpu_change_percent": -2.853148505493641,
+    "direction": "separated faster",
+    "candidate_cpu_samples_us": [
+      0.024651,
+      0.0246685,
+      0.0247705,
+      0.0246345,
+      0.0247525
+    ],
+    "reference_cpu_samples_us": [
+      0.0253945,
+      0.0254965,
+      0.025393,
+      0.0253155,
+      0.0253515
+    ],
+    "peak_change_kib": -48.0,
+    "current_change_kib": -128.0
+  },
+  {
+    "fixture": "empty_object",
+    "mode": "select",
+    "cpu_change_percent": 0.13779944880221162,
+    "direction": "overlap",
+    "candidate_cpu_samples_us": [
+      0.0094385,
+      0.0094665,
+      0.0094385,
+      0.009459,
+      0.009447
+    ],
+    "reference_cpu_samples_us": [
+      0.009434,
+      0.00943,
+      0.0094445,
+      0.0094355,
+      0.0094305
+    ],
+    "peak_change_kib": 96.0,
+    "current_change_kib": 128.0
+  },
+  {
+    "fixture": "tiny_object",
+    "mode": "rotating",
+    "cpu_change_percent": -0.4511118204064357,
+    "direction": "separated faster",
+    "candidate_cpu_samples_us": [
+      0.046773,
+      0.0468115,
+      0.046783,
+      0.0467495,
+      0.04683
+    ],
+    "reference_cpu_samples_us": [
+      0.046995,
+      0.0469595,
+      0.0470375,
+      0.0469615,
+      0.0470245
+    ],
+    "peak_change_kib": -64.0,
+    "current_change_kib": -144.0
+  },
+  {
+    "fixture": "tiny_object",
+    "mode": "same",
+    "cpu_change_percent": -0.9168888513554352,
+    "direction": "separated faster",
+    "candidate_cpu_samples_us": [
+      0.041158,
+      0.0410695,
+      0.0410645,
+      0.040994,
+      0.041032
+    ],
+    "reference_cpu_samples_us": [
+      0.0413905,
+      0.041416,
+      0.0414445,
+      0.0414925,
+      0.041614
+    ],
+    "peak_change_kib": -64.0,
+    "current_change_kib": -144.0
+  },
+  {
+    "fixture": "tiny_object",
+    "mode": "select",
+    "cpu_change_percent": 0.03713133884999387,
+    "direction": "overlap",
+    "candidate_cpu_samples_us": [
+      0.0094255,
+      0.0094295,
+      0.0094175,
+      0.009462,
+      0.009469
+    ],
+    "reference_cpu_samples_us": [
+      0.009444,
+      0.009421,
+      0.0094255,
+      0.009426,
+      0.009431
+    ],
+    "peak_change_kib": 96.0,
+    "current_change_kib": 128.0
+  },
+  {
+    "fixture": "small_record",
+    "mode": "rotating",
+    "cpu_change_percent": -0.25413709534821693,
+    "direction": "overlap",
+    "candidate_cpu_samples_us": [
+      0.49675213675213675,
+      0.4963705430372097,
+      0.49719934386601056,
+      0.49763964430631097,
+      0.4964775964775965
+    ],
+    "reference_cpu_samples_us": [
+      0.4981939048605715,
+      0.49801778468445135,
+      0.4984926184926185,
+      0.49789001122334453,
+      0.4972476905810239
+    ],
+    "peak_change_kib": -32.0,
+    "current_change_kib": -112.0
+  },
+  {
+    "fixture": "small_record",
+    "mode": "same",
+    "cpu_change_percent": -0.8309370223569368,
+    "direction": "separated faster",
+    "candidate_cpu_samples_us": [
+      0.0994599684038513,
+      0.09901829485557016,
+      0.09935326835192393,
+      0.09887344145174151,
+      0.09897238149989233
+    ],
+    "reference_cpu_samples_us": [
+      0.09993526863516407,
+      0.09985184859456632,
+      0.09970440852281215,
+      0.09971410852753282,
+      0.09984796859267805
+    ],
+    "peak_change_kib": -48.0,
+    "current_change_kib": -128.0
+  },
+  {
+    "fixture": "small_record",
+    "mode": "select",
+    "cpu_change_percent": 0.05832140395525265,
+    "direction": "overlap",
+    "candidate_cpu_samples_us": [
+      0.009476,
+      0.0094225,
+      0.009436,
+      0.0094185,
+      0.0095585
+    ],
+    "reference_cpu_samples_us": [
+      0.009506,
+      0.0094305,
+      0.0094965,
+      0.0094305,
+      0.0094305
+    ],
+    "peak_change_kib": 112.0,
+    "current_change_kib": 144.0
+  },
+  {
+    "fixture": "object_1k",
+    "mode": "rotating",
+    "cpu_change_percent": -2.759450538532593,
+    "direction": "separated faster",
+    "candidate_cpu_samples_us": [
+      0.481120477856223,
+      0.4827115052653691,
+      0.48433906602489746,
+      0.4826402652321238,
+      0.483053092091443
+    ],
+    "reference_cpu_samples_us": [
+      0.4958762980756058,
+      0.49550731123674524,
+      0.496846258528254,
+      0.4974618454821946,
+      0.4964096849911863
+    ],
+    "peak_change_kib": -16.0,
+    "current_change_kib": -96.0
+  },
+  {
+    "fixture": "object_1k",
+    "mode": "same",
+    "cpu_change_percent": -0.8682771344870721,
+    "direction": "separated faster",
+    "candidate_cpu_samples_us": [
+      0.08340890300634786,
+      0.0832209749905619,
+      0.08323821099200972,
+      0.08334774300121041,
+      0.08369579903044712
+    ],
+    "reference_cpu_samples_us": [
+      0.08378920703829339,
+      0.08396490305305186,
+      0.08451756709947564,
+      0.08407777106253277,
+      0.08417951907107961
+    ],
+    "peak_change_kib": -32.0,
+    "current_change_kib": -128.0
+  },
+  {
+    "fixture": "object_1k",
+    "mode": "select",
+    "cpu_change_percent": 0.2598366740905744,
+    "direction": "separated slower",
+    "candidate_cpu_samples_us": [
+      0.0094505,
+      0.0094535,
+      0.0094645,
+      0.009464,
+      0.009436
+    ],
+    "reference_cpu_samples_us": [
+      0.009431,
+      0.009422,
+      0.009426,
+      0.0094345,
+      0.009429
+    ],
+    "peak_change_kib": 96.0,
+    "current_change_kib": 128.0
+  },
+  {
+    "fixture": "records_array_16k",
+    "mode": "rotating",
+    "cpu_change_percent": -0.09882399446585755,
+    "direction": "overlap",
+    "candidate_cpu_samples_us": [
+      18.30211480362538,
+      18.309123867069488,
+      18.324471299093656,
+      18.363383685800603,
+      18.33740181268882
+    ],
+    "reference_cpu_samples_us": [
+      18.373293051359518,
+      18.34126888217523,
+      18.324229607250754,
+      18.34259818731118,
+      18.364592145015106
+    ],
+    "peak_change_kib": -32.0,
+    "current_change_kib": -112.0
+  },
+  {
+    "fixture": "records_array_16k",
+    "mode": "same",
+    "cpu_change_percent": 0.04090138869954352,
+    "direction": "overlap",
+    "candidate_cpu_samples_us": [
+      18.22319526627219,
+      18.260591715976332,
+      18.241775147928994,
+      18.193846153846152,
+      18.235739644970415
+    ],
+    "reference_cpu_samples_us": [
+      18.19147928994083,
+      18.263786982248522,
+      18.240591715976333,
+      18.22828402366864,
+      18.222011834319527
+    ],
+    "peak_change_kib": -32.0,
+    "current_change_kib": -112.0
+  },
+  {
+    "fixture": "records_array_16k",
+    "mode": "select",
+    "cpu_change_percent": 0.047714982504509784,
+    "direction": "overlap",
+    "candidate_cpu_samples_us": [
+      0.009429,
+      0.0094355,
+      0.009474,
+      0.009468,
+      0.009435
+    ],
+    "reference_cpu_samples_us": [
+      0.009428,
+      0.009444,
+      0.009433,
+      0.009425,
+      0.009431
+    ],
+    "peak_change_kib": 96.0,
+    "current_change_kib": 128.0
+  },
+  {
+    "fixture": "records_array_1m",
+    "mode": "rotating",
+    "cpu_change_percent": -0.00561895961842529,
+    "direction": "overlap",
+    "candidate_cpu_samples_us": [
+      1213.3560606060605,
+      1216.1818181818182,
+      1213.2954545454545,
+      1213.4469696969697,
+      1212.8484848484848
+    ],
+    "reference_cpu_samples_us": [
+      1209.439393939394,
+      1213.4242424242425,
+      1213.621212121212,
+      1210.3484848484848,
+      1214.6363636363637
+    ],
+    "peak_change_kib": -32.0,
+    "current_change_kib": -112.0
+  },
+  {
+    "fixture": "records_array_1m",
+    "mode": "same",
+    "cpu_change_percent": 0.09023404455306139,
+    "direction": "overlap",
+    "candidate_cpu_samples_us": [
+      1209.8484848484848,
+      1210.090909090909,
+      1211.5757575757575,
+      1210.0681818181818,
+      1207.4242424242425
+    ],
+    "reference_cpu_samples_us": [
+      1213.5454545454545,
+      1208.9772727272727,
+      1209.9242424242425,
+      1208.340909090909,
+      1208.689393939394
+    ],
+    "peak_change_kib": -32.0,
+    "current_change_kib": -112.0
+  },
+  {
+    "fixture": "records_array_1m",
+    "mode": "select",
+    "cpu_change_percent": 6.697418610840056,
+    "direction": "overlap",
+    "candidate_cpu_samples_us": [
+      0.012028,
+      0.01221,
+      0.0106875,
+      0.011463,
+      0.0120865
+    ],
+    "reference_cpu_samples_us": [
+      0.0106805,
+      0.0115295,
+      0.011273,
+      0.0111925,
+      0.0115395
+    ],
+    "peak_change_kib": 96.0,
+    "current_change_kib": 144.0
+  },
+  {
+    "fixture": "records_object_1m",
+    "mode": "rotating",
+    "cpu_change_percent": -1.4429803495729643,
+    "direction": "separated faster",
+    "candidate_cpu_samples_us": [
+      2020.9571428571428,
+      2021.5857142857142,
+      2022.6857142857143,
+      2023.2285714285715,
+      2026.5285714285715
+    ],
+    "reference_cpu_samples_us": [
+      2051.5142857142855,
+      2052.8285714285716,
+      2049.657142857143,
+      2058.1714285714284,
+      2052.3
+    ],
+    "peak_change_kib": -48.0,
+    "current_change_kib": -128.0
+  },
+  {
+    "fixture": "records_object_1m",
+    "mode": "same",
+    "cpu_change_percent": -1.3725382330289304,
+    "direction": "separated faster",
+    "candidate_cpu_samples_us": [
+      2020.112676056338,
+      2020.4084507042253,
+      2019.9154929577464,
+      2018.0140845070423,
+      2021.2394366197184
+    ],
+    "reference_cpu_samples_us": [
+      2044.7605633802816,
+      2050.8169014084506,
+      2051.3661971830984,
+      2048.225352112676,
+      2043.394366197183
+    ],
+    "peak_change_kib": -48.0,
+    "current_change_kib": -128.0
+  },
+  {
+    "fixture": "records_object_1m",
+    "mode": "select",
+    "cpu_change_percent": 0.41446708258801035,
+    "direction": "overlap",
+    "candidate_cpu_samples_us": [
+      0.011508,
+      0.0116615,
+      0.011423,
+      0.012093,
+      0.010671
+    ],
+    "reference_cpu_samples_us": [
+      0.011313,
+      0.0116025,
+      0.0114605,
+      0.01164,
+      0.011278
+    ],
+    "peak_change_kib": 80.0,
+    "current_change_kib": 128.0
+  },
+  {
+    "fixture": "records_array_8m",
+    "mode": "rotating",
+    "cpu_change_percent": -0.1675254103668644,
+    "direction": "overlap",
+    "candidate_cpu_samples_us": [
+      10127.214285714286,
+      10130.714285714286,
+      10114.714285714286,
+      10132.357142857143,
+      10163.0
+    ],
+    "reference_cpu_samples_us": [
+      10156.142857142857,
+      10128.642857142857,
+      10147.714285714286,
+      10168.142857142857,
+      10136.0
+    ],
+    "peak_change_kib": -48.0,
+    "current_change_kib": -128.0
+  },
+  {
+    "fixture": "records_array_8m",
+    "mode": "same",
+    "cpu_change_percent": 0.09873896239456226,
+    "direction": "overlap",
+    "candidate_cpu_samples_us": [
+      10131.5,
+      10141.642857142857,
+      10137.57142857143,
+      10137.714285714286,
+      10147.357142857143
+    ],
+    "reference_cpu_samples_us": [
+      10127.92857142857,
+      10125.714285714286,
+      10151.785714285714,
+      10127.714285714286,
+      10099.42857142857
+    ],
+    "peak_change_kib": -48.0,
+    "current_change_kib": -128.0
+  },
+  {
+    "fixture": "records_array_8m",
+    "mode": "select",
+    "cpu_change_percent": 2.347918890074707,
+    "direction": "overlap",
+    "candidate_cpu_samples_us": [
+      0.0111375,
+      0.012147,
+      0.0119875,
+      0.0115215,
+      0.012532
+    ],
+    "reference_cpu_samples_us": [
+      0.011805,
+      0.0117125,
+      0.011359,
+      0.01199,
+      0.0113515
+    ],
+    "peak_change_kib": -32.0,
+    "current_change_kib": -112.0
+  },
+  {
+    "fixture": "records_object_8m",
+    "mode": "rotating",
+    "cpu_change_percent": -1.838122364636563,
+    "direction": "separated faster",
+    "candidate_cpu_samples_us": [
+      15623.444444444445,
+      15639.777777777777,
+      15687.222222222223,
+      15617.222222222223,
+      15621.0
+    ],
+    "reference_cpu_samples_us": [
+      16252.666666666666,
+      15888.888888888889,
+      16140.555555555555,
+      15916.0,
+      15912.333333333334
+    ],
+    "peak_change_kib": -16.0,
+    "current_change_kib": -96.0
+  },
+  {
+    "fixture": "records_object_8m",
+    "mode": "same",
+    "cpu_change_percent": -2.300932866899885,
+    "direction": "separated faster",
+    "candidate_cpu_samples_us": [
+      15661.555555555555,
+      15639.666666666666,
+      15667.555555555555,
+      15638.555555555555,
+      15615.444444444445
+    ],
+    "reference_cpu_samples_us": [
+      16008.0,
+      15862.888888888889,
+      15884.444444444445,
+      16128.888888888889,
+      16117.777777777777
+    ],
+    "peak_change_kib": -16.0,
+    "current_change_kib": -96.0
+  },
+  {
+    "fixture": "records_object_8m",
+    "mode": "select",
+    "cpu_change_percent": -0.45885076825930016,
+    "direction": "overlap",
+    "candidate_cpu_samples_us": [
+      0.011597,
+      0.011823,
+      0.0121645,
+      0.0120555,
+      0.011332
+    ],
+    "reference_cpu_samples_us": [
+      0.011936,
+      0.0118775,
+      0.012115,
+      0.0114975,
+      0.0117435
+    ],
+    "peak_change_kib": -32.0,
+    "current_change_kib": -112.0
+  },
+  {
+    "fixture": "records_array_20m",
+    "mode": "rotating",
+    "cpu_change_percent": -2.0342459981926853,
+    "direction": "separated faster",
+    "candidate_cpu_samples_us": [
+      42144.5,
+      42077.125,
+      42043.125,
+      42149.625,
+      42211.625
+    ],
+    "reference_cpu_samples_us": [
+      43069.75,
+      42999.5,
+      43019.625,
+      42928.75,
+      43199.0
+    ],
+    "peak_change_kib": -16.0,
+    "current_change_kib": -96.0
+  },
+  {
+    "fixture": "records_array_20m",
+    "mode": "same",
+    "cpu_change_percent": -2.1722500007271828,
+    "direction": "separated faster",
+    "candidate_cpu_samples_us": [
+      42040.375,
+      42012.625,
+      42140.5,
+      42083.5,
+      42035.875
+    ],
+    "reference_cpu_samples_us": [
+      43060.375,
+      42937.375,
+      42973.875,
+      43158.875,
+      42906.625
+    ],
+    "peak_change_kib": 0.0,
+    "current_change_kib": -80.0
+  },
+  {
+    "fixture": "records_array_20m",
+    "mode": "select",
+    "cpu_change_percent": 0.5903549796825835,
+    "direction": "overlap",
+    "candidate_cpu_samples_us": [
+      0.01312,
+      0.013015,
+      0.013971,
+      0.012667,
+      0.0136335
+    ],
+    "reference_cpu_samples_us": [
+      0.013084,
+      0.0130135,
+      0.01305,
+      0.0129425,
+      0.013043
+    ],
+    "peak_change_kib": -32.0,
+    "current_change_kib": -112.0
+  },
+  {
+    "fixture": "records_object_20m",
+    "mode": "rotating",
+    "cpu_change_percent": -1.829044706101468,
+    "direction": "separated faster",
+    "candidate_cpu_samples_us": [
+      42185.75,
+      42101.25,
+      42167.125,
+      42094.5,
+      42357.5
+    ],
+    "reference_cpu_samples_us": [
+      43123.75,
+      42923.5,
+      42952.75,
+      43163.875,
+      42934.25
+    ],
+    "peak_change_kib": 0.0,
+    "current_change_kib": -80.0
+  },
+  {
+    "fixture": "records_object_20m",
+    "mode": "same",
+    "cpu_change_percent": -1.6836881955235805,
+    "direction": "separated faster",
+    "candidate_cpu_samples_us": [
+      42152.75,
+      42241.875,
+      42106.5,
+      42191.125,
+      42147.25
+    ],
+    "reference_cpu_samples_us": [
+      42874.625,
+      42826.5,
+      42935.375,
+      43312.625,
+      42862.125
+    ],
+    "peak_change_kib": -32.0,
+    "current_change_kib": -112.0
+  },
+  {
+    "fixture": "records_object_20m",
+    "mode": "select",
+    "cpu_change_percent": 1.2776358182424286,
+    "direction": "overlap",
+    "candidate_cpu_samples_us": [
+      0.013394457668459255,
+      0.012758235622557231,
+      0.013323929589467806,
+      0.014063005083899027,
+      0.01377501542801728
+    ],
+    "reference_cpu_samples_us": [
+      0.01308442798789268,
+      0.013450292397660818,
+      0.012949249169825736,
+      0.013266625525287255,
+      0.013225484145875576
+    ],
+    "peak_change_kib": -32.0,
+    "current_change_kib": -112.0
+  },
+  {
+    "fixture": "numbers_1m",
+    "mode": "rotating",
+    "cpu_change_percent": -0.2451654293831873,
+    "direction": "separated faster",
+    "candidate_cpu_samples_us": [
+      1576.0481927710844,
+      1570.7590361445782,
+      1574.1084337349398,
+      1572.987951807229,
+      1573.6265060240964
+    ],
+    "reference_cpu_samples_us": [
+      1576.55421686747,
+      1582.6506024096386,
+      1577.4939759036145,
+      1579.1084337349398,
+      1576.8192771084337
+    ],
+    "peak_change_kib": -48.0,
+    "current_change_kib": -128.0
+  },
+  {
+    "fixture": "numbers_1m",
+    "mode": "same",
+    "cpu_change_percent": -0.6115697462668379,
+    "direction": "separated faster",
+    "candidate_cpu_samples_us": [
+      1558.2857142857142,
+      1559.357142857143,
+      1557.202380952381,
+      1559.892857142857,
+      1559.4761904761904
+    ],
+    "reference_cpu_samples_us": [
+      1568.1666666666667,
+      1571.642857142857,
+      1568.952380952381,
+      1569.75,
+      1567.7380952380952
+    ],
+    "peak_change_kib": -48.0,
+    "current_change_kib": -128.0
+  },
+  {
+    "fixture": "numbers_1m",
+    "mode": "select",
+    "cpu_change_percent": 3.4396683025892605,
+    "direction": "overlap",
+    "candidate_cpu_samples_us": [
+      0.012413,
+      0.0122245,
+      0.0121945,
+      0.0120425,
+      0.012259
+    ],
+    "reference_cpu_samples_us": [
+      0.012102,
+      0.011553,
+      0.0115545,
+      0.0121945,
+      0.011818
+    ],
+    "peak_change_kib": 64.0,
+    "current_change_kib": 112.0
+  },
+  {
+    "fixture": "long_string_1m",
+    "mode": "rotating",
+    "cpu_change_percent": -7.529122372719366,
+    "direction": "separated faster",
+    "candidate_cpu_samples_us": [
+      100.70748299319727,
+      100.1062925170068,
+      100.37414965986395,
+      100.42431972789116,
+      100.13095238095238
+    ],
+    "reference_cpu_samples_us": [
+      109.21513605442176,
+      108.91921768707483,
+      108.35884353741497,
+      108.43622448979592,
+      108.546768707483
+    ],
+    "peak_change_kib": -32.0,
+    "current_change_kib": -112.0
+  },
+  {
+    "fixture": "long_string_1m",
+    "mode": "same",
+    "cpu_change_percent": 0.09017132551847329,
+    "direction": "overlap",
+    "candidate_cpu_samples_us": [
+      0.3568893191352049,
+      0.35785737334624074,
+      0.35818005808325265,
+      0.3591481122942885,
+      0.3591481122942885
+    ],
+    "reference_cpu_samples_us": [
+      0.3604388512423362,
+      0.35785737334624074,
+      0.3594707970313004,
+      0.356243949661181,
+      0.35785737334624074
+    ],
+    "peak_change_kib": 80.0,
+    "current_change_kib": 128.0
+  },
+  {
+    "fixture": "long_string_1m",
+    "mode": "select",
+    "cpu_change_percent": -0.46253469010176795,
+    "direction": "overlap",
+    "candidate_cpu_samples_us": [
+      0.011962,
+      0.0116375,
+      0.0123865,
+      0.011836,
+      0.011618
+    ],
+    "reference_cpu_samples_us": [
+      0.0117125,
+      0.0119315,
+      0.0114345,
+      0.011891,
+      0.0119465
+    ],
+    "peak_change_kib": 64.0,
+    "current_change_kib": 112.0
+  },
+  {
+    "fixture": "escaped_1m",
+    "mode": "rotating",
+    "cpu_change_percent": -0.7242842059115961,
+    "direction": "separated faster",
+    "candidate_cpu_samples_us": [
+      1010.62893081761,
+      1010.3270440251572,
+      1012.6037735849056,
+      1011.62893081761,
+      1011.1949685534591
+    ],
+    "reference_cpu_samples_us": [
+      1020.7924528301887,
+      1017.8993710691824,
+      1019.3836477987421,
+      1017.8176100628931,
+      1018.5723270440252
+    ],
+    "peak_change_kib": -32.0,
+    "current_change_kib": -112.0
+  },
+  {
+    "fixture": "escaped_1m",
+    "mode": "same",
+    "cpu_change_percent": -0.9665538708893417,
+    "direction": "separated faster",
+    "candidate_cpu_samples_us": [
+      994.9375,
+      991.8625,
+      995.28125,
+      993.225,
+      992.18125
+    ],
+    "reference_cpu_samples_us": [
+      1006.325,
+      1004.81875,
+      1002.61875,
+      1002.175,
+      1002.91875
+    ],
+    "peak_change_kib": -32.0,
+    "current_change_kib": -112.0
+  },
+  {
+    "fixture": "escaped_1m",
+    "mode": "select",
+    "cpu_change_percent": 1.9536775106082205,
+    "direction": "overlap",
+    "candidate_cpu_samples_us": [
+      0.011517,
+      0.011697,
+      0.0122305,
+      0.011533,
+      0.0114595
+    ],
+    "reference_cpu_samples_us": [
+      0.011502,
+      0.011253,
+      0.011483,
+      0.0111995,
+      0.011312
+    ],
+    "peak_change_kib": 96.0,
+    "current_change_kib": 144.0
+  },
+  {
+    "fixture": "unicode_1m",
+    "mode": "rotating",
+    "cpu_change_percent": -4.670393608785073,
+    "direction": "separated faster",
+    "candidate_cpu_samples_us": [
+      142.18194640338504,
+      141.53032440056418,
+      141.712976022567,
+      141.50846262341327,
+      141.54160789844852
+    ],
+    "reference_cpu_samples_us": [
+      148.27503526093088,
+      148.5098730606488,
+      147.99576868829337,
+      148.47602256699577,
+      148.96967559943582
+    ],
+    "peak_change_kib": -16.0,
+    "current_change_kib": -96.0
+  },
+  {
+    "fixture": "unicode_1m",
+    "mode": "same",
+    "cpu_change_percent": -0.30333670374115274,
+    "direction": "overlap",
+    "candidate_cpu_samples_us": [
+      0.3548736462093863,
+      0.3592057761732852,
+      0.35667870036101085,
+      0.355956678700361,
+      0.3555956678700361
+    ],
+    "reference_cpu_samples_us": [
+      0.3574007220216607,
+      0.3588447653429603,
+      0.355956678700361,
+      0.35631768953068593,
+      0.35703971119133576
+    ],
+    "peak_change_kib": 80.0,
+    "current_change_kib": 128.0
+  },
+  {
+    "fixture": "unicode_1m",
+    "mode": "select",
+    "cpu_change_percent": 7.027598977162497,
+    "direction": "overlap",
+    "candidate_cpu_samples_us": [
+      0.012138,
+      0.0115285,
+      0.012144,
+      0.011302,
+      0.0121895
+    ],
+    "reference_cpu_samples_us": [
+      0.01085,
+      0.011317,
+      0.0115995,
+      0.011529,
+      0.011341
+    ],
+    "peak_change_kib": 64.0,
+    "current_change_kib": 112.0
+  },
+  {
+    "fixture": "wide_1m",
+    "mode": "rotating",
+    "cpu_change_percent": 0.13103814537729352,
+    "direction": "overlap",
+    "candidate_cpu_samples_us": [
+      2707.59375,
+      2728.015625,
+      2707.53125,
+      2710.296875,
+      2712.46875
+    ],
+    "reference_cpu_samples_us": [
+      2710.390625,
+      2696.84375,
+      2715.375,
+      2706.25,
+      2706.75
+    ],
+    "peak_change_kib": -32.0,
+    "current_change_kib": -96.0
+  },
+  {
+    "fixture": "wide_1m",
+    "mode": "same",
+    "cpu_change_percent": -0.3309189364311682,
+    "direction": "overlap",
+    "candidate_cpu_samples_us": [
+      2708.84375,
+      2691.875,
+      2688.734375,
+      2696.6875,
+      2687.203125
+    ],
+    "reference_cpu_samples_us": [
+      2709.25,
+      2700.421875,
+      2704.21875,
+      2700.8125,
+      2691.40625
+    ],
+    "peak_change_kib": -32.0,
+    "current_change_kib": -96.0
+  },
+  {
+    "fixture": "wide_1m",
+    "mode": "select",
+    "cpu_change_percent": 2.3699421965317935,
+    "direction": "overlap",
+    "candidate_cpu_samples_us": [
+      0.012189,
+      0.0117985,
+      0.01137,
+      0.0114655,
+      0.0115115
+    ],
+    "reference_cpu_samples_us": [
+      0.0111785,
+      0.0114435,
+      0.011245,
+      0.0108925,
+      0.0114685
+    ],
+    "peak_change_kib": 80.0,
+    "current_change_kib": 128.0
+  },
+  {
+    "fixture": "heterogeneous_1m",
+    "mode": "rotating",
+    "cpu_change_percent": -0.03860182610271323,
+    "direction": "overlap",
+    "candidate_cpu_samples_us": [
+      1424.5955056179776,
+      1425.7078651685392,
+      1423.741573033708,
+      1430.808988764045,
+      1426.6067415730338
+    ],
+    "reference_cpu_samples_us": [
+      1426.0674157303372,
+      1427.7752808988764,
+      1424.685393258427,
+      1426.258426966292,
+      1427.191011235955
+    ],
+    "peak_change_kib": -32.0,
+    "current_change_kib": -112.0
+  },
+  {
+    "fixture": "heterogeneous_1m",
+    "mode": "same",
+    "cpu_change_percent": -0.20972294495166244,
+    "direction": "overlap",
+    "candidate_cpu_samples_us": [
+      1422.7191011235955,
+      1421.876404494382,
+      1422.112359550562,
+      1420.9213483146068,
+      1424.561797752809
+    ],
+    "reference_cpu_samples_us": [
+      1425.5955056179776,
+      1427.0224719101125,
+      1423.8202247191011,
+      1425.1011235955057,
+      1423.258426966292
+    ],
+    "peak_change_kib": -48.0,
+    "current_change_kib": -128.0
+  },
+  {
+    "fixture": "heterogeneous_1m",
+    "mode": "select",
+    "cpu_change_percent": 2.3638684685477696,
+    "direction": "overlap",
+    "candidate_cpu_samples_us": [
+      0.012024,
+      0.011501,
+      0.011627,
+      0.011464,
+      0.012853
+    ],
+    "reference_cpu_samples_us": [
+      0.0113585,
+      0.011316,
+      0.0112765,
+      0.011596,
+      0.011435
+    ],
+    "peak_change_kib": 80.0,
+    "current_change_kib": 128.0
+  }
+]

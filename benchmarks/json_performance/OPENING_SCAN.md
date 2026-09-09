@@ -1,7 +1,8 @@
 # Opening-container scan and parse entry experiments
 
 These are follow-ups to the corrected parser landed through PR #10035. The
-current R3 candidate is undergoing final performance validation in PR #10036. Global GC policy, construction
+current R3 candidate remains experimental in PR #10036 after full validation
+found persistent small slowdowns. Global GC policy, construction
 allocation and parse-boundary collection scheduling are unchanged.
 
 ## R1: wider scan
@@ -60,9 +61,17 @@ The [complete original suite against freshly built merged main](results/quiet-op
 passes all 200 output checks and retains 46/50 CPU, 67/86 peak-RSS and 31/36
 retained-current-RSS wins over the better Node/Bun median. No row has separated
 slower timing ranges, but sparse reads (+0.50%), heterogeneous parse (+0.23%)
-and variable large-string stringify medians (+5.43%/+3.92%) require focused
-replay. Overlap alone is not proof of equality. Full changing-input validation
-against that fresh main build is running; PR #10036 remains draft.
+and variable large-string stringify medians (+5.43%/+3.92%) motivated longer
+replay. Overlap alone is not proof of equality. The [complete changing-input suite](results/quiet-opening-scan-r3-main-rotating-r5/README.md)
+passes 380 output checks and 1140 trials. No rotating/same parse row has separated
+slower ranges; rotating ASCII, Unicode and 1 KB object medians improve 7.53%,
+4.67% and 2.76%. Two selection-only controls are slightly slower and reported
+separately without subtraction. The [longer original replay against fresh main](results/quiet-opening-scan-r3-main-regression-r9/README.md)
+retains +0.243% sparse CPU (9/9 pairs slower), +0.197% heterogeneous parse
+(8/9 pairs slower), and variable +4.46%/+1.90% ASCII/Unicode stringify medians.
+Although all ranges overlap, those repeated increases remain unresolved.
+PR #10036 stays draft. [Fresh merged-main standings](MERGED_MAIN_EEE.md) report
+all remaining Node/Bun gaps independently of candidate acceptance.
 
 Earlier [long original-worker replay](results/quiet-opening-scan-r3-regression-r9/README.md)
 and [changing-input focus](results/quiet-opening-scan-r3-focus-r9/README.md) used

@@ -1,11 +1,10 @@
 # Next parse investigations
 
-The [opening-scan and entry-frame experiment](OPENING_SCAN.md) now has complete R1 evidence and an R2 follow-up under validation. The [large-container memory diagnosis](GC_MEMORY_GROWTH.md) has separate default/full-GC measurements.
+The [opening-scan and entry-frame experiment](OPENING_SCAN.md) now has complete R3 original and changing-input comparisons against [freshly built merged main 0.5.1529](MERGED_MAIN_EEE.md), with persistent sparse/heterogeneous CPU concerns in the longer replay. The [large-container memory diagnosis](GC_MEMORY_GROWTH.md) has separate default/full-GC measurements.
 
 These are hypotheses, not accepted speedups. Bounded lazy-record construction
 and preserved large-output sweep requests landed through #10033 at `e7223f700`.
-The escaped-record correction and its regression checks come before the next
-optimization candidate.
+The escaped-record correction landed through #10035 at `eee3881c4`; the opening-scan follow-up retains that corrected behavior.
 
 Fresh [merged-main stack samples](results/main-e722-location-profiles/README.md)
 confirm the same broad targets. The Unicode object has 1522 main-thread samples:
@@ -67,3 +66,16 @@ UTF-16 recount. Require the entire original string, rather than retaining a
 large source for a tiny substring. Preserve all existing mutation/fallback
 checks and establish canonical output equivalence before considering reuse.
 This is a follow-up hypothesis; no implementation or measured gain is claimed.
+
+## Avoid a duplicated array nesting pass
+
+Eligible lazy arrays currently scan nesting before building a native tape whose
+explicit stack already tracks container depth. Returning depth metadata from
+that existing tape pass could eliminate the preflight for valid shallow arrays.
+Keep the 1000-level recursive and 500000-level iterative limits, route valid deep
+trees through iterative materialization, and preserve the old depth/error path
+before any malformed-tape recursive fallback. Typed, throwing and fallible
+entries need consistent admission; force-on object roots also need protection.
+No input borrow may cross the tape callback's collection points. Measure the
+extra per-container depth accounting as well as the pass removed. This is a
+read-only design; no source change or speed claim is part of PR #10036.
