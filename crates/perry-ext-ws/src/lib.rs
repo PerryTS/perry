@@ -753,16 +753,8 @@ pub unsafe extern "C" fn js_ws_on(
             .get(&ws_id)
             .map(|c| c.is_open)
             .unwrap_or(false);
-    let mut g = WS_CLIENT_LISTENERS.lock().unwrap();
-    let entry = g.entry(ws_id).or_insert_with(|| WsClientListeners {
-        listeners: HashMap::new(),
-    });
-    entry
-        .listeners
-        .entry(event_name)
-        .or_default()
-        .push(callback_ptr);
-    drop(g);
+    // #10029: use the same buffered-frame drain as receiver-method registration.
+    js_ws_on_client_i64(handle, event_name_ptr, callback_ptr);
     if already_open {
         push_ws_event(PendingWsEvent::Open(ws_id));
     }
@@ -1314,6 +1306,50 @@ mod tests {
     fn gc_scanner_registration_idempotent() {
         ensure_runtime_hooks_registered();
         ensure_runtime_hooks_registered();
+    }
+
+    #[test]
+    fn generic_message_listener_drains_frames_received_before_registration() {
+        let _lock = GC_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let ws_id = register_handle(WsClientHandle) as usize;
+        let (tx, _rx) = mpsc::unbounded_channel::<WsCommand>();
+        WS_CONNECTIONS.lock().unwrap().insert(
+            ws_id,
+            WsConnection {
+                sender: tx,
+                messages: vec!["first subscription".into(), "second frame".into()],
+                is_open: true,
+                is_closing: false,
+                is_closed: false,
+            },
+        );
+        let event = alloc_string("message");
+        unsafe {
+            js_ws_on(ws_id as i64, event.as_raw(), 42);
+        }
+        let remaining = WS_CONNECTIONS
+            .lock()
+            .unwrap()
+            .remove(&ws_id)
+            .unwrap()
+            .messages;
+        let mut delivered = Vec::new();
+        WS_PENDING_EVENTS.lock().unwrap().retain(|event| {
+            if let PendingWsEvent::Message(id, text) = event {
+                if *id == ws_id {
+                    delivered.push(text.clone());
+                    return false;
+                }
+            }
+            true
+        });
+        WS_CLIENT_LISTENERS.lock().unwrap().remove(&ws_id);
+        drop_handle(ws_id as i64);
+        assert!(
+            remaining.is_empty(),
+            "listener registration must drain buffered frames"
+        );
+        assert_eq!(delivered, vec!["first subscription", "second frame"]);
     }
 
     #[test]
