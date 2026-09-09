@@ -185,11 +185,32 @@ fn json_small_object_template_survives_evacuation() {
     let first = input.with_const_ptr(|input| unsafe { crate::json::js_json_parse(input) });
     let first = scope.root_nanbox_u64(first.bits());
 
+    // The bounded parse-shape cache usually carries the same descriptor as
+    // the reusable object template. Remove that redundant owner and rebuild
+    // transient carrier bits as a full trace does: the template must retain
+    // its own ShapeId even when it is the sole metadata publisher.
+    let first_object =
+        crate::JSValue::from_bits(first.get_nanbox_u64()).as_pointer::<crate::ObjectHeader>();
+    let template_shape = unsafe { crate::object::shapes::object_shape_stamp(first_object) };
+    crate::json::PARSE_SHAPE_CACHE.with(|cache| cache.borrow_mut().clear());
+    crate::object::shape_carriers::recompute_after_full_trace();
+    assert!(
+        crate::object::shapes::shape_descriptor_by_id(template_shape)
+            .is_some_and(|descriptor| descriptor.cache_carrier),
+        "the reusable object template must rebuild ownership of its ShapeId"
+    );
+
     let _ = gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
     assert_ne!(
         input_before,
         input.with_const_ptr(|input: *const crate::StringHeader| input as usize),
         "the test must exercise template-key rewriting"
+    );
+    assert!(
+        input.with_const_ptr(|input| {
+            crate::json::test_parse_object_template_matches(input, text.len())
+        }),
+        "the template source slot must be rewritten with its rooted input"
     );
     let second = input.with_const_ptr(|input| unsafe { crate::json::js_json_parse(input) });
     assert_ne!(first.get_nanbox_u64(), second.bits());

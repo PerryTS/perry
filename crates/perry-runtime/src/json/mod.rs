@@ -530,6 +530,7 @@ pub(crate) fn note_parse_shape_cache_carriers() {
     if empty != 0 {
         crate::object::shape_carriers::note_shape_id(empty);
     }
+    parse_reuse::note_shape_carrier();
 }
 
 #[inline]

@@ -418,6 +418,22 @@ pub(super) fn scan_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     });
 }
 
+/// Rebuild ShapeId ownership for the object template after a full trace.
+///
+/// `keys_array` is a traced root, but tracing that array does not visit the
+/// separate descriptor table entry named by `shape_id`. The ordinary parse
+/// shape cache usually owns the same id; once that bounded cache is full,
+/// however, this template can be the only metadata publisher left. Re-note it
+/// before uncarried descriptors are pruned so a later template hit cannot
+/// stamp a retired id into a fresh object.
+pub(super) fn note_shape_carrier() {
+    PARSE_OBJECT_TEMPLATE.with(|cache| {
+        if let Some(entry) = cache.borrow().as_ref() {
+            crate::object::shape_carriers::note_shape_id(entry.shape_id);
+        }
+    });
+}
+
 #[cfg(test)]
 pub(super) fn clear_caches() {
     PARSE_STRING_CACHE.with(|cache| *cache.borrow_mut() = None);
