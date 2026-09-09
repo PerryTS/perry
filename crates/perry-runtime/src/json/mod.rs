@@ -86,12 +86,15 @@ pub(crate) use parse_api::test_json_parse_direct;
 pub(crate) unsafe fn test_json_stringify_record_output(bits: u64) -> Option<JSValue> {
     stringify_record_output::try_object(bits)
 }
-#[cfg(test)]
-pub(crate) use parse_reuse::test_parse_object_template_matches;
 pub(crate) use parse_reuse::{
     cached_parse_source_is_direct, cached_parse_string, remember_parse_object_template,
     remember_parse_string, try_reuse_parse_object_template, validate_cached_parse_source,
     ParseStringReuse,
+};
+#[cfg(test)]
+pub(crate) use parse_reuse::{
+    test_parse_object_template_matches, test_root_scanner_slot_addresses,
+    test_seed_root_scanner_slots,
 };
 pub(crate) use parser::{DirectParser, ObjectShapeHint};
 pub(crate) use raw_json::{ptr_is_raw_json_wrapper, raw_json_text_bytes};

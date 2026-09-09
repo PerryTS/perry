@@ -319,6 +319,72 @@ pub(crate) fn test_parse_object_template_matches(
     })
 }
 
+#[cfg(test)]
+pub(crate) fn test_seed_root_scanner_slots(
+    string_source: *const StringHeader,
+    string_value: *const StringHeader,
+    template_source: *const StringHeader,
+    keys: *mut crate::array::ArrayHeader,
+    inline_value: JSValue,
+    array_value: JSValue,
+) {
+    PARSE_STRING_CACHE.with(|cache| {
+        *cache.borrow_mut() = Some(ParseStringCacheEntry {
+            source: string_source,
+            source_len: 1,
+            token_start: 0,
+            token_end: 1,
+            value: string_value,
+            direct_depth_validated: false,
+        });
+    });
+    let mut values = [EMPTY_PARSE_TEMPLATE_VALUE; PARSE_OBJECT_TEMPLATE_MAX_FIELDS];
+    values[0] = ParseTemplateValue::Inline(inline_value);
+    let mut array_values = [JSValue::undefined(); PARSE_OBJECT_TEMPLATE_MAX_ARRAY];
+    array_values[0] = array_value;
+    values[1] = ParseTemplateValue::Array {
+        values: array_values,
+        len: 1,
+    };
+    PARSE_OBJECT_TEMPLATE.with(|cache| {
+        *cache.borrow_mut() = Some(ParseObjectTemplate {
+            source: template_source,
+            source_len: 1,
+            keys_array: keys,
+            shape_id: 0,
+            values,
+            len: 2,
+        });
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_root_scanner_slot_addresses() -> [usize; 6] {
+    let strings = PARSE_STRING_CACHE.with(|cache| {
+        let cache = cache.borrow();
+        let entry = cache.as_ref().expect("seeded parse string cache");
+        [entry.source as usize, entry.value as usize]
+    });
+    PARSE_OBJECT_TEMPLATE.with(|cache| {
+        let cache = cache.borrow();
+        let entry = cache.as_ref().expect("seeded parse object template");
+        let ParseTemplateValue::Inline(inline) = entry.values[0] else {
+            unreachable!("seeded inline template slot")
+        };
+        let ParseTemplateValue::Array { values, .. } = entry.values[1] else {
+            unreachable!("seeded array template slot")
+        };
+        [
+            strings[0],
+            strings[1],
+            entry.source as usize,
+            entry.keys_array as usize,
+            inline.as_string_ptr() as usize,
+            values[0].as_string_ptr() as usize,
+        ]
+    })
+}
+
 pub(super) fn scan_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     PARSE_STRING_CACHE.with(|cache| {
         if let Some(entry) = cache.borrow_mut().as_mut() {

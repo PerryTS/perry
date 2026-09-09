@@ -201,6 +201,106 @@ fn json_small_object_template_survives_evacuation() {
     }
 }
 
+#[test]
+fn json_parse_reuse_cache_alone_marks_and_rewrites_every_pointer_slot() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _scan = ConservativeScanDisabledGuard::new();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _evacuation = ForcedEvacuationTestGuard::on();
+    let _protection =
+        crate::arena::ProtectionModeGuard::set(crate::arena::FromSpaceProtection::PoisonOnly);
+    register_runtime_handle_root_scanner_for_tests();
+    gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
+    crate::json::test_clear_parse_roots();
+
+    let before = {
+        let scope = RuntimeHandleScope::new();
+        let string_source_ptr = crate::js_string_from_bytes(
+            b"string cache source".as_ptr(),
+            b"string cache source".len() as u32,
+        );
+        let string_source = scope.root_string_ptr(string_source_ptr);
+        let string_value_ptr = crate::js_string_from_bytes(
+            b"string cache value".as_ptr(),
+            b"string cache value".len() as u32,
+        );
+        let string_value = scope.root_string_ptr(string_value_ptr);
+        let template_source_ptr = crate::js_string_from_bytes(
+            b"object template source".as_ptr(),
+            b"object template source".len() as u32,
+        );
+        let template_source = scope.root_string_ptr(template_source_ptr);
+        let inline_value_ptr = crate::js_string_from_bytes(
+            b"inline template value".as_ptr(),
+            b"inline template value".len() as u32,
+        );
+        let inline_value = scope.root_string_ptr(inline_value_ptr);
+        let array_value_ptr = crate::js_string_from_bytes(
+            b"array template value".as_ptr(),
+            b"array template value".len() as u32,
+        );
+        let array_value = scope.root_string_ptr(array_value_ptr);
+        let keys_array = crate::array::js_array_alloc_with_length(0);
+        let _keys_root =
+            scope.root_nanbox_u64(crate::JSValue::object_ptr(keys_array.cast()).bits());
+
+        crate::json::test_seed_root_scanner_slots(
+            string_source.with_const_ptr(|ptr| ptr),
+            string_value.with_const_ptr(|ptr| ptr),
+            template_source.with_const_ptr(|ptr| ptr),
+            keys_array,
+            crate::JSValue::string_ptr(
+                inline_value.with_const_ptr(|ptr: *const crate::StringHeader| ptr.cast_mut()),
+            ),
+            crate::JSValue::string_ptr(
+                array_value.with_const_ptr(|ptr: *const crate::StringHeader| ptr.cast_mut()),
+            ),
+        );
+        crate::json::test_root_scanner_slot_addresses()
+    };
+    assert!(
+        before
+            .iter()
+            .all(|&address| crate::arena::pointer_in_nursery(address)),
+        "every cache slot must begin in the copying nursery"
+    );
+
+    let _ = gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+
+    let after = crate::json::test_root_scanner_slot_addresses();
+    for (index, (&old, &new)) in before.iter().zip(&after).enumerate() {
+        assert_ne!(old, new, "cache-only slot {index} must be evacuated");
+        assert_ne!(
+            crate::arena::classify_heap_generation(new),
+            crate::arena::HeapGeneration::Unknown,
+            "cache-only slot {index} must remain live"
+        );
+    }
+    unsafe {
+        assert_eq!(
+            crate::json::str_from_header(after[0] as *const crate::StringHeader),
+            Some("string cache source")
+        );
+        assert_eq!(
+            crate::json::str_from_header(after[1] as *const crate::StringHeader),
+            Some("string cache value")
+        );
+        assert_eq!(
+            crate::json::str_from_header(after[2] as *const crate::StringHeader),
+            Some("object template source")
+        );
+        assert_eq!((*(after[3] as *const crate::ArrayHeader)).length, 0);
+        assert_eq!(
+            crate::json::str_from_header(after[4] as *const crate::StringHeader),
+            Some("inline template value")
+        );
+        assert_eq!(
+            crate::json::str_from_header(after[5] as *const crate::StringHeader),
+            Some("array template value")
+        );
+    }
+}
+
 impl ParseStateGuard {
     fn new() -> Self {
         Self {
