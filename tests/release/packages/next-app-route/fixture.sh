@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Pinned #8034 production App Route / shared-provider gate for #8036.
 #
-# What this asserts, on every run: Next 16.3.0's UNTOUCHED production webpack
+# What this asserts, on every run: the pinned Next version's UNTOUCHED production webpack
 # output compiles to an app-only dylib against separately loaded runtime and
 # stdlib provider images, serves through a `dlopen` host, and matches the Node
 # production oracle byte-for-byte across 10 cold starts of
@@ -106,8 +106,11 @@ esac
 
 cp tsconfig.json "$TS_CONFIG_BACKUP"
 
-echo "  [1/7] install and production webpack build (Next 16.3.0)"
+NEXT_VERSION="$(node -p "require('./package.json').dependencies.next")"
+echo "  [1/7] install and production webpack build (Next $NEXT_VERSION)"
 npm ci --silent --no-audit --no-fund >"$BUILD_DIR/npm-install.log" 2>&1
+INSTALLED_NEXT_VERSION="$(node -p "require('next/package.json').version")"
+[[ "$INSTALLED_NEXT_VERSION" == "$NEXT_VERSION" ]] || fail "installed Next $INSTALLED_NEXT_VERSION does not match pin $NEXT_VERSION"
 npm run build >"$BUILD_DIR/next-build.log" 2>&1
 ROUTE_BUNDLE=".next/server/app/api/benchmark/route.js"
 [[ -f "$ROUTE_BUNDLE" ]] || fail "production route bundle was not generated"
@@ -177,7 +180,7 @@ if command -v shasum >/dev/null 2>&1; then
 else
   PROVIDER_ABI_HASH="$(sha256sum "$RUNTIME_IMAGE" "$STDLIB_IMAGE" | sha256sum | awk '{print $1}')"
 fi
-echo "  commit=$PERRY_COMMIT next=16.3.0 mode=dylib providers=$PROVIDER_ABI_HASH"
+echo "  commit=$PERRY_COMMIT next=$INSTALLED_NEXT_VERSION mode=dylib providers=$PROVIDER_ABI_HASH"
 
 run_cold_start() {
   local index="$1"

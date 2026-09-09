@@ -2,10 +2,13 @@
 // through `options.createServer || createServerHTTP` inside compiled package
 // code. Exercise the real package through listen, fetch, response, and close.
 import { serve } from "@hono/node-server";
+import { Hono } from "hono";
 
 const port = 38139;
+const app = new Hono();
+app.get("/", (context) => context.text("ok"));
 const server = serve({
-  fetch: () => new Response("ok"),
+  fetch: app.fetch,
   port,
 }, async () => {
   const response = await fetch(`http://127.0.0.1:${port}/`);
