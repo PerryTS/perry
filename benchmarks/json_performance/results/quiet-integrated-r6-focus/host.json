@@ -1,0 +1,48 @@
+{
+  "started_utc": "2026-09-09T15:28:36Z",
+  "load_before": [
+    1.78125,
+    1.84033203125,
+    1.84912109375
+  ],
+  "cases": [
+    [
+      "long_string_1m",
+      "stringify",
+      32768,
+      8,
+      9
+    ],
+    [
+      "records_array_16k",
+      "roundtrip",
+      6185,
+      2,
+      25
+    ],
+    [
+      "records_array_16k",
+      "roundtrip",
+      20000,
+      8,
+      9
+    ]
+  ],
+  "workers": {
+    "perry": "2024394862eb438b33403e8aa30115150a8d2ab955c71d819378f1b45195a7b5",
+    "baseline": "641228aef444a8d10e0312db2580bb7eef7f87343a592029105bf6a72d8c941a",
+    "prior": "79859599d177e1f0b404a73ec798ae6da06590adab7faff823d0501fa9ec61e1"
+  },
+  "sources": {
+    "run_regression_focus.py": "653b9f6a7d30a4b83a6c85eb2af8fa9a9bc7daa2a7a295558ffc40eae77bd45f",
+    "run_dispatch_focus.py": "e08b6a92d9135b27255b64bf46f94f03c5855e13f9ac1a3069d0f8bac8882aa6",
+    "worker.js": "55c11d12296f896212d6abd76bcf8d551d0590b0ad24b262018b7a707369a2f4"
+  },
+  "node_version": "v26.5.1",
+  "finished_utc": "2026-09-09T15:29:33Z",
+  "load_after": [
+    2.1533203125,
+    1.9150390625,
+    1.8720703125
+  ]
+}

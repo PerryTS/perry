@@ -1,0 +1,1 @@
+Development-host or ungated diagnostic run. These results are not performance acceptance evidence. Use the later `quiet-merged-all-r5` and `quiet-merged-rotating-r5` runs for the merged baseline, and `quiet-integrated-r6-*` for the follow-up candidate. Raw observations are preserved without promoting them into accepted comparisons.

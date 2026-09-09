@@ -1,8 +1,10 @@
-Current source progress is in [DATA_RECORDS.md](DATA_RECORDS.md): scalar parse isolation, guarded record emission, and fixes for descriptor fallback and a first-prototype GC hazard. The record release has no accepted performance measurements yet.
+The latest follow-up is [FOLLOWUP_RESULTS.md](FOLLOWUP_RESULTS.md): bounded lazy-record construction and preserved reclamation requests improve scan CPU and changing-input large-string CPU/RSS. It links every current measurement, remaining Node/Bun gap, and release-validation status. The [merged baseline audit](MERGED_MAIN_AUDIT.md) records the exact PR #10022 merge. Follow-up experiments cover [lazy record batches](LAZY_RECORD_BATCHES.md) and [large-string reclamation](LARGE_STRING_RECLAMATION.md). The [outlined stringify experiment](STRINGIFY_DISPATCH.md) was rejected; [next parse investigations](NEXT_PARSE_TARGETS.md) are hypotheses. Earlier reports below are historical stages.
+
+An earlier source milestone is in [DATA_RECORDS.md](DATA_RECORDS.md): scalar parse isolation, guarded record emission, and fixes for descriptor fallback and a first-prototype GC hazard. The record release has no accepted performance measurements yet.
 
 This study measures `JSON.parse` and `JSON.stringify` in Perry, Node.js and Bun, and identifies an implementation path for improving Perry. Read [the analysis and roadmap](REPORT.md), [all CPU/wall/RSS tables](results/full-tables.md), or [the raw-data summary](results/summary.csv).
 
-Latest measured candidate: [bounded tape scanning](TAPE_SCANNING.md).
+Earlier measured candidate: [bounded tape scanning](TAPE_SCANNING.md).
 Numeric-array parse improves 7% and 1–8 MB record-array parse improves 3–3.5%
 over the preceding candidate. Repeated CPU and process-memory regressions
 keep performance acceptance open. The
@@ -29,3 +31,30 @@ To reproduce:
 The original quiet-window record is `results/window.json`. Follow-up diagnostics have their own window record. Per-process CPU is measured around the work loop, using `process.cpuUsage()`; wall time uses `performance.now()`. `/usr/bin/time -l` independently records process-wide peak RSS, peak physical footprint, instructions, and cycles. `process.memoryUsage().rss` supplies current RSS before/after the loop. Memory retention cases compare one retained result with a larger live batch. No forced GC or GC-disabling flags are used in the default standings.
 
 The main matrix includes valid scalars, small objects, records, object envelopes, numeric arrays, long ASCII strings, escape-heavy strings, Unicode, heterogeneous objects, and wide objects. Large array parse, sparse access, full scan, normal stringify, and untouched roundtrip are separate operations. The stringify setup wraps input in an object before parsing to ensure Perry materializes its input rather than reusing the lazy source text. Output verification occurs in separate processes, outside both timing and memory trials.
+
+For follow-up candidate/reference runs, `summarize_original.py RESULTS
+--engines perry,node,bun,baseline` validates all original CPU and retained-memory
+groups (five repetitions), output checks, and the saved quiet-window verdict.
+`parity.py RESULTS/summary.json --output RESULTS` then lists every CPU/RSS target.
+The summarizer also writes `comparison.md` with all individual engine medians.
+
+For rotating input, run `generate_rotating.py`, compile `rotating-worker.ts`, and
+invoke `run_rotating.py --worker CANDIDATE --baseline-worker REFERENCE --node
+NODE --bun BUN --repeat 5 --results-dir NEW_RESULTS` under `with_lock.py --`.
+The reference must be a rotating worker linked against the baseline runtime.
+The controller checks every corpus member and several final loop positions;
+`summarize_rotating.py NEW_RESULTS` validates coverage and writes CPU/RSS tables.
+Save `results/window-custom.json` into the run as `window.json` and inspect its
+quiet verdict before accepting measurements.
+
+`run_dispatch_focus.py` supplements the full matrix with longer interleaved
+stringify trials for `string_a`, `small_record`, and `unicode_1m`. Supply
+`--worker`, `--baseline-worker`, optionally `--prior-worker`, the pinned `--node`,
+and a new `--results-dir`, under the same lock. Node supplies the correctness
+oracle; these timing arms compare Perry versions only. Tiny cases run 50 million
+calls per trial so nanosecond-scale differences get longer observation windows.
+
+`run_regression_focus.py` uses the same arguments and admission wrapper to
+replicate the large ASCII-stringify CPU and small roundtrip RSS concerns at fixed
+work counts. It compares Perry versions with Node as the output oracle. Preserve
+its controller scripts with the raw results and the saved quiet-window verdict.

@@ -1,0 +1,18 @@
+{
+  "disposition": "development-host stack samples; concurrent compilation; not acceptance timing or RSS",
+  "worker_sha256": "5bc0b890ddabc22d2af72ee5f7d318f06c9783ab332b58151b4e3791b5a6b6f2",
+  "sample_seconds": 2,
+  "sample_interval_ms": 1,
+  "startup_delay_s": 0.3,
+  "mode": "rotating",
+  "fixtures": [
+    "unicode_1m",
+    "small_record"
+  ],
+  "workers_intentionally_terminated_after_sampling": true,
+  "unicode_main_thread_samples": 1565,
+  "unicode_utf16_leaf_samples": 672,
+  "unicode_token_scan_leaf_samples": 343,
+  "unicode_depth_preflight_leaf_samples": 220,
+  "unicode_copy_leaf_samples": 143
+}

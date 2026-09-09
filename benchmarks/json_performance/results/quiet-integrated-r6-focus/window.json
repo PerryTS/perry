@@ -1,0 +1,32 @@
+{
+  "owner": "json-perf-30169-1788967716",
+  "load_before": [
+    1.78125,
+    1.84033203125,
+    1.84912109375
+  ],
+  "started_utc": "2026-09-09T15:28:36Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    "run_regression_focus.py",
+    "--worker",
+    ".work/integrated-r6/worker",
+    "--baseline-worker",
+    ".work/worker-merged-pr10022",
+    "--prior-worker",
+    ".work/output-debt-r6/worker",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--results-dir",
+    "results/quiet-integrated-r6-focus"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    2.1533203125,
+    1.9150390625,
+    1.8720703125
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-09T15:29:33Z"
+}

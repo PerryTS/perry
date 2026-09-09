@@ -1,0 +1,251 @@
+diff --git a/crates/perry-runtime/src/gc/policy.rs b/crates/perry-runtime/src/gc/policy.rs
+index 24de15222..f95e714fc 100644
+--- a/crates/perry-runtime/src/gc/policy.rs
++++ b/crates/perry-runtime/src/gc/policy.rs
+@@ -3118,7 +3118,7 @@ crate::perry_thread_local! {
+     static GC_BUDGETED_STEP_ACTIVE: Cell<bool> = const { Cell::new(false) };
+ }
+ 
+-pub(super) fn gc_budgeted_cycle_active() -> bool {
++pub(crate) fn gc_budgeted_cycle_active() -> bool {
+     GC_BUDGETED_CYCLE_ACTIVE.with(Cell::get)
+ }
+ 
+diff --git a/crates/perry-runtime/src/gc/tests/runtime_roots/callback_scanners.rs b/crates/perry-runtime/src/gc/tests/runtime_roots/callback_scanners.rs
+index bcf72ccef..e3e4776e5 100644
+--- a/crates/perry-runtime/src/gc/tests/runtime_roots/callback_scanners.rs
++++ b/crates/perry-runtime/src/gc/tests/runtime_roots/callback_scanners.rs
+@@ -312,6 +312,36 @@ fn test_json_tape_lazy_get_header_handle_survives_copied_minor_gc() {
+     }
+ }
+ 
++#[test]
++fn test_json_tape_small_record_batch_survives_copied_minor_before_cache_store() {
++    let _guard = CopyingNurseryTestGuard::new(0);
++    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
++    register_runtime_handle_root_scanner_for_tests();
++    let input = br#"[{"id":42,"name":"lazy-record-long","tags":["red-long","blue-long"]}]"#;
++    let hdr = unsafe { test_alloc_lazy_json_array(input) };
++    let scope = RuntimeHandleScope::new();
++    let hdr_handle = scope.root_raw_mut_ptr(hdr);
++    let hook = JsonTapeSafepointHookGuard::new(
++        crate::json_tape::JsonTapeSafepoint::MaterializeObjectRooted,
++    );
++    let value = unsafe { crate::json_tape::lazy_get(hdr_handle.get_raw_mut_ptr(), 0) };
++    let original = hook.fired_ptr();
++    assert_ne!(original, 0, "completed-record collection hook must run");
++    assert_ne!(
++        value.as_pointer::<u8>() as usize,
++        original,
++        "the completed record must move before lazy_get publishes its cache slot"
++    );
++    let value_handle = scope.root_nanbox_u64(value.bits());
++    let again = unsafe { crate::json_tape::lazy_get(hdr_handle.get_raw_mut_ptr(), 0) };
++    assert_eq!(again.bits(), value_handle.get_nanbox_u64());
++    let output =
++        unsafe { crate::json::js_json_stringify(f64::from_bits(value_handle.get_nanbox_u64()), 0) };
++    unsafe {
++        assert_string_bytes(output, &input[1..input.len() - 1]);
++    }
++}
++
+ /// #7538 / #7500: `lazy_get`'s sparse-cache store must be recorded as an
+ /// EXTERNAL old→young edge.
+ ///
+diff --git a/crates/perry-runtime/src/json_tape.rs b/crates/perry-runtime/src/json_tape.rs
+index 34e415c69..80c279766 100644
+--- a/crates/perry-runtime/src/json_tape.rs
++++ b/crates/perry-runtime/src/json_tape.rs
+@@ -565,6 +565,9 @@ enum TapeSource<'a, 'scope> {
+     },
+ }
+ 
++#[path = "json_tape/record_materialize.rs"]
++mod record_materialize;
++
+ impl<'a, 'scope> TapeSource<'a, 'scope> {
+     #[inline]
+     unsafe fn len(&self) -> usize {
+@@ -1612,7 +1615,8 @@ pub unsafe fn lazy_get(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
+     (*hdr).walk_tape_pos = idx as u32;
+     (*hdr).cumulative_walk_steps = (*hdr).cumulative_walk_steps.saturating_add(step_cost);
+ 
+-    let value = materialize_from_idx_source(&source, &scope, idx);
++    let value = record_materialize::try_small_record(&source, &scope, idx)
++        .unwrap_or_else(|| materialize_from_idx_source(&source, &scope, idx));
+     let value_handle = scope.root_nanbox_u64(value.bits());
+     let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
+     let bitmap = (*hdr).materialized_bitmap;
+@@ -1751,7 +1755,7 @@ unsafe fn reparse_materialize(
+         let _suppress = crate::gc::GcSuppressScope::new();
+         let data = (blob as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+         let bytes = std::slice::from_raw_parts(data, blob_len);
+-        let mut parser = crate::json::DirectParser::new(bytes);
++        let mut parser = crate::json::DirectParser::new_batched(bytes);
+         let parsed = parser.parse_value();
+         // Hand the tree to PARSE_ROOTS before the window closes — the
+         // handle-scope root below is pushed after it has already closed.
+diff --git a/scripts/gc_runtime_root_holders.json b/scripts/gc_runtime_root_holders.json
+index 85f1771a2..3e2b1a821 100644
+--- a/scripts/gc_runtime_root_holders.json
++++ b/scripts/gc_runtime_root_holders.json
+@@ -289,7 +289,7 @@
+       "file": "crates/perry-runtime/src/gc/census.rs",
+       "name": "PASS1_MARKED",
+       "verdict": "non_moving_snapshot",
+-      "why": "Real GC header addresses, deliberately untraced so the diagnostic does not keep its observed objects alive. Populated only at the end of mark propagation of a synchronous full cycle; consumed at sweep entry in the same run_to_completion invocation. The intervening full-cycle phases do not relocate or run JS callbacks. The Vec is used for membership comparisons and dropped with the census before sweep. Budgeted and minor cycles skip both boundaries. Pin re-audited 2026-09-05 after #9760 touched `gc/mod.rs`: that change is `mod heap_stats;` plus a `pub(crate) use` re-export and alters no mark/sweep control flow. `heap_stats()` is reached only from `js_bun_jsc_heap_stats` (the JS-facing `bun:jsc.heapStats()`), i.e. from mutator code, never inside a cycle, and its own module contract forbids allocation or collection during its walk. The mark-complete \u2192 sweep-entry window is unchanged. Re-audited 2026-09-05 (train125) after #9769 and #9771 touched pinned files. #9769 adds one `reg_scanner!` registration to `gc/mod.rs`; #9771 adds a feature-gated `alloc_census_init()` there and a feature-gated Rust-heap dump inside `take_census`. `alloc-census` is not in the default feature set, and decisively: `census_take_if_armed_at_full_sweep_start` does `PASS1_MARKED.with(|p| p.borrow_mut().take())` BEFORE calling `take_census`, so the snapshot has already left the thread-local by the time #9771's code runs \u2014 it cannot affect the window. Neither change alters mark/sweep control flow. Re-audited 2026-09-06 after #9831 touched `gc/policy.rs`. Its hunks are (a) the tiny-parse pressure guard's pricing (`tiny_parse_pressure_headroom_bytes`, `tiny_parse_pressure_due*`, a `Cell<usize>` byte-count base) consulted from JSON.parse's mutator-side boundaries (`gc_bump_malloc_trigger`, `gc_collect_pending_suppressed_parse`, `gc_schedule_parse_boundary_collection_if_pressure`), none of which is reachable from inside a cycle, and (b) one extra `Cell` store in `note_collection_finished_arena_occupancy`, which runs from `publish_reclaim_outcome` in the Publish subphase \u2014 after `step_sweep` has already consumed the snapshot. Mark/sweep control flow between `census_pass1_if_armed` and `census_take_if_armed_at_full_sweep_start` is untouched. Re-audited 2026-09-05 (train126) after #9755 restructured `gc/cycle.rs`. Its hunks are all root-scan machinery (`RootScanSubphase`, `RootScanCycleState`, the mutable-scanner iteration state), which runs BEFORE mark propagation completes; `gc/mod.rs` gains only a `mod young_log;` declaration. The bracketing is unchanged \u2014 `census_pass1_if_armed` is still inside `step_mark_propagation` and `census_take_if_armed_at_full_sweep_start` inside `step_sweep` \u2014 and a synchronous full mark-sweep still moves nothing between them. Re-pinned 2026-09-05 for the #9740 hot-TLS conversion of this file: the sole change is `thread_local!` \u2192 `crate::perry_thread_local!`, a macro-name swap with identical declaration syntax and `.with()` call sites. No control flow, no phase boundary, and no storage semantics change. Re-audited 2026-09-06 (train128) after #9794's GC diagnostics touched `gc/mod.rs` and `gc/policy.rs`: both gain diagnostic module declarations and counters only \u2014 no mark/sweep control flow, and the census bracketing in `step_mark_propagation` / `step_sweep` is unchanged. Re-audited for #9794's GC diagnostics: `gc/mod.rs` gains `mod diag_sites;` / `mod survival_diag;`, a re-export, a `diag_sites::full_started(...)` call at TRIGGER time (before mark propagation begins), and exit-time reporting. Nothing executes between mark-complete and sweep-entry, so the window is unchanged. Re-audited 2026-09-06 for the retained array-growth verifier fix: the cycle.rs change passes the existing non-copying evacuation verifier an explicit all-forwarded policy. That call remains in minor finalization, outside the synchronous full-cycle census window; its root and heap reads do not allocate GC objects, move objects, or invoke JS callbacks. The mark-complete and sweep-entry boundaries are unchanged. Re-audited 2026-09-05 after #9830 touched `gc/policy.rs`. That change is (a) six `thread_local! {` blocks rewritten as `crate::perry_thread_local! {` and (b) one `#[cfg(test)]` accessor listing the trigger path's hot-slot indices. The macro keeps the same storage, the same `.with()` at every read and write, and the same destructor registration (the teardown guard exists exactly when `needs_drop` holds, which is what `std::thread_local!` already decided); no value, predicate or branch in the file changes, so no mark or sweep control flow does. The one new behaviour is on a declaration's FIRST read: `HotKey::resolve_and_cache` takes a mutex and allocates a key through the GLOBAL allocator. Even if a first read landed inside this window it would be sound \u2014 the window's contract is that nothing relocates and no JS callback runs, and a mimalloc allocation does neither. `census_pass1_if_armed` is still inside `step_mark_propagation` and `census_take_if_armed_at_full_sweep_start` inside `step_sweep`; the bracketing is untouched. Re-audited 2026-09-06 (train132) after #9860 and #9845 touched `gc/mod.rs`. Both hunks are re-export lists and nothing else: #9860 adds `idle_reclaim_elapsed_starts` / `IDLE_RECLAIM_REARM_MS`, and #9845 adds `owner_is_dead_copied_minor_from_space_of_type`. No mark or sweep control flow changes. #9845's substantive work sits in `gc/oldgen.rs` and `gc/copying.rs`, neither pinned: the copying-minor arm (`finalize_dead_copied_minor_from_space_regexps`) runs on a MINOR, which skips both census boundaries; the full-cycle arm (`collect_dead_registered_regexps_post_trace`, from `with_dead_collection_finalize`) walks the RegExp registry building a Vec of addresses \u2014 no GC allocation, no JS callback, so it cannot relocate the snapshot's subjects \u2014 and it is reached from the sweep body, i.e. AFTER `census_take_if_armed_at_full_sweep_start` has already `take()`n the snapshot out of the thread-local. The mark-complete -> sweep-entry window is unchanged. Re-audited 2026-09-07 for #9965 after 1ec9e0e8a touched `gc/cycle.rs` and `gc/mod.rs`: `gc/mod.rs:216-217` only declares and imports the failure-attribution module, while `gc/cycle.rs:1414-1417` reads the trigger and diagnostic counters immediately before evacuation verification inside `atomic_finalize_minor_prelude`. Full cycles bypass `MinorPrelude` at `gc/cycle.rs:1192-1196`; evacuation remains guarded by the minor-only context at `gc/cycle.rs:1330-1372`. The snapshot store remains at `gc/cycle.rs:963-964` after synchronous full marking, and its take remains at `gc/cycle.rs:1454-1457` before sweep. No new write, relocation, collection, or JS callback was added to that full-cycle interval, so the PASS1_MARKED window is unaffected. Re-audited 2026-09-07 for the regex census rows: all new work is in `take_census` after `census_take_if_armed_at_full_sweep_start` has taken PASS1_MARKED out of TLS; neither boundary nor the intervening cycle control flow changed. Re-audited 2026-09-08 (train144) after #9976 and #9977 touched pinned files. `gc/mod.rs` gains exactly three lines: `mod copying_phase;` and `mod regex_census;` (declarations) and one `reg_scanner!(regex::site_test::scan_roots_mut)` registration. A scanner registration adds a root SOURCE for the mutable-root walks; it does not move either census boundary and runs nowhere between them. `gc/census.rs` widens `side_tables()` to `pub(super)`, extends it with regex rows and adds a test module \u2014 all census REPORTING, which runs from the diagnostic dump, not inside a cycle. Mark/sweep control flow between `census_pass1_if_armed` and `census_take_if_armed_at_full_sweep_start` is untouched. Re-audited 2026-09-08 for #9849 JSON construction deferral. `gc/mod.rs` adds the `json_defer` module/re-export and a trusted-header layout helper used only by already-validated JSON emitters; neither changes or runs in collector phase control flow. `gc/policy.rs` adds JSON completion scheduling, construction-grace checks, and safepoint deferral predicates. These are called from mutator-side JSON allocation/output boundaries and ordinary safepoint entry; they do not alter `step_mark_propagation`, `step_sweep`, or invoke callbacks or relocation between the census boundaries. The mark-complete to sweep-entry window is unchanged. The follow-up adds a cfg(test)-only one-shot boolean for deterministic explicit-pressure fixtures; it is absent from production builds and cannot affect the census window. The first predicate read consumes it, so post-parse accounting exercises normal pricing. Re-audited 2026-09-09 for bounded tiny-JSON completion polling. The policy.rs changes split the mutator-side pending-parse check into an inlined empty fast path plus an outlined debt-service path, and amortize the mutator-side arena-pressure read across 64 bounded parse completions. Neither function is reachable from step_mark_propagation or step_sweep; neither census boundary nor the synchronous full-cycle interval between them changes.",
++      "why": "Real GC header addresses, deliberately untraced so the diagnostic does not keep its observed objects alive. Populated only at the end of mark propagation of a synchronous full cycle; consumed at sweep entry in the same run_to_completion invocation. The intervening full-cycle phases do not relocate or run JS callbacks. The Vec is used for membership comparisons and dropped with the census before sweep. Budgeted and minor cycles skip both boundaries. Pin re-audited 2026-09-05 after #9760 touched `gc/mod.rs`: that change is `mod heap_stats;` plus a `pub(crate) use` re-export and alters no mark/sweep control flow. `heap_stats()` is reached only from `js_bun_jsc_heap_stats` (the JS-facing `bun:jsc.heapStats()`), i.e. from mutator code, never inside a cycle, and its own module contract forbids allocation or collection during its walk. The mark-complete \u2192 sweep-entry window is unchanged. Re-audited 2026-09-05 (train125) after #9769 and #9771 touched pinned files. #9769 adds one `reg_scanner!` registration to `gc/mod.rs`; #9771 adds a feature-gated `alloc_census_init()` there and a feature-gated Rust-heap dump inside `take_census`. `alloc-census` is not in the default feature set, and decisively: `census_take_if_armed_at_full_sweep_start` does `PASS1_MARKED.with(|p| p.borrow_mut().take())` BEFORE calling `take_census`, so the snapshot has already left the thread-local by the time #9771's code runs \u2014 it cannot affect the window. Neither change alters mark/sweep control flow. Re-audited 2026-09-06 after #9831 touched `gc/policy.rs`. Its hunks are (a) the tiny-parse pressure guard's pricing (`tiny_parse_pressure_headroom_bytes`, `tiny_parse_pressure_due*`, a `Cell<usize>` byte-count base) consulted from JSON.parse's mutator-side boundaries (`gc_bump_malloc_trigger`, `gc_collect_pending_suppressed_parse`, `gc_schedule_parse_boundary_collection_if_pressure`), none of which is reachable from inside a cycle, and (b) one extra `Cell` store in `note_collection_finished_arena_occupancy`, which runs from `publish_reclaim_outcome` in the Publish subphase \u2014 after `step_sweep` has already consumed the snapshot. Mark/sweep control flow between `census_pass1_if_armed` and `census_take_if_armed_at_full_sweep_start` is untouched. Re-audited 2026-09-05 (train126) after #9755 restructured `gc/cycle.rs`. Its hunks are all root-scan machinery (`RootScanSubphase`, `RootScanCycleState`, the mutable-scanner iteration state), which runs BEFORE mark propagation completes; `gc/mod.rs` gains only a `mod young_log;` declaration. The bracketing is unchanged \u2014 `census_pass1_if_armed` is still inside `step_mark_propagation` and `census_take_if_armed_at_full_sweep_start` inside `step_sweep` \u2014 and a synchronous full mark-sweep still moves nothing between them. Re-pinned 2026-09-05 for the #9740 hot-TLS conversion of this file: the sole change is `thread_local!` \u2192 `crate::perry_thread_local!`, a macro-name swap with identical declaration syntax and `.with()` call sites. No control flow, no phase boundary, and no storage semantics change. Re-audited 2026-09-06 (train128) after #9794's GC diagnostics touched `gc/mod.rs` and `gc/policy.rs`: both gain diagnostic module declarations and counters only \u2014 no mark/sweep control flow, and the census bracketing in `step_mark_propagation` / `step_sweep` is unchanged. Re-audited for #9794's GC diagnostics: `gc/mod.rs` gains `mod diag_sites;` / `mod survival_diag;`, a re-export, a `diag_sites::full_started(...)` call at TRIGGER time (before mark propagation begins), and exit-time reporting. Nothing executes between mark-complete and sweep-entry, so the window is unchanged. Re-audited 2026-09-06 for the retained array-growth verifier fix: the cycle.rs change passes the existing non-copying evacuation verifier an explicit all-forwarded policy. That call remains in minor finalization, outside the synchronous full-cycle census window; its root and heap reads do not allocate GC objects, move objects, or invoke JS callbacks. The mark-complete and sweep-entry boundaries are unchanged. Re-audited 2026-09-05 after #9830 touched `gc/policy.rs`. That change is (a) six `thread_local! {` blocks rewritten as `crate::perry_thread_local! {` and (b) one `#[cfg(test)]` accessor listing the trigger path's hot-slot indices. The macro keeps the same storage, the same `.with()` at every read and write, and the same destructor registration (the teardown guard exists exactly when `needs_drop` holds, which is what `std::thread_local!` already decided); no value, predicate or branch in the file changes, so no mark or sweep control flow does. The one new behaviour is on a declaration's FIRST read: `HotKey::resolve_and_cache` takes a mutex and allocates a key through the GLOBAL allocator. Even if a first read landed inside this window it would be sound \u2014 the window's contract is that nothing relocates and no JS callback runs, and a mimalloc allocation does neither. `census_pass1_if_armed` is still inside `step_mark_propagation` and `census_take_if_armed_at_full_sweep_start` inside `step_sweep`; the bracketing is untouched. Re-audited 2026-09-06 (train132) after #9860 and #9845 touched `gc/mod.rs`. Both hunks are re-export lists and nothing else: #9860 adds `idle_reclaim_elapsed_starts` / `IDLE_RECLAIM_REARM_MS`, and #9845 adds `owner_is_dead_copied_minor_from_space_of_type`. No mark or sweep control flow changes. #9845's substantive work sits in `gc/oldgen.rs` and `gc/copying.rs`, neither pinned: the copying-minor arm (`finalize_dead_copied_minor_from_space_regexps`) runs on a MINOR, which skips both census boundaries; the full-cycle arm (`collect_dead_registered_regexps_post_trace`, from `with_dead_collection_finalize`) walks the RegExp registry building a Vec of addresses \u2014 no GC allocation, no JS callback, so it cannot relocate the snapshot's subjects \u2014 and it is reached from the sweep body, i.e. AFTER `census_take_if_armed_at_full_sweep_start` has already `take()`n the snapshot out of the thread-local. The mark-complete -> sweep-entry window is unchanged. Re-audited 2026-09-07 for #9965 after 1ec9e0e8a touched `gc/cycle.rs` and `gc/mod.rs`: `gc/mod.rs:216-217` only declares and imports the failure-attribution module, while `gc/cycle.rs:1414-1417` reads the trigger and diagnostic counters immediately before evacuation verification inside `atomic_finalize_minor_prelude`. Full cycles bypass `MinorPrelude` at `gc/cycle.rs:1192-1196`; evacuation remains guarded by the minor-only context at `gc/cycle.rs:1330-1372`. The snapshot store remains at `gc/cycle.rs:963-964` after synchronous full marking, and its take remains at `gc/cycle.rs:1454-1457` before sweep. No new write, relocation, collection, or JS callback was added to that full-cycle interval, so the PASS1_MARKED window is unaffected. Re-audited 2026-09-07 for the regex census rows: all new work is in `take_census` after `census_take_if_armed_at_full_sweep_start` has taken PASS1_MARKED out of TLS; neither boundary nor the intervening cycle control flow changed. Re-audited 2026-09-08 (train144) after #9976 and #9977 touched pinned files. `gc/mod.rs` gains exactly three lines: `mod copying_phase;` and `mod regex_census;` (declarations) and one `reg_scanner!(regex::site_test::scan_roots_mut)` registration. A scanner registration adds a root SOURCE for the mutable-root walks; it does not move either census boundary and runs nowhere between them. `gc/census.rs` widens `side_tables()` to `pub(super)`, extends it with regex rows and adds a test module \u2014 all census REPORTING, which runs from the diagnostic dump, not inside a cycle. Mark/sweep control flow between `census_pass1_if_armed` and `census_take_if_armed_at_full_sweep_start` is untouched. Re-audited 2026-09-08 for #9849 JSON construction deferral. `gc/mod.rs` adds the `json_defer` module/re-export and a trusted-header layout helper used only by already-validated JSON emitters; neither changes or runs in collector phase control flow. `gc/policy.rs` adds JSON completion scheduling, construction-grace checks, and safepoint deferral predicates. These are called from mutator-side JSON allocation/output boundaries and ordinary safepoint entry; they do not alter `step_mark_propagation`, `step_sweep`, or invoke callbacks or relocation between the census boundaries. The mark-complete to sweep-entry window is unchanged. The follow-up adds a cfg(test)-only one-shot boolean for deterministic explicit-pressure fixtures; it is absent from production builds and cannot affect the census window. The first predicate read consumes it, so post-parse accounting exercises normal pricing. Re-audited 2026-09-09 for bounded tiny-JSON completion polling. The policy.rs changes split the mutator-side pending-parse check into an inlined empty fast path plus an outlined debt-service path, and amortize the mutator-side arena-pressure read across 64 bounded parse completions. Neither function is reachable from step_mark_propagation or step_sweep; neither census boundary nor the synchronous full-cycle interval between them changes. Re-audited 2026-09-09 for lazy JSON record batches: policy.rs only widens gc_budgeted_cycle_active visibility from pub(super) to pub(crate). Its body remains a read-only Cell<bool> query. The new caller is lazy_get materialization in the mutator; run_to_completion, step_mark_propagation, census snapshot consumption at step_sweep, and the synchronous non-moving window are unchanged.",
+       "window": {
+         "start": {
+           "file": "crates/perry-runtime/src/gc/census.rs",
+@@ -307,7 +307,7 @@
+           "crates/perry-runtime/src/gc/census.rs": "0fd14b011bdbe0ae561e105d6d1acf0e9cc03e8a86ddef12685e307d1adee55a",
+           "crates/perry-runtime/src/gc/cycle.rs": "77eadaf7c4157308c3b14be5e1ff11d7198b84b503a50ff2d244851248d3e800",
+           "crates/perry-runtime/src/gc/mod.rs": "74fbcbd4c0a1ea991e06251526ce54854d8f74cd35c8ab9ac6a8c3894a7ebc05",
+-          "crates/perry-runtime/src/gc/policy.rs": "76c607769087e49885ba1f028bb038a2e0170ca4ba1ad11b438ca3aa6a7ddff6",
++          "crates/perry-runtime/src/gc/policy.rs": "11539904abc3d444c443568adb78e7ec7028891c523a2ca893bac66e071de60f",
+           "crates/perry-runtime/src/gc/progress.rs": "a5ad3971bbe4047229ca57325234780daa85921dbc778e1c08dff4ad07ccfb96"
+         }
+       }
+diff --git a/crates/perry-runtime/src/json_tape/record_materialize.rs b/crates/perry-runtime/src/json_tape/record_materialize.rs
+new file mode 100644
+index 000000000..6d701ed5b
+--- /dev/null
++++ b/crates/perry-runtime/src/json_tape/record_materialize.rs
+@@ -0,0 +1,136 @@
++//! Materialize one small lazy record using the ordinary JSON construction batch.
++//! The tape supplies its exact byte range; larger records keep the rooted tape
++//! walker. No source-identity cache is used for a slice of the enclosing blob.
++
++use super::*;
++
++const MAX_RECORD_BYTES: usize = 512;
++
++pub(super) unsafe fn try_small_record(
++    source: &TapeSource<'_, '_>,
++    scope: &crate::gc::RuntimeHandleScope,
++    start_idx: usize,
++) -> Option<JSValue> {
++    let entry = source.entry(start_idx)?;
++    if entry.kind != KIND_OBJ_START {
++        return None;
++    }
++    let end = source.entry(entry.link as usize)?;
++    if end.kind != KIND_OBJ_END {
++        return None;
++    }
++    let len = (end.offset as usize)
++        .checked_sub(entry.offset as usize)?
++        .checked_add(1)?;
++    if len > MAX_RECORD_BYTES {
++        return None;
++    }
++
++    // Reuse the bounded parse boundary policy. An unconditional trigger here
++    // also collects for unrelated old/tape pressure on every sparse read,
++    // changing the scheduling of an otherwise cheap record construction.
++    // Full-GC mode and active incremental cycles retain ordinary servicing.
++    // TapeSource re-reads the rooted blob after a possible move.
++    if !crate::gc::gen_gc_enabled() || crate::gc::gc_budgeted_cycle_active() {
++        crate::gc::gc_check_trigger();
++    } else {
++        crate::gc::gc_collect_pending_suppressed_parse();
++    }
++    let value_handle = {
++        let _suppress = crate::gc::GcSuppressScope::new();
++        let bytes = source.bytes_from_offset(entry.offset as usize).get(..len)?;
++        let mut parser = crate::json::DirectParser::new_batched(bytes);
++        let value = parser.parse_value();
++        if !parser.finish() {
++            return None;
++        }
++        scope.root_nanbox_u64(value.bits())
++    };
++    // At most 63 more records of <=512 source bytes can precede the next
++    // pressure observation, using the existing tiny-parse completion counter.
++    // This schedules work; the completed record is already a rewritable root.
++    crate::gc::gc_schedule_tiny_parse_boundary_collection_if_pressure();
++    json_tape_safepoint(
++        JsonTapeSafepoint::MaterializeObjectRooted,
++        JSValue::from_bits(value_handle.get_nanbox_u64()).as_pointer::<u8>() as usize,
++    );
++    Some(JSValue::from_bits(value_handle.get_nanbox_u64()))
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn small_lazy_record_batch_preserves_duplicate_escape_and_nested_values() {
++        // Expected output checked against the repository's pinned Node oracle.
++        // The legacy tape walker drops lone surrogates, so it cannot serve as
++        // the oracle for the escaped-string case.
++        for (text, expected) in [
++            (
++                r#"{"id":42,"name":"user_42","tags":["red","blue"],"active":true}"#,
++                r#"{"id":42,"name":"user_42","tags":["red","blue"],"active":true}"#,
++            ),
++            (
++                r#"{"a":1,"\u0061":2,"nested":{"x":1,"x":3},"s":"\ud800\n"}"#,
++                r#"{"a":2,"nested":{"x":3},"s":"\ud800\n"}"#,
++            ),
++            (
++                r#"{"0":0,"__proto__":{"polluted":true},"v":-0,"n":1e300}"#,
++                r#"{"0":0,"__proto__":{"polluted":true},"v":0,"n":1e+300}"#,
++            ),
++        ] {
++            unsafe {
++                let tape = build_tape(text.as_bytes()).unwrap();
++                let source = TapeSource::Borrowed {
++                    tape: &tape.entries,
++                    bytes: text.as_bytes(),
++                };
++                let scope = crate::gc::RuntimeHandleScope::new();
++                let value = try_small_record(&source, &scope, 0)
++                    .expect("bounded record must reach the batch producer");
++                let batch = crate::json::js_json_stringify(f64::from_bits(value.bits()), 0);
++                assert_eq!(crate::string::string_as_str(batch), expected);
++            }
++        }
++    }
++
++    #[test]
++    fn small_lazy_record_batch_uses_the_element_range() {
++        let text = br#"[{"id":1},{"id":2,"s":"right"},{"id":3}]"#;
++        let tape = build_tape(text).unwrap();
++        unsafe {
++            let first_end = tape.entries[1].link as usize;
++            let source = TapeSource::Borrowed {
++                tape: &tape.entries,
++                bytes: text,
++            };
++            let scope = crate::gc::RuntimeHandleScope::new();
++            let value = try_small_record(&source, &scope, first_end + 1).unwrap();
++            let output = crate::json::js_json_stringify(f64::from_bits(value.bits()), 0);
++            assert_eq!(
++                crate::string::string_as_str(output),
++                r#"{"id":2,"s":"right"}"#
++            );
++        }
++    }
++
++    #[test]
++    fn small_lazy_record_batch_declines_large_records_and_nonobjects() {
++        for text in [
++            format!(r#"{{"s":"{}"}}"#, "x".repeat(MAX_RECORD_BYTES)),
++            "[1,2]".to_owned(),
++            "null".to_owned(),
++        ] {
++            let tape = build_tape(text.as_bytes()).unwrap();
++            unsafe {
++                let scope = crate::gc::RuntimeHandleScope::new();
++                let source = TapeSource::Borrowed {
++                    tape: &tape.entries,
++                    bytes: text.as_bytes(),
++                };
++                assert!(try_small_record(&source, &scope, 0).is_none());
++            }
++        }
++    }
++}

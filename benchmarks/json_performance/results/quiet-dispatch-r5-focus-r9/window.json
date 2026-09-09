@@ -1,0 +1,34 @@
+{
+  "owner": "json-perf-17655-1788965106",
+  "load_before": [
+    1.90283203125,
+    2.017578125,
+    1.84033203125
+  ],
+  "started_utc": "2026-09-09T14:45:06Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    "run_dispatch_focus.py",
+    "--worker",
+    ".work/dispatch-r5/worker",
+    "--baseline-worker",
+    ".work/worker-merged-pr10022",
+    "--prior-worker",
+    ".work/output-debt-r4/worker",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--repeat",
+    "9",
+    "--results-dir",
+    "results/quiet-dispatch-r5-focus-r9"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.74658203125,
+    1.93798828125,
+    1.82421875
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-09T14:46:29Z"
+}

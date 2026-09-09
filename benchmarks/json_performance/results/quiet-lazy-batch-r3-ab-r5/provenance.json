@@ -1,0 +1,20 @@
+{
+  "base_commit": "c82e613d260a80324914b5aba503a31a763ad90e",
+  "files": {
+    "crates/perry-runtime/src/json_tape.rs": "a23d26790752d77a7ac061c77f3a6b971d175fca05122342b1eb919ea5a96217",
+    "crates/perry-runtime/src/gc/policy.rs": "11539904abc3d444c443568adb78e7ec7028891c523a2ca893bac66e071de60f",
+    "crates/perry-runtime/src/gc/tests/runtime_roots/callback_scanners.rs": "0fb0a108ea34d4a120f14461eb34a219238a2c53672e24e6fab31dc8c2640a75",
+    "crates/perry-runtime/src/json_tape/record_materialize.rs": "b07fe91ea7bcfb5a4cdcab568149266d0f34c7c58bf4b91d04fbd91e6b97b3f2",
+    "scripts/gc_runtime_root_holders.json": "8e3ea6366482940f501b6c7192bf0f26ecbace5d020c42b3076036fb1ac42084",
+    "target/release/libperry_runtime.a": "61f1fbdb8723424f7da9ed6a1099e390d47f464f75739217dcb7e16f47f48809",
+    "benchmarks/json_performance/.work/worker.o": "e90dae0943404bb0f3473c8dbdb80e268626410584f8e2002dcf737daac9cdd0",
+    "benchmarks/json_performance/.work/rotating-worker": "4f5a58a4519354066d756e49786be3d52e580bc5ddf8768c88053246e64038c8",
+    "benchmarks/json_performance/.work/lazy-batch-r3/worker": "d2b706017814d1cae543c1ddfc113b6e2c57ee0c09be6d06c2a25e4ce817bc1a",
+    "benchmarks/json_performance/.work/lazy-batch-r3/rotating-worker": "b2ef3bb56c1a7c42d9b86fdb03e037c2e0b6eeedb3551044595dc4db470c89d7",
+    "target/release/perry": "0c31b71d50f7c84b052d4a9c1bdd023d68a520f0d5a4ca91ac2910711269fd8d",
+    "target/release/libperry_stdlib.a": "9c36516a84679dd039c13bfc26fcb875224e0c90b0a0d74acfb1395068905626"
+  },
+  "runtime_only_bench_link": true,
+  "tests": "275 JSON tests passed",
+  "matched_release_build": "passed"
+}

@@ -1,0 +1,1082 @@
+[
+  {
+    "phase": "memory",
+    "fixture": "tiny_object",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "perry",
+    "cpu_us": 31.0,
+    "peak_rss_mib": 12.9375,
+    "rss_after_mib": 11.84375
+  },
+  {
+    "phase": "memory",
+    "fixture": "tiny_object",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "node",
+    "cpu_us": 373.0,
+    "peak_rss_mib": 53.515625,
+    "rss_after_mib": 52.6875
+  },
+  {
+    "phase": "memory",
+    "fixture": "tiny_object",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "bun",
+    "cpu_us": 9.0,
+    "peak_rss_mib": 28.703125,
+    "rss_after_mib": 28.3125
+  },
+  {
+    "phase": "memory",
+    "fixture": "tiny_object",
+    "operation": "retain-parse",
+    "iterations": 200000,
+    "engine": "perry",
+    "cpu_us": 0.044455,
+    "peak_rss_mib": 25.40625,
+    "rss_after_mib": 24.328125
+  },
+  {
+    "phase": "memory",
+    "fixture": "tiny_object",
+    "operation": "retain-parse",
+    "iterations": 200000,
+    "engine": "node",
+    "cpu_us": 0.125525,
+    "peak_rss_mib": 75.6875,
+    "rss_after_mib": 74.96875
+  },
+  {
+    "phase": "memory",
+    "fixture": "tiny_object",
+    "operation": "retain-parse",
+    "iterations": 200000,
+    "engine": "bun",
+    "cpu_us": 0.05821,
+    "peak_rss_mib": 50.59375,
+    "rss_after_mib": 50.203125
+  },
+  {
+    "phase": "memory",
+    "fixture": "tiny_object",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "perry",
+    "cpu_us": 10.0,
+    "peak_rss_mib": 13.03125,
+    "rss_after_mib": 11.9375
+  },
+  {
+    "phase": "memory",
+    "fixture": "tiny_object",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "node",
+    "cpu_us": 360.0,
+    "peak_rss_mib": 53.640625,
+    "rss_after_mib": 52.84375
+  },
+  {
+    "phase": "memory",
+    "fixture": "tiny_object",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "bun",
+    "cpu_us": 7.0,
+    "peak_rss_mib": 28.78125,
+    "rss_after_mib": 28.375
+  },
+  {
+    "phase": "memory",
+    "fixture": "tiny_object",
+    "operation": "retain-stringify",
+    "iterations": 200000,
+    "engine": "perry",
+    "cpu_us": 0.046795,
+    "peak_rss_mib": 25.484375,
+    "rss_after_mib": 24.40625
+  },
+  {
+    "phase": "memory",
+    "fixture": "tiny_object",
+    "operation": "retain-stringify",
+    "iterations": 200000,
+    "engine": "node",
+    "cpu_us": 0.082745,
+    "peak_rss_mib": 71.984375,
+    "rss_after_mib": 71.28125
+  },
+  {
+    "phase": "memory",
+    "fixture": "tiny_object",
+    "operation": "retain-stringify",
+    "iterations": 200000,
+    "engine": "bun",
+    "cpu_us": 0.049355,
+    "peak_rss_mib": 47.46875,
+    "rss_after_mib": 47.0625
+  },
+  {
+    "phase": "memory",
+    "fixture": "small_record",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "perry",
+    "cpu_us": 32.0,
+    "peak_rss_mib": 12.90625,
+    "rss_after_mib": 11.8125
+  },
+  {
+    "phase": "memory",
+    "fixture": "small_record",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "node",
+    "cpu_us": 390.0,
+    "peak_rss_mib": 53.5625,
+    "rss_after_mib": 52.765625
+  },
+  {
+    "phase": "memory",
+    "fixture": "small_record",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "bun",
+    "cpu_us": 12.0,
+    "peak_rss_mib": 28.703125,
+    "rss_after_mib": 28.3125
+  },
+  {
+    "phase": "memory",
+    "fixture": "small_record",
+    "operation": "retain-parse",
+    "iterations": 100000,
+    "engine": "perry",
+    "cpu_us": 0.10452,
+    "peak_rss_mib": 25.40625,
+    "rss_after_mib": 24.3125
+  },
+  {
+    "phase": "memory",
+    "fixture": "small_record",
+    "operation": "retain-parse",
+    "iterations": 100000,
+    "engine": "node",
+    "cpu_us": 0.47847,
+    "peak_rss_mib": 86.296875,
+    "rss_after_mib": 85.53125
+  },
+  {
+    "phase": "memory",
+    "fixture": "small_record",
+    "operation": "retain-parse",
+    "iterations": 100000,
+    "engine": "bun",
+    "cpu_us": 0.26301,
+    "peak_rss_mib": 53.109375,
+    "rss_after_mib": 52.71875
+  },
+  {
+    "phase": "memory",
+    "fixture": "small_record",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "perry",
+    "cpu_us": 12.0,
+    "peak_rss_mib": 13.03125,
+    "rss_after_mib": 11.9375
+  },
+  {
+    "phase": "memory",
+    "fixture": "small_record",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "node",
+    "cpu_us": 361.0,
+    "peak_rss_mib": 53.609375,
+    "rss_after_mib": 52.859375
+  },
+  {
+    "phase": "memory",
+    "fixture": "small_record",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "bun",
+    "cpu_us": 10.0,
+    "peak_rss_mib": 28.75,
+    "rss_after_mib": 28.34375
+  },
+  {
+    "phase": "memory",
+    "fixture": "small_record",
+    "operation": "retain-stringify",
+    "iterations": 100000,
+    "engine": "perry",
+    "cpu_us": 0.06664,
+    "peak_rss_mib": 28.640625,
+    "rss_after_mib": 27.5625
+  },
+  {
+    "phase": "memory",
+    "fixture": "small_record",
+    "operation": "retain-stringify",
+    "iterations": 100000,
+    "engine": "node",
+    "cpu_us": 0.18501,
+    "peak_rss_mib": 81.09375,
+    "rss_after_mib": 80.375
+  },
+  {
+    "phase": "memory",
+    "fixture": "small_record",
+    "operation": "retain-stringify",
+    "iterations": 100000,
+    "engine": "bun",
+    "cpu_us": 0.13494,
+    "peak_rss_mib": 51.515625,
+    "rss_after_mib": 51.109375
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_array_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "perry",
+    "cpu_us": 1240.0,
+    "peak_rss_mib": 17.59375,
+    "rss_after_mib": 16.515625
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_array_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "node",
+    "cpu_us": 3975.0,
+    "peak_rss_mib": 60.25,
+    "rss_after_mib": 58.453125
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_array_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "bun",
+    "cpu_us": 2425.0,
+    "peak_rss_mib": 32.046875,
+    "rss_after_mib": 31.65625
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_array_1m",
+    "operation": "retain-parse",
+    "iterations": 16,
+    "engine": "perry",
+    "cpu_us": 1153.5,
+    "peak_rss_mib": 41.484375,
+    "rss_after_mib": 40.40625
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_array_1m",
+    "operation": "retain-parse",
+    "iterations": 16,
+    "engine": "node",
+    "cpu_us": 3678.75,
+    "peak_rss_mib": 89.609375,
+    "rss_after_mib": 88.859375
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_array_1m",
+    "operation": "retain-parse",
+    "iterations": 16,
+    "engine": "bun",
+    "cpu_us": 2140.5,
+    "peak_rss_mib": 56.3125,
+    "rss_after_mib": 55.921875
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_array_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "perry",
+    "cpu_us": 801.0,
+    "peak_rss_mib": 20.15625,
+    "rss_after_mib": 19.09375
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_array_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "node",
+    "cpu_us": 1326.0,
+    "peak_rss_mib": 62.90625,
+    "rss_after_mib": 60.59375
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_array_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "bun",
+    "cpu_us": 1066.0,
+    "peak_rss_mib": 34.859375,
+    "rss_after_mib": 34.46875
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_array_1m",
+    "operation": "retain-stringify",
+    "iterations": 16,
+    "engine": "perry",
+    "cpu_us": 654.375,
+    "peak_rss_mib": 32.828125,
+    "rss_after_mib": 31.765625
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_array_1m",
+    "operation": "retain-stringify",
+    "iterations": 16,
+    "engine": "node",
+    "cpu_us": 994.5,
+    "peak_rss_mib": 77.078125,
+    "rss_after_mib": 76.453125
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_array_1m",
+    "operation": "retain-stringify",
+    "iterations": 16,
+    "engine": "bun",
+    "cpu_us": 985.0,
+    "peak_rss_mib": 47.671875,
+    "rss_after_mib": 47.28125
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_object_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "perry",
+    "cpu_us": 1885.0,
+    "peak_rss_mib": 16.359375,
+    "rss_after_mib": 15.265625
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_object_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "node",
+    "cpu_us": 3866.0,
+    "peak_rss_mib": 60.25,
+    "rss_after_mib": 58.4375
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_object_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "bun",
+    "cpu_us": 2407.0,
+    "peak_rss_mib": 32.046875,
+    "rss_after_mib": 31.65625
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_object_1m",
+    "operation": "retain-parse",
+    "iterations": 16,
+    "engine": "perry",
+    "cpu_us": 2988.5,
+    "peak_rss_mib": 52.890625,
+    "rss_after_mib": 52.359375
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_object_1m",
+    "operation": "retain-parse",
+    "iterations": 16,
+    "engine": "node",
+    "cpu_us": 3572.625,
+    "peak_rss_mib": 89.5625,
+    "rss_after_mib": 88.828125
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_object_1m",
+    "operation": "retain-parse",
+    "iterations": 16,
+    "engine": "bun",
+    "cpu_us": 2142.875,
+    "peak_rss_mib": 56.328125,
+    "rss_after_mib": 55.9375
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_object_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "perry",
+    "cpu_us": 802.0,
+    "peak_rss_mib": 20.171875,
+    "rss_after_mib": 19.109375
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_object_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "node",
+    "cpu_us": 1324.0,
+    "peak_rss_mib": 62.890625,
+    "rss_after_mib": 60.59375
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_object_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "bun",
+    "cpu_us": 1063.0,
+    "peak_rss_mib": 34.84375,
+    "rss_after_mib": 34.453125
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_object_1m",
+    "operation": "retain-stringify",
+    "iterations": 16,
+    "engine": "perry",
+    "cpu_us": 658.0,
+    "peak_rss_mib": 32.84375,
+    "rss_after_mib": 31.78125
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_object_1m",
+    "operation": "retain-stringify",
+    "iterations": 16,
+    "engine": "node",
+    "cpu_us": 992.875,
+    "peak_rss_mib": 77.0,
+    "rss_after_mib": 76.390625
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_object_1m",
+    "operation": "retain-stringify",
+    "iterations": 16,
+    "engine": "bun",
+    "cpu_us": 985.375,
+    "peak_rss_mib": 47.65625,
+    "rss_after_mib": 47.265625
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_array_8m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "perry",
+    "cpu_us": 10492.0,
+    "peak_rss_mib": 49.5625,
+    "rss_after_mib": 48.484375
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_array_8m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "node",
+    "cpu_us": 28129.0,
+    "peak_rss_mib": 97.75,
+    "rss_after_mib": 94.40625
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_array_8m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "bun",
+    "cpu_us": 18714.0,
+    "peak_rss_mib": 52.734375,
+    "rss_after_mib": 52.34375
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_array_8m",
+    "operation": "retain-parse",
+    "iterations": 4,
+    "engine": "perry",
+    "cpu_us": 10706.5,
+    "peak_rss_mib": 85.8125,
+    "rss_after_mib": 85.3125
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_array_8m",
+    "operation": "retain-parse",
+    "iterations": 4,
+    "engine": "node",
+    "cpu_us": 27066.0,
+    "peak_rss_mib": 159.265625,
+    "rss_after_mib": 146.890625
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_array_8m",
+    "operation": "retain-parse",
+    "iterations": 4,
+    "engine": "bun",
+    "cpu_us": 21911.0,
+    "peak_rss_mib": 92.234375,
+    "rss_after_mib": 91.84375
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_array_8m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "perry",
+    "cpu_us": 30140.0,
+    "peak_rss_mib": 79.9375,
+    "rss_after_mib": 77.359375
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_array_8m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "node",
+    "cpu_us": 7912.0,
+    "peak_rss_mib": 118.296875,
+    "rss_after_mib": 114.296875
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_array_8m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "bun",
+    "cpu_us": 8319.0,
+    "peak_rss_mib": 73.859375,
+    "rss_after_mib": 73.46875
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_array_8m",
+    "operation": "retain-stringify",
+    "iterations": 4,
+    "engine": "perry",
+    "cpu_us": 16359.75,
+    "peak_rss_mib": 99.125,
+    "rss_after_mib": 98.609375
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_array_8m",
+    "operation": "retain-stringify",
+    "iterations": 4,
+    "engine": "node",
+    "cpu_us": 8958.75,
+    "peak_rss_mib": 144.625,
+    "rss_after_mib": 143.984375
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_array_8m",
+    "operation": "retain-stringify",
+    "iterations": 4,
+    "engine": "bun",
+    "cpu_us": 9429.25,
+    "peak_rss_mib": 94.890625,
+    "rss_after_mib": 94.5
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_object_8m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "perry",
+    "cpu_us": 14703.0,
+    "peak_rss_mib": 45.40625,
+    "rss_after_mib": 33.078125
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_object_8m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "node",
+    "cpu_us": 28077.0,
+    "peak_rss_mib": 97.71875,
+    "rss_after_mib": 94.359375
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_object_8m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "bun",
+    "cpu_us": 18644.0,
+    "peak_rss_mib": 52.734375,
+    "rss_after_mib": 52.34375
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_object_8m",
+    "operation": "retain-parse",
+    "iterations": 4,
+    "engine": "perry",
+    "cpu_us": 22619.0,
+    "peak_rss_mib": 94.109375,
+    "rss_after_mib": 90.859375
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_object_8m",
+    "operation": "retain-parse",
+    "iterations": 4,
+    "engine": "node",
+    "cpu_us": 28108.75,
+    "peak_rss_mib": 159.265625,
+    "rss_after_mib": 146.984375
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_object_8m",
+    "operation": "retain-parse",
+    "iterations": 4,
+    "engine": "bun",
+    "cpu_us": 21926.75,
+    "peak_rss_mib": 92.40625,
+    "rss_after_mib": 92.015625
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_object_8m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "perry",
+    "cpu_us": 30259.0,
+    "peak_rss_mib": 79.921875,
+    "rss_after_mib": 77.34375
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_object_8m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "node",
+    "cpu_us": 7909.0,
+    "peak_rss_mib": 118.3125,
+    "rss_after_mib": 114.265625
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_object_8m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "bun",
+    "cpu_us": 8299.0,
+    "peak_rss_mib": 73.875,
+    "rss_after_mib": 73.484375
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_object_8m",
+    "operation": "retain-stringify",
+    "iterations": 4,
+    "engine": "perry",
+    "cpu_us": 16397.5,
+    "peak_rss_mib": 99.140625,
+    "rss_after_mib": 98.625
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_object_8m",
+    "operation": "retain-stringify",
+    "iterations": 4,
+    "engine": "node",
+    "cpu_us": 8954.25,
+    "peak_rss_mib": 144.65625,
+    "rss_after_mib": 144.03125
+  },
+  {
+    "phase": "memory",
+    "fixture": "records_object_8m",
+    "operation": "retain-stringify",
+    "iterations": 4,
+    "engine": "bun",
+    "cpu_us": 9441.75,
+    "peak_rss_mib": 94.90625,
+    "rss_after_mib": 94.515625
+  },
+  {
+    "phase": "memory",
+    "fixture": "long_string_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "perry",
+    "cpu_us": 171.0,
+    "peak_rss_mib": 16.3125,
+    "rss_after_mib": 15.234375
+  },
+  {
+    "phase": "memory",
+    "fixture": "long_string_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "node",
+    "cpu_us": 821.0,
+    "peak_rss_mib": 57.671875,
+    "rss_after_mib": 56.625
+  },
+  {
+    "phase": "memory",
+    "fixture": "long_string_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "bun",
+    "cpu_us": 126.0,
+    "peak_rss_mib": 30.96875,
+    "rss_after_mib": 30.59375
+  },
+  {
+    "phase": "memory",
+    "fixture": "long_string_1m",
+    "operation": "retain-parse",
+    "iterations": 32,
+    "engine": "perry",
+    "cpu_us": 5.875,
+    "peak_rss_mib": 16.328125,
+    "rss_after_mib": 15.25
+  },
+  {
+    "phase": "memory",
+    "fixture": "long_string_1m",
+    "operation": "retain-parse",
+    "iterations": 32,
+    "engine": "node",
+    "cpu_us": 468.0625,
+    "peak_rss_mib": 90.125,
+    "rss_after_mib": 89.21875
+  },
+  {
+    "phase": "memory",
+    "fixture": "long_string_1m",
+    "operation": "retain-parse",
+    "iterations": 32,
+    "engine": "bun",
+    "cpu_us": 142.0,
+    "peak_rss_mib": 62.015625,
+    "rss_after_mib": 61.625
+  },
+  {
+    "phase": "memory",
+    "fixture": "long_string_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "perry",
+    "cpu_us": 128.0,
+    "peak_rss_mib": 18.671875,
+    "rss_after_mib": 17.59375
+  },
+  {
+    "phase": "memory",
+    "fixture": "long_string_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "node",
+    "cpu_us": 950.0,
+    "peak_rss_mib": 61.515625,
+    "rss_after_mib": 60.625
+  },
+  {
+    "phase": "memory",
+    "fixture": "long_string_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "bun",
+    "cpu_us": 154.0,
+    "peak_rss_mib": 33.046875,
+    "rss_after_mib": 32.65625
+  },
+  {
+    "phase": "memory",
+    "fixture": "long_string_1m",
+    "operation": "retain-stringify",
+    "iterations": 32,
+    "engine": "perry",
+    "cpu_us": 171.8125,
+    "peak_rss_mib": 51.65625,
+    "rss_after_mib": 51.125
+  },
+  {
+    "phase": "memory",
+    "fixture": "long_string_1m",
+    "operation": "retain-stringify",
+    "iterations": 32,
+    "engine": "node",
+    "cpu_us": 194.21875,
+    "peak_rss_mib": 93.328125,
+    "rss_after_mib": 92.375
+  },
+  {
+    "phase": "memory",
+    "fixture": "long_string_1m",
+    "operation": "retain-stringify",
+    "iterations": 32,
+    "engine": "bun",
+    "cpu_us": 171.625,
+    "peak_rss_mib": 64.171875,
+    "rss_after_mib": 63.765625
+  },
+  {
+    "phase": "memory",
+    "fixture": "unicode_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "perry",
+    "cpu_us": 204.0,
+    "peak_rss_mib": 15.625,
+    "rss_after_mib": 14.546875
+  },
+  {
+    "phase": "memory",
+    "fixture": "unicode_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "node",
+    "cpu_us": 1229.0,
+    "peak_rss_mib": 58.515625,
+    "rss_after_mib": 57.765625
+  },
+  {
+    "phase": "memory",
+    "fixture": "unicode_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "bun",
+    "cpu_us": 113.0,
+    "peak_rss_mib": 31.65625,
+    "rss_after_mib": 31.28125
+  },
+  {
+    "phase": "memory",
+    "fixture": "unicode_1m",
+    "operation": "retain-parse",
+    "iterations": 32,
+    "engine": "perry",
+    "cpu_us": 6.8125,
+    "peak_rss_mib": 15.640625,
+    "rss_after_mib": 14.5625
+  },
+  {
+    "phase": "memory",
+    "fixture": "unicode_1m",
+    "operation": "retain-parse",
+    "iterations": 32,
+    "engine": "node",
+    "cpu_us": 528.625,
+    "peak_rss_mib": 87.015625,
+    "rss_after_mib": 86.359375
+  },
+  {
+    "phase": "memory",
+    "fixture": "unicode_1m",
+    "operation": "retain-parse",
+    "iterations": 32,
+    "engine": "bun",
+    "cpu_us": 102.9375,
+    "peak_rss_mib": 59.390625,
+    "rss_after_mib": 59.0
+  },
+  {
+    "phase": "memory",
+    "fixture": "unicode_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "perry",
+    "cpu_us": 112.0,
+    "peak_rss_mib": 17.53125,
+    "rss_after_mib": 16.453125
+  },
+  {
+    "phase": "memory",
+    "fixture": "unicode_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "node",
+    "cpu_us": 1234.0,
+    "peak_rss_mib": 61.609375,
+    "rss_after_mib": 60.9375
+  },
+  {
+    "phase": "memory",
+    "fixture": "unicode_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "bun",
+    "cpu_us": 582.0,
+    "peak_rss_mib": 34.484375,
+    "rss_after_mib": 34.078125
+  },
+  {
+    "phase": "memory",
+    "fixture": "unicode_1m",
+    "operation": "retain-stringify",
+    "iterations": 32,
+    "engine": "perry",
+    "cpu_us": 66.03125,
+    "peak_rss_mib": 42.90625,
+    "rss_after_mib": 41.828125
+  },
+  {
+    "phase": "memory",
+    "fixture": "unicode_1m",
+    "operation": "retain-stringify",
+    "iterations": 32,
+    "engine": "node",
+    "cpu_us": 500.3125,
+    "peak_rss_mib": 89.890625,
+    "rss_after_mib": 89.21875
+  },
+  {
+    "phase": "memory",
+    "fixture": "unicode_1m",
+    "operation": "retain-stringify",
+    "iterations": 32,
+    "engine": "bun",
+    "cpu_us": 497.28125,
+    "peak_rss_mib": 62.625,
+    "rss_after_mib": 62.21875
+  },
+  {
+    "phase": "memory",
+    "fixture": "wide_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "perry",
+    "cpu_us": 2606.0,
+    "peak_rss_mib": 21.421875,
+    "rss_after_mib": 20.609375
+  },
+  {
+    "phase": "memory",
+    "fixture": "wide_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "node",
+    "cpu_us": 7503.0,
+    "peak_rss_mib": 66.4375,
+    "rss_after_mib": 65.640625
+  },
+  {
+    "phase": "memory",
+    "fixture": "wide_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "bun",
+    "cpu_us": 5746.0,
+    "peak_rss_mib": 36.71875,
+    "rss_after_mib": 36.328125
+  },
+  {
+    "phase": "memory",
+    "fixture": "wide_1m",
+    "operation": "retain-parse",
+    "iterations": 16,
+    "engine": "perry",
+    "cpu_us": 3690.875,
+    "peak_rss_mib": 77.59375,
+    "rss_after_mib": 77.09375
+  },
+  {
+    "phase": "memory",
+    "fixture": "wide_1m",
+    "operation": "retain-parse",
+    "iterations": 16,
+    "engine": "node",
+    "cpu_us": 5607.5625,
+    "peak_rss_mib": 113.171875,
+    "rss_after_mib": 112.53125
+  },
+  {
+    "phase": "memory",
+    "fixture": "wide_1m",
+    "operation": "retain-parse",
+    "iterations": 16,
+    "engine": "bun",
+    "cpu_us": 4316.8125,
+    "peak_rss_mib": 69.3125,
+    "rss_after_mib": 68.921875
+  },
+  {
+    "phase": "memory",
+    "fixture": "wide_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "perry",
+    "cpu_us": 2479.0,
+    "peak_rss_mib": 23.921875,
+    "rss_after_mib": 22.859375
+  },
+  {
+    "phase": "memory",
+    "fixture": "wide_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "node",
+    "cpu_us": 7566.0,
+    "peak_rss_mib": 69.375,
+    "rss_after_mib": 68.703125
+  },
+  {
+    "phase": "memory",
+    "fixture": "wide_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "bun",
+    "cpu_us": 773.0,
+    "peak_rss_mib": 39.65625,
+    "rss_after_mib": 39.265625
+  },
+  {
+    "phase": "memory",
+    "fixture": "wide_1m",
+    "operation": "retain-stringify",
+    "iterations": 16,
+    "engine": "perry",
+    "cpu_us": 750.0625,
+    "peak_rss_mib": 37.078125,
+    "rss_after_mib": 36.015625
+  },
+  {
+    "phase": "memory",
+    "fixture": "wide_1m",
+    "operation": "retain-stringify",
+    "iterations": 16,
+    "engine": "node",
+    "cpu_us": 6465.375,
+    "peak_rss_mib": 87.15625,
+    "rss_after_mib": 86.5
+  },
+  {
+    "phase": "memory",
+    "fixture": "wide_1m",
+    "operation": "retain-stringify",
+    "iterations": 16,
+    "engine": "bun",
+    "cpu_us": 704.9375,
+    "peak_rss_mib": 53.859375,
+    "rss_after_mib": 53.46875
+  }
+]

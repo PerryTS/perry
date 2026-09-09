@@ -1,0 +1,27 @@
+{
+  "base_commit": "c82e613d260a80324914b5aba503a31a763ad90e",
+  "files": {
+    "crates/perry-runtime/src/json_tape.rs": "a23d26790752d77a7ac061c77f3a6b971d175fca05122342b1eb919ea5a96217",
+    "crates/perry-runtime/src/json_tape/record_materialize.rs": "b07fe91ea7bcfb5a4cdcab568149266d0f34c7c58bf4b91d04fbd91e6b97b3f2",
+    "crates/perry-runtime/src/gc/policy.rs": "4e775d68dffe269edef2d02df2bf66127e691ad2c051350341a50e2f3a848642",
+    "crates/perry-runtime/src/json/parse_api.rs": "06cf5b58f35fcce28b775c7837c713f20e9bfe7fa28c1304342b100ae325e32d",
+    "crates/perry-runtime/src/json/stringify_flat.rs": "a74d28193eb51078e98c5f5b7362ba16949e3a827c4f0454ef983a0e40c11f16",
+    "crates/perry-runtime/src/json/replacer.rs": "f5e1d7f24939f12fecaed38de9a073673869d12757e7e84a4ee39ae4acc1ee7a",
+    "crates/perry-runtime/src/gc/tests/json_stringify_output.rs": "c339012f4aec4232eaa746d74bad31b8198cb11b23661ee99d5241c743c4b617",
+    "crates/perry-runtime/src/gc/tests/runtime_roots/callback_scanners.rs": "0fb0a108ea34d4a120f14461eb34a219238a2c53672e24e6fab31dc8c2640a75",
+    "scripts/gc_runtime_root_holders.json": "9a26ca41dd1d88efb6a4f0157e32eed4c8a646e56643be846d24e0e993ed4214",
+    "test-files/test_json_large_parse_leaf_lifetime.ts": "402a430e5bd50f3ad8bc1aca6cddf4f3e112f1999b44d67a53d16823aaaacab2",
+    "target/release/perry": "33f5f35ba4b4bbda5f3fc00ddaea26d76cf9be3e370074005fe00173ac75dcf0",
+    "target/release/libperry_runtime.a": "3dce5434add01f3ea2f7ef274c0a0ea54d92950ccb2044b856b67b405a50fcf8",
+    "target/release/libperry_stdlib.a": "c48c397e8df3c9bd36f7f68dd622f107bb135c829d48354c4bfdbc78ab4db35f",
+    "benchmarks/json_performance/.work/worker.o": "e90dae0943404bb0f3473c8dbdb80e268626410584f8e2002dcf737daac9cdd0",
+    "benchmarks/json_performance/.work/rotating-worker": "4f5a58a4519354066d756e49786be3d52e580bc5ddf8768c88053246e64038c8",
+    "benchmarks/json_performance/.work/large-leaf-lifetime/worker.o": "de25f9bce096b2ad7bd58d605e5e9791a928fe01aa798cde2e620d26e8b05589",
+    "benchmarks/json_performance/.work/dispatch-r5/worker": "b638d5db93b949c48ed9b041b69fd17131cf4d2ae772a5fb4296e419318c823c",
+    "benchmarks/json_performance/.work/dispatch-r5/rotating-worker": "aaf8894c84888869fdb91d1b4f886a7800a44268c6c86efa16923edbf36ff882",
+    "benchmarks/json_performance/.work/dispatch-r5/leaf-lifetime": "a063216886f8ae4e3f35417756b6fc51645d81e9e7ec4736e19a622398d10932"
+  },
+  "runtime_only_bench_link": true,
+  "tests": "278 JSON tests passed",
+  "matched_release_build": "passed"
+}
