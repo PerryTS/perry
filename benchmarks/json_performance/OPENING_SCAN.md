@@ -36,8 +36,11 @@ stack frame and saves twelve registers on every call. Empty-object allocation
 is inlined into that entry, imposing its register requirements on scalar and
 ordinary-object dispatch as well. R2 changes only that allocator's inline
 attribute to retain a separate function. All 285 release JSON tests pass.
-The matched release build and generated-code/performance checks are pending;
-no R2 speedup or regression-free result is claimed yet.
+The matched release build passed in 5m34s. The generated entry shrank from
+1736 to 156 bytes and its frame from 96 to 16 bytes; parse_slow also shrank
+from 7232 to 5416 bytes. Compiled Node comparisons and live moving/full-GC
+witnesses pass. [Exact validation and codegen evidence](results/opening-scan-r2-validation/README.md).
+Timing and RSS acceptance are pending; no R2 speedup is claimed yet.
 
 The next acceptance measurements include both original parse/stringify rows
 and the full changing-input suite, with default GC and separate retained-output
