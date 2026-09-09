@@ -64,8 +64,6 @@ mod tests {
     #[test]
     fn small_lazy_record_batch_preserves_duplicate_escape_and_nested_values() {
         // Expected output checked against the repository's pinned Node oracle.
-        // The legacy tape walker drops lone surrogates, so it cannot serve as
-        // the oracle for the escaped-string case.
         for (text, expected) in [
             (
                 r#"{"id":42,"name":"user_42","tags":["red","blue"],"active":true}"#,

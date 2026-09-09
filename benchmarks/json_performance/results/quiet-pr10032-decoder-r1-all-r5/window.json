@@ -1,0 +1,32 @@
+{
+  "owner": "json-perf-52761-1788975152",
+  "load_before": [
+    1.24072265625,
+    1.47509765625,
+    1.49560546875
+  ],
+  "started_utc": "2026-09-09T17:32:32Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    "run_baseline.py",
+    "--phase",
+    "all",
+    "--repeat",
+    "5",
+    "--worker",
+    ".work/pr10032-decoder-r1/worker",
+    "--baseline-worker",
+    ".work/release1528-r6/worker",
+    "--results-dir",
+    "results/quiet-pr10032-decoder-r1-all-r5"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    2.41845703125,
+    1.9609375,
+    1.7041015625
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-09T17:37:38Z"
+}

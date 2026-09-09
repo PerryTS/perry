@@ -1406,6 +1406,13 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
             // name embeds all 32 ASCII control characters).
             write_escaped_string(buf, key_str);
             buf.push(':');
+        } else if crate::string::js_string_key_bytes(
+            JSValue::from_bits(current_key_bits),
+            &mut key_sso,
+        )
+        .is_some_and(|bytes| super::stringify_scalars::write_wtf8_key(buf, bytes))
+        {
+            buf.push(':');
         } else {
             let _ = write!(buf, "\"field{}\":", f);
         }

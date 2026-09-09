@@ -117,6 +117,43 @@ pub(crate) unsafe fn write_escaped_string(buf: &mut String, s: &str) {
         return;
     };
 
+    write_escaped_bytes_from(buf, bytes, first_escape);
+}
+
+/// Quote a key rejected by the UTF-8 key decoder. Validate its WTF-8 first so
+/// malformed internal bytes cannot enter the Rust output String unchanged.
+#[inline(never)]
+pub(crate) unsafe fn write_wtf8_key(buf: &mut String, bytes: &[u8]) -> bool {
+    let mut rest = bytes;
+    while let Err(error) = std::str::from_utf8(rest) {
+        rest = &rest[error.valid_up_to()..];
+        if rest.len() < 3
+            || rest[0] != 0xed
+            || !(0xa0..=0xbf).contains(&rest[1])
+            || !(0x80..=0xbf).contains(&rest[2])
+        {
+            return false;
+        }
+        rest = &rest[3..];
+    }
+    let Some(first_escape) = super::simd::find_string_escape(bytes) else {
+        return false;
+    };
+    write_escaped_bytes_from(buf, bytes, first_escape);
+    true
+}
+
+#[test]
+fn json_wtf8_key_fallback_validates_before_writing() {
+    for bytes in [b"\xed\xa0".as_slice(), b"\xff", b"\xed\xa0\x80\xff"] {
+        let mut output = "prefix".to_owned();
+        assert!(!unsafe { write_wtf8_key(&mut output, bytes) });
+        assert_eq!(output, "prefix");
+    }
+}
+
+#[inline]
+unsafe fn write_escaped_bytes_from(buf: &mut String, bytes: &[u8], first_escape: usize) {
     buf.push('"');
     let mut start = 0;
     // Issue #548: `s` reaches us via `str_from_header`, which uses
