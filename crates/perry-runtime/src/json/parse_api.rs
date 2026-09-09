@@ -400,8 +400,10 @@ unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
     // pass. Keep the preflight for direct parses and forced oversized tapes:
     // a huge over-budget input must fail before reserving its native tape.
     let preflight_depth = !use_tape || len > LAZY_MAX_BLOB_BYTES;
-    if preflight_depth
-        && !cached_parse_source_is_direct(text_ptr, len)
+    // Keep an already validated source ahead of the new route guard: repeated
+    // direct parses need neither preflight branch nor a second depth scan.
+    if !cached_parse_source_is_direct(text_ptr, len)
+        && preflight_depth
         && requires_iterative_parse(bytes)
     {
         return parse_deep_or_throw(text_ptr, len);
