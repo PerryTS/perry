@@ -79,3 +79,15 @@ solves the dead final large-container problem above.
 
 No GC policy, allocation placement or construction behavior has been changed
 by this investigation. The parser scanner candidate remains independent.
+
+## Earlier prefix-retirement experiment
+
+[The preserved prefix-retirement trial](results/json-prefix-retirement/README.md)
+already tested clearing abandoned construction buffers and publishing only the
+final array. It reduced remembered-slot reads 62.9% and total slot reads 9.0%,
+while promotion and RSS remained essentially unchanged: final dead old arrays
+still held the children. That candidate was rejected after a 1.55% numeric-parse
+slowdown in all seven paired groups. It used the older 16-codegen-unit comparison
+profile, so it is not a measurement of the current default release profile.
+Revisiting it could target duplicate tracing work, but it is not a demonstrated
+solution to the final-container memory growth documented above.

@@ -1,7 +1,8 @@
 # JSON construction and reclamation follow-up
 
-Latest: [fresh merged-main 0.5.1528 measurements](MERGED_MAIN_E722.md) and
-[the escaped-record correction in PR #10034](ESCAPED_RECORD_CORRECTION.md).
+Latest: [fresh merged-main 0.5.1529 measurements](MERGED_MAIN_EEE.md), after
+[the escaped-record correction](ESCAPED_RECORD_CORRECTION.md) landed through
+#10035, and [the opening-scan follow-up](OPENING_SCAN.md) in PR #10036.
 The earlier measurements below retain their original revisions and provenance.
 
 The 0.5.1528 release implementation makes record-array traversal 30–78% faster
