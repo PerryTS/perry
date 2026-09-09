@@ -19,7 +19,9 @@
       0.015654,
       0.0156375
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "null",
@@ -41,7 +43,9 @@
       0.01185,
       0.0118515
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "null",
@@ -63,7 +67,9 @@
       0.0094395,
       0.0094235
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "string_a",
@@ -85,7 +91,9 @@
       0.0205195,
       0.020524
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "string_a",
@@ -107,7 +115,9 @@
       0.017231,
       0.0172265
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "string_a",
@@ -129,7 +139,9 @@
       0.009428,
       0.009428
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "empty_object",
@@ -151,7 +163,9 @@
       0.030322,
       0.030381
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "empty_object",
@@ -173,7 +187,9 @@
       0.025402,
       0.0253985
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "empty_object",
@@ -195,7 +211,9 @@
       0.0095015,
       0.009439
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "tiny_object",
@@ -217,7 +235,9 @@
       0.0469455,
       0.0470525
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "tiny_object",
@@ -239,7 +259,9 @@
       0.041461,
       0.041501
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "tiny_object",
@@ -261,7 +283,9 @@
       0.0094255,
       0.009437
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "small_record",
@@ -283,7 +307,9 @@
       0.4984981163258155,
       0.4981895459133597
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "small_record",
@@ -305,7 +331,9 @@
       0.09997312,
       0.0997248
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "small_record",
@@ -327,7 +355,9 @@
       0.009517,
       0.00943
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "object_1k",
@@ -349,7 +379,9 @@
       0.4981782769395053,
       0.49788687644995244
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "object_1k",
@@ -371,7 +403,9 @@
       0.08465418263448697,
       0.08460746095716777
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "object_1k",
@@ -393,7 +427,9 @@
       0.0094255,
       0.009422
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "records_array_16k",
@@ -415,7 +451,9 @@
       18.321065088757397,
       18.362958579881656
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "records_array_16k",
@@ -437,7 +475,9 @@
       18.291480362537765,
       18.266223564954682
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "records_array_16k",
@@ -459,7 +499,9 @@
       0.009454,
       0.0094365
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "records_array_1m",
@@ -481,7 +523,9 @@
       1213.4135338345864,
       1213.954887218045
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "records_array_1m",
@@ -503,7 +547,9 @@
       1209.7142857142858,
       1209.8646616541353
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "records_array_1m",
@@ -525,7 +571,9 @@
       0.0112065,
       0.0118365
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "records_object_1m",
@@ -547,7 +595,9 @@
       2052.114285714286,
       2051.114285714286
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "records_object_1m",
@@ -569,7 +619,9 @@
       2044.5492957746478,
       2046.1408450704225
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "records_object_1m",
@@ -591,7 +643,9 @@
       0.011709,
       0.0114695
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "records_array_8m",
@@ -613,7 +667,9 @@
       10196.285714285714,
       10124.357142857143
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "records_array_8m",
@@ -635,7 +691,9 @@
       10170.92857142857,
       10230.0
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "records_array_8m",
@@ -657,7 +715,9 @@
       0.0118125,
       0.011815
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "records_object_8m",
@@ -679,7 +739,9 @@
       16088.222222222223,
       16056.333333333334
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "records_object_8m",
@@ -701,7 +763,9 @@
       16566.0,
       16427.88888888889
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "records_object_8m",
@@ -723,7 +787,9 @@
       0.0122565,
       0.0124555
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "records_array_20m",
@@ -745,7 +811,9 @@
       43068.125,
       43066.25
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "records_array_20m",
@@ -767,7 +835,9 @@
       42706.75,
       42686.875
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "records_array_20m",
@@ -789,7 +859,9 @@
       0.013453521196018803,
       0.014337104826825292
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "records_object_20m",
@@ -811,7 +883,9 @@
       43223.375,
       43481.75
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "records_object_20m",
@@ -833,7 +907,9 @@
       42635.625,
       42178.5
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "records_object_20m",
@@ -855,7 +931,9 @@
       0.012827560423431346,
       0.013184804658021725
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "numbers_1m",
@@ -877,7 +955,9 @@
       1579.4698795180723,
       1576.0602409638554
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "numbers_1m",
@@ -899,7 +979,9 @@
       1567.7951807228915,
       1570.55421686747
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "numbers_1m",
@@ -921,7 +1003,9 @@
       0.0114725,
       0.0115205
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "long_string_1m",
@@ -943,7 +1027,9 @@
       107.57926829268293,
       107.99085365853658
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "long_string_1m",
@@ -965,7 +1051,9 @@
       0.3600770218228498,
       0.3591142490372272
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "long_string_1m",
@@ -987,7 +1075,9 @@
       0.011463,
       0.012058
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "escaped_1m",
@@ -1009,7 +1099,9 @@
       1001.5316455696203,
       1001.0949367088608
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "escaped_1m",
@@ -1031,7 +1123,9 @@
       1002.0314465408806,
       1001.3081761006289
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "escaped_1m",
@@ -1053,7 +1147,9 @@
       0.0115595,
       0.011512
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": false,
+    "separated_faster": true
   },
   {
     "fixture": "unicode_1m",
@@ -1075,7 +1171,9 @@
       148.73919206236712,
       148.0198440822112
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "unicode_1m",
@@ -1097,7 +1195,9 @@
       0.3565125308859866,
       0.3568655135898341
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "unicode_1m",
@@ -1119,7 +1219,9 @@
       0.0112005,
       0.011507
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "wide_1m",
@@ -1141,7 +1243,9 @@
       2678.328125,
       2674.109375
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "wide_1m",
@@ -1163,7 +1267,9 @@
       2674.046875,
       2676.078125
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "wide_1m",
@@ -1185,7 +1291,9 @@
       0.011704,
       0.011668
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "heterogeneous_1m",
@@ -1207,7 +1315,9 @@
       1425.3595505617977,
       1424.1348314606741
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "heterogeneous_1m",
@@ -1229,7 +1339,9 @@
       1422.3522727272727,
       1427.0795454545455
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   },
   {
     "fixture": "heterogeneous_1m",
@@ -1251,6 +1363,8 @@
       0.011431,
       0.0113925
     ],
-    "separated_slower": false
+    "separated_slower": false,
+    "samples_overlap": true,
+    "separated_faster": false
   }
 ]
