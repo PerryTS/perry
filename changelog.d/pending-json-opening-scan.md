@@ -1,0 +1,1 @@
+Optimize the ARM64 JSON nesting precheck by scanning opening-container bytes in 64-byte blocks. Preserve the initial 16-byte early-positive check and exact behavior for arbitrary input bytes. Add vector-boundary and out-of-slice poison coverage. JSON construction and GC scheduling continue through their existing paths.
