@@ -2655,6 +2655,15 @@ pub fn run_with_parse_cache(
     let mut module_name_to_module: HashMap<String, perry_hir::Module> = HashMap::new();
     for (path, hir_module) in &ctx.native_modules {
         let mut rewritten = hir_module.clone();
+        // This map is an analysis-only view. Entry outlining moves module
+        // declarations into compiler-owned functions; flatten_exports must
+        // still see those bindings or an imported variable falls back to a
+        // getter on its barrel (which does not own the value). Reconstruct
+        // only the logical entry stream, never arbitrary function locals.
+        rewritten.init = perry_codegen::codegen::entry_outline::logical_entry_stmts(hir_module)
+            .into_iter()
+            .cloned()
+            .collect();
         for export in rewritten.exports.iter_mut() {
             match export {
                 perry_hir::Export::ReExport { source, .. }
