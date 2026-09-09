@@ -145,7 +145,7 @@ fn json_tape_safepoint(_point: JsonTapeSafepoint, _ptr: usize) {}
 pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
     let mut entries: Vec<TapeEntry> = Vec::new();
     let mut stack: Vec<u32> = Vec::new();
-    if build_tape_into(bytes, &mut entries, &mut stack) {
+    if build_tape_into::<false>(bytes, &mut entries, &mut stack, &mut 0) {
         Some(Tape { entries })
     } else {
         None
@@ -155,7 +155,12 @@ pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
 /// Build a tape into caller-provided storage. This is the hot-path
 /// variant used by `JSON.parse` so repeated parse-churn workloads do
 /// not allocate and free a fresh tape vector on every iteration.
-fn build_tape_into(bytes: &[u8], entries: &mut Vec<TapeEntry>, stack: &mut Vec<u32>) -> bool {
+fn build_tape_into<const CAPTURE_DEPTH: bool>(
+    bytes: &[u8],
+    entries: &mut Vec<TapeEntry>,
+    stack: &mut Vec<u32>,
+    max_depth: &mut usize,
+) -> bool {
     entries.clear();
     stack.clear();
     // Pre-size: worst case is one tape entry per ~4 bytes of input
@@ -284,6 +289,12 @@ fn build_tape_into(bytes: &[u8], entries: &mut Vec<TapeEntry>, stack: &mut Vec<u
                             link: 0,
                         });
                         stack.push(idx);
+                        if CAPTURE_DEPTH {
+                            *max_depth = (*max_depth).max(stack.len());
+                            if *max_depth > crate::json::MAX_ITERATIVE_NESTING_DEPTH {
+                                return false;
+                            }
+                        }
                         pos += 1;
                         skip_ws(bytes, &mut pos);
                         if pos < bytes.len() && bytes[pos] == b'}' {
@@ -329,6 +340,12 @@ fn build_tape_into(bytes: &[u8], entries: &mut Vec<TapeEntry>, stack: &mut Vec<u
                             link: 0,
                         });
                         stack.push(idx);
+                        if CAPTURE_DEPTH {
+                            *max_depth = (*max_depth).max(stack.len());
+                            if *max_depth > crate::json::MAX_ITERATIVE_NESTING_DEPTH {
+                                return false;
+                            }
+                        }
                         pos += 1;
                         skip_ws(bytes, &mut pos);
                         if pos < bytes.len() && bytes[pos] == b']' {
@@ -516,15 +533,41 @@ pub(crate) unsafe fn with_built_tape_mut_raw<R>(
     len: usize,
     f: impl FnOnce(&mut Vec<TapeEntry>) -> R,
 ) -> Option<R> {
+    with_built_tape_depth_impl::<false, R>(data, len, |entries, _| f(entries))
+}
+
+/// Build a syntax-validated tape and capture the deepest container stack.
+/// Refuse inputs beyond the parse resource budget before materialization.
+/// The caller must retain the legacy depth/error check when this declines.
+///
+/// # Safety
+/// As with `with_built_tape_raw`, no input borrow crosses the callback; `f`
+/// receives only native entries and depth metadata, and must derive its source
+/// pointer again from the root after any collection.
+pub(crate) unsafe fn with_built_tape_depth_raw<R>(
+    data: *const u8,
+    len: usize,
+    f: impl FnOnce(&mut Vec<TapeEntry>, usize) -> R,
+) -> Option<R> {
+    with_built_tape_depth_impl::<true, R>(data, len, f)
+}
+
+unsafe fn with_built_tape_depth_impl<const CAPTURE_DEPTH: bool, R>(
+    data: *const u8,
+    len: usize,
+    f: impl FnOnce(&mut Vec<TapeEntry>, usize) -> R,
+) -> Option<R> {
     TAPE_SCRATCH.with(|cell| {
         let mut scratch = cell.take().unwrap_or_else(TapeScratch::new);
-        let built = build_tape_into(
+        let mut max_depth = 0;
+        let built = build_tape_into::<CAPTURE_DEPTH>(
             std::slice::from_raw_parts(data, len),
             &mut scratch.entries,
             &mut scratch.stack,
+            &mut max_depth,
         );
         let result = if built {
-            Some(f(&mut scratch.entries))
+            Some(f(&mut scratch.entries, max_depth))
         } else {
             None
         };
