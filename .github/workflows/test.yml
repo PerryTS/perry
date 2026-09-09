@@ -3079,13 +3079,38 @@ jobs:
           )
           UNEXPECTED=()
           STALE=()
+          # #9470 is classified by its ERROR SIGNATURE, not by test name. The
+          # tokio-coherence flake is a property of the auto-optimize build, not
+          # of any particular test: it lands on whichever tokio-using wrapper
+          # the run happens to route through, so a name list is always one test
+          # behind. It cost three cycles to learn that — the list held
+          # test_issue_340_* and test_issue_414_*, and run 34355138005 then
+          # failed on test_issue_9310_mysql2_param_values with the identical
+          # error while both listed entries passed.
+          #
+          # The signature is unambiguous and comes from perry's own linker
+          # refusing the link (crates/perry/src/commands/compile/shared_tokio.rs),
+          # so it cannot be confused with a genuine compile error. The root cause
+          # is fixed on main by "isolate shared-tokio auto-opt graphs"; this pin
+          # predates it.
+          TOKIO_SIG='bundle a DIFFERENT tokio compilation'
+          TOKIO_HITS=()
           for marker in "$LOGS_DIR"/*.fail; do
             [[ -e "$marker" ]] || continue
             name=$(basename "$marker" .fail)
             known=0
             for k in ${KNOWN_FAIL[@]+"${KNOWN_FAIL[@]}"}; do [[ "$name" == "$k" ]] && known=1 && break; done
+            if [[ $known -eq 0 ]] && [[ -e "$LOGS_DIR/${name}.compile_error.log" ]] \
+               && grep -qF "$TOKIO_SIG" "$LOGS_DIR/${name}.compile_error.log"; then
+              known=1
+              TOKIO_HITS+=("$name")
+            fi
             [[ $known -eq 1 ]] || UNEXPECTED+=("$name")
           done
+          if [[ ${#TOKIO_HITS[@]} -gt 0 ]]; then
+            echo "::notice::${#TOKIO_HITS[@]} failure(s) carry the #9470 tokio-coherence signature and are tolerated:"
+            printf '  - %s\n' "${TOKIO_HITS[@]}"
+          fi
           for k in ${KNOWN_FAIL[@]+"${KNOWN_FAIL[@]}"}; do
             [[ -e "$LOGS_DIR/$k.fail" ]] || STALE+=("$k")
           done
