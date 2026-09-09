@@ -20,6 +20,7 @@ try {
       const label = `${fixture}-outline${outline}-O${opt}`;
       const output = path.join(work, label);
       const compileEnv = { ...process.env, PERRY_LL_OPT_LEVEL: opt,
+        RUST_LOG: 'perry::commands::compile::collect_modules::finish=debug',
         PERRY_OUTLINE_ENTRY: outline, PERRY_OUTLINE_ENTRY_CHUNK_STMTS: '1' };
       // An explicit frozen Wasm archive set must not trigger a workspace
       // rebuild of the optional provider with different feature unification.
