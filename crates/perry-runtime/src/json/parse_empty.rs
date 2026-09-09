@@ -54,7 +54,9 @@ fn padded_empty_object(mut bytes: &[u8]) -> bool {
 /// Call only after the entire input has been validated and is no longer used.
 /// The ordinary allocator services its own trigger before publishing the new
 /// object. Pressure scheduling below cannot collect.
-#[inline(always)]
+// Keep the allocator's register frame off scalar and nonempty-object dispatch.
+// All three callers can transfer control here after validation is complete.
+#[inline(never)]
 pub(super) unsafe fn allocate_empty_object() -> JSValue {
     crate::gc::gc_collect_pending_suppressed_parse();
     let shape_id = EMPTY_JSON_SHAPE_ID.with(std::cell::Cell::get);
