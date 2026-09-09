@@ -1,0 +1,1070 @@
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 5f627082a..f2abaf02e 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
+ 
+ Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
+ 
+-**Current Version:** 0.5.1528
++**Current Version:** 0.5.1529
+ 
+ 
+ ## TypeScript Parity Status
+diff --git a/Cargo.lock b/Cargo.lock
+index 639bb7d0e..b6c8f481f 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -5695,7 +5695,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
+ 
+ [[package]]
+ name = "perry"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -5759,7 +5759,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-api-manifest"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "perry-dispatch",
+  "serde",
+@@ -5767,7 +5767,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-audio-miniaudio"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "cc",
+  "libc",
+@@ -5776,7 +5776,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-codegen"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "anyhow",
+  "inkwell",
+@@ -5793,7 +5793,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-codegen-arkts"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "anyhow",
+  "perry-hir",
+@@ -5801,7 +5801,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-codegen-glance"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "anyhow",
+  "perry-hir",
+@@ -5809,7 +5809,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-codegen-js"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "anyhow",
+  "perry-dispatch",
+@@ -5818,7 +5818,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-codegen-swiftui"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "anyhow",
+  "perry-hir",
+@@ -5826,7 +5826,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-codegen-wasm"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -5838,7 +5838,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-codegen-wear-tiles"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "anyhow",
+  "perry-hir",
+@@ -5846,7 +5846,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-container-compose"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "anyhow",
+  "async-trait",
+@@ -5875,14 +5875,14 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-container-e2e"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "anyhow",
+ ]
+ 
+ [[package]]
+ name = "perry-diagnostics"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "serde",
+  "serde_json",
+@@ -5890,7 +5890,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-dispatch"
+-version = "0.5.1528"
++version = "0.5.1529"
+ 
+ [[package]]
+ name = "perry-doc-fixture-my-bindings"
+@@ -5901,7 +5901,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-doc-tests"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -5916,7 +5916,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-ads"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "block2",
+  "objc2",
+@@ -5926,7 +5926,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-argon2"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "argon2",
+  "perry-ffi",
+@@ -5935,7 +5935,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-axios"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "perry-ffi",
+  "reqwest",
+@@ -5944,7 +5944,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-bcrypt"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "bcrypt",
+  "perry-ffi",
+@@ -5952,7 +5952,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-better-sqlite3"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "perry-ffi",
+  "rusqlite",
+@@ -5960,7 +5960,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-cheerio"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "perry-ffi",
+  "scraper",
+@@ -5968,7 +5968,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-commander"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "perry-ffi",
+  "perry-runtime",
+@@ -5976,7 +5976,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-cron"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "chrono",
+  "cron",
+@@ -5986,7 +5986,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-dayjs"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "chrono",
+  "perry-ffi",
+@@ -5994,7 +5994,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-decimal"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "perry-ffi",
+  "rust_decimal",
+@@ -6002,7 +6002,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-dotenv"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "perry-ffi",
+  "serde_json",
+@@ -6010,7 +6010,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-ethers"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "perry-ffi",
+  "rand 0.10.2",
+@@ -6018,7 +6018,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-events"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "perry-ffi",
+  "perry-runtime",
+@@ -6026,14 +6026,14 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-exponential-backoff"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "perry-ffi",
+ ]
+ 
+ [[package]]
+ name = "perry-ext-fastify"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "bytes",
+  "http-body-util",
+@@ -6051,7 +6051,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-fetch"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "bytes",
+  "lazy_static",
+@@ -6064,7 +6064,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-http"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "base64 0.22.1",
+  "bytes",
+@@ -6096,7 +6096,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-ioredis"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "lazy_static",
+  "perry-ffi",
+@@ -6106,7 +6106,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-jsonwebtoken"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "base64 0.22.1",
+  "jsonwebtoken",
+@@ -6117,7 +6117,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-lru-cache"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "lru",
+  "perry-ffi",
+@@ -6126,7 +6126,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-moment"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "chrono",
+  "perry-ffi",
+@@ -6134,7 +6134,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-mongodb"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "bson",
+  "futures-util",
+@@ -6146,7 +6146,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-mysql2"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "chrono",
+  "perry-ffi",
+@@ -6158,7 +6158,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-nanoid"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "nanoid",
+  "perry-ffi",
+@@ -6167,7 +6167,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-net"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "bytes",
+  "perry-ffi",
+@@ -6182,7 +6182,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-node-forge"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "const-oid 0.10.2",
+  "der 0.8.1",
+@@ -6201,7 +6201,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-nodemailer"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "lettre",
+  "perry-ffi",
+@@ -6211,7 +6211,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-parcel-watcher"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "fancy-regex",
+  "notify",
+@@ -6223,7 +6223,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-pdf"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "perry-ffi",
+  "printpdf",
+@@ -6231,7 +6231,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-pg"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "perry-ffi",
+  "sqlx",
+@@ -6240,7 +6240,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-qs"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "perry-ffi",
+  "perry-runtime",
+@@ -6249,7 +6249,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-ratelimit"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "governor",
+  "perry-ffi",
+@@ -6257,7 +6257,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-sharp"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "fast_image_resize",
+  "image",
+@@ -6268,7 +6268,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-streams"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "lazy_static",
+  "perry-ffi",
+@@ -6277,7 +6277,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-typescript"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "anyhow",
+  "perry-ffi",
+@@ -6297,7 +6297,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-undici"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "perry-ffi",
+  "perry-runtime",
+@@ -6306,7 +6306,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-uuid"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "perry-ffi",
+  "uuid",
+@@ -6314,7 +6314,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-validator"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "perry-ffi",
+  "regex",
+@@ -6324,7 +6324,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-ws"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "futures-util",
+  "lazy_static",
+@@ -6337,7 +6337,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-zlib"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "brotli",
+  "flate2",
+@@ -6347,7 +6347,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ffi"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "dashmap 6.2.1",
+  "once_cell",
+@@ -6356,7 +6356,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-hir"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "anyhow",
+  "perry-api-manifest",
+@@ -6375,7 +6375,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-parser"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "anyhow",
+  "perry-diagnostics",
+@@ -6388,7 +6388,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-runtime"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "ahash",
+  "anyhow",
+@@ -6451,14 +6451,14 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-runtime-static"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "perry-runtime",
+ ]
+ 
+ [[package]]
+ name = "perry-stdlib"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "aes 0.8.4",
+  "aes 0.9.1",
+@@ -6554,14 +6554,14 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-stdlib-static"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "perry-stdlib",
+ ]
+ 
+ [[package]]
+ name = "perry-transform"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "anyhow",
+  "perry-hir",
+@@ -6570,7 +6570,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ui"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "perry-ffi",
+  "perry-ui-model",
+@@ -6578,7 +6578,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ui-android"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "base64 0.22.1",
+  "itoa",
+@@ -6596,7 +6596,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ui-geisterhand"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "rand 0.10.2",
+  "serde",
+@@ -6606,7 +6606,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ui-gtk4"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "base64 0.22.1",
+  "cairo-rs 0.22.9",
+@@ -6629,7 +6629,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ui-ios"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "base64 0.22.1",
+  "block2",
+@@ -6646,7 +6646,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ui-macos"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "base64 0.22.1",
+  "block2",
+@@ -6663,7 +6663,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ui-model"
+-version = "0.5.1528"
++version = "0.5.1529"
+ 
+ [[package]]
+ name = "perry-ui-test"
+@@ -6674,11 +6674,11 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ui-testkit"
+-version = "0.5.1528"
++version = "0.5.1529"
+ 
+ [[package]]
+ name = "perry-ui-tvos"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "base64 0.22.1",
+  "block2",
+@@ -6695,7 +6695,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ui-visionos"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "base64 0.22.1",
+  "block2",
+@@ -6712,7 +6712,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ui-watchos"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "block2",
+  "libc",
+@@ -6726,7 +6726,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ui-windows"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "base64 0.22.1",
+  "libc",
+@@ -6745,7 +6745,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ui-windows-winui"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "base64 0.22.1",
+  "libc",
+@@ -6758,7 +6758,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-updater"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -6774,7 +6774,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-wasm-host"
+-version = "0.5.1528"
++version = "0.5.1529"
+ dependencies = [
+  "wasmi",
+ ]
+diff --git a/Cargo.toml b/Cargo.toml
+index c25eb6755..2675014ca 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -335,7 +335,7 @@ codegen-units = 1
+ codegen-units = 1
+ 
+ [workspace.package]
+-version = "0.5.1528"
++version = "0.5.1529"
+ edition = "2021"
+ license = "MIT"
+ repository = "https://github.com/PerryTS/perry"
+diff --git a/crates/perry-runtime/src/json/mod.rs b/crates/perry-runtime/src/json/mod.rs
+index 69ab93a53..2c8b6475c 100644
+--- a/crates/perry-runtime/src/json/mod.rs
++++ b/crates/perry-runtime/src/json/mod.rs
+@@ -96,7 +96,7 @@ pub(crate) use parse_reuse::{
+     test_parse_object_template_matches, test_root_scanner_slot_addresses,
+     test_seed_root_scanner_slots,
+ };
+-pub(crate) use parser::{DirectParser, ObjectShapeHint};
++pub(crate) use parser::{DirectParser, ObjectShapeHint, ParsedStr};
+ pub(crate) use raw_json::{ptr_is_raw_json_wrapper, raw_json_text_bytes};
+ #[cfg(test)]
+ pub(crate) use reviver::test_apply_reviver_for_value;
+diff --git a/crates/perry-runtime/src/json/stringify.rs b/crates/perry-runtime/src/json/stringify.rs
+index 086e22610..22d4bd2d9 100644
+--- a/crates/perry-runtime/src/json/stringify.rs
++++ b/crates/perry-runtime/src/json/stringify.rs
+@@ -1406,6 +1406,13 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
+             // name embeds all 32 ASCII control characters).
+             write_escaped_string(buf, key_str);
+             buf.push(':');
++        } else if crate::string::js_string_key_bytes(
++            JSValue::from_bits(current_key_bits),
++            &mut key_sso,
++        )
++        .is_some_and(|bytes| super::stringify_scalars::write_wtf8_key(buf, bytes))
++        {
++            buf.push(':');
+         } else {
+             let _ = write!(buf, "\"field{}\":", f);
+         }
+diff --git a/crates/perry-runtime/src/json/stringify_scalars.rs b/crates/perry-runtime/src/json/stringify_scalars.rs
+index aa931a334..36b2df294 100644
+--- a/crates/perry-runtime/src/json/stringify_scalars.rs
++++ b/crates/perry-runtime/src/json/stringify_scalars.rs
+@@ -117,6 +117,43 @@ pub(crate) unsafe fn write_escaped_string(buf: &mut String, s: &str) {
+         return;
+     };
+ 
++    write_escaped_bytes_from(buf, bytes, first_escape);
++}
++
++/// Quote a key rejected by the UTF-8 key decoder. Validate its WTF-8 first so
++/// malformed internal bytes cannot enter the Rust output String unchanged.
++#[inline(never)]
++pub(crate) unsafe fn write_wtf8_key(buf: &mut String, bytes: &[u8]) -> bool {
++    let mut rest = bytes;
++    while let Err(error) = std::str::from_utf8(rest) {
++        rest = &rest[error.valid_up_to()..];
++        if rest.len() < 3
++            || rest[0] != 0xed
++            || !(0xa0..=0xbf).contains(&rest[1])
++            || !(0x80..=0xbf).contains(&rest[2])
++        {
++            return false;
++        }
++        rest = &rest[3..];
++    }
++    let Some(first_escape) = super::simd::find_string_escape(bytes) else {
++        return false;
++    };
++    write_escaped_bytes_from(buf, bytes, first_escape);
++    true
++}
++
++#[test]
++fn json_wtf8_key_fallback_validates_before_writing() {
++    for bytes in [b"\xed\xa0".as_slice(), b"\xff", b"\xed\xa0\x80\xff"] {
++        let mut output = "prefix".to_owned();
++        assert!(!unsafe { write_wtf8_key(&mut output, bytes) });
++        assert_eq!(output, "prefix");
++    }
++}
++
++#[inline]
++unsafe fn write_escaped_bytes_from(buf: &mut String, bytes: &[u8], first_escape: usize) {
+     buf.push('"');
+     let mut start = 0;
+     // Issue #548: `s` reaches us via `str_from_header`, which uses
+diff --git a/crates/perry-runtime/src/json_tape.rs b/crates/perry-runtime/src/json_tape.rs
+index e45300655..f5f4476f1 100644
+--- a/crates/perry-runtime/src/json_tape.rs
++++ b/crates/perry-runtime/src/json_tape.rs
+@@ -844,8 +844,12 @@ unsafe fn materialize_string_value(source: &TapeSource<'_, '_>, offset: usize) -
+             // access) can handle both forms — Step 1 + 1.5 of the
+             // SSO migration landed those consumer arms in v0.5.214
+             // / v0.5.215.
+-            if let Some(sso) = JSValue::try_short_string(slice) {
+-                return sso;
++            if slice.len() <= crate::value::SHORT_STRING_MAX_LEN
++                && !crate::string::bytes_have_lone_surrogate(slice)
++            {
++                if let Some(sso) = JSValue::try_short_string(slice) {
++                    return sso;
++                }
+             }
+             let ptr = if source.is_lazy() {
+                 let owned = slice.to_vec();
+@@ -856,10 +860,14 @@ unsafe fn materialize_string_value(source: &TapeSource<'_, '_>, offset: usize) -
+             JSValue::string_ptr(ptr)
+         }
+         Some(ParsedStr::Owned(vec)) => {
+-            if let Some(sso) = JSValue::try_short_string(&vec) {
+-                return sso;
++            if vec.len() <= crate::value::SHORT_STRING_MAX_LEN
++                && !crate::string::bytes_have_lone_surrogate(&vec)
++            {
++                if let Some(sso) = JSValue::try_short_string(&vec) {
++                    return sso;
++                }
+             }
+-            let ptr = crate::string::js_string_from_bytes(vec.as_ptr(), vec.len() as u32);
++            let ptr = crate::string::js_string_from_builder_bytes(&vec);
+             JSValue::string_ptr(ptr)
+         }
+         None => JSValue::null(),
+@@ -908,6 +916,9 @@ enum ParsedStr<'a> {
+ /// Standalone because the materializer doesn't have a live
+ /// `DirectParser` instance. Same semantics as
+ /// `DirectParser::parse_string_bytes`.
++// Keep the scalar scan out of its materialization callers even though the
++// canonical escape decoder is now shared and the scanner itself is small.
++#[inline(never)]
+ fn parse_string_bytes_static(bytes: &[u8]) -> Option<ParsedStr<'_>> {
+     if bytes.is_empty() || bytes[0] != b'"' {
+         return None;
+@@ -921,77 +932,28 @@ fn parse_string_bytes_static(bytes: &[u8]) -> Option<ParsedStr<'_>> {
+         }
+         if c == b'\\' {
+             // Fall through to slow path from here.
+-            return parse_string_bytes_slow(bytes, pos, start);
++            return parse_string_bytes_slow(bytes);
+         }
+         pos += 1;
+     }
+     None
+ }
+ 
+-fn parse_string_bytes_slow(bytes: &[u8], start_pos: usize, start: usize) -> Option<ParsedStr<'_>> {
+-    let mut result: Vec<u8> = Vec::from(&bytes[start..start_pos]);
+-    let mut pos = start_pos;
+-    loop {
+-        if pos >= bytes.len() {
+-            return None;
+-        }
+-        let c = bytes[pos];
+-        pos += 1;
+-        match c {
+-            b'"' => return Some(ParsedStr::Owned(result)),
+-            b'\\' => {
+-                if pos >= bytes.len() {
+-                    return None;
+-                }
+-                let esc = bytes[pos];
+-                pos += 1;
+-                match esc {
+-                    b'"' => result.push(b'"'),
+-                    b'\\' => result.push(b'\\'),
+-                    b'/' => result.push(b'/'),
+-                    b'n' => result.push(b'\n'),
+-                    b'r' => result.push(b'\r'),
+-                    b't' => result.push(b'\t'),
+-                    b'b' => result.push(0x08),
+-                    b'f' => result.push(0x0C),
+-                    b'u' => {
+-                        if pos + 4 > bytes.len() {
+-                            return None;
+-                        }
+-                        let hex = std::str::from_utf8(&bytes[pos..pos + 4]).ok()?;
+-                        let code = u16::from_str_radix(hex, 16).ok()?;
+-                        pos += 4;
+-                        if (0xD800..=0xDBFF).contains(&code) {
+-                            if pos + 6 <= bytes.len()
+-                                && bytes[pos] == b'\\'
+-                                && bytes[pos + 1] == b'u'
+-                            {
+-                                let hex2 = std::str::from_utf8(&bytes[pos + 2..pos + 6]).ok()?;
+-                                let low = u16::from_str_radix(hex2, 16).ok()?;
+-                                pos += 6;
+-                                let codepoint = 0x10000
+-                                    + ((code as u32 - 0xD800) << 10)
+-                                    + (low as u32 - 0xDC00);
+-                                if let Some(ch) = char::from_u32(codepoint) {
+-                                    let mut buf = [0u8; 4];
+-                                    let s = ch.encode_utf8(&mut buf);
+-                                    result.extend_from_slice(s.as_bytes());
+-                                }
+-                            }
+-                        } else if let Some(ch) = char::from_u32(code as u32) {
+-                            let mut buf = [0u8; 4];
+-                            let s = ch.encode_utf8(&mut buf);
+-                            result.extend_from_slice(s.as_bytes());
+-                        }
+-                    }
+-                    _ => result.push(esc),
+-                }
+-            }
+-            _ => result.push(c),
+-        }
++// Keep the cold escape decoder shared with eager/batched parsing. In
++// particular, lone surrogates must survive every lazy access order.
++#[inline(never)]
++fn parse_string_bytes_slow(bytes: &[u8]) -> Option<ParsedStr<'_>> {
++    let mut parser = crate::json::DirectParser::new(bytes);
++    match parser.parse_string_bytes()? {
++        crate::json::ParsedStr::Borrowed(bytes) => Some(ParsedStr::Borrowed(bytes)),
++        crate::json::ParsedStr::Owned(bytes) => Some(ParsedStr::Owned(bytes)),
+     }
+ }
+ 
++#[cfg(test)]
++#[path = "json_tape/string_decode_tests.rs"]
++mod string_decode_tests;
++
+ #[cfg(test)]
+ #[path = "json_tape_tests.rs"]
+ mod tests;
+diff --git a/crates/perry-runtime/src/json_tape/record_materialize.rs b/crates/perry-runtime/src/json_tape/record_materialize.rs
+index 70d1f1f8f..5eaa7807c 100644
+--- a/crates/perry-runtime/src/json_tape/record_materialize.rs
++++ b/crates/perry-runtime/src/json_tape/record_materialize.rs
+@@ -64,8 +64,6 @@ mod tests {
+     #[test]
+     fn small_lazy_record_batch_preserves_duplicate_escape_and_nested_values() {
+         // Expected output checked against the repository's pinned Node oracle.
+-        // The legacy tape walker drops lone surrogates, so it cannot serve as
+-        // the oracle for the escaped-string case.
+         for (text, expected) in [
+             (
+                 r#"{"id":42,"name":"user_42","tags":["red","blue"],"active":true}"#,
+diff --git a/crates/perry-runtime/src/json_tape/string_decode_tests.rs b/crates/perry-runtime/src/json_tape/string_decode_tests.rs
+new file mode 100644
+index 000000000..606390487
+--- /dev/null
++++ b/crates/perry-runtime/src/json_tape/string_decode_tests.rs
+@@ -0,0 +1,110 @@
++//! All materializers must preserve the same escaped UTF-16 code units.
++use super::*;
++
++const CASES: &[(&str, &str)] = &[
++    (r#"{"id":1,"s":"\ud800"}"#, r#"{"id":1,"s":"\ud800"}"#),
++    (r#"{"id":1,"s":"\udfff"}"#, r#"{"id":1,"s":"\udfff"}"#),
++    (
++        r#"{"id":1,"s":"\ud800\u0061"}"#,
++        r#"{"id":1,"s":"\ud800a"}"#,
++    ),
++    (
++        r#"{"id":1,"s":"\ud800\ud800"}"#,
++        r#"{"id":1,"s":"\ud800\ud800"}"#,
++    ),
++    (r#"{"id":1,"s":"\ud83d\ude42"}"#, r#"{"id":1,"s":"🙂"}"#),
++    (
++        r#"{"id":1,"s":"prefix\ud800\n\t"}"#,
++        r#"{"id":1,"s":"prefix\ud800\n\t"}"#,
++    ),
++    (
++        r#"{"a":1,"\u0061":2,"\ud800":3,"\ud800":4,"s":["\udc00","\ud800\udc00"]}"#,
++        r#"{"a":2,"\ud800":4,"s":["\udc00","𐀀"]}"#,
++    ),
++];
++
++unsafe fn render(value: JSValue) -> String {
++    let output = crate::json::js_json_stringify(f64::from_bits(value.bits()), 0);
++    crate::string::string_as_str(output).to_owned()
++}
++
++#[test]
++fn json_tape_escaped_records_match_in_all_materializers() {
++    let _suppress = crate::gc::GcSuppressScope::new();
++    for &(text, expected) in CASES {
++        let tape = build_tape(text.as_bytes()).unwrap();
++        let source = TapeSource::Borrowed {
++            tape: &tape.entries,
++            bytes: text.as_bytes(),
++        };
++        let scope = crate::gc::RuntimeHandleScope::new();
++        unsafe {
++            let value = materialize_from_idx_source(&source, &scope, 0);
++            assert_eq!(render(value), expected, "tape: {text}");
++            let value = record_materialize::try_small_record(&source, &scope, 0).unwrap();
++            assert_eq!(render(value), expected, "batch: {text}");
++            let value = materialize_iterative(&tape.entries, text.as_bytes()).unwrap();
++            assert_eq!(render(value), expected, "iterative: {text}");
++        }
++    }
++}
++
++#[test]
++fn json_tape_escaped_records_do_not_depend_on_access_order() {
++    let _suppress = crate::gc::GcSuppressScope::new();
++    for &(record, expected) in CASES {
++        let input = format!("[{}]", vec![record; 128].join(","));
++        let tape = build_tape(input.as_bytes()).unwrap();
++        for order in [vec![0, 1, 2, 127], vec![127, 2, 1, 0], (0..128).collect()] {
++            let scope = crate::gc::RuntimeHandleScope::new();
++            let text = crate::js_string_from_bytes(input.as_ptr(), input.len() as u32);
++            let lazy =
++                scope.root_raw_mut_ptr(unsafe { alloc_lazy_array(&tape.entries, 0, 128, text) });
++            for index in order {
++                let value = lazy.with_mut_ptr(|header| unsafe { lazy_get(header, index) });
++                assert_eq!(
++                    unsafe { render(value) },
++                    expected,
++                    "index {index}: {record}"
++                );
++            }
++            // Exercise the final sparse-cache merge or adaptive reparse too.
++            lazy.with_mut_ptr(|header| unsafe { force_materialize_lazy(header) });
++            for index in 0..128 {
++                let value = lazy.with_mut_ptr(|header| unsafe { lazy_get(header, index) });
++                assert_eq!(
++                    unsafe { render(value) },
++                    expected,
++                    "after force {index}: {record}"
++                );
++            }
++        }
++    }
++}
++
++#[test]
++fn json_tape_lone_escape_uses_heap_wtf8_metadata() {
++    let _suppress = crate::gc::GcSuppressScope::new();
++    for (text, units) in [
++        (r#""\ud800""#, 1),
++        (r#""xx\ud800""#, 3),
++        (r#""xxx\ud800""#, 4),
++    ] {
++        let tape = build_tape(text.as_bytes()).unwrap();
++        let source = TapeSource::Borrowed {
++            tape: &tape.entries,
++            bytes: text.as_bytes(),
++        };
++        unsafe {
++            let value = materialize_string_value(&source, 0);
++            assert!(!value.is_short_string(), "lone surrogate must not use SSO");
++            let string = value.as_string_ptr();
++            assert_eq!((*string).utf16_len, units);
++            assert_ne!(
++                (*string).flags & crate::string::STRING_FLAG_HAS_LONE_SURROGATES,
++                0
++            );
++            assert_eq!(render(value), text);
++        }
++    }
++}
