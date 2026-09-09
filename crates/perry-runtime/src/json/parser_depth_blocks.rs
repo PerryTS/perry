@@ -140,7 +140,6 @@ pub(crate) fn nesting_depth_exceeds(bytes: &[u8], limit: usize) -> bool {
 #[inline(always)]
 fn contains_open_container(bytes: &[u8]) -> bool {
     use std::arch::aarch64::*;
-    let mut i = 0usize;
     unsafe {
         // '[' and '{' differ only by bit 0x20. No other byte folds to '{'.
         let fold = vdupq_n_u8(0x20);
@@ -151,8 +150,21 @@ fn contains_open_container(bytes: &[u8]) -> bool {
             if vmaxvq_u8(vceqq_u8(vorrq_u8(chunk, fold), object)) != 0 {
                 return true;
             }
-            i = 16;
+            return contains_open_container_tail(&bytes[16..]);
         }
+    }
+    contains_open_container_tail(bytes)
+}
+
+// Keep the initial positive probe in the depth scanner. Its quote/depth loop
+// does not need the wide no-opening search in its instruction footprint.
+#[inline(never)]
+fn contains_open_container_tail(bytes: &[u8]) -> bool {
+    use std::arch::aarch64::*;
+    let mut i = 0usize;
+    unsafe {
+        let fold = vdupq_n_u8(0x20);
+        let object = vdupq_n_u8(b'{');
         while bytes.len() - i >= 64 {
             let p = bytes.as_ptr().add(i);
             let a = vceqq_u8(vorrq_u8(vld1q_u8(p), fold), object);
