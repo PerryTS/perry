@@ -1,0 +1,20 @@
+{
+  "disposition": "development-host scheduling diagnostic, not acceptance timing",
+  "worker_sha256": "d70a025d2ba8f97b2c1a8bb034292e7d0c3b244ac2d29edc5e667b1747bab1c3",
+  "base_commit": "c82e613d260a80324914b5aba503a31a763ad90e",
+  "candidate": "R2; large-string path unchanged from merge",
+  "cpu": "Apple M1 Max",
+  "timed_parses": 1000,
+  "warmup_parses": 8,
+  "fixture": "unicode_1m",
+  "mode": "rotating",
+  "environment": {
+    "PERRY_GC_DIAG": "1"
+  },
+  "rss_before_bytes": 28786688,
+  "rss_after_bytes": 914817024,
+  "copying_minors": 0,
+  "incremental_cycle_starts": 0,
+  "minor_us": 0,
+  "full_sync_us": 0
+}

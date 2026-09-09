@@ -1,0 +1,12 @@
+{
+  "base_commit": "c82e613d260a80324914b5aba503a31a763ad90e",
+  "files": {
+    "crates/perry-runtime/src/json_tape.rs": "89b345130ea3717e652f790c058176ff218bf8d95aeab8ace8dd6c65ba4beb85",
+    "crates/perry-runtime/src/json_tape/record_materialize.rs": "fb665b641720572b13cdda64aeca6882226e0e5b8e33366cde28f952e757c0ba",
+    "target/release/libperry_runtime.a": "72126da51eb21246bbec42f58dce3266793b5636467ad52f432a67dd74e883cf",
+    "benchmarks/json_performance/.work/lazy-batch/worker": "99a61622913e556010082a1fe0ae80386d6768685a6557337722475f2bfc13fa",
+    "benchmarks/json_performance/.work/lazy-batch/rotating-worker": "9d84d4a2dbb5925e96df1428c63e88365a72e39a94382cdabb63cd7e007885e8"
+  },
+  "runtime_only_bench_link": true,
+  "tests": "275 JSON tests passed"
+}

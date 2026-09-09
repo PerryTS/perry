@@ -1,0 +1,58 @@
+# Next parse investigations
+
+These are hypotheses, not implemented changes or measured speedups. The current
+milestone is bounded lazy-record construction and preserved large-output sweep
+requests; the investigations below follow its validation and landing.
+
+## Large Unicode strings
+
+A two-second R4 rotating-input stack sample has 1,565 main-thread samples:
+672 at UTF-16 counting, 343 at string-token scanning, 220 at nesting preflight,
+and 143 at copying. The workload starts before sampling and is intentionally
+terminated afterwards. The development host is compiling concurrently, so these
+are location diagnostics, not quantitative acceptance timings.
+
+The source StringHeader already has its UTF-16 length. For a dominant unescaped
+string token with a bounded ASCII prefix and suffix, its length may be derivable
+by subtracting those outside bytes. The proof must require the exact rooted
+source/input range, checked subtraction, and a token boundary that preserves
+the existing malformed/WTF-8 counting behavior. Standalone byte parsers and
+other shapes need the current counter. No source/output pointer may survive an
+allocation without its existing root/suppression protection. This could remove
+an entire large counting pass without retaining more strings.
+
+## Small records with changing input
+
+The small-record profile shows material time in pressure checks, arena occupancy
+walks, and parse-completion bookkeeping. It also shows generic object parsing,
+per-field TLS access, and representation/shape cleanup. The existing same-source
+and tiny-value entries already amortize some boundary accounting, while a cold
+small record enters the full parse boundary.
+
+Investigate whether bounded, callback-free small parses can use the same
+construction scope and pressure cadence as bounded lazy record construction.
+Retain pending-work servicing, full-GC behavior, active-cycle handling, error
+semantics, and result rooting. Size bounds must make deferred pressure safe;
+this must not be implemented as an unconditional GC bypass. Do not change
+object representation cleanup without proving address-reuse correctness.
+
+[Compressed stack samples and binary provenance](results/output-debt-r4-profiles/provenance.json).
+
+## Integration before publishing
+
+Upstream `d342c816be56c8f8b011144939a66674d1a42027` retains reusable parse
+template ShapeId ownership during a full trace. It changes `json/mod.rs`,
+`json/parse_reuse.rs`, and a GC regression test, and is integrated into the
+measured candidate. The later `f2dc03582` adds release metadata only, so this
+follow-up uses 0.5.1528. Existing trial artifacts remain measurements of their
+recorded revisions and must not be relabelled as measurements of a later build.
+
+## Untouched lazy-array roundtrip
+
+`try_stringify_lazy_array` currently canonicalizes number spellings, then makes
+a fresh managed string. If normalization returns a borrowed whole-input span,
+returning the rooted original immutable string may avoid the final copy and
+UTF-16 recount. Require the entire original string, rather than retaining a
+large source for a tiny substring. Preserve all existing mutation/fallback
+checks and establish canonical output equivalence before considering reuse.
+This is a follow-up hypothesis; no implementation or measured gain is claimed.

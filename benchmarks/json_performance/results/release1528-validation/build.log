@@ -1,0 +1,33 @@
+   Compiling perry-diagnostics v0.5.1528 (/Users/amlug/projects/perry/json-merged-pr10022/crates/perry-diagnostics)
+   Compiling perry-dispatch v0.5.1528 (/Users/amlug/projects/perry/json-merged-pr10022/crates/perry-dispatch)
+   Compiling perry-api-manifest v0.5.1528 (/Users/amlug/projects/perry/json-merged-pr10022/crates/perry-api-manifest)
+   Compiling perry-ui-model v0.5.1528 (/Users/amlug/projects/perry/json-merged-pr10022/crates/perry-ui-model)
+   Compiling perry-codegen v0.5.1528 (/Users/amlug/projects/perry/json-merged-pr10022/crates/perry-codegen)
+   Compiling perry v0.5.1528 (/Users/amlug/projects/perry/json-merged-pr10022/crates/perry)
+   Compiling perry-ffi v0.5.1528 (/Users/amlug/projects/perry/json-merged-pr10022/crates/perry-ffi)
+   Compiling perry-runtime v0.5.1528 (/Users/amlug/projects/perry/json-merged-pr10022/crates/perry-runtime)
+   Compiling perry-parser v0.5.1528 (/Users/amlug/projects/perry/json-merged-pr10022/crates/perry-parser)
+   Compiling perry-hir v0.5.1528 (/Users/amlug/projects/perry/json-merged-pr10022/crates/perry-hir)
+   Compiling perry-codegen-js v0.5.1528 (/Users/amlug/projects/perry/json-merged-pr10022/crates/perry-codegen-js)
+   Compiling perry-codegen-wear-tiles v0.5.1528 (/Users/amlug/projects/perry/json-merged-pr10022/crates/perry-codegen-wear-tiles)
+   Compiling perry-codegen-arkts v0.5.1528 (/Users/amlug/projects/perry/json-merged-pr10022/crates/perry-codegen-arkts)
+   Compiling perry-codegen-swiftui v0.5.1528 (/Users/amlug/projects/perry/json-merged-pr10022/crates/perry-codegen-swiftui)
+   Compiling perry-transform v0.5.1528 (/Users/amlug/projects/perry/json-merged-pr10022/crates/perry-transform)
+   Compiling perry-codegen-glance v0.5.1528 (/Users/amlug/projects/perry/json-merged-pr10022/crates/perry-codegen-glance)
+   Compiling perry-codegen-wasm v0.5.1528 (/Users/amlug/projects/perry/json-merged-pr10022/crates/perry-codegen-wasm)
+warning: function `relevant_box_roots` is never used
+    --> crates/perry-runtime/src/box.rs:1020:4
+     |
+1020 | fn relevant_box_roots() -> Vec<usize> {
+     |    ^^^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `perry-runtime` (lib) generated 1 warning
+   Compiling perry-updater v0.5.1528 (/Users/amlug/projects/perry/json-merged-pr10022/crates/perry-updater)
+   Compiling perry-runtime-static v0.5.1528 (/Users/amlug/projects/perry/json-merged-pr10022/crates/perry-runtime-static)
+   Compiling perry-stdlib v0.5.1528 (/Users/amlug/projects/perry/json-merged-pr10022/crates/perry-stdlib)
+   Compiling perry-stdlib-static v0.5.1528 (/Users/amlug/projects/perry/json-merged-pr10022/crates/perry-stdlib-static)
+    Finished `release` profile [optimized] target(s) in 5m 36s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1, redis v1.6.0
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`

@@ -519,6 +519,27 @@ pub(crate) fn gc_schedule_malloc_sweep_after_json_output() {
     GC_NEXT_MALLOC_TRIGGER.with(|trigger| trigger.set(trigger.get().min(current)));
 }
 
+pub(crate) enum JsonOutputSweep {
+    Pending,
+    CompletedBeforeBoundary,
+    CompletedAtBoundary,
+}
+
+/// Service completed JSON-output debt at a rooted input boundary. Distinguish
+/// an earlier deferred completion so JSON can carry forward output bytes
+/// produced after that request instead of dropping an extra buffer's debt.
+pub(crate) fn gc_service_json_output_sweep() -> JsonOutputSweep {
+    let was_due = malloc_object_count() >= GC_NEXT_MALLOC_TRIGGER.with(Cell::get);
+    gc_check_trigger();
+    if malloc_object_count() >= GC_NEXT_MALLOC_TRIGGER.with(Cell::get) {
+        JsonOutputSweep::Pending
+    } else if was_due {
+        JsonOutputSweep::CompletedAtBoundary
+    } else {
+        JsonOutputSweep::CompletedBeforeBoundary
+    }
+}
+
 crate::perry_thread_local! {
     /// Per-program adaptive malloc-count step. Mirrors `GC_STEP_BYTES`
     /// behaviour: doubles when mostly-garbage, halves when mostly-live.
@@ -3118,7 +3139,7 @@ crate::perry_thread_local! {
     static GC_BUDGETED_STEP_ACTIVE: Cell<bool> = const { Cell::new(false) };
 }
 
-pub(super) fn gc_budgeted_cycle_active() -> bool {
+pub(crate) fn gc_budgeted_cycle_active() -> bool {
     GC_BUDGETED_CYCLE_ACTIVE.with(Cell::get)
 }
 

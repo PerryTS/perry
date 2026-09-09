@@ -565,6 +565,9 @@ enum TapeSource<'a, 'scope> {
     },
 }
 
+#[path = "json_tape/record_materialize.rs"]
+mod record_materialize;
+
 impl<'a, 'scope> TapeSource<'a, 'scope> {
     #[inline]
     unsafe fn len(&self) -> usize {
@@ -1612,7 +1615,13 @@ pub unsafe fn lazy_get(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
     (*hdr).walk_tape_pos = idx as u32;
     (*hdr).cumulative_walk_steps = (*hdr).cumulative_walk_steps.saturating_add(step_cost);
 
-    let value = materialize_from_idx_source(&source, &scope, idx);
+    // Amortize the direct producer's shape metadata once consecutive reads
+    // establish a traversal. Isolated reads keep the tape producer, which
+    // avoids creating another parser cache for a glance at a few records.
+    let value = (streak > 1)
+        .then(|| record_materialize::try_small_record(&source, &scope, idx))
+        .flatten()
+        .unwrap_or_else(|| materialize_from_idx_source(&source, &scope, idx));
     let value_handle = scope.root_nanbox_u64(value.bits());
     let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
     let bitmap = (*hdr).materialized_bitmap;
@@ -1751,7 +1760,7 @@ unsafe fn reparse_materialize(
         let _suppress = crate::gc::GcSuppressScope::new();
         let data = (blob as *const u8).add(std::mem::size_of::<crate::StringHeader>());
         let bytes = std::slice::from_raw_parts(data, blob_len);
-        let mut parser = crate::json::DirectParser::new(bytes);
+        let mut parser = crate::json::DirectParser::new_batched(bytes);
         let parsed = parser.parse_value();
         // Hand the tree to PARSE_ROOTS before the window closes — the
         // handle-scope root below is pushed after it has already closed.

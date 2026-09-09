@@ -1,0 +1,28 @@
+{
+  "started_utc": "2026-09-09T14:45:06Z",
+  "load_before": [
+    1.90283203125,
+    2.017578125,
+    1.84033203125
+  ],
+  "fixtures": {
+    "string_a": 50000000,
+    "small_record": 50000000,
+    "unicode_1m": 16384
+  },
+  "repeat": 9,
+  "worker_sha256": {
+    "perry": "b638d5db93b949c48ed9b041b69fd17131cf4d2ae772a5fb4296e419318c823c",
+    "baseline": "641228aef444a8d10e0312db2580bb7eef7f87343a592029105bf6a72d8c941a",
+    "prior": "9be2422a3519f4f61291a1bb269f4a761cc5c06e9bd7e54e85ff594b51e187f9"
+  },
+  "node_version": "v26.5.1",
+  "harness_sha256": "6db51f42471c346604abbbdbdbccc3dc6c4da4be0d652e8299209cf67138fcfe",
+  "worker_source_sha256": "55c11d12296f896212d6abd76bcf8d551d0590b0ad24b262018b7a707369a2f4",
+  "finished_utc": "2026-09-09T14:46:29Z",
+  "load_after": [
+    1.74658203125,
+    1.93798828125,
+    1.82421875
+  ]
+}

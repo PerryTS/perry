@@ -312,6 +312,42 @@ fn test_json_tape_lazy_get_header_handle_survives_copied_minor_gc() {
     }
 }
 
+#[test]
+fn test_json_tape_small_record_batch_survives_copied_minor_before_cache_store() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    register_runtime_handle_root_scanner_for_tests();
+    let record = br#"{"id":42,"name":"lazy-record-long","tags":["red-long","blue-long"]}"#;
+    let mut input = b"[0,".to_vec();
+    input.extend_from_slice(record);
+    input.push(b']');
+    let hdr = unsafe { test_alloc_lazy_json_array(&input) };
+    let scope = RuntimeHandleScope::new();
+    let hdr_handle = scope.root_raw_mut_ptr(hdr);
+    // Establish an ascending traversal before arming the completed-record
+    // hook, so the second read must select the batch producer.
+    unsafe { crate::json_tape::lazy_get(hdr_handle.get_raw_mut_ptr(), 0) };
+    let hook = JsonTapeSafepointHookGuard::new(
+        crate::json_tape::JsonTapeSafepoint::MaterializeObjectRooted,
+    );
+    let value = unsafe { crate::json_tape::lazy_get(hdr_handle.get_raw_mut_ptr(), 1) };
+    let original = hook.fired_ptr();
+    assert_ne!(original, 0, "completed-record collection hook must run");
+    assert_ne!(
+        value.as_pointer::<u8>() as usize,
+        original,
+        "the completed record must move before lazy_get publishes its cache slot"
+    );
+    let value_handle = scope.root_nanbox_u64(value.bits());
+    let again = unsafe { crate::json_tape::lazy_get(hdr_handle.get_raw_mut_ptr(), 1) };
+    assert_eq!(again.bits(), value_handle.get_nanbox_u64());
+    let output =
+        unsafe { crate::json::js_json_stringify(f64::from_bits(value_handle.get_nanbox_u64()), 0) };
+    unsafe {
+        assert_string_bytes(output, record);
+    }
+}
+
 /// #7538 / #7500: `lazy_get`'s sparse-cache store must be recorded as an
 /// EXTERNAL old→young edge.
 ///

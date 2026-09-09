@@ -1,0 +1,10 @@
+{
+  "commit": "c82e613d260a80324914b5aba503a31a763ad90e",
+  "files": {
+    "target/release/perry": "4d391ded5a0dfebdcf680cda84d4144667f1e7749c5d931df3da620bcf4a9c4c",
+    "target/release/libperry_runtime.a": "ffc8cb5ea382a2f6e259ab396ed0649945b1d5d11b1ce07d1ee070879664b9ed",
+    "target/release/libperry_stdlib.a": "cc64a0a4487506fdc9f090e9c0e73fe3a6bbc243a2253cccdfcb12577f53899f",
+    "benchmarks/json_performance/.work/worker-merged-pr10022": "641228aef444a8d10e0312db2580bb7eef7f87343a592029105bf6a72d8c941a",
+    "benchmarks/json_performance/.work/rotating-worker-merged": "2f8b86ac67d27278bdf3705c0305563a00948cb8774f5de518131c6a63452961"
+  }
+}

@@ -162,7 +162,7 @@ unsafe fn try_parse_deep_iterative(text_ptr: *const StringHeader, len: usize) ->
             }
 
             crate::gc::gc_unsuppress();
-            crate::gc::gc_bump_json_malloc_trigger_deferred();
+            super::stringify_flat::finish_parse_gc_accounting();
             crate::gc::gc_schedule_parse_boundary_collection_if_pressure();
             gc_allocation.finish();
             result
@@ -286,7 +286,7 @@ unsafe fn parse_result_slow(text_ptr: *const StringHeader, len: usize) -> Result
     }
     parse_root_push(result);
     crate::gc::gc_unsuppress();
-    crate::gc::gc_bump_json_malloc_trigger_deferred();
+    super::stringify_flat::finish_parse_gc_accounting();
     crate::gc::gc_schedule_parse_boundary_collection_if_pressure();
     gc_allocation.finish();
     parse_root_restore(text_root);
@@ -531,7 +531,7 @@ unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
     // before returning. The scheduler owns the bounded lifetime grace period;
     // all object layouts and old-to-young edges are already complete.
     crate::gc::gc_unsuppress();
-    crate::gc::gc_bump_json_malloc_trigger_deferred();
+    super::stringify_flat::finish_parse_gc_accounting();
     crate::gc::gc_schedule_parse_boundary_collection_if_pressure();
     gc_allocation.finish();
     parse_root_restore(text_root);
@@ -630,7 +630,7 @@ unsafe fn try_parse_via_tape(text_root: usize, len: usize) -> Option<JSValue> {
             };
             let result_root = parse_root_push(result);
             crate::gc::gc_unsuppress();
-            crate::gc::gc_bump_json_malloc_trigger_deferred();
+            super::stringify_flat::finish_parse_gc_accounting();
             gc_allocation.finish();
 
             super::parse_scalar::clear_oversized_key_cache();
@@ -739,7 +739,7 @@ pub unsafe extern "C" fn js_json_parse_typed_array(
     parse_root_push(result);
 
     crate::gc::gc_unsuppress();
-    crate::gc::gc_bump_json_malloc_trigger_deferred();
+    super::stringify_flat::finish_parse_gc_accounting();
     gc_allocation.finish();
     parse_root_restore(text_root);
 

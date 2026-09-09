@@ -11,32 +11,67 @@ use crate::string::{
 const MAX_FIELDS: usize = 4;
 const JSON_OUTPUT_SWEEP_BUDGET: usize = 32 * 1024 * 1024;
 
+#[derive(Clone, Copy, Default)]
+struct JsonOutputDebt {
+    completed: usize,
+    // Completed bytes at the most recent boundary whose sweep was deferred.
+    // Zero means no such boundary needs an acknowledgement.
+    requested: usize,
+}
+
 crate::perry_thread_local! {
-    /// Bytes of malloc-backed JSON string leaves completed since the last
-    /// boundary sweep. This is scheduling debt only and never owns a managed
-    /// pointer; large parsed strings and stringify results share the policy.
-    static JSON_OUTPUT_BYTES_SINCE_SWEEP: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Unretired completed-byte debt and the last deferred request's cutoff.
+    /// These are byte counts only; this state owns no managed pointer.
+    static JSON_OUTPUT_BYTES_SINCE_SWEEP: std::cell::Cell<JsonOutputDebt> =
+        const { std::cell::Cell::new(JsonOutputDebt { completed: 0, requested: 0 }) };
 }
 
 #[inline]
 pub(super) fn service_json_output_sweep_boundary() {
-    JSON_OUTPUT_BYTES_SINCE_SWEEP.with(|bytes| {
-        if bytes.get() >= JSON_OUTPUT_SWEEP_BUDGET {
+    JSON_OUTPUT_BYTES_SINCE_SWEEP.with(|cell| {
+        let mut debt = cell.get();
+        if debt.completed >= JSON_OUTPUT_SWEEP_BUDGET {
             // The caller has rooted its input and has not allocated output.
-            // A collection here can reclaim prior results without observing a
-            // partially initialized string.
-            crate::gc::gc_check_trigger();
-            bytes.set(0);
+            // Retire only the old request's bytes if the caller serviced it
+            // after a previous return; newer completed output keeps its debt.
+            match crate::gc::gc_service_json_output_sweep() {
+                crate::gc::JsonOutputSweep::Pending => debt.requested = debt.completed,
+                crate::gc::JsonOutputSweep::CompletedBeforeBoundary => {
+                    let retired = if debt.requested == 0 {
+                        debt.completed
+                    } else {
+                        debt.requested
+                    };
+                    debt.completed = debt.completed.saturating_sub(retired);
+                    debt.requested = 0;
+                }
+                crate::gc::JsonOutputSweep::CompletedAtBoundary => debt = JsonOutputDebt::default(),
+            }
+            cell.set(debt);
+        }
+    });
+}
+
+/// Parse accounting raises the malloc-count threshold to price the completed
+/// graph. Publish completed large-leaf debt AFTER that adjustment so it cannot
+/// cancel the output sweep request. This only schedules; it does not collect.
+#[inline]
+pub(super) fn finish_parse_gc_accounting() {
+    crate::gc::gc_bump_json_malloc_trigger_deferred();
+    JSON_OUTPUT_BYTES_SINCE_SWEEP.with(|cell| {
+        if cell.get().completed >= JSON_OUTPUT_SWEEP_BUDGET {
+            crate::gc::gc_schedule_malloc_sweep_after_json_output();
         }
     });
 }
 
 #[inline]
 pub(crate) fn note_completed_malloc_json_output(bytes: u32) {
-    JSON_OUTPUT_BYTES_SINCE_SWEEP.with(|debt| {
-        let total = debt.get().saturating_add(bytes as usize);
-        debt.set(total);
-        if total >= JSON_OUTPUT_SWEEP_BUDGET {
+    JSON_OUTPUT_BYTES_SINCE_SWEEP.with(|cell| {
+        let mut debt = cell.get();
+        debt.completed = debt.completed.saturating_add(bytes as usize);
+        cell.set(debt);
+        if debt.completed >= JSON_OUTPUT_SWEEP_BUDGET {
             crate::gc::gc_schedule_malloc_sweep_after_json_output();
         }
     });

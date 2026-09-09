@@ -1,0 +1,32 @@
+{
+  "owner": "json-perf-22262-1788966553",
+  "load_before": [
+    1.544921875,
+    1.8798828125,
+    1.796875
+  ],
+  "started_utc": "2026-09-09T15:09:13Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    "run_baseline.py",
+    "--phase",
+    "all",
+    "--repeat",
+    "5",
+    "--worker",
+    ".work/output-debt-r6/worker",
+    "--baseline-worker",
+    ".work/worker-merged-pr10022",
+    "--results-dir",
+    "results/quiet-output-debt-r6-all-repeat-r5"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    2.03662109375,
+    2.09521484375,
+    1.9228515625
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-09T15:14:24Z"
+}

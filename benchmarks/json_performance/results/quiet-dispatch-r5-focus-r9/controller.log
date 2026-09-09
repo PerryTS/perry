@@ -1,0 +1,3 @@
+FINISHED string_a 50000000 calls per trial
+FINISHED small_record 50000000 calls per trial
+FINISHED unicode_1m 16384 calls per trial

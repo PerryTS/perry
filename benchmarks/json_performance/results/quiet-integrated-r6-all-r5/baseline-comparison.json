@@ -1,0 +1,784 @@
+{
+  "reference": "c82e613d260a80324914b5aba503a31a763ad90e",
+  "quiet_gate_passed": true,
+  "screening_only_not_significance": true,
+  "timing_cpu_ratio_threshold": 1.025,
+  "peak_rss_delta_mib_threshold": 0.75,
+  "checks": [
+    {
+      "phase": "timing",
+      "fixture": "empty_object",
+      "operation": "parse",
+      "iterations": 2000000,
+      "cpu_ratio": 0.9986043992667888,
+      "peak_rss_delta_mib": -0.15625,
+      "rss_after_delta_mib": -0.125
+    },
+    {
+      "phase": "timing",
+      "fixture": "empty_object",
+      "operation": "stringify",
+      "iterations": 2000000,
+      "cpu_ratio": 1.0004827077062866,
+      "peak_rss_delta_mib": -0.078125,
+      "rss_after_delta_mib": -0.03125
+    },
+    {
+      "phase": "timing",
+      "fixture": "escaped_1m",
+      "operation": "parse",
+      "iterations": 158,
+      "cpu_ratio": 1.0011530405037505,
+      "peak_rss_delta_mib": -0.109375,
+      "rss_after_delta_mib": -0.078125
+    },
+    {
+      "phase": "timing",
+      "fixture": "escaped_1m",
+      "operation": "stringify",
+      "iterations": 167,
+      "cpu_ratio": 1.00092804595521,
+      "peak_rss_delta_mib": -0.140625,
+      "rss_after_delta_mib": -0.09375
+    },
+    {
+      "phase": "timing",
+      "fixture": "heterogeneous_1m",
+      "operation": "parse",
+      "iterations": 111,
+      "cpu_ratio": 0.9975014058585963,
+      "peak_rss_delta_mib": -0.109375,
+      "rss_after_delta_mib": -0.09375
+    },
+    {
+      "phase": "timing",
+      "fixture": "heterogeneous_1m",
+      "operation": "stringify",
+      "iterations": 217,
+      "cpu_ratio": 0.9956083550244266,
+      "peak_rss_delta_mib": -0.15625,
+      "rss_after_delta_mib": -0.109375
+    },
+    {
+      "phase": "timing",
+      "fixture": "long_string_1m",
+      "operation": "parse",
+      "iterations": 2814,
+      "cpu_ratio": 1.0122699386503067,
+      "peak_rss_delta_mib": -0.078125,
+      "rss_after_delta_mib": -0.015625
+    },
+    {
+      "phase": "timing",
+      "fixture": "long_string_1m",
+      "operation": "stringify",
+      "iterations": 1799,
+      "cpu_ratio": 1.0105256483418934,
+      "peak_rss_delta_mib": -0.140625,
+      "rss_after_delta_mib": -0.09375
+    },
+    {
+      "phase": "timing",
+      "fixture": "null",
+      "operation": "parse",
+      "iterations": 2000000,
+      "cpu_ratio": 1.0002822599614245,
+      "peak_rss_delta_mib": -0.109375,
+      "rss_after_delta_mib": -0.0625
+    },
+    {
+      "phase": "timing",
+      "fixture": "null",
+      "operation": "stringify",
+      "iterations": 2000000,
+      "cpu_ratio": 1.0003044140030442,
+      "peak_rss_delta_mib": -0.09375,
+      "rss_after_delta_mib": -0.046875
+    },
+    {
+      "phase": "timing",
+      "fixture": "numbers_1m",
+      "operation": "parse",
+      "iterations": 100,
+      "cpu_ratio": 1.00021972089169,
+      "peak_rss_delta_mib": -0.109375,
+      "rss_after_delta_mib": -0.09375
+    },
+    {
+      "phase": "timing",
+      "fixture": "numbers_1m",
+      "operation": "stringify",
+      "iterations": 146,
+      "cpu_ratio": 0.99881310440635,
+      "peak_rss_delta_mib": -0.171875,
+      "rss_after_delta_mib": -0.125
+    },
+    {
+      "phase": "timing",
+      "fixture": "object_1k",
+      "operation": "parse",
+      "iterations": 1958646,
+      "cpu_ratio": 0.9986909297486214,
+      "peak_rss_delta_mib": -0.125,
+      "rss_after_delta_mib": -0.078125
+    },
+    {
+      "phase": "timing",
+      "fixture": "object_1k",
+      "operation": "stringify",
+      "iterations": 1027397,
+      "cpu_ratio": 0.9954915319573288,
+      "peak_rss_delta_mib": -0.140625,
+      "rss_after_delta_mib": -0.09375
+    },
+    {
+      "phase": "timing",
+      "fixture": "records_array_16k",
+      "operation": "parse",
+      "iterations": 8561,
+      "cpu_ratio": 0.9861695387734414,
+      "peak_rss_delta_mib": -0.109375,
+      "rss_after_delta_mib": -0.078125
+    },
+    {
+      "phase": "timing",
+      "fixture": "records_array_16k",
+      "operation": "roundtrip",
+      "iterations": 6111,
+      "cpu_ratio": 0.9914640993773146,
+      "peak_rss_delta_mib": -0.578125,
+      "rss_after_delta_mib": -0.5625
+    },
+    {
+      "phase": "timing",
+      "fixture": "records_array_16k",
+      "operation": "scan",
+      "iterations": 3885,
+      "cpu_ratio": 0.2174121623898427,
+      "peak_rss_delta_mib": -233.546875,
+      "rss_after_delta_mib": -233.46875
+    },
+    {
+      "phase": "timing",
+      "fixture": "records_array_16k",
+      "operation": "sparse",
+      "iterations": 6388,
+      "cpu_ratio": 0.9913384976137974,
+      "peak_rss_delta_mib": -0.09375,
+      "rss_after_delta_mib": -0.078125
+    },
+    {
+      "phase": "timing",
+      "fixture": "records_array_16k",
+      "operation": "stringify",
+      "iterations": 12834,
+      "cpu_ratio": 0.992001239244624,
+      "peak_rss_delta_mib": -0.140625,
+      "rss_after_delta_mib": -0.09375
+    },
+    {
+      "phase": "timing",
+      "fixture": "records_array_1m",
+      "operation": "parse",
+      "iterations": 128,
+      "cpu_ratio": 0.9878315690065532,
+      "peak_rss_delta_mib": -0.109375,
+      "rss_after_delta_mib": -0.078125
+    },
+    {
+      "phase": "timing",
+      "fixture": "records_array_1m",
+      "operation": "roundtrip",
+      "iterations": 94,
+      "cpu_ratio": 0.990536002442322,
+      "peak_rss_delta_mib": -0.109375,
+      "rss_after_delta_mib": -0.09375
+    },
+    {
+      "phase": "timing",
+      "fixture": "records_array_1m",
+      "operation": "scan",
+      "iterations": 69,
+      "cpu_ratio": 0.7005063235511079,
+      "peak_rss_delta_mib": -2.0,
+      "rss_after_delta_mib": -1.953125
+    },
+    {
+      "phase": "timing",
+      "fixture": "records_array_1m",
+      "operation": "sparse",
+      "iterations": 121,
+      "cpu_ratio": 0.9864226298181439,
+      "peak_rss_delta_mib": -0.09375,
+      "rss_after_delta_mib": -0.078125
+    },
+    {
+      "phase": "timing",
+      "fixture": "records_array_1m",
+      "operation": "stringify",
+      "iterations": 233,
+      "cpu_ratio": 1.0031975485461146,
+      "peak_rss_delta_mib": -0.1875,
+      "rss_after_delta_mib": -0.140625
+    },
+    {
+      "phase": "timing",
+      "fixture": "records_array_20m",
+      "operation": "parse",
+      "iterations": 4,
+      "cpu_ratio": 0.9888019039268491,
+      "peak_rss_delta_mib": -0.140625,
+      "rss_after_delta_mib": -0.09375
+    },
+    {
+      "phase": "timing",
+      "fixture": "records_array_20m",
+      "operation": "roundtrip",
+      "iterations": 2,
+      "cpu_ratio": 0.9943968691056172,
+      "peak_rss_delta_mib": -0.1875,
+      "rss_after_delta_mib": -0.140625
+    },
+    {
+      "phase": "timing",
+      "fixture": "records_array_20m",
+      "operation": "scan",
+      "iterations": 4,
+      "cpu_ratio": 0.9895354242098052,
+      "peak_rss_delta_mib": -0.109375,
+      "rss_after_delta_mib": -0.0625
+    },
+    {
+      "phase": "timing",
+      "fixture": "records_array_20m",
+      "operation": "sparse",
+      "iterations": 4,
+      "cpu_ratio": 0.9907471880861421,
+      "peak_rss_delta_mib": -0.125,
+      "rss_after_delta_mib": -0.078125
+    },
+    {
+      "phase": "timing",
+      "fixture": "records_array_20m",
+      "operation": "stringify",
+      "iterations": 12,
+      "cpu_ratio": 1.0008585822748883,
+      "peak_rss_delta_mib": -0.15625,
+      "rss_after_delta_mib": -0.109375
+    },
+    {
+      "phase": "timing",
+      "fixture": "records_array_8m",
+      "operation": "parse",
+      "iterations": 13,
+      "cpu_ratio": 0.9954905633194063,
+      "peak_rss_delta_mib": -0.109375,
+      "rss_after_delta_mib": -0.09375
+    },
+    {
+      "phase": "timing",
+      "fixture": "records_array_8m",
+      "operation": "roundtrip",
+      "iterations": 9,
+      "cpu_ratio": 0.9964235341527302,
+      "peak_rss_delta_mib": -0.109375,
+      "rss_after_delta_mib": -0.09375
+    },
+    {
+      "phase": "timing",
+      "fixture": "records_array_8m",
+      "operation": "scan",
+      "iterations": 8,
+      "cpu_ratio": 0.6830572106187179,
+      "peak_rss_delta_mib": -5.6875,
+      "rss_after_delta_mib": -5.71875
+    },
+    {
+      "phase": "timing",
+      "fixture": "records_array_8m",
+      "operation": "sparse",
+      "iterations": 12,
+      "cpu_ratio": 0.9954782608695653,
+      "peak_rss_delta_mib": -0.09375,
+      "rss_after_delta_mib": -0.078125
+    },
+    {
+      "phase": "timing",
+      "fixture": "records_array_8m",
+      "operation": "stringify",
+      "iterations": 29,
+      "cpu_ratio": 0.9934615384615385,
+      "peak_rss_delta_mib": -0.171875,
+      "rss_after_delta_mib": -0.125
+    },
+    {
+      "phase": "timing",
+      "fixture": "records_object_1m",
+      "operation": "parse",
+      "iterations": 80,
+      "cpu_ratio": 0.9959192453062102,
+      "peak_rss_delta_mib": -0.125,
+      "rss_after_delta_mib": -0.078125
+    },
+    {
+      "phase": "timing",
+      "fixture": "records_object_1m",
+      "operation": "stringify",
+      "iterations": 232,
+      "cpu_ratio": 0.9999001271714016,
+      "peak_rss_delta_mib": -0.15625,
+      "rss_after_delta_mib": -0.109375
+    },
+    {
+      "phase": "timing",
+      "fixture": "records_object_20m",
+      "operation": "parse",
+      "iterations": 4,
+      "cpu_ratio": 0.9906865821513744,
+      "peak_rss_delta_mib": -0.125,
+      "rss_after_delta_mib": -0.078125
+    },
+    {
+      "phase": "timing",
+      "fixture": "records_object_20m",
+      "operation": "stringify",
+      "iterations": 12,
+      "cpu_ratio": 0.9967535927144087,
+      "peak_rss_delta_mib": -0.15625,
+      "rss_after_delta_mib": -0.109375
+    },
+    {
+      "phase": "timing",
+      "fixture": "records_object_8m",
+      "operation": "parse",
+      "iterations": 10,
+      "cpu_ratio": 0.9915489287243351,
+      "peak_rss_delta_mib": -0.125,
+      "rss_after_delta_mib": -0.078125
+    },
+    {
+      "phase": "timing",
+      "fixture": "records_object_8m",
+      "operation": "stringify",
+      "iterations": 29,
+      "cpu_ratio": 0.9991117081202878,
+      "peak_rss_delta_mib": -0.1875,
+      "rss_after_delta_mib": -0.140625
+    },
+    {
+      "phase": "timing",
+      "fixture": "small_record",
+      "operation": "parse",
+      "iterations": 1587645,
+      "cpu_ratio": 1.0017233704292527,
+      "peak_rss_delta_mib": -0.09375,
+      "rss_after_delta_mib": -0.046875
+    },
+    {
+      "phase": "timing",
+      "fixture": "small_record",
+      "operation": "stringify",
+      "iterations": 2000000,
+      "cpu_ratio": 1.0001531628120692,
+      "peak_rss_delta_mib": -0.140625,
+      "rss_after_delta_mib": -0.09375
+    },
+    {
+      "phase": "timing",
+      "fixture": "string_a",
+      "operation": "parse",
+      "iterations": 2000000,
+      "cpu_ratio": 1.0002718868950518,
+      "peak_rss_delta_mib": -0.109375,
+      "rss_after_delta_mib": -0.0625
+    },
+    {
+      "phase": "timing",
+      "fixture": "string_a",
+      "operation": "stringify",
+      "iterations": 2000000,
+      "cpu_ratio": 1.000464636035106,
+      "peak_rss_delta_mib": -0.09375,
+      "rss_after_delta_mib": -0.046875
+    },
+    {
+      "phase": "timing",
+      "fixture": "tiny_object",
+      "operation": "parse",
+      "iterations": 2000000,
+      "cpu_ratio": 0.9988876678549412,
+      "peak_rss_delta_mib": -0.125,
+      "rss_after_delta_mib": -0.078125
+    },
+    {
+      "phase": "timing",
+      "fixture": "tiny_object",
+      "operation": "stringify",
+      "iterations": 2000000,
+      "cpu_ratio": 1.0012818434972228,
+      "peak_rss_delta_mib": -0.1875,
+      "rss_after_delta_mib": -0.140625
+    },
+    {
+      "phase": "timing",
+      "fixture": "unicode_1m",
+      "operation": "parse",
+      "iterations": 2846,
+      "cpu_ratio": 1.0090817356205852,
+      "peak_rss_delta_mib": -0.109375,
+      "rss_after_delta_mib": -0.046875
+    },
+    {
+      "phase": "timing",
+      "fixture": "unicode_1m",
+      "operation": "stringify",
+      "iterations": 2425,
+      "cpu_ratio": 0.970600829653419,
+      "peak_rss_delta_mib": -0.171875,
+      "rss_after_delta_mib": -0.125
+    },
+    {
+      "phase": "timing",
+      "fixture": "wide_1m",
+      "operation": "parse",
+      "iterations": 64,
+      "cpu_ratio": 1.0011480931905077,
+      "peak_rss_delta_mib": -0.125,
+      "rss_after_delta_mib": -0.078125
+    },
+    {
+      "phase": "timing",
+      "fixture": "wide_1m",
+      "operation": "stringify",
+      "iterations": 232,
+      "cpu_ratio": 0.9997756567139827,
+      "peak_rss_delta_mib": -0.171875,
+      "rss_after_delta_mib": -0.125
+    },
+    {
+      "phase": "memory",
+      "fixture": "long_string_1m",
+      "operation": "retain-parse",
+      "iterations": 1,
+      "cpu_ratio": 1.0116279069767442,
+      "peak_rss_delta_mib": -0.078125,
+      "rss_after_delta_mib": -0.015625
+    },
+    {
+      "phase": "memory",
+      "fixture": "long_string_1m",
+      "operation": "retain-parse",
+      "iterations": 32,
+      "cpu_ratio": 1.0161290322580645,
+      "peak_rss_delta_mib": -0.046875,
+      "rss_after_delta_mib": 0.015625
+    },
+    {
+      "phase": "memory",
+      "fixture": "long_string_1m",
+      "operation": "retain-stringify",
+      "iterations": 1,
+      "cpu_ratio": 0.9923664122137404,
+      "peak_rss_delta_mib": -0.078125,
+      "rss_after_delta_mib": -0.015625
+    },
+    {
+      "phase": "memory",
+      "fixture": "long_string_1m",
+      "operation": "retain-stringify",
+      "iterations": 32,
+      "cpu_ratio": 0.9942825525636296,
+      "peak_rss_delta_mib": -0.09375,
+      "rss_after_delta_mib": -0.046875
+    },
+    {
+      "phase": "memory",
+      "fixture": "records_array_1m",
+      "operation": "retain-parse",
+      "iterations": 1,
+      "cpu_ratio": 0.988663967611336,
+      "peak_rss_delta_mib": -0.046875,
+      "rss_after_delta_mib": 0.015625
+    },
+    {
+      "phase": "memory",
+      "fixture": "records_array_1m",
+      "operation": "retain-parse",
+      "iterations": 16,
+      "cpu_ratio": 0.9849872635629505,
+      "peak_rss_delta_mib": -0.0625,
+      "rss_after_delta_mib": 0.0
+    },
+    {
+      "phase": "memory",
+      "fixture": "records_array_1m",
+      "operation": "retain-stringify",
+      "iterations": 1,
+      "cpu_ratio": 0.9888198757763975,
+      "peak_rss_delta_mib": -0.078125,
+      "rss_after_delta_mib": -0.015625
+    },
+    {
+      "phase": "memory",
+      "fixture": "records_array_1m",
+      "operation": "retain-stringify",
+      "iterations": 16,
+      "cpu_ratio": 0.9985632183908046,
+      "peak_rss_delta_mib": -0.078125,
+      "rss_after_delta_mib": -0.015625
+    },
+    {
+      "phase": "memory",
+      "fixture": "records_array_8m",
+      "operation": "retain-parse",
+      "iterations": 1,
+      "cpu_ratio": 0.994609683318895,
+      "peak_rss_delta_mib": -0.0625,
+      "rss_after_delta_mib": 0.0
+    },
+    {
+      "phase": "memory",
+      "fixture": "records_array_8m",
+      "operation": "retain-parse",
+      "iterations": 4,
+      "cpu_ratio": 0.9975090740872535,
+      "peak_rss_delta_mib": -0.09375,
+      "rss_after_delta_mib": -0.0625
+    },
+    {
+      "phase": "memory",
+      "fixture": "records_array_8m",
+      "operation": "retain-stringify",
+      "iterations": 1,
+      "cpu_ratio": 0.9980168067226891,
+      "peak_rss_delta_mib": -0.171875,
+      "rss_after_delta_mib": -0.125
+    },
+    {
+      "phase": "memory",
+      "fixture": "records_array_8m",
+      "operation": "retain-stringify",
+      "iterations": 4,
+      "cpu_ratio": 1.0004018485031143,
+      "peak_rss_delta_mib": -0.125,
+      "rss_after_delta_mib": -0.078125
+    },
+    {
+      "phase": "memory",
+      "fixture": "records_object_1m",
+      "operation": "retain-parse",
+      "iterations": 1,
+      "cpu_ratio": 0.9973418394471026,
+      "peak_rss_delta_mib": -0.0625,
+      "rss_after_delta_mib": 0.0
+    },
+    {
+      "phase": "memory",
+      "fixture": "records_object_1m",
+      "operation": "retain-parse",
+      "iterations": 16,
+      "cpu_ratio": 0.9943886097152429,
+      "peak_rss_delta_mib": -0.109375,
+      "rss_after_delta_mib": -0.0625
+    },
+    {
+      "phase": "memory",
+      "fixture": "records_object_1m",
+      "operation": "retain-stringify",
+      "iterations": 1,
+      "cpu_ratio": 0.9975155279503105,
+      "peak_rss_delta_mib": -0.09375,
+      "rss_after_delta_mib": -0.03125
+    },
+    {
+      "phase": "memory",
+      "fixture": "records_object_1m",
+      "operation": "retain-stringify",
+      "iterations": 16,
+      "cpu_ratio": 0.9998087588449034,
+      "peak_rss_delta_mib": -0.09375,
+      "rss_after_delta_mib": -0.03125
+    },
+    {
+      "phase": "memory",
+      "fixture": "records_object_8m",
+      "operation": "retain-parse",
+      "iterations": 1,
+      "cpu_ratio": 0.9887548558576978,
+      "peak_rss_delta_mib": -0.109375,
+      "rss_after_delta_mib": 0.0
+    },
+    {
+      "phase": "memory",
+      "fixture": "records_object_8m",
+      "operation": "retain-parse",
+      "iterations": 4,
+      "cpu_ratio": 0.9945364920050296,
+      "peak_rss_delta_mib": -0.125,
+      "rss_after_delta_mib": -0.078125
+    },
+    {
+      "phase": "memory",
+      "fixture": "records_object_8m",
+      "operation": "retain-stringify",
+      "iterations": 1,
+      "cpu_ratio": 0.9993282729898569,
+      "peak_rss_delta_mib": -0.109375,
+      "rss_after_delta_mib": -0.0625
+    },
+    {
+      "phase": "memory",
+      "fixture": "records_object_8m",
+      "operation": "retain-stringify",
+      "iterations": 4,
+      "cpu_ratio": 1.0003246552470473,
+      "peak_rss_delta_mib": -0.125,
+      "rss_after_delta_mib": -0.078125
+    },
+    {
+      "phase": "memory",
+      "fixture": "small_record",
+      "operation": "retain-parse",
+      "iterations": 1,
+      "cpu_ratio": 1.064516129032258,
+      "peak_rss_delta_mib": -0.0625,
+      "rss_after_delta_mib": -0.015625
+    },
+    {
+      "phase": "memory",
+      "fixture": "small_record",
+      "operation": "retain-parse",
+      "iterations": 100000,
+      "cpu_ratio": 1.0027801744799156,
+      "peak_rss_delta_mib": -0.0625,
+      "rss_after_delta_mib": 0.0
+    },
+    {
+      "phase": "memory",
+      "fixture": "small_record",
+      "operation": "retain-stringify",
+      "iterations": 1,
+      "cpu_ratio": 0.7857142857142857,
+      "peak_rss_delta_mib": -0.078125,
+      "rss_after_delta_mib": -0.03125
+    },
+    {
+      "phase": "memory",
+      "fixture": "small_record",
+      "operation": "retain-stringify",
+      "iterations": 100000,
+      "cpu_ratio": 1.007090058832403,
+      "peak_rss_delta_mib": -0.0625,
+      "rss_after_delta_mib": 0.0
+    },
+    {
+      "phase": "memory",
+      "fixture": "tiny_object",
+      "operation": "retain-parse",
+      "iterations": 1,
+      "cpu_ratio": 1.0666666666666667,
+      "peak_rss_delta_mib": -0.078125,
+      "rss_after_delta_mib": -0.03125
+    },
+    {
+      "phase": "memory",
+      "fixture": "tiny_object",
+      "operation": "retain-parse",
+      "iterations": 200000,
+      "cpu_ratio": 0.9979647218453188,
+      "peak_rss_delta_mib": -0.046875,
+      "rss_after_delta_mib": 0.015625
+    },
+    {
+      "phase": "memory",
+      "fixture": "tiny_object",
+      "operation": "retain-stringify",
+      "iterations": 1,
+      "cpu_ratio": 1.1,
+      "peak_rss_delta_mib": -0.09375,
+      "rss_after_delta_mib": -0.046875
+    },
+    {
+      "phase": "memory",
+      "fixture": "tiny_object",
+      "operation": "retain-stringify",
+      "iterations": 200000,
+      "cpu_ratio": 0.9994658690310865,
+      "peak_rss_delta_mib": -0.0625,
+      "rss_after_delta_mib": 0.0
+    },
+    {
+      "phase": "memory",
+      "fixture": "unicode_1m",
+      "operation": "retain-parse",
+      "iterations": 1,
+      "cpu_ratio": 1.0098039215686274,
+      "peak_rss_delta_mib": -0.078125,
+      "rss_after_delta_mib": -0.015625
+    },
+    {
+      "phase": "memory",
+      "fixture": "unicode_1m",
+      "operation": "retain-parse",
+      "iterations": 32,
+      "cpu_ratio": 1.0045871559633028,
+      "peak_rss_delta_mib": -0.046875,
+      "rss_after_delta_mib": 0.015625
+    },
+    {
+      "phase": "memory",
+      "fixture": "unicode_1m",
+      "operation": "retain-stringify",
+      "iterations": 1,
+      "cpu_ratio": 1.0446428571428572,
+      "peak_rss_delta_mib": -0.078125,
+      "rss_after_delta_mib": -0.015625
+    },
+    {
+      "phase": "memory",
+      "fixture": "unicode_1m",
+      "operation": "retain-stringify",
+      "iterations": 32,
+      "cpu_ratio": 1.019895783988631,
+      "peak_rss_delta_mib": -0.0625,
+      "rss_after_delta_mib": 0.0
+    },
+    {
+      "phase": "memory",
+      "fixture": "wide_1m",
+      "operation": "retain-parse",
+      "iterations": 1,
+      "cpu_ratio": 1.006156213928434,
+      "peak_rss_delta_mib": -0.09375,
+      "rss_after_delta_mib": -0.03125
+    },
+    {
+      "phase": "memory",
+      "fixture": "wide_1m",
+      "operation": "retain-parse",
+      "iterations": 16,
+      "cpu_ratio": 0.9948841715247209,
+      "peak_rss_delta_mib": -0.125,
+      "rss_after_delta_mib": -0.078125
+    },
+    {
+      "phase": "memory",
+      "fixture": "wide_1m",
+      "operation": "retain-stringify",
+      "iterations": 1,
+      "cpu_ratio": 0.9951749095295537,
+      "peak_rss_delta_mib": -0.109375,
+      "rss_after_delta_mib": -0.046875
+    },
+    {
+      "phase": "memory",
+      "fixture": "wide_1m",
+      "operation": "retain-stringify",
+      "iterations": 16,
+      "cpu_ratio": 0.9973317768698408,
+      "peak_rss_delta_mib": -0.109375,
+      "rss_after_delta_mib": -0.046875
+    }
+  ],
+  "screening_flags": []
+}

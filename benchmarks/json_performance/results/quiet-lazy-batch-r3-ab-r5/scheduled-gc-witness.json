@@ -1,0 +1,10 @@
+{
+  "seed": 10022,
+  "scheduled_collections": 1232,
+  "copying_minors": 1323,
+  "moved_objects": 208531,
+  "loop_polls": 12342,
+  "protected_retired_sets": 1323,
+  "matches_node": true,
+  "full_gc_matches_node": true
+}

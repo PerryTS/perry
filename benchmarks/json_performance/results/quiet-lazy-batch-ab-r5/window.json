@@ -1,0 +1,32 @@
+{
+  "owner": "json-perf-95265-1788959404",
+  "load_before": [
+    1.8857421875,
+    1.85693359375,
+    1.86083984375
+  ],
+  "started_utc": "2026-09-09T13:10:04Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    "run_baseline.py",
+    "--phase",
+    "all",
+    "--repeat",
+    "5",
+    "--worker",
+    ".work/lazy-batch/worker",
+    "--baseline-worker",
+    ".work/worker-merged-pr10022",
+    "--results-dir",
+    "results/quiet-lazy-batch-ab-r5"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    2.45361328125,
+    2.1689453125,
+    1.984375
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-09T13:15:14Z"
+}
