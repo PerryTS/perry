@@ -1,5 +1,9 @@
 # Opening-container scan and parse entry experiments
 
+The [tape-depth follow-up](TAPE_DEPTH.md) removes a duplicated eligible-array
+preflight and retains this scanner for direct/fallback admission. Its source and
+validation are in PR #10036; performance acceptance is still pending.
+
 These are follow-ups to the corrected parser landed through PR #10035. The
 current R3 candidate remains experimental in PR #10036 after full validation
 found persistent small slowdowns. Global GC policy, construction

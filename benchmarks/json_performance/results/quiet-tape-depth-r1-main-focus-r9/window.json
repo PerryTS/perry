@@ -1,0 +1,50 @@
+{
+  "owner": "json-perf-2011-1788991593",
+  "load_before": [
+    1.53271484375,
+    1.55224609375,
+    1.63525390625
+  ],
+  "started_utc": "2026-09-09T22:06:33Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    "run_regression_focus.py",
+    "--worker",
+    ".work/tape-depth-r1/worker",
+    "--baseline-worker",
+    ".work/main-eee/worker",
+    "--prior-worker",
+    ".work/opening-scan-r3/worker",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--case",
+    "records_array_16k:parse:20000:8:9",
+    "--case",
+    "records_array_16k:sparse:20000:8:9",
+    "--case",
+    "records_array_16k:scan:10000:8:9",
+    "--case",
+    "records_array_1m:parse:512:8:9",
+    "--case",
+    "heterogeneous_1m:parse:512:8:9",
+    "--case",
+    "small_record:parse:2000000:2000:9",
+    "--case",
+    "small_record:stringify:5000000:2000:9",
+    "--case",
+    "long_string_1m:stringify:32768:8:9",
+    "--case",
+    "unicode_1m:stringify:32768:8:9",
+    "--results-dir",
+    "results/quiet-tape-depth-r1-main-focus-r9"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.7646484375,
+    1.64208984375,
+    1.65673828125
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-09T22:08:59Z"
+}

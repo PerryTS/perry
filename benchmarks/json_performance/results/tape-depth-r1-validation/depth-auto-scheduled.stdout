@@ -1,0 +1,9 @@
+depth 999 1006
+depth 1000 1007
+depth 1001 1008
+depth 10000 10007
+quoted [[{}] 0
+invalid SyntaxError
+invalid SyntaxError
+invalid SyntaxError
+oversized 1010

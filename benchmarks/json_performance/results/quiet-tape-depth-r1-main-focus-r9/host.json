@@ -1,0 +1,90 @@
+{
+  "started_utc": "2026-09-09T22:06:33Z",
+  "load_before": [
+    1.53271484375,
+    1.55224609375,
+    1.63525390625
+  ],
+  "cases": [
+    [
+      "records_array_16k",
+      "parse",
+      20000,
+      8,
+      9
+    ],
+    [
+      "records_array_16k",
+      "sparse",
+      20000,
+      8,
+      9
+    ],
+    [
+      "records_array_16k",
+      "scan",
+      10000,
+      8,
+      9
+    ],
+    [
+      "records_array_1m",
+      "parse",
+      512,
+      8,
+      9
+    ],
+    [
+      "heterogeneous_1m",
+      "parse",
+      512,
+      8,
+      9
+    ],
+    [
+      "small_record",
+      "parse",
+      2000000,
+      2000,
+      9
+    ],
+    [
+      "small_record",
+      "stringify",
+      5000000,
+      2000,
+      9
+    ],
+    [
+      "long_string_1m",
+      "stringify",
+      32768,
+      8,
+      9
+    ],
+    [
+      "unicode_1m",
+      "stringify",
+      32768,
+      8,
+      9
+    ]
+  ],
+  "workers": {
+    "perry": "3fd7d200d4b098bbe0234ca4c316c6b90baa1eb9ce7bad4d3fc041a4f91d31f4",
+    "baseline": "43a90819e68a87d8365526189ff780e5bb9652b1df48573b0c293876dea8ee4d",
+    "prior": "ecec9a2a310d63fc3f8a265b5286c456f689ddd0177f3034850b5d11154325c9"
+  },
+  "sources": {
+    "run_regression_focus.py": "d45cbb853e7127dc0a95e68955f8e8dea130a784ce2525c829519edaeda36fe8",
+    "run_dispatch_focus.py": "100ba3e1bd5c0cd451d1a3528f95b5f4b8d0ff2f4771796ab8598b36a46fbcc4",
+    "worker.js": "55c11d12296f896212d6abd76bcf8d551d0590b0ad24b262018b7a707369a2f4"
+  },
+  "node_version": "v26.5.1",
+  "finished_utc": "2026-09-09T22:08:59Z",
+  "load_after": [
+    1.7646484375,
+    1.64208984375,
+    1.65673828125
+  ]
+}

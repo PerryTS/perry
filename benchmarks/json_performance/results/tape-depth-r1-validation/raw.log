@@ -1,0 +1,3 @@
+raw-handle debt sites: 949 (baseline 949)
+per-module: 110 module(s) within ceilings; every other runtime module is locked at zero
+recorded debt vs. eee3881c464bf91ae900e87a42bed072bbdfc95a: baseline 949 -> 949, 110 -> 110 module ceiling(s), none raised

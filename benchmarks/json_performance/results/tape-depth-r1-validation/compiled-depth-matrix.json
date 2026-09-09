@@ -1,0 +1,77 @@
+{
+  "source_sha256": "320b2aacbe9e06ebcdb502e8910de3fe2d49d9619441577883c725473f4c8a6c",
+  "worker_sha256": "7c7a0e276abcb56d7ce26e162b898aacc8dcf573185f2e9c81ed7c478e769b49",
+  "compile_command": [
+    "/Users/amlug/projects/perry/json-merged-pr10022/target/release/perry",
+    "compile",
+    "/Users/amlug/projects/perry/json-merged-pr10022/test-files/test_json_tape_depth_admission.ts",
+    "--no-cache",
+    "-o",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/tape-depth-r1/depth-admission"
+  ],
+  "matrix": [
+    {
+      "mode": "auto",
+      "gc": "normal",
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0
+    },
+    {
+      "mode": "auto",
+      "gc": "scheduled",
+      "matches_node": true,
+      "protected_retired_sets": 2772,
+      "moved_objects": 46518
+    },
+    {
+      "mode": "auto",
+      "gc": "fullgc",
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0
+    },
+    {
+      "mode": "tape",
+      "gc": "normal",
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0
+    },
+    {
+      "mode": "tape",
+      "gc": "scheduled",
+      "matches_node": true,
+      "protected_retired_sets": 2772,
+      "moved_objects": 46522
+    },
+    {
+      "mode": "tape",
+      "gc": "fullgc",
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0
+    },
+    {
+      "mode": "direct",
+      "gc": "normal",
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0
+    },
+    {
+      "mode": "direct",
+      "gc": "scheduled",
+      "matches_node": true,
+      "protected_retired_sets": 2772,
+      "moved_objects": 46449
+    },
+    {
+      "mode": "direct",
+      "gc": "fullgc",
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0
+    }
+  ]
+}
