@@ -40,9 +40,16 @@ The matched release build passed in 5m34s. The generated entry shrank from
 1736 to 156 bytes and its frame from 96 to 16 bytes; parse_slow also shrank
 from 7232 to 5416 bytes. Compiled Node comparisons and live moving/full-GC
 witnesses pass. [Exact validation and codegen evidence](results/opening-scan-r2-validation/README.md).
-Timing and RSS acceptance are pending; no R2 speedup is claimed yet.
+The [full original matrix](results/quiet-opening-scan-r2-all-r5/README.md) and
+[full changing-input suite](results/quiet-opening-scan-r2-rotating-r5/README.md)
+are complete. R2 repairs the tiny-input regressions and retains the large-string
+gains, but sparse reads (+0.614%), heterogeneous parsing (+0.467%) and rotating
+wide-object parsing (+0.473%) show separated slower ranges. PR #10036 remains
+draft. The corrected baseline tree has landed on main through #10035.
 
-The next acceptance measurements include both original parse/stringify rows
-and the full changing-input suite, with default GC and separate retained-output
-RSS. [Large-container memory diagnosis](GC_MEMORY_GROWTH.md) is a separate
+The next candidate, R3, keeps the initial 16-byte positive check inline and
+outlines the wide search tail from the depth state machine. Its 285 JSON tests
+pass; generated-code and performance validation follow the matched build.
+Acceptance still includes both original parse/stringify rows and the full
+changing-input suite, with default GC and separate retained-output RSS. [Large-container memory diagnosis](GC_MEMORY_GROWTH.md) is a separate
 investigation; neither scan nor outlining is a fix for delayed old reclamation.
