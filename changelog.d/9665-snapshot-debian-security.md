@@ -27,3 +27,23 @@
 
   The timestamp is part of the reproducibility contract: bump it only alongside a
   base-image digest bump, and re-check those versions when you do.
+
+- **LLVM packages are pinned to `apt.llvm.org`, and apt retries are enabled.**
+  Debian's `bullseye-security` genuinely ships LLVM 22 packages (`clang-22`,
+  `libpolly-22-dev`, …), so apt preferred snapshot's copies and tried to pull the
+  **large** LLVM `.deb`s through snapshot — an archival service, not a throughput
+  mirror. It reset the connection (run 34314310247):
+
+  ```
+  E: Failed to fetch .../libpolly-22-dev_22.1.8-1~deb11u1_amd64.deb
+     Error reading from server. Remote end closed connection
+  ```
+
+  An apt preference pinning `origin apt.llvm.org` at 1001 keeps the bulk on the
+  fast upstream mirror, leaving snapshot to serve only the four small base
+  packages it is actually needed for (libc6, libssl1.1, perl-base, gpgv).
+  `Acquire::Retries=5` covers the remaining transient resets.
+
+  Note the dependency resolution itself was already fixed by the snapshot pin —
+  this run installed all base packages cleanly and reached the LLVM step, which
+  the previous three attempts never did.

@@ -66,16 +66,28 @@ FROM ${OLD_GLIBC_IMAGE}
 # security patches. That is acceptable for a BUILD toolchain image whose only
 # job is to link against glibc 2.31 — it ships no runtime surface itself — and
 # it is the standard configuration for an EOL Debian base.
+#
+# Two extra safeguards, both learned from run 34314310247:
+#
+#   * APT PIN. Debian's bullseye-security genuinely ships LLVM 22 packages
+#     (clang-22, libpolly-22-dev, …), so apt preferred snapshot's copies over
+#     apt.llvm.org and tried to pull the LARGE LLVM debs through snapshot —
+#     which is an archival service, not a throughput mirror, and reset the
+#     connection: "Failed to fetch .../libpolly-22-dev_22.1.8-1~deb11u1_amd64.deb
+#     Error reading from server. Remote end closed connection". Pinning
+#     origin apt.llvm.org at 1001 keeps the bulk on the fast mirror and leaves
+#     snapshot serving only the four small base packages it is needed for.
+#   * Acquire::Retries=5, because snapshot drops connections under load.
 RUN printf '%s\n' \
       'deb [check-valid-until=no] https://archive.debian.org/debian bullseye main' \
       'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20260901T000000Z bullseye-security main' \
       > /etc/apt/sources.list \
-    && apt-get -o Acquire::https::Verify-Peer=false update \
+    && apt-get -o Acquire::https::Verify-Peer=false -o Acquire::Retries=5 update \
     && DEBIAN_FRONTEND=noninteractive apt-get \
-      -o Acquire::https::Verify-Peer=false \
+      -o Acquire::https::Verify-Peer=false -o Acquire::Retries=5 \
       install -y --no-install-recommends ca-certificates \
-    && apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    && apt-get -o Acquire::Retries=5 update \
+    && DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
       build-essential cmake curl gnupg libssl-dev libzstd-dev \
       perl pkg-config xz-utils zlib1g-dev \
     && curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
@@ -83,8 +95,13 @@ RUN printf '%s\n' \
     && printf '%s\n' \
       'deb https://apt.llvm.org/bullseye/ llvm-toolchain-bullseye-22 main' \
       > /etc/apt/sources.list.d/llvm22.list \
-    && apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    && printf '%s\n' \
+      'Package: clang-* llvm-* libclang-* libpolly-* libomp-* lld-* lldb-*' \
+      'Pin: origin apt.llvm.org' \
+      'Pin-Priority: 1001' \
+      > /etc/apt/preferences.d/llvm-from-upstream \
+    && apt-get -o Acquire::Retries=5 update \
+    && DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
       clang-22 libpolly-22-dev llvm-22-dev \
     && rm -rf /var/lib/apt/lists/*
 
