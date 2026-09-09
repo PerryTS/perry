@@ -169,9 +169,6 @@ thread_local! {
     /// key and burns 3× the time + RSS vs the direct parser.
     pub(crate) static PARSE_KEY_CACHE: RefCell<std::collections::HashMap<Vec<u8>, *const StringHeader>> =
         RefCell::new(std::collections::HashMap::new());
-    /// Set exactly when the key cache crosses its boundary limit. Tiny parse
-    /// completions can test this bit without borrowing the hash table.
-    pub(super) static PARSE_KEY_CACHE_OVERSIZED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// Tiny hot-key mirror for homogeneous object parses. Most API JSON
     /// repeats the same handful of property names thousands of times; a
     /// short linear probe avoids hashing + HashMap probing on the steady
@@ -189,17 +186,6 @@ thread_local! {
     /// pages.
     pub(crate) static PARSE_SHAPE_CACHE: RefCell<Vec<ParseShapeCacheEntry>> =
         const { RefCell::new(Vec::new()) };
-
-    /// One reusable immutable string token from the most recently parsed
-    /// source. Both pointers are ordinary GC roots and are rewritten on a
-    /// moving collection. The source length guards the only in-place string
-    /// mutation Perry permits; equal-length string contents are immutable.
-    static PARSE_STRING_CACHE: RefCell<Option<ParseStringCacheEntry>> = const { RefCell::new(None) };
-
-    /// A bounded construction template for repeated parses of the same small
-    /// object source. It owns only immutable strings, a canonical key shape,
-    /// and inline scalar bits; every mutable object/array is born afresh.
-    static PARSE_OBJECT_TEMPLATE: RefCell<Option<ParseObjectTemplate>> = const { RefCell::new(None) };
 
     /// Reentrancy depth counter for JSON.stringify (issue #67). 0 means
     /// no call in progress; ≥1 means a reentrant (toJSON callback) path.
@@ -269,6 +255,23 @@ thread_local! {
     /// are invisible and get swept. Symptom was `JSON.parse(big_array)` silently
     /// truncating at ~1666 records (= when the second adaptive malloc GC fires).
     pub(crate) static PARSE_ROOTS: RefCell<Vec<f64>> = const { RefCell::new(Vec::new()) };
+}
+
+crate::perry_thread_local! {
+    /// Set exactly when the key cache crosses its boundary limit. Tiny parse
+    /// completions can test this bit without borrowing the hash table.
+    pub(super) static PARSE_KEY_CACHE_OVERSIZED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+
+    /// One reusable immutable string token from the most recently parsed
+    /// source. Both pointers are ordinary GC roots and are rewritten on a
+    /// moving collection. The source length guards the only in-place string
+    /// mutation Perry permits; equal-length string contents are immutable.
+    static PARSE_STRING_CACHE: RefCell<Option<ParseStringCacheEntry>> = const { RefCell::new(None) };
+
+    /// A bounded construction template for repeated parses of the same small
+    /// object source. It owns only immutable strings, a canonical key shape,
+    /// and inline scalar bits; every mutable object/array is born afresh.
+    static PARSE_OBJECT_TEMPLATE: RefCell<Option<ParseObjectTemplate>> = const { RefCell::new(None) };
 }
 
 pub(crate) struct ParseShapeCacheEntry {
