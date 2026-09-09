@@ -6,3 +6,7 @@ Repair the separate shared-provider fixture workspace by removing the obsolete
 `bundled-slugify` feature and refreshing its lockfile for current Perry path
 dependencies. Newly required registry packages use versions already locked by
 the main workspace.
+
+Retain the stdlib TLS preflight provider required by the external socket wrapper,
+so eager shared-library loading can resolve `js_tls_client_preflight` before
+starting the production application.
