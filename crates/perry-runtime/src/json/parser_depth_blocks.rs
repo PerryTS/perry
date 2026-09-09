@@ -142,15 +142,84 @@ fn contains_open_container(bytes: &[u8]) -> bool {
     use std::arch::aarch64::*;
     let mut i = 0usize;
     unsafe {
-        let array = vdupq_n_u8(b'[');
+        // '[' and '{' differ only by bit 0x20. No other byte folds to '{'.
+        let fold = vdupq_n_u8(0x20);
         let object = vdupq_n_u8(b'{');
+        // Preserve early admission for arrays whose first record opens here.
+        if bytes.len() >= 16 {
+            let chunk = vld1q_u8(bytes.as_ptr());
+            if vmaxvq_u8(vceqq_u8(vorrq_u8(chunk, fold), object)) != 0 {
+                return true;
+            }
+            i = 16;
+        }
+        while bytes.len() - i >= 64 {
+            let p = bytes.as_ptr().add(i);
+            let a = vceqq_u8(vorrq_u8(vld1q_u8(p), fold), object);
+            let b = vceqq_u8(vorrq_u8(vld1q_u8(p.add(16)), fold), object);
+            let c = vceqq_u8(vorrq_u8(vld1q_u8(p.add(32)), fold), object);
+            let d = vceqq_u8(vorrq_u8(vld1q_u8(p.add(48)), fold), object);
+            if vmaxvq_u8(vorrq_u8(vorrq_u8(a, b), vorrq_u8(c, d))) != 0 {
+                return true;
+            }
+            i += 64;
+        }
         while bytes.len() - i >= 16 {
             let chunk = vld1q_u8(bytes.as_ptr().add(i));
-            if vmaxvq_u8(vorrq_u8(vceqq_u8(chunk, array), vceqq_u8(chunk, object))) != 0 {
+            if vmaxvq_u8(vceqq_u8(vorrq_u8(chunk, fold), object)) != 0 {
                 return true;
             }
             i += 16;
         }
     }
     bytes[i..].iter().any(|&b| matches!(b, b'[' | b'{'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::contains_open_container;
+
+    #[test]
+    fn json_open_scan_matches_every_byte_and_vector_tail() {
+        for len in [
+            0, 1, 3, 7, 8, 15, 16, 17, 31, 32, 47, 48, 63, 64, 65, 79, 80, 81, 127, 128, 129, 255,
+            256, 257,
+        ] {
+            for byte in 0..=255u8 {
+                for offset in 0..16 {
+                    // An accidental read outside the slice sees an opening.
+                    let mut storage = vec![b'{'; len + 32];
+                    let bytes = &mut storage[offset..offset + len];
+                    bytes.fill(byte);
+                    assert_eq!(
+                        contains_open_container(bytes),
+                        bytes.iter().any(|&b| matches!(b, b'[' | b'{')),
+                        "len={len}, byte={byte}, offset={offset}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn json_open_scan_finds_every_position_with_poisoned_surroundings() {
+        for len in 0..260 {
+            for offset in 0..16 {
+                let mut storage = vec![b'['; len + 32];
+                let bytes = &mut storage[offset..offset + len];
+                bytes.fill(b'x');
+                assert!(!contains_open_container(bytes));
+                for position in 0..len {
+                    for opening in [b'[', b'{'] {
+                        bytes[position] = opening;
+                        assert!(
+                            contains_open_container(bytes),
+                            "{len}, {offset}, {position}"
+                        );
+                    }
+                    bytes[position] = b'x';
+                }
+            }
+        }
+    }
 }
