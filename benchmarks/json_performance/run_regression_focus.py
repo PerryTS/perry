@@ -31,7 +31,7 @@ def parse_case(value):
             raise ValueError
         return fixture, operation, count, warmup, repetitions
     except ValueError:
-        raise argparse.ArgumentTypeError('expected fixture:operation:positive-count:nonnegative-warmup:positive-repetitions')
+        raise argparse.ArgumentTypeError('expected fixture:operation:positive-count:nonnegative-warmup:positive-repetitions') from None
 
 
 def main():

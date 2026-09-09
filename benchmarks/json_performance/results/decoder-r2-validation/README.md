@@ -19,3 +19,20 @@ release binaries are pinned in provenance.json and source.patch. Package 0.5.152
 
 These checks establish correctness and live GC witnesses, not timing acceptance.
 Performance runs have their own quiet windows and result inventories.
+
+The original full validation driver is preserved byte-for-byte in
+`validate-recorded.txt`; it records the local build procedure and is not a
+portable entry point. `validate.py` now replays the compiled escaped-record
+checks from any working directory, resolves Node from PATH / `NODE` / `--node`,
+and enforces the repository's exact `.node-version` pin. Stage the immutable
+workers first, then run:
+
+```sh
+python3 benchmarks/json_performance/results/decoder-r2-validation/validate.py \
+  --results-dir benchmarks/json_performance/.work/decoder-finite-replay
+```
+
+The original last fixture lacks `id`; its serialized-output comparison is valid,
+but its scan/sparse checksum is NaN and was not checked. The
+[finite-checksum replay](../decoder-r2-finite-validation/README.md) adds that field
+and verifies every numeric result without rewriting the historical measurements.

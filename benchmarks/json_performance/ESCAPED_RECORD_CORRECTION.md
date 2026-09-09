@@ -56,7 +56,10 @@ call boundary removed by compiler inlining after the duplicate escape decoder
 was deleted. The shared canonical decoder and correctness checks remain.
 R2 passes its own 283 JSON tests, matched release build, 14 compiled Node
 comparisons and live GC/retained-output/cadence witnesses. See the
-[rebuilt validation evidence](results/decoder-r2-validation/README.md).
+[rebuilt validation evidence](results/decoder-r2-validation/README.md). A subsequent
+[finite-checksum replay](results/decoder-r2-finite-validation/README.md) checks all
+70 processes and 42 candidate comparisons after adding the missing scan `id`
+to the final escaped-key fixture; twelve main comparisons still fail as expected.
 
 The [longer paired comparison](results/quiet-decoder-r2-focus-r9/README.md)
 passes 18 output comparisons and 162 timing trials. Sparse reads are +0.063%

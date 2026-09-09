@@ -1,0 +1,156 @@
+[
+  {
+    "case": 0,
+    "mode": "scan",
+    "old_matches_node": false,
+    "fixed_matches_node": {
+      "normal": true,
+      "scheduled": true,
+      "fullgc": true
+    },
+    "finite_checksums": true
+  },
+  {
+    "case": 0,
+    "mode": "sparse",
+    "old_matches_node": false,
+    "fixed_matches_node": {
+      "normal": true,
+      "scheduled": true,
+      "fullgc": true
+    },
+    "finite_checksums": true
+  },
+  {
+    "case": 1,
+    "mode": "scan",
+    "old_matches_node": false,
+    "fixed_matches_node": {
+      "normal": true,
+      "scheduled": true,
+      "fullgc": true
+    },
+    "finite_checksums": true
+  },
+  {
+    "case": 1,
+    "mode": "sparse",
+    "old_matches_node": false,
+    "fixed_matches_node": {
+      "normal": true,
+      "scheduled": true,
+      "fullgc": true
+    },
+    "finite_checksums": true
+  },
+  {
+    "case": 2,
+    "mode": "scan",
+    "old_matches_node": false,
+    "fixed_matches_node": {
+      "normal": true,
+      "scheduled": true,
+      "fullgc": true
+    },
+    "finite_checksums": true
+  },
+  {
+    "case": 2,
+    "mode": "sparse",
+    "old_matches_node": false,
+    "fixed_matches_node": {
+      "normal": true,
+      "scheduled": true,
+      "fullgc": true
+    },
+    "finite_checksums": true
+  },
+  {
+    "case": 3,
+    "mode": "scan",
+    "old_matches_node": false,
+    "fixed_matches_node": {
+      "normal": true,
+      "scheduled": true,
+      "fullgc": true
+    },
+    "finite_checksums": true
+  },
+  {
+    "case": 3,
+    "mode": "sparse",
+    "old_matches_node": false,
+    "fixed_matches_node": {
+      "normal": true,
+      "scheduled": true,
+      "fullgc": true
+    },
+    "finite_checksums": true
+  },
+  {
+    "case": 4,
+    "mode": "scan",
+    "old_matches_node": true,
+    "fixed_matches_node": {
+      "normal": true,
+      "scheduled": true,
+      "fullgc": true
+    },
+    "finite_checksums": true
+  },
+  {
+    "case": 4,
+    "mode": "sparse",
+    "old_matches_node": true,
+    "fixed_matches_node": {
+      "normal": true,
+      "scheduled": true,
+      "fullgc": true
+    },
+    "finite_checksums": true
+  },
+  {
+    "case": 5,
+    "mode": "scan",
+    "old_matches_node": false,
+    "fixed_matches_node": {
+      "normal": true,
+      "scheduled": true,
+      "fullgc": true
+    },
+    "finite_checksums": true
+  },
+  {
+    "case": 5,
+    "mode": "sparse",
+    "old_matches_node": false,
+    "fixed_matches_node": {
+      "normal": true,
+      "scheduled": true,
+      "fullgc": true
+    },
+    "finite_checksums": true
+  },
+  {
+    "case": 6,
+    "mode": "scan",
+    "old_matches_node": false,
+    "fixed_matches_node": {
+      "normal": true,
+      "scheduled": true,
+      "fullgc": true
+    },
+    "finite_checksums": true
+  },
+  {
+    "case": 6,
+    "mode": "sparse",
+    "old_matches_node": false,
+    "fixed_matches_node": {
+      "normal": true,
+      "scheduled": true,
+      "fullgc": true
+    },
+    "finite_checksums": true
+  }
+]

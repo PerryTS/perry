@@ -1,0 +1,3 @@
+[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=10022 rate=0.1
+[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=10022 PERRY_GC_SCHEDULE_RATE=0.1
+[gc-schedule] done: seed=10022 safepoints=135 scheduled_collections=11 polls_paced=0 copying_minors=11 moved_objects=13571 loop_polls=129
