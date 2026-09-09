@@ -572,11 +572,27 @@ jobs:
         # (which transitively needs javascriptcoregtk-6.0.pc + webkitgtk-6.0.pc
         # + libsoup-3.0.pc) and libshumate-sys (#517 MapView). Mirrors the
         # apt step in test.yml's doc-tests-gtk4 job.
-        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libunwind-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libwebkitgtk-6.0-dev libshumate-dev
+        run: |
+          # See test.yml: a broken third-party index (Chrome) fails
+          # `apt-get update` for everyone. Drop those sources by CONTENT
+          # (deb822 `.sources` now, not `.list`) and let the install gate.
+          if _bad=$(sudo grep -rlE 'dl\.google\.com|packages\.microsoft\.com' /etc/apt/sources.list.d/ 2>/dev/null); then
+            printf '%s\n' "$_bad" | sudo xargs -r rm -f
+          fi
+          sudo apt-get update || echo "::warning::apt-get update reported errors; the install below is the real gate"
+          sudo apt-get install -y libgtk-4-dev libunwind-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libwebkitgtk-6.0-dev libshumate-dev
 
       - name: Install musl tools (Linux musl)
         if: endsWith(matrix.target, '-musl') && matrix.musl_image == ''
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+        run: |
+          # See test.yml: a broken third-party index (Chrome) fails
+          # `apt-get update` for everyone. Drop those sources by CONTENT
+          # (deb822 `.sources` now, not `.list`) and let the install gate.
+          if _bad=$(sudo grep -rlE 'dl\.google\.com|packages\.microsoft\.com' /etc/apt/sources.list.d/ 2>/dev/null); then
+            printf '%s\n' "$_bad" | sudo xargs -r rm -f
+          fi
+          sudo apt-get update || echo "::warning::apt-get update reported errors; the install below is the real gate"
+          sudo apt-get install -y musl-tools
 
       - name: Build perry
         # Build only the CLI crate; the runtime libraries are built in

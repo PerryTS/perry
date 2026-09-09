@@ -1804,7 +1804,21 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install clang
         run: |
-          sudo apt-get update
+          # Third-party sources we never install from can fail `apt-get update`,
+          # which exits non-zero if ANY source fails -- a broken Chrome index has
+          # now reddened jobs that only want clang in three separate runs
+          # (34383689667, 34384580491, 34386043331). Two lessons are baked in here:
+          #
+          #   1. Match by CONTENT, not filename. The ubuntu24/20260907.300 image
+          #      moved these to deb822 `.sources` files, so removing
+          #      `google-chrome.list` removed nothing and the job still failed.
+          #   2. Let the INSTALL be the gate. `apt-get update`'s exit status
+          #      aggregates sources we care about with sources we do not; if the
+          #      packages we came for resolve, the update did its job.
+          if _bad=$(sudo grep -rlE 'dl\.google\.com|packages\.microsoft\.com' /etc/apt/sources.list.d/ 2>/dev/null); then
+            printf '%s\n' "$_bad" | sudo xargs -r rm -f
+          fi
+          sudo apt-get update || echo "::warning::apt-get update reported errors; the install below is the real gate"
           sudo apt-get install -y clang
       - name: Build perry + runtime staticlibs (release)
         env:
@@ -1854,7 +1868,21 @@ jobs:
           save-if: false
       - name: Install clang
         run: |
-          sudo apt-get update
+          # Third-party sources we never install from can fail `apt-get update`,
+          # which exits non-zero if ANY source fails -- a broken Chrome index has
+          # now reddened jobs that only want clang in three separate runs
+          # (34383689667, 34384580491, 34386043331). Two lessons are baked in here:
+          #
+          #   1. Match by CONTENT, not filename. The ubuntu24/20260907.300 image
+          #      moved these to deb822 `.sources` files, so removing
+          #      `google-chrome.list` removed nothing and the job still failed.
+          #   2. Let the INSTALL be the gate. `apt-get update`'s exit status
+          #      aggregates sources we care about with sources we do not; if the
+          #      packages we came for resolve, the update did its job.
+          if _bad=$(sudo grep -rlE 'dl\.google\.com|packages\.microsoft\.com' /etc/apt/sources.list.d/ 2>/dev/null); then
+            printf '%s\n' "$_bad" | sudo xargs -r rm -f
+          fi
+          sudo apt-get update || echo "::warning::apt-get update reported errors; the install below is the real gate"
           sudo apt-get install -y clang
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -1936,7 +1964,21 @@ jobs:
           save-if: false
       - name: Install clang
         run: |
-          sudo apt-get update
+          # Third-party sources we never install from can fail `apt-get update`,
+          # which exits non-zero if ANY source fails -- a broken Chrome index has
+          # now reddened jobs that only want clang in three separate runs
+          # (34383689667, 34384580491, 34386043331). Two lessons are baked in here:
+          #
+          #   1. Match by CONTENT, not filename. The ubuntu24/20260907.300 image
+          #      moved these to deb822 `.sources` files, so removing
+          #      `google-chrome.list` removed nothing and the job still failed.
+          #   2. Let the INSTALL be the gate. `apt-get update`'s exit status
+          #      aggregates sources we care about with sources we do not; if the
+          #      packages we came for resolve, the update did its job.
+          if _bad=$(sudo grep -rlE 'dl\.google\.com|packages\.microsoft\.com' /etc/apt/sources.list.d/ 2>/dev/null); then
+            printf '%s\n' "$_bad" | sudo xargs -r rm -f
+          fi
+          sudo apt-get update || echo "::warning::apt-get update reported errors; the install below is the real gate"
           sudo apt-get install -y clang
       - name: Download shared GC matrix build
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -2032,7 +2074,21 @@ jobs:
 
       - name: Install clang
         run: |
-          sudo apt-get update
+          # Third-party sources we never install from can fail `apt-get update`,
+          # which exits non-zero if ANY source fails -- a broken Chrome index has
+          # now reddened jobs that only want clang in three separate runs
+          # (34383689667, 34384580491, 34386043331). Two lessons are baked in here:
+          #
+          #   1. Match by CONTENT, not filename. The ubuntu24/20260907.300 image
+          #      moved these to deb822 `.sources` files, so removing
+          #      `google-chrome.list` removed nothing and the job still failed.
+          #   2. Let the INSTALL be the gate. `apt-get update`'s exit status
+          #      aggregates sources we care about with sources we do not; if the
+          #      packages we came for resolve, the update did its job.
+          if _bad=$(sudo grep -rlE 'dl\.google\.com|packages\.microsoft\.com' /etc/apt/sources.list.d/ 2>/dev/null); then
+            printf '%s\n' "$_bad" | sudo xargs -r rm -f
+          fi
+          sudo apt-get update || echo "::warning::apt-get update reported errors; the install below is the real gate"
           sudo apt-get install -y clang
 
       - name: Build compiler
@@ -2412,7 +2468,21 @@ jobs:
 
       - name: Install clang
         run: |
-          sudo apt-get update
+          # Third-party sources we never install from can fail `apt-get update`,
+          # which exits non-zero if ANY source fails -- a broken Chrome index has
+          # now reddened jobs that only want clang in three separate runs
+          # (34383689667, 34384580491, 34386043331). Two lessons are baked in here:
+          #
+          #   1. Match by CONTENT, not filename. The ubuntu24/20260907.300 image
+          #      moved these to deb822 `.sources` files, so removing
+          #      `google-chrome.list` removed nothing and the job still failed.
+          #   2. Let the INSTALL be the gate. `apt-get update`'s exit status
+          #      aggregates sources we care about with sources we do not; if the
+          #      packages we came for resolve, the update did its job.
+          if _bad=$(sudo grep -rlE 'dl\.google\.com|packages\.microsoft\.com' /etc/apt/sources.list.d/ 2>/dev/null); then
+            printf '%s\n' "$_bad" | sudo xargs -r rm -f
+          fi
+          sudo apt-get update || echo "::warning::apt-get update reported errors; the install below is the real gate"
           sudo apt-get install -y clang
 
       - name: Gate native ABI evidence packet
@@ -3324,7 +3394,21 @@ jobs:
 
       - name: Install mysql client (for fixture health probe)
         run: |
-          sudo apt-get update -qq
+          # Third-party sources we never install from can fail `apt-get update`,
+          # which exits non-zero if ANY source fails -- a broken Chrome index has
+          # now reddened jobs that only want clang in three separate runs
+          # (34383689667, 34384580491, 34386043331). Two lessons are baked in here:
+          #
+          #   1. Match by CONTENT, not filename. The ubuntu24/20260907.300 image
+          #      moved these to deb822 `.sources` files, so removing
+          #      `google-chrome.list` removed nothing and the job still failed.
+          #   2. Let the INSTALL be the gate. `apt-get update`'s exit status
+          #      aggregates sources we care about with sources we do not; if the
+          #      packages we came for resolve, the update did its job.
+          if _bad=$(sudo grep -rlE 'dl\.google\.com|packages\.microsoft\.com' /etc/apt/sources.list.d/ 2>/dev/null); then
+            printf '%s\n' "$_bad" | sudo xargs -r rm -f
+          fi
+          sudo apt-get update -qq || echo "::warning::apt-get update reported errors; the install below is the real gate"
           sudo apt-get install -y -qq mysql-client
 
       - name: Wait for MySQL service to accept connections
@@ -3609,7 +3693,21 @@ jobs:
       - name: Install GTK4 + GStreamer + Xvfb + PulseAudio headers (Linux)
         if: matrix.os == 'ubuntu-24.04'
         run: |
-          sudo apt-get update
+          # Third-party sources we never install from can fail `apt-get update`,
+          # which exits non-zero if ANY source fails -- a broken Chrome index has
+          # now reddened jobs that only want clang in three separate runs
+          # (34383689667, 34384580491, 34386043331). Two lessons are baked in here:
+          #
+          #   1. Match by CONTENT, not filename. The ubuntu24/20260907.300 image
+          #      moved these to deb822 `.sources` files, so removing
+          #      `google-chrome.list` removed nothing and the job still failed.
+          #   2. Let the INSTALL be the gate. `apt-get update`'s exit status
+          #      aggregates sources we care about with sources we do not; if the
+          #      packages we came for resolve, the update did its job.
+          if _bad=$(sudo grep -rlE 'dl\.google\.com|packages\.microsoft\.com' /etc/apt/sources.list.d/ 2>/dev/null); then
+            printf '%s\n' "$_bad" | sudo xargs -r rm -f
+          fi
+          sudo apt-get update || echo "::warning::apt-get update reported errors; the install below is the real gate"
           # libgstreamer1.0-dev + libgstreamer-plugins-base1.0-dev added in
           # v0.5.442 for PR #371 (perry/media streaming playback, #351).
           # gstreamer-sys's build script needs `gstreamer-1.0.pc` findable
