@@ -1,0 +1,39 @@
+{
+  "purpose": "full-GC memory growth diagnostic; not CPU acceptance",
+  "worker_sha256": "ccce75e98f9cd686b579673bc01423619fcf57abdcc83d7a85cc2280b39ab4af",
+  "runner_sha256": "0858e206f56ad75fffebccc153adb3cf6b9046020c85621c492303d2baceae0a",
+  "host": "perry-macos.fritz.box",
+  "started_utc": "2026-09-09T19:34:25Z",
+  "gc_mode": "fullgc diagnostic",
+  "counts": [
+    1,
+    8,
+    16,
+    32
+  ],
+  "warmup": 0,
+  "mode": "rotating",
+  "fixtures": {
+    "wide_1m": {
+      "0": "97f24b77b98ccfd85db41fb44f0316e27c87fdff4cec53e9d763a696f3611747",
+      "1": "61bc3aeea8ea3bf941ca3dfacc83483933f2f801d42f29919b7090e2e169eea4",
+      "2": "b93c04f0b4f5ddaa8d7f6d9ef39b1a33a0ca05ddcdeba49509160238f47c8bb4",
+      "3": "051f6bd75aa40269ee0db362f79d7409d95be966654008a40b8399d16fa8269d",
+      "4": "d6c50c9d08594d7957008b9933f5579ff9b5339571fffc47680546028d3da4e9",
+      "5": "a93da8ca093c47beb7b813ce95fc5caa3be3e25649b1c7ab38a613f8dbc63708",
+      "6": "4a172951cf78a83d98fafea9f8cd0ff0243a4c948e69865a1973bbece3c3ee8b",
+      "7": "e2309789e481a9204db22f7fc59eb0ae33473cb169ec8be0d1b57ae68ebcd832"
+    },
+    "records_object_20m": {
+      "0": "356c7f6f75c99f8664bb5e45a2fe7c37f06cbd74494da6943754676804304e80",
+      "1": "33309f39969fecc8f3f338511d26138d840e1963eced14de71a86b074c3d75dd",
+      "2": "1b027e2f9671fe69f617d0dc720c4dc3b96299be1176ca3832f44ee5cc520466",
+      "3": "db4cace5ae703c16e1777042131f83bfd539d699b55877549fc4edfa1aefe3f9",
+      "4": "717cde2dcda3170e50b2df50d8d447119365a899eb4235358647cbeac987d3c3",
+      "5": "2a3e877b3d9a4aaa2071684a20db8b21b8c2ed5c4d60e13d892305027aca876d",
+      "6": "421074b708f80a7111a60b540bc7530d5cf8b12ebb7a82ea55b3e247ef97be43",
+      "7": "ac11ae2aa5482797aed2c41b625bc5f122ce099f1f9af8c09121ec66a2f71b9b"
+    }
+  },
+  "finished_utc": "2026-09-09T19:34:30Z"
+}

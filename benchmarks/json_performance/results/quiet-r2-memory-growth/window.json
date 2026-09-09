@@ -1,0 +1,23 @@
+{
+  "owner": "json-perf-72054-1788982181",
+  "load_before": [
+    1.34521484375,
+    1.47265625,
+    1.537109375
+  ],
+  "started_utc": "2026-09-09T19:29:41Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/r2-memory-growth/run.py",
+    "results/quiet-r2-memory-growth"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.4775390625,
+    1.49755859375,
+    1.54541015625
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-09T19:29:45Z"
+}

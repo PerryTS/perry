@@ -1,0 +1,24 @@
+{
+  "owner": "json-perf-70610-1788980852",
+  "load_before": [
+    1.41748046875,
+    1.60888671875,
+    1.63232421875
+  ],
+  "started_utc": "2026-09-09T19:07:32Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/open-scan-probe/run.py",
+    "--results-dir",
+    "results/quiet-open-scan-probe-r9"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.4638671875,
+    1.615234375,
+    1.63427734375
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-09T19:07:39Z"
+}
