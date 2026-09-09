@@ -27,3 +27,10 @@ These findings explain the inherited failures; they do not waive required
 checks or claim that the PR gate is green. No published artifact fingerprint,
 benchmark measurement, or failing runtime assertion has been rewritten to hide
 them. The public-baseline refresh is also recorded as outstanding in PR #9998.
+
+The later run on b211 repeats the two inherited failures: [lint](https://github.com/PerryTS/perry/actions/runs/34376199953/job/102561570002)
+reports stale public evidence but confirms raw-handle debt 949/949;
+[cargo-test](https://github.com/PerryTS/perry/actions/runs/34376199953/job/102561569981)
+again passes 3,494 tests with only the same native-stack assertion failing.
+The subsequent [review corrections](REVIEW_TRIAGE.md) have their own local
+validation; they do not remove either inherited gate failure.

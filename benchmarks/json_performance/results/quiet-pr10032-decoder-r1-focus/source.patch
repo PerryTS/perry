@@ -1,0 +1,376 @@
+diff --git a/crates/perry-runtime/src/gc/tests/runtime_roots/callback_scanners.rs b/crates/perry-runtime/src/gc/tests/runtime_roots/callback_scanners.rs
+index 4e1604562..c296e7bb6 100644
+--- a/crates/perry-runtime/src/gc/tests/runtime_roots/callback_scanners.rs
++++ b/crates/perry-runtime/src/gc/tests/runtime_roots/callback_scanners.rs
+@@ -328,11 +328,14 @@ fn test_json_tape_small_record_batch_survives_copied_minor_before_cache_store()
+     // hook, so the second read must select the batch producer.
+     hdr_handle.with_mut_ptr(|hdr| unsafe { crate::json_tape::lazy_get(hdr, 0) });
+     let hook = JsonTapeSafepointHookGuard::new(
+-        crate::json_tape::JsonTapeSafepoint::MaterializeObjectRooted,
++        crate::json_tape::JsonTapeSafepoint::MaterializeBatchedRecordRooted,
+     );
+     let value = hdr_handle.with_mut_ptr(|hdr| unsafe { crate::json_tape::lazy_get(hdr, 1) });
+     let original = hook.fired_ptr();
+-    assert_ne!(original, 0, "completed-record collection hook must run");
++    assert_ne!(
++        original, 0,
++        "batch-specific completed-record collection hook must run"
++    );
+     assert_ne!(
+         value.as_pointer::<u8>() as usize,
+         original,
+diff --git a/crates/perry-runtime/src/json/mod.rs b/crates/perry-runtime/src/json/mod.rs
+index 69ab93a53..2c8b6475c 100644
+--- a/crates/perry-runtime/src/json/mod.rs
++++ b/crates/perry-runtime/src/json/mod.rs
+@@ -96,7 +96,7 @@ pub(crate) use parse_reuse::{
+     test_parse_object_template_matches, test_root_scanner_slot_addresses,
+     test_seed_root_scanner_slots,
+ };
+-pub(crate) use parser::{DirectParser, ObjectShapeHint};
++pub(crate) use parser::{DirectParser, ObjectShapeHint, ParsedStr};
+ pub(crate) use raw_json::{ptr_is_raw_json_wrapper, raw_json_text_bytes};
+ #[cfg(test)]
+ pub(crate) use reviver::test_apply_reviver_for_value;
+diff --git a/crates/perry-runtime/src/json/stringify.rs b/crates/perry-runtime/src/json/stringify.rs
+index 086e22610..22d4bd2d9 100644
+--- a/crates/perry-runtime/src/json/stringify.rs
++++ b/crates/perry-runtime/src/json/stringify.rs
+@@ -1406,6 +1406,13 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
+             // name embeds all 32 ASCII control characters).
+             write_escaped_string(buf, key_str);
+             buf.push(':');
++        } else if crate::string::js_string_key_bytes(
++            JSValue::from_bits(current_key_bits),
++            &mut key_sso,
++        )
++        .is_some_and(|bytes| super::stringify_scalars::write_wtf8_key(buf, bytes))
++        {
++            buf.push(':');
+         } else {
+             let _ = write!(buf, "\"field{}\":", f);
+         }
+diff --git a/crates/perry-runtime/src/json/stringify_scalars.rs b/crates/perry-runtime/src/json/stringify_scalars.rs
+index aa931a334..36b2df294 100644
+--- a/crates/perry-runtime/src/json/stringify_scalars.rs
++++ b/crates/perry-runtime/src/json/stringify_scalars.rs
+@@ -117,6 +117,43 @@ pub(crate) unsafe fn write_escaped_string(buf: &mut String, s: &str) {
+         return;
+     };
+ 
++    write_escaped_bytes_from(buf, bytes, first_escape);
++}
++
++/// Quote a key rejected by the UTF-8 key decoder. Validate its WTF-8 first so
++/// malformed internal bytes cannot enter the Rust output String unchanged.
++#[inline(never)]
++pub(crate) unsafe fn write_wtf8_key(buf: &mut String, bytes: &[u8]) -> bool {
++    let mut rest = bytes;
++    while let Err(error) = std::str::from_utf8(rest) {
++        rest = &rest[error.valid_up_to()..];
++        if rest.len() < 3
++            || rest[0] != 0xed
++            || !(0xa0..=0xbf).contains(&rest[1])
++            || !(0x80..=0xbf).contains(&rest[2])
++        {
++            return false;
++        }
++        rest = &rest[3..];
++    }
++    let Some(first_escape) = super::simd::find_string_escape(bytes) else {
++        return false;
++    };
++    write_escaped_bytes_from(buf, bytes, first_escape);
++    true
++}
++
++#[test]
++fn json_wtf8_key_fallback_validates_before_writing() {
++    for bytes in [b"\xed\xa0".as_slice(), b"\xff", b"\xed\xa0\x80\xff"] {
++        let mut output = "prefix".to_owned();
++        assert!(!unsafe { write_wtf8_key(&mut output, bytes) });
++        assert_eq!(output, "prefix");
++    }
++}
++
++#[inline]
++unsafe fn write_escaped_bytes_from(buf: &mut String, bytes: &[u8], first_escape: usize) {
+     buf.push('"');
+     let mut start = 0;
+     // Issue #548: `s` reaches us via `str_from_header`, which uses
+diff --git a/crates/perry-runtime/src/json_tape.rs b/crates/perry-runtime/src/json_tape.rs
+index 0c8b8e179..8cd72f7cd 100644
+--- a/crates/perry-runtime/src/json_tape.rs
++++ b/crates/perry-runtime/src/json_tape.rs
+@@ -92,6 +92,7 @@ thread_local! {
+ #[cfg_attr(not(test), allow(dead_code))]
+ pub enum JsonTapeSafepoint {
+     MaterializeObjectRooted,
++    MaterializeBatchedRecordRooted,
+     MaterializeArrayRooted,
+     LazyArrayRooted,
+     LazyGetHeaderRooted,
+@@ -843,8 +844,12 @@ unsafe fn materialize_string_value(source: &TapeSource<'_, '_>, offset: usize) -
+             // access) can handle both forms — Step 1 + 1.5 of the
+             // SSO migration landed those consumer arms in v0.5.214
+             // / v0.5.215.
+-            if let Some(sso) = JSValue::try_short_string(slice) {
+-                return sso;
++            if slice.len() <= crate::value::SHORT_STRING_MAX_LEN
++                && !crate::string::bytes_have_lone_surrogate(slice)
++            {
++                if let Some(sso) = JSValue::try_short_string(slice) {
++                    return sso;
++                }
+             }
+             let ptr = if source.is_lazy() {
+                 let owned = slice.to_vec();
+@@ -855,10 +860,14 @@ unsafe fn materialize_string_value(source: &TapeSource<'_, '_>, offset: usize) -
+             JSValue::string_ptr(ptr)
+         }
+         Some(ParsedStr::Owned(vec)) => {
+-            if let Some(sso) = JSValue::try_short_string(&vec) {
+-                return sso;
++            if vec.len() <= crate::value::SHORT_STRING_MAX_LEN
++                && !crate::string::bytes_have_lone_surrogate(&vec)
++            {
++                if let Some(sso) = JSValue::try_short_string(&vec) {
++                    return sso;
++                }
+             }
+-            let ptr = crate::string::js_string_from_bytes(vec.as_ptr(), vec.len() as u32);
++            let ptr = crate::string::js_string_from_builder_bytes(&vec);
+             JSValue::string_ptr(ptr)
+         }
+         None => JSValue::null(),
+@@ -920,77 +929,28 @@ fn parse_string_bytes_static(bytes: &[u8]) -> Option<ParsedStr<'_>> {
+         }
+         if c == b'\\' {
+             // Fall through to slow path from here.
+-            return parse_string_bytes_slow(bytes, pos, start);
++            return parse_string_bytes_slow(bytes);
+         }
+         pos += 1;
+     }
+     None
+ }
+ 
+-fn parse_string_bytes_slow(bytes: &[u8], start_pos: usize, start: usize) -> Option<ParsedStr<'_>> {
+-    let mut result: Vec<u8> = Vec::from(&bytes[start..start_pos]);
+-    let mut pos = start_pos;
+-    loop {
+-        if pos >= bytes.len() {
+-            return None;
+-        }
+-        let c = bytes[pos];
+-        pos += 1;
+-        match c {
+-            b'"' => return Some(ParsedStr::Owned(result)),
+-            b'\\' => {
+-                if pos >= bytes.len() {
+-                    return None;
+-                }
+-                let esc = bytes[pos];
+-                pos += 1;
+-                match esc {
+-                    b'"' => result.push(b'"'),
+-                    b'\\' => result.push(b'\\'),
+-                    b'/' => result.push(b'/'),
+-                    b'n' => result.push(b'\n'),
+-                    b'r' => result.push(b'\r'),
+-                    b't' => result.push(b'\t'),
+-                    b'b' => result.push(0x08),
+-                    b'f' => result.push(0x0C),
+-                    b'u' => {
+-                        if pos + 4 > bytes.len() {
+-                            return None;
+-                        }
+-                        let hex = std::str::from_utf8(&bytes[pos..pos + 4]).ok()?;
+-                        let code = u16::from_str_radix(hex, 16).ok()?;
+-                        pos += 4;
+-                        if (0xD800..=0xDBFF).contains(&code) {
+-                            if pos + 6 <= bytes.len()
+-                                && bytes[pos] == b'\\'
+-                                && bytes[pos + 1] == b'u'
+-                            {
+-                                let hex2 = std::str::from_utf8(&bytes[pos + 2..pos + 6]).ok()?;
+-                                let low = u16::from_str_radix(hex2, 16).ok()?;
+-                                pos += 6;
+-                                let codepoint = 0x10000
+-                                    + ((code as u32 - 0xD800) << 10)
+-                                    + (low as u32 - 0xDC00);
+-                                if let Some(ch) = char::from_u32(codepoint) {
+-                                    let mut buf = [0u8; 4];
+-                                    let s = ch.encode_utf8(&mut buf);
+-                                    result.extend_from_slice(s.as_bytes());
+-                                }
+-                            }
+-                        } else if let Some(ch) = char::from_u32(code as u32) {
+-                            let mut buf = [0u8; 4];
+-                            let s = ch.encode_utf8(&mut buf);
+-                            result.extend_from_slice(s.as_bytes());
+-                        }
+-                    }
+-                    _ => result.push(esc),
+-                }
+-            }
+-            _ => result.push(c),
+-        }
++// Keep the cold escape decoder shared with eager/batched parsing. In
++// particular, lone surrogates must survive every lazy access order.
++#[inline(never)]
++fn parse_string_bytes_slow(bytes: &[u8]) -> Option<ParsedStr<'_>> {
++    let mut parser = crate::json::DirectParser::new(bytes);
++    match parser.parse_string_bytes()? {
++        crate::json::ParsedStr::Borrowed(bytes) => Some(ParsedStr::Borrowed(bytes)),
++        crate::json::ParsedStr::Owned(bytes) => Some(ParsedStr::Owned(bytes)),
+     }
+ }
+ 
++#[cfg(test)]
++#[path = "json_tape/string_decode_tests.rs"]
++mod string_decode_tests;
++
+ #[cfg(test)]
+ #[path = "json_tape_tests.rs"]
+ mod tests;
+diff --git a/crates/perry-runtime/src/json_tape/record_materialize.rs b/crates/perry-runtime/src/json_tape/record_materialize.rs
+index 6d701ed5b..a897ad3ac 100644
+--- a/crates/perry-runtime/src/json_tape/record_materialize.rs
++++ b/crates/perry-runtime/src/json_tape/record_materialize.rs
+@@ -50,6 +50,10 @@ pub(super) unsafe fn try_small_record(
+     // pressure observation, using the existing tiny-parse completion counter.
+     // This schedules work; the completed record is already a rewritable root.
+     crate::gc::gc_schedule_tiny_parse_boundary_collection_if_pressure();
++    json_tape_safepoint(
++        JsonTapeSafepoint::MaterializeBatchedRecordRooted,
++        JSValue::from_bits(value_handle.get_nanbox_u64()).as_pointer::<u8>() as usize,
++    );
+     json_tape_safepoint(
+         JsonTapeSafepoint::MaterializeObjectRooted,
+         JSValue::from_bits(value_handle.get_nanbox_u64()).as_pointer::<u8>() as usize,
+@@ -64,8 +68,6 @@ mod tests {
+     #[test]
+     fn small_lazy_record_batch_preserves_duplicate_escape_and_nested_values() {
+         // Expected output checked against the repository's pinned Node oracle.
+-        // The legacy tape walker drops lone surrogates, so it cannot serve as
+-        // the oracle for the escaped-string case.
+         for (text, expected) in [
+             (
+                 r#"{"id":42,"name":"user_42","tags":["red","blue"],"active":true}"#,
+diff --git a/crates/perry-runtime/src/json_tape/string_decode_tests.rs b/crates/perry-runtime/src/json_tape/string_decode_tests.rs
+new file mode 100644
+index 000000000..606390487
+--- /dev/null
++++ b/crates/perry-runtime/src/json_tape/string_decode_tests.rs
+@@ -0,0 +1,110 @@
++//! All materializers must preserve the same escaped UTF-16 code units.
++use super::*;
++
++const CASES: &[(&str, &str)] = &[
++    (r#"{"id":1,"s":"\ud800"}"#, r#"{"id":1,"s":"\ud800"}"#),
++    (r#"{"id":1,"s":"\udfff"}"#, r#"{"id":1,"s":"\udfff"}"#),
++    (
++        r#"{"id":1,"s":"\ud800\u0061"}"#,
++        r#"{"id":1,"s":"\ud800a"}"#,
++    ),
++    (
++        r#"{"id":1,"s":"\ud800\ud800"}"#,
++        r#"{"id":1,"s":"\ud800\ud800"}"#,
++    ),
++    (r#"{"id":1,"s":"\ud83d\ude42"}"#, r#"{"id":1,"s":"🙂"}"#),
++    (
++        r#"{"id":1,"s":"prefix\ud800\n\t"}"#,
++        r#"{"id":1,"s":"prefix\ud800\n\t"}"#,
++    ),
++    (
++        r#"{"a":1,"\u0061":2,"\ud800":3,"\ud800":4,"s":["\udc00","\ud800\udc00"]}"#,
++        r#"{"a":2,"\ud800":4,"s":["\udc00","𐀀"]}"#,
++    ),
++];
++
++unsafe fn render(value: JSValue) -> String {
++    let output = crate::json::js_json_stringify(f64::from_bits(value.bits()), 0);
++    crate::string::string_as_str(output).to_owned()
++}
++
++#[test]
++fn json_tape_escaped_records_match_in_all_materializers() {
++    let _suppress = crate::gc::GcSuppressScope::new();
++    for &(text, expected) in CASES {
++        let tape = build_tape(text.as_bytes()).unwrap();
++        let source = TapeSource::Borrowed {
++            tape: &tape.entries,
++            bytes: text.as_bytes(),
++        };
++        let scope = crate::gc::RuntimeHandleScope::new();
++        unsafe {
++            let value = materialize_from_idx_source(&source, &scope, 0);
++            assert_eq!(render(value), expected, "tape: {text}");
++            let value = record_materialize::try_small_record(&source, &scope, 0).unwrap();
++            assert_eq!(render(value), expected, "batch: {text}");
++            let value = materialize_iterative(&tape.entries, text.as_bytes()).unwrap();
++            assert_eq!(render(value), expected, "iterative: {text}");
++        }
++    }
++}
++
++#[test]
++fn json_tape_escaped_records_do_not_depend_on_access_order() {
++    let _suppress = crate::gc::GcSuppressScope::new();
++    for &(record, expected) in CASES {
++        let input = format!("[{}]", vec![record; 128].join(","));
++        let tape = build_tape(input.as_bytes()).unwrap();
++        for order in [vec![0, 1, 2, 127], vec![127, 2, 1, 0], (0..128).collect()] {
++            let scope = crate::gc::RuntimeHandleScope::new();
++            let text = crate::js_string_from_bytes(input.as_ptr(), input.len() as u32);
++            let lazy =
++                scope.root_raw_mut_ptr(unsafe { alloc_lazy_array(&tape.entries, 0, 128, text) });
++            for index in order {
++                let value = lazy.with_mut_ptr(|header| unsafe { lazy_get(header, index) });
++                assert_eq!(
++                    unsafe { render(value) },
++                    expected,
++                    "index {index}: {record}"
++                );
++            }
++            // Exercise the final sparse-cache merge or adaptive reparse too.
++            lazy.with_mut_ptr(|header| unsafe { force_materialize_lazy(header) });
++            for index in 0..128 {
++                let value = lazy.with_mut_ptr(|header| unsafe { lazy_get(header, index) });
++                assert_eq!(
++                    unsafe { render(value) },
++                    expected,
++                    "after force {index}: {record}"
++                );
++            }
++        }
++    }
++}
++
++#[test]
++fn json_tape_lone_escape_uses_heap_wtf8_metadata() {
++    let _suppress = crate::gc::GcSuppressScope::new();
++    for (text, units) in [
++        (r#""\ud800""#, 1),
++        (r#""xx\ud800""#, 3),
++        (r#""xxx\ud800""#, 4),
++    ] {
++        let tape = build_tape(text.as_bytes()).unwrap();
++        let source = TapeSource::Borrowed {
++            tape: &tape.entries,
++            bytes: text.as_bytes(),
++        };
++        unsafe {
++            let value = materialize_string_value(&source, 0);
++            assert!(!value.is_short_string(), "lone surrogate must not use SSO");
++            let string = value.as_string_ptr();
++            assert_eq!((*string).utf16_len, units);
++            assert_ne!(
++                (*string).flags & crate::string::STRING_FLAG_HAS_LONE_SURROGATES,
++                0
++            );
++            assert_eq!(render(value), text);
++        }
++    }
++}

@@ -1,0 +1,98 @@
+[
+  {
+    "fixture": "records_array_16k",
+    "operation": "parse",
+    "cpu_delta_percent": 0.5914608664394416,
+    "peak_delta_mib": 0.03125,
+    "counters_per_call": {
+      "perry": {
+        "instructions": 283510.81754,
+        "cycles": 58846.63624
+      },
+      "baseline": {
+        "instructions": 283510.26458,
+        "cycles": 58505.73838
+      }
+    }
+  },
+  {
+    "fixture": "records_array_16k",
+    "operation": "sparse",
+    "cpu_delta_percent": 2.651586112774118,
+    "peak_delta_mib": 0.03125,
+    "counters_per_call": {
+      "perry": {
+        "instructions": 381407.84066,
+        "cycles": 82911.42646
+      },
+      "baseline": {
+        "instructions": 381755.38204,
+        "cycles": 80781.18576
+      }
+    }
+  },
+  {
+    "fixture": "records_array_16k",
+    "operation": "scan",
+    "cpu_delta_percent": 0.3627964927518157,
+    "peak_delta_mib": 0.015625,
+    "counters_per_call": {
+      "perry": {
+        "instructions": 1255682.7691,
+        "cycles": 255719.7658
+      },
+      "baseline": {
+        "instructions": 1252060.5963,
+        "cycles": 254988.281
+      }
+    }
+  },
+  {
+    "fixture": "escaped_1m",
+    "operation": "parse",
+    "cpu_delta_percent": -0.00806132980094576,
+    "peak_delta_mib": 0.015625,
+    "counters_per_call": {
+      "perry": {
+        "instructions": 16208568.922851562,
+        "cycles": 3188160.4736328125
+      },
+      "baseline": {
+        "instructions": 16208441.779296875,
+        "cycles": 3188741.7041015625
+      }
+    }
+  },
+  {
+    "fixture": "records_array_1m",
+    "operation": "parse",
+    "cpu_delta_percent": -0.24339161564039813,
+    "peak_delta_mib": 0.03125,
+    "counters_per_call": {
+      "perry": {
+        "instructions": 17499641.450195312,
+        "cycles": 3872845.400390625
+      },
+      "baseline": {
+        "instructions": 17499048.744140625,
+        "cycles": 3855187.8857421875
+      }
+    }
+  },
+  {
+    "fixture": "long_string_1m",
+    "operation": "stringify",
+    "cpu_delta_percent": -0.19828608316547758,
+    "peak_delta_mib": 0.0,
+    "counters_per_call": {
+      "perry": {
+        "instructions": 358375.9610595703,
+        "cycles": 106251.47134399414
+      },
+      "baseline": {
+        "instructions": 358430.8128051758,
+        "cycles": 106455.59030151367
+      }
+    }
+  }
+]

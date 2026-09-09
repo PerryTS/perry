@@ -844,8 +844,12 @@ unsafe fn materialize_string_value(source: &TapeSource<'_, '_>, offset: usize) -
             // access) can handle both forms — Step 1 + 1.5 of the
             // SSO migration landed those consumer arms in v0.5.214
             // / v0.5.215.
-            if let Some(sso) = JSValue::try_short_string(slice) {
-                return sso;
+            if slice.len() <= crate::value::SHORT_STRING_MAX_LEN
+                && !crate::string::bytes_have_lone_surrogate(slice)
+            {
+                if let Some(sso) = JSValue::try_short_string(slice) {
+                    return sso;
+                }
             }
             let ptr = if source.is_lazy() {
                 let owned = slice.to_vec();
@@ -856,10 +860,14 @@ unsafe fn materialize_string_value(source: &TapeSource<'_, '_>, offset: usize) -
             JSValue::string_ptr(ptr)
         }
         Some(ParsedStr::Owned(vec)) => {
-            if let Some(sso) = JSValue::try_short_string(&vec) {
-                return sso;
+            if vec.len() <= crate::value::SHORT_STRING_MAX_LEN
+                && !crate::string::bytes_have_lone_surrogate(&vec)
+            {
+                if let Some(sso) = JSValue::try_short_string(&vec) {
+                    return sso;
+                }
             }
-            let ptr = crate::string::js_string_from_bytes(vec.as_ptr(), vec.len() as u32);
+            let ptr = crate::string::js_string_from_builder_bytes(&vec);
             JSValue::string_ptr(ptr)
         }
         None => JSValue::null(),
@@ -908,6 +916,9 @@ enum ParsedStr<'a> {
 /// Standalone because the materializer doesn't have a live
 /// `DirectParser` instance. Same semantics as
 /// `DirectParser::parse_string_bytes`.
+// Keep the scalar scan out of its materialization callers even though the
+// canonical escape decoder is now shared and the scanner itself is small.
+#[inline(never)]
 fn parse_string_bytes_static(bytes: &[u8]) -> Option<ParsedStr<'_>> {
     if bytes.is_empty() || bytes[0] != b'"' {
         return None;
@@ -921,76 +932,27 @@ fn parse_string_bytes_static(bytes: &[u8]) -> Option<ParsedStr<'_>> {
         }
         if c == b'\\' {
             // Fall through to slow path from here.
-            return parse_string_bytes_slow(bytes, pos, start);
+            return parse_string_bytes_slow(bytes);
         }
         pos += 1;
     }
     None
 }
 
-fn parse_string_bytes_slow(bytes: &[u8], start_pos: usize, start: usize) -> Option<ParsedStr<'_>> {
-    let mut result: Vec<u8> = Vec::from(&bytes[start..start_pos]);
-    let mut pos = start_pos;
-    loop {
-        if pos >= bytes.len() {
-            return None;
-        }
-        let c = bytes[pos];
-        pos += 1;
-        match c {
-            b'"' => return Some(ParsedStr::Owned(result)),
-            b'\\' => {
-                if pos >= bytes.len() {
-                    return None;
-                }
-                let esc = bytes[pos];
-                pos += 1;
-                match esc {
-                    b'"' => result.push(b'"'),
-                    b'\\' => result.push(b'\\'),
-                    b'/' => result.push(b'/'),
-                    b'n' => result.push(b'\n'),
-                    b'r' => result.push(b'\r'),
-                    b't' => result.push(b'\t'),
-                    b'b' => result.push(0x08),
-                    b'f' => result.push(0x0C),
-                    b'u' => {
-                        if pos + 4 > bytes.len() {
-                            return None;
-                        }
-                        let hex = std::str::from_utf8(&bytes[pos..pos + 4]).ok()?;
-                        let code = u16::from_str_radix(hex, 16).ok()?;
-                        pos += 4;
-                        if (0xD800..=0xDBFF).contains(&code) {
-                            if pos + 6 <= bytes.len()
-                                && bytes[pos] == b'\\'
-                                && bytes[pos + 1] == b'u'
-                            {
-                                let hex2 = std::str::from_utf8(&bytes[pos + 2..pos + 6]).ok()?;
-                                let low = u16::from_str_radix(hex2, 16).ok()?;
-                                pos += 6;
-                                let codepoint = 0x10000
-                                    + ((code as u32 - 0xD800) << 10)
-                                    + (low as u32 - 0xDC00);
-                                if let Some(ch) = char::from_u32(codepoint) {
-                                    let mut buf = [0u8; 4];
-                                    let s = ch.encode_utf8(&mut buf);
-                                    result.extend_from_slice(s.as_bytes());
-                                }
-                            }
-                        } else if let Some(ch) = char::from_u32(code as u32) {
-                            let mut buf = [0u8; 4];
-                            let s = ch.encode_utf8(&mut buf);
-                            result.extend_from_slice(s.as_bytes());
-                        }
-                    }
-                    _ => result.push(esc),
-                }
-            }
-            _ => result.push(c),
-        }
+// Keep the cold escape decoder shared with eager/batched parsing. In
+// particular, lone surrogates must survive every lazy access order.
+#[inline(never)]
+fn parse_string_bytes_slow(bytes: &[u8]) -> Option<ParsedStr<'_>> {
+    let mut parser = crate::json::DirectParser::new(bytes);
+    match parser.parse_string_bytes()? {
+        crate::json::ParsedStr::Borrowed(bytes) => Some(ParsedStr::Borrowed(bytes)),
+        crate::json::ParsedStr::Owned(bytes) => Some(ParsedStr::Owned(bytes)),
     }
 }
+
+#[cfg(test)]
+#[path = "json_tape/string_decode_tests.rs"]
+mod string_decode_tests;
 
 #[cfg(test)]
 #[path = "json_tape_tests.rs"]

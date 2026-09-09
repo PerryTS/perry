@@ -96,7 +96,7 @@ pub(crate) use parse_reuse::{
     test_parse_object_template_matches, test_root_scanner_slot_addresses,
     test_seed_root_scanner_slots,
 };
-pub(crate) use parser::{DirectParser, ObjectShapeHint};
+pub(crate) use parser::{DirectParser, ObjectShapeHint, ParsedStr};
 pub(crate) use raw_json::{ptr_is_raw_json_wrapper, raw_json_text_bytes};
 #[cfg(test)]
 pub(crate) use reviver::test_apply_reviver_for_value;
