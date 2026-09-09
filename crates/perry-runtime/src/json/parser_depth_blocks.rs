@@ -141,13 +141,14 @@ pub(crate) fn nesting_depth_exceeds(bytes: &[u8], limit: usize) -> bool {
 fn contains_open_container(bytes: &[u8]) -> bool {
     use std::arch::aarch64::*;
     unsafe {
-        // '[' and '{' differ only by bit 0x20. No other byte folds to '{'.
-        let fold = vdupq_n_u8(0x20);
+        // Keep the original first-block comparisons: these bracket vectors
+        // are also used by the depth state machine after an early hit. The
+        // separate long-search tail owns its byte-folding constant.
+        let array = vdupq_n_u8(b'[');
         let object = vdupq_n_u8(b'{');
-        // Preserve early admission for arrays whose first record opens here.
         if bytes.len() >= 16 {
             let chunk = vld1q_u8(bytes.as_ptr());
-            if vmaxvq_u8(vceqq_u8(vorrq_u8(chunk, fold), object)) != 0 {
+            if vmaxvq_u8(vorrq_u8(vceqq_u8(chunk, array), vceqq_u8(chunk, object))) != 0 {
                 return true;
             }
             return contains_open_container_tail(&bytes[16..]);
