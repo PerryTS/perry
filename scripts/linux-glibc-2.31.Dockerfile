@@ -8,6 +8,39 @@ FROM ${OLD_GLIBC_IMAGE}
 # checked while bootstrapping ca-certificates; only TLS peer validation is
 # disabled for this first signed archive fetch.
 #
+# `bullseye-security` comes from snapshot.debian.org, pinned to a timestamp.
+# Bullseye is EOL and Debian is retiring it, which broke this image three times
+# in four days:
+#
+#   run 34197616242 — E: Release file for .../bullseye-security/InRelease is
+#     expired (Valid-Until was Mon, 07 Sep 2026 21:13:04 UTC).
+#   run 34272956353 — with check-valid-until=no, the same suite began returning
+#     404 for its .debs from some Fastly nodes (151.101.74.132) while serving
+#     200 from others. A CDN lottery.
+#   run 34293996179 — dropping the suite entirely then broke apt's resolver:
+#     the PINNED BASE IMAGE already carries security versions, so archive-only
+#     sources cannot satisfy them —
+#       libc6-dev : Depends: libc6 (= 2.31-13+deb11u11) but ...u14 is installed
+#       libssl-dev: Depends: libssl1.1 (= 1.1.1w-0+deb11u1) but ...u8 is installed
+#       perl      : Depends: perl-base (= 5.32.1-4+deb11u3) but ...u5 is installed
+#
+# archive.debian.org does NOT carry debian-security (404), so the only stable
+# source of those exact versions is snapshot.debian.org — Debian's timestamped
+# time-machine, immutable by design, immune to both expiry and CDN state.
+# Verified at 20260901T000000Z: libc6 2.31-13+deb11u14, libssl1.1 1.1.1w-0+deb11u8,
+# perl-base 5.32.1-4+deb11u5, gpgv 2.2.27-2+deb11u3 — exactly what the pinned
+# base image has installed.
+#
+# The timestamp is part of the reproducibility contract: bump it only alongside
+# a base-image digest bump, and re-check those four versions when you do.
+
+ARG OLD_GLIBC_IMAGE=debian:bullseye-slim@sha256:f313b4bd62667092a59b3a664d7d3ab8b5e65f41675f48e81455a15dc5abe792
+FROM ${OLD_GLIBC_IMAGE}
+
+# The archived slim image has no CA bundle. Debian Release signatures are still
+# checked while bootstrapping ca-certificates; only TLS peer validation is
+# disabled for this first signed archive fetch.
+#
 # The `bullseye-security` suite is deliberately NOT listed. Bullseye is EOL and
 # Debian is actively retiring it, which broke this image twice in four days:
 #
@@ -35,6 +68,7 @@ FROM ${OLD_GLIBC_IMAGE}
 # it is the standard configuration for an EOL Debian base.
 RUN printf '%s\n' \
       'deb [check-valid-until=no] https://archive.debian.org/debian bullseye main' \
+      'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20260901T000000Z bullseye-security main' \
       > /etc/apt/sources.list \
     && apt-get -o Acquire::https::Verify-Peer=false update \
     && DEBIAN_FRONTEND=noninteractive apt-get \
