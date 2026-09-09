@@ -87,3 +87,16 @@ investigation; neither scan nor outlining fixes delayed old reclamation.
 [Pristine Linux main CI comparison](results/main-e722-ci-comparison/README.md)
 reproduces the earlier correction PR's seven gap failures and stack-size test
 failure; this does not substitute for CI on the current candidate.
+
+## R4: first-block source variant, parked
+
+Restoring the original two comparisons and OR does not change the compiled
+scanner: LLVM folds it to the same instructions. The complete 3676-byte depth
+scanner and 284-byte tail are identical to R3 at the same addresses. All six
+inspected parse functions have identical disassembled instruction sequences.
+The matched build, 285 JSON tests and compiled GC/correctness checks pass, but
+no performance run was started because the intended mechanism was absent.
+[Codegen identity and validation](results/opening-scan-r4-validation/README.md).
+The source-only variant is preserved on its experimental branch and is not
+included in this PR. Codegen sizes above are symbol spans; the exported R3 parse
+entry's 156-byte span contains 112 explicitly disassembled instruction bytes.
