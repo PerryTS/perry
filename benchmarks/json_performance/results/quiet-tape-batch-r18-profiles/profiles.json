@@ -1,0 +1,70 @@
+[
+  {
+    "case": {
+      "fixture": "records_array_1m",
+      "operation": "scan",
+      "mode": "main",
+      "iterations": 600,
+      "warmup": 2
+    },
+    "worker_command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/tape-batch-r18/main-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/fixtures/records_array_1m.json",
+      "scan",
+      "600",
+      "2",
+      "verify"
+    ],
+    "worker_sha256": "caac66192bde3ff1c685350f61071b75383d042661a52b8898d89e8c48a7b944",
+    "env_overrides": {},
+    "sample_command": [
+      "/usr/bin/sample",
+      "78569",
+      "1",
+      "1",
+      "-mayDie",
+      "-file",
+      "results/quiet-tape-batch-r18-profiles/records_array_1m-scan-main.sample.txt"
+    ],
+    "worker_exit": 0,
+    "sampler_exit": 0,
+    "observed_peak_rss_bytes": 1308131328,
+    "elapsed_seconds": 2.0409064999999997,
+    "stop_reason": null,
+    "diagnostic_only": true
+  },
+  {
+    "case": {
+      "fixture": "records_array_1m",
+      "operation": "scan",
+      "mode": "candidate",
+      "iterations": 600,
+      "warmup": 2
+    },
+    "worker_command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/tape-batch-r18/candidate-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/fixtures/records_array_1m.json",
+      "scan",
+      "600",
+      "2",
+      "verify"
+    ],
+    "worker_sha256": "9545d17094f66194f83b621f5dc243633724ac4b0042f055d2fdac85060fca9c",
+    "env_overrides": {},
+    "sample_command": [
+      "/usr/bin/sample",
+      "78589",
+      "1",
+      "1",
+      "-mayDie",
+      "-file",
+      "results/quiet-tape-batch-r18-profiles/records_array_1m-scan-candidate.sample.txt"
+    ],
+    "worker_exit": 0,
+    "sampler_exit": 0,
+    "observed_peak_rss_bytes": 1311260672,
+    "elapsed_seconds": 1.9341940830000004,
+    "stop_reason": null,
+    "diagnostic_only": true
+  }
+]

@@ -1,0 +1,70 @@
+{
+  "source_commit": "0c20dd61f03d2024354edd50eb8ca1bbf67fa582",
+  "base_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+  "main_build": {
+    "source_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+    "command": [
+      "cargo",
+      "build",
+      "--release",
+      "-p",
+      "perry",
+      "-p",
+      "perry-runtime-static",
+      "-p",
+      "perry-stdlib-static"
+    ],
+    "started_utc": "2026-09-10T15:48:26.572992+00:00",
+    "elapsed_seconds": 338.8867919445038,
+    "files": {
+      "perry": {
+        "sha256": "ade63eddfdeca03926039d10e3310f9255d52c5b2721ccd2b0882f042a689156",
+        "bytes": 117699664,
+        "mtime": 1789055644.6386313
+      },
+      "libperry_runtime.a": {
+        "sha256": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458",
+        "bytes": 36882304,
+        "mtime": 1789055567.242991
+      },
+      "libperry_stdlib.a": {
+        "sha256": "61fac03f0405a48b8d390958e3002246061db6e009fcd078fe61a98d1a1068b0",
+        "bytes": 86372568,
+        "mtime": 1789055628.740747
+      }
+    }
+  },
+  "candidate_build": {
+    "source_commit": "0c20dd61f03d2024354edd50eb8ca1bbf67fa582",
+    "command": [
+      "cargo",
+      "build",
+      "--release",
+      "-p",
+      "perry",
+      "-p",
+      "perry-runtime-static",
+      "-p",
+      "perry-stdlib-static"
+    ],
+    "started_utc": "2026-09-10T22:20:39.085954+00:00",
+    "elapsed_seconds": 332.487459897995,
+    "files": {
+      "perry": {
+        "sha256": "0689567baddb2a1639da6761b7b98ff78e88a3ccf7b3ae5c095072c890b656a1",
+        "bytes": 117699632,
+        "mtime": 1789079170.7741973
+      },
+      "libperry_runtime.a": {
+        "sha256": "b57b9ba7018d06dcd7c54483762c969937219caf744987ad7401c4472cd4c992",
+        "bytes": 36888216,
+        "mtime": 1789079093.427017
+      },
+      "libperry_stdlib.a": {
+        "sha256": "8272bfa9362e04687bc5b213ff2677919971dd77778bddba8bf83d1c24cdb17f",
+        "bytes": 86377224,
+        "mtime": 1789079155.4374676
+      }
+    }
+  }
+}

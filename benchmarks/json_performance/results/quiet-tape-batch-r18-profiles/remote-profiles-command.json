@@ -1,0 +1,9 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/tape-batch-r18/run-profiles.py",
+  "--results-dir",
+  "results/quiet-tape-batch-r18-profiles"
+]

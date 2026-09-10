@@ -1,0 +1,33 @@
+{
+  "source_commit": "0c20dd61f03d2024354edd50eb8ca1bbf67fa582",
+  "command": [
+    "cargo",
+    "build",
+    "--release",
+    "-p",
+    "perry",
+    "-p",
+    "perry-runtime-static",
+    "-p",
+    "perry-stdlib-static"
+  ],
+  "started_utc": "2026-09-10T22:20:39.085954+00:00",
+  "elapsed_seconds": 332.487459897995,
+  "files": {
+    "perry": {
+      "sha256": "0689567baddb2a1639da6761b7b98ff78e88a3ccf7b3ae5c095072c890b656a1",
+      "bytes": 117699632,
+      "mtime": 1789079170.7741973
+    },
+    "libperry_runtime.a": {
+      "sha256": "b57b9ba7018d06dcd7c54483762c969937219caf744987ad7401c4472cd4c992",
+      "bytes": 36888216,
+      "mtime": 1789079093.427017
+    },
+    "libperry_stdlib.a": {
+      "sha256": "8272bfa9362e04687bc5b213ff2677919971dd77778bddba8bf83d1c24cdb17f",
+      "bytes": 86377224,
+      "mtime": 1789079155.4374676
+    }
+  }
+}

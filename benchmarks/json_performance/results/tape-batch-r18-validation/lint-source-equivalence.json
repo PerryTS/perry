@@ -1,0 +1,8 @@
+{
+  "source_commit": "0c20dd61f03d2024354edd50eb8ca1bbf67fa582",
+  "preliminary_lint_patch_exactly_matches_committed_source": true,
+  "patch_sha256": "2cca144ec81409e7115892d3adb094272d0a83bb2bef82cec224c3eb968f91e7",
+  "lint_exit_code": 1,
+  "file_cap_exit_code": 0,
+  "note": "73/74 script checks passed; public benchmark freshness already fails main. Compile and two CI-only gates skipped. No source change after this lint."
+}

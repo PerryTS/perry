@@ -1,0 +1,24 @@
+{
+  "owner": "json-perf-78566-1789079902",
+  "load_before": [
+    1.7900390625,
+    1.83837890625,
+    1.6982421875
+  ],
+  "started_utc": "2026-09-10T22:38:22Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/tape-batch-r18/run-profiles.py",
+    "--results-dir",
+    "results/quiet-tape-batch-r18-profiles"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.7265625,
+    1.82421875,
+    1.69384765625
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-10T22:38:26Z"
+}

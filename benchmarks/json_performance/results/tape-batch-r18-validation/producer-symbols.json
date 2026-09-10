@@ -1,0 +1,18 @@
+{
+  "source_commit": "0c20dd61f03d2024354edd50eb8ca1bbf67fa582",
+  "workers": [
+    {
+      "arm": "main",
+      "worker_sha256": "caac66192bde3ff1c685350f61071b75383d042661a52b8898d89e8c48a7b944",
+      "symbols": []
+    },
+    {
+      "arm": "candidate",
+      "worker_sha256": "9545d17094f66194f83b621f5dc243633724ac4b0042f055d2fdac85060fca9c",
+      "symbols": [
+        "000000010023ce90 t __RNvMNtNtNtCs3gRpqoBkMHm_13perry_runtime4json6parser4tapeNtB4_12DirectParser24materialize_tape_records"
+      ]
+    }
+  ],
+  "note": "Only a linkage witness. This does not establish runtime entry, phase savings or performance."
+}

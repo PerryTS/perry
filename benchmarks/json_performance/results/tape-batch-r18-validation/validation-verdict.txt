@@ -1,0 +1,1 @@
+Rejected after the longer control recheck: 1 MiB object parse is 0.9767% slower, separated with 11/11 slower pairs. Full scans improve 4.36% at 1 MiB and 6.00% at 8 MiB, with little RSS change. The 120-record/16 KiB scan cannot enter the changed producer under the existing guard. No PR/version bump or broader performance qualification; full objective remains open.

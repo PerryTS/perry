@@ -1,0 +1,12 @@
+{
+  "selection": "Predeclared follow-up to the largest separated control slowdown in the R18 screen: records_object_1m parse, four times original matrix work, unchanged warmup, 11 paired interleaved repetitions. Both frozen workers unchanged.",
+  "cases": [
+    {
+      "fixture": "records_object_1m",
+      "operation": "parse",
+      "iterations": 324,
+      "warmup": 2,
+      "repetitions": 11
+    }
+  ]
+}

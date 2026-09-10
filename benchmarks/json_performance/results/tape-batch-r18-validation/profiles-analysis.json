@@ -1,0 +1,258 @@
+{
+  "window": {
+    "owner": "json-perf-78566-1789079902",
+    "load_before": [
+      1.7900390625,
+      1.83837890625,
+      1.6982421875
+    ],
+    "started_utc": "2026-09-10T22:38:22Z",
+    "quiet_gate_passed": true,
+    "command": [
+      "python3",
+      ".work/tape-batch-r18/run-profiles.py",
+      "--results-dir",
+      "results/quiet-tape-batch-r18-profiles"
+    ],
+    "competing_workloads_before": [],
+    "load_after": [
+      1.7265625,
+      1.82421875,
+      1.69384765625
+    ],
+    "competing_workloads_after": [],
+    "finished_utc": "2026-09-10T22:38:26Z"
+  },
+  "diagnostic_only": true,
+  "instrumented": true,
+  "cases": [
+    {
+      "case": {
+        "fixture": "records_array_1m",
+        "operation": "scan",
+        "mode": "main",
+        "iterations": 600,
+        "warmup": 2
+      },
+      "samples": 752,
+      "profile_sha256": "f6bc019f54a420b802b9ffeb0d182910736e12fc2f168f115486e2632ff6403f",
+      "full_output_matches_node": true,
+      "phases": {
+        "tape_record_producer": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_main_thread_samples": 0.0
+        },
+        "tape_build": {
+          "samples": 197,
+          "frames": [
+            {
+              "depth": 14,
+              "count": 182,
+              "name": "_RINvNtCs3gRpqoBkMHm_13perry_runtime9json_tape15build_tape_intoKb1_EB4_  (in main-worker) + 200,1636,...  [0x1026f8cac,0x1026f9248,...]",
+              "parent": 145
+            },
+            {
+              "depth": 14,
+              "count": 15,
+              "name": "_RINvNtCs3gRpqoBkMHm_13perry_runtime9json_tape15build_tape_intoKb1_EB4_  (in main-worker) + 10168  [0x1026fb39c]",
+              "parent": 145
+            }
+          ],
+          "pct_of_main_thread_samples": 26.1968085106383
+        },
+        "lazy_full_materialization": {
+          "samples": 385,
+          "frames": [
+            {
+              "depth": 16,
+              "count": 383,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape22force_materialize_lazy  (in main-worker) + 1324  [0x10291dedc]",
+              "parent": 5
+            },
+            {
+              "depth": 16,
+              "count": 1,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape22force_materialize_lazy  (in main-worker) + 4220  [0x10291ea2c]",
+              "parent": 5
+            },
+            {
+              "depth": 16,
+              "count": 1,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape22force_materialize_lazy  (in main-worker) + 4360  [0x10291eab8]",
+              "parent": 5
+            }
+          ],
+          "pct_of_main_thread_samples": 51.196808510638306
+        },
+        "direct_array_parser": {
+          "samples": 383,
+          "frames": [
+            {
+              "depth": 18,
+              "count": 383,
+              "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser11parse_array  (in main-worker) + 236  [0x1027ec854]",
+              "parent": 6
+            }
+          ],
+          "pct_of_main_thread_samples": 50.930851063829785
+        },
+        "collection": {
+          "samples": 91,
+          "frames": [
+            {
+              "depth": 14,
+              "count": 89,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime2gc35gc_collect_minor_with_trigger_inner  (in main-worker) + 3600  [0x1028a2290]",
+              "parent": 157
+            },
+            {
+              "depth": 14,
+              "count": 2,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime2gc35gc_collect_minor_with_trigger_inner  (in main-worker) + 3272  [0x1028a2148]",
+              "parent": 157
+            }
+          ],
+          "pct_of_main_thread_samples": 12.101063829787234
+        }
+      },
+      "observed_peak_rss_mib": 1247.53125,
+      "note": "One short instrumented sample, not an isolated phase timer. Tape producer/direct parser are nested under full materialization; overlapping columns must not be added."
+    },
+    {
+      "case": {
+        "fixture": "records_array_1m",
+        "operation": "scan",
+        "mode": "candidate",
+        "iterations": 600,
+        "warmup": 2
+      },
+      "samples": 756,
+      "profile_sha256": "f9f7d9b5da07369531a4084811381d7ba4bc932543036cad5d22924635dd1453",
+      "full_output_matches_node": true,
+      "phases": {
+        "tape_record_producer": {
+          "samples": 376,
+          "frames": [
+            {
+              "depth": 18,
+              "count": 137,
+              "name": "_RNvMNtNtNtCs3gRpqoBkMHm_13perry_runtime4json6parser4tapeNtB4_12DirectParser24materialize_tape_records  (in candidate-worker) + 868,1908,...  [0x1011351f4,0x101135604,...]",
+              "parent": 6
+            },
+            {
+              "depth": 18,
+              "count": 84,
+              "name": "_RNvMNtNtNtCs3gRpqoBkMHm_13perry_runtime4json6parser4tapeNtB4_12DirectParser24materialize_tape_records  (in candidate-worker) + 2460  [0x10113582c]",
+              "parent": 6
+            },
+            {
+              "depth": 18,
+              "count": 62,
+              "name": "_RNvMNtNtNtCs3gRpqoBkMHm_13perry_runtime4json6parser4tapeNtB4_12DirectParser24materialize_tape_records  (in candidate-worker) + 1772  [0x10113557c]",
+              "parent": 6
+            },
+            {
+              "depth": 18,
+              "count": 31,
+              "name": "_RNvMNtNtNtCs3gRpqoBkMHm_13perry_runtime4json6parser4tapeNtB4_12DirectParser24materialize_tape_records  (in candidate-worker) + 1488  [0x101135460]",
+              "parent": 6
+            },
+            {
+              "depth": 18,
+              "count": 28,
+              "name": "_RNvMNtNtNtCs3gRpqoBkMHm_13perry_runtime4json6parser4tapeNtB4_12DirectParser24materialize_tape_records  (in candidate-worker) + 1740  [0x10113555c]",
+              "parent": 6
+            },
+            {
+              "depth": 18,
+              "count": 16,
+              "name": "_RNvMNtNtNtCs3gRpqoBkMHm_13perry_runtime4json6parser4tapeNtB4_12DirectParser24materialize_tape_records  (in candidate-worker) + 1116  [0x1011352ec]",
+              "parent": 6
+            },
+            {
+              "depth": 18,
+              "count": 13,
+              "name": "_RNvMNtNtNtCs3gRpqoBkMHm_13perry_runtime4json6parser4tapeNtB4_12DirectParser24materialize_tape_records  (in candidate-worker) + 468  [0x101135064]",
+              "parent": 6
+            },
+            {
+              "depth": 18,
+              "count": 4,
+              "name": "_RNvMNtNtNtCs3gRpqoBkMHm_13perry_runtime4json6parser4tapeNtB4_12DirectParser24materialize_tape_records  (in candidate-worker) + 1160  [0x101135318]",
+              "parent": 6
+            },
+            {
+              "depth": 18,
+              "count": 1,
+              "name": "_RNvMNtNtNtCs3gRpqoBkMHm_13perry_runtime4json6parser4tapeNtB4_12DirectParser24materialize_tape_records  (in candidate-worker) + 636  [0x10113510c]",
+              "parent": 6
+            }
+          ],
+          "pct_of_main_thread_samples": 49.735449735449734
+        },
+        "tape_build": {
+          "samples": 190,
+          "frames": [
+            {
+              "depth": 14,
+              "count": 173,
+              "name": "_RINvNtCs3gRpqoBkMHm_13perry_runtime9json_tape15build_tape_intoKb1_EB4_  (in candidate-worker) + 9600,9620,...  [0x10104b164,0x10104b178,...]",
+              "parent": 125
+            },
+            {
+              "depth": 14,
+              "count": 16,
+              "name": "_RINvNtCs3gRpqoBkMHm_13perry_runtime9json_tape15build_tape_intoKb1_EB4_  (in candidate-worker) + 10168  [0x10104b39c]",
+              "parent": 125
+            },
+            {
+              "depth": 14,
+              "count": 1,
+              "name": "_RINvNtCs3gRpqoBkMHm_13perry_runtime9json_tape15build_tape_intoKb1_EB4_  (in candidate-worker) + 10424  [0x10104b49c]",
+              "parent": 125
+            }
+          ],
+          "pct_of_main_thread_samples": 25.132275132275133
+        },
+        "lazy_full_materialization": {
+          "samples": 381,
+          "frames": [
+            {
+              "depth": 16,
+              "count": 381,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape22force_materialize_lazy  (in candidate-worker) + 2428  [0x10126efac]",
+              "parent": 5
+            }
+          ],
+          "pct_of_main_thread_samples": 50.39682539682539
+        },
+        "direct_array_parser": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_main_thread_samples": 0.0
+        },
+        "collection": {
+          "samples": 94,
+          "frames": [
+            {
+              "depth": 14,
+              "count": 93,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime2gc35gc_collect_minor_with_trigger_inner  (in candidate-worker) + 3600  [0x1011f2d90]",
+              "parent": 149
+            },
+            {
+              "depth": 14,
+              "count": 1,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime2gc35gc_collect_minor_with_trigger_inner  (in candidate-worker) + 3344  [0x1011f2c90]",
+              "parent": 149
+            }
+          ],
+          "pct_of_main_thread_samples": 12.433862433862434
+        }
+      },
+      "observed_peak_rss_mib": 1250.515625,
+      "note": "One short instrumented sample, not an isolated phase timer. Tape producer/direct parser are nested under full materialization; overlapping columns must not be added."
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "base_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+  "diagnostic_evidence_commit": "fb87e2b4ff7d6a052d8a549f7c0595c00cd70941",
+  "runtime_scope": "Only full lazy materialization producer. Read validated tape for shallow records; existing scalar decoding, shape cache, construction batch and fallback parser. No GC policy/admission/threshold change.",
+  "status": "Unmeasured prototype; no PR or version bump."
+}

@@ -1,0 +1,3 @@
+{
+  "initial_options_validation": "Failed before running Perry: options-worker.js had not been copied and main workers had not yet been built. Original failure preserved; copying unchanged JS then building workers before retry."
+}

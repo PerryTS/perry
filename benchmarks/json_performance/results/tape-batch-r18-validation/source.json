@@ -1,0 +1,11 @@
+{
+  "source_commit": "0c20dd61f03d2024354edd50eb8ca1bbf67fa582",
+  "base_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+  "production_change": "Full lazy materialization only; shallow records/scalar arrays use validated tape, other subtrees use DirectParser.",
+  "freshness_refresh_mtime_only": {
+    "crates/perry-runtime-static/src/lib.rs": "0f320c88d8d2679b4af3bc1fbe882752744e210212076d3ebcd60b7c6fed10de",
+    "crates/perry-stdlib-static/src/lib.rs": "f66830b9af1aafaa3270e09d2ba00da466fe4ce7d715f7590bba9db99b0103a0",
+    "crates/perry/src/main.rs": "cc3d6d228a6c9e031ba8f0a26d152c7690f622ee914c8aa09d47eeb2199db870"
+  },
+  "note": "Preliminary focused units passed. Full JSON units and exact production build follow from this clean source; no measurement yet."
+}

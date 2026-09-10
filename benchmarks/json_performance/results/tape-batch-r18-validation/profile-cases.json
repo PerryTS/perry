@@ -1,0 +1,19 @@
+{
+  "selection": "Two predeclared instrumented full-scan profiles, unchanged main versus R18 candidate, 600 iterations each and warmup2 on 1 MiB. Prepared before R18 screen results. Check actual producer entry and sampled phases; no timing gain claim from profiles.",
+  "cases": [
+    {
+      "fixture": "records_array_1m",
+      "operation": "scan",
+      "mode": "main",
+      "iterations": 600,
+      "warmup": 2
+    },
+    {
+      "fixture": "records_array_1m",
+      "operation": "scan",
+      "mode": "candidate",
+      "iterations": 600,
+      "warmup": 2
+    }
+  ]
+}

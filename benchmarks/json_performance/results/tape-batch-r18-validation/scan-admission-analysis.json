@@ -1,0 +1,26 @@
+{
+  "source_commit": "0c20dd61f03d2024354edd50eb8ca1bbf67fa582",
+  "unchanged_guard": "ascending streak >= max(64, length / 64) and cached_count * 2 < length",
+  "fixtures": [
+    {
+      "fixture": "records_array_16k",
+      "array_length": 120,
+      "scan_flip_threshold": 64,
+      "reparse_producer_eligible_at_threshold": false
+    },
+    {
+      "fixture": "records_array_1m",
+      "array_length": 7600,
+      "scan_flip_threshold": 118,
+      "reparse_producer_eligible_at_threshold": true
+    },
+    {
+      "fixture": "records_array_8m",
+      "array_length": 59000,
+      "scan_flip_threshold": 921,
+      "reparse_producer_eligible_at_threshold": true
+    }
+  ],
+  "note": "Source-derived admission proof. The 120-record fixture cannot enter the reparse producer on indexed scanning: at 64 cached elements it already exceeds half. R18 changes only that producer, so it cannot accelerate this row through the new code. No threshold change was made.",
+  "other_trigger": "cumulative_walk_steps > 2 * length; sequential indexed scanning visits each top-level element once and does not reach this threshold"
+}
