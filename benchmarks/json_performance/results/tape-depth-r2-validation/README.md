@@ -23,6 +23,9 @@ Fourteen compiled escaped-record comparisons pass; twelve fail on the unfixed
 main negative control. Raw/address/root/store/fmt/file-size gates pass.
 Human-audited store classes are not claimed as machine-verified.
 
-Performance evaluation is pending. Frozen workers have not yet been measured;
-R1 measurements must not be relabelled as R2 results. Local drivers are archived
+The [focused replay](../quiet-tape-depth-r2-main-focus-r9-r27/README.md) passes
+48 output checks and 378 timing trials. Array parse improves 24–25% versus main,
+while Unicode same-source parse retains a +0.249% concern (8/9 pairs slower).
+Full original and changing-input evaluation is pending. R1 measurements must
+not be relabelled as R2 results. Local drivers are archived
 as historical records with local paths, alongside logs, source patch and hashes.
