@@ -1,0 +1,10 @@
+{
+  "counts": {
+    "rotating": 2325580,
+    "same": 6818180
+  },
+  "factor": 4,
+  "source": "rotating-analysis.json",
+  "repetitions": 11,
+  "warmup": 5000
+}

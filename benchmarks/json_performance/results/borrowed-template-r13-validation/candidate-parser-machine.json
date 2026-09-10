@@ -1,0 +1,74 @@
+[
+  {
+    "symbol": "__RINvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction22string_from_json_bytesINtNtCsjgY6bXVaRmE_4core6option6OptionNtNtNtB6_5arena12construction17ConstructionBatchEEB6_",
+    "command": [
+      "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+      "--disassemble-symbols=__RINvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction22string_from_json_bytesINtNtCsjgY6bXVaRmE_4core6option6OptionNtNtNtB6_5arena12construction17ConstructionBatchEEB6_",
+      "--no-show-raw-insn",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/borrowed-template-r13/candidate-rotating-worker"
+    ],
+    "file": "candidate-parse-string-0.s",
+    "binary_sha256": "86d954f627b47c6cb4ec3e9c9c01f0e45510c85893dadb541e6e64ac3500106e",
+    "explicit_sub_frame_bytes": 96
+  },
+  {
+    "symbol": "__RINvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction22string_from_json_bytesNtNtNtB6_4json6parser12DirectParserEB6_",
+    "command": [
+      "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+      "--disassemble-symbols=__RINvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction22string_from_json_bytesNtNtNtB6_4json6parser12DirectParserEB6_",
+      "--no-show-raw-insn",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/borrowed-template-r13/candidate-rotating-worker"
+    ],
+    "file": "candidate-parse-string-1.s",
+    "binary_sha256": "86d954f627b47c6cb4ec3e9c9c01f0e45510c85893dadb541e6e64ac3500106e",
+    "explicit_sub_frame_bytes": 96
+  },
+  {
+    "symbol": "__RINvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction28string_from_json_large_bytesINtNtCsjgY6bXVaRmE_4core6option6OptionNtNtNtB6_5arena12construction17ConstructionBatchEEB6_",
+    "command": [
+      "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+      "--disassemble-symbols=__RINvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction28string_from_json_large_bytesINtNtCsjgY6bXVaRmE_4core6option6OptionNtNtNtB6_5arena12construction17ConstructionBatchEEB6_",
+      "--no-show-raw-insn",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/borrowed-template-r13/candidate-rotating-worker"
+    ],
+    "file": "candidate-parse-string-2.s",
+    "binary_sha256": "86d954f627b47c6cb4ec3e9c9c01f0e45510c85893dadb541e6e64ac3500106e",
+    "explicit_sub_frame_bytes": 96
+  },
+  {
+    "symbol": "__RINvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction28string_from_json_large_bytesNtNtNtB6_4json6parser12DirectParserEB6_",
+    "command": [
+      "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+      "--disassemble-symbols=__RINvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction28string_from_json_large_bytesNtNtNtB6_4json6parser12DirectParserEB6_",
+      "--no-show-raw-insn",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/borrowed-template-r13/candidate-rotating-worker"
+    ],
+    "file": "candidate-parse-string-3.s",
+    "binary_sha256": "86d954f627b47c6cb4ec3e9c9c01f0e45510c85893dadb541e6e64ac3500106e",
+    "explicit_sub_frame_bytes": 96
+  },
+  {
+    "symbol": "__RNvMs1_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value",
+    "command": [
+      "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+      "--disassemble-symbols=__RNvMs1_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value",
+      "--no-show-raw-insn",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/borrowed-template-r13/candidate-rotating-worker"
+    ],
+    "file": "candidate-parse-string-4.s",
+    "binary_sha256": "86d954f627b47c6cb4ec3e9c9c01f0e45510c85893dadb541e6e64ac3500106e",
+    "explicit_sub_frame_bytes": 96
+  },
+  {
+    "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction27json_source_token_utf16_len",
+    "command": [
+      "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+      "--disassemble-symbols=__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction27json_source_token_utf16_len",
+      "--no-show-raw-insn",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/borrowed-template-r13/candidate-rotating-worker"
+    ],
+    "file": "candidate-parse-string-5.s",
+    "binary_sha256": "86d954f627b47c6cb4ec3e9c9c01f0e45510c85893dadb541e6e64ac3500106e",
+    "explicit_sub_frame_bytes": null
+  }
+]

@@ -1,0 +1,95 @@
+{
+  "symbols": [
+    {
+      "arm": "candidate",
+      "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json11parse_reuse29reuse_matched_object_template",
+      "file": "candidate-cached-entry-0.s",
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json11parse_reuse29reuse_matched_object_template",
+        "--no-show-raw-insn",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/borrowed-template-r13/candidate-rotating-worker"
+      ],
+      "binary_sha256": "86d954f627b47c6cb4ec3e9c9c01f0e45510c85893dadb541e6e64ac3500106e",
+      "prologue": [
+        "1004e776c:     \tsub\tsp, sp, #0xe0",
+        "1004e7770:     \tstp\tx28, x27, [sp, #0x80]",
+        "1004e7774:     \tstp\tx26, x25, [sp, #0x90]",
+        "1004e7778:     \tstp\tx24, x23, [sp, #0xa0]",
+        "1004e777c:     \tstp\tx22, x21, [sp, #0xb0]",
+        "1004e7780:     \tstp\tx20, x19, [sp, #0xc0]",
+        "1004e7784:     \tstp\tx29, x30, [sp, #0xd0]",
+        "1004e7788:     \tadd\tx29, sp, #0xd0",
+        "1004e778c:     \tadrp\tx8, 0x100f74000 <_perry_global_rotating_worker_ts__1>",
+        "1004e7790:     \tldr\tw19, [x8, #0x948]",
+        "1004e7794:     \tadrp\tx21, 0x100f74000 <_perry_global_rotating_worker_ts__1>",
+        "1004e7798:     \tcmp\tw19, #0x300"
+      ],
+      "prologue_stack_bytes": 224
+    },
+    {
+      "arm": "candidate",
+      "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json9parse_api10parse_slow",
+      "file": "candidate-cached-entry-1.s",
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json9parse_api10parse_slow",
+        "--no-show-raw-insn",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/borrowed-template-r13/candidate-rotating-worker"
+      ],
+      "binary_sha256": "86d954f627b47c6cb4ec3e9c9c01f0e45510c85893dadb541e6e64ac3500106e",
+      "prologue": [
+        "100500af8:     \tstp\tx28, x27, [sp, #-0x60]!",
+        "100500afc:     \tstp\tx26, x25, [sp, #0x10]",
+        "100500b00:     \tstp\tx24, x23, [sp, #0x20]",
+        "100500b04:     \tstp\tx22, x21, [sp, #0x30]",
+        "100500b08:     \tstp\tx20, x19, [sp, #0x40]",
+        "100500b0c:     \tstp\tx29, x30, [sp, #0x50]",
+        "100500b10:     \tadd\tx29, sp, #0x50",
+        "100500b14:     \tsub\tsp, sp, #0x1a0",
+        "100500b18:     \tmov\tx19, x1",
+        "100500b1c:     \tmov\tx21, x0",
+        "100500b20:     \tadd\tx24, x0, #0x14",
+        "100500b24:     \tsub\tx8, x1, #0x801"
+      ],
+      "prologue_stack_bytes": 512
+    },
+    {
+      "arm": "candidate",
+      "symbol": "_js_json_parse",
+      "file": "candidate-cached-entry-2.s",
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=_js_json_parse",
+        "--no-show-raw-insn",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/borrowed-template-r13/candidate-rotating-worker"
+      ],
+      "binary_sha256": "86d954f627b47c6cb4ec3e9c9c01f0e45510c85893dadb541e6e64ac3500106e",
+      "prologue": [
+        "10083ba84:     \tstp\tx29, x30, [sp, #-0x10]!",
+        "10083ba88:     \tmov\tx29, sp",
+        "10083ba8c:     \tcbz\tx0, 0x10083bae4 <_js_json_parse+0x60>",
+        "10083ba90:     \tldr\tw1, [x0, #0x4]",
+        "10083ba94:     \tcmp\tw1, #0x2",
+        "10083ba98:     \tb.eq\t0x10083baa8 <_js_json_parse+0x24>",
+        "10083ba9c:     \tcbz\tw1, 0x10083bae4 <_js_json_parse+0x60>",
+        "10083baa0:     \tldrb\tw8, [x0, #0x14]",
+        "10083baa4:     \tb\t0x10083bac8 <_js_json_parse+0x44>",
+        "10083baa8:     \tldrb\tw8, [x0, #0x14]",
+        "10083baac:     \tcmp\tw8, #0x7b",
+        "10083bab0:     \tb.ne\t0x10083bac8 <_js_json_parse+0x44>"
+      ],
+      "prologue_stack_bytes": 16
+    }
+  ],
+  "indirect_symbols": {
+    "command": [
+      "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+      "--macho",
+      "--indirect-symbols",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/borrowed-template-r13/candidate-rotating-worker"
+    ],
+    "file": "candidate-indirect-symbols.txt",
+    "sha256": "bebbd45d79b23e4eed55377c34614fe28cfa744a677ac9ef6cd3157445b5a5bf"
+  }
+}

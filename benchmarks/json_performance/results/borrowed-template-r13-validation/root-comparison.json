@@ -1,0 +1,140 @@
+{
+  "ir_files": [
+    {
+      "mode": "native",
+      "file": "access-worker-0.ll",
+      "same": true,
+      "main_sha256": "a6657637f86ba6d980c5a2907bf912a486bc24f2be2a5247e12cf61c3288e936",
+      "candidate_sha256": "ae30b7722bbe1ac54c2ebc967401d2e42b34d3fde21db6ae3f9ac007b56c30a3",
+      "normalized_sha256": "04f04579821857db1734a0512c145bb71e74425e3e060ae0a22b2f6725060552",
+      "normalization": "only first ModuleID path comment removed"
+    },
+    {
+      "mode": "native",
+      "file": "callback-only-0.ll",
+      "same": true,
+      "main_sha256": "970e90ba6695b1771f6f307920c5c9f1a4b1f7a3ea6760fb56e7492c8b537998",
+      "candidate_sha256": "5d6e1c3bd758dcb09afe675bdaba859d286d673e3b19627fcdd0f6c822e0d44f",
+      "normalized_sha256": "c8bedc020317001c63d05c80a140a05fa247e033ca72930cddffabc7620eddbe",
+      "normalization": "only first ModuleID path comment removed"
+    },
+    {
+      "mode": "native",
+      "file": "options-worker-0.ll",
+      "same": true,
+      "main_sha256": "18fb5a335110287d3fb21b1df5c13fc54b3524f063e2735b439f3efcc48b72e3",
+      "candidate_sha256": "536b67dbc4f33bb20073b789aba826af427c7de692244789a97802b66ca7940a",
+      "normalized_sha256": "9352a7edb031e5ccfacb9d25091d047f2817c73a60dd9c7db72265719fd5085e",
+      "normalization": "only first ModuleID path comment removed"
+    },
+    {
+      "mode": "native",
+      "file": "prior-entry-0.ll",
+      "same": true,
+      "main_sha256": "4bf7f9e2d09b7fb3e414a74713d1a2d07f0366e213c7a5adb38fbb8953e2e542",
+      "candidate_sha256": "4407a463d786e216465650a54eb3804e25fa45ff89b76a580e320c71f5f3c963",
+      "normalized_sha256": "4d1df307ed341e030d489f43c28a85f11e71699b882309a21a047ad7c6d0e1a3",
+      "normalization": "only first ModuleID path comment removed"
+    },
+    {
+      "mode": "native",
+      "file": "test_json_cached_template_borrow-0.ll",
+      "same": true,
+      "main_sha256": "0696b22a5905e6943b5c5f3fd9b96e08597f382d3883611d8979175dd9133359",
+      "candidate_sha256": "629875a448a87f495fd4fd755a166512d3283ce1c27c3ca4550a4f71b87a561e",
+      "normalized_sha256": "4ec5ec7b18c042de958816fe9ccc57e482b74de337f084bf804c0db32d0a32a6",
+      "normalization": "only first ModuleID path comment removed"
+    },
+    {
+      "mode": "native",
+      "file": "test_json_source_length-0.ll",
+      "same": true,
+      "main_sha256": "c38b252a7de85a1053b2ee8363508ee3460e1df48634fa5c43d01eeaa0f97f1a",
+      "candidate_sha256": "57ad1d705355b8a46dfd6adae98aa08bd44e509d356a6f56739a04e8f32febe1",
+      "normalized_sha256": "a6086f83b4af2d110c87e81e273e7cde519251998af2fa26b6d19c7503b794f0",
+      "normalization": "only first ModuleID path comment removed"
+    },
+    {
+      "mode": "native",
+      "file": "worker-0.ll",
+      "same": true,
+      "main_sha256": "996552ddb7bfa8bc6dcdf452ad2e3321e109bcb239c4d38d254ef086f2b4e75c",
+      "candidate_sha256": "14fb20f9e16f98f5ce39af85571b26d76a957caa42f2dda634ec87d33c2e248a",
+      "normalized_sha256": "3e83f06c21d15cdf72cf8f95ff80663c9179b4587af4d6df175bfa9896662ef7",
+      "normalization": "only first ModuleID path comment removed"
+    },
+    {
+      "mode": "shadow",
+      "file": "access-worker-0.ll",
+      "same": true,
+      "main_sha256": "b7571309ef46cb77f8f1ec192eb7339b56515584e25c2377d2a4b5d960e3435f",
+      "candidate_sha256": "b7571309ef46cb77f8f1ec192eb7339b56515584e25c2377d2a4b5d960e3435f",
+      "normalized_sha256": "b7571309ef46cb77f8f1ec192eb7339b56515584e25c2377d2a4b5d960e3435f",
+      "normalization": "none"
+    },
+    {
+      "mode": "shadow",
+      "file": "callback-only-0.ll",
+      "same": true,
+      "main_sha256": "c4b60a96c63447ae16746673253936a9f82bb37e411e41f1b75b76b9f7dc6a63",
+      "candidate_sha256": "c4b60a96c63447ae16746673253936a9f82bb37e411e41f1b75b76b9f7dc6a63",
+      "normalized_sha256": "c4b60a96c63447ae16746673253936a9f82bb37e411e41f1b75b76b9f7dc6a63",
+      "normalization": "none"
+    },
+    {
+      "mode": "shadow",
+      "file": "options-worker-0.ll",
+      "same": true,
+      "main_sha256": "82e9af868875ba43d3b6d7a62decff03d028846252f51bbd651a9f4ef6316858",
+      "candidate_sha256": "82e9af868875ba43d3b6d7a62decff03d028846252f51bbd651a9f4ef6316858",
+      "normalized_sha256": "82e9af868875ba43d3b6d7a62decff03d028846252f51bbd651a9f4ef6316858",
+      "normalization": "none"
+    },
+    {
+      "mode": "shadow",
+      "file": "prior-entry-0.ll",
+      "same": true,
+      "main_sha256": "41a961e947c4c33a48d60d3a69b024f83171165dddea4ea45672669c266cf4e6",
+      "candidate_sha256": "41a961e947c4c33a48d60d3a69b024f83171165dddea4ea45672669c266cf4e6",
+      "normalized_sha256": "41a961e947c4c33a48d60d3a69b024f83171165dddea4ea45672669c266cf4e6",
+      "normalization": "none"
+    },
+    {
+      "mode": "shadow",
+      "file": "test_json_cached_template_borrow-0.ll",
+      "same": true,
+      "main_sha256": "4d771e3a982be11dd1d71db944a36dbe2ae92d766c13c6ee4d8981d6ae694147",
+      "candidate_sha256": "4d771e3a982be11dd1d71db944a36dbe2ae92d766c13c6ee4d8981d6ae694147",
+      "normalized_sha256": "4d771e3a982be11dd1d71db944a36dbe2ae92d766c13c6ee4d8981d6ae694147",
+      "normalization": "none"
+    },
+    {
+      "mode": "shadow",
+      "file": "test_json_source_length-0.ll",
+      "same": true,
+      "main_sha256": "b658ed40f002cd12b1ac69a70e191f53099c37cfc356d7e24ef0936b1b81b1aa",
+      "candidate_sha256": "b658ed40f002cd12b1ac69a70e191f53099c37cfc356d7e24ef0936b1b81b1aa",
+      "normalized_sha256": "b658ed40f002cd12b1ac69a70e191f53099c37cfc356d7e24ef0936b1b81b1aa",
+      "normalization": "none"
+    },
+    {
+      "mode": "shadow",
+      "file": "worker-0.ll",
+      "same": true,
+      "main_sha256": "5eeef00a7cfd04907ca73fdeb1d364bed9d6cf4e529aaf191235d6943c818168",
+      "candidate_sha256": "5eeef00a7cfd04907ca73fdeb1d364bed9d6cf4e529aaf191235d6943c818168",
+      "normalized_sha256": "5eeef00a7cfd04907ca73fdeb1d364bed9d6cf4e529aaf191235d6943c818168",
+      "normalization": "none"
+    }
+  ],
+  "checks_match": true,
+  "native_fingerprints": [
+    "options-worker-0.ll::perry_fn_options_worker_ts__run$generic::unrooted:global->js_closure_alloc_singleton",
+    "options-worker-0.ll::perry_fn_options_worker_ts__run$spec_b::unrooted:global->js_closure_alloc_singleton",
+    "prior-entry-0.ll::main::stale:alloc->js_write_barrier_root_nanbox",
+    "prior-entry-0.ll::perry_closure_prior_entry_ts__5::unrooted:global->js_array_push_f64_spec",
+    "prior-entry-0.ll::perry_fn_prior_entry_ts____obj_method_toJSON_1$generic::unrooted:global->js_array_push_f64_spec",
+    "prior-entry-0.ll::perry_fn_prior_entry_ts____obj_method_toJSON_1$spec_b::unrooted:global->js_array_push_f64_spec",
+    "test_json_source_length-0.ll::main::unrooted:strhandle->js_put_value_set_ic_overflow_store"
+  ]
+}

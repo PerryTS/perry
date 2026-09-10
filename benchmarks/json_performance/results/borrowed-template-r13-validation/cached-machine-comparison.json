@@ -1,0 +1,41 @@
+{
+  "records": [
+    {
+      "arm": "main",
+      "stack_bytes": 912,
+      "file": "main-cached-entry-0.s",
+      "sha256": "f6a818115c1f50c851f3d89481cb1dbb6ef2e695973e9341b251de933c71f6ef",
+      "external_calls": [
+        {
+          "instruction": "0x1004eb398",
+          "target": "0x100b5fbac",
+          "symbol": "_memcpy"
+        },
+        {
+          "instruction": "0x1004eb3f0",
+          "target": "0x100b5fbd0",
+          "symbol": "_memset_pattern16"
+        }
+      ]
+    },
+    {
+      "arm": "candidate",
+      "stack_bytes": 224,
+      "file": "candidate-cached-entry-0.s",
+      "sha256": "e6e1532d72c36550b437a51ebb19815299ce6136e2cfc365cc91ed893396bb3b",
+      "external_calls": [
+        {
+          "instruction": "0x1004e7860",
+          "target": "0x100b58850",
+          "symbol": "_memset_pattern16"
+        }
+      ]
+    }
+  ],
+  "findings": [
+    "Whole-template memcpy and planned-array vector copy removed. Candidate has one memset_pattern16 call initializing the 64-byte output-value array; it is not a template copy.",
+    "Candidate planned-array loop loads x2 directly from template pointer x19, advancing eight bytes; scalar fields likewise loaded from cache.",
+    "Cache predicate is inlined into parse_slow; construction is called only on match. parse_slow itself remains 512 bytes. Hit helper shrinks from 912 to 224 bytes.",
+    "Cache Ref count decremented after object constructor returns, before suppression restoration. Existing pressure/cleanup hooks retain order."
+  ]
+}
