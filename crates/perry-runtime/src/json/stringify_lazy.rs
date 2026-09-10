@@ -6,6 +6,7 @@ use crate::json_tape::*;
 struct ObjectKeys {
     first: usize,
     end: usize,
+    seen_lengths: u64,
     last_index: Option<u32>,
     saw_name: bool,
 }
@@ -64,6 +65,7 @@ pub(super) fn visit_copyable_numbers(
                 objects.push(ObjectKeys {
                     first: keys.len(),
                     end: entry.link as usize,
+                    seen_lengths: 0,
                     last_index: None,
                     saw_name: false,
                 });
@@ -86,9 +88,16 @@ pub(super) fn visit_copyable_numbers(
                     let key = key_text.as_bytes();
                     let frame = objects.last_mut()?;
                     let siblings = &keys[frame.first..];
-                    if siblings.len() >= 32 || siblings.contains(&key) {
+                    // An unseen length bucket proves this key is new. Lengths
+                    // separated by 64 collide deliberately; a hit still uses
+                    // exact byte equality, so the summary cannot admit a duplicate.
+                    let length_bit = 1u64 << (key.len() & 63);
+                    if siblings.len() >= 32
+                        || (frame.seen_lengths & length_bit != 0 && siblings.contains(&key))
+                    {
                         return None;
                     }
+                    frame.seen_lengths |= length_bit;
                     // Ordinary names cannot be array indices. Avoid calling
                     // the general index parser for each key in a record.
                     let index = if key.first().is_some_and(u8::is_ascii_digit) {

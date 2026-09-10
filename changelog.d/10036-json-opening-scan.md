@@ -14,3 +14,5 @@ Record a positive no-escape marker in the existing native key/string tape field
 during syntax validation. Lazy source admission can then skip a second body
 scan for those tokens, while unknown metadata retains the checked fallback.
 Tape entry size, managed object construction and collector policy are unchanged.
+Use a native per-object key-length summary to skip duplicate scans only when
+the length bucket is new, retaining exact comparisons on all collisions.

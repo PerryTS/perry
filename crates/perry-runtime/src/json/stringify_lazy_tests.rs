@@ -81,6 +81,53 @@ fn json_lazy_copy_admission_bounds_wide_object_work_and_rejects_bad_ranges() {
 }
 
 #[test]
+fn json_lazy_copy_key_lengths_preserve_exact_duplicate_decisions() {
+    let mut keys = vec![
+        "é".to_owned(),
+        "xy".to_owned(),
+        "😀".to_owned(),
+        "abcd".to_owned(),
+    ];
+    for len in [0, 1, 2, 7, 8, 15, 31, 32, 63, 64, 65, 127, 128, 129] {
+        keys.push("a".repeat(len));
+        keys.push("b".repeat(len));
+    }
+    // Includes equal byte lengths, different lengths in the same bucket, empty
+    // keys and multi-byte Unicode. Expected uniqueness uses ordinary equality.
+    for left in &keys {
+        for right in &keys {
+            let source = format!("[{{\"{left}\":1,\"{right}\":2}}]");
+            assert_eq!(admits(source.as_bytes(), 0), left != right, "{source}");
+        }
+    }
+}
+
+#[test]
+fn json_lazy_copy_key_lengths_preserve_frames_and_wide_fallback() {
+    for count in [31, 32, 33] {
+        let keys: Vec<_> = (0..count).map(|len| "a".repeat(len)).collect();
+        let fields: Vec<_> = keys.iter().map(|key| format!("\"{key}\":0")).collect();
+        let source = format!("[{{{}}}]", fields.join(","));
+        assert_eq!(admits(source.as_bytes(), 0), count <= 32);
+        for key in &keys {
+            let source = format!("[{{{},\"{key}\":1}}]", fields.join(","));
+            assert!(!admits(source.as_bytes(), 0), "{source}");
+        }
+    }
+    for (source, expected) in [
+        (r#"[{"x":{"x":1},"y":{"x":2}},{"x":3}]"#, true),
+        (r#"[{"x":{"x":1},"x":2}]"#, false),
+        (r#"[{"x":[{"y":1,"y":2}]}]"#, false),
+        (r#"[{"0":0,"1":1,"10":2,"20":3,"a":4}]"#, true),
+        (r#"[{"10":0,"2":1}]"#, false),
+        (r#"[{"a":0,"10":1}]"#, false),
+        (r#"[{"x":0,"\u0078":1}]"#, false),
+    ] {
+        assert_eq!(admits(source.as_bytes(), 0), expected, "{source}");
+    }
+}
+
+#[test]
 fn json_lazy_copy_unknown_string_metadata_keeps_the_checked_fallback() {
     for (source, expected) in [
         (r#"[{"name":"plain é😀"},"a\nb"]"#, true),
