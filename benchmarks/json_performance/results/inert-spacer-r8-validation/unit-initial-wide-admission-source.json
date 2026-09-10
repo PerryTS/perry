@@ -1,0 +1,16 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "--release",
+    "-p",
+    "perry-runtime",
+    "--lib",
+    "json"
+  ],
+  "hashes": {
+    "crates/perry-runtime/src/json/replacer.rs": "85681aa99194a5c804fd75c0d091e058890253d6ef60e15d2c6dae8b5005bbed",
+    "crates/perry-runtime/src/json/stringify_small_tests.rs": "5ff168603614e3b32c69bee0f86e21e6585790fee3c801a1a4afbe2a48eb86de"
+  },
+  "note": "Only Rust inputs are compiled by this cargo unit command; the separately compiled TS parity fixture was refined after a frozen-main mismatch."
+}

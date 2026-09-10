@@ -1,0 +1,12 @@
+{
+  "main": {
+    "frame_bytes": 272,
+    "entry": "00000001008459c0"
+  },
+  "candidate": {
+    "frame_bytes": 288,
+    "entry": "00000001008459c0"
+  },
+  "candidate_zero_admission_uses_fcmp": true,
+  "note": "LLVM lowers the source bit test to a floating zero comparison; boxed NaN tags fail it. The old lazy shortcut admission is kept separate. Frame grows16bytes; performance must be measured."
+}

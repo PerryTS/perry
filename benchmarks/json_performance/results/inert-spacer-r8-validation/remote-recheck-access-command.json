@@ -1,0 +1,21 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/inert-spacer-r8/run-access.py",
+  "--worker",
+  ".work/inert-spacer-r8/candidate-access-worker",
+  "--baseline-worker",
+  ".work/inert-spacer-r8/main-access-worker",
+  "--iterations",
+  "5000000",
+  "--repeat",
+  "11",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--results-dir",
+  "results/quiet-inert-spacer-r8-recheck-access"
+]

@@ -1,0 +1,15 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "--release",
+    "-p",
+    "perry-runtime",
+    "--lib",
+    "json"
+  ],
+  "hashes": {
+    "crates/perry-runtime/src/json/replacer.rs": "c5f904293e50f6e43ac27e1e367d95b65516741ba99ba370bc469b6f7cec1ce1",
+    "crates/perry-runtime/src/json/stringify_small_tests.rs": "5ff168603614e3b32c69bee0f86e21e6585790fee3c801a1a4afbe2a48eb86de"
+  }
+}

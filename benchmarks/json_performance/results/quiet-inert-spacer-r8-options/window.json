@@ -1,0 +1,32 @@
+{
+  "owner": "json-perf-53525-1789057933",
+  "load_before": [
+    2.2177734375,
+    2.0673828125,
+    1.77490234375
+  ],
+  "started_utc": "2026-09-10T16:32:13Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/inert-spacer-r8/run-options.py",
+    "--worker",
+    ".work/inert-spacer-r8/candidate-options",
+    "--baseline-worker",
+    ".work/inert-spacer-r8/main-options",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--bun",
+    "/Users/perry/.bun/bin/bun",
+    "--results-dir",
+    "results/quiet-inert-spacer-r8-options"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    2.1123046875,
+    2.05859375,
+    1.78076171875
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-10T16:32:45Z"
+}

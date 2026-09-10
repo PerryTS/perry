@@ -1,0 +1,134 @@
+[
+  {
+    "worker": "worker",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-r8/frozen-main/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-r8/harness/worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-r8/main-worker.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-r8/main-worker.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-r8/frozen-main/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-r8/main-worker"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/inert-spacer-r8/harness/worker.ts": "f3c42ec9f04fdb9ba84dc3cf50dc59f18685540033807f3db3a7f75c08a85d39",
+      "benchmarks/json_performance/.work/inert-spacer-r8/main-worker.o": "f743f45b4df3e8c52762b8d0ae0b64144ba66dda8706cda5ab61c082ca36dcfe",
+      "benchmarks/json_performance/.work/inert-spacer-r8/main-worker": "6f9b85c1edca0a0f1619ec0dbed7be9eb95cdfc367e2d39b96e8f2deab02de9a",
+      "benchmarks/json_performance/.work/inert-spacer-r8/frozen-main/perry": "ade63eddfdeca03926039d10e3310f9255d52c5b2721ccd2b0882f042a689156",
+      "benchmarks/json_performance/.work/inert-spacer-r8/frozen-main/libperry_runtime.a": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458",
+      "benchmarks/json_performance/.work/inert-spacer-r8/frozen-main/libperry_stdlib.a": "61fac03f0405a48b8d390958e3002246061db6e009fcd078fe61a98d1a1068b0"
+    }
+  },
+  {
+    "worker": "access-worker",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-r8/frozen-main/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-r8/harness/access-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-r8/main-access-worker.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-r8/main-access-worker.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-r8/frozen-main/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-r8/main-access-worker"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/inert-spacer-r8/harness/access-worker.ts": "dba0240ef6441a07657e664354982a04045c036e53f65c1d06df62d55c73be67",
+      "benchmarks/json_performance/.work/inert-spacer-r8/main-access-worker.o": "8f109f3b6fa3cb0535484baa3d57af7039ca90f132312927b60be61bb956194b",
+      "benchmarks/json_performance/.work/inert-spacer-r8/main-access-worker": "350f9c5340d6094daaeeee5e3271b3e0c5c1dc58dc84038ea5de1fd372234cbe",
+      "benchmarks/json_performance/.work/inert-spacer-r8/frozen-main/perry": "ade63eddfdeca03926039d10e3310f9255d52c5b2721ccd2b0882f042a689156",
+      "benchmarks/json_performance/.work/inert-spacer-r8/frozen-main/libperry_runtime.a": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458",
+      "benchmarks/json_performance/.work/inert-spacer-r8/frozen-main/libperry_stdlib.a": "61fac03f0405a48b8d390958e3002246061db6e009fcd078fe61a98d1a1068b0"
+    }
+  },
+  {
+    "worker": "rotating-worker",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-r8/frozen-main/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-r8/harness/rotating-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-r8/main-rotating-worker.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-r8/main-rotating-worker.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-r8/frozen-main/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-r8/main-rotating-worker"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/inert-spacer-r8/harness/rotating-worker.ts": "7541897acb2c7c35c0f5e762f8b2f28b9783feb26a42db107c1c4eb3af644b24",
+      "benchmarks/json_performance/.work/inert-spacer-r8/main-rotating-worker.o": "0494fb64fdd4aeba69d19f04d00e55319121b21dd59d765cad08a57b8247d895",
+      "benchmarks/json_performance/.work/inert-spacer-r8/main-rotating-worker": "4a7cfe4d886f623d7d7c294299895813968df3638afd507a744c8cc06eed3260",
+      "benchmarks/json_performance/.work/inert-spacer-r8/frozen-main/perry": "ade63eddfdeca03926039d10e3310f9255d52c5b2721ccd2b0882f042a689156",
+      "benchmarks/json_performance/.work/inert-spacer-r8/frozen-main/libperry_runtime.a": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458",
+      "benchmarks/json_performance/.work/inert-spacer-r8/frozen-main/libperry_stdlib.a": "61fac03f0405a48b8d390958e3002246061db6e009fcd078fe61a98d1a1068b0"
+    }
+  },
+  {
+    "worker": "options",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-r8/frozen-main/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-r8/options-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-r8/main-options.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-r8/main-options.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-r8/frozen-main/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-r8/main-options"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/inert-spacer-r8/options-worker.ts": "d08c6a916c18197b889a0de4a3777632ad307275752b85c5abd75daf4d6ad85d",
+      "benchmarks/json_performance/.work/inert-spacer-r8/main-options.o": "7511e8dd0693ad1a0ec286d54fa8778d3c34ba8943833305867c2df1d4b5b6b1",
+      "benchmarks/json_performance/.work/inert-spacer-r8/main-options": "055f62fd6d2bcf24df1f436f8e80040b8150b8b07f9d1226c9985089f5488010",
+      "benchmarks/json_performance/.work/inert-spacer-r8/frozen-main/perry": "ade63eddfdeca03926039d10e3310f9255d52c5b2721ccd2b0882f042a689156",
+      "benchmarks/json_performance/.work/inert-spacer-r8/frozen-main/libperry_runtime.a": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458",
+      "benchmarks/json_performance/.work/inert-spacer-r8/frozen-main/libperry_stdlib.a": "61fac03f0405a48b8d390958e3002246061db6e009fcd078fe61a98d1a1068b0"
+    }
+  }
+]

@@ -1,0 +1,41 @@
+[
+  {
+    "mode": "plain",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-r8/main-options",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/fixtures/small_record.json",
+      "plain",
+      "1000000",
+      "5000"
+    ],
+    "output": "RESULT 55.065250000000006 48594 3287 13369344 34570240 107535000 0\nKEEP 1 1\n",
+    "diagnostic_only": true,
+    "not_quiet_or_comparable_to_remote_results": true
+  },
+  {
+    "mode": "zero",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-r8/main-options",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/fixtures/small_record.json",
+      "zero",
+      "1000000",
+      "5000"
+    ],
+    "output": "RESULT 455.38254099999995 449264 4432 13615104 34996224 107535000 0\nKEEP 1 1\n",
+    "diagnostic_only": true,
+    "not_quiet_or_comparable_to_remote_results": true
+  },
+  {
+    "mode": "dynamic-zero",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-r8/main-options",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/fixtures/small_record.json",
+      "dynamic-zero",
+      "1000000",
+      "5000"
+    ],
+    "output": "RESULT 457.649542 450462 4901 13631488 34963456 107535000 0\nKEEP 1 1\n",
+    "diagnostic_only": true,
+    "not_quiet_or_comparable_to_remote_results": true
+  }
+]

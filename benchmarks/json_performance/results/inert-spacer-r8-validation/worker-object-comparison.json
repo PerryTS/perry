@@ -1,0 +1,26 @@
+[
+  {
+    "worker": "worker",
+    "same": true,
+    "main_sha256": "f743f45b4df3e8c52762b8d0ae0b64144ba66dda8706cda5ab61c082ca36dcfe",
+    "candidate_sha256": "f743f45b4df3e8c52762b8d0ae0b64144ba66dda8706cda5ab61c082ca36dcfe"
+  },
+  {
+    "worker": "access-worker",
+    "same": true,
+    "main_sha256": "8f109f3b6fa3cb0535484baa3d57af7039ca90f132312927b60be61bb956194b",
+    "candidate_sha256": "8f109f3b6fa3cb0535484baa3d57af7039ca90f132312927b60be61bb956194b"
+  },
+  {
+    "worker": "rotating-worker",
+    "same": true,
+    "main_sha256": "0494fb64fdd4aeba69d19f04d00e55319121b21dd59d765cad08a57b8247d895",
+    "candidate_sha256": "0494fb64fdd4aeba69d19f04d00e55319121b21dd59d765cad08a57b8247d895"
+  },
+  {
+    "worker": "options",
+    "same": true,
+    "main_sha256": "7511e8dd0693ad1a0ec286d54fa8778d3c34ba8943833305867c2df1d4b5b6b1",
+    "candidate_sha256": "7511e8dd0693ad1a0ec286d54fa8778d3c34ba8943833305867c2df1d4b5b6b1"
+  }
+]

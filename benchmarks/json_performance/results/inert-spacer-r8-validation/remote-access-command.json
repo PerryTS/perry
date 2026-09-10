@@ -1,0 +1,17 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/inert-spacer-r8/run-access.py",
+  "--worker",
+  ".work/inert-spacer-r8/candidate-access-worker",
+  "--baseline-worker",
+  ".work/inert-spacer-r8/main-access-worker",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--results-dir",
+  "results/quiet-inert-spacer-r8-access"
+]

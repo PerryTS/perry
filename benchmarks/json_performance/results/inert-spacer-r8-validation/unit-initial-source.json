@@ -1,0 +1,16 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "--release",
+    "-p",
+    "perry-runtime",
+    "--lib",
+    "json"
+  ],
+  "hashes": {
+    "crates/perry-runtime/src/json/replacer.rs": "85681aa99194a5c804fd75c0d091e058890253d6ef60e15d2c6dae8b5005bbed",
+    "crates/perry-runtime/src/json/stringify_small_tests.rs": "5ff168603614e3b32c69bee0f86e21e6585790fee3c801a1a4afbe2a48eb86de",
+    "test-files/test_json_inert_spacer.ts": "fdfc1b1b9d90da5c2cc6ff125487997d70607271333ce1726a8ae6d458760ba4"
+  }
+}
