@@ -483,9 +483,9 @@ pub(super) fn lower_with_scalar_projection(
     let elem_is_object = ctx.block().icmp_eq(I8, &gc_type, "2");
     // Ordinary Arrays and Objects keep their existing branches. Only the
     // already-rejected brand edge can inspect a lazy JSON array's memo slots.
-    let non_object_label = if let Some(projection) = projection {
+    let (non_object_label, materialized_edge) = if let Some(projection) = projection {
         let predecessor = ctx.current_block;
-        let (entry, exposed) = projection.emit(
+        let edge = projection.emit(
             ctx,
             obj_box,
             idx_d,
@@ -494,12 +494,13 @@ pub(super) fn lower_with_scalar_projection(
             &gc_type,
             &object_miss_label,
             &merge_label,
+            &object_array_guard_label,
         );
-        kind_incoming.push(exposed);
+        kind_incoming.push(edge.exposed);
         ctx.current_block = predecessor;
-        entry
+        (edge.entry, Some(edge.materialized))
     } else {
-        object_miss_label.clone()
+        (object_miss_label.clone(), None)
     };
     ctx.block()
         .cond_br(&elem_is_object, &elem_meta_label, &non_object_label);
@@ -575,7 +576,21 @@ pub(super) fn lower_with_scalar_projection(
     // statically-Array tier.  Every exotic/OOB case retains the unchanged
     // boxed dispatcher.
     ctx.current_block = object_array_guard_idx;
-    let array_reserved_addr = ctx.block().sub(I64, &object_raw, "6");
+    // Both predecessors prove an ordinary Array header without forwarding.
+    // Every remaining guard/load uses this selected handle. On non-JSON sites
+    // there is no additional predecessor or phi, preserving ordinary lowering.
+    let array_handle = if let Some((materialized, predecessor)) = materialized_edge {
+        ctx.block().phi(
+            I64,
+            &[
+                (&object_raw, &object_brand_label),
+                (&materialized, &predecessor),
+            ],
+        )
+    } else {
+        object_raw.clone()
+    };
+    let array_reserved_addr = ctx.block().sub(I64, &array_handle, "6");
     let array_reserved_ptr = ctx.block().inttoptr(I64, &array_reserved_addr);
     let array_reserved = ctx.block().load(I16, &array_reserved_ptr);
     let array_descriptor_bits = ctx.block().and(I16, &array_reserved, "1024");
@@ -584,9 +599,9 @@ pub(super) fn lower_with_scalar_projection(
         .block()
         .load_volatile(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
     let array_default_prototypes = ctx.block().icmp_eq(I8, &array_invalidated, "0");
-    let array_ptr = ctx.block().inttoptr(I64, &object_raw);
+    let array_ptr = ctx.block().inttoptr(I64, &array_handle);
     let array_length = ctx.block().load(I32, &array_ptr);
-    let array_capacity_addr = ctx.block().add(I64, &object_raw, "4");
+    let array_capacity_addr = ctx.block().add(I64, &array_handle, "4");
     let array_capacity_ptr = ctx.block().inttoptr(I64, &array_capacity_addr);
     let array_capacity = ctx.block().load(I32, &array_capacity_ptr);
     let array_length_i64 = ctx.block().zext(I32, &array_length, I64);

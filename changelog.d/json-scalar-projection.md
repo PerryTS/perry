@@ -19,3 +19,8 @@ R2 preserves smaller-array scan improvements and improves repeated scalar reads,
 but remaining CPU regressions and native-root checker findings prevent landing.
 The measurements and validation limits are recorded in
 `benchmarks/json_performance/SCALAR_MEMO.md`.
+
+The subsequent R3 experiment routes a fully materialized lazy array into the
+existing ordinary-array read guards after validating its backing array's brand
+and forwarding state. Growth, descriptors, holes and prototype invalidation
+retain the established fallback. Validation and measurement are pending.

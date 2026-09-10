@@ -10,6 +10,12 @@ pub(crate) struct ScalarProjection {
     pub incoming: Vec<(String, String)>,
 }
 
+pub(super) struct ProjectionEdge {
+    pub entry: String,
+    pub exposed: (String, String),
+    pub materialized: (String, String),
+}
+
 impl ScalarProjection {
     pub fn new(property: &str) -> Self {
         Self {
@@ -23,7 +29,7 @@ impl ScalarProjection {
     /// and no forwarding. This edge follows the ordinary Array/Object brands.
     /// The caller admits only 64-bit targets; runtime const asserts pin offsets.
     #[allow(clippy::too_many_arguments)]
-    pub fn emit(
+    pub(super) fn emit(
         &mut self,
         ctx: &mut FnCtx<'_>,
         receiver: &str,
@@ -33,9 +39,12 @@ impl ScalarProjection {
         gc_type: &str,
         fallback: &str,
         element_merge: &str,
-    ) -> (String, (String, String)) {
+        array_guard: &str,
+    ) -> ProjectionEdge {
         let kind = ctx.new_block("json.scalar.kind");
         let guard = ctx.new_block("json.scalar.guard");
+        let cache_guard = ctx.new_block("json.scalar.cache_guard");
+        let materialized_guard = ctx.new_block("json.scalar.materialized_guard");
         let bitmap = ctx.new_block("json.scalar.bitmap");
         let exposed = ctx.new_block("json.scalar.exposed");
         let memo = ctx.new_block("json.scalar.memo");
@@ -46,6 +55,8 @@ impl ScalarProjection {
         self.merge_block = Some(merge);
         let kind_label = ctx.block_label(kind);
         let guard_label = ctx.block_label(guard);
+        let cache_guard_label = ctx.block_label(cache_guard);
+        let materialized_guard_label = ctx.block_label(materialized_guard);
         let bitmap_label = ctx.block_label(bitmap);
         let exposed_label = ctx.block_label(exposed);
         let memo_label = ctx.block_label(memo);
@@ -60,9 +71,6 @@ impl ScalarProjection {
 
         ctx.current_block = guard;
         let hdr = ctx.block().inttoptr(I64, raw);
-        let len = ctx.block().load(I32, &hdr);
-        let len = ctx.block().zext(I32, &len, I64);
-        let in_bounds = ctx.block().icmp_ult(I64, index_i64, &len);
         let magic_ptr = ctx.block().gep(I8, &hdr, &[(I64, "4")]);
         let magic = ctx.block().load(I32, &magic_ptr);
         let magic_ok = ctx.block().icmp_eq(I32, &magic, "1280989249"); // LZXA
@@ -73,15 +81,45 @@ impl ScalarProjection {
         let flags = ctx.block().load(I16, &flags_ptr);
         let desc = ctx.block().and(I16, &flags, "3072");
         let no_desc = ctx.block().icmp_eq(I16, &desc, "0");
+        let header_ok = ctx.block().and(I1, &magic_ok, &no_desc);
+        let has_materialized = ctx.block().icmp_ne(PTR, &mat, "null");
+        let inspect_materialized = ctx.block().and(I1, &header_ok, &has_materialized);
+        ctx.block().cond_br(
+            &inspect_materialized,
+            &materialized_guard_label,
+            &cache_guard_label,
+        );
+
+        ctx.current_block = materialized_guard;
+        // `materialized` is a managed edge installed by the runtime. Its live
+        // target can have a growth forwarding header, so validate that header
+        // before sharing the ordinary Array guard. A forwarded target keeps
+        // the boxed fallback, which resolves and refreshes the owner's edge.
+        // No call or collection occurs while this borrowed edge is live.
+        let mat_raw = ctx.block().ptrtoint(&mat, I64);
+        let mat_kind_ptr = ctx.block().gep(I8, &mat, &[(I64, "-8")]);
+        let mat_kind = ctx.block().load(I8, &mat_kind_ptr);
+        let mat_is_array = ctx.block().icmp_eq(I8, &mat_kind, "1");
+        let mat_flags_ptr = ctx.block().gep(I8, &mat, &[(I64, "-7")]);
+        let mat_flags = ctx.block().load(I8, &mat_flags_ptr);
+        let mat_forwarded = ctx.block().and(I8, &mat_flags, "128");
+        let mat_not_forwarded = ctx.block().icmp_eq(I8, &mat_forwarded, "0");
+        let mat_ok = ctx.block().and(I1, &mat_is_array, &mat_not_forwarded);
+        let mat_predecessor = ctx.block().label.clone();
+        ctx.block().cond_br(&mat_ok, array_guard, fallback);
+
+        ctx.current_block = cache_guard;
+        let len = ctx.block().load(I32, &hdr);
+        let len = ctx.block().zext(I32, &len, I64);
+        let in_bounds = ctx.block().icmp_ult(I64, index_i64, &len);
         let cache_ptr = ctx.block().gep(I8, &hdr, &[(I64, "40")]);
         let cache = ctx.block().load(PTR, &cache_ptr);
         let bitmap_ptr = ctx.block().gep(I8, &hdr, &[(I64, "48")]);
         let bitmap_base = ctx.block().load(PTR, &bitmap_ptr);
         let cache_present = ctx.block().icmp_ne(PTR, &cache, "null");
         let bitmap_present = ctx.block().icmp_ne(PTR, &bitmap_base, "null");
-        let ok = ctx.block().and(I1, &in_bounds, &magic_ok);
+        let ok = ctx.block().and(I1, &in_bounds, &header_ok);
         let ok = ctx.block().and(I1, &ok, &unmaterialized);
-        let ok = ctx.block().and(I1, &ok, &no_desc);
         let ok = ctx.block().and(I1, &ok, &cache_present);
         let ok = ctx.block().and(I1, &ok, &bitmap_present);
         ctx.block().cond_br(&ok, &bitmap_label, fallback);
@@ -154,6 +192,10 @@ impl ScalarProjection {
             .icmp_eq(I64, &projected_bits, crate::nanbox::TAG_HOLE_I64);
         self.incoming.push((projected, ctx.block().label.clone()));
         ctx.block().cond_br(&missed, fallback, &merge_label);
-        (kind_label, (value, exposed_end))
+        ProjectionEdge {
+            entry: kind_label,
+            exposed: (value, exposed_end),
+            materialized: (mat_raw, mat_predecessor),
+        }
     }
 }
