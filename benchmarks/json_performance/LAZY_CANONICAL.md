@@ -27,3 +27,25 @@ speedup is claimed yet. Source-string reuse additionally requires shared ownersh
 (`StringHeader.refcount == 0`), a complete source span and borrowed normalized output.
 The standard record fixtures contain spellings such as `0.0`, so their normalization
 produces owned output: whole-source reuse would not accelerate those rows.
+
+## R2 combined traversal: still parked
+
+R2 (`c812afd4841e79970d298f7b4ff9b97c9d8888ab`) combines proof and number
+normalization, validates UTF-8 once, compares separators directly and derives
+string ends from adjacent token offsets. It passes 298 JSON tests and all 162
+compiled candidate comparisons, including deep and wide fallback cases.
+[Validation and moving-GC witnesses](results/lazy-canonical-r2-validation/README.md).
+
+Its [quiet focused replay](results/quiet-lazy-canonical-r2-main-focus-r9/README.md)
+reduces the recorded record-roundtrip slowdowns to 28–36% versus main, compared
+with 87–101% in the separate R1 window. It remains 50–65% slower than the current
+PR build and is not accepted. Eager heterogeneous stringify remains +0.434%
+versus main; the 13 KiB roundtrip has a 624 KiB median peak RSS increase.
+
+The fresh local profile points to the scalar quote/backslash tail loop: the
+prominent +1388/+1400 offsets are a byte load and character comparisons, not a
+key-table lookup. The next bounded experiment should apply the existing padded
+word scanner to short lazy-string bodies/tails while preserving the general
+parser scanners. Validate every byte position and guard-page boundary before
+measuring. Native output allocation/copying is a later target; no new output
+ownership, global cache or GC-policy change has been implemented.

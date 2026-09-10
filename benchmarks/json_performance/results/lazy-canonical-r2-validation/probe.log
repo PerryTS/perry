@@ -1,0 +1,19 @@
+PASS canonical
+PASS canonical_escapes
+PASS canonical_index_limits
+PASS canonical_nested
+PASS depth_1000_whitespace
+PASS depth_999_canonical
+PASS depth_999_whitespace
+PASS duplicate_key
+PASS escaped_duplicate
+PASS index_after_name
+PASS integer_key_order
+PASS nested_duplicate
+PASS normalized_numbers
+PASS slash_escape
+PASS surrogate_and_control
+PASS unicode_escape
+PASS whitespace
+PASS wide_33_keys
+PASS 198 Perry comparisons
