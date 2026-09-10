@@ -1,0 +1,6 @@
+{
+  "original_bytes": 22701422,
+  "original_sha256": "a2f950f32866510071be6a1ecb5423912eb63d804693228f6c16fbb273c180e7",
+  "gzip_sha256": "a4dc51544ef334cfebdc9533420c2ba390856d625e919fa45e0dd3d3685ea02f",
+  "compression": "gzip, mtime=0; exact uncompressed source.patch retained in local work and remote archive"
+}

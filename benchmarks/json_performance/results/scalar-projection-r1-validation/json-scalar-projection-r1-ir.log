@@ -1,0 +1,8 @@
+LIVE PROBE test_json_scalar_projection.ts native 30
+LIVE PROBE access-worker.ts native 12
+LIVE PROBE worker.ts native 6
+Traceback (most recent call last):
+  File "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/scalar-projection-r1/check-ir.py", line 48, in <module>
+    assert result.returncode==0,(mode,index,(output/('check-'+str(index)+'.log')).read_text()[-4000:])
+           ^^^^^^^^^^^^^^^^^^^^
+AssertionError: ('native', 0, 'error: 1 GC value(s) live across a gc.statepoint with nothing in that safepoint\'s "gc-live" bundle naming them, budget is 0. Nothing marks or rewrites the object. See docs/src/internals/gc-rooting-invariant.md.\n=== checked 73 functions / 3 modules (3 .ll files)\n=== safepoints: 1154   with a live bundle: 824   relocates: 3296   (safepoint, root) pairs: 3234\n=== statepoint hazards: 1  (unrooted: 1, stale: 0)\n       1  unrooted/alloc\n       1  sink=js_closure_call1_receiverless\n=== suppressed by an IMMOVABLE_SOURCES exemption: none\ntest_json_scalar_projection-0.ll::main   [unrooted]\n  source (alloc): %r114442509 = call i64 @llvm.experimental.gc.result.i64(token %statepoint_token2508)\n  stale use        : %statepoint_token2516 = call token (i64, i32, ptr, i32, i32, ...) @llvm.experimental.gc.statepoint.p0(i64 2882400000, i32 0, ptr elementtype(double (i64, double)) @js_closure_call1_receiverless, i32 2\n  across safepoint : js_closure_unbox_callee_checked\n  MOVING           : no\n  fingerprint      : test_json_scalar_projection-0.ll::main::unrooted:alloc->js_closure_unbox_callee_checked\n\n')

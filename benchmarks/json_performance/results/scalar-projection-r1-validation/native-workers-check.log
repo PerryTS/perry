@@ -1,0 +1,5 @@
+=== checked 18 functions / 2 modules (2 .ll files)
+=== safepoints: 582   with a live bundle: 419   relocates: 1239   (safepoint, root) pairs: 1239
+=== statepoint hazards: 0  (unrooted: 0, stale: 0)
+=== suppressed by an IMMOVABLE_SOURCES exemption: none
+within budget: unrooted 0 <= 0

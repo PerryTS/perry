@@ -1,0 +1,52 @@
+{
+  "owner": "json-perf-38209-1789036801",
+  "load_before": [
+    1.42578125,
+    1.50341796875,
+    1.49755859375
+  ],
+  "started_utc": "2026-09-10T10:40:01Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    "run_regression_focus.py",
+    "--worker",
+    ".work/scalar-projection-r1/worker",
+    "--baseline-worker",
+    ".work/main-53df-fresh/worker",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--bun",
+    "/Users/perry/.bun/bin/bun",
+    "--results-dir",
+    "results/quiet-scalar-projection-r1-focus",
+    "--case",
+    "records_array_16k:scan:4000:8:7",
+    "--case",
+    "records_array_1m:scan:200:2:7",
+    "--case",
+    "records_array_8m:scan:32:1:7",
+    "--case",
+    "records_array_20m:scan:16:1:7",
+    "--case",
+    "records_array_20m:roundtrip:8:1:7",
+    "--case",
+    "records_array_1m:parse:200:8:7",
+    "--case",
+    "records_array_1m:stringify:256:8:7",
+    "--case",
+    "small_record:parse:2000000:5000:7",
+    "--case",
+    "small_record:stringify:10000000:5000:7",
+    "--case",
+    "long_string_1m:stringify:4096:8:7"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    2.26953125,
+    1.8818359375,
+    1.65234375
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-10T10:42:41Z"
+}

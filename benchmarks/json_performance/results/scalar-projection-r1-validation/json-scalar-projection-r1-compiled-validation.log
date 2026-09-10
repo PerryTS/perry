@@ -1,0 +1,33 @@
+COMPILED fixture
+COMPILED access
+COMPILED mutation
+PASS candidate-auto-normal 0 0
+PASS candidate-auto-scheduled 644 29155
+PASS candidate-auto-fullgc 0 0
+PASS candidate-tape-normal 0 0
+PASS candidate-tape-scheduled 644 29155
+PASS candidate-tape-fullgc 0 0
+PASS candidate-direct-normal 0 0
+PASS candidate-direct-scheduled 644 81733
+PASS candidate-direct-fullgc 0 0
+PASS mutation normal
+PASS mutation index-data
+PASS mutation index-getter
+PASS mutation record-data
+PASS mutation record-getter
+PASS mutation delete-index
+PASS mutation delete-field
+PASS mutation index-write
+PASS mutation prototype
+PASS access records_array_16k repeat
+PASS access records_array_16k random
+PASS access records_array_16k fields
+PASS access records_array_16k sequential
+PASS access records_array_1m repeat
+PASS access records_array_1m random
+PASS access records_array_1m fields
+PASS access records_array_1m sequential
+PASS access records_array_20m repeat
+PASS access records_array_20m random
+PASS access records_array_20m fields
+PASS access records_array_20m sequential

@@ -1,0 +1,85 @@
+{
+  "source_commit": "3c6176c7edff20ab990c8ad2fd80c51238a9459a",
+  "base_commit": "53df2c671fff33b1f8f624432372c2401db8b1d0",
+  "commands": [
+    [
+      "/Users/amlug/projects/perry/json-merged-pr10022/target/release/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/worker.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "--no-link",
+      "--trace",
+      "llvm",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/scalar-projection-r1/worker.o"
+    ],
+    [
+      "cc",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/scalar-projection-r1/worker.o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/target/release/libperry_runtime.a",
+      "-lc",
+      "-Wl,-dead_strip",
+      "-Wl,-no_exported_symbols",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/scalar-projection-r1/worker"
+    ],
+    [
+      "/Users/amlug/projects/perry/json-merged-pr10022/target/release/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/rotating-worker.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "--no-link",
+      "--trace",
+      "llvm",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/scalar-projection-r1/rotating-worker.o"
+    ],
+    [
+      "cc",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/scalar-projection-r1/rotating-worker.o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/target/release/libperry_runtime.a",
+      "-lc",
+      "-Wl,-dead_strip",
+      "-Wl,-no_exported_symbols",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/scalar-projection-r1/rotating-worker"
+    ],
+    [
+      "/Users/amlug/projects/perry/json-merged-pr10022/target/release/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/access-worker.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "--no-link",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/scalar-projection-r1/access-worker.o"
+    ],
+    [
+      "cc",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/scalar-projection-r1/access-worker.o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/target/release/libperry_runtime.a",
+      "-lc",
+      "-Wl,-dead_strip",
+      "-Wl,-no_exported_symbols",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/scalar-projection-r1/access-worker"
+    ]
+  ],
+  "runtime_dir": "/Users/amlug/projects/perry/json-merged-pr10022/target/release",
+  "files": {
+    "target/release/perry": "6c5a1453c7e3eb412a7ebf9d1d737d03431049709bb43504fbca9faee808d9c8",
+    "target/release/libperry_runtime.a": "92db4c4a019292e54ce8aa1d2f249ffe085f250b68219d18e241fef296558afd",
+    "target/release/libperry_stdlib.a": "916a12798952f1b94e4ed63bb6b2891649d9bf6cad908f42db2bb8281a294db9",
+    "benchmarks/json_performance/worker.ts": "f3c42ec9f04fdb9ba84dc3cf50dc59f18685540033807f3db3a7f75c08a85d39",
+    "benchmarks/json_performance/rotating-worker.ts": "7541897acb2c7c35c0f5e762f8b2f28b9783feb26a42db107c1c4eb3af644b24",
+    "benchmarks/json_performance/.work/scalar-projection-r1/worker": "fc788ac031df93f85f0b2bdf2c796c99ab3fd9f853b2aa8f8253417dcfd72613",
+    "benchmarks/json_performance/.work/scalar-projection-r1/worker.o": "e4dca933b9acf038f7db0472f62053e355ebb4245f6f63916a393072d37a3aef",
+    "benchmarks/json_performance/.work/scalar-projection-r1/rotating-worker": "5dac4416f21431b5ada7d045495f07d30ef6ac4b8b2646cc29171796f37baad1",
+    "benchmarks/json_performance/.work/scalar-projection-r1/rotating-worker.o": "4f5a58a4519354066d756e49786be3d52e580bc5ddf8768c88053246e64038c8",
+    "benchmarks/json_performance/access-worker.ts": "dba0240ef6441a07657e664354982a04045c036e53f65c1d06df62d55c73be67",
+    "benchmarks/json_performance/.work/scalar-projection-r1/access-worker.o": "3655a28229f2874f50393d8328de60d19d457626de69abaed6a15443b1a375fe",
+    "benchmarks/json_performance/.work/scalar-projection-r1/access-worker": "f327e9e1907cefa0ff809a93817d2c8dae47d203c728c576b06a3a8c8416e1a1"
+  }
+}

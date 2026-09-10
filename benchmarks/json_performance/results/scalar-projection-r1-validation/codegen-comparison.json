@@ -1,0 +1,66 @@
+{
+  "source_commit": "3c6176c7edff20ab990c8ad2fd80c51238a9459a",
+  "native": {
+    "benchmark_workers": {
+      "status": "PASS",
+      "modules": 2,
+      "functions": 18,
+      "statepoints": 582,
+      "live_bundles": 419,
+      "relocates": 1239,
+      "hazards": 0
+    },
+    "full_fixture_and_workers": {
+      "status": "FAIL",
+      "modules": 3,
+      "functions": 73,
+      "statepoints": 1154,
+      "live_bundles": 824,
+      "relocates": 3296,
+      "unrooted": 1,
+      "stale": 0,
+      "fingerprint": "test_json_scalar_projection-0.ll::main::unrooted:alloc->js_closure_unbox_callee_checked",
+      "moving": false
+    }
+  },
+  "probe_calls": {
+    "fixture": 30,
+    "access_worker": 12,
+    "original_worker": 6
+  },
+  "interpretation": "Accessor-literal construction leaves its temporary object unrooted across checked callee unboxing. The closure-call lowering and runtime unbox implementation are unchanged from main. Main compiler reproduction has not been performed; do not call the full native-root check green or suppress the finding.",
+  "shadow": {
+    "status": "PASS",
+    "checks": [
+      "bind-dominance",
+      "unrooted-allocas"
+    ],
+    "probe_counts": [
+      {
+        "source": "test-files/test_json_scalar_projection.ts",
+        "lowering": "shadow",
+        "probe_calls": 30
+      },
+      {
+        "source": "benchmarks/json_performance/access-worker.ts",
+        "lowering": "shadow",
+        "probe_calls": 12
+      },
+      {
+        "source": "benchmarks/json_performance/worker.ts",
+        "lowering": "shadow",
+        "probe_calls": 6
+      }
+    ]
+  },
+  "no_json_control": {
+    "checker_exit": 1,
+    "json_operations": 0,
+    "scalar_probe_calls": 0,
+    "compiler_commit": "3c6176c7edff20ab990c8ad2fd80c51238a9459a",
+    "unchanged_paths": [
+      "crates/perry-codegen/src/lower_call/console_promise.rs",
+      "crates/perry-runtime/src/closure/unbox.rs"
+    ]
+  }
+}

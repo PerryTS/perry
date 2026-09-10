@@ -1,0 +1,146 @@
+[
+  {
+    "case": "normal",
+    "matches": true,
+    "arms": {
+      "node": {
+        "exit": 0,
+        "stdout": "0\n",
+        "stderr": ""
+      },
+      "main": {
+        "exit": 0,
+        "stdout": "0\n",
+        "stderr": ""
+      }
+    }
+  },
+  {
+    "case": "index-data",
+    "matches": false,
+    "arms": {
+      "node": {
+        "exit": 0,
+        "stdout": "99\n",
+        "stderr": ""
+      },
+      "main": {
+        "exit": 0,
+        "stdout": "0\n",
+        "stderr": ""
+      }
+    }
+  },
+  {
+    "case": "index-getter",
+    "matches": false,
+    "arms": {
+      "node": {
+        "exit": 0,
+        "stdout": "98\n",
+        "stderr": ""
+      },
+      "main": {
+        "exit": 0,
+        "stdout": "0\n",
+        "stderr": ""
+      }
+    }
+  },
+  {
+    "case": "record-data",
+    "matches": true,
+    "arms": {
+      "node": {
+        "exit": 0,
+        "stdout": "97\n",
+        "stderr": ""
+      },
+      "main": {
+        "exit": 0,
+        "stdout": "97\n",
+        "stderr": ""
+      }
+    }
+  },
+  {
+    "case": "record-getter",
+    "matches": true,
+    "arms": {
+      "node": {
+        "exit": 0,
+        "stdout": "96\n",
+        "stderr": ""
+      },
+      "main": {
+        "exit": 0,
+        "stdout": "96\n",
+        "stderr": ""
+      }
+    }
+  },
+  {
+    "case": "delete-index",
+    "matches": false,
+    "arms": {
+      "node": {
+        "exit": 0,
+        "stdout": "95\n",
+        "stderr": ""
+      },
+      "main": {
+        "exit": 0,
+        "stdout": "0\n",
+        "stderr": ""
+      }
+    }
+  },
+  {
+    "case": "delete-field",
+    "matches": true,
+    "arms": {
+      "node": {
+        "exit": 0,
+        "stdout": "94\n",
+        "stderr": ""
+      },
+      "main": {
+        "exit": 0,
+        "stdout": "94\n",
+        "stderr": ""
+      }
+    }
+  },
+  {
+    "case": "index-write",
+    "matches": true,
+    "arms": {
+      "node": {
+        "exit": 0,
+        "stdout": "93\n",
+        "stderr": ""
+      },
+      "main": {
+        "exit": 0,
+        "stdout": "93\n",
+        "stderr": ""
+      }
+    }
+  },
+  {
+    "case": "prototype",
+    "matches": true,
+    "arms": {
+      "node": {
+        "exit": 0,
+        "stdout": "0\n",
+        "stderr": ""
+      },
+      "main": {
+        "exit": 0,
+        "stdout": "0\n",
+        "stderr": ""
+      }
+    }
+  }
+]

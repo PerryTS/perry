@@ -1,0 +1,10 @@
+{
+  "checker_exit": 1,
+  "json_operations": 0,
+  "scalar_probe_calls": 0,
+  "compiler_commit": "3c6176c7edff20ab990c8ad2fd80c51238a9459a",
+  "unchanged_paths": [
+    "crates/perry-codegen/src/lower_call/console_promise.rs",
+    "crates/perry-runtime/src/closure/unbox.rs"
+  ]
+}

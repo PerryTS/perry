@@ -1,0 +1,2 @@
+=== files: 3   gc-capable allocas: 206   unrooted-alloca violations: 0   (moving-minor reachable: 0)
+=== suppressed by an IMMOVABLE_SOURCES exemption: none

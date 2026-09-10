@@ -1,0 +1,23 @@
+scan 325200 40
+retained 7200
+cached 401 true
+getter 402 1
+children true record
+missing undefined
+inherited 88 2
+define-data 99 true
+define-getter 98 3
+delete-index 95
+evaluation 1 2
+string-index 3
+object-index 3 1
+coercion 77 3
+key-order key,descriptor
+invalid-descriptor-order key
+value 2 false
+value 3 false
+value 5 false
+value 6 false
+value -0 true
+value Infinity false
+value 9007199254740992 false

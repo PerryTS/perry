@@ -1,0 +1,14 @@
+[
+  {
+    "filter": "define_property",
+    "binary": "target/release/build/perry-runtime/93083ff25374cda4/out/perry_runtime-93083ff25374cda4",
+    "sha256": "a216f78aa14bd5c85bbd1c73a052abd66e22beced7d91537a847ec1c95aec838",
+    "passed": 9
+  },
+  {
+    "filter": "gc_call_effects",
+    "binary": "target/release/build/perry-codegen/626fdd784963821a/out/perry_codegen-626fdd784963821a",
+    "sha256": "5573bbbc2d29805a5ea70bc38c98991f17dda6d35857bd8f1d08caa2ae786cc0",
+    "passed": 15
+  }
+]

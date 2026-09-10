@@ -1,0 +1,12 @@
+[trace] LLVM IR → /Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/scalar-projection-r1/ir-native/worker/.perry-trace/llvm
+Collecting modules...
+Found 1 module(s): 1 native, 0 JavaScript
+Generating code...
+[perry-codegen] kept native reps: /var/folders/8v/09vl257j2_v70v2k77gh01n00000gn/T/perry_native_reps_18182_1789036240565872000_0.json
+[perry-codegen] kept LLVM IR: /var/folders/8v/09vl257j2_v70v2k77gh01n00000gn/T/perry_llvm_scratch_4706_0/perry_llvm_e629ddac270d7e53.ll
+[perry-codegen] kept compile metadata: /var/folders/8v/09vl257j2_v70v2k77gh01n00000gn/T/perry_llvm_scratch_4706_0/perry_llvm_e629ddac270d7e53_4706_0.o.compile-plan.json
+perry: in-process LLVM backend active (LLVM 22.1.4)
+[perry-codegen] kept object: /var/folders/8v/09vl257j2_v70v2k77gh01n00000gn/T/perry_llvm_scratch_4706_0/perry_llvm_e629ddac270d7e53_4706_0.o
+[perry] codegen: modules finished 1/1 (100%; 0.0 min elapsed; ETA ~0.0 min)
+Wrote object file: /Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/scalar-projection-r1/ir-native/worker/worker.o
+Asset manifest: /Users/amlug/projects/perry/json-merged-pr10022/node_modules/.cache/perry/assets.json

@@ -1,0 +1,21 @@
+{
+  "probe_counts": [
+    {
+      "source": "test-files/test_json_scalar_projection.ts",
+      "lowering": "shadow",
+      "probe_calls": 30
+    },
+    {
+      "source": "benchmarks/json_performance/access-worker.ts",
+      "lowering": "shadow",
+      "probe_calls": 12
+    },
+    {
+      "source": "benchmarks/json_performance/worker.ts",
+      "lowering": "shadow",
+      "probe_calls": 6
+    }
+  ],
+  "statepoint_passes": "always-inline,function(mem2reg,sccp),rewrite-statepoints-for-gc",
+  "source_commit": "3c6176c7edff20ab990c8ad2fd80c51238a9459a"
+}

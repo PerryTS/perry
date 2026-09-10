@@ -11,7 +11,6 @@ import json
 import os
 from pathlib import Path
 import random
-import shutil
 import statistics
 import subprocess
 import time
@@ -62,11 +61,8 @@ def main():
     if args.prior_worker:
         engines['prior'] = [str(args.prior_worker.resolve())]
     if args.bun:
-        for engine, executable in [('node', args.node), ('bun', args.bun)]:
-            resolved = shutil.which(executable)
-            if resolved is None:
-                parser.error(f'{engine} executable not found: {executable}')
-            engines[engine] = [str(Path(resolved).resolve()), str(ROOT / 'worker.js')]
+        engines['node'] = [args.node, str(ROOT / 'worker.js')]
+        engines['bun'] = [args.bun, str(ROOT / 'worker.js')]
     meta = dict(started_utc=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
                 load_before=os.getloadavg(), cases=cases,
                 workers={e: hashlib.sha256(Path(cmd[0]).read_bytes()).hexdigest()

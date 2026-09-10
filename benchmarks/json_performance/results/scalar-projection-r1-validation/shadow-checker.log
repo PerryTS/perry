@@ -1,0 +1,5 @@
+LIVE PROBE test_json_scalar_projection.ts shadow 30
+LIVE PROBE access-worker.ts shadow 12
+LIVE PROBE worker.ts shadow 6
+PASS roots shadow 0
+PASS roots shadow 1
