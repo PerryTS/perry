@@ -1,0 +1,62 @@
+{
+  "started_utc": "2026-09-10T06:54:44Z",
+  "load_before": [
+    1.9052734375,
+    1.7109375,
+    1.6416015625
+  ],
+  "cases": [
+    [
+      "records_array_16k",
+      "roundtrip",
+      20000,
+      8,
+      9
+    ],
+    [
+      "records_array_1m",
+      "roundtrip",
+      512,
+      8,
+      9
+    ],
+    [
+      "records_array_8m",
+      "roundtrip",
+      64,
+      8,
+      9
+    ],
+    [
+      "heterogeneous_1m",
+      "stringify",
+      1024,
+      8,
+      9
+    ],
+    [
+      "small_record",
+      "parse",
+      2000000,
+      2000,
+      9
+    ]
+  ],
+  "workers": {
+    "perry": "57fa4602c077434f6d9bc47982958a2212a212f85138a1fe959199c1fa03ddb5",
+    "baseline": "43a90819e68a87d8365526189ff780e5bb9652b1df48573b0c293876dea8ee4d",
+    "prior": "030015ade8384e30639de4714627e9f0927824745449cb0314572253ec7d1f1c"
+  },
+  "sources": {
+    "run_regression_focus.py": "d45cbb853e7127dc0a95e68955f8e8dea130a784ce2525c829519edaeda36fe8",
+    "run_dispatch_focus.py": "100ba3e1bd5c0cd451d1a3528f95b5f4b8d0ff2f4771796ab8598b36a46fbcc4",
+    "worker.js": "55c11d12296f896212d6abd76bcf8d551d0590b0ad24b262018b7a707369a2f4"
+  },
+  "node_version": "v26.5.1",
+  "finished_utc": "2026-09-10T06:56:21Z",
+  "load_after": [
+    1.77294921875,
+    1.72509765625,
+    1.6552734375
+  ]
+}
