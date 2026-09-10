@@ -129,11 +129,11 @@ fn failed_string_scans_do_not_publish_or_contaminate_scratch() {
 
 #[test]
 fn plain_string_metadata_does_not_claim_unicode_validity() {
-    let source = b"[\"\xed\xa0\x80\"]";
-    let tape = build_tape(source).expect("syntax validation does not decode UTF-8");
+    let source = b"[\"\xed\xa0\x80\"]".to_vec();
+    let tape = build_tape(&source).expect("syntax validation does not decode UTF-8");
     assert_eq!(
         string_metadata(&tape.entries),
         [(KIND_STRING, STRING_NO_ESCAPES)]
     );
-    assert!(std::str::from_utf8(source).is_err());
+    assert!(std::str::from_utf8(&source).is_err());
 }
