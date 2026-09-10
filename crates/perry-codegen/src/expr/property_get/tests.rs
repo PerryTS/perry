@@ -103,6 +103,84 @@ fn emit(debug: bool, source: Option<&str>) -> String {
         .expect("LLVM IR should be UTF-8")
 }
 
+fn emit_json_projection(base: Expr, index: Expr, property: &str) -> String {
+    let mut module = Module::new("json_projection.ts");
+    module.init = vec![
+        Stmt::Let {
+            id: 21,
+            name: "rows".into(),
+            ty: perry_hir::types::Type::Any,
+            mutable: false,
+            init: None,
+        },
+        Stmt::Let {
+            id: 22,
+            name: "index".into(),
+            ty: perry_hir::types::Type::Number,
+            mutable: false,
+            init: None,
+        },
+        Stmt::Return(Some(Expr::PropertyGet {
+            object: Box::new(Expr::IndexGet {
+                object: Box::new(base),
+                index: Box::new(index),
+            }),
+            property: property.into(),
+            byte_offset: 0,
+        })),
+    ];
+    String::from_utf8(compile_module(&module, ir_opts(false, None)).unwrap()).unwrap()
+}
+
+#[test]
+fn json_scalar_projection_preserves_ordinary_fallback_and_noncollecting_contract() {
+    let ir = emit_json_projection(Expr::LocalGet(21), Expr::LocalGet(22), "id");
+    assert_eq!(
+        ir.matches("call double @js_json_lazy_index_scalar(")
+            .count(),
+        1,
+        "{ir}"
+    );
+    assert!(
+        ir.contains("json.scalar.miss") && ir.contains("json.scalar.merge"),
+        "{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_object_get_field_ic_miss("),
+        "{ir}"
+    );
+    assert_eq!(
+        crate::gc_call_effects::classify_direct_callee("js_json_lazy_index_scalar"),
+        crate::gc_call_effects::GcCallEffect::CannotCollect
+    );
+}
+
+#[test]
+fn json_scalar_projection_leaves_effectful_expressions_and_unicode_keys_ordinary() {
+    for (base, index, property) in [
+        (
+            Expr::JsonParse(Box::new(Expr::String("[]".into()))),
+            Expr::Integer(0),
+            "id",
+        ),
+        (
+            Expr::LocalGet(21),
+            Expr::JsonParse(Box::new(Expr::String("0".into()))),
+            "id",
+        ),
+        (Expr::LocalGet(21), Expr::Integer(0), "π"),
+    ] {
+        let ir = emit_json_projection(base, index, property);
+        assert!(
+            !ir.contains("call double @js_json_lazy_index_scalar("),
+            "{ir}"
+        );
+        if property == "id" {
+            assert_eq!(ir.matches("call i64 @js_json_parse(").count(), 1, "{ir}");
+        }
+    }
+}
+
 #[test]
 fn imported_variable_read_preserves_class_tags_and_calls_the_live_getter_once() {
     let mut module = Module::new("imported_class_9366.ts");

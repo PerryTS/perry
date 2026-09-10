@@ -148,6 +148,11 @@ pub extern "C" fn js_object_delete_field(
         if (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
             let gc_header =
                 (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            // Indexed deletion must create an ordinary hole; an ObjectHeader
+            // deletion cannot edit the tape's dense own elements.
+            if (*gc_header).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+                return crate::json_tape::delete_lazy_named(obj.cast(), key);
+            }
             if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
                 if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
                     // An Array's `length` is a non-configurable exotic own

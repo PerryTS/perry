@@ -18,7 +18,7 @@ use std::cell::Cell;
 mod iterative;
 pub(crate) use iterative::materialize_iterative;
 mod mutation;
-pub(crate) use mutation::{resolve_materialized_array, set_lazy_index};
+pub(crate) use mutation::{delete_lazy_named, resolve_materialized_array, set_lazy_index};
 
 /// One tape entry. Kind + byte offset + (for container kinds) a
 /// parent/sibling pointer that lets materialization skip over
@@ -613,6 +613,8 @@ enum TapeSource<'a, 'scope> {
 
 #[path = "json_tape/record_materialize.rs"]
 mod record_materialize;
+#[path = "json_tape/scalar_projection.rs"]
+mod scalar_projection;
 
 impl<'a, 'scope> TapeSource<'a, 'scope> {
     #[inline]
@@ -1106,7 +1108,7 @@ pub struct LazyArrayHeader {
     ///
     /// Invariant: if `walk_idx != u32::MAX`, then `walk_tape_pos`
     /// points at the tape entry for the element at `walk_idx`.
-    /// Updated at the end of every `lazy_get` call on a cold path.
+    /// Updated by cold `lazy_get` calls and successful scalar projections.
     pub walk_idx: u32,
     pub walk_tape_pos: u32,
     /// Cumulative tape steps walked across all cold-path `lazy_get`
@@ -1608,7 +1610,7 @@ pub unsafe fn lazy_get(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
     // that is not exactly one past the previous COLD read ends it. Cache
     // hits never reach here, so a re-scan of an already-materialized
     // prefix does not inflate the count.
-    let streak = if prev_walk != u32::MAX && i == prev_walk + 1 {
+    let streak = if scalar_projection::continues_materialization_run(hdr, i, prev_walk) {
         (*hdr).sequential_streak.saturating_add(1)
     } else {
         // A cold read that does not continue the previous run still IS a run

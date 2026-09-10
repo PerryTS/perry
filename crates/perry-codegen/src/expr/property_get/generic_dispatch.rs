@@ -94,6 +94,18 @@ pub(crate) fn lower_generic_property_get(
     property: &str,
     byte_offset: u32,
 ) -> Result<String> {
+    if let Some(value) = super::scalar_projection::try_lower(ctx, object, property, byte_offset)? {
+        return Ok(value);
+    }
+    lower_generic_property_get_ordinary(ctx, object, property, byte_offset)
+}
+
+pub(super) fn lower_generic_property_get_ordinary(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    byte_offset: u32,
+) -> Result<String> {
     let obj_box = lower_expr(ctx, object)?;
     // #5247: record this access's source location right after the receiver is
     // evaluated and before the nullish-receiver throw path (the inline diamond

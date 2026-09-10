@@ -489,6 +489,9 @@ NONCOLLECTING = {
     "js_typed_feedback_closure_direct_call_guard", "js_closure_exact_func_guard",
     "js_object_own_method_cache_miss",
     "js_packed_arraylike_loop_revalidate_live",
+    # JSON scalar projection: tape reads + scalar cursor stores; no allocation,
+    # polling, user callbacks or managed result. TAG_HOLE delegates the miss.
+    "js_json_lazy_index_scalar",
     # ctor identity selection
     "js_ctor_return_override",
     "llvm.lifetime.start.p0", "llvm.lifetime.end.p0",

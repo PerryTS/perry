@@ -644,7 +644,12 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
                 f"{name} reads the authoritative ShapeId at header offset 4",
             )
 
-    generic_body = function_body(raw_generic_pic, "lower_generic_property_get")
+    require_code(
+        strip_rust_comments_and_literals(function_body(raw_generic_pic, "lower_generic_property_get")),
+        r"\blower_generic_property_get_ordinary\s*\(",
+        "generic read entry retains ordinary PIC fallback",
+    )
+    generic_body = function_body(raw_generic_pic, "lower_generic_property_get_ordinary")
     if re.search(r"add\s*\(\s*I64\s*,\s*&obj_handle\s*,\s*\"(?:8|16)\"", generic_body):
         raise CensusError("generic read PIC emits a removed ObjectHeader fact")
     require_code(
@@ -911,6 +916,20 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     expect_rejected(
         "legacy keys-header offset in emitted PIC",
         lambda: assert_authority_surfaces(legacy_ir),
+    )
+
+    disconnected_pic = dict(sources)
+    path = "crates/perry-codegen/src/expr/property_get/generic_dispatch.rs"
+    entry_body = function_body(disconnected_pic[path], "lower_generic_property_get")
+    disconnected_pic[path] = disconnected_pic[path].replace(
+        entry_body,
+        entry_body.replace("lower_generic_property_get_ordinary(", "removed_pic(")
+        + "\n// lower_generic_property_get_ordinary(ctx, object, property, byte_offset)\n",
+        1,
+    )
+    expect_rejected(
+        "generic read entry disconnected from ordinary PIC",
+        lambda: assert_authority_surfaces(disconnected_pic),
     )
 
     # #8665: the generic read PIC's invalid-id fail-closed token (pcid != 0)

@@ -363,29 +363,6 @@ pub extern "C" fn js_object_define_property(
             return obj_value;
         }
 
-        // A numeric key defined on `Object.prototype` (data or accessor) shows
-        // through array hole/OOB reads — flip the global flag.
-        {
-            let kb = key_value.to_bits();
-            let is_numeric_key =
-                (kb >> 48) == 0x7FFE || crate::value::JSValue::from_bits(kb).is_number() || {
-                    let sp = crate::value::js_get_string_pointer_unified(key_value)
-                        as *const crate::StringHeader;
-                    !sp.is_null()
-                        && super::super::has_own_helpers::str_from_string_header(sp)
-                            .map(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
-                            .unwrap_or(false)
-                };
-            if is_numeric_key {
-                let ob = obj_value.to_bits();
-                if (ob >> 48) == 0x7FFD {
-                    crate::array::note_object_prototype_index_write(
-                        (ob & crate::value::POINTER_MASK) as usize,
-                    );
-                }
-            }
-        }
-
         // #2817: ES Object.defineProperty validation.
         //   1. Target must be an object (or class-ref / function — all objects
         //      in Node). Primitives / null / undefined throw.
@@ -428,15 +405,6 @@ pub extern "C" fn js_object_define_property(
             }
             throw_object_type_error(b"Object.defineProperty called on non-object");
         }
-        // A descriptor must be an Object; a Symbol is pointer-tagged but not an
-        // object, so `ToPropertyDescriptor(Symbol())` throws (test262
-        // property-description-must-be-an-object-not-symbol).
-        if !value_is_object_like(descriptor_value)
-            || crate::symbol::js_is_symbol(descriptor_value) != 0
-        {
-            let desc = describe_value_for_type_error(descriptor_value);
-            throw_object_type_error_with_suffix("Property description must be an object: ", &desc);
-        }
         // #7963: ONE handle scope for everything below. The decoded descriptor's
         // field values, the receiver, the coerced key string and the accessor
         // closures are all live across calls that allocate, and this scope is
@@ -452,7 +420,19 @@ pub extern "C" fn js_object_define_property(
         // before continuing into the expando/closure/ordinary paths.
         let obj_value_handle = scope.root_heap_word_u64(obj_value.to_bits());
         let desc_handle = scope.root_nanbox_f64(descriptor_value);
-        let key_handle = scope.root_nanbox_f64(key_value);
+        // ToPropertyKey precedes ToPropertyDescriptor. Keep its result rooted
+        // and reuse it in every receiver arm: an object key may run user code,
+        // move either input, return a Symbol, or throw before the descriptor is
+        // inspected. Later string extraction must not repeat that user code.
+        let key_handle = super::super::to_property_key_rooted(&scope, key_value);
+        // A Symbol is pointer-tagged but is not a descriptor object.
+        let descriptor_value = desc_handle.get_nanbox_f64();
+        if !value_is_object_like(descriptor_value)
+            || crate::symbol::js_is_symbol(descriptor_value) != 0
+        {
+            let desc = describe_value_for_type_error(descriptor_value);
+            throw_object_type_error_with_suffix("Property description must be an object: ", &desc);
+        }
         // #6748 follow-up: decode the descriptor's 6 fields in ONE pass when it
         // is a plain default-prototype object (the overwhelming majority) —
         // the per-field `desc_has_field`/`desc_read_field` helpers each cost a
@@ -1393,6 +1373,16 @@ pub extern "C" fn js_object_define_property(
             let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
             std::str::from_utf8(name_bytes).ok().map(|s| s.to_string())
         };
+        // Numeric properties on Object.prototype are visible through array
+        // holes. Use the key already coerced above: probing the original key
+        // with js_get_string_pointer_unified ran object-key toString twice,
+        // before the input roots existed, even for unrelated array receivers.
+        if key_rust
+            .as_deref()
+            .is_some_and(|name| !name.is_empty() && name.bytes().all(|byte| byte.is_ascii_digit()))
+        {
+            crate::array::note_object_prototype_index_write(obj as usize);
+        }
         // #4949 / #2159 follow-up: `ClassExprFresh.prototype` now materializes
         // the declared-class prototype object. Keep `Object.defineProperty` on
         // that live object wired to the same prototype-method side tables used
@@ -1439,6 +1429,19 @@ pub extern "C" fn js_object_define_property(
                 );
             }
             return obj_value;
+        }
+        // Lazy JSON arrays have a different payload from ObjectHeader and do
+        // not satisfy define_array_property's ordinary-array guard. Materialize
+        // before installing the descriptor; preserve the already-coerced key.
+        if !receiver_plain_object
+            && crate::value::addr_class::try_read_gc_header(obj as usize)
+                .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY)
+        {
+            let array = across!(crate::json_tape::force_materialize_lazy(obj.cast()));
+            // Keep the original receiver value for return/this identity; the
+            // descriptor machinery writes the current ordinary array payload.
+            obj_handle.set_raw_mut_ptr(array.cast::<ObjectHeader>());
+            obj = array.cast();
         }
         let array_outcome = if receiver_plain_object {
             None

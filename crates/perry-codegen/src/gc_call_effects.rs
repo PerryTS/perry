@@ -54,6 +54,10 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         | "js_typed_feedback_numeric_array_index_set_guard"
         | "js_typed_feedback_numeric_array_push_guard"
         | "js_array_numeric_value_to_raw_f64"
+        // JSON tape scalar projection borrows validated tape/source bytes and
+        // changes scalar cursor fields only. No managed allocation or reentry;
+        // strings, objects, getters and all fallback work stay with the caller.
+        | "js_json_lazy_index_scalar"
         // `array/subclass.rs`: scalar descriptor/header comparison only. It
         // neither allocates nor enters user code; a miss returns zero.
         | "js_packed_arraylike_loop_revalidate_live"

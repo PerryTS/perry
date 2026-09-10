@@ -1,3 +1,16 @@
+/// # Safety
+/// `header` must be live GC_TYPE_LAZY_ARRAY and `key` a live coerced string.
+pub(crate) unsafe fn delete_lazy_named(
+    header: *mut super::LazyArrayHeader,
+    key: *const crate::StringHeader,
+) -> i32 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_raw_mut_ptr(header);
+    let key = scope.root_string_ptr(key);
+    let array = receiver.with_mut_ptr(|header| super::force_materialize_lazy(header));
+    key.with_const_ptr(|key| crate::object::js_object_delete_field(array.cast(), key))
+}
+
 /// Materialize a lazy receiver before applying ordinary computed assignment.
 ///
 /// # Safety

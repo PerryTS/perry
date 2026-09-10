@@ -49,6 +49,7 @@ mod globalget;
 mod helpers;
 
 mod composed_ics;
+mod scalar_projection;
 use composed_ics::{emit_array_subclass_length_ic, lower_symbol_then_named_property_ic};
 #[cfg(test)]
 mod tests;
