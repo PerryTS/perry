@@ -81,6 +81,29 @@ fn json_lazy_copy_admission_bounds_wide_object_work_and_rejects_bad_ranges() {
 }
 
 #[test]
+fn json_lazy_copy_unknown_string_metadata_keeps_the_checked_fallback() {
+    for (source, expected) in [
+        (r#"[{"name":"plain é😀"},"a\nb"]"#, true),
+        (r#"["\u0061"]"#, false),
+        (r#"[{"\u0061":"plain"}]"#, false),
+        (r#"["\/"]"#, false),
+        (r#"[{"name":1,"name":2}]"#, false),
+        (r#"["x" ,"y"]"#, false),
+    ] {
+        let mut tape = build_tape(source.as_bytes()).unwrap().entries;
+        assert_eq!(source_is_copyable(&tape, source.as_bytes(), 0), expected);
+        for metadata in [0, u32::MAX] {
+            for entry in &mut tape {
+                if matches!(entry.kind, KIND_KEY | KIND_STRING) {
+                    entry.link = metadata;
+                }
+            }
+            assert_eq!(source_is_copyable(&tape, source.as_bytes(), 0), expected);
+        }
+    }
+}
+
+#[test]
 fn json_lazy_copy_admission_creates_no_managed_intermediates() {
     let source = format!(
         "[{}]",

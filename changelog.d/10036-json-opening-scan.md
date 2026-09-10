@@ -10,3 +10,7 @@ Perform source admission and number normalization in one tape walk, validate
 UTF-8 once, and use adjacent token offsets to avoid repeating string-end scans.
 Use bounded padded-word classification for four-to-seven-byte lazy-string tails,
 while retaining the existing general parser and escaper scanner behavior.
+Record a positive no-escape marker in the existing native key/string tape field
+during syntax validation. Lazy source admission can then skip a second body
+scan for those tokens, while unknown metadata retains the checked fallback.
+Tape entry size, managed object construction and collector policy are unchanged.

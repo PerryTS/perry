@@ -139,6 +139,12 @@ fn canonical_string_end(blob: &[u8], entry: &TapeEntry, next: &TapeEntry) -> Opt
     {
         return None;
     }
+    // Only the syntax builder can certify a plain body. Unknown metadata
+    // (including zero in manually constructed tapes) keeps the checked scan.
+    // Whole-source UTF-8 and the surrounding separators are still validated.
+    if entry.link == STRING_NO_ESCAPES {
+        return Some(end);
+    }
     let mut body = blob.get(start + 1..end - 1)?;
     while let Some(at) = super::simd::find_quote_or_backslash_padded_tail(body) {
         if entry.kind == KIND_KEY || body[at] != b'\\' {

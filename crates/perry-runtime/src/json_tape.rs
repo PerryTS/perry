@@ -1,6 +1,6 @@
 //! Flat tape representation for lazy JSON arrays and iterative materialization.
 //!
-//! Tape entries contain only token kinds, byte offsets and subtree links.
+//! Tape entries contain token kinds, byte offsets, links and string metadata.
 //! Scanning validates syntax without constructing a managed value for each
 //! token. Lazy array results retain the source and their tape, materializing
 //! accessed elements or reparsing the full array when traversal warrants it.
@@ -18,11 +18,11 @@ use std::cell::Cell;
 mod iterative;
 pub(crate) use iterative::materialize_iterative;
 mod mutation;
+mod string_scan;
 pub(crate) use mutation::{resolve_materialized_array, set_lazy_index};
 
-/// One tape entry. Kind + byte offset + (for container kinds) a
-/// parent/sibling pointer that lets materialization skip over
-/// already-traversed subtrees.
+/// One token's kind and byte offset, plus container links or optional string
+/// metadata. Container links let materialization skip completed subtrees.
 #[derive(Debug, Clone, Copy)]
 pub struct TapeEntry {
     /// Byte offset into the source blob where this token starts.
@@ -31,7 +31,10 @@ pub struct TapeEntry {
     pub kind: u8,
     /// For container kinds (`KIND_OBJ_START` / `KIND_ARR_START`): the
     /// tape index of the matching end marker. Enables O(1) skip-over
-    /// during lazy subtree materialization. Zero for leaf kinds.
+    /// during lazy subtree materialization. End markers link back to the start.
+    /// For keys/strings, `STRING_NO_ESCAPES` certifies no backslash occurred;
+    /// zero means unknown or escaped and requires scanning before source reuse.
+    /// Other leaf kinds use zero. This is metadata, never a heap pointer.
     pub link: u32,
 }
 
@@ -47,6 +50,10 @@ pub const KIND_NUMBER: u8 = 7;
 pub const KIND_TRUE: u8 = 8;
 pub const KIND_FALSE: u8 = 9;
 pub const KIND_NULL: u8 = 10;
+
+/// Positive proof for a syntax-validated key/string. Zero remains conservative
+/// for escaped strings and tapes constructed without this optional metadata.
+pub const STRING_NO_ESCAPES: u32 = 1;
 
 /// The built tape for one JSON document.
 pub struct Tape {
@@ -186,50 +193,6 @@ fn build_tape_into<const CAPTURE_DEPTH: bool>(
         }
     }
 
-    // Helper: validate and skip a JSON string in place (past the closing
-    // quote). Decoding remains deferred to materialization.
-    #[inline(always)]
-    fn skip_string(bytes: &[u8], pos: &mut usize) -> bool {
-        debug_assert_eq!(bytes[*pos], b'"');
-        *pos += 1;
-        while *pos < bytes.len() {
-            let Some(offset) = crate::json::simd::find_string_terminator(&bytes[*pos..]) else {
-                *pos = bytes.len();
-                return false;
-            };
-            *pos += offset;
-            let c = bytes[*pos];
-            if c == b'"' {
-                *pos += 1;
-                return true;
-            }
-            if c == b'\\' {
-                *pos += 1;
-                if *pos >= bytes.len() {
-                    return false;
-                }
-                match bytes[*pos] {
-                    b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't' => *pos += 1,
-                    b'u' => {
-                        *pos += 1;
-                        if *pos + 4 > bytes.len()
-                            || !bytes[*pos..*pos + 4].iter().all(u8::is_ascii_hexdigit)
-                        {
-                            return false;
-                        }
-                        *pos += 4;
-                    }
-                    _ => return false,
-                }
-            } else if c < 0x20 {
-                return false;
-            } else {
-                *pos += 1;
-            }
-        }
-        false
-    }
-
     // Helper: validate and skip a JSON number (past its last digit/exponent).
     #[inline(always)]
     fn skip_number(bytes: &[u8], pos: &mut usize) -> bool {
@@ -318,15 +281,9 @@ fn build_tape_into<const CAPTURE_DEPTH: bool>(
                             if pos >= bytes.len() || bytes[pos] != b'"' {
                                 return false;
                             }
-                            let key_off = pos as u32;
-                            if !skip_string(bytes, &mut pos) {
+                            if !string_scan::push_string::<KIND_KEY>(bytes, &mut pos, entries) {
                                 return false;
                             }
-                            entries.push(TapeEntry {
-                                offset: key_off,
-                                kind: KIND_KEY,
-                                link: 0,
-                            });
                             skip_ws(bytes, &mut pos);
                             if pos >= bytes.len() || bytes[pos] != b':' {
                                 return false;
@@ -366,14 +323,9 @@ fn build_tape_into<const CAPTURE_DEPTH: bool>(
                         }
                     }
                     b'"' => {
-                        if !skip_string(bytes, &mut pos) {
+                        if !string_scan::push_string::<KIND_STRING>(bytes, &mut pos, entries) {
                             return false;
                         }
-                        entries.push(TapeEntry {
-                            offset: tok_off,
-                            kind: KIND_STRING,
-                            link: 0,
-                        });
                         state = State::AfterValue;
                     }
                     b't' => {
@@ -443,15 +395,9 @@ fn build_tape_into<const CAPTURE_DEPTH: bool>(
                             if pos >= bytes.len() || bytes[pos] != b'"' {
                                 return false;
                             }
-                            let key_off = pos as u32;
-                            if !skip_string(bytes, &mut pos) {
+                            if !string_scan::push_string::<KIND_KEY>(bytes, &mut pos, entries) {
                                 return false;
                             }
-                            entries.push(TapeEntry {
-                                offset: key_off,
-                                kind: KIND_KEY,
-                                link: 0,
-                            });
                             skip_ws(bytes, &mut pos);
                             if pos >= bytes.len() || bytes[pos] != b':' {
                                 return false;
@@ -998,6 +944,9 @@ fn parse_string_bytes_slow(bytes: &[u8]) -> Option<ParsedStr<'_>> {
 #[cfg(test)]
 #[path = "json_tape/string_decode_tests.rs"]
 mod string_decode_tests;
+#[cfg(test)]
+#[path = "json_tape/string_metadata_tests.rs"]
+mod string_metadata_tests;
 
 #[cfg(test)]
 #[path = "json_tape_tests.rs"]
