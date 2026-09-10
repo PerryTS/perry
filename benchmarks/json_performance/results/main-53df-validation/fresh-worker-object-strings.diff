@@ -1,0 +1,11 @@
+--- frozen
+
++++ fresh
+
+@@ -1,4 +1,4 @@
+
+-/Users/amlug/projects/perry/json-merged-main-10016/benchmarks/json_performance/worker.ts
++/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/worker.ts
+ parse
+ retain-parse
+ scan

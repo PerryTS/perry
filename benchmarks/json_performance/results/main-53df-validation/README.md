@@ -37,3 +37,11 @@ from the repository root to regenerate the headline report from tracked data.
 Large diagnostic logs use deterministic gzip; `compressed-logs.json` records
 both uncompressed and compressed hashes. Read them with `gzip -cd FILE.stderr.gz`.
 The untouched raw copies remain in the local build archive.
+
+Before the next compiler experiment, both benchmark sources were also freshly
+compiled by the matching main compiler. The rotating executable is byte-identical
+to the measured one. Comparing all 8569 original-object disassembly lines finds
+one changed immediate, at the startup `js_set_process_entry_path` call: the
+source path is three bytes shorter in this worktree. The measured loop is
+unchanged. `fresh-worker-comparison.json` and the two object diffs record this
+check; `fresh-provenance.json` records the new compilation commands and hashes.

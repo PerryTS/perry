@@ -1,0 +1,12 @@
+{
+  "compared_disassembly_lines": 8569,
+  "changes": [
+    {
+      "frozen": "000000000000613c\tmov\tw1, #0x58",
+      "fresh": "000000000000613c\tmov\tw1, #0x55"
+    }
+  ],
+  "following_call": "js_set_process_entry_path",
+  "fresh_rotating_worker_byte_identical": true,
+  "interpretation": "Only the startup source-path length immediate changes in the original object disassembly. The rotating executable is byte-identical. This supports the runtime-only comparison; use separately compiled objects for future compiler changes."
+}
