@@ -2294,6 +2294,12 @@ jobs:
             npm-publish-manifest.json socket-scan-receipt.json "${proofs[@]}"
 
       - name: npm publish exact tarballs (OIDC; platforms first, wrapper last)
+        env:
+          # How long to wait for npm publish-time scanning to make the platform
+          # packages visible before giving up. Generous on purpose: a timeout
+          # here is a resumable rerun, while publishing the wrapper too early
+          # is not recoverable (npm versions are immutable).
+          VISIBILITY_WAIT_MIN: "45"
         # No npm login and no NPM_TOKEN. npm exchanges this job's short-lived
         # GitHub OIDC identity because id-token:write is set above. Reruns skip
         # an already-public version only when its immutable registry sha1 is
@@ -2329,12 +2335,25 @@ jobs:
               # `time` map is the authoritative signal here: `npm view` and the
               # publish exit status both reported success for a version npm had
               # no record of.
+              # npm's publish-time scanning can hold a large binary for a
+              # long time -- its own notice says "may take longer than usual"
+              # and gives itself 24 h. So poll ROUND-ROBIN against a single
+              # global deadline rather than giving each package its own short
+              # budget: the packages settle in parallel, so a per-package
+              # timeout would fail the normal slow case while adding nothing
+              # for the broken one.
+              #
+              # Timing out here is SAFE and resumable. The platform packages
+              # are already published; a rerun skips them on matching sha1 and
+              # waits again. What must never happen is the wrapper going out
+              # over a platform that is not really there.
               echo "=== verifying every platform package is visible before publishing the wrapper ==="
+              deadline=$(( $(date +%s) + VISIBILITY_WAIT_MIN * 60 ))
               unseen=""
               while IFS=$'\t' read -r pname pversion; do
                 [ "$pname" = "@perryts/perry" ] && continue
                 seen=0
-                for attempt in $(seq 1 30); do
+                while :; do
                   if node -e '
                     const https = require("https")
                     const [pkg, ver] = process.argv.slice(1)
@@ -2349,12 +2368,13 @@ jobs:
                       })
                     }).on("error", () => process.exit(1))
                   ' "$pname" "$pversion"; then seen=1; break; fi
-                  sleep 10
+                  if [ "$(date +%s)" -ge "$deadline" ]; then break; fi
+                  sleep 20
                 done
                 if [ "$seen" -eq 1 ]; then
                   echo "  visible: $pname@$pversion"
                 else
-                  echo "::error::$pname@$pversion is not visible in the registry after 5 min — npm may have staged it without publishing." >&2
+                  echo "::error::$pname@$pversion still not visible after the ${VISIBILITY_WAIT_MIN}-minute budget — npm scanning may still be running, or the version is staged. Rerun this job to resume." >&2
                   unseen="$unseen $pname@$pversion"
                 fi
               done < <(node -e '

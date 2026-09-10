@@ -27,3 +27,12 @@
   Probe validated against live registry data, including the exact failing case:
   the five packages that really published read visible, and the staged
   linux-x64 reads not-visible.
+
+  The wait is a **single 45-minute budget across all platform packages**, not a
+  short per-package one. npm's own delay notice says a large upload "may take
+  longer than usual" and allows itself 24 hours, and the packages settle in
+  parallel — so a tight per-package timeout would fail the *normal* slow case
+  while adding nothing against the broken one. Timing out is safe and resumable:
+  the platform packages are already published, so a rerun skips them on matching
+  sha1 and waits again. Publishing the wrapper too early is the step that cannot
+  be undone, because npm versions are immutable.
