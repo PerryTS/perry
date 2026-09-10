@@ -1222,10 +1222,6 @@ pub(crate) fn build_and_run_link(
         if is_linux || is_android {
             cmd.arg("-Wl,--allow-multiple-definition");
         }
-        // On Windows, re-link the stdlib after geisterhand to resolve
-        // forward references to geisterhand registry functions.
-        // lld-link scans archives left-to-right once, so the stdlib
-        // must appear after the geisterhand lib that references it.
         // On Windows, force-include geisterhand registry symbols from stdlib.
         // lld-link scans archives left-to-right once, so the stdlib's
         // geisterhand objects are skipped on first scan (no references yet).
