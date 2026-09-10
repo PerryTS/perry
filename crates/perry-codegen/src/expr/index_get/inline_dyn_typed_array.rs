@@ -350,17 +350,6 @@ pub(super) fn lower_with_scalar_projection(
     ctx.ic_site_counter += 1;
     let cache_name = super::super::inline_cache_global_name(ctx, site_id);
     ctx.ic_globals.push(cache_name.clone());
-    // #9708: the cache sits behind a pointer slot the runtime fills on the
-    // first shape-carried prime. `arrlike.ic.shape` reads word 0 inside a
-    // flat predicate, so it reads through `key_cache`: the real cache when
-    // present, else the slot itself — 8 bytes of null, i.e. a zero identity,
-    // which fails `key_nonzero` exactly as the all-zero global did. Every
-    // later word is read only past that edge, through the real pointer.
-    let ic_slot = crate::expr::emit_inline_cache_slot(ctx, &cache_name);
-    let cache_ref = ic_slot.cache.clone();
-    let key_cache = ctx
-        .block()
-        .select(I1, &ic_slot.present, PTR, &cache_ref, &ic_slot.slot_ref);
 
     let object_header_idx = ctx.new_block("arrlike.ic.header");
     let object_brand_idx = ctx.new_block("arrlike.ic.brand");
@@ -658,6 +647,23 @@ pub(super) fn lower_with_scalar_projection(
     // mutation is observable.  This lets lifecycle-heavy subclasses traverse
     // a thousand historical tail shapes without thrashing a monomorphic IC.
     ctx.current_block = object_shape_idx;
+    // Only the shape-carried Object tier consumes this cache. Ordinary Arrays,
+    // lazy JSON arrays, and elements-backed subclasses need no cache load.
+    // Keep the pointer/sentinel selection here so those paths do not carry it
+    // live through their guards. The semantic miss needs only the static slot
+    // address, never this borrowed native cache pointer.
+    // #9708: the cache sits behind a pointer slot the runtime fills on the
+    // first shape-carried prime. `arrlike.ic.shape` reads word 0 inside a
+    // flat predicate, so it reads through `key_cache`: the real cache when
+    // present, else the slot itself — 8 bytes of null, i.e. a zero identity,
+    // which fails `key_nonzero` exactly as the all-zero global did. Every
+    // later word is read only past that edge, through the real pointer.
+    let ic_slot = crate::expr::emit_inline_cache_slot(ctx, &cache_name);
+    let cache_ref = ic_slot.cache.clone();
+    let key_cache = ctx
+        .block()
+        .select(I1, &ic_slot.present, PTR, &cache_ref, &ic_slot.slot_ref);
+
     let is_object = ctx.block().icmp_eq(I8, &gc_type, "2");
     let object_ptr = ctx.block().inttoptr(I64, &object_raw);
     let class_id = ctx.block().load(I32, &object_ptr);
@@ -898,7 +904,11 @@ pub(super) fn lower_with_scalar_projection(
     let slow_raw = ctx.block().call(
         DOUBLE,
         "js_packed_arraylike_index_get",
-        &[(DOUBLE, obj_box), (DOUBLE, idx_d), (PTR, &ic_slot.slot_ref)],
+        &[
+            (DOUBLE, obj_box),
+            (DOUBLE, idx_d),
+            (PTR, &format!("@{cache_name}")),
+        ],
     );
     // In a number context, coerce the (possibly boxed) slow result here so the
     // merge phi is uniformly a Number and the arithmetic caller skips its own

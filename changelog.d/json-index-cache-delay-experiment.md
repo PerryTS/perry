@@ -1,0 +1,1 @@
+Move the dynamic indexing cache load into the shape-carried Array-subclass branch so ordinary arrays and lazy JSON arrays need no unused cache pointer. Full semantic fallback still receives the static cache slot address. This is an unlanded experiment based on R5; validation and performance measurements are pending. It changes no runtime or GC policy.
