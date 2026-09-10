@@ -1,0 +1,36 @@
+{
+  "owner": "json-perf-39969-1789040477",
+  "load_before": [
+    1.70947265625,
+    1.623046875,
+    1.64208984375
+  ],
+  "started_utc": "2026-09-10T11:41:17Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    "run_access.py",
+    "--worker",
+    ".work/scalar-projection-r2/access-worker",
+    "--baseline-worker",
+    ".work/main-53df-fresh/main-access",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--bun",
+    "/Users/perry/.bun/bin/bun",
+    "--results-dir",
+    "results/quiet-scalar-projection-r2-access",
+    "--iterations",
+    "1000000",
+    "--repeat",
+    "7"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.869140625,
+    1.66748046875,
+    1.65771484375
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-10T11:41:41Z"
+}

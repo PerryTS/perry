@@ -14,6 +14,8 @@ ordinary array semantics, preserving indexed getters, replacement values and
 holes. Ordinary receiver definitions coerce keys once, before inspecting the
 descriptor, with the inputs and converted key rooted across user callbacks.
 
-This is an experimental R2 candidate following R1's rejected reuse regressions;
-compiled validation and performance acceptance are still pending. The access benchmark covers repeated, random,
-mixed-field and sequential reads separately from parse timing.
+This is an experimental R2 candidate following R1's rejected reuse regressions.
+R2 preserves smaller-array scan improvements and improves repeated scalar reads,
+but remaining CPU regressions and native-root checker findings prevent landing.
+The measurements and validation limits are recorded in
+`benchmarks/json_performance/SCALAR_MEMO.md`.

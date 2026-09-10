@@ -1,0 +1,39 @@
+{
+  "commit": "46e9b34c62edd97463b192f64f377fd4e705eebd",
+  "base": "53df2c671fff33b1f8f624432372c2401db8b1d0",
+  "unit_results": {
+    "runtime_json": 301,
+    "codegen_json": 10,
+    "index_get": 13,
+    "property_get": 25,
+    "gc_call_effects": 15
+  },
+  "lint": {
+    "passed": 72,
+    "failed": [
+      "public_baseline_freshness",
+      "string_payload_access_inventory_new_test"
+    ],
+    "compile_tier": "skipped"
+  },
+  "pending": [
+    "Resolve five separated CPU regressions",
+    "Resolve two native checker findings",
+    "Investigate long-string stringify variability",
+    "Full original/rotating/retained matrices only after targeted acceptance"
+  ],
+  "status": "rejected",
+  "timed_trials": 616,
+  "all_timed_checksums_match_node": true,
+  "script_gates": {
+    "passed_after_repaired_gate": 73,
+    "failed": [
+      "public_baseline_freshness"
+    ],
+    "compile_tier": "skipped"
+  },
+  "runtime_test_accessor_followup": {
+    "passed": 301,
+    "failed": 0
+  }
+}

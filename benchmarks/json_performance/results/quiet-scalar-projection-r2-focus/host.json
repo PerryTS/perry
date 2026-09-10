@@ -1,0 +1,99 @@
+{
+  "started_utc": "2026-09-10T11:43:12Z",
+  "load_before": [
+    1.32763671875,
+    1.53271484375,
+    1.60498046875
+  ],
+  "cases": [
+    [
+      "records_array_16k",
+      "scan",
+      4000,
+      8,
+      7
+    ],
+    [
+      "records_array_1m",
+      "scan",
+      200,
+      2,
+      7
+    ],
+    [
+      "records_array_8m",
+      "scan",
+      32,
+      1,
+      7
+    ],
+    [
+      "records_array_20m",
+      "scan",
+      16,
+      1,
+      7
+    ],
+    [
+      "records_array_20m",
+      "roundtrip",
+      8,
+      1,
+      7
+    ],
+    [
+      "records_array_1m",
+      "parse",
+      200,
+      8,
+      7
+    ],
+    [
+      "records_array_1m",
+      "stringify",
+      256,
+      8,
+      7
+    ],
+    [
+      "small_record",
+      "parse",
+      2000000,
+      5000,
+      7
+    ],
+    [
+      "small_record",
+      "stringify",
+      10000000,
+      5000,
+      7
+    ],
+    [
+      "long_string_1m",
+      "stringify",
+      4096,
+      8,
+      7
+    ]
+  ],
+  "workers": {
+    "perry": "55dd67ed3277d28864be32a262149d9d2f66340ad717a20fddd95fb3792cc7e3",
+    "baseline": "83c2f71794d8fb233c11a6256df84744764604ee3e7278cee9408d8a278aa74e",
+    "node": "87e9b1fed820a2683ea90f5871596edf605b7162519156856dacbfbad36d1d29",
+    "bun": "e0c90ec15d33363e6b70713d56bc3b2c7585c17f40a0fe0f8fd9305901d4e233"
+  },
+  "sources": {
+    "run_regression_focus.py": "0607798d0b675af6c99977f6a821e29af69d6fdbdf16e6144d50a40d096c7270",
+    "run_dispatch_focus.py": "100ba3e1bd5c0cd451d1a3528f95b5f4b8d0ff2f4771796ab8598b36a46fbcc4",
+    "worker.js": "55c11d12296f896212d6abd76bcf8d551d0590b0ad24b262018b7a707369a2f4"
+  },
+  "node_version": "v26.5.1",
+  "bun_version": "1.3.14",
+  "finished_utc": "2026-09-10T11:45:52Z",
+  "load_after": [
+    2.291015625,
+    1.82275390625,
+    1.7060546875
+  ]
+}

@@ -1,0 +1,67 @@
+{
+  "probe_counts": [
+    {
+      "source": "test-files/test_json_scalar_projection.ts",
+      "lowering": "native",
+      "probe_calls": 49
+    },
+    {
+      "source": "benchmarks/json_performance/access-worker.ts",
+      "lowering": "native",
+      "probe_calls": 12
+    },
+    {
+      "source": "benchmarks/json_performance/worker.ts",
+      "lowering": "native",
+      "probe_calls": 4
+    },
+    {
+      "source": "test-files/test_json_scalar_projection.ts",
+      "lowering": "shadow",
+      "probe_calls": 49
+    },
+    {
+      "source": "benchmarks/json_performance/access-worker.ts",
+      "lowering": "shadow",
+      "probe_calls": 12
+    },
+    {
+      "source": "benchmarks/json_performance/worker.ts",
+      "lowering": "shadow",
+      "probe_calls": 4
+    }
+  ],
+  "checks": [
+    {
+      "mode": "native",
+      "scope": "all",
+      "variant": 0,
+      "exit_code": 1
+    },
+    {
+      "mode": "native",
+      "scope": "workers",
+      "exit_code": 0
+    },
+    {
+      "mode": "shadow",
+      "scope": "all",
+      "variant": 0,
+      "exit_code": 0
+    },
+    {
+      "mode": "shadow",
+      "scope": "all",
+      "variant": 1,
+      "exit_code": 0
+    }
+  ],
+  "statepoint_passes": "always-inline,function(mem2reg,sccp),rewrite-statepoints-for-gc",
+  "source_commit": "46e9b34c62edd97463b192f64f377fd4e705eebd",
+  "notes": [
+    "Native workers pass with 582 statepoints / 1239 relocates; shadow checks pass.",
+    "Full fixture has TWO native findings: pre-existing R1 accessor construction and a global string argument across js_get_string_pointer_unified, exposed by the new JSON.stringify(memo) === source assertion.",
+    "Two standalone no-JSON string-comparison controls did not reproduce the new finding. Compare lowering is byte-unchanged from main, but its inheritance is NOT established by an actual main compiler reproduction. No exemption added.",
+    "A third, stringify-only comparison control also did not reproduce the new full-fixture finding. All three controls and their zero-finding results are retained; no inherited-status claim follows from them."
+  ]
+}
