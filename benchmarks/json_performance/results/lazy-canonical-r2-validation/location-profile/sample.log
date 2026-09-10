@@ -1,0 +1,3 @@
+Sampling process 62412 for 2 seconds with 1 millisecond of run time between samples
+Sampling completed, processing symbols...
+Sample analysis of process 62412 written to file benchmarks/json_performance/.work/lazy-canonical-r2/location-profile/sample.txt
