@@ -1,0 +1,1174 @@
+﻿2026-09-10T05:21:32.7131626Z Current runner version: '2.337.0'
+2026-09-10T05:21:32.7156455Z ##[group]Runner Image Provisioner
+2026-09-10T05:21:32.7157509Z Hosted Compute Agent
+2026-09-10T05:21:32.7158097Z Version: 20260828.587
+2026-09-10T05:21:32.7158783Z Commit: abac92662cab4cc7352de4f9f9d2e2419aad9c29
+2026-09-10T05:21:32.7159567Z Build Date: 2026-08-28T16:44:25Z
+2026-09-10T05:21:32.7160246Z Worker ID: {7e9f9d5e-8e45-4c03-9396-fefba811f24a}
+2026-09-10T05:21:32.7161004Z Azure Region: westus3
+2026-09-10T05:21:32.7161571Z ##[endgroup]
+2026-09-10T05:21:32.7163076Z ##[group]Operating System
+2026-09-10T05:21:32.7163866Z Ubuntu
+2026-09-10T05:21:32.7164403Z 24.04.5
+2026-09-10T05:21:32.7165371Z LTS
+2026-09-10T05:21:32.7166023Z ##[endgroup]
+2026-09-10T05:21:32.7166607Z ##[group]Runner Image
+2026-09-10T05:21:32.7167367Z Image: ubuntu-24.04
+2026-09-10T05:21:32.7167949Z Version: 20260907.300.1
+2026-09-10T05:21:32.7169263Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260907.300/images/ubuntu/Ubuntu2404-Readme.md
+2026-09-10T05:21:32.7170812Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260907.300
+2026-09-10T05:21:32.7171891Z ##[endgroup]
+2026-09-10T05:21:32.7173095Z ##[group]GITHUB_TOKEN Permissions
+2026-09-10T05:21:32.7175492Z Contents: read
+2026-09-10T05:21:32.7176119Z Metadata: read
+2026-09-10T05:21:32.7176791Z Packages: read
+2026-09-10T05:21:32.7177373Z ##[endgroup]
+2026-09-10T05:21:32.7179449Z Secret source: Actions
+2026-09-10T05:21:32.7180578Z Cache mode: write
+2026-09-10T05:21:32.7181270Z Prepare workflow directory
+2026-09-10T05:21:32.7585981Z Prepare all required actions
+2026-09-10T05:21:32.7635544Z Getting action download info
+2026-09-10T05:21:33.1250171Z Download action repository 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' (SHA:3d3c42e5aac5ba805825da76410c181273ba90b1)
+2026-09-10T05:21:33.2405980Z Download action repository 'actions/setup-node@820762786026740c76f36085b0efc47a31fe5020' (SHA:820762786026740c76f36085b0efc47a31fe5020)
+2026-09-10T05:21:33.3228573Z Download action repository 'Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6' (SHA:6323deb102c322ba6fcbdcafc7e3dddab59af2b6)
+2026-09-10T05:21:34.4279961Z Complete job name: lint
+2026-09-10T05:21:34.5358476Z ##[group]Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+2026-09-10T05:21:34.5360002Z with:
+2026-09-10T05:21:34.5360514Z   repository: PerryTS/perry
+2026-09-10T05:21:34.5365141Z   token: ***
+2026-09-10T05:21:34.5365635Z   ssh-strict: true
+2026-09-10T05:21:34.5366116Z   ssh-user: git
+2026-09-10T05:21:34.5366606Z   persist-credentials: true
+2026-09-10T05:21:34.5367138Z   clean: true
+2026-09-10T05:21:34.5367639Z   sparse-checkout-cone-mode: true
+2026-09-10T05:21:34.5368217Z   fetch-depth: 1
+2026-09-10T05:21:34.5368679Z   fetch-tags: false
+2026-09-10T05:21:34.5369175Z   show-progress: true
+2026-09-10T05:21:34.5369658Z   lfs: false
+2026-09-10T05:21:34.5370112Z   submodules: false
+2026-09-10T05:21:34.5370608Z   set-safe-directory: true
+2026-09-10T05:21:34.5371153Z   allow-unsafe-pr-checkout: false
+2026-09-10T05:21:34.5372084Z env:
+2026-09-10T05:21:34.5372556Z   CARGO_TERM_COLOR: always
+2026-09-10T05:21:34.5373117Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:21:34.5373716Z ##[endgroup]
+2026-09-10T05:21:34.6364104Z Syncing repository: PerryTS/perry
+2026-09-10T05:21:34.6366717Z ##[group]Getting Git version info
+2026-09-10T05:21:34.6367503Z Working directory is '/home/runner/work/perry/perry'
+2026-09-10T05:21:34.6368651Z [command]/usr/bin/git version
+2026-09-10T05:21:34.6448366Z git version 2.55.0
+2026-09-10T05:21:34.6474340Z ##[endgroup]
+2026-09-10T05:21:34.6486781Z Temporarily overriding HOME='/home/runner/work/_temp/c6c5d4f2-27f9-42b6-9bde-95f54780ae35' before making global git config changes
+2026-09-10T05:21:34.6488429Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-10T05:21:34.6494274Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/perry/perry
+2026-09-10T05:21:34.6553440Z Deleting the contents of '/home/runner/work/perry/perry'
+2026-09-10T05:21:34.6558381Z ##[group]Determining repository object format
+2026-09-10T05:21:34.6560365Z ##[endgroup]
+2026-09-10T05:21:34.6562129Z ##[group]Initializing the repository
+2026-09-10T05:21:34.6564406Z [command]/usr/bin/git init /home/runner/work/perry/perry
+2026-09-10T05:21:34.6697465Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-09-10T05:21:34.6699891Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-09-10T05:21:34.6702439Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-09-10T05:21:34.6704131Z hint: call:
+2026-09-10T05:21:34.6705238Z hint:
+2026-09-10T05:21:34.6706346Z hint: 	git config --global init.defaultBranch <name>
+2026-09-10T05:21:34.6707581Z hint:
+2026-09-10T05:21:34.6708721Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-09-10T05:21:34.6710543Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-09-10T05:21:34.6712584Z hint:
+2026-09-10T05:21:34.6713534Z hint: 	git branch -m <name>
+2026-09-10T05:21:34.6714514Z hint:
+2026-09-10T05:21:34.6716128Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-09-10T05:21:34.6718186Z Initialized empty Git repository in /home/runner/work/perry/perry/.git/
+2026-09-10T05:21:34.6721507Z [command]/usr/bin/git remote add origin https://github.com/PerryTS/perry
+2026-09-10T05:21:34.6772328Z ##[endgroup]
+2026-09-10T05:21:34.6774375Z ##[group]Disabling automatic garbage collection
+2026-09-10T05:21:34.6777907Z [command]/usr/bin/git config --local gc.auto 0
+2026-09-10T05:21:34.6817333Z ##[endgroup]
+2026-09-10T05:21:34.6819142Z ##[group]Setting up auth
+2026-09-10T05:21:34.6820230Z Removing SSH command configuration
+2026-09-10T05:21:34.6833961Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-10T05:21:34.6908571Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-10T05:21:34.7316663Z Removing HTTP extra header
+2026-09-10T05:21:34.7323718Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-10T05:21:34.7365386Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-10T05:21:34.7603515Z Removing includeIf entries pointing to credentials config files
+2026-09-10T05:21:34.7604639Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-10T05:21:34.7652220Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-10T05:21:34.7908040Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-bfd43864-c015-43b2-b0bb-db548056ceba.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-09-10T05:21:34.7957668Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/perry/perry/.git.path /home/runner/work/_temp/git-credentials-bfd43864-c015-43b2-b0bb-db548056ceba.config
+2026-09-10T05:21:34.7992802Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/perry/perry/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-bfd43864-c015-43b2-b0bb-db548056ceba.config
+2026-09-10T05:21:34.8030626Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-bfd43864-c015-43b2-b0bb-db548056ceba.config
+2026-09-10T05:21:34.8077281Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-bfd43864-c015-43b2-b0bb-db548056ceba.config
+2026-09-10T05:21:34.8109335Z ##[endgroup]
+2026-09-10T05:21:34.8110932Z ##[group]Fetching the repository
+2026-09-10T05:21:34.8118163Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +eee3881c464bf91ae900e87a42bed072bbdfc95a:refs/remotes/origin/main
+2026-09-10T05:21:39.2029765Z From https://github.com/PerryTS/perry
+2026-09-10T05:21:39.2031616Z  * [new ref]           eee3881c464bf91ae900e87a42bed072bbdfc95a -> origin/main
+2026-09-10T05:21:39.2039164Z [command]/usr/bin/git branch --list --remote origin/main
+2026-09-10T05:21:39.2069303Z   origin/main
+2026-09-10T05:21:39.2077407Z [command]/usr/bin/git rev-parse refs/remotes/origin/main
+2026-09-10T05:21:39.2106128Z eee3881c464bf91ae900e87a42bed072bbdfc95a
+2026-09-10T05:21:39.2111202Z ##[endgroup]
+2026-09-10T05:21:39.2112109Z ##[group]Determining the checkout info
+2026-09-10T05:21:39.2113118Z ##[endgroup]
+2026-09-10T05:21:39.2117180Z [command]/usr/bin/git sparse-checkout disable
+2026-09-10T05:21:39.2172400Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-09-10T05:21:39.2205637Z ##[group]Checking out the ref
+2026-09-10T05:21:39.2209667Z [command]/usr/bin/git checkout --progress --force -B main refs/remotes/origin/main
+2026-09-10T05:21:40.2546771Z Updating files:  46% (9310/20115)
+2026-09-10T05:21:40.2779476Z Updating files:  47% (9455/20115)
+2026-09-10T05:21:40.3033902Z Updating files:  48% (9656/20115)
+2026-09-10T05:21:40.3240842Z Updating files:  49% (9857/20115)
+2026-09-10T05:21:40.3492696Z Updating files:  50% (10058/20115)
+2026-09-10T05:21:40.3739019Z Updating files:  51% (10259/20115)
+2026-09-10T05:21:40.3965827Z Updating files:  52% (10460/20115)
+2026-09-10T05:21:40.4183536Z Updating files:  53% (10661/20115)
+2026-09-10T05:21:40.4327291Z Updating files:  54% (10863/20115)
+2026-09-10T05:21:40.4433729Z Updating files:  55% (11064/20115)
+2026-09-10T05:21:40.4576354Z Updating files:  56% (11265/20115)
+2026-09-10T05:21:40.4784751Z Updating files:  57% (11466/20115)
+2026-09-10T05:21:40.4914122Z Updating files:  58% (11667/20115)
+2026-09-10T05:21:40.5076561Z Updating files:  59% (11868/20115)
+2026-09-10T05:21:40.6134303Z Updating files:  60% (12069/20115)
+2026-09-10T05:21:40.6307744Z Updating files:  61% (12271/20115)
+2026-09-10T05:21:40.6480831Z Updating files:  62% (12472/20115)
+2026-09-10T05:21:40.6603681Z Updating files:  63% (12673/20115)
+2026-09-10T05:21:40.6680728Z Updating files:  64% (12874/20115)
+2026-09-10T05:21:40.6770359Z Updating files:  65% (13075/20115)
+2026-09-10T05:21:40.6870195Z Updating files:  66% (13276/20115)
+2026-09-10T05:21:40.6976389Z Updating files:  67% (13478/20115)
+2026-09-10T05:21:40.7074422Z Updating files:  68% (13679/20115)
+2026-09-10T05:21:40.7173112Z Updating files:  69% (13880/20115)
+2026-09-10T05:21:40.7264171Z Updating files:  70% (14081/20115)
+2026-09-10T05:21:40.7354572Z Updating files:  71% (14282/20115)
+2026-09-10T05:21:40.7447790Z Updating files:  72% (14483/20115)
+2026-09-10T05:21:40.7526354Z Updating files:  73% (14684/20115)
+2026-09-10T05:21:40.7607161Z Updating files:  74% (14886/20115)
+2026-09-10T05:21:40.7735275Z Updating files:  75% (15087/20115)
+2026-09-10T05:21:40.7860205Z Updating files:  76% (15288/20115)
+2026-09-10T05:21:40.7969540Z Updating files:  77% (15489/20115)
+2026-09-10T05:21:40.8051776Z Updating files:  78% (15690/20115)
+2026-09-10T05:21:40.8130159Z Updating files:  79% (15891/20115)
+2026-09-10T05:21:40.8218356Z Updating files:  80% (16092/20115)
+2026-09-10T05:21:40.8301155Z Updating files:  81% (16294/20115)
+2026-09-10T05:21:40.8383254Z Updating files:  82% (16495/20115)
+2026-09-10T05:21:40.8470455Z Updating files:  83% (16696/20115)
+2026-09-10T05:21:40.8550809Z Updating files:  84% (16897/20115)
+2026-09-10T05:21:40.8634661Z Updating files:  85% (17098/20115)
+2026-09-10T05:21:40.8711067Z Updating files:  86% (17299/20115)
+2026-09-10T05:21:40.8792596Z Updating files:  87% (17501/20115)
+2026-09-10T05:21:40.8864840Z Updating files:  88% (17702/20115)
+2026-09-10T05:21:40.8935807Z Updating files:  89% (17903/20115)
+2026-09-10T05:21:40.9011948Z Updating files:  90% (18104/20115)
+2026-09-10T05:21:40.9091716Z Updating files:  91% (18305/20115)
+2026-09-10T05:21:40.9168467Z Updating files:  92% (18506/20115)
+2026-09-10T05:21:40.9247232Z Updating files:  93% (18707/20115)
+2026-09-10T05:21:40.9330545Z Updating files:  94% (18909/20115)
+2026-09-10T05:21:40.9404763Z Updating files:  95% (19110/20115)
+2026-09-10T05:21:40.9494638Z Updating files:  96% (19311/20115)
+2026-09-10T05:21:40.9603532Z Updating files:  97% (19512/20115)
+2026-09-10T05:21:40.9723159Z Updating files:  98% (19713/20115)
+2026-09-10T05:21:40.9839003Z Updating files:  99% (19914/20115)
+2026-09-10T05:21:40.9839581Z Updating files: 100% (20115/20115)
+2026-09-10T05:21:40.9840140Z Updating files: 100% (20115/20115), done.
+2026-09-10T05:21:41.0041263Z Switched to a new branch 'main'
+2026-09-10T05:21:41.0048420Z branch 'main' set up to track 'origin/main'.
+2026-09-10T05:21:41.0136598Z ##[endgroup]
+2026-09-10T05:21:41.0189875Z [command]/usr/bin/git log -1 --format=%H
+2026-09-10T05:21:41.0219567Z eee3881c464bf91ae900e87a42bed072bbdfc95a
+2026-09-10T05:21:41.0429445Z ##[group]Run ./scripts/check_changeset_fragment.sh --self-test
+2026-09-10T05:21:41.0429988Z [36;1m./scripts/check_changeset_fragment.sh --self-test[0m
+2026-09-10T05:21:41.0471572Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:21:41.0471835Z env:
+2026-09-10T05:21:41.0472030Z   CARGO_TERM_COLOR: always
+2026-09-10T05:21:41.0472278Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:21:41.0472529Z ##[endgroup]
+2026-09-10T05:21:41.0649985Z   ok    no crates/ change is not applicable
+2026-09-10T05:21:41.0763380Z   ok    crates/ change with the right number passes silently
+2026-09-10T05:21:41.0862978Z   ok    crates/ change with no fragment fails
+2026-09-10T05:21:41.0962782Z   ok    0000- placeholder is a hard failure
+2026-09-10T05:21:41.1062338Z   ok    0000- fails even alongside a correct fragment
+2026-09-10T05:21:41.1173033Z   ok    a backfill number warns but passes
+2026-09-10T05:21:41.1271465Z   ok    an EDITED fragment does not satisfy the gate
+2026-09-10T05:21:41.1371118Z   ok    a nested path does not satisfy the gate
+2026-09-10T05:21:41.1498979Z   ok    a fragment on a later page still counts
+2026-09-10T05:21:41.1598383Z   ok    crates/ on a later page is still gated
+2026-09-10T05:21:41.1598968Z check_changeset_fragment: self-test passed
+2026-09-10T05:21:41.1727532Z ##[group]Run actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+2026-09-10T05:21:41.1727937Z with:
+2026-09-10T05:21:41.1728152Z   node-version-file: .node-version
+2026-09-10T05:21:41.1728421Z   check-latest: false
+2026-09-10T05:21:41.1731066Z   token: ***
+2026-09-10T05:21:41.1731287Z   package-manager-cache: true
+2026-09-10T05:21:41.1731527Z env:
+2026-09-10T05:21:41.1731712Z   CARGO_TERM_COLOR: always
+2026-09-10T05:21:41.1731947Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:21:41.1732187Z ##[endgroup]
+2026-09-10T05:21:41.2925487Z Node version file is not JSON file
+2026-09-10T05:21:41.2928090Z Resolved .node-version as 26.5.1
+2026-09-10T05:21:41.2944902Z Attempting to download 26.5.1...
+2026-09-10T05:21:42.2650821Z Acquiring 26.5.1 - x64 from https://github.com/actions/node-versions/releases/download/26.5.1-30508404249/node-26.5.1-linux-x64.tar.gz
+2026-09-10T05:21:42.8171811Z Extracting ...
+2026-09-10T05:21:42.8303202Z [command]/usr/bin/tar xz --strip 1 --warning=no-unknown-keyword --overwrite -C /home/runner/work/_temp/41761f51-37f8-46ea-985b-e2e3bb1b12be -f /home/runner/work/_temp/8082b9ed-61a5-42df-8243-ba97bd825466
+2026-09-10T05:21:44.1562106Z Adding to the cache ...
+2026-09-10T05:21:46.2387848Z ##[group]Environment details
+2026-09-10T05:21:46.4604934Z node: v26.5.1
+2026-09-10T05:21:46.4605545Z npm: 11.17.0
+2026-09-10T05:21:46.4605805Z yarn: 1.22.22
+2026-09-10T05:21:46.4606326Z ##[endgroup]
+2026-09-10T05:21:46.4756295Z ##[group]Run python3 -m unittest discover -s tests -p 'test_benchmark_*.py' -v
+2026-09-10T05:21:46.4756894Z [36;1mpython3 -m unittest discover -s tests -p 'test_benchmark_*.py' -v[0m
+2026-09-10T05:21:46.4757323Z [36;1m./tests/test_benchmark_peer_fallback.sh[0m
+2026-09-10T05:21:46.4757659Z [36;1m./tests/test_benchmark_output_verifier.sh[0m
+2026-09-10T05:21:46.4758026Z [36;1mbash -n benchmarks/compare.sh benchmarks/quick.sh \[0m
+2026-09-10T05:21:46.4758697Z [36;1m  benchmarks/suite/run_benchmarks.sh benchmarks/honest_bench/run.sh \[0m
+2026-09-10T05:21:46.4759160Z [36;1m  benchmarks/honest_bench/harness/run_http_bench.sh \[0m
+2026-09-10T05:21:46.4759517Z [36;1m  tests/test_benchmark_peer_fallback.sh[0m
+2026-09-10T05:21:46.4798021Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:21:46.4798276Z env:
+2026-09-10T05:21:46.4798469Z   CARGO_TERM_COLOR: always
+2026-09-10T05:21:46.4798733Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:21:46.4798982Z ##[endgroup]
+2026-09-10T05:21:46.5693582Z test_build_cli_rejects_malformed_json_lines (test_benchmark_gate.BenchmarkArtifactTests.test_build_cli_rejects_malformed_json_lines) ... ok
+2026-09-10T05:21:46.5695351Z test_builds_distributions_and_peer_ratios (test_benchmark_gate.BenchmarkArtifactTests.test_builds_distributions_and_peer_ratios) ... ok
+2026-09-10T05:21:46.5698424Z test_bun_absent_is_explicit_and_does_not_invalidate_results (test_benchmark_gate.BenchmarkArtifactTests.test_bun_absent_is_explicit_and_does_not_invalidate_results) ... ok
+2026-09-10T05:21:46.5707368Z test_load_rejects_inconsistent_derived_distribution (test_benchmark_gate.BenchmarkArtifactTests.test_load_rejects_inconsistent_derived_distribution) ... ok
+2026-09-10T05:21:46.5715373Z test_load_rejects_missing_runtime_metadata (test_benchmark_gate.BenchmarkArtifactTests.test_load_rejects_missing_runtime_metadata) ... ok
+2026-09-10T05:21:46.5723444Z test_load_rejects_tampered_sample_count (test_benchmark_gate.BenchmarkArtifactTests.test_load_rejects_tampered_sample_count) ... ok
+2026-09-10T05:21:46.5728361Z test_loads_legacy_baseline_schema (test_benchmark_gate.BenchmarkArtifactTests.test_loads_legacy_baseline_schema) ... ok
+2026-09-10T05:21:46.5729988Z test_rejects_empty_benchmark_artifact (test_benchmark_gate.BenchmarkArtifactTests.test_rejects_empty_benchmark_artifact) ... ok
+2026-09-10T05:21:46.5731662Z test_rejects_explicit_empty_rss_samples (test_benchmark_gate.BenchmarkArtifactTests.test_rejects_explicit_empty_rss_samples) ... ok
+2026-09-10T05:21:46.5733250Z test_rejects_fractional_millisecond_samples (test_benchmark_gate.BenchmarkArtifactTests.test_rejects_fractional_millisecond_samples) ... ok
+2026-09-10T05:21:46.5735743Z test_rejects_incomplete_available_runtime_samples (test_benchmark_gate.BenchmarkArtifactTests.test_rejects_incomplete_available_runtime_samples) ... ok
+2026-09-10T05:21:46.5738882Z test_rejects_missing_expected_benchmark (test_benchmark_gate.BenchmarkArtifactTests.test_rejects_missing_expected_benchmark) ... ok
+2026-09-10T05:21:46.5740878Z test_rejects_runtime_metadata_without_a_command (test_benchmark_gate.BenchmarkArtifactTests.test_rejects_runtime_metadata_without_a_command) ... ok
+2026-09-10T05:21:46.5742649Z test_rejects_unknown_explicit_schema_version (test_benchmark_gate.BenchmarkArtifactTests.test_rejects_unknown_explicit_schema_version) ... ok
+2026-09-10T05:21:46.5744364Z test_rejects_zero_perry_median_as_measuring_nothing (test_benchmark_gate.BenchmarkArtifactTests.test_rejects_zero_perry_median_as_measuring_nothing) ... ok
+2026-09-10T05:21:46.5746554Z test_rejects_zero_rss_as_an_incomplete_measurement (test_benchmark_gate.BenchmarkArtifactTests.test_rejects_zero_rss_as_an_incomplete_measurement) ... ok
+2026-09-10T05:21:46.5747881Z test_rejects_http_rows_with_missing_metrics (test_benchmark_gate.HttpSummaryTests.test_rejects_http_rows_with_missing_metrics) ... ok
+2026-09-10T05:21:46.5748882Z test_rejects_incomplete_http_samples (test_benchmark_gate.HttpSummaryTests.test_rejects_incomplete_http_samples) ... ok
+2026-09-10T05:21:46.5752928Z test_rejects_missing_pinned_http_metadata (test_benchmark_gate.HttpSummaryTests.test_rejects_missing_pinned_http_metadata) ... ok
+2026-09-10T05:21:46.5754806Z test_rejects_unhealthy_http_samples (test_benchmark_gate.HttpSummaryTests.test_rejects_unhealthy_http_samples) ... ok
+2026-09-10T05:21:46.5761230Z test_summarizes_throughput_and_latency_distributions (test_benchmark_gate.HttpSummaryTests.test_summarizes_throughput_and_latency_distributions) ... ok
+2026-09-10T05:21:46.5770087Z test_fast_noisy_samples_are_calibrated_per_benchmark (test_benchmark_gate.RegressionGateTests.test_fast_noisy_samples_are_calibrated_per_benchmark) ... ok
+2026-09-10T05:21:46.5777268Z test_fast_stable_regression_is_not_hidden_by_global_escape_hatch (test_benchmark_gate.RegressionGateTests.test_fast_stable_regression_is_not_hidden_by_global_escape_hatch) ... ok
+2026-09-10T05:21:46.5783624Z test_legacy_unpinned_peer_cannot_veto_a_regression (test_benchmark_gate.RegressionGateTests.test_legacy_unpinned_peer_cannot_veto_a_regression) ... ok
+2026-09-10T05:21:46.5793446Z test_peer_relative_trend_filters_runner_wide_drift (test_benchmark_gate.RegressionGateTests.test_peer_relative_trend_filters_runner_wide_drift) ... ok
+2026-09-10T05:21:46.5800009Z test_percentage_threshold_must_be_exceeded (test_benchmark_gate.RegressionGateTests.test_percentage_threshold_must_be_exceeded) ... ok
+2026-09-10T05:21:46.5806629Z test_single_outlier_does_not_hide_a_stable_median_shift (test_benchmark_gate.RegressionGateTests.test_single_outlier_does_not_hide_a_stable_median_shift) ... ok
+2026-09-10T05:21:46.5813024Z test_stable_one_tick_fast_regression_is_detected (test_benchmark_gate.RegressionGateTests.test_stable_one_tick_fast_regression_is_detected) ... ok
+2026-09-10T05:21:46.5826802Z test_thresholds_must_be_positive_and_finite (test_benchmark_gate.RegressionGateTests.test_thresholds_must_be_positive_and_finite) ... ok
+2026-09-10T05:21:46.5833092Z test_zero_baseline_timer_is_not_ungateable (test_benchmark_gate.RegressionGateTests.test_zero_baseline_timer_is_not_ungateable) ... ok
+2026-09-10T05:21:46.5833720Z 
+2026-09-10T05:21:46.5833968Z ----------------------------------------------------------------------
+2026-09-10T05:21:46.5834336Z Ran 30 tests in 0.016s
+2026-09-10T05:21:46.5834482Z 
+2026-09-10T05:21:46.5834564Z OK
+2026-09-10T05:21:46.6776230Z Bun is unavailable; Bun distributions and ratios will be marked unavailable.
+2026-09-10T05:22:31.0344549Z benchmark Bun-absent fallback: ok
+2026-09-10T05:22:31.4453171Z ##[group]Run ./tests/test_stage_npm_windows_llvm.sh
+2026-09-10T05:22:31.4453849Z [36;1m./tests/test_stage_npm_windows_llvm.sh[0m
+2026-09-10T05:22:31.4489792Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:22:31.4490049Z env:
+2026-09-10T05:22:31.4490265Z   CARGO_TERM_COLOR: always
+2026-09-10T05:22:31.4490528Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:22:31.4490773Z ##[endgroup]
+2026-09-10T05:22:31.5127066Z Windows LLVM runtime npm staging: OK (copy + missing-DLL refusal)
+2026-09-10T05:22:31.5173228Z ##[group]Run rustup toolchain install nightly-2026-08-20 --profile minimal --component rustfmt --component clippy
+2026-09-10T05:22:31.5174094Z [36;1mrustup toolchain install nightly-2026-08-20 --profile minimal --component rustfmt --component clippy[0m
+2026-09-10T05:22:31.5209705Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:22:31.5209953Z env:
+2026-09-10T05:22:31.5210145Z   CARGO_TERM_COLOR: always
+2026-09-10T05:22:31.5210387Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:22:31.5210650Z ##[endgroup]
+2026-09-10T05:22:31.5804227Z info: syncing channel updates for nightly-2026-08-20-x86_64-unknown-linux-gnu
+2026-09-10T05:22:31.7845617Z info: latest update on 2026-08-20 for version 1.100.0-nightly (f7d782a3b 2026-08-19)
+2026-09-10T05:22:31.7847148Z info: downloading 5 components
+2026-09-10T05:22:39.8895256Z 
+2026-09-10T05:22:39.8964003Z   nightly-2026-08-20-x86_64-unknown-linux-gnu installed - rustc 1.100.0-nightly (f7d782a3b 2026-08-19)
+2026-09-10T05:22:39.8964494Z 
+2026-09-10T05:22:39.9245216Z Prepare all required actions
+2026-09-10T05:22:39.9458523Z ##[group]Run ./.github/actions/setup-llvm22
+2026-09-10T05:22:39.9458830Z with:
+2026-09-10T05:22:39.9459023Z   version: 22.1.8
+2026-09-10T05:22:39.9459228Z env:
+2026-09-10T05:22:39.9459418Z   CARGO_TERM_COLOR: always
+2026-09-10T05:22:39.9459665Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:22:39.9459908Z ##[endgroup]
+2026-09-10T05:22:39.9514768Z ##[start-action display=LLVM 22 (macOS, brew);id=__self.__run]
+2026-09-10T05:22:39.9520692Z ##[end-action id=__self.__run;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-09-10T05:22:39.9522587Z ##[start-action display=LLVM 22 (Linux, apt.llvm.org);id=__self.__run_2]
+2026-09-10T05:22:39.9545265Z ##[group]Run set -euo pipefail
+2026-09-10T05:22:39.9545589Z [36;1mset -euo pipefail[0m
+2026-09-10T05:22:39.9545940Z [36;1mwget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \[0m
+2026-09-10T05:22:39.9546461Z [36;1m  | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc >/dev/null[0m
+2026-09-10T05:22:39.9546848Z [36;1m. /etc/os-release[0m
+2026-09-10T05:22:39.9547305Z [36;1mecho "deb http://apt.llvm.org/${VERSION_CODENAME}/ llvm-toolchain-${VERSION_CODENAME}-22 main" \[0m
+2026-09-10T05:22:39.9547876Z [36;1m  | sudo tee /etc/apt/sources.list.d/llvm22.list >/dev/null[0m
+2026-09-10T05:22:39.9548232Z [36;1msudo apt-get update -qq[0m
+2026-09-10T05:22:39.9548616Z [36;1m# `clang-22` is NOT implied by `llvm-22-dev`: apt ships opt and clang as[0m
+2026-09-10T05:22:39.9549124Z [36;1m# separate packages, so installing only the dev libraries leaves[0m
+2026-09-10T05:22:39.9549625Z [36;1m# /usr/lib/llvm-22/bin/opt with no clang beside it. That is exactly what[0m
+2026-09-10T05:22:39.9550137Z [36;1m# ubuntu-24.04-arm hits. Anything needing a MATCHED opt+clang pair — the[0m
+2026-09-10T05:22:39.9550669Z [36;1m# RS4GC arm in gc-native-roots.yml — then finds a half-populated bin dir[0m
+2026-09-10T05:22:39.9551203Z [36;1m# and either fails outright or falls back to hand-rolled discovery and[0m
+2026-09-10T05:22:39.9551709Z [36;1m# picks up the distro's LLVM 18. Install the pair here, once, so every[0m
+2026-09-10T05:22:39.9552189Z [36;1m# workflow gets a version-matched toolchain from one place.[0m
+2026-09-10T05:22:39.9552655Z [36;1msudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \[0m
+2026-09-10T05:22:39.9553090Z [36;1m  llvm-22-dev libpolly-22-dev libzstd-dev clang-22[0m
+2026-09-10T05:22:39.9553468Z [36;1mllvm-config-22 --version | grep -q '^22\.' \[0m
+2026-09-10T05:22:39.9553838Z [36;1m  || { echo "::error::apt LLVM is not 22.x"; exit 1; }[0m
+2026-09-10T05:22:39.9554189Z [36;1mPREFIX="$(llvm-config-22 --prefix)"[0m
+2026-09-10T05:22:39.9554584Z [36;1m# Co-locate clang with opt. apt installs the versioned binary at[0m
+2026-09-10T05:22:39.9555207Z [36;1m# /usr/bin/clang-22, but consumers resolve a toolchain by DIRECTORY —[0m
+2026-09-10T05:22:39.9555719Z [36;1m# PERRY_LLVM_OPT and PERRY_LLVM_CLANG must come from the same bin dir or[0m
+2026-09-10T05:22:39.9556233Z [36;1m# opt and clang can skew across majors — so it has to sit under $PREFIX.[0m
+2026-09-10T05:22:39.9556708Z [36;1mif [ ! -x "$PREFIX/bin/clang" ] && [ -x /usr/bin/clang-22 ]; then[0m
+2026-09-10T05:22:39.9557131Z [36;1m  sudo ln -sf /usr/bin/clang-22 "$PREFIX/bin/clang"[0m
+2026-09-10T05:22:39.9557446Z [36;1mfi[0m
+2026-09-10T05:22:39.9557764Z [36;1m# Assert the pair, not just llvm-config. A green setup step that leaves[0m
+2026-09-10T05:22:39.9558269Z [36;1m# a mismatched clang is the failure this whole action exists to prevent.[0m
+2026-09-10T05:22:39.9558740Z [36;1m"$PREFIX/bin/clang" --version | grep -q 'version 22\.' \[0m
+2026-09-10T05:22:39.9559183Z [36;1m  || { echo "::error::clang under $PREFIX is not 22.x"; exit 1; }[0m
+2026-09-10T05:22:39.9559604Z [36;1mecho "LLVM_SYS_221_PREFIX=$PREFIX" >> "$GITHUB_ENV"[0m
+2026-09-10T05:22:39.9596547Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-09-10T05:22:39.9596899Z env:
+2026-09-10T05:22:39.9597102Z   CARGO_TERM_COLOR: always
+2026-09-10T05:22:39.9597540Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:22:39.9597799Z ##[endgroup]
+2026-09-10T05:22:47.2569329Z Selecting previously unselected package libllvm22:amd64.
+2026-09-10T05:22:47.2924547Z (Reading database ... 
+2026-09-10T05:22:47.2925823Z (Reading database ... 5%
+2026-09-10T05:22:47.2926923Z (Reading database ... 10%
+2026-09-10T05:22:47.2927749Z (Reading database ... 15%
+2026-09-10T05:22:47.2928342Z (Reading database ... 20%
+2026-09-10T05:22:47.2928794Z (Reading database ... 25%
+2026-09-10T05:22:47.2929719Z (Reading database ... 30%
+2026-09-10T05:22:47.2930181Z (Reading database ... 35%
+2026-09-10T05:22:47.2930640Z (Reading database ... 40%
+2026-09-10T05:22:47.2931109Z (Reading database ... 45%
+2026-09-10T05:22:47.2931562Z (Reading database ... 50%
+2026-09-10T05:22:47.2989032Z (Reading database ... 55%
+2026-09-10T05:22:47.4478058Z (Reading database ... 60%
+2026-09-10T05:22:47.6244276Z (Reading database ... 65%
+2026-09-10T05:22:47.7943585Z (Reading database ... 70%
+2026-09-10T05:22:47.9706436Z (Reading database ... 75%
+2026-09-10T05:22:48.1480383Z (Reading database ... 80%
+2026-09-10T05:22:48.3377984Z (Reading database ... 85%
+2026-09-10T05:22:48.5269752Z (Reading database ... 90%
+2026-09-10T05:22:48.6962298Z (Reading database ... 95%
+2026-09-10T05:22:48.6962726Z (Reading database ... 100%
+2026-09-10T05:22:48.6963309Z (Reading database ... 201818 files and directories currently installed.)
+2026-09-10T05:22:48.7004606Z Preparing to unpack .../00-libllvm22_1%3a22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80_amd64.deb ...
+2026-09-10T05:22:48.7043665Z Unpacking libllvm22:amd64 (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:22:49.2483892Z Selecting previously unselected package libclang-cpp22.
+2026-09-10T05:22:49.2607902Z Preparing to unpack .../01-libclang-cpp22_1%3a22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80_amd64.deb ...
+2026-09-10T05:22:49.2641387Z Unpacking libclang-cpp22 (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:22:49.4851566Z Selecting previously unselected package libclang-common-22-dev:amd64.
+2026-09-10T05:22:49.4972668Z Preparing to unpack .../02-libclang-common-22-dev_1%3a22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80_amd64.deb ...
+2026-09-10T05:22:49.4984116Z Unpacking libclang-common-22-dev:amd64 (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:22:49.5944015Z Selecting previously unselected package llvm-22-linker-tools.
+2026-09-10T05:22:49.6068048Z Preparing to unpack .../03-llvm-22-linker-tools_1%3a22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80_amd64.deb ...
+2026-09-10T05:22:49.6076917Z Unpacking llvm-22-linker-tools (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:22:49.6453714Z Selecting previously unselected package libclang1-22.
+2026-09-10T05:22:49.6576850Z Preparing to unpack .../04-libclang1-22_1%3a22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80_amd64.deb ...
+2026-09-10T05:22:49.6590454Z Unpacking libclang1-22 (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:22:49.7937819Z Selecting previously unselected package clang-22.
+2026-09-10T05:22:49.8058612Z Preparing to unpack .../05-clang-22_1%3a22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80_amd64.deb ...
+2026-09-10T05:22:49.8066730Z Unpacking clang-22 (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:22:49.8354637Z Selecting previously unselected package clang-tools-22.
+2026-09-10T05:22:49.8478500Z Preparing to unpack .../06-clang-tools-22_1%3a22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80_amd64.deb ...
+2026-09-10T05:22:49.8486564Z Unpacking clang-tools-22 (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:22:50.0190868Z Selecting previously unselected package libclang-rt-22-dev.
+2026-09-10T05:22:50.0314662Z Preparing to unpack .../07-libclang-rt-22-dev_1%3a22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80_amd64.deb ...
+2026-09-10T05:22:50.0322468Z Unpacking libclang-rt-22-dev (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:22:50.1928522Z Selecting previously unselected package libpolly-22-dev.
+2026-09-10T05:22:50.2049562Z Preparing to unpack .../08-libpolly-22-dev_1%3a22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80_amd64.deb ...
+2026-09-10T05:22:50.2057288Z Unpacking libpolly-22-dev (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:22:50.2742219Z Selecting previously unselected package llvm-22-runtime.
+2026-09-10T05:22:50.2866075Z Preparing to unpack .../09-llvm-22-runtime_1%3a22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80_amd64.deb ...
+2026-09-10T05:22:50.2876626Z Unpacking llvm-22-runtime (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:22:50.3154654Z Selecting previously unselected package llvm-22.
+2026-09-10T05:22:50.3278820Z Preparing to unpack .../10-llvm-22_1%3a22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80_amd64.deb ...
+2026-09-10T05:22:50.3289760Z Unpacking llvm-22 (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:22:50.6537221Z Selecting previously unselected package llvm-22-tools.
+2026-09-10T05:22:50.6659937Z Preparing to unpack .../11-llvm-22-tools_1%3a22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80_amd64.deb ...
+2026-09-10T05:22:50.6668353Z Unpacking llvm-22-tools (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:22:50.7021458Z Selecting previously unselected package llvm-22-dev.
+2026-09-10T05:22:50.7144512Z Preparing to unpack .../12-llvm-22-dev_1%3a22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80_amd64.deb ...
+2026-09-10T05:22:50.7152588Z Unpacking llvm-22-dev (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:22:52.1568849Z Setting up libclang-common-22-dev:amd64 (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:22:52.1592929Z Setting up libpolly-22-dev (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:22:52.1612812Z Setting up libclang-rt-22-dev (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:22:52.1632901Z Setting up libllvm22:amd64 (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:22:52.1656084Z Setting up libclang1-22 (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:22:52.1677479Z Setting up llvm-22-runtime (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:22:52.1708864Z Setting up llvm-22-linker-tools (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:22:52.1729643Z Setting up llvm-22 (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:22:52.1751191Z Setting up llvm-22-tools (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:22:52.3341894Z Setting up libclang-cpp22 (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:22:52.3362706Z Setting up clang-22 (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:22:52.3382361Z Setting up llvm-22-dev (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:22:52.3404821Z Setting up clang-tools-22 (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:22:52.3431983Z Processing triggers for systemd (255.4-1ubuntu8.17) ...
+2026-09-10T05:22:52.3706935Z Processing triggers for man-db (2.12.0-4build2) ...
+2026-09-10T05:22:52.3728451Z Not building database; man-db/auto-update is not 'true'.
+2026-09-10T05:22:52.3740042Z Processing triggers for libc-bin (2.39-0ubuntu8.8) ...
+2026-09-10T05:22:53.0551382Z 
+2026-09-10T05:22:53.0552003Z Running kernel seems to be up-to-date.
+2026-09-10T05:22:53.0552441Z 
+2026-09-10T05:22:53.0553006Z No services need to be restarted.
+2026-09-10T05:22:53.0553324Z 
+2026-09-10T05:22:53.0553597Z No containers need to be restarted.
+2026-09-10T05:22:53.0553893Z 
+2026-09-10T05:22:53.0554196Z No user sessions are running outdated binaries.
+2026-09-10T05:22:53.0554563Z 
+2026-09-10T05:22:53.0555317Z No VM guests are running outdated hypervisor (qemu) binaries on this host.
+2026-09-10T05:22:54.0320638Z ##[end-action id=__self.__run_2;outcome=success;conclusion=success;duration_ms=14079]
+2026-09-10T05:22:54.0324704Z ##[start-action display=LLVM 22 (Windows, official MSVC tarball);id=__self.__run_3]
+2026-09-10T05:22:54.0329348Z ##[end-action id=__self.__run_3;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-09-10T05:22:54.0412924Z ##[group]Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+2026-09-10T05:22:54.0413348Z with:
+2026-09-10T05:22:54.0413554Z   shared-key: Linux-perry
+2026-09-10T05:22:54.0413786Z   save-if: true
+2026-09-10T05:22:54.0413988Z   prefix-key: v0-rust
+2026-09-10T05:22:54.0414210Z   add-job-id-key: true
+2026-09-10T05:22:54.0414449Z   add-rust-environment-hash-key: true
+2026-09-10T05:22:54.0414720Z   cache-targets: true
+2026-09-10T05:22:54.0415224Z   cache-all-crates: false
+2026-09-10T05:22:54.0415505Z   cache-workspace-crates: false
+2026-09-10T05:22:54.0415759Z   cache-provider: github
+2026-09-10T05:22:54.0415988Z   cache-bin: true
+2026-09-10T05:22:54.0416194Z   lookup-only: false
+2026-09-10T05:22:54.0416400Z   cmd-format: {0}
+2026-09-10T05:22:54.0416586Z env:
+2026-09-10T05:22:54.0416771Z   CARGO_TERM_COLOR: always
+2026-09-10T05:22:54.0417017Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:22:54.0417278Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:22:54.0417586Z ##[endgroup]
+2026-09-10T05:22:56.0952283Z ##[group]Cache Configuration
+2026-09-10T05:22:56.0953048Z Cache Provider:
+2026-09-10T05:22:56.0953684Z     github
+2026-09-10T05:22:56.0954055Z Workspaces:
+2026-09-10T05:22:56.0954569Z     /home/runner/work/perry/perry
+2026-09-10T05:22:56.0955640Z Cache Paths:
+2026-09-10T05:22:56.0956192Z     /home/runner/.cargo/bin
+2026-09-10T05:22:56.0956868Z     /home/runner/.cargo/.crates.toml
+2026-09-10T05:22:56.0957573Z     /home/runner/.cargo/.crates2.json
+2026-09-10T05:22:56.0958255Z     /home/runner/.cargo/registry
+2026-09-10T05:22:56.0958801Z     /home/runner/.cargo/git
+2026-09-10T05:22:56.0959356Z     /home/runner/work/perry/perry/target
+2026-09-10T05:22:56.0959849Z Restore Key:
+2026-09-10T05:22:56.0960286Z     v0-rust-Linux-perry-Linux-x64-743f3116
+2026-09-10T05:22:56.0960977Z Cache Key:
+2026-09-10T05:22:56.0961531Z     v0-rust-Linux-perry-Linux-x64-743f3116-6283268c
+2026-09-10T05:22:56.0962278Z .. Prefix:
+2026-09-10T05:22:56.0962754Z   - v0-rust-Linux-perry-Linux-x64
+2026-09-10T05:22:56.0963329Z .. Environment considered:
+2026-09-10T05:22:56.0963913Z   - Rust Versions:
+2026-09-10T05:22:56.0964864Z     - 1.100.0-nightly x86_64-unknown-linux-gnu f7d782a3be46d6bb4b9792fe69a61db389ba1769
+2026-09-10T05:22:56.0966252Z     - 1.98.1 x86_64-unknown-linux-gnu 48a229ceaefd4985c50990b14116b6d856af0985
+2026-09-10T05:22:56.0966929Z   - CARGO_INCREMENTAL
+2026-09-10T05:22:56.0967302Z   - CARGO_TERM_COLOR
+2026-09-10T05:22:56.0967704Z .. Lockfiles considered:
+2026-09-10T05:22:56.0968223Z   - /home/runner/work/perry/perry/.cargo/config.toml
+2026-09-10T05:22:56.0968877Z   - /home/runner/work/perry/perry/Cargo.lock
+2026-09-10T05:22:56.0969699Z   - /home/runner/work/perry/perry/crates/perry-api-manifest/Cargo.toml
+2026-09-10T05:22:56.0970721Z   - /home/runner/work/perry/perry/crates/perry-audio-miniaudio/Cargo.toml
+2026-09-10T05:22:56.0971749Z   - /home/runner/work/perry/perry/crates/perry-codegen-arkts/Cargo.toml
+2026-09-10T05:22:56.0972751Z   - /home/runner/work/perry/perry/crates/perry-codegen-glance/Cargo.toml
+2026-09-10T05:22:56.0973709Z   - /home/runner/work/perry/perry/crates/perry-codegen-js/Cargo.toml
+2026-09-10T05:22:56.0974700Z   - /home/runner/work/perry/perry/crates/perry-codegen-swiftui/Cargo.toml
+2026-09-10T05:22:56.0976260Z   - /home/runner/work/perry/perry/crates/perry-codegen-wasm/Cargo.toml
+2026-09-10T05:22:56.0976863Z   - /home/runner/work/perry/perry/crates/perry-codegen-wear-tiles/Cargo.toml
+2026-09-10T05:22:56.0977396Z   - /home/runner/work/perry/perry/crates/perry-codegen/Cargo.toml
+2026-09-10T05:22:56.0977931Z   - /home/runner/work/perry/perry/crates/perry-container-compose/Cargo.toml
+2026-09-10T05:22:56.0978490Z   - /home/runner/work/perry/perry/crates/perry-container-e2e/Cargo.toml
+2026-09-10T05:22:56.0979004Z   - /home/runner/work/perry/perry/crates/perry-diagnostics/Cargo.toml
+2026-09-10T05:22:56.0979485Z   - /home/runner/work/perry/perry/crates/perry-dispatch/Cargo.toml
+2026-09-10T05:22:56.0980405Z   - /home/runner/work/perry/perry/crates/perry-doc-tests/Cargo.toml
+2026-09-10T05:22:56.0981078Z   - /home/runner/work/perry/perry/crates/perry-ext-ads/Cargo.toml
+2026-09-10T05:22:56.0981580Z   - /home/runner/work/perry/perry/crates/perry-ext-argon2/Cargo.toml
+2026-09-10T05:22:56.0982076Z   - /home/runner/work/perry/perry/crates/perry-ext-axios/Cargo.toml
+2026-09-10T05:22:56.0982558Z   - /home/runner/work/perry/perry/crates/perry-ext-bcrypt/Cargo.toml
+2026-09-10T05:22:56.0983082Z   - /home/runner/work/perry/perry/crates/perry-ext-better-sqlite3/Cargo.toml
+2026-09-10T05:22:56.0983604Z   - /home/runner/work/perry/perry/crates/perry-ext-cheerio/Cargo.toml
+2026-09-10T05:22:56.0984120Z   - /home/runner/work/perry/perry/crates/perry-ext-commander/Cargo.toml
+2026-09-10T05:22:56.0984608Z   - /home/runner/work/perry/perry/crates/perry-ext-cron/Cargo.toml
+2026-09-10T05:22:56.0985416Z   - /home/runner/work/perry/perry/crates/perry-ext-dayjs/Cargo.toml
+2026-09-10T05:22:56.0986315Z   - /home/runner/work/perry/perry/crates/perry-ext-decimal/Cargo.toml
+2026-09-10T05:22:56.0986870Z   - /home/runner/work/perry/perry/crates/perry-ext-dotenv/Cargo.toml
+2026-09-10T05:22:56.0987382Z   - /home/runner/work/perry/perry/crates/perry-ext-ethers/Cargo.toml
+2026-09-10T05:22:56.0987872Z   - /home/runner/work/perry/perry/crates/perry-ext-events/Cargo.toml
+2026-09-10T05:22:56.0988423Z   - /home/runner/work/perry/perry/crates/perry-ext-exponential-backoff/Cargo.toml
+2026-09-10T05:22:56.0988975Z   - /home/runner/work/perry/perry/crates/perry-ext-fastify/Cargo.toml
+2026-09-10T05:22:56.0989458Z   - /home/runner/work/perry/perry/crates/perry-ext-fetch/Cargo.toml
+2026-09-10T05:22:56.0989934Z   - /home/runner/work/perry/perry/crates/perry-ext-http/Cargo.toml
+2026-09-10T05:22:56.0990414Z   - /home/runner/work/perry/perry/crates/perry-ext-ioredis/Cargo.toml
+2026-09-10T05:22:56.0990946Z   - /home/runner/work/perry/perry/crates/perry-ext-jsonwebtoken/Cargo.toml
+2026-09-10T05:22:56.0991485Z   - /home/runner/work/perry/perry/crates/perry-ext-lru-cache/Cargo.toml
+2026-09-10T05:22:56.0991984Z   - /home/runner/work/perry/perry/crates/perry-ext-moment/Cargo.toml
+2026-09-10T05:22:56.0992475Z   - /home/runner/work/perry/perry/crates/perry-ext-mongodb/Cargo.toml
+2026-09-10T05:22:56.0992967Z   - /home/runner/work/perry/perry/crates/perry-ext-mysql2/Cargo.toml
+2026-09-10T05:22:56.0993469Z   - /home/runner/work/perry/perry/crates/perry-ext-nanoid/Cargo.toml
+2026-09-10T05:22:56.0994028Z   - /home/runner/work/perry/perry/crates/perry-ext-net/Cargo.toml
+2026-09-10T05:22:56.0994553Z   - /home/runner/work/perry/perry/crates/perry-ext-node-forge/Cargo.toml
+2026-09-10T05:22:56.0995356Z   - /home/runner/work/perry/perry/crates/perry-ext-nodemailer/Cargo.toml
+2026-09-10T05:22:56.0995925Z   - /home/runner/work/perry/perry/crates/perry-ext-parcel-watcher/Cargo.toml
+2026-09-10T05:22:56.0996452Z   - /home/runner/work/perry/perry/crates/perry-ext-pdf/Cargo.toml
+2026-09-10T05:22:56.0996922Z   - /home/runner/work/perry/perry/crates/perry-ext-pg/Cargo.toml
+2026-09-10T05:22:56.0997390Z   - /home/runner/work/perry/perry/crates/perry-ext-qs/Cargo.toml
+2026-09-10T05:22:56.0997883Z   - /home/runner/work/perry/perry/crates/perry-ext-ratelimit/Cargo.toml
+2026-09-10T05:22:56.0998376Z   - /home/runner/work/perry/perry/crates/perry-ext-sharp/Cargo.toml
+2026-09-10T05:22:56.0998862Z   - /home/runner/work/perry/perry/crates/perry-ext-streams/Cargo.toml
+2026-09-10T05:22:56.0999361Z   - /home/runner/work/perry/perry/crates/perry-ext-typescript/Cargo.toml
+2026-09-10T05:22:56.0999848Z   - /home/runner/work/perry/perry/crates/perry-ext-undici/Cargo.toml
+2026-09-10T05:22:56.1000316Z   - /home/runner/work/perry/perry/crates/perry-ext-uuid/Cargo.toml
+2026-09-10T05:22:56.1000797Z   - /home/runner/work/perry/perry/crates/perry-ext-validator/Cargo.toml
+2026-09-10T05:22:56.1001270Z   - /home/runner/work/perry/perry/crates/perry-ext-ws/Cargo.toml
+2026-09-10T05:22:56.1001743Z   - /home/runner/work/perry/perry/crates/perry-ext-zlib/Cargo.toml
+2026-09-10T05:22:56.1002360Z   - /home/runner/work/perry/perry/crates/perry-ffi/Cargo.toml
+2026-09-10T05:22:56.1002908Z   - /home/runner/work/perry/perry/crates/perry-hir/Cargo.toml
+2026-09-10T05:22:56.1003359Z   - /home/runner/work/perry/perry/crates/perry-parser/Cargo.toml
+2026-09-10T05:22:56.1003849Z   - /home/runner/work/perry/perry/crates/perry-runtime-static/Cargo.toml
+2026-09-10T05:22:56.1004332Z   - /home/runner/work/perry/perry/crates/perry-runtime/Cargo.toml
+2026-09-10T05:22:56.1004808Z   - /home/runner/work/perry/perry/crates/perry-stdlib-static/Cargo.toml
+2026-09-10T05:22:56.1005813Z   - /home/runner/work/perry/perry/crates/perry-stdlib/Cargo.toml
+2026-09-10T05:22:56.1006319Z   - /home/runner/work/perry/perry/crates/perry-transform/Cargo.toml
+2026-09-10T05:22:56.1007015Z   - /home/runner/work/perry/perry/crates/perry-ui-android/Cargo.toml
+2026-09-10T05:22:56.1007681Z   - /home/runner/work/perry/perry/crates/perry-ui-geisterhand/Cargo.toml
+2026-09-10T05:22:56.1008355Z   - /home/runner/work/perry/perry/crates/perry-ui-gtk4/Cargo.toml
+2026-09-10T05:22:56.1008977Z   - /home/runner/work/perry/perry/crates/perry-ui-ios/Cargo.toml
+2026-09-10T05:22:56.1009668Z   - /home/runner/work/perry/perry/crates/perry-ui-macos/Cargo.toml
+2026-09-10T05:22:56.1010288Z   - /home/runner/work/perry/perry/crates/perry-ui-model/Cargo.toml
+2026-09-10T05:22:56.1010806Z   - /home/runner/work/perry/perry/crates/perry-ui-test/Cargo.toml
+2026-09-10T05:22:56.1011487Z   - /home/runner/work/perry/perry/crates/perry-ui-testkit/Cargo.toml
+2026-09-10T05:22:56.1012104Z   - /home/runner/work/perry/perry/crates/perry-ui-tvos/Cargo.toml
+2026-09-10T05:22:56.1012732Z   - /home/runner/work/perry/perry/crates/perry-ui-visionos/Cargo.toml
+2026-09-10T05:22:56.1013377Z   - /home/runner/work/perry/perry/crates/perry-ui-watchos/Cargo.toml
+2026-09-10T05:22:56.1014048Z   - /home/runner/work/perry/perry/crates/perry-ui-windows-winui/Cargo.toml
+2026-09-10T05:22:56.1014703Z   - /home/runner/work/perry/perry/crates/perry-ui-windows/Cargo.toml
+2026-09-10T05:22:56.1015572Z   - /home/runner/work/perry/perry/crates/perry-ui/Cargo.toml
+2026-09-10T05:22:56.1016057Z   - /home/runner/work/perry/perry/crates/perry-updater/Cargo.toml
+2026-09-10T05:22:56.1016529Z   - /home/runner/work/perry/perry/crates/perry-wasm-host/Cargo.toml
+2026-09-10T05:22:56.1016965Z   - /home/runner/work/perry/perry/crates/perry/Cargo.toml
+2026-09-10T05:22:56.1017538Z   - /home/runner/work/perry/perry/docs/examples/_fixtures/native-libraries/my-bindings/Cargo.toml
+2026-09-10T05:22:56.1018086Z   - /home/runner/work/perry/perry/rust-toolchain.toml
+2026-09-10T05:22:56.1018602Z ##[endgroup]
+2026-09-10T05:22:56.1018727Z 
+2026-09-10T05:22:56.1018838Z ... Restoring cache ...
+2026-09-10T05:22:56.3025676Z Cache hit for: v0-rust-Linux-perry-Linux-x64-743f3116-6283268c
+2026-09-10T05:22:57.5074157Z Received 37748736 of 283013515 (13.3%), 36.0 MBs/sec
+2026-09-10T05:22:58.5073531Z Received 197132288 of 283013515 (69.7%), 94.0 MBs/sec
+2026-09-10T05:22:59.0097380Z Received 283013515 of 283013515 (100.0%), 107.8 MBs/sec
+2026-09-10T05:22:59.0098434Z Cache Size: ~270 MB (283013515 B)
+2026-09-10T05:22:59.0137480Z [command]/usr/bin/tar -xf /home/runner/work/_temp/ab058531-fc97-423c-b343-b6fe9d0e5aa1/cache.tzst -P -C /home/runner/work/perry/perry --use-compress-program unzstd
+2026-09-10T05:23:00.4543253Z Cache restored successfully
+2026-09-10T05:23:00.4665309Z Restored from cache key "v0-rust-Linux-perry-Linux-x64-743f3116-6283268c" full match: true.
+2026-09-10T05:23:00.4842370Z ##[group]Run cargo fmt --all -- --check
+2026-09-10T05:23:00.4842727Z [36;1mcargo fmt --all -- --check[0m
+2026-09-10T05:23:00.4883218Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:23:00.4883479Z env:
+2026-09-10T05:23:00.4883681Z   CARGO_TERM_COLOR: always
+2026-09-10T05:23:00.4883937Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:23:00.4884207Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:23:00.4884486Z   CACHE_ON_FAILURE: false
+2026-09-10T05:23:00.4884725Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:23:00.4884939Z ##[endgroup]
+2026-09-10T05:23:16.0141491Z ##[group]Run python3 scripts/ci_plan.py --self-test
+2026-09-10T05:23:16.0141936Z [36;1mpython3 scripts/ci_plan.py --self-test[0m
+2026-09-10T05:23:16.0142317Z [36;1mpython3 scripts/ci_cargo_test_shard.py --self-test[0m
+2026-09-10T05:23:16.0142746Z [36;1mpython3 scripts/ci_cargo_test_shard.py --package perry \[0m
+2026-09-10T05:23:16.0143113Z [36;1m  --total-shards "8" \[0m
+2026-09-10T05:23:16.0143371Z [36;1m  --validate[0m
+2026-09-10T05:23:16.0143686Z [36;1mpython3 scripts/ci_plan.py --table > /tmp/ci-plan-table.md[0m
+2026-09-10T05:23:16.0144212Z [36;1mif ! grep -qF -- "$(head -1 /tmp/ci-plan-table.md)" docs/src/testing/ci-tiers.md; then[0m
+2026-09-10T05:23:16.0144808Z [36;1m  echo "::error::docs/src/testing/ci-tiers.md is missing the tier table header"; exit 1[0m
+2026-09-10T05:23:16.0145557Z [36;1mfi[0m
+2026-09-10T05:23:16.0145767Z [36;1mpython3 - <<'PY'[0m
+2026-09-10T05:23:16.0146010Z [36;1mimport re, sys[0m
+2026-09-10T05:23:16.0146349Z [36;1mwant = open('/tmp/ci-plan-table.md').read().strip()[0m
+2026-09-10T05:23:16.0146749Z [36;1mdoc = open('docs/src/testing/ci-tiers.md').read()[0m
+2026-09-10T05:23:16.0147075Z [36;1mif want not in doc:[0m
+2026-09-10T05:23:16.0147482Z [36;1m    print("::error::docs/src/testing/ci-tiers.md tier table is stale. Regenerate with:")[0m
+2026-09-10T05:23:16.0148064Z [36;1m    print("  python3 scripts/ci_plan.py --table   # and paste over the table")[0m
+2026-09-10T05:23:16.0148478Z [36;1m    sys.exit(1)[0m
+2026-09-10T05:23:16.0148780Z [36;1mprint("ci-tiers.md tier table matches ci_plan.py")[0m
+2026-09-10T05:23:16.0149102Z [36;1mPY[0m
+2026-09-10T05:23:16.0187758Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:23:16.0188007Z env:
+2026-09-10T05:23:16.0188212Z   CARGO_TERM_COLOR: always
+2026-09-10T05:23:16.0188463Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:23:16.0188728Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:23:16.0189009Z   CACHE_ON_FAILURE: false
+2026-09-10T05:23:16.0189242Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:23:16.0189474Z ##[endgroup]
+2026-09-10T05:23:16.0549323Z ci_plan --self-test: 22 jobs, 3 tiers, all invariants hold
+2026-09-10T05:23:16.0875405Z ci_cargo_test_shard --self-test: deterministic exact coverage holds
+2026-09-10T05:23:16.1814428Z perry: 343 integration targets assigned exactly once across 8 shards (sizes: 43, 43, 43, 43, 43, 43, 43, 42)
+2026-09-10T05:23:16.2388765Z ci-tiers.md tier table matches ci_plan.py
+2026-09-10T05:23:16.2449566Z ##[group]Run python3 scripts/compiler_output_step_liveness.py --self-test
+2026-09-10T05:23:16.2461396Z [36;1mpython3 scripts/compiler_output_step_liveness.py --self-test[0m
+2026-09-10T05:23:16.2462088Z [36;1mpython3 scripts/compiler_output_step_liveness.py[0m
+2026-09-10T05:23:16.2500913Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:23:16.2501167Z env:
+2026-09-10T05:23:16.2501364Z   CARGO_TERM_COLOR: always
+2026-09-10T05:23:16.2501625Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:23:16.2501893Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:23:16.2502186Z   CACHE_ON_FAILURE: false
+2026-09-10T05:23:16.2502432Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:23:16.2502652Z ##[endgroup]
+2026-09-10T05:23:16.2957453Z compiler-output step liveness self-test passed (8 cases)
+2026-09-10T05:23:16.3411409Z compiler-output step liveness check passed (9 subjects)
+2026-09-10T05:23:16.3497581Z ##[group]Run python3 scripts/workspace_architecture.py --self-test
+2026-09-10T05:23:16.3498113Z [36;1mpython3 scripts/workspace_architecture.py --self-test[0m
+2026-09-10T05:23:16.3498606Z [36;1mpython3 scripts/workspace_architecture.py --check --print-summary[0m
+2026-09-10T05:23:16.3537473Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:23:16.3537732Z env:
+2026-09-10T05:23:16.3537963Z   CARGO_TERM_COLOR: always
+2026-09-10T05:23:16.3538215Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:23:16.3538480Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:23:16.3538762Z   CACHE_ON_FAILURE: false
+2026-09-10T05:23:16.3538996Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:23:16.3539215Z ##[endgroup]
+2026-09-10T05:23:16.4093436Z test_ci_scopes_share_the_host_exclusion_source (__main__.HelpersTest.test_ci_scopes_share_the_host_exclusion_source) ... ok
+2026-09-10T05:23:16.4096065Z test_dependency_closure_ignores_dev_dependencies (__main__.HelpersTest.test_dependency_closure_ignores_dev_dependencies) ... ok
+2026-09-10T05:23:16.4097915Z test_policy_schema_version_is_required (__main__.HelpersTest.test_policy_schema_version_is_required) ... ok
+2026-09-10T05:23:16.4099749Z test_supported_policy_schema_version_is_accepted (__main__.HelpersTest.test_supported_policy_schema_version_is_accepted) ... ok
+2026-09-10T05:23:16.4101505Z test_unknown_ci_scope_is_rejected (__main__.HelpersTest.test_unknown_ci_scope_is_rejected) ... ok
+2026-09-10T05:23:16.4103097Z test_unknown_policy_schema_version_is_rejected (__main__.HelpersTest.test_unknown_policy_schema_version_is_rejected) ... ok
+2026-09-10T05:23:16.4104843Z test_workspace_lists_are_scoped_to_workspace_section (__main__.HelpersTest.test_workspace_lists_are_scoped_to_workspace_section) ... ok
+2026-09-10T05:23:16.4105985Z 
+2026-09-10T05:23:16.4106381Z ----------------------------------------------------------------------
+2026-09-10T05:23:16.4106947Z Ran 7 tests in 0.001s
+2026-09-10T05:23:16.4107174Z 
+2026-09-10T05:23:16.4107303Z OK
+2026-09-10T05:23:16.8659247Z Workspace architecture summary
+2026-09-10T05:23:16.8659805Z   workspace members:          80
+2026-09-10T05:23:16.8660271Z   default members:            2
+2026-09-10T05:23:16.8660707Z   default dependency closure: 18
+2026-09-10T05:23:16.8661178Z   perry dependency closure:   17
+2026-09-10T05:23:16.8661809Z   decisions:                  externalize=33, keep=42, merge=1, remove=1, review=3
+2026-09-10T05:23:16.8662520Z Workspace architecture policy: OK
+2026-09-10T05:23:16.8770223Z ##[group]Run python3 scripts/test_capture_linux_incident.py
+2026-09-10T05:23:16.8770695Z [36;1mpython3 scripts/test_capture_linux_incident.py[0m
+2026-09-10T05:23:16.8809682Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:23:16.8809947Z env:
+2026-09-10T05:23:16.8810160Z   CARGO_TERM_COLOR: always
+2026-09-10T05:23:16.8810415Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:23:16.8810685Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:23:16.8810961Z   CACHE_ON_FAILURE: false
+2026-09-10T05:23:16.8811200Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:23:16.8811414Z ##[endgroup]
+2026-09-10T05:23:16.9740788Z .......
+2026-09-10T05:23:16.9741729Z ----------------------------------------------------------------------
+2026-09-10T05:23:16.9742397Z Ran 7 tests in 0.003s
+2026-09-10T05:23:16.9742638Z 
+2026-09-10T05:23:16.9742780Z OK
+2026-09-10T05:23:16.9893092Z ##[group]Run PYTHONPATH=. python3 tests/test_public_baseline.py
+2026-09-10T05:23:16.9893948Z [36;1mPYTHONPATH=. python3 tests/test_public_baseline.py[0m
+2026-09-10T05:23:16.9894764Z [36;1m# README embedded table is optional since #6736 (marketing landing[0m
+2026-09-10T05:23:16.9895978Z [36;1m# page); this wrapper still enforces artifact freshness + RESULTS.md[0m
+2026-09-10T05:23:16.9896952Z [36;1m# drift. Kept out of public_baseline.py to preserve harness_fingerprint.[0m
+2026-09-10T05:23:16.9897833Z [36;1mpython3 benchmarks/ci_public_baseline_check.py[0m
+2026-09-10T05:23:16.9941506Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:23:16.9941773Z env:
+2026-09-10T05:23:16.9941981Z   CARGO_TERM_COLOR: always
+2026-09-10T05:23:16.9942247Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:23:16.9942529Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:23:16.9942821Z   CACHE_ON_FAILURE: false
+2026-09-10T05:23:16.9943057Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:23:16.9943316Z ##[endgroup]
+2026-09-10T05:23:17.0865514Z .............
+2026-09-10T05:23:17.0866449Z ----------------------------------------------------------------------
+2026-09-10T05:23:17.0867074Z Ran 13 tests in 0.021s
+2026-09-10T05:23:17.0867317Z 
+2026-09-10T05:23:17.0867451Z OK
+2026-09-10T05:23:17.1570051Z public baseline error: public artifact benchmark inputs changed; regenerate it with ./benchmarks/run_public_baseline.sh
+2026-09-10T05:23:17.1656836Z ##[error]Process completed with exit code 2.
+2026-09-10T05:23:17.1702292Z ##[group]Run ./scripts/check_file_size.sh
+2026-09-10T05:23:17.1702650Z [36;1m./scripts/check_file_size.sh[0m
+2026-09-10T05:23:17.1740975Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:23:17.1741232Z env:
+2026-09-10T05:23:17.1741436Z   CARGO_TERM_COLOR: always
+2026-09-10T05:23:17.1741690Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:23:17.1741954Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:23:17.1742233Z   CACHE_ON_FAILURE: false
+2026-09-10T05:23:17.1742473Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:23:17.1742688Z ##[endgroup]
+2026-09-10T05:23:29.0651272Z OK: no Rust source files exceed 2000 lines.
+2026-09-10T05:23:29.0683930Z ##[group]Run python3 scripts/local_binding_type_audit.py --self-test
+2026-09-10T05:23:29.0684473Z [36;1mpython3 scripts/local_binding_type_audit.py --self-test[0m
+2026-09-10T05:23:29.0684886Z [36;1mpython3 scripts/local_binding_type_audit.py[0m
+2026-09-10T05:23:29.0724715Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:23:29.0725289Z env:
+2026-09-10T05:23:29.0725505Z   CARGO_TERM_COLOR: always
+2026-09-10T05:23:29.0725771Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:23:29.0726052Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:23:29.0726350Z   CACHE_ON_FAILURE: false
+2026-09-10T05:23:29.0726585Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:23:29.0726801Z ##[endgroup]
+2026-09-10T05:23:29.1278263Z local_binding_type_audit self-test: OK (9 cases)
+2026-09-10T05:23:33.8818835Z local-binding-type audit: OK (93 sites, 84 groups; metadata-only=13, representation-proven=39, runtime-validated=32)
+2026-09-10T05:23:33.8933982Z ##[group]Run node scripts/binding_pins.mjs --check
+2026-09-10T05:23:33.8934392Z [36;1mnode scripts/binding_pins.mjs --check[0m
+2026-09-10T05:23:33.8973066Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:23:33.8973321Z env:
+2026-09-10T05:23:33.8973522Z   CARGO_TERM_COLOR: always
+2026-09-10T05:23:33.8973775Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:23:33.8974045Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:23:33.8974332Z   CACHE_ON_FAILURE: false
+2026-09-10T05:23:33.8974565Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:23:33.8974775Z ##[endgroup]
+2026-09-10T05:23:33.9393535Z binding pins OK — 38 pinned, lock-step holds
+2026-09-10T05:23:33.9452999Z ##[group]Run python3 scripts/binding_governance.py --check
+2026-09-10T05:23:33.9453482Z [36;1mpython3 scripts/binding_governance.py --check[0m
+2026-09-10T05:23:33.9492454Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:23:33.9492856Z env:
+2026-09-10T05:23:33.9493205Z   CARGO_TERM_COLOR: always
+2026-09-10T05:23:33.9493584Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:23:33.9494034Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:23:33.9494407Z   CACHE_ON_FAILURE: false
+2026-09-10T05:23:33.9505846Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:23:33.9506265Z ##[endgroup]
+2026-09-10T05:23:34.0026843Z binding governance OK — 40 extension crates classified
+2026-09-10T05:23:34.0110485Z ##[group]Run python3 scripts/gc_store_site_inventory.py --self-test
+2026-09-10T05:23:34.0111021Z [36;1mpython3 scripts/gc_store_site_inventory.py --self-test[0m
+2026-09-10T05:23:34.0111443Z [36;1mpython3 scripts/gc_store_site_inventory.py[0m
+2026-09-10T05:23:34.0149752Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:23:34.0150011Z env:
+2026-09-10T05:23:34.0150211Z   CARGO_TERM_COLOR: always
+2026-09-10T05:23:34.0150472Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:23:34.0150751Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:23:34.0151023Z   CACHE_ON_FAILURE: false
+2026-09-10T05:23:34.0151253Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:23:34.0151468Z ##[endgroup]
+2026-09-10T05:23:34.4774377Z GC store-site inventory self-test passed.
+2026-09-10T05:25:08.2505921Z GC store-site inventory passed (1892 files scanned, 419 audited sites, 99 allowlisted).
+2026-09-10T05:25:08.2508884Z Claim verification: 12 codegen barrier sites bound to 8 IR-witnessed stems (apush, class_field_set, ctor_prologue, idxset.inbounds, idxset.recv_captured, idxset.recv_global, idxset.recv_prop, put.pic); 115 runtime BARRIERED/EXTERNAL_BARRIERED markers source-verified against 29 barrier primitives + 15 chain-verified helpers (granularity: enclosing function).
+2026-09-10T05:25:08.2511967Z UNVERIFIED (human-audited only, by class): INIT=71, POINTER_FREE=160, ROOT=53, STACK=15. These classes have no machine-checkable evidence; do not cite this gate as verifying them.
+2026-09-10T05:25:08.2703611Z ##[group]Run python3 scripts/addr_class_inventory.py --self-test
+2026-09-10T05:25:08.2704455Z [36;1mpython3 scripts/addr_class_inventory.py --self-test[0m
+2026-09-10T05:25:08.2705398Z [36;1mpython3 scripts/addr_class_inventory.py[0m
+2026-09-10T05:25:08.2748358Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:25:08.2748608Z env:
+2026-09-10T05:25:08.2748803Z   CARGO_TERM_COLOR: always
+2026-09-10T05:25:08.2749056Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:25:08.2749327Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:25:08.2749597Z   CACHE_ON_FAILURE: false
+2026-09-10T05:25:08.2749827Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:25:08.2750040Z ##[endgroup]
+2026-09-10T05:25:08.3238305Z addr-class inventory self-tests passed.
+2026-09-10T05:25:10.6778630Z Address-classification audit passed (1429 files scanned, 319 allowlisted, 519 known sites held by the ratchet).
+2026-09-10T05:25:10.6892310Z ##[group]Run python3 scripts/string_payload_access_inventory.py --self-test
+2026-09-10T05:25:10.6893335Z [36;1mpython3 scripts/string_payload_access_inventory.py --self-test[0m
+2026-09-10T05:25:10.6894176Z [36;1mpython3 scripts/string_payload_access_inventory.py[0m
+2026-09-10T05:25:10.6946835Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:25:10.6947145Z env:
+2026-09-10T05:25:10.6947396Z   CARGO_TERM_COLOR: always
+2026-09-10T05:25:10.6947709Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:25:10.6948033Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:25:10.6948382Z   CACHE_ON_FAILURE: false
+2026-09-10T05:25:10.6948666Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:25:10.6948940Z ##[endgroup]
+2026-09-10T05:25:10.7439961Z string-payload access inventory self-tests passed
+2026-09-10T05:25:16.6670257Z string-payload access inventory: 3635 files; 414 inline offsets and 14 reader helpers held by the ratchet
+2026-09-10T05:25:16.6779002Z ##[group]Run python3 scripts/class_id_collisions.py
+2026-09-10T05:25:16.6779407Z [36;1mpython3 scripts/class_id_collisions.py[0m
+2026-09-10T05:25:16.6817928Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:25:16.6818177Z env:
+2026-09-10T05:25:16.6818377Z   CARGO_TERM_COLOR: always
+2026-09-10T05:25:16.6818623Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:25:16.6818893Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:25:16.6819163Z   CACHE_ON_FAILURE: false
+2026-09-10T05:25:16.6819385Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:25:16.6819602Z ##[endgroup]
+2026-09-10T05:25:16.9692778Z Class-id audit passed (35 reserved ids, 1 intentional cross-crate mirror(s)).
+2026-09-10T05:25:16.9776865Z ##[group]Run python3 scripts/shape_descriptor_census.py
+2026-09-10T05:25:16.9777301Z [36;1mpython3 scripts/shape_descriptor_census.py[0m
+2026-09-10T05:25:16.9816006Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:25:16.9816281Z env:
+2026-09-10T05:25:16.9816482Z   CARGO_TERM_COLOR: always
+2026-09-10T05:25:16.9816731Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:25:16.9817004Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:25:16.9817277Z   CACHE_ON_FAILURE: false
+2026-09-10T05:25:16.9817508Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:25:16.9817716Z ##[endgroup]
+2026-09-10T05:25:22.3080153Z {
+2026-09-10T05:25:22.3080806Z   "codegen_object_header_size_sites": 43,
+2026-09-10T05:25:22.3081476Z   "raw_member_files": 12,
+2026-09-10T05:25:22.3081994Z   "raw_member_sites": {
+2026-09-10T05:25:22.3082510Z     "keys_array": 35
+2026-09-10T05:25:22.3082987Z   }
+2026-09-10T05:25:22.3083342Z }
+2026-09-10T05:25:22.3263878Z ##[group]Run python3 scripts/gc_pin_sites.py --self-test
+2026-09-10T05:25:22.3264332Z [36;1mpython3 scripts/gc_pin_sites.py --self-test[0m
+2026-09-10T05:25:22.3264669Z [36;1mpython3 scripts/gc_pin_sites.py[0m
+2026-09-10T05:25:22.3303156Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:25:22.3303601Z env:
+2026-09-10T05:25:22.3303808Z   CARGO_TERM_COLOR: always
+2026-09-10T05:25:22.3304059Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:25:22.3304327Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:25:22.3304601Z   CACHE_ON_FAILURE: false
+2026-09-10T05:25:22.3304831Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:25:22.3305343Z ##[endgroup]
+2026-09-10T05:25:22.3725978Z gc_pin_sites --self-test: OK (6 offender shapes caught, no false positives on read/clear/preserve)
+2026-09-10T05:25:27.9342332Z gc_pin_sites: OK — every pin originates in gc::pin_object (3 allowlisted exception(s), 75 GC_FLAG_PINNED tokens scanned).
+2026-09-10T05:25:27.9447017Z ##[group]Run python3 scripts/check_cross_thread_promise_provenance.py --self-test
+2026-09-10T05:25:27.9447641Z [36;1mpython3 scripts/check_cross_thread_promise_provenance.py --self-test[0m
+2026-09-10T05:25:27.9448160Z [36;1mpython3 scripts/check_cross_thread_promise_provenance.py[0m
+2026-09-10T05:25:27.9486364Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:25:27.9486637Z env:
+2026-09-10T05:25:27.9486836Z   CARGO_TERM_COLOR: always
+2026-09-10T05:25:27.9487087Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:25:27.9487350Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:25:27.9487623Z   CACHE_ON_FAILURE: false
+2026-09-10T05:25:27.9487848Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:25:27.9488070Z ##[endgroup]
+2026-09-10T05:25:27.9873584Z check_cross_thread_promise_provenance --self-test ok (3 planted shapes caught, 3 clean shapes pass)
+2026-09-10T05:25:31.1540837Z check_cross_thread_promise_provenance: no arena promise reaches a native settlement sink
+2026-09-10T05:25:31.1625391Z ##[group]Run python3 scripts/gc_runtime_root_holders.py --self-test
+2026-09-10T05:25:31.1625932Z [36;1mpython3 scripts/gc_runtime_root_holders.py --self-test[0m
+2026-09-10T05:25:31.1626334Z [36;1mpython3 scripts/gc_runtime_root_holders.py[0m
+2026-09-10T05:25:31.1664351Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:25:31.1664602Z env:
+2026-09-10T05:25:31.1664796Z   CARGO_TERM_COLOR: always
+2026-09-10T05:25:31.1665274Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:25:31.1665562Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:25:31.1665843Z   CACHE_ON_FAILURE: false
+2026-09-10T05:25:31.1666076Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:25:31.1666288Z ##[endgroup]
+2026-09-10T05:25:38.1178307Z gc_runtime_root_holders self-test: OK (90 planted declarations classified, 371 inventory entries checked)
+2026-09-10T05:25:45.0410727Z gc_runtime_root_holders: OK — 1402 holder declarations scanned (1192 identity-ratcheted), 608 reached by a registered scanner, 371 classified in the inventory, 418 pinned on the frontier ratchet (152 registered scanners).
+2026-09-10T05:25:45.0413790Z   UNVERIFIED by this gate: RuntimeState struct fields (growth-floor only); non-TLS core-crate integer tables in files that never call an allocator (rule B's limit); and the 418 pinned frontier holders, which are ENUMERATED and RATCHETED but scanned by nothing — a value parked there may still be invisible to the collector.
+2026-09-10T05:25:45.0571064Z ##[group]Run python3 scripts/gc_root_dominance_check.py --self-test
+2026-09-10T05:25:45.0571587Z [36;1mpython3 scripts/gc_root_dominance_check.py --self-test[0m
+2026-09-10T05:25:45.0572046Z [36;1mpython3 scripts/gc_root_dominance_check.py --audit-poll-reach[0m
+2026-09-10T05:25:45.0610706Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:25:45.0610953Z env:
+2026-09-10T05:25:45.0611148Z   CARGO_TERM_COLOR: always
+2026-09-10T05:25:45.0611400Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:25:45.0611678Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:25:45.0611957Z   CACHE_ON_FAILURE: false
+2026-09-10T05:25:45.0612196Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:25:45.0612410Z ##[endgroup]
+2026-09-10T05:25:45.1688153Z self-test OK
+2026-09-10T05:25:45.9370013Z === poll reach: 4036 exported symbols, 1667 with an intra-runtime call edge, 399 matched by ALLOC_RE
+2026-09-10T05:25:45.9371037Z === no ALLOC_RE symbol reaches a poll-capable one unlisted
+2026-09-10T05:25:45.9471437Z ##[group]Run python3 scripts/check_gc_scanner_latches.py --self-test
+2026-09-10T05:25:45.9472184Z [36;1mpython3 scripts/check_gc_scanner_latches.py --self-test[0m
+2026-09-10T05:25:45.9472620Z [36;1mpython3 scripts/check_gc_scanner_latches.py[0m
+2026-09-10T05:25:45.9510939Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:25:45.9511223Z env:
+2026-09-10T05:25:45.9511448Z   CARGO_TERM_COLOR: always
+2026-09-10T05:25:45.9511736Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:25:45.9512034Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:25:45.9512330Z   CACHE_ON_FAILURE: false
+2026-09-10T05:25:45.9512584Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:25:45.9512823Z ##[endgroup]
+2026-09-10T05:25:45.9896911Z GC scanner latch self-test: OK (4 bad shapes rejected, 4 good shapes accepted)
+2026-09-10T05:25:59.2069198Z GC scanner latch policy OK: 171 registration calls checked across perry-runtime and perry-stdlib
+2026-09-10T05:25:59.2160526Z ##[group]Run python3 scripts/gc_rekeyed_key_tables.py --self-test
+2026-09-10T05:25:59.2161032Z [36;1mpython3 scripts/gc_rekeyed_key_tables.py --self-test[0m
+2026-09-10T05:25:59.2161443Z [36;1mpython3 scripts/gc_rekeyed_key_tables.py[0m
+2026-09-10T05:25:59.2201293Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:25:59.2201549Z env:
+2026-09-10T05:25:59.2201746Z   CARGO_TERM_COLOR: always
+2026-09-10T05:25:59.2201996Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:25:59.2202270Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:25:59.2202550Z   CACHE_ON_FAILURE: false
+2026-09-10T05:25:59.2202778Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:25:59.2202989Z ##[endgroup]
+2026-09-10T05:25:59.2752324Z self-test: 12 planted shapes, all adjudicated as expected
+2026-09-10T05:26:07.5446839Z 42 rekey sites, 25 registered prunes, 0/0 declared gaps — all classified.
+2026-09-10T05:26:07.5542200Z ##[group]Run python3 scripts/check_gc_env_knobs.py --self-test
+2026-09-10T05:26:07.5542684Z [36;1mpython3 scripts/check_gc_env_knobs.py --self-test[0m
+2026-09-10T05:26:07.5543055Z [36;1mpython3 scripts/check_gc_env_knobs.py[0m
+2026-09-10T05:26:07.5581733Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:26:07.5581983Z env:
+2026-09-10T05:26:07.5582182Z   CARGO_TERM_COLOR: always
+2026-09-10T05:26:07.5582434Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:26:07.5582730Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:26:07.5583001Z   CACHE_ON_FAILURE: false
+2026-09-10T05:26:07.5583227Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:26:07.5583438Z ##[endgroup]
+2026-09-10T05:26:07.5942572Z GC env-knob self-test: OK (dead and commented parsers are rejected; the presence-only detector distinguishes a sabotaged read from a fixed one)
+2026-09-10T05:26:09.4652075Z GC environment-knob drift check OK: 32 claimed knobs, 257 live env parsers, 3 historical documents exempt, 0 presence-only GC reads
+2026-09-10T05:26:09.4736004Z ##[group]Run python3 scripts/check_llvm_corpus_currency.py --self-test
+2026-09-10T05:26:09.4736566Z [36;1mpython3 scripts/check_llvm_corpus_currency.py --self-test[0m
+2026-09-10T05:26:09.4736990Z [36;1mpython3 scripts/check_llvm_corpus_currency.py[0m
+2026-09-10T05:26:09.4775166Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:26:09.4775445Z env:
+2026-09-10T05:26:09.4775642Z   CARGO_TERM_COLOR: always
+2026-09-10T05:26:09.4775897Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:26:09.4776172Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:26:09.4776446Z   CACHE_ON_FAILURE: false
+2026-09-10T05:26:09.4776672Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:26:09.4776883Z ##[endgroup]
+2026-09-10T05:26:09.5116328Z llvm-corpus-currency self-test: OK (today's IR shapes are all matched; the 2026-08-03 corpus shape is rejected)
+2026-09-10T05:26:09.6137838Z llvm-inprocess corpus currency OK: 13 reader-supported IR forms present across 3 corpora
+2026-09-10T05:26:09.6244716Z ##[group]Run python3 scripts/read_statepoint_rewrite_passes.py --self-test
+2026-09-10T05:26:09.6245910Z [36;1mpython3 scripts/read_statepoint_rewrite_passes.py --self-test[0m
+2026-09-10T05:26:09.6246767Z [36;1mpython3 scripts/read_statepoint_rewrite_passes.py --check[0m
+2026-09-10T05:26:09.6300325Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:26:09.6300764Z env:
+2026-09-10T05:26:09.6301107Z   CARGO_TERM_COLOR: always
+2026-09-10T05:26:09.6301567Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:26:09.6302038Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:26:09.6302506Z   CACHE_ON_FAILURE: false
+2026-09-10T05:26:09.6302904Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:26:09.6303269Z ##[endgroup]
+2026-09-10T05:26:09.9509435Z statepoint-pass reader self-test: OK
+2026-09-10T05:26:10.2711413Z statepoint-pass source OK: crates/perry-codegen/src/linker.rs -> always-inline,function(mem2reg,sccp),rewrite-statepoints-for-gc
+2026-09-10T05:26:10.2806440Z ##[group]Run python3 scripts/check_gc_doc_claims.py --self-test
+2026-09-10T05:26:10.2807281Z [36;1mpython3 scripts/check_gc_doc_claims.py --self-test[0m
+2026-09-10T05:26:10.2807955Z [36;1mpython3 scripts/check_gc_doc_claims.py[0m
+2026-09-10T05:26:10.2864950Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:26:10.2865634Z env:
+2026-09-10T05:26:10.2865971Z   CARGO_TERM_COLOR: always
+2026-09-10T05:26:10.2866424Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:26:10.2866891Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:26:10.2867373Z   CACHE_ON_FAILURE: false
+2026-09-10T05:26:10.2867780Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:26:10.2868152Z ##[endgroup]
+2026-09-10T05:26:10.3323223Z check_gc_doc_claims self-test: OK
+2026-09-10T05:26:10.4029355Z check_gc_doc_claims: OK - 5 documents, 31 facts re-derived
+2026-09-10T05:26:10.4117285Z ##[group]Run python3 scripts/check_locale_independent_io.py --self-test
+2026-09-10T05:26:10.4117824Z [36;1mpython3 scripts/check_locale_independent_io.py --self-test[0m
+2026-09-10T05:26:10.4118253Z [36;1mpython3 scripts/check_locale_independent_io.py[0m
+2026-09-10T05:26:10.4156756Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:26:10.4157014Z env:
+2026-09-10T05:26:10.4157212Z   CARGO_TERM_COLOR: always
+2026-09-10T05:26:10.4157465Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:26:10.4157736Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:26:10.4158026Z   CACHE_ON_FAILURE: false
+2026-09-10T05:26:10.4158253Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:26:10.4158470Z ##[endgroup]
+2026-09-10T05:26:10.4531997Z check_locale_independent_io self-test: OK (6 flagged shapes, accepted shapes clean, scope asserted)
+2026-09-10T05:26:10.5548644Z locale-independent I/O OK: 6 Windows-CI scripts scanned
+2026-09-10T05:26:10.5643323Z ##[group]Run python3 scripts/gc_evacuation_liveness_assert.py --self-test
+2026-09-10T05:26:10.5643862Z [36;1mpython3 scripts/gc_evacuation_liveness_assert.py --self-test[0m
+2026-09-10T05:26:10.5682240Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:26:10.5682501Z env:
+2026-09-10T05:26:10.5682695Z   CARGO_TERM_COLOR: always
+2026-09-10T05:26:10.5682944Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:26:10.5683207Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:26:10.5683473Z   CACHE_ON_FAILURE: false
+2026-09-10T05:26:10.5683704Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:26:10.5683917Z ##[endgroup]
+2026-09-10T05:26:10.5986248Z gc_evacuation_liveness_assert self-test: OK (5 directions)
+2026-09-10T05:26:10.6065603Z ##[group]Run python3 scripts/check_node_version_consistency.py --self-test
+2026-09-10T05:26:10.6066579Z [36;1mpython3 scripts/check_node_version_consistency.py --self-test[0m
+2026-09-10T05:26:10.6067413Z [36;1mpython3 scripts/check_node_version_consistency.py[0m
+2026-09-10T05:26:10.6120789Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:26:10.6121223Z env:
+2026-09-10T05:26:10.6121569Z   CARGO_TERM_COLOR: always
+2026-09-10T05:26:10.6122029Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:26:10.6122524Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:26:10.6123100Z   CACHE_ON_FAILURE: false
+2026-09-10T05:26:10.6123542Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:26:10.6123952Z ##[endgroup]
+2026-09-10T05:26:10.7444700Z check_node_version_consistency self-test: OK
+2026-09-10T05:26:10.7953641Z node version consistency: OK
+2026-09-10T05:26:10.8029870Z ##[group]Run python3 scripts/raw_handle_debt.py --self-test
+2026-09-10T05:26:10.8030342Z [36;1mpython3 scripts/raw_handle_debt.py --self-test[0m
+2026-09-10T05:26:10.8030905Z [36;1mpython3 scripts/raw_handle_debt.py[0m
+2026-09-10T05:26:10.8069373Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:26:10.8069630Z env:
+2026-09-10T05:26:10.8069828Z   CARGO_TERM_COLOR: always
+2026-09-10T05:26:10.8070082Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:26:10.8070360Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:26:10.8070638Z   CACHE_ON_FAILURE: false
+2026-09-10T05:26:10.8070867Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:26:10.8071080Z ##[endgroup]
+2026-09-10T05:26:10.9831861Z self-test ok (949 sites across 110 files); all three per-module rules fire, clean case silent; merge-base rule rejects all three raises and passes four legal diffs
+2026-09-10T05:26:11.1555746Z raw-handle debt sites: 949 (baseline 949)
+2026-09-10T05:26:11.1556766Z per-module: 110 module(s) within ceilings; every other runtime module is locked at zero
+2026-09-10T05:26:11.1640766Z ##[group]Run python3 scripts/unrooted_local_shape.py --self-test
+2026-09-10T05:26:11.1641277Z [36;1mpython3 scripts/unrooted_local_shape.py --self-test[0m
+2026-09-10T05:26:11.1641694Z [36;1mpython3 scripts/unrooted_local_shape.py --check[0m
+2026-09-10T05:26:11.1679881Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:26:11.1680136Z env:
+2026-09-10T05:26:11.1680330Z   CARGO_TERM_COLOR: always
+2026-09-10T05:26:11.1680582Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:26:11.1680861Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:26:11.1681135Z   CACHE_ON_FAILURE: false
+2026-09-10T05:26:11.1681363Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:26:11.1681573Z ##[endgroup]
+2026-09-10T05:26:11.2114628Z self-test OK: collecting/plain-return/later-RHS sites flagged, clean controls ignored, baseline increases rejected
+2026-09-10T05:26:12.0913113Z unrooted-local shape: 560 finding(s) across 81 file(s)
+2026-09-10T05:26:12.0913988Z (exposure surface, not a bug count -- see the module docstring)
+2026-09-10T05:26:12.0914754Z     40  crates/perry-stdlib/src/webcrypto/keys.rs
+2026-09-10T05:26:12.0915577Z     39  crates/perry-stdlib/src/mysql2/result.rs
+2026-09-10T05:26:12.0916129Z     25  crates/perry-stdlib/src/streams.rs
+2026-09-10T05:26:12.0916656Z     22  crates/perry-stdlib/src/crypto/sign.rs
+2026-09-10T05:26:12.0917183Z     21  crates/perry-stdlib/src/lodash.rs
+2026-09-10T05:26:12.0917721Z     20  crates/perry-ext-node-forge/src/lib.rs
+2026-09-10T05:26:12.0918338Z     18  crates/perry-stdlib/src/sqlite/better.rs
+2026-09-10T05:26:12.0918906Z     17  crates/perry-stdlib/src/events/events_on.rs
+2026-09-10T05:26:12.0919472Z     16  crates/perry-stdlib/src/mysql2/types.rs
+2026-09-10T05:26:12.0920006Z     14  crates/perry-stdlib/src/pg/types.rs
+2026-09-10T05:26:12.0920525Z     14  crates/perry-stdlib/src/pg/result.rs
+2026-09-10T05:26:12.0921042Z     14  crates/perry-stdlib/src/ioredis.rs
+2026-09-10T05:26:12.0921545Z     14  crates/perry-ext-fetch/src/tests.rs
+2026-09-10T05:26:12.0922062Z     14  crates/perry-ext-fetch/src/lib.rs
+2026-09-10T05:26:12.0922582Z     13  crates/perry-stdlib/src/streams/pipe.rs
+2026-09-10T05:26:12.0923215Z     13  crates/perry-ext-better-sqlite3/src/lib.rs
+2026-09-10T05:26:12.0923879Z     12  crates/perry-stdlib/src/worker_threads.rs
+2026-09-10T05:26:12.0924515Z     12  crates/perry-stdlib/src/streams/byob.rs
+2026-09-10T05:26:12.0925313Z     12  crates/perry-ext-events/src/lib.rs
+2026-09-10T05:26:12.0925953Z      9  crates/perry-stdlib/src/streams/strategy.rs
+2026-09-10T05:26:12.0926537Z   ... and 61 more file(s)
+2026-09-10T05:26:12.0927242Z improved: 560 < baseline 561 -- run --update-baseline to ratchet
+2026-09-10T05:26:12.0927866Z OK
+2026-09-10T05:26:12.1028635Z ##[group]Run python3 scripts/gap_snapshot.py --self-test
+2026-09-10T05:26:12.1029060Z [36;1mpython3 scripts/gap_snapshot.py --self-test[0m
+2026-09-10T05:26:12.1067550Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:26:12.1067800Z env:
+2026-09-10T05:26:12.1067997Z   CARGO_TERM_COLOR: always
+2026-09-10T05:26:12.1068246Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:26:12.1068518Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:26:12.1068982Z   CACHE_ON_FAILURE: false
+2026-09-10T05:26:12.1069209Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:26:12.1069422Z ##[endgroup]
+2026-09-10T05:26:12.1428270Z gap_snapshot self-test OK
+2026-09-10T05:26:12.1497483Z ##[group]Run python3 scripts/parity_known_failures.py --self-test
+2026-09-10T05:26:12.1497962Z [36;1mpython3 scripts/parity_known_failures.py --self-test[0m
+2026-09-10T05:26:12.1534680Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:26:12.1535129Z env:
+2026-09-10T05:26:12.1535368Z   CARGO_TERM_COLOR: always
+2026-09-10T05:26:12.1535629Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:26:12.1535898Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:26:12.1536169Z   CACHE_ON_FAILURE: false
+2026-09-10T05:26:12.1536404Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:26:12.1536618Z ##[endgroup]
+2026-09-10T05:26:12.1925508Z parity_known_failures self-test OK
+2026-09-10T05:26:12.1995668Z ##[group]Run python3 scripts/parity_known_failures.py --audit
+2026-09-10T05:26:12.1996171Z [36;1mpython3 scripts/parity_known_failures.py --audit[0m
+2026-09-10T05:26:12.2033725Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:26:12.2033987Z env:
+2026-09-10T05:26:12.2034185Z   CARGO_TERM_COLOR: always
+2026-09-10T05:26:12.2034437Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:26:12.2034713Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:26:12.2035227Z   CACHE_ON_FAILURE: false
+2026-09-10T05:26:12.2035489Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:26:12.2035709Z ##[endgroup]
+2026-09-10T05:26:12.2448461Z known_failures.json audit OK — 115 entries carry provenance and cross-checked 5 gap entries against gap_snapshot.json; 5 snapshot entries carry provenance.
+2026-09-10T05:26:12.2520063Z ##[group]Run python3 scripts/gc_gate_wiring_check.py --self-test
+2026-09-10T05:26:12.2520545Z [36;1mpython3 scripts/gc_gate_wiring_check.py --self-test[0m
+2026-09-10T05:26:12.2520930Z [36;1mpython3 scripts/gc_gate_wiring_check.py[0m
+2026-09-10T05:26:12.2558798Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:26:12.2559055Z env:
+2026-09-10T05:26:12.2559267Z   CARGO_TERM_COLOR: always
+2026-09-10T05:26:12.2559519Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:26:12.2559794Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:26:12.2560078Z   CACHE_ON_FAILURE: false
+2026-09-10T05:26:12.2560306Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:26:12.2560521Z ##[endgroup]
+2026-09-10T05:26:12.2937631Z gc_gate_wiring_check self-test: OK (18 cases)
+2026-09-10T05:26:12.3691448Z GC gate wiring OK (9 gates main-line-reachable and able to fail; 36 workflows checked for constant scheduled-run concurrency groups)
+2026-09-10T05:26:12.3768711Z ##[group]Run ./scripts/gc_repsel_matrix.sh --self-test-liveness-parser
+2026-09-10T05:26:12.3769255Z [36;1m./scripts/gc_repsel_matrix.sh --self-test-liveness-parser[0m
+2026-09-10T05:26:12.3769704Z [36;1mpython3 scripts/gc_repsel_matrix_merge.py --self-test[0m
+2026-09-10T05:26:12.3770135Z [36;1mpython3 scripts/gc_matrix_liveness_check.py --self-test[0m
+2026-09-10T05:26:12.3770585Z [36;1mpython3 scripts/gc_matrix_liveness_check.py --check-registry[0m
+2026-09-10T05:26:12.3809091Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:26:12.3809352Z env:
+2026-09-10T05:26:12.3809549Z   CARGO_TERM_COLOR: always
+2026-09-10T05:26:12.3809802Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:26:12.3810067Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:26:12.3810349Z   CACHE_ON_FAILURE: false
+2026-09-10T05:26:12.3810588Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:26:12.3810800Z ##[endgroup]
+2026-09-10T05:26:12.3974444Z gc_repsel_matrix liveness parser self-test: OK (legacy, current, promoted, and in-place forms)
+2026-09-10T05:26:12.4380903Z gc_repsel_matrix_merge --self-test: OK (7 cases)
+2026-09-10T05:26:12.4762228Z self-test: 24 checks, 0 failures
+2026-09-10T05:26:12.5121880Z registry: 0 known-inert arm(s), 22 arms declared in gc_repsel_matrix.sh
+2026-09-10T05:26:12.5123216Z PR subset: default,safepoint_minor,evac_minor,verify_evac,force_verify,cons_scan_off,shipped_default
+2026-09-10T05:26:12.5124659Z   relocating and not known-inert: default,safepoint_minor,evac_minor,verify_evac,force_verify,cons_scan_off
+2026-09-10T05:26:12.5192212Z ##[group]Run python3 scripts/check_test_registration.py --self-test
+2026-09-10T05:26:12.5192721Z [36;1mpython3 scripts/check_test_registration.py --self-test[0m
+2026-09-10T05:26:12.5193129Z [36;1mpython3 scripts/check_test_registration.py[0m
+2026-09-10T05:26:12.5231510Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:26:12.5231768Z env:
+2026-09-10T05:26:12.5231967Z   CARGO_TERM_COLOR: always
+2026-09-10T05:26:12.5232228Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:26:12.5232503Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:26:12.5232788Z   CACHE_ON_FAILURE: false
+2026-09-10T05:26:12.5233022Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:26:12.5233237Z ##[endgroup]
+2026-09-10T05:26:13.4436063Z check_test_registration self-test: OK (39 cases)
+2026-09-10T05:26:13.6525276Z test registration OK: checked 270 files against 4 registries
+2026-09-10T05:26:13.6526120Z   gc-repsel-corpus             78 candidates    78 registered   0 excluded
+2026-09-10T05:26:13.6527135Z   feature-matrix-probes        25 candidates    22 registered   3 excluded
+2026-09-10T05:26:13.6528006Z   compiler-output-workloads    23 candidates    21 registered   2 excluded
+2026-09-10T05:26:13.6528841Z   rust-test-modules           144 candidates   144 registered   0 excluded
+2026-09-10T05:26:13.6642539Z ##[group]Run python3 scripts/global_sink_isolation.py --self-test
+2026-09-10T05:26:13.6643022Z [36;1mpython3 scripts/global_sink_isolation.py --self-test[0m
+2026-09-10T05:26:13.6643414Z [36;1mpython3 scripts/global_sink_isolation.py[0m
+2026-09-10T05:26:13.6681850Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:26:13.6682099Z env:
+2026-09-10T05:26:13.6682300Z   CARGO_TERM_COLOR: always
+2026-09-10T05:26:13.6682549Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:26:13.6682820Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:26:13.6683088Z   CACHE_ON_FAILURE: false
+2026-09-10T05:26:13.6683316Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:26:13.6683530Z ##[endgroup]
+2026-09-10T05:26:14.4187416Z self-test: 20 checks, 0 failures
+2026-09-10T05:26:56.6278338Z per-test global sinks (#7672): 20 clear helper(s) reached from reset_copying_nursery_runtime_test_state, plus the guards' own module
+2026-09-10T05:26:56.6281014Z   reset_for_test                           CAP_GROW_STREAK=thread_local, CAP_SHRINK_STREAK=thread_local, MEAN_SURVIVING_OBJECT_BYTES=thread_local, NURSERY_CAP_SCALE=thread_local, OBJECT_CENSUS_SEEDED=thread_local, PREV_COPIED_BYTES=thread_local, PROMOTE_LOCK=thread_local, RAISE_STREAK=thread_local, SURVIVOR_ROUND_MEASURED=thread_local, TENURING_SURVIVALS=thread_local, UNLOCK_STREAK=thread_local
+2026-09-10T05:26:56.6283167Z   test_clear_all_timer_scanner_roots       CALLBACK_TIMERS=per_test, INTERVAL_TIMERS=per_test, TIMER_QUEUE=per_test
+2026-09-10T05:26:56.6283997Z   test_clear_arguments_object_roots        ARGUMENTS_OBJECTS=thread_local
+2026-09-10T05:26:56.6286731Z   test_clear_box_registry                  ASYNC_PENDING_RELEASES=thread_local, ASYNC_RELEASED_CELLS=thread_local, BOOL_BOX_FREE_HEAD=thread_local, BOOL_BOX_REGISTRY=thread_local, BOOL_BOX_RELEASE_QUARANTINE=thread_local, BOX_FREE_HEAD=thread_local, BOX_REGISTRY=thread_local, BOX_RELEASE_QUARANTINE=thread_local, BOX_YOUNG_ROOTS=thread_local, I32_BOX_FREE_HEAD=thread_local, I32_BOX_REGISTRY=thread_local, I32_BOX_RELEASE_QUARANTINE=thread_local
+2026-09-10T05:26:56.6292097Z   test_clear_class_side_table_roots        CLASS_DECLARED_STATIC_GLOBAL_SLOTS=thread_local, CLASS_DECL_PROTOTYPE_OBJECTS=thread_local, CLASS_DELETED_KEYS=thread_local, CLASS_DYNAMIC_PROPS=thread_local, CLASS_DYNAMIC_PROP_ORDER=thread_local, CLASS_PARENT_CLOSURES=thread_local, CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED=per_test, CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD=per_test, CLASS_PROTOTYPE_METHODS=thread_local, CLASS_PROTOTYPE_METHOD_VALUES=thread_local, CLASS_PROTOTYPE_OBJECTS=thread_local, CLASS_STATIC_PROTOTYPES=thread_local, CLASS_SYMBOL_ACCESSORS=thread_local, CLASS_SYMBOL_MEMBER_ORDERS=thread_local, CLASS_SYMBOL_METHODS=thread_local, FUNCTION_CLASS_IDS=thread_local, NEXT_SYNTHETIC_CLASS_ID=per_test
+2026-09-10T05:26:56.6296464Z   test_clear_closure_side_tables           CLOSURE_DELETED_KEYS=per_test, CLOSURE_PROPS=per_test, CLOSURE_STATIC_PROTOTYPES=per_test, CLOSURE_YOUNG_OWNERS=thread_local
+2026-09-10T05:26:56.6297535Z   test_clear_geisterhand_roots             PENDING_ACTIONS=per_test, REGISTRY=per_test
+2026-09-10T05:26:56.6299583Z   test_clear_object_cache_roots            FS_CONSTANTS_CACHE=thread_local, GLOBAL_THIS_PTR=per_test, GLOBAL_THIS_READY=per_test, HTTP_METHODS_CACHE=thread_local, OS_CONSTANTS_CACHE=thread_local, OS_CONSTANTS_DLOPEN_CACHE=thread_local, OS_CONSTANTS_ERRNO_CACHE=thread_local, OS_CONSTANTS_PRIORITY_CACHE=thread_local, OS_CONSTANTS_SIGNALS_CACHE=thread_local
+2026-09-10T05:26:56.6301051Z   test_clear_overflow_fields_root          (no static storage)
+2026-09-10T05:26:56.6301610Z   test_clear_parse_roots                   PARSE_ROOTS=thread_local, PARSE_SHAPE_CACHE=thread_local
+2026-09-10T05:26:56.6302160Z   test_clear_plugin_roots                  REGISTRY=thread_local
+2026-09-10T05:26:56.6302634Z   test_clear_process_event_listeners       PROCESS_EMITTER=thread_local
+2026-09-10T05:26:56.6305124Z   test_clear_promise_scanner_roots         ASYNC_STEP_GUARD=thread_local, CURRENT_MICROTASK_CALLBACK=thread_local, CURRENT_MICROTASK_NEXT=thread_local, CURRENT_MICROTASK_PROMISE=thread_local, CURRENT_MICROTASK_VALUE=thread_local, INLINE_TRAP=thread_local, MICROTASK_PREV_CONTEXTS=thread_local, PROMISE_ALL_STATES=thread_local, PROMISE_CONTEXTS=thread_local, PROMISE_OVERFLOW_REACTIONS=thread_local, PROMISE_SETTLE_LISTENERS=thread_local, SCHEDULED_RESOLVES=thread_local, TASK_QUEUE=thread_local
+2026-09-10T05:26:56.6307265Z   test_clear_set_roots                     SET_COMPACTION_LOG=thread_local, SET_INDEX=thread_local, SET_REGISTRY=thread_local
+2026-09-10T05:26:56.6308244Z   test_clear_singleton_closure_caches      CAPTURED_MISS_STREAK=thread_local, SINGLETON_CAPTURED_CLOSURES=thread_local, SINGLETON_CLOSURES=thread_local
+2026-09-10T05:26:56.6309711Z   test_clear_symbol_side_table_roots       CLASS_STATIC_SYMBOLS=per_test, CLASS_STATIC_SYMBOL_ORDER=per_test, SYMBOL_POINTERS=per_test, SYMBOL_PROPERTIES=per_test, SYMBOL_PROPERTY_ATTRS=per_test, SYMBOL_REGISTRY=per_test, WELL_KNOWN_SYMBOLS=static
+2026-09-10T05:26:56.6310833Z   test_clear_transition_cache_root         TRANSITION_CACHE_YOUNG=thread_local
+2026-09-10T05:26:56.6311448Z   test_clear_ui_text_registry_roots        FOREACH_REGISTRY=per_test, STATE_VALUES=per_test
+2026-09-10T05:26:56.6311994Z   test_reset_young_pin_latch               YOUNG_PIN_EVER=static
+2026-09-10T05:26:56.6312492Z   test_set_console_log_singleton           CONSOLE_LOG_SINGLETON=per_test
+2026-09-10T05:26:56.6316030Z   gc/tests/support.rs (the guards themselves) API=static, CLOSURE_PROPS=per_test, CONSERVATIVE_STACK_SCAN_OVERRIDE=thread_local, COPYING_NURSERY_TEST_LOCK=lock, FFI_MUTABLE_ROOT_SCANNERS=thread_local, FFI_ROOT_SCANNERS=thread_local, GC_MALLOC_COUNT_STEP=thread_local, GC_NEXT_MALLOC_TRIGGER=thread_local, GC_NEXT_TRIGGER_BYTES=thread_local, GC_STATS=thread_local, GENERATED_BARRIER_TEST_LOCK=lock, GENERATED_WRITE_BARRIERS_EMITTED=per_test, GLOBAL=allocator, GLOBAL_ROOTS=thread_local, MALLOC_STATE=thread_local, MUTABLE_ROOT_SCANNERS=thread_local, OLD_DEFRAG_TEST_OVERRIDE=thread_local, PLUGIN_REGISTRY_TEST_LOCK=lock, ROOT_SCANNERS=thread_local, SHADOW=thread_local, TEST_ARMED_OVERRIDE=thread_local, TEST_COPY_ONLY_ROOTS=thread_local, YOUNG_LEAF_COUNTER=static
+2026-09-10T05:26:56.6318844Z   -> 0 hazard(s), 6 allowlisted, 115 static(s) classified
+2026-09-10T05:26:56.6478843Z Post job cleanup.
+2026-09-10T05:26:56.7363497Z [command]/usr/bin/git version
+2026-09-10T05:26:56.7410383Z git version 2.55.0
+2026-09-10T05:26:56.7458921Z Temporarily overriding HOME='/home/runner/work/_temp/a00cc8b8-2559-415b-9448-f1700f71e793' before making global git config changes
+2026-09-10T05:26:56.7460787Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-10T05:26:56.7462522Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/perry/perry
+2026-09-10T05:26:56.7496989Z Removing SSH command configuration
+2026-09-10T05:26:56.7503764Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-10T05:26:56.7542711Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-10T05:26:56.7826100Z Removing HTTP extra header
+2026-09-10T05:26:56.7833735Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-10T05:26:56.7874092Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-10T05:26:56.8153397Z Removing includeIf entries pointing to credentials config files
+2026-09-10T05:26:56.8161019Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-10T05:26:56.8197879Z includeif.gitdir:/home/runner/work/perry/perry/.git.path
+2026-09-10T05:26:56.8198927Z includeif.gitdir:/home/runner/work/perry/perry/.git/worktrees/*.path
+2026-09-10T05:26:56.8199806Z includeif.gitdir:/github/workspace/.git.path
+2026-09-10T05:26:56.8200607Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-09-10T05:26:56.8211236Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/perry/perry/.git.path
+2026-09-10T05:26:56.8243706Z /home/runner/work/_temp/git-credentials-bfd43864-c015-43b2-b0bb-db548056ceba.config
+2026-09-10T05:26:56.8254077Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/perry/perry/.git.path \/home\/runner\/work\/_temp\/git\-credentials\-bfd43864\-c015\-43b2\-b0bb\-db548056ceba\.config
+2026-09-10T05:26:56.8302700Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/perry/perry/.git/worktrees/*.path
+2026-09-10T05:26:56.8334720Z /home/runner/work/_temp/git-credentials-bfd43864-c015-43b2-b0bb-db548056ceba.config
+2026-09-10T05:26:56.8343940Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/perry/perry/.git/worktrees/*.path \/home\/runner\/work\/_temp\/git\-credentials\-bfd43864\-c015\-43b2\-b0bb\-db548056ceba\.config
+2026-09-10T05:26:56.8389035Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-09-10T05:26:56.8418239Z /github/runner_temp/git-credentials-bfd43864-c015-43b2-b0bb-db548056ceba.config
+2026-09-10T05:26:56.8425905Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path \/github\/runner_temp\/git\-credentials\-bfd43864\-c015\-43b2\-b0bb\-db548056ceba\.config
+2026-09-10T05:26:56.8462790Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-09-10T05:26:56.8490615Z /github/runner_temp/git-credentials-bfd43864-c015-43b2-b0bb-db548056ceba.config
+2026-09-10T05:26:56.8499469Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \/github\/runner_temp\/git\-credentials\-bfd43864\-c015\-43b2\-b0bb\-db548056ceba\.config
+2026-09-10T05:26:56.8538238Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-10T05:26:56.8786356Z Removing credentials config '/home/runner/work/_temp/git-credentials-bfd43864-c015-43b2-b0bb-db548056ceba.config'
+2026-09-10T05:26:56.8936344Z Cleaning up orphan processes

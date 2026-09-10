@@ -1,0 +1,23 @@
+{
+  "main_run": 34440726868,
+  "main_commit": "eee3881c464bf91ae900e87a42bed072bbdfc95a",
+  "pr_run": 34447665074,
+  "pr_commit": "a1b39840283ce7c771a776706621a9ca249a8e8e",
+  "compared_tests": 748,
+  "identical_statuses": true,
+  "nonpass": {
+    "test_gap_2159_defineproperty_class_prototype": "parity_fail",
+    "test_gap_2514_settracesigint": "parity_fail",
+    "test_gap_2899_2779_2777_static_helpers": "parity_fail",
+    "test_gap_9616_readable_to_web_fs": "parity_fail",
+    "test_gap_crypto_scrypt_options": "parity_fail",
+    "test_gap_disposablestack_2875": "parity_fail",
+    "test_gap_iterator_prototype_next_patch": "parity_fail",
+    "test_gap_perfhooks_3088_3008_3010_3011": "parity_fail",
+    "test_gap_promisify_pipeline_custom_6692": "parity_fail",
+    "test_gap_prop_plan_cache_invalidation": "parity_fail",
+    "test_gap_v8_2_3680plus": "parity_fail",
+    "test_gap_webcrypto_async_threadpool": "crash"
+  },
+  "limits": "Compares all artifact test statuses by test name across three versus six shards. Artifacts contain statuses, not full stdout/stderr diffs; identical output failures or universal absence of regressions are not inferred."
+}

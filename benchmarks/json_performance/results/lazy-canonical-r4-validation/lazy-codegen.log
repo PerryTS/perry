@@ -1,0 +1,26 @@
+lazy-canonical-r3 <std::thread::local::LocalKey<core::cell::RefCell<alloc::vec::Vec<usize>>>>::with::<perry_runtime::json::stringify::stringify_object_inner::{closure#3}, core::option::Option<usize>> 136
+lazy-canonical-r3 <std::thread::local::LocalKey<core::cell::RefCell<alloc::vec::Vec<usize>>>>::with::<perry_runtime::json::stringify::stringify_object_inner::{closure#6}, core::option::Option<usize>> 136
+lazy-canonical-r3 perry_runtime::json::stringify::stringify_object_inner::{closure#4} 348
+lazy-canonical-r3 perry_runtime::json::stringify::stringify_object_inner::{closure#5} 232
+lazy-canonical-r3 perry_runtime::json::stringify_api::try_stringify_lazy_array 404
+lazy-canonical-r3 perry_runtime::json::stringify_api::normalize_lazy_json_numbers 4356
+lazy-canonical-r3 perry_runtime::json::replacer::stringify_value_pretty 2912
+lazy-canonical-r3 perry_runtime::json::replacer::stringify_value_with_array_replacer 4764
+lazy-canonical-r3 perry_runtime::json::stringify::stringify_value 3344
+lazy-canonical-r3 perry_runtime::json::stringify::stringify_value_depth 2892
+lazy-canonical-r3 perry_runtime::json::stringify::stringify_object_inner 6100
+lazy-canonical-r3 _js_json_stringify 1876
+lazy-canonical-r3 <alloc::raw_vec::RawVec<perry_runtime::json::stringify_lazy::ObjectKeys>>::grow_one 100
+lazy-canonical-r4 <std::thread::local::LocalKey<core::cell::RefCell<alloc::vec::Vec<usize>>>>::with::<perry_runtime::json::stringify::stringify_object_inner::{closure#3}, core::option::Option<usize>> 136
+lazy-canonical-r4 <std::thread::local::LocalKey<core::cell::RefCell<alloc::vec::Vec<usize>>>>::with::<perry_runtime::json::stringify::stringify_object_inner::{closure#6}, core::option::Option<usize>> 136
+lazy-canonical-r4 perry_runtime::json::stringify::stringify_object_inner::{closure#4} 348
+lazy-canonical-r4 perry_runtime::json::stringify::stringify_object_inner::{closure#5} 232
+lazy-canonical-r4 perry_runtime::json::stringify_api::try_stringify_lazy_array 404
+lazy-canonical-r4 perry_runtime::json::stringify_api::normalize_lazy_json_numbers 4472
+lazy-canonical-r4 perry_runtime::json::replacer::stringify_value_pretty 2912
+lazy-canonical-r4 perry_runtime::json::replacer::stringify_value_with_array_replacer 4764
+lazy-canonical-r4 perry_runtime::json::stringify::stringify_value 3344
+lazy-canonical-r4 perry_runtime::json::stringify::stringify_value_depth 2892
+lazy-canonical-r4 perry_runtime::json::stringify::stringify_object_inner 6100
+lazy-canonical-r4 _js_json_stringify 1876
+lazy-canonical-r4 <alloc::raw_vec::RawVec<perry_runtime::json::stringify_lazy::ObjectKeys>>::grow_one 100

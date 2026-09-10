@@ -1,0 +1,21 @@
+{
+  "refs": {
+    "eee3881c464bf91ae900e87a42bed072bbdfc95a": {
+      "source": "9507434be47f7bb383c30810bdc5d66d9be65290da529f38b7473860ea98f75e",
+      "harness": "513dba8ff9eaf931edc8a5fc01a0093a1156c31b0b6c9cc1218f710405e315e0",
+      "recorded": {
+        "source_fingerprint": "bec8afb6e384640aa9090036e3ad393ac564750a083f6e6c485804b6784c38b8",
+        "harness_fingerprint": "513dba8ff9eaf931edc8a5fc01a0093a1156c31b0b6c9cc1218f710405e315e0"
+      }
+    },
+    "a1b39840283ce7c771a776706621a9ca249a8e8e": {
+      "source": "9507434be47f7bb383c30810bdc5d66d9be65290da529f38b7473860ea98f75e",
+      "harness": "513dba8ff9eaf931edc8a5fc01a0093a1156c31b0b6c9cc1218f710405e315e0",
+      "recorded": {
+        "source_fingerprint": "bec8afb6e384640aa9090036e3ad393ac564750a083f6e6c485804b6784c38b8",
+        "harness_fingerprint": "513dba8ff9eaf931edc8a5fc01a0093a1156c31b0b6c9cc1218f710405e315e0"
+      }
+    }
+  },
+  "scope": "Current main versus exact PR head; read-only Git blobs normalized by the committed checker"
+}

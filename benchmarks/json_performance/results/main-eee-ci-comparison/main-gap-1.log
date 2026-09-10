@@ -1,0 +1,1202 @@
+﻿2026-09-10T05:34:31.5457036Z Current runner version: '2.337.0'
+2026-09-10T05:34:31.5481932Z ##[group]Runner Image Provisioner
+2026-09-10T05:34:31.5482907Z Hosted Compute Agent
+2026-09-10T05:34:31.5483508Z Version: 20260828.587
+2026-09-10T05:34:31.5484713Z Commit: abac92662cab4cc7352de4f9f9d2e2419aad9c29
+2026-09-10T05:34:31.5485489Z Build Date: 2026-08-28T16:44:25Z
+2026-09-10T05:34:31.5486219Z Worker ID: {e6678a45-0872-4aef-a5a8-52a7b260ac9f}
+2026-09-10T05:34:31.5486999Z Azure Region: westus
+2026-09-10T05:34:31.5487567Z ##[endgroup]
+2026-09-10T05:34:31.5489348Z ##[group]Operating System
+2026-09-10T05:34:31.5490021Z Ubuntu
+2026-09-10T05:34:31.5490577Z 24.04.5
+2026-09-10T05:34:31.5491135Z LTS
+2026-09-10T05:34:31.5491650Z ##[endgroup]
+2026-09-10T05:34:31.5492184Z ##[group]Runner Image
+2026-09-10T05:34:31.5492847Z Image: ubuntu-24.04
+2026-09-10T05:34:31.5493482Z Version: 20260907.300.1
+2026-09-10T05:34:31.5495600Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260907.300/images/ubuntu/Ubuntu2404-Readme.md
+2026-09-10T05:34:31.5497179Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260907.300
+2026-09-10T05:34:31.5498301Z ##[endgroup]
+2026-09-10T05:34:31.5499442Z ##[group]GITHUB_TOKEN Permissions
+2026-09-10T05:34:31.5501461Z Contents: read
+2026-09-10T05:34:31.5502112Z Metadata: read
+2026-09-10T05:34:31.5502768Z Packages: read
+2026-09-10T05:34:31.5503359Z ##[endgroup]
+2026-09-10T05:34:31.5505838Z Secret source: Actions
+2026-09-10T05:34:31.5507012Z Cache mode: write
+2026-09-10T05:34:31.5507689Z Prepare workflow directory
+2026-09-10T05:34:31.5918482Z Prepare all required actions
+2026-09-10T05:34:31.5968895Z Getting action download info
+2026-09-10T05:34:31.9760877Z Download action repository 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' (SHA:3d3c42e5aac5ba805825da76410c181273ba90b1)
+2026-09-10T05:34:32.1152076Z Download action repository 'Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6' (SHA:6323deb102c322ba6fcbdcafc7e3dddab59af2b6)
+2026-09-10T05:34:32.8125704Z Download action repository 'actions/setup-node@820762786026740c76f36085b0efc47a31fe5020' (SHA:820762786026740c76f36085b0efc47a31fe5020)
+2026-09-10T05:34:32.8940315Z Download action repository 'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c' (SHA:3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c)
+2026-09-10T05:34:33.2880640Z Download action repository 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' (SHA:043fb46d1a93c77aae656e7c1c64a875d1fc6a0a)
+2026-09-10T05:34:33.5267893Z Complete job name: gap-suite (1)
+2026-09-10T05:34:33.6206755Z ##[group]Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+2026-09-10T05:34:33.6208871Z with:
+2026-09-10T05:34:33.6209827Z   repository: PerryTS/perry
+2026-09-10T05:34:33.6219826Z   token: ***
+2026-09-10T05:34:33.6220805Z   ssh-strict: true
+2026-09-10T05:34:33.6221794Z   ssh-user: git
+2026-09-10T05:34:33.6222900Z   persist-credentials: true
+2026-09-10T05:34:33.6224242Z   clean: true
+2026-09-10T05:34:33.6225336Z   sparse-checkout-cone-mode: true
+2026-09-10T05:34:33.6226544Z   fetch-depth: 1
+2026-09-10T05:34:33.6227517Z   fetch-tags: false
+2026-09-10T05:34:33.6228593Z   show-progress: true
+2026-09-10T05:34:33.6229584Z   lfs: false
+2026-09-10T05:34:33.6230484Z   submodules: false
+2026-09-10T05:34:33.6231547Z   set-safe-directory: true
+2026-09-10T05:34:33.6232738Z   allow-unsafe-pr-checkout: false
+2026-09-10T05:34:33.6234524Z env:
+2026-09-10T05:34:33.6235468Z   CARGO_TERM_COLOR: always
+2026-09-10T05:34:33.6236560Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:34:33.6237857Z ##[endgroup]
+2026-09-10T05:34:33.7389504Z Syncing repository: PerryTS/perry
+2026-09-10T05:34:33.7393473Z ##[group]Getting Git version info
+2026-09-10T05:34:33.7395920Z Working directory is '/home/runner/work/perry/perry'
+2026-09-10T05:34:33.7399357Z [command]/usr/bin/git version
+2026-09-10T05:34:33.7401026Z git version 2.55.0
+2026-09-10T05:34:33.7406510Z ##[endgroup]
+2026-09-10T05:34:33.7417991Z Temporarily overriding HOME='/home/runner/work/_temp/ed65f2fe-424a-41b1-8857-b14aa7b935dd' before making global git config changes
+2026-09-10T05:34:33.7423955Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-10T05:34:33.7428092Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/perry/perry
+2026-09-10T05:34:33.7442517Z Deleting the contents of '/home/runner/work/perry/perry'
+2026-09-10T05:34:33.7466432Z ##[group]Determining repository object format
+2026-09-10T05:34:33.7470451Z ##[endgroup]
+2026-09-10T05:34:33.7473971Z ##[group]Initializing the repository
+2026-09-10T05:34:33.7476831Z [command]/usr/bin/git init /home/runner/work/perry/perry
+2026-09-10T05:34:33.7573312Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-09-10T05:34:33.7577197Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-09-10T05:34:33.7580069Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-09-10T05:34:33.7582391Z hint: call:
+2026-09-10T05:34:33.7583985Z hint:
+2026-09-10T05:34:33.7585104Z hint: 	git config --global init.defaultBranch <name>
+2026-09-10T05:34:33.7586351Z hint:
+2026-09-10T05:34:33.7587720Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-09-10T05:34:33.7590041Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-09-10T05:34:33.7591791Z hint:
+2026-09-10T05:34:33.7592658Z hint: 	git branch -m <name>
+2026-09-10T05:34:33.7594127Z hint:
+2026-09-10T05:34:33.7595478Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-09-10T05:34:33.7597500Z Initialized empty Git repository in /home/runner/work/perry/perry/.git/
+2026-09-10T05:34:33.7600680Z [command]/usr/bin/git remote add origin https://github.com/PerryTS/perry
+2026-09-10T05:34:33.7646099Z ##[endgroup]
+2026-09-10T05:34:33.7647741Z ##[group]Disabling automatic garbage collection
+2026-09-10T05:34:33.7649841Z [command]/usr/bin/git config --local gc.auto 0
+2026-09-10T05:34:33.7684702Z ##[endgroup]
+2026-09-10T05:34:33.7687615Z ##[group]Setting up auth
+2026-09-10T05:34:33.7689585Z Removing SSH command configuration
+2026-09-10T05:34:33.7697172Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-10T05:34:33.7739286Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-10T05:34:33.8139883Z Removing HTTP extra header
+2026-09-10T05:34:33.8146809Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-10T05:34:33.8186270Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-10T05:34:33.8424134Z Removing includeIf entries pointing to credentials config files
+2026-09-10T05:34:33.8429009Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-10T05:34:33.8473147Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-10T05:34:33.8705611Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-2c120ac2-2a58-4747-a83b-7de8dc763c47.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-09-10T05:34:33.8747829Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/perry/perry/.git.path /home/runner/work/_temp/git-credentials-2c120ac2-2a58-4747-a83b-7de8dc763c47.config
+2026-09-10T05:34:33.8781665Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/perry/perry/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-2c120ac2-2a58-4747-a83b-7de8dc763c47.config
+2026-09-10T05:34:33.8818530Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-2c120ac2-2a58-4747-a83b-7de8dc763c47.config
+2026-09-10T05:34:33.8855587Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-2c120ac2-2a58-4747-a83b-7de8dc763c47.config
+2026-09-10T05:34:33.8889598Z ##[endgroup]
+2026-09-10T05:34:33.8891122Z ##[group]Fetching the repository
+2026-09-10T05:34:33.8896530Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +eee3881c464bf91ae900e87a42bed072bbdfc95a:refs/remotes/origin/main
+2026-09-10T05:34:39.9144459Z From https://github.com/PerryTS/perry
+2026-09-10T05:34:39.9145447Z  * [new ref]           eee3881c464bf91ae900e87a42bed072bbdfc95a -> origin/main
+2026-09-10T05:34:39.9156704Z [command]/usr/bin/git branch --list --remote origin/main
+2026-09-10T05:34:39.9189113Z   origin/main
+2026-09-10T05:34:39.9199189Z [command]/usr/bin/git rev-parse refs/remotes/origin/main
+2026-09-10T05:34:39.9228367Z eee3881c464bf91ae900e87a42bed072bbdfc95a
+2026-09-10T05:34:39.9235434Z ##[endgroup]
+2026-09-10T05:34:39.9236024Z ##[group]Determining the checkout info
+2026-09-10T05:34:39.9236555Z ##[endgroup]
+2026-09-10T05:34:39.9238561Z [command]/usr/bin/git sparse-checkout disable
+2026-09-10T05:34:39.9298504Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-09-10T05:34:39.9335860Z ##[group]Checking out the ref
+2026-09-10T05:34:39.9340190Z [command]/usr/bin/git checkout --progress --force -B main refs/remotes/origin/main
+2026-09-10T05:34:40.9585318Z Updating files:  45% (9221/20115)
+2026-09-10T05:34:40.9802843Z Updating files:  46% (9253/20115)
+2026-09-10T05:34:41.0045540Z Updating files:  47% (9455/20115)
+2026-09-10T05:34:41.0280975Z Updating files:  48% (9656/20115)
+2026-09-10T05:34:41.0492801Z Updating files:  49% (9857/20115)
+2026-09-10T05:34:41.0746116Z Updating files:  50% (10058/20115)
+2026-09-10T05:34:41.1000205Z Updating files:  51% (10259/20115)
+2026-09-10T05:34:41.1204998Z Updating files:  52% (10460/20115)
+2026-09-10T05:34:41.1387516Z Updating files:  53% (10661/20115)
+2026-09-10T05:34:41.1534764Z Updating files:  54% (10863/20115)
+2026-09-10T05:34:41.1644664Z Updating files:  55% (11064/20115)
+2026-09-10T05:34:41.1789557Z Updating files:  56% (11265/20115)
+2026-09-10T05:34:41.2002930Z Updating files:  57% (11466/20115)
+2026-09-10T05:34:41.2135719Z Updating files:  58% (11667/20115)
+2026-09-10T05:34:41.2271084Z Updating files:  59% (11868/20115)
+2026-09-10T05:34:41.3293958Z Updating files:  60% (12069/20115)
+2026-09-10T05:34:41.3470399Z Updating files:  61% (12271/20115)
+2026-09-10T05:34:41.3647073Z Updating files:  62% (12472/20115)
+2026-09-10T05:34:41.3741351Z Updating files:  63% (12673/20115)
+2026-09-10T05:34:41.3822232Z Updating files:  64% (12874/20115)
+2026-09-10T05:34:41.3913387Z Updating files:  65% (13075/20115)
+2026-09-10T05:34:41.4016430Z Updating files:  66% (13276/20115)
+2026-09-10T05:34:41.4123897Z Updating files:  67% (13478/20115)
+2026-09-10T05:34:41.4223529Z Updating files:  68% (13679/20115)
+2026-09-10T05:34:41.4323563Z Updating files:  69% (13880/20115)
+2026-09-10T05:34:41.4416787Z Updating files:  70% (14081/20115)
+2026-09-10T05:34:41.4508885Z Updating files:  71% (14282/20115)
+2026-09-10T05:34:41.4604870Z Updating files:  72% (14483/20115)
+2026-09-10T05:34:41.4685974Z Updating files:  73% (14684/20115)
+2026-09-10T05:34:41.4768238Z Updating files:  74% (14886/20115)
+2026-09-10T05:34:41.4847205Z Updating files:  75% (15087/20115)
+2026-09-10T05:34:41.4929483Z Updating files:  76% (15288/20115)
+2026-09-10T05:34:41.5008029Z Updating files:  77% (15489/20115)
+2026-09-10T05:34:41.5091371Z Updating files:  78% (15690/20115)
+2026-09-10T05:34:41.5172705Z Updating files:  79% (15891/20115)
+2026-09-10T05:34:41.5262031Z Updating files:  80% (16092/20115)
+2026-09-10T05:34:41.5347864Z Updating files:  81% (16294/20115)
+2026-09-10T05:34:41.5433187Z Updating files:  82% (16495/20115)
+2026-09-10T05:34:41.5522061Z Updating files:  83% (16696/20115)
+2026-09-10T05:34:41.5604023Z Updating files:  84% (16897/20115)
+2026-09-10T05:34:41.5688451Z Updating files:  85% (17098/20115)
+2026-09-10T05:34:41.5765029Z Updating files:  86% (17299/20115)
+2026-09-10T05:34:41.5847290Z Updating files:  87% (17501/20115)
+2026-09-10T05:34:41.5921114Z Updating files:  88% (17702/20115)
+2026-09-10T05:34:41.5994071Z Updating files:  89% (17903/20115)
+2026-09-10T05:34:41.6070205Z Updating files:  90% (18104/20115)
+2026-09-10T05:34:41.6151603Z Updating files:  91% (18305/20115)
+2026-09-10T05:34:41.6230011Z Updating files:  92% (18506/20115)
+2026-09-10T05:34:41.6311691Z Updating files:  93% (18707/20115)
+2026-09-10T05:34:41.6396709Z Updating files:  94% (18909/20115)
+2026-09-10T05:34:41.6472162Z Updating files:  95% (19110/20115)
+2026-09-10T05:34:41.6564547Z Updating files:  96% (19311/20115)
+2026-09-10T05:34:41.6676351Z Updating files:  97% (19512/20115)
+2026-09-10T05:34:41.6796566Z Updating files:  98% (19713/20115)
+2026-09-10T05:34:41.6914325Z Updating files:  99% (19914/20115)
+2026-09-10T05:34:41.6914856Z Updating files: 100% (20115/20115)
+2026-09-10T05:34:41.6915218Z Updating files: 100% (20115/20115), done.
+2026-09-10T05:34:41.7119611Z Switched to a new branch 'main'
+2026-09-10T05:34:41.7125321Z branch 'main' set up to track 'origin/main'.
+2026-09-10T05:34:41.7207345Z ##[endgroup]
+2026-09-10T05:34:41.7257355Z [command]/usr/bin/git log -1 --format=%H
+2026-09-10T05:34:41.7289477Z eee3881c464bf91ae900e87a42bed072bbdfc95a
+2026-09-10T05:34:41.7496660Z ##[group]Run rustup toolchain install nightly-2026-08-20 --profile minimal
+2026-09-10T05:34:41.7497247Z [36;1mrustup toolchain install nightly-2026-08-20 --profile minimal[0m
+2026-09-10T05:34:41.7536264Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:34:41.7536523Z env:
+2026-09-10T05:34:41.7536729Z   CARGO_TERM_COLOR: always
+2026-09-10T05:34:41.7536979Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:34:41.7537239Z ##[endgroup]
+2026-09-10T05:34:41.8012100Z info: syncing channel updates for nightly-2026-08-20-x86_64-unknown-linux-gnu
+2026-09-10T05:34:41.9267126Z info: latest update on 2026-08-20 for version 1.100.0-nightly (f7d782a3b 2026-08-19)
+2026-09-10T05:34:41.9267656Z info: downloading 3 components
+2026-09-10T05:34:49.5068992Z 
+2026-09-10T05:34:49.5136336Z   nightly-2026-08-20-x86_64-unknown-linux-gnu installed - rustc 1.100.0-nightly (f7d782a3b 2026-08-19)
+2026-09-10T05:34:49.5136800Z 
+2026-09-10T05:34:49.5408367Z Prepare all required actions
+2026-09-10T05:34:49.5588856Z ##[group]Run ./.github/actions/setup-llvm22
+2026-09-10T05:34:49.5589153Z with:
+2026-09-10T05:34:49.5589346Z   version: 22.1.8
+2026-09-10T05:34:49.5589543Z env:
+2026-09-10T05:34:49.5589739Z   CARGO_TERM_COLOR: always
+2026-09-10T05:34:49.5589981Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:34:49.5590222Z ##[endgroup]
+2026-09-10T05:34:49.5649257Z ##[start-action display=LLVM 22 (macOS, brew);id=__self.__run]
+2026-09-10T05:34:49.5667470Z ##[end-action id=__self.__run;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-09-10T05:34:49.5669567Z ##[start-action display=LLVM 22 (Linux, apt.llvm.org);id=__self.__run_2]
+2026-09-10T05:34:49.5695709Z ##[group]Run set -euo pipefail
+2026-09-10T05:34:49.5696057Z [36;1mset -euo pipefail[0m
+2026-09-10T05:34:49.5696400Z [36;1mwget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \[0m
+2026-09-10T05:34:49.5696910Z [36;1m  | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc >/dev/null[0m
+2026-09-10T05:34:49.5697265Z [36;1m. /etc/os-release[0m
+2026-09-10T05:34:49.5697716Z [36;1mecho "deb http://apt.llvm.org/${VERSION_CODENAME}/ llvm-toolchain-${VERSION_CODENAME}-22 main" \[0m
+2026-09-10T05:34:49.5698278Z [36;1m  | sudo tee /etc/apt/sources.list.d/llvm22.list >/dev/null[0m
+2026-09-10T05:34:49.5698625Z [36;1msudo apt-get update -qq[0m
+2026-09-10T05:34:49.5698998Z [36;1m# `clang-22` is NOT implied by `llvm-22-dev`: apt ships opt and clang as[0m
+2026-09-10T05:34:49.5699492Z [36;1m# separate packages, so installing only the dev libraries leaves[0m
+2026-09-10T05:34:49.5699975Z [36;1m# /usr/lib/llvm-22/bin/opt with no clang beside it. That is exactly what[0m
+2026-09-10T05:34:49.5700474Z [36;1m# ubuntu-24.04-arm hits. Anything needing a MATCHED opt+clang pair — the[0m
+2026-09-10T05:34:49.5701169Z [36;1m# RS4GC arm in gc-native-roots.yml — then finds a half-populated bin dir[0m
+2026-09-10T05:34:49.5701692Z [36;1m# and either fails outright or falls back to hand-rolled discovery and[0m
+2026-09-10T05:34:49.5702191Z [36;1m# picks up the distro's LLVM 18. Install the pair here, once, so every[0m
+2026-09-10T05:34:49.5702654Z [36;1m# workflow gets a version-matched toolchain from one place.[0m
+2026-09-10T05:34:49.5703112Z [36;1msudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \[0m
+2026-09-10T05:34:49.5703531Z [36;1m  llvm-22-dev libpolly-22-dev libzstd-dev clang-22[0m
+2026-09-10T05:34:49.5704100Z [36;1mllvm-config-22 --version | grep -q '^22\.' \[0m
+2026-09-10T05:34:49.5704452Z [36;1m  || { echo "::error::apt LLVM is not 22.x"; exit 1; }[0m
+2026-09-10T05:34:49.5704790Z [36;1mPREFIX="$(llvm-config-22 --prefix)"[0m
+2026-09-10T05:34:49.5705204Z [36;1m# Co-locate clang with opt. apt installs the versioned binary at[0m
+2026-09-10T05:34:49.5705691Z [36;1m# /usr/bin/clang-22, but consumers resolve a toolchain by DIRECTORY —[0m
+2026-09-10T05:34:49.5706177Z [36;1m# PERRY_LLVM_OPT and PERRY_LLVM_CLANG must come from the same bin dir or[0m
+2026-09-10T05:34:49.5706678Z [36;1m# opt and clang can skew across majors — so it has to sit under $PREFIX.[0m
+2026-09-10T05:34:49.5707141Z [36;1mif [ ! -x "$PREFIX/bin/clang" ] && [ -x /usr/bin/clang-22 ]; then[0m
+2026-09-10T05:34:49.5707552Z [36;1m  sudo ln -sf /usr/bin/clang-22 "$PREFIX/bin/clang"[0m
+2026-09-10T05:34:49.5707860Z [36;1mfi[0m
+2026-09-10T05:34:49.5708161Z [36;1m# Assert the pair, not just llvm-config. A green setup step that leaves[0m
+2026-09-10T05:34:49.5708646Z [36;1m# a mismatched clang is the failure this whole action exists to prevent.[0m
+2026-09-10T05:34:49.5709094Z [36;1m"$PREFIX/bin/clang" --version | grep -q 'version 22\.' \[0m
+2026-09-10T05:34:49.5709506Z [36;1m  || { echo "::error::clang under $PREFIX is not 22.x"; exit 1; }[0m
+2026-09-10T05:34:49.5709900Z [36;1mecho "LLVM_SYS_221_PREFIX=$PREFIX" >> "$GITHUB_ENV"[0m
+2026-09-10T05:34:49.5747813Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-09-10T05:34:49.5748152Z env:
+2026-09-10T05:34:49.5748359Z   CARGO_TERM_COLOR: always
+2026-09-10T05:34:49.5748818Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:34:49.5749078Z ##[endgroup]
+2026-09-10T05:34:57.3957493Z Selecting previously unselected package libllvm22:amd64.
+2026-09-10T05:34:57.4236775Z (Reading database ... 
+2026-09-10T05:34:57.4237349Z (Reading database ... 5%
+2026-09-10T05:34:57.4237787Z (Reading database ... 10%
+2026-09-10T05:34:57.4238211Z (Reading database ... 15%
+2026-09-10T05:34:57.4238620Z (Reading database ... 20%
+2026-09-10T05:34:57.4239013Z (Reading database ... 25%
+2026-09-10T05:34:57.4239520Z (Reading database ... 30%
+2026-09-10T05:34:57.4239915Z (Reading database ... 35%
+2026-09-10T05:34:57.4240299Z (Reading database ... 40%
+2026-09-10T05:34:57.4240688Z (Reading database ... 45%
+2026-09-10T05:34:57.4241070Z (Reading database ... 50%
+2026-09-10T05:34:57.4284302Z (Reading database ... 55%
+2026-09-10T05:34:57.5462156Z (Reading database ... 60%
+2026-09-10T05:34:57.7433394Z (Reading database ... 65%
+2026-09-10T05:34:57.9101867Z (Reading database ... 70%
+2026-09-10T05:34:58.0879713Z (Reading database ... 75%
+2026-09-10T05:34:58.2595691Z (Reading database ... 80%
+2026-09-10T05:34:58.4969882Z (Reading database ... 85%
+2026-09-10T05:34:58.6893586Z (Reading database ... 90%
+2026-09-10T05:34:58.8594189Z (Reading database ... 95%
+2026-09-10T05:34:58.8594831Z (Reading database ... 100%
+2026-09-10T05:34:58.8595566Z (Reading database ... 201818 files and directories currently installed.)
+2026-09-10T05:34:58.8636789Z Preparing to unpack .../00-libllvm22_1%3a22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80_amd64.deb ...
+2026-09-10T05:34:58.8680176Z Unpacking libllvm22:amd64 (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:34:59.4172121Z Selecting previously unselected package libclang-cpp22.
+2026-09-10T05:34:59.4296617Z Preparing to unpack .../01-libclang-cpp22_1%3a22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80_amd64.deb ...
+2026-09-10T05:34:59.4308498Z Unpacking libclang-cpp22 (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:34:59.6525222Z Selecting previously unselected package libclang-common-22-dev:amd64.
+2026-09-10T05:34:59.6650559Z Preparing to unpack .../02-libclang-common-22-dev_1%3a22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80_amd64.deb ...
+2026-09-10T05:34:59.6658985Z Unpacking libclang-common-22-dev:amd64 (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:34:59.7724429Z Selecting previously unselected package llvm-22-linker-tools.
+2026-09-10T05:34:59.7851247Z Preparing to unpack .../03-llvm-22-linker-tools_1%3a22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80_amd64.deb ...
+2026-09-10T05:34:59.7860061Z Unpacking llvm-22-linker-tools (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:34:59.8224418Z Selecting previously unselected package libclang1-22.
+2026-09-10T05:34:59.8350212Z Preparing to unpack .../04-libclang1-22_1%3a22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80_amd64.deb ...
+2026-09-10T05:34:59.8358094Z Unpacking libclang1-22 (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:34:59.9707667Z Selecting previously unselected package clang-22.
+2026-09-10T05:34:59.9836093Z Preparing to unpack .../05-clang-22_1%3a22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80_amd64.deb ...
+2026-09-10T05:34:59.9843941Z Unpacking clang-22 (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:35:00.0361723Z Selecting previously unselected package clang-tools-22.
+2026-09-10T05:35:00.0489168Z Preparing to unpack .../06-clang-tools-22_1%3a22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80_amd64.deb ...
+2026-09-10T05:35:00.0498552Z Unpacking clang-tools-22 (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:35:00.2693420Z Selecting previously unselected package libclang-rt-22-dev.
+2026-09-10T05:35:00.2819509Z Preparing to unpack .../07-libclang-rt-22-dev_1%3a22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80_amd64.deb ...
+2026-09-10T05:35:00.2828047Z Unpacking libclang-rt-22-dev (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:35:00.4452004Z Selecting previously unselected package libpolly-22-dev.
+2026-09-10T05:35:00.4578286Z Preparing to unpack .../08-libpolly-22-dev_1%3a22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80_amd64.deb ...
+2026-09-10T05:35:00.4587517Z Unpacking libpolly-22-dev (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:35:00.5292459Z Selecting previously unselected package llvm-22-runtime.
+2026-09-10T05:35:00.5417021Z Preparing to unpack .../09-llvm-22-runtime_1%3a22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80_amd64.deb ...
+2026-09-10T05:35:00.5426441Z Unpacking llvm-22-runtime (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:35:00.5711598Z Selecting previously unselected package llvm-22.
+2026-09-10T05:35:00.5838874Z Preparing to unpack .../10-llvm-22_1%3a22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80_amd64.deb ...
+2026-09-10T05:35:00.5849437Z Unpacking llvm-22 (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:35:00.9182370Z Selecting previously unselected package llvm-22-tools.
+2026-09-10T05:35:00.9310335Z Preparing to unpack .../11-llvm-22-tools_1%3a22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80_amd64.deb ...
+2026-09-10T05:35:00.9320559Z Unpacking llvm-22-tools (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:35:00.9694333Z Selecting previously unselected package llvm-22-dev.
+2026-09-10T05:35:00.9819221Z Preparing to unpack .../12-llvm-22-dev_1%3a22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80_amd64.deb ...
+2026-09-10T05:35:00.9828459Z Unpacking llvm-22-dev (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:35:02.5544700Z Setting up libclang-common-22-dev:amd64 (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:35:02.5575297Z Setting up libpolly-22-dev (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:35:02.5594871Z Setting up libclang-rt-22-dev (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:35:02.5614619Z Setting up libllvm22:amd64 (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:35:02.5636238Z Setting up libclang1-22 (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:35:02.5656984Z Setting up llvm-22-runtime (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:35:02.5691106Z Setting up llvm-22-linker-tools (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:35:02.5714281Z Setting up llvm-22 (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:35:02.5736472Z Setting up llvm-22-tools (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:35:02.8207849Z Setting up libclang-cpp22 (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:35:02.8229705Z Setting up clang-22 (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:35:02.8252101Z Setting up llvm-22-dev (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:35:02.8275124Z Setting up clang-tools-22 (1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80) ...
+2026-09-10T05:35:02.8301676Z Processing triggers for systemd (255.4-1ubuntu8.17) ...
+2026-09-10T05:35:02.8692795Z Processing triggers for man-db (2.12.0-4build2) ...
+2026-09-10T05:35:02.8715210Z Not building database; man-db/auto-update is not 'true'.
+2026-09-10T05:35:02.8729280Z Processing triggers for libc-bin (2.39-0ubuntu8.8) ...
+2026-09-10T05:35:03.5360944Z 
+2026-09-10T05:35:03.5361552Z Running kernel seems to be up-to-date.
+2026-09-10T05:35:03.5362038Z 
+2026-09-10T05:35:03.5362652Z No services need to be restarted.
+2026-09-10T05:35:03.5363091Z 
+2026-09-10T05:35:03.5364266Z No containers need to be restarted.
+2026-09-10T05:35:03.5364951Z 
+2026-09-10T05:35:03.5365325Z No user sessions are running outdated binaries.
+2026-09-10T05:35:03.5365729Z 
+2026-09-10T05:35:03.5366003Z No VM guests are running outdated hypervisor (qemu) binaries on this host.
+2026-09-10T05:35:04.7191816Z ##[end-action id=__self.__run_2;outcome=success;conclusion=success;duration_ms=15152]
+2026-09-10T05:35:04.7225269Z ##[start-action display=LLVM 22 (Windows, official MSVC tarball);id=__self.__run_3]
+2026-09-10T05:35:04.7230460Z ##[end-action id=__self.__run_3;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-09-10T05:35:04.7322240Z ##[group]Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+2026-09-10T05:35:04.7322673Z with:
+2026-09-10T05:35:04.7322877Z   shared-key: Linux-perry
+2026-09-10T05:35:04.7323109Z   save-if: true
+2026-09-10T05:35:04.7323316Z   prefix-key: v0-rust
+2026-09-10T05:35:04.7323539Z   add-job-id-key: true
+2026-09-10T05:35:04.7324157Z   add-rust-environment-hash-key: true
+2026-09-10T05:35:04.7324450Z   cache-targets: true
+2026-09-10T05:35:04.7324676Z   cache-all-crates: false
+2026-09-10T05:35:04.7324918Z   cache-workspace-crates: false
+2026-09-10T05:35:04.7325174Z   cache-provider: github
+2026-09-10T05:35:04.7325399Z   cache-bin: true
+2026-09-10T05:35:04.7325603Z   lookup-only: false
+2026-09-10T05:35:04.7325809Z   cmd-format: {0}
+2026-09-10T05:35:04.7326002Z env:
+2026-09-10T05:35:04.7326190Z   CARGO_TERM_COLOR: always
+2026-09-10T05:35:04.7326423Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:35:04.7326681Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:35:04.7326976Z ##[endgroup]
+2026-09-10T05:35:07.5987489Z ##[group]Cache Configuration
+2026-09-10T05:35:07.5988443Z Cache Provider:
+2026-09-10T05:35:07.5988764Z     github
+2026-09-10T05:35:07.5989057Z Workspaces:
+2026-09-10T05:35:07.5989376Z     /home/runner/work/perry/perry
+2026-09-10T05:35:07.5989761Z Cache Paths:
+2026-09-10T05:35:07.5990078Z     /home/runner/.cargo/bin
+2026-09-10T05:35:07.5990467Z     /home/runner/.cargo/.crates.toml
+2026-09-10T05:35:07.5990958Z     /home/runner/.cargo/.crates2.json
+2026-09-10T05:35:07.5991441Z     /home/runner/.cargo/registry
+2026-09-10T05:35:07.5991884Z     /home/runner/.cargo/git
+2026-09-10T05:35:07.5992371Z     /home/runner/work/perry/perry/target
+2026-09-10T05:35:07.5992937Z Restore Key:
+2026-09-10T05:35:07.5993401Z     v0-rust-Linux-perry-Linux-x64-743f3116
+2026-09-10T05:35:07.5994122Z Cache Key:
+2026-09-10T05:35:07.5994400Z     v0-rust-Linux-perry-Linux-x64-743f3116-6283268c
+2026-09-10T05:35:07.5994748Z .. Prefix:
+2026-09-10T05:35:07.5994982Z   - v0-rust-Linux-perry-Linux-x64
+2026-09-10T05:35:07.5995323Z .. Environment considered:
+2026-09-10T05:35:07.5995579Z   - Rust Versions:
+2026-09-10T05:35:07.5995984Z     - 1.100.0-nightly x86_64-unknown-linux-gnu f7d782a3be46d6bb4b9792fe69a61db389ba1769
+2026-09-10T05:35:07.5996570Z     - 1.98.1 x86_64-unknown-linux-gnu 48a229ceaefd4985c50990b14116b6d856af0985
+2026-09-10T05:35:07.5997159Z   - CARGO_INCREMENTAL
+2026-09-10T05:35:07.5997537Z   - CARGO_TERM_COLOR
+2026-09-10T05:35:07.5997894Z .. Lockfiles considered:
+2026-09-10T05:35:07.5998316Z   - /home/runner/work/perry/perry/.cargo/config.toml
+2026-09-10T05:35:07.5998681Z   - /home/runner/work/perry/perry/Cargo.lock
+2026-09-10T05:35:07.5999107Z   - /home/runner/work/perry/perry/crates/perry-api-manifest/Cargo.toml
+2026-09-10T05:35:07.5999634Z   - /home/runner/work/perry/perry/crates/perry-audio-miniaudio/Cargo.toml
+2026-09-10T05:35:07.6000166Z   - /home/runner/work/perry/perry/crates/perry-codegen-arkts/Cargo.toml
+2026-09-10T05:35:07.6000702Z   - /home/runner/work/perry/perry/crates/perry-codegen-glance/Cargo.toml
+2026-09-10T05:35:07.6001208Z   - /home/runner/work/perry/perry/crates/perry-codegen-js/Cargo.toml
+2026-09-10T05:35:07.6001725Z   - /home/runner/work/perry/perry/crates/perry-codegen-swiftui/Cargo.toml
+2026-09-10T05:35:07.6002241Z   - /home/runner/work/perry/perry/crates/perry-codegen-wasm/Cargo.toml
+2026-09-10T05:35:07.6002772Z   - /home/runner/work/perry/perry/crates/perry-codegen-wear-tiles/Cargo.toml
+2026-09-10T05:35:07.6003286Z   - /home/runner/work/perry/perry/crates/perry-codegen/Cargo.toml
+2026-09-10T05:35:07.6004206Z   - /home/runner/work/perry/perry/crates/perry-container-compose/Cargo.toml
+2026-09-10T05:35:07.6005066Z   - /home/runner/work/perry/perry/crates/perry-container-e2e/Cargo.toml
+2026-09-10T05:35:07.6005597Z   - /home/runner/work/perry/perry/crates/perry-diagnostics/Cargo.toml
+2026-09-10T05:35:07.6006042Z   - /home/runner/work/perry/perry/crates/perry-dispatch/Cargo.toml
+2026-09-10T05:35:07.6006453Z   - /home/runner/work/perry/perry/crates/perry-doc-tests/Cargo.toml
+2026-09-10T05:35:07.6007270Z   - /home/runner/work/perry/perry/crates/perry-ext-ads/Cargo.toml
+2026-09-10T05:35:07.6007718Z   - /home/runner/work/perry/perry/crates/perry-ext-argon2/Cargo.toml
+2026-09-10T05:35:07.6008145Z   - /home/runner/work/perry/perry/crates/perry-ext-axios/Cargo.toml
+2026-09-10T05:35:07.6008567Z   - /home/runner/work/perry/perry/crates/perry-ext-bcrypt/Cargo.toml
+2026-09-10T05:35:07.6009027Z   - /home/runner/work/perry/perry/crates/perry-ext-better-sqlite3/Cargo.toml
+2026-09-10T05:35:07.6009499Z   - /home/runner/work/perry/perry/crates/perry-ext-cheerio/Cargo.toml
+2026-09-10T05:35:07.6009939Z   - /home/runner/work/perry/perry/crates/perry-ext-commander/Cargo.toml
+2026-09-10T05:35:07.6010367Z   - /home/runner/work/perry/perry/crates/perry-ext-cron/Cargo.toml
+2026-09-10T05:35:07.6010772Z   - /home/runner/work/perry/perry/crates/perry-ext-dayjs/Cargo.toml
+2026-09-10T05:35:07.6011189Z   - /home/runner/work/perry/perry/crates/perry-ext-decimal/Cargo.toml
+2026-09-10T05:35:07.6011621Z   - /home/runner/work/perry/perry/crates/perry-ext-dotenv/Cargo.toml
+2026-09-10T05:35:07.6012038Z   - /home/runner/work/perry/perry/crates/perry-ext-ethers/Cargo.toml
+2026-09-10T05:35:07.6012581Z   - /home/runner/work/perry/perry/crates/perry-ext-events/Cargo.toml
+2026-09-10T05:35:07.6013058Z   - /home/runner/work/perry/perry/crates/perry-ext-exponential-backoff/Cargo.toml
+2026-09-10T05:35:07.6013696Z   - /home/runner/work/perry/perry/crates/perry-ext-fastify/Cargo.toml
+2026-09-10T05:35:07.6014130Z   - /home/runner/work/perry/perry/crates/perry-ext-fetch/Cargo.toml
+2026-09-10T05:35:07.6014554Z   - /home/runner/work/perry/perry/crates/perry-ext-http/Cargo.toml
+2026-09-10T05:35:07.6014972Z   - /home/runner/work/perry/perry/crates/perry-ext-ioredis/Cargo.toml
+2026-09-10T05:35:07.6015419Z   - /home/runner/work/perry/perry/crates/perry-ext-jsonwebtoken/Cargo.toml
+2026-09-10T05:35:07.6015880Z   - /home/runner/work/perry/perry/crates/perry-ext-lru-cache/Cargo.toml
+2026-09-10T05:35:07.6016311Z   - /home/runner/work/perry/perry/crates/perry-ext-moment/Cargo.toml
+2026-09-10T05:35:07.6016737Z   - /home/runner/work/perry/perry/crates/perry-ext-mongodb/Cargo.toml
+2026-09-10T05:35:07.6017168Z   - /home/runner/work/perry/perry/crates/perry-ext-mysql2/Cargo.toml
+2026-09-10T05:35:07.6017582Z   - /home/runner/work/perry/perry/crates/perry-ext-nanoid/Cargo.toml
+2026-09-10T05:35:07.6018106Z   - /home/runner/work/perry/perry/crates/perry-ext-net/Cargo.toml
+2026-09-10T05:35:07.6018566Z   - /home/runner/work/perry/perry/crates/perry-ext-node-forge/Cargo.toml
+2026-09-10T05:35:07.6019016Z   - /home/runner/work/perry/perry/crates/perry-ext-nodemailer/Cargo.toml
+2026-09-10T05:35:07.6019481Z   - /home/runner/work/perry/perry/crates/perry-ext-parcel-watcher/Cargo.toml
+2026-09-10T05:35:07.6019947Z   - /home/runner/work/perry/perry/crates/perry-ext-pdf/Cargo.toml
+2026-09-10T05:35:07.6020360Z   - /home/runner/work/perry/perry/crates/perry-ext-pg/Cargo.toml
+2026-09-10T05:35:07.6020759Z   - /home/runner/work/perry/perry/crates/perry-ext-qs/Cargo.toml
+2026-09-10T05:35:07.6021183Z   - /home/runner/work/perry/perry/crates/perry-ext-ratelimit/Cargo.toml
+2026-09-10T05:35:07.6021618Z   - /home/runner/work/perry/perry/crates/perry-ext-sharp/Cargo.toml
+2026-09-10T05:35:07.6022049Z   - /home/runner/work/perry/perry/crates/perry-ext-streams/Cargo.toml
+2026-09-10T05:35:07.6022510Z   - /home/runner/work/perry/perry/crates/perry-ext-typescript/Cargo.toml
+2026-09-10T05:35:07.6022954Z   - /home/runner/work/perry/perry/crates/perry-ext-undici/Cargo.toml
+2026-09-10T05:35:07.6023391Z   - /home/runner/work/perry/perry/crates/perry-ext-uuid/Cargo.toml
+2026-09-10T05:35:07.6023963Z   - /home/runner/work/perry/perry/crates/perry-ext-validator/Cargo.toml
+2026-09-10T05:35:07.6024397Z   - /home/runner/work/perry/perry/crates/perry-ext-ws/Cargo.toml
+2026-09-10T05:35:07.6025295Z   - /home/runner/work/perry/perry/crates/perry-ext-zlib/Cargo.toml
+2026-09-10T05:35:07.6026046Z   - /home/runner/work/perry/perry/crates/perry-ffi/Cargo.toml
+2026-09-10T05:35:07.6027016Z   - /home/runner/work/perry/perry/crates/perry-hir/Cargo.toml
+2026-09-10T05:35:07.6027763Z   - /home/runner/work/perry/perry/crates/perry-parser/Cargo.toml
+2026-09-10T05:35:07.6028602Z   - /home/runner/work/perry/perry/crates/perry-runtime-static/Cargo.toml
+2026-09-10T05:35:07.6029223Z   - /home/runner/work/perry/perry/crates/perry-runtime/Cargo.toml
+2026-09-10T05:35:07.6029667Z   - /home/runner/work/perry/perry/crates/perry-stdlib-static/Cargo.toml
+2026-09-10T05:35:07.6030097Z   - /home/runner/work/perry/perry/crates/perry-stdlib/Cargo.toml
+2026-09-10T05:35:07.6030504Z   - /home/runner/work/perry/perry/crates/perry-transform/Cargo.toml
+2026-09-10T05:35:07.6030924Z   - /home/runner/work/perry/perry/crates/perry-ui-android/Cargo.toml
+2026-09-10T05:35:07.6031361Z   - /home/runner/work/perry/perry/crates/perry-ui-geisterhand/Cargo.toml
+2026-09-10T05:35:07.6031881Z   - /home/runner/work/perry/perry/crates/perry-ui-gtk4/Cargo.toml
+2026-09-10T05:35:07.6032389Z   - /home/runner/work/perry/perry/crates/perry-ui-ios/Cargo.toml
+2026-09-10T05:35:07.6032864Z   - /home/runner/work/perry/perry/crates/perry-ui-macos/Cargo.toml
+2026-09-10T05:35:07.6034062Z   - /home/runner/work/perry/perry/crates/perry-ui-model/Cargo.toml
+2026-09-10T05:35:07.6034495Z   - /home/runner/work/perry/perry/crates/perry-ui-test/Cargo.toml
+2026-09-10T05:35:07.6034938Z   - /home/runner/work/perry/perry/crates/perry-ui-testkit/Cargo.toml
+2026-09-10T05:35:07.6035365Z   - /home/runner/work/perry/perry/crates/perry-ui-tvos/Cargo.toml
+2026-09-10T05:35:07.6035783Z   - /home/runner/work/perry/perry/crates/perry-ui-visionos/Cargo.toml
+2026-09-10T05:35:07.6036215Z   - /home/runner/work/perry/perry/crates/perry-ui-watchos/Cargo.toml
+2026-09-10T05:35:07.6036657Z   - /home/runner/work/perry/perry/crates/perry-ui-windows-winui/Cargo.toml
+2026-09-10T05:35:07.6037103Z   - /home/runner/work/perry/perry/crates/perry-ui-windows/Cargo.toml
+2026-09-10T05:35:07.6037504Z   - /home/runner/work/perry/perry/crates/perry-ui/Cargo.toml
+2026-09-10T05:35:07.6037907Z   - /home/runner/work/perry/perry/crates/perry-updater/Cargo.toml
+2026-09-10T05:35:07.6038349Z   - /home/runner/work/perry/perry/crates/perry-wasm-host/Cargo.toml
+2026-09-10T05:35:07.6038755Z   - /home/runner/work/perry/perry/crates/perry/Cargo.toml
+2026-09-10T05:35:07.6039246Z   - /home/runner/work/perry/perry/docs/examples/_fixtures/native-libraries/my-bindings/Cargo.toml
+2026-09-10T05:35:07.6039748Z   - /home/runner/work/perry/perry/rust-toolchain.toml
+2026-09-10T05:35:07.6040308Z ##[endgroup]
+2026-09-10T05:35:07.6040425Z 
+2026-09-10T05:35:07.6040518Z ... Restoring cache ...
+2026-09-10T05:35:07.8456430Z Cache hit for: v0-rust-Linux-perry-Linux-x64-743f3116-6283268c
+2026-09-10T05:35:09.1099082Z Received 0 of 283013515 (0.0%), 0.0 MBs/sec
+2026-09-10T05:35:10.1104151Z Received 134217728 of 283013515 (47.4%), 63.9 MBs/sec
+2026-09-10T05:35:10.9754730Z Received 283013515 of 283013515 (100.0%), 94.3 MBs/sec
+2026-09-10T05:35:10.9758461Z Cache Size: ~270 MB (283013515 B)
+2026-09-10T05:35:10.9810314Z [command]/usr/bin/tar -xf /home/runner/work/_temp/823962ae-413c-42e5-b732-de17b54f04eb/cache.tzst -P -C /home/runner/work/perry/perry --use-compress-program unzstd
+2026-09-10T05:35:12.4397428Z Cache restored successfully
+2026-09-10T05:35:12.4522457Z Restored from cache key "v0-rust-Linux-perry-Linux-x64-743f3116-6283268c" full match: true.
+2026-09-10T05:35:12.4959829Z ##[group]Run actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+2026-09-10T05:35:12.4960267Z with:
+2026-09-10T05:35:12.4960494Z   node-version-file: .node-version
+2026-09-10T05:35:12.4960765Z   check-latest: false
+2026-09-10T05:35:12.4963547Z   token: ***
+2026-09-10T05:35:12.4963984Z   package-manager-cache: true
+2026-09-10T05:35:12.4964251Z env:
+2026-09-10T05:35:12.4964447Z   CARGO_TERM_COLOR: always
+2026-09-10T05:35:12.4964693Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:35:12.4964970Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:35:12.4965251Z   CACHE_ON_FAILURE: false
+2026-09-10T05:35:12.4965481Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:35:12.4965697Z ##[endgroup]
+2026-09-10T05:35:12.6204813Z Node version file is not JSON file
+2026-09-10T05:35:12.6207124Z Resolved .node-version as 26.5.1
+2026-09-10T05:35:12.8325251Z Attempting to download 26.5.1...
+2026-09-10T05:35:13.4420325Z Acquiring 26.5.1 - x64 from https://github.com/actions/node-versions/releases/download/26.5.1-30508404249/node-26.5.1-linux-x64.tar.gz
+2026-09-10T05:35:14.1691501Z Extracting ...
+2026-09-10T05:35:14.1821598Z [command]/usr/bin/tar xz --strip 1 --warning=no-unknown-keyword --overwrite -C /home/runner/work/_temp/8adccc65-8885-4b94-aa09-b7348cf8e174 -f /home/runner/work/_temp/a266fc40-62e8-4ff7-846c-78996c3dddc8
+2026-09-10T05:35:15.4878582Z Adding to the cache ...
+2026-09-10T05:35:18.0510172Z ##[group]Environment details
+2026-09-10T05:35:18.3144520Z node: v26.5.1
+2026-09-10T05:35:18.3144970Z npm: 11.17.0
+2026-09-10T05:35:18.3145305Z yarn: 1.22.22
+2026-09-10T05:35:18.3146023Z ##[endgroup]
+2026-09-10T05:35:18.3322775Z ##[group]Run npm ci --ignore-scripts --no-audit --no-fund
+2026-09-10T05:35:18.3323223Z [36;1mnpm ci --ignore-scripts --no-audit --no-fund[0m
+2026-09-10T05:35:18.3366832Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:35:18.3367290Z env:
+2026-09-10T05:35:18.3367493Z   CARGO_TERM_COLOR: always
+2026-09-10T05:35:18.3367757Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:35:18.3368030Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:35:18.3368315Z   CACHE_ON_FAILURE: false
+2026-09-10T05:35:18.3368545Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:35:18.3368766Z ##[endgroup]
+2026-09-10T05:35:18.6959635Z npm warn EBADENGINE Unsupported engine {
+2026-09-10T05:35:18.6960327Z npm warn EBADENGINE   package: '@socketsecurity/sdk@4.1.4',
+2026-09-10T05:35:18.6961047Z npm warn EBADENGINE   required: { node: '>=24', npm: '>=12.0.1', pnpm: '>=11.0.5' },
+2026-09-10T05:35:18.6961742Z npm warn EBADENGINE   current: { node: 'v26.5.1', npm: '11.17.0' }
+2026-09-10T05:35:18.6962189Z npm warn EBADENGINE }
+2026-09-10T05:35:20.1947449Z 
+2026-09-10T05:35:20.1948086Z added 32 packages in 2s
+2026-09-10T05:35:20.2456523Z ##[group]Run actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+2026-09-10T05:35:20.2456965Z with:
+2026-09-10T05:35:20.2457193Z   name: gap-suite-fast-build
+2026-09-10T05:35:20.2457452Z   path: target/release
+2026-09-10T05:35:20.2457689Z   merge-multiple: false
+2026-09-10T05:35:20.2457925Z   repository: PerryTS/perry
+2026-09-10T05:35:20.2458158Z   run-id: 34440726868
+2026-09-10T05:35:20.2458403Z   skip-decompress: false
+2026-09-10T05:35:20.2458638Z   digest-mismatch: error
+2026-09-10T05:35:20.2458854Z env:
+2026-09-10T05:35:20.2459042Z   CARGO_TERM_COLOR: always
+2026-09-10T05:35:20.2459279Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:35:20.2459552Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:35:20.2459827Z   CACHE_ON_FAILURE: false
+2026-09-10T05:35:20.2460063Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:35:20.2460280Z ##[endgroup]
+2026-09-10T05:35:20.3859947Z Downloading single artifact
+2026-09-10T05:35:20.6598785Z Preparing to download the following artifacts:
+2026-09-10T05:35:20.6600666Z - gap-suite-fast-build (ID: 10138122981, Size: 83687572, Expected Digest: sha256:ed11ea698e7f9d9223b60de47522939fb6c324db980c53cc6e35a2d1ee0e8c25)
+2026-09-10T05:35:21.2182844Z Redirecting to blob download url: https://productionresultssa11.blob.core.windows.net/actions-results/eb9cf662-1f13-472e-ab34-215fa04964b4/workflow-job-run-7d2d4e96-88dd-517d-9921-c741bd37d694/artifacts/2c216396a9d444c05cf3af4036ee78696c044ca90bd0b533ee43318a28236209.zip
+2026-09-10T05:35:21.2185945Z Starting download of artifact to: /home/runner/work/perry/perry/target/release
+2026-09-10T05:35:21.5310909Z (node:3077) [DEP0005] DeprecationWarning: Buffer() is deprecated due to security and usability issues. Please use the Buffer.alloc(), Buffer.allocUnsafe(), or Buffer.from() methods instead.
+2026-09-10T05:35:21.5312422Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-10T05:35:25.1521817Z SHA256 digest of downloaded artifact is ed11ea698e7f9d9223b60de47522939fb6c324db980c53cc6e35a2d1ee0e8c25
+2026-09-10T05:35:25.1523275Z Artifact download completed successfully.
+2026-09-10T05:35:25.1524275Z Total of 1 artifact(s) downloaded
+2026-09-10T05:35:25.1530647Z Download artifact has finished successfully
+2026-09-10T05:35:25.1659540Z ##[group]Run chmod +x target/release/perry
+2026-09-10T05:35:25.1659917Z [36;1mchmod +x target/release/perry[0m
+2026-09-10T05:35:25.1699796Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:35:25.1700060Z env:
+2026-09-10T05:35:25.1700279Z   CARGO_TERM_COLOR: always
+2026-09-10T05:35:25.1700537Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:35:25.1700827Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:35:25.1701118Z   CACHE_ON_FAILURE: false
+2026-09-10T05:35:25.1701362Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:35:25.1701593Z ##[endgroup]
+2026-09-10T05:35:25.1803868Z ##[group]Run set -euo pipefail
+2026-09-10T05:35:25.1804234Z [36;1mset -euo pipefail[0m
+2026-09-10T05:35:25.1804520Z [36;1mif [ "$GAP_MODE" = "fast" ]; then[0m
+2026-09-10T05:35:25.1804823Z [36;1m  export PERRY_SKIP_BUILD=1[0m
+2026-09-10T05:35:25.1805167Z [36;1m  export PERRY_BIN="$PWD/target/release/perry"[0m
+2026-09-10T05:35:25.1805547Z [36;1m  export PERRY_RUNTIME_DIR="$PWD/target/release"[0m
+2026-09-10T05:35:25.1806065Z [36;1mfi[0m
+2026-09-10T05:35:25.1806283Z [36;1mif [ "$GAP_TOTAL" = "1" ]; then[0m
+2026-09-10T05:35:25.1806561Z [36;1m  ./scripts/run_gap_tests.sh[0m
+2026-09-10T05:35:25.1806830Z [36;1melse[0m
+2026-09-10T05:35:25.1807131Z [36;1m  ./scripts/run_gap_tests.sh --shard "$GAP_SHARD/$GAP_TOTAL"[0m
+2026-09-10T05:35:25.1807497Z [36;1mfi[0m
+2026-09-10T05:35:25.1843359Z shell: /usr/bin/bash -e {0}
+2026-09-10T05:35:25.1843840Z env:
+2026-09-10T05:35:25.1844061Z   CARGO_TERM_COLOR: always
+2026-09-10T05:35:25.1844321Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T05:35:25.1844625Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T05:35:25.1844914Z   CACHE_ON_FAILURE: false
+2026-09-10T05:35:25.1845156Z   CARGO_INCREMENTAL: 0
+2026-09-10T05:35:25.1845384Z   GAP_MODE: fast
+2026-09-10T05:35:25.1845598Z   GAP_TOTAL: 3
+2026-09-10T05:35:25.1845797Z   GAP_SHARD: 1
+2026-09-10T05:35:25.1846010Z   UPDATE_SNAPSHOT: 0
+2026-09-10T05:35:25.1846246Z ##[endgroup]
+2026-09-10T05:35:25.4704270Z ==> Running gap suite (test-files/test_gap_*.ts) via run_parity_tests.sh --filter test_gap_
+2026-09-10T05:35:25.4982481Z ========================================
+2026-09-10T05:35:25.4983150Z    Perry Parity Test Runner (LLVM)
+2026-09-10T05:35:25.4983943Z ========================================
+2026-09-10T05:35:25.4984268Z 
+2026-09-10T05:35:25.4984840Z Using prebuilt compiler: /home/runner/work/perry/perry/target/release/perry
+2026-09-10T05:35:25.4985953Z Using prebuilt runtime archives: /home/runner/work/perry/perry/target/release
+2026-09-10T05:35:25.4987788Z [0;32mPrebuilt compiler and runtime archives verified[0m
+2026-09-10T05:35:25.4988240Z 
+2026-09-10T05:35:25.4988603Z Running parity tests (backend: LLVM, suite: all)...
+2026-09-10T05:35:25.4989001Z 
+2026-09-10T05:35:25.5200124Z echo server listening on 127.0.0.1:17891
+2026-09-10T05:35:25.5253874Z Echo server started on 127.0.0.1:17891 (PID 3125)
+2026-09-10T05:35:25.8131271Z 
+2026-09-10T05:35:25.8132437Z Result journal: /home/runner/work/perry/perry/test-parity/reports/journal/parity_all_flt-test_gap__shard-1-of-3.jsonl
+2026-09-10T05:35:35.3264335Z [0;32mPASS[0m  test_gap_1831_yield_star_array
+2026-09-10T05:35:35.3300325Z [1/250] (00:00:10) test_gap_1831_yield_star_array … PASS
+2026-09-10T05:35:37.1875459Z [0;32mPASS[0m  test_gap_2021_json_stringify_grown_array
+2026-09-10T05:35:37.1910577Z [2/250] (00:00:12) test_gap_2021_json_stringify_grown_array … PASS
+2026-09-10T05:35:38.9713485Z [0;32mPASS[0m  test_gap_2308_unrolled_loop_var
+2026-09-10T05:35:38.9749512Z [3/250] (00:00:13) test_gap_2308_unrolled_loop_var … PASS
+2026-09-10T05:35:40.7496015Z [0;32mPASS[0m  test_gap_2418_tofixed_rounding
+2026-09-10T05:35:40.7531715Z [4/250] (00:00:15) test_gap_2418_tofixed_rounding … PASS
+2026-09-10T05:35:42.5446001Z [0;31mFAIL[0m  test_gap_2514_settracesigint (output mismatch)
+2026-09-10T05:35:42.5446870Z        Node exit:   0
+2026-09-10T05:35:42.5447292Z        Perry exit:  0
+2026-09-10T05:35:42.5464480Z        Node.js:    function
+2026-09-10T05:35:42.5484032Z        Perry:  function
+2026-09-10T05:35:42.5520359Z [5/250] (00:00:17) test_gap_2514_settracesigint … PARITY_FAIL
+2026-09-10T05:35:44.4485649Z [0;32mPASS[0m  test_gap_2754_2907_2908_bigint_semantics
+2026-09-10T05:35:44.4521683Z [6/250] (00:00:19) test_gap_2754_2907_2908_bigint_semantics … PASS
+2026-09-10T05:35:46.7246556Z [0;32mPASS[0m  test_gap_2817_2843_2816_object_defineproperty
+2026-09-10T05:35:46.7282103Z [7/250] (00:00:21) test_gap_2817_2843_2816_object_defineproperty … PASS
+2026-09-10T05:35:48.7466353Z [0;32mPASS[0m  test_gap_3054_3055_url_arg_coercion
+2026-09-10T05:35:48.7505526Z [8/250] (00:00:23) test_gap_3054_3055_url_arg_coercion … PASS
+2026-09-10T05:35:50.5052210Z [0;32mPASS[0m  test_gap_3430_util_debuglog
+2026-09-10T05:35:50.5088565Z [9/250] (00:00:25) test_gap_3430_util_debuglog … PASS
+2026-09-10T05:35:52.9166994Z [0;32mPASS[0m  test_gap_3662_collection_brand_check
+2026-09-10T05:35:52.9203317Z [10/250] (00:00:27) test_gap_3662_collection_brand_check … PASS
+2026-09-10T05:40:46.6939736Z [0;32mPASS[0m  test_gap_3662_node_argvalidation
+2026-09-10T05:40:46.6977862Z [11/250] (00:05:21) test_gap_3662_node_argvalidation … PASS
+2026-09-10T05:40:48.6987806Z [0;32mPASS[0m  test_gap_3828_function_method_values
+2026-09-10T05:40:48.7025001Z [12/250] (00:05:23) test_gap_3828_function_method_values … PASS
+2026-09-10T05:40:50.5276431Z [0;32mPASS[0m  test_gap_4102_dynamic_instanceof
+2026-09-10T05:40:50.5313123Z [13/250] (00:05:25) test_gap_4102_dynamic_instanceof … PASS
+2026-09-10T05:40:50.6127203Z [1;33mNOTE[0m  test_gap_4510_enum_forward_ref (Node.js exit 1 — using expected-output)
+2026-09-10T05:40:52.3284252Z [0;32mPASS[0m  test_gap_4510_enum_forward_ref (expected-output)
+2026-09-10T05:40:52.3321500Z [14/250] (00:05:27) test_gap_4510_enum_forward_ref … PASS
+2026-09-10T05:40:54.2671685Z [0;32mPASS[0m  test_gap_5347_object_assign_array_source
+2026-09-10T05:40:54.2708337Z [15/250] (00:05:29) test_gap_5347_object_assign_array_source … PASS
+2026-09-10T05:40:56.1345007Z [0;32mPASS[0m  test_gap_5437_class_ref_static_closure_method
+2026-09-10T05:40:56.1385648Z [16/250] (00:05:31) test_gap_5437_class_ref_static_closure_method … PASS
+2026-09-10T05:40:58.0921871Z [0;32mPASS[0m  test_gap_5591_method_string_coercion
+2026-09-10T05:40:58.0958898Z [17/250] (00:05:33) test_gap_5591_method_string_coercion … PASS
+2026-09-10T05:40:59.9794903Z [0;32mPASS[0m  test_gap_5592_extends_proxy_superclass
+2026-09-10T05:40:59.9830403Z [18/250] (00:05:34) test_gap_5592_extends_proxy_superclass … PASS
+2026-09-10T05:41:01.9591995Z [0;32mPASS[0m  test_gap_5901_define_properties_keys
+2026-09-10T05:41:01.9629923Z [19/250] (00:05:36) test_gap_5901_define_properties_keys … PASS
+2026-09-10T05:41:03.8534807Z [0;32mPASS[0m  test_gap_6072_dynamic_bound_counter
+2026-09-10T05:41:03.8571329Z [20/250] (00:05:38) test_gap_6072_dynamic_bound_counter … PASS
+2026-09-10T05:41:05.7168387Z [0;32mPASS[0m  test_gap_6077_unhandled_rejection_event
+2026-09-10T05:41:05.7204871Z [21/250] (00:05:40) test_gap_6077_unhandled_rejection_event … PASS
+2026-09-10T05:41:07.7625420Z [0;32mPASS[0m  test_gap_6082_helper_attr_soundness
+2026-09-10T05:41:07.7663204Z [22/250] (00:05:42) test_gap_6082_helper_attr_soundness … PASS
+2026-09-10T05:41:09.7121322Z [0;32mPASS[0m  test_gap_6287_timer_batch_order
+2026-09-10T05:41:09.7158824Z [23/250] (00:05:44) test_gap_6287_timer_batch_order … PASS
+2026-09-10T05:45:39.4802915Z [0;32mPASS[0m  test_gap_6316_native_base_override
+2026-09-10T05:45:39.4839927Z [24/250] (00:10:14) test_gap_6316_native_base_override … PASS
+2026-09-10T05:45:41.6376394Z [0;32mPASS[0m  test_gap_6325_map_set_subclass
+2026-09-10T05:45:41.6411541Z [25/250] (00:10:16) test_gap_6325_map_set_subclass … PASS
+2026-09-10T05:45:44.0302719Z [0;32mPASS[0m  test_gap_6336_class_expr_builtin_parent
+2026-09-10T05:45:44.0340032Z [26/250] (00:10:19) test_gap_6336_class_expr_builtin_parent … PASS
+2026-09-10T05:45:48.8141748Z [0;32mPASS[0m  test_gap_6345_async_loop_per_iteration_binding
+2026-09-10T05:45:48.8178001Z [27/250] (00:10:23) test_gap_6345_async_loop_per_iteration_binding … PASS
+2026-09-10T05:45:50.6792490Z [0;32mPASS[0m  test_gap_6359_ushr_uint32_signed_slot
+2026-09-10T05:45:50.6828861Z [28/250] (00:10:25) test_gap_6359_ushr_uint32_signed_slot … PASS
+2026-09-10T05:45:52.5071946Z [0;32mPASS[0m  test_gap_6371_path_lexical_semantics
+2026-09-10T05:45:52.5109183Z [29/250] (00:10:27) test_gap_6371_path_lexical_semantics … PASS
+2026-09-10T05:45:54.9076870Z [0;32mPASS[0m  test_gap_6386_dataview_concat_regex_fastpaths
+2026-09-10T05:45:54.9112480Z [30/250] (00:10:29) test_gap_6386_dataview_concat_regex_fastpaths … PASS
+2026-09-10T05:45:57.0850231Z [0;32mPASS[0m  test_gap_6518_spread_call_grown_array
+2026-09-10T05:45:57.0887671Z [31/250] (00:10:32) test_gap_6518_spread_call_grown_array … PASS
+2026-09-10T05:45:59.7906978Z [0;32mPASS[0m  test_gap_6595_repeated_capture_class_statics
+2026-09-10T05:45:59.7942515Z [32/250] (00:10:34) test_gap_6595_repeated_capture_class_statics … PASS
+2026-09-10T05:46:01.9877335Z [0;32mPASS[0m  test_gap_6676_computed_symbol_iterator
+2026-09-10T05:46:01.9974669Z [33/250] (00:10:36) test_gap_6676_computed_symbol_iterator … PASS
+2026-09-10T05:46:04.2465975Z [0;32mPASS[0m  test_gap_6696_generator_symbol_iterator
+2026-09-10T05:46:04.2502335Z [34/250] (00:10:39) test_gap_6696_generator_symbol_iterator … PASS
+2026-09-10T05:46:21.4262510Z [0;32mPASS[0m  test_gap_6812_object_write_loop_generalization
+2026-09-10T05:46:21.4298536Z [35/250] (00:10:56) test_gap_6812_object_write_loop_generalization … PASS
+2026-09-10T05:46:23.4240385Z [0;32mPASS[0m  test_gap_6927_clone_suffix_user_members
+2026-09-10T05:46:23.4279114Z [36/250] (00:10:58) test_gap_6927_clone_suffix_user_members … PASS
+2026-09-10T05:46:25.4603379Z [0;32mPASS[0m  test_gap_7232_i32_chain_double_rounding
+2026-09-10T05:46:25.4640063Z [37/250] (00:11:00) test_gap_7232_i32_chain_double_rounding … PASS
+2026-09-10T05:46:27.3748273Z [0;32mPASS[0m  test_gap_7302_invoke_eh_paths
+2026-09-10T05:46:27.3786677Z [38/250] (00:11:02) test_gap_7302_invoke_eh_paths … PASS
+2026-09-10T05:46:29.3549761Z [0;32mPASS[0m  test_gap_7506_pshape_add_result_coercion
+2026-09-10T05:46:29.3585670Z [39/250] (00:11:04) test_gap_7506_pshape_add_result_coercion … PASS
+2026-09-10T05:46:31.3517566Z [0;32mPASS[0m  test_gap_7548_grown_array_object_ops
+2026-09-10T05:46:31.3553301Z [40/250] (00:11:06) test_gap_7548_grown_array_object_ops … PASS
+2026-09-10T05:46:33.8810140Z [0;32mPASS[0m  test_gap_7564_iter_result_rooting
+2026-09-10T05:46:33.8846993Z [41/250] (00:11:08) test_gap_7564_iter_result_rooting … PASS
+2026-09-10T05:46:36.4951204Z [0;32mPASS[0m  test_gap_7570_map_set_declared_base_type
+2026-09-10T05:46:36.4988552Z [42/250] (00:11:11) test_gap_7570_map_set_declared_base_type … PASS
+2026-09-10T05:46:38.7195637Z [0;32mPASS[0m  test_gap_7577_generator_prototype_rooting
+2026-09-10T05:46:38.7233547Z [43/250] (00:11:13) test_gap_7577_generator_prototype_rooting … PASS
+2026-09-10T05:46:40.8325439Z [0;32mPASS[0m  test_gap_7628_index_update_rooted
+2026-09-10T05:46:40.8362036Z [44/250] (00:11:15) test_gap_7628_index_update_rooted … PASS
+2026-09-10T05:46:42.7441865Z [0;32mPASS[0m  test_gap_7673_any_string_method_collision
+2026-09-10T05:46:42.7477483Z [45/250] (00:11:17) test_gap_7673_any_string_method_collision … PASS
+2026-09-10T05:46:44.6168595Z [0;32mPASS[0m  test_gap_7771_proxy_array_read_loop
+2026-09-10T05:46:44.6206685Z [46/250] (00:11:19) test_gap_7771_proxy_array_read_loop … PASS
+2026-09-10T05:46:46.4030518Z [0;32mPASS[0m  test_gap_7844_array_isarray_reassigned_local
+2026-09-10T05:46:46.4067797Z [47/250] (00:11:21) test_gap_7844_array_isarray_reassigned_local … PASS
+2026-09-10T05:46:50.0460175Z [0;32mPASS[0m  test_gap_7890_declared_array_receiver_element_read
+2026-09-10T05:46:50.0497670Z [48/250] (00:11:25) test_gap_7890_declared_array_receiver_element_read … PASS
+2026-09-10T05:46:54.1949847Z [0;32mPASS[0m  test_gap_7911_promise_all_slow_arm_guards
+2026-09-10T05:46:54.1987502Z [49/250] (00:11:29) test_gap_7911_promise_all_slow_arm_guards … PASS
+2026-09-10T05:46:57.8715755Z [0;32mPASS[0m  test_gap_8434_string_builder_roundtrips
+2026-09-10T05:46:57.8752065Z [50/250] (00:11:32) test_gap_8434_string_builder_roundtrips … PASS
+2026-09-10T05:46:59.7192941Z [0;32mPASS[0m  test_gap_9050_all_vouched_guarded_add
+2026-09-10T05:46:59.7230630Z [51/250] (00:11:34) test_gap_9050_all_vouched_guarded_add … PASS
+2026-09-10T05:47:02.0466704Z [0;32mPASS[0m  test_gap_9053_export_getter_descriptor
+2026-09-10T05:47:02.0503070Z [52/250] (00:11:37) test_gap_9053_export_getter_descriptor … PASS
+2026-09-10T05:47:04.1655953Z [0;32mPASS[0m  test_gap_9089_class_expr_self_private_identity
+2026-09-10T05:47:04.1693242Z [53/250] (00:11:39) test_gap_9089_class_expr_self_private_identity … PASS
+2026-09-10T05:47:06.7908647Z [0;32mPASS[0m  test_gap_9092_bigint_pow2_mod
+2026-09-10T05:47:06.7944349Z [54/250] (00:11:41) test_gap_9092_bigint_pow2_mod … PASS
+2026-09-10T05:47:08.7167662Z [0;32mPASS[0m  test_gap_9143_bigint_for_of_compound
+2026-09-10T05:47:08.7203982Z [55/250] (00:11:43) test_gap_9143_bigint_for_of_compound … PASS
+2026-09-10T05:47:11.5632653Z [0;32mPASS[0m  test_gap_9192_array_object_prototype
+2026-09-10T05:47:11.5672544Z [56/250] (00:11:46) test_gap_9192_array_object_prototype … PASS
+2026-09-10T05:47:13.7559372Z [0;32mPASS[0m  test_gap_9217_9218_regexp_word_dot
+2026-09-10T05:47:13.7597274Z [57/250] (00:11:48) test_gap_9217_9218_regexp_word_dot … PASS
+2026-09-10T05:47:15.5513347Z [0;32mPASS[0m  test_gap_9239_fresh_instance_prototype_replacement
+2026-09-10T05:47:15.5554308Z [58/250] (00:11:50) test_gap_9239_fresh_instance_prototype_replacement … PASS
+2026-09-10T05:47:17.4618503Z [0;32mPASS[0m  test_gap_9347_uint8array_extensibility
+2026-09-10T05:47:17.4655256Z [59/250] (00:11:52) test_gap_9347_uint8array_extensibility … PASS
+2026-09-10T05:47:19.2496541Z [0;32mPASS[0m  test_gap_9364_factory_decl_dynamic_parent_chain
+2026-09-10T05:47:19.2532747Z [60/250] (00:11:54) test_gap_9364_factory_decl_dynamic_parent_chain … PASS
+2026-09-10T05:47:21.2406694Z [0;32mPASS[0m  test_gap_9369_static_this_computed_member
+2026-09-10T05:47:21.2444176Z [61/250] (00:11:56) test_gap_9369_static_this_computed_member … PASS
+2026-09-10T05:47:23.3239425Z [0;32mPASS[0m  test_gap_9402_sigpipe_truncating_consumer
+2026-09-10T05:47:23.3276990Z [62/250] (00:11:58) test_gap_9402_sigpipe_truncating_consumer … PASS
+2026-09-10T05:47:25.1428264Z [0;32mPASS[0m  test_gap_9403_process_exit_event_explicit
+2026-09-10T05:47:25.1467386Z [63/250] (00:12:00) test_gap_9403_process_exit_event_explicit … PASS
+2026-09-10T05:47:27.4242757Z [0;32mPASS[0m  test_gap_9410_error_subclass_stack
+2026-09-10T05:47:27.4279517Z [64/250] (00:12:02) test_gap_9410_error_subclass_stack … PASS
+2026-09-10T05:47:29.9482195Z [0;32mPASS[0m  test_gap_9412_require_builtin_tick_order
+2026-09-10T05:47:29.9520307Z [65/250] (00:12:04) test_gap_9412_require_builtin_tick_order … PASS
+2026-09-10T05:47:32.8260386Z [0;32mPASS[0m  test_gap_9417_accessor_this_restore
+2026-09-10T05:47:32.8297299Z [66/250] (00:12:07) test_gap_9417_accessor_this_restore … PASS
+2026-09-10T05:47:46.1697666Z [0;32mPASS[0m  test_gap_9421_async_output_flush
+2026-09-10T05:47:46.1734108Z [67/250] (00:12:21) test_gap_9421_async_output_flush … PASS
+2026-09-10T05:47:48.6649744Z [0;32mPASS[0m  test_gap_9423_module_init_strictness
+2026-09-10T05:47:48.6687246Z [68/250] (00:12:23) test_gap_9423_module_init_strictness … PASS
+2026-09-10T05:47:51.3591634Z [0;32mPASS[0m  test_gap_9431_array_from_lone_surrogate
+2026-09-10T05:47:51.3628649Z [69/250] (00:12:26) test_gap_9431_array_from_lone_surrogate … PASS
+2026-09-10T05:47:53.3979363Z [0;32mPASS[0m  test_gap_9440_error_name_ownership
+2026-09-10T05:47:53.4016000Z [70/250] (00:12:28) test_gap_9440_error_name_ownership … PASS
+2026-09-10T05:47:56.4945446Z [0;32mPASS[0m  test_gap_9442_process_exit_abandons_async_fs_cjs
+2026-09-10T05:47:56.4982976Z [71/250] (00:12:31) test_gap_9442_process_exit_abandons_async_fs_cjs … PASS
+2026-09-10T05:47:58.6314532Z [0;32mPASS[0m  test_gap_9450_intl_indian_grouping
+2026-09-10T05:47:58.6350595Z [72/250] (00:12:33) test_gap_9450_intl_indian_grouping … PASS
+2026-09-10T05:48:01.2007116Z [0;32mPASS[0m  test_gap_9462_hole_leak_family
+2026-09-10T05:48:01.2044492Z [73/250] (00:12:36) test_gap_9462_hole_leak_family … PASS
+2026-09-10T05:48:03.1930379Z [0;32mPASS[0m  test_gap_9485_cjs_default_namespace_method_call
+2026-09-10T05:48:03.1967486Z [74/250] (00:12:38) test_gap_9485_cjs_default_namespace_method_call … PASS
+2026-09-10T05:48:07.3720852Z [0;32mPASS[0m  test_gap_9490_stream_set_encoding_utf8
+2026-09-10T05:48:07.3759015Z [75/250] (00:12:42) test_gap_9490_stream_set_encoding_utf8 … PASS
+2026-09-10T05:48:09.8355732Z [0;32mPASS[0m  test_gap_9493_utf8_stream_exit_no_flush
+2026-09-10T05:48:09.8391062Z [76/250] (00:12:44) test_gap_9493_utf8_stream_exit_no_flush … PASS
+2026-09-10T05:48:15.0660628Z [0;32mPASS[0m  test_gap_9495_strict_inherited_property_set
+2026-09-10T05:48:15.0698987Z [77/250] (00:12:50) test_gap_9495_strict_inherited_property_set … PASS
+2026-09-10T05:48:17.9479342Z [0;32mPASS[0m  test_gap_9500_mcp_debug_logger_shape
+2026-09-10T05:48:17.9516711Z [78/250] (00:12:52) test_gap_9500_mcp_debug_logger_shape … PASS
+2026-09-10T05:48:20.0088903Z [0;32mPASS[0m  test_gap_9503_dynamic_heritage_builtin_this
+2026-09-10T05:48:20.0126402Z [79/250] (00:12:55) test_gap_9503_dynamic_heritage_builtin_this … PASS
+2026-09-10T05:48:22.1535932Z [0;32mPASS[0m  test_gap_9528_loop_class_capture
+2026-09-10T05:48:22.1572179Z [80/250] (00:12:57) test_gap_9528_loop_class_capture … PASS
+2026-09-10T05:48:24.2177925Z [0;32mPASS[0m  test_gap_9537_child_process_null_bytes
+2026-09-10T05:48:24.2216543Z [81/250] (00:12:59) test_gap_9537_child_process_null_bytes … PASS
+2026-09-10T05:48:27.9321288Z [0;32mPASS[0m  test_gap_9574_unlink_waits_for_parked_write
+2026-09-10T05:48:27.9358542Z [82/250] (00:13:02) test_gap_9574_unlink_waits_for_parked_write … PASS
+2026-09-10T05:48:30.4067849Z [0;32mPASS[0m  test_gap_9609_explicit_resource_management
+2026-09-10T05:48:30.4104602Z [83/250] (00:13:05) test_gap_9609_explicit_resource_management … PASS
+2026-09-10T05:48:37.9446930Z [0;32mPASS[0m  test_gap_9676_stdin_unref_ref_keeps_reader
+2026-09-10T05:48:37.9482868Z [84/250] (00:13:12) test_gap_9676_stdin_unref_ref_keeps_reader … PASS
+2026-09-10T05:48:40.0071673Z [0;32mPASS[0m  test_gap_9713_dynamic_number_tostring
+2026-09-10T05:48:40.0109099Z [85/250] (00:13:15) test_gap_9713_dynamic_number_tostring … PASS
+2026-09-10T05:48:42.0012558Z [0;32mPASS[0m  test_gap_9721_tdz_binding_names
+2026-09-10T05:48:42.0049563Z [86/250] (00:13:17) test_gap_9721_tdz_binding_names … PASS
+2026-09-10T05:48:44.1582432Z [0;32mPASS[0m  test_gap_9782_specialized_typedarray_last_use
+2026-09-10T05:48:44.1619062Z [87/250] (00:13:19) test_gap_9782_specialized_typedarray_last_use … PASS
+2026-09-10T05:48:46.3505948Z [0;32mPASS[0m  test_gap_9785_array_prototype_receivers
+2026-09-10T05:48:46.3541922Z [88/250] (00:13:21) test_gap_9785_array_prototype_receivers … PASS
+2026-09-10T05:48:48.4664273Z [0;32mPASS[0m  test_gap_9787_object_prototype_hole_setter
+2026-09-10T05:48:48.4700565Z [89/250] (00:13:23) test_gap_9787_object_prototype_hole_setter … PASS
+2026-09-10T05:48:51.0219750Z [0;32mPASS[0m  test_gap_9815_primitive_computed_properties
+2026-09-10T05:48:51.0257735Z [90/250] (00:13:26) test_gap_9815_primitive_computed_properties … PASS
+2026-09-10T05:48:53.2765219Z [0;32mPASS[0m  test_gap_anon_shape_boxed_capture
+2026-09-10T05:48:53.2803011Z [91/250] (00:13:28) test_gap_anon_shape_boxed_capture … PASS
+2026-09-10T05:48:55.2706945Z [0;32mPASS[0m  test_gap_arguments_in_object_literal_method
+2026-09-10T05:48:55.2744731Z [92/250] (00:13:30) test_gap_arguments_in_object_literal_method … PASS
+2026-09-10T05:48:57.2372736Z [0;32mPASS[0m  test_gap_array_dyndispatch_2803_2808_2791
+2026-09-10T05:48:57.2409580Z [93/250] (00:13:32) test_gap_array_dyndispatch_2803_2808_2791 … PASS
+2026-09-10T05:48:59.4525472Z [0;32mPASS[0m  test_gap_array_iterator_manual_next
+2026-09-10T05:48:59.4563795Z [94/250] (00:13:34) test_gap_array_iterator_manual_next … PASS
+2026-09-10T05:49:01.4835975Z [0;32mPASS[0m  test_gap_array_optargs_2804_2801_2800_2802
+2026-09-10T05:49:01.4872189Z [95/250] (00:13:36) test_gap_array_optargs_2804_2801_2800_2802 … PASS
+2026-09-10T05:49:03.4909293Z [0;32mPASS[0m  test_gap_array_side_mask_covers_a_pointer_stored_at_a_late_index
+2026-09-10T05:49:03.4946340Z [96/250] (00:13:38) test_gap_array_side_mask_covers_a_pointer_stored_at_a_late_index … PASS
+2026-09-10T05:49:05.3796147Z [0;32mPASS[0m  test_gap_array_symbol_iterator
+2026-09-10T05:49:05.3832695Z [97/250] (00:13:40) test_gap_array_symbol_iterator … PASS
+2026-09-10T05:49:09.3930466Z [0;32mPASS[0m  test_gap_async_generator_yield_star_shared_dispatch
+2026-09-10T05:49:09.3967230Z [98/250] (00:13:44) test_gap_async_generator_yield_star_shared_dispatch … PASS
+2026-09-10T05:49:13.8658598Z [0;32mPASS[0m  test_gap_asynchooks_3089_3090_3091_3093
+2026-09-10T05:49:13.8695638Z [99/250] (00:13:48) test_gap_asynchooks_3089_3090_3091_3093 … PASS
+2026-09-10T05:49:15.7556780Z [0;32mPASS[0m  test_gap_bigint
+2026-09-10T05:49:15.7595358Z [100/250] (00:13:50) test_gap_bigint … PASS
+2026-09-10T05:49:17.6623502Z [0;32mPASS[0m  test_gap_bigint_tolocalestring_intl_gate
+2026-09-10T05:49:17.6660417Z [101/250] (00:13:52) test_gap_bigint_tolocalestring_intl_gate … PASS
+2026-09-10T05:49:19.8131871Z [0;32mPASS[0m  test_gap_buffer_ops
+2026-09-10T05:49:19.8169844Z [102/250] (00:13:54) test_gap_buffer_ops … PASS
+2026-09-10T05:49:21.7037841Z [0;32mPASS[0m  test_gap_buffer_pool_identity
+2026-09-10T05:49:21.7074411Z [103/250] (00:13:56) test_gap_buffer_pool_identity … PASS
+2026-09-10T05:49:21.7896693Z [1;33mNOTE[0m  test_gap_bun_sql_9604 (Node.js exit 1 — using expected-output)
+2026-09-10T05:49:26.9013542Z [0;32mPASS[0m  test_gap_bun_sql_9604 (expected-output)
+2026-09-10T05:49:26.9050052Z [104/250] (00:14:01) test_gap_bun_sql_9604 … PASS
+2026-09-10T05:49:29.3387507Z [0;32mPASS[0m  test_gap_chalk_proto_styles_5039
+2026-09-10T05:49:29.3423817Z [105/250] (00:14:04) test_gap_chalk_proto_styles_5039 … PASS
+2026-09-10T05:49:32.4133470Z [0;32mPASS[0m  test_gap_class_expr_dynamic_parent_ctor
+2026-09-10T05:49:32.4173949Z [106/250] (00:14:07) test_gap_class_expr_dynamic_parent_ctor … PASS
+2026-09-10T05:49:34.3869204Z [0;32mPASS[0m  test_gap_class_expr_fresh_static_blocks_this
+2026-09-10T05:49:34.3905958Z [107/250] (00:14:09) test_gap_class_expr_fresh_static_blocks_this … PASS
+2026-09-10T05:49:36.2026009Z [0;32mPASS[0m  test_gap_class_expr_inherited_static_method
+2026-09-10T05:49:36.2063338Z [108/250] (00:14:11) test_gap_class_expr_inherited_static_method … PASS
+2026-09-10T05:49:38.0325994Z [0;32mPASS[0m  test_gap_class_expr_perf_eval_statics
+2026-09-10T05:49:38.0363450Z [109/250] (00:14:13) test_gap_class_expr_perf_eval_statics … PASS
+2026-09-10T05:49:39.8985531Z [0;32mPASS[0m  test_gap_class_extends_runtime_value_super
+2026-09-10T05:49:39.9023002Z [110/250] (00:14:14) test_gap_class_extends_runtime_value_super … PASS
+2026-09-10T05:49:42.3587364Z [0;32mPASS[0m  test_gap_class_forward_capture_6523
+2026-09-10T05:49:42.3624938Z [111/250] (00:14:17) test_gap_class_forward_capture_6523 … PASS
+2026-09-10T05:49:44.3056649Z [0;32mPASS[0m  test_gap_class_ref_numeric_array_canon
+2026-09-10T05:49:44.3092498Z [112/250] (00:14:19) test_gap_class_ref_numeric_array_canon … PASS
+2026-09-10T05:49:46.4092930Z [0;32mPASS[0m  test_gap_class_symbol_async_iterator
+2026-09-10T05:49:46.4130056Z [113/250] (00:14:21) test_gap_class_symbol_async_iterator … PASS
+2026-09-10T05:49:48.4199514Z [0;32mPASS[0m  test_gap_collection_foreach_member_receiver_thisarg
+2026-09-10T05:49:48.4237534Z [114/250] (00:14:23) test_gap_collection_foreach_member_receiver_thisarg … PASS
+2026-09-10T05:49:50.2584995Z [0;32mPASS[0m  test_gap_computed_key_method_def
+2026-09-10T05:49:50.2621986Z [115/250] (00:14:25) test_gap_computed_key_method_def … PASS
+2026-09-10T05:49:52.0632415Z [0;32mPASS[0m  test_gap_computed_tagged_template_closure
+2026-09-10T05:49:52.0671496Z [116/250] (00:14:27) test_gap_computed_tagged_template_closure … PASS
+2026-09-10T05:49:54.0244336Z [0;32mPASS[0m  test_gap_console_methods
+2026-09-10T05:49:54.0281239Z [117/250] (00:14:29) test_gap_console_methods … PASS
+2026-09-10T05:49:57.1117228Z [0;32mPASS[0m  test_gap_cp_3079plus
+2026-09-10T05:49:57.1154898Z [118/250] (00:14:32) test_gap_cp_3079plus … PASS
+2026-09-10T05:49:58.9389907Z [0;32mPASS[0m  test_gap_cross_module_arguments
+2026-09-10T05:49:58.9426598Z [119/250] (00:14:33) test_gap_cross_module_arguments … PASS
+2026-09-10T05:50:02.4699987Z [0;32mPASS[0m  test_gap_crypto_cipher_3382_3381_2954
+2026-09-10T05:50:02.4736863Z [120/250] (00:14:37) test_gap_crypto_cipher_3382_3381_2954 … PASS
+2026-09-10T05:50:04.3255426Z [0;32mPASS[0m  test_gap_ctor_arg_capture_order
+2026-09-10T05:50:04.3291556Z [121/250] (00:14:39) test_gap_ctor_arg_capture_order … PASS
+2026-09-10T05:50:06.1896723Z [0;32mPASS[0m  test_gap_date_2826_2851_2827
+2026-09-10T05:50:06.1933473Z [122/250] (00:14:41) test_gap_date_2826_2851_2827 … PASS
+2026-09-10T05:50:08.1069057Z [0;32mPASS[0m  test_gap_date_parse_slash_9414
+2026-09-10T05:50:08.1105277Z [123/250] (00:14:43) test_gap_date_parse_slash_9414 … PASS
+2026-09-10T05:50:10.8776115Z [0;32mPASS[0m  test_gap_declared_field_type_refine_guarded
+2026-09-10T05:50:10.8813914Z [124/250] (00:14:45) test_gap_declared_field_type_refine_guarded … PASS
+2026-09-10T05:50:12.6945812Z [0;32mPASS[0m  test_gap_default_param_tdz
+2026-09-10T05:50:12.6982115Z [125/250] (00:14:47) test_gap_default_param_tdz … PASS
+2026-09-10T05:50:16.5587592Z [0;32mPASS[0m  test_gap_diagchannel_3082_3084_3085_3086
+2026-09-10T05:50:16.5625344Z [126/250] (00:14:51) test_gap_diagchannel_3082_3084_3085_3086 … PASS
+2026-09-10T05:50:18.5631209Z [0;32mPASS[0m  test_gap_dup_class_name_field_layout
+2026-09-10T05:50:18.5669539Z [127/250] (00:14:53) test_gap_dup_class_name_field_layout … PASS
+2026-09-10T05:50:20.7098212Z [0;32mPASS[0m  test_gap_dynamic_import_alias_binding
+2026-09-10T05:50:20.7136056Z [128/250] (00:14:55) test_gap_dynamic_import_alias_binding … PASS
+2026-09-10T05:50:22.5219973Z [0;32mPASS[0m  test_gap_dynamic_import_init_time
+2026-09-10T05:50:22.5258483Z [129/250] (00:14:57) test_gap_dynamic_import_init_time … PASS
+2026-09-10T05:50:24.4198323Z [0;32mPASS[0m  test_gap_dynamic_import_reexport
+2026-09-10T05:50:24.4236394Z [130/250] (00:14:59) test_gap_dynamic_import_reexport … PASS
+2026-09-10T05:50:26.2444159Z [0;32mPASS[0m  test_gap_dynamic_import_template
+2026-09-10T05:50:26.2481241Z [131/250] (00:15:01) test_gap_dynamic_import_template … PASS
+2026-09-10T05:50:28.2318164Z [0;32mPASS[0m  test_gap_dynamic_string_length_generic_tower
+2026-09-10T05:50:28.2355181Z [132/250] (00:15:03) test_gap_dynamic_string_length_generic_tower … PASS
+2026-09-10T05:50:30.4190989Z [0;32mPASS[0m  test_gap_error_2836_2838_2904_2882
+2026-09-10T05:50:30.4228889Z [133/250] (00:15:05) test_gap_error_2836_2838_2904_2882 … PASS
+2026-09-10T05:50:32.2611771Z [0;32mPASS[0m  test_gap_eval_as_value
+2026-09-10T05:50:32.2648557Z [134/250] (00:15:07) test_gap_eval_as_value … PASS
+2026-09-10T05:50:34.2444130Z [0;32mPASS[0m  test_gap_export_star_variable_reexport
+2026-09-10T05:50:34.2481576Z [135/250] (00:15:09) test_gap_export_star_variable_reexport … PASS
+2026-09-10T05:50:37.7560942Z [0;32mPASS[0m  test_gap_fetch_reqresp_2640_2643
+2026-09-10T05:50:37.7598742Z [136/250] (00:15:12) test_gap_fetch_reqresp_2640_2643 … PASS
+2026-09-10T05:50:41.3412413Z [0;32mPASS[0m  test_gap_fetch_response_json_init
+2026-09-10T05:50:41.3450704Z [137/250] (00:15:16) test_gap_fetch_response_json_init … PASS
+2026-09-10T05:50:43.2388356Z [0;32mPASS[0m  test_gap_flatmap_array_type_check
+2026-09-10T05:50:43.2424881Z [138/250] (00:15:18) test_gap_flatmap_array_type_check … PASS
+2026-09-10T05:50:45.3162781Z [0;32mPASS[0m  test_gap_fn_prototype_own_keys_5024
+2026-09-10T05:50:45.3200454Z [139/250] (00:15:20) test_gap_fn_prototype_own_keys_5024 … PASS
+2026-09-10T05:50:49.0485116Z [0;32mPASS[0m  test_gap_fs_errprop2_2745plus
+2026-09-10T05:50:49.0522217Z [140/250] (00:15:24) test_gap_fs_errprop2_2745plus … PASS
+2026-09-10T05:50:51.0433136Z [0;32mPASS[0m  test_gap_fs_write_error_propagation
+2026-09-10T05:50:51.0471206Z [141/250] (00:15:26) test_gap_fs_write_error_propagation … PASS
+2026-09-10T05:51:03.4904709Z [0;32mPASS[0m  test_gap_gc_alloc_point_no_move
+2026-09-10T05:51:03.4941290Z [142/250] (00:15:38) test_gap_gc_alloc_point_no_move … PASS
+2026-09-10T05:51:05.3667107Z [0;32mPASS[0m  test_gap_gc_catch_param_rooting
+2026-09-10T05:51:05.3704541Z [143/250] (00:15:40) test_gap_gc_catch_param_rooting … PASS
+2026-09-10T05:51:07.2486996Z [0;32mPASS[0m  test_gap_gc_closure_call_callee_rooting
+2026-09-10T05:51:07.2524504Z [144/250] (00:15:42) test_gap_gc_closure_call_callee_rooting … PASS
+2026-09-10T05:51:09.1202276Z [0;32mPASS[0m  test_gap_gc_closure_this_capture_rooting
+2026-09-10T05:51:09.1239137Z [145/250] (00:15:44) test_gap_gc_closure_this_capture_rooting … PASS
+2026-09-10T05:51:11.2716305Z [0;32mPASS[0m  test_gap_gc_define_properties_key_rooting
+2026-09-10T05:51:11.2753113Z [146/250] (00:15:46) test_gap_gc_define_properties_key_rooting … PASS
+2026-09-10T05:51:14.9447871Z [0;32mPASS[0m  test_gap_gc_fetch_method_value_cache_rooting
+2026-09-10T05:51:14.9485097Z [147/250] (00:15:49) test_gap_gc_fetch_method_value_cache_rooting … PASS
+2026-09-10T05:56:23.2122604Z [0;32mPASS[0m  test_gap_gc_http2_pending_event_callback_rooting
+2026-09-10T05:56:23.2159149Z [148/250] (00:20:58) test_gap_gc_http2_pending_event_callback_rooting … PASS
+2026-09-10T05:56:25.0498194Z [0;32mPASS[0m  test_gap_gc_inline_ctor_this_rooting
+2026-09-10T05:56:25.0535628Z [149/250] (00:21:00) test_gap_gc_inline_ctor_this_rooting … PASS
+2026-09-10T05:56:26.8808996Z [0;32mPASS[0m  test_gap_gc_interval_args_rooting
+2026-09-10T05:56:26.8845681Z [150/250] (00:21:01) test_gap_gc_interval_args_rooting … PASS
+2026-09-10T05:56:28.9377039Z [0;32mPASS[0m  test_gap_gc_namespace_and_computed_dispatch_rooting
+2026-09-10T05:56:28.9415067Z [151/250] (00:21:03) test_gap_gc_namespace_and_computed_dispatch_rooting … PASS
+2026-09-10T05:56:33.2359511Z [0;32mPASS[0m  test_gap_gc_next_request_import
+2026-09-10T05:56:33.2396688Z [152/250] (00:21:08) test_gap_gc_next_request_import … PASS
+2026-09-10T05:56:35.2969566Z [0;32mPASS[0m  test_gap_gc_process_env_cache_rooting
+2026-09-10T05:56:35.3007379Z [153/250] (00:21:10) test_gap_gc_process_env_cache_rooting … PASS
+2026-09-10T05:56:37.4010963Z [0;32mPASS[0m  test_gap_gc_rest_argument_rooting
+2026-09-10T05:56:37.4048657Z [154/250] (00:21:12) test_gap_gc_rest_argument_rooting … PASS
+2026-09-10T05:56:39.3918750Z [0;32mPASS[0m  test_gap_gc_spread_symbol_iterator_rooting
+2026-09-10T05:56:39.3955727Z [155/250] (00:21:14) test_gap_gc_spread_symbol_iterator_rooting … PASS
+2026-09-10T05:56:41.4172102Z [0;32mPASS[0m  test_gap_gc_string_copy_source_rooting
+2026-09-10T05:56:41.4209105Z [156/250] (00:21:16) test_gap_gc_string_copy_source_rooting … PASS
+2026-09-10T05:56:45.4042115Z [0;32mPASS[0m  test_gap_gc_symbol_local_rooting
+2026-09-10T05:56:45.4080828Z [157/250] (00:21:20) test_gap_gc_symbol_local_rooting … PASS
+2026-09-10T05:56:47.4985236Z [0;32mPASS[0m  test_gap_gc_uint8_buffer_callback_rooting
+2026-09-10T05:56:47.5021160Z [158/250] (00:21:22) test_gap_gc_uint8_buffer_callback_rooting … PASS
+2026-09-10T05:56:50.1096581Z [0;32mPASS[0m  test_gap_generator_return_throw_finally
+2026-09-10T05:56:50.1133175Z [159/250] (00:21:25) test_gap_generator_return_throw_finally … PASS
+2026-09-10T05:56:52.3068303Z [0;32mPASS[0m  test_gap_generic_specialization_constructor_identity_7757
+2026-09-10T05:56:52.3104540Z [160/250] (00:21:27) test_gap_generic_specialization_constructor_identity_7757 … PASS
+2026-09-10T05:56:55.2590919Z [0;32mPASS[0m  test_gap_global_apis
+2026-09-10T05:56:55.2627215Z [161/250] (00:21:30) test_gap_global_apis … PASS
+2026-09-10T05:56:57.4890995Z [0;32mPASS[0m  test_gap_globals_abortsignal_navigator_2582_2923
+2026-09-10T05:56:57.4929370Z [162/250] (00:21:32) test_gap_globals_abortsignal_navigator_2582_2923 … PASS
+2026-09-10T05:57:00.7695685Z [0;32mPASS[0m  test_gap_http2_settings
+2026-09-10T05:57:00.7732153Z [163/250] (00:21:35) test_gap_http2_settings … PASS
+2026-09-10T06:02:03.5346330Z [0;32mPASS[0m  test_gap_http_req_async_iterator
+2026-09-10T06:02:03.5384193Z [164/250] (00:26:38) test_gap_http_req_async_iterator … PASS
+2026-09-10T06:02:05.5368191Z [0;32mPASS[0m  test_gap_imported_member_array_method_names
+2026-09-10T06:02:05.5405748Z [165/250] (00:26:40) test_gap_imported_member_array_method_names … PASS
+2026-09-10T06:02:07.5117337Z [0;32mPASS[0m  test_gap_in_operator_to_property_key
+2026-09-10T06:02:07.5154300Z [166/250] (00:26:42) test_gap_in_operator_to_property_key … PASS
+2026-09-10T06:02:09.4495014Z [0;32mPASS[0m  test_gap_instanceof_flattened_class_rename
+2026-09-10T06:02:09.4533084Z [167/250] (00:26:44) test_gap_instanceof_flattened_class_rename … PASS
+2026-09-10T06:02:11.6274996Z [0;32mPASS[0m  test_gap_intl_builtin_fn_no_prototype_5904
+2026-09-10T06:02:11.6312841Z [168/250] (00:26:46) test_gap_intl_builtin_fn_no_prototype_5904 … PASS
+2026-09-10T06:02:13.7148308Z [0;32mPASS[0m  test_gap_intl_ctor_mechanics_5835
+2026-09-10T06:02:13.7184633Z [169/250] (00:26:48) test_gap_intl_ctor_mechanics_5835 … PASS
+2026-09-10T06:02:15.7305367Z [0;32mPASS[0m  test_gap_intl_datetimeformat_null_option_5582
+2026-09-10T06:02:15.7343123Z [170/250] (00:26:50) test_gap_intl_datetimeformat_null_option_5582 … PASS
+2026-09-10T06:02:17.9123334Z [0;32mPASS[0m  test_gap_intl_rtf_auto_instanceof_6960
+2026-09-10T06:02:17.9160900Z [171/250] (00:26:52) test_gap_intl_rtf_auto_instanceof_6960 … PASS
+2026-09-10T06:02:19.7852866Z [0;32mPASS[0m  test_gap_iterator_helper_next_value_9068
+2026-09-10T06:02:19.7890217Z [172/250] (00:26:54) test_gap_iterator_helper_next_value_9068 … PASS
+2026-09-10T06:02:22.6320270Z [0;32mPASS[0m  test_gap_iterator_patched_next
+2026-09-10T06:02:22.6357277Z [173/250] (00:26:57) test_gap_iterator_patched_next … PASS
+2026-09-10T06:02:25.2735243Z [0;32mPASS[0m  test_gap_json_array_element_overflow_fields
+2026-09-10T06:02:25.2773326Z [174/250] (00:27:00) test_gap_json_array_element_overflow_fields … PASS
+2026-09-10T06:02:29.4930152Z [0;32mPASS[0m  test_gap_json_direct_strings
+2026-09-10T06:02:29.4967923Z [175/250] (00:27:04) test_gap_json_direct_strings … PASS
+2026-09-10T06:02:31.6053375Z [0;32mPASS[0m  test_gap_json_flat_scalar_depth
+2026-09-10T06:02:31.6094598Z [176/250] (00:27:06) test_gap_json_flat_scalar_depth … PASS
+2026-09-10T06:02:33.8678530Z [0;32mPASS[0m  test_gap_json_lazy_growth_alias
+2026-09-10T06:02:33.8715886Z [177/250] (00:27:08) test_gap_json_lazy_growth_alias … PASS
+2026-09-10T06:02:35.7364808Z [0;32mPASS[0m  test_gap_json_number_formatting
+2026-09-10T06:02:35.7402801Z [178/250] (00:27:10) test_gap_json_number_formatting … PASS
+2026-09-10T06:02:38.0864457Z [0;32mPASS[0m  test_gap_json_parse_entry
+2026-09-10T06:02:38.0902560Z [179/250] (00:27:13) test_gap_json_parse_entry … PASS
+2026-09-10T06:02:40.3377470Z [0;32mPASS[0m  test_gap_json_parse_scalars
+2026-09-10T06:02:40.3414598Z [180/250] (00:27:15) test_gap_json_parse_scalars … PASS
+2026-09-10T06:02:42.6485375Z [0;32mPASS[0m  test_gap_json_prototype_tojson
+2026-09-10T06:02:42.6523372Z [181/250] (00:27:17) test_gap_json_prototype_tojson … PASS
+2026-09-10T06:02:44.7451191Z [0;32mPASS[0m  test_gap_json_root_record
+2026-09-10T06:02:44.7490364Z [182/250] (00:27:19) test_gap_json_root_record … PASS
+2026-09-10T06:02:46.7911698Z [0;32mPASS[0m  test_gap_json_small_results
+2026-09-10T06:02:46.7950267Z [183/250] (00:27:21) test_gap_json_small_results … PASS
+2026-09-10T06:02:49.0094579Z [0;32mPASS[0m  test_gap_json_unicode_lengths
+2026-09-10T06:02:49.0133024Z [184/250] (00:27:24) test_gap_json_unicode_lengths … PASS
+2026-09-10T06:02:51.0299360Z [0;32mPASS[0m  test_gap_language_types_object_part_a
+2026-09-10T06:02:51.0338367Z [185/250] (00:27:26) test_gap_language_types_object_part_a … PASS
+2026-09-10T06:02:53.6440769Z [0;32mPASS[0m  test_gap_logical_await_short_circuit_5434
+2026-09-10T06:02:53.6478565Z [186/250] (00:27:28) test_gap_logical_await_short_circuit_5434 … PASS
+2026-09-10T06:02:55.9624479Z [0;32mPASS[0m  test_gap_map_set_entries_dispatch
+2026-09-10T06:02:55.9662030Z [187/250] (00:27:30) test_gap_map_set_entries_dispatch … PASS
+2026-09-10T06:03:00.0107775Z [0;32mPASS[0m  test_gap_map_view_for_of
+2026-09-10T06:03:00.0145184Z [188/250] (00:27:35) test_gap_map_view_for_of … PASS
+2026-09-10T06:03:01.8649566Z [0;32mPASS[0m  test_gap_module_const_local_shadow
+2026-09-10T06:03:01.8687363Z [189/250] (00:27:36) test_gap_module_const_local_shadow … PASS
+2026-09-10T06:03:03.7247451Z [0;32mPASS[0m  test_gap_namespace_member_sort_dual
+2026-09-10T06:03:03.7286998Z [190/250] (00:27:38) test_gap_namespace_member_sort_dual … PASS
+2026-09-10T06:07:54.1770082Z [0;32mPASS[0m  test_gap_net_connect_bound_value
+2026-09-10T06:07:54.1808319Z [191/250] (00:32:29) test_gap_net_connect_bound_value … PASS
+2026-09-10T06:07:56.1589043Z [0;32mPASS[0m  test_gap_new_globalthis_builtin_6726
+2026-09-10T06:07:56.1626571Z [192/250] (00:32:31) test_gap_new_globalthis_builtin_6726 … PASS
+2026-09-10T06:12:22.7568041Z [0;32mPASS[0m  test_gap_node_events_console_3072_3081_3080
+2026-09-10T06:12:22.7605260Z [193/250] (00:36:57) test_gap_node_events_console_3072_3081_3080 … PASS
+2026-09-10T06:12:24.6882971Z [0;32mPASS[0m  test_gap_node_path
+2026-09-10T06:12:24.6920176Z [194/250] (00:36:59) test_gap_node_path … PASS
+2026-09-10T06:12:27.0780718Z [0;32mPASS[0m  test_gap_node_v8_3137plus
+2026-09-10T06:12:27.0817757Z [195/250] (00:37:02) test_gap_node_v8_3137plus … PASS
+2026-09-10T06:12:29.0266844Z [0;32mPASS[0m  test_gap_number_string_2864_2948_2855
+2026-09-10T06:12:29.0307969Z [196/250] (00:37:04) test_gap_number_string_2864_2948_2855 … PASS
+2026-09-10T06:12:30.9447076Z [0;32mPASS[0m  test_gap_object_assign_process_env
+2026-09-10T06:12:30.9483436Z [197/250] (00:37:05) test_gap_object_assign_process_env … PASS
+2026-09-10T06:12:32.8884930Z [0;32mPASS[0m  test_gap_object_get_own_property_descriptors
+2026-09-10T06:12:32.8921767Z [198/250] (00:37:07) test_gap_object_get_own_property_descriptors … PASS
+2026-09-10T06:12:35.0463358Z [0;32mPASS[0m  test_gap_object_proto_proxy_2820_2846
+2026-09-10T06:12:35.0499754Z [199/250] (00:37:10) test_gap_object_proto_proxy_2820_2846 … PASS
+2026-09-10T06:12:37.0763018Z [0;32mPASS[0m  test_gap_optional_call_conditional_receiver
+2026-09-10T06:12:37.0800649Z [200/250] (00:37:12) test_gap_optional_call_conditional_receiver … PASS
+2026-09-10T06:12:39.7310849Z [0;32mPASS[0m  test_gap_path_includes_2992_2995_2812
+2026-09-10T06:12:39.7349447Z [201/250] (00:37:14) test_gap_path_includes_2992_2995_2812 … PASS
+2026-09-10T06:12:41.7225752Z [0;32mPASS[0m  test_gap_process_emitter_3047_3046_3050
+2026-09-10T06:12:41.7262965Z [202/250] (00:37:16) test_gap_process_emitter_3047_3046_3050 … PASS
+2026-09-10T06:12:43.7858033Z [0;32mPASS[0m  test_gap_process_misc_3045plus
+2026-09-10T06:12:43.7898122Z [203/250] (00:37:18) test_gap_process_misc_3045plus … PASS
+2026-09-10T06:12:45.7798256Z [0;32mPASS[0m  test_gap_promise_resolve_proxy_then_trap
+2026-09-10T06:12:45.7837067Z [204/250] (00:37:20) test_gap_promise_resolve_proxy_then_trap … PASS
+2026-09-10T06:12:47.8795455Z [0;31mFAIL[0m  test_gap_promisify_pipeline_custom_6692 (output mismatch)
+2026-09-10T06:12:47.8796100Z        Node exit:   0
+2026-09-10T06:12:47.8796347Z        Perry exit:  0
+2026-09-10T06:12:47.8815227Z        Node.js:    pipeline custom: function
+2026-09-10T06:12:47.8834948Z        Perry:  pipeline custom: undefined
+2026-09-10T06:12:47.8874579Z [205/250] (00:37:22) test_gap_promisify_pipeline_custom_6692 … PARITY_FAIL
+2026-09-10T06:12:50.6279690Z [0;32mPASS[0m  test_gap_proxy_local_name_collision_7775
+2026-09-10T06:12:50.6318744Z [206/250] (00:37:25) test_gap_proxy_local_name_collision_7775 … PASS
+2026-09-10T06:13:02.4255185Z [0;32mPASS[0m  test_gap_ratelimiter_memory
+2026-09-10T06:13:02.4293144Z [207/250] (00:37:37) test_gap_ratelimiter_memory … PASS
+2026-09-10T06:13:05.9218754Z [0;32mPASS[0m  test_gap_readline_3698plus
+2026-09-10T06:13:05.9256962Z [208/250] (00:37:40) test_gap_readline_3698plus … PASS
+2026-09-10T06:13:09.4503441Z [0;32mPASS[0m  test_gap_reflect_handle_band_objects
+2026-09-10T06:13:09.4544478Z [209/250] (00:37:44) test_gap_reflect_handle_band_objects … PASS
+2026-09-10T06:13:11.5579147Z [0;32mPASS[0m  test_gap_regexp_advanced
+2026-09-10T06:13:11.5617812Z [210/250] (00:37:46) test_gap_regexp_advanced … PASS
+2026-09-10T06:13:15.1388460Z [0;32mPASS[0m  test_gap_region_shadow_clear_gc
+2026-09-10T06:13:15.1428657Z [211/250] (00:37:50) test_gap_region_shadow_clear_gc … PASS
+2026-09-10T06:13:17.3534185Z [0;32mPASS[0m  test_gap_repsel_canonical_str_locals
+2026-09-10T06:13:17.3573797Z [212/250] (00:37:52) test_gap_repsel_canonical_str_locals … PASS
+2026-09-10T06:13:22.7939678Z [0;32mPASS[0m  test_gap_repsel_element_shape_loop_clone
+2026-09-10T06:13:22.7979651Z [213/250] (00:37:57) test_gap_repsel_element_shape_loop_clone … PASS
+2026-09-10T06:13:26.4890583Z [0;32mPASS[0m  test_gap_repsel_loop_bounded_i32
+2026-09-10T06:13:26.4929827Z [214/250] (00:38:01) test_gap_repsel_loop_bounded_i32 … PASS
+2026-09-10T06:13:29.2646395Z [0;32mPASS[0m  test_gap_repsel_p4a3_numarray_growth
+2026-09-10T06:13:29.2687220Z [215/250] (00:38:04) test_gap_repsel_p4a3_numarray_growth … PASS
+2026-09-10T06:13:31.8704183Z [0;32mPASS[0m  test_gap_repsel_p4a_inline_tiers
+2026-09-10T06:13:31.8742198Z [216/250] (00:38:06) test_gap_repsel_p4a_inline_tiers … PASS
+2026-09-10T06:13:33.9995569Z [0;32mPASS[0m  test_gap_repsel_proven_this_frozen
+2026-09-10T06:13:34.0035864Z [217/250] (00:38:09) test_gap_repsel_proven_this_frozen … PASS
+2026-09-10T06:13:36.1111201Z [0;32mPASS[0m  test_gap_repsel_ptr_shape_barriers
+2026-09-10T06:13:36.1151490Z [218/250] (00:38:11) test_gap_repsel_ptr_shape_barriers … PASS
+2026-09-10T06:13:39.1313077Z [0;32mPASS[0m  test_gap_repsel_return_shape
+2026-09-10T06:13:39.1352879Z [219/250] (00:38:14) test_gap_repsel_return_shape … PASS
+2026-09-10T06:13:43.1197406Z [0;32mPASS[0m  test_gap_request_multipart_form_data
+2026-09-10T06:13:43.1238286Z [220/250] (00:38:18) test_gap_request_multipart_form_data … PASS
+2026-09-10T06:13:46.7255358Z [0;32mPASS[0m  test_gap_response_boxed_string_body_5453
+2026-09-10T06:13:46.7294450Z [221/250] (00:38:21) test_gap_response_boxed_string_body_5453 … PASS
+2026-09-10T06:13:48.6097068Z [0;32mPASS[0m  test_gap_scalar_method_field_write_summary
+2026-09-10T06:13:48.6137071Z [222/250] (00:38:23) test_gap_scalar_method_field_write_summary … PASS
+2026-09-10T06:13:50.7139968Z [0;32mPASS[0m  test_gap_set_map_foreach_fused_receiver
+2026-09-10T06:13:50.7178397Z [223/250] (00:38:25) test_gap_set_map_foreach_fused_receiver … PASS
+2026-09-10T06:13:52.6735001Z [0;32mPASS[0m  test_gap_specabi_reassign
+2026-09-10T06:13:52.6774099Z [224/250] (00:38:27) test_gap_specabi_reassign … PASS
+2026-09-10T06:13:54.6536183Z [0;32mPASS[0m  test_gap_spread_call_imported_receiver_7191
+2026-09-10T06:13:54.6575568Z [225/250] (00:38:29) test_gap_spread_call_imported_receiver_7191 … PASS
+2026-09-10T06:13:56.5119604Z [0;32mPASS[0m  test_gap_static_field_inheritance
+2026-09-10T06:13:56.5158442Z [226/250] (00:38:31) test_gap_static_field_inheritance … PASS
+2026-09-10T06:14:00.2973360Z [0;32mPASS[0m  test_gap_stream_async_transform_tick_parity
+2026-09-10T06:14:00.3012958Z [227/250] (00:38:35) test_gap_stream_async_transform_tick_parity … PASS
+2026-09-10T06:14:04.0728217Z [0;32mPASS[0m  test_gap_stream_livetee_tick_parity
+2026-09-10T06:14:04.0767700Z [228/250] (00:38:39) test_gap_stream_livetee_tick_parity … PASS
+2026-09-10T06:14:05.9723152Z [0;32mPASS[0m  test_gap_string_builtin_brand_tostring
+2026-09-10T06:14:05.9762057Z [229/250] (00:38:40) test_gap_string_builtin_brand_tostring … PASS
+2026-09-10T06:14:07.9337664Z [0;32mPASS[0m  test_gap_string_locale_2781_2845_2897
+2026-09-10T06:14:07.9381054Z [230/250] (00:38:42) test_gap_string_locale_2781_2845_2897 … PASS
+2026-09-10T06:14:09.7825960Z [0;32mPASS[0m  test_gap_symbol_for_coercion
+2026-09-10T06:14:09.7866154Z [231/250] (00:38:44) test_gap_symbol_for_coercion … PASS
+2026-09-10T06:14:11.8259262Z [0;32mPASS[0m  test_gap_temporal_construct_overflow
+2026-09-10T06:14:11.8297811Z [232/250] (00:38:46) test_gap_temporal_construct_overflow … PASS
+2026-09-10T06:14:13.9060890Z [0;32mPASS[0m  test_gap_temporal_now
+2026-09-10T06:14:13.9099483Z [233/250] (00:38:48) test_gap_temporal_now … PASS
+2026-09-10T06:14:16.1448895Z [0;32mPASS[0m  test_gap_temporal_plaindatetime
+2026-09-10T06:14:16.1487604Z [234/250] (00:38:51) test_gap_temporal_plaindatetime … PASS
+2026-09-10T06:14:20.1348703Z [0;32mPASS[0m  test_gap_throw_circuit_breaker_2780
+2026-09-10T06:14:20.1387824Z [235/250] (00:38:55) test_gap_throw_circuit_breaker_2780 … PASS
+2026-09-10T06:14:23.2274148Z [0;32mPASS[0m  test_gap_tolocalestring_locale_options_9414
+2026-09-10T06:14:23.2312162Z [236/250] (00:38:58) test_gap_tolocalestring_locale_options_9414 … PASS
+2026-09-10T06:14:25.5182490Z [0;32mPASS[0m  test_gap_try_setjmp_volatile
+2026-09-10T06:14:25.5223216Z [237/250] (00:39:00) test_gap_try_setjmp_volatile … PASS
+2026-09-10T06:14:27.4682447Z [0;32mPASS[0m  test_gap_typed_array_symbol_key
+2026-09-10T06:14:27.4719997Z [238/250] (00:39:02) test_gap_typed_array_symbol_key … PASS
+2026-09-10T06:14:29.5348359Z [0;32mPASS[0m  test_gap_typedarray_buffer_aliasing_7219
+2026-09-10T06:14:29.5386491Z [239/250] (00:39:04) test_gap_typedarray_buffer_aliasing_7219 … PASS
+2026-09-10T06:14:31.7171978Z [0;32mPASS[0m  test_gap_typeof_instanceof
+2026-09-10T06:14:31.7211465Z [240/250] (00:39:06) test_gap_typeof_instanceof … PASS
+2026-09-10T06:14:33.5438016Z [0;32mPASS[0m  test_gap_uint8array_oob_push_9039
+2026-09-10T06:14:33.5477743Z [241/250] (00:39:08) test_gap_uint8array_oob_push_9039 … PASS
+2026-09-10T06:14:35.4191979Z [0;32mPASS[0m  test_gap_union_typeof_narrowing
+2026-09-10T06:14:35.4231674Z [242/250] (00:39:10) test_gap_union_typeof_narrowing … PASS
+2026-09-10T06:14:37.3363419Z [0;32mPASS[0m  test_gap_url_host_canon_3056_3059
+2026-09-10T06:14:37.3402875Z [243/250] (00:39:12) test_gap_url_host_canon_3056_3059 … PASS
+2026-09-10T06:14:39.3126015Z [0;32mPASS[0m  test_gap_url_shape_probe_gate
+2026-09-10T06:14:39.3166133Z [244/250] (00:39:14) test_gap_url_shape_probe_gate … PASS
+2026-09-10T06:14:41.7934706Z [0;32mPASS[0m  test_gap_v8_heap_snapshot_4916
+2026-09-10T06:14:41.7973135Z [245/250] (00:39:16) test_gap_v8_heap_snapshot_4916 … PASS
+2026-09-10T06:14:43.6673063Z [0;32mPASS[0m  test_gap_weakmap_dynamic
+2026-09-10T06:14:43.6713932Z [246/250] (00:39:18) test_gap_weakmap_dynamic … PASS
+2026-09-10T06:14:57.1854403Z [0;31mCRASH[0m test_gap_webcrypto_async_threadpool (TIMEOUT (killed after 10s))
+2026-09-10T06:14:57.1877152Z        Perry died after printing 1 line(s); Node exited 0.
+2026-09-10T06:14:57.1905194Z        Last Perry line: subtle.digest crosses macrotask: true
+2026-09-10T06:14:57.1946393Z [247/250] (00:39:32) test_gap_webcrypto_async_threadpool … CRASH
+2026-09-10T06:14:59.6006473Z [0;32mPASS[0m  test_gap_yield_star_iterable
+2026-09-10T06:14:59.6045556Z [248/250] (00:39:34) test_gap_yield_star_iterable … PASS
+2026-09-10T06:15:01.7585715Z [0;32mPASS[0m  test_gap_yieldstar_inherited_iterator_this
+2026-09-10T06:15:01.7624434Z [249/250] (00:39:36) test_gap_yieldstar_inherited_iterator_this … PASS
+2026-09-10T06:19:43.0246141Z [0;32mPASS[0m  test_gap_zlib_fs_assert_2935_2752_2971
+2026-09-10T06:19:43.0283163Z [250/250] (00:44:18) test_gap_zlib_fs_assert_2935_2752_2971 … PASS
+2026-09-10T06:19:43.0682580Z 
+2026-09-10T06:19:43.0685614Z ========================================
+2026-09-10T06:19:43.0686143Z    Parity Test Summary
+2026-09-10T06:19:43.0686498Z ========================================
+2026-09-10T06:19:43.0687103Z [0;32mParity Pass:[0m   247
+2026-09-10T06:19:43.0687495Z [0;31mParity Fail:[0m   2
+2026-09-10T06:19:43.0687882Z [0;31mCompile Fail:[0m  0
+2026-09-10T06:19:43.0688295Z [0;31mCrashed:[0m       1
+2026-09-10T06:19:43.0688756Z [1;33mSkipped:[0m       0
+2026-09-10T06:19:43.0688936Z 
+2026-09-10T06:19:43.0689147Z [0;36mParity Rate:[0m   98.8%
+2026-09-10T06:19:43.0689349Z 
+2026-09-10T06:19:43.0689718Z [0;31mCRASHED (signal death / timeout — NOT an output nit):[0m
+2026-09-10T06:19:43.0690221Z   - test_gap_webcrypto_async_threadpool
+2026-09-10T06:19:43.0690463Z 
+2026-09-10T06:19:43.0690594Z Output Mismatches:
+2026-09-10T06:19:43.0690911Z   - test_gap_2514_settracesigint
+2026-09-10T06:19:43.0691287Z   - test_gap_promisify_pipeline_custom_6692
+2026-09-10T06:19:43.0691537Z 
+2026-09-10T06:19:43.1102394Z Report saved to: /home/runner/work/perry/perry/test-parity/reports/parity_report_20260910_053525.json
+2026-09-10T06:19:43.1103136Z 
+2026-09-10T06:19:43.1329679Z 
+2026-09-10T06:19:43.1331074Z *** CRASHES — Perry died from a signal or timed out (NOT an output nit): ***
+2026-09-10T06:19:43.1342070Z   - test_gap_webcrypto_async_threadpool
+2026-09-10T06:19:43.1344238Z 
+2026-09-10T06:19:43.1345314Z A crash is a hard defect. Even when the snapshot already accepts it,
+2026-09-10T06:19:43.1346680Z it is reported here every run. Reproduce on LINUX — several crash classes
+2026-09-10T06:19:43.1347550Z (e.g. handle-band derefs, #6271) are masked on macOS by its 2 TB heap floor.
+2026-09-10T06:19:43.1347926Z 
+2026-09-10T06:19:43.1909447Z 
+2026-09-10T06:19:43.1910394Z REGRESSIONS — these were expected to pass:
+2026-09-10T06:19:43.1911682Z   - test_gap_promisify_pipeline_custom_6692: pass -> parity_fail
+2026-09-10T06:19:43.1912437Z   - test_gap_webcrypto_async_threadpool: pass -> crash
+2026-09-10T06:19:43.1912821Z 
+2026-09-10T06:19:43.1913122Z Fix the regressions, then accept the rest with:
+2026-09-10T06:19:43.1914024Z   UPDATE_SNAPSHOT=1 ./scripts/run_gap_tests.sh
+2026-09-10T06:19:43.1914665Z and commit test-parity/gap_snapshot.json.
+2026-09-10T06:19:43.1979518Z ##[error]Process completed with exit code 1.
+2026-09-10T06:19:43.2066891Z ##[group]Run actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+2026-09-10T06:19:43.2067313Z with:
+2026-09-10T06:19:43.2067539Z   name: gap-suite-report-fast-shard-1
+2026-09-10T06:19:43.2067841Z   path: test-parity/reports/
+2026-09-10T06:19:43.2068108Z   if-no-files-found: warn
+2026-09-10T06:19:43.2068349Z   compression-level: 6
+2026-09-10T06:19:43.2068577Z   overwrite: false
+2026-09-10T06:19:43.2068800Z   include-hidden-files: false
+2026-09-10T06:19:43.2069048Z   archive: true
+2026-09-10T06:19:43.2069274Z env:
+2026-09-10T06:19:43.2069470Z   CARGO_TERM_COLOR: always
+2026-09-10T06:19:43.2069718Z   MACOSX_DEPLOYMENT_TARGET: 13.0
+2026-09-10T06:19:43.2069992Z   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+2026-09-10T06:19:43.2070272Z   CACHE_ON_FAILURE: false
+2026-09-10T06:19:43.2070509Z   CARGO_INCREMENTAL: 0
+2026-09-10T06:19:43.2070729Z ##[endgroup]
+2026-09-10T06:19:43.3565903Z With the provided path, there will be 3 files uploaded
+2026-09-10T06:19:43.3566925Z Artifact name is valid!
+2026-09-10T06:19:43.3567419Z Root directory input is valid!
+2026-09-10T06:19:43.7598447Z Uploading artifact: gap-suite-report-fast-shard-1.zip
+2026-09-10T06:19:43.7689718Z Beginning upload of artifact content to blob storage
+2026-09-10T06:19:44.0973929Z Uploaded bytes 12486
+2026-09-10T06:19:44.1822065Z Finished uploading artifact content to blob storage!
+2026-09-10T06:19:44.1824358Z SHA256 digest of uploaded artifact is ff906f3715925dbe59ae5ca5a95b0efe53c2e8d3b24efd8115b1fb47605dea98
+2026-09-10T06:19:44.1825650Z Finalizing artifact upload
+2026-09-10T06:19:44.5526517Z Artifact gap-suite-report-fast-shard-1 successfully finalized. Artifact ID 10139199244
+2026-09-10T06:19:44.5527895Z Artifact gap-suite-report-fast-shard-1 has been successfully uploaded! Final size is 12486 bytes. Artifact ID is 10139199244
+2026-09-10T06:19:44.5530336Z Artifact download URL: https://github.com/PerryTS/perry/actions/runs/34440726868/artifacts/10139199244
+2026-09-10T06:19:44.5730129Z Post job cleanup.
+2026-09-10T06:19:44.6614998Z [command]/usr/bin/git version
+2026-09-10T06:19:44.6662567Z git version 2.55.0
+2026-09-10T06:19:44.6710977Z Temporarily overriding HOME='/home/runner/work/_temp/6b20207e-ab44-4de8-926a-538b96b738e2' before making global git config changes
+2026-09-10T06:19:44.6712481Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-10T06:19:44.6717680Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/perry/perry
+2026-09-10T06:19:44.6755434Z Removing SSH command configuration
+2026-09-10T06:19:44.6762323Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-10T06:19:44.6818050Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-10T06:19:44.7102027Z Removing HTTP extra header
+2026-09-10T06:19:44.7103211Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-10T06:19:44.7148219Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-10T06:19:44.7442804Z Removing includeIf entries pointing to credentials config files
+2026-09-10T06:19:44.7451297Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-10T06:19:44.7491927Z includeif.gitdir:/home/runner/work/perry/perry/.git.path
+2026-09-10T06:19:44.7513835Z includeif.gitdir:/home/runner/work/perry/perry/.git/worktrees/*.path
+2026-09-10T06:19:44.7514772Z includeif.gitdir:/github/workspace/.git.path
+2026-09-10T06:19:44.7515443Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-09-10T06:19:44.7517200Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/perry/perry/.git.path
+2026-09-10T06:19:44.7537577Z /home/runner/work/_temp/git-credentials-2c120ac2-2a58-4747-a83b-7de8dc763c47.config
+2026-09-10T06:19:44.7561016Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/perry/perry/.git.path \/home\/runner\/work\/_temp\/git\-credentials\-2c120ac2\-2a58\-4747\-a83b\-7de8dc763c47\.config
+2026-09-10T06:19:44.7612112Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/perry/perry/.git/worktrees/*.path
+2026-09-10T06:19:44.7632191Z /home/runner/work/_temp/git-credentials-2c120ac2-2a58-4747-a83b-7de8dc763c47.config
+2026-09-10T06:19:44.7657066Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/perry/perry/.git/worktrees/*.path \/home\/runner\/work\/_temp\/git\-credentials\-2c120ac2\-2a58\-4747\-a83b\-7de8dc763c47\.config
+2026-09-10T06:19:44.7713515Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-09-10T06:19:44.7760009Z /github/runner_temp/git-credentials-2c120ac2-2a58-4747-a83b-7de8dc763c47.config
+2026-09-10T06:19:44.7781958Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path \/github\/runner_temp\/git\-credentials\-2c120ac2\-2a58\-4747\-a83b\-7de8dc763c47\.config
+2026-09-10T06:19:44.7827259Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-09-10T06:19:44.7848672Z /github/runner_temp/git-credentials-2c120ac2-2a58-4747-a83b-7de8dc763c47.config
+2026-09-10T06:19:44.7875752Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \/github\/runner_temp\/git\-credentials\-2c120ac2\-2a58\-4747\-a83b\-7de8dc763c47\.config
+2026-09-10T06:19:44.7911138Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-10T06:19:44.8181521Z Removing credentials config '/home/runner/work/_temp/git-credentials-2c120ac2-2a58-4747-a83b-7de8dc763c47.config'
+2026-09-10T06:19:44.8340942Z Cleaning up orphan processes

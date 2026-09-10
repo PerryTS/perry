@@ -1,0 +1,5 @@
+test registration OK: checked 270 files against 4 registries
+  gc-repsel-corpus             78 candidates    78 registered   0 excluded
+  feature-matrix-probes        25 candidates    22 registered   3 excluded
+  compiler-output-workloads    23 candidates    21 registered   2 excluded
+  rust-test-modules           144 candidates   144 registered   0 excluded
