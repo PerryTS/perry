@@ -1,0 +1,30 @@
+{
+  "owner": "json-perf-75748-1789075357",
+  "load_before": [
+    1.2177734375,
+    1.64208984375,
+    1.66455078125
+  ],
+  "started_utc": "2026-09-10T21:22:37Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/scan-profile-r17/run-modes.py",
+    "--worker",
+    ".work/scan-profile-r17/main-worker",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--bun",
+    "/Users/perry/.bun/bin/bun",
+    "--results-dir",
+    "results/quiet-scan-profile-r17-modes"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    2.11474609375,
+    1.86181640625,
+    1.748046875
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-10T21:25:19Z"
+}

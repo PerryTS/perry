@@ -1,0 +1,240 @@
+[
+  {
+    "case": {
+      "fixture": "records_array_16k",
+      "operation": "scan",
+      "mode": "main_auto",
+      "iterations": 7522
+    },
+    "command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/scan-profile-r17/memory-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/fixtures/records_array_16k.json",
+      "scan",
+      "7522",
+      "2",
+      "verify"
+    ],
+    "env_overrides": {
+      "PERRY_GC_DIAG": "1"
+    },
+    "worker_sha256": "77f85758400117cf301e8a9707b523a0389167a011fc8956eba85a1cc6de774b",
+    "exit_code": 0,
+    "observed_peak_rss_bytes": 594427904,
+    "stop_reason": null,
+    "elapsed_seconds": 1.8280422500000002,
+    "diagnostic_only": true,
+    "instrumented": true
+  },
+  {
+    "case": {
+      "fixture": "records_array_16k",
+      "operation": "scan",
+      "mode": "main_auto",
+      "iterations": 15044
+    },
+    "command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/scan-profile-r17/memory-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/fixtures/records_array_16k.json",
+      "scan",
+      "15044",
+      "2",
+      "verify"
+    ],
+    "env_overrides": {
+      "PERRY_GC_DIAG": "1"
+    },
+    "worker_sha256": "77f85758400117cf301e8a9707b523a0389167a011fc8956eba85a1cc6de774b",
+    "exit_code": 0,
+    "observed_peak_rss_bytes": 1168752640,
+    "stop_reason": null,
+    "elapsed_seconds": 3.062883083,
+    "diagnostic_only": true,
+    "instrumented": true
+  },
+  {
+    "case": {
+      "fixture": "records_array_16k",
+      "operation": "scan",
+      "mode": "main_direct",
+      "iterations": 7522
+    },
+    "command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/scan-profile-r17/memory-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/fixtures/records_array_16k.json",
+      "scan",
+      "7522",
+      "2",
+      "verify"
+    ],
+    "env_overrides": {
+      "PERRY_GC_DIAG": "1",
+      "PERRY_JSON_TAPE": "0"
+    },
+    "worker_sha256": "77f85758400117cf301e8a9707b523a0389167a011fc8956eba85a1cc6de774b",
+    "exit_code": 0,
+    "observed_peak_rss_bytes": 33341440,
+    "stop_reason": null,
+    "elapsed_seconds": 0.35388537499999995,
+    "diagnostic_only": true,
+    "instrumented": true
+  },
+  {
+    "case": {
+      "fixture": "records_array_1m",
+      "operation": "scan",
+      "mode": "main_auto",
+      "iterations": 138
+    },
+    "command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/scan-profile-r17/memory-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/fixtures/records_array_1m.json",
+      "scan",
+      "138",
+      "2",
+      "verify"
+    ],
+    "env_overrides": {
+      "PERRY_GC_DIAG": "1"
+    },
+    "worker_sha256": "77f85758400117cf301e8a9707b523a0389167a011fc8956eba85a1cc6de774b",
+    "exit_code": 0,
+    "observed_peak_rss_bytes": 395476992,
+    "stop_reason": null,
+    "elapsed_seconds": 0.915070042,
+    "diagnostic_only": true,
+    "instrumented": true
+  },
+  {
+    "case": {
+      "fixture": "records_array_1m",
+      "operation": "scan",
+      "mode": "main_auto",
+      "iterations": 478
+    },
+    "command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/scan-profile-r17/memory-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/fixtures/records_array_1m.json",
+      "scan",
+      "478",
+      "2",
+      "verify"
+    ],
+    "env_overrides": {
+      "PERRY_GC_DIAG": "1"
+    },
+    "worker_sha256": "77f85758400117cf301e8a9707b523a0389167a011fc8956eba85a1cc6de774b",
+    "exit_code": 0,
+    "observed_peak_rss_bytes": 1258110976,
+    "stop_reason": null,
+    "elapsed_seconds": 3.0618039999999995,
+    "diagnostic_only": true,
+    "instrumented": true
+  },
+  {
+    "case": {
+      "fixture": "records_array_1m",
+      "operation": "scan",
+      "mode": "main_direct",
+      "iterations": 138
+    },
+    "command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/scan-profile-r17/memory-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/fixtures/records_array_1m.json",
+      "scan",
+      "138",
+      "2",
+      "verify"
+    ],
+    "env_overrides": {
+      "PERRY_GC_DIAG": "1",
+      "PERRY_JSON_TAPE": "0"
+    },
+    "worker_sha256": "77f85758400117cf301e8a9707b523a0389167a011fc8956eba85a1cc6de774b",
+    "exit_code": 0,
+    "observed_peak_rss_bytes": 84230144,
+    "stop_reason": null,
+    "elapsed_seconds": 0.47058391599999894,
+    "diagnostic_only": true,
+    "instrumented": true
+  },
+  {
+    "case": {
+      "fixture": "records_array_1m",
+      "operation": "scan",
+      "mode": "main_direct",
+      "iterations": 478
+    },
+    "command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/scan-profile-r17/memory-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/fixtures/records_array_1m.json",
+      "scan",
+      "478",
+      "2",
+      "verify"
+    ],
+    "env_overrides": {
+      "PERRY_GC_DIAG": "1",
+      "PERRY_JSON_TAPE": "0"
+    },
+    "worker_sha256": "77f85758400117cf301e8a9707b523a0389167a011fc8956eba85a1cc6de774b",
+    "exit_code": 0,
+    "observed_peak_rss_bytes": 79888384,
+    "stop_reason": null,
+    "elapsed_seconds": 1.150498292,
+    "diagnostic_only": true,
+    "instrumented": true
+  },
+  {
+    "case": {
+      "fixture": "records_array_1m",
+      "operation": "parse",
+      "mode": "main_auto",
+      "iterations": 340
+    },
+    "command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/scan-profile-r17/memory-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/fixtures/records_array_1m.json",
+      "parse",
+      "340",
+      "2",
+      "verify"
+    ],
+    "env_overrides": {
+      "PERRY_GC_DIAG": "1"
+    },
+    "worker_sha256": "77f85758400117cf301e8a9707b523a0389167a011fc8956eba85a1cc6de774b",
+    "exit_code": 0,
+    "observed_peak_rss_bytes": 72941568,
+    "stop_reason": null,
+    "elapsed_seconds": 0.47331450000000075,
+    "diagnostic_only": true,
+    "instrumented": true
+  },
+  {
+    "case": {
+      "fixture": "records_array_1m",
+      "operation": "parse",
+      "mode": "main_direct",
+      "iterations": 340
+    },
+    "command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/scan-profile-r17/memory-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/fixtures/records_array_1m.json",
+      "parse",
+      "340",
+      "2",
+      "verify"
+    ],
+    "env_overrides": {
+      "PERRY_GC_DIAG": "1",
+      "PERRY_JSON_TAPE": "0"
+    },
+    "worker_sha256": "77f85758400117cf301e8a9707b523a0389167a011fc8956eba85a1cc6de774b",
+    "exit_code": 0,
+    "observed_peak_rss_bytes": 80527360,
+    "stop_reason": null,
+    "elapsed_seconds": 0.810687583,
+    "diagnostic_only": true,
+    "instrumented": true
+  }
+]

@@ -1,0 +1,37 @@
+{
+  "cases": [
+    {
+      "fixture": "records_array_1m",
+      "operation": "parse",
+      "mode": "main_auto",
+      "iterations": 1537,
+      "warmup": 2,
+      "selection_cpu_us": 911.1764705882352
+    },
+    {
+      "fixture": "records_array_1m",
+      "operation": "parse",
+      "mode": "main_direct",
+      "iterations": 750,
+      "warmup": 2,
+      "selection_cpu_us": 1868.9617647058824
+    },
+    {
+      "fixture": "records_array_1m",
+      "operation": "scan",
+      "mode": "main_auto",
+      "iterations": 478,
+      "warmup": 2,
+      "selection_cpu_us": 2932.0942028985505
+    },
+    {
+      "fixture": "records_array_1m",
+      "operation": "scan",
+      "mode": "main_direct",
+      "iterations": 671,
+      "warmup": 2,
+      "selection_cpu_us": 2088.159420289855
+    }
+  ],
+  "selection": "Four 1 MiB profiles: auto/direct parse and scan, each targeting 1.4 seconds CPU from the completed mode medians. Sample immediately for one second; 2 GiB RSS and 20 second wall watchdogs. Instrumented profiles are not comparative timings."
+}

@@ -1,0 +1,9 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/scan-profile-r17/run-memory.py",
+  "--results-dir",
+  "results/quiet-scan-profile-r17-memory"
+]

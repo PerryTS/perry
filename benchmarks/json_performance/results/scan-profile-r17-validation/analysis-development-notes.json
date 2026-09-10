@@ -1,0 +1,8 @@
+{
+  "memory_analyzer_initial_failure": {
+    "assertion": "Expected only two [gc] full-collection summaries in every case.",
+    "case": "records_array_1m-parse-main_auto-340",
+    "finding": "This parse-only control also has 16 automatic OldGenBytes full collections before the two explicit manual collections.",
+    "correction": "Pair every full trigger with its summary, preserve all cycles, and select Manual events for the two diagnostic collection measurements. Both manual events must be present and productive; no cycles are suppressed."
+  }
+}

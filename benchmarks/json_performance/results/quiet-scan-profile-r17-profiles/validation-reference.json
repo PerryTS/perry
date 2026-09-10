@@ -1,0 +1,8 @@
+{
+  "source_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+  "worker_source_matches_r16_main": true,
+  "cross_path_object_equal": false,
+  "worker_object_sha256": "c229b2a887544a2fcbf357ac23decd5e09f1282f3c0730fe7ef87c1602b47e81",
+  "reference": "https://github.com/PerryTS/perry/blob/3378e00c3ef9690c641f2d3dbef0b4f24f17a571/benchmarks/json_performance/results/template-capture-r16-validation/main-fixture-validation.json",
+  "note": "Unchanged main runtime and worker source; generated objects embed different source paths, so cross-path object equality is not claimed. Both modes use the same R17 executable. R16 main checks covered auto/tape/direct modes under scheduled moving/protected GC. New diagnostics verify complete outputs for every mode/case."
+}

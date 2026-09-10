@@ -1,0 +1,284 @@
+{
+  "window": {
+    "owner": "json-perf-76528-1789076080",
+    "load_before": [
+      2.34619140625,
+      1.79541015625,
+      1.72607421875
+    ],
+    "started_utc": "2026-09-10T21:34:40Z",
+    "quiet_gate_passed": true,
+    "command": [
+      "python3",
+      ".work/scan-profile-r17/run-profiles.py",
+      "--results-dir",
+      "results/quiet-scan-profile-r17-profiles"
+    ],
+    "competing_workloads_before": [],
+    "load_after": [
+      2.4462890625,
+      1.83447265625,
+      1.74072265625
+    ],
+    "competing_workloads_after": [],
+    "finished_utc": "2026-09-10T21:34:46Z"
+  },
+  "diagnostic_only": true,
+  "instrumented": true,
+  "cases": [
+    {
+      "case": {
+        "fixture": "records_array_1m",
+        "operation": "parse",
+        "mode": "main_auto",
+        "iterations": 1537,
+        "warmup": 2,
+        "selection_cpu_us": 911.1764705882352
+      },
+      "samples": 759,
+      "profile_sha256": "d032bf4786fc6655ff5b062757fd57367a4cc0758daa489838442510fb56f338",
+      "full_output_matches_node": true,
+      "phases": {
+        "tape_build": {
+          "samples": 626,
+          "frames": [
+            {
+              "depth": 14,
+              "count": 557,
+              "name": "_RINvNtCs3gRpqoBkMHm_13perry_runtime9json_tape15build_tape_intoKb1_EB4_  (in main-worker) + 236,292,...  [0x104168cd0,0x104168d08,...]",
+              "parent": 4
+            },
+            {
+              "depth": 14,
+              "count": 67,
+              "name": "_RINvNtCs3gRpqoBkMHm_13perry_runtime9json_tape15build_tape_intoKb1_EB4_  (in main-worker) + 10168  [0x10416b39c]",
+              "parent": 4
+            },
+            {
+              "depth": 14,
+              "count": 2,
+              "name": "_RINvNtCs3gRpqoBkMHm_13perry_runtime9json_tape15build_tape_intoKb1_EB4_  (in main-worker) + 10424  [0x10416b49c]",
+              "parent": 4
+            }
+          ],
+          "pct_of_main_thread_samples": 82.47694334650856
+        },
+        "lazy_full_materialization": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_main_thread_samples": 0.0
+        },
+        "direct_array_parser": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_main_thread_samples": 0.0
+        },
+        "collection": {
+          "samples": 62,
+          "frames": [
+            {
+              "depth": 16,
+              "count": 62,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime2gc39gc_collect_full_mark_sweep_with_trigger  (in main-worker) + 1080  [0x104314634]",
+              "parent": 36
+            }
+          ],
+          "pct_of_main_thread_samples": 8.168642951251647
+        }
+      },
+      "observed_peak_rss_mib": 66.625,
+      "note": "One short instrumented sample, not an isolated phase timer. Direct parser is nested under full materialization in lazy scans; those columns overlap and must not be added."
+    },
+    {
+      "case": {
+        "fixture": "records_array_1m",
+        "operation": "parse",
+        "mode": "main_direct",
+        "iterations": 750,
+        "warmup": 2,
+        "selection_cpu_us": 1868.9617647058824
+      },
+      "samples": 758,
+      "profile_sha256": "73af356dff056805edd617f8172c0fcfa720625b6eb1ba57fded4dae39b56fd0",
+      "full_output_matches_node": true,
+      "phases": {
+        "tape_build": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_main_thread_samples": 0.0
+        },
+        "lazy_full_materialization": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_main_thread_samples": 0.0
+        },
+        "direct_array_parser": {
+          "samples": 613,
+          "frames": [
+            {
+              "depth": 14,
+              "count": 612,
+              "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser11parse_array  (in main-worker) + 236  [0x104c4c854]",
+              "parent": 4
+            },
+            {
+              "depth": 14,
+              "count": 1,
+              "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser11parse_array  (in main-worker) + 220  [0x104c4c844]",
+              "parent": 4
+            }
+          ],
+          "pct_of_main_thread_samples": 80.87071240105541
+        },
+        "collection": {
+          "samples": 35,
+          "frames": [
+            {
+              "depth": 14,
+              "count": 35,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime2gc35gc_collect_minor_with_trigger_inner  (in main-worker) + 3600  [0x104d02290]",
+              "parent": 109
+            }
+          ],
+          "pct_of_main_thread_samples": 4.617414248021108
+        }
+      },
+      "observed_peak_rss_mib": 70.640625,
+      "note": "One short instrumented sample, not an isolated phase timer. Direct parser is nested under full materialization in lazy scans; those columns overlap and must not be added."
+    },
+    {
+      "case": {
+        "fixture": "records_array_1m",
+        "operation": "scan",
+        "mode": "main_auto",
+        "iterations": 478,
+        "warmup": 2,
+        "selection_cpu_us": 2932.0942028985505
+      },
+      "samples": 753,
+      "profile_sha256": "77f511e400eaa88660c1752df089f8efe3591dda812a64697633a18ba28898bc",
+      "full_output_matches_node": true,
+      "phases": {
+        "tape_build": {
+          "samples": 195,
+          "frames": [
+            {
+              "depth": 14,
+              "count": 175,
+              "name": "_RINvNtCs3gRpqoBkMHm_13perry_runtime9json_tape15build_tape_intoKb1_EB4_  (in main-worker) + 384,460,...  [0x10056cd64,0x10056cdb0,...]",
+              "parent": 160
+            },
+            {
+              "depth": 14,
+              "count": 20,
+              "name": "_RINvNtCs3gRpqoBkMHm_13perry_runtime9json_tape15build_tape_intoKb1_EB4_  (in main-worker) + 10168  [0x10056f39c]",
+              "parent": 160
+            }
+          ],
+          "pct_of_main_thread_samples": 25.89641434262948
+        },
+        "lazy_full_materialization": {
+          "samples": 387,
+          "frames": [
+            {
+              "depth": 16,
+              "count": 386,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape22force_materialize_lazy  (in main-worker) + 1324  [0x100791edc]",
+              "parent": 5
+            },
+            {
+              "depth": 16,
+              "count": 1,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape22force_materialize_lazy  (in main-worker) + 4960  [0x100792d10]",
+              "parent": 5
+            }
+          ],
+          "pct_of_main_thread_samples": 51.39442231075697
+        },
+        "direct_array_parser": {
+          "samples": 386,
+          "frames": [
+            {
+              "depth": 18,
+              "count": 385,
+              "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser11parse_array  (in main-worker) + 236  [0x100660854]",
+              "parent": 6
+            },
+            {
+              "depth": 18,
+              "count": 1,
+              "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser11parse_array  (in main-worker) + 220  [0x100660844]",
+              "parent": 6
+            }
+          ],
+          "pct_of_main_thread_samples": 51.26162018592297
+        },
+        "collection": {
+          "samples": 89,
+          "frames": [
+            {
+              "depth": 14,
+              "count": 89,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime2gc35gc_collect_minor_with_trigger_inner  (in main-worker) + 3600  [0x100716290]",
+              "parent": 179
+            }
+          ],
+          "pct_of_main_thread_samples": 11.819389110225764
+        }
+      },
+      "observed_peak_rss_mib": 940.328125,
+      "note": "One short instrumented sample, not an isolated phase timer. Direct parser is nested under full materialization in lazy scans; those columns overlap and must not be added."
+    },
+    {
+      "case": {
+        "fixture": "records_array_1m",
+        "operation": "scan",
+        "mode": "main_direct",
+        "iterations": 671,
+        "warmup": 2,
+        "selection_cpu_us": 2088.159420289855
+      },
+      "samples": 755,
+      "profile_sha256": "5f12cbd37c56de17bb7bcd29968e53f795befe6b2730f76d1f732da187a4d22d",
+      "full_output_matches_node": true,
+      "phases": {
+        "tape_build": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_main_thread_samples": 0.0
+        },
+        "lazy_full_materialization": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_main_thread_samples": 0.0
+        },
+        "direct_array_parser": {
+          "samples": 581,
+          "frames": [
+            {
+              "depth": 14,
+              "count": 581,
+              "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser11parse_array  (in main-worker) + 236  [0x104f60854]",
+              "parent": 4
+            }
+          ],
+          "pct_of_main_thread_samples": 76.95364238410596
+        },
+        "collection": {
+          "samples": 52,
+          "frames": [
+            {
+              "depth": 14,
+              "count": 52,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime2gc35gc_collect_minor_with_trigger_inner  (in main-worker) + 3600  [0x105016290]",
+              "parent": 102
+            }
+          ],
+          "pct_of_main_thread_samples": 6.887417218543046
+        }
+      },
+      "observed_peak_rss_mib": 70.484375,
+      "note": "One short instrumented sample, not an isolated phase timer. Direct parser is nested under full materialization in lazy scans; those columns overlap and must not be added."
+    }
+  ]
+}

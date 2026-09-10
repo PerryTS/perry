@@ -1,0 +1,28 @@
+{
+  "slug": "quiet-scan-profile-r17-memory",
+  "window": {
+    "owner": "json-perf-76751-1789076870",
+    "load_before": [
+      2.40673828125,
+      2.2734375,
+      1.95458984375
+    ],
+    "started_utc": "2026-09-10T21:47:50Z",
+    "quiet_gate_passed": false,
+    "command": [
+      "python3",
+      ".work/scan-profile-r17/run-memory.py",
+      "--results-dir",
+      "results/quiet-scan-profile-r17-memory"
+    ],
+    "competing_workloads_before": [],
+    "load_after": [
+      2.50390625,
+      2.296875,
+      1.96630859375
+    ],
+    "competing_workloads_after": [],
+    "finished_utc": "2026-09-10T21:48:02Z"
+  },
+  "note": "Excluded from qualified diagnostic results: the terminal quiet gate failed (ending one-minute load 2.50390625 exceeds the pre-existing 2.5 limit). All raw outputs and GC logs are preserved. The same nine cases are repeated in a fresh directory; RSS results were not inspected to select the repeat.\n"
+}

@@ -1,0 +1,13 @@
+{
+  "source_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+  "command": [
+    "./scripts/run_lint_gates.sh"
+  ],
+  "env_overrides": {
+    "SKIP_COMPILE_GATES": "1"
+  },
+  "exit_code": 1,
+  "file_cap_exit_code": 0,
+  "elapsed_seconds": 222.43892407417297,
+  "note": "R17 diagnostics only; runtime source unchanged. Compile gates explicitly skipped; no full CI claim."
+}

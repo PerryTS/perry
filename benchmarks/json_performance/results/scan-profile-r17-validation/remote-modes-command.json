@@ -1,0 +1,15 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/scan-profile-r17/run-modes.py",
+  "--worker",
+  ".work/scan-profile-r17/main-worker",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--results-dir",
+  "results/quiet-scan-profile-r17-modes"
+]

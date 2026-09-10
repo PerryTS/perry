@@ -1,0 +1,59 @@
+{
+  "cases": [
+    {
+      "fixture": "records_array_16k",
+      "operation": "scan",
+      "mode": "main_auto",
+      "iterations": 7522
+    },
+    {
+      "fixture": "records_array_16k",
+      "operation": "scan",
+      "mode": "main_auto",
+      "iterations": 15044
+    },
+    {
+      "fixture": "records_array_16k",
+      "operation": "scan",
+      "mode": "main_direct",
+      "iterations": 7522
+    },
+    {
+      "fixture": "records_array_1m",
+      "operation": "scan",
+      "mode": "main_auto",
+      "iterations": 138
+    },
+    {
+      "fixture": "records_array_1m",
+      "operation": "scan",
+      "mode": "main_auto",
+      "iterations": 478
+    },
+    {
+      "fixture": "records_array_1m",
+      "operation": "scan",
+      "mode": "main_direct",
+      "iterations": 138
+    },
+    {
+      "fixture": "records_array_1m",
+      "operation": "scan",
+      "mode": "main_direct",
+      "iterations": 478
+    },
+    {
+      "fixture": "records_array_1m",
+      "operation": "parse",
+      "mode": "main_auto",
+      "iterations": 340
+    },
+    {
+      "fixture": "records_array_1m",
+      "operation": "parse",
+      "mode": "main_direct",
+      "iterations": 340
+    }
+  ],
+  "selection": "Nine predeclared instrumented lifetime probes. Scan counts revisit the mode window and longer sample, plus doubled 16 KiB auto work; parse-only controls at 1 MiB. Two explicit collections after the timed run, before/after releasing the last result. Post-GC live output must still match Node. No policy changes and no speedup claim."
+}

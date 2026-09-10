@@ -1,0 +1,773 @@
+{
+  "window": {
+    "owner": "json-perf-76916-1789077060",
+    "load_before": [
+      1.73779296875,
+      2.02490234375,
+      1.91015625
+    ],
+    "started_utc": "2026-09-10T21:51:00Z",
+    "quiet_gate_passed": true,
+    "command": [
+      "python3",
+      ".work/scan-profile-r17/run-memory.py",
+      "--results-dir",
+      "results/quiet-scan-profile-r17-retry1-memory"
+    ],
+    "competing_workloads_before": [],
+    "load_after": [
+      2.06005859375,
+      2.0869140625,
+      1.93408203125
+    ],
+    "competing_workloads_after": [],
+    "finished_utc": "2026-09-10T21:51:11Z"
+  },
+  "diagnostic_only": true,
+  "instrumented": true,
+  "excluded_window": "quiet-scan-profile-r17-memory",
+  "note": "Explicit GC occurs after timed work. MEMORY_LIVE follows output verification; RESULT RSS precedes it. Snapshots and monitor peaks are not ru_maxrss or speedup measurements. Full collections reclaimed bytes; RSS remaining high does not imply those objects are still live. These probes establish no protected-from-space safety verdict.",
+  "cases": [
+    {
+      "case": {
+        "fixture": "records_array_16k",
+        "operation": "scan",
+        "mode": "main_auto",
+        "iterations": 7522
+      },
+      "full_output_matches_node_before_and_after_gc": true,
+      "rss_after_timing_bytes": 529235968,
+      "rss_snapshots_bytes": {
+        "MEMORY_LIVE": 529514496,
+        "MEMORY_COLLECTED_LIVE": 598376448,
+        "MEMORY_COLLECTED_DROPPED": 598425600
+      },
+      "observed_peak_rss_bytes": 594411520,
+      "manual_full_collections": 2,
+      "full_collection_freed_bytes": [
+        183449688,
+        128776
+      ],
+      "pre_manual_full_old_reclaimable_bytes": [
+        183867632,
+        469120
+      ],
+      "all_full_collections": [
+        {
+          "site": "sync",
+          "trigger": "Manual",
+          "freed_bytes": 183449688
+        },
+        {
+          "site": "sync",
+          "trigger": "Manual",
+          "freed_bytes": 128776
+        }
+      ],
+      "copying_minors": 1081,
+      "sampled_lazy_owner_survival": [
+        {
+          "minor": 1,
+          "type": "string",
+          "objects": 112322,
+          "bytes": 4942168,
+          "promoted_bytes": 4942168
+        },
+        {
+          "minor": 1,
+          "type": "object",
+          "objects": 56161,
+          "bytes": 4028584,
+          "promoted_bytes": 4028584
+        },
+        {
+          "minor": 1,
+          "type": "array",
+          "objects": 56630,
+          "bytes": 1879696,
+          "promoted_bytes": 1879696
+        },
+        {
+          "minor": 1,
+          "type": "object_meta",
+          "objects": 469,
+          "bytes": 52528,
+          "promoted_bytes": 52528
+        },
+        {
+          "minor": 436,
+          "type": "string",
+          "objects": 480,
+          "bytes": 21120,
+          "promoted_bytes": 21120
+        },
+        {
+          "minor": 436,
+          "type": "object",
+          "objects": 240,
+          "bytes": 17216,
+          "promoted_bytes": 17216
+        },
+        {
+          "minor": 436,
+          "type": "array",
+          "objects": 242,
+          "bytes": 8032,
+          "promoted_bytes": 8032
+        },
+        {
+          "minor": 436,
+          "type": "object_meta",
+          "objects": 2,
+          "bytes": 224,
+          "promoted_bytes": 224
+        }
+      ],
+      "final_arena": {
+        "arena_live": 444736,
+        "arena_capacity": 4194304
+      },
+      "stdout_sha256": "1577f3b822828b19d4daae2e5d5c36985d2720cde7fbef87bc4b1b37080b9870",
+      "stderr_sha256": "5227641c3dcf57b25d545c2d6a79b58aac8b8df2403c868e183f416c3a7db0b7"
+    },
+    {
+      "case": {
+        "fixture": "records_array_16k",
+        "operation": "scan",
+        "mode": "main_auto",
+        "iterations": 15044
+      },
+      "full_output_matches_node_before_and_after_gc": true,
+      "rss_after_timing_bytes": 1039499264,
+      "rss_snapshots_bytes": {
+        "MEMORY_LIVE": 1039761408,
+        "MEMORY_COLLECTED_LIVE": 1170980864,
+        "MEMORY_COLLECTED_DROPPED": 1171783680
+      },
+      "observed_peak_rss_bytes": 1168031744,
+      "manual_full_collections": 2,
+      "full_collection_freed_bytes": [
+        366806008,
+        4315240
+      ],
+      "pre_manual_full_old_reclaimable_bytes": [
+        326339456,
+        469120
+      ],
+      "all_full_collections": [
+        {
+          "site": "sync",
+          "trigger": "Manual",
+          "freed_bytes": 366806008
+        },
+        {
+          "site": "sync",
+          "trigger": "Manual",
+          "freed_bytes": 4315240
+        }
+      ],
+      "copying_minors": 2818,
+      "sampled_lazy_owner_survival": [
+        {
+          "minor": 1,
+          "type": "string",
+          "objects": 112322,
+          "bytes": 4942168,
+          "promoted_bytes": 4942168
+        },
+        {
+          "minor": 1,
+          "type": "object",
+          "objects": 56161,
+          "bytes": 4028584,
+          "promoted_bytes": 4028584
+        },
+        {
+          "minor": 1,
+          "type": "array",
+          "objects": 56630,
+          "bytes": 1879696,
+          "promoted_bytes": 1879696
+        },
+        {
+          "minor": 1,
+          "type": "object_meta",
+          "objects": 469,
+          "bytes": 52528,
+          "promoted_bytes": 52528
+        },
+        {
+          "minor": 436,
+          "type": "string",
+          "objects": 480,
+          "bytes": 21120,
+          "promoted_bytes": 21120
+        },
+        {
+          "minor": 436,
+          "type": "object",
+          "objects": 240,
+          "bytes": 17216,
+          "promoted_bytes": 17216
+        },
+        {
+          "minor": 436,
+          "type": "array",
+          "objects": 242,
+          "bytes": 8032,
+          "promoted_bytes": 8032
+        },
+        {
+          "minor": 436,
+          "type": "object_meta",
+          "objects": 2,
+          "bytes": 224,
+          "promoted_bytes": 224
+        }
+      ],
+      "final_arena": {
+        "arena_live": 444736,
+        "arena_capacity": 9437184
+      },
+      "stdout_sha256": "3c6ed895536899516bb160b52f019ed95d79e732c1112c6ba8ff36a02934aa51",
+      "stderr_sha256": "328dab5b52139d7aa382b2cb5cba11ae7946ec16b514482b37f3ac920e54c674"
+    },
+    {
+      "case": {
+        "fixture": "records_array_16k",
+        "operation": "scan",
+        "mode": "main_direct",
+        "iterations": 7522
+      },
+      "full_output_matches_node_before_and_after_gc": true,
+      "rss_after_timing_bytes": 33325056,
+      "rss_snapshots_bytes": {
+        "MEMORY_LIVE": 33554432,
+        "MEMORY_COLLECTED_LIVE": 35405824,
+        "MEMORY_COLLECTED_DROPPED": 35438592
+      },
+      "observed_peak_rss_bytes": 33325056,
+      "manual_full_collections": 2,
+      "full_collection_freed_bytes": [
+        10413448,
+        5338256
+      ],
+      "pre_manual_full_old_reclaimable_bytes": [
+        453688,
+        453648
+      ],
+      "all_full_collections": [
+        {
+          "site": "sync",
+          "trigger": "Manual",
+          "freed_bytes": 10413448
+        },
+        {
+          "site": "sync",
+          "trigger": "Manual",
+          "freed_bytes": 5338256
+        }
+      ],
+      "copying_minors": 14,
+      "sampled_lazy_owner_survival": [],
+      "final_arena": {
+        "arena_live": 291856,
+        "arena_capacity": 10485760
+      },
+      "stdout_sha256": "858380d77b0ff7f86ddf63ff1abaf62d6c068dae7500ab06c5d6df99846c2366",
+      "stderr_sha256": "9e6e9d943fa0d2f8e1b6ab263fd08b1f26231e9faef1396f3f5bd86c908279ab"
+    },
+    {
+      "case": {
+        "fixture": "records_array_1m",
+        "operation": "scan",
+        "mode": "main_auto",
+        "iterations": 138
+      },
+      "full_output_matches_node_before_and_after_gc": true,
+      "rss_after_timing_bytes": 314245120,
+      "rss_snapshots_bytes": {
+        "MEMORY_LIVE": 319651840,
+        "MEMORY_COLLECTED_LIVE": 395804672,
+        "MEMORY_COLLECTED_DROPPED": 395804672
+      },
+      "observed_peak_rss_bytes": 395493376,
+      "manual_full_collections": 2,
+      "full_collection_freed_bytes": [
+        233192152,
+        2580136
+      ],
+      "pre_manual_full_old_reclaimable_bytes": [
+        234573520,
+        2287168
+      ],
+      "all_full_collections": [
+        {
+          "site": "sync",
+          "trigger": "Manual",
+          "freed_bytes": 233192152
+        },
+        {
+          "site": "sync",
+          "trigger": "Manual",
+          "freed_bytes": 2580136
+        }
+      ],
+      "copying_minors": 65,
+      "sampled_lazy_owner_survival": [
+        {
+          "minor": 1,
+          "type": "string",
+          "objects": 121606,
+          "bytes": 5773064,
+          "promoted_bytes": 5773064
+        },
+        {
+          "minor": 1,
+          "type": "object",
+          "objects": 60803,
+          "bytes": 4377528,
+          "promoted_bytes": 4377528
+        },
+        {
+          "minor": 1,
+          "type": "array",
+          "objects": 60820,
+          "bytes": 2539792,
+          "promoted_bytes": 2539792
+        },
+        {
+          "minor": 1,
+          "type": "object_meta",
+          "objects": 9,
+          "bytes": 1008,
+          "promoted_bytes": 1008
+        },
+        {
+          "minor": 19,
+          "type": "string",
+          "objects": 15200,
+          "bytes": 721600,
+          "promoted_bytes": 721600
+        },
+        {
+          "minor": 19,
+          "type": "object",
+          "objects": 7600,
+          "bytes": 547168,
+          "promoted_bytes": 547168
+        },
+        {
+          "minor": 19,
+          "type": "array",
+          "objects": 7602,
+          "bytes": 317440,
+          "promoted_bytes": 317440
+        },
+        {
+          "minor": 19,
+          "type": "object_meta",
+          "objects": 1,
+          "bytes": 112,
+          "promoted_bytes": 112
+        }
+      ],
+      "final_arena": {
+        "arena_live": 1319992,
+        "arena_capacity": 7340032
+      },
+      "stdout_sha256": "00232d017bf88c965b2078c73c156ec877df2c99dbab7bb813b9a64a3dea200e",
+      "stderr_sha256": "d9496f47fccbebaa13c893a205891006f8ff6439c70f6f5f2a00dffb5664332c"
+    },
+    {
+      "case": {
+        "fixture": "records_array_1m",
+        "operation": "scan",
+        "mode": "main_auto",
+        "iterations": 478
+      },
+      "full_output_matches_node_before_and_after_gc": true,
+      "rss_after_timing_bytes": 999817216,
+      "rss_snapshots_bytes": {
+        "MEMORY_LIVE": 1002504192,
+        "MEMORY_COLLECTED_LIVE": 1258668032,
+        "MEMORY_COLLECTED_DROPPED": 1258668032
+      },
+      "observed_peak_rss_bytes": 1258127360,
+      "manual_full_collections": 2,
+      "full_collection_freed_bytes": [
+        801275032,
+        4188280
+      ],
+      "pre_manual_full_old_reclaimable_bytes": [
+        801047424,
+        2286336
+      ],
+      "all_full_collections": [
+        {
+          "site": "sync",
+          "trigger": "Manual",
+          "freed_bytes": 801275032
+        },
+        {
+          "site": "sync",
+          "trigger": "Manual",
+          "freed_bytes": 4188280
+        }
+      ],
+      "copying_minors": 93,
+      "sampled_lazy_owner_survival": [
+        {
+          "minor": 1,
+          "type": "string",
+          "objects": 121606,
+          "bytes": 5773064,
+          "promoted_bytes": 5773064
+        },
+        {
+          "minor": 1,
+          "type": "object",
+          "objects": 60803,
+          "bytes": 4377528,
+          "promoted_bytes": 4377528
+        },
+        {
+          "minor": 1,
+          "type": "array",
+          "objects": 60820,
+          "bytes": 2539792,
+          "promoted_bytes": 2539792
+        },
+        {
+          "minor": 1,
+          "type": "object_meta",
+          "objects": 9,
+          "bytes": 1008,
+          "promoted_bytes": 1008
+        },
+        {
+          "minor": 19,
+          "type": "string",
+          "objects": 15200,
+          "bytes": 721600,
+          "promoted_bytes": 721600
+        },
+        {
+          "minor": 19,
+          "type": "object",
+          "objects": 7600,
+          "bytes": 547168,
+          "promoted_bytes": 547168
+        },
+        {
+          "minor": 19,
+          "type": "array",
+          "objects": 7602,
+          "bytes": 317440,
+          "promoted_bytes": 317440
+        },
+        {
+          "minor": 19,
+          "type": "object_meta",
+          "objects": 1,
+          "bytes": 112,
+          "promoted_bytes": 112
+        },
+        {
+          "minor": 89,
+          "type": "string",
+          "objects": 516800,
+          "bytes": 24534400,
+          "promoted_bytes": 24534400
+        },
+        {
+          "minor": 89,
+          "type": "object",
+          "objects": 258400,
+          "bytes": 18603712,
+          "promoted_bytes": 18603712
+        },
+        {
+          "minor": 89,
+          "type": "array",
+          "objects": 258468,
+          "bytes": 10792960,
+          "promoted_bytes": 10792960
+        },
+        {
+          "minor": 89,
+          "type": "object_meta",
+          "objects": 34,
+          "bytes": 3808,
+          "promoted_bytes": 3808
+        }
+      ],
+      "final_arena": {
+        "arena_live": 1319992,
+        "arena_capacity": 9437184
+      },
+      "stdout_sha256": "58327dffd5d20ad55e67007fbb69222030fb70765c2ac06e678346393856f8b2",
+      "stderr_sha256": "2402521e25f7be8cbc865aff00810f4aee007e7f750f074be3dba64bfc07597d"
+    },
+    {
+      "case": {
+        "fixture": "records_array_1m",
+        "operation": "scan",
+        "mode": "main_direct",
+        "iterations": 138
+      },
+      "full_output_matches_node_before_and_after_gc": true,
+      "rss_after_timing_bytes": 73711616,
+      "rss_snapshots_bytes": {
+        "MEMORY_LIVE": 77856768,
+        "MEMORY_COLLECTED_LIVE": 81625088,
+        "MEMORY_COLLECTED_DROPPED": 83902464
+      },
+      "observed_peak_rss_bytes": 83902464,
+      "manual_full_collections": 2,
+      "full_collection_freed_bytes": [
+        19915672,
+        6960928
+      ],
+      "pre_manual_full_old_reclaimable_bytes": [
+        2210120,
+        2210088
+      ],
+      "all_full_collections": [
+        {
+          "site": "sync",
+          "trigger": "Manual",
+          "freed_bytes": 19915672
+        },
+        {
+          "site": "sync",
+          "trigger": "Manual",
+          "freed_bytes": 6960928
+        }
+      ],
+      "copying_minors": 7,
+      "sampled_lazy_owner_survival": [],
+      "final_arena": {
+        "arena_live": 1167256,
+        "arena_capacity": 13631488
+      },
+      "stdout_sha256": "6af4afbbb6cafa41cf09d8b21d4ffdf6d72715cb0df2c06804a55b7d4c358253",
+      "stderr_sha256": "f99e19362216c4d3b7753e1100715ab18ddeefe415084c6e4322989d51845e6b"
+    },
+    {
+      "case": {
+        "fixture": "records_array_1m",
+        "operation": "scan",
+        "mode": "main_direct",
+        "iterations": 478
+      },
+      "full_output_matches_node_before_and_after_gc": true,
+      "rss_after_timing_bytes": 73744384,
+      "rss_snapshots_bytes": {
+        "MEMORY_LIVE": 77889536,
+        "MEMORY_COLLECTED_LIVE": 79888384,
+        "MEMORY_COLLECTED_DROPPED": 81756160
+      },
+      "observed_peak_rss_bytes": 79839232,
+      "manual_full_collections": 2,
+      "full_collection_freed_bytes": [
+        7227168,
+        5806632
+      ],
+      "pre_manual_full_old_reclaimable_bytes": [
+        2210120,
+        2210088
+      ],
+      "all_full_collections": [
+        {
+          "site": "sync",
+          "trigger": "Manual",
+          "freed_bytes": 7227168
+        },
+        {
+          "site": "sync",
+          "trigger": "Manual",
+          "freed_bytes": 5806632
+        }
+      ],
+      "copying_minors": 19,
+      "sampled_lazy_owner_survival": [],
+      "final_arena": {
+        "arena_live": 1167256,
+        "arena_capacity": 11534336
+      },
+      "stdout_sha256": "3be8bd9630273f3939013ee9aa2266dcc1c2a5e2cd84767499ab3c7e0bdd1cdd",
+      "stderr_sha256": "71d526c17672108a2f332500c621118b1a1bd7f278550370ed3c0e3f37ec638d"
+    },
+    {
+      "case": {
+        "fixture": "records_array_1m",
+        "operation": "parse",
+        "mode": "main_auto",
+        "iterations": 340
+      },
+      "full_output_matches_node_before_and_after_gc": true,
+      "rss_after_timing_bytes": 70074368,
+      "rss_snapshots_bytes": {
+        "MEMORY_LIVE": 71958528,
+        "MEMORY_COLLECTED_LIVE": 72073216,
+        "MEMORY_COLLECTED_DROPPED": 72122368
+      },
+      "observed_peak_rss_bytes": 70074368,
+      "manual_full_collections": 2,
+      "full_collection_freed_bytes": [
+        2452352,
+        2082880
+      ],
+      "pre_manual_full_old_reclaimable_bytes": [
+        3145456,
+        2712560
+      ],
+      "all_full_collections": [
+        {
+          "site": "alloc_point_old_reclaim",
+          "trigger": "OldGenBytes",
+          "freed_bytes": 1215024
+        },
+        {
+          "site": "alloc_point_old_reclaim",
+          "trigger": "OldGenBytes",
+          "freed_bytes": 1359616
+        },
+        {
+          "site": "alloc_point_old_reclaim",
+          "trigger": "OldGenBytes",
+          "freed_bytes": 1538984
+        },
+        {
+          "site": "alloc_point_old_reclaim",
+          "trigger": "OldGenBytes",
+          "freed_bytes": 1542328
+        },
+        {
+          "site": "alloc_point_old_reclaim",
+          "trigger": "OldGenBytes",
+          "freed_bytes": 1541664
+        },
+        {
+          "site": "alloc_point_old_reclaim",
+          "trigger": "OldGenBytes",
+          "freed_bytes": 1543896
+        },
+        {
+          "site": "alloc_point_old_reclaim",
+          "trigger": "OldGenBytes",
+          "freed_bytes": 1545184
+        },
+        {
+          "site": "alloc_point_old_reclaim",
+          "trigger": "OldGenBytes",
+          "freed_bytes": 1546344
+        },
+        {
+          "site": "alloc_point_old_reclaim",
+          "trigger": "OldGenBytes",
+          "freed_bytes": 1547376
+        },
+        {
+          "site": "alloc_point_old_reclaim",
+          "trigger": "OldGenBytes",
+          "freed_bytes": 1548280
+        },
+        {
+          "site": "alloc_point_old_reclaim",
+          "trigger": "OldGenBytes",
+          "freed_bytes": 1549200
+        },
+        {
+          "site": "alloc_point_old_reclaim",
+          "trigger": "OldGenBytes",
+          "freed_bytes": 1550136
+        },
+        {
+          "site": "alloc_point_old_reclaim",
+          "trigger": "OldGenBytes",
+          "freed_bytes": 1551088
+        },
+        {
+          "site": "alloc_point_old_reclaim",
+          "trigger": "OldGenBytes",
+          "freed_bytes": 1552056
+        },
+        {
+          "site": "alloc_point_old_reclaim",
+          "trigger": "OldGenBytes",
+          "freed_bytes": 1553048
+        },
+        {
+          "site": "alloc_point_old_reclaim",
+          "trigger": "OldGenBytes",
+          "freed_bytes": 1554064
+        },
+        {
+          "site": "sync",
+          "trigger": "Manual",
+          "freed_bytes": 2452352
+        },
+        {
+          "site": "sync",
+          "trigger": "Manual",
+          "freed_bytes": 2082880
+        }
+      ],
+      "copying_minors": 0,
+      "sampled_lazy_owner_survival": [],
+      "final_arena": {
+        "arena_live": 1127864,
+        "arena_capacity": 4194304
+      },
+      "stdout_sha256": "93db7ecb17c7660f559dfecac24d71184168797fd6ba39a62cf23ef27142a6fd",
+      "stderr_sha256": "c9b9ef60ec7015e80b4122f2ec2c0325971d9c22322ce55febe445cbab6fb432"
+    },
+    {
+      "case": {
+        "fixture": "records_array_1m",
+        "operation": "parse",
+        "mode": "main_direct",
+        "iterations": 340
+      },
+      "full_output_matches_node_before_and_after_gc": true,
+      "rss_after_timing_bytes": 75087872,
+      "rss_snapshots_bytes": {
+        "MEMORY_LIVE": 80019456,
+        "MEMORY_COLLECTED_LIVE": 81248256,
+        "MEMORY_COLLECTED_DROPPED": 83460096
+      },
+      "observed_peak_rss_bytes": 80019456,
+      "manual_full_collections": 2,
+      "full_collection_freed_bytes": [
+        882904,
+        2634504
+      ],
+      "pre_manual_full_old_reclaimable_bytes": [
+        2210128,
+        2210096
+      ],
+      "all_full_collections": [
+        {
+          "site": "sync",
+          "trigger": "Manual",
+          "freed_bytes": 882904
+        },
+        {
+          "site": "sync",
+          "trigger": "Manual",
+          "freed_bytes": 2634504
+        }
+      ],
+      "copying_minors": 13,
+      "sampled_lazy_owner_survival": [],
+      "final_arena": {
+        "arena_live": 1167264,
+        "arena_capacity": 7340032
+      },
+      "stdout_sha256": "222ed2ec7945fb3881dbe0e22ab8604001dfaade073a9c1db4822f0ff514e841",
+      "stderr_sha256": "bcf35c8ee470824e910217953217906b7eeb6bdae6da998a53c7b50e8400bed1"
+    }
+  ]
+}

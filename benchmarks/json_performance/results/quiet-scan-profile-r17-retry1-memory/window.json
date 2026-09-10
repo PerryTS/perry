@@ -1,0 +1,24 @@
+{
+  "owner": "json-perf-76916-1789077060",
+  "load_before": [
+    1.73779296875,
+    2.02490234375,
+    1.91015625
+  ],
+  "started_utc": "2026-09-10T21:51:00Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/scan-profile-r17/run-memory.py",
+    "--results-dir",
+    "results/quiet-scan-profile-r17-retry1-memory"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    2.06005859375,
+    2.0869140625,
+    1.93408203125
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-10T21:51:11Z"
+}

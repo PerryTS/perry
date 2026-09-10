@@ -1,0 +1,22 @@
+{
+  "source_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+  "reused_from": "benchmarks/json_performance/.work/template-capture-r16/frozen-main",
+  "files": {
+    "perry": {
+      "sha256": "ade63eddfdeca03926039d10e3310f9255d52c5b2721ccd2b0882f042a689156",
+      "bytes": 117699664,
+      "mtime": 1789055644.6386313
+    },
+    "libperry_runtime.a": {
+      "sha256": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458",
+      "bytes": 36882304,
+      "mtime": 1789055567.242991
+    },
+    "libperry_stdlib.a": {
+      "sha256": "61fac03f0405a48b8d390958e3002246061db6e009fcd078fe61a98d1a1068b0",
+      "bytes": 86372568,
+      "mtime": 1789055628.740747
+    }
+  },
+  "note": "Original fresh main production artifacts copied by verified hashes. Diagnostic workers recompiled at R17 paths; no candidate runtime change."
+}

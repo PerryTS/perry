@@ -1,0 +1,1 @@
+Excluded from qualified diagnostic results: the terminal quiet gate failed (ending one-minute load 2.50390625 exceeds the pre-existing 2.5 limit). All raw outputs and GC logs are preserved. The same nine cases are repeated in a fresh directory; RSS results were not inspected to select the repeat.

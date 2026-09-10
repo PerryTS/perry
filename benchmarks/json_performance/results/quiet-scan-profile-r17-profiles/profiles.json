@@ -1,0 +1,146 @@
+[
+  {
+    "case": {
+      "fixture": "records_array_1m",
+      "operation": "parse",
+      "mode": "main_auto",
+      "iterations": 1537,
+      "warmup": 2,
+      "selection_cpu_us": 911.1764705882352
+    },
+    "worker_command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/scan-profile-r17/main-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/fixtures/records_array_1m.json",
+      "parse",
+      "1537",
+      "2",
+      "verify"
+    ],
+    "worker_sha256": "ebb1d11253bf4e1bb396bf20e1debde59a0351eb7c9e20bd632afc9c8146ec13",
+    "env_overrides": {},
+    "sample_command": [
+      "/usr/bin/sample",
+      "76531",
+      "1",
+      "1",
+      "-mayDie",
+      "-file",
+      "results/quiet-scan-profile-r17-profiles/records_array_1m-parse-main_auto.sample.txt"
+    ],
+    "worker_exit": 0,
+    "sampler_exit": 0,
+    "observed_peak_rss_bytes": 69861376,
+    "elapsed_seconds": 1.471034416,
+    "stop_reason": null,
+    "diagnostic_only": true
+  },
+  {
+    "case": {
+      "fixture": "records_array_1m",
+      "operation": "parse",
+      "mode": "main_direct",
+      "iterations": 750,
+      "warmup": 2,
+      "selection_cpu_us": 1868.9617647058824
+    },
+    "worker_command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/scan-profile-r17/main-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/fixtures/records_array_1m.json",
+      "parse",
+      "750",
+      "2",
+      "verify"
+    ],
+    "worker_sha256": "ebb1d11253bf4e1bb396bf20e1debde59a0351eb7c9e20bd632afc9c8146ec13",
+    "env_overrides": {
+      "PERRY_JSON_TAPE": "0"
+    },
+    "sample_command": [
+      "/usr/bin/sample",
+      "76548",
+      "1",
+      "1",
+      "-mayDie",
+      "-file",
+      "results/quiet-scan-profile-r17-profiles/records_array_1m-parse-main_direct.sample.txt"
+    ],
+    "worker_exit": 0,
+    "sampler_exit": 0,
+    "observed_peak_rss_bytes": 74072064,
+    "elapsed_seconds": 1.4720239590000002,
+    "stop_reason": null,
+    "diagnostic_only": true
+  },
+  {
+    "case": {
+      "fixture": "records_array_1m",
+      "operation": "scan",
+      "mode": "main_auto",
+      "iterations": 478,
+      "warmup": 2,
+      "selection_cpu_us": 2932.0942028985505
+    },
+    "worker_command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/scan-profile-r17/main-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/fixtures/records_array_1m.json",
+      "scan",
+      "478",
+      "2",
+      "verify"
+    ],
+    "worker_sha256": "ebb1d11253bf4e1bb396bf20e1debde59a0351eb7c9e20bd632afc9c8146ec13",
+    "env_overrides": {},
+    "sample_command": [
+      "/usr/bin/sample",
+      "76563",
+      "1",
+      "1",
+      "-mayDie",
+      "-file",
+      "results/quiet-scan-profile-r17-profiles/records_array_1m-scan-main_auto.sample.txt"
+    ],
+    "worker_exit": 0,
+    "sampler_exit": 0,
+    "observed_peak_rss_bytes": 986005504,
+    "elapsed_seconds": 1.5873147090000002,
+    "stop_reason": null,
+    "diagnostic_only": true
+  },
+  {
+    "case": {
+      "fixture": "records_array_1m",
+      "operation": "scan",
+      "mode": "main_direct",
+      "iterations": 671,
+      "warmup": 2,
+      "selection_cpu_us": 2088.159420289855
+    },
+    "worker_command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/scan-profile-r17/main-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/fixtures/records_array_1m.json",
+      "scan",
+      "671",
+      "2",
+      "verify"
+    ],
+    "worker_sha256": "ebb1d11253bf4e1bb396bf20e1debde59a0351eb7c9e20bd632afc9c8146ec13",
+    "env_overrides": {
+      "PERRY_JSON_TAPE": "0"
+    },
+    "sample_command": [
+      "/usr/bin/sample",
+      "76579",
+      "1",
+      "1",
+      "-mayDie",
+      "-file",
+      "results/quiet-scan-profile-r17-profiles/records_array_1m-scan-main_direct.sample.txt"
+    ],
+    "worker_exit": 0,
+    "sampler_exit": 0,
+    "observed_peak_rss_bytes": 73908224,
+    "elapsed_seconds": 1.476910083,
+    "stop_reason": null,
+    "diagnostic_only": true
+  }
+]

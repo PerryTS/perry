@@ -1,0 +1,34 @@
+{
+  "source_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+  "diagnostic_only": true,
+  "commands": [
+    [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/scan-profile-r17/frozen-main/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/scan-profile-r17/memory-worker.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "--no-link",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/scan-profile-r17/memory-worker.o"
+    ],
+    [
+      "cc",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/scan-profile-r17/memory-worker.o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/scan-profile-r17/frozen-main/libperry_runtime.a",
+      "-lc",
+      "-Wl,-dead_strip",
+      "-Wl,-no_exported_symbols",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/scan-profile-r17/memory-worker"
+    ]
+  ],
+  "files": {
+    "benchmarks/json_performance/.work/scan-profile-r17/memory-worker.ts": "02ddf0ef9d802e3e3a8b67830ebb7cbf512fef037d39539c2511d6b44cdd7a00",
+    "benchmarks/json_performance/.work/scan-profile-r17/memory-worker.o": "775f7a3f33d73cbb282c3203871cfb0346d9414d0bc5f4b411ec77fc015c1bac",
+    "benchmarks/json_performance/.work/scan-profile-r17/memory-worker": "77f85758400117cf301e8a9707b523a0389167a011fc8956eba85a1cc6de774b",
+    "benchmarks/json_performance/.work/scan-profile-r17/frozen-main/perry": "ade63eddfdeca03926039d10e3310f9255d52c5b2721ccd2b0882f042a689156",
+    "benchmarks/json_performance/.work/scan-profile-r17/frozen-main/libperry_runtime.a": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458",
+    "benchmarks/json_performance/.work/scan-profile-r17/frozen-main/libperry_stdlib.a": "61fac03f0405a48b8d390958e3002246061db6e009fcd078fe61a98d1a1068b0"
+  }
+}

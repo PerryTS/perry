@@ -1,0 +1,24 @@
+{
+  "owner": "json-perf-76528-1789076080",
+  "load_before": [
+    2.34619140625,
+    1.79541015625,
+    1.72607421875
+  ],
+  "started_utc": "2026-09-10T21:34:40Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/scan-profile-r17/run-profiles.py",
+    "--results-dir",
+    "results/quiet-scan-profile-r17-profiles"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    2.4462890625,
+    1.83447265625,
+    1.74072265625
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-10T21:34:46Z"
+}

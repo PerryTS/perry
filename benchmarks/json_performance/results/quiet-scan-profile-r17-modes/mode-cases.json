@@ -1,0 +1,75 @@
+{
+  "cases": [
+    {
+      "fixture": "records_array_16k",
+      "operation": "parse",
+      "iterations": 22568,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_16k",
+      "operation": "sparse",
+      "iterations": 15736,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_16k",
+      "operation": "scan",
+      "iterations": 7522,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_1m",
+      "operation": "parse",
+      "iterations": 340,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_1m",
+      "operation": "sparse",
+      "iterations": 322,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_1m",
+      "operation": "scan",
+      "iterations": 138,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_8m",
+      "operation": "parse",
+      "iterations": 32,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_8m",
+      "operation": "sparse",
+      "iterations": 30,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_8m",
+      "operation": "scan",
+      "iterations": 16,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_20m",
+      "operation": "scan",
+      "iterations": 8,
+      "warmup": 2,
+      "repetitions": 7
+    }
+  ],
+  "selection": "Predeclared diagnostic: parse/sparse/scan at 16 KiB, 1 MiB and 8 MiB, plus a 20 MiB scan same-route control. Two times original full-matrix work, original warmup, seven repetitions. No runtime candidate or qualification claim."
+}

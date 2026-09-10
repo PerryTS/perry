@@ -1,0 +1,7 @@
+{
+  "exit_code": 0,
+  "matches_node_outputs_before_and_after_gc": true,
+  "local_only": true,
+  "runtime_sha256": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458",
+  "note": "Local smoke of the diagnostic harness, not memory/performance evidence."
+}
