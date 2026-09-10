@@ -10,6 +10,9 @@ use crate::{
     js_array_alloc, js_array_push, JSValue, StringHeader,
 };
 
+#[path = "parser_tape.rs"]
+mod tape;
+
 // ─── Direct JSON parser ────────────────────────────────────────────────────────
 
 /// Result of parsing a JSON string: either a zero-copy borrow from the

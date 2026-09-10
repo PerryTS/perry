@@ -1769,7 +1769,10 @@ unsafe fn reparse_materialize(
         let data = (blob as *const u8).add(std::mem::size_of::<crate::StringHeader>());
         let bytes = std::slice::from_raw_parts(data, blob_len);
         let mut parser = crate::json::DirectParser::new_batched(bytes);
-        let parsed = parser.parse_value();
+        let tape = LazyArrayHeader::tape_slice(hdr);
+        let parsed = parser
+            .materialize_tape_records(tape, cached_length)
+            .unwrap_or_else(|| parser.parse_value());
         // Hand the tree to PARSE_ROOTS before the window closes — the
         // handle-scope root below is pushed after it has already closed.
         crate::json::parse_root_push(parsed);
