@@ -1,0 +1,9 @@
+{
+  "base_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+  "reference_build": "R19 independent rebuild, byte-identical to original frozen main",
+  "r19_evidence_commit": "87f571d734eddca2bf997561c17adb072f5132c1",
+  "plan": "Only for existing minority-cached full-materialization admission, build one exact-capacity root array and copy existing cached values while ordinary DirectParser builds uncached subtrees at validated tape offsets. Keep thresholds, sparse reads, parse entry and GC policy unchanged. Existing cache publication patch retained.",
+  "screen_plan": "Same 18 R18 rows, counts and seven paired repetitions. Longer 11-pair object_1m parse control required. No broader acceptance without remaining full50/access/rotating/retained36/short/options performance checks.",
+  "previous_goal_turn": "R19 progress: independently rebuilt unchanged main produced identical three artifacts; ruled out build drift. No new timings needed for identical binaries.",
+  "baseline_gaps": "Known lazy raw output/zero-spacing crashes and fractional-spacing differences remain unmodified."
+}

@@ -1,0 +1,1 @@
+Parked without a runtime PR: scan CPU gains are 0.34% at 1 MiB and 0.88% at 8 MiB; the recurring object-parse control is 0.74% slower in the longer recheck, with 10/11 slower pairs and overlapping ranges. The initial screen also has a separated 16 KiB sparse-access slowdown. No broader performance qualification.

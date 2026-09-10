@@ -1,0 +1,10 @@
+{
+  "base_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+  "hashes": {
+    "crates/perry-runtime/src/json/parser.rs": "f631ee2335f2dd87775ff340e4dcd76ebb69ece0652226176129d8519ded0a6f",
+    "crates/perry-runtime/src/json/parser_cached_array.rs": "a3bef103aa483f95c87330cbf571f031378930c9102df2c336513cd7407355cf",
+    "crates/perry-runtime/src/json_tape.rs": "5a5094798815f868e95eed53f13bb46cb0196e710901de43776ab4a891aeb884",
+    "test-files/test_json_cached_construction.ts": "574ed0efb44c04e0a206d8cdc20aa5d6f7585787c4f3880a7acd153e45d3eaf6"
+  },
+  "focused_units": "3/3 passed. Formatter overlapped the start of the preliminary compile; initial hashes and the formatting-only mismatch are preserved. Full JSON units will run on the final clean commit. After focused units only comments in json_tape.rs changed."
+}

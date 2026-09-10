@@ -1,0 +1,8 @@
+{
+  "base_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+  "hashes": {
+    "crates/perry-runtime/src/json/parser.rs": "f631ee2335f2dd87775ff340e4dcd76ebb69ece0652226176129d8519ded0a6f",
+    "crates/perry-runtime/src/json/parser_cached_array.rs": "133d0ab5f9f6c87d4584ee291c634a926b7beefe21ab4d4f0797ea224da208f6",
+    "crates/perry-runtime/src/json_tape.rs": "95301104b1eb7ba9bdc2dea70733949e8ee61dcf3a43d97909bdbfa6d7904522"
+  }
+}

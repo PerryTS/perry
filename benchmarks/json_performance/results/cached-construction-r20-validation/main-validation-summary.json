@@ -1,0 +1,19 @@
+{
+  "fixture_runs": 37,
+  "fixture_matches_node": true,
+  "options_runs": 14,
+  "options_match_node": true,
+  "ir_files": 16,
+  "native_unsuppressed_findings": [
+    "options-worker-0.ll::perry_fn_options_worker_ts__run$generic::unrooted:global->js_closure_alloc_singleton",
+    "options-worker-0.ll::perry_fn_options_worker_ts__run$spec_b::unrooted:global->js_closure_alloc_singleton",
+    "prior-entry-0.ll::main::stale:alloc->js_write_barrier_root_nanbox",
+    "prior-entry-0.ll::perry_closure_prior_entry_ts__5::unrooted:global->js_array_push_f64_spec",
+    "prior-entry-0.ll::perry_fn_prior_entry_ts____obj_method_toJSON_1$generic::unrooted:global->js_array_push_f64_spec",
+    "prior-entry-0.ll::perry_fn_prior_entry_ts____obj_method_toJSON_1$spec_b::unrooted:global->js_array_push_f64_spec",
+    "test_json_cached_construction-0.ll::main::unrooted:strhandle->js_put_value_set_ic_overflow_store",
+    "test_json_source_length-0.ll::main::unrooted:strhandle->js_put_value_set_ic_overflow_store"
+  ],
+  "shadow_and_ordinary_callback_native_pass": true,
+  "note": "Main baseline only. Does not establish candidate behavior or performance."
+}

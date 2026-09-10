@@ -1,0 +1,15 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "--release",
+    "-p",
+    "perry-runtime",
+    "--lib",
+    "json_cached_array"
+  ],
+  "env": {
+    "RUST_TEST_THREADS": "1"
+  },
+  "exit_code": 0
+}

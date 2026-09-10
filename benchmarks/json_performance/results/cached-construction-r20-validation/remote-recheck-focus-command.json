@@ -1,0 +1,19 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/cached-construction-r20/run-focus.py",
+  "--worker",
+  ".work/cached-construction-r20/candidate-worker",
+  "--baseline-worker",
+  ".work/cached-construction-r20/main-worker",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--case",
+  "records_object_1m:parse:324:2:11",
+  "--results-dir",
+  "results/quiet-cached-construction-r20-recheck-focus"
+]

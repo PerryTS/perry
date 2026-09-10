@@ -1,0 +1,211 @@
+{
+  "trials": 44,
+  "phases": {
+    "focus": {
+      "window": {
+        "owner": "json-perf-80262-1789083601",
+        "load_before": [
+          1.72412109375,
+          1.8759765625,
+          1.69189453125
+        ],
+        "started_utc": "2026-09-10T23:40:01Z",
+        "quiet_gate_passed": true,
+        "command": [
+          "python3",
+          ".work/cached-construction-r20/run-focus.py",
+          "--worker",
+          ".work/cached-construction-r20/candidate-worker",
+          "--baseline-worker",
+          ".work/cached-construction-r20/main-worker",
+          "--node",
+          "/opt/homebrew/bin/node",
+          "--bun",
+          "/Users/perry/.bun/bin/bun",
+          "--case",
+          "records_object_1m:parse:324:2:11",
+          "--results-dir",
+          "results/quiet-cached-construction-r20-recheck-focus"
+        ],
+        "competing_workloads_before": [],
+        "load_after": [
+          1.953125,
+          1.91943359375,
+          1.7138671875
+        ],
+        "competing_workloads_after": [],
+        "finished_utc": "2026-09-10T23:40:33Z"
+      },
+      "timed_trials": 44,
+      "cases": [
+        {
+          "fixture": "records_object_1m",
+          "operation": "parse",
+          "engines": {
+            "perry": {
+              "fixture": "records_object_1m",
+              "operation": "parse",
+              "iterations": 324,
+              "engine": "perry",
+              "repetitions": 11,
+              "cpu_us": 1880.358024691358,
+              "cpu_samples_us": [
+                1882.8796296296296,
+                1885.6450617283951,
+                1880.358024691358,
+                1879.3549382716049,
+                1880.216049382716,
+                1883.570987654321,
+                1878.9753086419753,
+                1880.0061728395062,
+                1880.320987654321,
+                1880.4969135802469,
+                1880.537037037037
+              ],
+              "peak_rss_mib": 71.203125,
+              "peak_rss_samples_mib": [
+                71.234375,
+                71.234375,
+                71.21875,
+                71.203125,
+                71.203125,
+                71.203125,
+                71.203125,
+                71.203125,
+                71.203125,
+                71.203125,
+                71.234375
+              ]
+            },
+            "baseline": {
+              "fixture": "records_object_1m",
+              "operation": "parse",
+              "iterations": 324,
+              "engine": "baseline",
+              "repetitions": 11,
+              "cpu_us": 1866.5092592592594,
+              "cpu_samples_us": [
+                1866.5092592592594,
+                1866.4814814814815,
+                1863.891975308642,
+                1865.7345679012346,
+                1868.6574074074074,
+                1884.5864197530864,
+                1867.358024691358,
+                1865.8425925925926,
+                1870.037037037037,
+                1865.287037037037,
+                1868.4722222222222
+              ],
+              "peak_rss_mib": 71.15625,
+              "peak_rss_samples_mib": [
+                71.1875,
+                71.15625,
+                71.15625,
+                71.1875,
+                71.15625,
+                71.15625,
+                71.15625,
+                71.15625,
+                71.15625,
+                71.1875,
+                71.1875
+              ]
+            },
+            "node": {
+              "fixture": "records_object_1m",
+              "operation": "parse",
+              "iterations": 324,
+              "engine": "node",
+              "repetitions": 11,
+              "cpu_us": 2741.8456790123455,
+              "cpu_samples_us": [
+                2525.966049382716,
+                2652.679012345679,
+                2667.811728395062,
+                2790.456790123457,
+                2836.953703703704,
+                2597.7654320987654,
+                2756.1728395061727,
+                2801.9413580246915,
+                2741.8456790123455,
+                2812.9783950617284,
+                2583.990740740741
+              ],
+              "peak_rss_mib": 125.65625,
+              "peak_rss_samples_mib": [
+                125.5625,
+                125.734375,
+                125.640625,
+                125.65625,
+                125.625,
+                125.65625,
+                125.59375,
+                125.65625,
+                125.546875,
+                125.765625,
+                125.796875
+              ]
+            },
+            "bun": {
+              "fixture": "records_object_1m",
+              "operation": "parse",
+              "iterations": 324,
+              "engine": "bun",
+              "repetitions": 11,
+              "cpu_us": 2138.4814814814813,
+              "cpu_samples_us": [
+                2137.0401234567903,
+                2138.4814814814813,
+                2138.617283950617,
+                2417.003086419753,
+                2141.0925925925926,
+                2135.3364197530864,
+                2138.216049382716,
+                2139.9691358024693,
+                2139.2808641975307,
+                2135.3395061728397,
+                2137.2283950617284
+              ],
+              "peak_rss_mib": 107.828125,
+              "peak_rss_samples_mib": [
+                107.765625,
+                107.75,
+                107.828125,
+                107.75,
+                107.828125,
+                107.75,
+                107.890625,
+                107.90625,
+                107.75,
+                107.84375,
+                107.84375
+              ]
+            }
+          },
+          "delta_pct": 0.7419607142798101,
+          "paired_delta_pct": [
+            0.8770580852552001,
+            1.0267222277342336,
+            0.8834229451516018,
+            0.7300272292050547,
+            0.6185532955099049,
+            -0.05388089864822865,
+            0.6221240810281969,
+            0.7590983453343414,
+            0.549932991358193,
+            0.8154174795194313,
+            0.6457047994251619
+          ],
+          "slower_pairs": 10,
+          "rss_delta_mib": 0.046875,
+          "separated_regression": false,
+          "separated_improvement": false,
+          "beats_both_peers": true,
+          "rss_beats_both_peers": true,
+          "all_samples_beat_both_peers": true
+        }
+      ]
+    }
+  }
+}

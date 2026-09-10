@@ -1,0 +1,11 @@
+{
+  "source_commit": "66ae4aaa39c8dee54773393d1c78c64181ae532a",
+  "base_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+  "freshness_refresh_mtime_only": {
+    "crates/perry-runtime-static/src/lib.rs": "0f320c88d8d2679b4af3bc1fbe882752744e210212076d3ebcd60b7c6fed10de",
+    "crates/perry-stdlib-static/src/lib.rs": "f66830b9af1aafaa3270e09d2ba00da466fe4ce7d715f7590bba9db99b0103a0",
+    "crates/perry/src/main.rs": "cc3d6d228a6c9e031ba8f0a26d152c7690f622ee914c8aa09d47eeb2199db870"
+  },
+  "compiler_runtime_stdlib_source_bytes_unchanged_by_refresh": true,
+  "production_flags_unchanged": true
+}

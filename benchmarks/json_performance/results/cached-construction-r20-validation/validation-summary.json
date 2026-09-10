@@ -1,0 +1,168 @@
+{
+  "source_commit": "66ae4aaa39c8dee54773393d1c78c64181ae532a",
+  "full_json_units": 294,
+  "focused_units": 3,
+  "lint": {
+    "script_pass": 73,
+    "script_total": 74,
+    "existing_failure": "public baseline freshness",
+    "compile_tier_skipped": true,
+    "ci_only_skipped": 2,
+    "file_cap_pass": true
+  },
+  "arms": {
+    "main": {
+      "behavior_runs": 37,
+      "stringify_option_runs": 14,
+      "scheduled_new_fixture": [
+        {
+          "subject": "test_json_cached_construction",
+          "parser": "auto",
+          "gc": "scheduled",
+          "matches_node": true,
+          "exit_code": 0,
+          "protected_retired_sets": 854,
+          "moved_objects": 159027,
+          "source_sha256": "574ed0efb44c04e0a206d8cdc20aa5d6f7585787c4f3880a7acd153e45d3eaf6",
+          "binary_sha256": "ce8bb48e7087644c98d377bb21943e661fc69cf794d76347eb16e3f2837fe227",
+          "command": [
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/frozen-main/perry",
+            "compile",
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/test_json_cached_construction.ts",
+            "--no-auto-optimize",
+            "--no-cache",
+            "-o",
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/main-test_json_cached_construction"
+          ]
+        },
+        {
+          "subject": "test_json_cached_construction",
+          "parser": "tape",
+          "gc": "scheduled",
+          "matches_node": true,
+          "exit_code": 0,
+          "protected_retired_sets": 854,
+          "moved_objects": 159027,
+          "source_sha256": "574ed0efb44c04e0a206d8cdc20aa5d6f7585787c4f3880a7acd153e45d3eaf6",
+          "binary_sha256": "ce8bb48e7087644c98d377bb21943e661fc69cf794d76347eb16e3f2837fe227",
+          "command": [
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/frozen-main/perry",
+            "compile",
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/test_json_cached_construction.ts",
+            "--no-auto-optimize",
+            "--no-cache",
+            "-o",
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/main-test_json_cached_construction"
+          ]
+        },
+        {
+          "subject": "test_json_cached_construction",
+          "parser": "direct",
+          "gc": "scheduled",
+          "matches_node": true,
+          "exit_code": 0,
+          "protected_retired_sets": 1118,
+          "moved_objects": 155168,
+          "source_sha256": "574ed0efb44c04e0a206d8cdc20aa5d6f7585787c4f3880a7acd153e45d3eaf6",
+          "binary_sha256": "ce8bb48e7087644c98d377bb21943e661fc69cf794d76347eb16e3f2837fe227",
+          "command": [
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/frozen-main/perry",
+            "compile",
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/test_json_cached_construction.ts",
+            "--no-auto-optimize",
+            "--no-cache",
+            "-o",
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/main-test_json_cached_construction"
+          ]
+        }
+      ]
+    },
+    "candidate": {
+      "behavior_runs": 37,
+      "stringify_option_runs": 14,
+      "scheduled_new_fixture": [
+        {
+          "subject": "test_json_cached_construction",
+          "parser": "auto",
+          "gc": "scheduled",
+          "matches_node": true,
+          "exit_code": 0,
+          "protected_retired_sets": 854,
+          "moved_objects": 159027,
+          "source_sha256": "574ed0efb44c04e0a206d8cdc20aa5d6f7585787c4f3880a7acd153e45d3eaf6",
+          "binary_sha256": "2e72f66b23ce89f2936ff39fc11120e7a0b9f5bf12ac043afb01c43cf62353cb",
+          "command": [
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/frozen-build/perry",
+            "compile",
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/test_json_cached_construction.ts",
+            "--no-auto-optimize",
+            "--no-cache",
+            "-o",
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/candidate-test_json_cached_construction"
+          ]
+        },
+        {
+          "subject": "test_json_cached_construction",
+          "parser": "tape",
+          "gc": "scheduled",
+          "matches_node": true,
+          "exit_code": 0,
+          "protected_retired_sets": 854,
+          "moved_objects": 159027,
+          "source_sha256": "574ed0efb44c04e0a206d8cdc20aa5d6f7585787c4f3880a7acd153e45d3eaf6",
+          "binary_sha256": "2e72f66b23ce89f2936ff39fc11120e7a0b9f5bf12ac043afb01c43cf62353cb",
+          "command": [
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/frozen-build/perry",
+            "compile",
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/test_json_cached_construction.ts",
+            "--no-auto-optimize",
+            "--no-cache",
+            "-o",
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/candidate-test_json_cached_construction"
+          ]
+        },
+        {
+          "subject": "test_json_cached_construction",
+          "parser": "direct",
+          "gc": "scheduled",
+          "matches_node": true,
+          "exit_code": 0,
+          "protected_retired_sets": 1118,
+          "moved_objects": 155168,
+          "source_sha256": "574ed0efb44c04e0a206d8cdc20aa5d6f7585787c4f3880a7acd153e45d3eaf6",
+          "binary_sha256": "2e72f66b23ce89f2936ff39fc11120e7a0b9f5bf12ac043afb01c43cf62353cb",
+          "command": [
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/frozen-build/perry",
+            "compile",
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/test_json_cached_construction.ts",
+            "--no-auto-optimize",
+            "--no-cache",
+            "-o",
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/candidate-test_json_cached_construction"
+          ]
+        }
+      ]
+    }
+  },
+  "same_worker_objects": {
+    "worker": "813444eaa578387934105f10cf1163c21fdd7dd03b69b72e5b8e798e14465e64",
+    "access-worker": "90d922ea2a34e8cf99d4c6f668237ed6848db83bafeeac29d27c76ca1ca4acb5",
+    "rotating-worker": "3b8178f7b57a9f5ff0bd65d45f81eeac2226165872a05258a2242d7a104b0680",
+    "options": "f674c40ad721988cbf229c9d4cf4d5536eb1d6224c6ee309640c628acd96e361"
+  },
+  "limits": [
+    "Known main lazy raw-output and zero/true spacing failures preserved, not conformance passes.",
+    "Eight native static findings remain unsuppressed and equal to main; shadow and ordinary/callback native subsets pass.",
+    "Validation and linkage do not establish timed speed, RSS improvement or sampled entry."
+  ],
+  "native_fingerprints": [
+    "options-worker-0.ll::perry_fn_options_worker_ts__run$generic::unrooted:global->js_closure_alloc_singleton",
+    "options-worker-0.ll::perry_fn_options_worker_ts__run$spec_b::unrooted:global->js_closure_alloc_singleton",
+    "prior-entry-0.ll::main::stale:alloc->js_write_barrier_root_nanbox",
+    "prior-entry-0.ll::perry_closure_prior_entry_ts__5::unrooted:global->js_array_push_f64_spec",
+    "prior-entry-0.ll::perry_fn_prior_entry_ts____obj_method_toJSON_1$generic::unrooted:global->js_array_push_f64_spec",
+    "prior-entry-0.ll::perry_fn_prior_entry_ts____obj_method_toJSON_1$spec_b::unrooted:global->js_array_push_f64_spec",
+    "test_json_cached_construction-0.ll::main::unrooted:strhandle->js_put_value_set_ic_overflow_store",
+    "test_json_source_length-0.ll::main::unrooted:strhandle->js_put_value_set_ic_overflow_store"
+  ]
+}

@@ -1,0 +1,134 @@
+[
+  {
+    "worker": "worker",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/frozen-main/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/harness/worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/main-worker.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/main-worker.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/frozen-main/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/main-worker"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/cached-construction-r20/harness/worker.ts": "f3c42ec9f04fdb9ba84dc3cf50dc59f18685540033807f3db3a7f75c08a85d39",
+      "benchmarks/json_performance/.work/cached-construction-r20/main-worker.o": "813444eaa578387934105f10cf1163c21fdd7dd03b69b72e5b8e798e14465e64",
+      "benchmarks/json_performance/.work/cached-construction-r20/main-worker": "1107e562b0283ff07c91cc55d24fb4fff1e5d8c67f76ffcba0024368221b90cc",
+      "benchmarks/json_performance/.work/cached-construction-r20/frozen-main/perry": "ade63eddfdeca03926039d10e3310f9255d52c5b2721ccd2b0882f042a689156",
+      "benchmarks/json_performance/.work/cached-construction-r20/frozen-main/libperry_runtime.a": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458",
+      "benchmarks/json_performance/.work/cached-construction-r20/frozen-main/libperry_stdlib.a": "61fac03f0405a48b8d390958e3002246061db6e009fcd078fe61a98d1a1068b0"
+    }
+  },
+  {
+    "worker": "access-worker",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/frozen-main/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/harness/access-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/main-access-worker.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/main-access-worker.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/frozen-main/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/main-access-worker"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/cached-construction-r20/harness/access-worker.ts": "dba0240ef6441a07657e664354982a04045c036e53f65c1d06df62d55c73be67",
+      "benchmarks/json_performance/.work/cached-construction-r20/main-access-worker.o": "90d922ea2a34e8cf99d4c6f668237ed6848db83bafeeac29d27c76ca1ca4acb5",
+      "benchmarks/json_performance/.work/cached-construction-r20/main-access-worker": "4a010e636a232fddef84a44c9551d142c508715085599f0ed8a1c63d2fa78da6",
+      "benchmarks/json_performance/.work/cached-construction-r20/frozen-main/perry": "ade63eddfdeca03926039d10e3310f9255d52c5b2721ccd2b0882f042a689156",
+      "benchmarks/json_performance/.work/cached-construction-r20/frozen-main/libperry_runtime.a": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458",
+      "benchmarks/json_performance/.work/cached-construction-r20/frozen-main/libperry_stdlib.a": "61fac03f0405a48b8d390958e3002246061db6e009fcd078fe61a98d1a1068b0"
+    }
+  },
+  {
+    "worker": "rotating-worker",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/frozen-main/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/harness/rotating-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/main-rotating-worker.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/main-rotating-worker.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/frozen-main/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/main-rotating-worker"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/cached-construction-r20/harness/rotating-worker.ts": "7541897acb2c7c35c0f5e762f8b2f28b9783feb26a42db107c1c4eb3af644b24",
+      "benchmarks/json_performance/.work/cached-construction-r20/main-rotating-worker.o": "3b8178f7b57a9f5ff0bd65d45f81eeac2226165872a05258a2242d7a104b0680",
+      "benchmarks/json_performance/.work/cached-construction-r20/main-rotating-worker": "9a9f8254ab4673798d010bfac427f5ccda441bca9fd4fcf5143291e6a096b2fe",
+      "benchmarks/json_performance/.work/cached-construction-r20/frozen-main/perry": "ade63eddfdeca03926039d10e3310f9255d52c5b2721ccd2b0882f042a689156",
+      "benchmarks/json_performance/.work/cached-construction-r20/frozen-main/libperry_runtime.a": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458",
+      "benchmarks/json_performance/.work/cached-construction-r20/frozen-main/libperry_stdlib.a": "61fac03f0405a48b8d390958e3002246061db6e009fcd078fe61a98d1a1068b0"
+    }
+  },
+  {
+    "worker": "options",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/frozen-main/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/options-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/main-options.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/main-options.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/frozen-main/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/cached-construction-r20/main-options"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/cached-construction-r20/options-worker.ts": "d08c6a916c18197b889a0de4a3777632ad307275752b85c5abd75daf4d6ad85d",
+      "benchmarks/json_performance/.work/cached-construction-r20/main-options.o": "f674c40ad721988cbf229c9d4cf4d5536eb1d6224c6ee309640c628acd96e361",
+      "benchmarks/json_performance/.work/cached-construction-r20/main-options": "74b35618087a8defa1ee1b9adb505aead73e74676824bb1bd63577331b24b389",
+      "benchmarks/json_performance/.work/cached-construction-r20/frozen-main/perry": "ade63eddfdeca03926039d10e3310f9255d52c5b2721ccd2b0882f042a689156",
+      "benchmarks/json_performance/.work/cached-construction-r20/frozen-main/libperry_runtime.a": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458",
+      "benchmarks/json_performance/.work/cached-construction-r20/frozen-main/libperry_stdlib.a": "61fac03f0405a48b8d390958e3002246061db6e009fcd078fe61a98d1a1068b0"
+    }
+  }
+]

@@ -1,0 +1,8 @@
+{
+  "format_exit_code": 0,
+  "preliminary_hashes_unchanged_after_format_completed": {
+    "crates/perry-runtime/src/json/parser.rs": true,
+    "crates/perry-runtime/src/json/parser_cached_array.rs": false,
+    "crates/perry-runtime/src/json_tape.rs": false
+  }
+}

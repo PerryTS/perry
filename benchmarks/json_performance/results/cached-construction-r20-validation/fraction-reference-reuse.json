@@ -1,0 +1,5 @@
+{
+  "reuses": "inert-spacer-r8 main/Node/Bun output evidence carried by R18",
+  "same_compiler_runtime_and_fixture_hashes": true,
+  "new_baseline_fraction_worker_run": false
+}

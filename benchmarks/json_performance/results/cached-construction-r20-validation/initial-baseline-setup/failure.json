@@ -1,0 +1,8 @@
+{
+  "exit_code": 1,
+  "stage": "fixture preparation / Node source lookup before third subject",
+  "reason": "An unused lazy-spacer.ts copy failed before the fixture-name replacement. The copied validator still named R18 test_json_tape_batch_records.ts, which was absent. First two main subjects completed 18 passing runs; no candidate executed.",
+  "correction": "Preserve initial outputs and script, replace stale subject with test_json_cached_construction, preflight every source and frozen artifact, rerun baseline validation.",
+  "missing_optional_source": "tape-batch-r18/lazy-spacer.ts",
+  "missing_third_subject": "test_json_tape_batch_records.ts"
+}
