@@ -140,7 +140,7 @@ fn canonical_string_end(blob: &[u8], entry: &TapeEntry, next: &TapeEntry) -> Opt
         return None;
     }
     let mut body = blob.get(start + 1..end - 1)?;
-    while let Some(at) = super::simd::find_quote_or_backslash(body) {
+    while let Some(at) = super::simd::find_quote_or_backslash_padded_tail(body) {
         if entry.kind == KIND_KEY || body[at] != b'\\' {
             return None;
         }

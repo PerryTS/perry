@@ -8,3 +8,5 @@ materialization and serialization; native admission scratch adds no GC roots.
 This corrects inherited whitespace, escape, duplicate-key and enumeration bugs.
 Perform source admission and number normalization in one tape walk, validate
 UTF-8 once, and use adjacent token offsets to avoid repeating string-end scans.
+Use bounded padded-word classification for four-to-seven-byte lazy-string tails,
+while retaining the existing general parser and escaper scanner behavior.

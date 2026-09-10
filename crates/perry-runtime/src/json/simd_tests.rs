@@ -51,13 +51,15 @@ fn digit_and_string_scans_stop_before_guard_page() {
             0
         );
         for len in [
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129,
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 20, 21, 22, 23, 28, 29, 30, 31,
+            32, 33, 36, 37, 38, 39, 63, 64, 65, 68, 69, 70, 71, 127, 128, 129,
         ] {
             let start = base.add(page - len);
             std::ptr::write_bytes(start, b'5', len);
             let bytes = std::slice::from_raw_parts(start, len);
             assert_eq!(count_ascii_digits(bytes), len);
             assert_eq!(find_string_terminator(bytes), None);
+            assert_eq!(find_quote_or_backslash_padded_tail(bytes), None);
             assert!(!short_string_needs_escape(bytes));
             if len != 0 {
                 // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
@@ -65,6 +67,7 @@ fn digit_and_string_scans_stop_before_guard_page() {
                 let bytes = std::slice::from_raw_parts(start, len);
                 assert_eq!(count_ascii_digits(bytes), len - 1);
                 assert_eq!(find_string_terminator(bytes), Some(len - 1));
+                assert_eq!(find_quote_or_backslash_padded_tail(bytes), Some(len - 1));
                 assert!(short_string_needs_escape(bytes));
             }
         }
@@ -90,6 +93,16 @@ fn check(bytes: &[u8]) {
     );
     assert_eq!(find_quote_or_backslash(bytes), quotes, "quotes {bytes:?}");
     assert_eq!(
+        find_quote_or_backslash_padded_tail(bytes),
+        quotes,
+        "lazy quotes {bytes:?}"
+    );
+    assert_eq!(
+        find_word_with_tail::<false, false, true>(bytes),
+        quotes,
+        "lazy word quotes {bytes:?}"
+    );
+    assert_eq!(
         find_word::<true, false>(bytes),
         parse,
         "word parse {bytes:?}"
@@ -109,7 +122,8 @@ fn check(bytes: &[u8]) {
 #[test]
 fn every_byte_at_vector_word_and_tail_boundaries() {
     for len in [
-        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 23, 24, 31, 32, 33, 63, 64, 65,
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 20, 21, 22, 23, 24, 28, 29, 30, 31,
+        32, 33, 36, 37, 38, 39, 63, 64, 65, 68, 69, 70, 71,
     ] {
         for alignment in [0, 1, 7, 15] {
             let mut storage = vec![b'a'; alignment + len + 16];

@@ -44,6 +44,28 @@ pub(crate) fn find_quote_or_backslash(bytes: &[u8]) -> Option<usize> {
     find_special::<false, false>(bytes)
 }
 
+/// Lazy source admission has many complete short strings and short tails.
+/// Classify four to seven remaining bytes in a padded word, preserving the
+/// first-match contract. General parser/escaper entries keep their prior tails.
+#[inline(always)]
+pub(super) fn find_quote_or_backslash_padded_tail(bytes: &[u8]) -> Option<usize> {
+    #[cfg(target_arch = "aarch64")]
+    {
+        find_neon::<false, false, true>(bytes)
+    }
+    #[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
+    {
+        find_sse2::<false, false, true>(bytes)
+    }
+    #[cfg(not(any(
+        target_arch = "aarch64",
+        all(target_arch = "x86_64", target_feature = "sse2")
+    )))]
+    {
+        find_word_with_tail::<false, false, true>(bytes)
+    }
+}
+
 #[inline(always)]
 fn special<const CONTROL: bool, const SURROGATE: bool>(b: u8) -> bool {
     b == b'"' || b == b'\\' || (CONTROL && b < 0x20) || (SURROGATE && b == 0xED)
@@ -53,11 +75,11 @@ fn special<const CONTROL: bool, const SURROGATE: bool>(b: u8) -> bool {
 fn find_special<const CONTROL: bool, const SURROGATE: bool>(bytes: &[u8]) -> Option<usize> {
     #[cfg(target_arch = "aarch64")]
     {
-        find_neon::<CONTROL, SURROGATE>(bytes)
+        find_neon::<CONTROL, SURROGATE, false>(bytes)
     }
     #[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
     {
-        find_sse2::<CONTROL, SURROGATE>(bytes)
+        find_sse2::<CONTROL, SURROGATE, false>(bytes)
     }
     #[cfg(not(any(
         target_arch = "aarch64",
@@ -73,6 +95,13 @@ fn find_special<const CONTROL: bool, const SURROGATE: bool>(bytes: &[u8]) -> Opt
 /// lane, so its mask must not be used directly as a first-byte index.
 #[inline(always)]
 fn find_word<const CONTROL: bool, const SURROGATE: bool>(bytes: &[u8]) -> Option<usize> {
+    find_word_with_tail::<CONTROL, SURROGATE, false>(bytes)
+}
+
+#[inline(always)]
+fn find_word_with_tail<const CONTROL: bool, const SURROGATE: bool, const PADDED: bool>(
+    bytes: &[u8],
+) -> Option<usize> {
     const LOW: u64 = 0x0101_0101_0101_0101;
     const HIGH: u64 = 0x8080_8080_8080_8080;
     #[inline(always)]
@@ -95,8 +124,11 @@ fn find_word<const CONTROL: bool, const SURROGATE: bool>(bytes: &[u8]) -> Option
         }
         i += 8;
     }
-    bytes[i..]
-        .iter()
+    let tail = &bytes[i..];
+    if PADDED && (4..8).contains(&tail.len()) {
+        return find_padded_tail::<CONTROL, SURROGATE, false>(tail).map(|j| i + j);
+    }
+    tail.iter()
         .position(|&b| special::<CONTROL, SURROGATE>(b))
         .map(|j| i + j)
 }
@@ -166,7 +198,9 @@ fn find_padded_tail<const CONTROL: bool, const SURROGATE: bool, const NON_ASCII:
 
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
-fn find_neon<const CONTROL: bool, const SURROGATE: bool>(bytes: &[u8]) -> Option<usize> {
+fn find_neon<const CONTROL: bool, const SURROGATE: bool, const PADDED: bool>(
+    bytes: &[u8],
+) -> Option<usize> {
     use std::arch::aarch64::*;
     unsafe {
         let quote = vdupq_n_u8(b'"');
@@ -188,13 +222,20 @@ fn find_neon<const CONTROL: bool, const SURROGATE: bool>(bytes: &[u8]) -> Option
             }
             i += 16;
         }
-        find_word::<CONTROL, SURROGATE>(&bytes[i..]).map(|j| i + j)
+        let tail = if PADDED {
+            find_word_with_tail::<CONTROL, SURROGATE, true>(&bytes[i..])
+        } else {
+            find_word::<CONTROL, SURROGATE>(&bytes[i..])
+        };
+        tail.map(|j| i + j)
     }
 }
 
 #[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
 #[inline(always)]
-fn find_sse2<const CONTROL: bool, const SURROGATE: bool>(bytes: &[u8]) -> Option<usize> {
+fn find_sse2<const CONTROL: bool, const SURROGATE: bool, const PADDED: bool>(
+    bytes: &[u8],
+) -> Option<usize> {
     use std::arch::x86_64::*;
     unsafe {
         let quote = _mm_set1_epi8(b'"' as i8);
@@ -220,7 +261,12 @@ fn find_sse2<const CONTROL: bool, const SURROGATE: bool>(bytes: &[u8]) -> Option
             }
             i += 16;
         }
-        find_word::<CONTROL, SURROGATE>(&bytes[i..]).map(|j| i + j)
+        let tail = if PADDED {
+            find_word_with_tail::<CONTROL, SURROGATE, true>(&bytes[i..])
+        } else {
+            find_word::<CONTROL, SURROGATE>(&bytes[i..])
+        };
+        tail.map(|j| i + j)
     }
 }
 
