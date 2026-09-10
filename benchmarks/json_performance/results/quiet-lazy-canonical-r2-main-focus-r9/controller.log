@@ -1,0 +1,5 @@
+FINISHED records_array_16k roundtrip 20000
+FINISHED records_array_1m roundtrip 512
+FINISHED records_array_8m roundtrip 64
+FINISHED heterogeneous_1m stringify 1024
+FINISHED small_record parse 2000000

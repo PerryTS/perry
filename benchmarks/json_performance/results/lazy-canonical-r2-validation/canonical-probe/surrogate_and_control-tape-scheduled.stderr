@@ -1,0 +1,300 @@
+[gc-globalthis-bootstrap] elapsed_us=3457 per_object_slot_masks=1 per_object_typed_layouts=0
+[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=10022 rate=0.1
+[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=10022 PERRY_GC_SCHEDULE_RATE=0.1
+[gc-trigger] site=safepoint kind=ArenaBytes arena_total=3145728 next_base=134217728 armed=true from_space=816608 nursery_cap=16777216 old_in_use=17472 old_free=0 old_reclaimable=17472 external_side=0 old_baseline=0 old_band=33554432 old_threshold=50331648 old_pending=false retaining=false malloc=0 next_malloc=100000
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=1 walks=0)
+[gc-fromspace-protect] mode=ProtectPages retired_set=#0 blocks=1 sets_held=1/4 bytes_protected=1048576 bytes_poisoned=0 blocks_recycled=0
+[gc-restore-coverage] copying_minor dirty_pages=5 objects_walked=0 objects_skipped=84 pages_added=0
+[gc-page-class] arm=table lookups=248323 hit=244325 (98.390%) miss=3998 (1.610%) miss_registered=12 miss_unregistered=3986 miss_out_of_span=21 span=4096 rebases=0 refused=0
+[gc-dirty-covered] len=84 capacity=112 presized_to=0
+[gc-tenuring] nursery cap object denomination: mean_surviving_object_bytes 72 -> 57 (scale 791 permille, band 13270777 B)
+[gc-survival] minor=1 rows=38 objects=11866 bytes=684520
+[gc-survival]   minor=1 origin=crate::object::shapes::scan_shape_table_rekey_mut type=array objects=1178 bytes=227888 promoted_bytes=0
+[gc-survival]   minor=1 origin=remembered_set/lazy_array type=string objects=3584 bytes=114688 promoted_bytes=0
+[gc-survival]   minor=1 origin=remembered_set/lazy_array type=object objects=1792 bytes=86016 promoted_bytes=0
+[gc-survival]   minor=1 origin=crate::closure::scan_closure_dynamic_props_roots_mut type=string objects=1861 bytes=78784 promoted_bytes=0
+[gc-survival]   minor=1 origin=crate::object::shapes::scan_shape_table_rekey_mut type=string objects=792 bytes=33704 promoted_bytes=0
+[gc-survival]   minor=1 origin=crate::closure::scan_closure_dynamic_props_roots_mut type=closure objects=1070 bytes=25944 promoted_bytes=0
+[gc-survival]   minor=1 origin=intern_table_mutable_root_scanner type=string objects=621 bytes=25264 promoted_bytes=0
+[gc-survival]   minor=1 origin=remembered_set/lazy_array type=array objects=28 bytes=24640 promoted_bytes=0
+[gc-survival]   minor=1 origin=crate::closure::scan_closure_dynamic_props_roots_mut type=array objects=83 bytes=17520 promoted_bytes=0
+[gc-survival]   minor=1 origin=crate::closure::scan_closure_dynamic_props_roots_mut type=object_meta objects=110 bytes=12320 promoted_bytes=0
+[gc-survival]   minor=1 origin=mutable_root_slots/global_root type=string objects=36 bytes=6624 promoted_bytes=0
+[gc-survival]   minor=1 origin=crate::closure::scan_closure_dynamic_props_roots_mut type=object objects=121 bytes=5960 promoted_bytes=0
+[gc-survival]   minor=1 origin=crate::object::descriptor_state::scan_descriptor_roots_mut type=closure objects=199 bytes=5176 promoted_bytes=0
+[gc-survival]   minor=1 origin=mutable_root_slots/global_root type=array objects=14 bytes=4384 promoted_bytes=0
+[gc-survival]   minor=1 origin=mutable_root_slots/global_root type=closure objects=101 bytes=2424 promoted_bytes=0
+[gc-survival]   minor=1 origin=crate::symbol::scan_symbol_side_table_roots_mut type=string objects=38 bytes=1800 promoted_bytes=0
+[gc-survival]   minor=1 origin=crate::object::scan_object_cache_roots_mut type=closure objects=65 bytes=1560 promoted_bytes=0
+[gc-survival]   minor=1 origin=crate::object::scan_native_callable_export_roots_mut type=array objects=10 bytes=1440 promoted_bytes=0
+[gc-survival]   minor=1 origin=crate::array::scan_template_raw_roots_mut type=closure objects=47 bytes=1128 promoted_bytes=0
+[gc-survival]   minor=1 origin=mutable_root_slots/global_root type=object_meta objects=10 bytes=1120 promoted_bytes=0
+[gc-survival]   minor=1 origin=crate::object::scan_object_cache_roots_mut type=array objects=4 bytes=1088 promoted_bytes=0
+[gc-survival]   minor=1 origin=crate::object::scan_object_cache_roots_mut type=object_meta objects=9 bytes=1008 promoted_bytes=0
+[gc-survival]   minor=1 origin=crate::object::scan_native_callable_export_roots_mut type=string objects=20 bytes=800 promoted_bytes=0
+[gc-survival]   minor=1 origin=mutable_root_slots/global_root type=object objects=13 bytes=552 promoted_bytes=0
+[gc-survival]   minor=1 origin-total=crate::object::shapes::scan_shape_table_rekey_mut objects=1970 bytes=261592 permille=382
+[gc-survival]   minor=1 origin-total=remembered_set/lazy_array objects=5404 bytes=225344 permille=329
+[gc-survival]   minor=1 origin-total=crate::closure::scan_closure_dynamic_props_roots_mut objects=3245 bytes=140528 permille=205
+[gc-survival]   minor=1 origin-total=intern_table_mutable_root_scanner objects=621 bytes=25264 permille=36
+[gc-survival]   minor=1 origin-total=mutable_root_slots/global_root objects=174 bytes=15104 permille=22
+[gc-survival]   minor=1 origin-total=crate::object::descriptor_state::scan_descriptor_roots_mut objects=199 bytes=5176 permille=7
+[gc-survival]   minor=1 origin-total=crate::object::scan_object_cache_roots_mut objects=88 bytes=4152 permille=6
+[gc-survival]   minor=1 origin-total=crate::object::scan_native_callable_export_roots_mut objects=49 bytes=3048 permille=4
+[gc-survival]   minor=1 origin-total=crate::symbol::scan_symbol_side_table_roots_mut objects=49 bytes=2064 permille=3
+[gc-survival]   minor=1 origin-total=crate::array::scan_template_raw_roots_mut objects=47 bytes=1128 permille=1
+[gc-survival]   minor=1 origin-total=crate::array::scan_prototype_addr_cache_roots_mut objects=11 bytes=608 permille=0
+[gc-survival]   minor=1 origin-total=crate::perf_hooks::scan_perf_entries_roots_mut objects=5 bytes=376 permille=0
+[gc-survival]   minor=1 type-total=array objects=1320 bytes=277392
+[gc-survival]   minor=1 type-total=string objects=6957 bytes=261840
+[gc-survival]   minor=1 type-total=object objects=1949 bytes=93544
+[gc-survival]   minor=1 type-total=closure objects=1509 bytes=37072
+[gc-survival]   minor=1 type-total=object_meta objects=131 bytes=14672
+[gc-idlist] removals=6084 elems_moved=1566 bytes_moved=6264 positions_scanned=10927
+[gc-young-log] copying_minor table=object.descriptors mode=young passes=2 logged=3616 visited=3616 kept=3616 table_len=1833 skipped=50
+[gc-young-log] copying_minor table=shapes.families+indices mode=young passes=2 logged=2593 visited=2593 kept=2754 table_len=1381 skipped=169
+[gc-young-log] copying_minor table=object.transition_cache mode=young passes=2 logged=2502 visited=2502 kept=1564 table_len=16384 skipped=30266
+[gc-young-log] copying_minor table=box.roots mode=young passes=2 logged=0 visited=0 kept=0 table_len=0 skipped=0
+[gc-young-log] copying_minor table=closure.dynamic_props mode=young passes=2 logged=5226 visited=5226 kept=5226 table_len=1690 skipped=0
+[gc-young-log] copying_minor table=object.builtin_closure_metadata mode=young passes=2 logged=3094 visited=3094 kept=3094 table_len=2843 skipped=2592
+[gc-young-log] copying_minor table=gc.layout_tables mode=young passes=1 logged=4 visited=2 kept=2 table_len=2 skipped=0
+[gc-scanner-profile] copying_minor scanners=93 total_us=2364 total_slots=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=705 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=570 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=476 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=141 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=128 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=85 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   exception_mutable_root_scanner us=41 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::r#box::scan_box_roots_mut us=28 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=20 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=13 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=12 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=10 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_class_side_table_roots_mut us=8 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::perf_histogram::scan_histogram_roots_mut us=7 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-copy-minor] ran pause_us=5732 scan_us=2364 phases: root_scan=2421/2364 copy_evacuation=1131/11866/684520 remembered_set_young_logs=123/5/112 promotion=0/0/0 dead_owner_side_table_pruning=169[ "ARRAY_NAMED_PROPS":0 "LAYOUT_SLOT_MASKS + TYPED_LAYOUTS":1 "ELEMENT_SHAPES":0 "MAP_ITERATOR_ARRAYS":0 "MAP_COMPACTION_LOG":0 "SET_ITERATOR_ARRAYS":0 "SET_COMPACTION_LOG":0 "state().descriptors.property_descriptors + .accessor_descriptors":48 "ARGUMENTS_OBJECTS":0 "OBJECT_PROTOTYPES":0 "state().shapes.inner (descriptors + indices)":23 "state().exotic_expando.entries":0 "SYMBOL_PROPERTIES + SYMBOL_PROPERTY_ATTRS":3 "SYMBOL_POINTERS":1 "CLOSURE_PROPS + CLOSURE_STATIC_PROTOTYPES + CLOSURE_DELETED_KEYS + CLOSURE_BOX_CELLS":38 "BUILTIN_CLOSURE_LENGTH + BUILTIN_CLOSURE_NON_CONSTRUCTABLE":26 "FUNCTION_CLASS_IDS":0 "VM_CONTEXTS + VM_SCRIPTS + VM_FUNCTIONS":2 "FILEHANDLE_OBJECT_FDS":0 "CONSOLE_INSTANCES":0 "BOXED_PRIMITIVE_PAYLOADS":0 "TRANSITION_CACHE_GLOBAL":15 "REFLECT_METADATA":0] from_space_finalization=3/map:1/0+set:0/0+errors:0/0+regex:0/0 forwarding_fixups=32 block_reset_flip=210 other=1639 phase_sum_us=5732 in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=838 copied_objects=11866 copied_bytes=684520 promoted_objects=0 promoted_bytes=0 freed_bytes=132088 tenuring_survivals=2 eden_live_bytes=684520 eden_copied_bytes=684520 survivor_live_bytes=0 survivor_first_round_live_bytes=0 trigger=ArenaBytes declared_safepoint=true
+[gc-step] pre_in_use=834392 post_in_use=702304 sweep_freed=132088 block_reclaim=132088 pct=15% step=134217728→134217728
+[gc-arena-rebaseline] arm=arena next_trigger=134217728 total=4194304 headroom=130023424 pct=15% step=134217728→134217728
+[gc-safepoint-drain] kind=nursery_minor count=1
+[gc-trigger] site=safepoint kind=ArenaBytes arena_total=4194304 next_base=134217728 armed=true from_space=878592 nursery_cap=13270777 old_in_use=28080 old_free=0 old_reclaimable=28080 external_side=0 old_baseline=0 old_band=33554432 old_threshold=50331648 old_pending=false retaining=false malloc=0 next_malloc=100000
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=2 walks=0)
+[gc-fromspace-protect] mode=ProtectPages retired_set=#1 blocks=2 sets_held=2/4 bytes_protected=3145728 bytes_poisoned=0 blocks_recycled=0
+[gc-restore-coverage] copying_minor dirty_pages=7 objects_walked=1 objects_skipped=150 pages_added=0
+[gc-page-class] arm=table lookups=537624 hit=523151 (97.308%) miss=14473 (2.692%) miss_registered=21 miss_unregistered=14452 miss_out_of_span=61 span=4096 rebases=0 refused=0
+[gc-dirty-covered] len=150 capacity=224 presized_to=84
+[gc-tenuring] nursery cap object denomination: mean_surviving_object_bytes 57 -> 54 (scale 750 permille, band 12582912 B)
+[gc-tenuring] survivals 2 -> 1 (lock, eden_live_bytes=139472 desired=786432)
+[gc-survival] minor=2 rows=38 objects=14821 bytes=807592
+[gc-survival]   minor=2 origin=crate::object::shapes::scan_shape_table_rekey_mut type=array objects=1178 bytes=227888 promoted_bytes=227888
+[gc-survival]   minor=2 origin=remembered_set/lazy_array type=string objects=5760 bytes=184320 promoted_bytes=114688
+[gc-survival]   minor=2 origin=remembered_set/lazy_array type=object objects=2880 bytes=138240 promoted_bytes=86016
+[gc-survival]   minor=2 origin=crate::closure::scan_closure_dynamic_props_roots_mut type=string objects=1535 bytes=65040 promoted_bytes=65040
+[gc-survival]   minor=2 origin=remembered_set/lazy_array type=array objects=45 bytes=39600 promoted_bytes=24640
+[gc-survival]   minor=2 origin=crate::object::shapes::scan_shape_table_rekey_mut type=string objects=792 bytes=33704 promoted_bytes=33704
+[gc-survival]   minor=2 origin=crate::closure::scan_closure_dynamic_props_roots_mut type=closure objects=1070 bytes=25944 promoted_bytes=25944
+[gc-survival]   minor=2 origin=intern_table_mutable_root_scanner type=string objects=621 bytes=25264 promoted_bytes=25264
+[gc-survival]   minor=2 origin=crate::closure::scan_closure_dynamic_props_roots_mut type=array objects=83 bytes=17520 promoted_bytes=17520
+[gc-survival]   minor=2 origin=crate::closure::scan_closure_dynamic_props_roots_mut type=object_meta objects=110 bytes=12320 promoted_bytes=12320
+[gc-survival]   minor=2 origin=mutable_root_slots/global_root type=string objects=36 bytes=6624 promoted_bytes=3968
+[gc-survival]   minor=2 origin=crate::closure::scan_closure_dynamic_props_roots_mut type=object objects=121 bytes=5960 promoted_bytes=5960
+[gc-survival]   minor=2 origin=crate::object::descriptor_state::scan_descriptor_roots_mut type=closure objects=199 bytes=5176 promoted_bytes=5176
+[gc-survival]   minor=2 origin=mutable_root_slots/global_root type=array objects=14 bytes=4384 promoted_bytes=4384
+[gc-survival]   minor=2 origin=mutable_root_slots/global_root type=closure objects=101 bytes=2424 promoted_bytes=2424
+[gc-survival]   minor=2 origin=crate::symbol::scan_symbol_side_table_roots_mut type=string objects=38 bytes=1800 promoted_bytes=1800
+[gc-survival]   minor=2 origin=crate::object::scan_object_cache_roots_mut type=closure objects=65 bytes=1560 promoted_bytes=1560
+[gc-survival]   minor=2 origin=crate::object::scan_native_callable_export_roots_mut type=array objects=10 bytes=1440 promoted_bytes=1440
+[gc-survival]   minor=2 origin=crate::array::scan_template_raw_roots_mut type=closure objects=47 bytes=1128 promoted_bytes=1128
+[gc-survival]   minor=2 origin=mutable_root_slots/global_root type=object_meta objects=10 bytes=1120 promoted_bytes=1120
+[gc-survival]   minor=2 origin=crate::object::scan_object_cache_roots_mut type=array objects=4 bytes=1088 promoted_bytes=1088
+[gc-survival]   minor=2 origin=crate::object::scan_object_cache_roots_mut type=object_meta objects=9 bytes=1008 promoted_bytes=1008
+[gc-survival]   minor=2 origin=crate::object::scan_native_callable_export_roots_mut type=string objects=20 bytes=800 promoted_bytes=800
+[gc-survival]   minor=2 origin=mutable_root_slots/global_root type=object objects=13 bytes=552 promoted_bytes=552
+[gc-survival]   minor=2 origin-total=remembered_set/lazy_array objects=8685 bytes=362160 permille=448
+[gc-survival]   minor=2 origin-total=crate::object::shapes::scan_shape_table_rekey_mut objects=1970 bytes=261592 permille=323
+[gc-survival]   minor=2 origin-total=crate::closure::scan_closure_dynamic_props_roots_mut objects=2919 bytes=126784 permille=156
+[gc-survival]   minor=2 origin-total=intern_table_mutable_root_scanner objects=621 bytes=25264 permille=31
+[gc-survival]   minor=2 origin-total=mutable_root_slots/global_root objects=174 bytes=15104 permille=18
+[gc-survival]   minor=2 origin-total=crate::object::descriptor_state::scan_descriptor_roots_mut objects=199 bytes=5176 permille=6
+[gc-survival]   minor=2 origin-total=crate::object::scan_object_cache_roots_mut objects=88 bytes=4152 permille=5
+[gc-survival]   minor=2 origin-total=crate::object::scan_native_callable_export_roots_mut objects=49 bytes=3048 permille=3
+[gc-survival]   minor=2 origin-total=crate::symbol::scan_symbol_side_table_roots_mut objects=49 bytes=2064 permille=2
+[gc-survival]   minor=2 origin-total=crate::array::scan_template_raw_roots_mut objects=47 bytes=1128 permille=1
+[gc-survival]   minor=2 origin-total=crate::array::scan_prototype_addr_cache_roots_mut objects=11 bytes=608 permille=0
+[gc-survival]   minor=2 origin-total=crate::perf_hooks::scan_perf_entries_roots_mut objects=5 bytes=376 permille=0
+[gc-survival]   minor=2 type-total=string objects=8807 bytes=317728
+[gc-survival]   minor=2 type-total=array objects=1337 bytes=292352
+[gc-survival]   minor=2 type-total=object objects=3037 bytes=145768
+[gc-survival]   minor=2 type-total=closure objects=1509 bytes=37072
+[gc-survival]   minor=2 type-total=object_meta objects=131 bytes=14672
+[gc-idlist] removals=8866 elems_moved=1566 bytes_moved=6264 positions_scanned=16646
+[gc-young-log] copying_minor table=object.descriptors mode=young passes=2 logged=3174 visited=3174 kept=1587 table_len=1612 skipped=50
+[gc-young-log] copying_minor table=shapes.families+indices mode=young passes=2 logged=1398 visited=1398 kept=191 table_len=1373 skipped=1348
+[gc-young-log] copying_minor table=object.transition_cache mode=young passes=2 logged=570 visited=570 kept=285 table_len=16384 skipped=32198
+[gc-young-log] copying_minor table=box.roots mode=young passes=2 logged=0 visited=0 kept=0 table_len=0 skipped=0
+[gc-young-log] copying_minor table=closure.dynamic_props mode=young passes=2 logged=5976 visited=5976 kept=3018 table_len=1469 skipped=0
+[gc-young-log] copying_minor table=object.builtin_closure_metadata mode=young passes=2 logged=2873 visited=2873 kept=1326 table_len=2429 skipped=1985
+[gc-young-log] copying_minor table=gc.layout_tables mode=young passes=1 logged=4 visited=2 kept=0 table_len=2 skipped=0
+[gc-scanner-profile] copying_minor scanners=93 total_us=1649 total_slots=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=586 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=489 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=312 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=98 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=82 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=27 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=14 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=11 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=3 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=3 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   shape_cache_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   small_int_cache_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   json_parse_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-copy-minor] ran pause_us=5274 scan_us=1649 phases: root_scan=1679/1649 copy_evacuation=1485/3282/139472 remembered_set_young_logs=185/7/180 promotion=0/11539/668120 dead_owner_side_table_pruning=43[ "ARRAY_NAMED_PROPS":0 "LAYOUT_SLOT_MASKS + TYPED_LAYOUTS":0 "ELEMENT_SHAPES":0 "MAP_ITERATOR_ARRAYS":0 "MAP_COMPACTION_LOG":0 "SET_ITERATOR_ARRAYS":0 "SET_COMPACTION_LOG":0 "state().descriptors.property_descriptors + .accessor_descriptors":0 "ARGUMENTS_OBJECTS":0 "OBJECT_PROTOTYPES":0 "state().shapes.inner (descriptors + indices)":0 "state().exotic_expando.entries":0 "SYMBOL_PROPERTIES + SYMBOL_PROPERTY_ATTRS":2 "SYMBOL_POINTERS":0 "CLOSURE_PROPS + CLOSURE_STATIC_PROTOTYPES + CLOSURE_DELETED_KEYS + CLOSURE_BOX_CELLS":10 "BUILTIN_CLOSURE_LENGTH + BUILTIN_CLOSURE_NON_CONSTRUCTABLE":18 "FUNCTION_CLASS_IDS":0 "VM_CONTEXTS + VM_SCRIPTS + VM_FUNCTIONS":0 "FILEHANDLE_OBJECT_FDS":0 "CONSOLE_INSTANCES":0 "BOXED_PRIMITIVE_PAYLOADS":0 "TRANSITION_CACHE_GLOBAL":6 "REFLECT_METADATA":0] from_space_finalization=0/map:0/0+set:0/0+errors:0/0+regex:0/0 forwarding_fixups=444 block_reset_flip=129 other=1305 phase_sum_us=5274 in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=919 copied_objects=3282 copied_bytes=139472 promoted_objects=11539 promoted_bytes=668120 freed_bytes=71000 tenuring_survivals=2 eden_live_bytes=139472 eden_copied_bytes=139472 survivor_live_bytes=668120 survivor_first_round_live_bytes=668120 trigger=ArenaBytes declared_safepoint=true
+[gc-step] pre_in_use=906984 post_in_use=835984 sweep_freed=71000 block_reclaim=71000 pct=7% step=134217728→268435456
+[gc-arena-rebaseline] arm=arena next_trigger=134217728 total=4194304 headroom=130023424 pct=7% step=134217728→268435456
+[gc-safepoint-drain] kind=nursery_minor count=2
+[gc-trigger] site=safepoint kind=ArenaBytes arena_total=4194304 next_base=134217728 armed=true from_space=242216 nursery_cap=12582912 old_in_use=701816 old_free=0 old_reclaimable=701816 external_side=0 old_baseline=668120 old_band=134217728 old_threshold=50331648 old_pending=false retaining=true malloc=0 next_malloc=100000
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=3 walks=0)
+[gc-fromspace-protect] mode=ProtectPages retired_set=#2 blocks=2 sets_held=3/4 bytes_protected=5242880 bytes_poisoned=0 blocks_recycled=0
+[gc-restore-coverage] copying_minor dirty_pages=6 objects_walked=73 objects_skipped=115 pages_added=0
+[gc-page-class] arm=table lookups=605129 hit=585455 (96.749%) miss=19674 (3.251%) miss_registered=25 miss_unregistered=19649 miss_out_of_span=61 span=4096 rebases=0 refused=0
+[gc-dirty-covered] len=115 capacity=224 presized_to=150
+[gc-tenuring] nursery cap object denomination: mean_surviving_object_bytes 54 -> 42 (scale 583 permille, band 9781116 B)
+[gc-survival] minor=3 rows=4 objects=5019 bytes=211904
+[gc-survival]   minor=3 origin=remembered_set/lazy_array type=string objects=3328 bytes=106496 promoted_bytes=106496
+[gc-survival]   minor=3 origin=remembered_set/lazy_array type=object objects=1664 bytes=79872 promoted_bytes=79872
+[gc-survival]   minor=3 origin=remembered_set/lazy_array type=array objects=26 bytes=22880 promoted_bytes=22880
+[gc-survival]   minor=3 origin=mutable_root_slots/global_root type=string objects=1 bytes=2656 promoted_bytes=2656
+[gc-survival]   minor=3 origin-total=remembered_set/lazy_array objects=5018 bytes=209248 permille=987
+[gc-survival]   minor=3 origin-total=mutable_root_slots/global_root objects=1 bytes=2656 permille=12
+[gc-survival]   minor=3 type-total=string objects=3329 bytes=109152
+[gc-survival]   minor=3 type-total=object objects=1664 bytes=79872
+[gc-survival]   minor=3 type-total=array objects=26 bytes=22880
+[gc-idlist] removals=8866 elems_moved=1566 bytes_moved=6264 positions_scanned=16646
+[gc-young-log] copying_minor table=object.descriptors mode=young passes=2 logged=0 visited=0 kept=0 table_len=1612 skipped=3224
+[gc-young-log] copying_minor table=shapes.families+indices mode=young passes=2 logged=0 visited=0 kept=0 table_len=1373 skipped=2746
+[gc-young-log] copying_minor table=object.transition_cache mode=young passes=2 logged=0 visited=0 kept=0 table_len=16384 skipped=32768
+[gc-young-log] copying_minor table=box.roots mode=young passes=2 logged=0 visited=0 kept=0 table_len=0 skipped=0
+[gc-young-log] copying_minor table=closure.dynamic_props mode=young passes=2 logged=1509 visited=1509 kept=0 table_len=1469 skipped=1429
+[gc-young-log] copying_minor table=object.builtin_closure_metadata mode=young passes=2 logged=0 visited=0 kept=0 table_len=2429 skipped=4858
+[gc-young-log] copying_minor table=gc.layout_tables mode=young passes=1 logged=0 visited=0 kept=0 table_len=2 skipped=2
+[gc-scanner-profile] copying_minor scanners=93 total_us=117 total_slots=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=50 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=34 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=13 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=5 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   small_int_cache_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   shape_cache_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   json_parse_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   promise_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_class_side_table_roots_mut us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-copy-minor] ran pause_us=1814 scan_us=117 phases: root_scan=136/117 copy_evacuation=437/0/0 remembered_set_young_logs=227/6/284 promotion=0/5019/211904 dead_owner_side_table_pruning=30[ "ARRAY_NAMED_PROPS":0 "LAYOUT_SLOT_MASKS + TYPED_LAYOUTS":0 "ELEMENT_SHAPES":0 "MAP_ITERATOR_ARRAYS":0 "MAP_COMPACTION_LOG":0 "SET_ITERATOR_ARRAYS":0 "SET_COMPACTION_LOG":0 "state().descriptors.property_descriptors + .accessor_descriptors":0 "ARGUMENTS_OBJECTS":0 "OBJECT_PROTOTYPES":0 "state().shapes.inner (descriptors + indices)":0 "state().exotic_expando.entries":0 "SYMBOL_PROPERTIES + SYMBOL_PROPERTY_ATTRS":2 "SYMBOL_POINTERS":0 "CLOSURE_PROPS + CLOSURE_STATIC_PROTOTYPES + CLOSURE_DELETED_KEYS + CLOSURE_BOX_CELLS":0 "BUILTIN_CLOSURE_LENGTH + BUILTIN_CLOSURE_NON_CONSTRUCTABLE":17 "FUNCTION_CLASS_IDS":0 "VM_CONTEXTS + VM_SCRIPTS + VM_FUNCTIONS":0 "FILEHANDLE_OBJECT_FDS":0 "CONSOLE_INSTANCES":0 "BOXED_PRIMITIVE_PAYLOADS":0 "TRANSITION_CACHE_GLOBAL":6 "REFLECT_METADATA":0] from_space_finalization=0/map:0/0+set:0/0+errors:0/0+regex:0/0 forwarding_fixups=117 block_reset_flip=63 other=802 phase_sum_us=1814 in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=874 copied_objects=0 copied_bytes=0 promoted_objects=5019 promoted_bytes=211904 freed_bytes=30312 tenuring_survivals=1 eden_live_bytes=75088 eden_copied_bytes=0 survivor_live_bytes=136816 survivor_first_round_live_bytes=136816 trigger=ArenaBytes declared_safepoint=true
+[gc-step] pre_in_use=944344 post_in_use=914032 sweep_freed=30312 block_reclaim=30312 pct=3% step=268435456→536870912
+[gc-arena-rebaseline] arm=arena next_trigger=134217728 total=3145728 headroom=131072000 pct=3% step=268435456→536870912
+[gc-safepoint-drain] kind=nursery_minor count=3
+[gc-trigger] site=safepoint kind=ArenaBytes arena_total=3145728 next_base=134217728 armed=true from_space=45664 nursery_cap=9781116 old_in_use=916216 old_free=0 old_reclaimable=916216 external_side=0 old_baseline=880024 old_band=33554432 old_threshold=50331648 old_pending=false retaining=false malloc=0 next_malloc=100000
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=4 walks=0)
+[gc-fromspace-protect] mode=ProtectPages retired_set=#3 blocks=1 sets_held=4/4 bytes_protected=6291456 bytes_poisoned=0 blocks_recycled=0
+[gc-restore-coverage] copying_minor dirty_pages=1 objects_walked=0 objects_skipped=23 pages_added=0
+[gc-page-class] arm=table lookups=619240 hit=598835 (96.705%) miss=20405 (3.295%) miss_registered=28 miss_unregistered=20377 miss_out_of_span=61 span=4096 rebases=0 refused=0
+[gc-dirty-covered] len=23 capacity=224 presized_to=115
+[gc-tenuring] nursery cap object denomination: mean_surviving_object_bytes 42 -> 45 (scale 625 permille, band 10485760 B)
+[gc-tenuring] survivals 1 -> 2 (unlock, eden_live_bytes=34848 desired=655360)
+[gc-survival] minor=4 rows=4 objects=773 bytes=34848
+[gc-survival]   minor=4 origin=remembered_set/lazy_array type=string objects=512 bytes=16384 promoted_bytes=16384
+[gc-survival]   minor=4 origin=remembered_set/lazy_array type=object objects=256 bytes=12288 promoted_bytes=12288
+[gc-survival]   minor=4 origin=remembered_set/lazy_array type=array objects=4 bytes=3520 promoted_bytes=3520
+[gc-survival]   minor=4 origin=mutable_root_slots/global_root type=string objects=1 bytes=2656 promoted_bytes=2656
+[gc-survival]   minor=4 origin-total=remembered_set/lazy_array objects=772 bytes=32192 permille=923
+[gc-survival]   minor=4 origin-total=mutable_root_slots/global_root objects=1 bytes=2656 permille=76
+[gc-survival]   minor=4 type-total=string objects=513 bytes=19040
+[gc-survival]   minor=4 type-total=object objects=256 bytes=12288
+[gc-survival]   minor=4 type-total=array objects=4 bytes=3520
+[gc-idlist] removals=8866 elems_moved=1566 bytes_moved=6264 positions_scanned=16646
+[gc-young-log] copying_minor table=object.descriptors mode=young passes=2 logged=0 visited=0 kept=0 table_len=1612 skipped=3224
+[gc-young-log] copying_minor table=shapes.families+indices mode=young passes=2 logged=0 visited=0 kept=0 table_len=1373 skipped=2746
+[gc-young-log] copying_minor table=object.transition_cache mode=young passes=2 logged=0 visited=0 kept=0 table_len=16384 skipped=32768
+[gc-young-log] copying_minor table=box.roots mode=young passes=2 logged=0 visited=0 kept=0 table_len=0 skipped=0
+[gc-young-log] copying_minor table=closure.dynamic_props mode=young passes=2 logged=0 visited=0 kept=0 table_len=1469 skipped=2938
+[gc-young-log] copying_minor table=object.builtin_closure_metadata mode=young passes=2 logged=0 visited=0 kept=0 table_len=2429 skipped=4858
+[gc-young-log] copying_minor table=gc.layout_tables mode=young passes=1 logged=0 visited=0 kept=0 table_len=2 skipped=2
+[gc-scanner-profile] copying_minor scanners=93 total_us=114 total_slots=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=37 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=23 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=8 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=3 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=2 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_class_side_table_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   promise_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   shape_cache_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   small_int_cache_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   json_parse_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   async_context_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-copy-minor] ran pause_us=1269 scan_us=114 phases: root_scan=146/114 copy_evacuation=100/0/0 remembered_set_young_logs=83/1/16 promotion=0/773/34848 dead_owner_side_table_pruning=40[ "ARRAY_NAMED_PROPS":0 "LAYOUT_SLOT_MASKS + TYPED_LAYOUTS":0 "ELEMENT_SHAPES":0 "MAP_ITERATOR_ARRAYS":0 "MAP_COMPACTION_LOG":0 "SET_ITERATOR_ARRAYS":0 "SET_COMPACTION_LOG":0 "state().descriptors.property_descriptors + .accessor_descriptors":0 "ARGUMENTS_OBJECTS":0 "OBJECT_PROTOTYPES":0 "state().shapes.inner (descriptors + indices)":0 "state().exotic_expando.entries":0 "SYMBOL_PROPERTIES + SYMBOL_PROPERTY_ATTRS":4 "SYMBOL_POINTERS":0 "CLOSURE_PROPS + CLOSURE_STATIC_PROTOTYPES + CLOSURE_DELETED_KEYS + CLOSURE_BOX_CELLS":0 "BUILTIN_CLOSURE_LENGTH + BUILTIN_CLOSURE_NON_CONSTRUCTABLE":19 "FUNCTION_CLASS_IDS":0 "VM_CONTEXTS + VM_SCRIPTS + VM_FUNCTIONS":0 "FILEHANDLE_OBJECT_FDS":0 "CONSOLE_INSTANCES":0 "BOXED_PRIMITIVE_PAYLOADS":0 "TRANSITION_CACHE_GLOBAL":7 "REFLECT_METADATA":0] from_space_finalization=2/map:0/0+set:0/0+errors:0/0+regex:0/0 forwarding_fixups=22 block_reset_flip=103 other=770 phase_sum_us=1269 in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=763 copied_objects=0 copied_bytes=0 promoted_objects=773 promoted_bytes=34848 freed_bytes=10816 tenuring_survivals=1 eden_live_bytes=34848 eden_copied_bytes=0 survivor_live_bytes=0 survivor_first_round_live_bytes=0 trigger=ArenaBytes declared_safepoint=true
+[gc-step] pre_in_use=962192 post_in_use=951376 sweep_freed=10816 block_reclaim=10816 pct=1% step=536870912→1073741824
+[gc-arena-rebaseline] arm=arena next_trigger=134217728 total=3145728 headroom=131072000 pct=1% step=536870912→1073741824
+[gc-safepoint-drain] kind=nursery_minor count=4
+[gc-trigger] site=safepoint kind=ArenaBytes arena_total=3145728 next_base=134217728 armed=true from_space=73728 nursery_cap=10485760 old_in_use=954808 old_free=0 old_reclaimable=954808 external_side=0 old_baseline=914872 old_band=33554432 old_threshold=50331648 old_pending=false retaining=false malloc=0 next_malloc=100000
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=5 walks=0)
+[gc-fromspace-protect] mode=ProtectPages retired_set=#4 blocks=1 sets_held=4/4 bytes_protected=7340032 bytes_poisoned=0 blocks_recycled=1
+[gc-restore-coverage] copying_minor dirty_pages=1 objects_walked=0 objects_skipped=42 pages_added=0
+[gc-page-class] arm=table lookups=632365 hit=611352 (96.677%) miss=21013 (3.323%) miss_registered=36 miss_unregistered=20977 miss_out_of_span=61 span=4096 rebases=0 refused=0
+[gc-dirty-covered] len=42 capacity=56 presized_to=23
+[gc-tenuring] nursery cap object denomination: mean_surviving_object_bytes 45 -> 44 (scale 611 permille, band 10250878 B)
+[gc-survival] minor=5 rows=6 objects=1173 bytes=52216
+[gc-survival]   minor=5 origin=remembered_set/lazy_array type=string objects=768 bytes=24576 promoted_bytes=0
+[gc-survival]   minor=5 origin=remembered_set/lazy_array type=object objects=384 bytes=18432 promoted_bytes=0
+[gc-survival]   minor=5 origin=remembered_set/lazy_array type=array objects=6 bytes=5280 promoted_bytes=0
+[gc-survival]   minor=5 origin=mutable_root_slots/global_root type=string objects=1 bytes=2656 promoted_bytes=0
+[gc-survival]   minor=5 origin=crate::object::shapes::scan_shape_table_rekey_mut type=array objects=7 bytes=1008 promoted_bytes=0
+[gc-survival]   minor=5 origin=crate::object::shapes::scan_shape_table_rekey_mut type=string objects=7 bytes=264 promoted_bytes=0
+[gc-survival]   minor=5 origin-total=remembered_set/lazy_array objects=1158 bytes=48288 permille=924
+[gc-survival]   minor=5 origin-total=mutable_root_slots/global_root objects=1 bytes=2656 permille=50
+[gc-survival]   minor=5 origin-total=crate::object::shapes::scan_shape_table_rekey_mut objects=14 bytes=1272 permille=24
+[gc-survival]   minor=5 type-total=string objects=776 bytes=27496
+[gc-survival]   minor=5 type-total=object objects=384 bytes=18432
+[gc-survival]   minor=5 type-total=array objects=13 bytes=6288
+[gc-idlist] removals=8883 elems_moved=1571 bytes_moved=6284 positions_scanned=16668
+[gc-young-log] copying_minor table=object.descriptors mode=young passes=2 logged=0 visited=0 kept=0 table_len=1612 skipped=3224
+[gc-young-log] copying_minor table=shapes.families+indices mode=young passes=2 logged=14 visited=14 kept=14 table_len=1380 skipped=2746
+[gc-young-log] copying_minor table=object.transition_cache mode=young passes=2 logged=14 visited=14 kept=14 table_len=16384 skipped=32754
+[gc-young-log] copying_minor table=box.roots mode=young passes=2 logged=0 visited=0 kept=0 table_len=0 skipped=0
+[gc-young-log] copying_minor table=closure.dynamic_props mode=young passes=2 logged=0 visited=0 kept=0 table_len=1469 skipped=2938
+[gc-young-log] copying_minor table=object.builtin_closure_metadata mode=young passes=2 logged=0 visited=0 kept=0 table_len=2429 skipped=4858
+[gc-young-log] copying_minor table=gc.layout_tables mode=young passes=1 logged=2 visited=1 kept=1 table_len=3 skipped=2
+[gc-scanner-profile] copying_minor scanners=93 total_us=72 total_slots=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=34 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=14 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=5 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=3 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   small_int_cache_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   shape_cache_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_class_side_table_roots_mut us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   json_parse_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   async_hooks_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-copy-minor] ran pause_us=1148 scan_us=72 phases: root_scan=93/72 copy_evacuation=78/1173/52216 remembered_set_young_logs=64/1/24 promotion=0/0/0 dead_owner_side_table_pruning=31[ "ARRAY_NAMED_PROPS":0 "LAYOUT_SLOT_MASKS + TYPED_LAYOUTS":0 "ELEMENT_SHAPES":0 "MAP_ITERATOR_ARRAYS":0 "MAP_COMPACTION_LOG":0 "SET_ITERATOR_ARRAYS":0 "SET_COMPACTION_LOG":0 "state().descriptors.property_descriptors + .accessor_descriptors":0 "ARGUMENTS_OBJECTS":0 "OBJECT_PROTOTYPES":0 "state().shapes.inner (descriptors + indices)":0 "state().exotic_expando.entries":0 "SYMBOL_PROPERTIES + SYMBOL_PROPERTY_ATTRS":3 "SYMBOL_POINTERS":0 "CLOSURE_PROPS + CLOSURE_STATIC_PROTOTYPES + CLOSURE_DELETED_KEYS + CLOSURE_BOX_CELLS":0 "BUILTIN_CLOSURE_LENGTH + BUILTIN_CLOSURE_NON_CONSTRUCTABLE":17 "FUNCTION_CLASS_IDS":0 "VM_CONTEXTS + VM_SCRIPTS + VM_FUNCTIONS":0 "FILEHANDLE_OBJECT_FDS":0 "CONSOLE_INSTANCES":0 "BOXED_PRIMITIVE_PAYLOADS":0 "TRANSITION_CACHE_GLOBAL":7 "REFLECT_METADATA":0] from_space_finalization=0/map:0/0+set:0/0+errors:0/0+regex:0/0 forwarding_fixups=3 block_reset_flip=41 other=834 phase_sum_us=1148 in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=708 copied_objects=1173 copied_bytes=52216 promoted_objects=0 promoted_bytes=0 freed_bytes=21512 tenuring_survivals=2 eden_live_bytes=52216 eden_copied_bytes=52216 survivor_live_bytes=0 survivor_first_round_live_bytes=0 trigger=ArenaBytes declared_safepoint=true
+[gc-step] pre_in_use=1028848 post_in_use=1007336 sweep_freed=21512 block_reclaim=21512 pct=2% step=1073741824→1073741824
+[gc-arena-rebaseline] arm=arena next_trigger=134217728 total=4194304 headroom=130023424 pct=2% step=1073741824→1073741824
+[gc-safepoint-drain] kind=nursery_minor count=5
+[gc-schedule] done: seed=10022 safepoints=70 scheduled_collections=5 polls_paced=0 copying_minors=5 moved_objects=33652 loop_polls=64
+[box-stats] allocs=0 pool_reuses=0 releases=0 resident_cells=0 registry_len=0 i32_registry_len=0 bool_registry_len=0 flushes=6 published=0
+[gc-incremental] cycle_starts=0 steps=0 completions=0 active_at_exit=false mark_barrier_arms=0 mark_barrier_armed_us=0 skips(reentrant=0 no_trigger=7 start_blocked=0 resume_blocked=0 nursery_cap_deferred=0) safepoints_blocked_by_budgeted=0 safepoints_blocked(in_alloc=0 unsafe_zone=0 root_lock=0) copying_minors=5 loop_polls=64 poll_arm_events=0 poll_armed_at_exit=1 forwarded_stub_recoveries=0
+[gc-idle-reclaim] enabled=true attempts=0 completions=0 productive=0 freed_bytes=0 old_reclaimed_bytes=0 slices=0 yields=0 start_blocked=0 work_capped=0 post_purges=0 backoff_shift=0
+[gc-idle-compact] enabled=true attempts=0 productive=0 broken_promises=0 released_bytes=0 pause_us_total=0 pause_us_max=0 wake_declined=0 backoff_shift=0
+[gc-arena-right-size] episodes=0 starts=0 released_capacity_bytes=0 low_collections=0 fulls_remaining=0 disarmed=false arena_live=1007336 arena_capacity=4194304
+[gc-step-bounds] step_max_us=0 final_remark_max_us=0 final_remarks=0 weak_records=0 weak_max_records_per_step=0 weak_steps_sliced=0 weak_registry_restarts=0 weak_registry_atomic_finishes=0
+[gc-time] wall_us=22306 step_us=0 remark_us=0 minor_us=10274 full_sync_us=0 share_permille=460

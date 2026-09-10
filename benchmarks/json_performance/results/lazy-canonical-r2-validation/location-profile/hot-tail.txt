@@ -1,0 +1,17 @@
++1360 1004ee460: 52800030    	mov	w16, #0x1               ; =1
++1364 1004ee464: 14000017    	b	0x1004ee4c0 <perry_runtime::json::stringify_api::normalize_lazy_json_numbers+0x5b0>
++1368 1004ee468: eb02001f    	cmp	x0, x2
++1372 1004ee46c: 54005688    	b.hi	0x1004eef3c <perry_runtime::json::stringify_api::normalize_lazy_json_numbers+0x102c>
++1376 1004ee470: eb00023f    	cmp	x17, x0
++1380 1004ee474: 54000140    	b.eq	0x1004ee49c <perry_runtime::json::stringify_api::normalize_lazy_json_numbers+0x58c>
++1384 1004ee478: d2800011    	mov	x17, #0x0               ; =0
++1388 1004ee47c: 387169f0    	ldrb	w16, [x15, x17]
++1392 1004ee480: 71008a1f    	cmp	w16, #0x22
++1396 1004ee484: 540001a0    	b.eq	0x1004ee4b8 <perry_runtime::json::stringify_api::normalize_lazy_json_numbers+0x5a8>
++1400 1004ee488: 7101721f    	cmp	w16, #0x5c
++1404 1004ee48c: 54000160    	b.eq	0x1004ee4b8 <perry_runtime::json::stringify_api::normalize_lazy_json_numbers+0x5a8>
++1408 1004ee490: 91000631    	add	x17, x17, #0x1
++1412 1004ee494: f1000463    	subs	x3, x3, #0x1
++1416 1004ee498: 54ffff21    	b.ne	0x1004ee47c <perry_runtime::json::stringify_api::normalize_lazy_json_numbers+0x56c>
++1420 1004ee49c: 5280002f    	mov	w15, #0x1               ; =1
++1424 1004ee4a0: 14000007    	b	0x1004ee4bc <perry_runtime::json::stringify_api::normalize_lazy_json_numbers+0x5ac>
