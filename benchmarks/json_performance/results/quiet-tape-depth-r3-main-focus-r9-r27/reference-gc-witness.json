@@ -1,0 +1,66 @@
+{
+  "scan": {
+    "scheduled_collections": 1232,
+    "copying_minors": 1323,
+    "moved_objects": 208531,
+    "loop_polls": 12342,
+    "cycle_starts": 0,
+    "protected_retired_sets": 1323,
+    "matches_node": true,
+    "full_gc_matches_node": true
+  },
+  "retained_normal": {
+    "scheduled_collections": 0,
+    "copying_minors": 2,
+    "moved_objects": 151,
+    "loop_polls": 3,
+    "cycle_starts": 0,
+    "protected_retired_sets": 0,
+    "matches_node": true
+  },
+  "retained_scheduled": {
+    "scheduled_collections": 57,
+    "copying_minors": 59,
+    "moved_objects": 18900,
+    "loop_polls": 482,
+    "cycle_starts": 0,
+    "protected_retired_sets": 59,
+    "matches_node": true
+  },
+  "retained_fullgc": {
+    "scheduled_collections": 0,
+    "copying_minors": 0,
+    "moved_objects": 0,
+    "loop_polls": 3,
+    "cycle_starts": 0,
+    "protected_retired_sets": 0,
+    "matches_node": true
+  },
+  "rotating_unicode_diagnostic": {
+    "scheduled_collections": 0,
+    "copying_minors": 26,
+    "moved_objects": 12608,
+    "loop_polls": 27,
+    "cycle_starts": 0,
+    "protected_retired_sets": 0,
+    "rss_before_bytes": 28803072.0,
+    "rss_after_bytes": 63406080.0,
+    "timed_parses": 1000,
+    "warmup_parses": 8,
+    "matches_node": true
+  },
+  "stringify_cadence_malloc_counts": {
+    "baseline": [
+      39,
+      40,
+      40,
+      40
+    ],
+    "candidate": [
+      39,
+      40,
+      40,
+      40
+    ]
+  }
+}

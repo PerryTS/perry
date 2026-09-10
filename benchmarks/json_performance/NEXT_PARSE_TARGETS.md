@@ -80,4 +80,6 @@ No input borrow may cross the tape callback's collection points. Measure the
 extra per-container depth accounting as well as the pass removed. [Tape-depth R1/R2](TAPE_DEPTH.md) implement this design with six new Rust tests
 and a compiled nine-mode depth/GC witness. R1 has array gains in focused and
 full original measurements, with conflicting Unicode stringify evidence. R2
-keeps the builder separate; its performance evaluation is pending.
+keeps the builder separate and completes both full suites, with 20–24% array
+parse gains and retained small stringify/cached-parse concerns. R3 reorders a
+guard, but is parked after its focused replay does not resolve them.

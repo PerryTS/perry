@@ -1,0 +1,32 @@
+{
+  "owner": "json-perf-11465-1788993056",
+  "load_before": [
+    1.45654296875,
+    1.71923828125,
+    1.77001953125
+  ],
+  "started_utc": "2026-09-09T22:30:56Z",
+  "quiet_gate_passed": false,
+  "command": [
+    "python3",
+    "run_baseline.py",
+    "--phase",
+    "all",
+    "--repeat",
+    "5",
+    "--worker",
+    ".work/tape-depth-r2/worker",
+    "--baseline-worker",
+    ".work/main-eee/worker",
+    "--results-dir",
+    "results/quiet-tape-depth-r2-main-all-r5"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    2.67822265625,
+    2.17724609375,
+    1.9462890625
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-09T22:36:11Z"
+}
