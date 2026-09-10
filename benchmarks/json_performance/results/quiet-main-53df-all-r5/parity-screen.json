@@ -1,0 +1,110 @@
+{
+  "counts": {
+    "cpu_us": {
+      "leads": 46,
+      "total": 50
+    },
+    "peak_rss_mib": {
+      "leads": 66,
+      "total": 86
+    },
+    "rss_after_mib": {
+      "leads": 31,
+      "total": 36
+    }
+  },
+  "cpu_gaps": [
+    {
+      "fixture": "records_array_16k",
+      "operation": "scan",
+      "perry_us": 58.65700611539484,
+      "node_us": 39.34990693964371,
+      "bun_us": 35.6966232385004,
+      "vs_best_ratio": 1.643208819038397,
+      "vs_old_main_pct": -7.505345687811838
+    },
+    {
+      "fixture": "records_array_1m",
+      "operation": "scan",
+      "perry_us": 2938.695652173913,
+      "node_us": 2841.68115942029,
+      "bun_us": 2227.9565217391305,
+      "vs_best_ratio": 1.3190094256776534,
+      "vs_old_main_pct": -9.240650806794527
+    },
+    {
+      "fixture": "records_array_20m",
+      "operation": "roundtrip",
+      "perry_us": 98653.5,
+      "node_us": 100507.5,
+      "bun_us": 76629.0,
+      "vs_best_ratio": 1.2874172963238462,
+      "vs_old_main_pct": -0.09165113829701088
+    },
+    {
+      "fixture": "records_array_8m",
+      "operation": "scan",
+      "perry_us": 22672.625,
+      "node_us": 29538.375,
+      "bun_us": 21483.125,
+      "vs_best_ratio": 1.0553690396532163,
+      "vs_old_main_pct": -9.447140346673056
+    }
+  ],
+  "positive_cpu_deltas": [
+    {
+      "fixture": "empty_object",
+      "operation": "stringify",
+      "pct": 0.04828722376866157,
+      "separated": false
+    },
+    {
+      "fixture": "heterogeneous_1m",
+      "operation": "stringify",
+      "pct": 0.42651171143435196,
+      "separated": false
+    },
+    {
+      "fixture": "long_string_1m",
+      "operation": "parse",
+      "pct": 0.6128702757916216,
+      "separated": false
+    },
+    {
+      "fixture": "null",
+      "operation": "parse",
+      "pct": 0.07526578229373193,
+      "separated": false
+    },
+    {
+      "fixture": "null",
+      "operation": "stringify",
+      "pct": 0.11430313190581298,
+      "separated": false
+    },
+    {
+      "fixture": "numbers_1m",
+      "operation": "stringify",
+      "pct": 0.034239907619371124,
+      "separated": false
+    },
+    {
+      "fixture": "tiny_object",
+      "operation": "stringify",
+      "pct": 0.09132016555464251,
+      "separated": false
+    },
+    {
+      "fixture": "unicode_1m",
+      "operation": "parse",
+      "pct": 0.2057613168724215,
+      "separated": false
+    },
+    {
+      "fixture": "unicode_1m",
+      "operation": "stringify",
+      "pct": 1.8616549358253964,
+      "separated": false
+    }
+  ]
+}

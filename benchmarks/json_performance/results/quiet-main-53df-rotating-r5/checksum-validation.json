@@ -1,0 +1,10 @@
+{
+  "checked": {
+    "verify": 380,
+    "calibration": 228,
+    "timing": 1140
+  },
+  "all_finite": true,
+  "all_checksums_match_node_per_call": true,
+  "retained_counts_match": true
+}

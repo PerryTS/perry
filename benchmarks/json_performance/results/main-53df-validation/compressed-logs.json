@@ -1,0 +1,34 @@
+[
+  {
+    "file": "depth-auto-scheduled.stderr",
+    "sha256": "6b26d7b1521b70f3d6134cbed295513a1000b14066f7c383b9acfa70362bb8e3",
+    "bytes": 14537434,
+    "archive": "depth-auto-scheduled.stderr.gz",
+    "archive_sha256": "ca012d860ab8138c83f43d6700f6143c4fd23eeb5cab9626e5c0146257328283",
+    "archive_bytes": 308566
+  },
+  {
+    "file": "depth-direct-scheduled.stderr",
+    "sha256": "a245ad89d26bbf83288fcd9aa1f3e855b6c7156a4be47fa355c17a6cd9f49c9f",
+    "bytes": 14510915,
+    "archive": "depth-direct-scheduled.stderr.gz",
+    "archive_sha256": "b297f2ef007263cef26fd75d5e5f41ca72e4757eb77bdb810685993c83b4565f",
+    "archive_bytes": 303501
+  },
+  {
+    "file": "depth-tape-scheduled.stderr",
+    "sha256": "ead99fe0d36092804bb135fa18b91a2f9c69104d072e0336d9eb5374e189bcd4",
+    "bytes": 14530988,
+    "archive": "depth-tape-scheduled.stderr.gz",
+    "archive_sha256": "cc0b8efbedd07a7445116a7a1282b6afda1c013f65c102008786637ff3c13b88",
+    "archive_bytes": 309204
+  },
+  {
+    "file": "scan-scheduled.stderr",
+    "sha256": "dc879d5fbfcce31c6cd3252655e35901f27e4d0f9a2fa9e377637ea206a1c7b1",
+    "bytes": 8004095,
+    "archive": "scan-scheduled.stderr.gz",
+    "archive_sha256": "b21f6416f5c92e88b9c6a53eee24c1678615e4b9a9a064ee18da5c412e5dda50",
+    "archive_bytes": 424164
+  }
+]

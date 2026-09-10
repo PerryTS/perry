@@ -1,0 +1,60 @@
+{
+  "original": {
+    "cpu_us": {
+      "leads": 46,
+      "total": 50
+    },
+    "peak_rss_mib": {
+      "leads": 66,
+      "total": 86
+    },
+    "rss_after_mib": {
+      "leads": 31,
+      "total": 36
+    }
+  },
+  "rotating": {
+    "rotating": {
+      "cpu_us": {
+        "leads": 13,
+        "total": 19
+      },
+      "peak_rss_mib": {
+        "leads": 15,
+        "total": 19
+      },
+      "rss_after_mib": {
+        "leads": 15,
+        "total": 19
+      }
+    },
+    "same": {
+      "cpu_us": {
+        "leads": 18,
+        "total": 19
+      },
+      "peak_rss_mib": {
+        "leads": 13,
+        "total": 19
+      },
+      "rss_after_mib": {
+        "leads": 13,
+        "total": 19
+      }
+    },
+    "select": {
+      "cpu_us": {
+        "leads": 0,
+        "total": 19
+      },
+      "peak_rss_mib": {
+        "leads": 17,
+        "total": 19
+      },
+      "rss_after_mib": {
+        "leads": 17,
+        "total": 19
+      }
+    }
+  }
+}
