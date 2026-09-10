@@ -1,0 +1,70 @@
+{
+  "verdict": "Mechanism check failed; parked before performance timing.",
+  "expected": {
+    "memcpy_calls": 1,
+    "frame_smaller_than": 1376
+  },
+  "observed": {
+    "memcpy_calls": 2,
+    "frame_bytes": 1376
+  },
+  "main_copies": [
+    {
+      "instruction": "1004eafcc:     \tbl\t0x100b5fbac <_writev+0x100b5fbac>",
+      "symbol": "_memcpy",
+      "context": [
+        "1004eafb4:     \tmov\tw9, #-0x40000000        ; =-1073741824",
+        "1004eafb8:     \tcmp\tw8, w9",
+        "1004eafbc:     \tcsel\tw24, w8, wzr, lt",
+        "1004eafc0:     \tadd\tx0, sp, #0x250",
+        "1004eafc4:     \tadd\tx1, sp, #0x10",
+        "1004eafc8:     \tmov\tw2, #0x240              ; =576",
+        "1004eafcc:     \tbl\t0x100b5fbac <_writev+0x100b5fbac>"
+      ]
+    },
+    {
+      "instruction": "1004eb164:     \tbl\t0x100b5fbac <_writev+0x100b5fbac>",
+      "symbol": "_memcpy",
+      "context": [
+        "1004eb14c:     \tldr\tx0, [x8, #0x1e8]",
+        "1004eb150:     \tcbz\tx0, 0x1004eb198 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json11parse_reuse30remember_parse_object_template+0x5d8>",
+        "1004eb154:     \tldr\tx8, [x0], #0x8",
+        "1004eb158:     \tcbnz\tx8, 0x1004eb1ac <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json11parse_reuse30remember_parse_object_template+0x5ec>",
+        "1004eb15c:     \tadd\tx1, sp, #0x250",
+        "1004eb160:     \tmov\tw2, #0x258              ; =600",
+        "1004eb164:     \tbl\t0x100b5fbac <_writev+0x100b5fbac>"
+      ]
+    }
+  ],
+  "candidate_copies": [
+    {
+      "instruction": "1004ead00:     \tbl\t0x100b5fbac <_writev+0x100b5fbac>",
+      "symbol": "_memcpy",
+      "context": [
+        "1004eace8:     \tstr\txzr, [sp, #0x260]",
+        "1004eacec:     \tstr\twzr, [sp, #0x268]",
+        "1004eacf0:     \tadd\tx19, sp, #0x18",
+        "1004eacf4:     \tadd\tx0, sp, #0x18",
+        "1004eacf8:     \tadd\tx1, sp, #0x270",
+        "1004eacfc:     \tmov\tw2, #0x240              ; =576",
+        "1004ead00:     \tbl\t0x100b5fbac <_writev+0x100b5fbac>"
+      ]
+    },
+    {
+      "instruction": "1004eb170:     \tbl\t0x100b5fbac <_writev+0x100b5fbac>",
+      "symbol": "_memcpy",
+      "context": [
+        "1004eb158:     \tldr\tx0, [x8, #0x1e8]",
+        "1004eb15c:     \tcbz\tx0, 0x1004eb1a4 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json11parse_reuse30remember_parse_object_template+0x5e4>",
+        "1004eb160:     \tldr\tx8, [x0], #0x8",
+        "1004eb164:     \tcbnz\tx8, 0x1004eb1b8 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json11parse_reuse30remember_parse_object_template+0x5f8>",
+        "1004eb168:     \tadd\tx1, sp, #0x18",
+        "1004eb16c:     \tmov\tw2, #0x258              ; =600",
+        "1004eb170:     \tbl\t0x100b5fbac <_writev+0x100b5fbac>"
+      ]
+    }
+  ],
+  "note": "Main copies 576 bytes from a completed values array into the local entry. Candidate instead copies 576 bytes from the default values temporary into the entry at initialization. Both retain a 600-byte final cache-publication copy. No CPU/RSS improvement or regression was measured for R16.",
+  "checker": "inspect-capture.py",
+  "checker_exit_code": 1
+}

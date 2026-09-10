@@ -1,0 +1,75 @@
+{
+  "arm": "main",
+  "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json11parse_reuse30remember_parse_object_template",
+  "command": [
+    "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+    "--disassemble-symbols=__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json11parse_reuse30remember_parse_object_template",
+    "--no-show-raw-insn",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-capture-r16/main-rotating-worker"
+  ],
+  "indirect_command": [
+    "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+    "--macho",
+    "--indirect-symbols",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-capture-r16/main-rotating-worker"
+  ],
+  "binary_sha256": "7f8ad1e78cf215d076caf5ad8e410f7dcae1db01e54d96af9b710094479e1376",
+  "assembly_file": "main-template-capture.s",
+  "assembly_sha256": "f181ac4dd3b9fce120d7d76a34e091e0537e51c8240c10e1ee32b68b35651f4f",
+  "prologue": [
+    "1004eabc0:     \tstp\tx28, x27, [sp, #-0x60]!",
+    "1004eabc4:     \tstp\tx26, x25, [sp, #0x10]",
+    "1004eabc8:     \tstp\tx24, x23, [sp, #0x20]",
+    "1004eabcc:     \tstp\tx22, x21, [sp, #0x30]",
+    "1004eabd0:     \tstp\tx20, x19, [sp, #0x40]",
+    "1004eabd4:     \tstp\tx29, x30, [sp, #0x50]",
+    "1004eabd8:     \tadd\tx29, sp, #0x50",
+    "1004eabdc:     \tsub\tsp, sp, #0x500",
+    "1004eabe0:     \tldr\txzr, [sp]",
+    "1004eabe4:     \tsub\tx8, x1, #0x41",
+    "1004eabe8:     \tlsr\tx9, x2, #48",
+    "1004eabec:     \tmov\tw10, #0x7ffd            ; =32765"
+  ],
+  "stack_bytes": 1376,
+  "external_calls": [
+    {
+      "instruction": "1004ead7c:     \tbl\t0x100b5fbd0 <_writev+0x100b5fbd0>",
+      "symbol": "_memset_pattern16",
+      "context": [
+        "1004ead64:     \tcmp\tw25, #0x8",
+        "1004ead68:     \tb.hi\t0x1004eb168 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json11parse_reuse30remember_parse_object_template+0x5a8>",
+        "1004ead6c:     \tadd\tx0, sp, #0x250",
+        "1004ead70:     \tadrp\tx1, 0x100c99000 <__RNvNvNtNtCs3gRpqoBkMHm_13perry_runtime6string6format13fmt_fixed_int5POW10+0x70f0>",
+        "1004ead74:     \tadd\tx1, x1, #0x9f0",
+        "1004ead78:     \tmov\tw2, #0x40               ; =64",
+        "1004ead7c:     \tbl\t0x100b5fbd0 <_writev+0x100b5fbd0>"
+      ]
+    },
+    {
+      "instruction": "1004eafcc:     \tbl\t0x100b5fbac <_writev+0x100b5fbac>",
+      "symbol": "_memcpy",
+      "context": [
+        "1004eafb4:     \tmov\tw9, #-0x40000000        ; =-1073741824",
+        "1004eafb8:     \tcmp\tw8, w9",
+        "1004eafbc:     \tcsel\tw24, w8, wzr, lt",
+        "1004eafc0:     \tadd\tx0, sp, #0x250",
+        "1004eafc4:     \tadd\tx1, sp, #0x10",
+        "1004eafc8:     \tmov\tw2, #0x240              ; =576",
+        "1004eafcc:     \tbl\t0x100b5fbac <_writev+0x100b5fbac>"
+      ]
+    },
+    {
+      "instruction": "1004eb164:     \tbl\t0x100b5fbac <_writev+0x100b5fbac>",
+      "symbol": "_memcpy",
+      "context": [
+        "1004eb14c:     \tldr\tx0, [x8, #0x1e8]",
+        "1004eb150:     \tcbz\tx0, 0x1004eb198 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json11parse_reuse30remember_parse_object_template+0x5d8>",
+        "1004eb154:     \tldr\tx8, [x0], #0x8",
+        "1004eb158:     \tcbnz\tx8, 0x1004eb1ac <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json11parse_reuse30remember_parse_object_template+0x5ec>",
+        "1004eb15c:     \tadd\tx1, sp, #0x250",
+        "1004eb160:     \tmov\tw2, #0x258              ; =600",
+        "1004eb164:     \tbl\t0x100b5fbac <_writev+0x100b5fbac>"
+      ]
+    }
+  ]
+}

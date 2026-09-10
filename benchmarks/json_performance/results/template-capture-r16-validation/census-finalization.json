@@ -1,0 +1,18 @@
+{
+  "preliminary_source": "1525b24134845943ea6306d67512f7dee499911d",
+  "source_commit": "7c488321ce8cfe868b10526a9965a345e12cae39",
+  "changed_paths": [
+    "scripts/shape_descriptor_census_baseline.json"
+  ],
+  "inventory_gate_command": [
+    "python3",
+    "scripts/shape_descriptor_census.py"
+  ],
+  "inventory_gate_exit_code": 0,
+  "freshness_refresh_mtime_only": {
+    "crates/perry-runtime-static/src/lib.rs": "0f320c88d8d2679b4af3bc1fbe882752744e210212076d3ebcd60b7c6fed10de",
+    "crates/perry-stdlib-static/src/lib.rs": "f66830b9af1aafaa3270e09d2ba00da466fe4ce7d715f7590bba9db99b0103a0",
+    "crates/perry/src/main.rs": "cc3d6d228a6c9e031ba8f0a26d152c7690f622ee914c8aa09d47eeb2199db870"
+  },
+  "note": "No runtime source changed; preliminary artifacts are preserved and never timed. Units and the exact production build rerun from the final clean source."
+}

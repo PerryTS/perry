@@ -1,0 +1,27 @@
+{
+  "source_commit": "7c488321ce8cfe868b10526a9965a345e12cae39",
+  "base_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+  "cache_hit_and_root_scanners_identical_to_main": true,
+  "cache_types_and_admission_helpers_identical_to_main": true,
+  "source_hashes": {
+    "crates/perry-runtime/src/json/parse_reuse.rs": "bad0a90c02e1880b554d88e78a2012e7a11595d2cef49fda94f0f96ade3e8335",
+    "crates/perry-runtime/src/json/parse_api.rs": "af906e8bdb25d73cc194a2d6b8740ab8809e341d287552c0087033416380c4fe",
+    "crates/perry-runtime/src/json/parser.rs": "15c2de59de0e0ab7b3869aedba0d2295b1be4d5a78c21a6eaf9e22f410edbd95",
+    "crates/perry-runtime/src/string/mod.rs": "4baa5cb71410a293798160f94af1e42cc0ed326dc351ede219a3cb318e6d0282",
+    "crates/perry-runtime/src/string/json_construction.rs": "26acd6d946f4bd9198a02b38f2b4d13b50059a48bc791d965852bd5427a28356",
+    "crates/perry-runtime/src/gc/barrier/mod.rs": "0f3dcf349d1573dcc4c04bf2a75fdacb4b81626445b0f0e6dca5dc0d89c1a535",
+    "crates/perry-runtime/src/gc/roots.rs": "97e65c18ae9db4153648fb466a7958244e80378a6363b9a949cecbd90c98a7cd"
+  },
+  "review": [
+    "Only remember_parse_object_template changes in production source.",
+    "Both capture call sites remain inside their existing gc_suppress/gc_unsuppress scope, after parser.finish and before output publication.",
+    "Values are validated into one local struct; keys_array and shape_id placeholders remain local until all values qualify.",
+    "Shape lookup order remains object_keys_array then object_shape_stamp, after value validation.",
+    "Root barriers still run source then keys then each field/array value, followed by one borrow_mut cache publication.",
+    "Borrowed array slices reference the local plan only, not a thread-local cache borrow.",
+    "Early admission failure returns without cache mutation; the prior complete plan stays registered through the existing scanner.",
+    "No cache bounds, root registrations, allocator settings or collection hooks change.",
+    "Exact shape-field inventory refreshed for one declaration replaced by a declaration plus delayed assignment. ObjectHeader authority and strict census rules unchanged."
+  ],
+  "preliminary_source_commit": "1525b24134845943ea6306d67512f7dee499911d"
+}

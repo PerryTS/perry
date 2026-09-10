@@ -1,0 +1,26 @@
+[
+  {
+    "symbol": "__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value",
+    "command": [
+      "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+      "--disassemble-symbols=__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value",
+      "--no-show-raw-insn",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-capture-r16/main-rotating-worker"
+    ],
+    "file": "main-parse-string-0.s",
+    "binary_sha256": "7f8ad1e78cf215d076caf5ad8e410f7dcae1db01e54d96af9b710094479e1376",
+    "explicit_sub_frame_bytes": 96
+  },
+  {
+    "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction22string_from_json_bytes",
+    "command": [
+      "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+      "--disassemble-symbols=__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction22string_from_json_bytes",
+      "--no-show-raw-insn",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-capture-r16/main-rotating-worker"
+    ],
+    "file": "main-parse-string-1.s",
+    "binary_sha256": "7f8ad1e78cf215d076caf5ad8e410f7dcae1db01e54d96af9b710094479e1376",
+    "explicit_sub_frame_bytes": 96
+  }
+]

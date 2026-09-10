@@ -1,0 +1,134 @@
+[
+  {
+    "worker": "worker",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-capture-r16/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-capture-r16/harness/worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-capture-r16/candidate-worker.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-capture-r16/candidate-worker.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-capture-r16/frozen-build/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-capture-r16/candidate-worker"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/template-capture-r16/harness/worker.ts": "f3c42ec9f04fdb9ba84dc3cf50dc59f18685540033807f3db3a7f75c08a85d39",
+      "benchmarks/json_performance/.work/template-capture-r16/candidate-worker.o": "4af444c69ee89680e8b03dfdb516824549f510f11ce620b3cdbb4a64cf713f2c",
+      "benchmarks/json_performance/.work/template-capture-r16/candidate-worker": "799b7021021f2db1ff283e50fedf6431993dc2ecb475714fe2ea11651aee349d",
+      "benchmarks/json_performance/.work/template-capture-r16/frozen-build/perry": "c3620ae89e58a79dd7abf6f46641a421327fffbe987a5cb051739a452784fcc1",
+      "benchmarks/json_performance/.work/template-capture-r16/frozen-build/libperry_runtime.a": "800fa88c5ee9961ce76ea615020862fc045752fa4eee4ab9fee41dd8589f008f",
+      "benchmarks/json_performance/.work/template-capture-r16/frozen-build/libperry_stdlib.a": "076904c86cbb95e6923e07066612590d0e8227d7a13276da44bc05c1d2232b69"
+    }
+  },
+  {
+    "worker": "access-worker",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-capture-r16/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-capture-r16/harness/access-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-capture-r16/candidate-access-worker.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-capture-r16/candidate-access-worker.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-capture-r16/frozen-build/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-capture-r16/candidate-access-worker"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/template-capture-r16/harness/access-worker.ts": "dba0240ef6441a07657e664354982a04045c036e53f65c1d06df62d55c73be67",
+      "benchmarks/json_performance/.work/template-capture-r16/candidate-access-worker.o": "10bdfec2a8c451b16b5c533858dffe554f44ce69f8dff9bf13fe29aa5d8d6016",
+      "benchmarks/json_performance/.work/template-capture-r16/candidate-access-worker": "b2ec6ef09f748ab997f443f2a6d39c7572a311a90e39a4399c02f8a0942a430e",
+      "benchmarks/json_performance/.work/template-capture-r16/frozen-build/perry": "c3620ae89e58a79dd7abf6f46641a421327fffbe987a5cb051739a452784fcc1",
+      "benchmarks/json_performance/.work/template-capture-r16/frozen-build/libperry_runtime.a": "800fa88c5ee9961ce76ea615020862fc045752fa4eee4ab9fee41dd8589f008f",
+      "benchmarks/json_performance/.work/template-capture-r16/frozen-build/libperry_stdlib.a": "076904c86cbb95e6923e07066612590d0e8227d7a13276da44bc05c1d2232b69"
+    }
+  },
+  {
+    "worker": "rotating-worker",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-capture-r16/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-capture-r16/harness/rotating-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-capture-r16/candidate-rotating-worker.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-capture-r16/candidate-rotating-worker.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-capture-r16/frozen-build/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-capture-r16/candidate-rotating-worker"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/template-capture-r16/harness/rotating-worker.ts": "7541897acb2c7c35c0f5e762f8b2f28b9783feb26a42db107c1c4eb3af644b24",
+      "benchmarks/json_performance/.work/template-capture-r16/candidate-rotating-worker.o": "8c58720975105f938b744fcc20c207d649118f11e91c1ee778a2940b9290b65b",
+      "benchmarks/json_performance/.work/template-capture-r16/candidate-rotating-worker": "cc85d5d8e47b4da498522db958d43498e81831fb643091d2e278ed54c5880b02",
+      "benchmarks/json_performance/.work/template-capture-r16/frozen-build/perry": "c3620ae89e58a79dd7abf6f46641a421327fffbe987a5cb051739a452784fcc1",
+      "benchmarks/json_performance/.work/template-capture-r16/frozen-build/libperry_runtime.a": "800fa88c5ee9961ce76ea615020862fc045752fa4eee4ab9fee41dd8589f008f",
+      "benchmarks/json_performance/.work/template-capture-r16/frozen-build/libperry_stdlib.a": "076904c86cbb95e6923e07066612590d0e8227d7a13276da44bc05c1d2232b69"
+    }
+  },
+  {
+    "worker": "options",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-capture-r16/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-capture-r16/options-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-capture-r16/candidate-options.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-capture-r16/candidate-options.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-capture-r16/frozen-build/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-capture-r16/candidate-options"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/template-capture-r16/options-worker.ts": "d08c6a916c18197b889a0de4a3777632ad307275752b85c5abd75daf4d6ad85d",
+      "benchmarks/json_performance/.work/template-capture-r16/candidate-options.o": "21f09fc8c848a087baca888550da29607706c3be07efddf34a8ab0f84b2eb814",
+      "benchmarks/json_performance/.work/template-capture-r16/candidate-options": "dc427829c86c2d7d18ff12c08daed4a3b6be2ba127bf188497059890ae63f205",
+      "benchmarks/json_performance/.work/template-capture-r16/frozen-build/perry": "c3620ae89e58a79dd7abf6f46641a421327fffbe987a5cb051739a452784fcc1",
+      "benchmarks/json_performance/.work/template-capture-r16/frozen-build/libperry_runtime.a": "800fa88c5ee9961ce76ea615020862fc045752fa4eee4ab9fee41dd8589f008f",
+      "benchmarks/json_performance/.work/template-capture-r16/frozen-build/libperry_stdlib.a": "076904c86cbb95e6923e07066612590d0e8227d7a13276da44bc05c1d2232b69"
+    }
+  }
+]

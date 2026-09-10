@@ -1,0 +1,22 @@
+[
+  {
+    "worker": "worker",
+    "same": true,
+    "sha256": "4af444c69ee89680e8b03dfdb516824549f510f11ce620b3cdbb4a64cf713f2c"
+  },
+  {
+    "worker": "access-worker",
+    "same": true,
+    "sha256": "10bdfec2a8c451b16b5c533858dffe554f44ce69f8dff9bf13fe29aa5d8d6016"
+  },
+  {
+    "worker": "rotating-worker",
+    "same": true,
+    "sha256": "8c58720975105f938b744fcc20c207d649118f11e91c1ee778a2940b9290b65b"
+  },
+  {
+    "worker": "options",
+    "same": true,
+    "sha256": "21f09fc8c848a087baca888550da29607706c3be07efddf34a8ab0f84b2eb814"
+  }
+]
