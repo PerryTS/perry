@@ -1,0 +1,2000 @@
+diff --git a/CLAUDE.md b/CLAUDE.md
+index f2abaf02e..11a8f09bf 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
+ 
+ Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
+ 
+-**Current Version:** 0.5.1529
++**Current Version:** 0.5.1530
+ 
+ 
+ ## TypeScript Parity Status
+diff --git a/Cargo.lock b/Cargo.lock
+index b6c8f481f..491d36b19 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -5695,7 +5695,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
+ 
+ [[package]]
+ name = "perry"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -5759,7 +5759,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-api-manifest"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "perry-dispatch",
+  "serde",
+@@ -5767,7 +5767,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-audio-miniaudio"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "cc",
+  "libc",
+@@ -5776,7 +5776,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-codegen"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "anyhow",
+  "inkwell",
+@@ -5793,7 +5793,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-codegen-arkts"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "anyhow",
+  "perry-hir",
+@@ -5801,7 +5801,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-codegen-glance"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "anyhow",
+  "perry-hir",
+@@ -5809,7 +5809,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-codegen-js"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "anyhow",
+  "perry-dispatch",
+@@ -5818,7 +5818,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-codegen-swiftui"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "anyhow",
+  "perry-hir",
+@@ -5826,7 +5826,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-codegen-wasm"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -5838,7 +5838,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-codegen-wear-tiles"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "anyhow",
+  "perry-hir",
+@@ -5846,7 +5846,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-container-compose"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "anyhow",
+  "async-trait",
+@@ -5875,14 +5875,14 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-container-e2e"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "anyhow",
+ ]
+ 
+ [[package]]
+ name = "perry-diagnostics"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "serde",
+  "serde_json",
+@@ -5890,7 +5890,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-dispatch"
+-version = "0.5.1529"
++version = "0.5.1530"
+ 
+ [[package]]
+ name = "perry-doc-fixture-my-bindings"
+@@ -5901,7 +5901,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-doc-tests"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -5916,7 +5916,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-ads"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "block2",
+  "objc2",
+@@ -5926,7 +5926,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-argon2"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "argon2",
+  "perry-ffi",
+@@ -5935,7 +5935,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-axios"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "perry-ffi",
+  "reqwest",
+@@ -5944,7 +5944,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-bcrypt"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "bcrypt",
+  "perry-ffi",
+@@ -5952,7 +5952,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-better-sqlite3"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "perry-ffi",
+  "rusqlite",
+@@ -5960,7 +5960,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-cheerio"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "perry-ffi",
+  "scraper",
+@@ -5968,7 +5968,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-commander"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "perry-ffi",
+  "perry-runtime",
+@@ -5976,7 +5976,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-cron"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "chrono",
+  "cron",
+@@ -5986,7 +5986,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-dayjs"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "chrono",
+  "perry-ffi",
+@@ -5994,7 +5994,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-decimal"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "perry-ffi",
+  "rust_decimal",
+@@ -6002,7 +6002,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-dotenv"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "perry-ffi",
+  "serde_json",
+@@ -6010,7 +6010,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-ethers"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "perry-ffi",
+  "rand 0.10.2",
+@@ -6018,7 +6018,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-events"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "perry-ffi",
+  "perry-runtime",
+@@ -6026,14 +6026,14 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-exponential-backoff"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "perry-ffi",
+ ]
+ 
+ [[package]]
+ name = "perry-ext-fastify"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "bytes",
+  "http-body-util",
+@@ -6051,7 +6051,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-fetch"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "bytes",
+  "lazy_static",
+@@ -6064,7 +6064,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-http"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "base64 0.22.1",
+  "bytes",
+@@ -6096,7 +6096,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-ioredis"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "lazy_static",
+  "perry-ffi",
+@@ -6106,7 +6106,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-jsonwebtoken"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "base64 0.22.1",
+  "jsonwebtoken",
+@@ -6117,7 +6117,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-lru-cache"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "lru",
+  "perry-ffi",
+@@ -6126,7 +6126,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-moment"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "chrono",
+  "perry-ffi",
+@@ -6134,7 +6134,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-mongodb"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "bson",
+  "futures-util",
+@@ -6146,7 +6146,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-mysql2"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "chrono",
+  "perry-ffi",
+@@ -6158,7 +6158,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-nanoid"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "nanoid",
+  "perry-ffi",
+@@ -6167,7 +6167,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-net"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "bytes",
+  "perry-ffi",
+@@ -6182,7 +6182,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-node-forge"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "const-oid 0.10.2",
+  "der 0.8.1",
+@@ -6201,7 +6201,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-nodemailer"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "lettre",
+  "perry-ffi",
+@@ -6211,7 +6211,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-parcel-watcher"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "fancy-regex",
+  "notify",
+@@ -6223,7 +6223,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-pdf"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "perry-ffi",
+  "printpdf",
+@@ -6231,7 +6231,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-pg"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "perry-ffi",
+  "sqlx",
+@@ -6240,7 +6240,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-qs"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "perry-ffi",
+  "perry-runtime",
+@@ -6249,7 +6249,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-ratelimit"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "governor",
+  "perry-ffi",
+@@ -6257,7 +6257,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-sharp"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "fast_image_resize",
+  "image",
+@@ -6268,7 +6268,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-streams"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "lazy_static",
+  "perry-ffi",
+@@ -6277,7 +6277,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-typescript"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "anyhow",
+  "perry-ffi",
+@@ -6297,7 +6297,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-undici"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "perry-ffi",
+  "perry-runtime",
+@@ -6306,7 +6306,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-uuid"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "perry-ffi",
+  "uuid",
+@@ -6314,7 +6314,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-validator"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "perry-ffi",
+  "regex",
+@@ -6324,7 +6324,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-ws"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "futures-util",
+  "lazy_static",
+@@ -6337,7 +6337,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ext-zlib"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "brotli",
+  "flate2",
+@@ -6347,7 +6347,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ffi"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "dashmap 6.2.1",
+  "once_cell",
+@@ -6356,7 +6356,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-hir"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "anyhow",
+  "perry-api-manifest",
+@@ -6375,7 +6375,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-parser"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "anyhow",
+  "perry-diagnostics",
+@@ -6388,7 +6388,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-runtime"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "ahash",
+  "anyhow",
+@@ -6451,14 +6451,14 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-runtime-static"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "perry-runtime",
+ ]
+ 
+ [[package]]
+ name = "perry-stdlib"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "aes 0.8.4",
+  "aes 0.9.1",
+@@ -6554,14 +6554,14 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-stdlib-static"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "perry-stdlib",
+ ]
+ 
+ [[package]]
+ name = "perry-transform"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "anyhow",
+  "perry-hir",
+@@ -6570,7 +6570,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ui"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "perry-ffi",
+  "perry-ui-model",
+@@ -6578,7 +6578,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ui-android"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "base64 0.22.1",
+  "itoa",
+@@ -6596,7 +6596,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ui-geisterhand"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "rand 0.10.2",
+  "serde",
+@@ -6606,7 +6606,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ui-gtk4"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "base64 0.22.1",
+  "cairo-rs 0.22.9",
+@@ -6629,7 +6629,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ui-ios"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "base64 0.22.1",
+  "block2",
+@@ -6646,7 +6646,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ui-macos"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "base64 0.22.1",
+  "block2",
+@@ -6663,7 +6663,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ui-model"
+-version = "0.5.1529"
++version = "0.5.1530"
+ 
+ [[package]]
+ name = "perry-ui-test"
+@@ -6674,11 +6674,11 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ui-testkit"
+-version = "0.5.1529"
++version = "0.5.1530"
+ 
+ [[package]]
+ name = "perry-ui-tvos"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "base64 0.22.1",
+  "block2",
+@@ -6695,7 +6695,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ui-visionos"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "base64 0.22.1",
+  "block2",
+@@ -6712,7 +6712,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ui-watchos"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "block2",
+  "libc",
+@@ -6726,7 +6726,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ui-windows"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "base64 0.22.1",
+  "libc",
+@@ -6745,7 +6745,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-ui-windows-winui"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "base64 0.22.1",
+  "libc",
+@@ -6758,7 +6758,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-updater"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -6774,7 +6774,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "perry-wasm-host"
+-version = "0.5.1529"
++version = "0.5.1530"
+ dependencies = [
+  "wasmi",
+ ]
+diff --git a/Cargo.toml b/Cargo.toml
+index 2675014ca..02b376022 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -335,7 +335,7 @@ codegen-units = 1
+ codegen-units = 1
+ 
+ [workspace.package]
+-version = "0.5.1529"
++version = "0.5.1530"
+ edition = "2021"
+ license = "MIT"
+ repository = "https://github.com/PerryTS/perry"
+diff --git a/crates/perry-runtime/src/json/mod.rs b/crates/perry-runtime/src/json/mod.rs
+index 2c8b6475c..0602fb9a3 100644
+--- a/crates/perry-runtime/src/json/mod.rs
++++ b/crates/perry-runtime/src/json/mod.rs
+@@ -42,6 +42,7 @@ mod stringify_copy;
+ mod stringify_data_record;
+ mod stringify_escaped_output;
+ mod stringify_flat;
++mod stringify_lazy;
+ pub(crate) use stringify_flat::note_completed_malloc_json_output;
+ mod stringify_nested_records;
+ mod stringify_primitive_array;
+@@ -96,7 +97,7 @@ pub(crate) use parse_reuse::{
+     test_parse_object_template_matches, test_root_scanner_slot_addresses,
+     test_seed_root_scanner_slots,
+ };
+-pub(crate) use parser::{DirectParser, ObjectShapeHint, ParsedStr};
++pub(crate) use parser::{DirectParser, ObjectShapeHint, ParsedStr, MAX_ITERATIVE_NESTING_DEPTH};
+ pub(crate) use raw_json::{ptr_is_raw_json_wrapper, raw_json_text_bytes};
+ #[cfg(test)]
+ pub(crate) use reviver::test_apply_reviver_for_value;
+diff --git a/crates/perry-runtime/src/json/parse_api.rs b/crates/perry-runtime/src/json/parse_api.rs
+index f62f3dfd4..fe465e0f8 100644
+--- a/crates/perry-runtime/src/json/parse_api.rs
++++ b/crates/perry-runtime/src/json/parse_api.rs
+@@ -300,6 +300,8 @@ unsafe fn parse_result_slow(text_ptr: *const StringHeader, len: usize) -> Result
+     Ok(result)
+ }
+ 
++const LAZY_MAX_BLOB_BYTES: usize = 16 * 1024 * 1024;
++
+ /// JSON.parse(text) -> any
+ ///
+ /// Uses a direct recursive-descent parser that constructs Perry JSValues
+@@ -324,7 +326,6 @@ unsafe fn parse_result_slow(text_ptr: *const StringHeader, len: usize) -> Result
+ /// tree-build is faster end-to-end).
+ pub(crate) fn tape_route_eligible(len: usize, bytes: &[u8]) -> bool {
+     const LAZY_MIN_BLOB_BYTES: usize = 1024;
+-    const LAZY_MAX_BLOB_BYTES: usize = 16 * 1024 * 1024;
+     match tape_mode_from_env() {
+         TapeMode::ForceOn => true,
+         TapeMode::ForceOff => false,
+@@ -394,25 +395,22 @@ unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
+             }
+         }
+     }
+-    if !cached_parse_source_is_direct(text_ptr, len) && requires_iterative_parse(bytes) {
+-        if exceeds_iterative_budget(bytes) {
+-            throw_range_error(&iterative_budget_message());
+-        }
+-        return match try_parse_deep_iterative(text_ptr, len) {
+-            Some(value) => value,
+-            None => throw_syntax_error("JSON parse error: malformed deep document"),
+-        };
++    let use_tape = tape_route_eligible(len, bytes);
++    // The tape's explicit stack proves shallow/deep admission in its syntax
++    // pass. Keep the preflight for direct parses and forced oversized tapes:
++    // a huge over-budget input must fail before reserving its native tape.
++    let preflight_depth = !use_tape || len > LAZY_MAX_BLOB_BYTES;
++    if preflight_depth
++        && !cached_parse_source_is_direct(text_ptr, len)
++        && requires_iterative_parse(bytes)
++    {
++        return parse_deep_or_throw(text_ptr, len);
+     }
+ 
+     // Pending parse debt can evacuate the input before the later trigger.
+     // Root once for both routes and derive every later borrow from this slot.
+     let text_root = parse_root_push(JSValue::string_ptr(text_ptr as *mut StringHeader));
+     crate::gc::gc_collect_pending_suppressed_parse();
+-    let bytes = std::slice::from_raw_parts(
+-        crate::string::string_data(parse_root_get(text_root).as_string_ptr()),
+-        len,
+-    );
+-
+     // Issue #179 Step 2 Phase 1 → default-on: tape-based lazy parse
+     // is now the default for top-level arrays on blobs larger than
+     // the size threshold. v0.5.209 runtime adaptive handling (walk
+@@ -461,15 +459,21 @@ unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
+     // Escape hatch via PERRY_JSON_TAPE=1 (force lazy regardless
+     // of size, useful for testing) / =0 (force direct, useful as
+     // a correctness fallback).
+-    let use_tape = tape_route_eligible(len, bytes);
+     if use_tape {
+         if let Some(result) = try_parse_via_tape(text_root, len) {
+             parse_root_restore(text_root);
+             return result;
+         }
+-        // Malformed input or non-array top-level — fall through to
+-        // direct parser, which has the full error-reporting path
+-        // and handles non-array roots.
++        // A malformed or over-budget tape must not enter recursion without
++        // the old depth check. Re-derive the source after the entry collection.
++        let text = parse_root_get(text_root).as_string_ptr();
++        let bytes = std::slice::from_raw_parts(crate::string::string_data(text), len);
++        if !preflight_depth && requires_iterative_parse(bytes) {
++            // No collection occurs between releasing this root and the deep
++            // helper installing its own source root.
++            parse_root_restore(text_root);
++            return parse_deep_or_throw(text, len);
++        }
+     }
+ 
+     // #64 follow-up: opportunistic pre-parse cleanup. When parse runs in a
+@@ -549,6 +553,19 @@ unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
+     result
+ }
+ 
++// Shared cold fallback for preflight admission and rejected tape builds.
++#[cold]
++unsafe fn parse_deep_or_throw(text: *const StringHeader, len: usize) -> JSValue {
++    let bytes = std::slice::from_raw_parts(crate::string::string_data(text), len);
++    if exceeds_iterative_budget(bytes) {
++        throw_range_error(&iterative_budget_message());
++    }
++    match try_parse_deep_iterative(text, len) {
++        Some(value) => value,
++        None => throw_syntax_error("JSON parse error: malformed deep document"),
++    }
++}
++
+ /// v0.5.210: tape-mode selector. Cached at first JSON.parse so we
+ /// pay the env-var lookup once per process, not once per parse.
+ #[derive(Copy, Clone)]
+@@ -600,10 +617,10 @@ unsafe fn try_parse_via_tape(text_root: usize, len: usize) -> Option<JSValue> {
+     // The caller owns the input root. Build the native tape before collecting,
+     // as in the original allocation order, but end the input borrow first.
+     let text_ptr = parse_root_get(text_root).as_string_ptr();
+-    crate::json_tape::with_built_tape_mut_raw(
++    crate::json_tape::with_built_tape_depth_raw(
+         crate::string::string_data(text_ptr),
+         len,
+-        |tape_entries| {
++        |tape_entries, max_depth| {
+             crate::gc::gc_collect_pending_suppressed_parse();
+             super::stringify_flat::service_json_output_sweep_boundary();
+             crate::gc::gc_check_trigger();
+@@ -618,25 +635,36 @@ unsafe fn try_parse_via_tape(text_root: usize, len: usize) -> Option<JSValue> {
+             // dominates `bench_json_roundtrip` and most realistic JSON.parse
+             // workloads). Extending to top-level objects in a follow-up is a
+             // straightforward mirror of the same construction.
+-            let result = if !tape_entries.is_empty()
++            let deep = max_depth > crate::json::parser::MAX_RECURSIVE_NESTING_DEPTH;
++            let result = if deep {
++                crate::json_tape::materialize_iterative(tape_entries, bytes)
++            } else if !tape_entries.is_empty()
+                 && tape_entries[0].kind == crate::json_tape::KIND_ARR_START
+             {
+                 let len = crate::json_tape::count_array_length(tape_entries, 0);
+                 let hdr =
+                     crate::json_tape::alloc_lazy_array_from_scratch(tape_entries, 0, len, text_ptr);
+-                JSValue::object_ptr(hdr as *mut u8)
++                Some(JSValue::object_ptr(hdr as *mut u8))
+             } else {
+-                crate::json_tape::materialize_from_idx(tape_entries, bytes, 0)
++                Some(crate::json_tape::materialize_from_idx(
++                    tape_entries,
++                    bytes,
++                    0,
++                ))
+             };
+-            let result_root = parse_root_push(result);
++            let result_root = result.map(parse_root_push);
+             crate::gc::gc_unsuppress();
+             super::stringify_flat::finish_parse_gc_accounting();
++            if deep {
++                crate::gc::gc_schedule_parse_boundary_collection_if_pressure();
++            }
+             gc_allocation.finish();
+ 
+             super::parse_scalar::clear_oversized_key_cache();
+-            parse_root_get(result_root)
++            result_root.map(parse_root_get)
+         },
+     )
++    .flatten()
+ }
+ 
+ // ─── JSON.parse<T[]>: schema-directed typed parse ─────────────────────────────
+@@ -826,3 +854,7 @@ pub(crate) fn shape_hash(bytes: &[u8]) -> u64 {
+     // Nonzero class_id (0 is reserved for plain objects).
+     h | 0x8000_0000_0000_0000
+ }
++
++#[cfg(test)]
++#[path = "parse_tape_depth_tests.rs"]
++mod tape_depth_tests;
+diff --git a/crates/perry-runtime/src/json/parse_empty.rs b/crates/perry-runtime/src/json/parse_empty.rs
+index 51f8f1b15..409e58ba8 100644
+--- a/crates/perry-runtime/src/json/parse_empty.rs
++++ b/crates/perry-runtime/src/json/parse_empty.rs
+@@ -54,7 +54,9 @@ fn padded_empty_object(mut bytes: &[u8]) -> bool {
+ /// Call only after the entire input has been validated and is no longer used.
+ /// The ordinary allocator services its own trigger before publishing the new
+ /// object. Pressure scheduling below cannot collect.
+-#[inline(always)]
++// Keep the allocator's register frame off scalar and nonempty-object dispatch.
++// All three callers can transfer control here after validation is complete.
++#[inline(never)]
+ pub(super) unsafe fn allocate_empty_object() -> JSValue {
+     crate::gc::gc_collect_pending_suppressed_parse();
+     let shape_id = EMPTY_JSON_SHAPE_ID.with(std::cell::Cell::get);
+diff --git a/crates/perry-runtime/src/json/parse_tape_depth_tests.rs b/crates/perry-runtime/src/json/parse_tape_depth_tests.rs
+new file mode 100644
+index 000000000..9f857c425
+--- /dev/null
++++ b/crates/perry-runtime/src/json/parse_tape_depth_tests.rs
+@@ -0,0 +1,153 @@
++//! Depth admission through the tape path and its legacy error fallback.
++use super::*;
++
++fn nested_arrays(depth: usize, leaf: &str) -> Vec<u8> {
++    let mut input = vec![b'['; depth];
++    input.extend_from_slice(leaf.as_bytes());
++    input.extend(std::iter::repeat_n(b']', depth));
++    input
++}
++
++#[test]
++fn json_tape_deep_result_is_eager_and_safe_on_a_small_stack() {
++    std::thread::Builder::new()
++        .name("json-tape-depth".into())
++        .stack_size(2 * 1024 * 1024)
++        .spawn(|| unsafe {
++            const DEPTH: usize = 10_000;
++            let input = nested_arrays(DEPTH, "7");
++            for typed in [false, true] {
++                let text = crate::js_string_from_bytes(input.as_ptr(), input.len() as u32);
++                let value = if typed {
++                    js_json_parse_typed_array(text, b"x\0".as_ptr(), 2, 1)
++                } else {
++                    js_json_parse(text)
++                };
++                let root = crate::gc::RuntimeHandleScope::new();
++                let held = root.root_nanbox_u64(value.bits());
++                let mut value = JSValue::from_bits(held.get_nanbox_u64());
++                for _ in 0..DEPTH {
++                    let array = value.as_pointer::<crate::ArrayHeader>();
++                    let header = array
++                        .cast::<u8>()
++                        .sub(crate::gc::GC_HEADER_SIZE)
++                        .cast::<crate::gc::GcHeader>();
++                    assert_eq!(
++                        (*header).obj_type,
++                        crate::gc::GC_TYPE_ARRAY,
++                        "deep trees must not leave a recursively materialized lazy node"
++                    );
++                    assert_eq!((*array).length, 1);
++                    value = crate::array::js_array_get(array, 0);
++                }
++                assert_eq!(value.as_number(), 7.0);
++            }
++        })
++        .unwrap()
++        .join()
++        .expect("deep tape parse must not overflow a worker stack");
++}
++
++#[test]
++fn json_tape_depth_handoff_keeps_shallow_arrays_lazy() {
++    unsafe {
++        let limit = crate::json::parser::MAX_RECURSIVE_NESTING_DEPTH;
++        for depth in [limit - 1, limit, limit + 1] {
++            let input = nested_arrays(depth, "0");
++            let text = crate::js_string_from_bytes(input.as_ptr(), input.len() as u32);
++            let root = parse_root_push(JSValue::string_ptr(text));
++            let value = try_parse_via_tape(root, input.len()).expect("valid boundary tape");
++            let header = value
++                .as_pointer::<u8>()
++                .sub(crate::gc::GC_HEADER_SIZE)
++                .cast::<crate::gc::GcHeader>();
++            assert_eq!(
++                (*header).obj_type,
++                if depth > limit {
++                    crate::gc::GC_TYPE_ARRAY
++                } else {
++                    crate::gc::GC_TYPE_LAZY_ARRAY
++                },
++                "depth {depth}"
++            );
++            parse_root_restore(root);
++        }
++    }
++}
++
++#[test]
++fn json_tape_nonarray_deep_root_uses_iterative_materialization() {
++    unsafe {
++        let depth = crate::json::parser::MAX_RECURSIVE_NESTING_DEPTH + 1;
++        let input = format!(
++            "{{\"x\":{}}}",
++            String::from_utf8(nested_arrays(depth, "9")).unwrap()
++        );
++        let text = crate::js_string_from_bytes(input.as_ptr(), input.len() as u32);
++        let root = parse_root_push(JSValue::string_ptr(text));
++        // Exercise the force-on object route without changing the cached env mode.
++        let value = try_parse_via_tape(root, input.len()).expect("valid deep object tape");
++        assert!(value.is_pointer());
++        let value_root = parse_root_push(value);
++        let key = crate::js_string_from_bytes(b"x".as_ptr(), 1);
++        let mut child = crate::object::js_object_get_field_by_name(
++            parse_root_get(value_root).as_pointer(),
++            key,
++        );
++        for _ in 0..depth {
++            child = crate::array::js_array_get(child.as_pointer(), 0);
++        }
++        assert_eq!(child.as_number(), 9.0);
++        parse_root_restore(root);
++    }
++}
++
++#[test]
++fn json_tape_fallback_preserves_syntax_and_budget_errors_across_entries() {
++    let depth = crate::json::parser::MAX_RECURSIVE_NESTING_DEPTH + 1;
++    let mut trailing = nested_arrays(depth, "0");
++    trailing.push(b'x');
++    let mut early_invalid = b"[?,".to_vec();
++    early_invalid.extend(std::iter::repeat_n(
++        b'[',
++        crate::json::parser::MAX_ITERATIVE_NESTING_DEPTH + 1,
++    ));
++    let cases = [
++        (
++            nested_arrays(depth, "01"),
++            crate::error::ERROR_KIND_SYNTAX_ERROR,
++        ),
++        (trailing, crate::error::ERROR_KIND_SYNTAX_ERROR),
++        (
++            nested_arrays(crate::json::parser::MAX_ITERATIVE_NESTING_DEPTH + 1, "0"),
++            crate::error::ERROR_KIND_RANGE_ERROR,
++        ),
++        (early_invalid, crate::error::ERROR_KIND_RANGE_ERROR),
++    ];
++    for (input, kind) in cases {
++        for entry in 0..3 {
++            let before = parse_root_save_len();
++            let text = crate::js_string_from_bytes(input.as_ptr(), input.len() as u32);
++            let result = if entry == 0 {
++                unsafe { js_json_parse_result(text) }
++            } else {
++                crate::exception::catch_js_throw(|| unsafe {
++                    if entry == 1 {
++                        js_json_parse(text)
++                    } else {
++                        js_json_parse_typed_array(text, b"x\0".as_ptr(), 2, 1)
++                    }
++                })
++            };
++            let error = result.expect_err("malformed/depth-limited input must reject");
++            let header =
++                JSValue::from_bits(error.to_bits()).as_pointer::<crate::error::ErrorHeader>();
++            assert_eq!(unsafe { (*header).error_kind }, kind, "entry {entry}");
++            assert_eq!(
++                parse_root_save_len(),
++                before,
++                "failed parse must restore its roots"
++            );
++        }
++    }
++}
+diff --git a/crates/perry-runtime/src/json/parser_depth_blocks.rs b/crates/perry-runtime/src/json/parser_depth_blocks.rs
+index 83ebd2ed6..3d43b4a98 100644
+--- a/crates/perry-runtime/src/json/parser_depth_blocks.rs
++++ b/crates/perry-runtime/src/json/parser_depth_blocks.rs
+@@ -139,14 +139,46 @@ pub(crate) fn nesting_depth_exceeds(bytes: &[u8], limit: usize) -> bool {
+ 
+ #[inline(always)]
+ fn contains_open_container(bytes: &[u8]) -> bool {
++    use std::arch::aarch64::*;
++    unsafe {
++        // '[' and '{' differ only by bit 0x20. No other byte folds to '{'.
++        let fold = vdupq_n_u8(0x20);
++        let object = vdupq_n_u8(b'{');
++        // Preserve early admission for arrays whose first record opens here.
++        if bytes.len() >= 16 {
++            let chunk = vld1q_u8(bytes.as_ptr());
++            if vmaxvq_u8(vceqq_u8(vorrq_u8(chunk, fold), object)) != 0 {
++                return true;
++            }
++            return contains_open_container_tail(&bytes[16..]);
++        }
++    }
++    contains_open_container_tail(bytes)
++}
++
++// Keep the initial positive probe in the depth scanner. Its quote/depth loop
++// does not need the wide no-opening search in its instruction footprint.
++#[inline(never)]
++fn contains_open_container_tail(bytes: &[u8]) -> bool {
+     use std::arch::aarch64::*;
+     let mut i = 0usize;
+     unsafe {
+-        let array = vdupq_n_u8(b'[');
++        let fold = vdupq_n_u8(0x20);
+         let object = vdupq_n_u8(b'{');
++        while bytes.len() - i >= 64 {
++            let p = bytes.as_ptr().add(i);
++            let a = vceqq_u8(vorrq_u8(vld1q_u8(p), fold), object);
++            let b = vceqq_u8(vorrq_u8(vld1q_u8(p.add(16)), fold), object);
++            let c = vceqq_u8(vorrq_u8(vld1q_u8(p.add(32)), fold), object);
++            let d = vceqq_u8(vorrq_u8(vld1q_u8(p.add(48)), fold), object);
++            if vmaxvq_u8(vorrq_u8(vorrq_u8(a, b), vorrq_u8(c, d))) != 0 {
++                return true;
++            }
++            i += 64;
++        }
+         while bytes.len() - i >= 16 {
+             let chunk = vld1q_u8(bytes.as_ptr().add(i));
+-            if vmaxvq_u8(vorrq_u8(vceqq_u8(chunk, array), vceqq_u8(chunk, object))) != 0 {
++            if vmaxvq_u8(vceqq_u8(vorrq_u8(chunk, fold), object)) != 0 {
+                 return true;
+             }
+             i += 16;
+@@ -154,3 +186,52 @@ fn contains_open_container(bytes: &[u8]) -> bool {
+     }
+     bytes[i..].iter().any(|&b| matches!(b, b'[' | b'{'))
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::contains_open_container;
++
++    #[test]
++    fn json_open_scan_matches_every_byte_and_vector_tail() {
++        for len in [
++            0, 1, 3, 7, 8, 15, 16, 17, 31, 32, 47, 48, 63, 64, 65, 79, 80, 81, 127, 128, 129, 255,
++            256, 257,
++        ] {
++            for byte in 0..=255u8 {
++                for offset in 0..16 {
++                    // An accidental read outside the slice sees an opening.
++                    let mut storage = vec![b'{'; len + 32];
++                    let bytes = &mut storage[offset..offset + len];
++                    bytes.fill(byte);
++                    assert_eq!(
++                        contains_open_container(bytes),
++                        bytes.iter().any(|&b| matches!(b, b'[' | b'{')),
++                        "len={len}, byte={byte}, offset={offset}"
++                    );
++                }
++            }
++        }
++    }
++
++    #[test]
++    fn json_open_scan_finds_every_position_with_poisoned_surroundings() {
++        for len in 0..260 {
++            for offset in 0..16 {
++                let mut storage = vec![b'['; len + 32];
++                let bytes = &mut storage[offset..offset + len];
++                bytes.fill(b'x');
++                assert!(!contains_open_container(bytes));
++                for position in 0..len {
++                    for opening in [b'[', b'{'] {
++                        bytes[position] = opening;
++                        assert!(
++                            contains_open_container(bytes),
++                            "{len}, {offset}, {position}"
++                        );
++                    }
++                    bytes[position] = b'x';
++                }
++            }
++        }
++    }
++}
+diff --git a/crates/perry-runtime/src/json/simd.rs b/crates/perry-runtime/src/json/simd.rs
+index 00da392f3..56ec11b95 100644
+--- a/crates/perry-runtime/src/json/simd.rs
++++ b/crates/perry-runtime/src/json/simd.rs
+@@ -44,6 +44,28 @@ pub(crate) fn find_quote_or_backslash(bytes: &[u8]) -> Option<usize> {
+     find_special::<false, false>(bytes)
+ }
+ 
++/// Lazy source admission has many complete short strings and short tails.
++/// Classify four to seven remaining bytes in a padded word, preserving the
++/// first-match contract. General parser/escaper entries keep their prior tails.
++#[inline(always)]
++pub(super) fn find_quote_or_backslash_padded_tail(bytes: &[u8]) -> Option<usize> {
++    #[cfg(target_arch = "aarch64")]
++    {
++        find_neon::<false, false, true>(bytes)
++    }
++    #[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
++    {
++        find_sse2::<false, false, true>(bytes)
++    }
++    #[cfg(not(any(
++        target_arch = "aarch64",
++        all(target_arch = "x86_64", target_feature = "sse2")
++    )))]
++    {
++        find_word_with_tail::<false, false, true>(bytes)
++    }
++}
++
+ #[inline(always)]
+ fn special<const CONTROL: bool, const SURROGATE: bool>(b: u8) -> bool {
+     b == b'"' || b == b'\\' || (CONTROL && b < 0x20) || (SURROGATE && b == 0xED)
+@@ -53,11 +75,11 @@ fn special<const CONTROL: bool, const SURROGATE: bool>(b: u8) -> bool {
+ fn find_special<const CONTROL: bool, const SURROGATE: bool>(bytes: &[u8]) -> Option<usize> {
+     #[cfg(target_arch = "aarch64")]
+     {
+-        find_neon::<CONTROL, SURROGATE>(bytes)
++        find_neon::<CONTROL, SURROGATE, false>(bytes)
+     }
+     #[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
+     {
+-        find_sse2::<CONTROL, SURROGATE>(bytes)
++        find_sse2::<CONTROL, SURROGATE, false>(bytes)
+     }
+     #[cfg(not(any(
+         target_arch = "aarch64",
+@@ -73,6 +95,13 @@ fn find_special<const CONTROL: bool, const SURROGATE: bool>(bytes: &[u8]) -> Opt
+ /// lane, so its mask must not be used directly as a first-byte index.
+ #[inline(always)]
+ fn find_word<const CONTROL: bool, const SURROGATE: bool>(bytes: &[u8]) -> Option<usize> {
++    find_word_with_tail::<CONTROL, SURROGATE, false>(bytes)
++}
++
++#[inline(always)]
++fn find_word_with_tail<const CONTROL: bool, const SURROGATE: bool, const PADDED: bool>(
++    bytes: &[u8],
++) -> Option<usize> {
+     const LOW: u64 = 0x0101_0101_0101_0101;
+     const HIGH: u64 = 0x8080_8080_8080_8080;
+     #[inline(always)]
+@@ -95,8 +124,11 @@ fn find_word<const CONTROL: bool, const SURROGATE: bool>(bytes: &[u8]) -> Option
+         }
+         i += 8;
+     }
+-    bytes[i..]
+-        .iter()
++    let tail = &bytes[i..];
++    if PADDED && (4..8).contains(&tail.len()) {
++        return find_padded_tail::<CONTROL, SURROGATE, false>(tail).map(|j| i + j);
++    }
++    tail.iter()
+         .position(|&b| special::<CONTROL, SURROGATE>(b))
+         .map(|j| i + j)
+ }
+@@ -166,7 +198,9 @@ fn find_padded_tail<const CONTROL: bool, const SURROGATE: bool, const NON_ASCII:
+ 
+ #[cfg(target_arch = "aarch64")]
+ #[inline(always)]
+-fn find_neon<const CONTROL: bool, const SURROGATE: bool>(bytes: &[u8]) -> Option<usize> {
++fn find_neon<const CONTROL: bool, const SURROGATE: bool, const PADDED: bool>(
++    bytes: &[u8],
++) -> Option<usize> {
+     use std::arch::aarch64::*;
+     unsafe {
+         let quote = vdupq_n_u8(b'"');
+@@ -188,13 +222,20 @@ fn find_neon<const CONTROL: bool, const SURROGATE: bool>(bytes: &[u8]) -> Option
+             }
+             i += 16;
+         }
+-        find_word::<CONTROL, SURROGATE>(&bytes[i..]).map(|j| i + j)
++        let tail = if PADDED {
++            find_word_with_tail::<CONTROL, SURROGATE, true>(&bytes[i..])
++        } else {
++            find_word::<CONTROL, SURROGATE>(&bytes[i..])
++        };
++        tail.map(|j| i + j)
+     }
+ }
+ 
+ #[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
+ #[inline(always)]
+-fn find_sse2<const CONTROL: bool, const SURROGATE: bool>(bytes: &[u8]) -> Option<usize> {
++fn find_sse2<const CONTROL: bool, const SURROGATE: bool, const PADDED: bool>(
++    bytes: &[u8],
++) -> Option<usize> {
+     use std::arch::x86_64::*;
+     unsafe {
+         let quote = _mm_set1_epi8(b'"' as i8);
+@@ -220,7 +261,12 @@ fn find_sse2<const CONTROL: bool, const SURROGATE: bool>(bytes: &[u8]) -> Option
+             }
+             i += 16;
+         }
+-        find_word::<CONTROL, SURROGATE>(&bytes[i..]).map(|j| i + j)
++        let tail = if PADDED {
++            find_word_with_tail::<CONTROL, SURROGATE, true>(&bytes[i..])
++        } else {
++            find_word::<CONTROL, SURROGATE>(&bytes[i..])
++        };
++        tail.map(|j| i + j)
+     }
+ }
+ 
+diff --git a/crates/perry-runtime/src/json/simd_tests.rs b/crates/perry-runtime/src/json/simd_tests.rs
+index c66fbafc4..446377cf8 100644
+--- a/crates/perry-runtime/src/json/simd_tests.rs
++++ b/crates/perry-runtime/src/json/simd_tests.rs
+@@ -51,13 +51,15 @@ fn digit_and_string_scans_stop_before_guard_page() {
+             0
+         );
+         for len in [
+-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129,
++            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 20, 21, 22, 23, 28, 29, 30, 31,
++            32, 33, 36, 37, 38, 39, 63, 64, 65, 68, 69, 70, 71, 127, 128, 129,
+         ] {
+             let start = base.add(page - len);
+             std::ptr::write_bytes(start, b'5', len);
+             let bytes = std::slice::from_raw_parts(start, len);
+             assert_eq!(count_ascii_digits(bytes), len);
+             assert_eq!(find_string_terminator(bytes), None);
++            assert_eq!(find_quote_or_backslash_padded_tail(bytes), None);
+             assert!(!short_string_needs_escape(bytes));
+             if len != 0 {
+                 // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+@@ -65,6 +67,7 @@ fn digit_and_string_scans_stop_before_guard_page() {
+                 let bytes = std::slice::from_raw_parts(start, len);
+                 assert_eq!(count_ascii_digits(bytes), len - 1);
+                 assert_eq!(find_string_terminator(bytes), Some(len - 1));
++                assert_eq!(find_quote_or_backslash_padded_tail(bytes), Some(len - 1));
+                 assert!(short_string_needs_escape(bytes));
+             }
+         }
+@@ -89,6 +92,16 @@ fn check(bytes: &[u8]) {
+         "short output escape {bytes:?}"
+     );
+     assert_eq!(find_quote_or_backslash(bytes), quotes, "quotes {bytes:?}");
++    assert_eq!(
++        find_quote_or_backslash_padded_tail(bytes),
++        quotes,
++        "lazy quotes {bytes:?}"
++    );
++    assert_eq!(
++        find_word_with_tail::<false, false, true>(bytes),
++        quotes,
++        "lazy word quotes {bytes:?}"
++    );
+     assert_eq!(
+         find_word::<true, false>(bytes),
+         parse,
+@@ -109,7 +122,8 @@ fn check(bytes: &[u8]) {
+ #[test]
+ fn every_byte_at_vector_word_and_tail_boundaries() {
+     for len in [
+-        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 23, 24, 31, 32, 33, 63, 64, 65,
++        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 20, 21, 22, 23, 24, 28, 29, 30, 31,
++        32, 33, 36, 37, 38, 39, 63, 64, 65, 68, 69, 70, 71,
+     ] {
+         for alignment in [0, 1, 7, 15] {
+             let mut storage = vec![b'a'; alignment + len + 16];
+diff --git a/crates/perry-runtime/src/json/stringify_api.rs b/crates/perry-runtime/src/json/stringify_api.rs
+index 57f2dbac1..87732d765 100644
+--- a/crates/perry-runtime/src/json/stringify_api.rs
++++ b/crates/perry-runtime/src/json/stringify_api.rs
+@@ -53,7 +53,7 @@ pub(crate) unsafe fn redirect_lazy_to_materialized(value: f64) -> f64 {
+ /// Return one validated JSON number token and its exclusive end offset.
+ /// The tape builder already accepted this input; the checks here keep the
+ /// lazy stringify path fail-closed if a retained blob or tape is corrupted.
+-fn json_number_token(bytes: &[u8], start: usize) -> Option<(usize, &[u8])> {
++pub(super) fn json_number_token(bytes: &[u8], start: usize) -> Option<(usize, &[u8])> {
+     let mut end = start;
+     if bytes.get(end) == Some(&b'-') {
+         end += 1;
+@@ -109,7 +109,7 @@ fn is_trivially_canonical_json_integer(token: &[u8]) -> bool {
+         && !(negative && digits == b"0")
+ }
+ 
+-/// Normalize number spellings in an otherwise byte-copyable lazy JSON array.
++/// Prove source-copy admission while normalizing the array's number spellings.
+ /// `JSON.parse` converts every number token to an IEEE-754 double, so the
+ /// stringify shortcut must not preserve source spellings such as `1e-400`,
+ /// `1.0`, or `9007199254740993`. Allocate a rewritten buffer only when a token
+@@ -117,6 +117,7 @@ fn is_trivially_canonical_json_integer(token: &[u8]) -> bool {
+ fn normalize_lazy_json_numbers<'a>(
+     tape: &[crate::json_tape::TapeEntry],
+     blob: &'a [u8],
++    root: usize,
+     root_start: usize,
+     root_end: usize,
+ ) -> Option<std::borrow::Cow<'a, [u8]>> {
+@@ -125,37 +126,35 @@ fn normalize_lazy_json_numbers<'a>(
+     let mut copied_until = root_start;
+     let mut canonical = String::new();
+ 
+-    for entry in tape {
+-        if entry.kind != crate::json_tape::KIND_NUMBER {
+-            continue;
+-        }
+-        let number_start = entry.offset as usize;
+-        if number_start < root_start || number_start >= root_end {
+-            continue;
+-        }
+-        let (number_end, token) = json_number_token(blob, number_start)?;
+-        if number_end > root_end {
+-            return None;
+-        }
+-        if is_trivially_canonical_json_integer(token) {
+-            continue;
+-        }
++    super::stringify_lazy::visit_copyable_numbers(
++        tape,
++        blob,
++        root,
++        |number_start, number_end, token| {
++            if number_end > root_end {
++                return None;
++            }
++            if is_trivially_canonical_json_integer(token) {
++                return Some(());
++            }
+ 
+-        let value = std::str::from_utf8(token).ok()?.parse::<f64>().ok()?;
+-        canonical.clear();
+-        unsafe { stringify::write_number(&mut canonical, value) };
+-        if canonical.as_bytes() == token {
+-            continue;
+-        }
++            let value = std::str::from_utf8(token).ok()?.parse::<f64>().ok()?;
++            canonical.clear();
++            unsafe { stringify::write_number(&mut canonical, value) };
++            if canonical.as_bytes() == token {
++                return Some(());
++            }
+ 
+-        let output = rewritten.get_or_insert_with(|| Vec::with_capacity(original.len()));
+-        if number_start < copied_until {
+-            return None;
+-        }
+-        output.extend_from_slice(blob.get(copied_until..number_start)?);
+-        output.extend_from_slice(canonical.as_bytes());
+-        copied_until = number_end;
+-    }
++            let output = rewritten.get_or_insert_with(|| Vec::with_capacity(original.len()));
++            if number_start < copied_until {
++                return None;
++            }
++            output.extend_from_slice(blob.get(copied_until..number_start)?);
++            output.extend_from_slice(canonical.as_bytes());
++            copied_until = number_end;
++            Some(())
++        },
++    )?;
+ 
+     if let Some(mut output) = rewritten {
+         output.extend_from_slice(blob.get(copied_until..root_end)?);
+@@ -165,23 +164,10 @@ fn normalize_lazy_json_numbers<'a>(
+     }
+ }
+ 
+-/// Issue #179 Phase 4: lazy-stringify fast path. If `value` is a
+-/// lazy-parse top-level array whose `materialized` is still null (no
+-/// indexed access or mutation has forced tree build), memcpy the
+-/// original blob bytes into a fresh string — no tree walk, no
+-/// escape handling. Returns `None` if `value` is not a
+-/// tape-backed-and-unmutated lazy array, in which case the caller
+-/// falls through to the generic stringify path.
+-///
+-/// Correctness invariant: if the lazy value is unmutated, the bytes
+-/// spanning `[root.offset .. root_end.offset+1]` in the original
+-/// blob are exactly what `JSON.stringify` would produce for that
+-/// value (modulo whitespace the user's original blob may contain —
+-/// `JSON.stringify` never emits whitespace for the 2-arg form, so
+-/// this is only correct when the blob came from `JSON.stringify` or
+-/// is otherwise whitespace-free in the array span). Number tokens are
+-/// normalized separately: their source spelling is preserved only when it
+-/// matches the canonical formatting of the `f64` produced by `JSON.parse`.
++/// Copy an untouched lazy array only after proving its compact source spelling,
++/// unique keys and property order. Number tokens normalize during that proof.
++/// Noncanonical sources materialize before returning
++/// `None`, so the caller can redirect to the ordinary array stringifier.
+ pub(crate) unsafe fn try_stringify_lazy_array(value: f64) -> Option<*mut StringHeader> {
+     let bits = value.to_bits();
+     let top16 = bits >> 48;
+@@ -257,7 +243,11 @@ pub(crate) unsafe fn try_stringify_lazy_array(value: f64) -> Option<*mut StringH
+     if end > blob_bytes.len() || start > end {
+         return None;
+     }
+-    let normalized = normalize_lazy_json_numbers(tape, blob_bytes, start, end)?;
++    let Some(normalized) = normalize_lazy_json_numbers(tape, blob_bytes, root, start, end) else {
++        // Native proof/rewrite scratch is dropped before this collecting path.
++        crate::json_tape::force_materialize_lazy(lazy.cast_mut());
++        return None;
++    };
+     Some(json_string_from_output_bytes(normalized.as_ref()))
+ }
+ 
+diff --git a/crates/perry-runtime/src/json/stringify_lazy.rs b/crates/perry-runtime/src/json/stringify_lazy.rs
+new file mode 100644
+index 000000000..06a63ca2a
+--- /dev/null
++++ b/crates/perry-runtime/src/json/stringify_lazy.rs
+@@ -0,0 +1,159 @@
++//! Source-form admission for lazy stringify. All scratch is native and lives
++//! only for this call; no managed values are constructed during the proof.
++
++use crate::json_tape::*;
++
++struct ObjectKeys {
++    first: usize,
++    end: usize,
++    last_index: Option<u32>,
++    saw_name: bool,
++}
++
++/// Prove that copying these tokens preserves compact JSON string spelling and
++/// property enumeration. Number spelling is checked by the caller separately.
++/// Escaped keys and objects wider than 32 keys conservatively materialize;
++/// the bound prevents duplicate detection from becoming quadratic on wide input.
++#[cfg(test)]
++fn source_is_copyable(tape: &[TapeEntry], blob: &[u8], root: usize) -> bool {
++    visit_copyable_numbers(tape, blob, root, |_, _, _| Some(())).is_some()
++}
++
++/// Visit numbers during the source proof, so normalization does not need a
++/// second tape walk or a second scan of each number token. The callback may
++/// grow native buffers but must not allocate managed objects or collect.
++pub(super) fn visit_copyable_numbers(
++    tape: &[TapeEntry],
++    blob: &[u8],
++    root: usize,
++    mut number: impl FnMut(usize, usize, &[u8]) -> Option<()>,
++) -> Option<()> {
++    // Reject raw WTF-8 surrogates once for the entire source. Validating every
++    // short key and string separately pays the validator's setup per token.
++    let text = simdutf8::basic::from_utf8(blob).ok()?;
++    let root_entry = tape.get(root)?;
++    if root_entry.kind != KIND_ARR_START {
++        return None;
++    }
++    let end = root_entry.link as usize;
++    let entries = tape.get(root..=end)?;
++    let mut cursor = root_entry.offset as usize;
++    let mut previous = KIND_ARR_START;
++    let mut objects: Vec<ObjectKeys> = Vec::new();
++    let mut keys: Vec<&[u8]> = Vec::new();
++    for (relative, entry) in entries.iter().enumerate() {
++        let at = entry.offset as usize;
++        // Tape omits commas and colons. Require the exact compact separator,
++        // including adjacent empty/nested containers, rather than skipping ws.
++        let separator = if previous == KIND_KEY {
++            Some(b':')
++        } else if matches!(previous, KIND_ARR_START | KIND_OBJ_START)
++            || matches!(entry.kind, KIND_ARR_END | KIND_OBJ_END)
++        {
++            None
++        } else {
++            Some(b',')
++        };
++        if at.checked_sub(cursor)? != usize::from(separator.is_some())
++            || separator.is_some_and(|byte| blob.get(cursor) != Some(&byte))
++        {
++            return None;
++        }
++        cursor = match entry.kind {
++            KIND_OBJ_START => {
++                objects.push(ObjectKeys {
++                    first: keys.len(),
++                    end: entry.link as usize,
++                    last_index: None,
++                    saw_name: false,
++                });
++                at + 1
++            }
++            KIND_OBJ_END => {
++                let frame = objects.pop()?;
++                if frame.end != root + relative {
++                    return None;
++                }
++                keys.truncate(frame.first);
++                at + 1
++            }
++            KIND_ARR_START | KIND_ARR_END => at + 1,
++            KIND_STRING | KIND_KEY => {
++                let next = entries.get(relative + 1)?;
++                let end = canonical_string_end(blob, entry, next)?;
++                if entry.kind == KIND_KEY {
++                    let key_text = text.get(at + 1..end - 1)?;
++                    let key = key_text.as_bytes();
++                    let frame = objects.last_mut()?;
++                    let siblings = &keys[frame.first..];
++                    if siblings.len() >= 32 || siblings.contains(&key) {
++                        return None;
++                    }
++                    // Ordinary names cannot be array indices. Avoid calling
++                    // the general index parser for each key in a record.
++                    let index = if key.first().is_some_and(u8::is_ascii_digit) {
++                        crate::object::canonical_array_index(key_text)
++                    } else {
++                        None
++                    };
++                    if let Some(index) = index {
++                        if frame.saw_name || frame.last_index.is_some_and(|last| index <= last) {
++                            return None;
++                        }
++                        frame.last_index = Some(index);
++                    } else {
++                        frame.saw_name = true;
++                    }
++                    keys.push(key);
++                }
++                end
++            }
++            KIND_NUMBER => {
++                let (end, token) = super::stringify_api::json_number_token(blob, at)?;
++                number(at, end, token)?;
++                end
++            }
++            KIND_TRUE | KIND_NULL => at + 4,
++            KIND_FALSE => at + 5,
++            _ => return None,
++        };
++        previous = entry.kind;
++    }
++    if previous != KIND_ARR_END || !objects.is_empty() || cursor > blob.len() {
++        return None;
++    }
++    Some(())
++}
++
++fn canonical_string_end(blob: &[u8], entry: &TapeEntry, next: &TapeEntry) -> Option<usize> {
++    // A valid tape identifies the next token. Its required compact separator
++    // fixes this string's closing quote without another quote search. The
++    // adjacent-token check in the caller then validates that separator byte.
++    let gap =
++        usize::from(entry.kind == KIND_KEY || !matches!(next.kind, KIND_ARR_END | KIND_OBJ_END));
++    let start = entry.offset as usize;
++    let end = (next.offset as usize).checked_sub(gap)?;
++    if end.checked_sub(start)? < 2
++        || blob.get(start) != Some(&b'"')
++        || blob.get(end - 1) != Some(&b'"')
++    {
++        return None;
++    }
++    let mut body = blob.get(start + 1..end - 1)?;
++    while let Some(at) = super::simd::find_quote_or_backslash_padded_tail(body) {
++        if entry.kind == KIND_KEY || body[at] != b'\\' {
++            return None;
++        }
++        match body.get(at + 1)? {
++            b'"' | b'\\' | b'b' | b'f' | b'n' | b'r' | b't' => body = body.get(at + 2..)?,
++            // Slash and Unicode escapes need normalization. Canonical Unicode
++            // control/surrogate escapes conservatively use materialization too.
++            _ => return None,
++        }
++    }
++    Some(end)
++}
++
++#[cfg(test)]
++#[path = "stringify_lazy_tests.rs"]
++mod tests;
+diff --git a/crates/perry-runtime/src/json/stringify_lazy_tests.rs b/crates/perry-runtime/src/json/stringify_lazy_tests.rs
+new file mode 100644
+index 000000000..37b024be1
+--- /dev/null
++++ b/crates/perry-runtime/src/json/stringify_lazy_tests.rs
+@@ -0,0 +1,147 @@
++use super::*;
++use crate::{gc::RuntimeHandleScope, JSValue};
++
++fn admits(source: &[u8], root: usize) -> bool {
++    let tape = build_tape(source).expect("valid fixture");
++    source_is_copyable(&tape.entries, source, root)
++}
++
++#[test]
++fn json_lazy_copy_admission_checks_spelling_duplicates_and_key_order() {
++    for source in [
++        r#"[ {"x":1}]"#,
++        r#"["x" ,1]"#,
++        r#"["x", 1]"#,
++        r#"["x" ]"#,
++        r#"["x\"" ,""]"#,
++        r#"[{"x" :1}]"#,
++        r#"[{"x": 1}]"#,
++        r#"[{"x":1} ,{"x":2}]"#,
++        r#"["\u0061"]"#,
++        r#"["\/"]"#,
++        r#"[{"x":1,"x":2}]"#,
++        r#"[{"":1,"":2}]"#,
++        r#"[{"x":1,"\u0078":2}]"#,
++        r#"[{"2":2,"1":1}]"#,
++        r#"[{"a":0,"1":1}]"#,
++        r#"[{"0":1,"0":2}]"#,
++        r#"[{"child":{"x":1,"x":2}}]"#,
++    ] {
++        assert!(!admits(source.as_bytes(), 0), "{source}");
++    }
++    let mut raw_surrogate = b"[\"".to_vec();
++    raw_surrogate.extend_from_slice(b"\xed\xa0\x80");
++    raw_surrogate.extend_from_slice(b"\"]");
++    assert!(!admits(&raw_surrogate, 0));
++}
++
++#[test]
++fn json_lazy_copy_number_visitor_excludes_strings_and_other_subtrees() {
++    let source = br#"[8,[1.0,"2e3",{"x":4}],9]"#;
++    let tape = build_tape(source).unwrap();
++    let mut visited = Vec::new();
++    visit_copyable_numbers(&tape.entries, source, 2, |start, end, token| {
++        assert_eq!(&source[start..end], token);
++        visited.push(token.to_vec());
++        Some(())
++    })
++    .unwrap();
++    assert_eq!(visited, [b"1.0".to_vec(), b"4".to_vec()]);
++}
++
++#[test]
++fn json_lazy_copy_admission_preserves_canonical_nested_and_unicode_sources() {
++    for source in [
++        r#"[]"#,
++        r#"[[],{},[{},[]],null,true,false]"#,
++        r#"[{"x":1},{"x":2}]"#,
++        r#"[{"x":{"x":1},"y":2}]"#,
++        r#"[{"0":0,"2":2,"4294967294":3,"a":4,"01":5,"4294967295":6}]"#,
++        r#"["a b","é"]"#,
++        r#"["a\nb\t\"\\/é😀"]"#,
++        r#"[1e-400,1.0,-0,9007199254740993]"#,
++        " \n[1,2]\t ",
++    ] {
++        assert!(admits(source.as_bytes(), 0), "{source}");
++    }
++    assert!(admits(br#"[ {"x":0},[1,2] ]"#, 5));
++}
++
++#[test]
++fn json_lazy_copy_admission_bounds_wide_object_work_and_rejects_bad_ranges() {
++    let object = (0..33)
++        .map(|i| format!("\"k{i}\":{i}"))
++        .collect::<Vec<_>>()
++        .join(",");
++    assert!(!admits(format!("[{{{object}}}]").as_bytes(), 0));
++    let mut tape = build_tape(b"[1]").unwrap().entries;
++    tape[0].link = u32::MAX;
++    assert!(!source_is_copyable(&tape, b"[1]", 0));
++    assert!(!source_is_copyable(&[], b"[]", 0));
++}
++
++#[test]
++fn json_lazy_copy_admission_creates_no_managed_intermediates() {
++    let source = format!(
++        "[{}]",
++        vec![r#"{"x":1,"child":{"x":"é😀"}}"#; 128].join(",")
++    );
++    let tape = build_tape(source.as_bytes()).unwrap();
++    let bytes = crate::arena::arena_total_bytes();
++    let roots = RuntimeHandleScope::active_len_for_tests();
++    for _ in 0..100 {
++        assert!(source_is_copyable(&tape.entries, source.as_bytes(), 0));
++    }
++    assert_eq!(crate::arena::arena_total_bytes(), bytes);
++    assert_eq!(RuntimeHandleScope::active_len_for_tests(), roots);
++}
++
++unsafe fn roundtrip(source: &str, expected: &str, remains_lazy: bool) {
++    let source = source.as_bytes();
++    let scope = RuntimeHandleScope::new();
++    let text = crate::js_string_from_bytes(source.as_ptr(), source.len() as u32);
++    let lazy = with_built_tape(source, |tape| {
++        alloc_lazy_array(tape, 0, count_array_length(tape, 0), text)
++    })
++    .unwrap();
++    let held = scope.root_raw_mut_ptr(lazy);
++    let output = held.with_mut_ptr(|lazy: *mut LazyArrayHeader| {
++        crate::json::js_json_stringify(f64::from_bits(JSValue::object_ptr(lazy.cast()).bits()), 0)
++    });
++    assert!(!output.is_null());
++    assert_eq!(crate::string::header_str_checked(output).unwrap(), expected);
++    held.with_mut_ptr(|lazy: *mut LazyArrayHeader| {
++        assert_eq!((*lazy).materialized.is_null(), remains_lazy);
++    });
++}
++
++#[test]
++fn json_lazy_stringify_materializes_noncanonical_source_correctly() {
++    unsafe {
++        for (source, expected) in [
++            (r#"[ {"x" : 1} , {"x":2} ]"#, r#"[{"x":1},{"x":2}]"#),
++            (r#"["\u0061","\/"]"#, r#"["a","/"]"#),
++            (r#"[{"x":1,"x":2}]"#, r#"[{"x":2}]"#),
++            (r#"[{"2":2,"1":1}]"#, r#"[{"1":1,"2":2}]"#),
++            (r#"[{"x":1,"\u0078":2}]"#, r#"[{"x":2}]"#),
++        ] {
++            roundtrip(source, expected, false);
++        }
++    }
++}
++
++#[test]
++fn json_lazy_stringify_keeps_canonical_arrays_lazy_and_normalizes_numbers() {
++    unsafe {
++        roundtrip(
++            r#"[{"x":"é😀"},{"x":"a\nb"}]"#,
++            r#"[{"x":"é😀"},{"x":"a\nb"}]"#,
++            true,
++        );
++        roundtrip(
++            r#"[1e-400,1.0,-0,9007199254740993,1e400]"#,
++            r#"[0,1,0,9007199254740992,null]"#,
++            true,
++        );
++    }
++}
+diff --git a/crates/perry-runtime/src/json_tape.rs b/crates/perry-runtime/src/json_tape.rs
+index f5f4476f1..6fd8b112a 100644
+--- a/crates/perry-runtime/src/json_tape.rs
++++ b/crates/perry-runtime/src/json_tape.rs
+@@ -145,7 +145,7 @@ fn json_tape_safepoint(_point: JsonTapeSafepoint, _ptr: usize) {}
+ pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
+     let mut entries: Vec<TapeEntry> = Vec::new();
+     let mut stack: Vec<u32> = Vec::new();
+-    if build_tape_into(bytes, &mut entries, &mut stack) {
++    if build_tape_into::<false>(bytes, &mut entries, &mut stack, &mut 0) {
+         Some(Tape { entries })
+     } else {
+         None
+@@ -155,7 +155,14 @@ pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
+ /// Build a tape into caller-provided storage. This is the hot-path
+ /// variant used by `JSON.parse` so repeated parse-churn workloads do
+ /// not allocate and free a fresh tape vector on every iteration.
+-fn build_tape_into(bytes: &[u8], entries: &mut Vec<TapeEntry>, stack: &mut Vec<u32>) -> bool {
++// Keep both specializations outside the common parse entry and its stack frame.
++#[inline(never)]
++fn build_tape_into<const CAPTURE_DEPTH: bool>(
++    bytes: &[u8],
++    entries: &mut Vec<TapeEntry>,
++    stack: &mut Vec<u32>,
++    max_depth: &mut usize,
++) -> bool {
+     entries.clear();
+     stack.clear();
+     // Pre-size: worst case is one tape entry per ~4 bytes of input
+@@ -284,6 +291,12 @@ fn build_tape_into(bytes: &[u8], entries: &mut Vec<TapeEntry>, stack: &mut Vec<u
+                             link: 0,
+                         });
+                         stack.push(idx);
++                        if CAPTURE_DEPTH {
++                            *max_depth = (*max_depth).max(stack.len());
++                            if *max_depth > crate::json::MAX_ITERATIVE_NESTING_DEPTH {
++                                return false;
++                            }
++                        }
+                         pos += 1;
+                         skip_ws(bytes, &mut pos);
+                         if pos < bytes.len() && bytes[pos] == b'}' {
+@@ -329,6 +342,12 @@ fn build_tape_into(bytes: &[u8], entries: &mut Vec<TapeEntry>, stack: &mut Vec<u
+                             link: 0,
+                         });
+                         stack.push(idx);
++                        if CAPTURE_DEPTH {
++                            *max_depth = (*max_depth).max(stack.len());
++                            if *max_depth > crate::json::MAX_ITERATIVE_NESTING_DEPTH {
++                                return false;
++                            }
++                        }
+                         pos += 1;
+                         skip_ws(bytes, &mut pos);
+                         if pos < bytes.len() && bytes[pos] == b']' {
+@@ -515,16 +534,42 @@ pub(crate) unsafe fn with_built_tape_mut_raw<R>(
+     data: *const u8,
+     len: usize,
+     f: impl FnOnce(&mut Vec<TapeEntry>) -> R,
++) -> Option<R> {
++    with_built_tape_depth_impl::<false, R>(data, len, |entries, _| f(entries))
++}
++
++/// Build a syntax-validated tape and capture the deepest container stack.
++/// Refuse inputs beyond the parse resource budget before materialization.
++/// The caller must retain the legacy depth/error check when this declines.
++///
++/// # Safety
++/// As with `with_built_tape_raw`, no input borrow crosses the callback; `f`
++/// receives only native entries and depth metadata, and must derive its source
++/// pointer again from the root after any collection.
++pub(crate) unsafe fn with_built_tape_depth_raw<R>(
++    data: *const u8,
++    len: usize,
++    f: impl FnOnce(&mut Vec<TapeEntry>, usize) -> R,
++) -> Option<R> {
++    with_built_tape_depth_impl::<true, R>(data, len, f)
++}
++
++unsafe fn with_built_tape_depth_impl<const CAPTURE_DEPTH: bool, R>(
++    data: *const u8,
++    len: usize,
++    f: impl FnOnce(&mut Vec<TapeEntry>, usize) -> R,
+ ) -> Option<R> {
+     TAPE_SCRATCH.with(|cell| {
+         let mut scratch = cell.take().unwrap_or_else(TapeScratch::new);
+-        let built = build_tape_into(
++        let mut max_depth = 0;
++        let built = build_tape_into::<CAPTURE_DEPTH>(
+             std::slice::from_raw_parts(data, len),
+             &mut scratch.entries,
+             &mut scratch.stack,
++            &mut max_depth,
+         );
+         let result = if built {
+-            Some(f(&mut scratch.entries))
++            Some(f(&mut scratch.entries, max_depth))
+         } else {
+             None
+         };
+diff --git a/crates/perry-runtime/src/json_tape_tests.rs b/crates/perry-runtime/src/json_tape_tests.rs
+index 42ff3d2db..70f795aca 100644
+--- a/crates/perry-runtime/src/json_tape_tests.rs
++++ b/crates/perry-runtime/src/json_tape_tests.rs
+@@ -757,3 +757,71 @@ fn owned_tape_callback_transfers_storage_and_recovers_after_large_invalid_input(
+     assert_eq!(owned[1].kind, KIND_NUMBER);
+     assert_eq!(owned.last().unwrap().kind, KIND_ARR_END);
+ }
++
++#[test]
++fn json_tape_depth_capture_counts_structural_and_empty_containers() {
++    let mut cases = vec![
++        (b"0".to_vec(), 0),
++        (b"[]".to_vec(), 1),
++        (br#"[{"x":[]}]"#.to_vec(), 3),
++        (br#"{"x":"[{}]\\\"[","y":{}}"#.to_vec(), 2),
++    ];
++    for depth in [31, 999, 1000, 1001, 2048] {
++        let mut input = Vec::new();
++        for level in 0..depth {
++            input.extend_from_slice(if level % 2 == 0 { b"[" } else { b"{\"x\":" });
++        }
++        input.push(b'0');
++        for level in (0..depth).rev() {
++            input.push(if level % 2 == 0 { b']' } else { b'}' });
++        }
++        cases.push((input, depth));
++    }
++    for (input, expected_depth) in cases {
++        let reference = build_tape(&input).expect("valid reference tape");
++        let data = input.as_ptr();
++        let len = input.len();
++        let captured = unsafe {
++            with_built_tape_depth_raw(data, len, |entries, depth| {
++                drop(input); // No source borrow or access survives into the callback.
++                assert_eq!(depth, expected_depth);
++                entries
++                    .iter()
++                    .map(|e| (e.kind, e.offset, e.link))
++                    .collect::<Vec<_>>()
++            })
++        }
++        .expect("valid depth-captured tape");
++        assert_eq!(
++            captured,
++            reference
++                .entries
++                .iter()
++                .map(|e| (e.kind, e.offset, e.link))
++                .collect::<Vec<_>>()
++        );
++    }
++}
++
++#[test]
++fn json_tape_depth_capture_refuses_budget_and_resets_after_failure() {
++    let input = vec![b'['; crate::json::MAX_ITERATIVE_NESTING_DEPTH + 1];
++    assert!(unsafe {
++        with_built_tape_depth_raw::<()>(input.as_ptr(), input.len(), |_, _| {
++            panic!("an over-budget prefix cannot reach materialization")
++        })
++    }
++    .is_none());
++    for input in [b"[01]".as_slice(), b"[{\"x\":]}", b"[0] trailing"] {
++        assert!(unsafe {
++            with_built_tape_depth_raw::<()>(input.as_ptr(), input.len(), |_, _| {
++                panic!("invalid grammar cannot reach materialization")
++            })
++        }
++        .is_none());
++    }
++    assert_eq!(
++        unsafe { with_built_tape_depth_raw(b"[[]]".as_ptr(), 4, |_, depth| depth) },
++        Some(2)
++    );
++}

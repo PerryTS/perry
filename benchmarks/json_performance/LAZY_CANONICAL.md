@@ -49,3 +49,23 @@ word scanner to short lazy-string bodies/tails while preserving the general
 parser scanners. Validate every byte position and guard-page boundary before
 measuring. Native output allocation/copying is a later target; no new output
 ownership, global cache or GC-policy change has been implemented.
+
+## R3 padded short tails: still parked
+
+R3 (`6cb0854eb50837495d7ab67aa7c6c749f544dbf1`) uses packed four-to-seven-byte
+tails only in the lazy canonical-string scan. General parser scanner entry points
+retain their existing specialization. All 298 JSON tests and 162 compiled candidate
+comparisons pass, including guard-page and moving-GC coverage.
+[Validation and exact code](results/lazy-canonical-r3-validation/README.md).
+
+The [qualified focused replay](results/quiet-lazy-canonical-r3-main-focus-r9/README.md)
+keeps record roundtrips 25–34% slower than main and 46–62% slower than the PR build.
+All three sizes have 9/9 slower pairs. Eager heterogeneous stringify is +0.381%
+versus main (8/9 slower pairs). The source remains parked; no full matrix is justified.
+
+A next candidate could retain the plain/escaped string fact already discovered
+while building the native tape, avoiding a second body scan during stringify.
+That requires a complete tape-metadata consumer audit and parse-only, sparse and
+full-scan measurements: moving work into parsing must not hide its cost. No such
+metadata change is included here. Canonicalization and eager stringify performance
+remain separate unresolved issues, and parity with both engines is still incomplete.
