@@ -1,0 +1,3404 @@
+{
+  "conclusion": "failure",
+  "event": "schedule",
+  "headSha": "eee3881c464bf91ae900e87a42bed072bbdfc95a",
+  "jobs": [
+    {
+      "completedAt": "2026-09-10T05:21:28Z",
+      "conclusion": "success",
+      "databaseId": 102755028021,
+      "name": "plan",
+      "startedAt": "2026-09-10T05:21:17Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T05:21:18Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T05:21:17Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:26Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 2,
+          "startedAt": "2026-09-10T05:21:18Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:26Z",
+          "conclusion": "success",
+          "name": "Self-test the planner",
+          "number": 3,
+          "startedAt": "2026-09-10T05:21:26Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:26Z",
+          "conclusion": "skipped",
+          "name": "List changed files (pull_request only)",
+          "number": 4,
+          "startedAt": "2026-09-10T05:21:26Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:26Z",
+          "conclusion": "success",
+          "name": "Compute the plan",
+          "number": 5,
+          "startedAt": "2026-09-10T05:21:26Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:26Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 10,
+          "startedAt": "2026-09-10T05:21:26Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:26Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 11,
+          "startedAt": "2026-09-10T05:21:26Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102755028021"
+    },
+    {
+      "completedAt": "2026-09-10T05:25:19Z",
+      "conclusion": "failure",
+      "databaseId": 102755070701,
+      "name": "cargo-test",
+      "startedAt": "2026-09-10T05:21:30Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T05:21:32Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T05:21:31Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:40Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 2,
+          "startedAt": "2026-09-10T05:21:32Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:48Z",
+          "conclusion": "success",
+          "name": "Install Rust toolchain",
+          "number": 3,
+          "startedAt": "2026-09-10T05:21:40Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:22:03Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/setup-llvm22",
+          "number": 4,
+          "startedAt": "2026-09-10T05:21:48Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:22:04Z",
+          "conclusion": "success",
+          "name": "Install sccache",
+          "number": 5,
+          "startedAt": "2026-09-10T05:22:03Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:22:09Z",
+          "conclusion": "success",
+          "name": "Restore sccache objects",
+          "number": 6,
+          "startedAt": "2026-09-10T05:22:04Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:22:12Z",
+          "conclusion": "success",
+          "name": "Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 7,
+          "startedAt": "2026-09-10T05:22:09Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:22:12Z",
+          "conclusion": "success",
+          "name": "Evict stale auto-opt archives (#5892)",
+          "number": 8,
+          "startedAt": "2026-09-10T05:22:12Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:25:12Z",
+          "conclusion": "failure",
+          "name": "Run cargo test",
+          "number": 9,
+          "startedAt": "2026-09-10T05:22:12Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:25:12Z",
+          "conclusion": "skipped",
+          "name": "perry-ffi ABI mirror matches the runtime (#8113)",
+          "number": 10,
+          "startedAt": "2026-09-10T05:25:12Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:25:17Z",
+          "conclusion": "success",
+          "name": "Save sccache objects (main-line runs only)",
+          "number": 11,
+          "startedAt": "2026-09-10T05:25:12Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:25:17Z",
+          "conclusion": "skipped",
+          "name": "Post Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 20,
+          "startedAt": "2026-09-10T05:25:17Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:25:17Z",
+          "conclusion": "success",
+          "name": "Post Install sccache",
+          "number": 21,
+          "startedAt": "2026-09-10T05:25:17Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:25:17Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 22,
+          "startedAt": "2026-09-10T05:25:17Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:25:17Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 23,
+          "startedAt": "2026-09-10T05:25:17Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102755070701"
+    },
+    {
+      "completedAt": "2026-09-10T05:25:51Z",
+      "conclusion": "success",
+      "databaseId": 102755070706,
+      "name": "warnings",
+      "startedAt": "2026-09-10T05:21:31Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T05:21:33Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T05:21:31Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:41Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 2,
+          "startedAt": "2026-09-10T05:21:33Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:51Z",
+          "conclusion": "success",
+          "name": "Install Rust toolchain",
+          "number": 3,
+          "startedAt": "2026-09-10T05:21:41Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:22:15Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/setup-llvm22",
+          "number": 4,
+          "startedAt": "2026-09-10T05:21:51Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:22:17Z",
+          "conclusion": "success",
+          "name": "Install sccache",
+          "number": 5,
+          "startedAt": "2026-09-10T05:22:15Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:22:25Z",
+          "conclusion": "success",
+          "name": "Restore sccache objects",
+          "number": 6,
+          "startedAt": "2026-09-10T05:22:17Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:22:30Z",
+          "conclusion": "success",
+          "name": "Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 7,
+          "startedAt": "2026-09-10T05:22:25Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:23:29Z",
+          "conclusion": "success",
+          "name": "rustc warnings (product)",
+          "number": 8,
+          "startedAt": "2026-09-10T05:22:30Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:25:30Z",
+          "conclusion": "success",
+          "name": "rustc warnings (host-compatible, all targets)",
+          "number": 9,
+          "startedAt": "2026-09-10T05:23:29Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:25:36Z",
+          "conclusion": "success",
+          "name": "Save sccache objects (main-line runs only)",
+          "number": 10,
+          "startedAt": "2026-09-10T05:25:30Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:25:49Z",
+          "conclusion": "success",
+          "name": "Post Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 18,
+          "startedAt": "2026-09-10T05:25:36Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:25:49Z",
+          "conclusion": "success",
+          "name": "Post Install sccache",
+          "number": 19,
+          "startedAt": "2026-09-10T05:25:49Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:25:50Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 20,
+          "startedAt": "2026-09-10T05:25:49Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:25:50Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 21,
+          "startedAt": "2026-09-10T05:25:50Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102755070706"
+    },
+    {
+      "completedAt": "2026-09-10T05:32:56Z",
+      "conclusion": "success",
+      "databaseId": 102755070713,
+      "name": "gc-stress-build",
+      "startedAt": "2026-09-10T05:21:31Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T05:21:33Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T05:21:32Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:41Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 2,
+          "startedAt": "2026-09-10T05:21:33Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:49Z",
+          "conclusion": "success",
+          "name": "Install Rust toolchain",
+          "number": 3,
+          "startedAt": "2026-09-10T05:21:41Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:22:09Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/setup-llvm22",
+          "number": 4,
+          "startedAt": "2026-09-10T05:21:49Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:22:15Z",
+          "conclusion": "success",
+          "name": "Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 5,
+          "startedAt": "2026-09-10T05:22:09Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:22:18Z",
+          "conclusion": "success",
+          "name": "Install clang",
+          "number": 6,
+          "startedAt": "2026-09-10T05:22:15Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:32:45Z",
+          "conclusion": "success",
+          "name": "Build perry + runtime staticlibs (release)",
+          "number": 7,
+          "startedAt": "2026-09-10T05:22:18Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:32:53Z",
+          "conclusion": "success",
+          "name": "Upload shared GC matrix build",
+          "number": 8,
+          "startedAt": "2026-09-10T05:32:45Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:32:53Z",
+          "conclusion": "success",
+          "name": "Post Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 15,
+          "startedAt": "2026-09-10T05:32:53Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:32:53Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 16,
+          "startedAt": "2026-09-10T05:32:53Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:32:53Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 17,
+          "startedAt": "2026-09-10T05:32:53Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102755070713"
+    },
+    {
+      "completedAt": "2026-09-10T05:26:59Z",
+      "conclusion": "failure",
+      "databaseId": 102755070722,
+      "name": "lint",
+      "startedAt": "2026-09-10T05:21:31Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T05:21:34Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T05:21:32Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:41Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 2,
+          "startedAt": "2026-09-10T05:21:34Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:41Z",
+          "conclusion": "success",
+          "name": "Changeset gate self-test",
+          "number": 3,
+          "startedAt": "2026-09-10T05:21:41Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:41Z",
+          "conclusion": "skipped",
+          "name": "Require a changelog.d/ fragment for crates/ changes",
+          "number": 4,
+          "startedAt": "2026-09-10T05:21:41Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:46Z",
+          "conclusion": "success",
+          "name": "Setup Node.js for benchmark harness tests",
+          "number": 5,
+          "startedAt": "2026-09-10T05:21:41Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:22:31Z",
+          "conclusion": "success",
+          "name": "Validate benchmark artifact and fallback gates",
+          "number": 6,
+          "startedAt": "2026-09-10T05:21:46Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:22:31Z",
+          "conclusion": "success",
+          "name": "Validate Windows LLVM runtime npm staging",
+          "number": 7,
+          "startedAt": "2026-09-10T05:22:31Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:22:39Z",
+          "conclusion": "success",
+          "name": "Install Rust toolchain",
+          "number": 8,
+          "startedAt": "2026-09-10T05:22:31Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:22:54Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/setup-llvm22",
+          "number": 9,
+          "startedAt": "2026-09-10T05:22:39Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:23:00Z",
+          "conclusion": "success",
+          "name": "Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 10,
+          "startedAt": "2026-09-10T05:22:54Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:23:16Z",
+          "conclusion": "success",
+          "name": "Check formatting",
+          "number": 11,
+          "startedAt": "2026-09-10T05:23:00Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:23:16Z",
+          "conclusion": "success",
+          "name": "CI plan policy self-test + docs table freshness",
+          "number": 12,
+          "startedAt": "2026-09-10T05:23:16Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:23:16Z",
+          "conclusion": "success",
+          "name": "Compiler-output gate liveness",
+          "number": 13,
+          "startedAt": "2026-09-10T05:23:16Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:23:16Z",
+          "conclusion": "success",
+          "name": "Audit workspace architecture",
+          "number": 14,
+          "startedAt": "2026-09-10T05:23:16Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:23:16Z",
+          "conclusion": "success",
+          "name": "Linux incident collector fixtures",
+          "number": 15,
+          "startedAt": "2026-09-10T05:23:16Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:23:17Z",
+          "conclusion": "failure",
+          "name": "Public benchmark evidence freshness",
+          "number": 16,
+          "startedAt": "2026-09-10T05:23:16Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:23:29Z",
+          "conclusion": "success",
+          "name": "File size limit",
+          "number": 17,
+          "startedAt": "2026-09-10T05:23:17Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:23:33Z",
+          "conclusion": "success",
+          "name": "Local binding type-proof audit",
+          "number": 18,
+          "startedAt": "2026-09-10T05:23:29Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:23:33Z",
+          "conclusion": "success",
+          "name": "Binding upstream pins (lock-step)",
+          "number": 19,
+          "startedAt": "2026-09-10T05:23:33Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:23:34Z",
+          "conclusion": "success",
+          "name": "Bundled binding governance",
+          "number": 20,
+          "startedAt": "2026-09-10T05:23:33Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:25:08Z",
+          "conclusion": "success",
+          "name": "GC store-site inventory",
+          "number": 21,
+          "startedAt": "2026-09-10T05:23:34Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:25:10Z",
+          "conclusion": "success",
+          "name": "Address-classification audit",
+          "number": 22,
+          "startedAt": "2026-09-10T05:25:08Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:25:16Z",
+          "conclusion": "success",
+          "name": "String payload-access inventory",
+          "number": 23,
+          "startedAt": "2026-09-10T05:25:10Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:25:16Z",
+          "conclusion": "success",
+          "name": "Class-id collision audit",
+          "number": 24,
+          "startedAt": "2026-09-10T05:25:16Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:25:22Z",
+          "conclusion": "success",
+          "name": "Object-header shape-descriptor census",
+          "number": 25,
+          "startedAt": "2026-09-10T05:25:16Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:25:27Z",
+          "conclusion": "success",
+          "name": "GC pin-site custody audit",
+          "number": 26,
+          "startedAt": "2026-09-10T05:25:22Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:25:31Z",
+          "conclusion": "success",
+          "name": "Cross-thread promise provenance (#9552)",
+          "number": 27,
+          "startedAt": "2026-09-10T05:25:27Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:25:45Z",
+          "conclusion": "success",
+          "name": "Runtime GC-pointer holder custody audit",
+          "number": 28,
+          "startedAt": "2026-09-10T05:25:31Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:25:45Z",
+          "conclusion": "success",
+          "name": "Poll-capable reach audit (GC root dominance)",
+          "number": 29,
+          "startedAt": "2026-09-10T05:25:45Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:25:59Z",
+          "conclusion": "success",
+          "name": "Thread-local GC scanner registration audit",
+          "number": 30,
+          "startedAt": "2026-09-10T05:25:45Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:26:07Z",
+          "conclusion": "success",
+          "name": "Rekeyed side-table custody audit",
+          "number": 31,
+          "startedAt": "2026-09-10T05:25:59Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:26:09Z",
+          "conclusion": "success",
+          "name": "GC environment-knob drift audit",
+          "number": 32,
+          "startedAt": "2026-09-10T05:26:07Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:26:09Z",
+          "conclusion": "success",
+          "name": "llvm-inprocess corpus currency",
+          "number": 33,
+          "startedAt": "2026-09-10T05:26:09Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:26:10Z",
+          "conclusion": "success",
+          "name": "Statepoint pass source reader",
+          "number": 34,
+          "startedAt": "2026-09-10T05:26:09Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:26:10Z",
+          "conclusion": "success",
+          "name": "GC documentation claim audit",
+          "number": 35,
+          "startedAt": "2026-09-10T05:26:10Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:26:10Z",
+          "conclusion": "success",
+          "name": "Windows-portable text I/O in the Windows-CI audits",
+          "number": 36,
+          "startedAt": "2026-09-10T05:26:10Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:26:10Z",
+          "conclusion": "success",
+          "name": "GC evacuation-liveness assert can say no",
+          "number": 37,
+          "startedAt": "2026-09-10T05:26:10Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:26:10Z",
+          "conclusion": "success",
+          "name": "Node version consistency",
+          "number": 38,
+          "startedAt": "2026-09-10T05:26:10Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:26:11Z",
+          "conclusion": "success",
+          "name": "Raw-handle debt ratchet",
+          "number": 39,
+          "startedAt": "2026-09-10T05:26:10Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:26:12Z",
+          "conclusion": "success",
+          "name": "Unrooted-local shape ratchet",
+          "number": 40,
+          "startedAt": "2026-09-10T05:26:11Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:26:12Z",
+          "conclusion": "skipped",
+          "name": "Unrooted-local shape ratchet vs. merge base",
+          "number": 41,
+          "startedAt": "2026-09-10T05:26:12Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:26:12Z",
+          "conclusion": "skipped",
+          "name": "Raw-handle debt ratchet vs. merge base",
+          "number": 42,
+          "startedAt": "2026-09-10T05:26:12Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:26:12Z",
+          "conclusion": "success",
+          "name": "Gap snapshot checker self-test",
+          "number": 43,
+          "startedAt": "2026-09-10T05:26:12Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:26:12Z",
+          "conclusion": "success",
+          "name": "Platform-aware parity allowlist self-test",
+          "number": 44,
+          "startedAt": "2026-09-10T05:26:12Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:26:12Z",
+          "conclusion": "success",
+          "name": "Parity allowlist ratchet (provenance + stale entries)",
+          "number": 45,
+          "startedAt": "2026-09-10T05:26:12Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:26:12Z",
+          "conclusion": "success",
+          "name": "Moving-GC gate wiring",
+          "number": 46,
+          "startedAt": "2026-09-10T05:26:12Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:26:12Z",
+          "conclusion": "success",
+          "name": "GC matrix liveness gate",
+          "number": 47,
+          "startedAt": "2026-09-10T05:26:12Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:26:13Z",
+          "conclusion": "success",
+          "name": "Test registration (dark tests)",
+          "number": 48,
+          "startedAt": "2026-09-10T05:26:12Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:26:56Z",
+          "conclusion": "success",
+          "name": "Per-test global sinks",
+          "number": 49,
+          "startedAt": "2026-09-10T05:26:13Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:26:56Z",
+          "conclusion": "skipped",
+          "name": "Post Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 96,
+          "startedAt": "2026-09-10T05:26:56Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:26:56Z",
+          "conclusion": "skipped",
+          "name": "Post Setup Node.js for benchmark harness tests",
+          "number": 97,
+          "startedAt": "2026-09-10T05:26:56Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:26:56Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 98,
+          "startedAt": "2026-09-10T05:26:56Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:26:56Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 99,
+          "startedAt": "2026-09-10T05:26:56Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102755070722"
+    },
+    {
+      "completedAt": "2026-09-10T05:30:50Z",
+      "conclusion": "success",
+      "databaseId": 102755070736,
+      "name": "check",
+      "startedAt": "2026-09-10T05:21:31Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T05:21:34Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T05:21:32Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:40Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 2,
+          "startedAt": "2026-09-10T05:21:34Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:48Z",
+          "conclusion": "success",
+          "name": "Install Rust toolchain",
+          "number": 3,
+          "startedAt": "2026-09-10T05:21:40Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:22:21Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/setup-llvm22",
+          "number": 4,
+          "startedAt": "2026-09-10T05:21:48Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:22:27Z",
+          "conclusion": "success",
+          "name": "Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 5,
+          "startedAt": "2026-09-10T05:22:21Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:23:23Z",
+          "conclusion": "success",
+          "name": "Clippy (product)",
+          "number": 6,
+          "startedAt": "2026-09-10T05:22:27Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:25:01Z",
+          "conclusion": "success",
+          "name": "Clippy (host-compatible)",
+          "number": 7,
+          "startedAt": "2026-09-10T05:23:23Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:30:47Z",
+          "conclusion": "success",
+          "name": "Regenerate API docs",
+          "number": 8,
+          "startedAt": "2026-09-10T05:25:01Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:30:47Z",
+          "conclusion": "success",
+          "name": "Check for API docs drift",
+          "number": 9,
+          "startedAt": "2026-09-10T05:30:47Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:30:47Z",
+          "conclusion": "success",
+          "name": "Post Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 17,
+          "startedAt": "2026-09-10T05:30:47Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:30:47Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 18,
+          "startedAt": "2026-09-10T05:30:47Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:30:47Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 19,
+          "startedAt": "2026-09-10T05:30:47Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102755070736"
+    },
+    {
+      "completedAt": "2026-09-10T05:34:27Z",
+      "conclusion": "success",
+      "databaseId": 102755070739,
+      "name": "gap-suite-build",
+      "startedAt": "2026-09-10T05:21:30Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T05:21:32Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T05:21:31Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:40Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 2,
+          "startedAt": "2026-09-10T05:21:32Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:48Z",
+          "conclusion": "success",
+          "name": "Install Rust toolchain",
+          "number": 3,
+          "startedAt": "2026-09-10T05:21:40Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:22:03Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/setup-llvm22",
+          "number": 4,
+          "startedAt": "2026-09-10T05:21:48Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:22:09Z",
+          "conclusion": "success",
+          "name": "Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 5,
+          "startedAt": "2026-09-10T05:22:03Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:34:16Z",
+          "conclusion": "success",
+          "name": "Build compiler + runtime archives (fast mode, shared across shards)",
+          "number": 6,
+          "startedAt": "2026-09-10T05:22:09Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:34:24Z",
+          "conclusion": "success",
+          "name": "Upload the shared fast-mode build",
+          "number": 7,
+          "startedAt": "2026-09-10T05:34:16Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:34:25Z",
+          "conclusion": "success",
+          "name": "Post Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 13,
+          "startedAt": "2026-09-10T05:34:24Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:34:25Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 14,
+          "startedAt": "2026-09-10T05:34:25Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:34:25Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 15,
+          "startedAt": "2026-09-10T05:34:25Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102755070739"
+    },
+    {
+      "completedAt": "2026-09-10T05:21:50Z",
+      "conclusion": "success",
+      "databaseId": 102755071028,
+      "name": "security-audit / soak-gate",
+      "startedAt": "2026-09-10T05:21:31Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T05:21:32Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T05:21:31Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:40Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 2,
+          "startedAt": "2026-09-10T05:21:32Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:45Z",
+          "conclusion": "success",
+          "name": "Run actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+          "number": 3,
+          "startedAt": "2026-09-10T05:21:40Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:47Z",
+          "conclusion": "success",
+          "name": "Install script test dependencies",
+          "number": 4,
+          "startedAt": "2026-09-10T05:21:45Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:47Z",
+          "conclusion": "success",
+          "name": "Soak window parity (npm run soak)",
+          "number": 5,
+          "startedAt": "2026-09-10T05:21:47Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:47Z",
+          "conclusion": "success",
+          "name": "External-tool pins valid (npm run tools:check)",
+          "number": 6,
+          "startedAt": "2026-09-10T05:21:47Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:47Z",
+          "conclusion": "success",
+          "name": "Soak + publish script unit tests (npm run test:scripts)",
+          "number": 7,
+          "startedAt": "2026-09-10T05:21:47Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:48Z",
+          "conclusion": "success",
+          "name": "Post Run actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+          "number": 13,
+          "startedAt": "2026-09-10T05:21:47Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:48Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 14,
+          "startedAt": "2026-09-10T05:21:48Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:48Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 15,
+          "startedAt": "2026-09-10T05:21:48Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102755071028"
+    },
+    {
+      "completedAt": "2026-09-10T05:25:13Z",
+      "conclusion": "success",
+      "databaseId": 102755071050,
+      "name": "security-audit / security-audit",
+      "startedAt": "2026-09-10T05:21:31Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T05:21:33Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T05:21:32Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:40Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 2,
+          "startedAt": "2026-09-10T05:21:33Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:48Z",
+          "conclusion": "success",
+          "name": "Install Rust toolchain",
+          "number": 3,
+          "startedAt": "2026-09-10T05:21:40Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:22:03Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/setup-llvm22",
+          "number": 4,
+          "startedAt": "2026-09-10T05:21:48Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:22:08Z",
+          "conclusion": "success",
+          "name": "Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 5,
+          "startedAt": "2026-09-10T05:22:03Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:24:56Z",
+          "conclusion": "success",
+          "name": "Install cargo-audit",
+          "number": 6,
+          "startedAt": "2026-09-10T05:22:08Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:25:01Z",
+          "conclusion": "success",
+          "name": "Run cargo audit",
+          "number": 7,
+          "startedAt": "2026-09-10T05:24:56Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:25:10Z",
+          "conclusion": "success",
+          "name": "Post Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 13,
+          "startedAt": "2026-09-10T05:25:01Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:25:11Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 14,
+          "startedAt": "2026-09-10T05:25:10Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:25:11Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 15,
+          "startedAt": "2026-09-10T05:25:11Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102755071050"
+    },
+    {
+      "completedAt": "2026-09-10T05:21:56Z",
+      "conclusion": "success",
+      "databaseId": 102755071053,
+      "name": "security-audit / agent-scan",
+      "startedAt": "2026-09-10T05:21:31Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T05:21:33Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T05:21:32Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:40Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 2,
+          "startedAt": "2026-09-10T05:21:33Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:45Z",
+          "conclusion": "success",
+          "name": "Run actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+          "number": 3,
+          "startedAt": "2026-09-10T05:21:40Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:53Z",
+          "conclusion": "success",
+          "name": "Install pinned agentshield",
+          "number": 4,
+          "startedAt": "2026-09-10T05:21:45Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:54Z",
+          "conclusion": "success",
+          "name": "Scan .claude/ config",
+          "number": 5,
+          "startedAt": "2026-09-10T05:21:53Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:54Z",
+          "conclusion": "success",
+          "name": "Post Run actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+          "number": 9,
+          "startedAt": "2026-09-10T05:21:54Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:54Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 10,
+          "startedAt": "2026-09-10T05:21:54Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:54Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 11,
+          "startedAt": "2026-09-10T05:21:54Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102755071053"
+    },
+    {
+      "completedAt": "2026-09-10T05:22:00Z",
+      "conclusion": "success",
+      "databaseId": 102755071069,
+      "name": "security-audit / skills-scan",
+      "startedAt": "2026-09-10T05:21:31Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T05:21:33Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T05:21:32Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:40Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 2,
+          "startedAt": "2026-09-10T05:21:33Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:43Z",
+          "conclusion": "success",
+          "name": "Run astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d",
+          "number": 3,
+          "startedAt": "2026-09-10T05:21:40Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:56Z",
+          "conclusion": "success",
+          "name": "Scan each skill",
+          "number": 4,
+          "startedAt": "2026-09-10T05:21:43Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:58Z",
+          "conclusion": "success",
+          "name": "Post Run astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d",
+          "number": 7,
+          "startedAt": "2026-09-10T05:21:56Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:58Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 8,
+          "startedAt": "2026-09-10T05:21:58Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:58Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 9,
+          "startedAt": "2026-09-10T05:21:58Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102755071069"
+    },
+    {
+      "completedAt": "2026-09-10T05:24:08Z",
+      "conclusion": "success",
+      "databaseId": 102755071109,
+      "name": "security-audit / cargo-deny",
+      "startedAt": "2026-09-10T05:21:31Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T05:21:33Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T05:21:32Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:41Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 2,
+          "startedAt": "2026-09-10T05:21:33Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:21:50Z",
+          "conclusion": "success",
+          "name": "Install Rust toolchain",
+          "number": 3,
+          "startedAt": "2026-09-10T05:21:41Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:22:10Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/setup-llvm22",
+          "number": 4,
+          "startedAt": "2026-09-10T05:21:50Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:22:13Z",
+          "conclusion": "success",
+          "name": "Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 5,
+          "startedAt": "2026-09-10T05:22:10Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:23:53Z",
+          "conclusion": "success",
+          "name": "Install cargo-deny",
+          "number": 6,
+          "startedAt": "2026-09-10T05:22:13Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:24:00Z",
+          "conclusion": "success",
+          "name": "Run cargo deny",
+          "number": 7,
+          "startedAt": "2026-09-10T05:23:53Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:24:06Z",
+          "conclusion": "success",
+          "name": "Post Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 13,
+          "startedAt": "2026-09-10T05:24:00Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:24:06Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 14,
+          "startedAt": "2026-09-10T05:24:06Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:24:06Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 15,
+          "startedAt": "2026-09-10T05:24:06Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102755071109"
+    },
+    {
+      "completedAt": "2026-09-10T05:21:28Z",
+      "conclusion": "skipped",
+      "databaseId": 102755071459,
+      "name": "cargo-test-perry (${{ matrix.shard }}/${{ fromJSON(needs.plan.outputs.plan).cargo_test_perry.total }})",
+      "startedAt": "2026-09-10T05:21:28Z",
+      "status": "completed",
+      "steps": [],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102755071459"
+    },
+    {
+      "completedAt": "2026-09-10T05:21:28Z",
+      "conclusion": "skipped",
+      "databaseId": 102755071481,
+      "name": "e2e-scoped",
+      "startedAt": "2026-09-10T05:21:28Z",
+      "status": "completed",
+      "steps": [],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102755071481"
+    },
+    {
+      "completedAt": "2026-09-10T05:49:32Z",
+      "conclusion": "failure",
+      "databaseId": 102756912733,
+      "name": "windows-build",
+      "startedAt": "2026-09-10T05:30:53Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T05:30:55Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T05:30:54Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:31:14Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 2,
+          "startedAt": "2026-09-10T05:30:55Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:31:40Z",
+          "conclusion": "success",
+          "name": "GC structural audits (Windows)",
+          "number": 3,
+          "startedAt": "2026-09-10T05:31:14Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:31:51Z",
+          "conclusion": "success",
+          "name": "Install Rust toolchain",
+          "number": 4,
+          "startedAt": "2026-09-10T05:31:40Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:13Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/setup-llvm22",
+          "number": 5,
+          "startedAt": "2026-09-10T05:31:51Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:22Z",
+          "conclusion": "success",
+          "name": "Setup Node.js",
+          "number": 6,
+          "startedAt": "2026-09-10T05:33:13Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:31Z",
+          "conclusion": "success",
+          "name": "Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 7,
+          "startedAt": "2026-09-10T05:33:22Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:49:28Z",
+          "conclusion": "failure",
+          "name": "Build compiler + runtime + Windows UI crates (perry-dev)",
+          "number": 8,
+          "startedAt": "2026-09-10T05:33:31Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:49:28Z",
+          "conclusion": "skipped",
+          "name": "perry-runtime unit tests (single-threaded,",
+          "number": 9,
+          "startedAt": "2026-09-10T05:49:28Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:49:28Z",
+          "conclusion": "skipped",
+          "name": "Windows parity harness smoke",
+          "number": 10,
+          "startedAt": "2026-09-10T05:49:28Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:49:28Z",
+          "conclusion": "skipped",
+          "name": "Verify perry.exe VERSIONINFO resource",
+          "number": 11,
+          "startedAt": "2026-09-10T05:49:28Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:49:28Z",
+          "conclusion": "skipped",
+          "name": "Test COFF duplicate-symbol archive trimming",
+          "number": 12,
+          "startedAt": "2026-09-10T05:49:28Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:49:28Z",
+          "conclusion": "skipped",
+          "name": "Post Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 22,
+          "startedAt": "2026-09-10T05:49:28Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:49:28Z",
+          "conclusion": "skipped",
+          "name": "Post Setup Node.js",
+          "number": 23,
+          "startedAt": "2026-09-10T05:49:28Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:49:30Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 24,
+          "startedAt": "2026-09-10T05:49:28Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:49:30Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 25,
+          "startedAt": "2026-09-10T05:49:30Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102756912733"
+    },
+    {
+      "completedAt": "2026-09-10T05:48:59Z",
+      "conclusion": "failure",
+      "databaseId": 102756912792,
+      "name": "compiler-output-regression",
+      "startedAt": "2026-09-10T05:30:53Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T05:30:55Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T05:30:53Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:31:03Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 2,
+          "startedAt": "2026-09-10T05:30:55Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:31:11Z",
+          "conclusion": "success",
+          "name": "Install Rust toolchain",
+          "number": 3,
+          "startedAt": "2026-09-10T05:31:03Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:31:28Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/setup-llvm22",
+          "number": 4,
+          "startedAt": "2026-09-10T05:31:11Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:31:29Z",
+          "conclusion": "success",
+          "name": "Install sccache",
+          "number": 5,
+          "startedAt": "2026-09-10T05:31:28Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:31:36Z",
+          "conclusion": "success",
+          "name": "Restore sccache objects",
+          "number": 6,
+          "startedAt": "2026-09-10T05:31:29Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:31:40Z",
+          "conclusion": "success",
+          "name": "Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 7,
+          "startedAt": "2026-09-10T05:31:36Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:31:43Z",
+          "conclusion": "success",
+          "name": "Install clang",
+          "number": 8,
+          "startedAt": "2026-09-10T05:31:40Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:32:29Z",
+          "conclusion": "success",
+          "name": "Build compiler",
+          "number": 9,
+          "startedAt": "2026-09-10T05:31:43Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:32:29Z",
+          "conclusion": "success",
+          "name": "Run harness unit tests",
+          "number": 10,
+          "startedAt": "2026-09-10T05:32:29Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:32:29Z",
+          "conclusion": "success",
+          "name": "Run native ABI evidence report unit tests",
+          "number": 11,
+          "startedAt": "2026-09-10T05:32:29Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:39:05Z",
+          "conclusion": "failure",
+          "name": "Gate native-region proof compiler output",
+          "number": 12,
+          "startedAt": "2026-09-10T05:32:29Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:45:55Z",
+          "conclusion": "success",
+          "name": "Gate native-ABI proof compiler output",
+          "number": 13,
+          "startedAt": "2026-09-10T05:39:05Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:46:26Z",
+          "conclusion": "success",
+          "name": "Gate typed feedback runtime evidence",
+          "number": 14,
+          "startedAt": "2026-09-10T05:45:55Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:47:01Z",
+          "conclusion": "failure",
+          "name": "Gate positive vectorization compiler output",
+          "number": 15,
+          "startedAt": "2026-09-10T05:46:26Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:47:35Z",
+          "conclusion": "failure",
+          "name": "Gate HIR fact rewrite compiler output",
+          "number": 16,
+          "startedAt": "2026-09-10T05:47:01Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:48:09Z",
+          "conclusion": "success",
+          "name": "Gate FP contraction compiler output",
+          "number": 17,
+          "startedAt": "2026-09-10T05:47:35Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:48:42Z",
+          "conclusion": "success",
+          "name": "Gate fast-math no-contraction compiler output",
+          "number": 18,
+          "startedAt": "2026-09-10T05:48:09Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:48:53Z",
+          "conclusion": "success",
+          "name": "Upload compiler-output artifacts",
+          "number": 19,
+          "startedAt": "2026-09-10T05:48:42Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:48:58Z",
+          "conclusion": "success",
+          "name": "Save sccache objects (main-line runs only)",
+          "number": 20,
+          "startedAt": "2026-09-10T05:48:53Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:48:58Z",
+          "conclusion": "skipped",
+          "name": "Post Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 38,
+          "startedAt": "2026-09-10T05:48:58Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:48:58Z",
+          "conclusion": "success",
+          "name": "Post Install sccache",
+          "number": 39,
+          "startedAt": "2026-09-10T05:48:58Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:48:58Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 40,
+          "startedAt": "2026-09-10T05:48:58Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:48:58Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 41,
+          "startedAt": "2026-09-10T05:48:58Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102756912792"
+    },
+    {
+      "completedAt": "2026-09-10T05:55:20Z",
+      "conclusion": "success",
+      "databaseId": 102756912802,
+      "name": "windows-arm64-build",
+      "startedAt": "2026-09-10T05:30:53Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T05:30:55Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T05:30:54Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:31:35Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 2,
+          "startedAt": "2026-09-10T05:30:55Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:31:50Z",
+          "conclusion": "success",
+          "name": "Install Rust toolchain",
+          "number": 3,
+          "startedAt": "2026-09-10T05:31:35Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:32:49Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/setup-llvm22",
+          "number": 4,
+          "startedAt": "2026-09-10T05:31:50Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:11Z",
+          "conclusion": "success",
+          "name": "Set up ARM64 MSVC environment",
+          "number": 5,
+          "startedAt": "2026-09-10T05:32:49Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:24Z",
+          "conclusion": "success",
+          "name": "Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 6,
+          "startedAt": "2026-09-10T05:33:11Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:45:58Z",
+          "conclusion": "success",
+          "name": "Build ARM64 compiler and static libraries (perry-dev)",
+          "number": 7,
+          "startedAt": "2026-09-10T05:33:24Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:54:11Z",
+          "conclusion": "success",
+          "name": "Run ARM64 setjmp ABI tests",
+          "number": 8,
+          "startedAt": "2026-09-10T05:45:58Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:54:18Z",
+          "conclusion": "success",
+          "name": "Compile and run a Perry ARM64 executable",
+          "number": 9,
+          "startedAt": "2026-09-10T05:54:11Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:55:14Z",
+          "conclusion": "success",
+          "name": "Post Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 17,
+          "startedAt": "2026-09-10T05:54:18Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:55:18Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 18,
+          "startedAt": "2026-09-10T05:55:14Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:55:18Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 19,
+          "startedAt": "2026-09-10T05:55:18Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102756912802"
+    },
+    {
+      "completedAt": "2026-09-10T05:33:17Z",
+      "conclusion": "success",
+      "databaseId": 102756912805,
+      "name": "repsel-census",
+      "startedAt": "2026-09-10T05:30:53Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T05:30:55Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T05:30:53Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:31:02Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 2,
+          "startedAt": "2026-09-10T05:30:55Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:31:11Z",
+          "conclusion": "success",
+          "name": "Install Rust toolchain",
+          "number": 3,
+          "startedAt": "2026-09-10T05:31:02Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:31:28Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/setup-llvm22",
+          "number": 4,
+          "startedAt": "2026-09-10T05:31:11Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:31:29Z",
+          "conclusion": "success",
+          "name": "Install sccache",
+          "number": 5,
+          "startedAt": "2026-09-10T05:31:28Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:31:35Z",
+          "conclusion": "success",
+          "name": "Restore sccache objects",
+          "number": 6,
+          "startedAt": "2026-09-10T05:31:29Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:31:38Z",
+          "conclusion": "success",
+          "name": "Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 7,
+          "startedAt": "2026-09-10T05:31:35Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:31:39Z",
+          "conclusion": "success",
+          "name": "Census verdict self-test",
+          "number": 8,
+          "startedAt": "2026-09-10T05:31:38Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:32:26Z",
+          "conclusion": "success",
+          "name": "Build compiler",
+          "number": 9,
+          "startedAt": "2026-09-10T05:31:39Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:32:32Z",
+          "conclusion": "success",
+          "name": "Emission determinism",
+          "number": 10,
+          "startedAt": "2026-09-10T05:32:26Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:32:38Z",
+          "conclusion": "success",
+          "name": "Temp-directory hygiene",
+          "number": 11,
+          "startedAt": "2026-09-10T05:32:32Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:32:47Z",
+          "conclusion": "success",
+          "name": "Promotion census",
+          "number": 12,
+          "startedAt": "2026-09-10T05:32:38Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:32:56Z",
+          "conclusion": "success",
+          "name": "Sabotage check (the gate must be able to fail)",
+          "number": 13,
+          "startedAt": "2026-09-10T05:32:47Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:32:57Z",
+          "conclusion": "success",
+          "name": "Upload census reports",
+          "number": 14,
+          "startedAt": "2026-09-10T05:32:56Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:01Z",
+          "conclusion": "success",
+          "name": "Save sccache objects (main-line runs only)",
+          "number": 15,
+          "startedAt": "2026-09-10T05:32:57Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:15Z",
+          "conclusion": "success",
+          "name": "Post Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 28,
+          "startedAt": "2026-09-10T05:33:01Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:15Z",
+          "conclusion": "success",
+          "name": "Post Install sccache",
+          "number": 29,
+          "startedAt": "2026-09-10T05:33:15Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:15Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 30,
+          "startedAt": "2026-09-10T05:33:15Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:16Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 31,
+          "startedAt": "2026-09-10T05:33:15Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102756912805"
+    },
+    {
+      "completedAt": "2026-09-10T05:33:12Z",
+      "conclusion": "success",
+      "databaseId": 102756912826,
+      "name": "harmonyos-smoke",
+      "startedAt": "2026-09-10T05:30:53Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T05:30:56Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T05:30:54Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:31:04Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 2,
+          "startedAt": "2026-09-10T05:30:56Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:31:12Z",
+          "conclusion": "success",
+          "name": "Install Rust toolchain",
+          "number": 3,
+          "startedAt": "2026-09-10T05:31:04Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:31:39Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/setup-llvm22",
+          "number": 4,
+          "startedAt": "2026-09-10T05:31:12Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:31:46Z",
+          "conclusion": "success",
+          "name": "Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 5,
+          "startedAt": "2026-09-10T05:31:39Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:32:59Z",
+          "conclusion": "success",
+          "name": "Run perry-codegen-arkts unit tests",
+          "number": 6,
+          "startedAt": "2026-09-10T05:31:46Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:10Z",
+          "conclusion": "success",
+          "name": "Run Phase 2 full-app integration smoke",
+          "number": 7,
+          "startedAt": "2026-09-10T05:32:59Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:10Z",
+          "conclusion": "success",
+          "name": "Post Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 13,
+          "startedAt": "2026-09-10T05:33:10Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:11Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 14,
+          "startedAt": "2026-09-10T05:33:10Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:11Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 15,
+          "startedAt": "2026-09-10T05:33:11Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102756912826"
+    },
+    {
+      "completedAt": "2026-09-10T05:30:50Z",
+      "conclusion": "skipped",
+      "databaseId": 102756913497,
+      "name": "native-abi-evidence-packet",
+      "startedAt": "2026-09-10T05:30:50Z",
+      "status": "completed",
+      "steps": [],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102756913497"
+    },
+    {
+      "completedAt": "2026-09-10T05:30:50Z",
+      "conclusion": "skipped",
+      "databaseId": 102756913575,
+      "name": "compile-smoke",
+      "startedAt": "2026-09-10T05:30:50Z",
+      "status": "completed",
+      "steps": [],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102756913575"
+    },
+    {
+      "completedAt": "2026-09-10T05:30:50Z",
+      "conclusion": "skipped",
+      "databaseId": 102756913699,
+      "name": "doc-tests",
+      "startedAt": "2026-09-10T05:30:50Z",
+      "status": "completed",
+      "steps": [],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102756913699"
+    },
+    {
+      "completedAt": "2026-09-10T05:30:50Z",
+      "conclusion": "skipped",
+      "databaseId": 102756913886,
+      "name": "ink-link-smoke",
+      "startedAt": "2026-09-10T05:30:50Z",
+      "status": "completed",
+      "steps": [],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102756913886"
+    },
+    {
+      "completedAt": "2026-09-10T05:30:50Z",
+      "conclusion": "skipped",
+      "databaseId": 102756913929,
+      "name": "effect-basic-smoke",
+      "startedAt": "2026-09-10T05:30:50Z",
+      "status": "completed",
+      "steps": [],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102756913929"
+    },
+    {
+      "completedAt": "2026-09-10T05:30:50Z",
+      "conclusion": "skipped",
+      "databaseId": 102756913992,
+      "name": "parity",
+      "startedAt": "2026-09-10T05:30:50Z",
+      "status": "completed",
+      "steps": [],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102756913992"
+    },
+    {
+      "completedAt": "2026-09-10T05:30:50Z",
+      "conclusion": "skipped",
+      "databaseId": 102756914059,
+      "name": "parity-aggregate",
+      "startedAt": "2026-09-10T05:30:50Z",
+      "status": "completed",
+      "steps": [],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102756914059"
+    },
+    {
+      "completedAt": "2026-09-10T05:30:50Z",
+      "conclusion": "skipped",
+      "databaseId": 102756914086,
+      "name": "binary-size",
+      "startedAt": "2026-09-10T05:30:50Z",
+      "status": "completed",
+      "steps": [],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102756914086"
+    },
+    {
+      "completedAt": "2026-09-10T05:30:50Z",
+      "conclusion": "skipped",
+      "databaseId": 102756914097,
+      "name": "drizzle-mysql-smoke",
+      "startedAt": "2026-09-10T05:30:50Z",
+      "status": "completed",
+      "steps": [],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102756914097"
+    },
+    {
+      "completedAt": "2026-09-10T05:51:12Z",
+      "conclusion": "success",
+      "databaseId": 102757330587,
+      "name": "gc-stress matrix (3/4)",
+      "startedAt": "2026-09-10T05:33:00Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T05:33:03Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T05:33:01Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:11Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 2,
+          "startedAt": "2026-09-10T05:33:03Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:19Z",
+          "conclusion": "success",
+          "name": "Install Rust toolchain",
+          "number": 3,
+          "startedAt": "2026-09-10T05:33:11Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:33Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/setup-llvm22",
+          "number": 4,
+          "startedAt": "2026-09-10T05:33:19Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:41Z",
+          "conclusion": "success",
+          "name": "Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 5,
+          "startedAt": "2026-09-10T05:33:33Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:45Z",
+          "conclusion": "success",
+          "name": "Install clang",
+          "number": 6,
+          "startedAt": "2026-09-10T05:33:41Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:51Z",
+          "conclusion": "success",
+          "name": "Setup Node.js",
+          "number": 7,
+          "startedAt": "2026-09-10T05:33:45Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:56Z",
+          "conclusion": "success",
+          "name": "Download shared GC matrix build",
+          "number": 8,
+          "startedAt": "2026-09-10T05:33:51Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:56Z",
+          "conclusion": "success",
+          "name": "Ensure the downloaded compiler is executable",
+          "number": 9,
+          "startedAt": "2026-09-10T05:33:56Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:51:07Z",
+          "conclusion": "success",
+          "name": "GC x representation-selection matrix shard 3",
+          "number": 10,
+          "startedAt": "2026-09-10T05:33:56Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:51:08Z",
+          "conclusion": "success",
+          "name": "Upload shard report and interruption progress",
+          "number": 11,
+          "startedAt": "2026-09-10T05:51:07Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:51:09Z",
+          "conclusion": "success",
+          "name": "Post Setup Node.js",
+          "number": 20,
+          "startedAt": "2026-09-10T05:51:08Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:51:09Z",
+          "conclusion": "success",
+          "name": "Post Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 21,
+          "startedAt": "2026-09-10T05:51:09Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:51:09Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 22,
+          "startedAt": "2026-09-10T05:51:09Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:51:09Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 23,
+          "startedAt": "2026-09-10T05:51:09Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102757330587"
+    },
+    {
+      "completedAt": "2026-09-10T05:46:14Z",
+      "conclusion": "success",
+      "databaseId": 102757330600,
+      "name": "gc-stress matrix (1/4)",
+      "startedAt": "2026-09-10T05:32:59Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T05:33:01Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T05:32:59Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:08Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 2,
+          "startedAt": "2026-09-10T05:33:01Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:16Z",
+          "conclusion": "success",
+          "name": "Install Rust toolchain",
+          "number": 3,
+          "startedAt": "2026-09-10T05:33:08Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:31Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/setup-llvm22",
+          "number": 4,
+          "startedAt": "2026-09-10T05:33:16Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:38Z",
+          "conclusion": "success",
+          "name": "Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 5,
+          "startedAt": "2026-09-10T05:33:31Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:42Z",
+          "conclusion": "success",
+          "name": "Install clang",
+          "number": 6,
+          "startedAt": "2026-09-10T05:33:38Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:46Z",
+          "conclusion": "success",
+          "name": "Setup Node.js",
+          "number": 7,
+          "startedAt": "2026-09-10T05:33:42Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:49Z",
+          "conclusion": "success",
+          "name": "Download shared GC matrix build",
+          "number": 8,
+          "startedAt": "2026-09-10T05:33:46Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:49Z",
+          "conclusion": "success",
+          "name": "Ensure the downloaded compiler is executable",
+          "number": 9,
+          "startedAt": "2026-09-10T05:33:49Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:46:11Z",
+          "conclusion": "success",
+          "name": "GC x representation-selection matrix shard 1",
+          "number": 10,
+          "startedAt": "2026-09-10T05:33:49Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:46:12Z",
+          "conclusion": "success",
+          "name": "Upload shard report and interruption progress",
+          "number": 11,
+          "startedAt": "2026-09-10T05:46:11Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:46:12Z",
+          "conclusion": "success",
+          "name": "Post Setup Node.js",
+          "number": 20,
+          "startedAt": "2026-09-10T05:46:12Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:46:12Z",
+          "conclusion": "success",
+          "name": "Post Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 21,
+          "startedAt": "2026-09-10T05:46:12Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:46:12Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 22,
+          "startedAt": "2026-09-10T05:46:12Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:46:12Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 23,
+          "startedAt": "2026-09-10T05:46:12Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102757330600"
+    },
+    {
+      "completedAt": "2026-09-10T05:46:49Z",
+      "conclusion": "success",
+      "databaseId": 102757330632,
+      "name": "gc-stress matrix (2/4)",
+      "startedAt": "2026-09-10T05:32:58Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T05:33:00Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T05:32:59Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:08Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 2,
+          "startedAt": "2026-09-10T05:33:00Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:16Z",
+          "conclusion": "success",
+          "name": "Install Rust toolchain",
+          "number": 3,
+          "startedAt": "2026-09-10T05:33:08Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:32Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/setup-llvm22",
+          "number": 4,
+          "startedAt": "2026-09-10T05:33:16Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:46Z",
+          "conclusion": "success",
+          "name": "Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 5,
+          "startedAt": "2026-09-10T05:33:32Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:50Z",
+          "conclusion": "success",
+          "name": "Install clang",
+          "number": 6,
+          "startedAt": "2026-09-10T05:33:46Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:55Z",
+          "conclusion": "success",
+          "name": "Setup Node.js",
+          "number": 7,
+          "startedAt": "2026-09-10T05:33:50Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:58Z",
+          "conclusion": "success",
+          "name": "Download shared GC matrix build",
+          "number": 8,
+          "startedAt": "2026-09-10T05:33:55Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:58Z",
+          "conclusion": "success",
+          "name": "Ensure the downloaded compiler is executable",
+          "number": 9,
+          "startedAt": "2026-09-10T05:33:58Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:46:46Z",
+          "conclusion": "success",
+          "name": "GC x representation-selection matrix shard 2",
+          "number": 10,
+          "startedAt": "2026-09-10T05:33:58Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:46:46Z",
+          "conclusion": "success",
+          "name": "Upload shard report and interruption progress",
+          "number": 11,
+          "startedAt": "2026-09-10T05:46:46Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:46:47Z",
+          "conclusion": "success",
+          "name": "Post Setup Node.js",
+          "number": 20,
+          "startedAt": "2026-09-10T05:46:46Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:46:47Z",
+          "conclusion": "success",
+          "name": "Post Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 21,
+          "startedAt": "2026-09-10T05:46:47Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:46:47Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 22,
+          "startedAt": "2026-09-10T05:46:47Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:46:47Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 23,
+          "startedAt": "2026-09-10T05:46:47Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102757330632"
+    },
+    {
+      "completedAt": "2026-09-10T05:49:17Z",
+      "conclusion": "success",
+      "databaseId": 102757330650,
+      "name": "gc-stress matrix (4/4)",
+      "startedAt": "2026-09-10T05:32:58Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T05:33:00Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T05:32:59Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:08Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 2,
+          "startedAt": "2026-09-10T05:33:00Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:16Z",
+          "conclusion": "success",
+          "name": "Install Rust toolchain",
+          "number": 3,
+          "startedAt": "2026-09-10T05:33:08Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:31Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/setup-llvm22",
+          "number": 4,
+          "startedAt": "2026-09-10T05:33:16Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:37Z",
+          "conclusion": "success",
+          "name": "Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 5,
+          "startedAt": "2026-09-10T05:33:31Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:40Z",
+          "conclusion": "success",
+          "name": "Install clang",
+          "number": 6,
+          "startedAt": "2026-09-10T05:33:37Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:45Z",
+          "conclusion": "success",
+          "name": "Setup Node.js",
+          "number": 7,
+          "startedAt": "2026-09-10T05:33:40Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:47Z",
+          "conclusion": "success",
+          "name": "Download shared GC matrix build",
+          "number": 8,
+          "startedAt": "2026-09-10T05:33:45Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:33:47Z",
+          "conclusion": "success",
+          "name": "Ensure the downloaded compiler is executable",
+          "number": 9,
+          "startedAt": "2026-09-10T05:33:47Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:49:15Z",
+          "conclusion": "success",
+          "name": "GC x representation-selection matrix shard 4",
+          "number": 10,
+          "startedAt": "2026-09-10T05:33:47Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:49:16Z",
+          "conclusion": "success",
+          "name": "Upload shard report and interruption progress",
+          "number": 11,
+          "startedAt": "2026-09-10T05:49:15Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:49:16Z",
+          "conclusion": "success",
+          "name": "Post Setup Node.js",
+          "number": 20,
+          "startedAt": "2026-09-10T05:49:16Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:49:16Z",
+          "conclusion": "success",
+          "name": "Post Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 21,
+          "startedAt": "2026-09-10T05:49:16Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:49:16Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 22,
+          "startedAt": "2026-09-10T05:49:16Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:49:16Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 23,
+          "startedAt": "2026-09-10T05:49:16Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102757330650"
+    },
+    {
+      "completedAt": "2026-09-10T06:19:47Z",
+      "conclusion": "failure",
+      "databaseId": 102757641598,
+      "name": "gap-suite (1)",
+      "startedAt": "2026-09-10T05:34:30Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T05:34:33Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T05:34:31Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:34:41Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 2,
+          "startedAt": "2026-09-10T05:34:33Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:34:49Z",
+          "conclusion": "success",
+          "name": "Install Rust toolchain",
+          "number": 3,
+          "startedAt": "2026-09-10T05:34:41Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:35:04Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/setup-llvm22",
+          "number": 4,
+          "startedAt": "2026-09-10T05:34:49Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:35:12Z",
+          "conclusion": "success",
+          "name": "Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 5,
+          "startedAt": "2026-09-10T05:35:04Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:35:18Z",
+          "conclusion": "success",
+          "name": "Setup Node.js",
+          "number": 6,
+          "startedAt": "2026-09-10T05:35:12Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:35:20Z",
+          "conclusion": "success",
+          "name": "Install the npm packages the gap tests' oracle imports",
+          "number": 7,
+          "startedAt": "2026-09-10T05:35:18Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:35:25Z",
+          "conclusion": "success",
+          "name": "Download the shared fast-mode build",
+          "number": 8,
+          "startedAt": "2026-09-10T05:35:20Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:35:25Z",
+          "conclusion": "success",
+          "name": "Ensure the downloaded perry binary is executable",
+          "number": 9,
+          "startedAt": "2026-09-10T05:35:25Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T06:19:43Z",
+          "conclusion": "failure",
+          "name": "Run gap suite (shard 1/3, fast mode)",
+          "number": 10,
+          "startedAt": "2026-09-10T05:35:25Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T06:19:43Z",
+          "conclusion": "skipped",
+          "name": "Upload re-baselined gap snapshot",
+          "number": 11,
+          "startedAt": "2026-09-10T06:19:43Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T06:19:44Z",
+          "conclusion": "success",
+          "name": "Upload gap report",
+          "number": 12,
+          "startedAt": "2026-09-10T06:19:43Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T06:19:44Z",
+          "conclusion": "skipped",
+          "name": "Post Setup Node.js",
+          "number": 22,
+          "startedAt": "2026-09-10T06:19:44Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T06:19:44Z",
+          "conclusion": "skipped",
+          "name": "Post Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 23,
+          "startedAt": "2026-09-10T06:19:44Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T06:19:44Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 24,
+          "startedAt": "2026-09-10T06:19:44Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T06:19:44Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 25,
+          "startedAt": "2026-09-10T06:19:44Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102757641598"
+    },
+    {
+      "completedAt": "2026-09-10T06:25:04Z",
+      "conclusion": "failure",
+      "databaseId": 102757641608,
+      "name": "gap-suite (2)",
+      "startedAt": "2026-09-10T05:34:30Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T05:34:32Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T05:34:30Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:34:39Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 2,
+          "startedAt": "2026-09-10T05:34:32Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:34:48Z",
+          "conclusion": "success",
+          "name": "Install Rust toolchain",
+          "number": 3,
+          "startedAt": "2026-09-10T05:34:39Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:35:03Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/setup-llvm22",
+          "number": 4,
+          "startedAt": "2026-09-10T05:34:48Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:35:17Z",
+          "conclusion": "success",
+          "name": "Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 5,
+          "startedAt": "2026-09-10T05:35:03Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:35:22Z",
+          "conclusion": "success",
+          "name": "Setup Node.js",
+          "number": 6,
+          "startedAt": "2026-09-10T05:35:17Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:35:24Z",
+          "conclusion": "success",
+          "name": "Install the npm packages the gap tests' oracle imports",
+          "number": 7,
+          "startedAt": "2026-09-10T05:35:22Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:35:26Z",
+          "conclusion": "success",
+          "name": "Download the shared fast-mode build",
+          "number": 8,
+          "startedAt": "2026-09-10T05:35:24Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:35:26Z",
+          "conclusion": "success",
+          "name": "Ensure the downloaded perry binary is executable",
+          "number": 9,
+          "startedAt": "2026-09-10T05:35:26Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T06:25:01Z",
+          "conclusion": "failure",
+          "name": "Run gap suite (shard 2/3, fast mode)",
+          "number": 10,
+          "startedAt": "2026-09-10T05:35:26Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T06:25:01Z",
+          "conclusion": "skipped",
+          "name": "Upload re-baselined gap snapshot",
+          "number": 11,
+          "startedAt": "2026-09-10T06:25:01Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T06:25:02Z",
+          "conclusion": "success",
+          "name": "Upload gap report",
+          "number": 12,
+          "startedAt": "2026-09-10T06:25:01Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T06:25:02Z",
+          "conclusion": "skipped",
+          "name": "Post Setup Node.js",
+          "number": 22,
+          "startedAt": "2026-09-10T06:25:02Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T06:25:02Z",
+          "conclusion": "skipped",
+          "name": "Post Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 23,
+          "startedAt": "2026-09-10T06:25:02Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T06:25:02Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 24,
+          "startedAt": "2026-09-10T06:25:02Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T06:25:02Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 25,
+          "startedAt": "2026-09-10T06:25:02Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102757641608"
+    },
+    {
+      "completedAt": "2026-09-10T06:15:14Z",
+      "conclusion": "failure",
+      "databaseId": 102757641627,
+      "name": "gap-suite (3)",
+      "startedAt": "2026-09-10T05:34:29Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T05:34:31Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T05:34:30Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:34:39Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 2,
+          "startedAt": "2026-09-10T05:34:31Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:34:47Z",
+          "conclusion": "success",
+          "name": "Install Rust toolchain",
+          "number": 3,
+          "startedAt": "2026-09-10T05:34:39Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:35:01Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/setup-llvm22",
+          "number": 4,
+          "startedAt": "2026-09-10T05:34:47Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:35:07Z",
+          "conclusion": "success",
+          "name": "Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 5,
+          "startedAt": "2026-09-10T05:35:01Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:35:13Z",
+          "conclusion": "success",
+          "name": "Setup Node.js",
+          "number": 6,
+          "startedAt": "2026-09-10T05:35:07Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:35:15Z",
+          "conclusion": "success",
+          "name": "Install the npm packages the gap tests' oracle imports",
+          "number": 7,
+          "startedAt": "2026-09-10T05:35:13Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:35:17Z",
+          "conclusion": "success",
+          "name": "Download the shared fast-mode build",
+          "number": 8,
+          "startedAt": "2026-09-10T05:35:15Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:35:17Z",
+          "conclusion": "success",
+          "name": "Ensure the downloaded perry binary is executable",
+          "number": 9,
+          "startedAt": "2026-09-10T05:35:17Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T06:15:13Z",
+          "conclusion": "failure",
+          "name": "Run gap suite (shard 3/3, fast mode)",
+          "number": 10,
+          "startedAt": "2026-09-10T05:35:17Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T06:15:13Z",
+          "conclusion": "skipped",
+          "name": "Upload re-baselined gap snapshot",
+          "number": 11,
+          "startedAt": "2026-09-10T06:15:13Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T06:15:13Z",
+          "conclusion": "success",
+          "name": "Upload gap report",
+          "number": 12,
+          "startedAt": "2026-09-10T06:15:13Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T06:15:13Z",
+          "conclusion": "skipped",
+          "name": "Post Setup Node.js",
+          "number": 22,
+          "startedAt": "2026-09-10T06:15:13Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T06:15:13Z",
+          "conclusion": "skipped",
+          "name": "Post Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 23,
+          "startedAt": "2026-09-10T06:15:13Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T06:15:13Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 24,
+          "startedAt": "2026-09-10T06:15:13Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T06:15:13Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 25,
+          "startedAt": "2026-09-10T06:15:13Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102757641627"
+    },
+    {
+      "completedAt": "2026-09-10T05:59:53Z",
+      "conclusion": "success",
+      "databaseId": 102760962089,
+      "name": "gc-stress",
+      "startedAt": "2026-09-10T05:51:16Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T05:51:19Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T05:51:17Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:51:27Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 2,
+          "startedAt": "2026-09-10T05:51:19Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:51:28Z",
+          "conclusion": "success",
+          "name": "Download GC matrix shard evidence",
+          "number": 3,
+          "startedAt": "2026-09-10T05:51:27Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:51:28Z",
+          "conclusion": "success",
+          "name": "Merge shards and enforce complete coverage + liveness",
+          "number": 4,
+          "startedAt": "2026-09-10T05:51:28Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:51:36Z",
+          "conclusion": "success",
+          "name": "Install Rust toolchain",
+          "number": 5,
+          "startedAt": "2026-09-10T05:51:28Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:51:57Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/setup-llvm22",
+          "number": 6,
+          "startedAt": "2026-09-10T05:51:36Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:52:19Z",
+          "conclusion": "success",
+          "name": "Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 7,
+          "startedAt": "2026-09-10T05:51:57Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:52:24Z",
+          "conclusion": "success",
+          "name": "Install clang",
+          "number": 8,
+          "startedAt": "2026-09-10T05:52:19Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:52:28Z",
+          "conclusion": "success",
+          "name": "Download shared GC matrix build",
+          "number": 9,
+          "startedAt": "2026-09-10T05:52:24Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:52:28Z",
+          "conclusion": "success",
+          "name": "Ensure the downloaded compiler is executable",
+          "number": 10,
+          "startedAt": "2026-09-10T05:52:28Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:53:12Z",
+          "conclusion": "success",
+          "name": "GC rooting-bug instruments (inert-when-off, live-when-on)",
+          "number": 11,
+          "startedAt": "2026-09-10T05:52:28Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:59:50Z",
+          "conclusion": "success",
+          "name": "Run GC write-barrier stress tests",
+          "number": 12,
+          "startedAt": "2026-09-10T05:53:12Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:59:51Z",
+          "conclusion": "success",
+          "name": "Upload merged matrix report",
+          "number": 13,
+          "startedAt": "2026-09-10T05:59:50Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:59:51Z",
+          "conclusion": "success",
+          "name": "Post Run Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+          "number": 25,
+          "startedAt": "2026-09-10T05:59:51Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:59:51Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "number": 26,
+          "startedAt": "2026-09-10T05:59:51Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T05:59:51Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 27,
+          "startedAt": "2026-09-10T05:59:51Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102760962089"
+    },
+    {
+      "completedAt": "2026-09-10T06:25:11Z",
+      "conclusion": "failure",
+      "databaseId": 102768088249,
+      "name": "main-gate",
+      "startedAt": "2026-09-10T06:25:07Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T06:25:08Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T06:25:08Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T06:25:08Z",
+          "conclusion": "failure",
+          "name": "Require the plan and every planned job to have passed",
+          "number": 2,
+          "startedAt": "2026-09-10T06:25:08Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T06:25:09Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 3,
+          "startedAt": "2026-09-10T06:25:08Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/PerryTS/perry/actions/runs/34440726868/job/102768088249"
+    }
+  ],
+  "status": "completed"
+}
