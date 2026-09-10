@@ -199,6 +199,68 @@ fn repeated_parse_reuses_only_the_immutable_string_token() {
 }
 
 #[test]
+fn cached_template_construction_releases_borrow_and_keeps_arrays_fresh() {
+    let padding = "padding-".repeat(12);
+    let first_text =
+        format!(r#"{{"padding":"{padding}","items":["immutable-value",2,true],"value":7}}"#);
+    let second_text =
+        format!(r#"{{"padding":"{padding}","items":["other-value",false,3],"value":8}}"#);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let first_source = crate::js_string_from_bytes(first_text.as_ptr(), first_text.len() as u32);
+    let first_source = scope.root_nanbox_u64(crate::JSValue::string_ptr(first_source).bits());
+    let second_source = crate::js_string_from_bytes(second_text.as_ptr(), second_text.len() as u32);
+    let second_source = scope.root_nanbox_u64(crate::JSValue::string_ptr(second_source).bits());
+    unsafe {
+        for _ in 0..16 {
+            let source = crate::JSValue::from_bits(first_source.get_nanbox_u64()).as_string_ptr();
+            let first = crate::json::js_json_parse(source);
+            let first = scope.root_nanbox_u64(first.bits());
+            let source = crate::JSValue::from_bits(first_source.get_nanbox_u64()).as_string_ptr();
+            assert!(crate::json::test_parse_object_template_matches(
+                source,
+                first_text.len()
+            ));
+            let second = crate::json::js_json_parse(source);
+            let second = scope.root_nanbox_u64(second.bits());
+            assert_ne!(first.get_nanbox_u64(), second.get_nanbox_u64());
+            let fields = |bits| {
+                crate::JSValue::from_bits(bits)
+                    .as_pointer::<crate::object::ObjectHeader>()
+                    .cast::<u8>()
+                    .add(std::mem::size_of::<crate::object::ObjectHeader>())
+                    .cast::<crate::JSValue>()
+            };
+            let first_array =
+                (*fields(first.get_nanbox_u64()).add(1)).as_pointer::<crate::array::ArrayHeader>();
+            let second_array =
+                (*fields(second.get_nanbox_u64()).add(1)).as_pointer::<crate::array::ArrayHeader>();
+            assert_ne!(first_array, second_array);
+
+            // Capturing a different source needs a mutable cache borrow. This
+            // must succeed immediately after the borrowed construction returns.
+            let source = crate::JSValue::from_bits(second_source.get_nanbox_u64()).as_string_ptr();
+            let other = crate::json::js_json_parse(source);
+            let output = crate::json::js_json_stringify(
+                f64::from_bits(other.bits()),
+                crate::json::TYPE_UNKNOWN,
+            );
+            assert_eq!(
+                crate::json::str_from_header(output),
+                Some(second_text.as_str())
+            );
+            let output = crate::json::js_json_stringify(
+                f64::from_bits(second.get_nanbox_u64()),
+                crate::json::TYPE_UNKNOWN,
+            );
+            assert_eq!(
+                crate::json::str_from_header(output),
+                Some(first_text.as_str())
+            );
+        }
+    }
+}
+
+#[test]
 fn repeated_small_object_template_rebuilds_nested_arrays() {
     let input = r#"{"id":42,"name":"long-enough-to-cross-the-small-template-threshold","tags":["alpha","beta"]}"#;
     let source = crate::js_string_from_bytes(input.as_ptr(), input.len() as u32);

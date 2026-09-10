@@ -251,6 +251,7 @@ pub(crate) unsafe fn remember_parse_object_template(
 /// Rebuild only the mutable cells from a cached small-object plan. One pending
 /// collection may run before the plan is reloaded; the cache scanner rewrites
 /// every managed pointer in the meantime.
+#[inline]
 pub(crate) unsafe fn try_reuse_parse_object_template(
     source: *const StringHeader,
     source_len: usize,
@@ -271,22 +272,30 @@ pub(crate) unsafe fn try_reuse_parse_object_template(
         return None;
     }
 
+    reuse_matched_object_template()
+}
+
+// Keep the construction frame out of cache misses. The cache borrow begins
+// after the existing collection boundary and ends before suppression is lifted.
+#[inline(never)]
+unsafe fn reuse_matched_object_template() -> Option<JSValue> {
     crate::gc::gc_collect_pending_suppressed_parse();
-    let entry = PARSE_OBJECT_TEMPLATE.with(|cache| cache.borrow().as_ref().copied())?;
-    let result = {
+    let result = PARSE_OBJECT_TEMPLATE.with(|cache| {
         let _no_move = crate::gc::GcSuppressScope::new();
+        let cache = cache.borrow();
+        let entry = cache.as_ref()?;
         let mut batch = crate::arena::ConstructionBatch::new();
         let mut values = [JSValue::undefined(); PARSE_OBJECT_TEMPLATE_MAX_FIELDS];
         for (index, planned) in entry.values[..entry.len as usize].iter().enumerate() {
-            values[index] = match *planned {
-                ParseTemplateValue::Inline(value) => value,
+            values[index] = match planned {
+                ParseTemplateValue::Inline(value) => *value,
                 ParseTemplateValue::Array {
                     values: elements,
                     len,
                 } => {
                     let mut array =
-                        construction_array::ConstructionArray::new(&mut batch, len as u32);
-                    for &element in &elements[..len as usize] {
+                        construction_array::ConstructionArray::new(&mut batch, *len as u32);
+                    for &element in &elements[..*len as usize] {
                         array.push(&mut batch, element);
                     }
                     JSValue::object_ptr(array.finish(&batch).cast())
@@ -299,8 +308,8 @@ pub(crate) unsafe fn try_reuse_parse_object_template(
             entry.shape_id,
             &values[..entry.len as usize],
         );
-        JSValue::object_ptr(object.cast())
-    };
+        Some(JSValue::object_ptr(object.cast()))
+    })?;
     parse_scalar::clear_oversized_key_cache();
     crate::gc::gc_schedule_tiny_parse_boundary_collection_if_pressure();
     Some(result)
