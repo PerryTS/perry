@@ -2309,10 +2309,65 @@ jobs:
 
           failed=""
           while IFS=$'\t' read -r name version tarball expected_sha; do
-            if [ "$name" = "@perryts/perry" ] && [ -n "$failed" ]; then
-              echo "::error::Not publishing the wrapper because platform publication failed:$failed" >&2
-              failed="$failed $name@$version (blocked by platform failure)"
-              continue
+            if [ "$name" = "@perryts/perry" ]; then
+              if [ -n "$failed" ]; then
+                echo "::error::Not publishing the wrapper because platform publication failed:$failed" >&2
+                failed="$failed $name@$version (blocked by platform failure)"
+                continue
+              fi
+              # npm can report a successful publish that never lands. On
+              # 2026-09-10 it printed "+ @perryts/perry-linux-x64@0.5.1519",
+              # exited 0 and signed provenance, while leaving the version
+              # STAGED: invisible (404, absent from the packument's `time`
+              # map) and un-republishable (E409 on every retry). The guard
+              # above trusted that exit code, so the wrapper shipped as
+              # `latest` with a platform dependency that did not resolve, and
+              # v0.5.1519 could not be completed at all.
+              #
+              # So do not take npm's word for it. Before the wrapper goes out,
+              # confirm every platform package is REALLY in the registry. The
+              # `time` map is the authoritative signal here: `npm view` and the
+              # publish exit status both reported success for a version npm had
+              # no record of.
+              echo "=== verifying every platform package is visible before publishing the wrapper ==="
+              unseen=""
+              while IFS=$'\t' read -r pname pversion; do
+                [ "$pname" = "@perryts/perry" ] && continue
+                seen=0
+                for attempt in $(seq 1 30); do
+                  if node -e '
+                    const https = require("https")
+                    const [pkg, ver] = process.argv.slice(1)
+                    https.get("https://registry.npmjs.org/" + encodeURIComponent(pkg), res => {
+                      let b = ""
+                      res.on("data", c => b += c)
+                      res.on("end", () => {
+                        try {
+                          const t = JSON.parse(b).time || {}
+                          process.exit(t[ver] ? 0 : 1)
+                        } catch { process.exit(1) }
+                      })
+                    }).on("error", () => process.exit(1))
+                  ' "$pname" "$pversion"; then seen=1; break; fi
+                  sleep 10
+                done
+                if [ "$seen" -eq 1 ]; then
+                  echo "  visible: $pname@$pversion"
+                else
+                  echo "::error::$pname@$pversion is not visible in the registry after 5 min — npm may have staged it without publishing." >&2
+                  unseen="$unseen $pname@$pversion"
+                fi
+              done < <(node -e '
+                const manifest = require("./npm-publish-manifest.json")
+                for (const pkg of manifest.packages) {
+                  console.log([pkg.name, pkg.version].join("\t"))
+                }
+              ')
+              if [ -n "$unseen" ]; then
+                echo "::error::Refusing to publish the wrapper: platform package(s) not visible:$unseen" >&2
+                failed="$failed$unseen (published but not visible)"
+                continue
+              fi
             fi
 
             public_sha=$(npm view "$name@$version" dist.shasum 2>/dev/null | tr -d '[:space:]' || true)
