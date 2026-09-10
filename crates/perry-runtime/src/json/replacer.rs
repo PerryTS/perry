@@ -1588,7 +1588,11 @@ pub unsafe extern "C" fn js_json_stringify_full(
     let no_replacer = replacer_bits == TAG_NULL || replacer_bits == TAG_UNDEFINED;
     let no_spacer =
         spacer_bits == TAG_NULL || spacer_bits == TAG_UNDEFINED || spacer_bits == TAG_FALSE;
-    if no_replacer && no_spacer {
+    // Admit inert immediates to bounded output without widening the separate
+    // lazy-source shortcut. Boxed spacers retain their observable coercions.
+    let bounded_spacer =
+        no_spacer || spacer_bits == TAG_TRUE || (spacer_bits & 0x7fff_ffff_ffff_ffff) == 0;
+    if no_replacer && bounded_spacer {
         // These primitives cannot invoke toJSON. Restrict the other arguments
         // to inert values so replacers and spacer coercions remain observable.
         if let Some(result) = super::stringify_small::try_primitive(value_bits) {
