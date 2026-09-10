@@ -1699,9 +1699,9 @@ pub(crate) fn reparse_materializations() -> u64 {
     REPARSE_MATERIALIZATIONS.with(|c| c.get())
 }
 
-/// #7478: batch-materialize a lazy array by RE-PARSING its retained blob
-/// with the `DirectParser`, instead of walking the tape element by
-/// element.
+/// Batch-materialize a lazy array with `DirectParser` inside one construction
+/// window. With cache hits, use tape offsets to skip cached source subtrees
+/// and place their existing values directly into the completed array.
 ///
 /// A lazy array only ever stands for a TOP-LEVEL array — `try_parse_via_tape`
 /// builds one only when `tape_entries[0].kind == KIND_ARR_START`, and always
@@ -1745,6 +1745,7 @@ unsafe fn reparse_materialize(
     hdr_handle: &crate::gc::RuntimeHandle<'_>,
     hdr: *mut LazyArrayHeader,
     cached_length: u32,
+    has_cache_hits: bool,
 ) -> (Option<*mut crate::array::ArrayHeader>, *mut LazyArrayHeader) {
     // The blob is this array's own source only when the tape root is the
     // blob's first value. Every production lazy array is built that way;
@@ -1769,7 +1770,22 @@ unsafe fn reparse_materialize(
         let data = (blob as *const u8).add(std::mem::size_of::<crate::StringHeader>());
         let bytes = std::slice::from_raw_parts(data, blob_len);
         let mut parser = crate::json::DirectParser::new_batched(bytes);
-        let parsed = parser.parse_value();
+        let cached = has_cache_hits
+            .then(|| {
+                parser.materialize_cached_array(
+                    LazyArrayHeader::tape_slice(hdr),
+                    std::slice::from_raw_parts(
+                        (*hdr).materialized_elements,
+                        cached_length as usize,
+                    ),
+                    std::slice::from_raw_parts(
+                        (*hdr).materialized_bitmap,
+                        (cached_length as usize).div_ceil(64),
+                    ),
+                )
+            })
+            .flatten();
+        let parsed = cached.unwrap_or_else(|| parser.parse_value());
         // Hand the tree to PARSE_ROOTS before the window closes — the
         // handle-scope root below is pushed after it has already closed.
         crate::json::parse_root_push(parsed);
@@ -1793,10 +1809,9 @@ unsafe fn reparse_materialize(
     });
     let arr_ptr = array_from_nanbox_handle(&arr_handle);
 
-    // Patch the sparse cache back over the fresh slots. A cached slot holds
-    // the JSValue user code already has a reference to and may have MUTATED
-    // through it, so the cache — not the reparsed subtree — is authoritative
-    // there, and its identity has to survive (`parsed[i] === parsed[i]`).
+    // Keep publication authoritative to the refreshed cache, including when
+    // the cached producer declined and the whole-array parser ran. A cached
+    // slot may have aliases or mutations (`parsed[i] === parsed[i]`).
     //
     // `store_array_slot` is the store that knows how to downgrade a
     // RawF64-layout array when a pointer lands in it; a raw
@@ -1853,17 +1868,13 @@ pub unsafe fn force_materialize_lazy(hdr: *mut LazyArrayHeader) -> *mut crate::a
     let cached_count = lazy_cached_count(hdr);
     let has_cache_hits = cached_count > 0;
 
-    // #7478: when most of the array still has to be built, re-parse the
-    // retained blob with the batch DirectParser instead of walking the
-    // tape element-by-element — same tree, ~1.8× cheaper. When MOST
-    // elements are already cached the walk is the cheap producer (it
-    // copies cached JSValues and materializes only the remainder), and a
-    // reparse would rebuild subtrees it is about to throw away. Since the
-    // reparse rebuilds the whole array, it pays exactly while the cached
-    // fraction is below `1 - 1/1.8 ≈ 44%`; `cached_count * 2 <
-    // cached_length` is that crossover rounded to a shift.
+    // Preserve the existing minority-cache admission. Its original crossover
+    // was measured with a whole-array reparse; the cached producer now avoids
+    // rebuilding cached subtrees within this same admitted workload. Changing
+    // admission needs separate measurements of the majority-cache paths.
     if cached_count * 2 < cached_length as u64 {
-        let (reparsed, refreshed) = reparse_materialize(&scope, &hdr_handle, hdr, cached_length);
+        let (reparsed, refreshed) =
+            reparse_materialize(&scope, &hdr_handle, hdr, cached_length, has_cache_hits);
         if let Some(arr) = reparsed {
             return arr;
         }

@@ -1443,6 +1443,9 @@ mod short_array_tests;
 #[path = "parser_escape_chunk.rs"]
 mod escape_chunk;
 
+#[path = "parser_cached_array.rs"]
+mod cached_array;
+
 #[cfg(test)]
 #[path = "parser_escape_chunk_tests.rs"]
 mod escape_chunk_tests;
