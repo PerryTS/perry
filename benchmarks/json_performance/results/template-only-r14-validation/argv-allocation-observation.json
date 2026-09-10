@@ -1,0 +1,9 @@
+{
+  "file": "crates/perry-runtime/src/os.rs",
+  "sha256": "1f2bafdef929fe5e61dc35fe9cfbfd179cc51d245f15c7458898fc5877ea7eb5",
+  "lines": [
+    582,
+    628
+  ],
+  "finding": "js_process_argv allocates an array and a managed string for argv[0] on every call. Worker reads process.argv repeatedly before timing. main-worker basename is 11 bytes, candidate-worker 16, control00-worker 16. A/A same-path control is flat; different-name identical-byte control is pending. Name length can change allocation size/alignment, but no timing causality claimed before control outcome."
+}

@@ -1,0 +1,7 @@
+FINISHED records_array_1m scan 276
+FINISHED records_object_1m parse 324
+FINISHED records_object_8m parse 40
+FINISHED records_array_20m parse 16
+FINISHED records_array_20m sparse 16
+FINISHED records_array_20m scan 16
+FINISHED records_object_20m parse 16

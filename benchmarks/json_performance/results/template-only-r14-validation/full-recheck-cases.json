@@ -1,0 +1,56 @@
+{
+  "cases": [
+    {
+      "fixture": "records_array_1m",
+      "operation": "scan",
+      "iterations": 276,
+      "warmup": 2,
+      "repetitions": 11
+    },
+    {
+      "fixture": "records_object_1m",
+      "operation": "parse",
+      "iterations": 324,
+      "warmup": 2,
+      "repetitions": 11
+    },
+    {
+      "fixture": "records_object_8m",
+      "operation": "parse",
+      "iterations": 40,
+      "warmup": 2,
+      "repetitions": 11
+    },
+    {
+      "fixture": "records_array_20m",
+      "operation": "parse",
+      "iterations": 16,
+      "warmup": 2,
+      "repetitions": 11
+    },
+    {
+      "fixture": "records_array_20m",
+      "operation": "sparse",
+      "iterations": 16,
+      "warmup": 2,
+      "repetitions": 11
+    },
+    {
+      "fixture": "records_array_20m",
+      "operation": "scan",
+      "iterations": 16,
+      "warmup": 2,
+      "repetitions": 11
+    },
+    {
+      "fixture": "records_object_20m",
+      "operation": "parse",
+      "iterations": 16,
+      "warmup": 2,
+      "repetitions": 11
+    }
+  ],
+  "factor": 4,
+  "selection": "Six separated full-matrix slowdowns plus one overlapping case slower in all seven pairs; selected before recheck.",
+  "source": "full-analysis.json"
+}

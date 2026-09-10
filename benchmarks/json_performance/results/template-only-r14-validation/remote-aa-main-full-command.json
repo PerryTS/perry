@@ -1,0 +1,21 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/template-only-r14/run-focus.py",
+  "--worker",
+  ".work/template-only-r14/main-worker",
+  "--baseline-worker",
+  ".work/template-only-r14/main-worker",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--case",
+  "records_object_1m:parse:324:2:11",
+  "--case",
+  "records_array_20m:scan:16:2:11",
+  "--results-dir",
+  "results/quiet-template-only-r14-aa-main-full"
+]

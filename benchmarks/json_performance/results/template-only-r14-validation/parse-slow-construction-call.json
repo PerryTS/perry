@@ -1,0 +1,35 @@
+{
+  "records": [
+    {
+      "arm": "main",
+      "lines": [
+        "10050458c:     \tstr\tx8, [x20]",
+        "100504590:     \tadd\tx0, sp, #0xa0",
+        "100504594:     \tmov\tx2, x19",
+        "100504598:     \tmov\tx3, x25",
+        "10050459c:     \tbl\t0x10024530c <__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser23new_batched_from_string>",
+        "1005045a0:     \tadd\tx0, sp, #0xa0",
+        "1005045a4:     \tbl\t0x100242448 <__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser11parse_value>",
+        "1005045a8:     \tmov\tx23, x0",
+        "1005045ac:     \tldp\tx26, x28, [sp, #0x108]",
+        "1005045b0:     \tcmp\tx28, x26"
+      ]
+    },
+    {
+      "arm": "candidate",
+      "lines": [
+        "100504528:     \tstr\tx8, [x20]",
+        "10050452c:     \tadd\tx0, sp, #0xa0",
+        "100504530:     \tmov\tx2, x19",
+        "100504534:     \tmov\tx3, x25",
+        "100504538:     \tbl\t0x10024530c <__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser23new_batched_from_string>",
+        "10050453c:     \tadd\tx0, sp, #0xa0",
+        "100504540:     \tbl\t0x100242448 <__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser11parse_value>",
+        "100504544:     \tmov\tx23, x0",
+        "100504548:     \tldp\tx26, x28, [sp, #0x108]",
+        "10050454c:     \tcmp\tx28, x26"
+      ]
+    }
+  ],
+  "note": "Both frames are 512 bytes; DirectParser occupies sp+0xa0 in both and calls the same-address constructor/parse_value. This does not substantiate a changed parser stack-slot explanation. Inlined admission changes entry instructions; root cause of large-workload delta remains unproven."
+}

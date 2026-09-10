@@ -1,0 +1,7 @@
+{
+  "experiment": "A/A executable-name-length control",
+  "source_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+  "both_perry_arms": "same frozen main bytes; worker basename five bytes longer than reference",
+  "worker_sha256": "c22e0fc5c3910a4c75d23e51af4b061ed063aadf02103bb267aff8329f46e324",
+  "candidate_measured": false
+}

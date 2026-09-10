@@ -1,0 +1,47 @@
+{
+  "results_dir": "results/quiet-template-only-r14-rotating",
+  "counts": {
+    "timing": 420,
+    "calibration": 60,
+    "verify": 100
+  },
+  "window": {
+    "owner": "json-perf-67358-1789069710",
+    "load_before": [
+      1.3642578125,
+      1.50537109375,
+      1.52001953125
+    ],
+    "started_utc": "2026-09-10T19:48:30Z",
+    "quiet_gate_passed": false,
+    "command": [
+      "python3",
+      ".work/template-only-r14/run-rotating.py",
+      "--worker",
+      ".work/template-only-r14/candidate-rotating-worker",
+      "--baseline-worker",
+      ".work/template-only-r14/main-rotating-worker",
+      "--node",
+      "/opt/homebrew/bin/node",
+      "--bun",
+      "/Users/perry/.bun/bin/bun",
+      "--filter",
+      "unicode_1m,long_string_1m,escaped_1m,small_record,records_array_1m",
+      "--repeat",
+      "7",
+      "--source-commit",
+      "de85016c81ce39316408ef755c57eded37dd3202",
+      "--results-dir",
+      "results/quiet-template-only-r14-rotating"
+    ],
+    "competing_workloads_before": [],
+    "load_after": [
+      2.59423828125,
+      1.7626953125,
+      1.6064453125
+    ],
+    "competing_workloads_after": [],
+    "finished_utc": "2026-09-10T19:50:14Z"
+  },
+  "note": "Failed quiet gate; retained in full, excluded from performance qualification before inspecting medians."
+}

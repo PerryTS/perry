@@ -1,0 +1,1 @@
+Performance qualification rejected by the pre-existing quiet gate. Ending load exceeded the threshold; window.json records quiet_gate_passed=false. Every raw sample is retained. Do not use this window as a valid CPU/RSS comparison or replace its samples with the retry.
