@@ -1524,7 +1524,7 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # Tag-last core (cut-release mode only): every build leg is green and all
-  # nine exact npm tarballs are public + registry-verified, so NOW create the
+  # every exact npm tarball is public + registry-verified, so NOW create the
   # tag + GitHub Release. Release notes are cut from changelog.d/
   # fragments — same contract as scripts/cut_release_notes.sh, whose
   # --notes-only mode this job calls. The fragment-removal commit stays a
@@ -2152,7 +2152,7 @@ jobs:
   #
   # Uses OIDC / Trusted Publishers (no npm login, long-lived NPM_TOKEN, or
   # GitHub Environment). release-packages.yml is the one publisher identity
-  # shared by all nine @perryts/* packages.
+  # shared by every @perryts/* package.
   # ---------------------------------------------------------------------------
   npm-publish:
     # The irreversible leg. Every build must be green in canonical cut-release
@@ -2240,12 +2240,56 @@ jobs:
       - name: Bundle exact npm publication proofs
         run: |
           set -euo pipefail
-          mapfile -t proofs < <(find npm -mindepth 2 -maxdepth 2 -type f -name '*.tgz' | sort)
-          if [ "${#proofs[@]}" -ne 9 ]; then
-            echo "::error::Expected 9 exact npm tarballs; found ${#proofs[@]}." >&2
-            printf '  %s\n' "${proofs[@]}" >&2
+          # The expected set is DERIVED from the manifest the previous step
+          # generates from ALL_PACKAGES (scripts/publish/constants.mts) and
+          # already validates against it. This used to hardcode `9`, which went
+          # silently wrong when the musl legs were dropped pending #9382:
+          # ALL_PACKAGES became 6 platforms + wrapper = 7, stage-npm staged 6,
+          # prepare-ci-packages packed 7 and PASSED its own check -- and then
+          # this step failed the release with "Expected 9; found 7" AFTER a
+          # fully green 14-leg build (run 34438751300). Two expressions of the
+          # same fact, one of which nobody updated.
+          #
+          # Checked BY NAME, not by a count: a count cannot say WHICH package is
+          # missing, and that is the whole question when this fires. The count
+          # equality below still catches a stray EXTRA tarball.
+          # `while read` rather than `mapfile`: mapfile is bash 4+, and keeping
+          # this to bash 3.2 means it can be run and tested on a developer
+          # machine instead of only on a runner. This step failed a release once
+          # already; an untestable version of it is not an improvement.
+          proofs=()
+          while IFS= read -r line; do proofs+=("$line"); done \
+            < <(find npm -mindepth 2 -maxdepth 2 -type f -name '*.tgz' | sort)
+          want=()
+          while IFS= read -r line; do want+=("$line"); done < <(node -e '
+            const m = require("./npm-publish-manifest.json")
+            for (const p of m.packages) {
+              console.log(p.name.replace(/^@/, "").replace(/\//g, "-") + "-" + p.version + ".tgz")
+            }
+          ')
+          if [ "${#want[@]}" -lt 2 ]; then
+            echo "::error::manifest lists ${#want[@]} package(s); refusing to publish a set that small." >&2
             exit 1
           fi
+          missing=""
+          for w in ${want[@]+"${want[@]}"}; do
+            hit=0
+            for p in ${proofs[@]+"${proofs[@]}"}; do
+              if [ "$(basename "$p")" = "$w" ]; then hit=1; break; fi
+            done
+            if [ "$hit" -eq 0 ]; then missing="$missing $w"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::manifest package(s) have no packed tarball:$missing" >&2
+            printf '  on disk: %s\n' "${proofs[@]}" >&2
+            exit 1
+          fi
+          if [ "${#proofs[@]}" -ne "${#want[@]}" ]; then
+            echo "::error::found ${#proofs[@]} tarball(s) but the manifest lists ${#want[@]}; an unexpected tarball is present." >&2
+            printf '  on disk: %s\n' "${proofs[@]}" >&2
+            exit 1
+          fi
+          echo "${#want[@]} exact tarballs match the manifest by name."
           tar -cf npm-publish-package-proofs.tar \
             npm-publish-manifest.json socket-scan-receipt.json "${proofs[@]}"
 
@@ -2310,7 +2354,7 @@ jobs:
             exit 1
           fi
 
-      - name: Verify all nine public registry shasums
+      - name: Verify every public registry shasum
         # npm's CDN can lag a successful PUT. Wait briefly, but a different
         # sha1 fails immediately because published versions are immutable.
         run: |
@@ -2335,7 +2379,7 @@ jobs:
               }
             ')
             if [ -z "$waiting" ]; then
-              echo "All nine exact npm tarballs are public and verified. The tag may now be created."
+              echo "Every exact npm tarball is public and verified. The tag may now be created."
               break
             fi
             if [ "$SECONDS" -ge "$deadline" ]; then
