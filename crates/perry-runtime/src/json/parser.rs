@@ -518,6 +518,16 @@ impl<'a> DirectParser<'a> {
             // saves the equivalent walk inside `compute_utf16_len`
             // plus the conditional widening for non-ASCII counters.
             let ptr = match s {
+                ParsedStr::Borrowed(b)
+                    if b.len() >= crate::string::JSON_MALLOC_OUTPUT_THRESHOLD as usize =>
+                {
+                    crate::string::string_from_json_source_bytes(
+                        &mut self.batch,
+                        b,
+                        self.source,
+                        token_start + 1,
+                    )
+                }
                 ParsedStr::Borrowed(b) => crate::string::string_from_json_bytes(&mut self.batch, b),
                 // Escaped strings live in a Rust Vec, so the builder can derive
                 // the WTF-8 lone-surrogate flag while allocating the result.
