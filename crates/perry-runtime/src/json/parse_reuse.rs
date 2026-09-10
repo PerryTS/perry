@@ -251,7 +251,9 @@ pub(crate) unsafe fn remember_parse_object_template(
 /// Rebuild only the mutable cells from a cached small-object plan. One pending
 /// collection may run before the plan is reloaded; the cache scanner rewrites
 /// every managed pointer in the meantime.
-#[inline]
+// Preserve the out-of-line parse admission boundary while reducing the
+// construction frame and copies inside it.
+#[inline(never)]
 pub(crate) unsafe fn try_reuse_parse_object_template(
     source: *const StringHeader,
     source_len: usize,
@@ -272,13 +274,6 @@ pub(crate) unsafe fn try_reuse_parse_object_template(
         return None;
     }
 
-    reuse_matched_object_template()
-}
-
-// Keep the construction frame out of cache misses. The cache borrow begins
-// after the existing collection boundary and ends before suppression is lifted.
-#[inline(never)]
-unsafe fn reuse_matched_object_template() -> Option<JSValue> {
     crate::gc::gc_collect_pending_suppressed_parse();
     let result = PARSE_OBJECT_TEMPLATE.with(|cache| {
         let _no_move = crate::gc::GcSuppressScope::new();
