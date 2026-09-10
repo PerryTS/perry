@@ -1,0 +1,212 @@
+[
+  {
+    "arm": "r5",
+    "source": "test-files/test_gap_json_stringify_replacer_tojson.ts",
+    "matches_node": true,
+    "exit_code": 0,
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/test-files/test_gap_json_stringify_replacer_tojson.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/r5-test_gap_json_stringify_replacer_tojson"
+    ],
+    "hashes": {
+      "test-files/test_gap_json_stringify_replacer_tojson.ts": "7e818403941253fdacc3e8d1667c9b3c0560a812e7b14d85bbd66edb2a8232bf",
+      "benchmarks/json_performance/.work/stringify-entry-r7/r5-test_gap_json_stringify_replacer_tojson": "2baf1f624efb02199f83f8cb986f0b34be6df193331d58a256627ce314426086",
+      "benchmarks/json_performance/.work/invariant-field-loop-r5/frozen-build/perry": "d2abfd3befe5c7977251e68af77628a11b06611e7eb272ddcb381a889ed844d7",
+      "benchmarks/json_performance/.work/invariant-field-loop-r5/frozen-build/libperry_runtime.a": "2deb369a13c0c77fe98326e306ae4a52f3469224ee8c4d453e9dcc9908fe8322"
+    }
+  },
+  {
+    "arm": "candidate",
+    "source": "test-files/test_gap_json_stringify_replacer_tojson.ts",
+    "matches_node": true,
+    "exit_code": 0,
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/test-files/test_gap_json_stringify_replacer_tojson.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/candidate-test_gap_json_stringify_replacer_tojson"
+    ],
+    "hashes": {
+      "test-files/test_gap_json_stringify_replacer_tojson.ts": "7e818403941253fdacc3e8d1667c9b3c0560a812e7b14d85bbd66edb2a8232bf",
+      "benchmarks/json_performance/.work/stringify-entry-r7/candidate-test_gap_json_stringify_replacer_tojson": "4235654b7f3c7df2838b902cd034d09e4a8bcb78e8f3951b082aa1f2d49a0009",
+      "benchmarks/json_performance/.work/stringify-entry-r7/frozen-build/perry": "a68392dbcdd1f171c556e7be3a37c4a8ab9af452af300793f50b1f2c8c3ef7ed",
+      "benchmarks/json_performance/.work/stringify-entry-r7/frozen-build/libperry_runtime.a": "362f81813b8a8ee89250a1dae5f50b5f7328c87513f2e7f0c7e1eaca23d5496a"
+    }
+  },
+  {
+    "arm": "r5",
+    "source": "test-files/test_gap_json_replacer_sparse_hole.ts",
+    "matches_node": true,
+    "exit_code": 0,
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/test-files/test_gap_json_replacer_sparse_hole.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/r5-test_gap_json_replacer_sparse_hole"
+    ],
+    "hashes": {
+      "test-files/test_gap_json_replacer_sparse_hole.ts": "cbba820e6c3a37451b8b446ce0a662576549c3f16cea55311a76261d4e1f0c7e",
+      "benchmarks/json_performance/.work/stringify-entry-r7/r5-test_gap_json_replacer_sparse_hole": "7528df34453279b42cdfbecec0a7065cb82fbc66d5484420a75fcc08cada06ca",
+      "benchmarks/json_performance/.work/invariant-field-loop-r5/frozen-build/perry": "d2abfd3befe5c7977251e68af77628a11b06611e7eb272ddcb381a889ed844d7",
+      "benchmarks/json_performance/.work/invariant-field-loop-r5/frozen-build/libperry_runtime.a": "2deb369a13c0c77fe98326e306ae4a52f3469224ee8c4d453e9dcc9908fe8322"
+    }
+  },
+  {
+    "arm": "candidate",
+    "source": "test-files/test_gap_json_replacer_sparse_hole.ts",
+    "matches_node": true,
+    "exit_code": 0,
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/test-files/test_gap_json_replacer_sparse_hole.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/candidate-test_gap_json_replacer_sparse_hole"
+    ],
+    "hashes": {
+      "test-files/test_gap_json_replacer_sparse_hole.ts": "cbba820e6c3a37451b8b446ce0a662576549c3f16cea55311a76261d4e1f0c7e",
+      "benchmarks/json_performance/.work/stringify-entry-r7/candidate-test_gap_json_replacer_sparse_hole": "bdfa2fec17f257f4cae42689e43b8a976f9ebbb836ee3f5b620eb5f70bbdc2a1",
+      "benchmarks/json_performance/.work/stringify-entry-r7/frozen-build/perry": "a68392dbcdd1f171c556e7be3a37c4a8ab9af452af300793f50b1f2c8c3ef7ed",
+      "benchmarks/json_performance/.work/stringify-entry-r7/frozen-build/libperry_runtime.a": "362f81813b8a8ee89250a1dae5f50b5f7328c87513f2e7f0c7e1eaca23d5496a"
+    }
+  },
+  {
+    "arm": "r5",
+    "source": "test-files/test_gap_json_prototype_tojson.ts",
+    "matches_node": true,
+    "exit_code": 0,
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/test-files/test_gap_json_prototype_tojson.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/r5-test_gap_json_prototype_tojson"
+    ],
+    "hashes": {
+      "test-files/test_gap_json_prototype_tojson.ts": "552b10932a2d0e56e46be1447b8e3c8a358b333c55a4e49e76df1075b79d6d13",
+      "benchmarks/json_performance/.work/stringify-entry-r7/r5-test_gap_json_prototype_tojson": "e4726b31e3f03955128c4aee1119e1d0399221ce627ceb6dbb4ab077707f297e",
+      "benchmarks/json_performance/.work/invariant-field-loop-r5/frozen-build/perry": "d2abfd3befe5c7977251e68af77628a11b06611e7eb272ddcb381a889ed844d7",
+      "benchmarks/json_performance/.work/invariant-field-loop-r5/frozen-build/libperry_runtime.a": "2deb369a13c0c77fe98326e306ae4a52f3469224ee8c4d453e9dcc9908fe8322"
+    }
+  },
+  {
+    "arm": "candidate",
+    "source": "test-files/test_gap_json_prototype_tojson.ts",
+    "matches_node": true,
+    "exit_code": 0,
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/test-files/test_gap_json_prototype_tojson.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/candidate-test_gap_json_prototype_tojson"
+    ],
+    "hashes": {
+      "test-files/test_gap_json_prototype_tojson.ts": "552b10932a2d0e56e46be1447b8e3c8a358b333c55a4e49e76df1075b79d6d13",
+      "benchmarks/json_performance/.work/stringify-entry-r7/candidate-test_gap_json_prototype_tojson": "0f12d9f53a66633dba67ac17a5f346ec730a29c6e84cf72c9e10dc8e658b8ebe",
+      "benchmarks/json_performance/.work/stringify-entry-r7/frozen-build/perry": "a68392dbcdd1f171c556e7be3a37c4a8ab9af452af300793f50b1f2c8c3ef7ed",
+      "benchmarks/json_performance/.work/stringify-entry-r7/frozen-build/libperry_runtime.a": "362f81813b8a8ee89250a1dae5f50b5f7328c87513f2e7f0c7e1eaca23d5496a"
+    }
+  },
+  {
+    "arm": "r5",
+    "source": "test-files/test_issue_9398_json_pretty_tombstoned_key.ts",
+    "matches_node": true,
+    "exit_code": 0,
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/test-files/test_issue_9398_json_pretty_tombstoned_key.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/r5-test_issue_9398_json_pretty_tombstoned_key"
+    ],
+    "hashes": {
+      "test-files/test_issue_9398_json_pretty_tombstoned_key.ts": "daa1858e0c3e9258fb4afc980c088e2078bdf1b9b0d02d192c21b1b0eedcb7af",
+      "benchmarks/json_performance/.work/stringify-entry-r7/r5-test_issue_9398_json_pretty_tombstoned_key": "80c72ede939d340e5398be82546997a9f516414c7ef03d7c9421b0951341e49a",
+      "benchmarks/json_performance/.work/invariant-field-loop-r5/frozen-build/perry": "d2abfd3befe5c7977251e68af77628a11b06611e7eb272ddcb381a889ed844d7",
+      "benchmarks/json_performance/.work/invariant-field-loop-r5/frozen-build/libperry_runtime.a": "2deb369a13c0c77fe98326e306ae4a52f3469224ee8c4d453e9dcc9908fe8322"
+    }
+  },
+  {
+    "arm": "candidate",
+    "source": "test-files/test_issue_9398_json_pretty_tombstoned_key.ts",
+    "matches_node": true,
+    "exit_code": 0,
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/test-files/test_issue_9398_json_pretty_tombstoned_key.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/candidate-test_issue_9398_json_pretty_tombstoned_key"
+    ],
+    "hashes": {
+      "test-files/test_issue_9398_json_pretty_tombstoned_key.ts": "daa1858e0c3e9258fb4afc980c088e2078bdf1b9b0d02d192c21b1b0eedcb7af",
+      "benchmarks/json_performance/.work/stringify-entry-r7/candidate-test_issue_9398_json_pretty_tombstoned_key": "2b3a6111cea563dad0e00644e55fc983fab1b7e9b60268025e86289bd591b5e3",
+      "benchmarks/json_performance/.work/stringify-entry-r7/frozen-build/perry": "a68392dbcdd1f171c556e7be3a37c4a8ab9af452af300793f50b1f2c8c3ef7ed",
+      "benchmarks/json_performance/.work/stringify-entry-r7/frozen-build/libperry_runtime.a": "362f81813b8a8ee89250a1dae5f50b5f7328c87513f2e7f0c7e1eaca23d5496a"
+    }
+  },
+  {
+    "arm": "r5",
+    "source": "test-files/test_gap_2021_json_stringify_grown_array.ts",
+    "matches_node": true,
+    "exit_code": 0,
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/test-files/test_gap_2021_json_stringify_grown_array.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/r5-test_gap_2021_json_stringify_grown_array"
+    ],
+    "hashes": {
+      "test-files/test_gap_2021_json_stringify_grown_array.ts": "5d49e069e247f3e128ef87a9d9a7090b41be1d6a7de0674a70638bc2134c896b",
+      "benchmarks/json_performance/.work/stringify-entry-r7/r5-test_gap_2021_json_stringify_grown_array": "163f49134fdf51ec3a9650cc644b3fc81c55b6839b5958ba87d2a408117aee44",
+      "benchmarks/json_performance/.work/invariant-field-loop-r5/frozen-build/perry": "d2abfd3befe5c7977251e68af77628a11b06611e7eb272ddcb381a889ed844d7",
+      "benchmarks/json_performance/.work/invariant-field-loop-r5/frozen-build/libperry_runtime.a": "2deb369a13c0c77fe98326e306ae4a52f3469224ee8c4d453e9dcc9908fe8322"
+    }
+  },
+  {
+    "arm": "candidate",
+    "source": "test-files/test_gap_2021_json_stringify_grown_array.ts",
+    "matches_node": true,
+    "exit_code": 0,
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/test-files/test_gap_2021_json_stringify_grown_array.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/candidate-test_gap_2021_json_stringify_grown_array"
+    ],
+    "hashes": {
+      "test-files/test_gap_2021_json_stringify_grown_array.ts": "5d49e069e247f3e128ef87a9d9a7090b41be1d6a7de0674a70638bc2134c896b",
+      "benchmarks/json_performance/.work/stringify-entry-r7/candidate-test_gap_2021_json_stringify_grown_array": "4c7e9607a40668b4d2b79e8da5f0d5716e5c4b8931cd77901d84bab4f19c814b",
+      "benchmarks/json_performance/.work/stringify-entry-r7/frozen-build/perry": "a68392dbcdd1f171c556e7be3a37c4a8ab9af452af300793f50b1f2c8c3ef7ed",
+      "benchmarks/json_performance/.work/stringify-entry-r7/frozen-build/libperry_runtime.a": "362f81813b8a8ee89250a1dae5f50b5f7328c87513f2e7f0c7e1eaca23d5496a"
+    }
+  }
+]

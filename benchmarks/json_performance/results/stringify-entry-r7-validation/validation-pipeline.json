@@ -1,0 +1,38 @@
+[
+  {
+    "script": "validate.py",
+    "arguments": [],
+    "exit_code": 0
+  },
+  {
+    "script": "build-options.py",
+    "arguments": [
+      "--candidate"
+    ],
+    "exit_code": 0
+  },
+  {
+    "script": "validate-options.py",
+    "arguments": [
+      "--candidate"
+    ],
+    "exit_code": 0
+  },
+  {
+    "script": "validate-callback.py",
+    "arguments": [
+      "--candidate"
+    ],
+    "exit_code": 0
+  },
+  {
+    "script": "validate-existing.py",
+    "arguments": [],
+    "exit_code": 0
+  },
+  {
+    "script": "validate-inherited-gaps.py",
+    "arguments": [],
+    "exit_code": 0
+  }
+]

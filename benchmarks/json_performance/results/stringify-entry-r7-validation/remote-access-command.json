@@ -1,0 +1,19 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/stringify-entry-r7/run-access.py",
+  "--worker",
+  ".work/stringify-entry-r7/access-worker",
+  "--baseline-worker",
+  ".work/main-53df-fresh/main-access",
+  "--prior-worker",
+  ".work/invariant-field-loop-r5/access-worker",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--results-dir",
+  "results/quiet-stringify-entry-r7-access"
+]

@@ -1,0 +1,61 @@
+{
+  "source_commit": "53df2c671fff33b1f8f624432372c2401db8b1d0",
+  "commands": [
+    [
+      "target/release/perry",
+      "compile",
+      "benchmarks/json_performance/worker.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "--no-link",
+      "-o",
+      "benchmarks/json_performance/.work/main-53df-fresh/worker.o"
+    ],
+    [
+      "cc",
+      "benchmarks/json_performance/.work/main-53df-fresh/worker.o",
+      "target/release/libperry_runtime.a",
+      "-lc",
+      "-Wl,-dead_strip",
+      "-Wl,-no_exported_symbols",
+      "-o",
+      "benchmarks/json_performance/.work/main-53df-fresh/worker"
+    ],
+    [
+      "target/release/perry",
+      "compile",
+      "benchmarks/json_performance/rotating-worker.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "--no-link",
+      "-o",
+      "benchmarks/json_performance/.work/main-53df-fresh/rotating-worker.o"
+    ],
+    [
+      "cc",
+      "benchmarks/json_performance/.work/main-53df-fresh/rotating-worker.o",
+      "target/release/libperry_runtime.a",
+      "-lc",
+      "-Wl,-dead_strip",
+      "-Wl,-no_exported_symbols",
+      "-o",
+      "benchmarks/json_performance/.work/main-53df-fresh/rotating-worker"
+    ]
+  ],
+  "runtime_dir": "/Users/amlug/projects/perry/json-merged-pr10022/target/release",
+  "files": {
+    "target/release/perry": "f45e308bcb13940e75eebb377142d84c401b95f2faca1ddd09ea276c89b0f736",
+    "target/release/libperry_runtime.a": "d0c06e3ad5e85a99858d42c1194f6c43aca89ce1f9700cffe95c29d4aea9c76a",
+    "target/release/libperry_stdlib.a": "929824aaf04a4c504546a157a55da75c934be84a55db19b176610eab40621681",
+    "benchmarks/json_performance/worker.ts": "f3c42ec9f04fdb9ba84dc3cf50dc59f18685540033807f3db3a7f75c08a85d39",
+    "benchmarks/json_performance/rotating-worker.ts": "7541897acb2c7c35c0f5e762f8b2f28b9783feb26a42db107c1c4eb3af644b24",
+    "benchmarks/json_performance/.work/main-53df-fresh/rotating-worker.o": "4f5a58a4519354066d756e49786be3d52e580bc5ddf8768c88053246e64038c8",
+    "benchmarks/json_performance/.work/main-53df-fresh/rotating-worker": "eddbc0f45a8dbe10e29d28f1eb79f8df90eb54098312cdee4aa5f30e1af09c39",
+    "benchmarks/json_performance/.work/main-53df-fresh/worker.o": "d65f4561c3d89caaed5379383a17a7b1c87740686e4b4e2ea51d4709ddf247b4",
+    "benchmarks/json_performance/.work/main-53df-fresh/rotating-worker-link.log": "ad547701ba069d5f83b5e578262f7769a563167eff252761ba61afc8a441fa66",
+    "benchmarks/json_performance/.work/main-53df-fresh/worker": "83c2f71794d8fb233c11a6256df84744764604ee3e7278cee9408d8a278aa74e",
+    "benchmarks/json_performance/.work/main-53df-fresh/worker-compile.log": "f22ea28c2ccad4a068b34116592af3bb9320438d17ff5c6ab9abf4b0e7a35362",
+    "benchmarks/json_performance/.work/main-53df-fresh/rotating-worker-compile.log": "a870c5e6484bd3fdd8e0ed598336ac2539fdba4e7eda0e854b597f2d2ab76dec",
+    "benchmarks/json_performance/.work/main-53df-fresh/worker-link.log": "ad547701ba069d5f83b5e578262f7769a563167eff252761ba61afc8a441fa66"
+  }
+}

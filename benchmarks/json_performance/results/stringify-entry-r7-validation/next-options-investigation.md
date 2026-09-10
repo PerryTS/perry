@@ -1,0 +1,7 @@
+# Follow-up lead — no production change yet
+
+The full entry currently admits null/undefined/false spacer bits to bounded output. A numeric zero spacer and boolean true also produce no indentation in the existing fallback, but enter the general serializer. The new fixed-work options controls include numeric zero, pretty two, key lists, and identity callbacks, so this can be quantified after the R7 run. Do not infer a speedup from the predicate alone or add more default-entry checks without measuring their cost on ordinary calls.
+
+A future inert-spacer dispatch must preserve boxed Number/String coercions and callback ordering, distinguish NaN-box tags from raw numbers, handle -0, NaN, negatives, fractional <1, positive infinity and short/heap empty strings correctly, and avoid accepting mutable wrapper objects as inert. No new coercion should run merely to admit a fast path. Tests must prove spacing and replacer interactions plus live callback GC. This is an independent idea, not part of R7.
+
+R7 is based on rejected R5. If outlining has a useful isolated gain, evaluate the single runtime change on freshly built current main before opening a mergeable PR; do not bundle R5's mixed-field and short-call regressions by assuming they disappear. Original 38 rows, consumption, rotating sources, retained memory and short-call controls all remain required before claiming the user goal complete.

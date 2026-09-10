@@ -1,0 +1,8 @@
+{
+  "r5_entry_stack_bytes": 272,
+  "candidate_entry_stack_bytes": 160,
+  "candidate_fallback_stack_bytes": 304,
+  "candidate_fallback_tail_called_after_entry_frame_restore": true,
+  "evidence": ["r5-stringify-full-machine.s", "candidate-stringify-full-machine.s", "candidate-entry-only.s"],
+  "note": "All three generated worker objects are byte-identical to R5. The linked runtime entry and fallback differ. Smaller frame is machine evidence, not itself a performance claim."
+}

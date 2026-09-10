@@ -1,0 +1,41 @@
+{
+  "source_sha256": "010a685da8127268bcdaae53f5637735fee919beca8c54fc72f3f61f2f6721af",
+  "results": [
+    {
+      "arm": "main",
+      "stdout": "parsed-pretty \"\"\nliteral-pretty []\nparsed-plain []\n",
+      "binary_sha256": "a362a4d8eec84c2e05f4c70156a26e60c007bd5ef0bc5a203fdf6a0302d77f86",
+      "compiler_sha256": "f45e308bcb13940e75eebb377142d84c401b95f2faca1ddd09ea276c89b0f736",
+      "runtime_sha256": "d0c06e3ad5e85a99858d42c1194f6c43aca89ce1f9700cffe95c29d4aea9c76a",
+      "command": [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/native-main-proof/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/empty-value-pretty.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/main-empty-value-pretty"
+      ]
+    },
+    {
+      "arm": "r5",
+      "stdout": "parsed-pretty \"\"\nliteral-pretty []\nparsed-plain []\n",
+      "binary_sha256": "549cb5c54d8035c735a9624029c2abfdc9ed0d94cff779ec76c74ade145797e0",
+      "compiler_sha256": "d2abfd3befe5c7977251e68af77628a11b06611e7eb272ddcb381a889ed844d7",
+      "runtime_sha256": "2deb369a13c0c77fe98326e306ae4a52f3469224ee8c4d453e9dcc9908fe8322",
+      "command": [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/empty-value-pretty.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/r5-empty-value-pretty"
+      ]
+    },
+    {
+      "arm": "node",
+      "stdout": "parsed-pretty []\nliteral-pretty []\nparsed-plain []\n"
+    }
+  ]
+}

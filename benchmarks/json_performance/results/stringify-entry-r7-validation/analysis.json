@@ -1,0 +1,4736 @@
+{
+  "trials": 1120,
+  "phases": {
+    "access": {
+      "window": {
+        "owner": "json-perf-48898-1789054346",
+        "load_before": [
+          1.4765625,
+          1.48486328125,
+          1.52587890625
+        ],
+        "started_utc": "2026-09-10T15:32:26Z",
+        "quiet_gate_passed": true,
+        "command": [
+          "python3",
+          ".work/stringify-entry-r7/run-access.py",
+          "--worker",
+          ".work/stringify-entry-r7/access-worker",
+          "--baseline-worker",
+          ".work/main-53df-fresh/main-access",
+          "--prior-worker",
+          ".work/invariant-field-loop-r5/access-worker",
+          "--node",
+          "/opt/homebrew/bin/node",
+          "--bun",
+          "/Users/perry/.bun/bin/bun",
+          "--results-dir",
+          "results/quiet-stringify-entry-r7-access"
+        ],
+        "competing_workloads_before": [],
+        "load_after": [
+          1.75,
+          1.56103515625,
+          1.55224609375
+        ],
+        "competing_workloads_after": [],
+        "finished_utc": "2026-09-10T15:32:54Z"
+      },
+      "timed_trials": 420,
+      "cases": [
+        {
+          "fixture": "records_array_16k",
+          "operation": "repeat",
+          "engines": {
+            "perry": {
+              "fixture": "records_array_16k",
+              "operation": "repeat",
+              "engine": "perry",
+              "cpu_us": 0.000943,
+              "cpu_samples_us": [
+                0.003586,
+                0.002013,
+                0.000946,
+                0.000943,
+                0.000942,
+                0.000942,
+                0.000942
+              ],
+              "peak_rss_mib": 13.109375,
+              "peak_rss_samples_mib": [
+                13.109375,
+                13.109375,
+                13.109375,
+                13.109375,
+                13.109375,
+                13.125,
+                13.109375
+              ]
+            },
+            "baseline": {
+              "fixture": "records_array_16k",
+              "operation": "repeat",
+              "engine": "baseline",
+              "cpu_us": 0.018546,
+              "cpu_samples_us": [
+                0.018533,
+                0.018574,
+                0.018561,
+                0.018556,
+                0.018546,
+                0.018543,
+                0.018536
+              ],
+              "peak_rss_mib": 13.046875,
+              "peak_rss_samples_mib": [
+                13.046875,
+                13.0625,
+                13.046875,
+                13.046875,
+                13.046875,
+                13.046875,
+                13.046875
+              ]
+            },
+            "prior": {
+              "fixture": "records_array_16k",
+              "operation": "repeat",
+              "engine": "prior",
+              "cpu_us": 0.000946,
+              "cpu_samples_us": [
+                0.000946,
+                0.001011,
+                0.000945,
+                0.000954,
+                0.000946,
+                0.000945,
+                0.000984
+              ],
+              "peak_rss_mib": 13.03125,
+              "peak_rss_samples_mib": [
+                13.046875,
+                13.046875,
+                13.03125,
+                13.03125,
+                13.03125,
+                13.03125,
+                13.03125
+              ]
+            },
+            "node": {
+              "fixture": "records_array_16k",
+              "operation": "repeat",
+              "engine": "node",
+              "cpu_us": 0.002743,
+              "cpu_samples_us": [
+                0.00275,
+                0.002731,
+                0.002743,
+                0.002721,
+                0.002767,
+                0.002769,
+                0.002734
+              ],
+              "peak_rss_mib": 57.765625,
+              "peak_rss_samples_mib": [
+                57.765625,
+                57.84375,
+                57.8125,
+                57.734375,
+                57.734375,
+                57.796875,
+                57.71875
+              ]
+            },
+            "bun": {
+              "fixture": "records_array_16k",
+              "operation": "repeat",
+              "engine": "bun",
+              "cpu_us": 0.004538,
+              "cpu_samples_us": [
+                0.004579,
+                0.00568,
+                0.004538,
+                0.004589,
+                0.004528,
+                0.004488,
+                0.004537
+              ],
+              "peak_rss_mib": 34.8125,
+              "peak_rss_samples_mib": [
+                34.8125,
+                34.859375,
+                34.796875,
+                34.796875,
+                34.84375,
+                34.8125,
+                34.796875
+              ]
+            }
+          },
+          "delta_pct": -94.9153456270894,
+          "prior_delta_pct": -0.3171247357293794,
+          "separated_regression": false,
+          "separated_improvement": true,
+          "beats_both_peers": true,
+          "all_samples_beat_both_peers": false
+        },
+        {
+          "fixture": "records_array_16k",
+          "operation": "random",
+          "engines": {
+            "perry": {
+              "fixture": "records_array_16k",
+              "operation": "random",
+              "engine": "perry",
+              "cpu_us": 0.018901,
+              "cpu_samples_us": [
+                0.018982,
+                0.018889,
+                0.018919,
+                0.018898,
+                0.018894,
+                0.018901,
+                0.018902
+              ],
+              "peak_rss_mib": 13.5,
+              "peak_rss_samples_mib": [
+                13.5,
+                13.5,
+                13.5,
+                13.5,
+                13.5,
+                13.5,
+                13.5
+              ]
+            },
+            "baseline": {
+              "fixture": "records_array_16k",
+              "operation": "random",
+              "engine": "baseline",
+              "cpu_us": 0.040145,
+              "cpu_samples_us": [
+                0.039919,
+                0.040015,
+                0.040145,
+                0.040705,
+                0.039935,
+                0.040415,
+                0.040711
+              ],
+              "peak_rss_mib": 13.4375,
+              "peak_rss_samples_mib": [
+                13.4375,
+                13.421875,
+                13.4375,
+                13.4375,
+                13.4375,
+                13.421875,
+                13.4375
+              ]
+            },
+            "prior": {
+              "fixture": "records_array_16k",
+              "operation": "random",
+              "engine": "prior",
+              "cpu_us": 0.0189,
+              "cpu_samples_us": [
+                0.018929,
+                0.018905,
+                0.018896,
+                0.018896,
+                0.018892,
+                0.018922,
+                0.0189
+              ],
+              "peak_rss_mib": 13.46875,
+              "peak_rss_samples_mib": [
+                13.46875,
+                13.46875,
+                13.46875,
+                13.46875,
+                13.46875,
+                13.46875,
+                13.46875
+              ]
+            },
+            "node": {
+              "fixture": "records_array_16k",
+              "operation": "random",
+              "engine": "node",
+              "cpu_us": 0.006656,
+              "cpu_samples_us": [
+                0.006652,
+                0.006668,
+                0.006673,
+                0.006648,
+                0.006656,
+                0.006659,
+                0.006646
+              ],
+              "peak_rss_mib": 57.828125,
+              "peak_rss_samples_mib": [
+                57.875,
+                57.84375,
+                57.828125,
+                57.828125,
+                57.796875,
+                57.75,
+                57.75
+              ]
+            },
+            "bun": {
+              "fixture": "records_array_16k",
+              "operation": "random",
+              "engine": "bun",
+              "cpu_us": 0.00928,
+              "cpu_samples_us": [
+                0.00927,
+                0.009298,
+                0.009315,
+                0.00928,
+                0.009269,
+                0.009278,
+                0.009301
+              ],
+              "peak_rss_mib": 35.421875,
+              "peak_rss_samples_mib": [
+                35.421875,
+                35.40625,
+                35.421875,
+                35.390625,
+                35.421875,
+                35.390625,
+                35.421875
+              ]
+            }
+          },
+          "delta_pct": -52.91817162784904,
+          "prior_delta_pct": 0.005291005291008233,
+          "separated_regression": false,
+          "separated_improvement": true,
+          "beats_both_peers": false,
+          "all_samples_beat_both_peers": false
+        },
+        {
+          "fixture": "records_array_16k",
+          "operation": "fields",
+          "engines": {
+            "perry": {
+              "fixture": "records_array_16k",
+              "operation": "fields",
+              "engine": "perry",
+              "cpu_us": 0.043017,
+              "cpu_samples_us": [
+                0.042918,
+                0.042938,
+                0.043159,
+                0.043017,
+                0.043012,
+                0.043017,
+                0.043028
+              ],
+              "peak_rss_mib": 13.265625,
+              "peak_rss_samples_mib": [
+                13.265625,
+                13.28125,
+                13.265625,
+                13.265625,
+                13.265625,
+                13.28125,
+                13.265625
+              ]
+            },
+            "baseline": {
+              "fixture": "records_array_16k",
+              "operation": "fields",
+              "engine": "baseline",
+              "cpu_us": 0.084457,
+              "cpu_samples_us": [
+                0.084552,
+                0.084422,
+                0.084457,
+                0.084448,
+                0.08445,
+                0.084467,
+                0.08464
+              ],
+              "peak_rss_mib": 13.171875,
+              "peak_rss_samples_mib": [
+                13.171875,
+                13.171875,
+                13.171875,
+                13.171875,
+                13.171875,
+                13.171875,
+                13.171875
+              ]
+            },
+            "prior": {
+              "fixture": "records_array_16k",
+              "operation": "fields",
+              "engine": "prior",
+              "cpu_us": 0.043048,
+              "cpu_samples_us": [
+                0.04303,
+                0.043031,
+                0.043071,
+                0.043048,
+                0.043053,
+                0.043181,
+                0.043035
+              ],
+              "peak_rss_mib": 13.234375,
+              "peak_rss_samples_mib": [
+                13.234375,
+                13.234375,
+                13.234375,
+                13.234375,
+                13.234375,
+                13.234375,
+                13.234375
+              ]
+            },
+            "node": {
+              "fixture": "records_array_16k",
+              "operation": "fields",
+              "engine": "node",
+              "cpu_us": 0.005353,
+              "cpu_samples_us": [
+                0.005353,
+                0.005337,
+                0.005371,
+                0.005387,
+                0.005344,
+                0.005368,
+                0.005316
+              ],
+              "peak_rss_mib": 58.0,
+              "peak_rss_samples_mib": [
+                58.0625,
+                57.96875,
+                58.0625,
+                58.0,
+                57.828125,
+                58.0,
+                57.921875
+              ]
+            },
+            "bun": {
+              "fixture": "records_array_16k",
+              "operation": "fields",
+              "engine": "bun",
+              "cpu_us": 0.009268,
+              "cpu_samples_us": [
+                0.009267,
+                0.00924,
+                0.009193,
+                0.009268,
+                0.009294,
+                0.009311,
+                0.00927
+              ],
+              "peak_rss_mib": 36.0,
+              "peak_rss_samples_mib": [
+                36.046875,
+                36.0,
+                36.0,
+                36.0,
+                36.015625,
+                35.984375,
+                36.0
+              ]
+            }
+          },
+          "delta_pct": -49.06638881324225,
+          "prior_delta_pct": -0.07201263705631789,
+          "separated_regression": false,
+          "separated_improvement": true,
+          "beats_both_peers": false,
+          "all_samples_beat_both_peers": false
+        },
+        {
+          "fixture": "records_array_16k",
+          "operation": "sequential",
+          "engines": {
+            "perry": {
+              "fixture": "records_array_16k",
+              "operation": "sequential",
+              "engine": "perry",
+              "cpu_us": 0.022064,
+              "cpu_samples_us": [
+                0.022045,
+                0.022046,
+                0.022168,
+                0.022064,
+                0.022051,
+                0.022148,
+                0.022066
+              ],
+              "peak_rss_mib": 13.140625,
+              "peak_rss_samples_mib": [
+                13.140625,
+                13.125,
+                13.140625,
+                13.125,
+                13.125,
+                13.140625,
+                13.140625
+              ]
+            },
+            "baseline": {
+              "fixture": "records_array_16k",
+              "operation": "sequential",
+              "engine": "baseline",
+              "cpu_us": 0.035059,
+              "cpu_samples_us": [
+                0.03505,
+                0.035088,
+                0.035047,
+                0.035068,
+                0.03509,
+                0.035053,
+                0.035059
+              ],
+              "peak_rss_mib": 13.171875,
+              "peak_rss_samples_mib": [
+                13.1875,
+                13.171875,
+                13.171875,
+                13.1875,
+                13.171875,
+                13.171875,
+                13.171875
+              ]
+            },
+            "prior": {
+              "fixture": "records_array_16k",
+              "operation": "sequential",
+              "engine": "prior",
+              "cpu_us": 0.022051,
+              "cpu_samples_us": [
+                0.022084,
+                0.02205,
+                0.022053,
+                0.022041,
+                0.022077,
+                0.022051,
+                0.022042
+              ],
+              "peak_rss_mib": 13.046875,
+              "peak_rss_samples_mib": [
+                13.046875,
+                13.046875,
+                13.046875,
+                13.0625,
+                13.046875,
+                13.046875,
+                13.046875
+              ]
+            },
+            "node": {
+              "fixture": "records_array_16k",
+              "operation": "sequential",
+              "engine": "node",
+              "cpu_us": 0.00392,
+              "cpu_samples_us": [
+                0.003934,
+                0.003918,
+                0.003902,
+                0.003909,
+                0.003941,
+                0.003928,
+                0.00392
+              ],
+              "peak_rss_mib": 57.765625,
+              "peak_rss_samples_mib": [
+                57.765625,
+                57.703125,
+                57.6875,
+                57.734375,
+                57.859375,
+                57.859375,
+                57.78125
+              ]
+            },
+            "bun": {
+              "fixture": "records_array_16k",
+              "operation": "sequential",
+              "engine": "bun",
+              "cpu_us": 0.005728,
+              "cpu_samples_us": [
+                0.00571,
+                0.005752,
+                0.00572,
+                0.005717,
+                0.005746,
+                0.005728,
+                0.005778
+              ],
+              "peak_rss_mib": 35.234375,
+              "peak_rss_samples_mib": [
+                35.234375,
+                35.25,
+                35.234375,
+                35.234375,
+                35.234375,
+                35.28125,
+                35.234375
+              ]
+            }
+          },
+          "delta_pct": -37.06608859351379,
+          "prior_delta_pct": 0.05895424243798075,
+          "separated_regression": false,
+          "separated_improvement": true,
+          "beats_both_peers": false,
+          "all_samples_beat_both_peers": false
+        },
+        {
+          "fixture": "records_array_1m",
+          "operation": "repeat",
+          "engines": {
+            "perry": {
+              "fixture": "records_array_1m",
+              "operation": "repeat",
+              "engine": "perry",
+              "cpu_us": 0.000947,
+              "cpu_samples_us": [
+                0.000948,
+                0.000945,
+                0.00095,
+                0.000946,
+                0.000943,
+                0.000947,
+                0.00095
+              ],
+              "peak_rss_mib": 17.640625,
+              "peak_rss_samples_mib": [
+                17.640625,
+                17.640625,
+                17.65625,
+                17.640625,
+                17.640625,
+                17.640625,
+                17.65625
+              ]
+            },
+            "baseline": {
+              "fixture": "records_array_1m",
+              "operation": "repeat",
+              "engine": "baseline",
+              "cpu_us": 0.018562,
+              "cpu_samples_us": [
+                0.018588,
+                0.018549,
+                0.018602,
+                0.01855,
+                0.018608,
+                0.018562,
+                0.018529
+              ],
+              "peak_rss_mib": 17.5625,
+              "peak_rss_samples_mib": [
+                17.5625,
+                17.5625,
+                17.578125,
+                17.578125,
+                17.5625,
+                17.5625,
+                17.578125
+              ]
+            },
+            "prior": {
+              "fixture": "records_array_1m",
+              "operation": "repeat",
+              "engine": "prior",
+              "cpu_us": 0.000946,
+              "cpu_samples_us": [
+                0.000959,
+                0.000946,
+                0.000947,
+                0.000944,
+                0.000944,
+                0.000946,
+                0.000947
+              ],
+              "peak_rss_mib": 17.578125,
+              "peak_rss_samples_mib": [
+                17.5625,
+                17.5625,
+                17.578125,
+                17.578125,
+                17.578125,
+                17.578125,
+                17.578125
+              ]
+            },
+            "node": {
+              "fixture": "records_array_1m",
+              "operation": "repeat",
+              "engine": "node",
+              "cpu_us": 0.002748,
+              "cpu_samples_us": [
+                0.002783,
+                0.002758,
+                0.002717,
+                0.002877,
+                0.002748,
+                0.002745,
+                0.002748
+              ],
+              "peak_rss_mib": 63.765625,
+              "peak_rss_samples_mib": [
+                63.765625,
+                63.765625,
+                63.796875,
+                63.6875,
+                63.5625,
+                63.8125,
+                63.546875
+              ]
+            },
+            "bun": {
+              "fixture": "records_array_1m",
+              "operation": "repeat",
+              "engine": "bun",
+              "cpu_us": 0.004559,
+              "cpu_samples_us": [
+                0.004611,
+                0.004567,
+                0.004559,
+                0.004607,
+                0.004499,
+                0.004541,
+                0.004492
+              ],
+              "peak_rss_mib": 37.921875,
+              "peak_rss_samples_mib": [
+                37.9375,
+                37.9375,
+                37.953125,
+                37.921875,
+                37.921875,
+                37.90625,
+                37.921875
+              ]
+            }
+          },
+          "delta_pct": -94.89817907553065,
+          "prior_delta_pct": 0.10570824524314126,
+          "separated_regression": false,
+          "separated_improvement": true,
+          "beats_both_peers": true,
+          "all_samples_beat_both_peers": true
+        },
+        {
+          "fixture": "records_array_1m",
+          "operation": "random",
+          "engines": {
+            "perry": {
+              "fixture": "records_array_1m",
+              "operation": "random",
+              "engine": "perry",
+              "cpu_us": 0.02367,
+              "cpu_samples_us": [
+                0.023565,
+                0.024336,
+                0.02367,
+                0.023638,
+                0.023739,
+                0.023495,
+                0.02372
+              ],
+              "peak_rss_mib": 18.5625,
+              "peak_rss_samples_mib": [
+                18.5625,
+                18.546875,
+                18.5625,
+                18.5625,
+                18.546875,
+                18.546875,
+                18.5625
+              ]
+            },
+            "baseline": {
+              "fixture": "records_array_1m",
+              "operation": "random",
+              "engine": "baseline",
+              "cpu_us": 0.048811,
+              "cpu_samples_us": [
+                0.048476,
+                0.048811,
+                0.04878,
+                0.048869,
+                0.048773,
+                0.048817,
+                0.049257
+              ],
+              "peak_rss_mib": 18.484375,
+              "peak_rss_samples_mib": [
+                18.484375,
+                18.46875,
+                18.484375,
+                18.484375,
+                18.46875,
+                18.484375,
+                18.46875
+              ]
+            },
+            "prior": {
+              "fixture": "records_array_1m",
+              "operation": "random",
+              "engine": "prior",
+              "cpu_us": 0.023426,
+              "cpu_samples_us": [
+                0.02342,
+                0.023456,
+                0.023426,
+                0.023219,
+                0.023271,
+                0.023537,
+                0.023435
+              ],
+              "peak_rss_mib": 18.53125,
+              "peak_rss_samples_mib": [
+                18.53125,
+                18.53125,
+                18.53125,
+                18.53125,
+                18.515625,
+                18.53125,
+                18.515625
+              ]
+            },
+            "node": {
+              "fixture": "records_array_1m",
+              "operation": "random",
+              "engine": "node",
+              "cpu_us": 0.010629,
+              "cpu_samples_us": [
+                0.010609,
+                0.011265,
+                0.011283,
+                0.010498,
+                0.010596,
+                0.01064,
+                0.010629
+              ],
+              "peak_rss_mib": 66.59375,
+              "peak_rss_samples_mib": [
+                66.59375,
+                66.609375,
+                66.5,
+                66.5625,
+                66.546875,
+                66.59375,
+                66.625
+              ]
+            },
+            "bun": {
+              "fixture": "records_array_1m",
+              "operation": "random",
+              "engine": "bun",
+              "cpu_us": 0.010761,
+              "cpu_samples_us": [
+                0.010741,
+                0.010777,
+                0.010768,
+                0.010798,
+                0.010761,
+                0.010755,
+                0.010713
+              ],
+              "peak_rss_mib": 38.921875,
+              "peak_rss_samples_mib": [
+                38.921875,
+                38.890625,
+                38.9375,
+                38.921875,
+                39.0,
+                38.90625,
+                38.984375
+              ]
+            }
+          },
+          "delta_pct": -51.50683247628609,
+          "prior_delta_pct": 1.0415777341415522,
+          "separated_regression": false,
+          "separated_improvement": true,
+          "beats_both_peers": false,
+          "all_samples_beat_both_peers": false
+        },
+        {
+          "fixture": "records_array_1m",
+          "operation": "fields",
+          "engines": {
+            "perry": {
+              "fixture": "records_array_1m",
+              "operation": "fields",
+              "engine": "perry",
+              "cpu_us": 0.041175,
+              "cpu_samples_us": [
+                0.041165,
+                0.041301,
+                0.041175,
+                0.041149,
+                0.041147,
+                0.041325,
+                0.041234
+              ],
+              "peak_rss_mib": 18.359375,
+              "peak_rss_samples_mib": [
+                18.359375,
+                18.359375,
+                18.359375,
+                18.375,
+                18.359375,
+                18.359375,
+                18.375
+              ]
+            },
+            "baseline": {
+              "fixture": "records_array_1m",
+              "operation": "fields",
+              "engine": "baseline",
+              "cpu_us": 0.10794,
+              "cpu_samples_us": [
+                0.107894,
+                0.107951,
+                0.10794,
+                0.107818,
+                0.107958,
+                0.107981,
+                0.107839
+              ],
+              "peak_rss_mib": 18.265625,
+              "peak_rss_samples_mib": [
+                18.265625,
+                18.28125,
+                18.28125,
+                18.28125,
+                18.265625,
+                18.265625,
+                18.265625
+              ]
+            },
+            "prior": {
+              "fixture": "records_array_1m",
+              "operation": "fields",
+              "engine": "prior",
+              "cpu_us": 0.041227,
+              "cpu_samples_us": [
+                0.041214,
+                0.041345,
+                0.041226,
+                0.041228,
+                0.041227,
+                0.041744,
+                0.041193
+              ],
+              "peak_rss_mib": 18.34375,
+              "peak_rss_samples_mib": [
+                18.34375,
+                18.34375,
+                18.34375,
+                18.328125,
+                18.328125,
+                18.328125,
+                18.34375
+              ]
+            },
+            "node": {
+              "fixture": "records_array_1m",
+              "operation": "fields",
+              "engine": "node",
+              "cpu_us": 0.010811,
+              "cpu_samples_us": [
+                0.010811,
+                0.010708,
+                0.010871,
+                0.010763,
+                0.010886,
+                0.010792,
+                0.011588
+              ],
+              "peak_rss_mib": 66.65625,
+              "peak_rss_samples_mib": [
+                66.65625,
+                66.640625,
+                66.65625,
+                66.625,
+                66.734375,
+                66.65625,
+                66.828125
+              ]
+            },
+            "bun": {
+              "fixture": "records_array_1m",
+              "operation": "fields",
+              "engine": "bun",
+              "cpu_us": 0.014331,
+              "cpu_samples_us": [
+                0.014339,
+                0.014368,
+                0.014297,
+                0.014242,
+                0.014319,
+                0.014331,
+                0.014418
+              ],
+              "peak_rss_mib": 40.3125,
+              "peak_rss_samples_mib": [
+                40.328125,
+                40.3125,
+                40.28125,
+                40.296875,
+                40.3125,
+                40.328125,
+                40.390625
+              ]
+            }
+          },
+          "delta_pct": -61.8538076709283,
+          "prior_delta_pct": -0.12613093361145689,
+          "separated_regression": false,
+          "separated_improvement": true,
+          "beats_both_peers": false,
+          "all_samples_beat_both_peers": false
+        },
+        {
+          "fixture": "records_array_1m",
+          "operation": "sequential",
+          "engines": {
+            "perry": {
+              "fixture": "records_array_1m",
+              "operation": "sequential",
+              "engine": "perry",
+              "cpu_us": 0.016177,
+              "cpu_samples_us": [
+                0.016174,
+                0.016177,
+                0.016207,
+                0.016166,
+                0.016175,
+                0.016182,
+                0.016178
+              ],
+              "peak_rss_mib": 17.671875,
+              "peak_rss_samples_mib": [
+                17.671875,
+                17.671875,
+                17.671875,
+                17.671875,
+                17.671875,
+                17.65625,
+                17.65625
+              ]
+            },
+            "baseline": {
+              "fixture": "records_array_1m",
+              "operation": "sequential",
+              "engine": "baseline",
+              "cpu_us": 0.040603,
+              "cpu_samples_us": [
+                0.040615,
+                0.040603,
+                0.040464,
+                0.040621,
+                0.040233,
+                0.040632,
+                0.040515
+              ],
+              "peak_rss_mib": 18.28125,
+              "peak_rss_samples_mib": [
+                18.265625,
+                18.28125,
+                18.265625,
+                18.28125,
+                18.28125,
+                18.28125,
+                18.265625
+              ]
+            },
+            "prior": {
+              "fixture": "records_array_1m",
+              "operation": "sequential",
+              "engine": "prior",
+              "cpu_us": 0.016198,
+              "cpu_samples_us": [
+                0.016205,
+                0.016319,
+                0.016184,
+                0.016209,
+                0.016185,
+                0.016198,
+                0.016191
+              ],
+              "peak_rss_mib": 17.59375,
+              "peak_rss_samples_mib": [
+                17.59375,
+                17.578125,
+                17.59375,
+                17.59375,
+                17.59375,
+                17.578125,
+                17.59375
+              ]
+            },
+            "node": {
+              "fixture": "records_array_1m",
+              "operation": "sequential",
+              "engine": "node",
+              "cpu_us": 0.008151,
+              "cpu_samples_us": [
+                0.008154,
+                0.008071,
+                0.0082,
+                0.008285,
+                0.008151,
+                0.008067,
+                0.008116
+              ],
+              "peak_rss_mib": 66.578125,
+              "peak_rss_samples_mib": [
+                66.578125,
+                66.46875,
+                66.546875,
+                66.578125,
+                66.65625,
+                66.578125,
+                66.46875
+              ]
+            },
+            "bun": {
+              "fixture": "records_array_1m",
+              "operation": "sequential",
+              "engine": "bun",
+              "cpu_us": 0.007465,
+              "cpu_samples_us": [
+                0.007492,
+                0.007477,
+                0.00755,
+                0.007451,
+                0.007453,
+                0.007459,
+                0.007465
+              ],
+              "peak_rss_mib": 39.203125,
+              "peak_rss_samples_mib": [
+                39.203125,
+                39.203125,
+                39.203125,
+                39.21875,
+                39.203125,
+                39.1875,
+                39.21875
+              ]
+            }
+          },
+          "delta_pct": -60.158116395340244,
+          "prior_delta_pct": -0.12964563526360884,
+          "separated_regression": false,
+          "separated_improvement": true,
+          "beats_both_peers": false,
+          "all_samples_beat_both_peers": false
+        },
+        {
+          "fixture": "records_array_20m",
+          "operation": "repeat",
+          "engines": {
+            "perry": {
+              "fixture": "records_array_20m",
+              "operation": "repeat",
+              "engine": "perry",
+              "cpu_us": 0.000947,
+              "cpu_samples_us": [
+                0.00095,
+                0.000947,
+                0.000946,
+                0.000945,
+                0.000946,
+                0.000947,
+                0.000952
+              ],
+              "peak_rss_mib": 97.046875,
+              "peak_rss_samples_mib": [
+                97.046875,
+                97.046875,
+                97.046875,
+                97.046875,
+                97.046875,
+                97.046875,
+                97.046875
+              ]
+            },
+            "baseline": {
+              "fixture": "records_array_20m",
+              "operation": "repeat",
+              "engine": "baseline",
+              "cpu_us": 0.005643,
+              "cpu_samples_us": [
+                0.005643,
+                0.005645,
+                0.005645,
+                0.005648,
+                0.005634,
+                0.005638,
+                0.005634
+              ],
+              "peak_rss_mib": 96.921875,
+              "peak_rss_samples_mib": [
+                96.921875,
+                96.90625,
+                96.921875,
+                96.90625,
+                96.921875,
+                96.90625,
+                96.921875
+              ]
+            },
+            "prior": {
+              "fixture": "records_array_20m",
+              "operation": "repeat",
+              "engine": "prior",
+              "cpu_us": 0.000953,
+              "cpu_samples_us": [
+                0.000949,
+                0.000953,
+                0.000951,
+                0.000957,
+                0.000955,
+                0.000957,
+                0.000947
+              ],
+              "peak_rss_mib": 97.015625,
+              "peak_rss_samples_mib": [
+                97.015625,
+                97.0,
+                97.015625,
+                97.015625,
+                97.015625,
+                97.0,
+                97.015625
+              ]
+            },
+            "node": {
+              "fixture": "records_array_20m",
+              "operation": "repeat",
+              "engine": "node",
+              "cpu_us": 0.003019,
+              "cpu_samples_us": [
+                0.002979,
+                0.003004,
+                0.003018,
+                0.003019,
+                0.003109,
+                0.003032,
+                0.003021
+              ],
+              "peak_rss_mib": 194.75,
+              "peak_rss_samples_mib": [
+                194.6875,
+                194.765625,
+                194.734375,
+                194.734375,
+                194.765625,
+                194.75,
+                194.78125
+              ]
+            },
+            "bun": {
+              "fixture": "records_array_20m",
+              "operation": "repeat",
+              "engine": "bun",
+              "cpu_us": 0.004805,
+              "cpu_samples_us": [
+                0.004849,
+                0.004821,
+                0.004797,
+                0.004598,
+                0.004805,
+                0.004651,
+                0.00485
+              ],
+              "peak_rss_mib": 93.984375,
+              "peak_rss_samples_mib": [
+                93.96875,
+                94.015625,
+                93.984375,
+                93.921875,
+                94.0,
+                93.953125,
+                94.015625
+              ]
+            }
+          },
+          "delta_pct": -83.21814637604112,
+          "prior_delta_pct": -0.6295907660020861,
+          "separated_regression": false,
+          "separated_improvement": true,
+          "beats_both_peers": true,
+          "all_samples_beat_both_peers": true
+        },
+        {
+          "fixture": "records_array_20m",
+          "operation": "random",
+          "engines": {
+            "perry": {
+              "fixture": "records_array_20m",
+              "operation": "random",
+              "engine": "perry",
+              "cpu_us": 0.025617,
+              "cpu_samples_us": [
+                0.0256,
+                0.025712,
+                0.025709,
+                0.025603,
+                0.025676,
+                0.025617,
+                0.025161
+              ],
+              "peak_rss_mib": 97.046875,
+              "peak_rss_samples_mib": [
+                97.046875,
+                97.046875,
+                97.03125,
+                97.046875,
+                97.03125,
+                97.046875,
+                97.03125
+              ]
+            },
+            "baseline": {
+              "fixture": "records_array_20m",
+              "operation": "random",
+              "engine": "baseline",
+              "cpu_us": 0.026285,
+              "cpu_samples_us": [
+                0.026301,
+                0.026372,
+                0.026482,
+                0.026285,
+                0.02626,
+                0.026007,
+                0.025731
+              ],
+              "peak_rss_mib": 96.921875,
+              "peak_rss_samples_mib": [
+                96.921875,
+                96.921875,
+                96.921875,
+                96.921875,
+                96.9375,
+                96.9375,
+                96.9375
+              ]
+            },
+            "prior": {
+              "fixture": "records_array_20m",
+              "operation": "random",
+              "engine": "prior",
+              "cpu_us": 0.025425,
+              "cpu_samples_us": [
+                0.025383,
+                0.025511,
+                0.025398,
+                0.025425,
+                0.025459,
+                0.025517,
+                0.025417
+              ],
+              "peak_rss_mib": 97.015625,
+              "peak_rss_samples_mib": [
+                97.015625,
+                97.015625,
+                97.015625,
+                97.015625,
+                97.0,
+                97.0,
+                97.015625
+              ]
+            },
+            "node": {
+              "fixture": "records_array_20m",
+              "operation": "random",
+              "engine": "node",
+              "cpu_us": 0.008561,
+              "cpu_samples_us": [
+                0.008483,
+                0.008561,
+                0.008573,
+                0.008571,
+                0.0097,
+                0.008552,
+                0.00849
+              ],
+              "peak_rss_mib": 194.796875,
+              "peak_rss_samples_mib": [
+                194.796875,
+                194.796875,
+                194.796875,
+                194.703125,
+                194.890625,
+                194.765625,
+                194.75
+              ]
+            },
+            "bun": {
+              "fixture": "records_array_20m",
+              "operation": "random",
+              "engine": "bun",
+              "cpu_us": 0.010042,
+              "cpu_samples_us": [
+                0.01002,
+                0.010095,
+                0.010071,
+                0.010072,
+                0.010042,
+                0.009982,
+                0.010014
+              ],
+              "peak_rss_mib": 94.71875,
+              "peak_rss_samples_mib": [
+                94.734375,
+                94.78125,
+                94.703125,
+                94.765625,
+                94.71875,
+                94.71875,
+                94.703125
+              ]
+            }
+          },
+          "delta_pct": -2.5413734068860494,
+          "prior_delta_pct": 0.7551622418879189,
+          "separated_regression": false,
+          "separated_improvement": true,
+          "beats_both_peers": false,
+          "all_samples_beat_both_peers": false
+        },
+        {
+          "fixture": "records_array_20m",
+          "operation": "fields",
+          "engines": {
+            "perry": {
+              "fixture": "records_array_20m",
+              "operation": "fields",
+              "engine": "perry",
+              "cpu_us": 0.028045,
+              "cpu_samples_us": [
+                0.028025,
+                0.028031,
+                0.028037,
+                0.028045,
+                0.028173,
+                0.02878,
+                0.029082
+              ],
+              "peak_rss_mib": 97.046875,
+              "peak_rss_samples_mib": [
+                97.046875,
+                97.046875,
+                97.046875,
+                97.046875,
+                97.03125,
+                97.046875,
+                97.046875
+              ]
+            },
+            "baseline": {
+              "fixture": "records_array_20m",
+              "operation": "fields",
+              "engine": "baseline",
+              "cpu_us": 0.027211,
+              "cpu_samples_us": [
+                0.027174,
+                0.027164,
+                0.027212,
+                0.027211,
+                0.027407,
+                0.027776,
+                0.027158
+              ],
+              "peak_rss_mib": 96.921875,
+              "peak_rss_samples_mib": [
+                96.921875,
+                96.921875,
+                96.9375,
+                96.921875,
+                96.9375,
+                96.9375,
+                96.921875
+              ]
+            },
+            "prior": {
+              "fixture": "records_array_20m",
+              "operation": "fields",
+              "engine": "prior",
+              "cpu_us": 0.028045,
+              "cpu_samples_us": [
+                0.028051,
+                0.028038,
+                0.028035,
+                0.028045,
+                0.028029,
+                0.028289,
+                0.02826
+              ],
+              "peak_rss_mib": 97.0,
+              "peak_rss_samples_mib": [
+                97.0,
+                97.015625,
+                97.015625,
+                97.0,
+                97.0,
+                97.0,
+                97.0
+              ]
+            },
+            "node": {
+              "fixture": "records_array_20m",
+              "operation": "fields",
+              "engine": "node",
+              "cpu_us": 0.011734,
+              "cpu_samples_us": [
+                0.011736,
+                0.011849,
+                0.01188,
+                0.011731,
+                0.011734,
+                0.011363,
+                0.01144
+              ],
+              "peak_rss_mib": 195.015625,
+              "peak_rss_samples_mib": [
+                195.03125,
+                195.03125,
+                195.015625,
+                194.96875,
+                194.96875,
+                195.0625,
+                194.96875
+              ]
+            },
+            "bun": {
+              "fixture": "records_array_20m",
+              "operation": "fields",
+              "engine": "bun",
+              "cpu_us": 0.014601,
+              "cpu_samples_us": [
+                0.014636,
+                0.014602,
+                0.014601,
+                0.01452,
+                0.014485,
+                0.014508,
+                0.014773
+              ],
+              "peak_rss_mib": 95.359375,
+              "peak_rss_samples_mib": [
+                95.359375,
+                95.375,
+                95.390625,
+                95.328125,
+                95.328125,
+                95.375,
+                95.359375
+              ]
+            }
+          },
+          "delta_pct": 3.0649369740178622,
+          "prior_delta_pct": 0.0,
+          "separated_regression": true,
+          "separated_improvement": false,
+          "beats_both_peers": false,
+          "all_samples_beat_both_peers": false
+        },
+        {
+          "fixture": "records_array_20m",
+          "operation": "sequential",
+          "engines": {
+            "perry": {
+              "fixture": "records_array_20m",
+              "operation": "sequential",
+              "engine": "perry",
+              "cpu_us": 0.015708,
+              "cpu_samples_us": [
+                0.01656,
+                0.015684,
+                0.015727,
+                0.015708,
+                0.015731,
+                0.015612,
+                0.015705
+              ],
+              "peak_rss_mib": 97.046875,
+              "peak_rss_samples_mib": [
+                97.03125,
+                97.03125,
+                97.046875,
+                97.046875,
+                97.046875,
+                97.03125,
+                97.046875
+              ]
+            },
+            "baseline": {
+              "fixture": "records_array_20m",
+              "operation": "sequential",
+              "engine": "baseline",
+              "cpu_us": 0.016383,
+              "cpu_samples_us": [
+                0.016383,
+                0.016052,
+                0.016582,
+                0.01658,
+                0.015456,
+                0.016024,
+                0.016498
+              ],
+              "peak_rss_mib": 96.921875,
+              "peak_rss_samples_mib": [
+                96.9375,
+                96.921875,
+                96.921875,
+                96.9375,
+                96.921875,
+                96.921875,
+                96.921875
+              ]
+            },
+            "prior": {
+              "fixture": "records_array_20m",
+              "operation": "sequential",
+              "engine": "prior",
+              "cpu_us": 0.015644,
+              "cpu_samples_us": [
+                0.015669,
+                0.015594,
+                0.015677,
+                0.015531,
+                0.015543,
+                0.015698,
+                0.015644
+              ],
+              "peak_rss_mib": 97.015625,
+              "peak_rss_samples_mib": [
+                97.0,
+                97.015625,
+                97.015625,
+                97.015625,
+                97.015625,
+                97.0,
+                97.015625
+              ]
+            },
+            "node": {
+              "fixture": "records_array_20m",
+              "operation": "sequential",
+              "engine": "node",
+              "cpu_us": 0.00687,
+              "cpu_samples_us": [
+                0.00687,
+                0.0069,
+                0.006649,
+                0.007208,
+                0.006884,
+                0.006712,
+                0.006672
+              ],
+              "peak_rss_mib": 194.859375,
+              "peak_rss_samples_mib": [
+                194.859375,
+                194.796875,
+                194.90625,
+                194.875,
+                194.734375,
+                194.90625,
+                194.796875
+              ]
+            },
+            "bun": {
+              "fixture": "records_array_20m",
+              "operation": "sequential",
+              "engine": "bun",
+              "cpu_us": 0.008213,
+              "cpu_samples_us": [
+                0.008198,
+                0.008179,
+                0.008261,
+                0.008443,
+                0.008247,
+                0.008131,
+                0.008213
+              ],
+              "peak_rss_mib": 94.5625,
+              "peak_rss_samples_mib": [
+                94.578125,
+                94.5625,
+                94.578125,
+                94.59375,
+                94.5625,
+                94.546875,
+                94.5625
+              ]
+            }
+          },
+          "delta_pct": -4.1201245193188125,
+          "prior_delta_pct": 0.4091025313218921,
+          "separated_regression": false,
+          "separated_improvement": false,
+          "beats_both_peers": false,
+          "all_samples_beat_both_peers": false
+        }
+      ]
+    },
+    "focus": {
+      "window": {
+        "owner": "json-perf-49801-1789054377",
+        "load_before": [
+          1.75,
+          1.56103515625,
+          1.55224609375
+        ],
+        "started_utc": "2026-09-10T15:32:57Z",
+        "quiet_gate_passed": true,
+        "command": [
+          "python3",
+          "run_regression_focus.py",
+          "--worker",
+          ".work/stringify-entry-r7/worker",
+          "--baseline-worker",
+          ".work/main-53df-fresh/worker",
+          "--prior-worker",
+          ".work/invariant-field-loop-r5/worker",
+          "--node",
+          "/opt/homebrew/bin/node",
+          "--bun",
+          "/Users/perry/.bun/bin/bun",
+          "--case",
+          "records_array_16k:scan:4000:8:7",
+          "--case",
+          "records_array_1m:scan:200:2:7",
+          "--case",
+          "records_array_8m:scan:32:1:7",
+          "--case",
+          "records_array_20m:scan:16:1:7",
+          "--case",
+          "records_array_20m:roundtrip:8:1:7",
+          "--case",
+          "records_array_1m:parse:200:8:7",
+          "--case",
+          "records_array_1m:stringify:256:8:7",
+          "--case",
+          "small_record:parse:2000000:5000:7",
+          "--case",
+          "small_record:stringify:10000000:5000:7",
+          "--case",
+          "long_string_1m:stringify:4096:8:7",
+          "--case",
+          "null:stringify:20000000:5000:7",
+          "--case",
+          "string_a:stringify:20000000:5000:7",
+          "--case",
+          "empty_object:stringify:10000000:5000:7",
+          "--case",
+          "tiny_object:stringify:10000000:5000:7",
+          "--case",
+          "object_1k:stringify:2000000:5000:7",
+          "--results-dir",
+          "results/quiet-stringify-entry-r7-focus"
+        ],
+        "competing_workloads_before": [],
+        "load_after": [
+          2.39013671875,
+          1.9482421875,
+          1.72216796875
+        ],
+        "competing_workloads_after": [],
+        "finished_utc": "2026-09-10T15:37:05Z"
+      },
+      "timed_trials": 525,
+      "cases": [
+        {
+          "fixture": "records_array_16k",
+          "operation": "scan",
+          "engines": {
+            "perry": {
+              "fixture": "records_array_16k",
+              "operation": "scan",
+              "iterations": 4000,
+              "engine": "perry",
+              "repetitions": 7,
+              "cpu_us": 22.15175,
+              "cpu_samples_us": [
+                22.28025,
+                22.116,
+                22.12025,
+                22.097,
+                22.16975,
+                22.15575,
+                22.15175
+              ],
+              "peak_rss_mib": 63.0625,
+              "peak_rss_samples_mib": [
+                63.0625,
+                63.0625,
+                63.0625,
+                63.0625,
+                63.0625,
+                63.0625,
+                63.0625
+              ]
+            },
+            "baseline": {
+              "fixture": "records_array_16k",
+              "operation": "scan",
+              "iterations": 4000,
+              "engine": "baseline",
+              "repetitions": 7,
+              "cpu_us": 58.667,
+              "cpu_samples_us": [
+                59.6985,
+                58.62875,
+                58.477,
+                58.5965,
+                58.90375,
+                58.74925,
+                58.667
+              ],
+              "peak_rss_mib": 216.140625,
+              "peak_rss_samples_mib": [
+                216.140625,
+                215.875,
+                216.25,
+                216.140625,
+                216.140625,
+                216.125,
+                216.234375
+              ]
+            },
+            "prior": {
+              "fixture": "records_array_16k",
+              "operation": "scan",
+              "iterations": 4000,
+              "engine": "prior",
+              "repetitions": 7,
+              "cpu_us": 22.13875,
+              "cpu_samples_us": [
+                22.164,
+                22.11575,
+                22.13875,
+                22.0835,
+                22.18675,
+                22.189,
+                22.11875
+              ],
+              "peak_rss_mib": 63.078125,
+              "peak_rss_samples_mib": [
+                63.078125,
+                63.0625,
+                63.078125,
+                63.078125,
+                63.078125,
+                63.078125,
+                63.078125
+              ]
+            },
+            "node": {
+              "fixture": "records_array_16k",
+              "operation": "scan",
+              "iterations": 4000,
+              "engine": "node",
+              "repetitions": 7,
+              "cpu_us": 41.02525,
+              "cpu_samples_us": [
+                43.2325,
+                39.545,
+                41.02525,
+                44.039,
+                39.6435,
+                42.959,
+                39.312
+              ],
+              "peak_rss_mib": 61.9375,
+              "peak_rss_samples_mib": [
+                61.859375,
+                61.9375,
+                61.75,
+                61.96875,
+                61.984375,
+                61.71875,
+                61.953125
+              ]
+            },
+            "bun": {
+              "fixture": "records_array_16k",
+              "operation": "scan",
+              "iterations": 4000,
+              "engine": "bun",
+              "repetitions": 7,
+              "cpu_us": 35.68025,
+              "cpu_samples_us": [
+                35.58475,
+                35.7095,
+                35.668,
+                35.658,
+                35.68025,
+                35.8165,
+                35.745
+              ],
+              "peak_rss_mib": 77.375,
+              "peak_rss_samples_mib": [
+                77.296875,
+                77.390625,
+                77.375,
+                77.375,
+                77.359375,
+                77.421875,
+                77.328125
+              ]
+            }
+          },
+          "delta_pct": -62.241549763921796,
+          "prior_delta_pct": 0.058720569137804546,
+          "separated_regression": false,
+          "separated_improvement": true,
+          "beats_both_peers": true,
+          "all_samples_beat_both_peers": true
+        },
+        {
+          "fixture": "records_array_1m",
+          "operation": "scan",
+          "engines": {
+            "perry": {
+              "fixture": "records_array_1m",
+              "operation": "scan",
+              "iterations": 200,
+              "engine": "perry",
+              "repetitions": 7,
+              "cpu_us": 1370.315,
+              "cpu_samples_us": [
+                1375.49,
+                1371.605,
+                1370.465,
+                1369.85,
+                1367.155,
+                1368.78,
+                1370.315
+              ],
+              "peak_rss_mib": 67.203125,
+              "peak_rss_samples_mib": [
+                67.203125,
+                67.203125,
+                67.203125,
+                67.21875,
+                67.203125,
+                67.203125,
+                67.203125
+              ]
+            },
+            "baseline": {
+              "fixture": "records_array_1m",
+              "operation": "scan",
+              "iterations": 200,
+              "engine": "baseline",
+              "repetitions": 7,
+              "cpu_us": 2920.51,
+              "cpu_samples_us": [
+                2937.035,
+                2927.48,
+                2919.1,
+                2917.075,
+                2923.7,
+                2915.125,
+                2920.51
+              ],
+              "peak_rss_mib": 413.734375,
+              "peak_rss_samples_mib": [
+                413.734375,
+                413.734375,
+                413.71875,
+                413.734375,
+                413.734375,
+                413.734375,
+                413.734375
+              ]
+            },
+            "prior": {
+              "fixture": "records_array_1m",
+              "operation": "scan",
+              "iterations": 200,
+              "engine": "prior",
+              "repetitions": 7,
+              "cpu_us": 1369.3,
+              "cpu_samples_us": [
+                1369.5,
+                1368.34,
+                1368.23,
+                1370.94,
+                1369.3,
+                1368.95,
+                1373.605
+              ],
+              "peak_rss_mib": 67.234375,
+              "peak_rss_samples_mib": [
+                67.234375,
+                67.21875,
+                67.234375,
+                67.21875,
+                67.21875,
+                67.234375,
+                67.234375
+              ]
+            },
+            "node": {
+              "fixture": "records_array_1m",
+              "operation": "scan",
+              "iterations": 200,
+              "engine": "node",
+              "repetitions": 7,
+              "cpu_us": 2669.95,
+              "cpu_samples_us": [
+                2648.55,
+                2831.77,
+                2608.635,
+                2582.72,
+                2775.945,
+                2669.95,
+                2728.445
+              ],
+              "peak_rss_mib": 130.1875,
+              "peak_rss_samples_mib": [
+                130.171875,
+                130.390625,
+                130.15625,
+                130.1875,
+                130.203125,
+                130.21875,
+                130.171875
+              ]
+            },
+            "bun": {
+              "fixture": "records_array_1m",
+              "operation": "scan",
+              "iterations": 200,
+              "engine": "bun",
+              "repetitions": 7,
+              "cpu_us": 2204.405,
+              "cpu_samples_us": [
+                2199.81,
+                2208.71,
+                2204.405,
+                2207.635,
+                2539.325,
+                2203.915,
+                2201.945
+              ],
+              "peak_rss_mib": 99.578125,
+              "peak_rss_samples_mib": [
+                99.578125,
+                99.546875,
+                99.625,
+                99.5625,
+                99.53125,
+                99.578125,
+                99.578125
+              ]
+            }
+          },
+          "delta_pct": -53.07959911111415,
+          "prior_delta_pct": 0.0741254655663548,
+          "separated_regression": false,
+          "separated_improvement": true,
+          "beats_both_peers": true,
+          "all_samples_beat_both_peers": true
+        },
+        {
+          "fixture": "records_array_8m",
+          "operation": "scan",
+          "engines": {
+            "perry": {
+              "fixture": "records_array_8m",
+              "operation": "scan",
+              "iterations": 32,
+              "engine": "perry",
+              "repetitions": 7,
+              "cpu_us": 11907.4375,
+              "cpu_samples_us": [
+                11932.0,
+                11907.4375,
+                11924.0,
+                11887.84375,
+                11899.84375,
+                11877.59375,
+                11932.34375
+              ],
+              "peak_rss_mib": 108.890625,
+              "peak_rss_samples_mib": [
+                108.890625,
+                108.890625,
+                108.890625,
+                108.890625,
+                108.890625,
+                108.890625,
+                108.890625
+              ]
+            },
+            "baseline": {
+              "fixture": "records_array_8m",
+              "operation": "scan",
+              "iterations": 32,
+              "engine": "baseline",
+              "repetitions": 7,
+              "cpu_us": 23844.4375,
+              "cpu_samples_us": [
+                24144.25,
+                23841.46875,
+                23826.5625,
+                23836.59375,
+                23858.28125,
+                23919.3125,
+                23844.4375
+              ],
+              "peak_rss_mib": 530.25,
+              "peak_rss_samples_mib": [
+                530.25,
+                530.25,
+                530.25,
+                530.25,
+                530.265625,
+                530.265625,
+                530.25
+              ]
+            },
+            "prior": {
+              "fixture": "records_array_8m",
+              "operation": "scan",
+              "iterations": 32,
+              "engine": "prior",
+              "repetitions": 7,
+              "cpu_us": 11919.6875,
+              "cpu_samples_us": [
+                11944.9375,
+                11897.40625,
+                11919.6875,
+                11905.5625,
+                11884.90625,
+                11923.75,
+                11956.75
+              ],
+              "peak_rss_mib": 108.90625,
+              "peak_rss_samples_mib": [
+                108.90625,
+                108.90625,
+                108.90625,
+                108.90625,
+                108.90625,
+                108.90625,
+                108.90625
+              ]
+            },
+            "node": {
+              "fixture": "records_array_8m",
+              "operation": "scan",
+              "iterations": 32,
+              "engine": "node",
+              "repetitions": 7,
+              "cpu_us": 31548.3125,
+              "cpu_samples_us": [
+                31548.3125,
+                31498.59375,
+                31948.125,
+                30701.5,
+                32265.78125,
+                31546.21875,
+                31982.21875
+              ],
+              "peak_rss_mib": 313.578125,
+              "peak_rss_samples_mib": [
+                313.8125,
+                313.609375,
+                313.703125,
+                313.53125,
+                313.484375,
+                313.5625,
+                313.578125
+              ]
+            },
+            "bun": {
+              "fixture": "records_array_8m",
+              "operation": "scan",
+              "iterations": 32,
+              "engine": "bun",
+              "repetitions": 7,
+              "cpu_us": 21366.28125,
+              "cpu_samples_us": [
+                21201.125,
+                21294.1875,
+                21366.28125,
+                21589.65625,
+                21636.28125,
+                21794.53125,
+                21306.1875
+              ],
+              "peak_rss_mib": 136.421875,
+              "peak_rss_samples_mib": [
+                148.203125,
+                136.203125,
+                136.421875,
+                140.0625,
+                134.0625,
+                134.671875,
+                139.328125
+              ]
+            }
+          },
+          "delta_pct": -50.06199034890213,
+          "prior_delta_pct": -0.10277115066984477,
+          "separated_regression": false,
+          "separated_improvement": true,
+          "beats_both_peers": true,
+          "all_samples_beat_both_peers": true
+        },
+        {
+          "fixture": "records_array_20m",
+          "operation": "scan",
+          "engines": {
+            "perry": {
+              "fixture": "records_array_20m",
+              "operation": "scan",
+              "iterations": 16,
+              "engine": "perry",
+              "repetitions": 7,
+              "cpu_us": 54570.0625,
+              "cpu_samples_us": [
+                54659.9375,
+                54576.3125,
+                54614.0,
+                54570.0625,
+                54508.3125,
+                54526.5,
+                54562.75
+              ],
+              "peak_rss_mib": 691.5,
+              "peak_rss_samples_mib": [
+                691.5,
+                691.5,
+                691.5,
+                691.5,
+                691.5,
+                691.5,
+                691.5
+              ]
+            },
+            "baseline": {
+              "fixture": "records_array_20m",
+              "operation": "scan",
+              "iterations": 16,
+              "engine": "baseline",
+              "repetitions": 7,
+              "cpu_us": 54747.6875,
+              "cpu_samples_us": [
+                54756.9375,
+                54783.375,
+                54612.5,
+                54708.9375,
+                54747.6875,
+                54846.125,
+                54695.0625
+              ],
+              "peak_rss_mib": 691.4375,
+              "peak_rss_samples_mib": [
+                691.4375,
+                691.4375,
+                691.453125,
+                691.4375,
+                691.4375,
+                691.4375,
+                691.4375
+              ]
+            },
+            "prior": {
+              "fixture": "records_array_20m",
+              "operation": "scan",
+              "iterations": 16,
+              "engine": "prior",
+              "repetitions": 7,
+              "cpu_us": 54730.75,
+              "cpu_samples_us": [
+                54750.1875,
+                54748.3125,
+                54757.6875,
+                54727.9375,
+                54730.75,
+                54708.375,
+                54705.6875
+              ],
+              "peak_rss_mib": 691.53125,
+              "peak_rss_samples_mib": [
+                691.53125,
+                691.515625,
+                691.53125,
+                691.546875,
+                691.515625,
+                691.53125,
+                691.53125
+              ]
+            },
+            "node": {
+              "fixture": "records_array_20m",
+              "operation": "scan",
+              "iterations": 16,
+              "engine": "node",
+              "repetitions": 7,
+              "cpu_us": 84808.5625,
+              "cpu_samples_us": [
+                82718.0625,
+                83492.625,
+                83984.125,
+                89032.625,
+                89364.25,
+                88030.4375,
+                84808.5625
+              ],
+              "peak_rss_mib": 529.21875,
+              "peak_rss_samples_mib": [
+                529.046875,
+                529.21875,
+                529.3125,
+                529.046875,
+                529.234375,
+                529.3125,
+                529.21875
+              ]
+            },
+            "bun": {
+              "fixture": "records_array_20m",
+              "operation": "scan",
+              "iterations": 16,
+              "engine": "bun",
+              "repetitions": 7,
+              "cpu_us": 52423.0,
+              "cpu_samples_us": [
+                52399.0625,
+                51983.625,
+                51702.0625,
+                52742.625,
+                52423.0,
+                53126.9375,
+                53753.4375
+              ],
+              "peak_rss_mib": 293.953125,
+              "peak_rss_samples_mib": [
+                293.984375,
+                326.40625,
+                325.953125,
+                293.421875,
+                293.953125,
+                277.015625,
+                268.46875
+              ]
+            }
+          },
+          "delta_pct": -0.32444292738391667,
+          "prior_delta_pct": -0.2935963786354079,
+          "separated_regression": false,
+          "separated_improvement": false,
+          "beats_both_peers": false,
+          "all_samples_beat_both_peers": false
+        },
+        {
+          "fixture": "records_array_20m",
+          "operation": "roundtrip",
+          "engines": {
+            "perry": {
+              "fixture": "records_array_20m",
+              "operation": "roundtrip",
+              "iterations": 8,
+              "engine": "perry",
+              "repetitions": 7,
+              "cpu_us": 105302.75,
+              "cpu_samples_us": [
+                105305.5,
+                105335.0,
+                105480.5,
+                105302.75,
+                105255.75,
+                105123.0,
+                105164.875
+              ],
+              "peak_rss_mib": 506.421875,
+              "peak_rss_samples_mib": [
+                506.421875,
+                506.421875,
+                506.71875,
+                506.421875,
+                506.71875,
+                506.421875,
+                506.421875
+              ]
+            },
+            "baseline": {
+              "fixture": "records_array_20m",
+              "operation": "roundtrip",
+              "iterations": 8,
+              "engine": "baseline",
+              "repetitions": 7,
+              "cpu_us": 105504.375,
+              "cpu_samples_us": [
+                105508.875,
+                105455.0,
+                105551.625,
+                105504.375,
+                105491.125,
+                105502.0,
+                105536.0
+              ],
+              "peak_rss_mib": 506.34375,
+              "peak_rss_samples_mib": [
+                506.34375,
+                506.640625,
+                506.640625,
+                506.34375,
+                506.34375,
+                506.34375,
+                506.640625
+              ]
+            },
+            "prior": {
+              "fixture": "records_array_20m",
+              "operation": "roundtrip",
+              "iterations": 8,
+              "engine": "prior",
+              "repetitions": 7,
+              "cpu_us": 105470.375,
+              "cpu_samples_us": [
+                105624.0,
+                105436.125,
+                105482.125,
+                105107.0,
+                105606.25,
+                105373.75,
+                105470.375
+              ],
+              "peak_rss_mib": 506.71875,
+              "peak_rss_samples_mib": [
+                506.421875,
+                506.71875,
+                506.421875,
+                506.71875,
+                506.71875,
+                506.71875,
+                506.71875
+              ]
+            },
+            "node": {
+              "fixture": "records_array_20m",
+              "operation": "roundtrip",
+              "iterations": 8,
+              "engine": "node",
+              "repetitions": 7,
+              "cpu_us": 99373.875,
+              "cpu_samples_us": [
+                97422.625,
+                99631.25,
+                99113.25,
+                97889.375,
+                100753.25,
+                99373.875,
+                100151.875
+              ],
+              "peak_rss_mib": 493.953125,
+              "peak_rss_samples_mib": [
+                493.953125,
+                493.890625,
+                493.78125,
+                494.015625,
+                493.671875,
+                493.953125,
+                493.96875
+              ]
+            },
+            "bun": {
+              "fixture": "records_array_20m",
+              "operation": "roundtrip",
+              "iterations": 8,
+              "engine": "bun",
+              "repetitions": 7,
+              "cpu_us": 68900.5,
+              "cpu_samples_us": [
+                68571.0,
+                68870.0,
+                68900.5,
+                68971.25,
+                68620.625,
+                69049.5,
+                74189.0
+              ],
+              "peak_rss_mib": 319.578125,
+              "peak_rss_samples_mib": [
+                319.28125,
+                319.984375,
+                319.640625,
+                319.546875,
+                319.8125,
+                319.578125,
+                319.21875
+              ]
+            }
+          },
+          "delta_pct": -0.19110581907147983,
+          "prior_delta_pct": -0.15893088462044513,
+          "separated_regression": false,
+          "separated_improvement": false,
+          "beats_both_peers": false,
+          "all_samples_beat_both_peers": false
+        },
+        {
+          "fixture": "records_array_1m",
+          "operation": "parse",
+          "engines": {
+            "perry": {
+              "fixture": "records_array_1m",
+              "operation": "parse",
+              "iterations": 200,
+              "engine": "perry",
+              "repetitions": 7,
+              "cpu_us": 915.345,
+              "cpu_samples_us": [
+                918.43,
+                915.345,
+                912.62,
+                916.44,
+                915.635,
+                914.375,
+                914.645
+              ],
+              "peak_rss_mib": 67.171875,
+              "peak_rss_samples_mib": [
+                67.171875,
+                67.171875,
+                67.171875,
+                67.1875,
+                67.171875,
+                67.171875,
+                67.171875
+              ]
+            },
+            "baseline": {
+              "fixture": "records_array_1m",
+              "operation": "parse",
+              "iterations": 200,
+              "engine": "baseline",
+              "repetitions": 7,
+              "cpu_us": 914.235,
+              "cpu_samples_us": [
+                916.24,
+                913.6,
+                913.82,
+                915.16,
+                914.21,
+                914.235,
+                914.245
+              ],
+              "peak_rss_mib": 67.109375,
+              "peak_rss_samples_mib": [
+                67.109375,
+                67.109375,
+                67.109375,
+                67.109375,
+                67.109375,
+                67.109375,
+                67.125
+              ]
+            },
+            "prior": {
+              "fixture": "records_array_1m",
+              "operation": "parse",
+              "iterations": 200,
+              "engine": "prior",
+              "repetitions": 7,
+              "cpu_us": 915.575,
+              "cpu_samples_us": [
+                915.575,
+                915.83,
+                915.915,
+                913.01,
+                917.28,
+                914.965,
+                913.71
+              ],
+              "peak_rss_mib": 67.1875,
+              "peak_rss_samples_mib": [
+                67.1875,
+                67.1875,
+                67.1875,
+                67.1875,
+                67.1875,
+                67.203125,
+                67.1875
+              ]
+            },
+            "node": {
+              "fixture": "records_array_1m",
+              "operation": "parse",
+              "iterations": 200,
+              "engine": "node",
+              "repetitions": 7,
+              "cpu_us": 2630.16,
+              "cpu_samples_us": [
+                2769.915,
+                2589.15,
+                2545.425,
+                2843.54,
+                2622.14,
+                2630.16,
+                2645.325
+              ],
+              "peak_rss_mib": 125.515625,
+              "peak_rss_samples_mib": [
+                125.484375,
+                125.46875,
+                125.609375,
+                125.515625,
+                125.5625,
+                125.703125,
+                125.515625
+              ]
+            },
+            "bun": {
+              "fixture": "records_array_1m",
+              "operation": "parse",
+              "iterations": 200,
+              "engine": "bun",
+              "repetitions": 7,
+              "cpu_us": 2149.695,
+              "cpu_samples_us": [
+                2149.695,
+                2149.355,
+                2150.305,
+                2146.275,
+                2153.83,
+                2149.525,
+                2154.105
+              ],
+              "peak_rss_mib": 95.0,
+              "peak_rss_samples_mib": [
+                95.078125,
+                94.984375,
+                95.0,
+                94.984375,
+                95.09375,
+                94.984375,
+                95.109375
+              ]
+            }
+          },
+          "delta_pct": 0.12141298462648997,
+          "prior_delta_pct": -0.025120825710622796,
+          "separated_regression": false,
+          "separated_improvement": false,
+          "beats_both_peers": true,
+          "all_samples_beat_both_peers": true
+        },
+        {
+          "fixture": "records_array_1m",
+          "operation": "stringify",
+          "engines": {
+            "perry": {
+              "fixture": "records_array_1m",
+              "operation": "stringify",
+              "iterations": 256,
+              "engine": "perry",
+              "repetitions": 7,
+              "cpu_us": 641.8515625,
+              "cpu_samples_us": [
+                638.234375,
+                642.12109375,
+                641.8515625,
+                639.99609375,
+                635.25390625,
+                643.6875,
+                641.89453125
+              ],
+              "peak_rss_mib": 63.109375,
+              "peak_rss_samples_mib": [
+                63.09375,
+                63.109375,
+                63.140625,
+                63.109375,
+                63.109375,
+                63.109375,
+                63.109375
+              ]
+            },
+            "baseline": {
+              "fixture": "records_array_1m",
+              "operation": "stringify",
+              "iterations": 256,
+              "engine": "baseline",
+              "repetitions": 7,
+              "cpu_us": 640.8828125,
+              "cpu_samples_us": [
+                645.17578125,
+                640.8828125,
+                644.03515625,
+                640.39453125,
+                638.98828125,
+                642.7421875,
+                640.3515625
+              ],
+              "peak_rss_mib": 63.015625,
+              "peak_rss_samples_mib": [
+                63.015625,
+                63.015625,
+                63.015625,
+                63.015625,
+                63.015625,
+                63.046875,
+                63.015625
+              ]
+            },
+            "prior": {
+              "fixture": "records_array_1m",
+              "operation": "stringify",
+              "iterations": 256,
+              "engine": "prior",
+              "repetitions": 7,
+              "cpu_us": 640.01171875,
+              "cpu_samples_us": [
+                638.953125,
+                639.3671875,
+                640.01171875,
+                640.09765625,
+                639.38671875,
+                644.9609375,
+                640.53125
+              ],
+              "peak_rss_mib": 63.109375,
+              "peak_rss_samples_mib": [
+                63.109375,
+                63.109375,
+                63.109375,
+                63.109375,
+                63.109375,
+                63.109375,
+                63.109375
+              ]
+            },
+            "node": {
+              "fixture": "records_array_1m",
+              "operation": "stringify",
+              "iterations": 256,
+              "engine": "node",
+              "repetitions": 7,
+              "cpu_us": 840.6640625,
+              "cpu_samples_us": [
+                836.34765625,
+                840.6640625,
+                841.5625,
+                839.16015625,
+                852.21875,
+                836.62109375,
+                847.08984375
+              ],
+              "peak_rss_mib": 130.078125,
+              "peak_rss_samples_mib": [
+                130.078125,
+                130.109375,
+                130.015625,
+                130.25,
+                130.03125,
+                130.234375,
+                129.890625
+              ]
+            },
+            "bun": {
+              "fixture": "records_array_1m",
+              "operation": "stringify",
+              "iterations": 256,
+              "engine": "bun",
+              "repetitions": 7,
+              "cpu_us": 956.48046875,
+              "cpu_samples_us": [
+                957.8125,
+                956.0625,
+                956.48046875,
+                954.23046875,
+                957.14453125,
+                957.02734375,
+                956.2578125
+              ],
+              "peak_rss_mib": 103.703125,
+              "peak_rss_samples_mib": [
+                103.703125,
+                103.671875,
+                103.703125,
+                104.484375,
+                103.6875,
+                103.71875,
+                103.65625
+              ]
+            }
+          },
+          "delta_pct": 0.15115868004340616,
+          "prior_delta_pct": 0.28747032219869073,
+          "separated_regression": false,
+          "separated_improvement": false,
+          "beats_both_peers": true,
+          "all_samples_beat_both_peers": true
+        },
+        {
+          "fixture": "small_record",
+          "operation": "parse",
+          "engines": {
+            "perry": {
+              "fixture": "small_record",
+              "operation": "parse",
+              "iterations": 2000000,
+              "engine": "perry",
+              "repetitions": 7,
+              "cpu_us": 0.096663,
+              "cpu_samples_us": [
+                0.0968855,
+                0.096663,
+                0.0966195,
+                0.096525,
+                0.096565,
+                0.0968175,
+                0.0969725
+              ],
+              "peak_rss_mib": 81.421875,
+              "peak_rss_samples_mib": [
+                81.40625,
+                81.40625,
+                81.421875,
+                81.421875,
+                81.421875,
+                81.390625,
+                81.4375
+              ]
+            },
+            "baseline": {
+              "fixture": "small_record",
+              "operation": "parse",
+              "iterations": 2000000,
+              "engine": "baseline",
+              "repetitions": 7,
+              "cpu_us": 0.0965885,
+              "cpu_samples_us": [
+                0.0964305,
+                0.0965885,
+                0.096792,
+                0.0970575,
+                0.0964785,
+                0.096598,
+                0.0965575
+              ],
+              "peak_rss_mib": 81.375,
+              "peak_rss_samples_mib": [
+                81.375,
+                81.375,
+                81.34375,
+                81.375,
+                81.34375,
+                81.375,
+                81.375
+              ]
+            },
+            "prior": {
+              "fixture": "small_record",
+              "operation": "parse",
+              "iterations": 2000000,
+              "engine": "prior",
+              "repetitions": 7,
+              "cpu_us": 0.096744,
+              "cpu_samples_us": [
+                0.09672,
+                0.096744,
+                0.096776,
+                0.09663,
+                0.0970575,
+                0.0969145,
+                0.0967095
+              ],
+              "peak_rss_mib": 81.421875,
+              "peak_rss_samples_mib": [
+                81.421875,
+                81.421875,
+                81.453125,
+                81.46875,
+                81.421875,
+                81.421875,
+                81.453125
+              ]
+            },
+            "node": {
+              "fixture": "small_record",
+              "operation": "parse",
+              "iterations": 2000000,
+              "engine": "node",
+              "repetitions": 7,
+              "cpu_us": 0.353276,
+              "cpu_samples_us": [
+                0.3526665,
+                0.3222415,
+                0.353276,
+                0.3758485,
+                0.3722415,
+                0.3529915,
+                0.354182
+              ],
+              "peak_rss_mib": 59.625,
+              "peak_rss_samples_mib": [
+                59.65625,
+                59.546875,
+                59.625,
+                59.6875,
+                59.453125,
+                59.65625,
+                59.625
+              ]
+            },
+            "bun": {
+              "fixture": "small_record",
+              "operation": "parse",
+              "iterations": 2000000,
+              "engine": "bun",
+              "repetitions": 7,
+              "cpu_us": 0.2448125,
+              "cpu_samples_us": [
+                0.2448355,
+                0.243241,
+                0.2448125,
+                0.245502,
+                0.2448805,
+                0.243209,
+                0.243445
+              ],
+              "peak_rss_mib": 79.890625,
+              "peak_rss_samples_mib": [
+                79.890625,
+                79.890625,
+                79.859375,
+                79.890625,
+                79.875,
+                79.890625,
+                79.90625
+              ]
+            }
+          },
+          "delta_pct": 0.07713133551097151,
+          "prior_delta_pct": -0.08372612255023171,
+          "separated_regression": false,
+          "separated_improvement": false,
+          "beats_both_peers": true,
+          "all_samples_beat_both_peers": true
+        },
+        {
+          "fixture": "small_record",
+          "operation": "stringify",
+          "engines": {
+            "perry": {
+              "fixture": "small_record",
+              "operation": "stringify",
+              "iterations": 10000000,
+              "engine": "perry",
+              "repetitions": 7,
+              "cpu_us": 0.0428898,
+              "cpu_samples_us": [
+                0.0431443,
+                0.0427782,
+                0.0429335,
+                0.0428372,
+                0.0428898,
+                0.0431664,
+                0.0428539
+              ],
+              "peak_rss_mib": 33.375,
+              "peak_rss_samples_mib": [
+                33.375,
+                33.390625,
+                33.40625,
+                33.375,
+                33.375,
+                33.359375,
+                33.390625
+              ]
+            },
+            "baseline": {
+              "fixture": "small_record",
+              "operation": "stringify",
+              "iterations": 10000000,
+              "engine": "baseline",
+              "repetitions": 7,
+              "cpu_us": 0.0422633,
+              "cpu_samples_us": [
+                0.042085,
+                0.0425352,
+                0.0422633,
+                0.0421109,
+                0.0424262,
+                0.0420905,
+                0.0424106
+              ],
+              "peak_rss_mib": 33.34375,
+              "peak_rss_samples_mib": [
+                33.375,
+                33.328125,
+                33.34375,
+                33.375,
+                33.34375,
+                33.328125,
+                33.34375
+              ]
+            },
+            "prior": {
+              "fixture": "small_record",
+              "operation": "stringify",
+              "iterations": 10000000,
+              "engine": "prior",
+              "repetitions": 7,
+              "cpu_us": 0.0424154,
+              "cpu_samples_us": [
+                0.0424403,
+                0.0424154,
+                0.0436204,
+                0.0423328,
+                0.0423968,
+                0.0424496,
+                0.0423735
+              ],
+              "peak_rss_mib": 33.40625,
+              "peak_rss_samples_mib": [
+                33.40625,
+                33.40625,
+                33.4375,
+                33.390625,
+                33.390625,
+                33.40625,
+                33.40625
+              ]
+            },
+            "node": {
+              "fixture": "small_record",
+              "operation": "stringify",
+              "iterations": 10000000,
+              "engine": "node",
+              "repetitions": 7,
+              "cpu_us": 0.107925,
+              "cpu_samples_us": [
+                0.1109529,
+                0.108073,
+                0.1089864,
+                0.1071444,
+                0.1070724,
+                0.107925,
+                0.1077856
+              ],
+              "peak_rss_mib": 59.796875,
+              "peak_rss_samples_mib": [
+                59.796875,
+                59.71875,
+                59.78125,
+                59.796875,
+                59.828125,
+                59.796875,
+                59.734375
+              ]
+            },
+            "bun": {
+              "fixture": "small_record",
+              "operation": "stringify",
+              "iterations": 10000000,
+              "engine": "bun",
+              "repetitions": 7,
+              "cpu_us": 0.1184667,
+              "cpu_samples_us": [
+                0.1188492,
+                0.1182191,
+                0.1184667,
+                0.1192958,
+                0.1182729,
+                0.118446,
+                0.1198301
+              ],
+              "peak_rss_mib": 394.578125,
+              "peak_rss_samples_mib": [
+                394.546875,
+                394.53125,
+                394.578125,
+                394.578125,
+                394.578125,
+                394.5625,
+                394.625
+              ]
+            }
+          },
+          "delta_pct": 1.482373596004094,
+          "prior_delta_pct": 1.118461690800987,
+          "separated_regression": true,
+          "separated_improvement": false,
+          "beats_both_peers": true,
+          "all_samples_beat_both_peers": true
+        },
+        {
+          "fixture": "long_string_1m",
+          "operation": "stringify",
+          "engines": {
+            "perry": {
+              "fixture": "long_string_1m",
+              "operation": "stringify",
+              "iterations": 4096,
+              "engine": "perry",
+              "repetitions": 7,
+              "cpu_us": 33.663330078125,
+              "cpu_samples_us": [
+                34.63037109375,
+                33.773681640625,
+                33.254150390625,
+                30.18994140625,
+                33.663330078125,
+                31.383056640625,
+                33.9453125
+              ],
+              "peak_rss_mib": 54.515625,
+              "peak_rss_samples_mib": [
+                54.546875,
+                54.515625,
+                54.515625,
+                54.546875,
+                54.515625,
+                54.515625,
+                54.546875
+              ]
+            },
+            "baseline": {
+              "fixture": "long_string_1m",
+              "operation": "stringify",
+              "iterations": 4096,
+              "engine": "baseline",
+              "repetitions": 7,
+              "cpu_us": 33.220947265625,
+              "cpu_samples_us": [
+                33.220947265625,
+                32.273193359375,
+                33.033447265625,
+                32.88916015625,
+                36.95263671875,
+                35.9189453125,
+                33.975341796875
+              ],
+              "peak_rss_mib": 54.484375,
+              "peak_rss_samples_mib": [
+                54.515625,
+                54.515625,
+                54.484375,
+                54.484375,
+                54.484375,
+                54.515625,
+                54.484375
+              ]
+            },
+            "prior": {
+              "fixture": "long_string_1m",
+              "operation": "stringify",
+              "iterations": 4096,
+              "engine": "prior",
+              "repetitions": 7,
+              "cpu_us": 33.2080078125,
+              "cpu_samples_us": [
+                33.122802734375,
+                33.2080078125,
+                37.0634765625,
+                32.6162109375,
+                33.312255859375,
+                34.9169921875,
+                32.944091796875
+              ],
+              "peak_rss_mib": 54.546875,
+              "peak_rss_samples_mib": [
+                54.546875,
+                54.546875,
+                54.578125,
+                54.546875,
+                54.546875,
+                54.546875,
+                54.546875
+              ]
+            },
+            "node": {
+              "fixture": "long_string_1m",
+              "operation": "stringify",
+              "iterations": 4096,
+              "engine": "node",
+              "repetitions": 7,
+              "cpu_us": 98.97705078125,
+              "cpu_samples_us": [
+                98.947265625,
+                98.847900390625,
+                99.14892578125,
+                102.895751953125,
+                99.0927734375,
+                97.260009765625,
+                98.97705078125
+              ],
+              "peak_rss_mib": 255.390625,
+              "peak_rss_samples_mib": [
+                255.421875,
+                255.5,
+                255.53125,
+                255.28125,
+                255.359375,
+                255.328125,
+                255.390625
+              ]
+            },
+            "bun": {
+              "fixture": "long_string_1m",
+              "operation": "stringify",
+              "iterations": 4096,
+              "engine": "bun",
+              "repetitions": 7,
+              "cpu_us": 92.836669921875,
+              "cpu_samples_us": [
+                92.79541015625,
+                93.003662109375,
+                92.937744140625,
+                92.60302734375,
+                92.929443359375,
+                92.836669921875,
+                92.677734375
+              ],
+              "peak_rss_mib": 151.671875,
+              "peak_rss_samples_mib": [
+                147.734375,
+                161.71875,
+                151.671875,
+                147.734375,
+                155.6875,
+                149.703125,
+                153.71875
+              ]
+            }
+          },
+          "delta_pct": 1.3316381648085907,
+          "prior_delta_pct": 1.3711218938391445,
+          "separated_regression": false,
+          "separated_improvement": false,
+          "beats_both_peers": true,
+          "all_samples_beat_both_peers": true
+        },
+        {
+          "fixture": "null",
+          "operation": "stringify",
+          "engines": {
+            "perry": {
+              "fixture": "null",
+              "operation": "stringify",
+              "iterations": 20000000,
+              "engine": "perry",
+              "repetitions": 7,
+              "cpu_us": 0.0065656,
+              "cpu_samples_us": [
+                0.00656575,
+                0.0065656,
+                0.0065665,
+                0.0065656,
+                0.00656465,
+                0.00656555,
+                0.0065723
+              ],
+              "peak_rss_mib": 13.125,
+              "peak_rss_samples_mib": [
+                13.125,
+                13.125,
+                13.140625,
+                13.125,
+                13.140625,
+                13.125,
+                13.125
+              ]
+            },
+            "baseline": {
+              "fixture": "null",
+              "operation": "stringify",
+              "iterations": 20000000,
+              "engine": "baseline",
+              "repetitions": 7,
+              "cpu_us": 0.0065656,
+              "cpu_samples_us": [
+                0.0065657,
+                0.0065848,
+                0.00656185,
+                0.0065646,
+                0.0065656,
+                0.0065664,
+                0.0065653
+              ],
+              "peak_rss_mib": 13.015625,
+              "peak_rss_samples_mib": [
+                13.015625,
+                13.015625,
+                13.015625,
+                13.015625,
+                13.015625,
+                13.015625,
+                13.015625
+              ]
+            },
+            "prior": {
+              "fixture": "null",
+              "operation": "stringify",
+              "iterations": 20000000,
+              "engine": "prior",
+              "repetitions": 7,
+              "cpu_us": 0.0065688,
+              "cpu_samples_us": [
+                0.0065733,
+                0.0065699,
+                0.00656365,
+                0.00657275,
+                0.00656645,
+                0.006565,
+                0.0065688
+              ],
+              "peak_rss_mib": 13.046875,
+              "peak_rss_samples_mib": [
+                13.046875,
+                13.0625,
+                13.046875,
+                13.046875,
+                13.046875,
+                13.046875,
+                13.046875
+              ]
+            },
+            "node": {
+              "fixture": "null",
+              "operation": "stringify",
+              "iterations": 20000000,
+              "engine": "node",
+              "repetitions": 7,
+              "cpu_us": 0.0263233,
+              "cpu_samples_us": [
+                0.0263309,
+                0.0263233,
+                0.02634755,
+                0.0263156,
+                0.0262635,
+                0.02632035,
+                0.02633745
+              ],
+              "peak_rss_mib": 59.640625,
+              "peak_rss_samples_mib": [
+                59.53125,
+                59.671875,
+                59.640625,
+                59.640625,
+                59.6875,
+                59.546875,
+                59.546875
+              ]
+            },
+            "bun": {
+              "fixture": "null",
+              "operation": "stringify",
+              "iterations": 20000000,
+              "engine": "bun",
+              "repetitions": 7,
+              "cpu_us": 0.0297512,
+              "cpu_samples_us": [
+                0.0297512,
+                0.02976775,
+                0.02999885,
+                0.0297309,
+                0.0296793,
+                0.02997285,
+                0.02972505
+              ],
+              "peak_rss_mib": 134.171875,
+              "peak_rss_samples_mib": [
+                134.1875,
+                134.171875,
+                134.1875,
+                134.125,
+                134.203125,
+                134.171875,
+                134.125
+              ]
+            }
+          },
+          "delta_pct": 0.0,
+          "prior_delta_pct": -0.04871513822919393,
+          "separated_regression": false,
+          "separated_improvement": false,
+          "beats_both_peers": true,
+          "all_samples_beat_both_peers": true
+        },
+        {
+          "fixture": "string_a",
+          "operation": "stringify",
+          "engines": {
+            "perry": {
+              "fixture": "string_a",
+              "operation": "stringify",
+              "iterations": 20000000,
+              "engine": "perry",
+              "repetitions": 7,
+              "cpu_us": 0.0100097,
+              "cpu_samples_us": [
+                0.01000475,
+                0.0100137,
+                0.0100036,
+                0.0100086,
+                0.0100097,
+                0.01001295,
+                0.0100109
+              ],
+              "peak_rss_mib": 13.125,
+              "peak_rss_samples_mib": [
+                13.125,
+                13.125,
+                13.125,
+                13.125,
+                13.125,
+                13.125,
+                13.125
+              ]
+            },
+            "baseline": {
+              "fixture": "string_a",
+              "operation": "stringify",
+              "iterations": 20000000,
+              "engine": "baseline",
+              "repetitions": 7,
+              "cpu_us": 0.00969635,
+              "cpu_samples_us": [
+                0.00969695,
+                0.00969635,
+                0.0096985,
+                0.0096946,
+                0.00969845,
+                0.0096909,
+                0.0096952
+              ],
+              "peak_rss_mib": 13.015625,
+              "peak_rss_samples_mib": [
+                13.015625,
+                13.015625,
+                13.015625,
+                13.03125,
+                13.015625,
+                13.015625,
+                13.015625
+              ]
+            },
+            "prior": {
+              "fixture": "string_a",
+              "operation": "stringify",
+              "iterations": 20000000,
+              "engine": "prior",
+              "repetitions": 7,
+              "cpu_us": 0.0096951,
+              "cpu_samples_us": [
+                0.0096918,
+                0.00969865,
+                0.0096951,
+                0.0097111,
+                0.00970105,
+                0.0096925,
+                0.00969445
+              ],
+              "peak_rss_mib": 13.046875,
+              "peak_rss_samples_mib": [
+                13.0625,
+                13.046875,
+                13.046875,
+                13.046875,
+                13.046875,
+                13.046875,
+                13.0625
+              ]
+            },
+            "node": {
+              "fixture": "string_a",
+              "operation": "stringify",
+              "iterations": 20000000,
+              "engine": "node",
+              "repetitions": 7,
+              "cpu_us": 0.0291677,
+              "cpu_samples_us": [
+                0.0291677,
+                0.0291831,
+                0.02916975,
+                0.0291635,
+                0.0291747,
+                0.0291522,
+                0.0291552
+              ],
+              "peak_rss_mib": 59.609375,
+              "peak_rss_samples_mib": [
+                59.609375,
+                59.65625,
+                59.53125,
+                59.59375,
+                59.5,
+                59.671875,
+                59.609375
+              ]
+            },
+            "bun": {
+              "fixture": "string_a",
+              "operation": "stringify",
+              "iterations": 20000000,
+              "engine": "bun",
+              "repetitions": 7,
+              "cpu_us": 0.03058055,
+              "cpu_samples_us": [
+                0.03066355,
+                0.0297396,
+                0.03058055,
+                0.02952205,
+                0.02972635,
+                0.0306032,
+                0.0306586
+              ],
+              "peak_rss_mib": 134.140625,
+              "peak_rss_samples_mib": [
+                134.125,
+                134.15625,
+                134.140625,
+                134.171875,
+                134.140625,
+                134.171875,
+                134.140625
+              ]
+            }
+          },
+          "delta_pct": 3.2316283962521952,
+          "prior_delta_pct": 3.2449381646398656,
+          "separated_regression": true,
+          "separated_improvement": false,
+          "beats_both_peers": true,
+          "all_samples_beat_both_peers": true
+        },
+        {
+          "fixture": "empty_object",
+          "operation": "stringify",
+          "engines": {
+            "perry": {
+              "fixture": "empty_object",
+              "operation": "stringify",
+              "iterations": 10000000,
+              "engine": "perry",
+              "repetitions": 7,
+              "cpu_us": 0.0173937,
+              "cpu_samples_us": [
+                0.0173934,
+                0.0173934,
+                0.0173976,
+                0.0173963,
+                0.0173793,
+                0.0174076,
+                0.0173937
+              ],
+              "peak_rss_mib": 13.234375,
+              "peak_rss_samples_mib": [
+                13.234375,
+                13.234375,
+                13.234375,
+                13.25,
+                13.25,
+                13.234375,
+                13.234375
+              ]
+            },
+            "baseline": {
+              "fixture": "empty_object",
+              "operation": "stringify",
+              "iterations": 10000000,
+              "engine": "baseline",
+              "repetitions": 7,
+              "cpu_us": 0.0176331,
+              "cpu_samples_us": [
+                0.0176331,
+                0.0176422,
+                0.0176263,
+                0.0176556,
+                0.0176539,
+                0.017621,
+                0.0176231
+              ],
+              "peak_rss_mib": 13.109375,
+              "peak_rss_samples_mib": [
+                13.109375,
+                13.109375,
+                13.109375,
+                13.109375,
+                13.109375,
+                13.109375,
+                13.125
+              ]
+            },
+            "prior": {
+              "fixture": "empty_object",
+              "operation": "stringify",
+              "iterations": 10000000,
+              "engine": "prior",
+              "repetitions": 7,
+              "cpu_us": 0.0175804,
+              "cpu_samples_us": [
+                0.0175793,
+                0.0175804,
+                0.0175763,
+                0.0175849,
+                0.0175743,
+                0.0175827,
+                0.0176232
+              ],
+              "peak_rss_mib": 13.15625,
+              "peak_rss_samples_mib": [
+                13.15625,
+                13.15625,
+                13.140625,
+                13.140625,
+                13.15625,
+                13.15625,
+                13.140625
+              ]
+            },
+            "node": {
+              "fixture": "empty_object",
+              "operation": "stringify",
+              "iterations": 10000000,
+              "engine": "node",
+              "repetitions": 7,
+              "cpu_us": 0.0311463,
+              "cpu_samples_us": [
+                0.0311692,
+                0.0311385,
+                0.0311333,
+                0.0311455,
+                0.0311463,
+                0.0311702,
+                0.0311731
+              ],
+              "peak_rss_mib": 59.640625,
+              "peak_rss_samples_mib": [
+                59.6875,
+                59.6875,
+                59.640625,
+                59.640625,
+                59.71875,
+                59.59375,
+                59.515625
+              ]
+            },
+            "bun": {
+              "fixture": "empty_object",
+              "operation": "stringify",
+              "iterations": 10000000,
+              "engine": "bun",
+              "repetitions": 7,
+              "cpu_us": 0.0307743,
+              "cpu_samples_us": [
+                0.0306917,
+                0.0306184,
+                0.0314986,
+                0.0307743,
+                0.0307341,
+                0.0307909,
+                0.0308976
+              ],
+              "peak_rss_mib": 134.171875,
+              "peak_rss_samples_mib": [
+                134.171875,
+                134.1875,
+                134.140625,
+                134.15625,
+                134.171875,
+                134.15625,
+                134.171875
+              ]
+            }
+          },
+          "delta_pct": -1.3576739200707566,
+          "prior_delta_pct": -1.0619781119883376,
+          "separated_regression": false,
+          "separated_improvement": true,
+          "beats_both_peers": true,
+          "all_samples_beat_both_peers": true
+        },
+        {
+          "fixture": "tiny_object",
+          "operation": "stringify",
+          "engines": {
+            "perry": {
+              "fixture": "tiny_object",
+              "operation": "stringify",
+              "iterations": 10000000,
+              "engine": "perry",
+              "repetitions": 7,
+              "cpu_us": 0.0303111,
+              "cpu_samples_us": [
+                0.0303005,
+                0.0303428,
+                0.0303137,
+                0.0303025,
+                0.0303111,
+                0.0303112,
+                0.0302967
+              ],
+              "peak_rss_mib": 32.359375,
+              "peak_rss_samples_mib": [
+                32.359375,
+                32.359375,
+                32.359375,
+                32.390625,
+                32.375,
+                32.34375,
+                32.359375
+              ]
+            },
+            "baseline": {
+              "fixture": "tiny_object",
+              "operation": "stringify",
+              "iterations": 10000000,
+              "engine": "baseline",
+              "repetitions": 7,
+              "cpu_us": 0.0304428,
+              "cpu_samples_us": [
+                0.0304158,
+                0.0304981,
+                0.0305058,
+                0.0304323,
+                0.0304606,
+                0.0304174,
+                0.0304428
+              ],
+              "peak_rss_mib": 32.328125,
+              "peak_rss_samples_mib": [
+                32.359375,
+                32.34375,
+                32.359375,
+                32.328125,
+                32.3125,
+                32.328125,
+                32.3125
+              ]
+            },
+            "prior": {
+              "fixture": "tiny_object",
+              "operation": "stringify",
+              "iterations": 10000000,
+              "engine": "prior",
+              "repetitions": 7,
+              "cpu_us": 0.0304919,
+              "cpu_samples_us": [
+                0.0305676,
+                0.0304921,
+                0.0304919,
+                0.0304881,
+                0.0304816,
+                0.0304917,
+                0.0304924
+              ],
+              "peak_rss_mib": 32.390625,
+              "peak_rss_samples_mib": [
+                32.375,
+                32.421875,
+                32.390625,
+                32.390625,
+                32.40625,
+                32.390625,
+                32.375
+              ]
+            },
+            "node": {
+              "fixture": "tiny_object",
+              "operation": "stringify",
+              "iterations": 10000000,
+              "engine": "node",
+              "repetitions": 7,
+              "cpu_us": 0.0363633,
+              "cpu_samples_us": [
+                0.0363834,
+                0.0363196,
+                0.0376592,
+                0.036419,
+                0.036323,
+                0.0363569,
+                0.0363633
+              ],
+              "peak_rss_mib": 59.703125,
+              "peak_rss_samples_mib": [
+                59.59375,
+                59.703125,
+                59.65625,
+                59.703125,
+                59.734375,
+                59.703125,
+                59.75
+              ]
+            },
+            "bun": {
+              "fixture": "tiny_object",
+              "operation": "stringify",
+              "iterations": 10000000,
+              "engine": "bun",
+              "repetitions": 7,
+              "cpu_us": 0.0407992,
+              "cpu_samples_us": [
+                0.0404124,
+                0.04086,
+                0.0407992,
+                0.041035,
+                0.0403341,
+                0.0403078,
+                0.040862
+              ],
+              "peak_rss_mib": 134.171875,
+              "peak_rss_samples_mib": [
+                134.171875,
+                134.1875,
+                134.171875,
+                134.203125,
+                134.140625,
+                134.171875,
+                134.15625
+              ]
+            }
+          },
+          "delta_pct": -0.4326146083802995,
+          "prior_delta_pct": -0.5929443557141312,
+          "separated_regression": false,
+          "separated_improvement": true,
+          "beats_both_peers": true,
+          "all_samples_beat_both_peers": true
+        },
+        {
+          "fixture": "object_1k",
+          "operation": "stringify",
+          "engines": {
+            "perry": {
+              "fixture": "object_1k",
+              "operation": "stringify",
+              "iterations": 2000000,
+              "engine": "perry",
+              "repetitions": 7,
+              "cpu_us": 0.1157995,
+              "cpu_samples_us": [
+                0.115735,
+                0.1157995,
+                0.116138,
+                0.1130865,
+                0.1161055,
+                0.112949,
+                0.115994
+              ],
+              "peak_rss_mib": 33.390625,
+              "peak_rss_samples_mib": [
+                33.40625,
+                33.40625,
+                33.375,
+                33.375,
+                33.390625,
+                33.390625,
+                33.421875
+              ]
+            },
+            "baseline": {
+              "fixture": "object_1k",
+              "operation": "stringify",
+              "iterations": 2000000,
+              "engine": "baseline",
+              "repetitions": 7,
+              "cpu_us": 0.111819,
+              "cpu_samples_us": [
+                0.111308,
+                0.1110465,
+                0.111905,
+                0.111819,
+                0.111986,
+                0.1117675,
+                0.111853
+              ],
+              "peak_rss_mib": 33.375,
+              "peak_rss_samples_mib": [
+                33.375,
+                33.359375,
+                33.359375,
+                33.390625,
+                33.390625,
+                33.375,
+                33.34375
+              ]
+            },
+            "prior": {
+              "fixture": "object_1k",
+              "operation": "stringify",
+              "iterations": 2000000,
+              "engine": "prior",
+              "repetitions": 7,
+              "cpu_us": 0.1133625,
+              "cpu_samples_us": [
+                0.113065,
+                0.113091,
+                0.1133625,
+                0.113573,
+                0.11329,
+                0.1134265,
+                0.113464
+              ],
+              "peak_rss_mib": 33.421875,
+              "peak_rss_samples_mib": [
+                33.453125,
+                33.453125,
+                33.421875,
+                33.421875,
+                33.421875,
+                33.453125,
+                33.421875
+              ]
+            },
+            "node": {
+              "fixture": "object_1k",
+              "operation": "stringify",
+              "iterations": 2000000,
+              "engine": "node",
+              "repetitions": 7,
+              "cpu_us": 0.1900065,
+              "cpu_samples_us": [
+                0.190244,
+                0.1900065,
+                0.189962,
+                0.1898495,
+                0.189941,
+                0.1906045,
+                0.190269
+              ],
+              "peak_rss_mib": 61.796875,
+              "peak_rss_samples_mib": [
+                61.953125,
+                61.734375,
+                61.703125,
+                61.921875,
+                61.640625,
+                61.796875,
+                61.9375
+              ]
+            },
+            "bun": {
+              "fixture": "object_1k",
+              "operation": "stringify",
+              "iterations": 2000000,
+              "engine": "bun",
+              "repetitions": 7,
+              "cpu_us": 0.2074515,
+              "cpu_samples_us": [
+                0.20801,
+                0.2077895,
+                0.207904,
+                0.2074515,
+                0.207126,
+                0.206976,
+                0.20734
+              ],
+              "peak_rss_mib": 70.90625,
+              "peak_rss_samples_mib": [
+                70.921875,
+                70.9375,
+                70.90625,
+                70.84375,
+                70.890625,
+                70.921875,
+                70.890625
+              ]
+            }
+          },
+          "delta_pct": 3.559770700864795,
+          "prior_delta_pct": 2.1497408755099645,
+          "separated_regression": true,
+          "separated_improvement": false,
+          "beats_both_peers": true,
+          "all_samples_beat_both_peers": true
+        }
+      ]
+    },
+    "options": {
+      "window": {
+        "owner": "json-perf-51073-1789054628",
+        "load_before": [
+          2.39013671875,
+          1.9482421875,
+          1.72216796875
+        ],
+        "started_utc": "2026-09-10T15:37:08Z",
+        "quiet_gate_passed": true,
+        "command": [
+          "python3",
+          ".work/stringify-entry-r7/run-options.py",
+          "--worker",
+          ".work/stringify-entry-r7/candidate-options",
+          "--baseline-worker",
+          ".work/stringify-entry-r7/main-options",
+          "--prior-worker",
+          ".work/stringify-entry-r7/r5-options",
+          "--node",
+          "/opt/homebrew/bin/node",
+          "--bun",
+          "/Users/perry/.bun/bin/bun",
+          "--results-dir",
+          "results/quiet-stringify-entry-r7-options"
+        ],
+        "competing_workloads_before": [],
+        "load_after": [
+          1.84130859375,
+          1.85595703125,
+          1.69580078125
+        ],
+        "competing_workloads_after": [],
+        "finished_utc": "2026-09-10T15:37:37Z"
+      },
+      "timed_trials": 175,
+      "cases": [
+        {
+          "fixture": "small_record",
+          "operation": "zero",
+          "engines": {
+            "perry": {
+              "fixture": "small_record",
+              "operation": "zero",
+              "iterations": 1000000,
+              "engine": "perry",
+              "repetitions": 7,
+              "cpu_us": 0.44564,
+              "cpu_samples_us": [
+                0.445948,
+                0.447422,
+                0.44564,
+                0.445273,
+                0.445653,
+                0.445254,
+                0.445403
+              ],
+              "peak_rss_mib": 33.84375,
+              "peak_rss_samples_mib": [
+                33.84375,
+                33.859375,
+                33.828125,
+                33.828125,
+                33.875,
+                33.84375,
+                33.84375
+              ]
+            },
+            "baseline": {
+              "fixture": "small_record",
+              "operation": "zero",
+              "iterations": 1000000,
+              "engine": "baseline",
+              "repetitions": 7,
+              "cpu_us": 0.440819,
+              "cpu_samples_us": [
+                0.44115,
+                0.440255,
+                0.440508,
+                0.439968,
+                0.444883,
+                0.440819,
+                0.440833
+              ],
+              "peak_rss_mib": 33.6875,
+              "peak_rss_samples_mib": [
+                33.6875,
+                33.671875,
+                33.6875,
+                33.71875,
+                33.703125,
+                33.6875,
+                33.6875
+              ]
+            },
+            "prior": {
+              "fixture": "small_record",
+              "operation": "zero",
+              "iterations": 1000000,
+              "engine": "prior",
+              "repetitions": 7,
+              "cpu_us": 0.442508,
+              "cpu_samples_us": [
+                0.442999,
+                0.442149,
+                0.442416,
+                0.442905,
+                0.442508,
+                0.442531,
+                0.442452
+              ],
+              "peak_rss_mib": 33.71875,
+              "peak_rss_samples_mib": [
+                33.75,
+                33.71875,
+                33.71875,
+                33.71875,
+                33.703125,
+                33.71875,
+                33.71875
+              ]
+            },
+            "node": {
+              "fixture": "small_record",
+              "operation": "zero",
+              "iterations": 1000000,
+              "engine": "node",
+              "repetitions": 7,
+              "cpu_us": 0.248249,
+              "cpu_samples_us": [
+                0.250149,
+                0.248249,
+                0.248259,
+                0.24781,
+                0.248169,
+                0.247831,
+                0.24908
+              ],
+              "peak_rss_mib": 59.546875,
+              "peak_rss_samples_mib": [
+                59.546875,
+                59.546875,
+                59.46875,
+                59.484375,
+                59.625,
+                59.65625,
+                59.578125
+              ]
+            },
+            "bun": {
+              "fixture": "small_record",
+              "operation": "zero",
+              "iterations": 1000000,
+              "engine": "bun",
+              "repetitions": 7,
+              "cpu_us": 0.396306,
+              "cpu_samples_us": [
+                0.396944,
+                0.395683,
+                0.396457,
+                0.395747,
+                0.396306,
+                0.395898,
+                0.398113
+              ],
+              "peak_rss_mib": 207.6875,
+              "peak_rss_samples_mib": [
+                207.671875,
+                207.6875,
+                207.6875,
+                207.65625,
+                207.671875,
+                207.703125,
+                207.6875
+              ]
+            }
+          },
+          "delta_pct": 1.0936461450164359,
+          "prior_delta_pct": 0.7077838140779225,
+          "separated_regression": true,
+          "separated_improvement": false,
+          "beats_both_peers": false,
+          "all_samples_beat_both_peers": false
+        },
+        {
+          "fixture": "small_record",
+          "operation": "pretty",
+          "engines": {
+            "perry": {
+              "fixture": "small_record",
+              "operation": "pretty",
+              "iterations": 200000,
+              "engine": "perry",
+              "repetitions": 7,
+              "cpu_us": 0.511635,
+              "cpu_samples_us": [
+                0.51238,
+                0.512855,
+                0.509395,
+                0.51184,
+                0.510165,
+                0.511,
+                0.511635
+              ],
+              "peak_rss_mib": 33.640625,
+              "peak_rss_samples_mib": [
+                33.640625,
+                33.609375,
+                33.640625,
+                33.609375,
+                33.640625,
+                33.59375,
+                33.640625
+              ]
+            },
+            "baseline": {
+              "fixture": "small_record",
+              "operation": "pretty",
+              "iterations": 200000,
+              "engine": "baseline",
+              "repetitions": 7,
+              "cpu_us": 0.51389,
+              "cpu_samples_us": [
+                0.51262,
+                0.523405,
+                0.51524,
+                0.51451,
+                0.51281,
+                0.51389,
+                0.51171
+              ],
+              "peak_rss_mib": 33.5,
+              "peak_rss_samples_mib": [
+                33.5,
+                33.484375,
+                33.484375,
+                33.484375,
+                33.5,
+                33.515625,
+                33.515625
+              ]
+            },
+            "prior": {
+              "fixture": "small_record",
+              "operation": "pretty",
+              "iterations": 200000,
+              "engine": "prior",
+              "repetitions": 7,
+              "cpu_us": 0.51245,
+              "cpu_samples_us": [
+                0.512395,
+                0.512525,
+                0.512135,
+                0.51245,
+                0.514045,
+                0.511565,
+                0.514265
+              ],
+              "peak_rss_mib": 33.5,
+              "peak_rss_samples_mib": [
+                33.53125,
+                33.5,
+                33.53125,
+                33.5,
+                33.484375,
+                33.5,
+                33.484375
+              ]
+            },
+            "node": {
+              "fixture": "small_record",
+              "operation": "pretty",
+              "iterations": 200000,
+              "engine": "node",
+              "repetitions": 7,
+              "cpu_us": 0.308555,
+              "cpu_samples_us": [
+                0.308625,
+                0.30854,
+                0.30657,
+                0.308555,
+                0.30785,
+                0.31124,
+                0.30917
+              ],
+              "peak_rss_mib": 59.5625,
+              "peak_rss_samples_mib": [
+                59.5625,
+                59.609375,
+                59.46875,
+                59.5625,
+                59.546875,
+                59.40625,
+                59.5625
+              ]
+            },
+            "bun": {
+              "fixture": "small_record",
+              "operation": "pretty",
+              "iterations": 200000,
+              "engine": "bun",
+              "repetitions": 7,
+              "cpu_us": 0.540435,
+              "cpu_samples_us": [
+                0.539935,
+                0.539965,
+                0.541145,
+                0.586545,
+                0.540435,
+                0.541285,
+                0.539285
+              ],
+              "peak_rss_mib": 77.609375,
+              "peak_rss_samples_mib": [
+                77.609375,
+                77.609375,
+                77.640625,
+                77.609375,
+                77.59375,
+                77.625,
+                77.609375
+              ]
+            }
+          },
+          "delta_pct": -0.43880986203272965,
+          "prior_delta_pct": -0.15903990633232556,
+          "separated_regression": false,
+          "separated_improvement": false,
+          "beats_both_peers": false,
+          "all_samples_beat_both_peers": false
+        },
+        {
+          "fixture": "small_record",
+          "operation": "keys",
+          "engines": {
+            "perry": {
+              "fixture": "small_record",
+              "operation": "keys",
+              "iterations": 200000,
+              "engine": "perry",
+              "repetitions": 7,
+              "cpu_us": 0.47395,
+              "cpu_samples_us": [
+                0.47395,
+                0.474095,
+                0.47404,
+                0.47382,
+                0.473695,
+                0.47487,
+                0.47313
+              ],
+              "peak_rss_mib": 32.78125,
+              "peak_rss_samples_mib": [
+                32.78125,
+                32.78125,
+                32.78125,
+                32.78125,
+                32.78125,
+                32.78125,
+                32.78125
+              ]
+            },
+            "baseline": {
+              "fixture": "small_record",
+              "operation": "keys",
+              "iterations": 200000,
+              "engine": "baseline",
+              "repetitions": 7,
+              "cpu_us": 0.46956,
+              "cpu_samples_us": [
+                0.47001,
+                0.46864,
+                0.469705,
+                0.470715,
+                0.46927,
+                0.46931,
+                0.46956
+              ],
+              "peak_rss_mib": 32.65625,
+              "peak_rss_samples_mib": [
+                32.65625,
+                32.65625,
+                32.640625,
+                32.640625,
+                32.6875,
+                32.65625,
+                32.65625
+              ]
+            },
+            "prior": {
+              "fixture": "small_record",
+              "operation": "keys",
+              "iterations": 200000,
+              "engine": "prior",
+              "repetitions": 7,
+              "cpu_us": 0.469655,
+              "cpu_samples_us": [
+                0.469655,
+                0.47025,
+                0.46942,
+                0.46914,
+                0.469305,
+                0.47129,
+                0.471565
+              ],
+              "peak_rss_mib": 32.671875,
+              "peak_rss_samples_mib": [
+                32.65625,
+                32.6875,
+                32.671875,
+                32.65625,
+                32.671875,
+                32.65625,
+                32.703125
+              ]
+            },
+            "node": {
+              "fixture": "small_record",
+              "operation": "keys",
+              "iterations": 200000,
+              "engine": "node",
+              "repetitions": 7,
+              "cpu_us": 0.597625,
+              "cpu_samples_us": [
+                0.597625,
+                0.595675,
+                0.603845,
+                0.60061,
+                0.607665,
+                0.59602,
+                0.589795
+              ],
+              "peak_rss_mib": 59.515625,
+              "peak_rss_samples_mib": [
+                59.484375,
+                59.640625,
+                59.515625,
+                59.546875,
+                59.453125,
+                59.6875,
+                59.359375
+              ]
+            },
+            "bun": {
+              "fixture": "small_record",
+              "operation": "keys",
+              "iterations": 200000,
+              "engine": "bun",
+              "repetitions": 7,
+              "cpu_us": 0.4996,
+              "cpu_samples_us": [
+                0.50027,
+                0.50097,
+                0.49976,
+                0.49855,
+                0.498115,
+                0.4996,
+                0.49945
+              ],
+              "peak_rss_mib": 71.125,
+              "peak_rss_samples_mib": [
+                71.15625,
+                71.109375,
+                71.140625,
+                71.125,
+                71.109375,
+                71.140625,
+                71.109375
+              ]
+            }
+          },
+          "delta_pct": 0.9349177953829058,
+          "prior_delta_pct": 0.9145010699343148,
+          "separated_regression": true,
+          "separated_improvement": false,
+          "beats_both_peers": true,
+          "all_samples_beat_both_peers": true
+        },
+        {
+          "fixture": "small_record",
+          "operation": "callback",
+          "engines": {
+            "perry": {
+              "fixture": "small_record",
+              "operation": "callback",
+              "iterations": 50000,
+              "engine": "perry",
+              "repetitions": 7,
+              "cpu_us": 1.0336,
+              "cpu_samples_us": [
+                1.03088,
+                1.03496,
+                1.02996,
+                1.03748,
+                1.0336,
+                1.033,
+                1.0356
+              ],
+              "peak_rss_mib": 27.65625,
+              "peak_rss_samples_mib": [
+                27.65625,
+                27.65625,
+                27.671875,
+                27.625,
+                27.65625,
+                27.65625,
+                27.625
+              ]
+            },
+            "baseline": {
+              "fixture": "small_record",
+              "operation": "callback",
+              "iterations": 50000,
+              "engine": "baseline",
+              "repetitions": 7,
+              "cpu_us": 1.03162,
+              "cpu_samples_us": [
+                1.03502,
+                1.0306,
+                1.03118,
+                1.02786,
+                1.03216,
+                1.03162,
+                1.03232
+              ],
+              "peak_rss_mib": 27.53125,
+              "peak_rss_samples_mib": [
+                27.515625,
+                27.5,
+                27.546875,
+                27.53125,
+                27.546875,
+                27.515625,
+                27.53125
+              ]
+            },
+            "prior": {
+              "fixture": "small_record",
+              "operation": "callback",
+              "iterations": 50000,
+              "engine": "prior",
+              "repetitions": 7,
+              "cpu_us": 1.0311,
+              "cpu_samples_us": [
+                1.02858,
+                1.0311,
+                1.035,
+                1.02972,
+                1.03146,
+                1.02752,
+                1.03372
+              ],
+              "peak_rss_mib": 27.515625,
+              "peak_rss_samples_mib": [
+                27.515625,
+                27.5,
+                27.515625,
+                27.515625,
+                27.515625,
+                27.546875,
+                27.515625
+              ]
+            },
+            "node": {
+              "fixture": "small_record",
+              "operation": "callback",
+              "iterations": 50000,
+              "engine": "node",
+              "repetitions": 7,
+              "cpu_us": 0.61518,
+              "cpu_samples_us": [
+                0.62368,
+                0.61876,
+                0.60686,
+                0.61646,
+                0.61518,
+                0.61264,
+                0.60886
+              ],
+              "peak_rss_mib": 59.6875,
+              "peak_rss_samples_mib": [
+                59.609375,
+                59.671875,
+                59.6875,
+                59.75,
+                59.703125,
+                59.640625,
+                59.703125
+              ]
+            },
+            "bun": {
+              "fixture": "small_record",
+              "operation": "callback",
+              "iterations": 50000,
+              "engine": "bun",
+              "repetitions": 7,
+              "cpu_us": 0.56594,
+              "cpu_samples_us": [
+                0.56338,
+                0.56338,
+                0.56138,
+                0.56878,
+                0.5688,
+                0.56594,
+                0.56762
+              ],
+              "peak_rss_mib": 51.1875,
+              "peak_rss_samples_mib": [
+                51.1875,
+                51.203125,
+                51.171875,
+                51.171875,
+                51.21875,
+                51.203125,
+                51.1875
+              ]
+            }
+          },
+          "delta_pct": 0.19193113743434242,
+          "prior_delta_pct": 0.2424595092619608,
+          "separated_regression": false,
+          "separated_improvement": false,
+          "beats_both_peers": false,
+          "all_samples_beat_both_peers": false
+        },
+        {
+          "fixture": "records_array_16k",
+          "operation": "pretty",
+          "engines": {
+            "perry": {
+              "fixture": "records_array_16k",
+              "operation": "pretty",
+              "iterations": 500,
+              "engine": "perry",
+              "repetitions": 7,
+              "cpu_us": 45.552,
+              "cpu_samples_us": [
+                45.552,
+                45.514,
+                45.608,
+                45.68,
+                45.454,
+                45.364,
+                45.724
+              ],
+              "peak_rss_mib": 24.4375,
+              "peak_rss_samples_mib": [
+                24.4375,
+                24.4375,
+                24.4375,
+                24.421875,
+                24.4375,
+                24.4375,
+                24.421875
+              ]
+            },
+            "baseline": {
+              "fixture": "records_array_16k",
+              "operation": "pretty",
+              "iterations": 500,
+              "engine": "baseline",
+              "repetitions": 7,
+              "cpu_us": 45.806,
+              "cpu_samples_us": [
+                45.806,
+                45.686,
+                45.84,
+                45.602,
+                45.522,
+                45.812,
+                45.94
+              ],
+              "peak_rss_mib": 24.296875,
+              "peak_rss_samples_mib": [
+                24.296875,
+                24.296875,
+                24.296875,
+                24.296875,
+                24.296875,
+                24.296875,
+                24.296875
+              ]
+            },
+            "prior": {
+              "fixture": "records_array_16k",
+              "operation": "pretty",
+              "iterations": 500,
+              "engine": "prior",
+              "repetitions": 7,
+              "cpu_us": 45.542,
+              "cpu_samples_us": [
+                45.548,
+                45.704,
+                45.464,
+                45.454,
+                45.542,
+                45.708,
+                45.398
+              ],
+              "peak_rss_mib": 24.3125,
+              "peak_rss_samples_mib": [
+                24.3125,
+                24.296875,
+                24.3125,
+                24.3125,
+                24.3125,
+                24.296875,
+                24.296875
+              ]
+            },
+            "node": {
+              "fixture": "records_array_16k",
+              "operation": "pretty",
+              "iterations": 500,
+              "engine": "node",
+              "repetitions": 7,
+              "cpu_us": 34.796,
+              "cpu_samples_us": [
+                34.59,
+                34.796,
+                34.782,
+                34.844,
+                33.996,
+                34.966,
+                34.826
+              ],
+              "peak_rss_mib": 55.640625,
+              "peak_rss_samples_mib": [
+                55.671875,
+                55.578125,
+                55.5625,
+                55.59375,
+                55.640625,
+                55.703125,
+                55.71875
+              ]
+            },
+            "bun": {
+              "fixture": "records_array_16k",
+              "operation": "pretty",
+              "iterations": 500,
+              "engine": "bun",
+              "repetitions": 7,
+              "cpu_us": 46.034,
+              "cpu_samples_us": [
+                46.034,
+                46.11,
+                45.932,
+                46.434,
+                45.884,
+                46.086,
+                45.996
+              ],
+              "peak_rss_mib": 39.6875,
+              "peak_rss_samples_mib": [
+                39.6875,
+                39.6875,
+                39.671875,
+                39.671875,
+                39.6875,
+                39.71875,
+                39.671875
+              ]
+            }
+          },
+          "delta_pct": -0.5545125092782599,
+          "prior_delta_pct": 0.021957753282686454,
+          "separated_regression": false,
+          "separated_improvement": false,
+          "beats_both_peers": false,
+          "all_samples_beat_both_peers": false
+        }
+      ]
+    }
+  }
+}

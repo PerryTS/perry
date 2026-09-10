@@ -1,0 +1,40 @@
+[
+  {
+    "subject": "candidate-options",
+    "exit_code": 1,
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/options-worker.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "--no-link",
+      "--trace",
+      "llvm",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/ir-candidate-options/worker.o"
+    ],
+    "source_sha256": "abae4cb563cb08a09020c9130e0d6751cdf087c204ca2a6319ada25ce99804aa",
+    "compiler_sha256": "a68392dbcdd1f171c556e7be3a37c4a8ab9af452af300793f50b1f2c8c3ef7ed",
+    "runtime_sha256": "362f81813b8a8ee89250a1dae5f50b5f7328c87513f2e7f0c7e1eaca23d5496a"
+  },
+  {
+    "subject": "candidate-callback",
+    "exit_code": 0,
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/callback-only.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "--no-link",
+      "--trace",
+      "llvm",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/ir-candidate-callback/worker.o"
+    ],
+    "source_sha256": "bda27230cb7c71c98990924cc5a6699273d1eaa50e288ffd88c90f6ca56072d2",
+    "compiler_sha256": "a68392dbcdd1f171c556e7be3a37c4a8ab9af452af300793f50b1f2c8c3ef7ed",
+    "runtime_sha256": "362f81813b8a8ee89250a1dae5f50b5f7328c87513f2e7f0c7e1eaca23d5496a"
+  }
+]

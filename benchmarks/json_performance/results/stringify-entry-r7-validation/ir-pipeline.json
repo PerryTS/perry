@@ -1,0 +1,19 @@
+[
+  {
+    "script": "check-ir.py",
+    "arguments": [],
+    "exit_code": 1
+  },
+  {
+    "script": "check-extra-ir.py",
+    "arguments": [
+      "--candidate"
+    ],
+    "exit_code": 0
+  },
+  {
+    "script": "compare-roots.py",
+    "arguments": [],
+    "exit_code": 0
+  }
+]

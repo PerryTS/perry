@@ -1,0 +1,19 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/stringify-entry-r7/run-options.py",
+  "--worker",
+  ".work/stringify-entry-r7/candidate-options",
+  "--baseline-worker",
+  ".work/stringify-entry-r7/main-options",
+  "--prior-worker",
+  ".work/stringify-entry-r7/r5-options",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--results-dir",
+  "results/quiet-stringify-entry-r7-options"
+]

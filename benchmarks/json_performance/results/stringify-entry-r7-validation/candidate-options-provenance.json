@@ -1,0 +1,37 @@
+[
+  {
+    "label": "candidate",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/options-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "--trace",
+        "llvm",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/candidate-options.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/candidate-options.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/frozen-build/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/candidate-options"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/stringify-entry-r7/options-worker.ts": "abae4cb563cb08a09020c9130e0d6751cdf087c204ca2a6319ada25ce99804aa",
+      "benchmarks/json_performance/.work/stringify-entry-r7/candidate-options.o": "07d9950a27f7b55589f5d23b432d1b9cd61d0cef1874bff13c0f17ded535ac9a",
+      "benchmarks/json_performance/.work/stringify-entry-r7/candidate-options": "e5be59bd34fcc4967d70149e2160a5ddac74357c0a1a0d8e6b2af866e29b2558",
+      "benchmarks/json_performance/.work/stringify-entry-r7/frozen-build/perry": "a68392dbcdd1f171c556e7be3a37c4a8ab9af452af300793f50b1f2c8c3ef7ed",
+      "benchmarks/json_performance/.work/stringify-entry-r7/frozen-build/libperry_runtime.a": "362f81813b8a8ee89250a1dae5f50b5f7328c87513f2e7f0c7e1eaca23d5496a",
+      "benchmarks/json_performance/.work/stringify-entry-r7/frozen-build/libperry_stdlib.a": "6365fe4181d9294b73971d9686407d4820d504e291c259e209c9100e5189cd00"
+    }
+  }
+]

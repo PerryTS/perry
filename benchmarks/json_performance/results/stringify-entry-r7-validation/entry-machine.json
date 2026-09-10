@@ -1,0 +1,54 @@
+{
+  "binaries": [
+    {
+      "arm": "r5",
+      "symbols": [
+        "_js_json_stringify_full"
+      ],
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble",
+        "--no-show-raw-insn",
+        "--disassemble-symbols=_js_json_stringify_full",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/worker"
+      ],
+      "binary_sha256": "e0bd8f1f1b4c842f71b5f4cb7243b23c3b43c2ffdfc040f14c64c6956a15be5c"
+    },
+    {
+      "arm": "candidate",
+      "symbols": [
+        "__RINvMs2_NtNtNtCs2EcWOpJ680c_13perry_runtime2gc5roots15runtime_handlesNtB6_13RuntimeHandle14with_const_ptrNtNtNtBc_7closure5alloc13ClosureHeaderuNCNvNtNtBc_4json8replacer23stringify_full_fallbacks3_0EBc_",
+        "__RNvNtNtCs2EcWOpJ680c_13perry_runtime4json8replacer23stringify_full_fallback",
+        "_js_json_stringify_full"
+      ],
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble",
+        "--no-show-raw-insn",
+        "--disassemble-symbols=__RINvMs2_NtNtNtCs2EcWOpJ680c_13perry_runtime2gc5roots15runtime_handlesNtB6_13RuntimeHandle14with_const_ptrNtNtNtBc_7closure5alloc13ClosureHeaderuNCNvNtNtBc_4json8replacer23stringify_full_fallbacks3_0EBc_,__RNvNtNtCs2EcWOpJ680c_13perry_runtime4json8replacer23stringify_full_fallback,_js_json_stringify_full",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/worker"
+      ],
+      "binary_sha256": "434baa09c06c5172967b588fbb7000273bd857826ada976009cc012a6a1539e2"
+    }
+  ],
+  "objects": [
+    {
+      "name": "worker.o",
+      "r5_sha256": "9954f4951c74565f378c6e5407a11d2ed2a0da76cc32563c80c9e0cac594180a",
+      "candidate_sha256": "9954f4951c74565f378c6e5407a11d2ed2a0da76cc32563c80c9e0cac594180a",
+      "same": true
+    },
+    {
+      "name": "access-worker.o",
+      "r5_sha256": "442fd7ec384f7cee9173e8b738f47fdd8f76381e1817af55e27c8cc86c294f78",
+      "candidate_sha256": "442fd7ec384f7cee9173e8b738f47fdd8f76381e1817af55e27c8cc86c294f78",
+      "same": true
+    },
+    {
+      "name": "rotating-worker.o",
+      "r5_sha256": "4f5a58a4519354066d756e49786be3d52e580bc5ddf8768c88053246e64038c8",
+      "candidate_sha256": "4f5a58a4519354066d756e49786be3d52e580bc5ddf8768c88053246e64038c8",
+      "same": true
+    }
+  ]
+}

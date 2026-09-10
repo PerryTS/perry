@@ -1,0 +1,77 @@
+{
+  "source_sha256": "23224c52435e8f44b1d5535c20aa6b8d01aec2a879dec8920ece3940f36551c5",
+  "results": [
+    {
+      "arm": "main",
+      "mode": "auto",
+      "stdout": "parsed {\"a\":1,\"b\":2}\nliteral {}\nmissing {}\n",
+      "binary_sha256": "3f0aaf3a6427822a52eb8a9584989067a99a65ce149ecfa9f16d340ee327524e",
+      "compiler_sha256": "f45e308bcb13940e75eebb377142d84c401b95f2faca1ddd09ea276c89b0f736",
+      "runtime_sha256": "d0c06e3ad5e85a99858d42c1194f6c43aca89ce1f9700cffe95c29d4aea9c76a",
+      "command": [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/native-main-proof/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/empty-replacer.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/main-empty-replacer"
+      ]
+    },
+    {
+      "arm": "main",
+      "mode": "direct",
+      "stdout": "parsed {\"a\":1,\"b\":2}\nliteral {}\nmissing {}\n",
+      "binary_sha256": "3f0aaf3a6427822a52eb8a9584989067a99a65ce149ecfa9f16d340ee327524e",
+      "compiler_sha256": "f45e308bcb13940e75eebb377142d84c401b95f2faca1ddd09ea276c89b0f736",
+      "runtime_sha256": "d0c06e3ad5e85a99858d42c1194f6c43aca89ce1f9700cffe95c29d4aea9c76a",
+      "command": [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/native-main-proof/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/empty-replacer.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/main-empty-replacer"
+      ]
+    },
+    {
+      "arm": "r5",
+      "mode": "auto",
+      "stdout": "parsed {\"a\":1,\"b\":2}\nliteral {}\nmissing {}\n",
+      "binary_sha256": "f595a61f47f074cc8bcf30e5c40ca57c46e91dbdeb25f5b62c2784c3d612103a",
+      "compiler_sha256": "d2abfd3befe5c7977251e68af77628a11b06611e7eb272ddcb381a889ed844d7",
+      "runtime_sha256": "2deb369a13c0c77fe98326e306ae4a52f3469224ee8c4d453e9dcc9908fe8322",
+      "command": [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/empty-replacer.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/r5-empty-replacer"
+      ]
+    },
+    {
+      "arm": "r5",
+      "mode": "direct",
+      "stdout": "parsed {\"a\":1,\"b\":2}\nliteral {}\nmissing {}\n",
+      "binary_sha256": "f595a61f47f074cc8bcf30e5c40ca57c46e91dbdeb25f5b62c2784c3d612103a",
+      "compiler_sha256": "d2abfd3befe5c7977251e68af77628a11b06611e7eb272ddcb381a889ed844d7",
+      "runtime_sha256": "2deb369a13c0c77fe98326e306ae4a52f3469224ee8c4d453e9dcc9908fe8322",
+      "command": [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/empty-replacer.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/r5-empty-replacer"
+      ]
+    },
+    {
+      "arm": "node",
+      "stdout": "parsed {}\nliteral {}\nmissing {}\n"
+    }
+  ]
+}

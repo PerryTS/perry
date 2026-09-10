@@ -1,0 +1,134 @@
+[
+  {
+    "subject": "invariant",
+    "same": true,
+    "verdicts": [
+      {
+        "arm": "baseline",
+        "exit_code": 1,
+        "fingerprints": [
+          "main::unrooted:alloc->js_inline_arena_slow_alloc",
+          "main::unrooted:strhandle->js_put_value_set_ic_overflow_store"
+        ],
+        "count": 2,
+        "log": "invariant-baseline-roots.log",
+        "files": {
+          "benchmarks/json_performance/.work/invariant-field-loop-r5/main-fixture-native/fixture-0.ll": "1295c65c3fa9f9351f8ae971070bd5ff75af939ed51f5c4d0b74186f2abc5f0c"
+        }
+      },
+      {
+        "arm": "candidate",
+        "exit_code": 1,
+        "fingerprints": [
+          "main::unrooted:alloc->js_inline_arena_slow_alloc",
+          "main::unrooted:strhandle->js_put_value_set_ic_overflow_store"
+        ],
+        "count": 2,
+        "log": "invariant-candidate-roots.log",
+        "files": {
+          "benchmarks/json_performance/.work/stringify-entry-r7/ir-native/test_json_invariant_field_loop-0.ll": "fe29dc67a0063207cfd858a26961778a2ec48f194244eac1853e2c9bb59ec984"
+        }
+      }
+    ]
+  },
+  {
+    "subject": "projection",
+    "same": true,
+    "verdicts": [
+      {
+        "arm": "baseline",
+        "exit_code": 1,
+        "fingerprints": [
+          "main::unrooted:alloc->js_closure_unbox_callee_checked",
+          "main::unrooted:global->js_get_string_pointer_unified"
+        ],
+        "count": 2,
+        "log": "projection-baseline-roots.log",
+        "files": {
+          "benchmarks/json_performance/.work/invariant-field-loop-r5/main-current-projection/worker-0.ll": "cda90f58e0f2692b19e2ddd6ebd59175e9dd9fa843c6c25ac27e69ee53aa667a"
+        }
+      },
+      {
+        "arm": "candidate",
+        "exit_code": 1,
+        "fingerprints": [
+          "main::unrooted:alloc->js_closure_unbox_callee_checked",
+          "main::unrooted:global->js_get_string_pointer_unified"
+        ],
+        "count": 2,
+        "log": "projection-candidate-roots.log",
+        "files": {
+          "benchmarks/json_performance/.work/stringify-entry-r7/ir-native/test_json_scalar_projection-0.ll": "db6a930e85c0194dc7062688d0e63f669eea40d0e299c10ce8bbbe528b938091"
+        }
+      }
+    ]
+  },
+  {
+    "subject": "entry",
+    "same": true,
+    "verdicts": [
+      {
+        "arm": "baseline",
+        "exit_code": 1,
+        "fingerprints": [
+          "main::stale:alloc->js_write_barrier_root_nanbox",
+          "perry_closure_test_json_stringify_entry_ts__5::unrooted:global->js_array_push_f64_spec",
+          "perry_fn_test_json_stringify_entry_ts____obj_method_toJSON_1$generic::unrooted:global->js_array_push_f64_spec",
+          "perry_fn_test_json_stringify_entry_ts____obj_method_toJSON_1$spec_b::unrooted:global->js_array_push_f64_spec"
+        ],
+        "count": 4,
+        "log": "entry-baseline-roots.log",
+        "files": {
+          "benchmarks/json_performance/.work/stringify-entry-r7/ir-main-entry/worker-0.ll": "619306585bfc52f20699b98d0682c20bffa55148db549543d60e29dedda7714a"
+        }
+      },
+      {
+        "arm": "candidate",
+        "exit_code": 1,
+        "fingerprints": [
+          "main::stale:alloc->js_write_barrier_root_nanbox",
+          "perry_closure_test_json_stringify_entry_ts__5::unrooted:global->js_array_push_f64_spec",
+          "perry_fn_test_json_stringify_entry_ts____obj_method_toJSON_1$generic::unrooted:global->js_array_push_f64_spec",
+          "perry_fn_test_json_stringify_entry_ts____obj_method_toJSON_1$spec_b::unrooted:global->js_array_push_f64_spec"
+        ],
+        "count": 4,
+        "log": "entry-candidate-roots.log",
+        "files": {
+          "benchmarks/json_performance/.work/stringify-entry-r7/ir-native/test_json_stringify_entry-0.ll": "23ffd1c74841b7f8630d4fc17ca5bcdfddc989721dea4432944c2d1983c9210b"
+        }
+      }
+    ]
+  },
+  {
+    "subject": "options",
+    "same": true,
+    "verdicts": [
+      {
+        "arm": "baseline",
+        "exit_code": 1,
+        "fingerprints": [
+          "perry_fn_options_worker_ts__run$generic::unrooted:global->js_closure_alloc_singleton",
+          "perry_fn_options_worker_ts__run$spec_b::unrooted:global->js_closure_alloc_singleton"
+        ],
+        "count": 2,
+        "log": "options-baseline-roots.log",
+        "files": {
+          "benchmarks/json_performance/.work/stringify-entry-r7/ir-r5-options/worker-0.ll": "a04f8e590c495d55b4008fd999909d57f869ab9902c50b58e7d65faab762c38e"
+        }
+      },
+      {
+        "arm": "candidate",
+        "exit_code": 1,
+        "fingerprints": [
+          "perry_fn_options_worker_ts__run$generic::unrooted:global->js_closure_alloc_singleton",
+          "perry_fn_options_worker_ts__run$spec_b::unrooted:global->js_closure_alloc_singleton"
+        ],
+        "count": 2,
+        "log": "options-candidate-roots.log",
+        "files": {
+          "benchmarks/json_performance/.work/stringify-entry-r7/ir-candidate-options/worker-0.ll": "30892b838441772bc235912af770ba6a67469fe8076425a873a12117d7bed4d8"
+        }
+      }
+    ]
+  }
+]

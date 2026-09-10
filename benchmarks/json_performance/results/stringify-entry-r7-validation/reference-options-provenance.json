@@ -1,0 +1,72 @@
+[
+  {
+    "label": "main",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/native-main-proof/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/options-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "--trace",
+        "llvm",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/main-options.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/main-options.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/native-main-proof/frozen-build/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/main-options"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/stringify-entry-r7/options-worker.ts": "abae4cb563cb08a09020c9130e0d6751cdf087c204ca2a6319ada25ce99804aa",
+      "benchmarks/json_performance/.work/stringify-entry-r7/main-options.o": "07d9950a27f7b55589f5d23b432d1b9cd61d0cef1874bff13c0f17ded535ac9a",
+      "benchmarks/json_performance/.work/stringify-entry-r7/main-options": "a4b92e627f9157228139ee5728702791f570a7f3a0fbc42be12af54d98388f2a",
+      "benchmarks/json_performance/.work/native-main-proof/frozen-build/perry": "f45e308bcb13940e75eebb377142d84c401b95f2faca1ddd09ea276c89b0f736",
+      "benchmarks/json_performance/.work/native-main-proof/frozen-build/libperry_runtime.a": "d0c06e3ad5e85a99858d42c1194f6c43aca89ce1f9700cffe95c29d4aea9c76a",
+      "benchmarks/json_performance/.work/native-main-proof/frozen-build/libperry_stdlib.a": "929824aaf04a4c504546a157a55da75c934be84a55db19b176610eab40621681"
+    }
+  },
+  {
+    "label": "r5",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/options-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "--trace",
+        "llvm",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/r5-options.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/r5-options.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/frozen-build/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/r5-options"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/stringify-entry-r7/options-worker.ts": "abae4cb563cb08a09020c9130e0d6751cdf087c204ca2a6319ada25ce99804aa",
+      "benchmarks/json_performance/.work/stringify-entry-r7/r5-options.o": "07d9950a27f7b55589f5d23b432d1b9cd61d0cef1874bff13c0f17ded535ac9a",
+      "benchmarks/json_performance/.work/stringify-entry-r7/r5-options": "e3f7de0a3e27521be9c35c5e6dc99828994e51209d50c6066243e5328b07d8c6",
+      "benchmarks/json_performance/.work/invariant-field-loop-r5/frozen-build/perry": "d2abfd3befe5c7977251e68af77628a11b06611e7eb272ddcb381a889ed844d7",
+      "benchmarks/json_performance/.work/invariant-field-loop-r5/frozen-build/libperry_runtime.a": "2deb369a13c0c77fe98326e306ae4a52f3469224ee8c4d453e9dcc9908fe8322",
+      "benchmarks/json_performance/.work/invariant-field-loop-r5/frozen-build/libperry_stdlib.a": "39965b46915622a57d4cfb66760e159def70035282755e669fcbc906ad9220ce"
+    }
+  }
+]

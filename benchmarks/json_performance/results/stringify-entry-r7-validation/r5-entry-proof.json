@@ -1,0 +1,29 @@
+{
+  "command": [
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/frozen-build/perry",
+    "compile",
+    "/Users/amlug/projects/perry/json-merged-pr10022/test-files/test_json_stringify_entry.ts",
+    "--no-auto-optimize",
+    "--no-cache",
+    "-o",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/r5-entry"
+  ],
+  "source_sha256": "825b2d78cf40d341d7fdae3fde69a28ba905cd6faa0ba9cc8ebfc78e7f6738fa",
+  "binary_sha256": "fc443ae819c34edc90f65843f152224fc57c348fac687659b5bde099ed9357b2",
+  "compiler_sha256": "d2abfd3befe5c7977251e68af77628a11b06611e7eb272ddcb381a889ed844d7",
+  "runtime_sha256": "2deb369a13c0c77fe98326e306ae4a52f3469224ee8c4d453e9dcc9908fe8322",
+  "runs": [
+    {
+      "mode": "normal",
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0
+    },
+    {
+      "mode": "scheduled",
+      "matches_node": true,
+      "protected_retired_sets": 1208,
+      "moved_objects": 46150
+    }
+  ]
+}

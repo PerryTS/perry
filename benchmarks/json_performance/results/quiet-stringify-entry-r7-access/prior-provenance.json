@@ -1,0 +1,87 @@
+{
+  "source_commit": "24a8ab6953ba811f5112e49ba1c79ae6e683118b",
+  "base_commit": "53df2c671fff33b1f8f624432372c2401db8b1d0",
+  "commands": [
+    [
+      "/Users/amlug/projects/perry/json-merged-pr10022/target/release/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/worker.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "--no-link",
+      "--trace",
+      "llvm",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/worker.o"
+    ],
+    [
+      "cc",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/worker.o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/target/release/libperry_runtime.a",
+      "-lc",
+      "-Wl,-dead_strip",
+      "-Wl,-no_exported_symbols",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/worker"
+    ],
+    [
+      "/Users/amlug/projects/perry/json-merged-pr10022/target/release/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/rotating-worker.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "--no-link",
+      "--trace",
+      "llvm",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/rotating-worker.o"
+    ],
+    [
+      "cc",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/rotating-worker.o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/target/release/libperry_runtime.a",
+      "-lc",
+      "-Wl,-dead_strip",
+      "-Wl,-no_exported_symbols",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/rotating-worker"
+    ],
+    [
+      "/Users/amlug/projects/perry/json-merged-pr10022/target/release/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/access-worker.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "--no-link",
+      "--trace",
+      "llvm",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/access-worker.o"
+    ],
+    [
+      "cc",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/access-worker.o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/target/release/libperry_runtime.a",
+      "-lc",
+      "-Wl,-dead_strip",
+      "-Wl,-no_exported_symbols",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/access-worker"
+    ]
+  ],
+  "runtime_dir": "/Users/amlug/projects/perry/json-merged-pr10022/target/release",
+  "files": {
+    "target/release/perry": "d2abfd3befe5c7977251e68af77628a11b06611e7eb272ddcb381a889ed844d7",
+    "target/release/libperry_runtime.a": "2deb369a13c0c77fe98326e306ae4a52f3469224ee8c4d453e9dcc9908fe8322",
+    "target/release/libperry_stdlib.a": "39965b46915622a57d4cfb66760e159def70035282755e669fcbc906ad9220ce",
+    "benchmarks/json_performance/worker.ts": "f3c42ec9f04fdb9ba84dc3cf50dc59f18685540033807f3db3a7f75c08a85d39",
+    "benchmarks/json_performance/rotating-worker.ts": "7541897acb2c7c35c0f5e762f8b2f28b9783feb26a42db107c1c4eb3af644b24",
+    "benchmarks/json_performance/access-worker.ts": "dba0240ef6441a07657e664354982a04045c036e53f65c1d06df62d55c73be67",
+    "benchmarks/json_performance/.work/invariant-field-loop-r5/worker": "e0bd8f1f1b4c842f71b5f4cb7243b23c3b43c2ffdfc040f14c64c6956a15be5c",
+    "benchmarks/json_performance/.work/invariant-field-loop-r5/worker.o": "9954f4951c74565f378c6e5407a11d2ed2a0da76cc32563c80c9e0cac594180a",
+    "benchmarks/json_performance/.work/invariant-field-loop-r5/rotating-worker": "4017cb83a8efc94c3953862de5a2d03df2519718ee57bb5bc8df3ad22d2ad9fc",
+    "benchmarks/json_performance/.work/invariant-field-loop-r5/rotating-worker.o": "4f5a58a4519354066d756e49786be3d52e580bc5ddf8768c88053246e64038c8",
+    "benchmarks/json_performance/.work/invariant-field-loop-r5/access-worker": "b97a04e9de24a051427d36596f6b2d161bf37141e506e98e5e0dbf77755c9781",
+    "benchmarks/json_performance/.work/invariant-field-loop-r5/access-worker.o": "442fd7ec384f7cee9173e8b738f47fdd8f76381e1817af55e27c8cc86c294f78"
+  }
+}

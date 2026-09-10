@@ -1,0 +1,16 @@
+{
+  "baseline_source": "53df2c671fff33b1f8f624432372c2401db8b1d0",
+  "main_now": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+  "source_uncommitted": true,
+  "main_delta": "Geisterhand library selection/link fixes + version0.5.1531; no runtime/codegen JSON source change; not inferred binary equality",
+  "hashes": {
+    "benchmarks/json_performance/.work/native-main-proof/frozen-build/perry": "f45e308bcb13940e75eebb377142d84c401b95f2faca1ddd09ea276c89b0f736",
+    "benchmarks/json_performance/.work/native-main-proof/frozen-build/libperry_runtime.a": "d0c06e3ad5e85a99858d42c1194f6c43aca89ce1f9700cffe95c29d4aea9c76a",
+    "benchmarks/json_performance/.work/native-main-proof/frozen-build/libperry_stdlib.a": "929824aaf04a4c504546a157a55da75c934be84a55db19b176610eab40621681",
+    "test-files/test_json_invariant_field_loop.ts": "b16e5e741a45ceb86645bb0f23c9ec1541c272e6a835a03f44c26adca75d5732",
+    "benchmarks/json_performance/.work/invariant-field-loop-r5/main-fixture": "c2e60a9cd4cd659dadcc5d46aade4ebb86ebf6363814854003269be689042ca3",
+    "benchmarks/json_performance/.work/invariant-field-loop-r5/main-fixture.stdout": "f1581a5f33f42d477851d382a8d6a491821c3c6eceebc4c6f451d058843c80dc",
+    "benchmarks/json_performance/.work/invariant-field-loop-r5/node-fixture.stdout": "f1581a5f33f42d477851d382a8d6a491821c3c6eceebc4c6f451d058843c80dc",
+    "scripts/gc_root_dominance_check.py": "e812e9e73dfa1838d545ed15153f736118f5f2d0fa9240725bbb6255a0830ab8"
+  }
+}

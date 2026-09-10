@@ -1,0 +1,12 @@
+{
+  "baseline": "24a8ab6953ba811f5112e49ba1c79ae6e683118b",
+  "original_tail_sha256": "b53fe441f5d1b6e906ce9c18b33c4166fe291977a9dc00d7dc09dcb0c13b3984",
+  "tail_equality_after_only_plain_predicate_rename": true,
+  "helper_arguments": [
+    "value",
+    "replacer_f64",
+    "spacer_f64",
+    "no_replacer && no_spacer"
+  ],
+  "note": "No callback/stringify body edits; entry computes existing inert-argument predicate, fallback receives it."
+}

@@ -1,0 +1,6 @@
+{
+  "r5_sha256": "07d9950a27f7b55589f5d23b432d1b9cd61d0cef1874bff13c0f17ded535ac9a",
+  "candidate_sha256": "07d9950a27f7b55589f5d23b432d1b9cd61d0cef1874bff13c0f17ded535ac9a",
+  "same": true,
+  "note": "Generated options-worker machine object identical. Linked runtime changes are measured separately."
+}

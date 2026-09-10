@@ -1,0 +1,24 @@
+{
+  "arm": "candidate",
+  "command": [
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/frozen-build/perry",
+    "compile",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/callback-only.ts",
+    "--no-auto-optimize",
+    "--no-cache",
+    "--trace",
+    "llvm",
+    "-o",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-entry-r7/candidate-callback-only"
+  ],
+  "matches_node": true,
+  "protected_retired_sets": 16,
+  "moved_objects": 13305,
+  "only_javascript_loop_is_inside_replacer": true,
+  "files": {
+    "benchmarks/json_performance/.work/stringify-entry-r7/callback-only.ts": "bda27230cb7c71c98990924cc5a6699273d1eaa50e288ffd88c90f6ca56072d2",
+    "benchmarks/json_performance/.work/stringify-entry-r7/candidate-callback-only": "f5fc61c4f8a4d26afb6d7fa32d29117c39e2371135a2d71f80482761ec5d15db",
+    "benchmarks/json_performance/.work/stringify-entry-r7/frozen-build/perry": "a68392dbcdd1f171c556e7be3a37c4a8ab9af452af300793f50b1f2c8c3ef7ed",
+    "benchmarks/json_performance/.work/stringify-entry-r7/frozen-build/libperry_runtime.a": "362f81813b8a8ee89250a1dae5f50b5f7328c87513f2e7f0c7e1eaca23d5496a"
+  }
+}
