@@ -1,0 +1,4 @@
+tape-depth-r2 <perry_runtime::json::parser::DirectParser>::parse_string_value 976 ['100243708: d10183ff    \tsub\tsp, sp, #0x60', '10024370c: a9025ff8    \tstp\tx24, x23, [sp, #0x20]', '100243710: a90357f6    \tstp\tx22, x21, [sp, #0x30]']
+tape-depth-r2 perry_runtime::string::json_construction::string_from_json_bytes 1972 ['1005e8a84: d10183ff    \tsub\tsp, sp, #0x60', '1005e8a88: a9025ff8    \tstp\tx24, x23, [sp, #0x20]', '1005e8a8c: a90357f6    \tstp\tx22, x21, [sp, #0x30]']
+tape-depth-r3 <perry_runtime::json::parser::DirectParser>::parse_string_value 976 ['100243708: d10183ff    \tsub\tsp, sp, #0x60', '10024370c: a9025ff8    \tstp\tx24, x23, [sp, #0x20]', '100243710: a90357f6    \tstp\tx22, x21, [sp, #0x30]']
+tape-depth-r3 perry_runtime::string::json_construction::string_from_json_bytes 1972 ['1005e8ac4: d10183ff    \tsub\tsp, sp, #0x60', '1005e8ac8: a9025ff8    \tstp\tx24, x23, [sp, #0x20]', '1005e8acc: a90357f6    \tstp\tx22, x21, [sp, #0x30]']

@@ -1,0 +1,320 @@
+[
+  {
+    "depth_capture": "false",
+    "start": "0x10014e348",
+    "instruction_bytes": 10396,
+    "all_noncall_instructions_identical": true,
+    "relocated_calls_to_same_named_callees": [
+      {
+        "call_address": "10014e584",
+        "r2_target": "0x100b11e78",
+        "r3_target": "0x100b11eb8",
+        "named_callee": "<alloc::raw_vec::RawVec<u32>>::grow_one"
+      },
+      {
+        "call_address": "10014e738",
+        "r2_target": "0x100b11e78",
+        "r3_target": "0x100b11eb8",
+        "named_callee": "<alloc::raw_vec::RawVec<u32>>::grow_one"
+      },
+      {
+        "call_address": "100150038",
+        "r2_target": "0x100b3c2b4",
+        "r3_target": "0x100b3c2f4",
+        "named_callee": "<alloc::raw_vec::RawVec<perry_runtime::gc::roots::stack_maps::StackMapDerived>>::grow_one"
+      },
+      {
+        "call_address": "1001500d8",
+        "r2_target": "0x100b3c2b4",
+        "r3_target": "0x100b3c2f4",
+        "named_callee": "<alloc::raw_vec::RawVec<perry_runtime::gc::roots::stack_maps::StackMapDerived>>::grow_one"
+      },
+      {
+        "call_address": "100150348",
+        "r2_target": "0x100b3c2b4",
+        "r3_target": "0x100b3c2f4",
+        "named_callee": "<alloc::raw_vec::RawVec<perry_runtime::gc::roots::stack_maps::StackMapDerived>>::grow_one"
+      },
+      {
+        "call_address": "1001503e0",
+        "r2_target": "0x100b3c2b4",
+        "r3_target": "0x100b3c2f4",
+        "named_callee": "<alloc::raw_vec::RawVec<perry_runtime::gc::roots::stack_maps::StackMapDerived>>::grow_one"
+      },
+      {
+        "call_address": "100150448",
+        "r2_target": "0x100b3c2b4",
+        "r3_target": "0x100b3c2f4",
+        "named_callee": "<alloc::raw_vec::RawVec<perry_runtime::gc::roots::stack_maps::StackMapDerived>>::grow_one"
+      },
+      {
+        "call_address": "1001504e0",
+        "r2_target": "0x100b3c2b4",
+        "r3_target": "0x100b3c2f4",
+        "named_callee": "<alloc::raw_vec::RawVec<perry_runtime::gc::roots::stack_maps::StackMapDerived>>::grow_one"
+      },
+      {
+        "call_address": "10015057c",
+        "r2_target": "0x100b3c2b4",
+        "r3_target": "0x100b3c2f4",
+        "named_callee": "<alloc::raw_vec::RawVec<perry_runtime::gc::roots::stack_maps::StackMapDerived>>::grow_one"
+      },
+      {
+        "call_address": "100150618",
+        "r2_target": "0x100b3c2b4",
+        "r3_target": "0x100b3c2f4",
+        "named_callee": "<alloc::raw_vec::RawVec<perry_runtime::gc::roots::stack_maps::StackMapDerived>>::grow_one"
+      },
+      {
+        "call_address": "1001507d4",
+        "r2_target": "0x100b3c2b4",
+        "r3_target": "0x100b3c2f4",
+        "named_callee": "<alloc::raw_vec::RawVec<perry_runtime::gc::roots::stack_maps::StackMapDerived>>::grow_one"
+      },
+      {
+        "call_address": "100150874",
+        "r2_target": "0x100b3c2b4",
+        "r3_target": "0x100b3c2f4",
+        "named_callee": "<alloc::raw_vec::RawVec<perry_runtime::gc::roots::stack_maps::StackMapDerived>>::grow_one"
+      },
+      {
+        "call_address": "1001508f4",
+        "r2_target": "0x100b3c2b4",
+        "r3_target": "0x100b3c2f4",
+        "named_callee": "<alloc::raw_vec::RawVec<perry_runtime::gc::roots::stack_maps::StackMapDerived>>::grow_one"
+      },
+      {
+        "call_address": "100150990",
+        "r2_target": "0x100b3c2b4",
+        "r3_target": "0x100b3c2f4",
+        "named_callee": "<alloc::raw_vec::RawVec<perry_runtime::gc::roots::stack_maps::StackMapDerived>>::grow_one"
+      },
+      {
+        "call_address": "1001509f8",
+        "r2_target": "0x100b3c2b4",
+        "r3_target": "0x100b3c2f4",
+        "named_callee": "<alloc::raw_vec::RawVec<perry_runtime::gc::roots::stack_maps::StackMapDerived>>::grow_one"
+      },
+      {
+        "call_address": "100150a90",
+        "r2_target": "0x100b39390",
+        "r3_target": "0x100b393d0",
+        "named_callee": "<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>"
+      },
+      {
+        "call_address": "100150b3c",
+        "r2_target": "0x100b1294c",
+        "r3_target": "0x100b1298c",
+        "named_callee": "core::slice::index::slice_index_fail"
+      },
+      {
+        "call_address": "100150b54",
+        "r2_target": "0x100b1294c",
+        "r3_target": "0x100b1298c",
+        "named_callee": "core::slice::index::slice_index_fail"
+      },
+      {
+        "call_address": "100150b68",
+        "r2_target": "0x100b1294c",
+        "r3_target": "0x100b1298c",
+        "named_callee": "core::slice::index::slice_index_fail"
+      },
+      {
+        "call_address": "100150b7c",
+        "r2_target": "0x100b1278c",
+        "r3_target": "0x100b127cc",
+        "named_callee": "core::panicking::panic_bounds_check"
+      },
+      {
+        "call_address": "100150b90",
+        "r2_target": "0x100b1278c",
+        "r3_target": "0x100b127cc",
+        "named_callee": "core::panicking::panic_bounds_check"
+      },
+      {
+        "call_address": "100150ba4",
+        "r2_target": "0x100b1278c",
+        "r3_target": "0x100b127cc",
+        "named_callee": "core::panicking::panic_bounds_check"
+      },
+      {
+        "call_address": "100150bb8",
+        "r2_target": "0x100b1278c",
+        "r3_target": "0x100b127cc",
+        "named_callee": "core::panicking::panic_bounds_check"
+      },
+      {
+        "call_address": "100150bcc",
+        "r2_target": "0x100b1278c",
+        "r3_target": "0x100b127cc",
+        "named_callee": "core::panicking::panic_bounds_check"
+      },
+      {
+        "call_address": "100150be0",
+        "r2_target": "0x100b1278c",
+        "r3_target": "0x100b127cc",
+        "named_callee": "core::panicking::panic_bounds_check"
+      }
+    ],
+    "callee_bodies_not_compared": true
+  },
+  {
+    "depth_capture": "true",
+    "start": "0x100150be4",
+    "instruction_bytes": 10764,
+    "all_noncall_instructions_identical": true,
+    "relocated_calls_to_same_named_callees": [
+      {
+        "call_address": "100150e24",
+        "r2_target": "0x100b11e78",
+        "r3_target": "0x100b11eb8",
+        "named_callee": "<alloc::raw_vec::RawVec<u32>>::grow_one"
+      },
+      {
+        "call_address": "100150ff0",
+        "r2_target": "0x100b11e78",
+        "r3_target": "0x100b11eb8",
+        "named_callee": "<alloc::raw_vec::RawVec<u32>>::grow_one"
+      },
+      {
+        "call_address": "10015298c",
+        "r2_target": "0x100b3c2b4",
+        "r3_target": "0x100b3c2f4",
+        "named_callee": "<alloc::raw_vec::RawVec<perry_runtime::gc::roots::stack_maps::StackMapDerived>>::grow_one"
+      },
+      {
+        "call_address": "100152a38",
+        "r2_target": "0x100b3c2b4",
+        "r3_target": "0x100b3c2f4",
+        "named_callee": "<alloc::raw_vec::RawVec<perry_runtime::gc::roots::stack_maps::StackMapDerived>>::grow_one"
+      },
+      {
+        "call_address": "100152ccc",
+        "r2_target": "0x100b3c2b4",
+        "r3_target": "0x100b3c2f4",
+        "named_callee": "<alloc::raw_vec::RawVec<perry_runtime::gc::roots::stack_maps::StackMapDerived>>::grow_one"
+      },
+      {
+        "call_address": "100152d6c",
+        "r2_target": "0x100b3c2b4",
+        "r3_target": "0x100b3c2f4",
+        "named_callee": "<alloc::raw_vec::RawVec<perry_runtime::gc::roots::stack_maps::StackMapDerived>>::grow_one"
+      },
+      {
+        "call_address": "100152dd0",
+        "r2_target": "0x100b3c2b4",
+        "r3_target": "0x100b3c2f4",
+        "named_callee": "<alloc::raw_vec::RawVec<perry_runtime::gc::roots::stack_maps::StackMapDerived>>::grow_one"
+      },
+      {
+        "call_address": "100152e70",
+        "r2_target": "0x100b3c2b4",
+        "r3_target": "0x100b3c2f4",
+        "named_callee": "<alloc::raw_vec::RawVec<perry_runtime::gc::roots::stack_maps::StackMapDerived>>::grow_one"
+      },
+      {
+        "call_address": "100152f18",
+        "r2_target": "0x100b3c2b4",
+        "r3_target": "0x100b3c2f4",
+        "named_callee": "<alloc::raw_vec::RawVec<perry_runtime::gc::roots::stack_maps::StackMapDerived>>::grow_one"
+      },
+      {
+        "call_address": "100152fc0",
+        "r2_target": "0x100b3c2b4",
+        "r3_target": "0x100b3c2f4",
+        "named_callee": "<alloc::raw_vec::RawVec<perry_runtime::gc::roots::stack_maps::StackMapDerived>>::grow_one"
+      },
+      {
+        "call_address": "1001531a4",
+        "r2_target": "0x100b3c2b4",
+        "r3_target": "0x100b3c2f4",
+        "named_callee": "<alloc::raw_vec::RawVec<perry_runtime::gc::roots::stack_maps::StackMapDerived>>::grow_one"
+      },
+      {
+        "call_address": "100153258",
+        "r2_target": "0x100b3c2b4",
+        "r3_target": "0x100b3c2f4",
+        "named_callee": "<alloc::raw_vec::RawVec<perry_runtime::gc::roots::stack_maps::StackMapDerived>>::grow_one"
+      },
+      {
+        "call_address": "1001532ec",
+        "r2_target": "0x100b3c2b4",
+        "r3_target": "0x100b3c2f4",
+        "named_callee": "<alloc::raw_vec::RawVec<perry_runtime::gc::roots::stack_maps::StackMapDerived>>::grow_one"
+      },
+      {
+        "call_address": "100153398",
+        "r2_target": "0x100b3c2b4",
+        "r3_target": "0x100b3c2f4",
+        "named_callee": "<alloc::raw_vec::RawVec<perry_runtime::gc::roots::stack_maps::StackMapDerived>>::grow_one"
+      },
+      {
+        "call_address": "100153404",
+        "r2_target": "0x100b3c2b4",
+        "r3_target": "0x100b3c2f4",
+        "named_callee": "<alloc::raw_vec::RawVec<perry_runtime::gc::roots::stack_maps::StackMapDerived>>::grow_one"
+      },
+      {
+        "call_address": "100153498",
+        "r2_target": "0x100b39390",
+        "r3_target": "0x100b393d0",
+        "named_callee": "<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>"
+      },
+      {
+        "call_address": "100153548",
+        "r2_target": "0x100b1294c",
+        "r3_target": "0x100b1298c",
+        "named_callee": "core::slice::index::slice_index_fail"
+      },
+      {
+        "call_address": "100153560",
+        "r2_target": "0x100b1294c",
+        "r3_target": "0x100b1298c",
+        "named_callee": "core::slice::index::slice_index_fail"
+      },
+      {
+        "call_address": "100153574",
+        "r2_target": "0x100b1294c",
+        "r3_target": "0x100b1298c",
+        "named_callee": "core::slice::index::slice_index_fail"
+      },
+      {
+        "call_address": "100153588",
+        "r2_target": "0x100b1278c",
+        "r3_target": "0x100b127cc",
+        "named_callee": "core::panicking::panic_bounds_check"
+      },
+      {
+        "call_address": "10015359c",
+        "r2_target": "0x100b1278c",
+        "r3_target": "0x100b127cc",
+        "named_callee": "core::panicking::panic_bounds_check"
+      },
+      {
+        "call_address": "1001535b0",
+        "r2_target": "0x100b1278c",
+        "r3_target": "0x100b127cc",
+        "named_callee": "core::panicking::panic_bounds_check"
+      },
+      {
+        "call_address": "1001535c4",
+        "r2_target": "0x100b1278c",
+        "r3_target": "0x100b127cc",
+        "named_callee": "core::panicking::panic_bounds_check"
+      },
+      {
+        "call_address": "1001535d8",
+        "r2_target": "0x100b1278c",
+        "r3_target": "0x100b127cc",
+        "named_callee": "core::panicking::panic_bounds_check"
+      },
+      {
+        "call_address": "1001535ec",
+        "r2_target": "0x100b1278c",
+        "r3_target": "0x100b127cc",
+        "named_callee": "core::panicking::panic_bounds_check"
+      }
+    ],
+    "callee_bodies_not_compared": true
+  }
+]
