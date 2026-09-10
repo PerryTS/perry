@@ -1,5 +1,7 @@
 use super::*;
 
+#[path = "invariant_field_tests.rs"]
+mod invariant_field;
 #[path = "scalar_memo_tests.rs"]
 mod memo;
 

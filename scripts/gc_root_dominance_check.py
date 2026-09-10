@@ -492,6 +492,9 @@ NONCOLLECTING = {
     # JSON scalar projection: tape reads + scalar cursor stores; no allocation,
     # polling, user callbacks or managed result. TAG_HOLE delegates the miss.
     "js_json_lazy_index_scalar",
+    # Branded own-number probe: tape projection / certified own-field leaf,
+    # no managed allocation, property callbacks, coercion, or collection.
+    "js_array_index_own_number",
     # ctor identity selection
     "js_ctor_return_override",
     "llvm.lifetime.start.p0", "llvm.lifetime.end.p0",

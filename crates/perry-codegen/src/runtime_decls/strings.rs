@@ -1739,6 +1739,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // not f64. Use I64 return + bitcast to avoid ABI mismatch crash.
     module.declare_function("js_json_parse", I64, &[I64]);
     module.declare_function(
+        "js_array_index_own_number",
+        DOUBLE,
+        &[DOUBLE, I32, PTR, I64],
+    );
+    module.declare_function(
         "js_json_lazy_index_scalar",
         DOUBLE,
         &[DOUBLE, DOUBLE, PTR, I64],

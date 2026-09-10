@@ -21,6 +21,9 @@ mod element_shape_loop;
 #[cfg(test)]
 mod element_shape_loop_tests;
 mod if_stmt;
+mod invariant_field_loop;
+#[cfg(test)]
+mod invariant_field_loop_tests;
 mod let_buffer_views;
 mod let_object_facts;
 mod let_stmt;

@@ -248,6 +248,130 @@ pub unsafe extern "C" fn js_json_lazy_index_scalar(
         .map_or(miss, |value| f64::from_bits(value.bits()))
 }
 
+/// One-time admission probe for an invariant `array[index].name` numeric read.
+/// Returns a genuine f64 or TAG_HOLE. It never invokes JS, coerces a value,
+/// materializes a record, allocates in Perry's heap, polls, or throws. The only
+/// nontrivial callees are the tape projection above and the GC-leaf own-field
+/// reader. Descriptor-backed and declared-class records deliberately decline:
+/// a raw slot need not represent their ordinary property access semantics.
+///
+/// # Safety
+/// `name` points to `name_len` readable bytes. `receiver` follows the ordinary
+/// boxed-value ABI. Borrowed edges never outlive this noncollecting call.
+#[no_mangle]
+pub unsafe extern "C" fn js_array_index_own_number(
+    receiver: f64,
+    index: u32,
+    name: *const u8,
+    name_len: u64,
+) -> f64 {
+    let miss = f64::from_bits(crate::value::TAG_HOLE);
+    let Ok(name_len) = usize::try_from(name_len) else {
+        return miss;
+    };
+    if name.is_null() || index == u32::MAX {
+        return miss;
+    }
+    let bits = receiver.to_bits();
+    if bits & crate::value::TAG_MASK != crate::value::POINTER_TAG {
+        return miss;
+    }
+    let raw = (bits & crate::value::POINTER_MASK) as usize;
+    let Some(header) = crate::value::addr_class::try_read_gc_header(raw) else {
+        return miss;
+    };
+    let forbidden = crate::gc::OBJ_FLAG_HAS_DESCRIPTORS | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS;
+    if header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 || header._reserved & forbidden != 0 {
+        return miss;
+    }
+    let element = if header.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+        let hdr = raw as *mut LazyArrayHeader;
+        if (*hdr).magic != LAZY_ARRAY_MAGIC {
+            return miss;
+        }
+        if !(*hdr).materialized.is_null() {
+            // The backing array's own live length is authoritative after alias
+            // mutations. Forwarded backings decline without repairing an edge.
+            let Some(value) = dense_element((*hdr).materialized, index) else {
+                return miss;
+            };
+            value
+        } else {
+            if index >= (*hdr).cached_length
+                || (*hdr).materialized_bitmap.is_null()
+                || (*hdr).materialized_elements.is_null()
+            {
+                return miss;
+            }
+            let exposed =
+                *(*hdr).materialized_bitmap.add(index as usize / 64) & (1u64 << (index % 64)) != 0;
+            if exposed {
+                *(*hdr).materialized_elements.add(index as usize)
+            } else {
+                let name = std::slice::from_raw_parts(name, name_len);
+                return project(hdr, index, name).map_or(miss, own_number);
+            }
+        }
+    } else if header.obj_type == crate::gc::GC_TYPE_ARRAY {
+        let Some(value) = dense_element(raw as *const crate::array::ArrayHeader, index) else {
+            return miss;
+        };
+        value
+    } else {
+        return miss;
+    };
+    if !element.is_pointer() {
+        return miss;
+    }
+    let obj = element.as_pointer::<crate::object::ObjectHeader>();
+    let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
+        return miss;
+    };
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || header._reserved & (forbidden | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO) != 0
+        || *((obj as *const u8).add(crate::closure::CLOSURE_TYPE_TAG_OFFSET) as *const u32)
+            == crate::closure::CLOSURE_MAGIC
+        || (*obj).class_id != 0
+        || !crate::object::object_is_regular(obj)
+    {
+        return miss;
+    }
+    let value = crate::object::js_object_get_own_field_or_undef(
+        f64::from_bits(element.bits()),
+        name,
+        name_len,
+    );
+    own_number(JSValue::from_bits(value.to_bits()))
+}
+
+fn own_number(value: JSValue) -> f64 {
+    if value.is_int32() {
+        value.as_int32() as f64
+    } else if value.is_number() {
+        value.as_number()
+    } else {
+        f64::from_bits(crate::value::TAG_HOLE)
+    }
+}
+
+unsafe fn dense_element(arr: *const crate::array::ArrayHeader, index: u32) -> Option<JSValue> {
+    let header = crate::value::addr_class::try_read_gc_header(arr as usize)?;
+    if header.obj_type != crate::gc::GC_TYPE_ARRAY
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || header._reserved
+            & (crate::gc::OBJ_FLAG_HAS_DESCRIPTORS | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS)
+            != 0
+        || index >= (*arr).length
+        || (*arr).length > (*arr).capacity
+    {
+        return None;
+    }
+    let slots =
+        (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const JSValue;
+    Some(*slots.add(index as usize))
+}
+
 #[cfg(test)]
 #[path = "scalar_projection_tests.rs"]
 mod tests;

@@ -6814,6 +6814,10 @@ pub(crate) fn lower_for(
         return Ok(());
     }
 
+    if super::invariant_field_loop::lower(ctx, init, condition, update, body)? {
+        return Ok(());
+    }
+
     lower_for_after_init(ctx, init, condition, update, body, "for")
 }
 
