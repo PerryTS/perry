@@ -131,6 +131,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // skips in `test-parity/known_failures.json` — diagnosed via the
     // compile-stderr capture artifact added in the previous commit.
     module.declare_function("llvm.assume", VOID, &[I1]);
+    // Dynamic indexed-property dispatch keeps its optional lazy JSON arm cold.
+    // This is a branch hint; the returned condition retains its actual value.
+    module.declare_function("llvm.expect.i1", I1, &[I1, I1]);
     // `llvm.bswap.i{16,32,64}` — used by Buffer numeric BE-read/write
     // intrinsics (`lower_call.rs::lower_buffer_numeric_read/write` —
     // see the size-keyed lookup table at lower_call.rs:168). Same

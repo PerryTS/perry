@@ -69,6 +69,12 @@ impl ScalarProjection {
 
         ctx.current_block = kind;
         let lazy = ctx.block().icmp_eq(I8, gc_type, "9");
+        // Keep the optional JSON arm cold when LLVM folds the preceding brand
+        // tests into a switch. Source order alone allowed its comparison to
+        // move ahead of ordinary Array/Object reads in the optimized code.
+        let lazy = ctx
+            .block()
+            .call(I1, "llvm.expect.i1", &[(I1, &lazy), (I1, "false")]);
         ctx.block().cond_br(&lazy, &guard_label, fallback);
 
         ctx.current_block = guard;

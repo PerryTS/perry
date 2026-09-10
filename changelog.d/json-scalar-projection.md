@@ -29,3 +29,7 @@ but three measured CPU regressions keep it experimental and rejected for landing
 Actual main compilation reproduces both unsuppressed native-checker findings.
 See `benchmarks/json_performance/SCALAR_MATERIALIZED.md` for all targeted rows,
 validation evidence and the optimized dispatch-order investigation.
+
+R4 tests a branch-likelihood hint on the optional JSON brand edge so LLVM can
+preserve the ordinary-array hot path when folding type tests. Runtime semantics,
+guards and GC policy are unchanged; validation and measurements are pending.
