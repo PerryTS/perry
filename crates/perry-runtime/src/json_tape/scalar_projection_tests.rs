@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "scalar_memo_tests.rs"]
+mod memo;
+
 unsafe fn array(text: &[u8]) -> *mut LazyArrayHeader {
     let blob = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
     with_built_tape(text, |tape| {
@@ -13,7 +16,7 @@ unsafe fn read(hdr: *mut LazyArrayHeader, index: f64, name: &[u8]) -> u64 {
         f64::from_bits(JSValue::object_ptr(hdr.cast()).bits()),
         index,
         name.as_ptr(),
-        name.len(),
+        name.len() as u64,
     )
     .to_bits()
 }
@@ -48,15 +51,15 @@ fn json_scalar_projection_scans_without_construction_or_reparse() {
             for word in 0..4 {
                 assert_eq!(*(*hdr).materialized_bitmap.add(word), 0);
             }
-            // Misses preserve the cursor; short backward/forward walks work.
+            // Memo reads preserve the cursor, including distant and repeated indices.
             for i in [199, 150] {
-                assert_eq!(read(hdr, i as f64, b"id"), crate::value::TAG_HOLE);
+                assert_eq!(read(hdr, i as f64, b"id"), (i as f64).to_bits());
                 assert_eq!((*hdr).walk_idx, 199);
             }
             for i in [0, 5, 6] {
                 assert_eq!(read(hdr, i as f64, b"id"), (i as f64).to_bits());
             }
-            assert_eq!((*hdr).walk_idx, 6);
+            assert_eq!((*hdr).walk_idx, 199);
         });
         root.with_mut_ptr(|hdr| lazy_get(hdr, 7));
         root.with_const_ptr(|hdr: *const LazyArrayHeader| {
@@ -251,7 +254,7 @@ fn json_scalar_projection_bounds_walks_and_caches_repeated_reads() {
             assert_eq!(read(hdr, 32.0, b"id"), 32.0f64.to_bits());
             assert_eq!(read(hdr, 65.0, b"id"), crate::value::TAG_HOLE);
             assert_eq!((*hdr).walk_idx, 32);
-            assert_eq!(read(hdr, 32.0, b"id"), crate::value::TAG_HOLE);
+            assert_eq!(read(hdr, 32.0, b"id"), 32.0f64.to_bits());
         });
         root.with_mut_ptr(|hdr| lazy_get(hdr, 32));
         root.with_mut_ptr(|hdr: *mut LazyArrayHeader| {

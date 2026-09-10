@@ -142,7 +142,7 @@ fn json_scalar_projection_preserves_ordinary_fallback_and_noncollecting_contract
         "{ir}"
     );
     assert!(
-        ir.contains("json.scalar.miss") && ir.contains("json.scalar.merge"),
+        ir.contains("json.scalar.cold") && ir.contains("json.scalar.merge"),
         "{ir}"
     );
     assert!(

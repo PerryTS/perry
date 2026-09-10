@@ -9,6 +9,38 @@ use super::*;
 const MAX_INDEX_STEPS: u32 = 32;
 const MAX_RECORD_FIELDS: usize = 32;
 
+/// Exact, collision-free encoding of up to seven ASCII bytes. The low byte is
+/// length + 1, so even the empty property differs from the unchosen key (zero).
+fn property_id(name: &[u8]) -> Option<u64> {
+    if name.len() > 7 || !name.is_ascii() || name.contains(&b'"') || name.contains(&b'\\') {
+        return None;
+    }
+    let mut bytes = [0; 8];
+    bytes[0] = name.len() as u8 + 1;
+    bytes[1..name.len() + 1].copy_from_slice(name);
+    Some(u64::from_le_bytes(bytes))
+}
+
+// Slots already start zeroed. Encode +0 as the pointer-free tagged integer 0
+// so an empty slot remains distinguishable, without another bitmap or an
+// initialization pass. JSON number materialization itself emits f64 values.
+const MEMO_ZERO: u64 = crate::value::INT32_TAG;
+
+fn memo_decode(bits: u64) -> JSValue {
+    JSValue::from_bits(if bits == MEMO_ZERO { 0 } else { bits })
+}
+
+// The 64-bit inline read in codegen's index_get/scalar_projection.rs uses these
+// offsets. Other targets retain ordinary indexing; the runtime ABI is u64.
+#[cfg(target_pointer_width = "64")]
+const _: () = {
+    assert!(std::mem::offset_of!(LazyArrayHeader, magic) == 4);
+    assert!(std::mem::offset_of!(LazyArrayHeader, materialized) == 32);
+    assert!(std::mem::offset_of!(LazyArrayHeader, materialized_elements) == 40);
+    assert!(std::mem::offset_of!(LazyArrayHeader, materialized_bitmap) == 48);
+    assert!(std::mem::offset_of!(LazyArrayHeader, scalar_property) == 80);
+};
+
 /// A cursor can name either an exposed record or an unmaterialized projection.
 /// In the latter case a preserved streak belongs to the previous cold element:
 /// materializing this very record completes the next step of that run.
@@ -93,18 +125,30 @@ unsafe fn record_scalar(source: &TapeSource<'_, '_>, start: usize, name: &[u8]) 
 }
 
 unsafe fn project(hdr: *mut LazyArrayHeader, index: u32, name: &[u8]) -> Option<JSValue> {
+    let property = property_id(name)?;
     if (*hdr).magic != LAZY_ARRAY_MAGIC
         || !(*hdr).materialized.is_null()
         || index >= (*hdr).cached_length
-        || index == (*hdr).walk_idx
     {
         return None;
     }
     let bitmap = (*hdr).materialized_bitmap;
     if !bitmap.is_null() && *bitmap.add(index as usize / 64) & (1u64 << (index % 64)) != 0 {
-        // A previously exposed record can have mutations, getters, a changed
-        // prototype or escaped child identities. Its current object wins.
+        // An exposed record (including its mutations/getters) always wins.
         return None;
+    }
+    let cache = (*hdr).materialized_elements;
+    if cache.is_null() || bitmap.is_null() {
+        return None;
+    }
+    if (*hdr).scalar_property != 0 {
+        if (*hdr).scalar_property != property {
+            return None;
+        }
+        let memo = (*cache.add(index as usize)).bits();
+        if memo != 0 {
+            return Some(memo_decode(memo));
+        }
     }
     let source = TapeSource::Borrowed {
         tape: LazyArrayHeader::tape_slice(hdr),
@@ -136,7 +180,11 @@ unsafe fn project(hdr: *mut LazyArrayHeader, index: u32, name: &[u8]) -> Option<
         return None;
     }
     let result = record_scalar(&source, position, name)?;
-    // Scalar cursor stores only: no new element cache entry or GC edge. A
+    (*hdr).scalar_property = property;
+    let bits = result.bits();
+    // GC_STORE_AUDIT(POINTER_FREE): number/bool/null only, bitmap remains clear.
+    *cache.add(index as usize) = JSValue::from_bits(if bits == 0 { MEMO_ZERO } else { bits });
+    // Scalar memo/cursor stores only: no exposed element or GC edge. A
     // projection is not a cold materialization and must not extend its streak.
     // Preserve a run only when this projection immediately follows an exposed
     // record. If ordinary access now materializes this same index, it continues
@@ -164,11 +212,12 @@ pub unsafe extern "C" fn js_json_lazy_index_scalar(
     receiver: f64,
     index: f64,
     name: *const u8,
-    name_len: usize,
+    name_len: u64,
 ) -> f64 {
     let miss = f64::from_bits(crate::value::TAG_HOLE);
     let bits = receiver.to_bits();
-    if bits & crate::value::TAG_MASK != crate::value::POINTER_TAG || name.is_null() {
+    if bits & crate::value::TAG_MASK != crate::value::POINTER_TAG || name.is_null() || name_len > 7
+    {
         return miss;
     }
     let index = if index.to_bits() & crate::value::TAG_MASK == crate::value::INT32_TAG {
@@ -191,7 +240,7 @@ pub unsafe extern "C" fn js_json_lazy_index_scalar(
     {
         return miss;
     }
-    let name = std::slice::from_raw_parts(name, name_len);
+    let name = std::slice::from_raw_parts(name, name_len as usize);
     if !name.is_ascii() || name.contains(&b'"') || name.contains(&b'\\') {
         return miss;
     }

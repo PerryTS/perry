@@ -51,6 +51,8 @@ use foreign_counter::{
     packed_f64_loop_offset_read,
 };
 mod inline_dyn_typed_array;
+mod scalar_projection;
+pub(crate) use scalar_projection::ScalarProjection;
 
 use guarded_array::{
     lower_guarded_array_index_get, lower_packed_f64_loop_index_get,
@@ -1110,6 +1112,14 @@ fn lower_bounded_array_index_get_checked(
 }
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    lower_with_scalar_projection(ctx, expr, None)
+}
+
+pub(crate) fn lower_with_scalar_projection(
+    ctx: &mut FnCtx<'_>,
+    expr: &Expr,
+    projection: Option<&mut ScalarProjection>,
+) -> Result<String> {
     match expr {
         Expr::IndexGet { object, index } => {
             if let Some(value) =
@@ -1541,8 +1551,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // falling back to `js_dyn_index_get` on any guard miss. Removes
                     // the per-element out-of-line call + `lookup_typed_array_kind` +
                     // `js_number_coerce` on bcrypt's hot Int32Array `S[i]`/`P[i]`.
-                    Ok(lower_inline_dyn_typed_array_get(
-                        ctx, &obj_box, &idx_d, false,
+                    Ok(inline_dyn_typed_array::lower_with_scalar_projection(
+                        ctx, &obj_box, &idx_d, false, projection,
                     ))
                 });
             }

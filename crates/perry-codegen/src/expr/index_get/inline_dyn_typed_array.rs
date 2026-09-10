@@ -56,6 +56,16 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     idx_d: &str,
     coerce_slow_to_number: bool,
 ) -> String {
+    lower_with_scalar_projection(ctx, obj_box, idx_d, coerce_slow_to_number, None)
+}
+
+pub(super) fn lower_with_scalar_projection(
+    ctx: &mut FnCtx<'_>,
+    obj_box: &str,
+    idx_d: &str,
+    coerce_slow_to_number: bool,
+    projection: Option<&mut super::ScalarProjection>,
+) -> String {
     // TAG_MASK / POINTER_TAG / POINTER_MASK as signed-i64 LLVM literals.
     let tag_mask = crate::nanbox::i64_literal(crate::nanbox::TAG_MASK);
     let pointer_tag = crate::nanbox::POINTER_TAG_I64;
@@ -471,8 +481,28 @@ pub(super) fn lower_inline_dyn_typed_array_get(
         .cond_br(&is_array, &object_array_guard_label, &elem_kind_label);
     ctx.current_block = elem_kind_idx;
     let elem_is_object = ctx.block().icmp_eq(I8, &gc_type, "2");
+    // Ordinary Arrays and Objects keep their existing branches. Only the
+    // already-rejected brand edge can inspect a lazy JSON array's memo slots.
+    let non_object_label = if let Some(projection) = projection {
+        let predecessor = ctx.current_block;
+        let (entry, exposed) = projection.emit(
+            ctx,
+            obj_box,
+            idx_d,
+            &object_raw,
+            &object_idx_i64,
+            &gc_type,
+            &object_miss_label,
+            &merge_label,
+        );
+        kind_incoming.push(exposed);
+        ctx.current_block = predecessor;
+        entry
+    } else {
+        object_miss_label.clone()
+    };
     ctx.block()
-        .cond_br(&elem_is_object, &elem_meta_label, &object_miss_label);
+        .cond_br(&elem_is_object, &elem_meta_label, &non_object_label);
     ctx.current_block = elem_meta_idx;
     let elem_meta_addr = ctx.block().add(I64, &object_raw, &meta_offset);
     let elem_meta_slot_ptr = ctx.block().inttoptr(I64, &elem_meta_addr);

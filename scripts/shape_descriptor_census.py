@@ -649,7 +649,12 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         r"\blower_generic_property_get_ordinary\s*\(",
         "generic read entry retains ordinary PIC fallback",
     )
-    generic_body = function_body(raw_generic_pic, "lower_generic_property_get_ordinary")
+    require_code(
+        strip_rust_comments_and_literals(function_body(raw_generic_pic, "lower_generic_property_get_ordinary")),
+        r"\blower_generic_property_get_value\s*\(",
+        "ordinary read delegates to the shared PIC body",
+    )
+    generic_body = function_body(raw_generic_pic, "lower_generic_property_get_value")
     if re.search(r"add\s*\(\s*I64\s*,\s*&obj_handle\s*,\s*\"(?:8|16)\"", generic_body):
         raise CensusError("generic read PIC emits a removed ObjectHeader fact")
     require_code(

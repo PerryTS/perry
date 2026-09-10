@@ -23,6 +23,8 @@ pub(super) fn try_lower(
         )
         || rooting::operand_may_collect(ctx, base)
         || rooting::operand_may_collect(ctx, index)
+        || property.len() > 7
+        || crate::target_layout::target_is_ilp32(ctx.target_triple)
         || !property.is_ascii()
         || property.as_bytes().contains(&b'"')
         || property.as_bytes().contains(&b'\\')
@@ -30,46 +32,31 @@ pub(super) fn try_lower(
     {
         return Ok(None);
     }
-    // Both operands are reads/literals proven not to call or collect. The
-    // runtime probe validates that the index is numeric without coercion;
-    // an object/string/Symbol key takes the unchanged ordinary expression.
-    // scalar probe also cannot collect or enter user code, so an ordinary
-    // fallback may reload these same locals without duplicating any observable
-    // evaluation. Do not widen admission to getters/calls or coercions without
-    // capturing and rooting their once-evaluated operands across the fallback.
-    let base_value = lower_expr(ctx, base)?;
-    let index_value = lower_expr(ctx, index)?;
-    let key_idx = ctx.strings.intern(property);
-    let key_bytes = format!("@{}", ctx.strings.entry(key_idx).bytes_global);
-    let key_len = property.len().to_string();
-    let projected = ctx.block().call(
-        DOUBLE,
-        "js_json_lazy_index_scalar",
-        &[
-            (DOUBLE, &base_value),
-            (DOUBLE, &index_value),
-            (PTR, &key_bytes),
-            (I64, &key_len),
-        ],
-    );
-    let bits = ctx.block().bitcast_double_to_i64(&projected);
-    let missed = ctx.block().icmp_eq(I64, &bits, crate::nanbox::TAG_HOLE_I64);
-    let hit_end = ctx.block().label.clone();
-    let miss_block = ctx.new_block("json.scalar.miss");
-    let merge_block = ctx.new_block("json.scalar.merge");
-    let miss_label = ctx.block_label(miss_block);
+    // IndexGet retains all its existing specialization order. Only its generic
+    // dynamic-index tier installs the optional lazy-brand edge; specialized
+    // ordinary reads are therefore lowered exactly as before.
+    let mut projection = super::super::index_get::ScalarProjection::new(property);
+    let element =
+        super::super::index_get::lower_with_scalar_projection(ctx, object, Some(&mut projection))?;
+    let ordinary = generic_dispatch::lower_generic_property_get_value(
+        ctx,
+        object,
+        property,
+        byte_offset,
+        &element,
+    )?;
+    let Some(merge_block) = projection.merge_block else {
+        return Ok(Some(ordinary));
+    };
+    let ordinary_end = ctx.block().label.clone();
     let merge_label = ctx.block_label(merge_block);
-    ctx.block().cond_br(&missed, &miss_label, &merge_label);
-
-    ctx.current_block = miss_block;
-    let ordinary =
-        generic_dispatch::lower_generic_property_get_ordinary(ctx, object, property, byte_offset)?;
-    let miss_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);
-
     ctx.current_block = merge_block;
-    Ok(Some(ctx.block().phi(
-        DOUBLE,
-        &[(&projected, &hit_end), (&ordinary, &miss_end)],
-    )))
+    projection.incoming.push((ordinary, ordinary_end));
+    let incoming: Vec<(&str, &str)> = projection
+        .incoming
+        .iter()
+        .map(|(value, label)| (value.as_str(), label.as_str()))
+        .collect();
+    Ok(Some(ctx.block().phi(DOUBLE, &incoming)))
 }

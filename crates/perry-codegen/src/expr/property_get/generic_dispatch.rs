@@ -107,6 +107,16 @@ pub(super) fn lower_generic_property_get_ordinary(
     byte_offset: u32,
 ) -> Result<String> {
     let obj_box = lower_expr(ctx, object)?;
+    lower_generic_property_get_value(ctx, object, property, byte_offset, &obj_box)
+}
+
+pub(super) fn lower_generic_property_get_value(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    byte_offset: u32,
+    obj_box: &str,
+) -> Result<String> {
     // #5247: record this access's source location right after the receiver is
     // evaluated and before the nullish-receiver throw path (the inline diamond
     // OR the full-outline `js_object_get_field_ic` helper — both throw "Cannot

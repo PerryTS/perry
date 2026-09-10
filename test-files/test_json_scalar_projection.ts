@@ -33,6 +33,24 @@ for (let pass = 0; pass < saved.length; pass++) {
 }
 console.log('retained', retained);
 
+// Repeat and rescan scalars before exposing records, including both zero signs.
+const memo: any = make();
+let memoSum = 0;
+for (let pass = 0; pass < 3; pass++) {
+    for (let i = 0; i < 128; i++) memoSum += id(memo, i);
+    memoSum += id(memo, 0) + id(memo, 127) + id(memo, 53);
+}
+console.log('memo', memoSum, JSON.stringify(memo) === source);
+console.log('memo-switch', active(memo, 7), id(memo, 7), empty(memo, 7));
+const memoRecord: any = memo[8];
+memoRecord.id = 808;
+console.log('memo-mutation', id(memo, 8), memo[8] === memoRecord);
+memo.push({id: 128});
+console.log('memo-growth', id(memo, 128), id(memo, 8), memo[8] === memoRecord);
+memo.length = 12;
+Object.defineProperty(memo, '9', {get() { return {id: 909}; }, configurable: true});
+console.log('memo-materialized-getter', id(memo, 9), memo.length);
+
 const rows: any = make();
 const record: any = rows[4];
 record.id = 401;

@@ -1084,11 +1084,10 @@ pub struct LazyArrayHeader {
     /// per-element cache below is effectively dead.
     pub materialized: *mut crate::array::ArrayHeader,
     /// Phase 5: sparse per-element cache. `materialized_elements[i]`
-    /// is only meaningful when the corresponding bit in
-    /// `materialized_bitmap` is set. `JSValue::ZERO` is a valid value
-    /// (number 0 bits are all zero under NaN-boxing), so the bitmap
-    /// is the authoritative "cache valid" signal — we can't use
-    /// null-pointer semantics here.
+    /// is an exposed element only when its `materialized_bitmap` bit is set.
+    /// With that bit clear, a nonzero slot may instead memoize a pointer-free
+    /// scalar for `scalar_property` (see scalar_projection). GC, stringify and
+    /// materialization MUST continue to use the bitmap to select elements.
     ///
     /// Identity invariant: a cache hit returns the *same* JSValue on
     /// every access, so `parsed[i] === parsed[i]` holds. Without
@@ -1137,6 +1136,9 @@ pub struct LazyArrayHeader {
     /// tokenization included). This counter is the missing signal;
     /// `scan_flip_threshold` is where it trips.
     pub sequential_streak: u32,
+    /// Packed ASCII key for scalar-only memoization; zero means no key chosen.
+    /// Fixed by the first successful projection, never a heap pointer.
+    pub scalar_property: u64,
 }
 
 // `cached_length` at offset 0 is a CODEGEN contract, not a layout preference:
@@ -1312,6 +1314,7 @@ unsafe fn alloc_lazy_array_backing(
     (*hdr).walk_tape_pos = 0;
     (*hdr).cumulative_walk_steps = 0;
     (*hdr).sequential_streak = 0;
+    (*hdr).scalar_property = 0;
     let hdr_handle = scope.root_raw_mut_ptr(hdr);
     json_tape_safepoint(JsonTapeSafepoint::LazyArrayRooted, hdr as usize);
     let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
