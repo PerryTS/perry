@@ -8,6 +8,11 @@ No PR has been opened for this experiment.
 R1's measurements and rejection remain in [SCALAR_PROJECTION.md](SCALAR_PROJECTION.md).
 Reference main is `53df2c671fff33b1f8f624432372c2401db8b1d0` (0.5.1530).
 
+The later [R3 experiment](SCALAR_MATERIALIZED.md) fixes the targeted smaller-array
+access regressions and reproduces both native findings with an actual clean-main
+compiler build. Those findings are inherited and remain unsuppressed/unresolved;
+R2's measurements and rejection below are unchanged.
+
 R1 removed record construction on scalar scans but made every reuse control
 slower. R2 addresses both causes: save scalar results and put the probe behind
 the existing dynamic index dispatcher's ordinary Array/Object branches.

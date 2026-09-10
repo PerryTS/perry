@@ -1,0 +1,17 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  "run_access.py",
+  "--worker",
+  ".work/scalar-projection-r3/access-worker",
+  "--baseline-worker",
+  ".work/main-53df-fresh/main-access",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--results-dir",
+  "results/quiet-scalar-projection-r3-access"
+]

@@ -1,0 +1,1 @@
+always-inline,function(mem2reg,sccp),rewrite-statepoints-for-gc

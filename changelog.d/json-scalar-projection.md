@@ -24,4 +24,8 @@ The subsequent R3 experiment routes a fully materialized lazy array into the
 existing ordinary-array read guards after validating its backing array's brand
 and forwarding state. Reads refresh the wrapper's cached length after mutations
 through an alias. Growth, descriptors, holes and prototype invalidation retain
-the established fallback. Validation and measurement are pending.
+the established fallback. R3 improves smaller-array random and mixed-field reads,
+but three measured CPU regressions keep it experimental and rejected for landing.
+Actual main compilation reproduces both unsuppressed native-checker findings.
+See `benchmarks/json_performance/SCALAR_MATERIALIZED.md` for all targeted rows,
+validation evidence and the optimized dispatch-order investigation.

@@ -1,0 +1,3151 @@
+
+/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/main-53df-fresh/main-access.o:	file format mach-o arm64
+
+Disassembly of section __TEXT,__text:
+
+0000000000002a00 <_perry_fn_access_worker_ts__run>:
+    2a00:      	sub	sp, sp, #0xd0
+    2a04:      	stp	d15, d14, [sp, #0x30]
+    2a08:      	stp	d13, d12, [sp, #0x40]
+    2a0c:      	stp	d11, d10, [sp, #0x50]
+    2a10:      	stp	d9, d8, [sp, #0x60]
+    2a14:      	stp	x28, x27, [sp, #0x70]
+    2a18:      	stp	x26, x25, [sp, #0x80]
+    2a1c:      	stp	x24, x23, [sp, #0x90]
+    2a20:      	stp	x22, x21, [sp, #0xa0]
+    2a24:      	stp	x20, x19, [sp, #0xb0]
+    2a28:      	stp	x29, x30, [sp, #0xc0]
+    2a2c:      	add	x29, sp, #0xc0
+    2a30:      	fmov	x28, d1
+    2a34:      	mov	x8, #0x7ff9000000000000 ; =9221401712017801216
+    2a38:      	cmp	x28, x8
+    2a3c:      	b.lt	0x2a98 <_perry_fn_access_worker_ts__run+0x98>
+    2a40:      	and	x8, x28, #0xffffffff00000000
+    2a44:      	mov	x9, #0x7ffe000000000000 ; =9222809086901354496
+    2a48:      	cmp	x8, x9
+    2a4c:      	b.eq	0x2a98 <_perry_fn_access_worker_ts__run+0x98>
+    2a50:      	fmov	x24, d0
+    2a54:      	adrp	x19, 0x2000 <ltmp0+0x2000>
+		0000000000002a54:  ARM64_RELOC_PAGE21	_perry_global_access_worker_ts__1
+    2a58:      	ldr	x8, [x19]
+		0000000000002a58:  ARM64_RELOC_PAGEOFF12	_perry_global_access_worker_ts__1
+    2a5c:      	adrp	x9, 0x2000 <ltmp0+0x2000>
+		0000000000002a5c:  ARM64_RELOC_PAGE21	_access_worker_ts_.str.0.handle
+    2a60:      	ldr	x9, [x9]
+		0000000000002a60:  ARM64_RELOC_PAGEOFF12	_access_worker_ts_.str.0.handle
+    2a64:      	cmp	x8, x9
+    2a68:      	b.ne	0x2ac8 <_perry_fn_access_worker_ts__run+0xc8>
+    2a6c:      	mov	x8, x28
+    2a70:      	mov	x9, #0x7ff9000000000000 ; =9221401712017801216
+    2a74:      	cmp	x8, x9
+    2a78:      	b.lo	0x2b58 <_perry_fn_access_worker_ts__run+0x158>
+    2a7c:      	and	x9, x8, #0xffff000000000000
+    2a80:      	mov	x10, #0x7fff000000000000 ; =9223090561878065152
+    2a84:      	cmp	x9, x10
+    2a88:      	b.hi	0x2b58 <_perry_fn_access_worker_ts__run+0x158>
+    2a8c:      	mov	w9, #0x0                ; =0
+    2a90:      	mov	w23, #0x0               ; =0
+    2a94:      	b	0x2cf0 <_perry_fn_access_worker_ts__run+0x2f0>
+    2a98:      	ldp	x29, x30, [sp, #0xc0]
+    2a9c:      	ldp	x20, x19, [sp, #0xb0]
+    2aa0:      	ldp	x22, x21, [sp, #0xa0]
+    2aa4:      	ldp	x24, x23, [sp, #0x90]
+    2aa8:      	ldp	x26, x25, [sp, #0x80]
+    2aac:      	ldp	x28, x27, [sp, #0x70]
+    2ab0:      	ldp	d9, d8, [sp, #0x60]
+    2ab4:      	ldp	d11, d10, [sp, #0x50]
+    2ab8:      	ldp	d13, d12, [sp, #0x40]
+    2abc:      	ldp	d15, d14, [sp, #0x30]
+    2ac0:      	add	sp, sp, #0xd0
+    2ac4:      	b	0x2ac4 <_perry_fn_access_worker_ts__run+0xc4>
+		0000000000002ac4:  ARM64_RELOC_BRANCH26	_perry_fn_access_worker_ts__run$spec_b_b
+    2ac8:      	mov	w10, #0x7fff            ; =32767
+    2acc:      	cmp	x10, x8, lsr #48
+    2ad0:      	b.ne	0x2b1c <_perry_fn_access_worker_ts__run+0x11c>
+    2ad4:      	and	x0, x8, #0xffffffffffff
+    2ad8:      	cmp	x0, #0x1, lsl #12       ; =0x1000
+    2adc:      	b.lo	0x2b1c <_perry_fn_access_worker_ts__run+0x11c>
+    2ae0:      	ldr	w10, [x0, #0x4]
+    2ae4:      	cmp	w10, #0x6
+    2ae8:      	b.ne	0x2b1c <_perry_fn_access_worker_ts__run+0x11c>
+    2aec:      	ldrb	w10, [x0, #0x14]
+    2af0:      	cmp	w10, #0x72
+    2af4:      	b.ne	0x2b1c <_perry_fn_access_worker_ts__run+0x11c>
+    2af8:      	ldrb	w10, [x0, #0x19]
+    2afc:      	cmp	w10, #0x74
+    2b00:      	b.ne	0x2b1c <_perry_fn_access_worker_ts__run+0x11c>
+    2b04:      	stp	x24, x28, [sp, #0x20]
+    2b08:      	and	x1, x9, #0xffffffffffff
+    2b0c:      	bl	0x2b0c <_perry_fn_access_worker_ts__run+0x10c>
+		0000000000002b0c:  ARM64_RELOC_BRANCH26	_js_string_equals
+    2b10:      	ldp	x24, x28, [sp, #0x20]
+    2b14:      	cbnz	w0, 0x2a6c <_perry_fn_access_worker_ts__run+0x6c>
+    2b18:      	ldr	x8, [x19]
+		0000000000002b18:  ARM64_RELOC_PAGEOFF12	_perry_global_access_worker_ts__1
+    2b1c:      	adrp	x9, 0x2000 <ltmp0+0x2000>
+		0000000000002b1c:  ARM64_RELOC_PAGE21	_access_worker_ts_.str.2.handle
+    2b20:      	ldr	x9, [x9]
+		0000000000002b20:  ARM64_RELOC_PAGEOFF12	_access_worker_ts_.str.2.handle
+    2b24:      	cmp	x8, x9
+    2b28:      	b.ne	0x2b9c <_perry_fn_access_worker_ts__run+0x19c>
+    2b2c:      	mov	x8, x28
+    2b30:      	mov	x9, #0x7ff9000000000000 ; =9221401712017801216
+    2b34:      	cmp	x8, x9
+    2b38:      	b.lo	0x2c2c <_perry_fn_access_worker_ts__run+0x22c>
+    2b3c:      	and	x9, x8, #0xffff000000000000
+    2b40:      	mov	x10, #0x7fff000000000000 ; =9223090561878065152
+    2b44:      	cmp	x9, x10
+    2b48:      	b.hi	0x2c2c <_perry_fn_access_worker_ts__run+0x22c>
+    2b4c:      	mov	w9, #0x0                ; =0
+    2b50:      	mov	w23, #0x0               ; =0
+    2b54:      	b	0x3434 <_perry_fn_access_worker_ts__run+0xa34>
+    2b58:      	mov	w9, #0x0                ; =0
+    2b5c:      	fmov	d0, x8
+    2b60:      	mov	x8, #-0x3e20000000000000 ; =-4476578029606273024
+    2b64:      	fmov	d1, x8
+    2b68:      	fcmp	d0, d1
+    2b6c:      	b.lt	0x2cec <_perry_fn_access_worker_ts__run+0x2ec>
+    2b70:      	adrp	x8, 0x2000 <ltmp0+0x2000>
+		0000000000002b70:  ARM64_RELOC_PAGE21	lCPI1_0
+    2b74:      	ldr	d1, [x8]
+		0000000000002b74:  ARM64_RELOC_PAGEOFF12	lCPI1_0
+    2b78:      	fcmp	d0, d1
+    2b7c:      	mov	x23, x9
+    2b80:      	b.hi	0x2cf0 <_perry_fn_access_worker_ts__run+0x2f0>
+    2b84:      	fcvtzs	w9, d0
+    2b88:      	scvtf	d1, w9
+    2b8c:      	fcmp	d1, d0
+    2b90:      	b.ne	0x2a90 <_perry_fn_access_worker_ts__run+0x90>
+    2b94:      	mov	w23, #0x1               ; =1
+    2b98:      	b	0x2cf0 <_perry_fn_access_worker_ts__run+0x2f0>
+    2b9c:      	mov	w10, #0x7fff            ; =32767
+    2ba0:      	cmp	x10, x8, lsr #48
+    2ba4:      	b.ne	0x2bf0 <_perry_fn_access_worker_ts__run+0x1f0>
+    2ba8:      	and	x0, x8, #0xffffffffffff
+    2bac:      	cmp	x0, #0x1, lsl #12       ; =0x1000
+    2bb0:      	b.lo	0x2bf0 <_perry_fn_access_worker_ts__run+0x1f0>
+    2bb4:      	ldr	w10, [x0, #0x4]
+    2bb8:      	cmp	w10, #0x6
+    2bbc:      	b.ne	0x2bf0 <_perry_fn_access_worker_ts__run+0x1f0>
+    2bc0:      	ldrb	w10, [x0, #0x14]
+    2bc4:      	cmp	w10, #0x72
+    2bc8:      	b.ne	0x2bf0 <_perry_fn_access_worker_ts__run+0x1f0>
+    2bcc:      	ldrb	w10, [x0, #0x19]
+    2bd0:      	cmp	w10, #0x6d
+    2bd4:      	b.ne	0x2bf0 <_perry_fn_access_worker_ts__run+0x1f0>
+    2bd8:      	stp	x24, x28, [sp, #0x20]
+    2bdc:      	and	x1, x9, #0xffffffffffff
+    2be0:      	bl	0x2be0 <_perry_fn_access_worker_ts__run+0x1e0>
+		0000000000002be0:  ARM64_RELOC_BRANCH26	_js_string_equals
+    2be4:      	ldp	x24, x28, [sp, #0x20]
+    2be8:      	cbnz	w0, 0x2b2c <_perry_fn_access_worker_ts__run+0x12c>
+    2bec:      	ldr	x8, [x19]
+		0000000000002bec:  ARM64_RELOC_PAGEOFF12	_perry_global_access_worker_ts__1
+    2bf0:      	adrp	x9, 0x2000 <ltmp0+0x2000>
+		0000000000002bf0:  ARM64_RELOC_PAGE21	_access_worker_ts_.str.3.handle
+    2bf4:      	ldr	x9, [x9]
+		0000000000002bf4:  ARM64_RELOC_PAGEOFF12	_access_worker_ts_.str.3.handle
+    2bf8:      	cmp	x8, x9
+    2bfc:      	b.ne	0x2c70 <_perry_fn_access_worker_ts__run+0x270>
+    2c00:      	mov	x8, x28
+    2c04:      	mov	x9, #0x7ff9000000000000 ; =9221401712017801216
+    2c08:      	cmp	x8, x9
+    2c0c:      	b.lo	0x33ac <_perry_fn_access_worker_ts__run+0x9ac>
+    2c10:      	and	x9, x8, #0xffff000000000000
+    2c14:      	mov	x10, #0x7fff000000000000 ; =9223090561878065152
+    2c18:      	cmp	x9, x10
+    2c1c:      	b.hi	0x33ac <_perry_fn_access_worker_ts__run+0x9ac>
+    2c20:      	mov	w9, #0x0                ; =0
+    2c24:      	str	wzr, [sp, #0x14]
+    2c28:      	b	0x3bcc <_perry_fn_access_worker_ts__run+0x11cc>
+    2c2c:      	mov	w9, #0x0                ; =0
+    2c30:      	fmov	d0, x8
+    2c34:      	mov	x8, #-0x3e20000000000000 ; =-4476578029606273024
+    2c38:      	fmov	d1, x8
+    2c3c:      	fcmp	d0, d1
+    2c40:      	b.lt	0x3430 <_perry_fn_access_worker_ts__run+0xa30>
+    2c44:      	adrp	x8, 0x2000 <ltmp0+0x2000>
+		0000000000002c44:  ARM64_RELOC_PAGE21	lCPI1_0
+    2c48:      	ldr	d1, [x8]
+		0000000000002c48:  ARM64_RELOC_PAGEOFF12	lCPI1_0
+    2c4c:      	fcmp	d0, d1
+    2c50:      	mov	x23, x9
+    2c54:      	b.hi	0x3434 <_perry_fn_access_worker_ts__run+0xa34>
+    2c58:      	fcvtzs	w9, d0
+    2c5c:      	scvtf	d1, w9
+    2c60:      	fcmp	d1, d0
+    2c64:      	b.ne	0x2b50 <_perry_fn_access_worker_ts__run+0x150>
+    2c68:      	mov	w23, #0x1               ; =1
+    2c6c:      	b	0x3434 <_perry_fn_access_worker_ts__run+0xa34>
+    2c70:      	mov	w10, #0x7fff            ; =32767
+    2c74:      	cmp	x10, x8, lsr #48
+    2c78:      	b.ne	0x2cc0 <_perry_fn_access_worker_ts__run+0x2c0>
+    2c7c:      	and	x0, x8, #0xffffffffffff
+    2c80:      	cmp	x0, #0x1, lsl #12       ; =0x1000
+    2c84:      	b.lo	0x2cc0 <_perry_fn_access_worker_ts__run+0x2c0>
+    2c88:      	ldr	w8, [x0, #0x4]
+    2c8c:      	cmp	w8, #0x6
+    2c90:      	b.ne	0x2cc0 <_perry_fn_access_worker_ts__run+0x2c0>
+    2c94:      	ldrb	w8, [x0, #0x14]
+    2c98:      	cmp	w8, #0x66
+    2c9c:      	b.ne	0x2cc0 <_perry_fn_access_worker_ts__run+0x2c0>
+    2ca0:      	ldrb	w8, [x0, #0x19]
+    2ca4:      	cmp	w8, #0x73
+    2ca8:      	b.ne	0x2cc0 <_perry_fn_access_worker_ts__run+0x2c0>
+    2cac:      	stp	x24, x28, [sp, #0x20]
+    2cb0:      	and	x1, x9, #0xffffffffffff
+    2cb4:      	bl	0x2cb4 <_perry_fn_access_worker_ts__run+0x2b4>
+		0000000000002cb4:  ARM64_RELOC_BRANCH26	_js_string_equals
+    2cb8:      	ldp	x24, x28, [sp, #0x20]
+    2cbc:      	cbnz	w0, 0x2c00 <_perry_fn_access_worker_ts__run+0x200>
+    2cc0:      	mov	x8, x28
+    2cc4:      	mov	x9, #0x7ff9000000000000 ; =9221401712017801216
+    2cc8:      	cmp	x8, x9
+    2ccc:      	b.lo	0x33f0 <_perry_fn_access_worker_ts__run+0x9f0>
+    2cd0:      	and	x9, x8, #0xffff000000000000
+    2cd4:      	mov	x10, #0x7fff000000000000 ; =9223090561878065152
+    2cd8:      	cmp	x9, x10
+    2cdc:      	b.hi	0x33f0 <_perry_fn_access_worker_ts__run+0x9f0>
+    2ce0:      	mov	w9, #0x0                ; =0
+    2ce4:      	mov	w23, #0x0               ; =0
+    2ce8:      	b	0x4f18 <_perry_fn_access_worker_ts__run+0x2518>
+    2cec:      	mov	x23, x9
+    2cf0:      	str	w9, [sp, #0x14]
+    2cf4:      	mov	w25, #0x0               ; =0
+    2cf8:      	mov	x26, #0x0               ; =0
+    2cfc:      	mov	x22, #0x10              ; =16
+    2d00:      	movk	x22, #0x7ffc, lsl #48
+    2d04:      	adrp	x21, 0x2000 <ltmp0+0x2000>
+		0000000000002d04:  ARM64_RELOC_GOT_LOAD_PAGE21	_PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT
+    2d08:      	ldr	x21, [x21]
+		0000000000002d08:  ARM64_RELOC_GOT_LOAD_PAGEOFF12	_PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT
+    2d0c:      	mov	x20, #0x7ffd000000000000 ; =9222527611924643840
+    2d10:      	movi.2d	v10, #0000000000000000
+    2d14:      	adrp	x19, 0x2000 <ltmp0+0x2000>
+		0000000000002d14:  ARM64_RELOC_PAGE21	l_perry_ic_access_worker_ts__18
+    2d18:      	add	x19, x19, #0x0
+		0000000000002d18:  ARM64_RELOC_PAGEOFF12	l_perry_ic_access_worker_ts__18
+    2d1c:      	fmov	d11, #7.00000000
+    2d20:      	adrp	x8, 0x2000 <ltmp0+0x2000>
+		0000000000002d20:  ARM64_RELOC_PAGE21	lCPI1_3
+    2d24:      	ldr	d12, [x8]
+		0000000000002d24:  ARM64_RELOC_PAGEOFF12	lCPI1_3
+    2d28:      	adrp	x27, 0x2000 <ltmp0+0x2000>
+		0000000000002d28:  ARM64_RELOC_GOT_LOAD_PAGE21	_PERRY_GC_POLL_ARMED
+    2d2c:      	ldr	x27, [x27]
+		0000000000002d2c:  ARM64_RELOC_GOT_LOAD_PAGEOFF12	_PERRY_GC_POLL_ARMED
+    2d30:      	fmov	d13, #1.00000000
+    2d34:      	movi.2d	v8, #0000000000000000
+    2d38:      	tbnz	w23, #0x0, 0x2e28 <_perry_fn_access_worker_ts__run+0x428>
+    2d3c:      	mov	x8, x28
+    2d40:      	fmov	d1, x8
+    2d44:      	and	x9, x8, #0xffff000000000000
+    2d48:      	mov	x10, #0x7ffe000000000000 ; =9222809086901354496
+    2d4c:      	cmp	x9, x10
+    2d50:      	b.eq	0x2d90 <_perry_fn_access_worker_ts__run+0x390>
+    2d54:      	mov	x10, #0x7ff9000000000000 ; =9221401712017801216
+    2d58:      	cmp	x8, x10
+    2d5c:      	b.lt	0x2d90 <_perry_fn_access_worker_ts__run+0x390>
+    2d60:      	mov	x10, #-0x7ffc000000000001 ; =-9222246136947933185
+    2d64:      	add	x10, x8, x10
+    2d68:      	cmp	x10, #0x3
+    2d6c:      	b.ls	0x2d90 <_perry_fn_access_worker_ts__run+0x390>
+    2d70:      	stp	x28, x26, [sp, #0x20]
+    2d74:      	str	x24, [sp, #0x18]
+    2d78:      	mov.16b	v0, v8
+    2d7c:      	bl	0x2d7c <_perry_fn_access_worker_ts__run+0x37c>
+		0000000000002d7c:  ARM64_RELOC_BRANCH26	_js_rel_lt
+    2d80:      	mov.16b	v9, v0
+    2d84:      	ldp	x24, x28, [sp, #0x18]
+    2d88:      	ldr	x26, [sp, #0x28]
+    2d8c:      	b	0x2df8 <_perry_fn_access_worker_ts__run+0x3f8>
+    2d90:      	mov	x12, #0x10              ; =16
+    2d94:      	movk	x12, #0x7ffc, lsl #48
+    2d98:      	sub	x10, x12, #0xc
+    2d9c:      	and	x11, x8, #0xfffffffffffffffe
+    2da0:      	mov	x22, #0x10              ; =16
+    2da4:      	movk	x22, #0x7ffc, lsl #48
+    2da8:      	sub	x12, x12, #0xe
+    2dac:      	scvtf	d0, w8
+    2db0:      	mov	x13, #0x7ffe000000000000 ; =9222809086901354496
+    2db4:      	cmp	x9, x13
+    2db8:      	fcsel	d0, d0, d1, eq
+    2dbc:      	cmp	x11, x12
+    2dc0:      	fcsel	d0, d10, d0, eq
+    2dc4:      	cmp	x8, x10
+    2dc8:      	fcsel	d0, d13, d0, eq
+    2dcc:      	fmov	x8, d8
+    2dd0:      	scvtf	d1, w8
+    2dd4:      	mov	w9, #0x7ffe             ; =32766
+    2dd8:      	cmp	x9, x8, lsr #48
+    2ddc:      	fcsel	d1, d1, d8, eq
+    2de0:      	fcmp	d1, d0
+    2de4:      	mov	w8, #0x8                ; =8
+    2de8:      	csel	x8, x8, xzr, mi
+    2dec:      	adrp	x9, 0x2000 <ltmp0+0x2000>
+		0000000000002dec:  ARM64_RELOC_PAGE21	lCPI1_1
+    2df0:      	add	x9, x9, #0x0
+		0000000000002df0:  ARM64_RELOC_PAGEOFF12	lCPI1_1
+    2df4:      	ldr	d9, [x9, x8]
+    2df8:      	ldr	w8, [x27]
+    2dfc:      	cbz	w8, 0x2e14 <_perry_fn_access_worker_ts__run+0x414>
+    2e00:      	stp	x24, x26, [sp, #0x20]
+    2e04:      	str	x28, [sp, #0x18]
+    2e08:      	bl	0x2e08 <_perry_fn_access_worker_ts__run+0x408>
+		0000000000002e08:  ARM64_RELOC_BRANCH26	_js_gc_loop_safepoint
+    2e0c:      	ldp	x28, x24, [sp, #0x18]
+    2e10:      	ldr	x26, [sp, #0x28]
+    2e14:      	fmov	x8, d9
+    2e18:      	sub	x9, x22, #0xc
+    2e1c:      	cmp	x8, x9
+    2e20:      	b.ne	0x5638 <_perry_fn_access_worker_ts__run+0x2c38>
+    2e24:      	b	0x2e34 <_perry_fn_access_worker_ts__run+0x434>
+    2e28:      	ldr	w8, [sp, #0x14]
+    2e2c:      	cmp	w25, w8
+    2e30:      	b.ge	0x5638 <_perry_fn_access_worker_ts__run+0x2c38>
+    2e34:      	mov	x0, x26
+    2e38:      	ldr	w8, [x21]
+    2e3c:      	cbz	w8, 0x2e44 <_perry_fn_access_worker_ts__run+0x444>
+    2e40:      	bl	0x2e40 <_perry_fn_access_worker_ts__run+0x440>
+		0000000000002e40:  ARM64_RELOC_BRANCH26	_js_write_barrier_root_nanbox
+    2e44:      	mov	x9, x24
+    2e48:      	and	x8, x9, #0xffffffffffff
+    2e4c:      	and	x13, x9, #0xffff000000000000
+    2e50:      	cmp	x13, x20
+    2e54:      	b.ne	0x2ec0 <_perry_fn_access_worker_ts__run+0x4c0>
+    2e58:      	adrp	x10, 0x2000 <ltmp0+0x2000>
+		0000000000002e58:  ARM64_RELOC_GOT_LOAD_PAGE21	_PERRY_TA_VIEW_GUARD
+    2e5c:      	ldr	x10, [x10]
+		0000000000002e5c:  ARM64_RELOC_GOT_LOAD_PAGEOFF12	_PERRY_TA_VIEW_GUARD
+    2e60:      	ldr	x10, [x10]
+    2e64:      	sub	x11, x8, #0x100, lsl #12 ; =0x100000
+    2e68:      	cmp	x10, #0x0
+    2e6c:      	mov	x10, #0x7ffffff00000    ; =140737487306752
+    2e70:      	ccmp	x11, x10, #0x2, eq
+    2e74:      	b.hs	0x2ec0 <_perry_fn_access_worker_ts__run+0x4c0>
+    2e78:      	ldurb	w11, [x8, #-0x8]
+    2e7c:      	ldrb	w10, [x8, #0x8]
+    2e80:      	cmp	w11, #0xb
+    2e84:      	ccmp	w10, #0x9, #0x2, eq
+    2e88:      	b.hs	0x2ec0 <_perry_fn_access_worker_ts__run+0x4c0>
+    2e8c:      	ldr	w11, [x8]
+    2e90:      	cmp	w11, #0x8
+    2e94:      	b.lo	0x2ec0 <_perry_fn_access_worker_ts__run+0x4c0>
+    2e98:      	cmp	w10, #0x3
+    2e9c:      	b.le	0x2fc0 <_perry_fn_access_worker_ts__run+0x5c0>
+    2ea0:      	cmp	w10, #0x5
+    2ea4:      	b.gt	0x2fdc <_perry_fn_access_worker_ts__run+0x5dc>
+    2ea8:      	cmp	w10, #0x4
+    2eac:      	b.eq	0x3008 <_perry_fn_access_worker_ts__run+0x608>
+    2eb0:      	cmp	w10, #0x5
+    2eb4:      	b.ne	0x2ffc <_perry_fn_access_worker_ts__run+0x5fc>
+    2eb8:      	ldr	s0, [x8, #0x2c]
+    2ebc:      	b	0x3000 <_perry_fn_access_worker_ts__run+0x600>
+    2ec0:      	ldr	x12, [x19]
+    2ec4:      	cmp	x12, #0x0
+    2ec8:      	csel	x11, x19, x12, eq
+    2ecc:      	cmp	x13, x20
+    2ed0:      	b.ne	0x30e0 <_perry_fn_access_worker_ts__run+0x6e0>
+    2ed4:      	mov	x10, #-0x20000000000    ; =-2199023255552
+    2ed8:      	add	x10, x8, x10
+    2edc:      	lsr	x10, x10, #41
+    2ee0:      	cmp	x10, #0x3f
+    2ee4:      	b.hs	0x30e0 <_perry_fn_access_worker_ts__run+0x6e0>
+    2ee8:      	ldursb	w10, [x8, #-0x7]
+    2eec:      	tbnz	w10, #0x1f, 0x30e0 <_perry_fn_access_worker_ts__run+0x6e0>
+    2ef0:      	ldurb	w10, [x8, #-0x8]
+    2ef4:      	cmp	w10, #0x2
+    2ef8:      	b.eq	0x2f48 <_perry_fn_access_worker_ts__run+0x548>
+    2efc:      	cmp	w10, #0x1
+    2f00:      	b.ne	0x30e0 <_perry_fn_access_worker_ts__run+0x6e0>
+    2f04:      	ldurh	w11, [x8, #-0x6]
+    2f08:      	adrp	x10, 0x2000 <ltmp0+0x2000>
+		0000000000002f08:  ARM64_RELOC_GOT_LOAD_PAGE21	_PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED
+    2f0c:      	ldr	x10, [x10]
+		0000000000002f0c:  ARM64_RELOC_GOT_LOAD_PAGEOFF12	_PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED
+    2f10:      	ldrb	w10, [x10]
+    2f14:      	tbnz	w11, #0xa, 0x30e0 <_perry_fn_access_worker_ts__run+0x6e0>
+    2f18:      	cbnz	w10, 0x30e0 <_perry_fn_access_worker_ts__run+0x6e0>
+    2f1c:      	ldr	w10, [x8]
+    2f20:      	cmp	w10, #0x8
+    2f24:      	b.lo	0x30e0 <_perry_fn_access_worker_ts__run+0x6e0>
+    2f28:      	ldr	w11, [x8, #0x4]
+    2f2c:      	cmp	w10, w11
+    2f30:      	b.hi	0x30e0 <_perry_fn_access_worker_ts__run+0x6e0>
+    2f34:      	ldr	d0, [x8, #0x40]
+    2f38:      	fmov	x8, d0
+    2f3c:      	cmp	x8, x22
+    2f40:      	fcsel	d0, d12, d0, eq
+    2f44:      	b	0x3100 <_perry_fn_access_worker_ts__run+0x700>
+    2f48:      	ldr	x10, [x8, #0x8]
+    2f4c:      	cbz	x10, 0x2f8c <_perry_fn_access_worker_ts__run+0x58c>
+    2f50:      	ldr	x13, [x10, #0x60]
+    2f54:      	cbz	x13, 0x2f8c <_perry_fn_access_worker_ts__run+0x58c>
+    2f58:      	ldurb	w8, [x13, #-0x8]
+    2f5c:      	cmp	w8, #0x1
+    2f60:      	b.ne	0x30e0 <_perry_fn_access_worker_ts__run+0x6e0>
+    2f64:      	ldursb	w8, [x13, #-0x7]
+    2f68:      	tbnz	w8, #0x1f, 0x30e0 <_perry_fn_access_worker_ts__run+0x6e0>
+    2f6c:      	ldr	w8, [x13]
+    2f70:      	cmp	w8, #0x8
+    2f74:      	b.lo	0x30e0 <_perry_fn_access_worker_ts__run+0x6e0>
+    2f78:      	ldr	d0, [x13, #0x40]
+    2f7c:      	fmov	x8, d0
+    2f80:      	cmp	x8, x22
+    2f84:      	b.ne	0x3100 <_perry_fn_access_worker_ts__run+0x700>
+    2f88:      	b	0x30e0 <_perry_fn_access_worker_ts__run+0x6e0>
+    2f8c:      	ldr	x11, [x11]
+    2f90:      	cbz	x11, 0x30e0 <_perry_fn_access_worker_ts__run+0x6e0>
+    2f94:      	tbnz	x11, #0x3f, 0x3028 <_perry_fn_access_worker_ts__run+0x628>
+    2f98:      	ldp	w14, w13, [x8]
+    2f9c:      	orr	x13, x13, x14, lsl #32
+    2fa0:      	cmp	x13, x11
+    2fa4:      	b.ne	0x30e0 <_perry_fn_access_worker_ts__run+0x6e0>
+    2fa8:      	ldp	x14, x11, [x12, #0x8]
+    2fac:      	ldp	x13, x12, [x12, #0x18]
+    2fb0:      	cmp	x14, x12
+    2fb4:      	b.lo	0x3048 <_perry_fn_access_worker_ts__run+0x648>
+    2fb8:      	cbz	x10, 0x30e0 <_perry_fn_access_worker_ts__run+0x6e0>
+    2fbc:      	b	0x3054 <_perry_fn_access_worker_ts__run+0x654>
+    2fc0:      	cbz	w10, 0x2ff4 <_perry_fn_access_worker_ts__run+0x5f4>
+    2fc4:      	cmp	w10, #0x2
+    2fc8:      	b.eq	0x301c <_perry_fn_access_worker_ts__run+0x61c>
+    2fcc:      	cmp	w10, #0x3
+    2fd0:      	b.ne	0x2ffc <_perry_fn_access_worker_ts__run+0x5fc>
+    2fd4:      	ldr	h0, [x8, #0x1e]
+    2fd8:      	b	0x3000 <_perry_fn_access_worker_ts__run+0x600>
+    2fdc:      	cmp	w10, #0x6
+    2fe0:      	b.eq	0x3010 <_perry_fn_access_worker_ts__run+0x610>
+    2fe4:      	cmp	w10, #0x7
+    2fe8:      	b.ne	0x2ffc <_perry_fn_access_worker_ts__run+0x5fc>
+    2fec:      	ldr	d0, [x8, #0x48]
+    2ff0:      	b	0x3100 <_perry_fn_access_worker_ts__run+0x700>
+    2ff4:      	ldrsb	w8, [x8, #0x17]
+    2ff8:      	b	0x3020 <_perry_fn_access_worker_ts__run+0x620>
+    2ffc:      	ldr	b0, [x8, #0x17]
+    3000:      	ucvtf	d0, d0
+    3004:      	b	0x3100 <_perry_fn_access_worker_ts__run+0x700>
+    3008:      	ldr	w8, [x8, #0x2c]
+    300c:      	b	0x3020 <_perry_fn_access_worker_ts__run+0x620>
+    3010:      	ldr	s0, [x8, #0x2c]
+    3014:      	fcvt	d0, s0
+    3018:      	b	0x3100 <_perry_fn_access_worker_ts__run+0x700>
+    301c:      	ldrsh	w8, [x8, #0x1e]
+    3020:      	scvtf	d0, w8
+    3024:      	b	0x3100 <_perry_fn_access_worker_ts__run+0x700>
+    3028:      	cbz	x10, 0x30e0 <_perry_fn_access_worker_ts__run+0x6e0>
+    302c:      	ldr	x13, [x10, #0x30]
+    3030:      	cmp	x13, x11
+    3034:      	b.ne	0x30e0 <_perry_fn_access_worker_ts__run+0x6e0>
+    3038:      	ldp	x14, x11, [x12, #0x8]
+    303c:      	ldp	x13, x12, [x12, #0x18]
+    3040:      	cmp	x14, x12
+    3044:      	b.hs	0x3054 <_perry_fn_access_worker_ts__run+0x654>
+    3048:      	add	x14, x8, x14, lsl #3
+    304c:      	add	x14, x14, #0x10
+    3050:      	b	0x3078 <_perry_fn_access_worker_ts__run+0x678>
+    3054:      	ldr	x16, [x10, #0x20]
+    3058:      	cmp	x16, #0x0
+    305c:      	csel	x15, x16, x10, ne
+    3060:      	cbz	x16, 0x30e0 <_perry_fn_access_worker_ts__run+0x6e0>
+    3064:      	ldr	w16, [x15]
+    3068:      	cmp	x14, x16
+    306c:      	b.hs	0x30e0 <_perry_fn_access_worker_ts__run+0x6e0>
+    3070:      	add	x14, x15, x14, lsl #3
+    3074:      	add	x14, x14, #0x8
+    3078:      	ldr	d0, [x14]
+    307c:      	fcmp	d0, d11
+    3080:      	ccmp	x13, #0x7, #0x0, gt
+    3084:      	cset	w14, hi
+    3088:      	add	x13, x11, #0x7
+    308c:      	cmp	x13, x12
+    3090:      	b.hs	0x30a4 <_perry_fn_access_worker_ts__run+0x6a4>
+    3094:      	cbz	w14, 0x30a4 <_perry_fn_access_worker_ts__run+0x6a4>
+    3098:      	add	x8, x8, x13, lsl #3
+    309c:      	ldr	d0, [x8, #0x10]
+    30a0:      	b	0x3100 <_perry_fn_access_worker_ts__run+0x700>
+    30a4:      	cbz	x10, 0x30e0 <_perry_fn_access_worker_ts__run+0x6e0>
+    30a8:      	cmp	x13, x12
+    30ac:      	b.lo	0x30e0 <_perry_fn_access_worker_ts__run+0x6e0>
+    30b0:      	eor	w8, w14, #0x1
+    30b4:      	tbnz	w8, #0x0, 0x30e0 <_perry_fn_access_worker_ts__run+0x6e0>
+    30b8:      	ldr	x12, [x10, #0x20]
+    30bc:      	cmp	x12, #0x0
+    30c0:      	csel	x8, x12, x10, ne
+    30c4:      	cbz	x12, 0x30e0 <_perry_fn_access_worker_ts__run+0x6e0>
+    30c8:      	ldr	w10, [x8]
+    30cc:      	cmp	x13, x10
+    30d0:      	b.hs	0x30e0 <_perry_fn_access_worker_ts__run+0x6e0>
+    30d4:      	add	x8, x8, x11, lsl #3
+    30d8:      	ldr	d0, [x8, #0x40]
+    30dc:      	b	0x3100 <_perry_fn_access_worker_ts__run+0x700>
+    30e0:      	fmov	d0, x9
+    30e4:      	stp	x28, x24, [sp, #0x20]
+    30e8:      	str	x26, [sp, #0x18]
+    30ec:      	fmov	d1, #7.00000000
+    30f0:      	mov	x0, x19
+    30f4:      	bl	0x30f4 <_perry_fn_access_worker_ts__run+0x6f4>
+		00000000000030f4:  ARM64_RELOC_BRANCH26	_js_packed_arraylike_index_get
+    30f8:      	ldp	x26, x28, [sp, #0x18]
+    30fc:      	ldr	x24, [sp, #0x28]
+    3100:      	fmov	x8, d0
+    3104:      	mov	x9, #-0x3000000000000   ; =-844424930131968
+    3108:      	and	x9, x8, x9
+    310c:      	cmp	x9, x20
+    3110:      	b.ne	0x317c <_perry_fn_access_worker_ts__run+0x77c>
+    3114:      	and	x0, x8, #0xffffffffffff
+    3118:      	lsr	x8, x0, #20
+    311c:      	cbz	x8, 0x32c8 <_perry_fn_access_worker_ts__run+0x8c8>
+    3120:      	ldurb	w9, [x0, #-0x8]
+    3124:      	adrp	x8, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		0000000000003124:  ARM64_RELOC_PAGE21	l_perry_ic_access_worker_ts__20
+    3128:      	ldr	x8, [x8]
+		0000000000003128:  ARM64_RELOC_PAGEOFF12	l_perry_ic_access_worker_ts__20
+    312c:      	cbz	x8, 0x31f4 <_perry_fn_access_worker_ts__run+0x7f4>
+    3130:      	ldurh	w10, [x0, #-0x6]
+    3134:      	and	w10, w10, #0x800
+    3138:      	cmp	w9, #0x2
+    313c:      	ccmp	w10, #0x0, #0x0, eq
+    3140:      	b.ne	0x31f4 <_perry_fn_access_worker_ts__run+0x7f4>
+    3144:      	ldr	w10, [x0, #0x4]
+    3148:      	orr	x9, x10, #0x4000000000000000
+    314c:      	cbz	w10, 0x3220 <_perry_fn_access_worker_ts__run+0x820>
+    3150:      	ldr	x11, [x8]
+    3154:      	cmp	x9, x11
+    3158:      	b.ne	0x3220 <_perry_fn_access_worker_ts__run+0x820>
+    315c:      	ldr	x2, [x8, #0x8]
+    3160:      	tbnz	w2, #0x1e, 0x3388 <_perry_fn_access_worker_ts__run+0x988>
+    3164:      	add	x11, x0, x2, lsl #3
+    3168:      	ldr	d1, [x11, #0x10]
+    316c:      	fmov	x11, d1
+    3170:      	cmp	x11, x22
+    3174:      	b.ne	0x32f4 <_perry_fn_access_worker_ts__run+0x8f4>
+    3178:      	b	0x324c <_perry_fn_access_worker_ts__run+0x84c>
+    317c:      	lsr	x9, x8, #48
+    3180:      	mov	w10, #0x7ff9            ; =32761
+    3184:      	cmp	x9, x10
+    3188:      	b.eq	0x31d4 <_perry_fn_access_worker_ts__run+0x7d4>
+    318c:      	mov	w10, #0x7ffe            ; =32766
+    3190:      	cmp	w9, w10
+    3194:      	b.ne	0x31c4 <_perry_fn_access_worker_ts__run+0x7c4>
+    3198:      	adrp	x9, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		0000000000003198:  ARM64_RELOC_PAGE21	_access_worker_ts_.str.1.handle
+    319c:      	ldr	x9, [x9]
+		000000000000319c:  ARM64_RELOC_PAGEOFF12	_access_worker_ts_.str.1.handle
+    31a0:      	stp	x24, x26, [sp, #0x20]
+    31a4:      	str	x28, [sp, #0x18]
+    31a8:      	and	x2, x9, #0xffffffffffff
+    31ac:      	mov	x0, #0x13               ; =19
+    31b0:      	movk	x0, #0xddae, lsl #32
+    31b4:      	movk	x0, #0x5556, lsl #48
+    31b8:      	mov	x1, x8
+    31bc:      	bl	0x31bc <_perry_fn_access_worker_ts__run+0x7bc>
+		00000000000031bc:  ARM64_RELOC_BRANCH26	_js_typed_feedback_object_get_field_by_name_f64
+    31c0:      	b	0x32e8 <_perry_fn_access_worker_ts__run+0x8e8>
+    31c4:      	mov	x9, #-0x7ffc000000000001 ; =-9222246136947933185
+    31c8:      	add	x9, x8, x9
+    31cc:      	cmp	x9, #0x2
+    31d0:      	b.lo	0x566c <_perry_fn_access_worker_ts__run+0x2c6c>
+    31d4:      	adrp	x9, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		00000000000031d4:  ARM64_RELOC_PAGE21	_access_worker_ts_.str.1.handle
+    31d8:      	ldr	x9, [x9]
+		00000000000031d8:  ARM64_RELOC_PAGEOFF12	_access_worker_ts_.str.1.handle
+    31dc:      	stp	x24, x26, [sp, #0x20]
+    31e0:      	str	x28, [sp, #0x18]
+    31e4:      	and	x1, x9, #0xffffffffffff
+    31e8:      	mov	x0, x8
+    31ec:      	bl	0x31ec <_perry_fn_access_worker_ts__run+0x7ec>
+		00000000000031ec:  ARM64_RELOC_BRANCH26	_js_object_get_field_by_name_f64
+    31f0:      	b	0x32e8 <_perry_fn_access_worker_ts__run+0x8e8>
+    31f4:      	cmp	w9, #0x2
+    31f8:      	ccmp	x8, #0x0, #0x4, eq
+    31fc:      	b.eq	0x32c8 <_perry_fn_access_worker_ts__run+0x8c8>
+    3200:      	ldr	x9, [x8, #0x10]
+    3204:      	cbz	x9, 0x32c8 <_perry_fn_access_worker_ts__run+0x8c8>
+    3208:      	ldr	x10, [x0, #0x8]
+    320c:      	cbz	x10, 0x32c8 <_perry_fn_access_worker_ts__run+0x8c8>
+    3210:      	ldr	x10, [x10, #0x30]
+    3214:      	cmp	x10, x9
+    3218:      	b.eq	0x323c <_perry_fn_access_worker_ts__run+0x83c>
+    321c:      	b	0x32c8 <_perry_fn_access_worker_ts__run+0x8c8>
+    3220:      	ldr	x11, [x8, #0x10]
+    3224:      	cbz	x11, 0x324c <_perry_fn_access_worker_ts__run+0x84c>
+    3228:      	ldr	x12, [x0, #0x8]
+    322c:      	cbz	x12, 0x324c <_perry_fn_access_worker_ts__run+0x84c>
+    3230:      	ldr	x12, [x12, #0x30]
+    3234:      	cmp	x12, x11
+    3238:      	b.ne	0x324c <_perry_fn_access_worker_ts__run+0x84c>
+    323c:      	ldr	x8, [x8, #0x8]
+    3240:      	add	x8, x0, x8, lsl #3
+    3244:      	ldr	d1, [x8, #0x10]
+    3248:      	b	0x32f4 <_perry_fn_access_worker_ts__run+0x8f4>
+    324c:      	ldr	x11, [x8, #0x18]
+    3250:      	cmp	x11, #0x0
+    3254:      	b.le	0x32c8 <_perry_fn_access_worker_ts__run+0x8c8>
+    3258:      	ldr	x11, [x8, #0x20]
+    325c:      	ldr	x12, [x8, #0x30]
+    3260:      	ldr	x13, [x8, #0x40]
+    3264:      	cmp	x13, x9
+    3268:      	ldr	x14, [x8, #0x50]
+    326c:      	ccmp	x14, x9, #0x4, ne
+    3270:      	ccmp	x12, x9, #0x4, ne
+    3274:      	ccmp	x11, x9, #0x4, ne
+    3278:      	cset	w15, eq
+    327c:      	cbz	w10, 0x32c8 <_perry_fn_access_worker_ts__run+0x8c8>
+    3280:      	cbz	w15, 0x32c8 <_perry_fn_access_worker_ts__run+0x8c8>
+    3284:      	ldr	x10, [x8, #0x48]
+    3288:      	ldr	x15, [x8, #0x58]
+    328c:      	cmp	x14, x9
+    3290:      	csel	x14, x15, xzr, eq
+    3294:      	cmp	x13, x9
+    3298:      	csel	x10, x10, x14, eq
+    329c:      	ldr	x13, [x8, #0x28]
+    32a0:      	ldr	x8, [x8, #0x38]
+    32a4:      	cmp	x12, x9
+    32a8:      	csel	x8, x8, x10, eq
+    32ac:      	cmp	x11, x9
+    32b0:      	csel	x8, x13, x8, eq
+    32b4:      	add	x8, x0, x8, lsl #3
+    32b8:      	ldr	d1, [x8, #0x10]
+    32bc:      	fmov	x8, d1
+    32c0:      	cmp	x8, x22
+    32c4:      	b.ne	0x32f4 <_perry_fn_access_worker_ts__run+0x8f4>
+    32c8:      	adrp	x8, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		00000000000032c8:  ARM64_RELOC_PAGE21	_access_worker_ts_.str.1.handle
+    32cc:      	ldr	x8, [x8]
+		00000000000032cc:  ARM64_RELOC_PAGEOFF12	_access_worker_ts_.str.1.handle
+    32d0:      	stp	x24, x26, [sp, #0x20]
+    32d4:      	str	x28, [sp, #0x18]
+    32d8:      	and	x1, x8, #0xffffffffffff
+    32dc:      	adrp	x2, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		00000000000032dc:  ARM64_RELOC_PAGE21	l_perry_ic_access_worker_ts__20
+    32e0:      	add	x2, x2, #0x0
+		00000000000032e0:  ARM64_RELOC_PAGEOFF12	l_perry_ic_access_worker_ts__20
+    32e4:      	bl	0x32e4 <_perry_fn_access_worker_ts__run+0x8e4>
+		00000000000032e4:  ARM64_RELOC_BRANCH26	_js_object_get_field_ic_miss
+    32e8:      	mov.16b	v1, v0
+    32ec:      	ldp	x28, x24, [sp, #0x18]
+    32f0:      	ldr	x26, [sp, #0x28]
+    32f4:      	fmov	d0, x26
+    32f8:      	and	x9, x26, #0xffff000000000000
+    32fc:      	fmov	x8, d1
+    3300:      	and	x10, x8, #0xffff000000000000
+    3304:      	mov	x11, #0x7ff9000000000000 ; =9221401712017801216
+    3308:      	cmp	x8, x11
+    330c:      	mov	x8, #0x7fff000000000000 ; =9223090561878065152
+    3310:      	ccmp	x10, x8, #0x2, hs
+    3314:      	cset	w8, hi
+    3318:      	mov	x10, #0x1               ; =1
+    331c:      	movk	x10, #0x7fff, lsl #48
+    3320:      	cmp	x9, x10
+    3324:      	mov	x9, #0x7ff8ffffffffffff ; =9221401712017801215
+    3328:      	ccmp	x26, x9, #0x0, lo
+    332c:      	b.hi	0x333c <_perry_fn_access_worker_ts__run+0x93c>
+    3330:      	tbz	w8, #0x0, 0x333c <_perry_fn_access_worker_ts__run+0x93c>
+    3334:      	fadd	d0, d1, d0
+    3338:      	b	0x3348 <_perry_fn_access_worker_ts__run+0x948>
+    333c:      	stp	x28, x24, [sp, #0x20]
+    3340:      	bl	0x3340 <_perry_fn_access_worker_ts__run+0x940>
+		0000000000003340:  ARM64_RELOC_BRANCH26	_js_dynamic_string_or_number_add
+    3344:      	ldp	x28, x24, [sp, #0x20]
+    3348:      	fmov	x26, d0
+    334c:      	mov	x0, x26
+    3350:      	ldr	w8, [x21]
+    3354:      	cbz	w8, 0x335c <_perry_fn_access_worker_ts__run+0x95c>
+    3358:      	bl	0x3358 <_perry_fn_access_worker_ts__run+0x958>
+		0000000000003358:  ARM64_RELOC_BRANCH26	_js_write_barrier_root_nanbox
+    335c:      	ldr	w8, [x27]
+    3360:      	cbz	w8, 0x3378 <_perry_fn_access_worker_ts__run+0x978>
+    3364:      	stp	x24, x28, [sp, #0x20]
+    3368:      	str	x26, [sp, #0x18]
+    336c:      	bl	0x336c <_perry_fn_access_worker_ts__run+0x96c>
+		000000000000336c:  ARM64_RELOC_BRANCH26	_js_gc_loop_safepoint
+    3370:      	ldp	x26, x24, [sp, #0x18]
+    3374:      	ldr	x28, [sp, #0x28]
+    3378:      	fadd	d8, d8, d13
+    337c:      	add	w25, w25, #0x1
+    3380:      	tbz	w23, #0x0, 0x2d3c <_perry_fn_access_worker_ts__run+0x33c>
+    3384:      	b	0x2e28 <_perry_fn_access_worker_ts__run+0x428>
+    3388:      	adrp	x8, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		0000000000003388:  ARM64_RELOC_PAGE21	_access_worker_ts_.str.1.handle
+    338c:      	ldr	x8, [x8]
+		000000000000338c:  ARM64_RELOC_PAGEOFF12	_access_worker_ts_.str.1.handle
+    3390:      	stp	x24, x26, [sp, #0x20]
+    3394:      	str	x28, [sp, #0x18]
+    3398:      	and	x1, x8, #0xffffffffffff
+    339c:      	adrp	x3, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		000000000000339c:  ARM64_RELOC_PAGE21	l_perry_ic_access_worker_ts__20
+    33a0:      	add	x3, x3, #0x0
+		00000000000033a0:  ARM64_RELOC_PAGEOFF12	l_perry_ic_access_worker_ts__20
+    33a4:      	bl	0x33a4 <_perry_fn_access_worker_ts__run+0x9a4>
+		00000000000033a4:  ARM64_RELOC_BRANCH26	_js_object_get_field_ic_overflow_load
+    33a8:      	b	0x32e8 <_perry_fn_access_worker_ts__run+0x8e8>
+    33ac:      	mov	w9, #0x0                ; =0
+    33b0:      	fmov	d0, x8
+    33b4:      	mov	x8, #-0x3e20000000000000 ; =-4476578029606273024
+    33b8:      	fmov	d1, x8
+    33bc:      	fcmp	d0, d1
+    33c0:      	b.lt	0x3bc8 <_perry_fn_access_worker_ts__run+0x11c8>
+    33c4:      	adrp	x8, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		00000000000033c4:  ARM64_RELOC_PAGE21	lCPI1_0
+    33c8:      	ldr	d1, [x8]
+		00000000000033c8:  ARM64_RELOC_PAGEOFF12	lCPI1_0
+    33cc:      	fcmp	d0, d1
+    33d0:      	str	w9, [sp, #0x14]
+    33d4:      	b.hi	0x3bcc <_perry_fn_access_worker_ts__run+0x11cc>
+    33d8:      	fcvtzs	w9, d0
+    33dc:      	frintz	d1, d0
+    33e0:      	fcmp	d1, d0
+    33e4:      	cset	w8, eq
+    33e8:      	str	w8, [sp, #0x14]
+    33ec:      	b	0x3bcc <_perry_fn_access_worker_ts__run+0x11cc>
+    33f0:      	mov	w9, #0x0                ; =0
+    33f4:      	fmov	d0, x8
+    33f8:      	mov	x8, #-0x3e20000000000000 ; =-4476578029606273024
+    33fc:      	fmov	d1, x8
+    3400:      	fcmp	d0, d1
+    3404:      	b.lt	0x4f14 <_perry_fn_access_worker_ts__run+0x2514>
+    3408:      	adrp	x8, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		0000000000003408:  ARM64_RELOC_PAGE21	lCPI1_0
+    340c:      	ldr	d1, [x8]
+		000000000000340c:  ARM64_RELOC_PAGEOFF12	lCPI1_0
+    3410:      	fcmp	d0, d1
+    3414:      	mov	x23, x9
+    3418:      	b.hi	0x4f18 <_perry_fn_access_worker_ts__run+0x2518>
+    341c:      	fcvtzs	w9, d0
+    3420:      	frintz	d1, d0
+    3424:      	fcmp	d1, d0
+    3428:      	cset	w23, eq
+    342c:      	b	0x4f18 <_perry_fn_access_worker_ts__run+0x2518>
+    3430:      	mov	x23, x9
+    3434:      	str	w9, [sp, #0x14]
+    3438:      	mov	w25, #0x0               ; =0
+    343c:      	mov	x26, #0x0               ; =0
+    3440:      	mov	x27, #0x7ff9000000000000 ; =9221401712017801216
+    3444:      	adrp	x20, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		0000000000003444:  ARM64_RELOC_GOT_LOAD_PAGE21	_PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT
+    3448:      	ldr	x20, [x20]
+		0000000000003448:  ARM64_RELOC_GOT_LOAD_PAGEOFF12	_PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT
+    344c:      	mov	x21, #0x7ffd000000000000 ; =9222527611924643840
+    3450:      	fmov	d12, #17.00000000
+    3454:      	mov	x8, #0x41f0000000000000 ; =4751297606875873280
+    3458:      	fmov	d13, #7.00000000
+    345c:      	fmov	d14, x8
+    3460:      	adrp	x19, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		0000000000003460:  ARM64_RELOC_PAGE21	l_perry_ic_access_worker_ts__21
+    3464:      	add	x19, x19, #0x0
+		0000000000003464:  ARM64_RELOC_PAGEOFF12	l_perry_ic_access_worker_ts__21
+    3468:      	adrp	x8, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		0000000000003468:  ARM64_RELOC_PAGE21	lCPI1_2
+    346c:      	ldr	d15, [x8]
+		000000000000346c:  ARM64_RELOC_PAGEOFF12	lCPI1_2
+    3470:      	adrp	x8, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		0000000000003470:  ARM64_RELOC_PAGE21	lCPI1_3
+    3474:      	ldr	d0, [x8]
+		0000000000003474:  ARM64_RELOC_PAGEOFF12	lCPI1_3
+    3478:      	str	d0, [sp, #0x8]
+    347c:      	mov	x22, #0x7fff000000000000 ; =9223090561878065152
+    3480:      	fmov	d11, #1.00000000
+    3484:      	movi.2d	v8, #0000000000000000
+    3488:      	movi.2d	v9, #0000000000000000
+    348c:      	tbnz	w23, #0x0, 0x3584 <_perry_fn_access_worker_ts__run+0xb84>
+    3490:      	mov	x8, x28
+    3494:      	fmov	d1, x8
+    3498:      	and	x9, x8, #0xffff000000000000
+    349c:      	mov	x10, #0x7ffe000000000000 ; =9222809086901354496
+    34a0:      	cmp	x9, x10
+    34a4:      	b.eq	0x34e0 <_perry_fn_access_worker_ts__run+0xae0>
+    34a8:      	cmp	x8, x27
+    34ac:      	b.lt	0x34e0 <_perry_fn_access_worker_ts__run+0xae0>
+    34b0:      	mov	x10, #-0x7ffc000000000001 ; =-9222246136947933185
+    34b4:      	add	x10, x8, x10
+    34b8:      	cmp	x10, #0x3
+    34bc:      	b.ls	0x34e0 <_perry_fn_access_worker_ts__run+0xae0>
+    34c0:      	stp	x26, x28, [sp, #0x20]
+    34c4:      	str	x24, [sp, #0x18]
+    34c8:      	mov.16b	v0, v8
+    34cc:      	bl	0x34cc <_perry_fn_access_worker_ts__run+0xacc>
+		00000000000034cc:  ARM64_RELOC_BRANCH26	_js_rel_lt
+    34d0:      	mov.16b	v10, v0
+    34d4:      	ldp	x24, x26, [sp, #0x18]
+    34d8:      	ldr	x28, [sp, #0x28]
+    34dc:      	b	0x3544 <_perry_fn_access_worker_ts__run+0xb44>
+    34e0:      	mov	x12, #0x10              ; =16
+    34e4:      	movk	x12, #0x7ffc, lsl #48
+    34e8:      	sub	x10, x12, #0xc
+    34ec:      	and	x11, x8, #0xfffffffffffffffe
+    34f0:      	sub	x12, x12, #0xe
+    34f4:      	scvtf	d0, w8
+    34f8:      	mov	x13, #0x7ffe000000000000 ; =9222809086901354496
+    34fc:      	cmp	x9, x13
+    3500:      	fcsel	d0, d0, d1, eq
+    3504:      	cmp	x11, x12
+    3508:      	movi.2d	v1, #0000000000000000
+    350c:      	fcsel	d0, d1, d0, eq
+    3510:      	cmp	x8, x10
+    3514:      	fcsel	d0, d11, d0, eq
+    3518:      	fmov	x8, d8
+    351c:      	scvtf	d1, w8
+    3520:      	mov	w9, #0x7ffe             ; =32766
+    3524:      	cmp	x9, x8, lsr #48
+    3528:      	fcsel	d1, d1, d8, eq
+    352c:      	fcmp	d1, d0
+    3530:      	mov	w8, #0x8                ; =8
+    3534:      	csel	x8, x8, xzr, mi
+    3538:      	adrp	x9, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		0000000000003538:  ARM64_RELOC_PAGE21	lCPI1_1
+    353c:      	add	x9, x9, #0x0
+		000000000000353c:  ARM64_RELOC_PAGEOFF12	lCPI1_1
+    3540:      	ldr	d10, [x9, x8]
+    3544:      	adrp	x8, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		0000000000003544:  ARM64_RELOC_GOT_LOAD_PAGE21	_PERRY_GC_POLL_ARMED
+    3548:      	ldr	x8, [x8]
+		0000000000003548:  ARM64_RELOC_GOT_LOAD_PAGEOFF12	_PERRY_GC_POLL_ARMED
+    354c:      	ldr	w8, [x8]
+    3550:      	cbz	w8, 0x3568 <_perry_fn_access_worker_ts__run+0xb68>
+    3554:      	stp	x26, x28, [sp, #0x20]
+    3558:      	str	x24, [sp, #0x18]
+    355c:      	bl	0x355c <_perry_fn_access_worker_ts__run+0xb5c>
+		000000000000355c:  ARM64_RELOC_BRANCH26	_js_gc_loop_safepoint
+    3560:      	ldp	x24, x26, [sp, #0x18]
+    3564:      	ldr	x28, [sp, #0x28]
+    3568:      	fmov	x8, d10
+    356c:      	mov	x9, #0x10               ; =16
+    3570:      	movk	x9, #0x7ffc, lsl #48
+    3574:      	sub	x9, x9, #0xc
+    3578:      	cmp	x8, x9
+    357c:      	b.ne	0x5638 <_perry_fn_access_worker_ts__run+0x2c38>
+    3580:      	b	0x3590 <_perry_fn_access_worker_ts__run+0xb90>
+    3584:      	ldr	w8, [sp, #0x14]
+    3588:      	cmp	w25, w8
+    358c:      	b.ge	0x5638 <_perry_fn_access_worker_ts__run+0x2c38>
+    3590:      	fmov	x8, d9
+    3594:      	cmp	x8, x27
+    3598:      	b.lo	0x35c8 <_perry_fn_access_worker_ts__run+0xbc8>
+    359c:      	and	x8, x8, #0xffff000000000000
+    35a0:      	cmp	x8, x22
+    35a4:      	b.hi	0x35c8 <_perry_fn_access_worker_ts__run+0xbc8>
+    35a8:      	stp	x26, x28, [sp, #0x20]
+    35ac:      	str	x24, [sp, #0x18]
+    35b0:      	fmov	d1, #17.00000000
+    35b4:      	mov.16b	v0, v9
+    35b8:      	bl	0x35b8 <_perry_fn_access_worker_ts__run+0xbb8>
+		00000000000035b8:  ARM64_RELOC_BRANCH26	_js_dynamic_mul
+    35bc:      	ldp	x24, x26, [sp, #0x18]
+    35c0:      	ldr	x28, [sp, #0x28]
+    35c4:      	b	0x35cc <_perry_fn_access_worker_ts__run+0xbcc>
+    35c8:      	fmul	d0, d9, d12
+    35cc:      	fadd	d0, d0, d13
+    35d0:      	adrp	x8, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		00000000000035d0:  ARM64_RELOC_PAGE21	_perry_global_access_worker_ts__5
+    35d4:      	ldr	d1, [x8]
+		00000000000035d4:  ARM64_RELOC_PAGEOFF12	_perry_global_access_worker_ts__5
+    35d8:      	stp	x24, x26, [sp, #0x20]
+    35dc:      	str	x28, [sp, #0x18]
+    35e0:      	bl	0x35e0 <_perry_fn_access_worker_ts__run+0xbe0>
+		00000000000035e0:  ARM64_RELOC_BRANCH26	_js_dynamic_mod
+    35e4:      	mov.16b	v9, v0
+    35e8:      	ldp	x28, x24, [sp, #0x18]
+    35ec:      	ldr	x26, [sp, #0x28]
+    35f0:      	fmov	x8, d9
+    35f4:      	mov	w9, #0x7fff             ; =32767
+    35f8:      	cmp	x9, x8, lsr #48
+    35fc:      	b.ne	0x3608 <_perry_fn_access_worker_ts__run+0xc08>
+    3600:      	mov.16b	v0, v9
+    3604:      	bl	0x3604 <_perry_fn_access_worker_ts__run+0xc04>
+		0000000000003604:  ARM64_RELOC_BRANCH26	_js_string_addref_if_heap_string
+    3608:      	mov	x0, x26
+    360c:      	ldr	w8, [x20]
+    3610:      	cbz	w8, 0x3618 <_perry_fn_access_worker_ts__run+0xc18>
+    3614:      	bl	0x3614 <_perry_fn_access_worker_ts__run+0xc14>
+		0000000000003614:  ARM64_RELOC_BRANCH26	_js_write_barrier_root_nanbox
+    3618:      	mov	x8, x24
+    361c:      	and	x9, x8, #0xffffffffffff
+    3620:      	and	x14, x8, #0xffff000000000000
+    3624:      	cmp	x14, x21
+    3628:      	b.ne	0x3684 <_perry_fn_access_worker_ts__run+0xc84>
+    362c:      	adrp	x10, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		000000000000362c:  ARM64_RELOC_GOT_LOAD_PAGE21	_PERRY_TA_VIEW_GUARD
+    3630:      	ldr	x10, [x10]
+		0000000000003630:  ARM64_RELOC_GOT_LOAD_PAGEOFF12	_PERRY_TA_VIEW_GUARD
+    3634:      	ldr	x10, [x10]
+    3638:      	sub	x11, x9, #0x100, lsl #12 ; =0x100000
+    363c:      	cmp	x10, #0x0
+    3640:      	mov	x10, #0x7ffffff00000    ; =140737487306752
+    3644:      	ccmp	x11, x10, #0x2, eq
+    3648:      	b.hs	0x3684 <_perry_fn_access_worker_ts__run+0xc84>
+    364c:      	fcmp	d9, d14
+    3650:      	b.pl	0x3684 <_perry_fn_access_worker_ts__run+0xc84>
+    3654:      	ldurb	w10, [x9, #-0x8]
+    3658:      	ldrb	w11, [x9, #0x8]
+    365c:      	fcmp	d9, #0.0
+    3660:      	ccmp	w10, #0xb, #0x0, ge
+    3664:      	ccmp	w11, #0x9, #0x2, eq
+    3668:      	b.hs	0x3684 <_perry_fn_access_worker_ts__run+0xc84>
+    366c:      	fcvtzs	x10, d9
+    3670:      	scvtf	d0, x10
+    3674:      	ldr	w12, [x9]
+    3678:      	fcmp	d9, d0
+    367c:      	ccmp	x10, x12, #0x2, eq
+    3680:      	b.lo	0x3738 <_perry_fn_access_worker_ts__run+0xd38>
+    3684:      	ldr	x12, [x19]
+    3688:      	cmp	x12, #0x0
+    368c:      	csel	x13, x19, x12, eq
+    3690:      	cmp	x14, x21
+    3694:      	b.ne	0x38fc <_perry_fn_access_worker_ts__run+0xefc>
+    3698:      	fcmp	d9, #0.0
+    369c:      	b.lt	0x38fc <_perry_fn_access_worker_ts__run+0xefc>
+    36a0:      	fcmp	d9, d15
+    36a4:      	b.pl	0x38fc <_perry_fn_access_worker_ts__run+0xefc>
+    36a8:      	mov	x10, #-0x20000000000    ; =-2199023255552
+    36ac:      	add	x10, x9, x10
+    36b0:      	lsr	x10, x10, #41
+    36b4:      	cmp	x10, #0x3f
+    36b8:      	b.hs	0x38fc <_perry_fn_access_worker_ts__run+0xefc>
+    36bc:      	fcvtzs	x10, d9
+    36c0:      	scvtf	d0, x10
+    36c4:      	fcmp	d9, d0
+    36c8:      	b.ne	0x38fc <_perry_fn_access_worker_ts__run+0xefc>
+    36cc:      	ldursb	w11, [x9, #-0x7]
+    36d0:      	tbnz	w11, #0x1f, 0x38fc <_perry_fn_access_worker_ts__run+0xefc>
+    36d4:      	ldurb	w11, [x9, #-0x8]
+    36d8:      	cmp	w11, #0x2
+    36dc:      	b.eq	0x3764 <_perry_fn_access_worker_ts__run+0xd64>
+    36e0:      	cmp	w11, #0x1
+    36e4:      	b.ne	0x38fc <_perry_fn_access_worker_ts__run+0xefc>
+    36e8:      	ldurh	w13, [x9, #-0x6]
+    36ec:      	adrp	x11, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		00000000000036ec:  ARM64_RELOC_GOT_LOAD_PAGE21	_PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED
+    36f0:      	ldr	x11, [x11]
+		00000000000036f0:  ARM64_RELOC_GOT_LOAD_PAGEOFF12	_PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED
+    36f4:      	ldrb	w12, [x11]
+    36f8:      	ldp	w11, w14, [x9]
+    36fc:      	cmp	w11, w14
+    3700:      	b.hi	0x38fc <_perry_fn_access_worker_ts__run+0xefc>
+    3704:      	tbnz	w13, #0xa, 0x38fc <_perry_fn_access_worker_ts__run+0xefc>
+    3708:      	cbnz	w12, 0x38fc <_perry_fn_access_worker_ts__run+0xefc>
+    370c:      	cmp	x10, x11
+    3710:      	b.hs	0x38fc <_perry_fn_access_worker_ts__run+0xefc>
+    3714:      	add	x8, x9, x10, lsl #3
+    3718:      	ldr	d0, [x8, #0x8]
+    371c:      	fmov	x8, d0
+    3720:      	mov	x9, #0x10               ; =16
+    3724:      	movk	x9, #0x7ffc, lsl #48
+    3728:      	cmp	x8, x9
+    372c:      	ldr	d1, [sp, #0x8]
+    3730:      	fcsel	d0, d1, d0, eq
+    3734:      	b	0x3918 <_perry_fn_access_worker_ts__run+0xf18>
+    3738:      	add	x8, x9, #0x10
+    373c:      	cmp	w11, #0x3
+    3740:      	b.le	0x37b4 <_perry_fn_access_worker_ts__run+0xdb4>
+    3744:      	cmp	w11, #0x5
+    3748:      	b.gt	0x3804 <_perry_fn_access_worker_ts__run+0xe04>
+    374c:      	cmp	w11, #0x4
+    3750:      	b.eq	0x3830 <_perry_fn_access_worker_ts__run+0xe30>
+    3754:      	cmp	w11, #0x5
+    3758:      	b.ne	0x3824 <_perry_fn_access_worker_ts__run+0xe24>
+    375c:      	ldr	s0, [x8, x10, lsl #2]
+    3760:      	b	0x3828 <_perry_fn_access_worker_ts__run+0xe28>
+    3764:      	ldr	x11, [x9, #0x8]
+    3768:      	cbz	x11, 0x37d0 <_perry_fn_access_worker_ts__run+0xdd0>
+    376c:      	ldr	x14, [x11, #0x60]
+    3770:      	cbz	x14, 0x37d0 <_perry_fn_access_worker_ts__run+0xdd0>
+    3774:      	ldurb	w9, [x14, #-0x8]
+    3778:      	cmp	w9, #0x1
+    377c:      	b.ne	0x38fc <_perry_fn_access_worker_ts__run+0xefc>
+    3780:      	ldursb	w9, [x14, #-0x7]
+    3784:      	tbnz	w9, #0x1f, 0x38fc <_perry_fn_access_worker_ts__run+0xefc>
+    3788:      	ldr	w9, [x14]
+    378c:      	cmp	x10, x9
+    3790:      	b.hs	0x38fc <_perry_fn_access_worker_ts__run+0xefc>
+    3794:      	add	x9, x14, x10, lsl #3
+    3798:      	ldr	d0, [x9, #0x8]
+    379c:      	fmov	x9, d0
+    37a0:      	mov	x10, #0x10              ; =16
+    37a4:      	movk	x10, #0x7ffc, lsl #48
+    37a8:      	cmp	x9, x10
+    37ac:      	b.ne	0x3918 <_perry_fn_access_worker_ts__run+0xf18>
+    37b0:      	b	0x38fc <_perry_fn_access_worker_ts__run+0xefc>
+    37b4:      	cbz	w11, 0x381c <_perry_fn_access_worker_ts__run+0xe1c>
+    37b8:      	cmp	w11, #0x2
+    37bc:      	b.eq	0x3844 <_perry_fn_access_worker_ts__run+0xe44>
+    37c0:      	cmp	w11, #0x3
+    37c4:      	b.ne	0x3824 <_perry_fn_access_worker_ts__run+0xe24>
+    37c8:      	ldr	h0, [x8, x10, lsl #1]
+    37cc:      	b	0x3828 <_perry_fn_access_worker_ts__run+0xe28>
+    37d0:      	ldr	x13, [x13]
+    37d4:      	cbz	x13, 0x38fc <_perry_fn_access_worker_ts__run+0xefc>
+    37d8:      	tbnz	x13, #0x3f, 0x3850 <_perry_fn_access_worker_ts__run+0xe50>
+    37dc:      	ldp	w15, w14, [x9]
+    37e0:      	orr	x14, x14, x15, lsl #32
+    37e4:      	cmp	x14, x13
+    37e8:      	b.ne	0x38fc <_perry_fn_access_worker_ts__run+0xefc>
+    37ec:      	ldp	x15, x13, [x12, #0x8]
+    37f0:      	ldp	x14, x12, [x12, #0x18]
+    37f4:      	cmp	x15, x12
+    37f8:      	b.lo	0x3870 <_perry_fn_access_worker_ts__run+0xe70>
+    37fc:      	cbz	x11, 0x38fc <_perry_fn_access_worker_ts__run+0xefc>
+    3800:      	b	0x387c <_perry_fn_access_worker_ts__run+0xe7c>
+    3804:      	cmp	w11, #0x6
+    3808:      	b.eq	0x3838 <_perry_fn_access_worker_ts__run+0xe38>
+    380c:      	cmp	w11, #0x7
+    3810:      	b.ne	0x3824 <_perry_fn_access_worker_ts__run+0xe24>
+    3814:      	ldr	d0, [x8, x10, lsl #3]
+    3818:      	b	0x3918 <_perry_fn_access_worker_ts__run+0xf18>
+    381c:      	ldrsb	w8, [x8, x10]
+    3820:      	b	0x3848 <_perry_fn_access_worker_ts__run+0xe48>
+    3824:      	ldr	b0, [x8, x10]
+    3828:      	ucvtf	d0, d0
+    382c:      	b	0x3918 <_perry_fn_access_worker_ts__run+0xf18>
+    3830:      	ldr	w8, [x8, x10, lsl #2]
+    3834:      	b	0x3848 <_perry_fn_access_worker_ts__run+0xe48>
+    3838:      	ldr	s0, [x8, x10, lsl #2]
+    383c:      	fcvt	d0, s0
+    3840:      	b	0x3918 <_perry_fn_access_worker_ts__run+0xf18>
+    3844:      	ldrsh	w8, [x8, x10, lsl #1]
+    3848:      	scvtf	d0, w8
+    384c:      	b	0x3918 <_perry_fn_access_worker_ts__run+0xf18>
+    3850:      	cbz	x11, 0x38fc <_perry_fn_access_worker_ts__run+0xefc>
+    3854:      	ldr	x14, [x11, #0x30]
+    3858:      	cmp	x14, x13
+    385c:      	b.ne	0x38fc <_perry_fn_access_worker_ts__run+0xefc>
+    3860:      	ldp	x15, x13, [x12, #0x8]
+    3864:      	ldp	x14, x12, [x12, #0x18]
+    3868:      	cmp	x15, x12
+    386c:      	b.hs	0x387c <_perry_fn_access_worker_ts__run+0xe7c>
+    3870:      	add	x15, x9, x15, lsl #3
+    3874:      	add	x15, x15, #0x10
+    3878:      	b	0x38a0 <_perry_fn_access_worker_ts__run+0xea0>
+    387c:      	ldr	x17, [x11, #0x20]
+    3880:      	cmp	x17, #0x0
+    3884:      	csel	x16, x17, x11, ne
+    3888:      	cbz	x17, 0x38fc <_perry_fn_access_worker_ts__run+0xefc>
+    388c:      	ldr	w17, [x16]
+    3890:      	cmp	x15, x17
+    3894:      	b.hs	0x38fc <_perry_fn_access_worker_ts__run+0xefc>
+    3898:      	add	x15, x16, x15, lsl #3
+    389c:      	add	x15, x15, #0x8
+    38a0:      	ldr	d0, [x15]
+    38a4:      	fcmp	d9, d0
+    38a8:      	ccmp	x14, x10, #0x0, mi
+    38ac:      	cset	w14, hi
+    38b0:      	add	x10, x13, x10
+    38b4:      	cmp	x10, x12
+    38b8:      	ccmp	w14, #0x0, #0x4, lo
+    38bc:      	b.ne	0x3bbc <_perry_fn_access_worker_ts__run+0x11bc>
+    38c0:      	cbz	x11, 0x38fc <_perry_fn_access_worker_ts__run+0xefc>
+    38c4:      	cmp	x10, x12
+    38c8:      	b.lo	0x38fc <_perry_fn_access_worker_ts__run+0xefc>
+    38cc:      	eor	w9, w14, #0x1
+    38d0:      	tbnz	w9, #0x0, 0x38fc <_perry_fn_access_worker_ts__run+0xefc>
+    38d4:      	ldr	x12, [x11, #0x20]
+    38d8:      	cmp	x12, #0x0
+    38dc:      	csel	x9, x12, x11, ne
+    38e0:      	cbz	x12, 0x38fc <_perry_fn_access_worker_ts__run+0xefc>
+    38e4:      	ldr	w11, [x9]
+    38e8:      	cmp	x10, x11
+    38ec:      	b.hs	0x38fc <_perry_fn_access_worker_ts__run+0xefc>
+    38f0:      	add	x8, x9, x10, lsl #3
+    38f4:      	ldr	d0, [x8, #0x8]
+    38f8:      	b	0x3918 <_perry_fn_access_worker_ts__run+0xf18>
+    38fc:      	fmov	d0, x8
+    3900:      	str	x26, [sp, #0x28]
+    3904:      	mov.16b	v1, v9
+    3908:      	mov	x0, x19
+    390c:      	bl	0x390c <_perry_fn_access_worker_ts__run+0xf0c>
+		000000000000390c:  ARM64_RELOC_BRANCH26	_js_packed_arraylike_index_get
+    3910:      	ldp	x24, x26, [sp, #0x20]
+    3914:      	ldr	x28, [sp, #0x18]
+    3918:      	fmov	x8, d0
+    391c:      	mov	x9, #-0x3000000000000   ; =-844424930131968
+    3920:      	and	x9, x8, x9
+    3924:      	cmp	x9, x21
+    3928:      	b.ne	0x3994 <_perry_fn_access_worker_ts__run+0xf94>
+    392c:      	and	x0, x8, #0xffffffffffff
+    3930:      	lsr	x8, x0, #20
+    3934:      	cbz	x8, 0x3ae8 <_perry_fn_access_worker_ts__run+0x10e8>
+    3938:      	ldurb	w9, [x0, #-0x8]
+    393c:      	adrp	x8, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		000000000000393c:  ARM64_RELOC_PAGE21	l_perry_ic_access_worker_ts__23
+    3940:      	ldr	x8, [x8]
+		0000000000003940:  ARM64_RELOC_PAGEOFF12	l_perry_ic_access_worker_ts__23
+    3944:      	cbz	x8, 0x3a04 <_perry_fn_access_worker_ts__run+0x1004>
+    3948:      	ldurh	w10, [x0, #-0x6]
+    394c:      	and	w10, w10, #0x800
+    3950:      	cmp	w9, #0x2
+    3954:      	ccmp	w10, #0x0, #0x0, eq
+    3958:      	b.ne	0x3a04 <_perry_fn_access_worker_ts__run+0x1004>
+    395c:      	ldr	w10, [x0, #0x4]
+    3960:      	orr	x9, x10, #0x4000000000000000
+    3964:      	ldr	x11, [x8]
+    3968:      	cmp	w10, #0x0
+    396c:      	ccmp	x9, x11, #0x0, ne
+    3970:      	b.eq	0x3a3c <_perry_fn_access_worker_ts__run+0x103c>
+    3974:      	ldr	x11, [x8, #0x10]
+    3978:      	cbz	x11, 0x3a60 <_perry_fn_access_worker_ts__run+0x1060>
+    397c:      	ldr	x12, [x0, #0x8]
+    3980:      	cbz	x12, 0x3a60 <_perry_fn_access_worker_ts__run+0x1060>
+    3984:      	ldr	x12, [x12, #0x30]
+    3988:      	cmp	x12, x11
+    398c:      	b.eq	0x3a2c <_perry_fn_access_worker_ts__run+0x102c>
+    3990:      	b	0x3a60 <_perry_fn_access_worker_ts__run+0x1060>
+    3994:      	lsr	x9, x8, #48
+    3998:      	mov	w10, #0x7ff9            ; =32761
+    399c:      	cmp	x9, x10
+    39a0:      	b.eq	0x39e8 <_perry_fn_access_worker_ts__run+0xfe8>
+    39a4:      	mov	w10, #0x7ffe            ; =32766
+    39a8:      	cmp	w9, w10
+    39ac:      	b.ne	0x39d8 <_perry_fn_access_worker_ts__run+0xfd8>
+    39b0:      	adrp	x9, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		00000000000039b0:  ARM64_RELOC_PAGE21	_access_worker_ts_.str.1.handle
+    39b4:      	ldr	x9, [x9]
+		00000000000039b4:  ARM64_RELOC_PAGEOFF12	_access_worker_ts_.str.1.handle
+    39b8:      	str	x26, [sp, #0x28]
+    39bc:      	and	x2, x9, #0xffffffffffff
+    39c0:      	mov	x0, #0x16               ; =22
+    39c4:      	movk	x0, #0xddae, lsl #32
+    39c8:      	movk	x0, #0x5556, lsl #48
+    39cc:      	mov	x1, x8
+    39d0:      	bl	0x39d0 <_perry_fn_access_worker_ts__run+0xfd0>
+		00000000000039d0:  ARM64_RELOC_BRANCH26	_js_typed_feedback_object_get_field_by_name_f64
+    39d4:      	b	0x3b04 <_perry_fn_access_worker_ts__run+0x1104>
+    39d8:      	mov	x9, #-0x7ffc000000000001 ; =-9222246136947933185
+    39dc:      	add	x9, x8, x9
+    39e0:      	cmp	x9, #0x2
+    39e4:      	b.lo	0x5674 <_perry_fn_access_worker_ts__run+0x2c74>
+    39e8:      	adrp	x9, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		00000000000039e8:  ARM64_RELOC_PAGE21	_access_worker_ts_.str.1.handle
+    39ec:      	ldr	x9, [x9]
+		00000000000039ec:  ARM64_RELOC_PAGEOFF12	_access_worker_ts_.str.1.handle
+    39f0:      	str	x26, [sp, #0x28]
+    39f4:      	and	x1, x9, #0xffffffffffff
+    39f8:      	mov	x0, x8
+    39fc:      	bl	0x39fc <_perry_fn_access_worker_ts__run+0xffc>
+		00000000000039fc:  ARM64_RELOC_BRANCH26	_js_object_get_field_by_name_f64
+    3a00:      	b	0x3b04 <_perry_fn_access_worker_ts__run+0x1104>
+    3a04:      	cmp	w9, #0x2
+    3a08:      	ccmp	x8, #0x0, #0x4, eq
+    3a0c:      	b.eq	0x3ae8 <_perry_fn_access_worker_ts__run+0x10e8>
+    3a10:      	ldr	x9, [x8, #0x10]
+    3a14:      	cbz	x9, 0x3ae8 <_perry_fn_access_worker_ts__run+0x10e8>
+    3a18:      	ldr	x10, [x0, #0x8]
+    3a1c:      	cbz	x10, 0x3ae8 <_perry_fn_access_worker_ts__run+0x10e8>
+    3a20:      	ldr	x10, [x10, #0x30]
+    3a24:      	cmp	x10, x9
+    3a28:      	b.ne	0x3ae8 <_perry_fn_access_worker_ts__run+0x10e8>
+    3a2c:      	ldr	x8, [x8, #0x8]
+    3a30:      	add	x8, x0, x8, lsl #3
+    3a34:      	ldr	d1, [x8, #0x10]
+    3a38:      	b	0x3b10 <_perry_fn_access_worker_ts__run+0x1110>
+    3a3c:      	ldr	x2, [x8, #0x8]
+    3a40:      	tbnz	w2, #0x1e, 0x3b9c <_perry_fn_access_worker_ts__run+0x119c>
+    3a44:      	add	x11, x0, x2, lsl #3
+    3a48:      	ldr	d1, [x11, #0x10]
+    3a4c:      	fmov	x11, d1
+    3a50:      	mov	x12, #0x10              ; =16
+    3a54:      	movk	x12, #0x7ffc, lsl #48
+    3a58:      	cmp	x11, x12
+    3a5c:      	b.ne	0x3b10 <_perry_fn_access_worker_ts__run+0x1110>
+    3a60:      	ldr	x11, [x8, #0x18]
+    3a64:      	cmp	x11, #0x0
+    3a68:      	b.le	0x3ae8 <_perry_fn_access_worker_ts__run+0x10e8>
+    3a6c:      	ldr	x11, [x8, #0x20]
+    3a70:      	ldr	x12, [x8, #0x30]
+    3a74:      	ldr	x13, [x8, #0x40]
+    3a78:      	cmp	x13, x9
+    3a7c:      	ldr	x14, [x8, #0x50]
+    3a80:      	ccmp	x14, x9, #0x4, ne
+    3a84:      	ccmp	x12, x9, #0x4, ne
+    3a88:      	ccmp	x11, x9, #0x4, ne
+    3a8c:      	cset	w15, eq
+    3a90:      	cmp	w10, #0x0
+    3a94:      	ccmp	w15, #0x0, #0x4, ne
+    3a98:      	b.eq	0x3ae8 <_perry_fn_access_worker_ts__run+0x10e8>
+    3a9c:      	ldr	x10, [x8, #0x48]
+    3aa0:      	ldr	x15, [x8, #0x58]
+    3aa4:      	cmp	x14, x9
+    3aa8:      	csel	x14, x15, xzr, eq
+    3aac:      	cmp	x13, x9
+    3ab0:      	csel	x10, x10, x14, eq
+    3ab4:      	ldr	x13, [x8, #0x28]
+    3ab8:      	ldr	x8, [x8, #0x38]
+    3abc:      	cmp	x12, x9
+    3ac0:      	csel	x8, x8, x10, eq
+    3ac4:      	cmp	x11, x9
+    3ac8:      	csel	x8, x13, x8, eq
+    3acc:      	add	x8, x0, x8, lsl #3
+    3ad0:      	ldr	d1, [x8, #0x10]
+    3ad4:      	fmov	x8, d1
+    3ad8:      	mov	x9, #0x10               ; =16
+    3adc:      	movk	x9, #0x7ffc, lsl #48
+    3ae0:      	cmp	x8, x9
+    3ae4:      	b.ne	0x3b10 <_perry_fn_access_worker_ts__run+0x1110>
+    3ae8:      	adrp	x8, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		0000000000003ae8:  ARM64_RELOC_PAGE21	_access_worker_ts_.str.1.handle
+    3aec:      	ldr	x8, [x8]
+		0000000000003aec:  ARM64_RELOC_PAGEOFF12	_access_worker_ts_.str.1.handle
+    3af0:      	str	x26, [sp, #0x28]
+    3af4:      	and	x1, x8, #0xffffffffffff
+    3af8:      	adrp	x2, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		0000000000003af8:  ARM64_RELOC_PAGE21	l_perry_ic_access_worker_ts__23
+    3afc:      	add	x2, x2, #0x0
+		0000000000003afc:  ARM64_RELOC_PAGEOFF12	l_perry_ic_access_worker_ts__23
+    3b00:      	bl	0x3b00 <_perry_fn_access_worker_ts__run+0x1100>
+		0000000000003b00:  ARM64_RELOC_BRANCH26	_js_object_get_field_ic_miss
+    3b04:      	mov.16b	v1, v0
+    3b08:      	ldp	x28, x24, [sp, #0x18]
+    3b0c:      	ldr	x26, [sp, #0x28]
+    3b10:      	fmov	d0, x26
+    3b14:      	and	x9, x26, #0xffff000000000000
+    3b18:      	fmov	x8, d1
+    3b1c:      	and	x10, x8, #0xffff000000000000
+    3b20:      	cmp	x8, x27
+    3b24:      	ccmp	x10, x22, #0x2, hs
+    3b28:      	cset	w8, hi
+    3b2c:      	mov	x10, #0x1               ; =1
+    3b30:      	movk	x10, #0x7fff, lsl #48
+    3b34:      	cmp	x9, x10
+    3b38:      	mov	x9, #0x7ff8ffffffffffff ; =9221401712017801215
+    3b3c:      	ccmp	x26, x9, #0x0, lo
+    3b40:      	b.hi	0x3b50 <_perry_fn_access_worker_ts__run+0x1150>
+    3b44:      	tbz	w8, #0x0, 0x3b50 <_perry_fn_access_worker_ts__run+0x1150>
+    3b48:      	fadd	d0, d1, d0
+    3b4c:      	b	0x3b58 <_perry_fn_access_worker_ts__run+0x1158>
+    3b50:      	bl	0x3b50 <_perry_fn_access_worker_ts__run+0x1150>
+		0000000000003b50:  ARM64_RELOC_BRANCH26	_js_dynamic_string_or_number_add
+    3b54:      	ldp	x28, x24, [sp, #0x18]
+    3b58:      	fmov	x26, d0
+    3b5c:      	mov	x0, x26
+    3b60:      	ldr	w8, [x20]
+    3b64:      	cbz	w8, 0x3b6c <_perry_fn_access_worker_ts__run+0x116c>
+    3b68:      	bl	0x3b68 <_perry_fn_access_worker_ts__run+0x1168>
+		0000000000003b68:  ARM64_RELOC_BRANCH26	_js_write_barrier_root_nanbox
+    3b6c:      	adrp	x8, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		0000000000003b6c:  ARM64_RELOC_GOT_LOAD_PAGE21	_PERRY_GC_POLL_ARMED
+    3b70:      	ldr	x8, [x8]
+		0000000000003b70:  ARM64_RELOC_GOT_LOAD_PAGEOFF12	_PERRY_GC_POLL_ARMED
+    3b74:      	ldr	w8, [x8]
+    3b78:      	cbz	w8, 0x3b8c <_perry_fn_access_worker_ts__run+0x118c>
+    3b7c:      	str	x26, [sp, #0x28]
+    3b80:      	bl	0x3b80 <_perry_fn_access_worker_ts__run+0x1180>
+		0000000000003b80:  ARM64_RELOC_BRANCH26	_js_gc_loop_safepoint
+    3b84:      	ldp	x24, x26, [sp, #0x20]
+    3b88:      	ldr	x28, [sp, #0x18]
+    3b8c:      	fadd	d8, d8, d11
+    3b90:      	add	w25, w25, #0x1
+    3b94:      	tbz	w23, #0x0, 0x3490 <_perry_fn_access_worker_ts__run+0xa90>
+    3b98:      	b	0x3584 <_perry_fn_access_worker_ts__run+0xb84>
+    3b9c:      	adrp	x8, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		0000000000003b9c:  ARM64_RELOC_PAGE21	_access_worker_ts_.str.1.handle
+    3ba0:      	ldr	x8, [x8]
+		0000000000003ba0:  ARM64_RELOC_PAGEOFF12	_access_worker_ts_.str.1.handle
+    3ba4:      	str	x26, [sp, #0x28]
+    3ba8:      	and	x1, x8, #0xffffffffffff
+    3bac:      	adrp	x3, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		0000000000003bac:  ARM64_RELOC_PAGE21	l_perry_ic_access_worker_ts__23
+    3bb0:      	add	x3, x3, #0x0
+		0000000000003bb0:  ARM64_RELOC_PAGEOFF12	l_perry_ic_access_worker_ts__23
+    3bb4:      	bl	0x3bb4 <_perry_fn_access_worker_ts__run+0x11b4>
+		0000000000003bb4:  ARM64_RELOC_BRANCH26	_js_object_get_field_ic_overflow_load
+    3bb8:      	b	0x3b04 <_perry_fn_access_worker_ts__run+0x1104>
+    3bbc:      	add	x8, x9, x10, lsl #3
+    3bc0:      	ldr	d0, [x8, #0x10]
+    3bc4:      	b	0x3918 <_perry_fn_access_worker_ts__run+0xf18>
+    3bc8:      	str	w9, [sp, #0x14]
+    3bcc:      	str	w9, [sp, #0x8]
+    3bd0:      	mov	w22, #0x0               ; =0
+    3bd4:      	mov	x26, #0x0               ; =0
+    3bd8:      	adrp	x23, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		0000000000003bd8:  ARM64_RELOC_GOT_LOAD_PAGE21	_PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT
+    3bdc:      	ldr	x23, [x23]
+		0000000000003bdc:  ARM64_RELOC_GOT_LOAD_PAGEOFF12	_PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT
+    3be0:      	mov	x27, #0x7ffd000000000000 ; =9222527611924643840
+    3be4:      	adrp	x8, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		0000000000003be4:  ARM64_RELOC_PAGE21	lCPI1_2
+    3be8:      	ldr	d10, [x8]
+		0000000000003be8:  ARM64_RELOC_PAGEOFF12	lCPI1_2
+    3bec:      	adrp	x8, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		0000000000003bec:  ARM64_RELOC_PAGE21	lCPI1_3
+    3bf0:      	ldr	d11, [x8]
+		0000000000003bf0:  ARM64_RELOC_PAGEOFF12	lCPI1_3
+    3bf4:      	mov	x20, #-0x3000000000000  ; =-844424930131968
+    3bf8:      	mov	x19, #0x7ff9000000000000 ; =9221401712017801216
+    3bfc:      	mov	x21, #0x7fff000000000000 ; =9223090561878065152
+    3c00:      	mov	x25, #0x7ff8ffffffffffff ; =9221401712017801215
+    3c04:      	mov	x8, #0x41f0000000000000 ; =4751297606875873280
+    3c08:      	fmov	d12, x8
+    3c0c:      	movi.2d	v13, #0000000000000000
+    3c10:      	fmov	d14, #1.00000000
+    3c14:      	ldr	w8, [sp, #0x14]
+    3c18:      	tbz	w8, #0x0, 0x3c30 <_perry_fn_access_worker_ts__run+0x1230>
+    3c1c:      	ldr	w8, [sp, #0x8]
+    3c20:      	cmp	w22, w8
+    3c24:      	b.ge	0x5638 <_perry_fn_access_worker_ts__run+0x2c38>
+    3c28:      	scvtf	d8, w22
+    3c2c:      	b	0x3d20 <_perry_fn_access_worker_ts__run+0x1320>
+    3c30:      	scvtf	d8, w22
+    3c34:      	mov	x8, x28
+    3c38:      	fmov	d1, x8
+    3c3c:      	and	x9, x8, #0xffff000000000000
+    3c40:      	mov	x10, #0x7ffe000000000000 ; =9222809086901354496
+    3c44:      	cmp	x9, x10
+    3c48:      	b.eq	0x3c84 <_perry_fn_access_worker_ts__run+0x1284>
+    3c4c:      	cmp	x8, x19
+    3c50:      	b.lt	0x3c84 <_perry_fn_access_worker_ts__run+0x1284>
+    3c54:      	mov	x10, #-0x7ffc000000000001 ; =-9222246136947933185
+    3c58:      	add	x10, x8, x10
+    3c5c:      	cmp	x10, #0x3
+    3c60:      	b.ls	0x3c84 <_perry_fn_access_worker_ts__run+0x1284>
+    3c64:      	stp	x28, x26, [sp, #0x20]
+    3c68:      	str	x24, [sp, #0x18]
+    3c6c:      	mov.16b	v0, v8
+    3c70:      	bl	0x3c70 <_perry_fn_access_worker_ts__run+0x1270>
+		0000000000003c70:  ARM64_RELOC_BRANCH26	_js_rel_lt
+    3c74:      	mov.16b	v9, v0
+    3c78:      	ldp	x24, x28, [sp, #0x18]
+    3c7c:      	ldr	x26, [sp, #0x28]
+    3c80:      	b	0x3ce4 <_perry_fn_access_worker_ts__run+0x12e4>
+    3c84:      	mov	x12, #0x10              ; =16
+    3c88:      	movk	x12, #0x7ffc, lsl #48
+    3c8c:      	sub	x10, x12, #0xc
+    3c90:      	and	x11, x8, #0xfffffffffffffffe
+    3c94:      	sub	x12, x12, #0xe
+    3c98:      	scvtf	d0, w8
+    3c9c:      	mov	x13, #0x7ffe000000000000 ; =9222809086901354496
+    3ca0:      	cmp	x9, x13
+    3ca4:      	fcsel	d0, d0, d1, eq
+    3ca8:      	cmp	x11, x12
+    3cac:      	fcsel	d0, d13, d0, eq
+    3cb0:      	cmp	x8, x10
+    3cb4:      	fcsel	d0, d14, d0, eq
+    3cb8:      	fmov	x8, d8
+    3cbc:      	scvtf	d1, w8
+    3cc0:      	mov	w9, #0x7ffe             ; =32766
+    3cc4:      	cmp	x9, x8, lsr #48
+    3cc8:      	fcsel	d1, d1, d8, eq
+    3ccc:      	fcmp	d1, d0
+    3cd0:      	mov	w8, #0x8                ; =8
+    3cd4:      	csel	x8, x8, xzr, mi
+    3cd8:      	adrp	x9, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		0000000000003cd8:  ARM64_RELOC_PAGE21	lCPI1_1
+    3cdc:      	add	x9, x9, #0x0
+		0000000000003cdc:  ARM64_RELOC_PAGEOFF12	lCPI1_1
+    3ce0:      	ldr	d9, [x9, x8]
+    3ce4:      	adrp	x8, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		0000000000003ce4:  ARM64_RELOC_GOT_LOAD_PAGE21	_PERRY_GC_POLL_ARMED
+    3ce8:      	ldr	x8, [x8]
+		0000000000003ce8:  ARM64_RELOC_GOT_LOAD_PAGEOFF12	_PERRY_GC_POLL_ARMED
+    3cec:      	ldr	w8, [x8]
+    3cf0:      	cbz	w8, 0x3d08 <_perry_fn_access_worker_ts__run+0x1308>
+    3cf4:      	stp	x24, x28, [sp, #0x20]
+    3cf8:      	str	x26, [sp, #0x18]
+    3cfc:      	bl	0x3cfc <_perry_fn_access_worker_ts__run+0x12fc>
+		0000000000003cfc:  ARM64_RELOC_BRANCH26	_js_gc_loop_safepoint
+    3d00:      	ldp	x26, x24, [sp, #0x18]
+    3d04:      	ldr	x28, [sp, #0x28]
+    3d08:      	fmov	x8, d9
+    3d0c:      	mov	x9, #0x10               ; =16
+    3d10:      	movk	x9, #0x7ffc, lsl #48
+    3d14:      	sub	x9, x9, #0xc
+    3d18:      	cmp	x8, x9
+    3d1c:      	b.ne	0x5638 <_perry_fn_access_worker_ts__run+0x2c38>
+    3d20:      	adrp	x8, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		0000000000003d20:  ARM64_RELOC_PAGE21	_perry_global_access_worker_ts__5
+    3d24:      	ldr	d1, [x8]
+		0000000000003d24:  ARM64_RELOC_PAGEOFF12	_perry_global_access_worker_ts__5
+    3d28:      	stp	x28, x26, [sp, #0x20]
+    3d2c:      	str	x24, [sp, #0x18]
+    3d30:      	mov.16b	v0, v8
+    3d34:      	bl	0x3d34 <_perry_fn_access_worker_ts__run+0x1334>
+		0000000000003d34:  ARM64_RELOC_BRANCH26	_js_dynamic_mod
+    3d38:      	mov.16b	v8, v0
+    3d3c:      	ldp	x24, x28, [sp, #0x18]
+    3d40:      	ldr	x26, [sp, #0x28]
+    3d44:      	mov	x0, x26
+    3d48:      	ldr	w8, [x23]
+    3d4c:      	cbz	w8, 0x3d54 <_perry_fn_access_worker_ts__run+0x1354>
+    3d50:      	bl	0x3d50 <_perry_fn_access_worker_ts__run+0x1350>
+		0000000000003d50:  ARM64_RELOC_BRANCH26	_js_write_barrier_root_nanbox
+    3d54:      	mov	x8, x24
+    3d58:      	and	x9, x8, #0xffffffffffff
+    3d5c:      	and	x14, x8, #0xffff000000000000
+    3d60:      	adrp	x10, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		0000000000003d60:  ARM64_RELOC_GOT_LOAD_PAGE21	_PERRY_TA_VIEW_GUARD
+    3d64:      	ldr	x10, [x10]
+		0000000000003d64:  ARM64_RELOC_GOT_LOAD_PAGEOFF12	_PERRY_TA_VIEW_GUARD
+    3d68:      	ldr	x10, [x10]
+    3d6c:      	sub	x11, x9, #0x100, lsl #12 ; =0x100000
+    3d70:      	cmp	x14, x27
+    3d74:      	ccmp	x10, #0x0, #0x0, eq
+    3d78:      	mov	x10, #0x7ffffff00000    ; =140737487306752
+    3d7c:      	ccmp	x11, x10, #0x2, eq
+    3d80:      	b.hs	0x3dc4 <_perry_fn_access_worker_ts__run+0x13c4>
+    3d84:      	mov	x10, #0x41f0000000000000 ; =4751297606875873280
+    3d88:      	fmov	d0, x10
+    3d8c:      	fcmp	d8, d0
+    3d90:      	b.pl	0x3dc4 <_perry_fn_access_worker_ts__run+0x13c4>
+    3d94:      	ldurb	w10, [x9, #-0x8]
+    3d98:      	ldrb	w11, [x9, #0x8]
+    3d9c:      	fcmp	d8, #0.0
+    3da0:      	ccmp	w10, #0xb, #0x0, ge
+    3da4:      	ccmp	w11, #0x9, #0x2, eq
+    3da8:      	b.hs	0x3dc4 <_perry_fn_access_worker_ts__run+0x13c4>
+    3dac:      	fcvtzs	x10, d8
+    3db0:      	scvtf	d0, x10
+    3db4:      	ldr	w12, [x9]
+    3db8:      	fcmp	d8, d0
+    3dbc:      	ccmp	x10, x12, #0x2, eq
+    3dc0:      	b.lo	0x3e7c <_perry_fn_access_worker_ts__run+0x147c>
+    3dc4:      	adrp	x10, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		0000000000003dc4:  ARM64_RELOC_PAGE21	l_perry_ic_access_worker_ts__24
+    3dc8:      	add	x10, x10, #0x0
+		0000000000003dc8:  ARM64_RELOC_PAGEOFF12	l_perry_ic_access_worker_ts__24
+    3dcc:      	ldr	x12, [x10]
+    3dd0:      	cmp	x12, #0x0
+    3dd4:      	csel	x13, x10, x12, eq
+    3dd8:      	cmp	x14, x27
+    3ddc:      	b.ne	0x4040 <_perry_fn_access_worker_ts__run+0x1640>
+    3de0:      	fcmp	d8, #0.0
+    3de4:      	b.lt	0x4040 <_perry_fn_access_worker_ts__run+0x1640>
+    3de8:      	fcmp	d8, d10
+    3dec:      	b.pl	0x4040 <_perry_fn_access_worker_ts__run+0x1640>
+    3df0:      	mov	x10, #-0x20000000000    ; =-2199023255552
+    3df4:      	add	x10, x9, x10
+    3df8:      	lsr	x10, x10, #41
+    3dfc:      	cmp	x10, #0x3f
+    3e00:      	b.hs	0x4040 <_perry_fn_access_worker_ts__run+0x1640>
+    3e04:      	fcvtzs	x10, d8
+    3e08:      	scvtf	d0, x10
+    3e0c:      	fcmp	d8, d0
+    3e10:      	b.ne	0x4040 <_perry_fn_access_worker_ts__run+0x1640>
+    3e14:      	ldursb	w11, [x9, #-0x7]
+    3e18:      	tbnz	w11, #0x1f, 0x4040 <_perry_fn_access_worker_ts__run+0x1640>
+    3e1c:      	ldurb	w11, [x9, #-0x8]
+    3e20:      	cmp	w11, #0x2
+    3e24:      	b.eq	0x3ea8 <_perry_fn_access_worker_ts__run+0x14a8>
+    3e28:      	cmp	w11, #0x1
+    3e2c:      	b.ne	0x4040 <_perry_fn_access_worker_ts__run+0x1640>
+    3e30:      	ldurh	w13, [x9, #-0x6]
+    3e34:      	adrp	x11, 0x3000 <_perry_fn_access_worker_ts__run+0x600>
+		0000000000003e34:  ARM64_RELOC_GOT_LOAD_PAGE21	_PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED
+    3e38:      	ldr	x11, [x11]
+		0000000000003e38:  ARM64_RELOC_GOT_LOAD_PAGEOFF12	_PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED
+    3e3c:      	ldrb	w12, [x11]
+    3e40:      	ldp	w11, w14, [x9]
+    3e44:      	cmp	w11, w14
+    3e48:      	b.hi	0x4040 <_perry_fn_access_worker_ts__run+0x1640>
+    3e4c:      	tbnz	w13, #0xa, 0x4040 <_perry_fn_access_worker_ts__run+0x1640>
+    3e50:      	cbnz	w12, 0x4040 <_perry_fn_access_worker_ts__run+0x1640>
+    3e54:      	cmp	x10, x11
+    3e58:      	b.hs	0x4040 <_perry_fn_access_worker_ts__run+0x1640>
+    3e5c:      	add	x8, x9, x10, lsl #3
+    3e60:      	ldr	d0, [x8, #0x8]
+    3e64:      	fmov	x8, d0
+    3e68:      	mov	x9, #0x10               ; =16
+    3e6c:      	movk	x9, #0x7ffc, lsl #48
+    3e70:      	cmp	x8, x9
+    3e74:      	fcsel	d0, d11, d0, eq
+    3e78:      	b	0x4060 <_perry_fn_access_worker_ts__run+0x1660>
+    3e7c:      	add	x8, x9, #0x10
+    3e80:      	cmp	w11, #0x3
+    3e84:      	b.le	0x3ef8 <_perry_fn_access_worker_ts__run+0x14f8>
+    3e88:      	cmp	w11, #0x5
+    3e8c:      	b.gt	0x3f48 <_perry_fn_access_worker_ts__run+0x1548>
+    3e90:      	cmp	w11, #0x4
+    3e94:      	b.eq	0x3f74 <_perry_fn_access_worker_ts__run+0x1574>
+    3e98:      	cmp	w11, #0x5
+    3e9c:      	b.ne	0x3f68 <_perry_fn_access_worker_ts__run+0x1568>
+    3ea0:      	ldr	s0, [x8, x10, lsl #2]
+    3ea4:      	b	0x3f6c <_perry_fn_access_worker_ts__run+0x156c>
+    3ea8:      	ldr	x11, [x9, #0x8]
+    3eac:      	cbz	x11, 0x3f14 <_perry_fn_access_worker_ts__run+0x1514>
+    3eb0:      	ldr	x14, [x11, #0x60]
+    3eb4:      	cbz	x14, 0x3f14 <_perry_fn_access_worker_ts__run+0x1514>
+    3eb8:      	ldurb	w9, [x14, #-0x8]
+    3ebc:      	cmp	w9, #0x1
+    3ec0:      	b.ne	0x4040 <_perry_fn_access_worker_ts__run+0x1640>
+    3ec4:      	ldursb	w9, [x14, #-0x7]
+    3ec8:      	tbnz	w9, #0x1f, 0x4040 <_perry_fn_access_worker_ts__run+0x1640>
+    3ecc:      	ldr	w9, [x14]
+    3ed0:      	cmp	x10, x9
+    3ed4:      	b.hs	0x4040 <_perry_fn_access_worker_ts__run+0x1640>
+    3ed8:      	add	x9, x14, x10, lsl #3
+    3edc:      	ldr	d0, [x9, #0x8]
+    3ee0:      	fmov	x9, d0
+    3ee4:      	mov	x10, #0x10              ; =16
+    3ee8:      	movk	x10, #0x7ffc, lsl #48
+    3eec:      	cmp	x9, x10
+    3ef0:      	b.ne	0x4060 <_perry_fn_access_worker_ts__run+0x1660>
+    3ef4:      	b	0x4040 <_perry_fn_access_worker_ts__run+0x1640>
+    3ef8:      	cbz	w11, 0x3f60 <_perry_fn_access_worker_ts__run+0x1560>
+    3efc:      	cmp	w11, #0x2
+    3f00:      	b.eq	0x3f88 <_perry_fn_access_worker_ts__run+0x1588>
+    3f04:      	cmp	w11, #0x3
+    3f08:      	b.ne	0x3f68 <_perry_fn_access_worker_ts__run+0x1568>
+    3f0c:      	ldr	h0, [x8, x10, lsl #1]
+    3f10:      	b	0x3f6c <_perry_fn_access_worker_ts__run+0x156c>
+    3f14:      	ldr	x13, [x13]
+    3f18:      	cbz	x13, 0x4040 <_perry_fn_access_worker_ts__run+0x1640>
+    3f1c:      	tbnz	x13, #0x3f, 0x3f94 <_perry_fn_access_worker_ts__run+0x1594>
+    3f20:      	ldp	w15, w14, [x9]
+    3f24:      	orr	x14, x14, x15, lsl #32
+    3f28:      	cmp	x14, x13
+    3f2c:      	b.ne	0x4040 <_perry_fn_access_worker_ts__run+0x1640>
+    3f30:      	ldp	x15, x13, [x12, #0x8]
+    3f34:      	ldp	x14, x12, [x12, #0x18]
+    3f38:      	cmp	x15, x12
+    3f3c:      	b.lo	0x3fb4 <_perry_fn_access_worker_ts__run+0x15b4>
+    3f40:      	cbz	x11, 0x4040 <_perry_fn_access_worker_ts__run+0x1640>
+    3f44:      	b	0x3fc0 <_perry_fn_access_worker_ts__run+0x15c0>
+    3f48:      	cmp	w11, #0x6
+    3f4c:      	b.eq	0x3f7c <_perry_fn_access_worker_ts__run+0x157c>
+    3f50:      	cmp	w11, #0x7
+    3f54:      	b.ne	0x3f68 <_perry_fn_access_worker_ts__run+0x1568>
+    3f58:      	ldr	d0, [x8, x10, lsl #3]
+    3f5c:      	b	0x4060 <_perry_fn_access_worker_ts__run+0x1660>
+    3f60:      	ldrsb	w8, [x8, x10]
+    3f64:      	b	0x3f8c <_perry_fn_access_worker_ts__run+0x158c>
+    3f68:      	ldr	b0, [x8, x10]
+    3f6c:      	ucvtf	d0, d0
+    3f70:      	b	0x4060 <_perry_fn_access_worker_ts__run+0x1660>
+    3f74:      	ldr	w8, [x8, x10, lsl #2]
+    3f78:      	b	0x3f8c <_perry_fn_access_worker_ts__run+0x158c>
+    3f7c:      	ldr	s0, [x8, x10, lsl #2]
+    3f80:      	fcvt	d0, s0
+    3f84:      	b	0x4060 <_perry_fn_access_worker_ts__run+0x1660>
+    3f88:      	ldrsh	w8, [x8, x10, lsl #1]
+    3f8c:      	scvtf	d0, w8
+    3f90:      	b	0x4060 <_perry_fn_access_worker_ts__run+0x1660>
+    3f94:      	cbz	x11, 0x4040 <_perry_fn_access_worker_ts__run+0x1640>
+    3f98:      	ldr	x14, [x11, #0x30]
+    3f9c:      	cmp	x14, x13
+    3fa0:      	b.ne	0x4040 <_perry_fn_access_worker_ts__run+0x1640>
+    3fa4:      	ldp	x15, x13, [x12, #0x8]
+    3fa8:      	ldp	x14, x12, [x12, #0x18]
+    3fac:      	cmp	x15, x12
+    3fb0:      	b.hs	0x3fc0 <_perry_fn_access_worker_ts__run+0x15c0>
+    3fb4:      	add	x15, x9, x15, lsl #3
+    3fb8:      	add	x15, x15, #0x10
+    3fbc:      	b	0x3fe4 <_perry_fn_access_worker_ts__run+0x15e4>
+    3fc0:      	ldr	x17, [x11, #0x20]
+    3fc4:      	cmp	x17, #0x0
+    3fc8:      	csel	x16, x17, x11, ne
+    3fcc:      	cbz	x17, 0x4040 <_perry_fn_access_worker_ts__run+0x1640>
+    3fd0:      	ldr	w17, [x16]
+    3fd4:      	cmp	x15, x17
+    3fd8:      	b.hs	0x4040 <_perry_fn_access_worker_ts__run+0x1640>
+    3fdc:      	add	x15, x16, x15, lsl #3
+    3fe0:      	add	x15, x15, #0x8
+    3fe4:      	ldr	d0, [x15]
+    3fe8:      	fcmp	d8, d0
+    3fec:      	ccmp	x14, x10, #0x0, mi
+    3ff0:      	cset	w14, hi
+    3ff4:      	add	x10, x13, x10
+    3ff8:      	cmp	x10, x12
+    3ffc:      	ccmp	w14, #0x0, #0x4, lo
+    4000:      	b.ne	0x4f08 <_perry_fn_access_worker_ts__run+0x2508>
+    4004:      	cbz	x11, 0x4040 <_perry_fn_access_worker_ts__run+0x1640>
+    4008:      	cmp	x10, x12
+    400c:      	b.lo	0x4040 <_perry_fn_access_worker_ts__run+0x1640>
+    4010:      	eor	w9, w14, #0x1
+    4014:      	tbnz	w9, #0x0, 0x4040 <_perry_fn_access_worker_ts__run+0x1640>
+    4018:      	ldr	x12, [x11, #0x20]
+    401c:      	cmp	x12, #0x0
+    4020:      	csel	x9, x12, x11, ne
+    4024:      	cbz	x12, 0x4040 <_perry_fn_access_worker_ts__run+0x1640>
+    4028:      	ldr	w11, [x9]
+    402c:      	cmp	x10, x11
+    4030:      	b.hs	0x4040 <_perry_fn_access_worker_ts__run+0x1640>
+    4034:      	add	x8, x9, x10, lsl #3
+    4038:      	ldr	d0, [x8, #0x8]
+    403c:      	b	0x4060 <_perry_fn_access_worker_ts__run+0x1660>
+    4040:      	fmov	d0, x8
+    4044:      	str	x26, [sp, #0x28]
+    4048:      	mov.16b	v1, v8
+    404c:      	adrp	x0, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		000000000000404c:  ARM64_RELOC_PAGE21	l_perry_ic_access_worker_ts__24
+    4050:      	add	x0, x0, #0x0
+		0000000000004050:  ARM64_RELOC_PAGEOFF12	l_perry_ic_access_worker_ts__24
+    4054:      	bl	0x4054 <_perry_fn_access_worker_ts__run+0x1654>
+		0000000000004054:  ARM64_RELOC_BRANCH26	_js_packed_arraylike_index_get
+    4058:      	ldp	x24, x28, [sp, #0x18]
+    405c:      	ldr	x26, [sp, #0x28]
+    4060:      	fmov	x8, d0
+    4064:      	and	x9, x8, x20
+    4068:      	cmp	x9, x27
+    406c:      	b.ne	0x40d8 <_perry_fn_access_worker_ts__run+0x16d8>
+    4070:      	and	x0, x8, #0xffffffffffff
+    4074:      	lsr	x8, x0, #20
+    4078:      	cbz	x8, 0x422c <_perry_fn_access_worker_ts__run+0x182c>
+    407c:      	ldurb	w9, [x0, #-0x8]
+    4080:      	adrp	x8, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		0000000000004080:  ARM64_RELOC_PAGE21	l_perry_ic_access_worker_ts__26
+    4084:      	ldr	x8, [x8]
+		0000000000004084:  ARM64_RELOC_PAGEOFF12	l_perry_ic_access_worker_ts__26
+    4088:      	cbz	x8, 0x4148 <_perry_fn_access_worker_ts__run+0x1748>
+    408c:      	ldurh	w10, [x0, #-0x6]
+    4090:      	and	w10, w10, #0x800
+    4094:      	cmp	w9, #0x2
+    4098:      	ccmp	w10, #0x0, #0x0, eq
+    409c:      	b.ne	0x4148 <_perry_fn_access_worker_ts__run+0x1748>
+    40a0:      	ldr	w10, [x0, #0x4]
+    40a4:      	orr	x9, x10, #0x4000000000000000
+    40a8:      	ldr	x11, [x8]
+    40ac:      	cmp	w10, #0x0
+    40b0:      	ccmp	x9, x11, #0x0, ne
+    40b4:      	b.eq	0x4180 <_perry_fn_access_worker_ts__run+0x1780>
+    40b8:      	ldr	x11, [x8, #0x10]
+    40bc:      	cbz	x11, 0x41a4 <_perry_fn_access_worker_ts__run+0x17a4>
+    40c0:      	ldr	x12, [x0, #0x8]
+    40c4:      	cbz	x12, 0x41a4 <_perry_fn_access_worker_ts__run+0x17a4>
+    40c8:      	ldr	x12, [x12, #0x30]
+    40cc:      	cmp	x12, x11
+    40d0:      	b.eq	0x4170 <_perry_fn_access_worker_ts__run+0x1770>
+    40d4:      	b	0x41a4 <_perry_fn_access_worker_ts__run+0x17a4>
+    40d8:      	lsr	x9, x8, #48
+    40dc:      	mov	w10, #0x7ff9            ; =32761
+    40e0:      	cmp	x9, x10
+    40e4:      	b.eq	0x412c <_perry_fn_access_worker_ts__run+0x172c>
+    40e8:      	mov	w10, #0x7ffe            ; =32766
+    40ec:      	cmp	w9, w10
+    40f0:      	b.ne	0x411c <_perry_fn_access_worker_ts__run+0x171c>
+    40f4:      	adrp	x9, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		00000000000040f4:  ARM64_RELOC_PAGE21	_access_worker_ts_.str.1.handle
+    40f8:      	ldr	x9, [x9]
+		00000000000040f8:  ARM64_RELOC_PAGEOFF12	_access_worker_ts_.str.1.handle
+    40fc:      	str	x26, [sp, #0x28]
+    4100:      	and	x2, x9, #0xffffffffffff
+    4104:      	mov	x0, #0x19               ; =25
+    4108:      	movk	x0, #0xddae, lsl #32
+    410c:      	movk	x0, #0x5556, lsl #48
+    4110:      	mov	x1, x8
+    4114:      	bl	0x4114 <_perry_fn_access_worker_ts__run+0x1714>
+		0000000000004114:  ARM64_RELOC_BRANCH26	_js_typed_feedback_object_get_field_by_name_f64
+    4118:      	b	0x4248 <_perry_fn_access_worker_ts__run+0x1848>
+    411c:      	mov	x9, #-0x7ffc000000000001 ; =-9222246136947933185
+    4120:      	add	x9, x8, x9
+    4124:      	cmp	x9, #0x2
+    4128:      	b.lo	0x5674 <_perry_fn_access_worker_ts__run+0x2c74>
+    412c:      	adrp	x9, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		000000000000412c:  ARM64_RELOC_PAGE21	_access_worker_ts_.str.1.handle
+    4130:      	ldr	x9, [x9]
+		0000000000004130:  ARM64_RELOC_PAGEOFF12	_access_worker_ts_.str.1.handle
+    4134:      	str	x26, [sp, #0x28]
+    4138:      	and	x1, x9, #0xffffffffffff
+    413c:      	mov	x0, x8
+    4140:      	bl	0x4140 <_perry_fn_access_worker_ts__run+0x1740>
+		0000000000004140:  ARM64_RELOC_BRANCH26	_js_object_get_field_by_name_f64
+    4144:      	b	0x4248 <_perry_fn_access_worker_ts__run+0x1848>
+    4148:      	cmp	w9, #0x2
+    414c:      	ccmp	x8, #0x0, #0x4, eq
+    4150:      	b.eq	0x422c <_perry_fn_access_worker_ts__run+0x182c>
+    4154:      	ldr	x9, [x8, #0x10]
+    4158:      	cbz	x9, 0x422c <_perry_fn_access_worker_ts__run+0x182c>
+    415c:      	ldr	x10, [x0, #0x8]
+    4160:      	cbz	x10, 0x422c <_perry_fn_access_worker_ts__run+0x182c>
+    4164:      	ldr	x10, [x10, #0x30]
+    4168:      	cmp	x10, x9
+    416c:      	b.ne	0x422c <_perry_fn_access_worker_ts__run+0x182c>
+    4170:      	ldr	x8, [x8, #0x8]
+    4174:      	add	x8, x0, x8, lsl #3
+    4178:      	ldr	d1, [x8, #0x10]
+    417c:      	b	0x4254 <_perry_fn_access_worker_ts__run+0x1854>
+    4180:      	ldr	x2, [x8, #0x8]
+    4184:      	tbnz	w2, #0x1e, 0x44cc <_perry_fn_access_worker_ts__run+0x1acc>
+    4188:      	add	x11, x0, x2, lsl #3
+    418c:      	ldr	d1, [x11, #0x10]
+    4190:      	fmov	x11, d1
+    4194:      	mov	x12, #0x10              ; =16
+    4198:      	movk	x12, #0x7ffc, lsl #48
+    419c:      	cmp	x11, x12
+    41a0:      	b.ne	0x4254 <_perry_fn_access_worker_ts__run+0x1854>
+    41a4:      	ldr	x11, [x8, #0x18]
+    41a8:      	cmp	x11, #0x0
+    41ac:      	b.le	0x422c <_perry_fn_access_worker_ts__run+0x182c>
+    41b0:      	ldr	x11, [x8, #0x20]
+    41b4:      	ldr	x12, [x8, #0x30]
+    41b8:      	ldr	x13, [x8, #0x40]
+    41bc:      	cmp	x13, x9
+    41c0:      	ldr	x14, [x8, #0x50]
+    41c4:      	ccmp	x14, x9, #0x4, ne
+    41c8:      	ccmp	x12, x9, #0x4, ne
+    41cc:      	ccmp	x11, x9, #0x4, ne
+    41d0:      	cset	w15, eq
+    41d4:      	cmp	w10, #0x0
+    41d8:      	ccmp	w15, #0x0, #0x4, ne
+    41dc:      	b.eq	0x422c <_perry_fn_access_worker_ts__run+0x182c>
+    41e0:      	ldr	x10, [x8, #0x48]
+    41e4:      	ldr	x15, [x8, #0x58]
+    41e8:      	cmp	x14, x9
+    41ec:      	csel	x14, x15, xzr, eq
+    41f0:      	cmp	x13, x9
+    41f4:      	csel	x10, x10, x14, eq
+    41f8:      	ldr	x13, [x8, #0x28]
+    41fc:      	ldr	x8, [x8, #0x38]
+    4200:      	cmp	x12, x9
+    4204:      	csel	x8, x8, x10, eq
+    4208:      	cmp	x11, x9
+    420c:      	csel	x8, x13, x8, eq
+    4210:      	add	x8, x0, x8, lsl #3
+    4214:      	ldr	d1, [x8, #0x10]
+    4218:      	fmov	x8, d1
+    421c:      	mov	x9, #0x10               ; =16
+    4220:      	movk	x9, #0x7ffc, lsl #48
+    4224:      	cmp	x8, x9
+    4228:      	b.ne	0x4254 <_perry_fn_access_worker_ts__run+0x1854>
+    422c:      	adrp	x8, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		000000000000422c:  ARM64_RELOC_PAGE21	_access_worker_ts_.str.1.handle
+    4230:      	ldr	x8, [x8]
+		0000000000004230:  ARM64_RELOC_PAGEOFF12	_access_worker_ts_.str.1.handle
+    4234:      	str	x26, [sp, #0x28]
+    4238:      	and	x1, x8, #0xffffffffffff
+    423c:      	adrp	x2, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		000000000000423c:  ARM64_RELOC_PAGE21	l_perry_ic_access_worker_ts__26
+    4240:      	add	x2, x2, #0x0
+		0000000000004240:  ARM64_RELOC_PAGEOFF12	l_perry_ic_access_worker_ts__26
+    4244:      	bl	0x4244 <_perry_fn_access_worker_ts__run+0x1844>
+		0000000000004244:  ARM64_RELOC_BRANCH26	_js_object_get_field_ic_miss
+    4248:      	mov.16b	v1, v0
+    424c:      	ldp	x24, x28, [sp, #0x18]
+    4250:      	ldr	x26, [sp, #0x28]
+    4254:      	fmov	d0, x26
+    4258:      	and	x9, x26, #0xffff000000000000
+    425c:      	fmov	x8, d1
+    4260:      	and	x10, x8, #0xffff000000000000
+    4264:      	cmp	x8, x19
+    4268:      	ccmp	x10, x21, #0x2, hs
+    426c:      	cset	w8, hi
+    4270:      	mov	x10, #0x1               ; =1
+    4274:      	movk	x10, #0x7fff, lsl #48
+    4278:      	cmp	x9, x10
+    427c:      	ccmp	x26, x25, #0x0, lo
+    4280:      	b.hi	0x4290 <_perry_fn_access_worker_ts__run+0x1890>
+    4284:      	tbz	w8, #0x0, 0x4290 <_perry_fn_access_worker_ts__run+0x1890>
+    4288:      	fadd	d0, d1, d0
+    428c:      	b	0x4298 <_perry_fn_access_worker_ts__run+0x1898>
+    4290:      	bl	0x4290 <_perry_fn_access_worker_ts__run+0x1890>
+		0000000000004290:  ARM64_RELOC_BRANCH26	_js_dynamic_string_or_number_add
+    4294:      	ldp	x24, x28, [sp, #0x18]
+    4298:      	fmov	x26, d0
+    429c:      	mov	x0, x26
+    42a0:      	ldr	w8, [x23]
+    42a4:      	cbz	w8, 0x42ac <_perry_fn_access_worker_ts__run+0x18ac>
+    42a8:      	bl	0x42a8 <_perry_fn_access_worker_ts__run+0x18a8>
+		00000000000042a8:  ARM64_RELOC_BRANCH26	_js_write_barrier_root_nanbox
+    42ac:      	mov	x0, x26
+    42b0:      	ldr	w8, [x23]
+    42b4:      	cbz	w8, 0x42bc <_perry_fn_access_worker_ts__run+0x18bc>
+    42b8:      	bl	0x42b8 <_perry_fn_access_worker_ts__run+0x18b8>
+		00000000000042b8:  ARM64_RELOC_BRANCH26	_js_write_barrier_root_nanbox
+    42bc:      	mov	x8, x24
+    42c0:      	and	x9, x8, #0xffffffffffff
+    42c4:      	and	x11, x8, #0xffff000000000000
+    42c8:      	cmp	x11, x27
+    42cc:      	b.ne	0x4330 <_perry_fn_access_worker_ts__run+0x1930>
+    42d0:      	adrp	x10, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		00000000000042d0:  ARM64_RELOC_GOT_LOAD_PAGE21	_PERRY_TA_VIEW_GUARD
+    42d4:      	ldr	x10, [x10]
+		00000000000042d4:  ARM64_RELOC_GOT_LOAD_PAGEOFF12	_PERRY_TA_VIEW_GUARD
+    42d8:      	ldr	x10, [x10]
+    42dc:      	cbnz	x10, 0x4330 <_perry_fn_access_worker_ts__run+0x1930>
+    42e0:      	sub	x10, x9, #0x100, lsl #12 ; =0x100000
+    42e4:      	mov	x12, #0x7ffffff00000    ; =140737487306752
+    42e8:      	cmp	x10, x12
+    42ec:      	b.hs	0x4330 <_perry_fn_access_worker_ts__run+0x1930>
+    42f0:      	fcmp	d8, d12
+    42f4:      	b.pl	0x4330 <_perry_fn_access_worker_ts__run+0x1930>
+    42f8:      	fcmp	d8, #0.0
+    42fc:      	b.lt	0x4330 <_perry_fn_access_worker_ts__run+0x1930>
+    4300:      	ldurb	w10, [x9, #-0x8]
+    4304:      	cmp	w10, #0xb
+    4308:      	b.ne	0x4330 <_perry_fn_access_worker_ts__run+0x1930>
+    430c:      	ldrb	w12, [x9, #0x8]
+    4310:      	cmp	w12, #0x9
+    4314:      	b.hs	0x4330 <_perry_fn_access_worker_ts__run+0x1930>
+    4318:      	fcvtzs	x10, d8
+    431c:      	scvtf	d0, x10
+    4320:      	ldr	w13, [x9]
+    4324:      	fcmp	d8, d0
+    4328:      	ccmp	x10, x13, #0x2, eq
+    432c:      	b.lo	0x43e8 <_perry_fn_access_worker_ts__run+0x19e8>
+    4330:      	adrp	x10, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		0000000000004330:  ARM64_RELOC_PAGE21	l_perry_ic_access_worker_ts__27
+    4334:      	add	x10, x10, #0x0
+		0000000000004334:  ARM64_RELOC_PAGEOFF12	l_perry_ic_access_worker_ts__27
+    4338:      	ldr	x12, [x10]
+    433c:      	cmp	x12, #0x0
+    4340:      	csel	x13, x10, x12, eq
+    4344:      	cmp	x11, x27
+    4348:      	b.ne	0x45d8 <_perry_fn_access_worker_ts__run+0x1bd8>
+    434c:      	fcmp	d8, #0.0
+    4350:      	b.lt	0x45d8 <_perry_fn_access_worker_ts__run+0x1bd8>
+    4354:      	fcmp	d8, d10
+    4358:      	b.pl	0x45d8 <_perry_fn_access_worker_ts__run+0x1bd8>
+    435c:      	mov	x10, #-0x20000000000    ; =-2199023255552
+    4360:      	add	x10, x9, x10
+    4364:      	lsr	x10, x10, #41
+    4368:      	cmp	x10, #0x3f
+    436c:      	b.hs	0x45d8 <_perry_fn_access_worker_ts__run+0x1bd8>
+    4370:      	fcvtzs	x10, d8
+    4374:      	scvtf	d0, x10
+    4378:      	fcmp	d8, d0
+    437c:      	b.ne	0x45d8 <_perry_fn_access_worker_ts__run+0x1bd8>
+    4380:      	ldursb	w11, [x9, #-0x7]
+    4384:      	tbnz	w11, #0x1f, 0x45d8 <_perry_fn_access_worker_ts__run+0x1bd8>
+    4388:      	ldurb	w11, [x9, #-0x8]
+    438c:      	cmp	w11, #0x2
+    4390:      	b.eq	0x4414 <_perry_fn_access_worker_ts__run+0x1a14>
+    4394:      	cmp	w11, #0x1
+    4398:      	b.ne	0x45d8 <_perry_fn_access_worker_ts__run+0x1bd8>
+    439c:      	ldurh	w13, [x9, #-0x6]
+    43a0:      	adrp	x11, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		00000000000043a0:  ARM64_RELOC_GOT_LOAD_PAGE21	_PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED
+    43a4:      	ldr	x11, [x11]
+		00000000000043a4:  ARM64_RELOC_GOT_LOAD_PAGEOFF12	_PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED
+    43a8:      	ldrb	w12, [x11]
+    43ac:      	ldp	w11, w14, [x9]
+    43b0:      	cmp	w11, w14
+    43b4:      	b.hi	0x45d8 <_perry_fn_access_worker_ts__run+0x1bd8>
+    43b8:      	tbnz	w13, #0xa, 0x45d8 <_perry_fn_access_worker_ts__run+0x1bd8>
+    43bc:      	cbnz	w12, 0x45d8 <_perry_fn_access_worker_ts__run+0x1bd8>
+    43c0:      	cmp	x10, x11
+    43c4:      	b.hs	0x45d8 <_perry_fn_access_worker_ts__run+0x1bd8>
+    43c8:      	add	x8, x9, x10, lsl #3
+    43cc:      	ldr	d0, [x8, #0x8]
+    43d0:      	fmov	x8, d0
+    43d4:      	mov	x9, #0x10               ; =16
+    43d8:      	movk	x9, #0x7ffc, lsl #48
+    43dc:      	cmp	x8, x9
+    43e0:      	fcsel	d0, d11, d0, eq
+    43e4:      	b	0x45f8 <_perry_fn_access_worker_ts__run+0x1bf8>
+    43e8:      	add	x8, x9, #0x10
+    43ec:      	cmp	w12, #0x3
+    43f0:      	b.le	0x4464 <_perry_fn_access_worker_ts__run+0x1a64>
+    43f4:      	cmp	w12, #0x5
+    43f8:      	b.gt	0x44b4 <_perry_fn_access_worker_ts__run+0x1ab4>
+    43fc:      	cmp	w12, #0x4
+    4400:      	b.eq	0x4500 <_perry_fn_access_worker_ts__run+0x1b00>
+    4404:      	cmp	w12, #0x5
+    4408:      	b.ne	0x44f4 <_perry_fn_access_worker_ts__run+0x1af4>
+    440c:      	ldr	s0, [x8, x10, lsl #2]
+    4410:      	b	0x44f8 <_perry_fn_access_worker_ts__run+0x1af8>
+    4414:      	ldr	x11, [x9, #0x8]
+    4418:      	cbz	x11, 0x4480 <_perry_fn_access_worker_ts__run+0x1a80>
+    441c:      	ldr	x14, [x11, #0x60]
+    4420:      	cbz	x14, 0x4480 <_perry_fn_access_worker_ts__run+0x1a80>
+    4424:      	ldurb	w9, [x14, #-0x8]
+    4428:      	cmp	w9, #0x1
+    442c:      	b.ne	0x45d8 <_perry_fn_access_worker_ts__run+0x1bd8>
+    4430:      	ldursb	w9, [x14, #-0x7]
+    4434:      	tbnz	w9, #0x1f, 0x45d8 <_perry_fn_access_worker_ts__run+0x1bd8>
+    4438:      	ldr	w9, [x14]
+    443c:      	cmp	x10, x9
+    4440:      	b.hs	0x45d8 <_perry_fn_access_worker_ts__run+0x1bd8>
+    4444:      	add	x9, x14, x10, lsl #3
+    4448:      	ldr	d0, [x9, #0x8]
+    444c:      	fmov	x9, d0
+    4450:      	mov	x10, #0x10              ; =16
+    4454:      	movk	x10, #0x7ffc, lsl #48
+    4458:      	cmp	x9, x10
+    445c:      	b.ne	0x45f8 <_perry_fn_access_worker_ts__run+0x1bf8>
+    4460:      	b	0x45d8 <_perry_fn_access_worker_ts__run+0x1bd8>
+    4464:      	cbz	w12, 0x44ec <_perry_fn_access_worker_ts__run+0x1aec>
+    4468:      	cmp	w12, #0x2
+    446c:      	b.eq	0x4514 <_perry_fn_access_worker_ts__run+0x1b14>
+    4470:      	cmp	w12, #0x3
+    4474:      	b.ne	0x44f4 <_perry_fn_access_worker_ts__run+0x1af4>
+    4478:      	ldr	h0, [x8, x10, lsl #1]
+    447c:      	b	0x44f8 <_perry_fn_access_worker_ts__run+0x1af8>
+    4480:      	ldr	x13, [x13]
+    4484:      	cbz	x13, 0x45d8 <_perry_fn_access_worker_ts__run+0x1bd8>
+    4488:      	tbnz	x13, #0x3f, 0x4520 <_perry_fn_access_worker_ts__run+0x1b20>
+    448c:      	ldp	w15, w14, [x9]
+    4490:      	orr	x14, x14, x15, lsl #32
+    4494:      	cmp	x14, x13
+    4498:      	b.ne	0x45d8 <_perry_fn_access_worker_ts__run+0x1bd8>
+    449c:      	ldp	x15, x13, [x12, #0x8]
+    44a0:      	ldp	x14, x12, [x12, #0x18]
+    44a4:      	cmp	x15, x12
+    44a8:      	b.lo	0x4540 <_perry_fn_access_worker_ts__run+0x1b40>
+    44ac:      	cbz	x11, 0x45d8 <_perry_fn_access_worker_ts__run+0x1bd8>
+    44b0:      	b	0x454c <_perry_fn_access_worker_ts__run+0x1b4c>
+    44b4:      	cmp	w12, #0x6
+    44b8:      	b.eq	0x4508 <_perry_fn_access_worker_ts__run+0x1b08>
+    44bc:      	cmp	w12, #0x7
+    44c0:      	b.ne	0x44f4 <_perry_fn_access_worker_ts__run+0x1af4>
+    44c4:      	ldr	d0, [x8, x10, lsl #3]
+    44c8:      	b	0x45f8 <_perry_fn_access_worker_ts__run+0x1bf8>
+    44cc:      	adrp	x8, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		00000000000044cc:  ARM64_RELOC_PAGE21	_access_worker_ts_.str.1.handle
+    44d0:      	ldr	x8, [x8]
+		00000000000044d0:  ARM64_RELOC_PAGEOFF12	_access_worker_ts_.str.1.handle
+    44d4:      	str	x26, [sp, #0x28]
+    44d8:      	and	x1, x8, #0xffffffffffff
+    44dc:      	adrp	x3, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		00000000000044dc:  ARM64_RELOC_PAGE21	l_perry_ic_access_worker_ts__26
+    44e0:      	add	x3, x3, #0x0
+		00000000000044e0:  ARM64_RELOC_PAGEOFF12	l_perry_ic_access_worker_ts__26
+    44e4:      	bl	0x44e4 <_perry_fn_access_worker_ts__run+0x1ae4>
+		00000000000044e4:  ARM64_RELOC_BRANCH26	_js_object_get_field_ic_overflow_load
+    44e8:      	b	0x4248 <_perry_fn_access_worker_ts__run+0x1848>
+    44ec:      	ldrsb	w8, [x8, x10]
+    44f0:      	b	0x4518 <_perry_fn_access_worker_ts__run+0x1b18>
+    44f4:      	ldr	b0, [x8, x10]
+    44f8:      	ucvtf	d0, d0
+    44fc:      	b	0x45f8 <_perry_fn_access_worker_ts__run+0x1bf8>
+    4500:      	ldr	w8, [x8, x10, lsl #2]
+    4504:      	b	0x4518 <_perry_fn_access_worker_ts__run+0x1b18>
+    4508:      	ldr	s0, [x8, x10, lsl #2]
+    450c:      	fcvt	d0, s0
+    4510:      	b	0x45f8 <_perry_fn_access_worker_ts__run+0x1bf8>
+    4514:      	ldrsh	w8, [x8, x10, lsl #1]
+    4518:      	scvtf	d0, w8
+    451c:      	b	0x45f8 <_perry_fn_access_worker_ts__run+0x1bf8>
+    4520:      	cbz	x11, 0x45d8 <_perry_fn_access_worker_ts__run+0x1bd8>
+    4524:      	ldr	x14, [x11, #0x30]
+    4528:      	cmp	x14, x13
+    452c:      	b.ne	0x45d8 <_perry_fn_access_worker_ts__run+0x1bd8>
+    4530:      	ldp	x15, x13, [x12, #0x8]
+    4534:      	ldp	x14, x12, [x12, #0x18]
+    4538:      	cmp	x15, x12
+    453c:      	b.hs	0x454c <_perry_fn_access_worker_ts__run+0x1b4c>
+    4540:      	add	x15, x9, x15, lsl #3
+    4544:      	add	x15, x15, #0x10
+    4548:      	b	0x4570 <_perry_fn_access_worker_ts__run+0x1b70>
+    454c:      	ldr	x17, [x11, #0x20]
+    4550:      	cmp	x17, #0x0
+    4554:      	csel	x16, x17, x11, ne
+    4558:      	cbz	x17, 0x45d8 <_perry_fn_access_worker_ts__run+0x1bd8>
+    455c:      	ldr	w17, [x16]
+    4560:      	cmp	x15, x17
+    4564:      	b.hs	0x45d8 <_perry_fn_access_worker_ts__run+0x1bd8>
+    4568:      	add	x15, x16, x15, lsl #3
+    456c:      	add	x15, x15, #0x8
+    4570:      	ldr	d0, [x15]
+    4574:      	fcmp	d8, d0
+    4578:      	ccmp	x14, x10, #0x0, mi
+    457c:      	cset	w14, hi
+    4580:      	add	x10, x13, x10
+    4584:      	cmp	x10, x12
+    4588:      	b.hs	0x459c <_perry_fn_access_worker_ts__run+0x1b9c>
+    458c:      	cbz	w14, 0x459c <_perry_fn_access_worker_ts__run+0x1b9c>
+    4590:      	add	x8, x9, x10, lsl #3
+    4594:      	ldr	d0, [x8, #0x10]
+    4598:      	b	0x45f8 <_perry_fn_access_worker_ts__run+0x1bf8>
+    459c:      	cbz	x11, 0x45d8 <_perry_fn_access_worker_ts__run+0x1bd8>
+    45a0:      	cmp	x10, x12
+    45a4:      	b.lo	0x45d8 <_perry_fn_access_worker_ts__run+0x1bd8>
+    45a8:      	eor	w9, w14, #0x1
+    45ac:      	tbnz	w9, #0x0, 0x45d8 <_perry_fn_access_worker_ts__run+0x1bd8>
+    45b0:      	ldr	x12, [x11, #0x20]
+    45b4:      	cmp	x12, #0x0
+    45b8:      	csel	x9, x12, x11, ne
+    45bc:      	cbz	x12, 0x45d8 <_perry_fn_access_worker_ts__run+0x1bd8>
+    45c0:      	ldr	w11, [x9]
+    45c4:      	cmp	x10, x11
+    45c8:      	b.hs	0x45d8 <_perry_fn_access_worker_ts__run+0x1bd8>
+    45cc:      	add	x8, x9, x10, lsl #3
+    45d0:      	ldr	d0, [x8, #0x8]
+    45d4:      	b	0x45f8 <_perry_fn_access_worker_ts__run+0x1bf8>
+    45d8:      	fmov	d0, x8
+    45dc:      	str	x26, [sp, #0x28]
+    45e0:      	mov.16b	v1, v8
+    45e4:      	adrp	x0, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		00000000000045e4:  ARM64_RELOC_PAGE21	l_perry_ic_access_worker_ts__27
+    45e8:      	add	x0, x0, #0x0
+		00000000000045e8:  ARM64_RELOC_PAGEOFF12	l_perry_ic_access_worker_ts__27
+    45ec:      	bl	0x45ec <_perry_fn_access_worker_ts__run+0x1bec>
+		00000000000045ec:  ARM64_RELOC_BRANCH26	_js_packed_arraylike_index_get
+    45f0:      	ldp	x24, x28, [sp, #0x18]
+    45f4:      	ldr	x26, [sp, #0x28]
+    45f8:      	fmov	x8, d0
+    45fc:      	and	x9, x8, x20
+    4600:      	cmp	x9, x27
+    4604:      	b.ne	0x4674 <_perry_fn_access_worker_ts__run+0x1c74>
+    4608:      	and	x0, x8, #0xffffffffffff
+    460c:      	lsr	x8, x0, #20
+    4610:      	cbz	x8, 0x47c0 <_perry_fn_access_worker_ts__run+0x1dc0>
+    4614:      	ldurb	w9, [x0, #-0x8]
+    4618:      	adrp	x8, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		0000000000004618:  ARM64_RELOC_PAGE21	l_perry_ic_access_worker_ts__29
+    461c:      	ldr	x8, [x8]
+		000000000000461c:  ARM64_RELOC_PAGEOFF12	l_perry_ic_access_worker_ts__29
+    4620:      	cbz	x8, 0x46e4 <_perry_fn_access_worker_ts__run+0x1ce4>
+    4624:      	cmp	w9, #0x2
+    4628:      	b.ne	0x46e4 <_perry_fn_access_worker_ts__run+0x1ce4>
+    462c:      	ldurh	w10, [x0, #-0x6]
+    4630:      	tbnz	w10, #0xb, 0x46e4 <_perry_fn_access_worker_ts__run+0x1ce4>
+    4634:      	ldr	w10, [x0, #0x4]
+    4638:      	orr	x9, x10, #0x4000000000000000
+    463c:      	cbz	w10, 0x4710 <_perry_fn_access_worker_ts__run+0x1d10>
+    4640:      	ldr	x11, [x8]
+    4644:      	cmp	x9, x11
+    4648:      	b.ne	0x4710 <_perry_fn_access_worker_ts__run+0x1d10>
+    464c:      	ldr	x2, [x8, #0x8]
+    4650:      	tbnz	w2, #0x1e, 0x4acc <_perry_fn_access_worker_ts__run+0x20cc>
+    4654:      	add	x11, x0, x2, lsl #3
+    4658:      	ldr	d0, [x11, #0x10]
+    465c:      	fmov	x11, d0
+    4660:      	mov	x12, #0x10              ; =16
+    4664:      	movk	x12, #0x7ffc, lsl #48
+    4668:      	cmp	x11, x12
+    466c:      	b.ne	0x47e4 <_perry_fn_access_worker_ts__run+0x1de4>
+    4670:      	b	0x473c <_perry_fn_access_worker_ts__run+0x1d3c>
+    4674:      	lsr	x9, x8, #48
+    4678:      	mov	w10, #0x7ff9            ; =32761
+    467c:      	cmp	x9, x10
+    4680:      	b.eq	0x46c8 <_perry_fn_access_worker_ts__run+0x1cc8>
+    4684:      	mov	w10, #0x7ffe            ; =32766
+    4688:      	cmp	w9, w10
+    468c:      	b.ne	0x46b8 <_perry_fn_access_worker_ts__run+0x1cb8>
+    4690:      	adrp	x9, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		0000000000004690:  ARM64_RELOC_PAGE21	_access_worker_ts_.str.4.handle
+    4694:      	ldr	x9, [x9]
+		0000000000004694:  ARM64_RELOC_PAGEOFF12	_access_worker_ts_.str.4.handle
+    4698:      	str	x26, [sp, #0x28]
+    469c:      	and	x2, x9, #0xffffffffffff
+    46a0:      	mov	x0, #0x1c               ; =28
+    46a4:      	movk	x0, #0xddae, lsl #32
+    46a8:      	movk	x0, #0x5556, lsl #48
+    46ac:      	mov	x1, x8
+    46b0:      	bl	0x46b0 <_perry_fn_access_worker_ts__run+0x1cb0>
+		00000000000046b0:  ARM64_RELOC_BRANCH26	_js_typed_feedback_object_get_field_by_name_f64
+    46b4:      	b	0x47dc <_perry_fn_access_worker_ts__run+0x1ddc>
+    46b8:      	mov	x9, #-0x7ffc000000000001 ; =-9222246136947933185
+    46bc:      	add	x9, x8, x9
+    46c0:      	cmp	x9, #0x2
+    46c4:      	b.lo	0x569c <_perry_fn_access_worker_ts__run+0x2c9c>
+    46c8:      	adrp	x9, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		00000000000046c8:  ARM64_RELOC_PAGE21	_access_worker_ts_.str.4.handle
+    46cc:      	ldr	x9, [x9]
+		00000000000046cc:  ARM64_RELOC_PAGEOFF12	_access_worker_ts_.str.4.handle
+    46d0:      	str	x26, [sp, #0x28]
+    46d4:      	and	x1, x9, #0xffffffffffff
+    46d8:      	mov	x0, x8
+    46dc:      	bl	0x46dc <_perry_fn_access_worker_ts__run+0x1cdc>
+		00000000000046dc:  ARM64_RELOC_BRANCH26	_js_object_get_field_by_name_f64
+    46e0:      	b	0x47dc <_perry_fn_access_worker_ts__run+0x1ddc>
+    46e4:      	cmp	w9, #0x2
+    46e8:      	b.ne	0x47c0 <_perry_fn_access_worker_ts__run+0x1dc0>
+    46ec:      	cbz	x8, 0x47c0 <_perry_fn_access_worker_ts__run+0x1dc0>
+    46f0:      	ldr	x9, [x8, #0x10]
+    46f4:      	cbz	x9, 0x47c0 <_perry_fn_access_worker_ts__run+0x1dc0>
+    46f8:      	ldr	x10, [x0, #0x8]
+    46fc:      	cbz	x10, 0x47c0 <_perry_fn_access_worker_ts__run+0x1dc0>
+    4700:      	ldr	x10, [x10, #0x30]
+    4704:      	cmp	x10, x9
+    4708:      	b.eq	0x472c <_perry_fn_access_worker_ts__run+0x1d2c>
+    470c:      	b	0x47c0 <_perry_fn_access_worker_ts__run+0x1dc0>
+    4710:      	ldr	x11, [x8, #0x10]
+    4714:      	cbz	x11, 0x473c <_perry_fn_access_worker_ts__run+0x1d3c>
+    4718:      	ldr	x12, [x0, #0x8]
+    471c:      	cbz	x12, 0x473c <_perry_fn_access_worker_ts__run+0x1d3c>
+    4720:      	ldr	x12, [x12, #0x30]
+    4724:      	cmp	x12, x11
+    4728:      	b.ne	0x473c <_perry_fn_access_worker_ts__run+0x1d3c>
+    472c:      	ldr	x8, [x8, #0x8]
+    4730:      	add	x8, x0, x8, lsl #3
+    4734:      	ldr	d0, [x8, #0x10]
+    4738:      	b	0x47e4 <_perry_fn_access_worker_ts__run+0x1de4>
+    473c:      	ldr	x11, [x8, #0x18]
+    4740:      	cmp	x11, #0x0
+    4744:      	b.le	0x47c0 <_perry_fn_access_worker_ts__run+0x1dc0>
+    4748:      	ldr	x11, [x8, #0x20]
+    474c:      	ldr	x12, [x8, #0x30]
+    4750:      	ldr	x13, [x8, #0x40]
+    4754:      	cmp	x13, x9
+    4758:      	ldr	x14, [x8, #0x50]
+    475c:      	ccmp	x14, x9, #0x4, ne
+    4760:      	ccmp	x12, x9, #0x4, ne
+    4764:      	ccmp	x11, x9, #0x4, ne
+    4768:      	cset	w15, eq
+    476c:      	cbz	w10, 0x47c0 <_perry_fn_access_worker_ts__run+0x1dc0>
+    4770:      	cbz	w15, 0x47c0 <_perry_fn_access_worker_ts__run+0x1dc0>
+    4774:      	ldr	x10, [x8, #0x48]
+    4778:      	ldr	x15, [x8, #0x58]
+    477c:      	cmp	x14, x9
+    4780:      	csel	x14, x15, xzr, eq
+    4784:      	cmp	x13, x9
+    4788:      	csel	x10, x10, x14, eq
+    478c:      	ldr	x13, [x8, #0x28]
+    4790:      	ldr	x8, [x8, #0x38]
+    4794:      	cmp	x12, x9
+    4798:      	csel	x8, x8, x10, eq
+    479c:      	cmp	x11, x9
+    47a0:      	csel	x8, x13, x8, eq
+    47a4:      	add	x8, x0, x8, lsl #3
+    47a8:      	ldr	d0, [x8, #0x10]
+    47ac:      	fmov	x8, d0
+    47b0:      	mov	x9, #0x10               ; =16
+    47b4:      	movk	x9, #0x7ffc, lsl #48
+    47b8:      	cmp	x8, x9
+    47bc:      	b.ne	0x47e4 <_perry_fn_access_worker_ts__run+0x1de4>
+    47c0:      	adrp	x8, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		00000000000047c0:  ARM64_RELOC_PAGE21	_access_worker_ts_.str.4.handle
+    47c4:      	ldr	x8, [x8]
+		00000000000047c4:  ARM64_RELOC_PAGEOFF12	_access_worker_ts_.str.4.handle
+    47c8:      	str	x26, [sp, #0x28]
+    47cc:      	and	x1, x8, #0xffffffffffff
+    47d0:      	adrp	x2, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		00000000000047d0:  ARM64_RELOC_PAGE21	l_perry_ic_access_worker_ts__29
+    47d4:      	add	x2, x2, #0x0
+		00000000000047d4:  ARM64_RELOC_PAGEOFF12	l_perry_ic_access_worker_ts__29
+    47d8:      	bl	0x47d8 <_perry_fn_access_worker_ts__run+0x1dd8>
+		00000000000047d8:  ARM64_RELOC_BRANCH26	_js_object_get_field_ic_miss
+    47dc:      	ldp	x24, x28, [sp, #0x18]
+    47e0:      	ldr	x26, [sp, #0x28]
+    47e4:      	fmov	x8, d0
+    47e8:      	lsr	x9, x8, #48
+    47ec:      	mov	w10, #0x7ff9            ; =32761
+    47f0:      	cmp	x9, x10
+    47f4:      	b.eq	0x4824 <_perry_fn_access_worker_ts__run+0x1e24>
+    47f8:      	mov	w10, #0x7fff            ; =32767
+    47fc:      	cmp	w9, w10
+    4800:      	b.ne	0x4830 <_perry_fn_access_worker_ts__run+0x1e30>
+    4804:      	and	x9, x8, #0xffffffffffff
+    4808:      	tst	x8, #0xfffffffff000
+    480c:      	adrp	x8, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		000000000000480c:  ARM64_RELOC_PAGE21	_perry_null_guard_zero_access_worker_ts
+    4810:      	add	x8, x8, #0x0
+		0000000000004810:  ARM64_RELOC_PAGEOFF12	_perry_null_guard_zero_access_worker_ts
+    4814:      	csel	x8, x8, x9, eq
+    4818:      	ldr	s0, [x8]
+    481c:      	ucvtf	d1, d0
+    4820:      	b	0x4844 <_perry_fn_access_worker_ts__run+0x1e44>
+    4824:      	ubfx	x8, x8, #40, #8
+    4828:      	ucvtf	d1, x8
+    482c:      	b	0x4844 <_perry_fn_access_worker_ts__run+0x1e44>
+    4830:      	str	x26, [sp, #0x28]
+    4834:      	bl	0x4834 <_perry_fn_access_worker_ts__run+0x1e34>
+		0000000000004834:  ARM64_RELOC_BRANCH26	_js_value_length_property_f64
+    4838:      	mov.16b	v1, v0
+    483c:      	ldp	x24, x28, [sp, #0x18]
+    4840:      	ldr	x26, [sp, #0x28]
+    4844:      	fmov	d0, x26
+    4848:      	and	x9, x26, #0xffff000000000000
+    484c:      	fmov	x8, d1
+    4850:      	and	x10, x8, #0xffff000000000000
+    4854:      	cmp	x8, x19
+    4858:      	ccmp	x10, x21, #0x2, hs
+    485c:      	cset	w8, hi
+    4860:      	mov	x10, #0x1               ; =1
+    4864:      	movk	x10, #0x7fff, lsl #48
+    4868:      	cmp	x9, x10
+    486c:      	ccmp	x26, x25, #0x0, lo
+    4870:      	b.hi	0x4880 <_perry_fn_access_worker_ts__run+0x1e80>
+    4874:      	cbz	w8, 0x4880 <_perry_fn_access_worker_ts__run+0x1e80>
+    4878:      	fadd	d0, d1, d0
+    487c:      	b	0x488c <_perry_fn_access_worker_ts__run+0x1e8c>
+    4880:      	stp	x28, x24, [sp, #0x20]
+    4884:      	bl	0x4884 <_perry_fn_access_worker_ts__run+0x1e84>
+		0000000000004884:  ARM64_RELOC_BRANCH26	_js_dynamic_string_or_number_add
+    4888:      	ldp	x28, x24, [sp, #0x20]
+    488c:      	fmov	x26, d0
+    4890:      	mov	x0, x26
+    4894:      	ldr	w8, [x23]
+    4898:      	cbz	w8, 0x48a0 <_perry_fn_access_worker_ts__run+0x1ea0>
+    489c:      	bl	0x489c <_perry_fn_access_worker_ts__run+0x1e9c>
+		000000000000489c:  ARM64_RELOC_BRANCH26	_js_write_barrier_root_nanbox
+    48a0:      	mov	x0, x26
+    48a4:      	ldr	w8, [x23]
+    48a8:      	cbz	w8, 0x48b0 <_perry_fn_access_worker_ts__run+0x1eb0>
+    48ac:      	bl	0x48ac <_perry_fn_access_worker_ts__run+0x1eac>
+		00000000000048ac:  ARM64_RELOC_BRANCH26	_js_write_barrier_root_nanbox
+    48b0:      	mov	x8, x24
+    48b4:      	and	x9, x8, #0xffffffffffff
+    48b8:      	and	x11, x8, #0xffff000000000000
+    48bc:      	cmp	x11, x27
+    48c0:      	b.ne	0x495c <_perry_fn_access_worker_ts__run+0x1f5c>
+    48c4:      	adrp	x10, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		00000000000048c4:  ARM64_RELOC_GOT_LOAD_PAGE21	_PERRY_TA_VIEW_GUARD
+    48c8:      	ldr	x10, [x10]
+		00000000000048c8:  ARM64_RELOC_GOT_LOAD_PAGEOFF12	_PERRY_TA_VIEW_GUARD
+    48cc:      	ldr	x10, [x10]
+    48d0:      	cbnz	x10, 0x495c <_perry_fn_access_worker_ts__run+0x1f5c>
+    48d4:      	sub	x10, x9, #0x100, lsl #12 ; =0x100000
+    48d8:      	mov	x12, #0x7ffffff00000    ; =140737487306752
+    48dc:      	cmp	x10, x12
+    48e0:      	b.hs	0x495c <_perry_fn_access_worker_ts__run+0x1f5c>
+    48e4:      	mov	x10, #0x41f0000000000000 ; =4751297606875873280
+    48e8:      	fmov	d0, x10
+    48ec:      	fcmp	d8, d0
+    48f0:      	b.pl	0x495c <_perry_fn_access_worker_ts__run+0x1f5c>
+    48f4:      	fcmp	d8, #0.0
+    48f8:      	b.lt	0x495c <_perry_fn_access_worker_ts__run+0x1f5c>
+    48fc:      	ldurb	w10, [x9, #-0x8]
+    4900:      	cmp	w10, #0xb
+    4904:      	b.ne	0x495c <_perry_fn_access_worker_ts__run+0x1f5c>
+    4908:      	ldrb	w12, [x9, #0x8]
+    490c:      	cmp	w12, #0x9
+    4910:      	b.hs	0x495c <_perry_fn_access_worker_ts__run+0x1f5c>
+    4914:      	fcvtzs	x10, d8
+    4918:      	scvtf	d0, x10
+    491c:      	fcmp	d8, d0
+    4920:      	b.ne	0x495c <_perry_fn_access_worker_ts__run+0x1f5c>
+    4924:      	ldr	w13, [x9]
+    4928:      	cmp	x10, x13
+    492c:      	b.hs	0x495c <_perry_fn_access_worker_ts__run+0x1f5c>
+    4930:      	add	x8, x9, #0x10
+    4934:      	cmp	w12, #0x3
+    4938:      	b.le	0x4a64 <_perry_fn_access_worker_ts__run+0x2064>
+    493c:      	cmp	w12, #0x5
+    4940:      	b.gt	0x4ab4 <_perry_fn_access_worker_ts__run+0x20b4>
+    4944:      	cmp	w12, #0x4
+    4948:      	b.eq	0x4b00 <_perry_fn_access_worker_ts__run+0x2100>
+    494c:      	cmp	w12, #0x5
+    4950:      	b.ne	0x4af4 <_perry_fn_access_worker_ts__run+0x20f4>
+    4954:      	ldr	s0, [x8, x10, lsl #2]
+    4958:      	b	0x4af8 <_perry_fn_access_worker_ts__run+0x20f8>
+    495c:      	adrp	x10, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		000000000000495c:  ARM64_RELOC_PAGE21	l_perry_ic_access_worker_ts__30
+    4960:      	add	x10, x10, #0x0
+		0000000000004960:  ARM64_RELOC_PAGEOFF12	l_perry_ic_access_worker_ts__30
+    4964:      	ldr	x12, [x10]
+    4968:      	cmp	x12, #0x0
+    496c:      	csel	x13, x10, x12, eq
+    4970:      	cmp	x11, x27
+    4974:      	b.ne	0x4bd8 <_perry_fn_access_worker_ts__run+0x21d8>
+    4978:      	fcmp	d8, #0.0
+    497c:      	b.lt	0x4bd8 <_perry_fn_access_worker_ts__run+0x21d8>
+    4980:      	fcmp	d8, d10
+    4984:      	b.pl	0x4bd8 <_perry_fn_access_worker_ts__run+0x21d8>
+    4988:      	mov	x10, #-0x20000000000    ; =-2199023255552
+    498c:      	add	x10, x9, x10
+    4990:      	lsr	x10, x10, #41
+    4994:      	cmp	x10, #0x3f
+    4998:      	b.hs	0x4bd8 <_perry_fn_access_worker_ts__run+0x21d8>
+    499c:      	fcvtzs	x10, d8
+    49a0:      	scvtf	d0, x10
+    49a4:      	fcmp	d8, d0
+    49a8:      	b.ne	0x4bd8 <_perry_fn_access_worker_ts__run+0x21d8>
+    49ac:      	ldursb	w11, [x9, #-0x7]
+    49b0:      	tbnz	w11, #0x1f, 0x4bd8 <_perry_fn_access_worker_ts__run+0x21d8>
+    49b4:      	ldurb	w11, [x9, #-0x8]
+    49b8:      	cmp	w11, #0x2
+    49bc:      	b.eq	0x4a14 <_perry_fn_access_worker_ts__run+0x2014>
+    49c0:      	cmp	w11, #0x1
+    49c4:      	b.ne	0x4bd8 <_perry_fn_access_worker_ts__run+0x21d8>
+    49c8:      	ldurh	w13, [x9, #-0x6]
+    49cc:      	adrp	x11, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		00000000000049cc:  ARM64_RELOC_GOT_LOAD_PAGE21	_PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED
+    49d0:      	ldr	x11, [x11]
+		00000000000049d0:  ARM64_RELOC_GOT_LOAD_PAGEOFF12	_PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED
+    49d4:      	ldrb	w12, [x11]
+    49d8:      	ldp	w11, w14, [x9]
+    49dc:      	cmp	w11, w14
+    49e0:      	b.hi	0x4bd8 <_perry_fn_access_worker_ts__run+0x21d8>
+    49e4:      	tbnz	w13, #0xa, 0x4bd8 <_perry_fn_access_worker_ts__run+0x21d8>
+    49e8:      	cbnz	w12, 0x4bd8 <_perry_fn_access_worker_ts__run+0x21d8>
+    49ec:      	cmp	x10, x11
+    49f0:      	b.hs	0x4bd8 <_perry_fn_access_worker_ts__run+0x21d8>
+    49f4:      	add	x8, x9, x10, lsl #3
+    49f8:      	ldr	d0, [x8, #0x8]
+    49fc:      	fmov	x8, d0
+    4a00:      	mov	x9, #0x10               ; =16
+    4a04:      	movk	x9, #0x7ffc, lsl #48
+    4a08:      	cmp	x8, x9
+    4a0c:      	fcsel	d0, d11, d0, eq
+    4a10:      	b	0x4bfc <_perry_fn_access_worker_ts__run+0x21fc>
+    4a14:      	ldr	x11, [x9, #0x8]
+    4a18:      	cbz	x11, 0x4a80 <_perry_fn_access_worker_ts__run+0x2080>
+    4a1c:      	ldr	x14, [x11, #0x60]
+    4a20:      	cbz	x14, 0x4a80 <_perry_fn_access_worker_ts__run+0x2080>
+    4a24:      	ldurb	w9, [x14, #-0x8]
+    4a28:      	cmp	w9, #0x1
+    4a2c:      	b.ne	0x4bd8 <_perry_fn_access_worker_ts__run+0x21d8>
+    4a30:      	ldursb	w9, [x14, #-0x7]
+    4a34:      	tbnz	w9, #0x1f, 0x4bd8 <_perry_fn_access_worker_ts__run+0x21d8>
+    4a38:      	ldr	w9, [x14]
+    4a3c:      	cmp	x10, x9
+    4a40:      	b.hs	0x4bd8 <_perry_fn_access_worker_ts__run+0x21d8>
+    4a44:      	add	x9, x14, x10, lsl #3
+    4a48:      	ldr	d0, [x9, #0x8]
+    4a4c:      	fmov	x9, d0
+    4a50:      	mov	x10, #0x10              ; =16
+    4a54:      	movk	x10, #0x7ffc, lsl #48
+    4a58:      	cmp	x9, x10
+    4a5c:      	b.ne	0x4bfc <_perry_fn_access_worker_ts__run+0x21fc>
+    4a60:      	b	0x4bd8 <_perry_fn_access_worker_ts__run+0x21d8>
+    4a64:      	cbz	w12, 0x4aec <_perry_fn_access_worker_ts__run+0x20ec>
+    4a68:      	cmp	w12, #0x2
+    4a6c:      	b.eq	0x4b14 <_perry_fn_access_worker_ts__run+0x2114>
+    4a70:      	cmp	w12, #0x3
+    4a74:      	b.ne	0x4af4 <_perry_fn_access_worker_ts__run+0x20f4>
+    4a78:      	ldr	h0, [x8, x10, lsl #1]
+    4a7c:      	b	0x4af8 <_perry_fn_access_worker_ts__run+0x20f8>
+    4a80:      	ldr	x13, [x13]
+    4a84:      	cbz	x13, 0x4bd8 <_perry_fn_access_worker_ts__run+0x21d8>
+    4a88:      	tbnz	x13, #0x3f, 0x4b20 <_perry_fn_access_worker_ts__run+0x2120>
+    4a8c:      	ldp	w15, w14, [x9]
+    4a90:      	orr	x14, x14, x15, lsl #32
+    4a94:      	cmp	x14, x13
+    4a98:      	b.ne	0x4bd8 <_perry_fn_access_worker_ts__run+0x21d8>
+    4a9c:      	ldp	x15, x13, [x12, #0x8]
+    4aa0:      	ldp	x14, x12, [x12, #0x18]
+    4aa4:      	cmp	x15, x12
+    4aa8:      	b.lo	0x4b40 <_perry_fn_access_worker_ts__run+0x2140>
+    4aac:      	cbz	x11, 0x4bd8 <_perry_fn_access_worker_ts__run+0x21d8>
+    4ab0:      	b	0x4b4c <_perry_fn_access_worker_ts__run+0x214c>
+    4ab4:      	cmp	w12, #0x6
+    4ab8:      	b.eq	0x4b08 <_perry_fn_access_worker_ts__run+0x2108>
+    4abc:      	cmp	w12, #0x7
+    4ac0:      	b.ne	0x4af4 <_perry_fn_access_worker_ts__run+0x20f4>
+    4ac4:      	ldr	d0, [x8, x10, lsl #3]
+    4ac8:      	b	0x4bfc <_perry_fn_access_worker_ts__run+0x21fc>
+    4acc:      	adrp	x8, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		0000000000004acc:  ARM64_RELOC_PAGE21	_access_worker_ts_.str.4.handle
+    4ad0:      	ldr	x8, [x8]
+		0000000000004ad0:  ARM64_RELOC_PAGEOFF12	_access_worker_ts_.str.4.handle
+    4ad4:      	str	x26, [sp, #0x28]
+    4ad8:      	and	x1, x8, #0xffffffffffff
+    4adc:      	adrp	x3, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		0000000000004adc:  ARM64_RELOC_PAGE21	l_perry_ic_access_worker_ts__29
+    4ae0:      	add	x3, x3, #0x0
+		0000000000004ae0:  ARM64_RELOC_PAGEOFF12	l_perry_ic_access_worker_ts__29
+    4ae4:      	bl	0x4ae4 <_perry_fn_access_worker_ts__run+0x20e4>
+		0000000000004ae4:  ARM64_RELOC_BRANCH26	_js_object_get_field_ic_overflow_load
+    4ae8:      	b	0x47dc <_perry_fn_access_worker_ts__run+0x1ddc>
+    4aec:      	ldrsb	w8, [x8, x10]
+    4af0:      	b	0x4b18 <_perry_fn_access_worker_ts__run+0x2118>
+    4af4:      	ldr	b0, [x8, x10]
+    4af8:      	ucvtf	d0, d0
+    4afc:      	b	0x4bfc <_perry_fn_access_worker_ts__run+0x21fc>
+    4b00:      	ldr	w8, [x8, x10, lsl #2]
+    4b04:      	b	0x4b18 <_perry_fn_access_worker_ts__run+0x2118>
+    4b08:      	ldr	s0, [x8, x10, lsl #2]
+    4b0c:      	fcvt	d0, s0
+    4b10:      	b	0x4bfc <_perry_fn_access_worker_ts__run+0x21fc>
+    4b14:      	ldrsh	w8, [x8, x10, lsl #1]
+    4b18:      	scvtf	d0, w8
+    4b1c:      	b	0x4bfc <_perry_fn_access_worker_ts__run+0x21fc>
+    4b20:      	cbz	x11, 0x4bd8 <_perry_fn_access_worker_ts__run+0x21d8>
+    4b24:      	ldr	x14, [x11, #0x30]
+    4b28:      	cmp	x14, x13
+    4b2c:      	b.ne	0x4bd8 <_perry_fn_access_worker_ts__run+0x21d8>
+    4b30:      	ldp	x15, x13, [x12, #0x8]
+    4b34:      	ldp	x14, x12, [x12, #0x18]
+    4b38:      	cmp	x15, x12
+    4b3c:      	b.hs	0x4b4c <_perry_fn_access_worker_ts__run+0x214c>
+    4b40:      	add	x15, x9, x15, lsl #3
+    4b44:      	add	x15, x15, #0x10
+    4b48:      	b	0x4b70 <_perry_fn_access_worker_ts__run+0x2170>
+    4b4c:      	ldr	x17, [x11, #0x20]
+    4b50:      	cmp	x17, #0x0
+    4b54:      	csel	x16, x17, x11, ne
+    4b58:      	cbz	x17, 0x4bd8 <_perry_fn_access_worker_ts__run+0x21d8>
+    4b5c:      	ldr	w17, [x16]
+    4b60:      	cmp	x15, x17
+    4b64:      	b.hs	0x4bd8 <_perry_fn_access_worker_ts__run+0x21d8>
+    4b68:      	add	x15, x16, x15, lsl #3
+    4b6c:      	add	x15, x15, #0x8
+    4b70:      	ldr	d0, [x15]
+    4b74:      	fcmp	d8, d0
+    4b78:      	ccmp	x14, x10, #0x0, mi
+    4b7c:      	cset	w14, hi
+    4b80:      	add	x10, x13, x10
+    4b84:      	cmp	x10, x12
+    4b88:      	b.hs	0x4b9c <_perry_fn_access_worker_ts__run+0x219c>
+    4b8c:      	cbz	w14, 0x4b9c <_perry_fn_access_worker_ts__run+0x219c>
+    4b90:      	add	x8, x9, x10, lsl #3
+    4b94:      	ldr	d0, [x8, #0x10]
+    4b98:      	b	0x4bfc <_perry_fn_access_worker_ts__run+0x21fc>
+    4b9c:      	cbz	x11, 0x4bd8 <_perry_fn_access_worker_ts__run+0x21d8>
+    4ba0:      	cmp	x10, x12
+    4ba4:      	b.lo	0x4bd8 <_perry_fn_access_worker_ts__run+0x21d8>
+    4ba8:      	eor	w9, w14, #0x1
+    4bac:      	tbnz	w9, #0x0, 0x4bd8 <_perry_fn_access_worker_ts__run+0x21d8>
+    4bb0:      	ldr	x12, [x11, #0x20]
+    4bb4:      	cmp	x12, #0x0
+    4bb8:      	csel	x9, x12, x11, ne
+    4bbc:      	cbz	x12, 0x4bd8 <_perry_fn_access_worker_ts__run+0x21d8>
+    4bc0:      	ldr	w11, [x9]
+    4bc4:      	cmp	x10, x11
+    4bc8:      	b.hs	0x4bd8 <_perry_fn_access_worker_ts__run+0x21d8>
+    4bcc:      	add	x8, x9, x10, lsl #3
+    4bd0:      	ldr	d0, [x8, #0x8]
+    4bd4:      	b	0x4bfc <_perry_fn_access_worker_ts__run+0x21fc>
+    4bd8:      	fmov	d0, x8
+    4bdc:      	stp	x24, x26, [sp, #0x20]
+    4be0:      	str	x28, [sp, #0x18]
+    4be4:      	mov.16b	v1, v8
+    4be8:      	adrp	x0, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		0000000000004be8:  ARM64_RELOC_PAGE21	l_perry_ic_access_worker_ts__30
+    4bec:      	add	x0, x0, #0x0
+		0000000000004bec:  ARM64_RELOC_PAGEOFF12	l_perry_ic_access_worker_ts__30
+    4bf0:      	bl	0x4bf0 <_perry_fn_access_worker_ts__run+0x21f0>
+		0000000000004bf0:  ARM64_RELOC_BRANCH26	_js_packed_arraylike_index_get
+    4bf4:      	ldp	x28, x24, [sp, #0x18]
+    4bf8:      	ldr	x26, [sp, #0x28]
+    4bfc:      	fmov	x8, d0
+    4c00:      	and	x9, x8, x20
+    4c04:      	cmp	x9, x27
+    4c08:      	b.ne	0x4c78 <_perry_fn_access_worker_ts__run+0x2278>
+    4c0c:      	and	x0, x8, #0xffffffffffff
+    4c10:      	lsr	x8, x0, #20
+    4c14:      	cbz	x8, 0x4dcc <_perry_fn_access_worker_ts__run+0x23cc>
+    4c18:      	ldurb	w9, [x0, #-0x8]
+    4c1c:      	adrp	x8, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		0000000000004c1c:  ARM64_RELOC_PAGE21	l_perry_ic_access_worker_ts__32
+    4c20:      	ldr	x8, [x8]
+		0000000000004c20:  ARM64_RELOC_PAGEOFF12	l_perry_ic_access_worker_ts__32
+    4c24:      	cbz	x8, 0x4cf0 <_perry_fn_access_worker_ts__run+0x22f0>
+    4c28:      	cmp	w9, #0x2
+    4c2c:      	b.ne	0x4cf0 <_perry_fn_access_worker_ts__run+0x22f0>
+    4c30:      	ldurh	w10, [x0, #-0x6]
+    4c34:      	tbnz	w10, #0xb, 0x4cf0 <_perry_fn_access_worker_ts__run+0x22f0>
+    4c38:      	ldr	w10, [x0, #0x4]
+    4c3c:      	orr	x9, x10, #0x4000000000000000
+    4c40:      	cbz	w10, 0x4d1c <_perry_fn_access_worker_ts__run+0x231c>
+    4c44:      	ldr	x11, [x8]
+    4c48:      	cmp	x9, x11
+    4c4c:      	b.ne	0x4d1c <_perry_fn_access_worker_ts__run+0x231c>
+    4c50:      	ldr	x2, [x8, #0x8]
+    4c54:      	tbnz	w2, #0x1e, 0x4ee4 <_perry_fn_access_worker_ts__run+0x24e4>
+    4c58:      	add	x11, x0, x2, lsl #3
+    4c5c:      	ldr	d0, [x11, #0x10]
+    4c60:      	fmov	x11, d0
+    4c64:      	mov	x12, #0x10              ; =16
+    4c68:      	movk	x12, #0x7ffc, lsl #48
+    4c6c:      	cmp	x11, x12
+    4c70:      	b.ne	0x4df4 <_perry_fn_access_worker_ts__run+0x23f4>
+    4c74:      	b	0x4d48 <_perry_fn_access_worker_ts__run+0x2348>
+    4c78:      	lsr	x9, x8, #48
+    4c7c:      	mov	w10, #0x7ff9            ; =32761
+    4c80:      	cmp	x9, x10
+    4c84:      	b.eq	0x4cd0 <_perry_fn_access_worker_ts__run+0x22d0>
+    4c88:      	mov	w10, #0x7ffe            ; =32766
+    4c8c:      	cmp	w9, w10
+    4c90:      	b.ne	0x4cc0 <_perry_fn_access_worker_ts__run+0x22c0>
+    4c94:      	adrp	x9, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		0000000000004c94:  ARM64_RELOC_PAGE21	_access_worker_ts_.str.5.handle
+    4c98:      	ldr	x9, [x9]
+		0000000000004c98:  ARM64_RELOC_PAGEOFF12	_access_worker_ts_.str.5.handle
+    4c9c:      	stp	x24, x26, [sp, #0x20]
+    4ca0:      	str	x28, [sp, #0x18]
+    4ca4:      	and	x2, x9, #0xffffffffffff
+    4ca8:      	mov	x0, #0x1f               ; =31
+    4cac:      	movk	x0, #0xddae, lsl #32
+    4cb0:      	movk	x0, #0x5556, lsl #48
+    4cb4:      	mov	x1, x8
+    4cb8:      	bl	0x4cb8 <_perry_fn_access_worker_ts__run+0x22b8>
+		0000000000004cb8:  ARM64_RELOC_BRANCH26	_js_typed_feedback_object_get_field_by_name_f64
+    4cbc:      	b	0x4dec <_perry_fn_access_worker_ts__run+0x23ec>
+    4cc0:      	mov	x9, #-0x7ffc000000000001 ; =-9222246136947933185
+    4cc4:      	add	x9, x8, x9
+    4cc8:      	cmp	x9, #0x2
+    4ccc:      	b.lo	0x56c0 <_perry_fn_access_worker_ts__run+0x2cc0>
+    4cd0:      	adrp	x9, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		0000000000004cd0:  ARM64_RELOC_PAGE21	_access_worker_ts_.str.5.handle
+    4cd4:      	ldr	x9, [x9]
+		0000000000004cd4:  ARM64_RELOC_PAGEOFF12	_access_worker_ts_.str.5.handle
+    4cd8:      	stp	x24, x26, [sp, #0x20]
+    4cdc:      	str	x28, [sp, #0x18]
+    4ce0:      	and	x1, x9, #0xffffffffffff
+    4ce4:      	mov	x0, x8
+    4ce8:      	bl	0x4ce8 <_perry_fn_access_worker_ts__run+0x22e8>
+		0000000000004ce8:  ARM64_RELOC_BRANCH26	_js_object_get_field_by_name_f64
+    4cec:      	b	0x4dec <_perry_fn_access_worker_ts__run+0x23ec>
+    4cf0:      	cmp	w9, #0x2
+    4cf4:      	b.ne	0x4dcc <_perry_fn_access_worker_ts__run+0x23cc>
+    4cf8:      	cbz	x8, 0x4dcc <_perry_fn_access_worker_ts__run+0x23cc>
+    4cfc:      	ldr	x9, [x8, #0x10]
+    4d00:      	cbz	x9, 0x4dcc <_perry_fn_access_worker_ts__run+0x23cc>
+    4d04:      	ldr	x10, [x0, #0x8]
+    4d08:      	cbz	x10, 0x4dcc <_perry_fn_access_worker_ts__run+0x23cc>
+    4d0c:      	ldr	x10, [x10, #0x30]
+    4d10:      	cmp	x10, x9
+    4d14:      	b.eq	0x4d38 <_perry_fn_access_worker_ts__run+0x2338>
+    4d18:      	b	0x4dcc <_perry_fn_access_worker_ts__run+0x23cc>
+    4d1c:      	ldr	x11, [x8, #0x10]
+    4d20:      	cbz	x11, 0x4d48 <_perry_fn_access_worker_ts__run+0x2348>
+    4d24:      	ldr	x12, [x0, #0x8]
+    4d28:      	cbz	x12, 0x4d48 <_perry_fn_access_worker_ts__run+0x2348>
+    4d2c:      	ldr	x12, [x12, #0x30]
+    4d30:      	cmp	x12, x11
+    4d34:      	b.ne	0x4d48 <_perry_fn_access_worker_ts__run+0x2348>
+    4d38:      	ldr	x8, [x8, #0x8]
+    4d3c:      	add	x8, x0, x8, lsl #3
+    4d40:      	ldr	d0, [x8, #0x10]
+    4d44:      	b	0x4df4 <_perry_fn_access_worker_ts__run+0x23f4>
+    4d48:      	ldr	x11, [x8, #0x18]
+    4d4c:      	cmp	x11, #0x0
+    4d50:      	b.le	0x4dcc <_perry_fn_access_worker_ts__run+0x23cc>
+    4d54:      	ldr	x11, [x8, #0x20]
+    4d58:      	ldr	x12, [x8, #0x30]
+    4d5c:      	ldr	x13, [x8, #0x40]
+    4d60:      	cmp	x13, x9
+    4d64:      	ldr	x14, [x8, #0x50]
+    4d68:      	ccmp	x14, x9, #0x4, ne
+    4d6c:      	ccmp	x12, x9, #0x4, ne
+    4d70:      	ccmp	x11, x9, #0x4, ne
+    4d74:      	cset	w15, eq
+    4d78:      	cbz	w10, 0x4dcc <_perry_fn_access_worker_ts__run+0x23cc>
+    4d7c:      	cbz	w15, 0x4dcc <_perry_fn_access_worker_ts__run+0x23cc>
+    4d80:      	ldr	x10, [x8, #0x48]
+    4d84:      	ldr	x15, [x8, #0x58]
+    4d88:      	cmp	x14, x9
+    4d8c:      	csel	x14, x15, xzr, eq
+    4d90:      	cmp	x13, x9
+    4d94:      	csel	x10, x10, x14, eq
+    4d98:      	ldr	x13, [x8, #0x28]
+    4d9c:      	ldr	x8, [x8, #0x38]
+    4da0:      	cmp	x12, x9
+    4da4:      	csel	x8, x8, x10, eq
+    4da8:      	cmp	x11, x9
+    4dac:      	csel	x8, x13, x8, eq
+    4db0:      	add	x8, x0, x8, lsl #3
+    4db4:      	ldr	d0, [x8, #0x10]
+    4db8:      	fmov	x8, d0
+    4dbc:      	mov	x9, #0x10               ; =16
+    4dc0:      	movk	x9, #0x7ffc, lsl #48
+    4dc4:      	cmp	x8, x9
+    4dc8:      	b.ne	0x4df4 <_perry_fn_access_worker_ts__run+0x23f4>
+    4dcc:      	adrp	x8, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		0000000000004dcc:  ARM64_RELOC_PAGE21	_access_worker_ts_.str.5.handle
+    4dd0:      	ldr	x8, [x8]
+		0000000000004dd0:  ARM64_RELOC_PAGEOFF12	_access_worker_ts_.str.5.handle
+    4dd4:      	stp	x24, x26, [sp, #0x20]
+    4dd8:      	str	x28, [sp, #0x18]
+    4ddc:      	and	x1, x8, #0xffffffffffff
+    4de0:      	adrp	x2, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		0000000000004de0:  ARM64_RELOC_PAGE21	l_perry_ic_access_worker_ts__32
+    4de4:      	add	x2, x2, #0x0
+		0000000000004de4:  ARM64_RELOC_PAGEOFF12	l_perry_ic_access_worker_ts__32
+    4de8:      	bl	0x4de8 <_perry_fn_access_worker_ts__run+0x23e8>
+		0000000000004de8:  ARM64_RELOC_BRANCH26	_js_object_get_field_ic_miss
+    4dec:      	ldp	x28, x24, [sp, #0x18]
+    4df0:      	ldr	x26, [sp, #0x28]
+    4df4:      	fmov	x8, d0
+    4df8:      	mov	x9, #0x7ff8000000000000 ; =9221120237041090560
+    4dfc:      	bics	xzr, x9, x8
+    4e00:      	b.ne	0x4e30 <_perry_fn_access_worker_ts__run+0x2430>
+    4e04:      	mov	x9, #-0x7ffc000000000001 ; =-9222246136947933185
+    4e08:      	add	x9, x8, x9
+    4e0c:      	cmp	x9, #0x4
+    4e10:      	b.hs	0x4e44 <_perry_fn_access_worker_ts__run+0x2444>
+    4e14:      	mov	x9, #0x10               ; =16
+    4e18:      	movk	x9, #0x7ffc, lsl #48
+    4e1c:      	sub	x9, x9, #0xc
+    4e20:      	movi.2d	v1, #0000000000000000
+    4e24:      	cmp	x8, x9
+    4e28:      	b.eq	0x4e60 <_perry_fn_access_worker_ts__run+0x2460>
+    4e2c:      	b	0x4e64 <_perry_fn_access_worker_ts__run+0x2464>
+    4e30:      	movi.2d	v1, #0000000000000000
+    4e34:      	fcmp	d0, #0.0
+    4e38:      	b.eq	0x4e64 <_perry_fn_access_worker_ts__run+0x2464>
+    4e3c:      	b.vs	0x4e64 <_perry_fn_access_worker_ts__run+0x2464>
+    4e40:      	b	0x4e60 <_perry_fn_access_worker_ts__run+0x2460>
+    4e44:      	mov	w9, #0x7ffd             ; =32765
+    4e48:      	cmp	x9, x8, lsr #48
+    4e4c:      	b.ne	0x4e58 <_perry_fn_access_worker_ts__run+0x2458>
+    4e50:      	and	x8, x8, #0xffffffffffff
+    4e54:      	cbnz	x8, 0x4e60 <_perry_fn_access_worker_ts__run+0x2460>
+    4e58:      	bl	0x4e58 <_perry_fn_access_worker_ts__run+0x2458>
+		0000000000004e58:  ARM64_RELOC_BRANCH26	_js_is_truthy
+    4e5c:      	cbz	w0, 0x4edc <_perry_fn_access_worker_ts__run+0x24dc>
+    4e60:      	fmov	d1, #1.00000000
+    4e64:      	fmov	d0, x26
+    4e68:      	and	x8, x26, #0xffff000000000000
+    4e6c:      	cmp	x26, x19
+    4e70:      	ccmp	x8, x21, #0x2, hs
+    4e74:      	cset	w8, hi
+    4e78:      	fmov	x9, d1
+    4e7c:      	cmp	x9, x25
+    4e80:      	b.hi	0x4e90 <_perry_fn_access_worker_ts__run+0x2490>
+    4e84:      	tbz	w8, #0x0, 0x4e90 <_perry_fn_access_worker_ts__run+0x2490>
+    4e88:      	fadd	d0, d1, d0
+    4e8c:      	b	0x4e9c <_perry_fn_access_worker_ts__run+0x249c>
+    4e90:      	stp	x28, x24, [sp, #0x20]
+    4e94:      	bl	0x4e94 <_perry_fn_access_worker_ts__run+0x2494>
+		0000000000004e94:  ARM64_RELOC_BRANCH26	_js_dynamic_string_or_number_add
+    4e98:      	ldp	x28, x24, [sp, #0x20]
+    4e9c:      	fmov	x26, d0
+    4ea0:      	mov	x0, x26
+    4ea4:      	ldr	w8, [x23]
+    4ea8:      	cbz	w8, 0x4eb0 <_perry_fn_access_worker_ts__run+0x24b0>
+    4eac:      	bl	0x4eac <_perry_fn_access_worker_ts__run+0x24ac>
+		0000000000004eac:  ARM64_RELOC_BRANCH26	_js_write_barrier_root_nanbox
+    4eb0:      	adrp	x8, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		0000000000004eb0:  ARM64_RELOC_GOT_LOAD_PAGE21	_PERRY_GC_POLL_ARMED
+    4eb4:      	ldr	x8, [x8]
+		0000000000004eb4:  ARM64_RELOC_GOT_LOAD_PAGEOFF12	_PERRY_GC_POLL_ARMED
+    4eb8:      	ldr	w8, [x8]
+    4ebc:      	cbz	w8, 0x4ed4 <_perry_fn_access_worker_ts__run+0x24d4>
+    4ec0:      	stp	x24, x28, [sp, #0x20]
+    4ec4:      	str	x26, [sp, #0x18]
+    4ec8:      	bl	0x4ec8 <_perry_fn_access_worker_ts__run+0x24c8>
+		0000000000004ec8:  ARM64_RELOC_BRANCH26	_js_gc_loop_safepoint
+    4ecc:      	ldp	x26, x24, [sp, #0x18]
+    4ed0:      	ldr	x28, [sp, #0x28]
+    4ed4:      	add	w22, w22, #0x1
+    4ed8:      	b	0x3c14 <_perry_fn_access_worker_ts__run+0x1214>
+    4edc:      	movi.2d	v1, #0000000000000000
+    4ee0:      	b	0x4e64 <_perry_fn_access_worker_ts__run+0x2464>
+    4ee4:      	adrp	x8, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		0000000000004ee4:  ARM64_RELOC_PAGE21	_access_worker_ts_.str.5.handle
+    4ee8:      	ldr	x8, [x8]
+		0000000000004ee8:  ARM64_RELOC_PAGEOFF12	_access_worker_ts_.str.5.handle
+    4eec:      	stp	x24, x26, [sp, #0x20]
+    4ef0:      	str	x28, [sp, #0x18]
+    4ef4:      	and	x1, x8, #0xffffffffffff
+    4ef8:      	adrp	x3, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		0000000000004ef8:  ARM64_RELOC_PAGE21	l_perry_ic_access_worker_ts__32
+    4efc:      	add	x3, x3, #0x0
+		0000000000004efc:  ARM64_RELOC_PAGEOFF12	l_perry_ic_access_worker_ts__32
+    4f00:      	bl	0x4f00 <_perry_fn_access_worker_ts__run+0x2500>
+		0000000000004f00:  ARM64_RELOC_BRANCH26	_js_object_get_field_ic_overflow_load
+    4f04:      	b	0x4dec <_perry_fn_access_worker_ts__run+0x23ec>
+    4f08:      	add	x8, x9, x10, lsl #3
+    4f0c:      	ldr	d0, [x8, #0x10]
+    4f10:      	b	0x4060 <_perry_fn_access_worker_ts__run+0x1660>
+    4f14:      	mov	x23, x9
+    4f18:      	str	w9, [sp, #0x14]
+    4f1c:      	mov	w25, #0x0               ; =0
+    4f20:      	mov	x26, #0x0               ; =0
+    4f24:      	adrp	x21, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		0000000000004f24:  ARM64_RELOC_GOT_LOAD_PAGE21	_PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT
+    4f28:      	ldr	x21, [x21]
+		0000000000004f28:  ARM64_RELOC_GOT_LOAD_PAGEOFF12	_PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT
+    4f2c:      	mov	x27, #0x7ffd000000000000 ; =9222527611924643840
+    4f30:      	adrp	x19, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		0000000000004f30:  ARM64_RELOC_PAGE21	l_perry_ic_access_worker_ts__33
+    4f34:      	add	x19, x19, #0x0
+		0000000000004f34:  ARM64_RELOC_PAGEOFF12	l_perry_ic_access_worker_ts__33
+    4f38:      	adrp	x8, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		0000000000004f38:  ARM64_RELOC_PAGE21	lCPI1_2
+    4f3c:      	ldr	d10, [x8]
+		0000000000004f3c:  ARM64_RELOC_PAGEOFF12	lCPI1_2
+    4f40:      	adrp	x8, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		0000000000004f40:  ARM64_RELOC_PAGE21	lCPI1_3
+    4f44:      	ldr	d11, [x8]
+		0000000000004f44:  ARM64_RELOC_PAGEOFF12	lCPI1_3
+    4f48:      	mov	x20, #0x7ff9000000000000 ; =9221401712017801216
+    4f4c:      	adrp	x22, 0x4000 <_perry_fn_access_worker_ts__run+0x1600>
+		0000000000004f4c:  ARM64_RELOC_GOT_LOAD_PAGE21	_PERRY_GC_POLL_ARMED
+    4f50:      	ldr	x22, [x22]
+		0000000000004f50:  ARM64_RELOC_GOT_LOAD_PAGEOFF12	_PERRY_GC_POLL_ARMED
+    4f54:      	mov	x8, #0x41f0000000000000 ; =4751297606875873280
+    4f58:      	fmov	d12, x8
+    4f5c:      	movi.2d	v13, #0000000000000000
+    4f60:      	fmov	d14, #1.00000000
+    4f64:      	tbnz	w23, #0x0, 0x5054 <_perry_fn_access_worker_ts__run+0x2654>
+    4f68:      	scvtf	d8, w25
+    4f6c:      	mov	x8, x28
+    4f70:      	fmov	d1, x8
+    4f74:      	and	x9, x8, #0xffff000000000000
+    4f78:      	mov	x10, #0x7ffe000000000000 ; =9222809086901354496
+    4f7c:      	cmp	x9, x10
+    4f80:      	b.eq	0x4fbc <_perry_fn_access_worker_ts__run+0x25bc>
+    4f84:      	cmp	x8, x20
+    4f88:      	b.lt	0x4fbc <_perry_fn_access_worker_ts__run+0x25bc>
+    4f8c:      	mov	x10, #-0x7ffc000000000001 ; =-9222246136947933185
+    4f90:      	add	x10, x8, x10
+    4f94:      	cmp	x10, #0x3
+    4f98:      	b.ls	0x4fbc <_perry_fn_access_worker_ts__run+0x25bc>
+    4f9c:      	stp	x28, x26, [sp, #0x20]
+    4fa0:      	str	x24, [sp, #0x18]
+    4fa4:      	mov.16b	v0, v8
+    4fa8:      	bl	0x4fa8 <_perry_fn_access_worker_ts__run+0x25a8>
+		0000000000004fa8:  ARM64_RELOC_BRANCH26	_js_rel_lt
+    4fac:      	mov.16b	v9, v0
+    4fb0:      	ldp	x24, x28, [sp, #0x18]
+    4fb4:      	ldr	x26, [sp, #0x28]
+    4fb8:      	b	0x501c <_perry_fn_access_worker_ts__run+0x261c>
+    4fbc:      	mov	x12, #0x10              ; =16
+    4fc0:      	movk	x12, #0x7ffc, lsl #48
+    4fc4:      	sub	x10, x12, #0xc
+    4fc8:      	and	x11, x8, #0xfffffffffffffffe
+    4fcc:      	sub	x12, x12, #0xe
+    4fd0:      	scvtf	d0, w8
+    4fd4:      	mov	x13, #0x7ffe000000000000 ; =9222809086901354496
+    4fd8:      	cmp	x9, x13
+    4fdc:      	fcsel	d0, d0, d1, eq
+    4fe0:      	cmp	x11, x12
+    4fe4:      	fcsel	d0, d13, d0, eq
+    4fe8:      	cmp	x8, x10
+    4fec:      	fcsel	d0, d14, d0, eq
+    4ff0:      	fmov	x8, d8
+    4ff4:      	scvtf	d1, w8
+    4ff8:      	mov	w9, #0x7ffe             ; =32766
+    4ffc:      	cmp	x9, x8, lsr #48
+    5000:      	fcsel	d1, d1, d8, eq
+    5004:      	fcmp	d1, d0
+    5008:      	mov	w8, #0x8                ; =8
+    500c:      	csel	x8, x8, xzr, mi
+    5010:      	adrp	x9, 0x5000 <_perry_fn_access_worker_ts__run+0x2600>
+		0000000000005010:  ARM64_RELOC_PAGE21	lCPI1_1
+    5014:      	add	x9, x9, #0x0
+		0000000000005014:  ARM64_RELOC_PAGEOFF12	lCPI1_1
+    5018:      	ldr	d9, [x9, x8]
+    501c:      	ldr	w8, [x22]
+    5020:      	cbz	w8, 0x5038 <_perry_fn_access_worker_ts__run+0x2638>
+    5024:      	stp	x24, x28, [sp, #0x20]
+    5028:      	str	x26, [sp, #0x18]
+    502c:      	bl	0x502c <_perry_fn_access_worker_ts__run+0x262c>
+		000000000000502c:  ARM64_RELOC_BRANCH26	_js_gc_loop_safepoint
+    5030:      	ldp	x26, x24, [sp, #0x18]
+    5034:      	ldr	x28, [sp, #0x28]
+    5038:      	fmov	x8, d9
+    503c:      	mov	x9, #0x10               ; =16
+    5040:      	movk	x9, #0x7ffc, lsl #48
+    5044:      	sub	x9, x9, #0xc
+    5048:      	cmp	x8, x9
+    504c:      	b.ne	0x5638 <_perry_fn_access_worker_ts__run+0x2c38>
+    5050:      	b	0x5064 <_perry_fn_access_worker_ts__run+0x2664>
+    5054:      	ldr	w8, [sp, #0x14]
+    5058:      	cmp	w25, w8
+    505c:      	b.ge	0x5638 <_perry_fn_access_worker_ts__run+0x2c38>
+    5060:      	scvtf	d8, w25
+    5064:      	adrp	x8, 0x5000 <_perry_fn_access_worker_ts__run+0x2600>
+		0000000000005064:  ARM64_RELOC_PAGE21	_perry_global_access_worker_ts__5
+    5068:      	ldr	d1, [x8]
+		0000000000005068:  ARM64_RELOC_PAGEOFF12	_perry_global_access_worker_ts__5
+    506c:      	stp	x24, x26, [sp, #0x20]
+    5070:      	str	x28, [sp, #0x18]
+    5074:      	mov.16b	v0, v8
+    5078:      	bl	0x5078 <_perry_fn_access_worker_ts__run+0x2678>
+		0000000000005078:  ARM64_RELOC_BRANCH26	_js_dynamic_mod
+    507c:      	mov.16b	v8, v0
+    5080:      	ldp	x28, x24, [sp, #0x18]
+    5084:      	ldr	x26, [sp, #0x28]
+    5088:      	mov	x0, x26
+    508c:      	ldr	w8, [x21]
+    5090:      	cbz	w8, 0x5098 <_perry_fn_access_worker_ts__run+0x2698>
+    5094:      	bl	0x5094 <_perry_fn_access_worker_ts__run+0x2694>
+		0000000000005094:  ARM64_RELOC_BRANCH26	_js_write_barrier_root_nanbox
+    5098:      	mov	x8, x24
+    509c:      	and	x9, x8, #0xffffffffffff
+    50a0:      	and	x14, x8, #0xffff000000000000
+    50a4:      	adrp	x10, 0x5000 <_perry_fn_access_worker_ts__run+0x2600>
+		00000000000050a4:  ARM64_RELOC_GOT_LOAD_PAGE21	_PERRY_TA_VIEW_GUARD
+    50a8:      	ldr	x10, [x10]
+		00000000000050a8:  ARM64_RELOC_GOT_LOAD_PAGEOFF12	_PERRY_TA_VIEW_GUARD
+    50ac:      	ldr	x10, [x10]
+    50b0:      	sub	x11, x9, #0x100, lsl #12 ; =0x100000
+    50b4:      	cmp	x14, x27
+    50b8:      	ccmp	x10, #0x0, #0x0, eq
+    50bc:      	mov	x10, #0x7ffffff00000    ; =140737487306752
+    50c0:      	ccmp	x11, x10, #0x2, eq
+    50c4:      	b.hs	0x5100 <_perry_fn_access_worker_ts__run+0x2700>
+    50c8:      	fcmp	d8, d12
+    50cc:      	b.pl	0x5100 <_perry_fn_access_worker_ts__run+0x2700>
+    50d0:      	ldurb	w10, [x9, #-0x8]
+    50d4:      	ldrb	w11, [x9, #0x8]
+    50d8:      	fcmp	d8, #0.0
+    50dc:      	ccmp	w10, #0xb, #0x0, ge
+    50e0:      	ccmp	w11, #0x9, #0x2, eq
+    50e4:      	b.hs	0x5100 <_perry_fn_access_worker_ts__run+0x2700>
+    50e8:      	fcvtzs	x10, d8
+    50ec:      	scvtf	d0, x10
+    50f0:      	ldr	w12, [x9]
+    50f4:      	fcmp	d8, d0
+    50f8:      	ccmp	x10, x12, #0x2, eq
+    50fc:      	b.lo	0x51b0 <_perry_fn_access_worker_ts__run+0x27b0>
+    5100:      	ldr	x12, [x19]
+    5104:      	cmp	x12, #0x0
+    5108:      	csel	x13, x19, x12, eq
+    510c:      	cmp	x14, x27
+    5110:      	b.ne	0x5374 <_perry_fn_access_worker_ts__run+0x2974>
+    5114:      	fcmp	d8, #0.0
+    5118:      	b.lt	0x5374 <_perry_fn_access_worker_ts__run+0x2974>
+    511c:      	fcmp	d8, d10
+    5120:      	b.pl	0x5374 <_perry_fn_access_worker_ts__run+0x2974>
+    5124:      	mov	x10, #-0x20000000000    ; =-2199023255552
+    5128:      	add	x10, x9, x10
+    512c:      	lsr	x10, x10, #41
+    5130:      	cmp	x10, #0x3f
+    5134:      	b.hs	0x5374 <_perry_fn_access_worker_ts__run+0x2974>
+    5138:      	fcvtzs	x10, d8
+    513c:      	scvtf	d0, x10
+    5140:      	fcmp	d8, d0
+    5144:      	b.ne	0x5374 <_perry_fn_access_worker_ts__run+0x2974>
+    5148:      	ldursb	w11, [x9, #-0x7]
+    514c:      	tbnz	w11, #0x1f, 0x5374 <_perry_fn_access_worker_ts__run+0x2974>
+    5150:      	ldurb	w11, [x9, #-0x8]
+    5154:      	cmp	w11, #0x2
+    5158:      	b.eq	0x51dc <_perry_fn_access_worker_ts__run+0x27dc>
+    515c:      	cmp	w11, #0x1
+    5160:      	b.ne	0x5374 <_perry_fn_access_worker_ts__run+0x2974>
+    5164:      	ldurh	w13, [x9, #-0x6]
+    5168:      	adrp	x11, 0x5000 <_perry_fn_access_worker_ts__run+0x2600>
+		0000000000005168:  ARM64_RELOC_GOT_LOAD_PAGE21	_PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED
+    516c:      	ldr	x11, [x11]
+		000000000000516c:  ARM64_RELOC_GOT_LOAD_PAGEOFF12	_PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED
+    5170:      	ldrb	w12, [x11]
+    5174:      	ldp	w11, w14, [x9]
+    5178:      	cmp	w11, w14
+    517c:      	b.hi	0x5374 <_perry_fn_access_worker_ts__run+0x2974>
+    5180:      	tbnz	w13, #0xa, 0x5374 <_perry_fn_access_worker_ts__run+0x2974>
+    5184:      	cbnz	w12, 0x5374 <_perry_fn_access_worker_ts__run+0x2974>
+    5188:      	cmp	x10, x11
+    518c:      	b.hs	0x5374 <_perry_fn_access_worker_ts__run+0x2974>
+    5190:      	add	x8, x9, x10, lsl #3
+    5194:      	ldr	d0, [x8, #0x8]
+    5198:      	fmov	x8, d0
+    519c:      	mov	x9, #0x10               ; =16
+    51a0:      	movk	x9, #0x7ffc, lsl #48
+    51a4:      	cmp	x8, x9
+    51a8:      	fcsel	d0, d11, d0, eq
+    51ac:      	b	0x5390 <_perry_fn_access_worker_ts__run+0x2990>
+    51b0:      	add	x8, x9, #0x10
+    51b4:      	cmp	w11, #0x3
+    51b8:      	b.le	0x522c <_perry_fn_access_worker_ts__run+0x282c>
+    51bc:      	cmp	w11, #0x5
+    51c0:      	b.gt	0x527c <_perry_fn_access_worker_ts__run+0x287c>
+    51c4:      	cmp	w11, #0x4
+    51c8:      	b.eq	0x52a8 <_perry_fn_access_worker_ts__run+0x28a8>
+    51cc:      	cmp	w11, #0x5
+    51d0:      	b.ne	0x529c <_perry_fn_access_worker_ts__run+0x289c>
+    51d4:      	ldr	s0, [x8, x10, lsl #2]
+    51d8:      	b	0x52a0 <_perry_fn_access_worker_ts__run+0x28a0>
+    51dc:      	ldr	x11, [x9, #0x8]
+    51e0:      	cbz	x11, 0x5248 <_perry_fn_access_worker_ts__run+0x2848>
+    51e4:      	ldr	x14, [x11, #0x60]
+    51e8:      	cbz	x14, 0x5248 <_perry_fn_access_worker_ts__run+0x2848>
+    51ec:      	ldurb	w9, [x14, #-0x8]
+    51f0:      	cmp	w9, #0x1
+    51f4:      	b.ne	0x5374 <_perry_fn_access_worker_ts__run+0x2974>
+    51f8:      	ldursb	w9, [x14, #-0x7]
+    51fc:      	tbnz	w9, #0x1f, 0x5374 <_perry_fn_access_worker_ts__run+0x2974>
+    5200:      	ldr	w9, [x14]
+    5204:      	cmp	x10, x9
+    5208:      	b.hs	0x5374 <_perry_fn_access_worker_ts__run+0x2974>
+    520c:      	add	x9, x14, x10, lsl #3
+    5210:      	ldr	d0, [x9, #0x8]
+    5214:      	fmov	x9, d0
+    5218:      	mov	x10, #0x10              ; =16
+    521c:      	movk	x10, #0x7ffc, lsl #48
+    5220:      	cmp	x9, x10
+    5224:      	b.ne	0x5390 <_perry_fn_access_worker_ts__run+0x2990>
+    5228:      	b	0x5374 <_perry_fn_access_worker_ts__run+0x2974>
+    522c:      	cbz	w11, 0x5294 <_perry_fn_access_worker_ts__run+0x2894>
+    5230:      	cmp	w11, #0x2
+    5234:      	b.eq	0x52bc <_perry_fn_access_worker_ts__run+0x28bc>
+    5238:      	cmp	w11, #0x3
+    523c:      	b.ne	0x529c <_perry_fn_access_worker_ts__run+0x289c>
+    5240:      	ldr	h0, [x8, x10, lsl #1]
+    5244:      	b	0x52a0 <_perry_fn_access_worker_ts__run+0x28a0>
+    5248:      	ldr	x13, [x13]
+    524c:      	cbz	x13, 0x5374 <_perry_fn_access_worker_ts__run+0x2974>
+    5250:      	tbnz	x13, #0x3f, 0x52c8 <_perry_fn_access_worker_ts__run+0x28c8>
+    5254:      	ldp	w15, w14, [x9]
+    5258:      	orr	x14, x14, x15, lsl #32
+    525c:      	cmp	x14, x13
+    5260:      	b.ne	0x5374 <_perry_fn_access_worker_ts__run+0x2974>
+    5264:      	ldp	x15, x13, [x12, #0x8]
+    5268:      	ldp	x14, x12, [x12, #0x18]
+    526c:      	cmp	x15, x12
+    5270:      	b.lo	0x52e8 <_perry_fn_access_worker_ts__run+0x28e8>
+    5274:      	cbz	x11, 0x5374 <_perry_fn_access_worker_ts__run+0x2974>
+    5278:      	b	0x52f4 <_perry_fn_access_worker_ts__run+0x28f4>
+    527c:      	cmp	w11, #0x6
+    5280:      	b.eq	0x52b0 <_perry_fn_access_worker_ts__run+0x28b0>
+    5284:      	cmp	w11, #0x7
+    5288:      	b.ne	0x529c <_perry_fn_access_worker_ts__run+0x289c>
+    528c:      	ldr	d0, [x8, x10, lsl #3]
+    5290:      	b	0x5390 <_perry_fn_access_worker_ts__run+0x2990>
+    5294:      	ldrsb	w8, [x8, x10]
+    5298:      	b	0x52c0 <_perry_fn_access_worker_ts__run+0x28c0>
+    529c:      	ldr	b0, [x8, x10]
+    52a0:      	ucvtf	d0, d0
+    52a4:      	b	0x5390 <_perry_fn_access_worker_ts__run+0x2990>
+    52a8:      	ldr	w8, [x8, x10, lsl #2]
+    52ac:      	b	0x52c0 <_perry_fn_access_worker_ts__run+0x28c0>
+    52b0:      	ldr	s0, [x8, x10, lsl #2]
+    52b4:      	fcvt	d0, s0
+    52b8:      	b	0x5390 <_perry_fn_access_worker_ts__run+0x2990>
+    52bc:      	ldrsh	w8, [x8, x10, lsl #1]
+    52c0:      	scvtf	d0, w8
+    52c4:      	b	0x5390 <_perry_fn_access_worker_ts__run+0x2990>
+    52c8:      	cbz	x11, 0x5374 <_perry_fn_access_worker_ts__run+0x2974>
+    52cc:      	ldr	x14, [x11, #0x30]
+    52d0:      	cmp	x14, x13
+    52d4:      	b.ne	0x5374 <_perry_fn_access_worker_ts__run+0x2974>
+    52d8:      	ldp	x15, x13, [x12, #0x8]
+    52dc:      	ldp	x14, x12, [x12, #0x18]
+    52e0:      	cmp	x15, x12
+    52e4:      	b.hs	0x52f4 <_perry_fn_access_worker_ts__run+0x28f4>
+    52e8:      	add	x15, x9, x15, lsl #3
+    52ec:      	add	x15, x15, #0x10
+    52f0:      	b	0x5318 <_perry_fn_access_worker_ts__run+0x2918>
+    52f4:      	ldr	x17, [x11, #0x20]
+    52f8:      	cmp	x17, #0x0
+    52fc:      	csel	x16, x17, x11, ne
+    5300:      	cbz	x17, 0x5374 <_perry_fn_access_worker_ts__run+0x2974>
+    5304:      	ldr	w17, [x16]
+    5308:      	cmp	x15, x17
+    530c:      	b.hs	0x5374 <_perry_fn_access_worker_ts__run+0x2974>
+    5310:      	add	x15, x16, x15, lsl #3
+    5314:      	add	x15, x15, #0x8
+    5318:      	ldr	d0, [x15]
+    531c:      	fcmp	d8, d0
+    5320:      	ccmp	x14, x10, #0x0, mi
+    5324:      	cset	w14, hi
+    5328:      	add	x10, x13, x10
+    532c:      	cmp	x10, x12
+    5330:      	ccmp	w14, #0x0, #0x4, lo
+    5334:      	b.ne	0x562c <_perry_fn_access_worker_ts__run+0x2c2c>
+    5338:      	cbz	x11, 0x5374 <_perry_fn_access_worker_ts__run+0x2974>
+    533c:      	cmp	x10, x12
+    5340:      	b.lo	0x5374 <_perry_fn_access_worker_ts__run+0x2974>
+    5344:      	eor	w9, w14, #0x1
+    5348:      	tbnz	w9, #0x0, 0x5374 <_perry_fn_access_worker_ts__run+0x2974>
+    534c:      	ldr	x12, [x11, #0x20]
+    5350:      	cmp	x12, #0x0
+    5354:      	csel	x9, x12, x11, ne
+    5358:      	cbz	x12, 0x5374 <_perry_fn_access_worker_ts__run+0x2974>
+    535c:      	ldr	w11, [x9]
+    5360:      	cmp	x10, x11
+    5364:      	b.hs	0x5374 <_perry_fn_access_worker_ts__run+0x2974>
+    5368:      	add	x8, x9, x10, lsl #3
+    536c:      	ldr	d0, [x8, #0x8]
+    5370:      	b	0x5390 <_perry_fn_access_worker_ts__run+0x2990>
+    5374:      	fmov	d0, x8
+    5378:      	str	x26, [sp, #0x28]
+    537c:      	mov.16b	v1, v8
+    5380:      	mov	x0, x19
+    5384:      	bl	0x5384 <_perry_fn_access_worker_ts__run+0x2984>
+		0000000000005384:  ARM64_RELOC_BRANCH26	_js_packed_arraylike_index_get
+    5388:      	ldp	x24, x26, [sp, #0x20]
+    538c:      	ldr	x28, [sp, #0x18]
+    5390:      	fmov	x8, d0
+    5394:      	mov	x9, #-0x3000000000000   ; =-844424930131968
+    5398:      	and	x9, x8, x9
+    539c:      	cmp	x9, x27
+    53a0:      	b.ne	0x540c <_perry_fn_access_worker_ts__run+0x2a0c>
+    53a4:      	and	x0, x8, #0xffffffffffff
+    53a8:      	lsr	x8, x0, #20
+    53ac:      	cbz	x8, 0x5560 <_perry_fn_access_worker_ts__run+0x2b60>
+    53b0:      	ldurb	w9, [x0, #-0x8]
+    53b4:      	adrp	x8, 0x5000 <_perry_fn_access_worker_ts__run+0x2600>
+		00000000000053b4:  ARM64_RELOC_PAGE21	l_perry_ic_access_worker_ts__35
+    53b8:      	ldr	x8, [x8]
+		00000000000053b8:  ARM64_RELOC_PAGEOFF12	l_perry_ic_access_worker_ts__35
+    53bc:      	cbz	x8, 0x547c <_perry_fn_access_worker_ts__run+0x2a7c>
+    53c0:      	ldurh	w10, [x0, #-0x6]
+    53c4:      	and	w10, w10, #0x800
+    53c8:      	cmp	w9, #0x2
+    53cc:      	ccmp	w10, #0x0, #0x0, eq
+    53d0:      	b.ne	0x547c <_perry_fn_access_worker_ts__run+0x2a7c>
+    53d4:      	ldr	w10, [x0, #0x4]
+    53d8:      	orr	x9, x10, #0x4000000000000000
+    53dc:      	ldr	x11, [x8]
+    53e0:      	cmp	w10, #0x0
+    53e4:      	ccmp	x9, x11, #0x0, ne
+    53e8:      	b.eq	0x54b4 <_perry_fn_access_worker_ts__run+0x2ab4>
+    53ec:      	ldr	x11, [x8, #0x10]
+    53f0:      	cbz	x11, 0x54d8 <_perry_fn_access_worker_ts__run+0x2ad8>
+    53f4:      	ldr	x12, [x0, #0x8]
+    53f8:      	cbz	x12, 0x54d8 <_perry_fn_access_worker_ts__run+0x2ad8>
+    53fc:      	ldr	x12, [x12, #0x30]
+    5400:      	cmp	x12, x11
+    5404:      	b.eq	0x54a4 <_perry_fn_access_worker_ts__run+0x2aa4>
+    5408:      	b	0x54d8 <_perry_fn_access_worker_ts__run+0x2ad8>
+    540c:      	lsr	x9, x8, #48
+    5410:      	mov	w10, #0x7ff9            ; =32761
+    5414:      	cmp	x9, x10
+    5418:      	b.eq	0x5460 <_perry_fn_access_worker_ts__run+0x2a60>
+    541c:      	mov	w10, #0x7ffe            ; =32766
+    5420:      	cmp	w9, w10
+    5424:      	b.ne	0x5450 <_perry_fn_access_worker_ts__run+0x2a50>
+    5428:      	adrp	x9, 0x5000 <_perry_fn_access_worker_ts__run+0x2600>
+		0000000000005428:  ARM64_RELOC_PAGE21	_access_worker_ts_.str.1.handle
+    542c:      	ldr	x9, [x9]
+		000000000000542c:  ARM64_RELOC_PAGEOFF12	_access_worker_ts_.str.1.handle
+    5430:      	str	x26, [sp, #0x28]
+    5434:      	and	x2, x9, #0xffffffffffff
+    5438:      	mov	x0, #0x22               ; =34
+    543c:      	movk	x0, #0xddae, lsl #32
+    5440:      	movk	x0, #0x5556, lsl #48
+    5444:      	mov	x1, x8
+    5448:      	bl	0x5448 <_perry_fn_access_worker_ts__run+0x2a48>
+		0000000000005448:  ARM64_RELOC_BRANCH26	_js_typed_feedback_object_get_field_by_name_f64
+    544c:      	b	0x557c <_perry_fn_access_worker_ts__run+0x2b7c>
+    5450:      	mov	x9, #-0x7ffc000000000001 ; =-9222246136947933185
+    5454:      	add	x9, x8, x9
+    5458:      	cmp	x9, #0x2
+    545c:      	b.lo	0x5674 <_perry_fn_access_worker_ts__run+0x2c74>
+    5460:      	adrp	x9, 0x5000 <_perry_fn_access_worker_ts__run+0x2600>
+		0000000000005460:  ARM64_RELOC_PAGE21	_access_worker_ts_.str.1.handle
+    5464:      	ldr	x9, [x9]
+		0000000000005464:  ARM64_RELOC_PAGEOFF12	_access_worker_ts_.str.1.handle
+    5468:      	str	x26, [sp, #0x28]
+    546c:      	and	x1, x9, #0xffffffffffff
+    5470:      	mov	x0, x8
+    5474:      	bl	0x5474 <_perry_fn_access_worker_ts__run+0x2a74>
+		0000000000005474:  ARM64_RELOC_BRANCH26	_js_object_get_field_by_name_f64
+    5478:      	b	0x557c <_perry_fn_access_worker_ts__run+0x2b7c>
+    547c:      	cmp	w9, #0x2
+    5480:      	ccmp	x8, #0x0, #0x4, eq
+    5484:      	b.eq	0x5560 <_perry_fn_access_worker_ts__run+0x2b60>
+    5488:      	ldr	x9, [x8, #0x10]
+    548c:      	cbz	x9, 0x5560 <_perry_fn_access_worker_ts__run+0x2b60>
+    5490:      	ldr	x10, [x0, #0x8]
+    5494:      	cbz	x10, 0x5560 <_perry_fn_access_worker_ts__run+0x2b60>
+    5498:      	ldr	x10, [x10, #0x30]
+    549c:      	cmp	x10, x9
+    54a0:      	b.ne	0x5560 <_perry_fn_access_worker_ts__run+0x2b60>
+    54a4:      	ldr	x8, [x8, #0x8]
+    54a8:      	add	x8, x0, x8, lsl #3
+    54ac:      	ldr	d1, [x8, #0x10]
+    54b0:      	b	0x5588 <_perry_fn_access_worker_ts__run+0x2b88>
+    54b4:      	ldr	x2, [x8, #0x8]
+    54b8:      	tbnz	w2, #0x1e, 0x560c <_perry_fn_access_worker_ts__run+0x2c0c>
+    54bc:      	add	x11, x0, x2, lsl #3
+    54c0:      	ldr	d1, [x11, #0x10]
+    54c4:      	fmov	x11, d1
+    54c8:      	mov	x12, #0x10              ; =16
+    54cc:      	movk	x12, #0x7ffc, lsl #48
+    54d0:      	cmp	x11, x12
+    54d4:      	b.ne	0x5588 <_perry_fn_access_worker_ts__run+0x2b88>
+    54d8:      	ldr	x11, [x8, #0x18]
+    54dc:      	cmp	x11, #0x0
+    54e0:      	b.le	0x5560 <_perry_fn_access_worker_ts__run+0x2b60>
+    54e4:      	ldr	x11, [x8, #0x20]
+    54e8:      	ldr	x12, [x8, #0x30]
+    54ec:      	ldr	x13, [x8, #0x40]
+    54f0:      	cmp	x13, x9
+    54f4:      	ldr	x14, [x8, #0x50]
+    54f8:      	ccmp	x14, x9, #0x4, ne
+    54fc:      	ccmp	x12, x9, #0x4, ne
+    5500:      	ccmp	x11, x9, #0x4, ne
+    5504:      	cset	w15, eq
+    5508:      	cmp	w10, #0x0
+    550c:      	ccmp	w15, #0x0, #0x4, ne
+    5510:      	b.eq	0x5560 <_perry_fn_access_worker_ts__run+0x2b60>
+    5514:      	ldr	x10, [x8, #0x48]
+    5518:      	ldr	x15, [x8, #0x58]
+    551c:      	cmp	x14, x9
+    5520:      	csel	x14, x15, xzr, eq
+    5524:      	cmp	x13, x9
+    5528:      	csel	x10, x10, x14, eq
+    552c:      	ldr	x13, [x8, #0x28]
+    5530:      	ldr	x8, [x8, #0x38]
+    5534:      	cmp	x12, x9
+    5538:      	csel	x8, x8, x10, eq
+    553c:      	cmp	x11, x9
+    5540:      	csel	x8, x13, x8, eq
+    5544:      	add	x8, x0, x8, lsl #3
+    5548:      	ldr	d1, [x8, #0x10]
+    554c:      	fmov	x8, d1
+    5550:      	mov	x9, #0x10               ; =16
+    5554:      	movk	x9, #0x7ffc, lsl #48
+    5558:      	cmp	x8, x9
+    555c:      	b.ne	0x5588 <_perry_fn_access_worker_ts__run+0x2b88>
+    5560:      	adrp	x8, 0x5000 <_perry_fn_access_worker_ts__run+0x2600>
+		0000000000005560:  ARM64_RELOC_PAGE21	_access_worker_ts_.str.1.handle
+    5564:      	ldr	x8, [x8]
+		0000000000005564:  ARM64_RELOC_PAGEOFF12	_access_worker_ts_.str.1.handle
+    5568:      	str	x26, [sp, #0x28]
+    556c:      	and	x1, x8, #0xffffffffffff
+    5570:      	adrp	x2, 0x5000 <_perry_fn_access_worker_ts__run+0x2600>
+		0000000000005570:  ARM64_RELOC_PAGE21	l_perry_ic_access_worker_ts__35
+    5574:      	add	x2, x2, #0x0
+		0000000000005574:  ARM64_RELOC_PAGEOFF12	l_perry_ic_access_worker_ts__35
+    5578:      	bl	0x5578 <_perry_fn_access_worker_ts__run+0x2b78>
+		0000000000005578:  ARM64_RELOC_BRANCH26	_js_object_get_field_ic_miss
+    557c:      	mov.16b	v1, v0
+    5580:      	ldp	x28, x24, [sp, #0x18]
+    5584:      	ldr	x26, [sp, #0x28]
+    5588:      	fmov	d0, x26
+    558c:      	and	x9, x26, #0xffff000000000000
+    5590:      	fmov	x8, d1
+    5594:      	and	x10, x8, #0xffff000000000000
+    5598:      	cmp	x8, x20
+    559c:      	mov	x8, #0x7fff000000000000 ; =9223090561878065152
+    55a0:      	ccmp	x10, x8, #0x2, hs
+    55a4:      	cset	w8, hi
+    55a8:      	mov	x10, #0x1               ; =1
+    55ac:      	movk	x10, #0x7fff, lsl #48
+    55b0:      	cmp	x9, x10
+    55b4:      	mov	x9, #0x7ff8ffffffffffff ; =9221401712017801215
+    55b8:      	ccmp	x26, x9, #0x0, lo
+    55bc:      	b.hi	0x55cc <_perry_fn_access_worker_ts__run+0x2bcc>
+    55c0:      	tbz	w8, #0x0, 0x55cc <_perry_fn_access_worker_ts__run+0x2bcc>
+    55c4:      	fadd	d0, d1, d0
+    55c8:      	b	0x55d4 <_perry_fn_access_worker_ts__run+0x2bd4>
+    55cc:      	bl	0x55cc <_perry_fn_access_worker_ts__run+0x2bcc>
+		00000000000055cc:  ARM64_RELOC_BRANCH26	_js_dynamic_string_or_number_add
+    55d0:      	ldp	x28, x24, [sp, #0x18]
+    55d4:      	fmov	x26, d0
+    55d8:      	mov	x0, x26
+    55dc:      	ldr	w8, [x21]
+    55e0:      	cbz	w8, 0x55e8 <_perry_fn_access_worker_ts__run+0x2be8>
+    55e4:      	bl	0x55e4 <_perry_fn_access_worker_ts__run+0x2be4>
+		00000000000055e4:  ARM64_RELOC_BRANCH26	_js_write_barrier_root_nanbox
+    55e8:      	ldr	w8, [x22]
+    55ec:      	cbz	w8, 0x5600 <_perry_fn_access_worker_ts__run+0x2c00>
+    55f0:      	str	x26, [sp, #0x28]
+    55f4:      	bl	0x55f4 <_perry_fn_access_worker_ts__run+0x2bf4>
+		00000000000055f4:  ARM64_RELOC_BRANCH26	_js_gc_loop_safepoint
+    55f8:      	ldp	x24, x26, [sp, #0x20]
+    55fc:      	ldr	x28, [sp, #0x18]
+    5600:      	add	w25, w25, #0x1
+    5604:      	tbz	w23, #0x0, 0x4f68 <_perry_fn_access_worker_ts__run+0x2568>
+    5608:      	b	0x5054 <_perry_fn_access_worker_ts__run+0x2654>
+    560c:      	adrp	x8, 0x5000 <_perry_fn_access_worker_ts__run+0x2600>
+		000000000000560c:  ARM64_RELOC_PAGE21	_access_worker_ts_.str.1.handle
+    5610:      	ldr	x8, [x8]
+		0000000000005610:  ARM64_RELOC_PAGEOFF12	_access_worker_ts_.str.1.handle
+    5614:      	str	x26, [sp, #0x28]
+    5618:      	and	x1, x8, #0xffffffffffff
+    561c:      	adrp	x3, 0x5000 <_perry_fn_access_worker_ts__run+0x2600>
+		000000000000561c:  ARM64_RELOC_PAGE21	l_perry_ic_access_worker_ts__35
+    5620:      	add	x3, x3, #0x0
+		0000000000005620:  ARM64_RELOC_PAGEOFF12	l_perry_ic_access_worker_ts__35
+    5624:      	bl	0x5624 <_perry_fn_access_worker_ts__run+0x2c24>
+		0000000000005624:  ARM64_RELOC_BRANCH26	_js_object_get_field_ic_overflow_load
+    5628:      	b	0x557c <_perry_fn_access_worker_ts__run+0x2b7c>
+    562c:      	add	x8, x9, x10, lsl #3
+    5630:      	ldr	d0, [x8, #0x10]
+    5634:      	b	0x5390 <_perry_fn_access_worker_ts__run+0x2990>
+    5638:      	fmov	d0, x26
+    563c:      	ldp	x29, x30, [sp, #0xc0]
+    5640:      	ldp	x20, x19, [sp, #0xb0]
+    5644:      	ldp	x22, x21, [sp, #0xa0]
+    5648:      	ldp	x24, x23, [sp, #0x90]
+    564c:      	ldp	x26, x25, [sp, #0x80]
+    5650:      	ldp	x28, x27, [sp, #0x70]
+    5654:      	ldp	d9, d8, [sp, #0x60]
+    5658:      	ldp	d11, d10, [sp, #0x50]
+    565c:      	ldp	d13, d12, [sp, #0x40]
+    5660:      	ldp	d15, d14, [sp, #0x30]
+    5664:      	add	sp, sp, #0xd0
+    5668:      	ret
+    566c:      	sub	x9, x22, #0xe
+    5670:      	b	0x5680 <_perry_fn_access_worker_ts__run+0x2c80>
+    5674:      	mov	x9, #0x10               ; =16
+    5678:      	movk	x9, #0x7ffc, lsl #48
+    567c:      	sub	x9, x9, #0xe
+    5680:      	cmp	x8, x9
+    5684:      	cset	w0, eq
+    5688:      	adrp	x1, 0x5000 <_perry_fn_access_worker_ts__run+0x2600>
+		0000000000005688:  ARM64_RELOC_PAGE21	l_access_worker_ts_.str.1.bytes
+    568c:      	add	x1, x1, #0x0
+		000000000000568c:  ARM64_RELOC_PAGEOFF12	l_access_worker_ts_.str.1.bytes
+    5690:      	mov	w2, #0x2                ; =2
+    5694:      	bl	0x5694 <_perry_fn_access_worker_ts__run+0x2c94>
+		0000000000005694:  ARM64_RELOC_BRANCH26	_js_throw_type_error_property_access
+    5698:      	brk	#0x1
+    569c:      	mov	x9, #0x10               ; =16
+    56a0:      	movk	x9, #0x7ffc, lsl #48
+    56a4:      	sub	x9, x9, #0xe
+    56a8:      	cmp	x8, x9
+    56ac:      	cset	w0, eq
+    56b0:      	adrp	x1, 0x5000 <_perry_fn_access_worker_ts__run+0x2600>
+		00000000000056b0:  ARM64_RELOC_PAGE21	l_access_worker_ts_.str.4.bytes
+    56b4:      	add	x1, x1, #0x0
+		00000000000056b4:  ARM64_RELOC_PAGEOFF12	l_access_worker_ts_.str.4.bytes
+    56b8:      	mov	w2, #0x4                ; =4
+    56bc:      	b	0x5694 <_perry_fn_access_worker_ts__run+0x2c94>
+    56c0:      	mov	x9, #0x10               ; =16
+    56c4:      	movk	x9, #0x7ffc, lsl #48
+    56c8:      	sub	x9, x9, #0xe
+    56cc:      	cmp	x8, x9
+    56d0:      	cset	w0, eq
+    56d4:      	adrp	x1, 0x5000 <_perry_fn_access_worker_ts__run+0x2600>
+		00000000000056d4:  ARM64_RELOC_PAGE21	l_access_worker_ts_.str.5.bytes
+    56d8:      	add	x1, x1, #0x0
+		00000000000056d8:  ARM64_RELOC_PAGEOFF12	l_access_worker_ts_.str.5.bytes
+    56dc:      	mov	w2, #0x6                ; =6
+    56e0:      	b	0x5694 <_perry_fn_access_worker_ts__run+0x2c94>

@@ -1,0 +1,14 @@
+{
+  "implementation_commit": "2647ea7f0192283e6c140e0576d0b7f62419a33d",
+  "script_lint_session": 70994,
+  "release_build_session": 19955,
+  "peer_fallback_followup_exit_code": 0,
+  "main_native_comparison": "../native-main-proof/comparison.json",
+  "release_build_exit_code": 0,
+  "worker_and_runtime_validation_exit_code": 0,
+  "script_lint_exit_code": 1,
+  "script_lint_passes_after_peer_followup": "73/74, public benchmark freshness remains; compile tier skipped",
+  "codegen_check_session": 19508,
+  "json_unit_session": 20484,
+  "remote_activity": false
+}

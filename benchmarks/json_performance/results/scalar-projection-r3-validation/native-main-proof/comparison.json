@@ -1,0 +1,14 @@
+{
+  "same_input_checker_pass_hashes": true,
+  "same_fingerprints": [
+    "fixture-0.ll::main::unrooted:global->js_get_string_pointer_unified",
+    "fixture-0.ll::main::unrooted:alloc->js_closure_unbox_callee_checked"
+  ],
+  "main_scalar_probes": 0,
+  "r2_scalar_probes": 49,
+  "checker_exit_codes": [
+    1,
+    1
+  ],
+  "conclusion": "Both full-fixture findings reproduce on the actual main compiler. They remain unsuppressed and unresolved."
+}

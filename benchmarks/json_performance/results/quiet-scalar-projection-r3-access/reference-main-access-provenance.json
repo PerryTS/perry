@@ -1,0 +1,34 @@
+{
+  "source_commit": "53df2c671fff33b1f8f624432372c2401db8b1d0",
+  "commands": [
+    [
+      "/Users/amlug/projects/perry/json-merged-pr10022/target/release/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/access-worker.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "--no-link",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/main-53df-fresh/main-access.o"
+    ],
+    [
+      "cc",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/main-53df-fresh/main-access.o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/target/release/libperry_runtime.a",
+      "-lc",
+      "-Wl,-dead_strip",
+      "-Wl,-no_exported_symbols",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/main-53df-fresh/main-access"
+    ]
+  ],
+  "files": {
+    "target/release/perry": "f45e308bcb13940e75eebb377142d84c401b95f2faca1ddd09ea276c89b0f736",
+    "target/release/libperry_runtime.a": "d0c06e3ad5e85a99858d42c1194f6c43aca89ce1f9700cffe95c29d4aea9c76a",
+    "target/release/libperry_stdlib.a": "929824aaf04a4c504546a157a55da75c934be84a55db19b176610eab40621681",
+    "benchmarks/json_performance/access-worker.ts": "dba0240ef6441a07657e664354982a04045c036e53f65c1d06df62d55c73be67",
+    "benchmarks/json_performance/access-worker.js": "bfe066c9d1065102d7b0ec9f7b2909d2faae8935b104709865308422d8489957",
+    "benchmarks/json_performance/.work/main-53df-fresh/main-access": "5789e21cc25684cac804251b8e262fc1aa5676fd74f878300b3162335c08cc7f",
+    "benchmarks/json_performance/.work/main-53df-fresh/main-access.o": "b9864798ca1b4314ffcf391f056caa34c4fec603538839bea5685e23b54e430d"
+  }
+}

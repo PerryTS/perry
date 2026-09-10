@@ -1,0 +1,109 @@
+{
+  "source_commit": "2647ea7f0192283e6c140e0576d0b7f62419a33d",
+  "status": "rejected for landing: three separated CPU regressions",
+  "unit_json_runtime": 301,
+  "unit_json_codegen": 10,
+  "unit_index_get": 13,
+  "unit_property_get": 25,
+  "unit_gc_effects": 15,
+  "compiled_output_lines": 31,
+  "compiled_modes": 9,
+  "mutation_controls": 9,
+  "access_controls": 12,
+  "native_worker_hazards": 0,
+  "full_native_hazards": 2,
+  "full_native_fingerprints_match_actual_main": true,
+  "full_shadow_checks": [
+    0,
+    0
+  ],
+  "script_gates": "73/74 after peer-fallback rerun; public benchmark freshness fails; compile tier skipped",
+  "timed_trials": 616,
+  "qualified_windows": [
+    {
+      "owner": "json-perf-41636-1789043402",
+      "load_before": [
+        1.5703125,
+        1.55322265625,
+        1.5791015625
+      ],
+      "started_utc": "2026-09-10T12:30:02Z",
+      "quiet_gate_passed": true,
+      "command": [
+        "python3",
+        "run_access.py",
+        "--worker",
+        ".work/scalar-projection-r3/access-worker",
+        "--baseline-worker",
+        ".work/main-53df-fresh/main-access",
+        "--node",
+        "/opt/homebrew/bin/node",
+        "--bun",
+        "/Users/perry/.bun/bin/bun",
+        "--results-dir",
+        "results/quiet-scalar-projection-r3-access"
+      ],
+      "competing_workloads_before": [],
+      "load_after": [
+        1.970703125,
+        1.638671875,
+        1.6083984375
+      ],
+      "competing_workloads_after": [],
+      "finished_utc": "2026-09-10T12:30:25Z"
+    },
+    {
+      "owner": "json-perf-42352-1789043428",
+      "load_before": [
+        1.970703125,
+        1.638671875,
+        1.6083984375
+      ],
+      "started_utc": "2026-09-10T12:30:28Z",
+      "quiet_gate_passed": true,
+      "command": [
+        "python3",
+        "run_regression_focus.py",
+        "--worker",
+        ".work/scalar-projection-r3/worker",
+        "--baseline-worker",
+        ".work/main-53df-fresh/worker",
+        "--node",
+        "/opt/homebrew/bin/node",
+        "--bun",
+        "/Users/perry/.bun/bin/bun",
+        "--case",
+        "records_array_16k:scan:4000:8:7",
+        "--case",
+        "records_array_1m:scan:200:2:7",
+        "--case",
+        "records_array_8m:scan:32:1:7",
+        "--case",
+        "records_array_20m:scan:16:1:7",
+        "--case",
+        "records_array_20m:roundtrip:8:1:7",
+        "--case",
+        "records_array_1m:parse:200:8:7",
+        "--case",
+        "records_array_1m:stringify:256:8:7",
+        "--case",
+        "small_record:parse:2000000:5000:7",
+        "--case",
+        "small_record:stringify:10000000:5000:7",
+        "--case",
+        "long_string_1m:stringify:4096:8:7",
+        "--results-dir",
+        "results/quiet-scalar-projection-r3-focus"
+      ],
+      "competing_workloads_before": [],
+      "load_after": [
+        1.6591796875,
+        1.7001953125,
+        1.6416015625
+      ],
+      "competing_workloads_after": [],
+      "finished_utc": "2026-09-10T12:33:08Z"
+    }
+  ],
+  "production_artifact_hashes_still_match_frozen_build": true
+}

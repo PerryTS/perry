@@ -1,0 +1,27 @@
+{
+  "mode": "r2",
+  "commands": [
+    [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/scalar-projection-r2/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/native-main-proof/test_json_scalar_projection.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "--no-link",
+      "--trace",
+      "llvm",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/native-main-proof/r2/fixture.o"
+    ]
+  ],
+  "scalar_probe_calls": 49,
+  "checker_exit_code": 1,
+  "files": {
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/native-main-proof/test_json_scalar_projection.ts": "5a908dc0ae522c6dac9b90e6f082a8dda821e8037793924dd9a4426323b43c47",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/native-main-proof/checker.py": "de01a0f4cc3d8590f2e6afb5041bafd91c0efa309a72da26ff2f628b6ad503bc",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/native-main-proof/passes.txt": "ad70088f08c5bb3544f9d37172f9ae872227cadff61d4c3a7abe0523b0612613",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/scalar-projection-r2/frozen-build/perry": "1979aaa805f878f03e2b4cb3547fe846ce95e461a354d441749656295e524478",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/scalar-projection-r2/frozen-build/libperry_runtime.a": "905aca21f8294cc660c4e18967114540af97c8937bead5f128a0dbc54d2be5f6",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/scalar-projection-r2/frozen-build/libperry_stdlib.a": "aaae96831c67d6dc14afa888f67fc9e2b318685464ebd13efcde86f554a9eb64"
+  }
+}
