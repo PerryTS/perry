@@ -1,0 +1,14 @@
+{
+  "libperry_runtime.a": {
+    "old_commit_count": 1,
+    "new_commit_count": 1,
+    "equal_after_only_commit_replacement": true,
+    "different_bytes": 38
+  },
+  "libperry_stdlib.a": {
+    "old_commit_count": 1,
+    "new_commit_count": 1,
+    "equal_after_only_commit_replacement": false,
+    "different_bytes": 70130830
+  }
+}

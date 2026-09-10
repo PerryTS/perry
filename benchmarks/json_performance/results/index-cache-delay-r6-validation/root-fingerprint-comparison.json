@@ -1,0 +1,30 @@
+[
+  {
+    "fixture": "test_json_invariant_field_loop",
+    "actual": [
+      "main::unrooted:alloc->js_inline_arena_slow_alloc",
+      "main::unrooted:strhandle->js_put_value_set_ic_overflow_store"
+    ],
+    "actual_main_53df": [
+      "main::unrooted:alloc->js_inline_arena_slow_alloc",
+      "main::unrooted:strhandle->js_put_value_set_ic_overflow_store"
+    ],
+    "same": true,
+    "baseline_log": "test_json_invariant_field_loop-actual-main-roots.log",
+    "baseline_log_sha256": "d50610ce54e77b8252a88a4f76e1fc56cf86a195fd566cd42617fce3c9b15f76"
+  },
+  {
+    "fixture": "test_json_scalar_projection",
+    "actual": [
+      "main::unrooted:alloc->js_closure_unbox_callee_checked",
+      "main::unrooted:global->js_get_string_pointer_unified"
+    ],
+    "actual_main_53df": [
+      "main::unrooted:alloc->js_closure_unbox_callee_checked",
+      "main::unrooted:global->js_get_string_pointer_unified"
+    ],
+    "same": true,
+    "baseline_log": "test_json_scalar_projection-actual-main-roots.log",
+    "baseline_log_sha256": "d801fa03df6b3a9b10d02fe9930748e4156f009dadc20043acec7a6b47b74aec"
+  }
+]

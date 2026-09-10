@@ -1,0 +1,87 @@
+{
+  "source_commit": "3f7e40984a844a132f6446a04bfc6fd4ca03a235",
+  "base_commit": "53df2c671fff33b1f8f624432372c2401db8b1d0",
+  "commands": [
+    [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/index-cache-delay-r6/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/worker.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "--no-link",
+      "--trace",
+      "llvm",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/index-cache-delay-r6/worker.o"
+    ],
+    [
+      "cc",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/index-cache-delay-r6/worker.o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/index-cache-delay-r6/frozen-build/libperry_runtime.a",
+      "-lc",
+      "-Wl,-dead_strip",
+      "-Wl,-no_exported_symbols",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/index-cache-delay-r6/worker"
+    ],
+    [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/index-cache-delay-r6/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/rotating-worker.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "--no-link",
+      "--trace",
+      "llvm",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/index-cache-delay-r6/rotating-worker.o"
+    ],
+    [
+      "cc",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/index-cache-delay-r6/rotating-worker.o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/index-cache-delay-r6/frozen-build/libperry_runtime.a",
+      "-lc",
+      "-Wl,-dead_strip",
+      "-Wl,-no_exported_symbols",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/index-cache-delay-r6/rotating-worker"
+    ],
+    [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/index-cache-delay-r6/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/access-worker.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "--no-link",
+      "--trace",
+      "llvm",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/index-cache-delay-r6/access-worker.o"
+    ],
+    [
+      "cc",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/index-cache-delay-r6/access-worker.o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/index-cache-delay-r6/frozen-build/libperry_runtime.a",
+      "-lc",
+      "-Wl,-dead_strip",
+      "-Wl,-no_exported_symbols",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/index-cache-delay-r6/access-worker"
+    ]
+  ],
+  "runtime_dir": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/index-cache-delay-r6/frozen-build",
+  "files": {
+    "benchmarks/json_performance/.work/index-cache-delay-r6/frozen-build/perry": "cc2afac0371b44e4494286927fe869ca39297948c48ec01037e047f361bfcc50",
+    "benchmarks/json_performance/.work/index-cache-delay-r6/frozen-build/libperry_runtime.a": "74946368365f82d33007d204eda9f24e612c590c4db3d0c4ced45f087141e6d5",
+    "benchmarks/json_performance/.work/index-cache-delay-r6/frozen-build/libperry_stdlib.a": "7f9205c5cc737fba5ee23e69e0ffdb8c4c927dda67fc5704dfdb2384795621f1",
+    "benchmarks/json_performance/worker.ts": "f3c42ec9f04fdb9ba84dc3cf50dc59f18685540033807f3db3a7f75c08a85d39",
+    "benchmarks/json_performance/rotating-worker.ts": "7541897acb2c7c35c0f5e762f8b2f28b9783feb26a42db107c1c4eb3af644b24",
+    "benchmarks/json_performance/access-worker.ts": "dba0240ef6441a07657e664354982a04045c036e53f65c1d06df62d55c73be67",
+    "benchmarks/json_performance/.work/index-cache-delay-r6/worker": "e4365919a5c9b3d2f8f679f0f2e1e550d5bdaeb57eeca05b2153f2648cdc1496",
+    "benchmarks/json_performance/.work/index-cache-delay-r6/worker.o": "cc7b5ecf62df877357a45f8379e291aea425dc62dd159ee8d80aad1be0d99f97",
+    "benchmarks/json_performance/.work/index-cache-delay-r6/rotating-worker": "d07ba39ddd3a03bc966996bc72a7c80b651697148af9b6523fbbc8361de008c7",
+    "benchmarks/json_performance/.work/index-cache-delay-r6/rotating-worker.o": "4e525e972abba975e6d7ffc4c71b0743aa664c510da0f46d7f36099a5ac7bc3e",
+    "benchmarks/json_performance/.work/index-cache-delay-r6/access-worker": "a36717fb52ff7f2759691d49b562514ae38c101396058678f47510bf5e0ad309",
+    "benchmarks/json_performance/.work/index-cache-delay-r6/access-worker.o": "0cbf81f55c1d474942cbbdfbf536bf07105e668f768ebb1f1b39f663d23397f9"
+  }
+}

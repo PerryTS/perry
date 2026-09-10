@@ -1,0 +1,148 @@
+{
+  "matrix": [
+    {
+      "subject": "fixture",
+      "mode": "auto",
+      "gc": "normal",
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0
+    },
+    {
+      "subject": "fixture",
+      "mode": "auto",
+      "gc": "scheduled",
+      "matches_node": true,
+      "protected_retired_sets": 143,
+      "moved_objects": 22890
+    },
+    {
+      "subject": "fixture",
+      "mode": "auto",
+      "gc": "fullgc",
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0
+    },
+    {
+      "subject": "fixture",
+      "mode": "tape",
+      "gc": "normal",
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0
+    },
+    {
+      "subject": "fixture",
+      "mode": "tape",
+      "gc": "scheduled",
+      "matches_node": true,
+      "protected_retired_sets": 143,
+      "moved_objects": 22887
+    },
+    {
+      "subject": "fixture",
+      "mode": "tape",
+      "gc": "fullgc",
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0
+    },
+    {
+      "subject": "fixture",
+      "mode": "direct",
+      "gc": "normal",
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 6494
+    },
+    {
+      "subject": "fixture",
+      "mode": "direct",
+      "gc": "scheduled",
+      "matches_node": true,
+      "protected_retired_sets": 143,
+      "moved_objects": 12656
+    },
+    {
+      "subject": "fixture",
+      "mode": "direct",
+      "gc": "fullgc",
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0
+    },
+    {
+      "subject": "projection",
+      "mode": "auto",
+      "gc": "normal",
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0
+    },
+    {
+      "subject": "projection",
+      "mode": "auto",
+      "gc": "scheduled",
+      "matches_node": true,
+      "protected_retired_sets": 776,
+      "moved_objects": 33614
+    },
+    {
+      "subject": "projection",
+      "mode": "auto",
+      "gc": "fullgc",
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0
+    },
+    {
+      "subject": "projection",
+      "mode": "tape",
+      "gc": "normal",
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0
+    },
+    {
+      "subject": "projection",
+      "mode": "tape",
+      "gc": "scheduled",
+      "matches_node": true,
+      "protected_retired_sets": 776,
+      "moved_objects": 33614
+    },
+    {
+      "subject": "projection",
+      "mode": "tape",
+      "gc": "fullgc",
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0
+    },
+    {
+      "subject": "projection",
+      "mode": "direct",
+      "gc": "normal",
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0
+    },
+    {
+      "subject": "projection",
+      "mode": "direct",
+      "gc": "scheduled",
+      "matches_node": true,
+      "protected_retired_sets": 776,
+      "moved_objects": 88384
+    },
+    {
+      "subject": "projection",
+      "mode": "direct",
+      "gc": "fullgc",
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0
+    }
+  ]
+}

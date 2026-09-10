@@ -1,0 +1,18 @@
+[
+  {
+    "function": "ltmp0",
+    "instructions": [
+      "     1c4:      \tfadd\td1, d0, d1",
+      "     1c8:      \tsubs\tw8, w8, #0x1",
+      "     1cc:      \tb.ne\t0x1c4 <ltmp0+0x1c4>"
+    ]
+  },
+  {
+    "function": "_perry_fn_access_worker_ts__run$generic",
+    "instructions": [
+      "    3258:      \tfadd\td1, d0, d1",
+      "    325c:      \tsubs\tw8, w8, #0x1",
+      "    3260:      \tb.ne\t0x3258 <_perry_fn_access_worker_ts__run$generic+0x1c4>"
+    ]
+  }
+]

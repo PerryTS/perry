@@ -1,0 +1,36 @@
+{
+  "source_commit": "3f7e40984a844a132f6446a04bfc6fd4ca03a235",
+  "command": [
+    "cargo",
+    "build",
+    "--release",
+    "-p",
+    "perry",
+    "-p",
+    "perry-runtime-static",
+    "-p",
+    "perry-stdlib-static"
+  ],
+  "started_utc_from_log_birthtime": "2026-09-10T14:36:29.660390+00:00",
+  "elapsed_seconds_from_cargo_log": 334,
+  "files": {
+    "perry": {
+      "sha256": "cc2afac0371b44e4494286927fe869ca39297948c48ec01037e047f361bfcc50",
+      "bytes": 117732640,
+      "mtime": 1789051324.1292896
+    },
+    "libperry_runtime.a": {
+      "sha256": "74946368365f82d33007d204eda9f24e612c590c4db3d0c4ced45f087141e6d5",
+      "bytes": 36887304,
+      "mtime": 1789051246.465677
+    },
+    "libperry_stdlib.a": {
+      "sha256": "7f9205c5cc737fba5ee23e69e0ffdb8c4c927dda67fc5704dfdb2384795621f1",
+      "bytes": 86376296,
+      "mtime": 1789051307.5569923
+    }
+  },
+  "freeze_note": "Build completed; original freeze assertion incorrectly expected unchanged commit stamp. All fresh artifacts frozen after proving runtime differs from R5 ONLY in 38 commit-stamp bytes; see build-stamp-comparison.json. stdlib not byte-identical and is not linked into timed workers. No new build was started or provenance stamp modified.",
+  "build_script_executed": "build-release-original-freeze-check.py",
+  "corrected_script_note": "build-release.py corrected after completed build; it was not rerun."
+}

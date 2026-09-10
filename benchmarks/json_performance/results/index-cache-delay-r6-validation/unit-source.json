@@ -1,0 +1,13 @@
+{
+  "path": "crates/perry-codegen/src/expr/index_get/inline_dyn_typed_array.rs",
+  "sha256": "5e8a218767d978012fc5c164fde5e5732eb9272600cace4c7937796e998cffc7",
+  "command": [
+    "cargo",
+    "test",
+    "--release",
+    "-p",
+    "perry-codegen",
+    "--lib",
+    "index_get"
+  ]
+}

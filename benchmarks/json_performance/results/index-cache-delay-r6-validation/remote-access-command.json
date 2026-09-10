@@ -1,0 +1,19 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/index-cache-delay-r6/run-access.py",
+  "--worker",
+  ".work/index-cache-delay-r6/access-worker",
+  "--baseline-worker",
+  ".work/main-53df-fresh/main-access",
+  "--prior-worker",
+  ".work/invariant-field-loop-r5/access-worker",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--results-dir",
+  "results/quiet-index-cache-delay-r6-access"
+]

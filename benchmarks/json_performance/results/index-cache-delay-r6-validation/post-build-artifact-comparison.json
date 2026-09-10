@@ -1,0 +1,20 @@
+{
+  "perry": {
+    "new_sha256": "cc2afac0371b44e4494286927fe869ca39297948c48ec01037e047f361bfcc50",
+    "new_size": 117732640,
+    "prior_sha256": "d2abfd3befe5c7977251e68af77628a11b06611e7eb272ddcb381a889ed844d7",
+    "prior_size": 117732640
+  },
+  "libperry_runtime.a": {
+    "new_sha256": "74946368365f82d33007d204eda9f24e612c590c4db3d0c4ced45f087141e6d5",
+    "new_size": 36887304,
+    "prior_sha256": "2deb369a13c0c77fe98326e306ae4a52f3469224ee8c4d453e9dcc9908fe8322",
+    "prior_size": 36887304
+  },
+  "libperry_stdlib.a": {
+    "new_sha256": "7f9205c5cc737fba5ee23e69e0ffdb8c4c927dda67fc5704dfdb2384795621f1",
+    "new_size": 86376296,
+    "prior_sha256": "39965b46915622a57d4cfb66760e159def70035282755e669fcbc906ad9220ce",
+    "prior_size": 86377560
+  }
+}

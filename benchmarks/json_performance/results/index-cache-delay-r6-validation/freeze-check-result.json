@@ -1,0 +1,6 @@
+{
+  "build_exit_code": 0,
+  "post_build_freeze_assertion": "failed: expected raw runtime archive identity with R5",
+  "resolution": "Runtime archive proven byte-identical after ONLY embedded 40-byte commit string substitution (38 differing bytes). All fresh artifacts copied without alteration. No build restart or marker rewrite. stdlib differs; timed links exclude it.",
+  "corrected_script_rerun": false
+}

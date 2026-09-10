@@ -1,0 +1,116 @@
+[
+  {
+    "source": "benchmarks/json_performance/.work/index-cache-delay-r6/dispatch-probe.ts",
+    "arm": "r5",
+    "exit_code": 0,
+    "matches_node": true,
+    "source_sha256": "1f8cdd1838b68387b9addc6e4281a076f8e535970dd7b6791f4b6e806125adce",
+    "binary_sha256": "03f2e7677fe217400c70dd16079a52d9ea481500c48d048441868d9d6f7e3166",
+    "compiler_sha256": "d2abfd3befe5c7977251e68af77628a11b06611e7eb272ddcb381a889ed844d7",
+    "runtime_sha256": "2deb369a13c0c77fe98326e306ae4a52f3469224ee8c4d453e9dcc9908fe8322",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/index-cache-delay-r6/dispatch-probe.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/index-cache-delay-r6/r5-dispatch-probe"
+    ]
+  },
+  {
+    "source": "benchmarks/json_performance/.work/index-cache-delay-r6/dispatch-probe.ts",
+    "arm": "r6",
+    "exit_code": 0,
+    "matches_node": true,
+    "source_sha256": "1f8cdd1838b68387b9addc6e4281a076f8e535970dd7b6791f4b6e806125adce",
+    "binary_sha256": "f98b74801fed34ec2146ee485b5674cc733f85d233658cd78224c007c617ff56",
+    "compiler_sha256": "cc2afac0371b44e4494286927fe869ca39297948c48ec01037e047f361bfcc50",
+    "runtime_sha256": "74946368365f82d33007d204eda9f24e612c590c4db3d0c4ced45f087141e6d5",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/index-cache-delay-r6/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/index-cache-delay-r6/dispatch-probe.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/index-cache-delay-r6/r6-dispatch-probe"
+    ]
+  },
+  {
+    "source": "test-files/test_gap_7574_array_subclass_declared_base_type.ts",
+    "arm": "r5",
+    "exit_code": 0,
+    "matches_node": true,
+    "source_sha256": "38b0ff68ebfcd1356f61b0f56c37e22a4d7c38dc1acd8c59a7a08a7626e25628",
+    "binary_sha256": "f222742abb40cd3295997f1eba5a078760c513ac26669088f31fc1c43cca3feb",
+    "compiler_sha256": "d2abfd3befe5c7977251e68af77628a11b06611e7eb272ddcb381a889ed844d7",
+    "runtime_sha256": "2deb369a13c0c77fe98326e306ae4a52f3469224ee8c4d453e9dcc9908fe8322",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/test-files/test_gap_7574_array_subclass_declared_base_type.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/index-cache-delay-r6/r5-test_gap_7574_array_subclass_declared_base_type"
+    ]
+  },
+  {
+    "source": "test-files/test_gap_7574_array_subclass_declared_base_type.ts",
+    "arm": "r6",
+    "exit_code": 0,
+    "matches_node": true,
+    "source_sha256": "38b0ff68ebfcd1356f61b0f56c37e22a4d7c38dc1acd8c59a7a08a7626e25628",
+    "binary_sha256": "828eef6ce23451195641d0ed74d1d058f8d9dd0e54f035d3b728aa7d89e6c67f",
+    "compiler_sha256": "cc2afac0371b44e4494286927fe869ca39297948c48ec01037e047f361bfcc50",
+    "runtime_sha256": "74946368365f82d33007d204eda9f24e612c590c4db3d0c4ced45f087141e6d5",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/index-cache-delay-r6/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/test-files/test_gap_7574_array_subclass_declared_base_type.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/index-cache-delay-r6/r6-test_gap_7574_array_subclass_declared_base_type"
+    ]
+  },
+  {
+    "source": "test-files/test_gap_typedarray_param_read.ts",
+    "arm": "r5",
+    "exit_code": 0,
+    "matches_node": true,
+    "source_sha256": "21f465005f5ff5e620cf5a201c789e801bac6bc9f51d2010c13b6549ad860594",
+    "binary_sha256": "2eb32538bcb33846ac5d5766a4fb758bb57fecbf25904641ff7958efbafee7c8",
+    "compiler_sha256": "d2abfd3befe5c7977251e68af77628a11b06611e7eb272ddcb381a889ed844d7",
+    "runtime_sha256": "2deb369a13c0c77fe98326e306ae4a52f3469224ee8c4d453e9dcc9908fe8322",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/test-files/test_gap_typedarray_param_read.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/index-cache-delay-r6/r5-test_gap_typedarray_param_read"
+    ]
+  },
+  {
+    "source": "test-files/test_gap_typedarray_param_read.ts",
+    "arm": "r6",
+    "exit_code": 0,
+    "matches_node": true,
+    "source_sha256": "21f465005f5ff5e620cf5a201c789e801bac6bc9f51d2010c13b6549ad860594",
+    "binary_sha256": "b46d0139c03da20487cf387ecd736cf81f0fab32a3a630e7e848a367479b8e35",
+    "compiler_sha256": "cc2afac0371b44e4494286927fe869ca39297948c48ec01037e047f361bfcc50",
+    "runtime_sha256": "74946368365f82d33007d204eda9f24e612c590c4db3d0c4ced45f087141e6d5",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/index-cache-delay-r6/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/test-files/test_gap_typedarray_param_read.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/index-cache-delay-r6/r6-test_gap_typedarray_param_read"
+    ]
+  }
+]

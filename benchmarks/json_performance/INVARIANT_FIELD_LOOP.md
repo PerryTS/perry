@@ -110,3 +110,5 @@ All **751 timed checksums**, CPU/RSS sample vectors, medians, source-patch hashe
 The original 38 parse/stringify rows, the additional consumption/access controls, rotating inputs, peak RSS, and retained RAM all remain in scope. The full matrices and retained-memory suite were not rerun on this rejected candidate; their last broad measurements remain in [the frozen-main report](MERGED_MAIN_53DF.md).
 
 The next work is to remove the mixed-field and tiny-stringify regressions, then improve short-call setup and changing-index access without losing the long-loop win. Raising the 16 MiB lazy threshold still requires full/mixed consumption and retained-memory evidence. Main must be updated and rebuilt before any landing attempt.
+
+The later [R6 index-cache placement experiment](INDEX_CACHE_DELAY.md) preserves the repeat win and improves smaller changing-index controls, but remains rejected for large-input regressions.

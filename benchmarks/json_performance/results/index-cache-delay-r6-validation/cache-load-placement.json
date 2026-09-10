@@ -1,0 +1,168 @@
+{
+  "ir": [
+    {
+      "arm": "r5",
+      "ir_sha256": "c4509783c963ce60df6e41ac985f87bd7cae9d5d8e29765578521d8f8abf422a",
+      "loads": [
+        {
+          "slot": "@perry_ic_access_worker_ts__0",
+          "block": "tav.get.slow.37",
+          "instruction": "%r201 = load ptr, ptr @perry_ic_access_worker_ts__0"
+        },
+        {
+          "slot": "@perry_ic_access_worker_ts__3",
+          "block": "tav.get.slow.165",
+          "instruction": "%r788 = load ptr, ptr @perry_ic_access_worker_ts__3"
+        },
+        {
+          "slot": "@perry_ic_access_worker_ts__6",
+          "block": "tav.get.slow.286",
+          "instruction": "%r1356 = load ptr, ptr @perry_ic_access_worker_ts__6"
+        },
+        {
+          "slot": "@perry_ic_access_worker_ts__9",
+          "block": "tav.get.slow.383",
+          "instruction": "%r1858 = load ptr, ptr @perry_ic_access_worker_ts__9"
+        },
+        {
+          "slot": "@perry_ic_access_worker_ts__12",
+          "block": "tav.get.slow.485",
+          "instruction": "%r2375 = load ptr, ptr @perry_ic_access_worker_ts__12"
+        },
+        {
+          "slot": "@perry_ic_access_worker_ts__15",
+          "block": "tav.get.slow.603",
+          "instruction": "%r2936 = load ptr, ptr @perry_ic_access_worker_ts__15"
+        },
+        {
+          "slot": "@perry_ic_access_worker_ts__18",
+          "block": "tav.get.slow.40",
+          "instruction": "%r230 = load ptr, ptr @perry_ic_access_worker_ts__18"
+        },
+        {
+          "slot": "@perry_ic_access_worker_ts__21",
+          "block": "tav.get.slow.171",
+          "instruction": "%r846 = load ptr, ptr @perry_ic_access_worker_ts__21"
+        },
+        {
+          "slot": "@perry_ic_access_worker_ts__24",
+          "block": "tav.get.slow.295",
+          "instruction": "%r1443 = load ptr, ptr @perry_ic_access_worker_ts__24"
+        },
+        {
+          "slot": "@perry_ic_access_worker_ts__27",
+          "block": "tav.get.slow.392",
+          "instruction": "%r1945 = load ptr, ptr @perry_ic_access_worker_ts__27"
+        },
+        {
+          "slot": "@perry_ic_access_worker_ts__30",
+          "block": "tav.get.slow.494",
+          "instruction": "%r2462 = load ptr, ptr @perry_ic_access_worker_ts__30"
+        },
+        {
+          "slot": "@perry_ic_access_worker_ts__33",
+          "block": "tav.get.slow.615",
+          "instruction": "%r3052 = load ptr, ptr @perry_ic_access_worker_ts__33"
+        }
+      ]
+    },
+    {
+      "arm": "r6",
+      "ir_sha256": "d940596b95d474ffcab42c206ff8b165ebc9288f818fc82cdd5332b300c19cc1",
+      "loads": [
+        {
+          "slot": "@perry_ic_access_worker_ts__0",
+          "block": "arrlike.ic.shape.59",
+          "instruction": "%r345 = load ptr, ptr @perry_ic_access_worker_ts__0"
+        },
+        {
+          "slot": "@perry_ic_access_worker_ts__3",
+          "block": "arrlike.ic.shape.187",
+          "instruction": "%r932 = load ptr, ptr @perry_ic_access_worker_ts__3"
+        },
+        {
+          "slot": "@perry_ic_access_worker_ts__6",
+          "block": "arrlike.ic.shape.308",
+          "instruction": "%r1500 = load ptr, ptr @perry_ic_access_worker_ts__6"
+        },
+        {
+          "slot": "@perry_ic_access_worker_ts__9",
+          "block": "arrlike.ic.shape.405",
+          "instruction": "%r2002 = load ptr, ptr @perry_ic_access_worker_ts__9"
+        },
+        {
+          "slot": "@perry_ic_access_worker_ts__12",
+          "block": "arrlike.ic.shape.507",
+          "instruction": "%r2519 = load ptr, ptr @perry_ic_access_worker_ts__12"
+        },
+        {
+          "slot": "@perry_ic_access_worker_ts__15",
+          "block": "arrlike.ic.shape.625",
+          "instruction": "%r3080 = load ptr, ptr @perry_ic_access_worker_ts__15"
+        },
+        {
+          "slot": "@perry_ic_access_worker_ts__18",
+          "block": "arrlike.ic.shape.62",
+          "instruction": "%r374 = load ptr, ptr @perry_ic_access_worker_ts__18"
+        },
+        {
+          "slot": "@perry_ic_access_worker_ts__21",
+          "block": "arrlike.ic.shape.193",
+          "instruction": "%r990 = load ptr, ptr @perry_ic_access_worker_ts__21"
+        },
+        {
+          "slot": "@perry_ic_access_worker_ts__24",
+          "block": "arrlike.ic.shape.317",
+          "instruction": "%r1587 = load ptr, ptr @perry_ic_access_worker_ts__24"
+        },
+        {
+          "slot": "@perry_ic_access_worker_ts__27",
+          "block": "arrlike.ic.shape.414",
+          "instruction": "%r2089 = load ptr, ptr @perry_ic_access_worker_ts__27"
+        },
+        {
+          "slot": "@perry_ic_access_worker_ts__30",
+          "block": "arrlike.ic.shape.516",
+          "instruction": "%r2606 = load ptr, ptr @perry_ic_access_worker_ts__30"
+        },
+        {
+          "slot": "@perry_ic_access_worker_ts__33",
+          "block": "arrlike.ic.shape.637",
+          "instruction": "%r3196 = load ptr, ptr @perry_ic_access_worker_ts__33"
+        }
+      ]
+    }
+  ],
+  "machine_command": [
+    "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+    "--disassemble",
+    "--no-show-raw-insn",
+    "--reloc",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/index-cache-delay-r6/access-worker.o"
+  ],
+  "object_sha256": "0cbf81f55c1d474942cbbdfbf536bf07105e668f768ebb1f1b39f663d23397f9",
+  "machine_observation": {
+    "scope": "first emitted run function, representative mixed-field name array lookup",
+    "r5_common_entry": [
+      "    1ad8:      \tadrp\tx9, 0x1000 <ltmp0+0x1000>",
+      "    1adc:      \tadd\tx9, x9, #0x0",
+      "    1ae0:      \tldr\tx11, [x9]",
+      "    1ae4:      \tcmp\tx11, #0x0",
+      "    1ae8:      \tcsel\tx12, x9, x11, eq",
+      "    1aec:      \tcmp\tx13, x22"
+    ],
+    "r6_common_entry": [
+      "    1ad8:      \tcmp\tx12, x22"
+    ],
+    "removed_instructions": [
+      "adrp",
+      "add",
+      "ldr",
+      "cmp",
+      "csel"
+    ],
+    "r6_cache_slot_symbol": "l_perry_ic_access_worker_ts__9",
+    "r6_shape_cache_relocation_address": "0x1c88",
+    "qualification": "Scalar projection branches and all semantic guards remain. This establishes code movement, not performance."
+  }
+}
