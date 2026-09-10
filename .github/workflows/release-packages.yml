@@ -1555,18 +1555,60 @@ jobs:
           set -euo pipefail
           # Preflight checked this earlier; re-check so a concurrent manual
           # release of the same version fails here instead of clobbering.
-          if gh api "repos/$REPO/git/ref/tags/$TAG" --silent 2>/dev/null; then
-            echo "::error::tag $TAG appeared while the builds ran — aborting."
-            exit 1
+          #
+          # A tag pointing at THIS EXACT candidate is not a conflict, it is our
+          # own previous attempt: `gh release create` creates the tag and then
+          # POSTs the release, so a failure in the POST leaves the tag behind
+          # and the old unconditional abort made the job permanently
+          # unrerunnable. That is exactly what happened in run 34451289395.
+          # Abort only if the tag points somewhere else.
+          existing=$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq '.object.sha' 2>/dev/null || true)
+          reuse_tag=0
+          if [ -n "$existing" ]; then
+            if [ "$existing" != "$SHA" ]; then
+              echo "::error::tag $TAG already exists at $existing, not the candidate $SHA — aborting." >&2
+              exit 1
+            fi
+            echo "tag $TAG already exists at the exact candidate $SHA (previous attempt) — reusing it."
+            reuse_tag=1
           fi
-          ./scripts/cut_release_notes.sh --notes-only > /tmp/release-notes.md
+
+          ./scripts/cut_release_notes.sh --notes-only > /tmp/release-notes-full.md
+          # GitHub rejects a release body over 125,000 characters with
+          # `HTTP 422: body is too long`. v0.5.1519 carried 1505 changelog.d
+          # fragments -- the first tag since v0.5.1220 on 2026-07-04 -- and
+          # generated 2.8 MB of notes. The POST failed AFTER the tag was
+          # created, which is the worst place for it to fail.
+          LIMIT=120000
+          if [ "$(wc -c < /tmp/release-notes-full.md)" -gt "$LIMIT" ]; then
+            frags=$(find changelog.d -name '*.md' ! -name 'README.md' | wc -l | tr -d ' ')
+            # Cut on a line boundary so the body never ends mid-sentence.
+            head -c "$LIMIT" /tmp/release-notes-full.md | sed '$d' > /tmp/release-notes.md
+            {
+              echo
+              echo '---'
+              echo
+              echo "**These notes are truncated.** This release carries ${frags} changelog"
+              echo "fragments and the full text exceeds GitHub's 125,000-character limit for a"
+              echo "release body. The complete set is in \`changelog.d/\` at [\`$TAG\`](https://github.com/$REPO/tree/$TAG/changelog.d)."
+            } >> /tmp/release-notes.md
+            echo "::notice::release notes truncated from $(wc -c < /tmp/release-notes-full.md) to $(wc -c < /tmp/release-notes.md) bytes (${frags} fragments)"
+          else
+            cp /tmp/release-notes-full.md /tmp/release-notes.md
+          fi
           # Created with GITHUB_TOKEN: GitHub suppresses events triggered by a
           # workflow's own token, so this `release: published` does NOT fire a
           # second release-packages run (publishing continues in THIS run),
           # and the tag emits no `push: tags` event either — the step below
           # dispatches the tag-rider workflows explicitly.
-          gh release create "$TAG" -R "$REPO" \
-            --target "$SHA" --title "$TAG" --notes-file /tmp/release-notes.md
+          if [ "$reuse_tag" -eq 1 ]; then
+            # The tag already exists at this SHA; do not pass --target.
+            gh release create "$TAG" -R "$REPO" \
+              --title "$TAG" --notes-file /tmp/release-notes.md
+          else
+            gh release create "$TAG" -R "$REPO" \
+              --target "$SHA" --title "$TAG" --notes-file /tmp/release-notes.md
+          fi
           echo "Created release $TAG at $SHA"
 
       - name: Dispatch tag-rider workflows (docs, benchmark, container-tests)
