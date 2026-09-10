@@ -1,0 +1,50 @@
+{
+  "owner": "json-perf-29028-1789028835",
+  "load_before": [
+    1.4853515625,
+    1.6591796875,
+    1.62060546875
+  ],
+  "started_utc": "2026-09-10T08:27:15Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    "run_regression_focus_r5.py",
+    "--worker",
+    ".work/lazy-canonical-r5/worker",
+    "--baseline-worker",
+    ".work/main-eee/worker",
+    "--prior-worker",
+    ".work/tape-depth-r2/worker",
+    "--previous-worker",
+    ".work/lazy-canonical-r4/worker",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--results-dir",
+    "results/quiet-lazy-canonical-r5-main-focus-r9",
+    "--case",
+    "records_array_16k:roundtrip:20000:8:9",
+    "--case",
+    "records_array_1m:roundtrip:512:8:9",
+    "--case",
+    "records_array_8m:roundtrip:64:8:9",
+    "--case",
+    "heterogeneous_1m:stringify:1024:8:9",
+    "--case",
+    "small_record:parse:2000000:2000:9",
+    "--case",
+    "records_array_1m:parse:512:8:9",
+    "--case",
+    "records_array_1m:scan:256:8:9",
+    "--case",
+    "records_array_1m:sparse:512:8:9"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.96923828125,
+    1.7685546875,
+    1.66259765625
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-10T08:30:34Z"
+}

@@ -1,0 +1,32 @@
+{
+  "perry_runtime::json_tape::build_tape_into::<false>": {
+    "r4_instructions": 2557,
+    "r5_instructions": 2557,
+    "identical_instructions": true,
+    "differences": []
+  },
+  "perry_runtime::json_tape::build_tape_into::<true>": {
+    "r4_instructions": 2648,
+    "r5_instructions": 2648,
+    "identical_instructions": true,
+    "differences": []
+  },
+  "perry_runtime::json::parse_api::parse_slow": {
+    "r4_instructions": 1406,
+    "r5_instructions": 1406,
+    "identical_instructions": true,
+    "differences": []
+  },
+  "perry_runtime::json::parse_api::try_parse_deep_iterative": {
+    "r4_instructions": 368,
+    "r5_instructions": 368,
+    "identical_instructions": true,
+    "differences": []
+  },
+  "perry_runtime::json::parse_api::parse_deep_or_throw": {
+    "r4_instructions": 28,
+    "r5_instructions": 28,
+    "identical_instructions": true,
+    "differences": []
+  }
+}

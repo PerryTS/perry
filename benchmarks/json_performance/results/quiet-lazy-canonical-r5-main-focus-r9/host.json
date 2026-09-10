@@ -1,0 +1,84 @@
+{
+  "started_utc": "2026-09-10T08:27:15Z",
+  "load_before": [
+    1.4853515625,
+    1.6591796875,
+    1.62060546875
+  ],
+  "cases": [
+    [
+      "records_array_16k",
+      "roundtrip",
+      20000,
+      8,
+      9
+    ],
+    [
+      "records_array_1m",
+      "roundtrip",
+      512,
+      8,
+      9
+    ],
+    [
+      "records_array_8m",
+      "roundtrip",
+      64,
+      8,
+      9
+    ],
+    [
+      "heterogeneous_1m",
+      "stringify",
+      1024,
+      8,
+      9
+    ],
+    [
+      "small_record",
+      "parse",
+      2000000,
+      2000,
+      9
+    ],
+    [
+      "records_array_1m",
+      "parse",
+      512,
+      8,
+      9
+    ],
+    [
+      "records_array_1m",
+      "scan",
+      256,
+      8,
+      9
+    ],
+    [
+      "records_array_1m",
+      "sparse",
+      512,
+      8,
+      9
+    ]
+  ],
+  "workers": {
+    "perry": "fbfb3ea90ebcb564144f5dca57d9ed2d2b426c4a031f1509ade4f2921a73bf3d",
+    "baseline": "43a90819e68a87d8365526189ff780e5bb9652b1df48573b0c293876dea8ee4d",
+    "prior": "030015ade8384e30639de4714627e9f0927824745449cb0314572253ec7d1f1c",
+    "previous": "4cd188aecdc9c377cf00755309160180f07ed8fb7f9c227bdd683e351b7c17be"
+  },
+  "sources": {
+    "run_regression_focus_r5.py": "dbd0ae617720ef1d6f632f1a31ce1e2fe594ac42e720b2f5d8c4240c2d1751f2",
+    "run_dispatch_focus.py": "100ba3e1bd5c0cd451d1a3528f95b5f4b8d0ff2f4771796ab8598b36a46fbcc4",
+    "worker.js": "55c11d12296f896212d6abd76bcf8d551d0590b0ad24b262018b7a707369a2f4"
+  },
+  "node_version": "v26.5.1",
+  "finished_utc": "2026-09-10T08:30:34Z",
+  "load_after": [
+    1.96923828125,
+    1.7685546875,
+    1.66259765625
+  ]
+}

@@ -83,3 +83,24 @@ full original measurements, with conflicting Unicode stringify evidence. R2
 keeps the builder separate and completes both full suites, with 20–24% array
 parse gains and retained small stringify/cached-parse concerns. R3 reorders a
 guard, but is parked after its focused replay does not resolve them.
+
+## Indexed scalar reads and adaptive full materialization
+
+A fresh [PR scan profile](results/pr-lazy-record-scan-profile/README.md) contains
+1472 main-thread samples: 752 under force_materialize_lazy's batch DirectParser
+path and 402 tape-builder self samples. Sequential scans first read a sparse
+prefix, then adaptively reparse the entire input. The old element-wise tape
+materializer was slower than that batch producer; disabling the flip alone
+would restore an already demonstrated cost.
+
+Investigate compiler/runtime fusion of an indexed lazy record's scalar own
+property read. A pristine, uncached record could supply that field from the tape
+without building its unused properties. Cached or modified records, materialized
+arrays, non-scalar values, missing properties and ambiguous escaped keys need
+ordinary fallback. Duplicates must preserve last-wins semantics; prototype
+getters and base/index evaluation order must remain observable in the usual way.
+No code or measured speedup exists yet. The helper's fallback must keep roots
+valid across allocation and getters. Cursor updates must not count projections
+as materialized cache entries or accidentally trigger the adaptive reparse.
+Compiler changes require fresh candidate and baseline worker objects; the
+runtime-only frozen objects used by the stringify experiments are insufficient.

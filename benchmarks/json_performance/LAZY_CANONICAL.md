@@ -91,3 +91,26 @@ loop when a native per-object length-bit summary proves no preceding key has tha
 length, retaining exact comparison on all collisions. This is a hypothesis only.
 The early tape-entry push also needs reconsideration because parse-only costs
 increased. No new implementation or speed claim exists for either follow-up.
+
+## R5 native key-length summary: still parked
+
+R5 (`211a204c08ecb7825948e2e9242fc0ba9268d7a9`) uses a native per-object length
+bitset to skip duplicate-key scans only for previously unseen length buckets.
+All collisions retain exact comparison. Parser source and GC policy stay the same
+as R4. All 306 release JSON tests and 198 compiled candidate comparisons across
+22 fixtures and nine tape/GC modes pass.
+[Validation and generated-code comparison](results/lazy-canonical-r5-validation/README.md).
+
+The [qualified four-way replay](results/quiet-lazy-canonical-r5-main-focus-r9/README.md)
+compares R5 directly with R4, main and the PR build in the same randomized run:
+40 output checks and 288 trials pass. Roundtrip changes versus R4 are -0.377%,
++0.074% and -0.080% across the three sizes. R5 remains 15–21% slower than main
+and 34–46% slower than the PR build, so it is rejected. No full matrix is justified.
+
+The local profile moves the prominent location to compact-separator checks,
+without a useful overall timing change. Further isolated proof-loop tweaks are
+not the next priority. A fresh [PR scan profile](results/pr-lazy-record-scan-profile/README.md)
+shows the adaptive full reparse consuming 752 of 1472 main-thread samples.
+Reading an untouched record's scalar own field directly from the tape could
+avoid that full materialization, subject to ordinary property/identity/rooting
+semantics. This broader opportunity is unimplemented and unmeasured.
