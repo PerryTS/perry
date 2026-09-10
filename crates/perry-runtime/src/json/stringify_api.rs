@@ -53,7 +53,7 @@ pub(crate) unsafe fn redirect_lazy_to_materialized(value: f64) -> f64 {
 /// Return one validated JSON number token and its exclusive end offset.
 /// The tape builder already accepted this input; the checks here keep the
 /// lazy stringify path fail-closed if a retained blob or tape is corrupted.
-fn json_number_token(bytes: &[u8], start: usize) -> Option<(usize, &[u8])> {
+pub(super) fn json_number_token(bytes: &[u8], start: usize) -> Option<(usize, &[u8])> {
     let mut end = start;
     if bytes.get(end) == Some(&b'-') {
         end += 1;
@@ -165,23 +165,10 @@ fn normalize_lazy_json_numbers<'a>(
     }
 }
 
-/// Issue #179 Phase 4: lazy-stringify fast path. If `value` is a
-/// lazy-parse top-level array whose `materialized` is still null (no
-/// indexed access or mutation has forced tree build), memcpy the
-/// original blob bytes into a fresh string — no tree walk, no
-/// escape handling. Returns `None` if `value` is not a
-/// tape-backed-and-unmutated lazy array, in which case the caller
-/// falls through to the generic stringify path.
-///
-/// Correctness invariant: if the lazy value is unmutated, the bytes
-/// spanning `[root.offset .. root_end.offset+1]` in the original
-/// blob are exactly what `JSON.stringify` would produce for that
-/// value (modulo whitespace the user's original blob may contain —
-/// `JSON.stringify` never emits whitespace for the 2-arg form, so
-/// this is only correct when the blob came from `JSON.stringify` or
-/// is otherwise whitespace-free in the array span). Number tokens are
-/// normalized separately: their source spelling is preserved only when it
-/// matches the canonical formatting of the `f64` produced by `JSON.parse`.
+/// Copy an untouched lazy array only after proving its compact source spelling,
+/// unique keys and property order. Number tokens are normalized to the parsed
+/// f64's spelling separately. Noncanonical sources materialize before returning
+/// `None`, so the caller can redirect to the ordinary array stringifier.
 pub(crate) unsafe fn try_stringify_lazy_array(value: f64) -> Option<*mut StringHeader> {
     let bits = value.to_bits();
     let top16 = bits >> 48;
@@ -251,6 +238,12 @@ pub(crate) unsafe fn try_stringify_lazy_array(value: f64) -> Option<*mut StringH
         return None;
     }
     let root = (*lazy).root_idx as usize;
+    if !super::stringify_lazy::source_is_copyable(tape, blob_bytes, root) {
+        // The native proof owns no managed value. End its source/tape borrows
+        // before materialization, which can collect and move the source.
+        crate::json_tape::force_materialize_lazy(lazy.cast_mut());
+        return None;
+    }
     let start = tape[root].offset as usize;
     let end_idx = tape[root].link as usize;
     let end = tape[end_idx].offset as usize + 1; // +1 includes `]`
