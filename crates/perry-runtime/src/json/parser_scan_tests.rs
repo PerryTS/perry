@@ -199,6 +199,46 @@ fn repeated_parse_reuses_only_the_immutable_string_token() {
 }
 
 #[test]
+fn rejected_template_capture_preserves_the_previous_complete_plan() {
+    use crate::json::{js_json_parse, js_json_stringify, str_from_header, TYPE_UNKNOWN};
+
+    let padding = "padding-".repeat(12);
+    let original = format!(r#"{{"padding":"{padding}","items":["stable",2,true],"id":7}}"#);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let source = crate::js_string_from_bytes(original.as_ptr(), original.len() as u32);
+    let source = scope.root_nanbox_u64(crate::JSValue::string_ptr(source).bits());
+    unsafe {
+        let first =
+            js_json_parse(crate::JSValue::from_bits(source.get_nanbox_u64()).as_string_ptr());
+        let first = scope.root_nanbox_u64(first.bits());
+        for unsupported in [
+            r#"{"nested":1}"#,
+            r#"[1,{"nested":2}]"#,
+            "[0,1,2,3,4,5,6,7,8]",
+        ] {
+            let text =
+                format!(r#"{{"padding":"{padding}","items":["new",3],"last":{unsupported}}}"#);
+            let other_source = crate::js_string_from_bytes(text.as_ptr(), text.len() as u32);
+            let other = js_json_parse(other_source);
+            let output = js_json_stringify(f64::from_bits(other.bits()), TYPE_UNKNOWN);
+            assert_eq!(str_from_header(output), Some(text.as_str()));
+
+            let current_source = crate::JSValue::from_bits(source.get_nanbox_u64()).as_string_ptr();
+            assert!(crate::json::test_parse_object_template_matches(
+                current_source,
+                original.len()
+            ));
+            let rebuilt = js_json_parse(current_source);
+            assert_ne!(rebuilt.bits(), first.get_nanbox_u64());
+            let output = js_json_stringify(f64::from_bits(rebuilt.bits()), TYPE_UNKNOWN);
+            assert_eq!(str_from_header(output), Some(original.as_str()));
+        }
+        let output = js_json_stringify(f64::from_bits(first.get_nanbox_u64()), TYPE_UNKNOWN);
+        assert_eq!(str_from_header(output), Some(original.as_str()));
+    }
+}
+
+#[test]
 fn repeated_small_object_template_rebuilds_nested_arrays() {
     let input = r#"{"id":42,"name":"long-enough-to-cross-the-small-template-threshold","tags":["alpha","beta"]}"#;
     let source = crate::js_string_from_bytes(input.as_ptr(), input.len() as u32);

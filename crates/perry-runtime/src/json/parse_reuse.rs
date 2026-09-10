@@ -216,30 +216,33 @@ pub(crate) unsafe fn remember_parse_object_template(
         .cast::<u8>()
         .add(std::mem::size_of::<crate::object::ObjectHeader>())
         .cast::<JSValue>();
-    let mut values = [EMPTY_PARSE_TEMPLATE_VALUE; PARSE_OBJECT_TEMPLATE_MAX_FIELDS];
-    for (index, slot) in values[..len].iter_mut().enumerate() {
+    // Build one local plan in place. Resolve shape metadata only after all
+    // values qualify, then run root barriers before publishing the complete plan.
+    let mut entry = ParseObjectTemplate {
+        source,
+        source_len: source_len as u16,
+        keys_array: std::ptr::null_mut(),
+        shape_id: 0,
+        values: [EMPTY_PARSE_TEMPLATE_VALUE; PARSE_OBJECT_TEMPLATE_MAX_FIELDS],
+        len: len as u8,
+    };
+    for (index, slot) in entry.values[..len].iter_mut().enumerate() {
         let Some(value) = parse_template_value(*fields.add(index)) else {
             return;
         };
         *slot = value;
     }
-    let entry = ParseObjectTemplate {
-        source,
-        source_len: source_len as u16,
-        keys_array: crate::object::object_keys_array(object),
-        shape_id: crate::object::shapes::object_shape_stamp(object),
-        values,
-        len: len as u8,
-    };
+    entry.keys_array = crate::object::object_keys_array(object);
+    entry.shape_id = crate::object::shapes::object_shape_stamp(object);
     crate::gc::runtime_write_barrier_root_nanbox(JSValue::string_ptr(source.cast_mut()).bits());
     crate::gc::runtime_write_barrier_root_raw_ptr(entry.keys_array);
     for value in &entry.values[..len] {
-        match *value {
+        match value {
             ParseTemplateValue::Inline(value) => {
                 crate::gc::runtime_write_barrier_root_nanbox(value.bits());
             }
             ParseTemplateValue::Array { values, len } => {
-                for value in &values[..len as usize] {
+                for value in &values[..*len as usize] {
                     crate::gc::runtime_write_barrier_root_nanbox(value.bits());
                 }
             }
