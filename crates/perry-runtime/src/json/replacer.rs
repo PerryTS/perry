@@ -1605,6 +1605,15 @@ pub unsafe extern "C" fn js_json_stringify_full(
         }
     }
 
+    // Keep the ordinary compact entry above intact. Newly inert spacers can
+    // use bounded output here, while fallback retains the original arguments
+    // and the lazy-source shortcut's original admission below.
+    if no_replacer && !no_spacer {
+        if let Some(result) = super::stringify_small::try_inert_spacer(value_bits, spacer_bits) {
+            return result.bits() as i64;
+        }
+    }
+
     // JSON.stringify(undefined) returns undefined per spec
     if value_bits == TAG_UNDEFINED {
         return TAG_UNDEFINED as i64;

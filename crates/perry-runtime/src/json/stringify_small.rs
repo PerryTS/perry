@@ -64,6 +64,25 @@ pub(super) fn try_primitive(bits: u64) -> Option<JSValue> {
     Some(JSValue::short_string_unchecked(&output[..n + 1]))
 }
 
+/// Call only when the replacer is absent. The original spacer must reach the
+/// general path unchanged if these bounded writers cannot handle the value.
+#[inline(never)]
+pub(super) unsafe fn try_inert_spacer(value_bits: u64, spacer_bits: u64) -> Option<JSValue> {
+    if spacer_bits != TAG_TRUE && (spacer_bits & 0x7fff_ffff_ffff_ffff) != 0 {
+        return None;
+    }
+    if let Some(result) = try_primitive(value_bits) {
+        return Some(result);
+    }
+    if let Some(result) = super::stringify_string::try_heap_string(value_bits) {
+        return Some(JSValue::string_ptr(result));
+    }
+    if let Some(result) = super::stringify_record_output::try_object(value_bits) {
+        return Some(result);
+    }
+    super::stringify_flat::try_object(value_bits)
+}
+
 #[cfg(test)]
 #[path = "stringify_small_tests.rs"]
 mod tests;
