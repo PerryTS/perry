@@ -10,12 +10,17 @@ fn admits(source: &[u8], root: usize) -> bool {
 fn json_lazy_copy_admission_checks_spelling_duplicates_and_key_order() {
     for source in [
         r#"[ {"x":1}]"#,
+        r#"["x" ,1]"#,
+        r#"["x", 1]"#,
+        r#"["x" ]"#,
+        r#"["x\"" ,""]"#,
         r#"[{"x" :1}]"#,
         r#"[{"x": 1}]"#,
         r#"[{"x":1} ,{"x":2}]"#,
         r#"["\u0061"]"#,
         r#"["\/"]"#,
         r#"[{"x":1,"x":2}]"#,
+        r#"[{"":1,"":2}]"#,
         r#"[{"x":1,"\u0078":2}]"#,
         r#"[{"2":2,"1":1}]"#,
         r#"[{"a":0,"1":1}]"#,
@@ -28,6 +33,20 @@ fn json_lazy_copy_admission_checks_spelling_duplicates_and_key_order() {
     raw_surrogate.extend_from_slice(b"\xed\xa0\x80");
     raw_surrogate.extend_from_slice(b"\"]");
     assert!(!admits(&raw_surrogate, 0));
+}
+
+#[test]
+fn json_lazy_copy_number_visitor_excludes_strings_and_other_subtrees() {
+    let source = br#"[8,[1.0,"2e3",{"x":4}],9]"#;
+    let tape = build_tape(source).unwrap();
+    let mut visited = Vec::new();
+    visit_copyable_numbers(&tape.entries, source, 2, |start, end, token| {
+        assert_eq!(&source[start..end], token);
+        visited.push(token.to_vec());
+        Some(())
+    })
+    .unwrap();
+    assert_eq!(visited, [b"1.0".to_vec(), b"4".to_vec()]);
 }
 
 #[test]

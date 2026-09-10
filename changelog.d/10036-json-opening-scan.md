@@ -6,3 +6,5 @@ Validate compact string spelling, duplicate keys and integer-key order before
 copying an untouched lazy array's source. Noncanonical sources use ordinary
 materialization and serialization; native admission scratch adds no GC roots.
 This corrects inherited whitespace, escape, duplicate-key and enumeration bugs.
+Perform source admission and number normalization in one tape walk, validate
+UTF-8 once, and use adjacent token offsets to avoid repeating string-end scans.

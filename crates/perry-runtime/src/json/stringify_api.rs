@@ -109,7 +109,7 @@ fn is_trivially_canonical_json_integer(token: &[u8]) -> bool {
         && !(negative && digits == b"0")
 }
 
-/// Normalize number spellings in an otherwise byte-copyable lazy JSON array.
+/// Prove source-copy admission while normalizing the array's number spellings.
 /// `JSON.parse` converts every number token to an IEEE-754 double, so the
 /// stringify shortcut must not preserve source spellings such as `1e-400`,
 /// `1.0`, or `9007199254740993`. Allocate a rewritten buffer only when a token
@@ -117,6 +117,7 @@ fn is_trivially_canonical_json_integer(token: &[u8]) -> bool {
 fn normalize_lazy_json_numbers<'a>(
     tape: &[crate::json_tape::TapeEntry],
     blob: &'a [u8],
+    root: usize,
     root_start: usize,
     root_end: usize,
 ) -> Option<std::borrow::Cow<'a, [u8]>> {
@@ -125,37 +126,35 @@ fn normalize_lazy_json_numbers<'a>(
     let mut copied_until = root_start;
     let mut canonical = String::new();
 
-    for entry in tape {
-        if entry.kind != crate::json_tape::KIND_NUMBER {
-            continue;
-        }
-        let number_start = entry.offset as usize;
-        if number_start < root_start || number_start >= root_end {
-            continue;
-        }
-        let (number_end, token) = json_number_token(blob, number_start)?;
-        if number_end > root_end {
-            return None;
-        }
-        if is_trivially_canonical_json_integer(token) {
-            continue;
-        }
+    super::stringify_lazy::visit_copyable_numbers(
+        tape,
+        blob,
+        root,
+        |number_start, number_end, token| {
+            if number_end > root_end {
+                return None;
+            }
+            if is_trivially_canonical_json_integer(token) {
+                return Some(());
+            }
 
-        let value = std::str::from_utf8(token).ok()?.parse::<f64>().ok()?;
-        canonical.clear();
-        unsafe { stringify::write_number(&mut canonical, value) };
-        if canonical.as_bytes() == token {
-            continue;
-        }
+            let value = std::str::from_utf8(token).ok()?.parse::<f64>().ok()?;
+            canonical.clear();
+            unsafe { stringify::write_number(&mut canonical, value) };
+            if canonical.as_bytes() == token {
+                return Some(());
+            }
 
-        let output = rewritten.get_or_insert_with(|| Vec::with_capacity(original.len()));
-        if number_start < copied_until {
-            return None;
-        }
-        output.extend_from_slice(blob.get(copied_until..number_start)?);
-        output.extend_from_slice(canonical.as_bytes());
-        copied_until = number_end;
-    }
+            let output = rewritten.get_or_insert_with(|| Vec::with_capacity(original.len()));
+            if number_start < copied_until {
+                return None;
+            }
+            output.extend_from_slice(blob.get(copied_until..number_start)?);
+            output.extend_from_slice(canonical.as_bytes());
+            copied_until = number_end;
+            Some(())
+        },
+    )?;
 
     if let Some(mut output) = rewritten {
         output.extend_from_slice(blob.get(copied_until..root_end)?);
@@ -166,8 +165,8 @@ fn normalize_lazy_json_numbers<'a>(
 }
 
 /// Copy an untouched lazy array only after proving its compact source spelling,
-/// unique keys and property order. Number tokens are normalized to the parsed
-/// f64's spelling separately. Noncanonical sources materialize before returning
+/// unique keys and property order. Number tokens normalize during that proof.
+/// Noncanonical sources materialize before returning
 /// `None`, so the caller can redirect to the ordinary array stringifier.
 pub(crate) unsafe fn try_stringify_lazy_array(value: f64) -> Option<*mut StringHeader> {
     let bits = value.to_bits();
@@ -238,19 +237,17 @@ pub(crate) unsafe fn try_stringify_lazy_array(value: f64) -> Option<*mut StringH
         return None;
     }
     let root = (*lazy).root_idx as usize;
-    if !super::stringify_lazy::source_is_copyable(tape, blob_bytes, root) {
-        // The native proof owns no managed value. End its source/tape borrows
-        // before materialization, which can collect and move the source.
-        crate::json_tape::force_materialize_lazy(lazy.cast_mut());
-        return None;
-    }
     let start = tape[root].offset as usize;
     let end_idx = tape[root].link as usize;
     let end = tape[end_idx].offset as usize + 1; // +1 includes `]`
     if end > blob_bytes.len() || start > end {
         return None;
     }
-    let normalized = normalize_lazy_json_numbers(tape, blob_bytes, start, end)?;
+    let Some(normalized) = normalize_lazy_json_numbers(tape, blob_bytes, root, start, end) else {
+        // Native proof/rewrite scratch is dropped before this collecting path.
+        crate::json_tape::force_materialize_lazy(lazy.cast_mut());
+        return None;
+    };
     Some(json_string_from_output_bytes(normalized.as_ref()))
 }
 
