@@ -16,3 +16,7 @@ Heterogeneous eager stringify remains +0.427% versus main (9/9 slower). This
 admission guard does not run on that eager workload. No full-suite R1 expansion
 is justified. The correction passes 297 tests and 126 compiled candidate
 canonicalization/GC comparisons, but its separate token proof is too expensive.
+
+The quiet window retains the controller’s filtered competing-process lists.
+Its full process listings were not copied before the next run; R2 and future
+archives also retain those full listings.
