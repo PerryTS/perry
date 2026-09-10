@@ -1,0 +1,5 @@
+{
+  "base_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+  "prior_source_commit": "b62773c0064c047d68478dfac8d9a5761a90a4cf",
+  "purpose": "R10 enforce inlining of the three shared bounded writers; retain R9 helper and unchanged GC/fallback semantics."
+}

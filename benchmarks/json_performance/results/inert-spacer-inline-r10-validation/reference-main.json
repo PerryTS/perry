@@ -1,0 +1,5 @@
+{
+  "reference_work": "benchmarks/json_performance/.work/inert-spacer-tail-r9",
+  "original_fresh_build_work": "benchmarks/json_performance/.work/inert-spacer-r8",
+  "note": "Main artifacts copied by exact hashes, not rebuilt; main worker/fixture inputs will be recompiled at R10 paths."
+}

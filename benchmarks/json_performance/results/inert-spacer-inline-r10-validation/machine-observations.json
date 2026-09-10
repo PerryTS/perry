@@ -1,0 +1,40 @@
+{
+  "main": {
+    "frame_bytes": 272,
+    "entry": "0000000100842e40",
+    "command": [
+      "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+      "--disassemble-symbols=_js_json_stringify_full",
+      "--no-show-raw-insn",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-inline-r10/main-options"
+    ],
+    "binary_sha256": "b02de0441527d93382b1bbd63da302d9cc0e1630067a59bf2537f1245d6c19ab",
+    "bounded_calls": []
+  },
+  "candidate": {
+    "frame_bytes": 336,
+    "entry": "0000000100842fc0",
+    "command": [
+      "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+      "--disassemble-symbols=_js_json_stringify_full",
+      "--no-show-raw-insn",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-inline-r10/candidate-options"
+    ],
+    "binary_sha256": "383a2fa664621c37721f4193d5eba56eda532e35dfae637df44095ec62f2b785",
+    "bounded_calls": [
+      "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json15stringify_small16try_inert_spacer"
+    ]
+  },
+  "helper": {
+    "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json15stringify_small16try_inert_spacer",
+    "command": [
+      "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+      "--disassemble-symbols=__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json15stringify_small16try_inert_spacer",
+      "--no-show-raw-insn",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-inline-r10/candidate-options"
+    ],
+    "frame_bytes": 128
+  },
+  "three_writers_inlined": true,
+  "note": "R10 restores inlining of all three writers in the public entry, but public frame grows to336bytes versus main272/R9 304. This is machine-code evidence, not a performance verdict."
+}

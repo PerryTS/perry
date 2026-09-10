@@ -1,0 +1,70 @@
+{
+  "source_commit": "69455e99520aaee40737948eedad86901d46dd23",
+  "base_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+  "main_build": {
+    "source_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+    "command": [
+      "cargo",
+      "build",
+      "--release",
+      "-p",
+      "perry",
+      "-p",
+      "perry-runtime-static",
+      "-p",
+      "perry-stdlib-static"
+    ],
+    "started_utc": "2026-09-10T15:48:26.572992+00:00",
+    "elapsed_seconds": 338.8867919445038,
+    "files": {
+      "perry": {
+        "sha256": "ade63eddfdeca03926039d10e3310f9255d52c5b2721ccd2b0882f042a689156",
+        "bytes": 117699664,
+        "mtime": 1789055644.6386313
+      },
+      "libperry_runtime.a": {
+        "sha256": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458",
+        "bytes": 36882304,
+        "mtime": 1789055567.242991
+      },
+      "libperry_stdlib.a": {
+        "sha256": "61fac03f0405a48b8d390958e3002246061db6e009fcd078fe61a98d1a1068b0",
+        "bytes": 86372568,
+        "mtime": 1789055628.740747
+      }
+    }
+  },
+  "candidate_build": {
+    "source_commit": "69455e99520aaee40737948eedad86901d46dd23",
+    "command": [
+      "cargo",
+      "build",
+      "--release",
+      "-p",
+      "perry",
+      "-p",
+      "perry-runtime-static",
+      "-p",
+      "perry-stdlib-static"
+    ],
+    "started_utc": "2026-09-10T17:13:16.157194+00:00",
+    "elapsed_seconds": 326.68116521835327,
+    "files": {
+      "perry": {
+        "sha256": "9c2bc618601a7a4a18c25dc49dc9d2b6ee5b190a54364c15d1de68276a478259",
+        "bytes": 117699664,
+        "mtime": 1789060721.9440246
+      },
+      "libperry_runtime.a": {
+        "sha256": "1a538907c5b84b19e02244c64f1bf08ce38b480fd33c1490a8823425d7af9bcb",
+        "bytes": 36886096,
+        "mtime": 1789060644.9491787
+      },
+      "libperry_stdlib.a": {
+        "sha256": "7b0566c838430e51a1a8d92293d15453d4fb863baaa47441e6c3bb5902b39949",
+        "bytes": 86375160,
+        "mtime": 1789060706.7970362
+      }
+    }
+  }
+}

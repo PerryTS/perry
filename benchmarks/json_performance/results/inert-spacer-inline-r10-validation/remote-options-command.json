@@ -1,0 +1,17 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/inert-spacer-inline-r10/run-options.py",
+  "--worker",
+  ".work/inert-spacer-inline-r10/candidate-options",
+  "--baseline-worker",
+  ".work/inert-spacer-inline-r10/main-options",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--results-dir",
+  "results/quiet-inert-spacer-inline-r10-options"
+]

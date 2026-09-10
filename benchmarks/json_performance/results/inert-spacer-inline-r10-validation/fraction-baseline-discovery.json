@@ -1,0 +1,6 @@
+{
+  "main_source_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+  "original_fixture_sha256": "fdfc1b1b9d90da5c2cc6ff125487997d70607271333ce1726a8ae6d458760ba4",
+  "main_matches_node": false,
+  "difference": "space index 6 is 0.5; pinned Node26.5.1 emits pretty newlines with no indentation; frozen main emits compact JSON. All other output lines agree. This is not claimed to be an R8 regression."
+}

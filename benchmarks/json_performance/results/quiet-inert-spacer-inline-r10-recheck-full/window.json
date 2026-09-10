@@ -1,0 +1,42 @@
+{
+  "owner": "json-perf-61917-1789062133",
+  "load_before": [
+    1.46533203125,
+    1.67578125,
+    1.7001953125
+  ],
+  "started_utc": "2026-09-10T17:42:13Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/inert-spacer-inline-r10/run-focus.py",
+    "--worker",
+    ".work/inert-spacer-inline-r10/candidate-worker",
+    "--baseline-worker",
+    ".work/inert-spacer-inline-r10/main-worker",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--bun",
+    "/Users/perry/.bun/bin/bun",
+    "--case",
+    "records_array_16k:sparse:31472:2:11",
+    "--case",
+    "records_object_1m:parse:324:2:11",
+    "--case",
+    "records_array_8m:stringify:116:2:11",
+    "--case",
+    "records_object_20m:stringify:48:2:11",
+    "--case",
+    "numbers_1m:stringify:588:2:11",
+    "--results-dir",
+    "results/quiet-inert-spacer-inline-r10-recheck-full"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    2.392578125,
+    2.1376953125,
+    1.88916015625
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-10T17:45:27Z"
+}
