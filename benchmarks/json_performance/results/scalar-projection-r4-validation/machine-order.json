@@ -1,0 +1,16 @@
+{
+  "source_commit": "479cea228477675bcaf2213da6b93d569bd523b4",
+  "access_object_sha256": "533f1dd9fac31e5ebbb19618ae45ecc82c958220b2922ca4fb517d20069bf98e",
+  "repeat_guard_compare_order": [
+    "1",
+    "2",
+    "9"
+  ],
+  "disassembly_extract": "    3448:      \tldurb\tw12, [x8, #-0x8]\n    344c:      \tcmp\tw12, #0x1\n    3450:      \tb.eq\t0x34a0 <_perry_fn_access_worker_ts__run+0x3f8>\n    3454:      \tcmp\tw12, #0x2\n    3458:      \tb.ne\t0x34e8 <_perry_fn_access_worker_ts__run+0x440>\n    345c:      \tldr\tx9, [x8, #0x8]\n    3460:      \tcbz\tx9, 0x379c <_perry_fn_access_worker_ts__run+0x6f4>\n    3464:      \tldr\tx12, [x9, #0x60]\n    3468:      \tcbz\tx12, 0x379c <_perry_fn_access_worker_ts__run+0x6f4>\n    346c:      \tldurb\tw8, [x12, #-0x8]\n    3470:      \tcmp\tw8, #0x1\n    3474:      \tb.ne\t0x34f0 <_perry_fn_access_worker_ts__run+0x448>\n    3478:      \tldursb\tw8, [x12, #-0x7]\n    347c:      \ttbnz\tw8, #0x1f, 0x34f0 <_perry_fn_access_worker_ts__run+0x448>\n    3480:      \tldr\tw8, [x12]\n    3484:      \tcmp\tw8, #0x8\n    3488:      \tb.lo\t0x34f0 <_perry_fn_access_worker_ts__run+0x448>\n    348c:      \tldr\td0, [x12, #0x40]\n    3490:      \tfmov\tx8, d0\n    3494:      \tcmp\tx8, x25\n    3498:      \tb.eq\t0x34f0 <_perry_fn_access_worker_ts__run+0x448>\n    349c:      \tb\t0x3514 <_perry_fn_access_worker_ts__run+0x46c>\n    34a0:      \tldr\tw9, [x8]\n    34a4:      \tmov\tx10, x8\n    34a8:      \tldurh\tw12, [x8, #-0x6]\n    34ac:      \tadrp\tx11, 0x3000 <ltmp0+0x3000>\n\t\t00000000000034ac:  ARM64_RELOC_GOT_LOAD_PAGE21\t_PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED\n    34b0:      \tldr\tx11, [x11]\n\t\t00000000000034b0:  ARM64_RELOC_GOT_LOAD_PAGEOFF12\t_PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED\n    34b4:      \tldrb\tw11, [x11]\n    34b8:      \tldr\tw8, [x8, #0x4]\n    34bc:      \tcmp\tw9, w8\n    34c0:      \tb.hi\t0x34f0 <_perry_fn_access_worker_ts__run+0x448>\n    34c4:      \tcmp\tw9, #0x8\n    34c8:      \tb.lo\t0x34f0 <_perry_fn_access_worker_ts__run+0x448>\n    34cc:      \ttbnz\tw12, #0xa, 0x34f0 <_perry_fn_access_worker_ts__run+0x448>\n    34d0:      \tcbnz\tw11, 0x34f0 <_perry_fn_access_worker_ts__run+0x448>\n    34d4:      \tldr\td0, [x10, #0x40]\n    34d8:      \tfmov\tx8, d0\n    34dc:      \tcmp\tx8, x25\n    34e0:      \tfcsel\td0, d11, d0, eq\n    34e4:      \tb\t0x3514 <_perry_fn_access_worker_ts__run+0x46c>\n    34e8:      \tcmp\tw12, #0x9\n    34ec:      \tb.eq\t0x3914 <_perry_fn_access_worker_ts__run+0x86c>\n    34f0:      \tmov\tx8, x26",
+  "prior_r3_order": [
+    9,
+    2,
+    1
+  ],
+  "conclusion": "R4 places ordinary Object/Array tests before JSON in the optimized repeat loop. This alone is not a performance verdict."
+}

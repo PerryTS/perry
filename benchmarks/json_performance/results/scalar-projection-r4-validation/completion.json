@@ -1,0 +1,151 @@
+{
+  "source_commit": "479cea228477675bcaf2213da6b93d569bd523b4",
+  "status": "rejected: 20MiB mixed-field access +4.49% separated; smaller access slower than R3; stringify variability unresolved",
+  "actual_repeat_brand_order": [
+    1,
+    2,
+    9
+  ],
+  "unit_json_runtime": 301,
+  "unit_json_codegen": 10,
+  "unit_index_get": 13,
+  "unit_property_get": 25,
+  "unit_gc_effects": 15,
+  "compiled_output_lines": 31,
+  "compiled_modes": 9,
+  "mutation_controls": 9,
+  "access_controls": 12,
+  "native_worker_hazards": 0,
+  "full_native_hazards": 2,
+  "full_native_fingerprints_match_actual_main": true,
+  "full_shadow_checks": [
+    0,
+    0
+  ],
+  "script_gates": "73/74; public benchmark freshness fails; compile tier skipped",
+  "candidate_timed_trials": 616,
+  "tiny_crossover_timed_trials": 45,
+  "qualified_windows": [
+    {
+      "owner": "json-perf-43161-1789044783",
+      "load_before": [
+        1.427734375,
+        1.548828125,
+        1.5927734375
+      ],
+      "started_utc": "2026-09-10T12:53:03Z",
+      "quiet_gate_passed": true,
+      "command": [
+        "python3",
+        "run_access.py",
+        "--worker",
+        ".work/scalar-projection-r4/access-worker",
+        "--baseline-worker",
+        ".work/main-53df-fresh/main-access",
+        "--node",
+        "/opt/homebrew/bin/node",
+        "--bun",
+        "/Users/perry/.bun/bin/bun",
+        "--results-dir",
+        "results/quiet-scalar-projection-r4-access"
+      ],
+      "competing_workloads_before": [],
+      "load_after": [
+        2.12451171875,
+        1.6923828125,
+        1.6416015625
+      ],
+      "competing_workloads_after": [],
+      "finished_utc": "2026-09-10T12:53:26Z"
+    },
+    {
+      "owner": "json-perf-43877-1789044809",
+      "load_before": [
+        2.1142578125,
+        1.697265625,
+        1.6435546875
+      ],
+      "started_utc": "2026-09-10T12:53:29Z",
+      "quiet_gate_passed": true,
+      "command": [
+        "python3",
+        "run_regression_focus.py",
+        "--worker",
+        ".work/scalar-projection-r4/worker",
+        "--baseline-worker",
+        ".work/main-53df-fresh/worker",
+        "--node",
+        "/opt/homebrew/bin/node",
+        "--bun",
+        "/Users/perry/.bun/bin/bun",
+        "--case",
+        "records_array_16k:scan:4000:8:7",
+        "--case",
+        "records_array_1m:scan:200:2:7",
+        "--case",
+        "records_array_8m:scan:32:1:7",
+        "--case",
+        "records_array_20m:scan:16:1:7",
+        "--case",
+        "records_array_20m:roundtrip:8:1:7",
+        "--case",
+        "records_array_1m:parse:200:8:7",
+        "--case",
+        "records_array_1m:stringify:256:8:7",
+        "--case",
+        "small_record:parse:2000000:5000:7",
+        "--case",
+        "small_record:stringify:10000000:5000:7",
+        "--case",
+        "long_string_1m:stringify:4096:8:7",
+        "--results-dir",
+        "results/quiet-scalar-projection-r4-focus"
+      ],
+      "competing_workloads_before": [],
+      "load_after": [
+        1.97021484375,
+        1.861328125,
+        1.7197265625
+      ],
+      "competing_workloads_after": [],
+      "finished_utc": "2026-09-10T12:56:09Z"
+    },
+    {
+      "owner": "json-perf-44590-1789045057",
+      "load_before": [
+        1.8984375,
+        1.8857421875,
+        1.74267578125
+      ],
+      "started_utc": "2026-09-10T12:57:37Z",
+      "quiet_gate_passed": true,
+      "command": [
+        "python3",
+        "run_regression_focus.py",
+        "--worker",
+        ".work/scalar-projection-r3/worker",
+        "--baseline-worker",
+        ".work/main-53df-fresh/worker",
+        "--prior-worker",
+        ".work/scalar-projection-r4/main-codegen-r3-runtime-worker",
+        "--node",
+        "/opt/homebrew/bin/node",
+        "--bun",
+        "/Users/perry/.bun/bin/bun",
+        "--case",
+        "small_record:stringify:10000000:5000:9",
+        "--results-dir",
+        "results/quiet-scalar-projection-r4-tiny-crossover"
+      ],
+      "competing_workloads_before": [],
+      "load_after": [
+        1.8251953125,
+        1.865234375,
+        1.7412109375
+      ],
+      "competing_workloads_after": [],
+      "finished_utc": "2026-09-10T12:58:11Z"
+    }
+  ],
+  "production_artifact_hashes_still_match_frozen_build": true
+}

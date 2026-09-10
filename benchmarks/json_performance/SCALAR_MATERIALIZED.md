@@ -10,6 +10,10 @@ Measured implementation: `2647ea7f0192283e6c140e0576d0b7f62419a33d` on `codex/js
 Reference: actual main `53df2c671fff33b1f8f624432372c2401db8b1d0`, version 0.5.1530.
 R2 remains documented in [SCALAR_MEMO.md](SCALAR_MEMO.md). No PR is open for R3.
 
+The later [R4 branch-hint experiment](SCALAR_BRANCH_HINT.md) restores ordinary-array
+machine dispatch order and removes the repeated-read regression, but worsens
+mixed-field access. R3's measurements below remain unchanged.
+
 ## Change and correctness contract
 
 After scalar access has given way to full materialization, R2 still sends indexed

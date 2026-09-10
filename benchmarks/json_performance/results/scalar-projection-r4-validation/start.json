@@ -1,0 +1,17 @@
+{
+  "implementation_commit": "479cea228477675bcaf2213da6b93d569bd523b4",
+  "build_session": 96301,
+  "build_command": [
+    "cargo",
+    "build",
+    "--release",
+    "-p",
+    "perry",
+    "-p",
+    "perry-runtime-static",
+    "-p",
+    "perry-stdlib-static"
+  ],
+  "previous_turn": "progress: R3 implementation, measurements, actual-main native proof and optimized dispatch finding",
+  "candidate": "Add llvm.expect.i1(is_lazy,false) and its declaration; no runtime changes relative R3."
+}

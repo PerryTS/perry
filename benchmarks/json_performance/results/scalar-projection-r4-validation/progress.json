@@ -1,0 +1,22 @@
+{
+  "implementation_commit": "479cea228477675bcaf2213da6b93d569bd523b4",
+  "release_build_exit_code": 0,
+  "release_build_time": "6m06s",
+  "compiled_validation_exit_code": 0,
+  "native_worker_hazards": 0,
+  "full_native_hazards": 2,
+  "full_native_matches_actual_main": true,
+  "full_shadow_checks": [
+    0,
+    0
+  ],
+  "actual_repeat_dispatch_order": [
+    1,
+    2,
+    9
+  ],
+  "script_lint": "73/74 pass, public baseline freshness fails; compile tier skipped",
+  "live_unit_session": 69206,
+  "live_measurement_session": 60105,
+  "note": "R4 static archive hashes differ from R3 despite no runtime source edit; use each candidate matching frozen artifacts. Hybrid uses explicitly frozen R3 runtime only."
+}

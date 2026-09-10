@@ -1,0 +1,48 @@
+{
+  "note": "Diagnostic crossover only: actual main worker object linked to frozen R3 runtime. Not an R4 product binary. Existing imported function ABI and Object/Array layouts unchanged. Tiny stringify eager-object case only.",
+  "main_source_commit": "53df2c671fff33b1f8f624432372c2401db8b1d0",
+  "runtime_source_commit": "2647ea7f0192283e6c140e0576d0b7f62419a33d",
+  "commands": [
+    [
+      "cc",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/main-53df-fresh/worker.o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/scalar-projection-r3/frozen-build/libperry_runtime.a",
+      "-lc",
+      "-Wl,-dead_strip",
+      "-Wl,-no_exported_symbols",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/scalar-projection-r4/main-codegen-r3-runtime-worker"
+    ]
+  ],
+  "files": {
+    "benchmarks/json_performance/.work/main-53df-fresh/worker.o": "d65f4561c3d89caaed5379383a17a7b1c87740686e4b4e2ea51d4709ddf247b4",
+    "benchmarks/json_performance/.work/scalar-projection-r3/frozen-build/libperry_runtime.a": "adb2645bc55577904d22a1091361d66c5ecd9f7485f736001f9e9a13c461aaef",
+    "benchmarks/json_performance/.work/scalar-projection-r4/main-codegen-r3-runtime-worker": "c91fceb482f561b3995debea49bf5696ae94463b3f80ad7172b3473f120d8b9b",
+    "benchmarks/json_performance/.work/fixtures/small_record.json": "e8d7bd409aeaba5d0aa3ce4046609ff7abdd3b88fc422903982ed7e58bc8f340",
+    "benchmarks/json_performance/worker.js": "55c11d12296f896212d6abd76bcf8d551d0590b0ad24b262018b7a707369a2f4"
+  },
+  "checks": [
+    {
+      "mode": "normal",
+      "matches_node": true,
+      "full_checksum_and_output_checked": true,
+      "protected_sets": 0,
+      "moved_objects": 0
+    },
+    {
+      "mode": "scheduled",
+      "matches_node": true,
+      "full_checksum_and_output_checked": true,
+      "protected_sets": 106,
+      "moved_objects": 12720
+    },
+    {
+      "mode": "fullgc",
+      "matches_node": true,
+      "full_checksum_and_output_checked": true,
+      "protected_sets": 0,
+      "moved_objects": 0
+    }
+  ],
+  "verifier_sha256": "b69277e7815ebcfbbc202306e1a387e5705bdbbc0dc34108ca84b810639354b9"
+}

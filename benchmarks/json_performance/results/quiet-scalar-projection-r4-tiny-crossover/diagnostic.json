@@ -1,0 +1,8 @@
+{
+  "note": "R4 investigation of the R3 tiny-stringify regression. perry=R3 object+R3 runtime; baseline=main object+main runtime; prior=main object+R3 runtime. R4 product binary is not timed here. All three measured worker hashes verified after archiving.",
+  "engines": {
+    "perry": "R3",
+    "baseline": "main",
+    "prior": "main codegen + R3 runtime"
+  }
+}

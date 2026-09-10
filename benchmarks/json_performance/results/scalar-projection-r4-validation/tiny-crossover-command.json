@@ -1,0 +1,21 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  "run_regression_focus.py",
+  "--worker",
+  ".work/scalar-projection-r3/worker",
+  "--baseline-worker",
+  ".work/main-53df-fresh/worker",
+  "--prior-worker",
+  ".work/scalar-projection-r4/main-codegen-r3-runtime-worker",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--case",
+  "small_record:stringify:10000000:5000:9",
+  "--results-dir",
+  "results/quiet-scalar-projection-r4-tiny-crossover"
+]

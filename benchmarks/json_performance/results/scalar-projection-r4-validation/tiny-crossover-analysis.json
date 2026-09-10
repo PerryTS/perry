@@ -1,0 +1,224 @@
+{
+  "window": {
+    "owner": "json-perf-44590-1789045057",
+    "load_before": [
+      1.8984375,
+      1.8857421875,
+      1.74267578125
+    ],
+    "started_utc": "2026-09-10T12:57:37Z",
+    "quiet_gate_passed": true,
+    "command": [
+      "python3",
+      "run_regression_focus.py",
+      "--worker",
+      ".work/scalar-projection-r3/worker",
+      "--baseline-worker",
+      ".work/main-53df-fresh/worker",
+      "--prior-worker",
+      ".work/scalar-projection-r4/main-codegen-r3-runtime-worker",
+      "--node",
+      "/opt/homebrew/bin/node",
+      "--bun",
+      "/Users/perry/.bun/bin/bun",
+      "--case",
+      "small_record:stringify:10000000:5000:9",
+      "--results-dir",
+      "results/quiet-scalar-projection-r4-tiny-crossover"
+    ],
+    "competing_workloads_before": [],
+    "load_after": [
+      1.8251953125,
+      1.865234375,
+      1.7412109375
+    ],
+    "competing_workloads_after": [],
+    "finished_utc": "2026-09-10T12:58:11Z"
+  },
+  "all_full_checksums_verified": true,
+  "timed_trials": 45,
+  "verification_outputs": 6,
+  "arms": {
+    "perry": {
+      "fixture": "small_record",
+      "operation": "stringify",
+      "iterations": 10000000,
+      "engine": "perry",
+      "repetitions": 9,
+      "cpu_us": 0.0424487,
+      "cpu_samples_us": [
+        0.0423588,
+        0.0427675,
+        0.0427117,
+        0.0424249,
+        0.0423763,
+        0.0426046,
+        0.0424369,
+        0.0424487,
+        0.0427501
+      ],
+      "peak_rss_mib": 33.40625,
+      "peak_rss_samples_mib": [
+        33.40625,
+        33.40625,
+        33.390625,
+        33.40625,
+        33.40625,
+        33.390625,
+        33.421875,
+        33.390625,
+        33.40625
+      ]
+    },
+    "baseline": {
+      "fixture": "small_record",
+      "operation": "stringify",
+      "iterations": 10000000,
+      "engine": "baseline",
+      "repetitions": 9,
+      "cpu_us": 0.0421409,
+      "cpu_samples_us": [
+        0.0421491,
+        0.042119,
+        0.0421204,
+        0.0437169,
+        0.0421218,
+        0.0424518,
+        0.0421409,
+        0.0421054,
+        0.0421691
+      ],
+      "peak_rss_mib": 33.34375,
+      "peak_rss_samples_mib": [
+        33.328125,
+        33.34375,
+        33.34375,
+        33.34375,
+        33.34375,
+        33.375,
+        33.34375,
+        33.34375,
+        33.375
+      ]
+    },
+    "prior": {
+      "fixture": "small_record",
+      "operation": "stringify",
+      "iterations": 10000000,
+      "engine": "prior",
+      "repetitions": 9,
+      "cpu_us": 0.0423118,
+      "cpu_samples_us": [
+        0.0426962,
+        0.0423436,
+        0.0423348,
+        0.0423118,
+        0.0422984,
+        0.0423083,
+        0.042606,
+        0.0423012,
+        0.0422255
+      ],
+      "peak_rss_mib": 33.34375,
+      "peak_rss_samples_mib": [
+        33.34375,
+        33.34375,
+        33.34375,
+        33.34375,
+        33.34375,
+        33.34375,
+        33.375,
+        33.34375,
+        33.34375
+      ]
+    },
+    "node": {
+      "fixture": "small_record",
+      "operation": "stringify",
+      "iterations": 10000000,
+      "engine": "node",
+      "repetitions": 9,
+      "cpu_us": 0.1077714,
+      "cpu_samples_us": [
+        0.1088084,
+        0.1073607,
+        0.1077826,
+        0.1076391,
+        0.1077129,
+        0.1079218,
+        0.1077417,
+        0.1077768,
+        0.1077714
+      ],
+      "peak_rss_mib": 59.765625,
+      "peak_rss_samples_mib": [
+        59.765625,
+        59.765625,
+        59.78125,
+        59.765625,
+        59.765625,
+        59.6875,
+        59.734375,
+        59.765625,
+        59.8125
+      ]
+    },
+    "bun": {
+      "fixture": "small_record",
+      "operation": "stringify",
+      "iterations": 10000000,
+      "engine": "bun",
+      "repetitions": 9,
+      "cpu_us": 0.1184765,
+      "cpu_samples_us": [
+        0.1184765,
+        0.1182766,
+        0.118599,
+        0.1190026,
+        0.1185866,
+        0.1189722,
+        0.1178235,
+        0.1180534,
+        0.1181494
+      ],
+      "peak_rss_mib": 394.578125,
+      "peak_rss_samples_mib": [
+        394.546875,
+        394.609375,
+        394.578125,
+        394.578125,
+        394.578125,
+        394.578125,
+        394.578125,
+        394.53125,
+        394.53125
+      ]
+    }
+  },
+  "comparisons": [
+    {
+      "engine": "perry",
+      "reference": "baseline",
+      "delta_percent": 0.7304068019430066,
+      "separated": false
+    },
+    {
+      "engine": "prior",
+      "reference": "baseline",
+      "delta_percent": 0.4055442574790735,
+      "separated": false
+    },
+    {
+      "engine": "perry",
+      "reference": "prior",
+      "delta_percent": 0.323550404378925,
+      "separated": false
+    }
+  ],
+  "input_hashes": {
+    "window.json": "73a103ea777663af00921b753e8b5e0e965ead03d954d39bfbeef13a8aa0cd7e",
+    "timing.jsonl": "fd1b9c29ffda8bb48c95362eb24105599cf6b3abf2cae78a07b4c5ba9e25af5d",
+    "verify.jsonl": "54b0b1a3b60eb36e7994bc1cf84f94a31ebe1eb24e5dd0311455b9467d1d4822",
+    "summary.json": "c9f6950e57d7721da8591ed3f241d4a7e8cd86d90517d1efed6f051e58b0c015"
+  }
+}

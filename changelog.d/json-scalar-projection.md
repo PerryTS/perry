@@ -32,4 +32,7 @@ validation evidence and the optimized dispatch-order investigation.
 
 R4 tests a branch-likelihood hint on the optional JSON brand edge so LLVM can
 preserve the ordinary-array hot path when folding type tests. Runtime semantics,
-guards and GC policy are unchanged; validation and measurements are pending.
+guards and GC policy are unchanged. It removes the 20 MiB repeated-read regression
+but increases mixed-field access cost, so it is also rejected for landing.
+`benchmarks/json_performance/SCALAR_BRANCH_HINT.md` records all targeted rows,
+the unresolved tiny-stringify crossover, and the next guarded-loop investigation.

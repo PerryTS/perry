@@ -1,0 +1,11 @@
+{
+  "source_commit": "479cea228477675bcaf2213da6b93d569bd523b4",
+  "source_clean": true,
+  "command": "cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static",
+  "artifacts": {
+    "perry": "0143a8ee9ff2764fc7e03ce4220319e3c251ab4c47d18d036b1bac09db3425c0",
+    "libperry_runtime.a": "9d01a22990349d61873a7f5428f30defb34998ed9171b8e12572d16f789f2969",
+    "libperry_stdlib.a": "007808af693b44e6d7bb26b24258e9263fd1c34fee09d7c59d194ac08926b64f"
+  },
+  "frozen_at_utc": "2026-09-10T12:49:36.359563+00:00"
+}

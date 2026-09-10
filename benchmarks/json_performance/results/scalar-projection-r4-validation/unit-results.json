@@ -1,0 +1,22 @@
+{
+  "binary": "target/release/build/perry-codegen/626fdd784963821a/out/perry_codegen-626fdd784963821a",
+  "sha256": "d13c85d9d472e04b673e1d6335f3526a449a9b39acbcf4c57f578d71ff210aee",
+  "json_unit_exit_code": 0,
+  "results": [
+    {
+      "selector": "index_get",
+      "exit_code": 0,
+      "log": "index_get-unit.log"
+    },
+    {
+      "selector": "expr::property_get::",
+      "exit_code": 0,
+      "log": "expr__property_get__-unit.log"
+    },
+    {
+      "selector": "gc_call_effects",
+      "exit_code": 0,
+      "log": "gc_call_effects-unit.log"
+    }
+  ]
+}

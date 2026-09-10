@@ -1,0 +1,36 @@
+{
+  "owner": "json-perf-44590-1789045057",
+  "load_before": [
+    1.8984375,
+    1.8857421875,
+    1.74267578125
+  ],
+  "started_utc": "2026-09-10T12:57:37Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    "run_regression_focus.py",
+    "--worker",
+    ".work/scalar-projection-r3/worker",
+    "--baseline-worker",
+    ".work/main-53df-fresh/worker",
+    "--prior-worker",
+    ".work/scalar-projection-r4/main-codegen-r3-runtime-worker",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--bun",
+    "/Users/perry/.bun/bin/bun",
+    "--case",
+    "small_record:stringify:10000000:5000:9",
+    "--results-dir",
+    "results/quiet-scalar-projection-r4-tiny-crossover"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.8251953125,
+    1.865234375,
+    1.7412109375
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-10T12:58:11Z"
+}
