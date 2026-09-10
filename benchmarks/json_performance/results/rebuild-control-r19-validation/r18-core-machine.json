@@ -1,0 +1,229 @@
+{
+  "note": "Exploratory source-unchanged core function inspection of R18 versus original main. Counts/frames alone do not prove code equivalence or the cause of a slowdown. Full disassemblies preserved.",
+  "records": [
+    {
+      "arm": "main",
+      "symbol": "__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser11parse_array",
+      "file": "r18-main-0.s",
+      "binary_sha256": "caac66192bde3ff1c685350f61071b75383d042661a52b8898d89e8c48a7b944",
+      "instructions": 88,
+      "prologue_stack_bytes": 64,
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser11parse_array",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/tape-batch-r18/main-worker"
+      ]
+    },
+    {
+      "arm": "main",
+      "symbol": "__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser12parse_number",
+      "file": "r18-main-1.s",
+      "binary_sha256": "caac66192bde3ff1c685350f61071b75383d042661a52b8898d89e8c48a7b944",
+      "instructions": 233,
+      "prologue_stack_bytes": 48,
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser12parse_number",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/tape-batch-r18/main-worker"
+      ]
+    },
+    {
+      "arm": "main",
+      "symbol": "__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value",
+      "file": "r18-main-2.s",
+      "binary_sha256": "caac66192bde3ff1c685350f61071b75383d042661a52b8898d89e8c48a7b944",
+      "instructions": 239,
+      "prologue_stack_bytes": 96,
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/tape-batch-r18/main-worker"
+      ]
+    },
+    {
+      "arm": "main",
+      "symbol": "__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser20parse_object_untyped",
+      "file": "r18-main-3.s",
+      "binary_sha256": "caac66192bde3ff1c685350f61071b75383d042661a52b8898d89e8c48a7b944",
+      "instructions": 1405,
+      "prologue_stack_bytes": 832,
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser20parse_object_untyped",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/tape-batch-r18/main-worker"
+      ]
+    },
+    {
+      "arm": "main",
+      "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json9parse_api10parse_slow",
+      "file": "r18-main-4.s",
+      "binary_sha256": "caac66192bde3ff1c685350f61071b75383d042661a52b8898d89e8c48a7b944",
+      "instructions": 1406,
+      "prologue_stack_bytes": 512,
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json9parse_api10parse_slow",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/tape-batch-r18/main-worker"
+      ]
+    },
+    {
+      "arm": "main",
+      "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6object17json_construction36object_from_json_fields_preinstalled",
+      "file": "r18-main-5.s",
+      "binary_sha256": "caac66192bde3ff1c685350f61071b75383d042661a52b8898d89e8c48a7b944",
+      "instructions": 435,
+      "prologue_stack_bytes": 160,
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6object17json_construction36object_from_json_fields_preinstalled",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/tape-batch-r18/main-worker"
+      ]
+    },
+    {
+      "arm": "main",
+      "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction22string_from_json_bytes",
+      "file": "r18-main-6.s",
+      "binary_sha256": "caac66192bde3ff1c685350f61071b75383d042661a52b8898d89e8c48a7b944",
+      "instructions": 493,
+      "prologue_stack_bytes": 96,
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction22string_from_json_bytes",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/tape-batch-r18/main-worker"
+      ]
+    },
+    {
+      "arm": "main",
+      "symbol": "_js_json_parse",
+      "file": "r18-main-7.s",
+      "binary_sha256": "caac66192bde3ff1c685350f61071b75383d042661a52b8898d89e8c48a7b944",
+      "instructions": 28,
+      "prologue_stack_bytes": 16,
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=_js_json_parse",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/tape-batch-r18/main-worker"
+      ]
+    },
+    {
+      "arm": "candidate",
+      "symbol": "__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser11parse_array",
+      "file": "r18-candidate-0.s",
+      "binary_sha256": "9545d17094f66194f83b621f5dc243633724ac4b0042f055d2fdac85060fca9c",
+      "instructions": 88,
+      "prologue_stack_bytes": 64,
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser11parse_array",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/tape-batch-r18/candidate-worker"
+      ]
+    },
+    {
+      "arm": "candidate",
+      "symbol": "__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser12parse_number",
+      "file": "r18-candidate-1.s",
+      "binary_sha256": "9545d17094f66194f83b621f5dc243633724ac4b0042f055d2fdac85060fca9c",
+      "instructions": 233,
+      "prologue_stack_bytes": 48,
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser12parse_number",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/tape-batch-r18/candidate-worker"
+      ]
+    },
+    {
+      "arm": "candidate",
+      "symbol": "__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value",
+      "file": "r18-candidate-2.s",
+      "binary_sha256": "9545d17094f66194f83b621f5dc243633724ac4b0042f055d2fdac85060fca9c",
+      "instructions": 239,
+      "prologue_stack_bytes": 96,
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/tape-batch-r18/candidate-worker"
+      ]
+    },
+    {
+      "arm": "candidate",
+      "symbol": "__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser20parse_object_untyped",
+      "file": "r18-candidate-3.s",
+      "binary_sha256": "9545d17094f66194f83b621f5dc243633724ac4b0042f055d2fdac85060fca9c",
+      "instructions": 1405,
+      "prologue_stack_bytes": 832,
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser20parse_object_untyped",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/tape-batch-r18/candidate-worker"
+      ]
+    },
+    {
+      "arm": "candidate",
+      "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json9parse_api10parse_slow",
+      "file": "r18-candidate-4.s",
+      "binary_sha256": "9545d17094f66194f83b621f5dc243633724ac4b0042f055d2fdac85060fca9c",
+      "instructions": 1406,
+      "prologue_stack_bytes": 512,
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json9parse_api10parse_slow",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/tape-batch-r18/candidate-worker"
+      ]
+    },
+    {
+      "arm": "candidate",
+      "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6object17json_construction36object_from_json_fields_preinstalled",
+      "file": "r18-candidate-5.s",
+      "binary_sha256": "9545d17094f66194f83b621f5dc243633724ac4b0042f055d2fdac85060fca9c",
+      "instructions": 435,
+      "prologue_stack_bytes": 160,
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6object17json_construction36object_from_json_fields_preinstalled",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/tape-batch-r18/candidate-worker"
+      ]
+    },
+    {
+      "arm": "candidate",
+      "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction22string_from_json_bytes",
+      "file": "r18-candidate-6.s",
+      "binary_sha256": "9545d17094f66194f83b621f5dc243633724ac4b0042f055d2fdac85060fca9c",
+      "instructions": 493,
+      "prologue_stack_bytes": 96,
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction22string_from_json_bytes",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/tape-batch-r18/candidate-worker"
+      ]
+    },
+    {
+      "arm": "candidate",
+      "symbol": "_js_json_parse",
+      "file": "r18-candidate-7.s",
+      "binary_sha256": "9545d17094f66194f83b621f5dc243633724ac4b0042f055d2fdac85060fca9c",
+      "instructions": 28,
+      "prologue_stack_bytes": 16,
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=_js_json_parse",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/tape-batch-r18/candidate-worker"
+      ]
+    }
+  ]
+}

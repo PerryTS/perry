@@ -1,0 +1,8 @@
+{
+  "libperry_runtime.a": [
+    "PERRY_RUNTIME_BUILD_STAMP_V1|version=0.5.1531|build=git:1a9c0de6cb790d2467b0ca22a660870025179b37"
+  ],
+  "libperry_stdlib.a": [
+    "PERRY_RUNTIME_BUILD_STAMP_V1|version=0.5.1531|build=git:1a9c0de6cb790d2467b0ca22a660870025179b37"
+  ]
+}

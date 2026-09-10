@@ -1,0 +1,58 @@
+[
+  {
+    "symbol": "__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser11parse_array",
+    "same_after_instruction_address_and_resolved_branch_target_address_removal": false,
+    "diff": "r18-resolved-branches-0.diff",
+    "diff_lines": 9,
+    "note": "Only addresses immediately followed by an objdump-resolved <symbol+offset> are removed. Registers, stack offsets, immediate values and unresolved/data addresses are retained; this is not full relocation normalization."
+  },
+  {
+    "symbol": "__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser12parse_number",
+    "same_after_instruction_address_and_resolved_branch_target_address_removal": false,
+    "diff": "r18-resolved-branches-1.diff",
+    "diff_lines": 33,
+    "note": "Only addresses immediately followed by an objdump-resolved <symbol+offset> are removed. Registers, stack offsets, immediate values and unresolved/data addresses are retained; this is not full relocation normalization."
+  },
+  {
+    "symbol": "__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value",
+    "same_after_instruction_address_and_resolved_branch_target_address_removal": false,
+    "diff": "r18-resolved-branches-2.diff",
+    "diff_lines": 30,
+    "note": "Only addresses immediately followed by an objdump-resolved <symbol+offset> are removed. Registers, stack offsets, immediate values and unresolved/data addresses are retained; this is not full relocation normalization."
+  },
+  {
+    "symbol": "__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser20parse_object_untyped",
+    "same_after_instruction_address_and_resolved_branch_target_address_removal": false,
+    "diff": "r18-resolved-branches-3.diff",
+    "diff_lines": 208,
+    "note": "Only addresses immediately followed by an objdump-resolved <symbol+offset> are removed. Registers, stack offsets, immediate values and unresolved/data addresses are retained; this is not full relocation normalization."
+  },
+  {
+    "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json9parse_api10parse_slow",
+    "same_after_instruction_address_and_resolved_branch_target_address_removal": false,
+    "diff": "r18-resolved-branches-4.diff",
+    "diff_lines": 135,
+    "note": "Only addresses immediately followed by an objdump-resolved <symbol+offset> are removed. Registers, stack offsets, immediate values and unresolved/data addresses are retained; this is not full relocation normalization."
+  },
+  {
+    "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6object17json_construction36object_from_json_fields_preinstalled",
+    "same_after_instruction_address_and_resolved_branch_target_address_removal": false,
+    "diff": "r18-resolved-branches-5.diff",
+    "diff_lines": 53,
+    "note": "Only addresses immediately followed by an objdump-resolved <symbol+offset> are removed. Registers, stack offsets, immediate values and unresolved/data addresses are retained; this is not full relocation normalization."
+  },
+  {
+    "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction22string_from_json_bytes",
+    "same_after_instruction_address_and_resolved_branch_target_address_removal": false,
+    "diff": "r18-resolved-branches-6.diff",
+    "diff_lines": 32,
+    "note": "Only addresses immediately followed by an objdump-resolved <symbol+offset> are removed. Registers, stack offsets, immediate values and unresolved/data addresses are retained; this is not full relocation normalization."
+  },
+  {
+    "symbol": "_js_json_parse",
+    "same_after_instruction_address_and_resolved_branch_target_address_removal": false,
+    "diff": "r18-resolved-branches-7.diff",
+    "diff_lines": 11,
+    "note": "Only addresses immediately followed by an objdump-resolved <symbol+offset> are removed. Registers, stack offsets, immediate values and unresolved/data addresses are retained; this is not full relocation normalization."
+  }
+]

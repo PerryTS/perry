@@ -1,0 +1,47 @@
+{
+  "base_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+  "source_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+  "previous_goal_turn": "progress: R18 implementation, correctness/GC validation and measured rejection changed the next action; evidence pushed at 44426f53184029e55ece042e6b077f3e66b0eabf.",
+  "purpose": "Independently rebuild the exact same main source/build identity/package set in the same own worktree and compare against the original frozen main reference. No source modifications.",
+  "original_build": {
+    "source_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+    "command": [
+      "cargo",
+      "build",
+      "--release",
+      "-p",
+      "perry",
+      "-p",
+      "perry-runtime-static",
+      "-p",
+      "perry-stdlib-static"
+    ],
+    "started_utc": "2026-09-10T15:48:26.572992+00:00",
+    "elapsed_seconds": 338.8867919445038,
+    "files": {
+      "perry": {
+        "sha256": "ade63eddfdeca03926039d10e3310f9255d52c5b2721ccd2b0882f042a689156",
+        "bytes": 117699664,
+        "mtime": 1789055644.6386313
+      },
+      "libperry_runtime.a": {
+        "sha256": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458",
+        "bytes": 36882304,
+        "mtime": 1789055567.242991
+      },
+      "libperry_stdlib.a": {
+        "sha256": "61fac03f0405a48b8d390958e3002246061db6e009fcd078fe61a98d1a1068b0",
+        "bytes": 86372568,
+        "mtime": 1789055628.740747
+      }
+    }
+  },
+  "freshness_refresh_mtime_only": {
+    "crates/perry-runtime-static/src/lib.rs": "0f320c88d8d2679b4af3bc1fbe882752744e210212076d3ebcd60b7c6fed10de",
+    "crates/perry-stdlib-static/src/lib.rs": "f66830b9af1aafaa3270e09d2ba00da466fe4ce7d715f7590bba9db99b0103a0",
+    "crates/perry/src/main.rs": "cc3d6d228a6c9e031ba8f0a26d152c7690f622ee914c8aa09d47eeb2199db870"
+  },
+  "source_paths_unchanged": true,
+  "target_directory": "/Users/amlug/projects/perry/json-merged-pr10022/target",
+  "no_active_prior_jobs": true
+}
