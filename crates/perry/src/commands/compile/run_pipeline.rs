@@ -7153,34 +7153,20 @@ pub fn run_with_parse_cache(
         });
     }
 
-    // When geisterhand is enabled, prefer the geisterhand-enabled runtime
-    // (has the registry, dispatch queue, and pump functions). Otherwise
-    // prefer the auto-mode rebuild (which may be panic=abort) over the
-    // prebuilt one. Auto-mode never enables panic=abort when geisterhand
-    // is on, so the geisterhand path always uses the prebuilt variant.
-    let runtime_lib = if ctx.needs_geisterhand {
-        // The geisterhand-enabled runtime/UI/registry libs live in
-        // target/geisterhand and are auto-built on first use. On a cold
-        // build they don't exist yet at this point — the link step builds
-        // any missing ones, but that runs *after* runtime_lib is resolved.
-        // Build them now, before selecting the runtime, so we don't fall
-        // through to find_runtime_library() and pick the *host* runtime
-        // (wrong target + wrong feature set). That fallback is what makes a
-        // cold `--target ios --enable-geisterhand` fail with "building for
-        // 'iOS-simulator', but linking in object file built for 'macOS'"
-        // (#1311 Ask #2). This mirrors the missing-libs check in the link
-        // step and is idempotent — that check then finds them present.
-        let gh_missing = find_geisterhand_runtime(target.as_deref()).is_none()
-            || find_geisterhand_library(target.as_deref()).is_none()
-            || (ctx.needs_stdlib && find_geisterhand_stdlib(target.as_deref()).is_none())
-            || (ctx.needs_ui && find_geisterhand_ui(target.as_deref()).is_none());
-        if gh_missing {
-            build_geisterhand_libs(target.as_deref(), format, verbose)?;
-        }
-        match find_geisterhand_runtime(target.as_deref()) {
-            Some(gh_rt) => gh_rt,
-            None => find_runtime_library(target.as_deref())?,
-        }
+    // Refresh the entire Geisterhand Cargo graph even when archives exist.
+    // Cached files may contain different runtime builds (#10019). Keep Cargo's
+    // exact artifact paths together through the link instead of searching again.
+    let geisterhand_libs = if ctx.needs_geisterhand {
+        Some(geisterhand::build_geisterhand_libs(
+            target.as_deref(),
+            format,
+            verbose,
+        )?)
+    } else {
+        None
+    };
+    let runtime_lib = if let Some(ref libs) = geisterhand_libs {
+        libs.runtime.clone()
     } else if let Some(auto_rt) = optimized_libs.runtime.clone() {
         auto_rt
     } else {
@@ -7192,21 +7178,10 @@ pub fn run_with_parse_cache(
     // Read its embedded build stamp now so the error names the stale archive
     // and both builds before invoking the platform linker.
     ensure_runtime_library_compatible(&runtime_lib)?;
-    // #1383 — under --enable-geisterhand, prefer the geisterhand-built stdlib
-    // over the auto-optimized one. `build_geisterhand_libs` (already run above
-    // when selecting `runtime_lib`) compiles perry-stdlib into target/geisterhand
-    // with its full default feature set (incl. `async-runtime` → the
-    // `perry_ffi_promise_*` shims) against the geisterhand-featured, hash-
-    // consistent perry-runtime. The auto-optimized stdlib (`stdlib_lib_resolved`)
-    // is rebuilt with --no-default-features and a feature set computed from the
-    // app's *TS* imports, so it omits async-runtime when the async surface comes
-    // from a native binding (@perryts/storekit/google-auth/play-billing) rather
-    // than TS — producing the `Undefined symbols: _perry_ffi_promise_new` link
-    // failure this issue describes. Linking the geisterhand stdlib also keeps the
-    // bundled perry-runtime hash-consistent with `gh_runtime`. Fall back to the
-    // auto-optimized stdlib when geisterhand is off or its stdlib isn't present.
-    let stdlib_lib = if ctx.needs_geisterhand {
-        find_geisterhand_stdlib(target.as_deref()).or_else(|| stdlib_lib_resolved.clone())
+    // Geisterhand needs the full stdlib built against the same runtime,
+    // including native-FFI async exports that TS feature detection may miss.
+    let stdlib_lib = if let Some(ref libs) = geisterhand_libs {
+        Some(libs.stdlib.clone())
     } else {
         stdlib_lib_resolved.clone()
     };
@@ -7282,6 +7257,7 @@ pub fn run_with_parse_cache(
         &compiled_features,
         &runtime_lib,
         &stdlib_lib,
+        geisterhand_libs.as_ref(),
         &optimized_libs.well_known_libs,
         optimized_libs.prefer_well_known_before_stdlib,
         &wasm_host_lib,

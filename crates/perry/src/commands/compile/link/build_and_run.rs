@@ -23,6 +23,7 @@ pub(crate) fn build_and_run_link(
     compiled_features: &[String],
     runtime_lib: &Path,
     stdlib_lib: &Option<PathBuf>,
+    geisterhand_libs: Option<&super::super::geisterhand::GeisterhandLibs>,
     // #466 Phase 4 step 2: well-known native binding archives. Added
     // to the link line right after `stdlib_lib`. The matching
     // perry-stdlib feature was already stripped during the auto-
@@ -955,8 +956,8 @@ pub(crate) fn build_and_run_link(
     if ctx.needs_ui || force_ui {
         // When geisterhand is enabled, prefer the geisterhand-enabled UI lib
         // (it contains widget registration calls that the normal lib doesn't have)
-        let ui_lib_option = if ctx.needs_geisterhand {
-            find_geisterhand_ui(target).or_else(|| find_ui_library(target))
+        let ui_lib_option = if let Some(libs) = geisterhand_libs {
+            Some(libs.ui.clone())
         } else {
             find_ui_library(target)
         };
@@ -1214,57 +1215,38 @@ pub(crate) fn build_and_run_link(
         }
     }
 
-    // Link geisterhand libraries if enabled
-    if ctx.needs_geisterhand {
-        // Auto-build geisterhand libraries if any are missing
-        let gh_missing = find_geisterhand_library(target).is_none()
-            || find_geisterhand_runtime(target).is_none()
-            || (ctx.needs_stdlib && find_geisterhand_stdlib(target).is_none())
-            || (ctx.needs_ui && find_geisterhand_ui(target).is_none());
-        if gh_missing {
-            build_geisterhand_libs(target, format, verbose)?;
+    // Reuse the prepared set; rediscovery can select a different runtime.
+    if let Some(libs) = geisterhand_libs {
+        cmd.arg(&libs.server);
+        cmd.arg(runtime_lib);
+        if is_linux || is_android {
+            cmd.arg("-Wl,--allow-multiple-definition");
         }
-
-        if let Some(gh_lib) = find_geisterhand_library(target) {
-            cmd.arg(&gh_lib);
-            // Link geisterhand-enabled runtime (has the registry + pump functions)
-            if let Some(gh_runtime) = find_geisterhand_runtime(target) {
-                cmd.arg(&gh_runtime);
-                // ELF linkers need --allow-multiple-definition; macOS Mach-O uses first-wins natively
-                if is_linux || is_android {
-                    cmd.arg("-Wl,--allow-multiple-definition");
-                }
-            }
-            // On Windows, re-link the stdlib after geisterhand to resolve
-            // forward references to geisterhand registry functions.
-            // lld-link scans archives left-to-right once, so the stdlib
-            // must appear after the geisterhand lib that references it.
-            // On Windows, force-include geisterhand registry symbols from stdlib.
-            // lld-link scans archives left-to-right once, so the stdlib's
-            // geisterhand objects are skipped on first scan (no references yet).
-            // /INCLUDE forces the linker to pull in the specific symbols.
-            if is_windows {
-                cmd.arg("/INCLUDE:perry_geisterhand_queue_action");
-                cmd.arg("/INCLUDE:perry_geisterhand_queue_action1");
-                cmd.arg("/INCLUDE:perry_geisterhand_queue_state_set");
-                cmd.arg("/INCLUDE:perry_geisterhand_request_screenshot");
-                cmd.arg("/INCLUDE:perry_geisterhand_register");
-                cmd.arg("/INCLUDE:perry_geisterhand_pump");
-                cmd.arg("/INCLUDE:perry_geisterhand_start");
-                cmd.arg("/INCLUDE:perry_geisterhand_free_string");
-                cmd.arg("/INCLUDE:perry_geisterhand_get_closure");
-                cmd.arg("/INCLUDE:perry_geisterhand_get_registry_json");
-                // Allow duplicate symbols from re-linked stdlib objects
-                cmd.arg("/FORCE:MULTIPLE");
-            }
-            match format {
-                OutputFormat::Text => println!("Linking geisterhand (in-process fuzzer)"),
-                OutputFormat::Json => {}
-            }
-        } else {
-            return Err(anyhow!(
-                "Failed to build geisterhand libraries. Check that Perry source crates are available."
-            ));
+        // On Windows, re-link the stdlib after geisterhand to resolve
+        // forward references to geisterhand registry functions.
+        // lld-link scans archives left-to-right once, so the stdlib
+        // must appear after the geisterhand lib that references it.
+        // On Windows, force-include geisterhand registry symbols from stdlib.
+        // lld-link scans archives left-to-right once, so the stdlib's
+        // geisterhand objects are skipped on first scan (no references yet).
+        // /INCLUDE forces the linker to pull in the specific symbols.
+        if is_windows {
+            cmd.arg("/INCLUDE:perry_geisterhand_queue_action");
+            cmd.arg("/INCLUDE:perry_geisterhand_queue_action1");
+            cmd.arg("/INCLUDE:perry_geisterhand_queue_state_set");
+            cmd.arg("/INCLUDE:perry_geisterhand_request_screenshot");
+            cmd.arg("/INCLUDE:perry_geisterhand_register");
+            cmd.arg("/INCLUDE:perry_geisterhand_pump");
+            cmd.arg("/INCLUDE:perry_geisterhand_start");
+            cmd.arg("/INCLUDE:perry_geisterhand_free_string");
+            cmd.arg("/INCLUDE:perry_geisterhand_get_closure");
+            cmd.arg("/INCLUDE:perry_geisterhand_get_registry_json");
+            // Allow duplicate symbols from re-linked stdlib objects
+            cmd.arg("/FORCE:MULTIPLE");
+        }
+        match format {
+            OutputFormat::Text => println!("Linking geisterhand (in-process fuzzer)"),
+            OutputFormat::Json => {}
         }
     }
 
