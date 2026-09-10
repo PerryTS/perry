@@ -1605,6 +1605,19 @@ pub unsafe extern "C" fn js_json_stringify_full(
         }
     }
 
+    stringify_full_fallback(value, replacer_f64, spacer_f64, no_replacer && no_spacer)
+}
+
+// Keep the general serializer's frame and saved registers off completed bounded
+// outputs. This boundary does not change callback order or add a GC boundary.
+#[inline(never)]
+unsafe fn stringify_full_fallback(
+    value: f64,
+    replacer_f64: f64,
+    spacer_f64: f64,
+    plain: bool,
+) -> i64 {
+    let value_bits = value.to_bits();
     // JSON.stringify(undefined) returns undefined per spec
     if value_bits == TAG_UNDEFINED {
         return TAG_UNDEFINED as i64;
@@ -1626,7 +1639,7 @@ pub unsafe extern "C" fn js_json_stringify_full(
     // output `JSON.stringify(value)` produces; replacer/indent
     // require a real tree walk). The bench's 2-arg form (and most
     // real usage) hits this path.
-    if no_replacer && no_spacer {
+    if plain {
         if let Some(ptr) = try_stringify_lazy_array(value) {
             return JSValue::string_ptr(ptr).bits() as i64;
         }

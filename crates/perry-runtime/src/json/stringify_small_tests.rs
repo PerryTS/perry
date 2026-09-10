@@ -57,3 +57,66 @@ fn full_entry_returns_boxed_inline_output_for_short_results() {
         }
     }
 }
+
+#[test]
+fn full_entry_preserves_replacer_and_spacing_after_bounded_misses() {
+    unsafe fn parse(source: &str) -> f64 {
+        // Model literal empty arrays. The parsed zero-capacity representation
+        // has separate pre-existing pretty-output and replacer admission gaps.
+        if source == "[]" {
+            return f64::from_bits(JSValue::pointer(crate::js_array_alloc(0).cast()).bits());
+        }
+        let text = crate::string::js_string_from_bytes(source.as_ptr(), source.len() as u32);
+        f64::from_bits(crate::json::test_json_parse_direct(text).bits())
+    }
+    for (source, replacer, spacer, expected) in [
+        (r#"{"a":1,"b":2}"#, "null", "null", r#"{"a":1,"b":2}"#),
+        (r#"{"a":1,"b":2}"#, "null", "false", r#"{"a":1,"b":2}"#),
+        (r#"{"a":1,"b":2}"#, "null", "0", r#"{"a":1,"b":2}"#),
+        (
+            r#"{"a":1,"b":2}"#,
+            "null",
+            "2",
+            "{\n  \"a\": 1,\n  \"b\": 2\n}",
+        ),
+        (
+            r#"{"a":1,"b":2}"#,
+            r#"["b","a","b"]"#,
+            "null",
+            r#"{"b":2,"a":1}"#,
+        ),
+        (r#"{"a":1,"b":2}"#, "[]", "null", "{}"),
+        (r#"[{"a":1,"b":2},3]"#, r#"["b"]"#, "null", r#"[{"b":2},3]"#),
+        (
+            r#"{"a":[1,2]}"#,
+            "null",
+            r#""..""#,
+            "{\n..\"a\": [\n....1,\n....2\n..]\n}",
+        ),
+        ("[1,2]", "null", "null", "[1,2]"),
+        ("[]", "null", "2", "[]"),
+        ("true", "null", "2", "true"),
+        (r#""longer string""#, "null", "null", r#""longer string""#),
+    ] {
+        unsafe {
+            let roots = crate::gc::RuntimeHandleScope::new();
+            let value = roots.root_nanbox_f64(parse(source));
+            let replacer = roots.root_nanbox_f64(parse(replacer));
+            let spacer = roots.root_nanbox_f64(parse(spacer));
+            let result = crate::json::js_json_stringify_full(
+                value.get_nanbox_f64(),
+                replacer.get_nanbox_f64(),
+                spacer.get_nanbox_f64(),
+            );
+            let mut scratch = [0; SHORT_STRING_MAX_LEN];
+            let (bytes, length) =
+                crate::string::str_bytes_from_jsvalue(f64::from_bits(result as u64), &mut scratch)
+                    .expect("full entry must return a string");
+            assert_eq!(
+                std::slice::from_raw_parts(bytes, length as usize),
+                expected.as_bytes(),
+                "{source}"
+            );
+        }
+    }
+}

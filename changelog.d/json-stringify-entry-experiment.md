@@ -1,0 +1,1 @@
+Separate the general JSON.stringify fallback into a non-inlined helper so completed bounded outputs avoid the general serializer frame. Preserve the existing public ABI, argument admission checks, callback order, and fallback body. This unlanded R7 experiment is based on R5; performance and full validation are pending. GC policy and object representation are unchanged.
