@@ -1,0 +1,22 @@
+{
+  "worker_sha256": "57fa4602c077434f6d9bc47982958a2212a212f85138a1fe959199c1fa03ddb5",
+  "command": [
+    "benchmarks/json_performance/.work/lazy-canonical-r3/worker",
+    "benchmarks/json_performance/.work/fixtures/records_array_1m.json",
+    "roundtrip",
+    "1000000",
+    "8"
+  ],
+  "sample_command": [
+    "/usr/bin/sample",
+    "81704",
+    "2",
+    "1",
+    "-file",
+    "benchmarks/json_performance/.work/lazy-canonical-r3/location-profile/sample.txt"
+  ],
+  "worker_intentionally_terminated": true,
+  "worker_returncode": -15,
+  "diagnostic_only": true,
+  "host": "Darwin MacBookPro.fritz.box 25.5.0 Darwin Kernel Version 25.5.0: Mon Apr 27 20:38:56 PDT 2026; root:xnu-12377.121.6~2/RELEASE_ARM64_T6000 arm64"
+}
