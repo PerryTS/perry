@@ -1,0 +1,134 @@
+[
+  {
+    "worker": "worker",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-tail-r9/frozen-main/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-tail-r9/harness/worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-tail-r9/main-worker.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-tail-r9/main-worker.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-tail-r9/frozen-main/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-tail-r9/main-worker"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/inert-spacer-tail-r9/harness/worker.ts": "f3c42ec9f04fdb9ba84dc3cf50dc59f18685540033807f3db3a7f75c08a85d39",
+      "benchmarks/json_performance/.work/inert-spacer-tail-r9/main-worker.o": "e912cd2cab594cb0cf4cb77ec42b3ba9ff60542233c4598573ac48f9282b2b4d",
+      "benchmarks/json_performance/.work/inert-spacer-tail-r9/main-worker": "0c61495f76249b84d0976c14243e0d8d68368510be7dcfdb51dd0e3ed2b208ee",
+      "benchmarks/json_performance/.work/inert-spacer-tail-r9/frozen-main/perry": "ade63eddfdeca03926039d10e3310f9255d52c5b2721ccd2b0882f042a689156",
+      "benchmarks/json_performance/.work/inert-spacer-tail-r9/frozen-main/libperry_runtime.a": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458",
+      "benchmarks/json_performance/.work/inert-spacer-tail-r9/frozen-main/libperry_stdlib.a": "61fac03f0405a48b8d390958e3002246061db6e009fcd078fe61a98d1a1068b0"
+    }
+  },
+  {
+    "worker": "access-worker",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-tail-r9/frozen-main/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-tail-r9/harness/access-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-tail-r9/main-access-worker.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-tail-r9/main-access-worker.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-tail-r9/frozen-main/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-tail-r9/main-access-worker"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/inert-spacer-tail-r9/harness/access-worker.ts": "dba0240ef6441a07657e664354982a04045c036e53f65c1d06df62d55c73be67",
+      "benchmarks/json_performance/.work/inert-spacer-tail-r9/main-access-worker.o": "9d634431ee5e085f0729109a0deacbbf930fe1a0436b23e4e370953ea80dbe01",
+      "benchmarks/json_performance/.work/inert-spacer-tail-r9/main-access-worker": "2248a9ec094beac8ac180ac24ac8bf62f11f207c84a794b6590d2d663bbbb3bd",
+      "benchmarks/json_performance/.work/inert-spacer-tail-r9/frozen-main/perry": "ade63eddfdeca03926039d10e3310f9255d52c5b2721ccd2b0882f042a689156",
+      "benchmarks/json_performance/.work/inert-spacer-tail-r9/frozen-main/libperry_runtime.a": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458",
+      "benchmarks/json_performance/.work/inert-spacer-tail-r9/frozen-main/libperry_stdlib.a": "61fac03f0405a48b8d390958e3002246061db6e009fcd078fe61a98d1a1068b0"
+    }
+  },
+  {
+    "worker": "rotating-worker",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-tail-r9/frozen-main/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-tail-r9/harness/rotating-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-tail-r9/main-rotating-worker.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-tail-r9/main-rotating-worker.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-tail-r9/frozen-main/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-tail-r9/main-rotating-worker"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/inert-spacer-tail-r9/harness/rotating-worker.ts": "7541897acb2c7c35c0f5e762f8b2f28b9783feb26a42db107c1c4eb3af644b24",
+      "benchmarks/json_performance/.work/inert-spacer-tail-r9/main-rotating-worker.o": "40b90b8b7a781dcfb103cab00834c00894c51b6c1a60be3b1c2cd842b159d5ef",
+      "benchmarks/json_performance/.work/inert-spacer-tail-r9/main-rotating-worker": "e8f0743c0647ca33bacb6164f23ac9eb4fd258baf92a9660030e4596a7556f93",
+      "benchmarks/json_performance/.work/inert-spacer-tail-r9/frozen-main/perry": "ade63eddfdeca03926039d10e3310f9255d52c5b2721ccd2b0882f042a689156",
+      "benchmarks/json_performance/.work/inert-spacer-tail-r9/frozen-main/libperry_runtime.a": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458",
+      "benchmarks/json_performance/.work/inert-spacer-tail-r9/frozen-main/libperry_stdlib.a": "61fac03f0405a48b8d390958e3002246061db6e009fcd078fe61a98d1a1068b0"
+    }
+  },
+  {
+    "worker": "options",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-tail-r9/frozen-main/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-tail-r9/options-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-tail-r9/main-options.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-tail-r9/main-options.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-tail-r9/frozen-main/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-tail-r9/main-options"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/inert-spacer-tail-r9/options-worker.ts": "d08c6a916c18197b889a0de4a3777632ad307275752b85c5abd75daf4d6ad85d",
+      "benchmarks/json_performance/.work/inert-spacer-tail-r9/main-options.o": "abc5bf6f24ceec8357c34c90828fc2bf6755e44f27d46560aa2976b4c027dc33",
+      "benchmarks/json_performance/.work/inert-spacer-tail-r9/main-options": "9bd1c987e79cc28b7610956510c6a4d3c3890f00ac27b45e65990e1ed65df6b3",
+      "benchmarks/json_performance/.work/inert-spacer-tail-r9/frozen-main/perry": "ade63eddfdeca03926039d10e3310f9255d52c5b2721ccd2b0882f042a689156",
+      "benchmarks/json_performance/.work/inert-spacer-tail-r9/frozen-main/libperry_runtime.a": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458",
+      "benchmarks/json_performance/.work/inert-spacer-tail-r9/frozen-main/libperry_stdlib.a": "61fac03f0405a48b8d390958e3002246061db6e009fcd078fe61a98d1a1068b0"
+    }
+  }
+]

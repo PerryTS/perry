@@ -1,0 +1,13 @@
+{
+  "source_commit": "b62773c0064c047d68478dfac8d9a5761a90a4cf",
+  "command": [
+    "env",
+    "SKIP_COMPILE_GATES=1",
+    "./scripts/run_lint_gates.sh"
+  ],
+  "hashes": {
+    "crates/perry-runtime/src/json/replacer.rs": "67463c931af0e6324988ee9ebba7ce0b2067138f3e80bf108eef9ff20ebc1828",
+    "crates/perry-runtime/src/json/stringify_small.rs": "5ca9cfd9e24d0c56b124b7661fd79ad16fb4c5afaf75249bbeec687459add18e",
+    "crates/perry-runtime/src/json/stringify_small_tests.rs": "5ff168603614e3b32c69bee0f86e21e6585790fee3c801a1a4afbe2a48eb86de"
+  }
+}

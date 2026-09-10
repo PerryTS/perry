@@ -1,0 +1,6 @@
+{
+  "base_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+  "main_build_provenance": "benchmarks/json_performance/.work/inert-spacer-r8/main-build-provenance.json",
+  "reference_work": "benchmarks/json_performance/.work/inert-spacer-r8",
+  "note": "Reuse exact fresh-main build from R8; copied frozen artifacts must match its recorded hashes."
+}

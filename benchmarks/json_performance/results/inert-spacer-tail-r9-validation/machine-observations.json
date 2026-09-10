@@ -1,0 +1,41 @@
+{
+  "main": {
+    "frame_bytes": 272,
+    "entry": "0000000100842e40",
+    "command": [
+      "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+      "--disassemble-symbols=_js_json_stringify_full",
+      "--no-show-raw-insn",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-tail-r9/main-options"
+    ],
+    "binary_sha256": "9bd1c987e79cc28b7610956510c6a4d3c3890f00ac27b45e65990e1ed65df6b3",
+    "bounded_calls": []
+  },
+  "candidate": {
+    "frame_bytes": 304,
+    "entry": "00000001008430c4",
+    "command": [
+      "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+      "--disassemble-symbols=_js_json_stringify_full",
+      "--no-show-raw-insn",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-tail-r9/candidate-options"
+    ],
+    "binary_sha256": "5fe78330b76ecdfc84c571448039509b04fd0b95b7afdcd0f1645df2e4f769e1",
+    "bounded_calls": [
+      "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json15stringify_small13try_primitive",
+      "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json23stringify_record_output10try_object",
+      "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json14stringify_flat10try_object",
+      "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json15stringify_small16try_inert_spacer"
+    ]
+  },
+  "helper": {
+    "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json15stringify_small16try_inert_spacer",
+    "command": [
+      "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+      "--disassemble-symbols=__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json15stringify_small16try_inert_spacer",
+      "--no-show-raw-insn",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/inert-spacer-tail-r9/candidate-options"
+    ]
+  },
+  "observation": "The original source admission block is retained, but machine code is not. Candidate full entry calls try_primitive out of line; main inlines it. The newly shared call sites changed LLVM inlining decisions; frame growth alone is not a causal performance finding."
+}

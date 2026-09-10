@@ -1,0 +1,16 @@
+{
+  "frozen_main_reused_from": "benchmarks/json_performance/.work/inert-spacer-r8/frozen-main",
+  "fresh_main_source_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+  "main_workers_recompiled": true,
+  "main_fixtures_recompiled": true,
+  "main_static_ir_recompiled": true,
+  "production_build_queued_behind_broader_json_units": true,
+  "narrow_unit_session": 61064,
+  "broader_unit_session": 58836,
+  "production_session": 5178,
+  "lint_session": 61856,
+  "lint_exit_code": 1,
+  "lint_summary": "73/74 pass; public benchmark freshness fails; compile tier and two CI-only checks skipped",
+  "broader_unit_exit_code": 0,
+  "broader_unit_summary": "ok. 292 passed; 0 failed; 0 ignored; 0 measured; 3237 filtered out; finished in 1.63s"
+}

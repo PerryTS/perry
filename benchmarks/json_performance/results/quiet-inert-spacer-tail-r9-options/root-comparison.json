@@ -1,0 +1,124 @@
+{
+  "ir_files": [
+    {
+      "mode": "native",
+      "file": "access-worker-0.ll",
+      "same": true,
+      "main_sha256": "d3d82a6c937d5c33b2211487da4b80de5037ae9141ddc3802e710c728f90a9dc",
+      "candidate_sha256": "7fa860b6b9e60b7b0dfe07dd78fc4bc31d09cd469f24e1804c7634fb56fb5c9d",
+      "normalized_sha256": "3f924ad33436064a921fed8be149fcc45472044d7e420670ea45e07216d05150",
+      "normalization": "only first ModuleID path comment removed"
+    },
+    {
+      "mode": "native",
+      "file": "callback-only-0.ll",
+      "same": true,
+      "main_sha256": "b77b61f6c9e59cb4ccacbe374e0729ab206e9ef5e46b543cc8ac9cc3d1a99269",
+      "candidate_sha256": "87c16b1f7cb89d59fdc656cd5a602147edb78dd90ded9aba1ad5216903713b78",
+      "normalized_sha256": "08e6dc893be1423e088ee02ec87ab5fc066880ed2d20f521e4e2417979a6f712",
+      "normalization": "only first ModuleID path comment removed"
+    },
+    {
+      "mode": "native",
+      "file": "options-worker-0.ll",
+      "same": true,
+      "main_sha256": "d98c2f17ceb934d7ea02956a55d8a174532b7f64b54025a9ec8b4cdd195d0706",
+      "candidate_sha256": "bf4a6270e8041a683c684012f8944079e06ce83c246fe2624aec011332e324b3",
+      "normalized_sha256": "57a7c4445c3d33a7e937a7b846b1ea5bd270e72c1439aa23e11a16dad18a5441",
+      "normalization": "only first ModuleID path comment removed"
+    },
+    {
+      "mode": "native",
+      "file": "prior-entry-0.ll",
+      "same": true,
+      "main_sha256": "e1340ec60c4f144f9a9cac4ff3990608975b954d59a0531b0e3194f3e3855353",
+      "candidate_sha256": "8773e71996253ef8b1d63c0ecf4adfa015526550e3853cceb8d97d2bfb838c3d",
+      "normalized_sha256": "8c6277e23451b8c9bb151802397ec6abe48ef13a1edd0d299d70ec4cdbea42ab",
+      "normalization": "only first ModuleID path comment removed"
+    },
+    {
+      "mode": "native",
+      "file": "test_json_inert_spacer-0.ll",
+      "same": true,
+      "main_sha256": "32f39aad9d22f61525410a2feb21259aa9074fbfd46428406911aa6a1bcfd6fa",
+      "candidate_sha256": "90323249dc85d77ccf7346185b26f314d9be68d6a8b41c939e5c3b4f0faded34",
+      "normalized_sha256": "2b05c89427d2d4f16a23a9e82f790636f73d2027ece3e23f9a57b55ae96ccfb1",
+      "normalization": "only first ModuleID path comment removed"
+    },
+    {
+      "mode": "native",
+      "file": "worker-0.ll",
+      "same": true,
+      "main_sha256": "35abeccd03fd513645c3571757ee511f4192edacdb73f2c7a5e9c2075c0e6bea",
+      "candidate_sha256": "5a8574f0f9280d87942e52174eed9ff64a1e5f5483a5f03605f5cb62ada474ce",
+      "normalized_sha256": "e938be55fe64ba52caf9b2cd4038e8222a6719b5478e90e00999a600b6386679",
+      "normalization": "only first ModuleID path comment removed"
+    },
+    {
+      "mode": "shadow",
+      "file": "access-worker-0.ll",
+      "same": true,
+      "main_sha256": "7e552f21a5432c65b204262097531bf7fdab25690d2aef711106d950f417c45a",
+      "candidate_sha256": "7e552f21a5432c65b204262097531bf7fdab25690d2aef711106d950f417c45a",
+      "normalized_sha256": "7e552f21a5432c65b204262097531bf7fdab25690d2aef711106d950f417c45a",
+      "normalization": "none"
+    },
+    {
+      "mode": "shadow",
+      "file": "callback-only-0.ll",
+      "same": true,
+      "main_sha256": "17455d3b47adbbc01bcc017f22216856746f8f4b318bae922d641ebbb1fd1155",
+      "candidate_sha256": "17455d3b47adbbc01bcc017f22216856746f8f4b318bae922d641ebbb1fd1155",
+      "normalized_sha256": "17455d3b47adbbc01bcc017f22216856746f8f4b318bae922d641ebbb1fd1155",
+      "normalization": "none"
+    },
+    {
+      "mode": "shadow",
+      "file": "options-worker-0.ll",
+      "same": true,
+      "main_sha256": "aaeeda5fb3a9687831299dc2d00da7d800d5bec416eff4929905967f4d9ded7a",
+      "candidate_sha256": "aaeeda5fb3a9687831299dc2d00da7d800d5bec416eff4929905967f4d9ded7a",
+      "normalized_sha256": "aaeeda5fb3a9687831299dc2d00da7d800d5bec416eff4929905967f4d9ded7a",
+      "normalization": "none"
+    },
+    {
+      "mode": "shadow",
+      "file": "prior-entry-0.ll",
+      "same": true,
+      "main_sha256": "f7b611a69e46d429f38fe96a1b4822d37a9fc8ce887709b9f571ede841eca468",
+      "candidate_sha256": "f7b611a69e46d429f38fe96a1b4822d37a9fc8ce887709b9f571ede841eca468",
+      "normalized_sha256": "f7b611a69e46d429f38fe96a1b4822d37a9fc8ce887709b9f571ede841eca468",
+      "normalization": "none"
+    },
+    {
+      "mode": "shadow",
+      "file": "test_json_inert_spacer-0.ll",
+      "same": true,
+      "main_sha256": "5423225171376d0e2cec55441b851cf3fd0f99f2994593ac25025ce38219e52c",
+      "candidate_sha256": "5423225171376d0e2cec55441b851cf3fd0f99f2994593ac25025ce38219e52c",
+      "normalized_sha256": "5423225171376d0e2cec55441b851cf3fd0f99f2994593ac25025ce38219e52c",
+      "normalization": "none"
+    },
+    {
+      "mode": "shadow",
+      "file": "worker-0.ll",
+      "same": true,
+      "main_sha256": "5e147499ca1e3dc005731946625ed71b94835621663778f2eac87f291bfd5f4e",
+      "candidate_sha256": "5e147499ca1e3dc005731946625ed71b94835621663778f2eac87f291bfd5f4e",
+      "normalized_sha256": "5e147499ca1e3dc005731946625ed71b94835621663778f2eac87f291bfd5f4e",
+      "normalization": "none"
+    }
+  ],
+  "checks_match": true,
+  "native_fingerprints": [
+    "options-worker-0.ll::perry_fn_options_worker_ts__run$generic::unrooted:global->js_closure_alloc_singleton",
+    "options-worker-0.ll::perry_fn_options_worker_ts__run$spec_b::unrooted:global->js_closure_alloc_singleton",
+    "prior-entry-0.ll::main::stale:alloc->js_write_barrier_root_nanbox",
+    "prior-entry-0.ll::perry_closure_prior_entry_ts__5::unrooted:global->js_array_push_f64_spec",
+    "prior-entry-0.ll::perry_fn_prior_entry_ts____obj_method_toJSON_1$generic::unrooted:global->js_array_push_f64_spec",
+    "prior-entry-0.ll::perry_fn_prior_entry_ts____obj_method_toJSON_1$spec_b::unrooted:global->js_array_push_f64_spec",
+    "test_json_inert_spacer-0.ll::perry_closure_test_json_inert_spacer_ts__4::unrooted:global->js_array_push_f64_spec",
+    "test_json_inert_spacer-0.ll::perry_fn_test_json_inert_spacer_ts____obj_method_toJSON_0$generic::unrooted:global->js_array_push_f64_spec",
+    "test_json_inert_spacer-0.ll::perry_fn_test_json_inert_spacer_ts____obj_method_toJSON_0$spec_b::unrooted:global->js_array_push_f64_spec"
+  ]
+}
