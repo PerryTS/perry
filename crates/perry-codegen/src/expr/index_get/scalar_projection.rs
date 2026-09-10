@@ -45,6 +45,7 @@ impl ScalarProjection {
         let guard = ctx.new_block("json.scalar.guard");
         let cache_guard = ctx.new_block("json.scalar.cache_guard");
         let materialized_guard = ctx.new_block("json.scalar.materialized_guard");
+        let materialized_ready = ctx.new_block("json.scalar.materialized_ready");
         let bitmap = ctx.new_block("json.scalar.bitmap");
         let exposed = ctx.new_block("json.scalar.exposed");
         let memo = ctx.new_block("json.scalar.memo");
@@ -57,6 +58,7 @@ impl ScalarProjection {
         let guard_label = ctx.block_label(guard);
         let cache_guard_label = ctx.block_label(cache_guard);
         let materialized_guard_label = ctx.block_label(materialized_guard);
+        let materialized_ready_label = ctx.block_label(materialized_ready);
         let bitmap_label = ctx.block_label(bitmap);
         let exposed_label = ctx.block_label(exposed);
         let memo_label = ctx.block_label(memo);
@@ -105,8 +107,17 @@ impl ScalarProjection {
         let mat_forwarded = ctx.block().and(I8, &mat_flags, "128");
         let mat_not_forwarded = ctx.block().icmp_eq(I8, &mat_forwarded, "0");
         let mat_ok = ctx.block().and(I1, &mat_is_array, &mat_not_forwarded);
+        ctx.block()
+            .cond_br(&mat_ok, &materialized_ready_label, fallback);
+
+        ctx.current_block = materialized_ready;
+        // Preserve resolve_materialized_array's length refresh: another alias
+        // can mutate the backing array while this receiver stays a lazy header.
+        let materialized_length = ctx.block().load(I32, &mat);
+        // GC_STORE_AUDIT(POINTER_FREE): cached length is a u32, never a heap edge.
+        ctx.block().store(I32, &materialized_length, &hdr);
         let mat_predecessor = ctx.block().label.clone();
-        ctx.block().cond_br(&mat_ok, array_guard, fallback);
+        ctx.block().br(array_guard);
 
         ctx.current_block = cache_guard;
         let len = ctx.block().load(I32, &hdr);

@@ -54,21 +54,23 @@ console.log('memo-materialized-getter', id(memo, 9), memo.length);
 // Materialized backing arrays grow through forwarding headers. Read after
 // every push so the first access after a capacity change must resolve it.
 const grown: any = make();
+const grownAlias: any = grown;
 const grownFirst: any = grown[0];
 let growthSum = 0;
 for (let i = 128; i < 1024; i++) {
     grown.push({id: i});
-    growthSum += id(grown, i);
+    growthSum += id(grownAlias, i);
 }
-console.log('materialized-growth', growthSum, grown[0] === grownFirst, id(grown, 1023));
+console.log('materialized-growth', growthSum, grownAlias[0] === grownFirst,
+    id(grownAlias, 1023), grownAlias.length);
 delete grown[300];
 Object.defineProperty(Array.prototype, '300', {
     get() { return {id: 30303}; }, configurable: true,
 });
-console.log('materialized-prototype-hole', id(grown, 300), id(grown, 301));
+console.log('materialized-prototype-hole', id(grownAlias, 300), id(grownAlias, 301));
 delete (Array.prototype as any)[300];
 grown.length = 8;
-console.log('materialized-shrink', grown.length, id(grown, 7), grown[8]);
+console.log('materialized-shrink', id(grownAlias, 7), grownAlias.length, grownAlias[8]);
 
 const rows: any = make();
 const record: any = rows[4];

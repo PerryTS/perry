@@ -22,5 +22,6 @@ The measurements and validation limits are recorded in
 
 The subsequent R3 experiment routes a fully materialized lazy array into the
 existing ordinary-array read guards after validating its backing array's brand
-and forwarding state. Growth, descriptors, holes and prototype invalidation
-retain the established fallback. Validation and measurement are pending.
+and forwarding state. Reads refresh the wrapper's cached length after mutations
+through an alias. Growth, descriptors, holes and prototype invalidation retain
+the established fallback. Validation and measurement are pending.
