@@ -292,6 +292,21 @@ pub(crate) struct DirectParser<'a> {
     batch: Option<crate::arena::ConstructionBatch>,
 }
 
+impl crate::string::JsonStringContext for DirectParser<'_> {
+    #[inline(always)]
+    fn json_string_batch(&mut self) -> &mut Option<crate::arena::ConstructionBatch> {
+        &mut self.batch
+    }
+
+    #[inline]
+    unsafe fn json_string_utf16_len(&self, bytes: &[u8]) -> Option<u32> {
+        // Borrowed string decoding has just consumed the closing quote. This
+        // offset is needed only after construction dispatch selects a large leaf.
+        let start = self.pos.checked_sub(bytes.len().checked_add(1)?)?;
+        crate::string::json_source_token_utf16_len(bytes, self.source, start)
+    }
+}
+
 impl<'a> DirectParser<'a> {
     pub(crate) fn new(input: &'a [u8]) -> Self {
         Self {
@@ -518,17 +533,7 @@ impl<'a> DirectParser<'a> {
             // saves the equivalent walk inside `compute_utf16_len`
             // plus the conditional widening for non-ASCII counters.
             let ptr = match s {
-                ParsedStr::Borrowed(b)
-                    if b.len() >= crate::string::JSON_MALLOC_OUTPUT_THRESHOLD as usize =>
-                {
-                    crate::string::string_from_json_source_bytes(
-                        &mut self.batch,
-                        b,
-                        self.source,
-                        token_start + 1,
-                    )
-                }
-                ParsedStr::Borrowed(b) => crate::string::string_from_json_bytes(&mut self.batch, b),
+                ParsedStr::Borrowed(b) => crate::string::string_from_json_bytes(self, b),
                 // Escaped strings live in a Rust Vec, so the builder can derive
                 // the WTF-8 lone-surrogate flag while allocating the result.
                 ParsedStr::Owned(ref b) => crate::string::js_string_from_builder_bytes(b),

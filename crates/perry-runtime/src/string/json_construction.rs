@@ -1,39 +1,70 @@
 use super::*;
 
+/// Construction context is specialized at compile time. The parser can expose
+/// source metadata on the large-leaf path without loading it for every string.
+pub(crate) trait JsonStringContext {
+    fn json_string_batch(&mut self) -> &mut Option<crate::arena::ConstructionBatch>;
+
+    unsafe fn json_string_utf16_len(&self, _bytes: &[u8]) -> Option<u32> {
+        None
+    }
+}
+
+impl JsonStringContext for Option<crate::arena::ConstructionBatch> {
+    #[inline(always)]
+    fn json_string_batch(&mut self) -> &mut Option<crate::arena::ConstructionBatch> {
+        self
+    }
+}
+
 /// Unescaped JSON bytes remain valid throughout the parser's suppression
 /// window. Escaped/WTF-8 builder output keeps its existing canonicalizer.
-pub(crate) unsafe fn string_from_json_bytes(
-    batch: &mut Option<crate::arena::ConstructionBatch>,
+#[inline(never)]
+pub(crate) unsafe fn string_from_json_bytes<C: JsonStringContext>(
+    context: &mut C,
     bytes: &[u8],
 ) -> *mut StringHeader {
     let len = bytes.len() as u32;
+    if len >= JSON_MALLOC_OUTPUT_THRESHOLD {
+        return string_from_json_large_bytes(context, bytes);
+    }
     let utf16_len = if bytes.is_ascii() {
         len
     } else {
         compute_utf16_len(bytes.as_ptr(), len)
     };
-    string_from_json_bytes_known_utf16(batch, bytes, utf16_len)
+    string_from_json_bytes_known_utf16(context.json_string_batch(), bytes, utf16_len)
+}
+
+#[inline(never)]
+unsafe fn string_from_json_large_bytes<C: JsonStringContext>(
+    context: &mut C,
+    bytes: &[u8],
+) -> *mut StringHeader {
+    let utf16_len = context.json_string_utf16_len(bytes).unwrap_or_else(|| {
+        if bytes.is_ascii() {
+            bytes.len() as u32
+        } else {
+            compute_utf16_len(bytes.as_ptr(), bytes.len() as u32)
+        }
+    });
+    string_from_json_bytes_known_utf16(context.json_string_batch(), bytes, utf16_len)
 }
 
 /// The parser has rooted `source` and suppressed collection. `start` names the
 /// first decoded byte of an unescaped token in that source; no view is retained.
 #[inline(never)]
-pub(crate) unsafe fn string_from_json_source_bytes(
-    batch: &mut Option<crate::arena::ConstructionBatch>,
+pub(crate) unsafe fn json_source_token_utf16_len(
     bytes: &[u8],
     source: *const StringHeader,
     start: usize,
-) -> *mut StringHeader {
-    let known = if source.is_null() {
+) -> Option<u32> {
+    if source.is_null() {
         None
     } else {
         let input = std::slice::from_raw_parts(string_data(source), (*source).byte_len as usize);
         debug_assert_eq!(bytes.as_ptr(), input.as_ptr().add(start));
         source_token_utf16_len(input, (*source).utf16_len, start, bytes.len())
-    };
-    match known {
-        Some(units) => string_from_json_bytes_known_utf16(batch, bytes, units),
-        None => string_from_json_bytes(batch, bytes),
     }
 }
 

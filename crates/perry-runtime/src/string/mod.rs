@@ -102,7 +102,9 @@ impl AsRef<[u8]> for OwnedStringBytes {
 
 mod alloc;
 mod json_construction;
-pub(crate) use json_construction::{string_from_json_bytes, string_from_json_source_bytes};
+pub(crate) use json_construction::{
+    json_source_token_utf16_len, string_from_json_bytes, JsonStringContext,
+};
 mod append;
 mod base64_codec;
 mod char_ops;

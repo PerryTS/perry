@@ -124,3 +124,42 @@ fn json_large_source_lengths_preserve_bytes_units_and_tracked_allocation() {
         }
     }
 }
+
+#[test]
+fn json_construction_without_source_metadata_keeps_small_and_large_strings() {
+    struct ParseWindow;
+    impl Drop for ParseWindow {
+        fn drop(&mut self) {
+            crate::gc::gc_unsuppress();
+        }
+    }
+    crate::gc::gc_suppress();
+    let _suppression = ParseWindow;
+    for count in [8, crate::string::JSON_MALLOC_OUTPUT_THRESHOLD as usize / 4] {
+        let payload = "東京🙂".repeat(count);
+        let expected_units = payload.encode_utf16().count() as u32;
+        let input = format!("\"{payload}\"");
+        unsafe {
+            // This parser owns no managed source string: its construction
+            // context must use the normal counter even for a large token.
+            let mut parser = crate::json::DirectParser::new_batched(input.as_bytes());
+            let value = parser.parse_value();
+            assert!(parser.finish());
+            let parsed = value.as_string_ptr();
+            assert_eq!((*parsed).utf16_len, expected_units);
+            assert_eq!((*parsed).byte_len as usize, payload.len());
+            let bytes =
+                std::slice::from_raw_parts(crate::string::string_data(parsed), payload.len());
+            assert_eq!(bytes, payload.as_bytes());
+
+            // Non-parser callers retain their batch-only construction context.
+            let mut batch = None;
+            let direct = crate::string::string_from_json_bytes(&mut batch, payload.as_bytes());
+            assert_eq!((*direct).utf16_len, expected_units);
+            assert_eq!((*direct).byte_len as usize, payload.len());
+            let bytes =
+                std::slice::from_raw_parts(crate::string::string_data(direct), payload.len());
+            assert_eq!(bytes, payload.as_bytes());
+        }
+    }
+}
