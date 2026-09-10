@@ -1,0 +1,134 @@
+[
+  {
+    "worker": "worker",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/construction-context-r12/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/construction-context-r12/harness/worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/construction-context-r12/candidate-worker.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/construction-context-r12/candidate-worker.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/construction-context-r12/frozen-build/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/construction-context-r12/candidate-worker"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/construction-context-r12/harness/worker.ts": "f3c42ec9f04fdb9ba84dc3cf50dc59f18685540033807f3db3a7f75c08a85d39",
+      "benchmarks/json_performance/.work/construction-context-r12/candidate-worker.o": "8352d6331da040303ed7c390ae6698d9a1e6b2ac0f8f195e30101e886d2f87c6",
+      "benchmarks/json_performance/.work/construction-context-r12/candidate-worker": "a430fcffd0face5e739dd8b181345439bf7586942491a8cda305034d693f4816",
+      "benchmarks/json_performance/.work/construction-context-r12/frozen-build/perry": "3172207ece40b8e4f42822bcc32fadbce64843bb4242cbe9a026721e1405c087",
+      "benchmarks/json_performance/.work/construction-context-r12/frozen-build/libperry_runtime.a": "e1d7c34e91b034f85eb428502a9ccfea132d143c0d24e3317428d5ce46e7aaf0",
+      "benchmarks/json_performance/.work/construction-context-r12/frozen-build/libperry_stdlib.a": "eeb2734aee3ca31046f98e5f7a74248c20c008f3e89a63bca4184d6cc0eceb6e"
+    }
+  },
+  {
+    "worker": "access-worker",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/construction-context-r12/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/construction-context-r12/harness/access-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/construction-context-r12/candidate-access-worker.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/construction-context-r12/candidate-access-worker.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/construction-context-r12/frozen-build/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/construction-context-r12/candidate-access-worker"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/construction-context-r12/harness/access-worker.ts": "dba0240ef6441a07657e664354982a04045c036e53f65c1d06df62d55c73be67",
+      "benchmarks/json_performance/.work/construction-context-r12/candidate-access-worker.o": "d6d1d377abffde34119ac555fa6667c2f28a3a3ce8258a26d0fe1c789bf8daf7",
+      "benchmarks/json_performance/.work/construction-context-r12/candidate-access-worker": "8f3bb7d4902258526396d33e21a0e57a116285df1dc75c637d52eadfcf321749",
+      "benchmarks/json_performance/.work/construction-context-r12/frozen-build/perry": "3172207ece40b8e4f42822bcc32fadbce64843bb4242cbe9a026721e1405c087",
+      "benchmarks/json_performance/.work/construction-context-r12/frozen-build/libperry_runtime.a": "e1d7c34e91b034f85eb428502a9ccfea132d143c0d24e3317428d5ce46e7aaf0",
+      "benchmarks/json_performance/.work/construction-context-r12/frozen-build/libperry_stdlib.a": "eeb2734aee3ca31046f98e5f7a74248c20c008f3e89a63bca4184d6cc0eceb6e"
+    }
+  },
+  {
+    "worker": "rotating-worker",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/construction-context-r12/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/construction-context-r12/harness/rotating-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/construction-context-r12/candidate-rotating-worker.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/construction-context-r12/candidate-rotating-worker.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/construction-context-r12/frozen-build/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/construction-context-r12/candidate-rotating-worker"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/construction-context-r12/harness/rotating-worker.ts": "7541897acb2c7c35c0f5e762f8b2f28b9783feb26a42db107c1c4eb3af644b24",
+      "benchmarks/json_performance/.work/construction-context-r12/candidate-rotating-worker.o": "3190377de2ab7c815ec378b07c1d99bb1f1b68b260c138070ba77334c65ab1d3",
+      "benchmarks/json_performance/.work/construction-context-r12/candidate-rotating-worker": "4d491f74707e58700b3230b6305e27d5b1828dfc507683af8125bd941da5654b",
+      "benchmarks/json_performance/.work/construction-context-r12/frozen-build/perry": "3172207ece40b8e4f42822bcc32fadbce64843bb4242cbe9a026721e1405c087",
+      "benchmarks/json_performance/.work/construction-context-r12/frozen-build/libperry_runtime.a": "e1d7c34e91b034f85eb428502a9ccfea132d143c0d24e3317428d5ce46e7aaf0",
+      "benchmarks/json_performance/.work/construction-context-r12/frozen-build/libperry_stdlib.a": "eeb2734aee3ca31046f98e5f7a74248c20c008f3e89a63bca4184d6cc0eceb6e"
+    }
+  },
+  {
+    "worker": "options",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/construction-context-r12/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/construction-context-r12/options-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/construction-context-r12/candidate-options.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/construction-context-r12/candidate-options.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/construction-context-r12/frozen-build/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/construction-context-r12/candidate-options"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/construction-context-r12/options-worker.ts": "d08c6a916c18197b889a0de4a3777632ad307275752b85c5abd75daf4d6ad85d",
+      "benchmarks/json_performance/.work/construction-context-r12/candidate-options.o": "406784033e5b56206a1d9f5c1a442951db146c7f43a622fd5c9b6e1e4a232cf4",
+      "benchmarks/json_performance/.work/construction-context-r12/candidate-options": "3457e9d610151bccf19e748fbac220815e513cf168f4808fcada8f912534d863",
+      "benchmarks/json_performance/.work/construction-context-r12/frozen-build/perry": "3172207ece40b8e4f42822bcc32fadbce64843bb4242cbe9a026721e1405c087",
+      "benchmarks/json_performance/.work/construction-context-r12/frozen-build/libperry_runtime.a": "e1d7c34e91b034f85eb428502a9ccfea132d143c0d24e3317428d5ce46e7aaf0",
+      "benchmarks/json_performance/.work/construction-context-r12/frozen-build/libperry_stdlib.a": "eeb2734aee3ca31046f98e5f7a74248c20c008f3e89a63bca4184d6cc0eceb6e"
+    }
+  }
+]

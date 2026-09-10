@@ -1,0 +1,122 @@
+{
+  "ir_files": [
+    {
+      "mode": "native",
+      "file": "access-worker-0.ll",
+      "same": true,
+      "main_sha256": "4c0fb33e58715513fb6c521acc02e6782b540940571a3246dbe18ed0dd323e23",
+      "candidate_sha256": "b3a298b9ea6e659bbe6cd0e16b0c9f08fad167c8367b1d71a52c2739ea6b5d33",
+      "normalized_sha256": "99864413662f45411b14f5421792193062159644f84366da0a6b95296df7728f",
+      "normalization": "only first ModuleID path comment removed"
+    },
+    {
+      "mode": "native",
+      "file": "callback-only-0.ll",
+      "same": true,
+      "main_sha256": "be4c099d517238da57234c2874dc5c848d954c3d4be565fa95e1285183bcb560",
+      "candidate_sha256": "5759e6419b6ca9a72e68539b0073e70e63a172a1f5f547a227d218428b59929f",
+      "normalized_sha256": "430d753514173e2ec283d7eb350dd635880af9ea68eb3da476bb7e77b587d313",
+      "normalization": "only first ModuleID path comment removed"
+    },
+    {
+      "mode": "native",
+      "file": "options-worker-0.ll",
+      "same": true,
+      "main_sha256": "1cbe71b3ea99eed24fa55777d4deaa53824e4ba3d3cb2d98c95bde1900c4843d",
+      "candidate_sha256": "1c1dda45f82dec3dc20e213bc89949f119a4bbe56f1b7969540e9ffe95c0573f",
+      "normalized_sha256": "7f53634125c9d375e2085ece8c582b2124ae6f14c7923619660b489214003b21",
+      "normalization": "only first ModuleID path comment removed"
+    },
+    {
+      "mode": "native",
+      "file": "prior-entry-0.ll",
+      "same": true,
+      "main_sha256": "a01db1e1007ccfa075f6a93457fd15f9f28d35180d8424f9dcac846000fc2600",
+      "candidate_sha256": "34d1264f7dd3a2f4d13c50850ab1eb1951b6ebac6b6e27cec4f158e67bfd3138",
+      "normalized_sha256": "f0507e977cebd2cc1479cb6a5e1031a4b68cc3127be9dda500cbf5af29486c14",
+      "normalization": "only first ModuleID path comment removed"
+    },
+    {
+      "mode": "native",
+      "file": "test_json_source_length-0.ll",
+      "same": true,
+      "main_sha256": "87d5b1651a8bfaf3dab26b0a8334d6667412bbf33771cba527765bda5fbe1c38",
+      "candidate_sha256": "a32a7e3359fd641245663f6b1a1b4730a4acda378bd2c9a28b8fce542579ae1d",
+      "normalized_sha256": "d4d50e7d8a2eecb7f6123c20d913b67099dced472d4046346cb45cbdd22655f7",
+      "normalization": "only first ModuleID path comment removed"
+    },
+    {
+      "mode": "native",
+      "file": "worker-0.ll",
+      "same": true,
+      "main_sha256": "347263d254166367d1fb7a8cf892893133acca4874730578669bd62ac03a52fa",
+      "candidate_sha256": "194bde9c3e34178590f04a544509ebba630ef9d409504c13d44a4180f00e078e",
+      "normalized_sha256": "ee6720936196b5801c5d0c0633e8dbd24e832509d746f0e856489b155a1b43fc",
+      "normalization": "only first ModuleID path comment removed"
+    },
+    {
+      "mode": "shadow",
+      "file": "access-worker-0.ll",
+      "same": true,
+      "main_sha256": "ef0739c9f283b7553763cbb7386f9487789e826103ebd60886a52601e95e401e",
+      "candidate_sha256": "ef0739c9f283b7553763cbb7386f9487789e826103ebd60886a52601e95e401e",
+      "normalized_sha256": "ef0739c9f283b7553763cbb7386f9487789e826103ebd60886a52601e95e401e",
+      "normalization": "none"
+    },
+    {
+      "mode": "shadow",
+      "file": "callback-only-0.ll",
+      "same": true,
+      "main_sha256": "038341404039b123abfeabb7af18eb2c4347e3fbbb1a2c13af582ece2571b7d0",
+      "candidate_sha256": "038341404039b123abfeabb7af18eb2c4347e3fbbb1a2c13af582ece2571b7d0",
+      "normalized_sha256": "038341404039b123abfeabb7af18eb2c4347e3fbbb1a2c13af582ece2571b7d0",
+      "normalization": "none"
+    },
+    {
+      "mode": "shadow",
+      "file": "options-worker-0.ll",
+      "same": true,
+      "main_sha256": "1f0cfdfb920c4271c0f1cc46fdd5b02c9c8137a42669380b13417473c5f3613c",
+      "candidate_sha256": "1f0cfdfb920c4271c0f1cc46fdd5b02c9c8137a42669380b13417473c5f3613c",
+      "normalized_sha256": "1f0cfdfb920c4271c0f1cc46fdd5b02c9c8137a42669380b13417473c5f3613c",
+      "normalization": "none"
+    },
+    {
+      "mode": "shadow",
+      "file": "prior-entry-0.ll",
+      "same": true,
+      "main_sha256": "40489bb997a6f3ccff0ad2e01cb17181988a8ca8ab9013d7798a317055434193",
+      "candidate_sha256": "40489bb997a6f3ccff0ad2e01cb17181988a8ca8ab9013d7798a317055434193",
+      "normalized_sha256": "40489bb997a6f3ccff0ad2e01cb17181988a8ca8ab9013d7798a317055434193",
+      "normalization": "none"
+    },
+    {
+      "mode": "shadow",
+      "file": "test_json_source_length-0.ll",
+      "same": true,
+      "main_sha256": "7a5f4b327b4d5699dcbff40aaaed0c57e2503a173805648958a04cd6b7846e73",
+      "candidate_sha256": "7a5f4b327b4d5699dcbff40aaaed0c57e2503a173805648958a04cd6b7846e73",
+      "normalized_sha256": "7a5f4b327b4d5699dcbff40aaaed0c57e2503a173805648958a04cd6b7846e73",
+      "normalization": "none"
+    },
+    {
+      "mode": "shadow",
+      "file": "worker-0.ll",
+      "same": true,
+      "main_sha256": "dd04da26a32595e34d4ef9eaa690eb469f30738803f7ed3174ba7b83a51ddbfa",
+      "candidate_sha256": "dd04da26a32595e34d4ef9eaa690eb469f30738803f7ed3174ba7b83a51ddbfa",
+      "normalized_sha256": "dd04da26a32595e34d4ef9eaa690eb469f30738803f7ed3174ba7b83a51ddbfa",
+      "normalization": "none"
+    }
+  ],
+  "checks_match": true,
+  "native_fingerprints": [
+    "options-worker-0.ll::perry_fn_options_worker_ts__run$generic::unrooted:global->js_closure_alloc_singleton",
+    "options-worker-0.ll::perry_fn_options_worker_ts__run$spec_b::unrooted:global->js_closure_alloc_singleton",
+    "prior-entry-0.ll::main::stale:alloc->js_write_barrier_root_nanbox",
+    "prior-entry-0.ll::perry_closure_prior_entry_ts__5::unrooted:global->js_array_push_f64_spec",
+    "prior-entry-0.ll::perry_fn_prior_entry_ts____obj_method_toJSON_1$generic::unrooted:global->js_array_push_f64_spec",
+    "prior-entry-0.ll::perry_fn_prior_entry_ts____obj_method_toJSON_1$spec_b::unrooted:global->js_array_push_f64_spec",
+    "test_json_source_length-0.ll::main::unrooted:strhandle->js_put_value_set_ic_overflow_store"
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "fixture": "small_record",
+  "counts": {
+    "rotating": 2321080,
+    "same": 6217616
+  },
+  "multiplier": 4,
+  "repetitions": 11,
+  "source": "rotating-analysis.json",
+  "source_sha256": "6e4e8cc3936fe51bf420377ce1cfbb010a5eba47995103927656d55aa5916b95"
+}

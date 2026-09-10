@@ -1,0 +1,4 @@
+VERIFY small_record rotating all engines passed
+VERIFY small_record same all engines passed
+TIMING small_record rotating 2321080 calls per engine
+TIMING small_record same 6217616 calls per engine

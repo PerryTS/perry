@@ -1,0 +1,21 @@
+{
+  "command": [
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/construction-context-r12/frozen-build/perry",
+    "compile",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/construction-context-r12/fraction-spacer.ts",
+    "--no-auto-optimize",
+    "--no-cache",
+    "-o",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/construction-context-r12/candidate-fraction-spacer"
+  ],
+  "exit_code": 0,
+  "matches_main": true,
+  "note": "Preserves the separately recorded main/Bun vs Node fractional-spacing difference; not a Node conformance pass.",
+  "files": {
+    "benchmarks/json_performance/.work/construction-context-r12/fraction-spacer.ts": "2f11863b7ad102980a59991f0eeedd6bb0b863704b278078b012358882881ea5",
+    "benchmarks/json_performance/.work/construction-context-r12/candidate-fraction-spacer": "d940fd176073fcb63cf4e6f7c54416c6c7b96eff9d7d6b5d0935c02aff2f509c",
+    "benchmarks/json_performance/.work/construction-context-r12/frozen-build/perry": "3172207ece40b8e4f42822bcc32fadbce64843bb4242cbe9a026721e1405c087",
+    "benchmarks/json_performance/.work/construction-context-r12/frozen-build/libperry_runtime.a": "e1d7c34e91b034f85eb428502a9ccfea132d143c0d24e3317428d5ce46e7aaf0",
+    "benchmarks/json_performance/.work/construction-context-r12/frozen-build/libperry_stdlib.a": "eeb2734aee3ca31046f98e5f7a74248c20c008f3e89a63bca4184d6cc0eceb6e"
+  }
+}

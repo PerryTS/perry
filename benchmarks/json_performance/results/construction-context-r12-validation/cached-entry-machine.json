@@ -1,0 +1,80 @@
+[
+  {
+    "arm": "main",
+    "symbol": "_js_json_parse",
+    "file": "main-cached-entry-0.s",
+    "command": [
+      "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+      "--disassemble-symbols=_js_json_parse",
+      "--no-show-raw-insn",
+      "benchmarks/json_performance/.work/construction-context-r12/main-rotating-worker"
+    ],
+    "binary_sha256": "8b32b5623e985d81e913d1d1964549dfa0058ef1c5e6747d194432db87c07cd8",
+    "explicit_sub_frame": null
+  },
+  {
+    "arm": "main",
+    "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json11parse_reuse31try_reuse_parse_object_template",
+    "file": "main-cached-entry-1.s",
+    "command": [
+      "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+      "--disassemble-symbols=__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json11parse_reuse31try_reuse_parse_object_template",
+      "--no-show-raw-insn",
+      "benchmarks/json_performance/.work/construction-context-r12/main-rotating-worker"
+    ],
+    "binary_sha256": "8b32b5623e985d81e913d1d1964549dfa0058ef1c5e6747d194432db87c07cd8",
+    "explicit_sub_frame": 816
+  },
+  {
+    "arm": "main",
+    "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json9parse_api10parse_slow",
+    "file": "main-cached-entry-2.s",
+    "command": [
+      "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+      "--disassemble-symbols=__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json9parse_api10parse_slow",
+      "--no-show-raw-insn",
+      "benchmarks/json_performance/.work/construction-context-r12/main-rotating-worker"
+    ],
+    "binary_sha256": "8b32b5623e985d81e913d1d1964549dfa0058ef1c5e6747d194432db87c07cd8",
+    "explicit_sub_frame": 416
+  },
+  {
+    "arm": "candidate",
+    "symbol": "_js_json_parse",
+    "file": "candidate-cached-entry-0.s",
+    "command": [
+      "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+      "--disassemble-symbols=_js_json_parse",
+      "--no-show-raw-insn",
+      "benchmarks/json_performance/.work/construction-context-r12/candidate-rotating-worker"
+    ],
+    "binary_sha256": "4d491f74707e58700b3230b6305e27d5b1828dfc507683af8125bd941da5654b",
+    "explicit_sub_frame": null
+  },
+  {
+    "arm": "candidate",
+    "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json11parse_reuse31try_reuse_parse_object_template",
+    "file": "candidate-cached-entry-1.s",
+    "command": [
+      "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+      "--disassemble-symbols=__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json11parse_reuse31try_reuse_parse_object_template",
+      "--no-show-raw-insn",
+      "benchmarks/json_performance/.work/construction-context-r12/candidate-rotating-worker"
+    ],
+    "binary_sha256": "4d491f74707e58700b3230b6305e27d5b1828dfc507683af8125bd941da5654b",
+    "explicit_sub_frame": 816
+  },
+  {
+    "arm": "candidate",
+    "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json9parse_api10parse_slow",
+    "file": "candidate-cached-entry-2.s",
+    "command": [
+      "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+      "--disassemble-symbols=__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json9parse_api10parse_slow",
+      "--no-show-raw-insn",
+      "benchmarks/json_performance/.work/construction-context-r12/candidate-rotating-worker"
+    ],
+    "binary_sha256": "4d491f74707e58700b3230b6305e27d5b1828dfc507683af8125bd941da5654b",
+    "explicit_sub_frame": 416
+  }
+]
