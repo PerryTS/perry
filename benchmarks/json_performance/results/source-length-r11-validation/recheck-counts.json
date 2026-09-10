@@ -1,0 +1,9 @@
+{
+  "fixture": "small_record",
+  "mode": "rotating",
+  "initial_iterations": 578034,
+  "iterations": 2312136,
+  "repetitions": 11,
+  "source": "rotating-analysis.json",
+  "source_sha256": "6f44e50f5bab92e0eb75c1727583870a4cd9227ecd7d17ac605358347fb42eb7"
+}

@@ -1,0 +1,211 @@
+{
+  "rows": [
+    {
+      "count": 2,
+      "form": "canonical",
+      "mode": "plain",
+      "exit_code": 0,
+      "matches_node": true,
+      "output_bytes": 88
+    },
+    {
+      "count": 2,
+      "form": "canonical",
+      "mode": "zero",
+      "exit_code": 0,
+      "matches_node": true,
+      "output_bytes": 88
+    },
+    {
+      "count": 2,
+      "form": "canonical",
+      "mode": "true",
+      "exit_code": 0,
+      "matches_node": true,
+      "output_bytes": 88
+    },
+    {
+      "count": 2,
+      "form": "canonical",
+      "mode": "pretty",
+      "exit_code": 0,
+      "matches_node": true,
+      "output_bytes": 175
+    },
+    {
+      "count": 2,
+      "form": "whitespace",
+      "mode": "plain",
+      "exit_code": 0,
+      "matches_node": true,
+      "output_bytes": 88
+    },
+    {
+      "count": 2,
+      "form": "whitespace",
+      "mode": "zero",
+      "exit_code": 0,
+      "matches_node": true,
+      "output_bytes": 88
+    },
+    {
+      "count": 2,
+      "form": "whitespace",
+      "mode": "true",
+      "exit_code": 0,
+      "matches_node": true,
+      "output_bytes": 88
+    },
+    {
+      "count": 2,
+      "form": "whitespace",
+      "mode": "pretty",
+      "exit_code": 0,
+      "matches_node": true,
+      "output_bytes": 175
+    },
+    {
+      "count": 2,
+      "form": "duplicate",
+      "mode": "plain",
+      "exit_code": 0,
+      "matches_node": true,
+      "output_bytes": 88
+    },
+    {
+      "count": 2,
+      "form": "duplicate",
+      "mode": "zero",
+      "exit_code": 0,
+      "matches_node": true,
+      "output_bytes": 88
+    },
+    {
+      "count": 2,
+      "form": "duplicate",
+      "mode": "true",
+      "exit_code": 0,
+      "matches_node": true,
+      "output_bytes": 88
+    },
+    {
+      "count": 2,
+      "form": "duplicate",
+      "mode": "pretty",
+      "exit_code": 0,
+      "matches_node": true,
+      "output_bytes": 175
+    },
+    {
+      "count": 180,
+      "form": "canonical",
+      "mode": "plain",
+      "exit_code": 0,
+      "matches_node": true,
+      "output_bytes": 6568
+    },
+    {
+      "count": 180,
+      "form": "canonical",
+      "mode": "zero",
+      "exit_code": -11,
+      "matches_node": false,
+      "output_bytes": 7
+    },
+    {
+      "count": 180,
+      "form": "canonical",
+      "mode": "true",
+      "exit_code": -11,
+      "matches_node": false,
+      "output_bytes": 7
+    },
+    {
+      "count": 180,
+      "form": "canonical",
+      "mode": "pretty",
+      "exit_code": 0,
+      "matches_node": true,
+      "output_bytes": 14309
+    },
+    {
+      "count": 180,
+      "form": "whitespace",
+      "mode": "plain",
+      "exit_code": 0,
+      "matches_node": false,
+      "output_bytes": 7828
+    },
+    {
+      "count": 180,
+      "form": "whitespace",
+      "mode": "zero",
+      "exit_code": -11,
+      "matches_node": false,
+      "output_bytes": 7
+    },
+    {
+      "count": 180,
+      "form": "whitespace",
+      "mode": "true",
+      "exit_code": -11,
+      "matches_node": false,
+      "output_bytes": 7
+    },
+    {
+      "count": 180,
+      "form": "whitespace",
+      "mode": "pretty",
+      "exit_code": 0,
+      "matches_node": true,
+      "output_bytes": 14309
+    },
+    {
+      "count": 180,
+      "form": "duplicate",
+      "mode": "plain",
+      "exit_code": 0,
+      "matches_node": false,
+      "output_bytes": 7828
+    },
+    {
+      "count": 180,
+      "form": "duplicate",
+      "mode": "zero",
+      "exit_code": -11,
+      "matches_node": false,
+      "output_bytes": 7
+    },
+    {
+      "count": 180,
+      "form": "duplicate",
+      "mode": "true",
+      "exit_code": -11,
+      "matches_node": false,
+      "output_bytes": 7
+    },
+    {
+      "count": 180,
+      "form": "duplicate",
+      "mode": "pretty",
+      "exit_code": 0,
+      "matches_node": true,
+      "output_bytes": 14309
+    }
+  ],
+  "command": [
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/source-length-r11/frozen-build/perry",
+    "compile",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/source-length-r11/lazy-space-probe.ts",
+    "--no-auto-optimize",
+    "--no-cache",
+    "-o",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/source-length-r11/candidate-lazy-space-probe"
+  ],
+  "files": {
+    "benchmarks/json_performance/.work/source-length-r11/lazy-space-probe.ts": "414396d09f9ddafd606942015125ae17445e29b0b8cf47a229ccc1498be09234",
+    "benchmarks/json_performance/.work/source-length-r11/candidate-lazy-space-probe": "db10a85147801cd370169155d1363f7c98498d8803cb9eb4300c16224ae4d28a",
+    "benchmarks/json_performance/.work/source-length-r11/frozen-build/perry": "d67dbdbdbb62118ee0b183c58231ab69d44f5a671254b97fdc839f225e7b1d56",
+    "benchmarks/json_performance/.work/source-length-r11/frozen-build/libperry_runtime.a": "d7fba9f71185e62d992aeef32b331290feaf1d3887cf0682999af17cb576e479"
+  }
+}
