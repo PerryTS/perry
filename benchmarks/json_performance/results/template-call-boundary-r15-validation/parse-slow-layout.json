@@ -1,0 +1,38 @@
+[
+  {
+    "arm": "main",
+    "file": "main-cached-entry-1.s",
+    "selected_call_context": [
+      "100504588:     \tmov\tw1, #0x15               ; =21",
+      "10050458c:     \tstr\tx8, [x20]",
+      "100504590:     \tadd\tx0, sp, #0xa0",
+      "100504594:     \tmov\tx2, x19",
+      "100504598:     \tmov\tx3, x25",
+      "10050459c:     \tbl\t0x10024530c <__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser23new_batched_from_string>",
+      "100504590:     \tadd\tx0, sp, #0xa0",
+      "100504594:     \tmov\tx2, x19",
+      "100504598:     \tmov\tx3, x25",
+      "10050459c:     \tbl\t0x10024530c <__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser23new_batched_from_string>",
+      "1005045a0:     \tadd\tx0, sp, #0xa0",
+      "1005045a4:     \tbl\t0x100242448 <__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser11parse_value>"
+    ]
+  },
+  {
+    "arm": "candidate",
+    "file": "candidate-cached-entry-1.s",
+    "selected_call_context": [
+      "100504608:     \tmov\tw1, #0x15               ; =21",
+      "10050460c:     \tstr\tx8, [x20]",
+      "100504610:     \tadd\tx0, sp, #0xa0",
+      "100504614:     \tmov\tx2, x19",
+      "100504618:     \tmov\tx3, x25",
+      "10050461c:     \tbl\t0x10024530c <__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser23new_batched_from_string>",
+      "100504610:     \tadd\tx0, sp, #0xa0",
+      "100504614:     \tmov\tx2, x19",
+      "100504618:     \tmov\tx3, x25",
+      "10050461c:     \tbl\t0x10024530c <__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser23new_batched_from_string>",
+      "100504620:     \tadd\tx0, sp, #0xa0",
+      "100504624:     \tbl\t0x100242448 <__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser11parse_value>"
+    ]
+  }
+]

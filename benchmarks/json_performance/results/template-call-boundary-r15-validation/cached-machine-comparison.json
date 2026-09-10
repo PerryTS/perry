@@ -1,0 +1,35 @@
+{
+  "records": [
+    {
+      "arm": "main",
+      "stack_bytes": 912,
+      "file": "main-cached-entry-0.s",
+      "sha256": "84d425fa7d728c2a84a2482f8087eb4e292e5c08d859d77111cb219d0b1b3ecc",
+      "external_calls": [
+        {
+          "instruction": "0x1004eb398",
+          "target": "0x100b5fbac",
+          "symbol": "_memcpy"
+        },
+        {
+          "instruction": "0x1004eb3f0",
+          "target": "0x100b5fbd0",
+          "symbol": "_memset_pattern16"
+        }
+      ]
+    },
+    {
+      "arm": "candidate",
+      "stack_bytes": 224,
+      "file": "candidate-cached-entry-0.s",
+      "sha256": "49381614055c19ae6a1fec66576c2faf4461bd6cdda0e54d76db032d338e6bb8",
+      "external_calls": [
+        {
+          "instruction": "0x1004eb3bc",
+          "target": "0x100b5fc10",
+          "symbol": "_memset_pattern16"
+        }
+      ]
+    }
+  ]
+}

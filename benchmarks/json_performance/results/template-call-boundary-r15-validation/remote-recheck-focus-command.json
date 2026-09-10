@@ -1,0 +1,21 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/template-call-boundary-r15/run-focus.py",
+  "--worker",
+  ".work/template-call-boundary-r15/candidate-worker",
+  "--baseline-worker",
+  ".work/template-call-boundary-r15/main-worker",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--case",
+  "records_object_1m:parse:324:2:11",
+  "--case",
+  "records_array_20m:scan:16:2:11",
+  "--results-dir",
+  "results/quiet-template-call-boundary-r15-recheck-focus"
+]

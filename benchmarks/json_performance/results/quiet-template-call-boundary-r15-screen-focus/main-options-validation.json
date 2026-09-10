@@ -1,0 +1,142 @@
+[
+  {
+    "arm": "main",
+    "fixture": "small_record",
+    "operation": "plain",
+    "mode": "normal",
+    "matches_node": true,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "binary_sha256": "6b18441e01911b2f5c950f4e7716bdfee001a7291c88408c86140ec94c3af5f8"
+  },
+  {
+    "arm": "main",
+    "fixture": "small_record",
+    "operation": "plain",
+    "mode": "scheduled",
+    "matches_node": true,
+    "protected_retired_sets": 6,
+    "moved_objects": 12640,
+    "binary_sha256": "6b18441e01911b2f5c950f4e7716bdfee001a7291c88408c86140ec94c3af5f8"
+  },
+  {
+    "arm": "main",
+    "fixture": "small_record",
+    "operation": "zero",
+    "mode": "normal",
+    "matches_node": true,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "binary_sha256": "6b18441e01911b2f5c950f4e7716bdfee001a7291c88408c86140ec94c3af5f8"
+  },
+  {
+    "arm": "main",
+    "fixture": "small_record",
+    "operation": "zero",
+    "mode": "scheduled",
+    "matches_node": true,
+    "protected_retired_sets": 6,
+    "moved_objects": 12640,
+    "binary_sha256": "6b18441e01911b2f5c950f4e7716bdfee001a7291c88408c86140ec94c3af5f8"
+  },
+  {
+    "arm": "main",
+    "fixture": "small_record",
+    "operation": "dynamic-zero",
+    "mode": "normal",
+    "matches_node": true,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "binary_sha256": "6b18441e01911b2f5c950f4e7716bdfee001a7291c88408c86140ec94c3af5f8"
+  },
+  {
+    "arm": "main",
+    "fixture": "small_record",
+    "operation": "dynamic-zero",
+    "mode": "scheduled",
+    "matches_node": true,
+    "protected_retired_sets": 6,
+    "moved_objects": 12640,
+    "binary_sha256": "6b18441e01911b2f5c950f4e7716bdfee001a7291c88408c86140ec94c3af5f8"
+  },
+  {
+    "arm": "main",
+    "fixture": "small_record",
+    "operation": "pretty",
+    "mode": "normal",
+    "matches_node": true,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "binary_sha256": "6b18441e01911b2f5c950f4e7716bdfee001a7291c88408c86140ec94c3af5f8"
+  },
+  {
+    "arm": "main",
+    "fixture": "small_record",
+    "operation": "pretty",
+    "mode": "scheduled",
+    "matches_node": true,
+    "protected_retired_sets": 6,
+    "moved_objects": 12640,
+    "binary_sha256": "6b18441e01911b2f5c950f4e7716bdfee001a7291c88408c86140ec94c3af5f8"
+  },
+  {
+    "arm": "main",
+    "fixture": "small_record",
+    "operation": "keys",
+    "mode": "normal",
+    "matches_node": true,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "binary_sha256": "6b18441e01911b2f5c950f4e7716bdfee001a7291c88408c86140ec94c3af5f8"
+  },
+  {
+    "arm": "main",
+    "fixture": "small_record",
+    "operation": "keys",
+    "mode": "scheduled",
+    "matches_node": true,
+    "protected_retired_sets": 6,
+    "moved_objects": 12640,
+    "binary_sha256": "6b18441e01911b2f5c950f4e7716bdfee001a7291c88408c86140ec94c3af5f8"
+  },
+  {
+    "arm": "main",
+    "fixture": "small_record",
+    "operation": "callback",
+    "mode": "normal",
+    "matches_node": true,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "binary_sha256": "6b18441e01911b2f5c950f4e7716bdfee001a7291c88408c86140ec94c3af5f8"
+  },
+  {
+    "arm": "main",
+    "fixture": "small_record",
+    "operation": "callback",
+    "mode": "scheduled",
+    "matches_node": true,
+    "protected_retired_sets": 6,
+    "moved_objects": 12652,
+    "binary_sha256": "6b18441e01911b2f5c950f4e7716bdfee001a7291c88408c86140ec94c3af5f8"
+  },
+  {
+    "arm": "main",
+    "fixture": "records_array_16k",
+    "operation": "pretty",
+    "mode": "normal",
+    "matches_node": true,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "binary_sha256": "6b18441e01911b2f5c950f4e7716bdfee001a7291c88408c86140ec94c3af5f8"
+  },
+  {
+    "arm": "main",
+    "fixture": "records_array_16k",
+    "operation": "pretty",
+    "mode": "scheduled",
+    "matches_node": true,
+    "protected_retired_sets": 6,
+    "moved_objects": 13588,
+    "binary_sha256": "6b18441e01911b2f5c950f4e7716bdfee001a7291c88408c86140ec94c3af5f8"
+  }
+]

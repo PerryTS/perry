@@ -1,0 +1,22 @@
+{
+  "source_commit": "72be88b8d1ecdce1f972b646bed7d3a259ec823c",
+  "findings": [
+    "Collection hook remains before cache borrow; existing GcSuppressScope declared before Ref, so Ref drops first. Scope destructor restores flag only; no collection or callback.",
+    "ConstructionBatch holds ordinary cursor only; no Drop callback. ConstructionArray capacity equals admitted plan length; push cannot grow for valid cached entries. Native allocation/layout/store/barrier helpers do not invoke user callbacks.",
+    "Object preinstalled shape path inspects descriptor and publishes shape/layout. Fallback uses existing allocator/shape mint under suppression. No parse entry or template replacement from these helpers.",
+    "Mutable cache operations: parse template population at parse_reuse.rs:248; registered scan_roots_mut during GC; test-only clear/seed helpers. None entered by cached construction.",
+    "Shape carrier rebuild reaches parse cache only from full-trace dead-owner cleanup (plus test), outside suppressed construction. Individual shape carrier note uses its separate native log.",
+    "No new cache or root holder; existing bounded cache mutable scanner unchanged. Runtime scheduled protected/moving checks remain required."
+  ],
+  "hashes": {
+    "crates/perry-runtime/src/json/parse_reuse.rs": "99b4c5cacd342075d14ffa6fcac2ef337d14aa005e855597f5444ce29c4dd439",
+    "crates/perry-runtime/src/json/construction_array.rs": "2ab9cc207d04bc7e0efb4cd1e46a5c8991d6ee16aeb4eaf63bc0992312ca1d07",
+    "crates/perry-runtime/src/object/json_construction.rs": "131e722ae3d47dd50723deabc1c37366b74ecccdc3c9d34b099d52f4701be3ca",
+    "crates/perry-runtime/src/object/shapes.rs": "a1f2a0c0d4993bc25a9da1b821d24ffd3fb9f0683b955f0a486ec5a5c6a53e45",
+    "crates/perry-runtime/src/object/shape_carriers.rs": "044e3d3cbabc35a9c76e8192a31a7ae1395a66bfeda1c53b3d67d36f44d61921",
+    "crates/perry-runtime/src/object/alloc.rs": "0ef3e7f7856b1a7d3fd5bf3025628f85771d8eba55c8d2575c92c24b6a8efe7c",
+    "crates/perry-runtime/src/arena/construction.rs": "79f30ad9188f21f9263d17520ad86db5f8c97c1060284c4ffdac045b27c8519e",
+    "crates/perry-runtime/src/gc/policy.rs": "a701257f2e2310adabe16e33c0afcd935c7cd28e1ddc157b4974b48e2688cc4f"
+  },
+  "note": "R15 removes only the predicate/hit function split and explicitly prevents inlining of the original reuse function. Same original match check, collection-before-borrow, suppression-before-borrow, construction and drop ordering. Constructor/shape/GC audit source hashes all unchanged."
+}

@@ -1,0 +1,134 @@
+[
+  {
+    "worker": "worker",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-call-boundary-r15/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-call-boundary-r15/harness/worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-call-boundary-r15/candidate-worker.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-call-boundary-r15/candidate-worker.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-call-boundary-r15/frozen-build/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-call-boundary-r15/candidate-worker"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/template-call-boundary-r15/harness/worker.ts": "f3c42ec9f04fdb9ba84dc3cf50dc59f18685540033807f3db3a7f75c08a85d39",
+      "benchmarks/json_performance/.work/template-call-boundary-r15/candidate-worker.o": "a8c06b0e34240a131a8476ceaea1cf5afcf2c73b44354cc1bf94c89d4ed1361f",
+      "benchmarks/json_performance/.work/template-call-boundary-r15/candidate-worker": "be59124b50e54e6677fab2b498ad3ff7e899a7ce2ead7ceaada0347a82eca26c",
+      "benchmarks/json_performance/.work/template-call-boundary-r15/frozen-build/perry": "8e1055ea2f58b648d1a89ef0c9067d416cb9fdb3a3f641548c6e8712d3d0b5a6",
+      "benchmarks/json_performance/.work/template-call-boundary-r15/frozen-build/libperry_runtime.a": "1dd24e5f4fb61b771c86c52e860967618406f7b0d17ab682e58034b8b08863db",
+      "benchmarks/json_performance/.work/template-call-boundary-r15/frozen-build/libperry_stdlib.a": "febc047d9d8607dad420dd1fee796bd7cb7997339e1ebb6c24195c88609f3909"
+    }
+  },
+  {
+    "worker": "access-worker",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-call-boundary-r15/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-call-boundary-r15/harness/access-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-call-boundary-r15/candidate-access-worker.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-call-boundary-r15/candidate-access-worker.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-call-boundary-r15/frozen-build/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-call-boundary-r15/candidate-access-worker"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/template-call-boundary-r15/harness/access-worker.ts": "dba0240ef6441a07657e664354982a04045c036e53f65c1d06df62d55c73be67",
+      "benchmarks/json_performance/.work/template-call-boundary-r15/candidate-access-worker.o": "55d4cc6a42a5ca47f2592b8c5ff2fcf09aba7e1e6135856d0f0ec3e18c54e1c3",
+      "benchmarks/json_performance/.work/template-call-boundary-r15/candidate-access-worker": "642efa03c9a925c41c2739a1d1beba2ec643ba4cf4b9d5c419f5d3f708140a29",
+      "benchmarks/json_performance/.work/template-call-boundary-r15/frozen-build/perry": "8e1055ea2f58b648d1a89ef0c9067d416cb9fdb3a3f641548c6e8712d3d0b5a6",
+      "benchmarks/json_performance/.work/template-call-boundary-r15/frozen-build/libperry_runtime.a": "1dd24e5f4fb61b771c86c52e860967618406f7b0d17ab682e58034b8b08863db",
+      "benchmarks/json_performance/.work/template-call-boundary-r15/frozen-build/libperry_stdlib.a": "febc047d9d8607dad420dd1fee796bd7cb7997339e1ebb6c24195c88609f3909"
+    }
+  },
+  {
+    "worker": "rotating-worker",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-call-boundary-r15/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-call-boundary-r15/harness/rotating-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-call-boundary-r15/candidate-rotating-worker.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-call-boundary-r15/candidate-rotating-worker.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-call-boundary-r15/frozen-build/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-call-boundary-r15/candidate-rotating-worker"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/template-call-boundary-r15/harness/rotating-worker.ts": "7541897acb2c7c35c0f5e762f8b2f28b9783feb26a42db107c1c4eb3af644b24",
+      "benchmarks/json_performance/.work/template-call-boundary-r15/candidate-rotating-worker.o": "8e437278dfd1d52454ca62e61837a4a48691f07c184720eeb6a9237683002b18",
+      "benchmarks/json_performance/.work/template-call-boundary-r15/candidate-rotating-worker": "d8a1b440100b902d61e8dab300b05681f58123045e86d6e352232d80f93e80db",
+      "benchmarks/json_performance/.work/template-call-boundary-r15/frozen-build/perry": "8e1055ea2f58b648d1a89ef0c9067d416cb9fdb3a3f641548c6e8712d3d0b5a6",
+      "benchmarks/json_performance/.work/template-call-boundary-r15/frozen-build/libperry_runtime.a": "1dd24e5f4fb61b771c86c52e860967618406f7b0d17ab682e58034b8b08863db",
+      "benchmarks/json_performance/.work/template-call-boundary-r15/frozen-build/libperry_stdlib.a": "febc047d9d8607dad420dd1fee796bd7cb7997339e1ebb6c24195c88609f3909"
+    }
+  },
+  {
+    "worker": "options",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-call-boundary-r15/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-call-boundary-r15/options-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-call-boundary-r15/candidate-options.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-call-boundary-r15/candidate-options.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-call-boundary-r15/frozen-build/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/template-call-boundary-r15/candidate-options"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/template-call-boundary-r15/options-worker.ts": "d08c6a916c18197b889a0de4a3777632ad307275752b85c5abd75daf4d6ad85d",
+      "benchmarks/json_performance/.work/template-call-boundary-r15/candidate-options.o": "15a2b42094c9cbd5f75a2b3ad8ed82ad90d6b42546eddd9719955713d4fe2ab4",
+      "benchmarks/json_performance/.work/template-call-boundary-r15/candidate-options": "e98a642867ff008f6d3b40d26b6ef286563c57abb2cb468c8fae0660a3a6b2bd",
+      "benchmarks/json_performance/.work/template-call-boundary-r15/frozen-build/perry": "8e1055ea2f58b648d1a89ef0c9067d416cb9fdb3a3f641548c6e8712d3d0b5a6",
+      "benchmarks/json_performance/.work/template-call-boundary-r15/frozen-build/libperry_runtime.a": "1dd24e5f4fb61b771c86c52e860967618406f7b0d17ab682e58034b8b08863db",
+      "benchmarks/json_performance/.work/template-call-boundary-r15/frozen-build/libperry_stdlib.a": "febc047d9d8607dad420dd1fee796bd7cb7997339e1ebb6c24195c88609f3909"
+    }
+  }
+]
