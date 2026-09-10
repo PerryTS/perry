@@ -685,11 +685,12 @@ When geisterhand needs to pass values to widget callbacks, it must create proper
 
 ### Auto-Build
 
-When you pass `--enable-geisterhand` (or `--geisterhand-port`), Perry automatically builds the required libraries on first use if they're not already cached:
+When you pass `--enable-geisterhand` (or `--geisterhand-port`), Perry asks Cargo to build the complete library set together before linking. Cargo reuses fresh artifacts; existing archives alone are not enough to prove that their bundled Rust runtimes are compatible. This requires a Perry source checkout, located automatically or through `PERRY_WORKSPACE_ROOT`:
 
 ```
-cargo build --release \
-  -p perry-runtime --features perry-runtime/geisterhand \
+CARGO_TARGET_DIR=target/geisterhand cargo build --release \
+  -p perry-runtime-static --features perry-runtime/geisterhand \
+  -p perry-stdlib-static \
   -p perry-ui-{platform} --features perry-ui-{platform}/geisterhand \
   -p perry-ui-geisterhand
 ```
@@ -706,7 +707,7 @@ Platform crate selection is automatic based on `--target`:
 
 ### Separate Target Directory
 
-Geisterhand libraries are built into `target/geisterhand/` (via `CARGO_TARGET_DIR`) to avoid interfering with normal builds. This means your first geisterhand build takes a moment, but subsequent builds reuse the cached libraries.
+Geisterhand libraries are built into `target/geisterhand/` (via `CARGO_TARGET_DIR`) to avoid interfering with normal builds. This means your first geisterhand build takes a moment, but subsequent builds reuse Cargo’s cache. Perry links the exact archive paths reported by that invocation, including when Cargo uses a target-triple subdirectory. Build the full set together when building manually as well; separate runtime and stdlib builds can embed incompatible runtime instances and crash during module initialization (#10019).
 
 ### Feature Flags
 
