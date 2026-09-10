@@ -1,0 +1,12 @@
+lazy-canonical-r3 perry_runtime::json::parse_empty::allocate_empty_object 1856 bytes 0x1004ec900
+lazy-canonical-r3 perry_runtime::json::parse_api::parse_slow 5624 bytes 0x1005069b8
+lazy-canonical-r3 perry_runtime::json::parse_api::parse_noncontainer 1012 bytes 0x100509034
+lazy-canonical-r3 perry_runtime::json::parser::depth_blocks::nesting_depth_exceeds 3676 bytes 0x1006c58d4
+lazy-canonical-r3 perry_runtime::json::parser::depth_blocks::contains_open_container_tail 284 bytes 0x1006c6730
+lazy-canonical-r3 _js_json_parse 156 bytes 0x100845194
+lazy-canonical-r4 perry_runtime::json::parse_empty::allocate_empty_object 1856 bytes 0x1004ec7c0
+lazy-canonical-r4 perry_runtime::json::parse_api::parse_slow 5624 bytes 0x1005068f8
+lazy-canonical-r4 perry_runtime::json::parse_api::parse_noncontainer 1012 bytes 0x100508f74
+lazy-canonical-r4 perry_runtime::json::parser::depth_blocks::nesting_depth_exceeds 3676 bytes 0x1006c5814
+lazy-canonical-r4 perry_runtime::json::parser::depth_blocks::contains_open_container_tail 284 bytes 0x1006c6670
+lazy-canonical-r4 _js_json_parse 156 bytes 0x1008450d4

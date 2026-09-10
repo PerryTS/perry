@@ -1,0 +1,24 @@
+{
+  "source_commit": "a1b39840283ce7c771a776706621a9ca249a8e8e",
+  "started_utc": "2026-09-10T07:12:31.487857+00:00",
+  "command": [
+    "./benchmarks/run_public_baseline.sh"
+  ],
+  "pinned_node_bin": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/public-baseline-toolchain/node-v22.23.1-darwin-arm64/bin",
+  "pinned_bun_bin": "/Users/amlug/.bun/bin/bun",
+  "runtime_dir": "/Users/amlug/projects/perry/json-merged-pr10022/target/release",
+  "scratch": "/tmp/perry_polyglot_bench",
+  "reserved_output_files": [
+    "/tmp/out_rust.json",
+    "/tmp/out_zig.json",
+    "/tmp/out_perry.json",
+    "/tmp/out_node.json",
+    "/tmp/out_bun.json"
+  ],
+  "host": "Darwin MacBookPro.fritz.box 25.5.0 Darwin Kernel Version 25.5.0: Mon Apr 27 20:38:56 PDT 2026; root:xnu-12377.121.6~2/RELEASE_ARM64_T6000 arm64",
+  "purpose": "Regenerate stale published performance evidence required by lint; separate from the M1 Node26 JSON comparison.",
+  "exit_code": 1,
+  "finished_utc": "2026-09-10T07:33:39.909512+00:00",
+  "final_commit": "a1b39840283ce7c771a776706621a9ca249a8e8e",
+  "source_unchanged": true
+}

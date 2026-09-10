@@ -1,0 +1,92 @@
+run_lint_gates: 76 gate commands derived from 44 lint run steps
+
+  ok    [Changeset gate self-test] ./scripts/check_changeset_fragment.sh --self-test
+  skip  [Require a changelog.d/ fragment for crates/ changes] ./scripts/check_changeset_fragment.sh "${{ github.repository }}" "${{ github.event.pull_request.number }}"
+        (needs GitHub API repository/PR context)
+  ok    [Validate benchmark artifact and fallback gates] python3 -m unittest discover -s tests -p 'test_benchmark_*.py' -v
+  ok    [Validate benchmark artifact and fallback gates] ./tests/test_benchmark_peer_fallback.sh
+  ok    [Validate benchmark artifact and fallback gates] ./tests/test_benchmark_output_verifier.sh
+  ok    [Validate benchmark artifact and fallback gates] bash -n benchmarks/compare.sh benchmarks/quick.sh  benchmarks/suite/run_benchmarks.sh benchmarks/honest_bench/run.sh  benchmarks/honest_bench/harness/run_http_bench.sh  tests/test_benchmark_peer_fallback.sh
+  ok    [Validate Windows LLVM runtime npm staging] ./tests/test_stage_npm_windows_llvm.sh
+  ok    [Install Rust toolchain] rustup toolchain install nightly-2026-08-20 --profile minimal --component rustfmt --component clippy
+  ok    [Check formatting] cargo fmt --all -- --check
+  ok    [CI plan policy self-test + docs table freshness] python3 scripts/ci_plan.py --self-test
+  ok    [CI plan policy self-test + docs table freshness] python3 scripts/ci_cargo_test_shard.py --self-test
+  skip  [CI plan policy self-test + docs table freshness] python3 scripts/ci_cargo_test_shard.py --package perry  --total-shards "${{ fromJSON(needs.plan.outputs.plan).cargo_test_perry.total }}"  --validate
+        (needs the CI plan's shard count)
+  ok    [Compiler-output gate liveness] python3 scripts/compiler_output_step_liveness.py --self-test
+  ok    [Compiler-output gate liveness] python3 scripts/compiler_output_step_liveness.py
+  ok    [Audit workspace architecture] python3 scripts/workspace_architecture.py --self-test
+  ok    [Audit workspace architecture] python3 scripts/workspace_architecture.py --check --print-summary
+  ok    [Linux incident collector fixtures] python3 scripts/test_capture_linux_incident.py
+  ok    [Public benchmark evidence freshness] PYTHONPATH=. python3 tests/test_public_baseline.py
+  FAIL  [Public benchmark evidence freshness] python3 benchmarks/ci_public_baseline_check.py
+          public baseline error: public artifact benchmark inputs changed; regenerate it with ./benchmarks/run_public_baseline.sh
+  ok    [File size limit] ./scripts/check_file_size.sh
+  ok    [Local binding type-proof audit] python3 scripts/local_binding_type_audit.py --self-test
+  ok    [Local binding type-proof audit] python3 scripts/local_binding_type_audit.py
+  ok    [Binding upstream pins (lock-step)] node scripts/binding_pins.mjs --check
+  ok    [Bundled binding governance] python3 scripts/binding_governance.py --check
+  ok    [GC store-site inventory] python3 scripts/gc_store_site_inventory.py --self-test
+  ok    [GC store-site inventory] python3 scripts/gc_store_site_inventory.py
+  ok    [Address-classification audit] python3 scripts/addr_class_inventory.py --self-test
+  ok    [Address-classification audit] python3 scripts/addr_class_inventory.py
+  ok    [String payload-access inventory] python3 scripts/string_payload_access_inventory.py --self-test
+  ok    [String payload-access inventory] python3 scripts/string_payload_access_inventory.py
+  ok    [Class-id collision audit] python3 scripts/class_id_collisions.py
+  ok    [Object-header shape-descriptor census] python3 scripts/shape_descriptor_census.py
+  ok    [GC pin-site custody audit] python3 scripts/gc_pin_sites.py --self-test
+  ok    [GC pin-site custody audit] python3 scripts/gc_pin_sites.py
+  ok    [Cross-thread promise provenance (#9552)] python3 scripts/check_cross_thread_promise_provenance.py --self-test
+  ok    [Cross-thread promise provenance (#9552)] python3 scripts/check_cross_thread_promise_provenance.py
+  ok    [Runtime GC-pointer holder custody audit] python3 scripts/gc_runtime_root_holders.py --self-test
+  ok    [Runtime GC-pointer holder custody audit] python3 scripts/gc_runtime_root_holders.py
+  ok    [Poll-capable reach audit (GC root dominance)] python3 scripts/gc_root_dominance_check.py --self-test
+  ok    [Poll-capable reach audit (GC root dominance)] python3 scripts/gc_root_dominance_check.py --audit-poll-reach
+  ok    [Thread-local GC scanner registration audit] python3 scripts/check_gc_scanner_latches.py --self-test
+  ok    [Thread-local GC scanner registration audit] python3 scripts/check_gc_scanner_latches.py
+  ok    [Rekeyed side-table custody audit] python3 scripts/gc_rekeyed_key_tables.py --self-test
+  ok    [Rekeyed side-table custody audit] python3 scripts/gc_rekeyed_key_tables.py
+  ok    [GC environment-knob drift audit] python3 scripts/check_gc_env_knobs.py --self-test
+  ok    [GC environment-knob drift audit] python3 scripts/check_gc_env_knobs.py
+  ok    [llvm-inprocess corpus currency] python3 scripts/check_llvm_corpus_currency.py --self-test
+  ok    [llvm-inprocess corpus currency] python3 scripts/check_llvm_corpus_currency.py
+  ok    [Statepoint pass source reader] python3 scripts/read_statepoint_rewrite_passes.py --self-test
+  ok    [Statepoint pass source reader] python3 scripts/read_statepoint_rewrite_passes.py --check
+  ok    [GC documentation claim audit] python3 scripts/check_gc_doc_claims.py --self-test
+  ok    [GC documentation claim audit] python3 scripts/check_gc_doc_claims.py
+  ok    [Windows-portable text I/O in the Windows-CI audits] python3 scripts/check_locale_independent_io.py --self-test
+  ok    [Windows-portable text I/O in the Windows-CI audits] python3 scripts/check_locale_independent_io.py
+  ok    [GC evacuation-liveness assert can say no] python3 scripts/gc_evacuation_liveness_assert.py --self-test
+  ok    [Node version consistency] python3 scripts/check_node_version_consistency.py --self-test
+  ok    [Node version consistency] python3 scripts/check_node_version_consistency.py
+  ok    [Raw-handle debt ratchet] python3 scripts/raw_handle_debt.py --self-test
+  ok    [Raw-handle debt ratchet] python3 scripts/raw_handle_debt.py
+  ok    [Unrooted-local shape ratchet] python3 scripts/unrooted_local_shape.py --self-test
+  ok    [Unrooted-local shape ratchet] python3 scripts/unrooted_local_shape.py --check
+  ok    [Unrooted-local shape ratchet vs. merge base] python3 scripts/unrooted_local_shape.py --no-raise-vs "$BASE_SHA"
+  ok    [Raw-handle debt ratchet vs. merge base] python3 scripts/raw_handle_debt.py --no-raise-vs "$BASE_SHA"
+  ok    [Gap snapshot checker self-test] python3 scripts/gap_snapshot.py --self-test
+  ok    [Platform-aware parity allowlist self-test] python3 scripts/parity_known_failures.py --self-test
+  ok    [Parity allowlist ratchet (provenance + stale entries)] python3 scripts/parity_known_failures.py --audit
+  ok    [Moving-GC gate wiring] python3 scripts/gc_gate_wiring_check.py --self-test
+  ok    [Moving-GC gate wiring] python3 scripts/gc_gate_wiring_check.py
+  ok    [GC matrix liveness gate] ./scripts/gc_repsel_matrix.sh --self-test-liveness-parser
+  ok    [GC matrix liveness gate] python3 scripts/gc_repsel_matrix_merge.py --self-test
+  ok    [GC matrix liveness gate] python3 scripts/gc_matrix_liveness_check.py --self-test
+  ok    [GC matrix liveness gate] python3 scripts/gc_matrix_liveness_check.py --check-registry
+  ok    [Test registration (dark tests)] python3 scripts/check_test_registration.py --self-test
+  ok    [Test registration (dark tests)] python3 scripts/check_test_registration.py
+  ok    [Per-test global sinks] python3 scripts/global_sink_isolation.py --self-test
+  ok    [Per-test global sinks] python3 scripts/global_sink_isolation.py
+
+run_lint_gates: 6 compile commands derived from warnings + check (18 exclude args)
+  ok    [warnings: rustc warnings (product)] RUSTFLAGS="-D warnings" cargo check -p perry --bins
+  ok    [warnings: rustc warnings (host-compatible, all targets)] RUSTFLAGS="-D warnings" cargo check --workspace --all-targets --exclude perry-ui-android --exclude perry-ui-gtk4 --exclude perry-ui-ios --exclude perry-ui-macos --exclude perry-ui-tvos --exclude perry-ui-visionos --exclude perry-ui-watchos --exclude perry-ui-windows --exclude perry-ui-windows-winui
+  ok    [check: Clippy (product)] cargo clippy -p perry --bins
+  ok    [check: Clippy (host-compatible)] cargo clippy --workspace --exclude perry-ui-android --exclude perry-ui-gtk4 --exclude perry-ui-ios --exclude perry-ui-macos --exclude perry-ui-tvos --exclude perry-ui-visionos --exclude perry-ui-watchos --exclude perry-ui-windows --exclude perry-ui-windows-winui
+  ok    [check: Regenerate API docs] ./scripts/regen_api_docs.sh
+  ok    [check: Check for API docs drift] git diff --quiet -- docs/src/api/reference.md docs/api/perry.d.ts
+
+run_lint_gates: 1 of 80 FAILED; 2 CI-only skipped
+  [Public benchmark evidence freshness] python3 benchmarks/ci_public_baseline_check.py

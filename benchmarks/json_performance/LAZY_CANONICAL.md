@@ -69,3 +69,25 @@ That requires a complete tape-metadata consumer audit and parse-only, sparse and
 full-scan measurements: moving work into parsing must not hide its cost. No such
 metadata change is included here. Canonicalization and eager stringify performance
 remain separate unresolved issues, and parity with both engines is still incomplete.
+
+## R4 native escape metadata: still parked
+
+R4 (`8a7a29d72dd10d1ab51e3a34108cce9487bd2f3f`) retains the plain-string fact
+in existing native tape leaf metadata. The entry layout and GC policy stay the
+same; unknown metadata preserves the full checked scan. All 304 release JSON
+tests and 162 compiled candidate comparisons pass.
+[Validation and metadata audit](results/lazy-canonical-r4-validation/README.md).
+
+The [qualified eight-case replay](results/quiet-lazy-canonical-r4-main-focus-r9/README.md)
+still measures record roundtrips 15–22% slower than main and 34–47% slower than the
+PR build, with 9/9 slower pairs. The added 1 MiB parse/scan/sparse controls cost
++1.687%/+0.818%/+1.432% versus the PR build. The earlier tape-depth gains keep them
+faster than main, but R4's incremental cost remains unacceptable. Source is parked;
+only evidence is included in PR #10036. No full matrix is justified.
+
+The local profile now exposes the duplicate-key slice loop and string endpoint
+checks in normalization. A bounded next experiment could skip the duplicate
+loop when a native per-object length-bit summary proves no preceding key has that
+length, retaining exact comparison on all collisions. This is a hypothesis only.
+The early tape-entry push also needs reconsideration because parse-only costs
+increased. No new implementation or speed claim exists for either follow-up.
