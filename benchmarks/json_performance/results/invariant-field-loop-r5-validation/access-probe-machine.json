@@ -1,0 +1,19 @@
+{
+  "command": [
+    "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+    "--disassemble",
+    "--no-show-raw-insn",
+    "--reloc",
+    "benchmarks/json_performance/.work/invariant-field-loop-r5/access-worker.o"
+  ],
+  "probe_relocations": [
+    {
+      "function": "ltmp0",
+      "relocation": "0000000000000178:  ARM64_RELOC_BRANCH26\t_js_array_index_own_number"
+    },
+    {
+      "function": "_perry_fn_access_worker_ts__run$generic",
+      "relocation": "0000000000003214:  ARM64_RELOC_BRANCH26\t_js_array_index_own_number"
+    }
+  ]
+}

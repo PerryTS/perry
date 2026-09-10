@@ -1,0 +1,6 @@
+{
+  "branch": "codex/json-invariant-field-loop-r5",
+  "base": "d5c9a9246e355555dfd9b943dcd8a614c7a72d20",
+  "started_at": "2026-09-10T13:22:33.210764+00:00",
+  "intent": "R3 base, one-time own numeric field probe and call-free sequential reduction; R4 hint excluded"
+}

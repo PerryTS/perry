@@ -1,0 +1,21 @@
+{
+  "binary_sha256": "11e6362f7c062005147706572872cbe50b486205388079fa19a672b83a9ff248",
+  "tests": [
+    {
+      "filter": "index_get",
+      "exit_code": 0
+    },
+    {
+      "filter": "property_get",
+      "exit_code": 0
+    },
+    {
+      "filter": "element_shape_loop",
+      "exit_code": 0
+    },
+    {
+      "filter": "gc_call_effects",
+      "exit_code": 0
+    }
+  ]
+}

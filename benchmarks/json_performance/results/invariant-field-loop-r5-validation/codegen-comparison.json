@@ -1,0 +1,79 @@
+{
+  "probe_counts": [
+    {
+      "source": "test-files/test_json_invariant_field_loop.ts",
+      "lowering": "native",
+      "probe_calls": 2,
+      "invariant_probe_calls": 1
+    },
+    {
+      "source": "test-files/test_json_scalar_projection.ts",
+      "lowering": "native",
+      "probe_calls": 54,
+      "invariant_probe_calls": 0
+    },
+    {
+      "source": "benchmarks/json_performance/access-worker.ts",
+      "lowering": "native",
+      "probe_calls": 12,
+      "invariant_probe_calls": 2
+    },
+    {
+      "source": "benchmarks/json_performance/worker.ts",
+      "lowering": "native",
+      "probe_calls": 4,
+      "invariant_probe_calls": 0
+    },
+    {
+      "source": "test-files/test_json_invariant_field_loop.ts",
+      "lowering": "shadow",
+      "probe_calls": 2,
+      "invariant_probe_calls": 1
+    },
+    {
+      "source": "test-files/test_json_scalar_projection.ts",
+      "lowering": "shadow",
+      "probe_calls": 54,
+      "invariant_probe_calls": 0
+    },
+    {
+      "source": "benchmarks/json_performance/access-worker.ts",
+      "lowering": "shadow",
+      "probe_calls": 12,
+      "invariant_probe_calls": 2
+    },
+    {
+      "source": "benchmarks/json_performance/worker.ts",
+      "lowering": "shadow",
+      "probe_calls": 4,
+      "invariant_probe_calls": 0
+    }
+  ],
+  "checks": [
+    {
+      "mode": "native",
+      "scope": "all",
+      "variant": 0,
+      "exit_code": 1
+    },
+    {
+      "mode": "native",
+      "scope": "workers",
+      "exit_code": 0
+    },
+    {
+      "mode": "shadow",
+      "scope": "all",
+      "variant": 0,
+      "exit_code": 0
+    },
+    {
+      "mode": "shadow",
+      "scope": "all",
+      "variant": 1,
+      "exit_code": 0
+    }
+  ],
+  "statepoint_passes": "always-inline,function(mem2reg,sccp),rewrite-statepoints-for-gc",
+  "source_commit": "24a8ab6953ba811f5112e49ba1c79ae6e683118b"
+}

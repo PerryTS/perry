@@ -1,0 +1,68 @@
+[
+  {
+    "label": "main",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/native-main-proof/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/short-loops.ts",
+        "--no-cache",
+        "--no-auto-optimize",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/main-short.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/main-short.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/native-main-proof/frozen-build/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/main-short"
+      ]
+    ],
+    "hashes": {
+      "benchmarks/json_performance/.work/invariant-field-loop-r5/short-loops.ts": "c1d76ee99f58c704180916bcaddbad9089dd6673806d137f984e5e2a7a54a08e",
+      "benchmarks/json_performance/.work/invariant-field-loop-r5/main-short.o": "9710cc551a5749031c5634428e1fed48ad1bb1ec5532c28ba65c1fed3cbc4b20",
+      "benchmarks/json_performance/.work/invariant-field-loop-r5/main-short": "b8d49b11580d051b550ea30be11cff70870478169efaca087a5112b7146cdb32",
+      "benchmarks/json_performance/.work/native-main-proof/frozen-build/perry": "f45e308bcb13940e75eebb377142d84c401b95f2faca1ddd09ea276c89b0f736",
+      "benchmarks/json_performance/.work/native-main-proof/frozen-build/libperry_runtime.a": "d0c06e3ad5e85a99858d42c1194f6c43aca89ce1f9700cffe95c29d4aea9c76a",
+      "benchmarks/json_performance/.work/native-main-proof/frozen-build/libperry_stdlib.a": "929824aaf04a4c504546a157a55da75c934be84a55db19b176610eab40621681"
+    }
+  },
+  {
+    "label": "r3",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/scalar-projection-r3/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/short-loops.ts",
+        "--no-cache",
+        "--no-auto-optimize",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/r3-short.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/r3-short.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/scalar-projection-r3/frozen-build/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/r3-short"
+      ]
+    ],
+    "hashes": {
+      "benchmarks/json_performance/.work/invariant-field-loop-r5/short-loops.ts": "c1d76ee99f58c704180916bcaddbad9089dd6673806d137f984e5e2a7a54a08e",
+      "benchmarks/json_performance/.work/invariant-field-loop-r5/r3-short.o": "ccf9777958c0214445c9579439d60dc9adc29e17c584af65015ec6dbd8c9d3a9",
+      "benchmarks/json_performance/.work/invariant-field-loop-r5/r3-short": "e64db6173c97f1df1336b10f51f975d5f4f0a494816aa15cf7b16d2984517d08",
+      "benchmarks/json_performance/.work/scalar-projection-r3/frozen-build/perry": "9ac364a22448ed7410726519ebed87a76b55c5230d5cd72833315c1f9bad35be",
+      "benchmarks/json_performance/.work/scalar-projection-r3/frozen-build/libperry_runtime.a": "adb2645bc55577904d22a1091361d66c5ecd9f7485f736001f9e9a13c461aaef",
+      "benchmarks/json_performance/.work/scalar-projection-r3/frozen-build/libperry_stdlib.a": "9ef9e6e149500d7f8b3baeebadc1868032dfcfbc050ee0c3ea459cb2cbd9fcb2"
+    }
+  }
+]

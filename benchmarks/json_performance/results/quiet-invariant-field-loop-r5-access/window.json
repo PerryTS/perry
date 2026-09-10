@@ -1,0 +1,32 @@
+{
+  "owner": "json-perf-45022-1789048733",
+  "load_before": [
+    1.06689453125,
+    1.39208984375,
+    1.447265625
+  ],
+  "started_utc": "2026-09-10T13:58:53Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    "run_access.py",
+    "--worker",
+    ".work/invariant-field-loop-r5/access-worker",
+    "--baseline-worker",
+    ".work/main-53df-fresh/main-access",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--bun",
+    "/Users/perry/.bun/bin/bun",
+    "--results-dir",
+    "results/quiet-invariant-field-loop-r5-access"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.4990234375,
+    1.470703125,
+    1.4736328125
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-10T13:59:16Z"
+}

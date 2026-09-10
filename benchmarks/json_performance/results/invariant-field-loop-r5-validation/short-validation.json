@@ -1,0 +1,146 @@
+[
+  {
+    "engine": "main",
+    "trips": 1,
+    "mode": "normal",
+    "checksum": 7035.0,
+    "protected": 0,
+    "moved": 0
+  },
+  {
+    "engine": "main",
+    "trips": 1,
+    "mode": "scheduled",
+    "checksum": 7035.0,
+    "protected": 206,
+    "moved": 12582
+  },
+  {
+    "engine": "r3",
+    "trips": 1,
+    "mode": "normal",
+    "checksum": 7035.0,
+    "protected": 0,
+    "moved": 0
+  },
+  {
+    "engine": "r3",
+    "trips": 1,
+    "mode": "scheduled",
+    "checksum": 7035.0,
+    "protected": 206,
+    "moved": 12558
+  },
+  {
+    "engine": "candidate",
+    "trips": 1,
+    "mode": "normal",
+    "checksum": 7035.0,
+    "protected": 0,
+    "moved": 0
+  },
+  {
+    "engine": "candidate",
+    "trips": 1,
+    "mode": "scheduled",
+    "checksum": 7035.0,
+    "protected": 106,
+    "moved": 12572
+  },
+  {
+    "engine": "main",
+    "trips": 8,
+    "mode": "normal",
+    "checksum": 56280.0,
+    "protected": 0,
+    "moved": 0
+  },
+  {
+    "engine": "main",
+    "trips": 8,
+    "mode": "scheduled",
+    "checksum": 56280.0,
+    "protected": 908,
+    "moved": 12567
+  },
+  {
+    "engine": "r3",
+    "trips": 8,
+    "mode": "normal",
+    "checksum": 56280.0,
+    "protected": 0,
+    "moved": 0
+  },
+  {
+    "engine": "r3",
+    "trips": 8,
+    "mode": "scheduled",
+    "checksum": 56280.0,
+    "protected": 908,
+    "moved": 12543
+  },
+  {
+    "engine": "candidate",
+    "trips": 8,
+    "mode": "normal",
+    "checksum": 56280.0,
+    "protected": 0,
+    "moved": 0
+  },
+  {
+    "engine": "candidate",
+    "trips": 8,
+    "mode": "scheduled",
+    "checksum": 56280.0,
+    "protected": 106,
+    "moved": 12572
+  },
+  {
+    "engine": "main",
+    "trips": 64,
+    "mode": "normal",
+    "checksum": 450240.0,
+    "protected": 0,
+    "moved": 0
+  },
+  {
+    "engine": "main",
+    "trips": 64,
+    "mode": "scheduled",
+    "checksum": 450240.0,
+    "protected": 6450,
+    "moved": 12626
+  },
+  {
+    "engine": "r3",
+    "trips": 64,
+    "mode": "normal",
+    "checksum": 450240.0,
+    "protected": 0,
+    "moved": 0
+  },
+  {
+    "engine": "r3",
+    "trips": 64,
+    "mode": "scheduled",
+    "checksum": 450240.0,
+    "protected": 6450,
+    "moved": 12602
+  },
+  {
+    "engine": "candidate",
+    "trips": 64,
+    "mode": "normal",
+    "checksum": 450240.0,
+    "protected": 0,
+    "moved": 0
+  },
+  {
+    "engine": "candidate",
+    "trips": 64,
+    "mode": "scheduled",
+    "checksum": 450240.0,
+    "protected": 106,
+    "moved": 12572
+  }
+]

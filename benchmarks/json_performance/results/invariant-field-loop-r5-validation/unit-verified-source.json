@@ -1,0 +1,10 @@
+{
+  "command": "RUST_TEST_THREADS=1 cargo test --release -p perry-codegen -p perry-runtime --lib invariant_field",
+  "hashes": {
+    "crates/perry-codegen/src/stmt/invariant_field_loop.rs": "16943419ba801d6b9422dfb5118ee91ef134722f730a2baf0693c2723b958193",
+    "crates/perry-codegen/src/stmt/invariant_field_loop_tests.rs": "dc312c59aeac7936d4c394d8a2d62b65ec3ccab0b66777d5c768f570a3d0ad2d",
+    "crates/perry-runtime/src/json_tape/scalar_projection.rs": "198d6eafae23535c479778148ef529cbbcac2aa82cbb0d53bce110a2158ad188",
+    "crates/perry-runtime/src/json_tape/invariant_field_tests.rs": "d0121c3ddc4e8b0418df12b6a76b24224354662b19d675bdce975e0b0df2e83e",
+    "scripts/gc_root_dominance_check.py": "e812e9e73dfa1838d545ed15153f736118f5f2d0fa9240725bbb6255a0830ab8"
+  }
+}

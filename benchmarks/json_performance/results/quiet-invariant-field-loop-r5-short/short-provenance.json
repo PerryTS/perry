@@ -1,0 +1,38 @@
+{
+  "source_commit": "24a8ab6953ba811f5112e49ba1c79ae6e683118b",
+  "builds": [
+    {
+      "label": "candidate",
+      "commands": [
+        [
+          "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/frozen-build/perry",
+          "compile",
+          "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/short-loops.ts",
+          "--no-cache",
+          "--no-auto-optimize",
+          "--no-link",
+          "-o",
+          "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/candidate-short.o"
+        ],
+        [
+          "cc",
+          "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/candidate-short.o",
+          "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/frozen-build/libperry_runtime.a",
+          "-lc",
+          "-Wl,-dead_strip",
+          "-Wl,-no_exported_symbols",
+          "-o",
+          "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/invariant-field-loop-r5/candidate-short"
+        ]
+      ],
+      "hashes": {
+        "benchmarks/json_performance/.work/invariant-field-loop-r5/short-loops.ts": "c1d76ee99f58c704180916bcaddbad9089dd6673806d137f984e5e2a7a54a08e",
+        "benchmarks/json_performance/.work/invariant-field-loop-r5/candidate-short.o": "4ac39fecfa674a7d6e681cf28db191d427440b88e156220e2367923e64f174bf",
+        "benchmarks/json_performance/.work/invariant-field-loop-r5/candidate-short": "185cb8b7a9859bb9465cd4db1693c2eb9e03633436ddf78be84c903e27a6f2cf",
+        "benchmarks/json_performance/.work/invariant-field-loop-r5/frozen-build/perry": "d2abfd3befe5c7977251e68af77628a11b06611e7eb272ddcb381a889ed844d7",
+        "benchmarks/json_performance/.work/invariant-field-loop-r5/frozen-build/libperry_runtime.a": "2deb369a13c0c77fe98326e306ae4a52f3469224ee8c4d453e9dcc9908fe8322",
+        "benchmarks/json_performance/.work/invariant-field-loop-r5/frozen-build/libperry_stdlib.a": "39965b46915622a57d4cfb66760e159def70035282755e669fcbc906ad9220ce"
+      }
+    }
+  ]
+}

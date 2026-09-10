@@ -172,3 +172,10 @@ Large-input lazy parsing remains a separate bounded experiment: forcing the
 lazy path may help scalar scans, but must also be measured with mixed-field and
 full-object consumption before changing the 16 MiB cap. Inherited JSON
 canonicalization/conformance limitations remain; this is not full JSON conformance proof.
+
+## Guarded invariant-field follow-up
+
+[R5 results](INVARIANT_FIELD_LOOP.md) replace repeated literal-index field reads
+with a guarded scalar reduction. The three long repeat rows beat Node and Bun,
+but mixed-field and tiny-stringify regressions still prevent landing. The R3
+measurements above remain unchanged.

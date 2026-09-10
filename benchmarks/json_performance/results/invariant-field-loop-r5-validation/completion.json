@@ -1,0 +1,10 @@
+{
+  "source_commit": "24a8ab6953ba811f5112e49ba1c79ae6e683118b",
+  "performance_accepted": false,
+  "native_fixture_check_passed": false,
+  "native_fingerprints_inherited_from_exact_main": 4,
+  "all_timed_checksums_valid": 751,
+  "all_production_artifact_hashes_reconfirmed": true,
+  "final_script_lint": "73/74; public benchmark freshness fails; compile tier skipped",
+  "remaining": "mixed-field and tiny stringify regressions, short-call setup, changing-index CPU, large memory, full matrices and retained suites; rebase current main before any landing"
+}

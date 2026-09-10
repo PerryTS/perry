@@ -1,0 +1,28 @@
+[
+  {
+    "fixture": "test_json_invariant_field_loop",
+    "actual": [
+      "main::unrooted:alloc->js_inline_arena_slow_alloc",
+      "main::unrooted:strhandle->js_put_value_set_ic_overflow_store"
+    ],
+    "actual_main_53df": [
+      "main::unrooted:alloc->js_inline_arena_slow_alloc",
+      "main::unrooted:strhandle->js_put_value_set_ic_overflow_store"
+    ],
+    "same": true,
+    "baseline_log": "benchmarks/json_performance/.work/invariant-field-loop-r5/main-fixture-native/check.log"
+  },
+  {
+    "fixture": "test_json_scalar_projection",
+    "actual": [
+      "main::unrooted:alloc->js_closure_unbox_callee_checked",
+      "main::unrooted:global->js_get_string_pointer_unified"
+    ],
+    "actual_main_53df": [
+      "main::unrooted:alloc->js_closure_unbox_callee_checked",
+      "main::unrooted:global->js_get_string_pointer_unified"
+    ],
+    "same": true,
+    "baseline_log": "benchmarks/json_performance/.work/invariant-field-loop-r5/main-current-projection/check.log"
+  }
+]

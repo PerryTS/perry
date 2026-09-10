@@ -1,0 +1,19 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/invariant-field-loop-r5/run-short-loops.py",
+  "--worker",
+  ".work/invariant-field-loop-r5/candidate-short",
+  "--baseline-worker",
+  ".work/invariant-field-loop-r5/main-short",
+  "--prior-worker",
+  ".work/invariant-field-loop-r5/r3-short",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--results-dir",
+  "results/quiet-invariant-field-loop-r5-short"
+]

@@ -1,0 +1,31 @@
+{
+  "source_sha": "53df2c671fff33b1f8f624432372c2401db8b1d0",
+  "source_clean": true,
+  "command": [
+    "cargo",
+    "build",
+    "--release",
+    "-p",
+    "perry",
+    "-p",
+    "perry-runtime-static",
+    "-p",
+    "perry-stdlib-static"
+  ],
+  "completed_build_log_sha256": "4b1a834845ce02c5458ef445f9e994954a84426e83fdfa88e8254f055f8c3723",
+  "frozen_at_utc": "2026-09-10T12:19:15.668363+00:00",
+  "artifacts": {
+    "perry": {
+      "sha256": "f45e308bcb13940e75eebb377142d84c401b95f2faca1ddd09ea276c89b0f736",
+      "size": 117699616
+    },
+    "libperry_runtime.a": {
+      "sha256": "d0c06e3ad5e85a99858d42c1194f6c43aca89ce1f9700cffe95c29d4aea9c76a",
+      "size": 36882304
+    },
+    "libperry_stdlib.a": {
+      "sha256": "929824aaf04a4c504546a157a55da75c934be84a55db19b176610eab40621681",
+      "size": 86371304
+    }
+  }
+}

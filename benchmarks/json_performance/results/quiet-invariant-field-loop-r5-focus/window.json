@@ -1,0 +1,52 @@
+{
+  "owner": "json-perf-45738-1789048759",
+  "load_before": [
+    1.458984375,
+    1.46240234375,
+    1.470703125
+  ],
+  "started_utc": "2026-09-10T13:59:19Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    "run_regression_focus.py",
+    "--worker",
+    ".work/invariant-field-loop-r5/worker",
+    "--baseline-worker",
+    ".work/main-53df-fresh/worker",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--bun",
+    "/Users/perry/.bun/bin/bun",
+    "--case",
+    "records_array_16k:scan:4000:8:7",
+    "--case",
+    "records_array_1m:scan:200:2:7",
+    "--case",
+    "records_array_8m:scan:32:1:7",
+    "--case",
+    "records_array_20m:scan:16:1:7",
+    "--case",
+    "records_array_20m:roundtrip:8:1:7",
+    "--case",
+    "records_array_1m:parse:200:8:7",
+    "--case",
+    "records_array_1m:stringify:256:8:7",
+    "--case",
+    "small_record:parse:2000000:5000:7",
+    "--case",
+    "small_record:stringify:10000000:5000:7",
+    "--case",
+    "long_string_1m:stringify:4096:8:7",
+    "--results-dir",
+    "results/quiet-invariant-field-loop-r5-focus"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    2.33740234375,
+    1.806640625,
+    1.6025390625
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-10T14:01:58Z"
+}
