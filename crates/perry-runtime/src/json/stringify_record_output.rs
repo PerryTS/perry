@@ -164,7 +164,7 @@ unsafe fn receiver_to_json_absent(
 }
 
 /// Decline before entering the planning frame on large/exotic receivers.
-#[inline]
+#[inline(always)]
 pub(super) unsafe fn try_object(bits: u64) -> Option<JSValue> {
     if bits & crate::value::TAG_MASK != POINTER_TAG {
         return None;

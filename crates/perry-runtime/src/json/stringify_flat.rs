@@ -229,7 +229,7 @@ pub(super) unsafe fn emit_piece(piece: Piece, bits: u64, output: *mut u8) -> usi
 
 /// The full entry restricts replacer and spacer to inert arguments before
 /// calling this helper. Any semantic uncertainty declines before output.
-#[inline]
+#[inline(always)]
 pub(super) unsafe fn try_object(bits: u64) -> Option<JSValue> {
     if bits & crate::value::TAG_MASK != POINTER_TAG {
         return None;

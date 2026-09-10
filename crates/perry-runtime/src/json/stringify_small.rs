@@ -13,7 +13,8 @@ pub(super) fn inline_ascii_output(bytes: &[u8]) -> Option<JSValue> {
 }
 
 /// Only call when no replacer or observable spacer coercion is required.
-#[inline]
+// Keep this in the ordinary entry when the inert-spacer helper also calls it.
+#[inline(always)]
 pub(super) fn try_primitive(bits: u64) -> Option<JSValue> {
     match bits {
         TAG_NULL => return Some(JSValue::short_string_unchecked(b"null")),
