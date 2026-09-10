@@ -1,0 +1,119 @@
+from pathlib import Path
+import hashlib,json,math,os,re,subprocess
+root=Path('/Users/amlug/projects/perry/json-merged-pr10022')
+os.chdir(root)
+b=Path('benchmarks/json_performance'); work=b/'.work/lazy-canonical-r1'
+assert '297 passed; 0 failed' in Path('/tmp/json-lazy-canonical-r1-tests.log').read_text()
+assert 'json_small_object_template_survives_evacuation ... ok' in Path('/tmp/json-lazy-canonical-r1-tests.log').read_text()
+assert 'Finished `release`' in Path('/tmp/json-lazy-canonical-r1-build.log').read_text()
+tested=json.loads((b/'.work/lazy-canonical-r1-tests.json').read_text())
+assert subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()==tested['base_commit']
+for name,digest in tested['files'].items():
+    assert hashlib.sha256(Path(name).read_bytes()).hexdigest()==digest, name
+assert subprocess.check_output(['target/release/perry','--version'],text=True).strip().endswith('0.5.1530')
+work.mkdir(exist_ok=False)
+for obj,name in [(b/'.work/worker.o','worker'),(b/'.work/rotating-worker','rotating-worker'),(b/'.work/large-leaf-lifetime/worker.o','leaf-lifetime')]:
+    with (work/(name+'-link.log')).open('w') as log:
+        subprocess.run(['cc',str(obj),'target/release/libperry_runtime.a','-lc','-Wl,-dead_strip','-Wl,-no_exported_symbols','-o',str(work/name)],stdout=log,stderr=subprocess.STDOUT,check=True)
+files=[str(p) for p in [Path('crates/perry-runtime/src/json/parse_tape_depth_tests.rs'),Path('crates/perry-runtime/src/json_tape_tests.rs'),Path('test-files/test_json_tape_depth_admission.ts'),Path('crates/perry-runtime/src/json/parser_depth_blocks.rs'),Path('crates/perry-runtime/src/json/parse_empty.rs'),Path('crates/perry-runtime/src/json/parser.rs'),Path('crates/perry-runtime/src/json_tape/string_decode_tests.rs'),Path('crates/perry-runtime/src/string/json_construction.rs'),Path('crates/perry-runtime/src/string/mod.rs'),Path('Cargo.toml'),Path('Cargo.lock'),Path('CLAUDE.md'),Path('crates/perry-runtime/src/json/mod.rs'),Path('crates/perry-runtime/src/json/stringify_scalars.rs'),Path('crates/perry-runtime/src/json/stringify.rs'),Path('crates/perry-runtime/src/json/parse_reuse.rs'),Path('crates/perry-runtime/src/gc/tests/json_parse_scalar.rs'),Path('crates/perry-runtime/src/json_tape.rs'),Path('crates/perry-runtime/src/json_tape/record_materialize.rs'),Path('crates/perry-runtime/src/gc/policy.rs'),Path('crates/perry-runtime/src/json/parse_api.rs'),Path('crates/perry-runtime/src/json/stringify_flat.rs'),Path('crates/perry-runtime/src/json/replacer.rs'),Path('crates/perry-runtime/src/gc/tests/json_stringify_output.rs'),Path('crates/perry-runtime/src/gc/tests/runtime_roots/callback_scanners.rs'),Path('scripts/gc_runtime_root_holders.json'),Path('test-files/test_json_large_parse_leaf_lifetime.ts'),Path('target/release/perry'),Path('target/release/libperry_runtime.a'),Path('target/release/libperry_stdlib.a'),b/'.work/worker.o',b/'.work/rotating-worker',b/'.work/large-leaf-lifetime/worker.o',work/'worker',work/'rotating-worker',work/'leaf-lifetime']]
+files += ['crates/perry-runtime/src/json/stringify_api.rs','crates/perry-runtime/src/json/stringify_lazy.rs','crates/perry-runtime/src/json/stringify_lazy_tests.rs']
+provenance={'base_commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'files':{p:hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in files},'package_version':'0.5.1530','reference_commit':'eee3881c464bf91ae900e87a42bed072bbdfc95a','negative_control_commit':'e7223f700c8ce69c388210dab394ad7142550527','runtime_only_bench_link':True,'tests':'297 JSON tests passed at package version 0.5.1530; all changed Rust source hashes match that tested tree','matched_release_build':'passed'}
+(work/'provenance.json').write_text(json.dumps(provenance,indent=2)+'\n')
+patch=subprocess.check_output(['git','diff','eee3881c464bf91ae900e87a42bed072bbdfc95a','--','Cargo.toml','Cargo.lock','CLAUDE.md','crates/perry-runtime','scripts/gc_runtime_root_holders.json'])
+(work/'source.patch').write_bytes(patch)
+clean={k:v for k,v in os.environ.items() if not k.startswith('PERRY_')}
+node=['/opt/homebrew/bin/node']
+records=b/'.work/fixtures/records_array_16k.json'
+scan=[str(records),'scan','100','2','verify']
+rot=[str(b/'.work/rotating/unicode_1m'),'parse','1000','8','time','rotating']
+def run(name,cmd,env=None):
+    with (work/(name+'.stdout')).open('wb') as out,(work/(name+'.stderr')).open('wb') as err:
+        subprocess.run(list(map(str,cmd)),env=clean|{'PERRY_GC_DIAG':'1'}|(env or {}),stdout=out,stderr=err,check=True,timeout=90)
+    output = (work/(name+'.stdout')).read_bytes()
+    result = re.search(rb'^RESULT (.+)$', output, re.M)
+    if result:
+        fields = list(map(float, result.group(1).split()))
+        assert len(fields) == 7 and all(math.isfinite(n) for n in fields), name
+    print('PASS',name,flush=True)
+    return (work/(name+'.stdout')).read_bytes(),(work/(name+'.stderr')).read_text()
+def verification(text):
+    return [line for line in text.splitlines() if line.startswith((b'VERIFY ',b'LAST ',b'KEEP '))]
+def counters(text):
+    def last(key):
+        values=re.findall(r'\b'+key+r'=(\d+)',text)
+        return int(values[-1]) if values else 0
+    result = {key:last(key) for key in ['scheduled_collections','copying_minors','moved_objects','loop_polls','cycle_starts']}|{'protected_retired_sets':len(re.findall(r'\[gc-fromspace-protect\].*retired_set=#',text))}
+    if not re.search(r'\bmoved_objects=',text):
+        result['moved_objects']=sum(sum(map(int,re.findall(r'\b(?:copied_objects|promoted_objects)=(\d+)',line))) for line in text.splitlines() if line.startswith('[gc-copy-minor] ran'))
+    return result
+stress={'PERRY_GC_SCHEDULE_SEED':'10022','PERRY_GC_SCHEDULE_RATE':'0.1','PERRY_GC_SCHEDULE_ALLOC_KB':'0','PERRY_GC_PROTECT_FROMSPACE':'1'}
+expected,_=run('scan-node',node+[b/'worker.js']+scan)
+output,diagnostics=run('scan-scheduled',[work/'worker']+scan,stress)
+assert verification(output)==verification(expected)
+c=counters(diagnostics)
+assert all(c[k]>0 for k in ['scheduled_collections','copying_minors','moved_objects','protected_retired_sets'])
+full,_=run('scan-fullgc',[work/'worker']+scan,{'PERRY_GEN_GC':'0'})
+assert verification(full)==verification(expected)
+witness={'scan':c|{'matches_node':True,'full_gc_matches_node':True}}
+expected=(b/'.work/large-leaf-lifetime/node.stdout').read_bytes()
+for label,env in [('normal',{}),('scheduled',stress),('fullgc',{'PERRY_GEN_GC':'0'})]:
+    output,diagnostics=run('leaf-'+label,[work/'leaf-lifetime'],env)
+    assert output==expected,(label,output,expected)
+    c=counters(diagnostics)
+    if label in {'normal','scheduled'}: assert c['copying_minors']>0,c
+    if label=='scheduled': assert c['protected_retired_sets']>0 and c['moved_objects']>0,c
+    witness['retained_'+label]=c|{'matches_node':True}
+output,diagnostics=run('rotating-unicode',[work/'rotating-worker']+rot)
+c=counters(diagnostics)
+assert c['copying_minors']>0,c
+result=list(map(float,re.search(rb'^RESULT (.+)$',output,re.M).group(1).split()))
+witness['rotating_unicode_diagnostic']=c|{'rss_before_bytes':result[3],'rss_after_bytes':result[4],'timed_parses':1000,'warmup_parses':8}
+rot_verify=[str(b/'.work/rotating/unicode_1m'),'parse','7','8','verify','rotating']
+expected,_=run('rotating-node',node+[b/'rotating-worker.js']+rot_verify)
+output,_=run('rotating-verify',[work/'rotating-worker']+rot_verify)
+assert verification(output)==verification(expected)
+witness['rotating_unicode_diagnostic']['matches_node']=True
+
+# Compare the actual recurring malloc trigger counts, separately from timing.
+schedule_args=[str(b/'.work/fixtures/unicode_1m.json'),'stringify','150','2']
+schedule_counts={}
+for label,worker in [('baseline',b/'.work/main-eee/worker'),('candidate',work/'worker')]:
+    _,diagnostics=run('stringify-cadence-'+label,[worker]+schedule_args)
+    schedule_counts[label]=[int(n) for n in re.findall(r'\[gc-trigger\].*kind=MallocCount.*?\bmalloc=(\d+)',diagnostics)]
+assert len(schedule_counts['candidate'])>=len(schedule_counts['baseline'])>=3,schedule_counts
+assert max(schedule_counts['candidate'][1:])<=max(schedule_counts['baseline'][1:]),schedule_counts
+witness['stringify_cadence_malloc_counts']=schedule_counts
+(work/'gc-witness.json').write_text(json.dumps(witness,indent=2)+'\n')
+print(json.dumps(witness,indent=2),flush=True)
+
+# A compiled before/after witness of the confirmed sparse/batch discrepancy.
+fixture = b/'.work/review-surrogate/fixture.json'
+for mode in ['scan','sparse']:
+    args = [str(fixture),mode,'1','0','verify']
+    expected,_=run('surrogate-node-'+mode,node+[b/'worker.js']+args)
+    prior,_=run('surrogate-before-'+mode,[b/'.work/main-e722/worker']+args)
+    assert verification(prior)!=verification(expected),'regression witness must fail before the fix'
+    for label,env in [('normal',{}),('scheduled',stress),('fullgc',{'PERRY_GEN_GC':'0'})]:
+        output,_=run('surrogate-'+mode+'-'+label,[work/'worker']+args,env)
+        assert verification(output)==verification(expected),(mode,label)
+print('PASS compiled surrogate regression: old binary differs, fixed binary matches Node')
+
+# The same Node-checked records as the unit tests, through compiled lazy reads.
+text=Path('crates/perry-runtime/src/json_tape/string_decode_tests.rs').read_text().split('unsafe fn render',1)[0]
+tokens=re.findall(r'r#"(.*?)"#',text,re.S)
+assert len(tokens)==14
+matrix=[]
+for case,record in enumerate(tokens[::2]):
+    if '"id":' not in record:
+        record = '{"id":1,' + record[1:]
+    fixture=work/('escaped-record-'+str(case)+'.json')
+    fixture.write_text('['+','.join([record]*128)+']')
+    for mode in ['scan','sparse']:
+        args=[str(fixture),mode,'1','0','verify']
+        expected,_=run('escaped-node-'+str(case)+'-'+mode,node+[b/'worker.js']+args)
+        prior,_=run('escaped-before-'+str(case)+'-'+mode,[b/'.work/main-e722/worker']+args)
+        actual,_=run('escaped-fixed-'+str(case)+'-'+mode,[work/'worker']+args)
+        assert verification(actual)==verification(expected),(case,mode)
+        matrix.append({'case':case,'mode':mode,'old_matches_node':verification(prior)==verification(expected),'fixed_matches_node':True})
+(work/'compiled-surrogate-matrix.json').write_text(json.dumps(matrix,indent=2)+'\n')
+print('PASS all 14 compiled escaped-record comparisons')
