@@ -144,7 +144,7 @@ extern "C" fn client_once_wrapper(closure: *const RawClosureHeader, rest: f64) -
         if array.is_null() {
             return js_closure_call_array(callback, std::ptr::null(), 0);
         }
-        let args = array.add(1) as *const f64;
+        let args = perry_runtime::array::array_elements_ptr(array) as *const f64;
         js_closure_call_array(callback, args, (*array).length as i64)
     }
 }

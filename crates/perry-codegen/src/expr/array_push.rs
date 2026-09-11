@@ -184,8 +184,8 @@ fn emit_dynamic_pointer_push_store(
         let length = blk.safe_load_i32_from_ptr(arr_handle);
         let length_i64 = blk.zext(I32, &length, I64);
         let byte_offset = blk.shl(I64, &length_i64, "3");
-        let with_header = blk.add(I64, &byte_offset, "8");
-        let element_addr = blk.add(I64, arr_handle, &with_header);
+        let elements_addr = blk.array_elements_addr(arr_handle);
+        let element_addr = blk.add(I64, &elements_addr, &byte_offset);
         let element_ptr = blk.inttoptr(I64, &element_addr);
         // GC_STORE_AUDIT(BARRIERED): the common store remains unconditional;
         // only proven no-op bookkeeping is bypassed below, and the caller
@@ -282,8 +282,8 @@ fn emit_numeric_push_store_pointer_tested(
         let length = blk.safe_load_i32_from_ptr(arr_handle);
         let length_i64 = blk.zext(I32, &length, I64);
         let byte_offset = blk.shl(I64, &length_i64, "3");
-        let with_header = blk.add(I64, &byte_offset, "8");
-        let element_addr = blk.add(I64, arr_handle, &with_header);
+        let elements_addr = blk.array_elements_addr(arr_handle);
+        let element_addr = blk.add(I64, &elements_addr, &byte_offset);
         let element_ptr = blk.inttoptr(I64, &element_addr);
         // GC_STORE_AUDIT(BARRIERED): the slot write itself is unconditional;
         // only the bookkeeping moves behind the live test below, and the
@@ -1367,8 +1367,8 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                     let length = blk.safe_load_i32_from_ptr(&payload);
                     let length_i64 = blk.zext(I32, &length, I64);
                     let byte_offset = blk.shl(I64, &length_i64, "3");
-                    let with_header = blk.add(I64, &byte_offset, "8");
-                    let element_addr = blk.add(I64, &payload, &with_header);
+                    let elements_addr = blk.array_elements_addr(&payload);
+                    let element_addr = blk.add(I64, &elements_addr, &byte_offset);
                     let element_ptr = blk.inttoptr(I64, &element_addr);
                     let value_bits = if let Some(value_bits) = v_bits.as_deref() {
                         emit_jsvalue_slot_store_with_value_bits_on_block(

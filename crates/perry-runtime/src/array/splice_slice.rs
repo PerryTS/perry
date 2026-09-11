@@ -80,7 +80,7 @@ pub extern "C" fn js_array_splice(
         let deleted_is_plain = crate::array::species::species_result_is_plain_array(deleted_box);
         let deleted = crate::value::js_nanbox_get_pointer(deleted_box) as *mut ArrayHeader;
 
-        let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let elements_ptr = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
 
         // Copy deleted elements to return array. ECMA-262 §23.1.3.31 step
         // 12.b: each removed index goes through HasProperty/Get — a hole
@@ -100,7 +100,7 @@ pub extern "C" fn js_array_splice(
         if deleted_is_plain {
             (*deleted).length = actual_delete;
             let deleted_elements =
-                (deleted as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+                crate::array::array_elements_ptr(deleted as *const ArrayHeader) as *mut f64;
             // Hole reads also consult recorded custom prototypes, which are
             // not covered by array_iteration_is_exotic's canonical-proto flags.
             let src_exotic = crate::array::array_iteration_is_exotic(arr)
@@ -132,7 +132,7 @@ pub extern "C" fn js_array_splice(
         } else {
             arr
         };
-        let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let elements_ptr = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
 
         // Shift elements after the splice point
         let tail_start = start_idx + actual_delete;
@@ -270,12 +270,13 @@ pub extern "C" fn js_array_slice(
         // (has Array.prototype or Object.prototype indexed properties) so
         // inherited indices appear in the result just as [[Get]] would return
         // them (ECMA-262 §23.1.3.25 step 8b "If HasProperty(O, from)…").
-        let src_elements = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let src_elements =
+            crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
         let src_exotic = crate::array::array_iteration_is_exotic(arr);
         if is_plain {
             (*result).length = slice_len;
             let dst_elements =
-                (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+                crate::array::array_elements_ptr(result as *const ArrayHeader) as *mut f64;
             for i in 0..slice_len as usize {
                 let src_idx = start_idx as usize + i;
                 let v = if src_exotic {

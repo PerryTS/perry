@@ -564,7 +564,7 @@ pub(super) fn al_has(recv: f64, k: i64) -> bool {
             if k >= (*arr).length as i64 {
                 return false;
             }
-            let el = *((arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64)
+            let el = *(crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64)
                 .add(k as usize);
             if el.to_bits() != TAG_HOLE {
                 return true;
@@ -759,7 +759,7 @@ pub extern "C" fn js_arraylike_map(recv: f64, cb: f64, this_arg: f64) -> f64 {
             )
         });
         let elems =
-            unsafe { (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64 };
+            unsafe { crate::array::array_elements_ptr(result as *const ArrayHeader) as *mut f64 };
         unsafe {
             // GC_STORE_AUDIT(BARRIERED): note_array_slot below re-stores this slot with the barrier.
             ptr::write(elems.add(k as usize), mapped);
@@ -1207,7 +1207,7 @@ pub extern "C" fn js_arraylike_at(recv: f64, index: f64) -> f64 {
 fn materialize(recv: f64) -> *mut ArrayHeader {
     let len = al_length(recv);
     let arr = js_array_alloc_with_length(len.max(0) as u32);
-    let elems = unsafe { (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64 };
+    let elems = unsafe { crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64 };
     for k in 0..len {
         if !al_has(recv, k) {
             continue; // leave the hole
@@ -1283,7 +1283,7 @@ pub extern "C" fn js_arraylike_slice(
         value_h.set_nanbox_f64(al_get(recv_h.get_nanbox_f64(), k));
         let value = value_h.get_nanbox_f64();
         result_h.with_mut_ptr::<ArrayHeader, _>(|result| unsafe {
-            let elems = (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+            let elems = crate::array::array_elements_ptr(result as *const ArrayHeader) as *mut f64;
             // GC_STORE_AUDIT(BARRIERED): note_array_slot below re-stores this
             // slot with the write barrier after the direct dense write.
             ptr::write(elems.add(n as usize), value);

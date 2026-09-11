@@ -371,7 +371,7 @@ extern "C" fn outer_thunk(closure: *const ClosureHeader, rest_value: f64) -> f64
     let mut combined = js_array_alloc((rest_len + 1) as u32);
     if !rest_arr_ptr.is_null() && rest_len > 0 {
         let rest_data = unsafe {
-            (rest_arr_ptr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64
+            crate::array::array_elements_ptr(rest_arr_ptr as *const ArrayHeader) as *const f64
         };
         for i in 0..rest_len {
             let v = unsafe { *rest_data.add(i) };
@@ -396,7 +396,7 @@ extern "C" fn outer_thunk(closure: *const ClosureHeader, rest_value: f64) -> f64
                 called = true;
                 let arr = combined_handle.get_raw_const_ptr::<ArrayHeader>();
                 let data = unsafe {
-                    (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64
+                    crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64
                 };
                 let n = js_array_length(arr) as usize;
                 unsafe {
@@ -494,7 +494,7 @@ extern "C" fn gkp_outer_thunk(closure: *const ClosureHeader, rest_value: f64) ->
     let mut combined = js_array_alloc((rest_len + 1) as u32);
     if !rest_arr_ptr.is_null() && rest_len > 0 {
         let rest_data = unsafe {
-            (rest_arr_ptr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64
+            crate::array::array_elements_ptr(rest_arr_ptr as *const ArrayHeader) as *const f64
         };
         for i in 0..rest_len {
             let v = unsafe { *rest_data.add(i) };
@@ -516,7 +516,7 @@ extern "C" fn gkp_outer_thunk(closure: *const ClosureHeader, rest_value: f64) ->
                 called = true;
                 let arr = combined_handle.get_raw_const_ptr::<ArrayHeader>();
                 let data = unsafe {
-                    (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64
+                    crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64
                 };
                 let n = js_array_length(arr) as usize;
                 unsafe {
@@ -642,7 +642,9 @@ extern "C" fn deprecate_outer_thunk(closure: *const ClosureHeader, rest_value: f
     let rest_data = if rest_arr_ptr.is_null() {
         std::ptr::null()
     } else {
-        unsafe { (rest_arr_ptr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64 }
+        unsafe {
+            crate::array::array_elements_ptr(rest_arr_ptr as *const ArrayHeader) as *const f64
+        }
     };
 
     unsafe { crate::closure::js_native_call_value(fn_handle.get_nanbox_f64(), rest_data, rest_len) }
@@ -678,7 +680,7 @@ extern "C" fn callbackify_outer_thunk(closure: *const ClosureHeader, rest_value:
     }
 
     let rest_data = unsafe {
-        (rest_arr_ptr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64
+        crate::array::array_elements_ptr(rest_arr_ptr as *const ArrayHeader) as *const f64
     };
     let callback_value = unsafe { *rest_data.add(rest_len - 1) };
     let callback_handle = scope.root_nanbox_f64(callback_value);
@@ -699,7 +701,7 @@ extern "C" fn callbackify_outer_thunk(closure: *const ClosureHeader, rest_value:
     // trap so any sync exception unwinds past us.
     let returned = unsafe {
         let arr = original_args_handle.get_raw_const_ptr::<ArrayHeader>();
-        let data = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let data = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
         crate::closure::js_native_call_value(fn_handle.get_nanbox_f64(), data, original_arg_len)
     };
     // #9539: `returned` is a heap value that outlives two closure allocations,

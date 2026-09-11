@@ -426,7 +426,7 @@ fn test_transient_runtime_handle_array_push_gc() {
     unsafe {
         assert_eq!((*grown).length, 200_001);
         let elements =
-            (grown as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const u64;
+            crate::array::array_elements_ptr(grown as *const crate::ArrayHeader) as *const u64;
         let stored = *elements.add(200_000);
         assert_eq!(stored & TAG_MASK, STRING_TAG);
         let stored_ptr = (stored & POINTER_MASK) as *const crate::StringHeader;

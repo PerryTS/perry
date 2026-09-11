@@ -45,7 +45,8 @@ pub(crate) unsafe fn try_stringify_node_stream_json(ptr: *const u8, buf: &mut St
     if key_count > 65_536 || key_count > (*keys).capacity as usize {
         return false;
     }
-    let elements = (keys as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
+    let elements =
+        crate::array::array_elements_ptr(keys as *const crate::ArrayHeader) as *const f64;
     let mut readable_idx: Option<u32> = None;
     let mut writable_idx: Option<u32> = None;
     for i in 0..key_count {

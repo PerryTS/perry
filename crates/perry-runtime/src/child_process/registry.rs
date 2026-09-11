@@ -139,9 +139,9 @@ pub extern "C" fn js_child_process_spawn_background(
         if args_ptr != 0 {
             let arr_ptr = args_ptr as *const crate::array::ArrayHeader;
             let args_len = (*arr_ptr).length as usize;
-            let args_data = (arr_ptr as *const u8)
-                .add(std::mem::size_of::<crate::array::ArrayHeader>())
-                as *const f64;
+            let args_data =
+                crate::array::array_elements_ptr(arr_ptr as *const crate::array::ArrayHeader)
+                    as *const f64;
             for i in 0..args_len {
                 let arg_val = *args_data.add(i);
                 if let Some(arg_str) = extract_string_from_nanboxed(arg_val) {
@@ -271,9 +271,9 @@ pub extern "C" fn js_child_process_spawn_detached(
         if args_ptr != 0 {
             let arr_ptr = args_ptr as *const crate::array::ArrayHeader;
             let args_len = (*arr_ptr).length as usize;
-            let args_data = (arr_ptr as *const u8)
-                .add(std::mem::size_of::<crate::array::ArrayHeader>())
-                as *const f64;
+            let args_data =
+                crate::array::array_elements_ptr(arr_ptr as *const crate::array::ArrayHeader)
+                    as *const f64;
             for i in 0..args_len {
                 let arg_val = *args_data.add(i);
                 if let Some(arg_str) = extract_string_from_nanboxed(arg_val) {

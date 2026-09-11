@@ -76,7 +76,8 @@ unsafe fn keys_array_may_carry_to_json(keys: *mut crate::ArrayHeader) -> bool {
     // `ensure_key_in_keys_array` / the shape allocators), so read the element
     // slots raw — same layout walk `stringify_object_inner` does — instead of
     // paying the exported `js_array_get` validation per element.
-    let elements = (keys as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
+    let elements =
+        crate::array::array_elements_ptr(keys as *const crate::ArrayHeader) as *const f64;
     for i in 0..key_count {
         let stored = JSValue::from_bits((*elements.add(i)).to_bits());
         if key_may_carry_to_json(stored) {

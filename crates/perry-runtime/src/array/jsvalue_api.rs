@@ -32,7 +32,7 @@ pub extern "C" fn js_array_from_jsvalue(elements: *const u64, count: u32) -> *mu
     let arr = js_array_alloc(count);
     unsafe {
         (*arr).length = count;
-        let arr_elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let arr_elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
         // Each u64 contains NaN-boxed JSValue bits, store as f64 bits
         for i in 0..count as usize {
             let bits = *elements.add(i);

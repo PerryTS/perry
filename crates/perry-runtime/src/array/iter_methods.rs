@@ -14,7 +14,7 @@ fn array_receiver_value(arr: *const ArrayHeader) -> f64 {
 
 #[inline(always)]
 unsafe fn array_elements_ptr(arr: *const ArrayHeader) -> *const f64 {
-    (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64
+    crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64
 }
 
 #[inline(always)]
@@ -401,7 +401,7 @@ pub extern "C" fn js_array_map(
             if is_plain {
                 let result = result_arr(&result_rooted);
                 let result_elements =
-                    (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+                    crate::array::array_elements_ptr(result as *const ArrayHeader) as *mut f64;
                 // GC_STORE_AUDIT(INIT): plain result is unpublished; slot layout noted below.
                 ptr::write(result_elements.add(i), mapped);
                 let mapped_bits = mapped.to_bits();
@@ -1176,9 +1176,9 @@ pub extern "C" fn js_array_flatMap(
                     // read through a stale ArrayHeader pointer.
                     let sub_arr = crate::array::flattenable_array_ptr(sub_rooted.get_nanbox_f64());
                     debug_assert!(!sub_arr.is_null());
-                    let sub_elements = (sub_arr as *const u8)
-                        .add(std::mem::size_of::<ArrayHeader>())
-                        as *const f64;
+                    let sub_elements =
+                        crate::array::array_elements_ptr(sub_arr as *const ArrayHeader)
+                            as *const f64;
                     let Some(sub_element) = present_array_element(sub_elements, j) else {
                         continue;
                     };

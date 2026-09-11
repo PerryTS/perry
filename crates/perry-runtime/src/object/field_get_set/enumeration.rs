@@ -1079,7 +1079,7 @@ pub(crate) unsafe fn keys_contain_array_index(keys: *const ArrayHeader) -> bool 
             {
                 let len = (*keys).length as usize;
                 let elements =
-                    (keys as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+                    crate::array::array_elements_ptr(keys as *const ArrayHeader) as *const f64;
                 let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
                 for i in 0..len {
                     let key_val = crate::JSValue::from_bits((*elements.add(i)).to_bits());
@@ -1395,9 +1395,9 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
                         dense_limit.saturating_add(names.len() as u32),
                     );
                     if dense_limit > 0 {
-                        let elements = (arr as *const u8)
-                            .add(std::mem::size_of::<crate::array::ArrayHeader>())
-                            as *const u64;
+                        let elements = crate::array::array_elements_ptr(
+                            arr as *const crate::array::ArrayHeader,
+                        ) as *const u64;
                         for i in 0..dense_limit {
                             if std::ptr::read(elements.add(i as usize)) == crate::value::TAG_HOLE {
                                 continue;
@@ -1415,9 +1415,9 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
                     }
                     return result;
                 }
-                let elements = (arr as *const u8)
-                    .add(std::mem::size_of::<crate::array::ArrayHeader>())
-                    as *const u64;
+                let elements =
+                    crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader)
+                        as *const u64;
                 // Index properties may carry a non-default descriptor
                 // (`Object.defineProperty(arr, i, { enumerable: false })`).
                 // Object.keys / for-in must skip non-enumerable indices — but
@@ -1754,9 +1754,9 @@ fn js_object_values_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
                 if length > 100_000 {
                     return crate::array::js_array_alloc(0);
                 }
-                let elements = (arr as *const u8)
-                    .add(std::mem::size_of::<crate::array::ArrayHeader>())
-                    as *const u64;
+                let elements =
+                    crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader)
+                        as *const u64;
                 let result = crate::array::js_array_alloc(length);
                 for i in 0..length {
                     if std::ptr::read(elements.add(i as usize)) == crate::value::TAG_HOLE {

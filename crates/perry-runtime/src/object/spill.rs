@@ -58,7 +58,7 @@ pub(crate) fn object_spill_enabled() -> bool {
 /// the exact triple the retired side-table Vec store performed.
 #[inline]
 unsafe fn spill_elements(spill: *const crate::array::ArrayHeader) -> *mut u64 {
-    (spill as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64
+    crate::array::array_elements_ptr(spill as *const crate::array::ArrayHeader) as *mut u64
 }
 
 #[inline]
@@ -314,9 +314,9 @@ fn spill_set_slow(obj_ptr: usize, field_index: usize, vbits: u64) {
             let old = (*meta).spill as *const crate::array::ArrayHeader;
             if !old.is_null() {
                 let old_len = (*old).length as usize;
-                let elements = (old as *const u8)
-                    .add(std::mem::size_of::<crate::array::ArrayHeader>())
-                    as *const u64;
+                let elements =
+                    crate::array::array_elements_ptr(old as *const crate::array::ArrayHeader)
+                        as *const u64;
                 for i in 0..old_len {
                     let bits = *elements.add(i);
                     if bits != crate::value::TAG_HOLE && bits != crate::value::TAG_UNDEFINED {

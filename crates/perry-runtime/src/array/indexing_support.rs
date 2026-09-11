@@ -259,7 +259,7 @@ pub(crate) unsafe fn keys_array_slot(
             && index < (*keys).capacity
         {
             let elements =
-                (keys as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+                crate::array::array_elements_ptr(keys as *const ArrayHeader) as *const f64;
             let raw = std::ptr::read(elements.add(index as usize));
             if raw.to_bits() != crate::value::TAG_HOLE {
                 return crate::value::JSValue::from_bits(raw.to_bits());

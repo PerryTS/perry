@@ -110,7 +110,7 @@ impl<'s> RootedArrayElems<'s> {
     #[inline(always)]
     pub(crate) unsafe fn get(&self, index: usize) -> f64 {
         let arr = self.arr();
-        *((arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64).add(index)
+        *(crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64).add(index)
     }
 
     /// Barriered store (`note_array_slot`): keeps the layout side-table and
@@ -192,7 +192,7 @@ unsafe fn sort_permutation(
                     let arr = roots.get(0) as *const ArrayHeader;
                     let comparator = roots.get(1) as *const ClosureHeader;
                     let elements =
-                        (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+                        crate::array::array_elements_ptr(arr) as *const f64;
                     c.less_equal_at(
                         comparator,
                         *elements.add(a as usize),
@@ -210,7 +210,7 @@ unsafe fn apply_sorted_indices(data: &RootedArrayElems<'_>, order: &mut [u32]) {
     // receiver write-back. This replaces O(n log n) barriered element writes
     // with O(n) writes, without suppressing any collection in the comparator.
     let arr = data.arr();
-    let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+    let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
     mark_array_layout_unknown(arr);
     for start in 0..order.len() {
         if order[start] as usize == start {
@@ -493,8 +493,8 @@ unsafe fn publish_sorted_values(
         // No user code or allocation in this region. Resolve each root once,
         // copy the dense prefix, and rebuild layout/barriers after all stores.
         let source =
-            (values.arr() as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
-        let dest = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+            crate::array::array_elements_ptr(values.arr() as *const ArrayHeader) as *const f64;
+        let dest = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
         mark_array_layout_unknown(arr);
         if let Some(order) = order {
             debug_assert_eq!(order.len(), count);
@@ -632,7 +632,7 @@ unsafe fn sort_needs_spec_path(arr: *const ArrayHeader, objproto_keys: &[u32]) -
         return false;
     }
     let length = (*arr).length as usize;
-    let elements = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+    let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
     (0..length).any(|i| (*elements.add(i)).to_bits() == crate::value::TAG_HOLE)
 }
 
@@ -814,7 +814,7 @@ unsafe fn sort_array_receiver(
     if length <= 1 {
         return arr;
     }
-    let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+    let elements_ptr = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
 
     // ECMAScript SortIndexedProperties + CompareArrayElements: array holes
     // are excluded from the sort and trail every element, and `undefined`
@@ -842,7 +842,8 @@ unsafe fn sort_array_receiver(
         {
             // Re-derive after the temp allocation above (which can GC).
             let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-            let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+            let elements_ptr =
+                crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
             for i in 0..length {
                 let v = *elements_ptr.add(i);
                 let bits = v.to_bits();
@@ -886,8 +887,8 @@ unsafe fn sort_array_receiver(
     {
         // Re-derive after the temp allocation above (which can GC).
         let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-        let recv_elems = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
-        let dest = (temp.arr() as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let recv_elems = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
+        let dest = crate::array::array_elements_ptr(temp.arr() as *const ArrayHeader) as *mut f64;
         // GC_STORE_AUDIT(BARRIERED): initializing the private snapshot has no
         // safepoint before the layout/remembered-edge rebuild immediately below.
         std::ptr::copy_nonoverlapping(recv_elems, dest, length);

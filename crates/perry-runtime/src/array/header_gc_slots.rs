@@ -14,18 +14,20 @@ pub(crate) unsafe fn gc_element_slot_range(
     }
     let length = (*arr).length as usize;
     let capacity = (*arr).capacity as usize;
-    if capacity > 16_000_000 {
+    if capacity > 16_000_000 || capacity > super::array_physical_capacity(arr) {
         return None;
     }
     if length > capacity {
         // Preserve the old corruption fail-closed behavior while admitting
-        // legitimate sparse headers: the claimed capacity must exactly match
-        // the GC allocation that owns this payload.
+        // legitimate sparse headers: the remaining capacity must fit the
+        // tracked allocation, allowing the consumed prefix of a dense queue.
         let Some(gc_header) = crate::value::addr_class::try_read_tracked_gc_header(arr as usize)
         else {
             return None;
         };
-        if checked_array_allocation_size(capacity) != Some((*gc_header.as_ptr()).size as usize) {
+        if checked_array_allocation_size(super::array_physical_capacity(arr))
+            != Some((*gc_header.as_ptr()).size as usize)
+        {
             return None;
         }
     }
@@ -169,7 +171,7 @@ pub(crate) unsafe fn rebuild_array_layout(arr: *mut ArrayHeader) {
         return;
     }
     // #7480: this is the post-hoc funnel most bulk element mutators use —
-    // `shift`, `unshift`, `splice`, `fill`, `copyWithin`, and `reverse` all
+    // Generic `shift`, `unshift`, `splice`, `fill`, `copyWithin`, and `reverse`
     // mutate slots with bare `ptr::write` / `ptr::copy` and then land here.
     // NOT `sort`: its default path writes the rank permutation back through
     // `RootedArrayElems::set`, so it revokes through the STORE funnel

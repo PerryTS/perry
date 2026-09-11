@@ -202,7 +202,7 @@ fn regex_global_result_array_preserves_young_match_strings() {
     assert!(crate::arena::pointer_in_old_gen(result as usize));
     js_shadow_slot_set(0, ptr_bits(result as usize));
     let elements = unsafe {
-        (result as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64
+        crate::array::array_elements_ptr(result as *const crate::array::ArrayHeader) as *mut u64
     };
     let first_match = unsafe { (*elements & POINTER_MASK) as usize };
     assert!(crate::arena::pointer_in_nursery(first_match));
@@ -210,7 +210,8 @@ fn regex_global_result_array_preserves_young_match_strings() {
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     let result_after = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::array::ArrayHeader;
     let elements_after = unsafe {
-        (result_after as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64
+        crate::array::array_elements_ptr(result_after as *const crate::array::ArrayHeader)
+            as *mut u64
     };
 
     assert_verified_copied_minor(&trace);

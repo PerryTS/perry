@@ -280,8 +280,8 @@ fn lower_captureless_some_inline(
             let blk = ctx.block();
             let i64_i = blk.zext(I32, &i, I64);
             let byte_offset = blk.shl(I64, &i64_i, "3");
-            let with_header = blk.add(I64, &byte_offset, "8");
-            let elem_addr = blk.add(I64, &raw, &with_header);
+            let elements_addr = blk.array_elements_addr(&raw);
+            let elem_addr = blk.add(I64, &elements_addr, &byte_offset);
             let elem_ptr = blk.inttoptr(I64, &elem_addr);
             let bits = blk.load(I64, &elem_ptr);
             let is_hole = blk.icmp_eq(I64, &bits, TAG_HOLE_I64);

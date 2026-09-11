@@ -417,7 +417,7 @@ impl GuardState<'_> {
             return ObjectKeys::Invalid;
         }
         ObjectKeys::Present {
-            slots: (keys as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64,
+            slots: crate::array::array_elements_ptr(keys as *const ArrayHeader) as *const f64,
             len: key_len,
         }
     }
@@ -534,7 +534,7 @@ impl GuardState<'_> {
                     return true;
                 }
                 let elements =
-                    (array as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+                    crate::array::array_elements_ptr(array as *const ArrayHeader) as *const f64;
                 for index in 0..length {
                     let element = JSValue::from_bits(std::ptr::read(elements.add(index)).to_bits());
                     if element.bits() == TAG_HOLE || !self.matches(element, child, depth + 1) {
@@ -560,7 +560,7 @@ impl GuardState<'_> {
                     return true;
                 }
                 let elements =
-                    (array as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+                    crate::array::array_elements_ptr(array as *const ArrayHeader) as *const f64;
                 for index in 0..count {
                     let Some(child) = read_u32(node, 5 + index * 4) else {
                         return false;

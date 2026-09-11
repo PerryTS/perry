@@ -644,9 +644,9 @@ unsafe fn serialize_object(obj: *const crate::object::ObjectHeader) -> Serialize
         if keys_arr.is_null() || i >= (*keys_arr).length as usize {
             return false;
         }
-        let keys_elements = (keys_arr as *const u8)
-            .add(std::mem::size_of::<crate::array::ArrayHeader>())
-            as *const f64;
+        let keys_elements =
+            crate::array::array_elements_ptr(keys_arr as *const crate::array::ArrayHeader)
+                as *const f64;
         (*keys_elements.add(i)).to_bits() == crate::value::TAG_HOLE
     };
 
@@ -666,9 +666,9 @@ unsafe fn serialize_object(obj: *const crate::object::ObjectHeader) -> Serialize
     let keys = if !crate::object::object_keys_array(obj).is_null() {
         let keys_arr = crate::object::object_keys_array(obj);
         let keys_len = (*keys_arr).length as usize;
-        let keys_elements = (keys_arr as *const u8)
-            .add(std::mem::size_of::<crate::array::ArrayHeader>())
-            as *const f64;
+        let keys_elements =
+            crate::array::array_elements_ptr(keys_arr as *const crate::array::ArrayHeader)
+                as *const f64;
         let mut key_strings = Vec::with_capacity(keys_len);
         for i in 0..keys_len {
             let key_bits = (*keys_elements.add(i)).to_bits();

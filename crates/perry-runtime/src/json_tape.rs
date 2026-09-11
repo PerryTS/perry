@@ -1929,9 +1929,9 @@ pub unsafe fn force_materialize_lazy(hdr: *mut LazyArrayHeader) -> *mut crate::a
             };
             let value_handle = elem_scope.root_nanbox_u64(value.bits());
             let arr_ptr = array_from_nanbox_handle(&arr_handle);
-            let elements_ptr = (arr_ptr as *mut u8)
-                .add(std::mem::size_of::<crate::array::ArrayHeader>())
-                as *mut u64;
+            let elements_ptr =
+                crate::array::array_elements_ptr(arr_ptr as *const crate::array::ArrayHeader)
+                    as *mut u64;
             let value_bits = value_handle.get_nanbox_u64();
             // GC_STORE_AUDIT(BARRIERED): note_array_slot below re-stores this slot with the barrier.
             *elements_ptr.add(i) = value_bits;

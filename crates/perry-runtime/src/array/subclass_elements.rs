@@ -233,8 +233,7 @@ pub(crate) fn key_of_value(key: f64) -> Option<ElementsKey> {
 
 #[inline]
 unsafe fn slot_bits(elements: *const ArrayHeader, index: u32) -> u64 {
-    *(elements as *const u8)
-        .add(std::mem::size_of::<ArrayHeader>())
+    *crate::array::array_elements_ptr(elements as *const ArrayHeader)
         .cast::<u64>()
         .add(index as usize)
 }
@@ -626,8 +625,7 @@ pub(super) fn elements_index_get(elements: *const ArrayHeader, index: u32) -> Op
         if index >= (*elements).length {
             return None;
         }
-        let slot = (elements as *const u8)
-            .add(std::mem::size_of::<ArrayHeader>())
+        let slot = crate::array::array_elements_ptr(elements as *const ArrayHeader)
             .cast::<u64>()
             .add(index as usize);
         let bits = *slot;

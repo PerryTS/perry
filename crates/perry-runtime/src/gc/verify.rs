@@ -986,7 +986,8 @@ pub(super) unsafe fn verify_array_pointer_slots_enumerated_for(
     if length == 0 || length > capacity || length > 16_000_000 {
         return;
     }
-    let elements = (user as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>());
+    let elements =
+        crate::array::array_elements_ptr(user as *const crate::array::ArrayHeader) as *mut u8;
     let elements_addr = elements as usize;
     let words = elements as *const u64;
 

@@ -94,7 +94,8 @@ use crate::iter_result::make_iter_result;
 unsafe fn make_pair_array(idx: u32, byte: u8) -> f64 {
     let pair = crate::array::js_array_alloc(2);
     (*pair).length = 2;
-    let elems = (pair as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut f64;
+    let elems =
+        crate::array::array_elements_ptr(pair as *const crate::array::ArrayHeader) as *mut f64;
     *elems.add(0) = idx as f64;
     *elems.add(1) = byte as f64;
     crate::array::note_array_slot(pair, 0, (idx as f64).to_bits());

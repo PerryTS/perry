@@ -67,7 +67,7 @@ unsafe fn util_format_json_array_has_cycle(ptr: *const u8, stack: &mut Vec<usize
 
     let arr = ptr as *const crate::ArrayHeader;
     let len = (*arr).length as usize;
-    let elements = ptr.add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
+    let elements = crate::array::array_elements_ptr(ptr as *const crate::ArrayHeader) as *const f64;
     let found = (0..len).any(|i| {
         let value = *elements.add(i);
         let bits = value.to_bits();
@@ -243,7 +243,7 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
     }
     unsafe {
         let length = (*arr_ptr).length as usize;
-        let data_ptr = (arr_ptr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>())
+        let data_ptr = crate::array::array_elements_ptr(arr_ptr as *const crate::array::ArrayHeader)
             as *const f64;
 
         // No format string → empty result. Node returns "" for

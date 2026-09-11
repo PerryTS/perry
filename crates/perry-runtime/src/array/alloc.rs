@@ -50,7 +50,7 @@ pub extern "C" fn js_array_alloc(capacity: u32) -> *mut ArrayHeader {
         // HOLE-initialize the whole capacity so the unused [length, capacity)
         // slack never holds stale arena bits that the whole-heap from-space
         // scan misreads as live from-space pointers.
-        let elements_ptr = (ptr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64;
+        let elements_ptr = crate::array::array_elements_ptr(ptr as *const ArrayHeader) as *mut u64;
         for i in 0..actual_capacity as usize {
             // GC_STORE_AUDIT(INIT): initialization of a just-allocated array
             // that is not yet reachable from any root, and TAG_HOLE is a
@@ -128,7 +128,7 @@ pub extern "C" fn js_array_alloc_with_length(capacity: u32) -> *mut ArrayHeader 
     unsafe {
         (*ptr).length = capacity; // Set length = requested capacity
         (*ptr).capacity = actual_capacity;
-        let elements_ptr = (ptr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64;
+        let elements_ptr = crate::array::array_elements_ptr(ptr as *const ArrayHeader) as *mut u64;
         for i in 0..capacity as usize {
             // GC_STORE_AUDIT(POINTER_FREE): TAG_HOLE is a non-pointer sentinel for fresh array slots.
             std::ptr::write(elements_ptr.add(i), crate::value::TAG_HOLE);
@@ -156,7 +156,7 @@ pub(crate) fn js_array_alloc_with_length_exact(capacity: u32) -> *mut ArrayHeade
     unsafe {
         (*ptr).length = capacity;
         (*ptr).capacity = capacity;
-        let elements_ptr = (ptr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64;
+        let elements_ptr = crate::array::array_elements_ptr(ptr as *const ArrayHeader) as *mut u64;
         for i in 0..capacity as usize {
             // GC_STORE_AUDIT(POINTER_FREE): TAG_HOLE is a non-pointer sentinel for fresh array slots.
             std::ptr::write(elements_ptr.add(i), crate::value::TAG_HOLE);
@@ -249,7 +249,7 @@ pub extern "C" fn js_array_from_f64(elements: *const f64, count: u32) -> *mut Ar
     let arr = js_array_alloc(count);
     unsafe {
         (*arr).length = count;
-        let arr_elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let arr_elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
         // GC_STORE_AUDIT(BARRIERED): bulk array initialization is followed by layout/barrier rebuild.
         ptr::copy_nonoverlapping(elements, arr_elements, count as usize);
         rebuild_array_layout(arr);
@@ -296,7 +296,7 @@ unsafe fn js_array_from_arraylike_with_missing(
     let arr = js_array_alloc(len);
     (*arr).length = len;
     clear_array_numeric_layout(arr);
-    let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+    let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
     for i in 0..len {
         let key_str = i.to_string();
         let key = crate::string::js_string_from_bytes(key_str.as_ptr(), key_str.len() as u32);
@@ -368,7 +368,7 @@ unsafe fn store_codepoint_string(
     index: usize,
     string: *mut crate::string::StringHeader,
 ) {
-    let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+    let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
     let value = crate::value::js_nanbox_string(string as i64);
     // GC_STORE_AUDIT(BARRIERED): codepoint array slot is followed by a runtime write barrier.
     ptr::write(elements.add(index), value);
@@ -537,7 +537,7 @@ pub extern "C" fn js_array_from_values(values: *const f64, n: u32) -> *mut Array
         return arr;
     }
     let parent = arr as u64;
-    let elems = unsafe { (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64 };
+    let elems = unsafe { crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64 };
     for i in 0..n as usize {
         let v = unsafe { *values.add(i) };
         let slot = unsafe { elems.add(i) };

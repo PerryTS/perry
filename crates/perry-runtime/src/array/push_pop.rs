@@ -177,16 +177,22 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
             }
         } as *mut ArrayHeader;
         let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-        // GC_STORE_AUDIT(BARRIERED): array growth copy transfers layout and replays write barriers below.
-        ptr::copy_nonoverlapping(arr as *const u8, new_ptr as *mut u8, old_size);
-
+        let shifted = array_front_offset(arr) != 0;
+        (*new_ptr).length = (*arr).length;
         (*new_ptr).capacity = new_capacity;
+        // GC_STORE_AUDIT(BARRIERED): growth normalizes the logical backing
+        // range, transfers its layout, and replays its write barriers below.
+        ptr::copy_nonoverlapping(
+            array_elements_ptr(arr),
+            array_elements_ptr(new_ptr),
+            old_capacity as usize,
+        );
         // HOLE-initialize the newly added [old_capacity, new_capacity) slack
         // so it never holds stale arena bits the whole-heap from-space scan
         // misreads as live from-space pointers.
         {
             let new_elems =
-                (new_ptr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64;
+                crate::array::array_elements_ptr(new_ptr as *const ArrayHeader) as *mut u64;
             for i in old_capacity as usize..new_capacity as usize {
                 // GC_STORE_AUDIT(INIT): initialization of the freshly grown
                 // array's added [old_capacity, new_capacity) slack — storage
@@ -217,12 +223,14 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         // store's dirty-page coverage can be TRANSLATED to the new address
         // instead of re-derived from 3 M slot values. Falls back to the full
         // value-derived replay whenever the translation declines.
-        if !crate::gc::relocate_copied_old_object_dirty_pages(
-            new_ptr as usize,
-            arr as usize,
-            new_ptr as usize,
-            old_size,
-        ) {
+        if shifted
+            || !crate::gc::relocate_copied_old_object_dirty_pages(
+                new_ptr as usize,
+                arr as usize,
+                new_ptr as usize,
+                old_size,
+            )
+        {
             replay_array_growth_write_barriers(new_ptr);
         }
 
@@ -536,7 +544,7 @@ pub(super) fn proxy_array_mutator(
                         let (v, removed) = removed_handle.across_mut::<ArrayHeader, _>(|| {
                             proxy_get_str_key(p(), from.as_bytes())
                         });
-                        let elems = (removed as *mut u8).add(std::mem::size_of::<ArrayHeader>())
+                        let elems = crate::array::array_elements_ptr(removed as *const ArrayHeader)
                             as *mut f64;
                         // GC_STORE_AUDIT(BARRIERED): note_array_slot re-stores
                         // the slot with the barrier.
@@ -1034,8 +1042,7 @@ pub extern "C" fn js_array_push_spread_f64(
             if source.is_null() {
                 break;
             }
-            let elements =
-                (source as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+            let elements = crate::array::array_elements_ptr(source) as *const f64;
             let source_value = *elements.add(i);
             let value = if source_value.to_bits() == crate::value::TAG_HOLE {
                 f64::from_bits(crate::value::TAG_UNDEFINED)
@@ -1098,9 +1105,8 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
                 }
                 if length <= capacity && length <= 100_000_000 {
                     let new_length = length - 1;
-                    let elements = (arr as *mut u8)
-                        .add(std::mem::size_of::<ArrayHeader>())
-                        .cast::<f64>();
+                    let elements =
+                        crate::array::array_elements_ptr(arr as *const ArrayHeader).cast::<f64>();
                     let value = ptr::read(elements.add(new_length as usize));
                     if value.to_bits() != crate::value::TAG_HOLE {
                         (*arr).length = new_length;
@@ -1154,7 +1160,8 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
             None => crate::array::array_iteration_is_exotic(arr),
         };
         if !exotic {
-            let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+            let elements_ptr =
+                crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
             let value = *elements_ptr.add(new_length as usize);
             (*arr).length = new_length;
             // #9462: the popped slot can be a HOLE — `[1, ,].pop()`,
@@ -1268,7 +1275,7 @@ fn try_truncate_plain_array_to_zero(arr: *mut ArrayHeader) -> bool {
         if cur == 0 {
             return true;
         }
-        let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64;
+        let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut u64;
         for i in 0..cur {
             // GC_STORE_AUDIT(BARRIERED): the suffix becomes unreachable when
             // length is published below; rebuild_array_layout then rebuilds
@@ -1393,7 +1400,8 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
                 // rebuild from the surviving slots), so the head needs no
                 // handle scope. `pooled.length = 0` in an object pool is this
                 // branch every time.
-                let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64;
+                let elements =
+                    crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut u64;
                 for i in n..cur {
                     // GC_STORE_AUDIT(BARRIERED): the suffix becomes unreachable
                     // when length is published below; rebuild_array_layout then
@@ -1527,13 +1535,13 @@ pub extern "C" fn js_array_shift_f64(arr: *mut ArrayHeader) -> f64 {
     if arr.is_null() {
         return TAG_UNDEFINED_F64;
     }
-    if array_is_frozen(arr) {
-        throw_frozen_array_mutation();
-    }
-    guard_writable_length(arr);
     unsafe {
         let length = (*arr).length;
         if length == 0 {
+            if array_is_frozen(arr) {
+                throw_frozen_array_mutation();
+            }
+            guard_writable_length(arr);
             return TAG_UNDEFINED_F64;
         }
 
@@ -1542,21 +1550,16 @@ pub extern "C" fn js_array_shift_f64(arr: *mut ArrayHeader) -> f64 {
         // descriptors and prototype properties require the specified live
         // HasProperty/Get/Set/Delete order; their accessors can also freeze the
         // receiver or make `length` non-writable before the final length Set.
-        if crate::array::array_iteration_is_exotic(arr) {
+        if crate::array::array_iteration_is_exotic(arr)
+            || (crate::object::prototype_chain::array_static_proto_recorded()
+                && array_custom_prototype(arr).is_some())
+            || array_object_flags_resolved(arr)
+                & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED)
+                != 0
+        {
             return shift_array_spec_path(arr);
         }
-
-        // `TAG_HOLE` is an internal storage sentinel. Even on the dense path,
-        // Get(O, "0") must expose it as `undefined`.
-        let value = crate::array::js_array_get_f64(arr, 0);
-        let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
-
-        // Shift all elements down
-        // GC_STORE_AUDIT(BARRIERED): shift memmove is followed by layout/barrier rebuild.
-        ptr::copy(elements_ptr.add(1), elements_ptr, (length - 1) as usize);
-        (*arr).length = length - 1;
-        rebuild_array_layout(arr);
-        value
+        super::storage::shift_dense(arr)
     }
 }
 
@@ -1675,7 +1678,7 @@ pub extern "C" fn js_array_unshift_f64(arr: *mut ArrayHeader, value: f64) -> *mu
         };
         let value = value_handle.get_nanbox_f64();
 
-        let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let elements_ptr = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
 
         // Shift all elements up
         // GC_STORE_AUDIT(BARRIERED): unshift memmove and new slot are followed by layout/barrier rebuild.
@@ -1755,7 +1758,7 @@ pub extern "C" fn js_array_unshift_variadic(
         } else {
             arr
         };
-        let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let elements_ptr = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
         // Shift existing elements up by `n`.
         // GC_STORE_AUDIT(BARRIERED): memmove + new slots followed by layout/barrier rebuild.
         ptr::copy(elements_ptr, elements_ptr.add(n), length as usize);

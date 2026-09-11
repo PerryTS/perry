@@ -861,3 +861,4 @@ test_gap_gc_coalesce_local_root
 test_gap_gc_for_in_proxy_callback_roots
 
 test_gap_gc_string_suffix_cursor
+test_gap_gc_array_shift_queue

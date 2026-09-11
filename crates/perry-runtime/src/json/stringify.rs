@@ -1144,9 +1144,9 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
     let key_at = |f: u32| -> f64 {
         obj_handle.with_const_ptr(|obj: *const crate::ObjectHeader| {
             let keys_arr = crate::object::object_keys_array(obj);
-            let keys_elements = (keys_arr as *const u8)
-                .add(std::mem::size_of::<crate::ArrayHeader>())
-                as *const f64;
+            let keys_elements =
+                crate::array::array_elements_ptr(keys_arr as *const crate::ArrayHeader)
+                    as *const f64;
             *keys_elements.add(f as usize)
         })
     };
@@ -1555,7 +1555,7 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
     let arr_handle = scope.root_raw_const_ptr(arr);
     let elem_at = |i: usize| -> f64 {
         arr_handle.with_const_ptr(|arr: *const crate::ArrayHeader| {
-            *((arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64)
+            *(crate::array::array_elements_ptr(arr as *const crate::ArrayHeader) as *const f64)
                 .add(i)
         })
     };

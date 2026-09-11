@@ -225,8 +225,9 @@ unsafe fn scan_object(header: *mut GcHeader, report: &mut FromSpaceScanReport) {
     // shrinking scan cannot silently read as a cleaner heap.
     if (*header).obj_type == crate::gc::GC_TYPE_ARRAY {
         let arr = user as *const crate::array::ArrayHeader;
-        let live_words =
-            std::mem::size_of::<crate::array::ArrayHeader>() / 8 + (*arr).length as usize;
+        let live_words = std::mem::size_of::<crate::array::ArrayHeader>() / 8
+            + crate::array::array_front_offset(arr)
+            + (*arr).length as usize;
         if live_words < payload_words {
             report.array_slack_words_skipped += payload_words - live_words;
             payload_words = live_words;

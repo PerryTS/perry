@@ -924,7 +924,7 @@ pub(super) unsafe fn alloc_old_test_array(
     (*arr).length = length;
     (*arr).capacity = length;
     let elements =
-        (arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64;
+        crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader) as *mut u64;
     for i in 0..length as usize {
         *elements.add(i) = 0;
     }

@@ -38,9 +38,14 @@ mod prototype_addr;
 mod push_pop;
 mod reduce_right;
 mod search;
+#[cfg(test)]
+mod shift_queue_tests;
 mod sort;
 mod species;
 mod splice_slice;
+mod storage;
+pub use storage::array_elements_ptr;
+pub(crate) use storage::{array_front_offset, array_physical_capacity};
 mod subclass;
 pub(crate) mod subclass_elements;
 

@@ -1679,7 +1679,7 @@ fn test_array_sort_comparator_rooted_buffers_survive_copied_minor_gc() {
         });
         unsafe {
             assert_eq!((*sorted).length as usize, count);
-            let elems = (sorted as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>())
+            let elems = crate::array::array_elements_ptr(sorted as *const crate::array::ArrayHeader)
                 as *const f64;
             for i in 0..count {
                 let got = string_value_content(*elems.add(i));

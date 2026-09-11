@@ -23,7 +23,7 @@ pub(super) unsafe fn try_emit(arr: *const crate::ArrayHeader, buf: &mut String) 
     if (*arr).length > (*arr).capacity || flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
         return false;
     }
-    let data = (arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
+    let data = crate::array::array_elements_ptr(arr as *const crate::ArrayHeader) as *const f64;
     let len = (*arr).length as usize;
     let elements = std::slice::from_raw_parts(data, len);
     // The existing layout flag proves every live slot is an unboxed number,
@@ -52,7 +52,7 @@ pub(super) unsafe fn try_emit(arr: *const crate::ArrayHeader, buf: &mut String) 
 pub(super) unsafe fn emit_validated(arr: *const crate::ArrayHeader, buf: &mut String) {
     let header = crate::gc::header_from_trusted_user_ptr(arr.cast());
     let flags = (*header)._reserved;
-    let data = (arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
+    let data = crate::array::array_elements_ptr(arr as *const crate::ArrayHeader) as *const f64;
     let elements = std::slice::from_raw_parts(data, (*arr).length as usize);
     if flags & crate::gc::GC_ARRAY_RAW_F64_LAYOUT != 0 {
         buf.push('[');

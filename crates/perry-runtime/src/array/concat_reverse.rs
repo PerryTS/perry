@@ -141,9 +141,8 @@ pub extern "C" fn js_array_concat(
                         if source.is_null() {
                             return None;
                         }
-                        let source_elements = (source as *const u8)
-                            .add(std::mem::size_of::<ArrayHeader>())
-                            as *const f64;
+                        let source_elements =
+                            crate::array::array_elements_ptr(source) as *const f64;
                         Some(*source_elements.add(i))
                     })
                 else {
@@ -179,9 +178,8 @@ pub extern "C" fn js_array_concat(
                         if source.is_null() {
                             return None;
                         }
-                        let source_elements = (source as *const u8)
-                            .add(std::mem::size_of::<ArrayHeader>())
-                            as *const f64;
+                        let source_elements =
+                            crate::array::array_elements_ptr(source) as *const f64;
                         Some(*source_elements.add(i))
                     })
                 else {
@@ -227,8 +225,7 @@ pub extern "C" fn js_array_concat(
         if source.is_null() || result.is_null() {
             return result;
         }
-        let source_elements =
-            (source as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let source_elements = crate::array::array_elements_ptr(source) as *const f64;
         for i in 0..src_len as usize {
             let source_value = *source_elements.add(i);
             // Array iteration observes a hole as `undefined`; the internal
@@ -268,13 +265,13 @@ pub extern "C" fn js_array_concat_new(
 
         let mut result = js_array_alloc(total);
         if !a.is_null() && a_len > 0 {
-            let src = (a as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+            let src = crate::array::array_elements_ptr(a as *const ArrayHeader) as *const f64;
             for i in 0..a_len as usize {
                 result = js_array_push_f64(result, *src.add(i));
             }
         }
         if !b.is_null() && b_len > 0 {
-            let src = (b as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+            let src = crate::array::array_elements_ptr(b as *const ArrayHeader) as *const f64;
             for i in 0..b_len as usize {
                 result = js_array_push_f64(result, *src.add(i));
             }
@@ -319,7 +316,7 @@ pub extern "C" fn js_array_reverse(arr: *mut ArrayHeader) -> *mut ArrayHeader {
         if crate::array::array_iteration_is_exotic(arr) {
             return reverse_array_spec_path(arr);
         }
-        let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
         let mut i = 0usize;
         let mut j = len - 1;
         while i < j {
@@ -560,7 +557,7 @@ pub extern "C" fn js_array_fill(arr: *mut ArrayHeader, value: f64) -> *mut Array
         if len == 0 {
             return arr;
         }
-        let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
         for i in 0..len {
             // GC_STORE_AUDIT(BARRIERED): fill slot writes are followed by layout/barrier rebuild.
             *elements.add(i) = value;
@@ -644,7 +641,7 @@ pub extern "C" fn js_array_fill_range(
         if s >= e {
             return arr;
         }
-        let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
         for i in s..e {
             // GC_STORE_AUDIT(BARRIERED): fill range writes are followed by layout/barrier rebuild.
             *elements.add(i as usize) = value;

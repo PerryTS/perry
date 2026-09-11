@@ -43,8 +43,8 @@ pub(super) fn lower_trusted_plain_array_index_get(
     let blk = ctx.block();
     let idx_i64 = blk.zext(I32, idx_i32, I64);
     let byte_offset = blk.shl(I64, &idx_i64, "3");
-    let with_header = blk.add(I64, &byte_offset, "8");
-    let element_addr = blk.add(I64, array_handle, &with_header);
+    let elements_addr = blk.array_elements_addr(array_handle);
+    let element_addr = blk.add(I64, &elements_addr, &byte_offset);
     let element_ptr = blk.inttoptr(I64, &element_addr);
     let raw = blk.load(DOUBLE, &element_ptr);
     let raw_bits = blk.bitcast_double_to_i64(&raw);
@@ -62,8 +62,8 @@ fn lower_trusted_numeric_array_index_get(
     let blk = ctx.block();
     let idx_i64 = blk.zext(I32, idx_i32, I64);
     let byte_offset = blk.shl(I64, &idx_i64, "3");
-    let with_header = blk.add(I64, &byte_offset, "8");
-    let element_addr = blk.add(I64, array_handle, &with_header);
+    let elements_addr = blk.array_elements_addr(array_handle);
+    let element_addr = blk.add(I64, &elements_addr, &byte_offset);
     let element_ptr = blk.inttoptr(I64, &element_addr);
     let raw = blk.load(DOUBLE, &element_ptr);
     if coerce_numeric_fallback {
@@ -583,8 +583,8 @@ pub(super) fn lower_guarded_array_index_get(
         // does this load.
         let idx_i64 = fast_blk.zext(I32, idx_i32, I64);
         let byte_offset = fast_blk.shl(I64, &idx_i64, "3");
-        let with_header = fast_blk.add(I64, &byte_offset, "8");
-        let element_addr = fast_blk.add(I64, &arr_handle, &with_header);
+        let elements_addr = fast_blk.array_elements_addr(&arr_handle);
+        let element_addr = fast_blk.add(I64, &elements_addr, &byte_offset);
         let element_ptr = fast_blk.inttoptr(I64, &element_addr);
         let raw = fast_blk.load(DOUBLE, &element_ptr);
         if coerce_numeric_fallback {
@@ -605,8 +605,8 @@ pub(super) fn lower_guarded_array_index_get(
     } else {
         let idx_i64 = fast_blk.zext(I32, idx_i32, I64);
         let byte_offset = fast_blk.shl(I64, &idx_i64, "3");
-        let with_header = fast_blk.add(I64, &byte_offset, "8");
-        let element_addr = fast_blk.add(I64, &arr_handle, &with_header);
+        let elements_addr = fast_blk.array_elements_addr(&arr_handle);
+        let element_addr = fast_blk.add(I64, &elements_addr, &byte_offset);
         let element_ptr = fast_blk.inttoptr(I64, &element_addr);
         let fast_raw = fast_blk.load(DOUBLE, &element_ptr);
         // `new Array(n)` slots are TAG_HOLE internally; JavaScript reads expose
@@ -720,8 +720,8 @@ pub(super) fn lower_packed_f64_loop_index_get(
         let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
         let idx_i64 = blk.zext(I32, idx_i32, I64);
         let byte_offset = blk.shl(I64, &idx_i64, "3");
-        let with_header = blk.add(I64, &byte_offset, "8");
-        let element_addr = blk.add(I64, &arr_handle, &with_header);
+        let elements_addr = blk.array_elements_addr(&arr_handle);
+        let element_addr = blk.add(I64, &elements_addr, &byte_offset);
         let element_ptr = blk.inttoptr(I64, &element_addr);
         blk.load(DOUBLE, &element_ptr)
     };

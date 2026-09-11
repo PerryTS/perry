@@ -63,9 +63,9 @@ pub(super) fn js_object_entries_shape(obj: *const ObjectHeader) -> *mut ArrayHea
                 if length > 100_000 {
                     return crate::array::js_array_alloc(0);
                 }
-                let elements = (arr as *const u8)
-                    .add(std::mem::size_of::<crate::array::ArrayHeader>())
-                    as *const u64;
+                let elements =
+                    crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader)
+                        as *const u64;
                 let result = crate::array::js_array_alloc(length);
                 for i in 0..length {
                     if std::ptr::read(elements.add(i as usize)) == crate::value::TAG_HOLE {

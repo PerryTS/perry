@@ -166,7 +166,8 @@ pub unsafe fn parse_listen_args(args_array: i64) -> ListenArgs {
         return out;
     }
     let len = (*arr_ptr).length as usize;
-    let elements = (arr_ptr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const u64;
+    let elements =
+        perry_runtime::array::array_elements_ptr(arr_ptr as *const ArrayHeader) as *const u64;
     for i in 0..len {
         let bits = *elements.add(i);
         let v = JsValue::from_bits(bits);

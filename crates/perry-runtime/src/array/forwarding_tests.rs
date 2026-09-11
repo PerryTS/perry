@@ -22,7 +22,7 @@ fn growth_of_old_array_keeps_forwarding_target_out_of_copying_nursery() {
     unsafe {
         (*initial).length = 0;
         (*initial).capacity = capacity;
-        let elements = (initial as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64;
+        let elements = crate::array::array_elements_ptr(initial as *const ArrayHeader) as *mut u64;
         for i in 0..capacity as usize {
             // GC_STORE_AUDIT(INIT): initialize unpublished fresh array storage
             // with the non-pointer hole sentinel before exposing the array.

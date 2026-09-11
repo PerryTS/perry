@@ -293,7 +293,7 @@ unsafe fn key_prefix_plan(
                 plan.data[at] = if i == 0 { b'{' } else { b',' };
                 at += 1;
                 units += 1;
-                let key_bits = slot(keys.cast(), ARRAY_BYTES, i);
+                let key_bits = slot(crate::array::array_elements_ptr(keys).cast(), 0, i);
                 let key = key_piece(key_bits)?;
                 let (key_bytes, key_units) = key.lengths();
                 let needed = at.checked_add(key_bytes as usize)?.checked_add(1)?;
@@ -384,7 +384,9 @@ unsafe fn emit_repeated_output(
                 return None;
             }
             for j in 0..len as usize {
-                if slot(arr.cast(), ARRAY_BYTES, j) != cached.element_bits[element + j] {
+                if slot(crate::array::array_elements_ptr(arr).cast(), 0, j)
+                    != cached.element_bits[element + j]
+                {
                     cached.receiver = 0;
                     return None;
                 }
@@ -433,7 +435,8 @@ unsafe fn emit_cached_record_uncached(
             value_plan[i].write(Field::Array { start: used, len });
             let (mut ab, mut au) = (2u32, 2u32);
             for j in 0..len {
-                let value = record_value_piece(slot(arr.cast(), ARRAY_BYTES, j))?;
+                let value =
+                    record_value_piece(slot(crate::array::array_elements_ptr(arr).cast(), 0, j))?;
                 elements[used + j].write(value);
                 let (eb, eu) = value.lengths();
                 let comma = u32::from(j != 0);
@@ -486,7 +489,7 @@ unsafe fn emit_cached_record_uncached(
                         }
                         at += emit_piece(
                             elements[start + j].assume_init(),
-                            slot(arr.cast(), ARRAY_BYTES, j),
+                            slot(crate::array::array_elements_ptr(arr).cast(), 0, j),
                             output.add(at),
                         );
                     }
@@ -533,7 +536,8 @@ unsafe fn emit_cached_record_memo(
             value_plan[i].write(Field::Array { start: used, len });
             let (mut ab, mut au) = (2u32, 2u32);
             for j in 0..len {
-                let value = record_value_piece(slot(arr.cast(), ARRAY_BYTES, j))?;
+                let value =
+                    record_value_piece(slot(crate::array::array_elements_ptr(arr).cast(), 0, j))?;
                 elements[used + j].write(value);
                 let (eb, eu) = value.lengths();
                 let comma = u32::from(j != 0);
@@ -592,7 +596,7 @@ unsafe fn emit_cached_record_memo(
                             output.add(at).write(b',');
                             at += 1;
                         }
-                        let element_bits = slot(arr.cast(), ARRAY_BYTES, j);
+                        let element_bits = slot(crate::array::array_elements_ptr(arr).cast(), 0, j);
                         if repeated_candidate {
                             signature = repeated_signature_mix(signature, element_bits);
                         }
@@ -642,7 +646,8 @@ unsafe fn emit_cached_record_memo(
                         cached.array_lengths[i] = len as u8;
                         let arr = (bits & POINTER_MASK) as *const crate::ArrayHeader;
                         for j in 0..len {
-                            cached.element_bits[start + j] = slot(arr.cast(), ARRAY_BYTES, j);
+                            cached.element_bits[start + j] =
+                                slot(crate::array::array_elements_ptr(arr).cast(), 0, j);
                         }
                     }
                 }
@@ -693,7 +698,7 @@ unsafe fn emit_record(obj: *const crate::ObjectHeader, fields: usize) -> Option<
     let mut used = 0;
     let (mut bytes, mut units) = (2u32, 2u32);
     for i in 0..fields {
-        let key = key_piece(slot(keys.cast(), ARRAY_BYTES, i))?;
+        let key = key_piece(slot(crate::array::array_elements_ptr(keys).cast(), 0, i))?;
         key_plan[i].write(key);
         let (kb, ku) = key.lengths();
         let bits = slot(obj.cast(), OBJECT_BYTES, i);
@@ -708,7 +713,7 @@ unsafe fn emit_record(obj: *const crate::ObjectHeader, fields: usize) -> Option<
             value_plan[i].write(Field::Array { start: used, len });
             let (mut ab, mut au) = (2u32, 2u32);
             for j in 0..len {
-                let value = scalar_piece(slot(arr.cast(), ARRAY_BYTES, j))?;
+                let value = scalar_piece(slot(crate::array::array_elements_ptr(arr).cast(), 0, j))?;
                 elements[used + j].write(value);
                 let (eb, eu) = value.lengths();
                 let comma = u32::from(j != 0);
@@ -754,7 +759,7 @@ unsafe fn emit_record(obj: *const crate::ObjectHeader, fields: usize) -> Option<
             }
             at += emit_piece(
                 key_plan[i].assume_init(),
-                slot(keys.cast(), ARRAY_BYTES, i),
+                slot(crate::array::array_elements_ptr(keys).cast(), 0, i),
                 output.add(at),
             );
             // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
@@ -776,7 +781,7 @@ unsafe fn emit_record(obj: *const crate::ObjectHeader, fields: usize) -> Option<
                         }
                         at += emit_piece(
                             elements[start + j].assume_init(),
-                            slot(arr.cast(), ARRAY_BYTES, j),
+                            slot(crate::array::array_elements_ptr(arr).cast(), 0, j),
                             output.add(at),
                         );
                     }

@@ -4,6 +4,7 @@
 //! `clang -c` to build an object file linked against `libperry_runtime.a`.
 //! This is Perry's sole native code generation backend (since v0.5.0).
 
+mod array_storage;
 pub mod block;
 pub(crate) mod boxed_vars;
 pub mod codegen;

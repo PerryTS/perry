@@ -111,9 +111,7 @@ unsafe fn primitive_array(arr: *const crate::ArrayHeader) -> bool {
         return false;
     }
     let elements = std::slice::from_raw_parts(
-        (arr as *const u8)
-            .add(std::mem::size_of::<crate::ArrayHeader>())
-            .cast::<u64>(),
+        crate::array::array_elements_ptr(arr as *const crate::ArrayHeader).cast::<u64>(),
         (*arr).length as usize,
     );
     // Even a raw-f64 array is checked for tag collisions before borrowing it

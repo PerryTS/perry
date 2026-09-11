@@ -239,7 +239,7 @@ pub extern "C" fn js_promise_try(
     } else {
         let len = unsafe { (*args).length as usize };
         let data = unsafe {
-            (args as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64
+            crate::array::array_elements_ptr(args as *const crate::array::ArrayHeader) as *const f64
         };
         (data, len)
     };

@@ -75,7 +75,7 @@ fn array_numeric_range_add_impl(receiver: f64, start: f64, end: Option<f64>, del
         if start >= end {
             return i64::from(start);
         }
-        let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64;
+        let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut u64;
         // One fused pass instead of validate-then-mutate. The all-or-nothing
         // contract the two-pass version provided was stronger than the source
         // semantics require: each element gets exactly one `+ delta` either
@@ -227,7 +227,7 @@ pub unsafe extern "C" fn js_array_fill_range_strided_tagged(
         if start >= end {
             return i64::from(start);
         }
-        let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64;
+        let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut u64;
         let mut index = start;
         // GC_STORE_AUDIT(POINTER_FREE): the stored constant is a non-pointer
         // NaN-box (boolean/null/undefined/number bits), the receiver's layout

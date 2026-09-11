@@ -43,13 +43,13 @@ unsafe fn elided_inline_push(arr: *mut ArrayHeader, value_bits: u64) {
         length < (*arr).capacity as usize,
         "the elided inline push models the in-capacity arm only"
     );
-    let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64;
+    let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut u64;
     std::ptr::write(elements.add(length), value_bits);
     (*arr).length = length as u32 + 1;
 }
 
 unsafe fn element_bits(arr: *mut ArrayHeader, index: usize) -> u64 {
-    let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *const u64;
+    let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const u64;
     *elements.add(index)
 }
 

@@ -195,7 +195,7 @@ pub(crate) unsafe fn cp_read_arg_strings(args_ptr: i64) -> Vec<String> {
     let arr = args_ptr as *const crate::array::ArrayHeader;
     let n = (*arr).length as usize;
     let data =
-        (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64;
+        crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader) as *const f64;
     for i in 0..n {
         if let Some(s) = cp_value_to_string(*data.add(i)) {
             out.push(s);

@@ -161,9 +161,7 @@ impl Emitter {
         };
         plan.offsets[0] = self.prefixes.len() as u32;
         let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
-        let keys = (keys_array as *const u8)
-            .wrapping_add(std::mem::size_of::<crate::ArrayHeader>())
-            .cast::<u64>();
+        let keys = crate::array::array_elements_ptr(keys_array);
         for i in 0..len {
             let bytes =
                 crate::string::js_string_key_bytes(JSValue::from_bits(*keys.add(i)), &mut scratch)?;
@@ -375,9 +373,7 @@ pub(super) unsafe fn try_emit(
     {
         return false;
     }
-    let elements = (arr as *const u8)
-        .add(std::mem::size_of::<crate::ArrayHeader>())
-        .cast::<u64>();
+    let elements = crate::array::array_elements_ptr(arr as *const crate::ArrayHeader).cast::<u64>();
     let Some(first) = record(*elements) else {
         return false;
     };

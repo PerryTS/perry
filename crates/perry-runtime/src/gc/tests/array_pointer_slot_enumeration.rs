@@ -66,7 +66,7 @@ fn array_slot_enumeration_reports_a_pointer_element_the_layout_omits() {
     let index = unsafe { (*arr).length } as usize;
     unsafe {
         let elements =
-            (arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64;
+            crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader) as *mut u64;
         std::ptr::write(elements.add(index), ptr_bits(planted));
         (*arr).length = index as u32 + 1;
     }

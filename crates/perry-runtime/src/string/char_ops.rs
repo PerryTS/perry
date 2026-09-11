@@ -339,7 +339,9 @@ pub extern "C" fn js_string_to_char_array(s: i64) -> i64 {
         i = end;
     }
     let arr = crate::array::js_array_alloc_with_length(spans.len() as u32);
-    let elements = unsafe { (arr as *mut u8).add(8) as *mut f64 };
+    let elements = unsafe {
+        crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader) as *mut f64
+    };
     for (i, &(start, end)) in spans.iter().enumerate() {
         let seq = &bytes[start..end];
         let ch_ptr = js_string_from_bytes(seq.as_ptr(), seq.len() as u32);

@@ -1089,8 +1089,8 @@ fn lower_bounded_array_index_get_checked(
     let fast_blk = ctx.block();
     let idx_i64 = fast_blk.zext(I32, idx_i32, I64);
     let byte_offset = fast_blk.shl(I64, &idx_i64, "3");
-    let with_header = fast_blk.add(I64, &byte_offset, "8");
-    let element_addr = fast_blk.add(I64, &arr_handle, &with_header);
+    let elements_addr = fast_blk.array_elements_addr(&arr_handle);
+    let element_addr = fast_blk.add(I64, &elements_addr, &byte_offset);
     let element_ptr = fast_blk.inttoptr(I64, &element_addr);
     let fast_raw = fast_blk.load(DOUBLE, &element_ptr);
     // `new Array(n)` slots are TAG_HOLE internally; JavaScript reads expose

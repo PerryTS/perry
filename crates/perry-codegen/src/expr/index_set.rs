@@ -1094,8 +1094,8 @@ pub(crate) fn lower(
                                     // facts before doing this store.
                                     let idx_i64 = blk.zext(I32, &idx_i32, I64);
                                     let byte_offset = blk.shl(I64, &idx_i64, "3");
-                                    let with_header = blk.add(I64, &byte_offset, "8");
-                                    let element_addr = blk.add(I64, &arr_handle, &with_header);
+                                    let elements_addr = blk.array_elements_addr(&arr_handle);
+                                    let element_addr = blk.add(I64, &elements_addr, &byte_offset);
                                     let element_ptr = blk.inttoptr(I64, &element_addr);
                                     // GC_STORE_AUDIT(POINTER_FREE): guarded raw-f64
                                     // numeric store — the (canonical) value is a
@@ -1157,8 +1157,8 @@ pub(crate) fn lower(
                             // ptr = arr_handle + 8 + idx*8
                             let idx_i64 = blk.zext(I32, &idx_i32, I64);
                             let byte_offset = blk.shl(I64, &idx_i64, "3");
-                            let with_header = blk.add(I64, &byte_offset, "8");
-                            let element_addr = blk.add(I64, &arr_handle, &with_header);
+                            let elements_addr = blk.array_elements_addr(&arr_handle);
+                            let element_addr = blk.add(I64, &elements_addr, &byte_offset);
                             let element_ptr = blk.inttoptr(I64, &element_addr);
                             let value_bits = emit_jsvalue_slot_store_on_block(
                                 blk,

@@ -468,7 +468,9 @@ impl Census {
     ) {
         let header_bytes = GC_HEADER_SIZE + std::mem::size_of::<crate::array::ArrayHeader>();
         let slot_capacity = size.saturating_sub(header_bytes) / 8;
-        let length = ((*arr).length as usize).min(slot_capacity);
+        let length = ((*arr).length as usize)
+            .min((*arr).capacity as usize)
+            .min(slot_capacity);
         self.arr_length += length as u64;
         self.arr_capacity += slot_capacity as u64;
         self.arr_buckets[size_bucket(size)].add(size);
@@ -476,7 +478,7 @@ impl Census {
             self.arr_shape_keys.add(size);
         }
         let elems =
-            (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const u64;
+            crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader) as *const u64;
         for i in 0..length {
             self.arr_slot_tags[slot_kind(*elems.add(i))] += 1;
         }

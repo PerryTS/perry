@@ -398,7 +398,7 @@ unsafe fn try_readd_stable_tombstone_sso_no_grow(
         shape.live_inline_slot_count
     };
 
-    let elements = (keys as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+    let elements = crate::array::array_elements_ptr(keys as *const ArrayHeader) as *mut f64;
     crate::gc::runtime_store_external_jsvalue_slot(
         keys as usize,
         elements.add(new_index as usize) as usize,

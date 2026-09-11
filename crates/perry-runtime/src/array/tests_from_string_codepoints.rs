@@ -15,7 +15,7 @@ use crate::string::{
 
 /// The `index`-th element of the result, as (bytes, flags).
 unsafe fn element(arr: *mut ArrayHeader, index: usize) -> (Vec<u8>, u32) {
-    let elements = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+    let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
     let value = *elements.add(index);
     let part = crate::value::js_nanbox_get_pointer(value) as *const StringHeader;
     assert!(!part.is_null(), "element {index} is not a string");

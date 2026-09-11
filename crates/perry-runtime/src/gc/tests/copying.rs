@@ -6,6 +6,7 @@ mod latch;
 mod pointer_publish_7154;
 mod promise_side_tables;
 mod promoted_remembered_7803;
+mod shift_queue;
 mod survival_and_malloc;
 mod verify_malloc_borrow;
 mod verify_parent_context;
@@ -1426,7 +1427,7 @@ fn large_object_old_born_array_slot_write_keeps_young_child_alive() {
     );
 
     let elements = unsafe {
-        (arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64
+        crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader) as *mut u64
     };
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     let rewritten = unsafe { (*elements & POINTER_MASK) as usize };
@@ -1462,7 +1463,7 @@ fn large_object_array_literal_direct_store_keeps_young_child_alive_and_excludes_
         GC_TYPE_ARRAY
     ));
     let elements = unsafe {
-        (arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64
+        crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader) as *mut u64
     };
     unsafe {
         *elements = ptr_bits(child);
@@ -1507,7 +1508,7 @@ fn large_object_inline_push_store_keeps_young_child_alive_and_excludes_parent() 
     ));
 
     let elements = unsafe {
-        (arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64
+        crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader) as *mut u64
     };
     let slot = unsafe {
         let length = (*arr).length as usize;
@@ -1794,7 +1795,7 @@ fn test_copying_minor_copies_transitive_young_graph() {
     unsafe {
         (*arr).length = 1;
         let elements =
-            (arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64;
+            crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader) as *mut u64;
         *elements = ptr_bits(child);
         layout_note_slot(arr as usize, 0, *elements);
     }
@@ -1803,8 +1804,9 @@ fn test_copying_minor_copies_transitive_young_graph() {
     let _ = gc_collect_minor();
     let arr_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
     let child_after = unsafe {
-        let elements = (arr_after as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>())
-            as *mut u64;
+        let elements =
+            crate::array::array_elements_ptr(arr_after as *const crate::array::ArrayHeader)
+                as *mut u64;
         (*elements & POINTER_MASK) as usize
     };
 
@@ -1822,7 +1824,7 @@ fn test_copying_minor_moves_layout_masked_transitive_object() {
     unsafe {
         (*arr).length = 1;
         let elements =
-            (arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64;
+            crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader) as *mut u64;
         *elements = ptr_bits(child as usize);
         layout_note_slot(arr as usize, 0, *elements);
     }
@@ -1831,8 +1833,9 @@ fn test_copying_minor_moves_layout_masked_transitive_object() {
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     let arr_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
     let child_after = unsafe {
-        let elements = (arr_after as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>())
-            as *mut u64;
+        let elements =
+            crate::array::array_elements_ptr(arr_after as *const crate::array::ArrayHeader)
+                as *mut u64;
         (*elements & POINTER_MASK) as usize
     };
 

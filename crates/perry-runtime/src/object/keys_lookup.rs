@@ -32,7 +32,7 @@ pub(crate) unsafe fn keys_array_dense_slots(
     }
     let len = (*arr).length.min((*arr).capacity) as usize;
     (
-        (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64,
+        crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader) as *const f64,
         len,
     )
 }

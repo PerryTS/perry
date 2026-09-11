@@ -283,7 +283,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if array_parent {
                 let len_i32 = ctx.block().call(I32, "js_array_length", &[(I64, &arr)]);
                 let len = ctx.block().zext(I32, &len_i32, I64);
-                let elems_addr = ctx.block().add(I64, &arr, "8");
+                let elems_addr = ctx.block().array_elements_addr(&arr);
                 let elems_ptr = ctx.block().inttoptr(I64, &elems_addr);
                 let result = ctx.block().call(
                     DOUBLE,

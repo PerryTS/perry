@@ -130,7 +130,7 @@ pub(super) unsafe fn array_own_key_present(
         return false;
     }
     let elements =
-        (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const u64;
+        crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader) as *const u64;
     std::ptr::read(elements.add(index as usize)) != crate::value::TAG_HOLE
 }
 

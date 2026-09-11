@@ -3,6 +3,7 @@
 //! pulls these basics in via `use super::*;`.
 
 pub(crate) use super::header_gc_slots::*;
+pub(super) use super::storage::array_elements_ptr;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -853,15 +854,16 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
             // #9371: a large pre-sized holey array grows its dense prefix on
             // demand, so a legitimate sparse header can have capacity above
             // the old one-million cutoff while it is still below `length`.
-            // Prove the capacity against the tracked allocation's exact byte
-            // size instead of imposing a second semantic threshold. Corrupt
-            // length/capacity words still fail closed unless they describe
-            // precisely the allocation the GC owns at this address.
+            // Remaining capacity must fit the tracked allocation. A consumed
+            // queue prefix accounts for any whole-slot difference from the
+            // allocation's physical capacity.
             let sparse_array_shape = tracked_obj_type == Some(crate::gc::GC_TYPE_ARRAY)
                 && hdr.length > hdr.capacity
                 && tracked_header.is_some_and(|gc_header| {
-                    checked_array_allocation_size(hdr.capacity as usize)
-                        == Some((*gc_header.as_ptr()).size as usize)
+                    checked_array_allocation_size(hdr.capacity as usize).is_some_and(|minimum| {
+                        let size = (*gc_header.as_ptr()).size as usize;
+                        size >= minimum && (size - minimum) % 8 == 0
+                    })
                 });
             if sparse_array_shape {
                 return cleaned;
@@ -1130,7 +1132,8 @@ pub(crate) fn normalize_array_receiver(arr: *const ArrayHeader) -> *const ArrayH
 pub struct ArrayHeader {
     /// Number of elements in the array
     pub length: u32,
-    /// Capacity (allocated space for elements)
+    /// Available slots from logical element zero to the end of the allocation.
+    /// Dense shift advances that start by reducing this value. See storage.rs.
     pub capacity: u32,
 }
 
@@ -1218,7 +1221,7 @@ pub(crate) fn canonicalize_array_numeric_store_value_from_flags(flags: u16, valu
 
 #[inline]
 unsafe fn array_slot_bits(arr: *const ArrayHeader, index: usize) -> u64 {
-    let slot = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const u64;
+    let slot = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const u64;
     *slot.add(index)
 }
 
@@ -1980,9 +1983,4 @@ pub(super) fn checked_array_allocation_size(capacity: usize) -> Option<usize> {
         .checked_mul(std::mem::size_of::<f64>())
         .and_then(|elements| std::mem::size_of::<ArrayHeader>().checked_add(elements))
         .and_then(|payload| crate::gc::GC_HEADER_SIZE.checked_add(payload))
-}
-
-#[inline]
-pub(super) unsafe fn array_elements_ptr(arr: *mut ArrayHeader) -> *mut u64 {
-    (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64
 }

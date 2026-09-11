@@ -1251,7 +1251,8 @@ fn js_buffer_concat_impl(
 
     unsafe {
         let len = (*arr_ptr).length as usize;
-        let arr_data = (arr_ptr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let arr_data =
+            crate::array::array_elements_ptr(arr_ptr as *const ArrayHeader) as *const f64;
 
         // Helper to strip NaN-boxing tags from buffer element pointers
         let strip_nanbox = |bits: u64| -> u64 {

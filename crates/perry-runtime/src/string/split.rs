@@ -13,7 +13,7 @@ unsafe fn store_split_string(arr: *mut ArrayHeader, index: usize, string: *mut S
     const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
     const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 
-    let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+    let elements_ptr = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
     let value_bits = STRING_TAG | (string as u64 & POINTER_MASK);
     // GC_STORE_AUDIT(BARRIERED): split result string slot is followed by a runtime write barrier.
     std::ptr::write(elements_ptr.add(index), f64::from_bits(value_bits));
@@ -702,7 +702,7 @@ fn split_single_element(s: *const StringHeader) -> *mut ArrayHeader {
     let (arr, s) = s_handle.across_const::<StringHeader, _>(|| crate::array::js_array_alloc(1));
     unsafe {
         (*arr).length = 1;
-        let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let elements_ptr = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
         let nanboxed = STRING_TAG | (s as u64 & POINTER_MASK);
         // GC_STORE_AUDIT(BARRIERED): slot recorded via note_array_slot.
         std::ptr::write(elements_ptr, f64::from_bits(nanboxed));
