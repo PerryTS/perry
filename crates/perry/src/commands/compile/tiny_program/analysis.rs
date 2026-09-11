@@ -2,7 +2,9 @@
 //! Adding an expression requires proving both its value and absence of effects.
 use std::collections::HashMap;
 
-use swc_ecma_ast::{Callee, Decl, Expr, Lit, MemberProp, Module, ModuleItem, Pat, Stmt, VarDeclKind};
+use swc_ecma_ast::{
+    Callee, Decl, Expr, Lit, MemberProp, Module, ModuleItem, Pat, Stmt, VarDeclKind,
+};
 
 const MAX_BYTES: usize = 1024 * 1024;
 const MAX_DEPTH: usize = 64;
@@ -39,7 +41,7 @@ pub(super) fn analyze(source: &str, filename: &str) -> Result<ProvenProgram, &'s
 }
 
 fn analyze_module(module: &Module) -> Result<ProvenProgram, &'static str> {
-    let mut strings = HashMap::<String, String>::new();
+    let mut strings = HashMap::<String, Vec<u16>>::new();
     let mut outputs = Vec::new();
     let mut retained_bytes = 0usize;
     for item in &module.body {
@@ -92,7 +94,8 @@ fn analyze_module(module: &Module) -> Result<ProvenProgram, &'static str> {
                 if call.args.len() != 1 || call.args[0].spread.is_some() {
                     return Err("console requires one constant string argument");
                 }
-                let mut bytes = constant_string(&call.args[0].expr, &strings, 0)?.into_bytes();
+                let value = constant_string(&call.args[0].expr, &strings, 0)?;
+                let mut bytes = String::from_utf16_lossy(&value).into_bytes();
                 bytes.push(b'\n');
                 charge(&mut retained_bytes, bytes.len())?;
                 outputs.push(Output { fd, bytes });
@@ -104,7 +107,9 @@ fn analyze_module(module: &Module) -> Result<ProvenProgram, &'static str> {
 }
 
 fn charge(total: &mut usize, bytes: usize) -> Result<(), &'static str> {
-    *total = total.checked_add(bytes).ok_or("constant storage overflow")?;
+    *total = total
+        .checked_add(bytes)
+        .ok_or("constant storage overflow")?;
     if *total > MAX_BYTES {
         return Err("constant storage exceeds tiny analysis limit");
     }
@@ -113,29 +118,35 @@ fn charge(total: &mut usize, bytes: usize) -> Result<(), &'static str> {
 
 fn constant_string(
     expr: &Expr,
-    strings: &HashMap<String, String>,
+    strings: &HashMap<String, Vec<u16>>,
     depth: usize,
-) -> Result<String, &'static str> {
+) -> Result<Vec<u16>, &'static str> {
     if depth >= MAX_DEPTH {
         return Err("expression exceeds tiny analysis depth");
     }
     let value = match expr {
-        Expr::Lit(Lit::Str(s)) => s.value.to_string_lossy().into_owned(),
+        Expr::Lit(Lit::Str(s)) => s.value.as_wtf8().to_ill_formed_utf16().collect(),
         Expr::Ident(id) => strings
             .get(id.sym.as_ref())
             .cloned()
             .ok_or("string binding is not initialized and proven")?,
         Expr::Tpl(template) => {
-            let mut text = String::new();
+            let mut text = Vec::new();
             let mut size = 0;
             for (index, quasi) in template.quasis.iter().enumerate() {
-                let part = quasi.cooked.as_ref().ok_or("uncooked template")?.to_string_lossy();
+                let part: Vec<u16> = quasi
+                    .cooked
+                    .as_ref()
+                    .ok_or("uncooked template")?
+                    .as_wtf8()
+                    .to_ill_formed_utf16()
+                    .collect();
                 charge(&mut size, part.len())?;
-                text.push_str(&part);
+                text.extend_from_slice(&part);
                 if let Some(expr) = template.exprs.get(index) {
                     let part = constant_string(expr, strings, depth + 1)?;
                     charge(&mut size, part.len())?;
-                    text.push_str(&part);
+                    text.extend_from_slice(&part);
                 }
             }
             text
@@ -159,15 +170,27 @@ mod tests {
 
     #[test]
     fn proves_empty_and_constant_template_output() {
-        assert!(analyze("// empty\n;", "app.ts").unwrap().outputs().is_empty());
+        assert!(analyze("// empty\n;", "app.ts")
+            .unwrap()
+            .outputs()
+            .is_empty());
         let plan = analyze(
             "const who = 'world'; const greeting = `hello, ${who}`; console.log(greeting); console.error('done');",
             "app.ts",
         ).unwrap();
-        assert_eq!(plan.outputs(), &[
-            Output { fd: 1, bytes: b"hello, world\n".to_vec() },
-            Output { fd: 2, bytes: b"done\n".to_vec() },
-        ]);
+        assert_eq!(
+            plan.outputs(),
+            &[
+                Output {
+                    fd: 1,
+                    bytes: b"hello, world\n".to_vec()
+                },
+                Output {
+                    fd: 2,
+                    bytes: b"done\n".to_vec()
+                },
+            ]
+        );
     }
 
     #[test]
@@ -177,37 +200,76 @@ mod tests {
     }
 
     #[test]
+    fn template_substitution_preserves_surrogate_pairs() {
+        let plan = analyze(
+            r#"const low = '\uDC00'; console.log(`\uD800${low}`);"#,
+            "app.ts",
+        )
+        .unwrap();
+        assert_eq!(plan.outputs()[0].bytes, "𐀀\n".as_bytes());
+    }
+
+    #[test]
     fn every_unproven_construct_falls_back() {
         let sources = [
-            "let s = 'a'; console.log(s);", "var s = 'a'; console.log(s);",
+            "let s = 'a'; console.log(s);",
+            "var s = 'a'; console.log(s);",
             "const console = 'fake'; console.log('a');",
             "console.log('a'); const console = 'fake';",
             "console.log('a'); function console() {}",
             "console.log('a'); var console;",
-            "const {log} = console; log('a');", "const c = console; c.log('a');",
-            "console['log']('a');", "console.log?.('a');", "console?.log('a');",
+            "const {log} = console; log('a');",
+            "const c = console; c.log('a');",
+            "console['log']('a');",
+            "console.log?.('a');",
+            "console?.log('a');",
             "console.log = () => {}; console.log('a');",
             "console.log((console.log = () => {}, 'a'));",
             "console.log({ get x() { return 'a'; } });",
-            "console.log('a', 'b');", "console.log(...['a']);", "console.log(42);",
-            "console.log(`n=${42}`);", "console.log('a' + 'b');",
-            "console.log(s); const s = 'a';", "const s = s;",
-            "const s = 'a'; const s = 'b';", "const s = 'a'; s = 'b';",
-            "console.log(String('a'));", "globalThis.console.log('a');",
-            "import 'node:fs'; console.log('a');", "import type {T} from './t';",
-            "export const s = 'a';", "export {};", "function unused() {}",
+            "console.log('a', 'b');",
+            "console.log(...['a']);",
+            "console.log(42);",
+            "console.log(`n=${42}`);",
+            "console.log('a' + 'b');",
+            "console.log(s); const s = 'a';",
+            "const s = s;",
+            "const s = 'a'; const s = 'b';",
+            "const s = 'a'; s = 'b';",
+            "console.log(String('a'));",
+            "globalThis.console.log('a');",
+            "import 'node:fs'; console.log('a');",
+            "import type {T} from './t';",
+            "export const s = 'a';",
+            "export {};",
+            "function unused() {}",
             "if (false) { new Promise(() => {}); } console.log('a');",
-            "while (false) { const x = []; }", "for (;;) { const x = {}; }",
-            "class C {}", "const f = () => 'a';", "const x = [];",
-            "Promise.resolve('a');", "queueMicrotask(() => {});", "setTimeout(() => {}, 0);",
-            "process.on('exit', () => {});", "process.argv;", "eval('');",
-            "new Function('return this')();", "import('node:fs');",
-            "throw 'a';", "try { console.log('a'); } catch {}",
-            "using x = null;", "await Promise.resolve();", "namespace N {}",
-            "interface T {}", "declare const x: string;", "debugger;",
+            "while (false) { const x = []; }",
+            "for (;;) { const x = {}; }",
+            "class C {}",
+            "const f = () => 'a';",
+            "const x = [];",
+            "Promise.resolve('a');",
+            "queueMicrotask(() => {});",
+            "setTimeout(() => {}, 0);",
+            "process.on('exit', () => {});",
+            "process.argv;",
+            "eval('');",
+            "new Function('return this')();",
+            "import('node:fs');",
+            "throw 'a';",
+            "try { console.log('a'); } catch {}",
+            "using x = null;",
+            "await Promise.resolve();",
+            "namespace N {}",
+            "interface T {}",
+            "declare const x: string;",
+            "debugger;",
         ];
         for source in sources {
-            assert!(analyze(source, "app.ts").is_err(), "incorrectly admitted {source}");
+            assert!(
+                analyze(source, "app.ts").is_err(),
+                "incorrectly admitted {source}"
+            );
         }
     }
 
@@ -215,14 +277,20 @@ mod tests {
     fn escaped_identifiers_do_not_hide_receiver_shadowing() {
         assert!(analyze(r#"const \u0063onsole = 'x'; console.log('a');"#, "app.ts").is_err());
         assert!(analyze(r#"console.log('a'); const \u0063onsole = 'x';"#, "app.ts").is_err());
-        assert_eq!(analyze(r#"\u0063onsole.log('a');"#, "app.ts").unwrap().outputs()[0].bytes, b"a\n");
+        assert_eq!(
+            analyze(r#"\u0063onsole.log('a');"#, "app.ts")
+                .unwrap()
+                .outputs()[0]
+                .bytes,
+            b"a\n"
+        );
     }
 
     #[test]
     fn expansion_is_bounded() {
         let mut source = String::from("const s0 = 'abcdefgh';");
         for i in 1..20 {
-            source.push_str(&format!("const s{i} = `${{s{}}}${{s{}}}`;", i-1, i-1));
+            source.push_str(&format!("const s{i} = `${{s{}}}${{s{}}}`;", i - 1, i - 1));
         }
         assert!(analyze(&source, "app.ts").is_err());
     }

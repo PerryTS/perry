@@ -949,6 +949,10 @@ pub fn run_with_parse_cache(
         });
     }
 
+    if let Some(result) = tiny_program::try_compile(&args, &ctx, format, verbose)? {
+        return Ok(result);
+    }
+
     // #2309: tree-shake the final module graph — prune unreachable
     // node_modules modules and re-raise any deferred refusal that survives.
     // No-op unless tree-shaking is enabled (byte-identical to pre-#2309).
