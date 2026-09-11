@@ -179,7 +179,7 @@ sleep() { :; }
 
     def test_release_notes_cap_preserves_unicode_and_bounds(self):
         source = step('create-release', 'Create tag')
-        fragment = source[source.index('LIMIT=120000'):source.index('# Created with GITHUB_TOKEN:')]
+        fragment = source[source.index('LIMIT='):source.index('# Created with GITHUB_TOKEN:')]
         for body in ['short notes\n', 'Unicode: 日本語\n' * 100000, 'x' * 150000 + '\n']:
             with self.subTest(size=len(body)), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
