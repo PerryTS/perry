@@ -1,0 +1,47 @@
+{
+  "note": "R30 emitter screen declared before measuring: exact existing fixtures, pretty/callback paths plus escaped fallback controls.",
+  "cases": [
+    {
+      "fixture": "long_string_1m",
+      "operation": "pretty",
+      "iterations": 256,
+      "warmup": 4,
+      "repetitions": 7
+    },
+    {
+      "fixture": "long_string_1m",
+      "operation": "callback",
+      "iterations": 128,
+      "warmup": 4,
+      "repetitions": 7
+    },
+    {
+      "fixture": "unicode_1m",
+      "operation": "pretty",
+      "iterations": 256,
+      "warmup": 4,
+      "repetitions": 7
+    },
+    {
+      "fixture": "unicode_1m",
+      "operation": "callback",
+      "iterations": 128,
+      "warmup": 4,
+      "repetitions": 7
+    },
+    {
+      "fixture": "escaped_1m",
+      "operation": "pretty",
+      "iterations": 256,
+      "warmup": 4,
+      "repetitions": 7
+    },
+    {
+      "fixture": "escaped_1m",
+      "operation": "callback",
+      "iterations": 128,
+      "warmup": 4,
+      "repetitions": 7
+    }
+  ]
+}

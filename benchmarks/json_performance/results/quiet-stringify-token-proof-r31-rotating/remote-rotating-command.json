@@ -1,0 +1,23 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/stringify-token-proof-r31/run-rotating.py",
+  "--worker",
+  ".work/stringify-token-proof-r31/candidate-rotating-worker",
+  "--baseline-worker",
+  ".work/stringify-token-proof-r31/main-rotating-worker",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--filter",
+  "unicode_1m,long_string_1m,escaped_1m,small_record,records_array_1m",
+  "--repeat",
+  "7",
+  "--source-commit",
+  "f0bc3aeb6a2597a941ad4afe1b70e79e2df11a17",
+  "--results-dir",
+  "results/quiet-stringify-token-proof-r31-rotating"
+]

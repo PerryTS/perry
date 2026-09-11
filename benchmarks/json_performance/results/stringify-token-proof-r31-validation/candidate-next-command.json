@@ -1,0 +1,14 @@
+{
+  "after_production_terminal_zero": [
+    "copy-frozen-build.py",
+    "complete-candidate-validation.py",
+    "stage.py"
+  ],
+  "measurement_phase_one": [
+    "measure-supplement.py options",
+    "analyze-extras.py --options-only",
+    "measure-large-options.py",
+    "analyze-large-options.py"
+  ],
+  "note": "Dependencies remain sequential. No measured candidate can be staged before the expanded raw-surrogate, callback and old control matrices qualify."
+}

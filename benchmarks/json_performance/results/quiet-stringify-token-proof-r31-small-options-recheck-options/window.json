@@ -1,0 +1,38 @@
+{
+  "owner": "json-perf-27745-1789129962",
+  "load_before": [
+    1.43798828125,
+    1.50390625,
+    1.52685546875
+  ],
+  "started_utc": "2026-09-11T12:32:42Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/stringify-token-proof-r31/run-options.py",
+    "--worker",
+    ".work/stringify-token-proof-r31/candidate-options",
+    "--baseline-worker",
+    ".work/stringify-token-proof-r31/main-options",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--bun",
+    "/Users/perry/.bun/bin/bun",
+    "--case",
+    "small_record:plain:10000000:5000:11",
+    "--case",
+    "small_record:keys:2000000:5000:11",
+    "--case",
+    "small_record:callback:2000000:5000:11",
+    "--results-dir",
+    "results/quiet-stringify-token-proof-r31-small-options-recheck-options"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    2.40625,
+    1.8466796875,
+    1.65283203125
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-11T12:35:10Z"
+}

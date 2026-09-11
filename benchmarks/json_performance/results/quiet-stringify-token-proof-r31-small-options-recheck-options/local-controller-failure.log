@@ -1,0 +1,18 @@
+ACQUIRED json-perf-27745-1789129962 load (1.43798828125, 1.50390625, 1.52685546875)
+FINISHED custom load (2.40625, 1.8466796875, 1.65283203125)
+QUIET_GATE True
+RELEASED
+
+2026-09-11T12:32:42Z 2026-09-11T12:35:10Z
+ARCHIVED quiet-stringify-token-proof-r31-small-options-recheck-options
+Traceback (most recent call last):
+  File "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-token-proof-r31/measure-small-options-recheck.py", line 24, in <module>
+    shutil.copy2(w / name, d / name)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/shutil.py", line 529, in copy2
+    copyfile(src, dst, follow_symlinks=follow_symlinks)
+    ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/shutil.py", line 313, in copyfile
+    with open(src, 'rb') as fsrc:
+         ~~~~^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-token-proof-r31/measure-small-options-recheck-options.py'

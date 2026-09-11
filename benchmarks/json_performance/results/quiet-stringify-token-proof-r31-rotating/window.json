@@ -1,0 +1,38 @@
+{
+  "owner": "json-perf-28074-1789130219",
+  "load_before": [
+    2.03564453125,
+    1.921875,
+    1.7060546875
+  ],
+  "started_utc": "2026-09-11T12:36:59Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/stringify-token-proof-r31/run-rotating.py",
+    "--worker",
+    ".work/stringify-token-proof-r31/candidate-rotating-worker",
+    "--baseline-worker",
+    ".work/stringify-token-proof-r31/main-rotating-worker",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--bun",
+    "/Users/perry/.bun/bin/bun",
+    "--filter",
+    "unicode_1m,long_string_1m,escaped_1m,small_record,records_array_1m",
+    "--repeat",
+    "7",
+    "--source-commit",
+    "f0bc3aeb6a2597a941ad4afe1b70e79e2df11a17",
+    "--results-dir",
+    "results/quiet-stringify-token-proof-r31-rotating"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.95068359375,
+    1.9130859375,
+    1.72509765625
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-11T12:38:42Z"
+}

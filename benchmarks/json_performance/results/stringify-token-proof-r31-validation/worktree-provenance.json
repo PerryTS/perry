@@ -1,0 +1,6 @@
+{
+  "source_commit": "f0bc3aeb6a2597a941ad4afe1b70e79e2df11a17",
+  "actual_build_worktree": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29",
+  "shared_build_cache": "/Users/amlug/projects/perry/json-merged-pr10022/target",
+  "note": "R31 extends frozen R30 with Unicode validity proof for borrowed JSON token strings and an expanded raw-surrogate regression. R30 production and validation are terminal. ASCII construction and GC policy are unchanged."
+}

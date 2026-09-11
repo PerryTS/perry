@@ -1,0 +1,9 @@
+{
+  "exit_code": 1,
+  "measurement_command_success_proven": true,
+  "measurement_success_basis": "Archived remote with_lock.py prints FINISHED only after subprocess.run(check=True) completes; terminal quiet window, full output files and released lock were archived first. SSH return code was not persisted before the local copy failure.",
+  "local_failure": "Incorrect local controller filename in post-archive copy list; no measurement was rerun.",
+  "local_repair": "Copy actual controller and failure log, preserve exit1, allow analysis only with this explicit completion evidence.",
+  "with_lock_sha256": "443df89997be22f22f16b475d76c45ea2b560ab9550e4e6c028777e1e3b74b49",
+  "remote_log_sha256": "fd4948d89de6140adbf19a1e10b859abe5c6fff5807745067286b32ff957d538"
+}

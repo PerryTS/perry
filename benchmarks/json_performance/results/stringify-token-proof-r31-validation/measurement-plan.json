@@ -1,0 +1,20 @@
+{
+  "source_commit": "f0bc3aeb6a2597a941ad4afe1b70e79e2df11a17",
+  "reference_source_commit": "3aac4d6335da54abeeed73df842decbbe6dd5d71",
+  "order": [
+    "options",
+    "large-options",
+    "rotating",
+    "full",
+    "changing-options"
+  ],
+  "purpose": {
+    "options": "Seven established pretty/replacer/zero rows; CPU and peak RSS.",
+    "large-options": "Six declared megabyte ASCII/Unicode/escaped pretty/replacer rows.",
+    "rotating": "Fresh-source Unicode and small-record parsing controls; parse, same-source and selected-field consumption.",
+    "full": "Original 38 repeated-input parse/stringify rows plus 12 consumption rows.",
+    "changing-options": "Plain and zero-space stringify on changing small objects."
+  },
+  "conditional_rechecks": "Recheck separated regressions or unresolved adverse trends with independent repetitions; do not rerun successful controls without a concrete concern.",
+  "qualification": "No timings have run for this source yet. Every worker must first match complete Node output and positive moving/protected GC where scheduled. Every terminal remote window is archived before another remote operation."
+}

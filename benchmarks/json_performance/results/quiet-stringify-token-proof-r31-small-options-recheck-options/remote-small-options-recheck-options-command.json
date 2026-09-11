@@ -1,0 +1,23 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/stringify-token-proof-r31/run-options.py",
+  "--worker",
+  ".work/stringify-token-proof-r31/candidate-options",
+  "--baseline-worker",
+  ".work/stringify-token-proof-r31/main-options",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--case",
+  "small_record:plain:10000000:5000:11",
+  "--case",
+  "small_record:keys:2000000:5000:11",
+  "--case",
+  "small_record:callback:2000000:5000:11",
+  "--results-dir",
+  "results/quiet-stringify-token-proof-r31-small-options-recheck-options"
+]

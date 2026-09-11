@@ -1,0 +1,26 @@
+{
+  "note": "Independent recheck declared after initial seven-repetition screen: two separated regressions and an all-seven-slower plain trend.",
+  "cases": [
+    {
+      "fixture": "small_record",
+      "operation": "plain",
+      "iterations": 10000000,
+      "warmup": 5000,
+      "repetitions": 11
+    },
+    {
+      "fixture": "small_record",
+      "operation": "keys",
+      "iterations": 2000000,
+      "warmup": 5000,
+      "repetitions": 11
+    },
+    {
+      "fixture": "small_record",
+      "operation": "callback",
+      "iterations": 2000000,
+      "warmup": 5000,
+      "repetitions": 11
+    }
+  ]
+}

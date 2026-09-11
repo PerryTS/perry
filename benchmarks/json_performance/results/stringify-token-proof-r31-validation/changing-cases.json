@@ -1,0 +1,18 @@
+{
+  "cases": [
+    {
+      "fixture": "small_record",
+      "operation": "changing-plain",
+      "iterations": 2000000,
+      "warmup": 5000,
+      "repetitions": 7
+    },
+    {
+      "fixture": "small_record",
+      "operation": "changing-zero",
+      "iterations": 2000000,
+      "warmup": 5000,
+      "repetitions": 7
+    }
+  ]
+}

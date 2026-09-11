@@ -1,0 +1,15 @@
+{
+  "source_commit": "f0bc3aeb6a2597a941ad4afe1b70e79e2df11a17",
+  "command": [
+    "/Users/amlug/projects/perry/json-merged-pr10022/target/release/build/perry-runtime/b8ed6322d803238c/out/perry_runtime-b8ed6322d803238c",
+    "string::",
+    "--test-threads=1"
+  ],
+  "env": {
+    "RUST_TEST_THREADS": "1"
+  },
+  "exit_code": 0,
+  "binary_sha256": "b0352163e24e2c046a8387c948f4f9a3d9d69d5caac0915f664d420f9aa2b02d",
+  "unit_log_sha256": "9c9fa972a75db6b77196b28badf9e858a76513231a0d2319517c13142f336243",
+  "note": "Exact release unit binary from the successful 299-JSON-test build, with the new raw-surrogate boundary test positively listed. JSON and string suites overlap."
+}

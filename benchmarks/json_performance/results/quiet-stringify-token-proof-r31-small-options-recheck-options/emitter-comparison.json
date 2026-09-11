@@ -1,0 +1,21 @@
+{
+  "candidate_all_pass": true,
+  "main_passes": 6,
+  "main_existing_failures": 14,
+  "candidate_passes": 20,
+  "ir_matches": [
+    {
+      "mode": "native",
+      "main_sha256": "3e57b93a6546ae39c775ddf646188521a218edd4538aacb795c59dbc1b85d113",
+      "candidate_sha256": "4e550adaea3127f3b045a21c20377b49cf811481c4c036c76671a504c4375126",
+      "normalized_sha256": "7a3d0d7d7f1cb592afe94e8690ea4759a96bbd05923ae5345a40ea2198089207"
+    },
+    {
+      "mode": "shadow",
+      "main_sha256": "5917c5b5fa874adc137a37ab3bf11e0f251a9e076f382380239ee795ac4ef826",
+      "candidate_sha256": "5917c5b5fa874adc137a37ab3bf11e0f251a9e076f382380239ee795ac4ef826",
+      "normalized_sha256": "5917c5b5fa874adc137a37ab3bf11e0f251a9e076f382380239ee795ac4ef826"
+    }
+  ],
+  "note": "Both arms freshly executed at the same real test-files path. Fourteen reference output/callback failures are fixed, with positive copying/protected sets; candidate normal/full-GC/tape controls match complete Node output. Fresh native/shadow static checks pass in both arms."
+}

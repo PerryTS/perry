@@ -1,0 +1,1 @@
+The analyzer explicitly accepts the preserved local archive-copy failure only with archived remote command completion proof and matching controller/log hashes, then verifies all132timedchecksums,15oracleoutputs,12samplevectors. It does not relabel the local process as exit0.

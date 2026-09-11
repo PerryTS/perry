@@ -1,0 +1,17 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/stringify-token-proof-r31/run-options.py",
+  "--worker",
+  ".work/stringify-token-proof-r31/candidate-options",
+  "--baseline-worker",
+  ".work/stringify-token-proof-r31/main-options",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--results-dir",
+  "results/quiet-stringify-token-proof-r31-options"
+]

@@ -1,0 +1,10 @@
+{
+  "note": "Existing changing-object declaration inherited through R26 controllers, copied from original R25 source before measurements.",
+  "files": [
+    {
+      "source": "benchmarks/json_performance/.work/zero-spacing-r25/changing-cases.json",
+      "copy": "benchmarks/json_performance/.work/stringify-key-snapshot-r29/changing-cases.json",
+      "sha256": "27c6edca6250343f4097d316be2152244ea86a19148e874c78ee0cf503ba4561"
+    }
+  ]
+}
