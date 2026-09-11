@@ -1,0 +1,922 @@
+[
+  {
+    "subject": "test_json_source_length",
+    "parser": "auto",
+    "gc": "normal",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "source_sha256": "a031482a2a904280027dc90e581efcc78d2ff206dd62a382bce6128812981c3e",
+    "binary_sha256": "21f6cc3153b7f0042b6cd6c0b28640be73a24ab6456fc42858251a68cfbe5eb0",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_source_length.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_source_length"
+    ]
+  },
+  {
+    "subject": "test_json_source_length",
+    "parser": "auto",
+    "gc": "scheduled",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 102,
+    "moved_objects": 17478,
+    "source_sha256": "a031482a2a904280027dc90e581efcc78d2ff206dd62a382bce6128812981c3e",
+    "binary_sha256": "21f6cc3153b7f0042b6cd6c0b28640be73a24ab6456fc42858251a68cfbe5eb0",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_source_length.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_source_length"
+    ]
+  },
+  {
+    "subject": "test_json_source_length",
+    "parser": "auto",
+    "gc": "fullgc",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "source_sha256": "a031482a2a904280027dc90e581efcc78d2ff206dd62a382bce6128812981c3e",
+    "binary_sha256": "21f6cc3153b7f0042b6cd6c0b28640be73a24ab6456fc42858251a68cfbe5eb0",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_source_length.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_source_length"
+    ]
+  },
+  {
+    "subject": "test_json_source_length",
+    "parser": "tape",
+    "gc": "normal",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "source_sha256": "a031482a2a904280027dc90e581efcc78d2ff206dd62a382bce6128812981c3e",
+    "binary_sha256": "21f6cc3153b7f0042b6cd6c0b28640be73a24ab6456fc42858251a68cfbe5eb0",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_source_length.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_source_length"
+    ]
+  },
+  {
+    "subject": "test_json_source_length",
+    "parser": "tape",
+    "gc": "scheduled",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 102,
+    "moved_objects": 17540,
+    "source_sha256": "a031482a2a904280027dc90e581efcc78d2ff206dd62a382bce6128812981c3e",
+    "binary_sha256": "21f6cc3153b7f0042b6cd6c0b28640be73a24ab6456fc42858251a68cfbe5eb0",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_source_length.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_source_length"
+    ]
+  },
+  {
+    "subject": "test_json_source_length",
+    "parser": "tape",
+    "gc": "fullgc",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "source_sha256": "a031482a2a904280027dc90e581efcc78d2ff206dd62a382bce6128812981c3e",
+    "binary_sha256": "21f6cc3153b7f0042b6cd6c0b28640be73a24ab6456fc42858251a68cfbe5eb0",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_source_length.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_source_length"
+    ]
+  },
+  {
+    "subject": "test_json_source_length",
+    "parser": "direct",
+    "gc": "normal",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "source_sha256": "a031482a2a904280027dc90e581efcc78d2ff206dd62a382bce6128812981c3e",
+    "binary_sha256": "21f6cc3153b7f0042b6cd6c0b28640be73a24ab6456fc42858251a68cfbe5eb0",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_source_length.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_source_length"
+    ]
+  },
+  {
+    "subject": "test_json_source_length",
+    "parser": "direct",
+    "gc": "scheduled",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 102,
+    "moved_objects": 17478,
+    "source_sha256": "a031482a2a904280027dc90e581efcc78d2ff206dd62a382bce6128812981c3e",
+    "binary_sha256": "21f6cc3153b7f0042b6cd6c0b28640be73a24ab6456fc42858251a68cfbe5eb0",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_source_length.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_source_length"
+    ]
+  },
+  {
+    "subject": "test_json_source_length",
+    "parser": "direct",
+    "gc": "fullgc",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "source_sha256": "a031482a2a904280027dc90e581efcc78d2ff206dd62a382bce6128812981c3e",
+    "binary_sha256": "21f6cc3153b7f0042b6cd6c0b28640be73a24ab6456fc42858251a68cfbe5eb0",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_source_length.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_source_length"
+    ]
+  },
+  {
+    "subject": "test_json_template_capture",
+    "parser": "auto",
+    "gc": "normal",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "source_sha256": "7aaf623d651915ab2eca0fd37b3b89d544f3bef81f0fb79629e3ab12e47ad521",
+    "binary_sha256": "b73c77d11601d520f9b18b39ce706bc203735047684800408113ec2ec51982f0",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_template_capture.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_template_capture"
+    ]
+  },
+  {
+    "subject": "test_json_template_capture",
+    "parser": "auto",
+    "gc": "scheduled",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 1998,
+    "moved_objects": 96025,
+    "source_sha256": "7aaf623d651915ab2eca0fd37b3b89d544f3bef81f0fb79629e3ab12e47ad521",
+    "binary_sha256": "b73c77d11601d520f9b18b39ce706bc203735047684800408113ec2ec51982f0",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_template_capture.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_template_capture"
+    ]
+  },
+  {
+    "subject": "test_json_template_capture",
+    "parser": "auto",
+    "gc": "fullgc",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "source_sha256": "7aaf623d651915ab2eca0fd37b3b89d544f3bef81f0fb79629e3ab12e47ad521",
+    "binary_sha256": "b73c77d11601d520f9b18b39ce706bc203735047684800408113ec2ec51982f0",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_template_capture.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_template_capture"
+    ]
+  },
+  {
+    "subject": "test_json_template_capture",
+    "parser": "tape",
+    "gc": "normal",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "source_sha256": "7aaf623d651915ab2eca0fd37b3b89d544f3bef81f0fb79629e3ab12e47ad521",
+    "binary_sha256": "b73c77d11601d520f9b18b39ce706bc203735047684800408113ec2ec51982f0",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_template_capture.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_template_capture"
+    ]
+  },
+  {
+    "subject": "test_json_template_capture",
+    "parser": "tape",
+    "gc": "scheduled",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 1999,
+    "moved_objects": 95999,
+    "source_sha256": "7aaf623d651915ab2eca0fd37b3b89d544f3bef81f0fb79629e3ab12e47ad521",
+    "binary_sha256": "b73c77d11601d520f9b18b39ce706bc203735047684800408113ec2ec51982f0",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_template_capture.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_template_capture"
+    ]
+  },
+  {
+    "subject": "test_json_template_capture",
+    "parser": "tape",
+    "gc": "fullgc",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "source_sha256": "7aaf623d651915ab2eca0fd37b3b89d544f3bef81f0fb79629e3ab12e47ad521",
+    "binary_sha256": "b73c77d11601d520f9b18b39ce706bc203735047684800408113ec2ec51982f0",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_template_capture.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_template_capture"
+    ]
+  },
+  {
+    "subject": "test_json_template_capture",
+    "parser": "direct",
+    "gc": "normal",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "source_sha256": "7aaf623d651915ab2eca0fd37b3b89d544f3bef81f0fb79629e3ab12e47ad521",
+    "binary_sha256": "b73c77d11601d520f9b18b39ce706bc203735047684800408113ec2ec51982f0",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_template_capture.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_template_capture"
+    ]
+  },
+  {
+    "subject": "test_json_template_capture",
+    "parser": "direct",
+    "gc": "scheduled",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 1998,
+    "moved_objects": 96025,
+    "source_sha256": "7aaf623d651915ab2eca0fd37b3b89d544f3bef81f0fb79629e3ab12e47ad521",
+    "binary_sha256": "b73c77d11601d520f9b18b39ce706bc203735047684800408113ec2ec51982f0",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_template_capture.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_template_capture"
+    ]
+  },
+  {
+    "subject": "test_json_template_capture",
+    "parser": "direct",
+    "gc": "fullgc",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "source_sha256": "7aaf623d651915ab2eca0fd37b3b89d544f3bef81f0fb79629e3ab12e47ad521",
+    "binary_sha256": "b73c77d11601d520f9b18b39ce706bc203735047684800408113ec2ec51982f0",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_template_capture.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_template_capture"
+    ]
+  },
+  {
+    "subject": "test_json_cached_construction",
+    "parser": "auto",
+    "gc": "normal",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "source_sha256": "574ed0efb44c04e0a206d8cdc20aa5d6f7585787c4f3880a7acd153e45d3eaf6",
+    "binary_sha256": "3139279f55e9f61627ed311e63e0e4e14b3f87da14ac872bcf22d4deb6ad2407",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_cached_construction.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_cached_construction"
+    ]
+  },
+  {
+    "subject": "test_json_cached_construction",
+    "parser": "auto",
+    "gc": "scheduled",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 854,
+    "moved_objects": 159027,
+    "source_sha256": "574ed0efb44c04e0a206d8cdc20aa5d6f7585787c4f3880a7acd153e45d3eaf6",
+    "binary_sha256": "3139279f55e9f61627ed311e63e0e4e14b3f87da14ac872bcf22d4deb6ad2407",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_cached_construction.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_cached_construction"
+    ]
+  },
+  {
+    "subject": "test_json_cached_construction",
+    "parser": "auto",
+    "gc": "fullgc",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "source_sha256": "574ed0efb44c04e0a206d8cdc20aa5d6f7585787c4f3880a7acd153e45d3eaf6",
+    "binary_sha256": "3139279f55e9f61627ed311e63e0e4e14b3f87da14ac872bcf22d4deb6ad2407",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_cached_construction.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_cached_construction"
+    ]
+  },
+  {
+    "subject": "test_json_cached_construction",
+    "parser": "tape",
+    "gc": "normal",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "source_sha256": "574ed0efb44c04e0a206d8cdc20aa5d6f7585787c4f3880a7acd153e45d3eaf6",
+    "binary_sha256": "3139279f55e9f61627ed311e63e0e4e14b3f87da14ac872bcf22d4deb6ad2407",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_cached_construction.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_cached_construction"
+    ]
+  },
+  {
+    "subject": "test_json_cached_construction",
+    "parser": "tape",
+    "gc": "scheduled",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 854,
+    "moved_objects": 159027,
+    "source_sha256": "574ed0efb44c04e0a206d8cdc20aa5d6f7585787c4f3880a7acd153e45d3eaf6",
+    "binary_sha256": "3139279f55e9f61627ed311e63e0e4e14b3f87da14ac872bcf22d4deb6ad2407",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_cached_construction.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_cached_construction"
+    ]
+  },
+  {
+    "subject": "test_json_cached_construction",
+    "parser": "tape",
+    "gc": "fullgc",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "source_sha256": "574ed0efb44c04e0a206d8cdc20aa5d6f7585787c4f3880a7acd153e45d3eaf6",
+    "binary_sha256": "3139279f55e9f61627ed311e63e0e4e14b3f87da14ac872bcf22d4deb6ad2407",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_cached_construction.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_cached_construction"
+    ]
+  },
+  {
+    "subject": "test_json_cached_construction",
+    "parser": "direct",
+    "gc": "normal",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "source_sha256": "574ed0efb44c04e0a206d8cdc20aa5d6f7585787c4f3880a7acd153e45d3eaf6",
+    "binary_sha256": "3139279f55e9f61627ed311e63e0e4e14b3f87da14ac872bcf22d4deb6ad2407",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_cached_construction.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_cached_construction"
+    ]
+  },
+  {
+    "subject": "test_json_cached_construction",
+    "parser": "direct",
+    "gc": "scheduled",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 1118,
+    "moved_objects": 155168,
+    "source_sha256": "574ed0efb44c04e0a206d8cdc20aa5d6f7585787c4f3880a7acd153e45d3eaf6",
+    "binary_sha256": "3139279f55e9f61627ed311e63e0e4e14b3f87da14ac872bcf22d4deb6ad2407",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_cached_construction.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_cached_construction"
+    ]
+  },
+  {
+    "subject": "test_json_cached_construction",
+    "parser": "direct",
+    "gc": "fullgc",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "source_sha256": "574ed0efb44c04e0a206d8cdc20aa5d6f7585787c4f3880a7acd153e45d3eaf6",
+    "binary_sha256": "3139279f55e9f61627ed311e63e0e4e14b3f87da14ac872bcf22d4deb6ad2407",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_cached_construction.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_cached_construction"
+    ]
+  },
+  {
+    "subject": "test_json_warm_unique_keys",
+    "parser": "auto",
+    "gc": "normal",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "source_sha256": "9db45e92a08fbb9ea6c0d585e3684a8e15cd437787bce2f7af437e1d9278b504",
+    "binary_sha256": "d0666ce9a810f86d9732184080783c3abaefa11c0799a3946ef6e761b91bda71",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_warm_unique_keys.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_warm_unique_keys"
+    ]
+  },
+  {
+    "subject": "test_json_warm_unique_keys",
+    "parser": "auto",
+    "gc": "scheduled",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 402,
+    "moved_objects": 39798,
+    "source_sha256": "9db45e92a08fbb9ea6c0d585e3684a8e15cd437787bce2f7af437e1d9278b504",
+    "binary_sha256": "d0666ce9a810f86d9732184080783c3abaefa11c0799a3946ef6e761b91bda71",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_warm_unique_keys.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_warm_unique_keys"
+    ]
+  },
+  {
+    "subject": "test_json_warm_unique_keys",
+    "parser": "auto",
+    "gc": "fullgc",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "source_sha256": "9db45e92a08fbb9ea6c0d585e3684a8e15cd437787bce2f7af437e1d9278b504",
+    "binary_sha256": "d0666ce9a810f86d9732184080783c3abaefa11c0799a3946ef6e761b91bda71",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_warm_unique_keys.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_warm_unique_keys"
+    ]
+  },
+  {
+    "subject": "test_json_warm_unique_keys",
+    "parser": "tape",
+    "gc": "normal",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "source_sha256": "9db45e92a08fbb9ea6c0d585e3684a8e15cd437787bce2f7af437e1d9278b504",
+    "binary_sha256": "d0666ce9a810f86d9732184080783c3abaefa11c0799a3946ef6e761b91bda71",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_warm_unique_keys.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_warm_unique_keys"
+    ]
+  },
+  {
+    "subject": "test_json_warm_unique_keys",
+    "parser": "tape",
+    "gc": "scheduled",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 402,
+    "moved_objects": 46606,
+    "source_sha256": "9db45e92a08fbb9ea6c0d585e3684a8e15cd437787bce2f7af437e1d9278b504",
+    "binary_sha256": "d0666ce9a810f86d9732184080783c3abaefa11c0799a3946ef6e761b91bda71",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_warm_unique_keys.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_warm_unique_keys"
+    ]
+  },
+  {
+    "subject": "test_json_warm_unique_keys",
+    "parser": "tape",
+    "gc": "fullgc",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "source_sha256": "9db45e92a08fbb9ea6c0d585e3684a8e15cd437787bce2f7af437e1d9278b504",
+    "binary_sha256": "d0666ce9a810f86d9732184080783c3abaefa11c0799a3946ef6e761b91bda71",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_warm_unique_keys.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_warm_unique_keys"
+    ]
+  },
+  {
+    "subject": "test_json_warm_unique_keys",
+    "parser": "direct",
+    "gc": "normal",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "source_sha256": "9db45e92a08fbb9ea6c0d585e3684a8e15cd437787bce2f7af437e1d9278b504",
+    "binary_sha256": "d0666ce9a810f86d9732184080783c3abaefa11c0799a3946ef6e761b91bda71",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_warm_unique_keys.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_warm_unique_keys"
+    ]
+  },
+  {
+    "subject": "test_json_warm_unique_keys",
+    "parser": "direct",
+    "gc": "scheduled",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 402,
+    "moved_objects": 38289,
+    "source_sha256": "9db45e92a08fbb9ea6c0d585e3684a8e15cd437787bce2f7af437e1d9278b504",
+    "binary_sha256": "d0666ce9a810f86d9732184080783c3abaefa11c0799a3946ef6e761b91bda71",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_warm_unique_keys.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_warm_unique_keys"
+    ]
+  },
+  {
+    "subject": "test_json_warm_unique_keys",
+    "parser": "direct",
+    "gc": "fullgc",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "source_sha256": "9db45e92a08fbb9ea6c0d585e3684a8e15cd437787bce2f7af437e1d9278b504",
+    "binary_sha256": "d0666ce9a810f86d9732184080783c3abaefa11c0799a3946ef6e761b91bda71",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/test_json_warm_unique_keys.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-test_json_warm_unique_keys"
+    ]
+  },
+  {
+    "subject": "prior-entry",
+    "parser": "auto",
+    "gc": "normal",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "source_sha256": "825b2d78cf40d341d7fdae3fde69a28ba905cd6faa0ba9cc8ebfc78e7f6738fa",
+    "binary_sha256": "561dca1ed0ec29b54dac0a7936850f98ae476ad7401207c0ac79b1a7e6f5f24f",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/prior-entry.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-prior-entry"
+    ]
+  },
+  {
+    "subject": "prior-entry",
+    "parser": "auto",
+    "gc": "scheduled",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 1208,
+    "moved_objects": 46150,
+    "source_sha256": "825b2d78cf40d341d7fdae3fde69a28ba905cd6faa0ba9cc8ebfc78e7f6738fa",
+    "binary_sha256": "561dca1ed0ec29b54dac0a7936850f98ae476ad7401207c0ac79b1a7e6f5f24f",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/prior-entry.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-prior-entry"
+    ]
+  },
+  {
+    "subject": "prior-entry",
+    "parser": "auto",
+    "gc": "fullgc",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "source_sha256": "825b2d78cf40d341d7fdae3fde69a28ba905cd6faa0ba9cc8ebfc78e7f6738fa",
+    "binary_sha256": "561dca1ed0ec29b54dac0a7936850f98ae476ad7401207c0ac79b1a7e6f5f24f",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/prior-entry.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-prior-entry"
+    ]
+  },
+  {
+    "subject": "prior-entry",
+    "parser": "tape",
+    "gc": "normal",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "source_sha256": "825b2d78cf40d341d7fdae3fde69a28ba905cd6faa0ba9cc8ebfc78e7f6738fa",
+    "binary_sha256": "561dca1ed0ec29b54dac0a7936850f98ae476ad7401207c0ac79b1a7e6f5f24f",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/prior-entry.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-prior-entry"
+    ]
+  },
+  {
+    "subject": "prior-entry",
+    "parser": "tape",
+    "gc": "scheduled",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 1208,
+    "moved_objects": 46228,
+    "source_sha256": "825b2d78cf40d341d7fdae3fde69a28ba905cd6faa0ba9cc8ebfc78e7f6738fa",
+    "binary_sha256": "561dca1ed0ec29b54dac0a7936850f98ae476ad7401207c0ac79b1a7e6f5f24f",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/prior-entry.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-prior-entry"
+    ]
+  },
+  {
+    "subject": "prior-entry",
+    "parser": "tape",
+    "gc": "fullgc",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "source_sha256": "825b2d78cf40d341d7fdae3fde69a28ba905cd6faa0ba9cc8ebfc78e7f6738fa",
+    "binary_sha256": "561dca1ed0ec29b54dac0a7936850f98ae476ad7401207c0ac79b1a7e6f5f24f",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/prior-entry.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-prior-entry"
+    ]
+  },
+  {
+    "subject": "prior-entry",
+    "parser": "direct",
+    "gc": "normal",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "source_sha256": "825b2d78cf40d341d7fdae3fde69a28ba905cd6faa0ba9cc8ebfc78e7f6738fa",
+    "binary_sha256": "561dca1ed0ec29b54dac0a7936850f98ae476ad7401207c0ac79b1a7e6f5f24f",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/prior-entry.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-prior-entry"
+    ]
+  },
+  {
+    "subject": "prior-entry",
+    "parser": "direct",
+    "gc": "scheduled",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 1208,
+    "moved_objects": 46150,
+    "source_sha256": "825b2d78cf40d341d7fdae3fde69a28ba905cd6faa0ba9cc8ebfc78e7f6738fa",
+    "binary_sha256": "561dca1ed0ec29b54dac0a7936850f98ae476ad7401207c0ac79b1a7e6f5f24f",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/prior-entry.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-prior-entry"
+    ]
+  },
+  {
+    "subject": "prior-entry",
+    "parser": "direct",
+    "gc": "fullgc",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "source_sha256": "825b2d78cf40d341d7fdae3fde69a28ba905cd6faa0ba9cc8ebfc78e7f6738fa",
+    "binary_sha256": "561dca1ed0ec29b54dac0a7936850f98ae476ad7401207c0ac79b1a7e6f5f24f",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/prior-entry.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-prior-entry"
+    ]
+  },
+  {
+    "subject": "callback-only",
+    "parser": "auto",
+    "gc": "scheduled",
+    "matches_node": true,
+    "exit_code": 0,
+    "protected_retired_sets": 16,
+    "moved_objects": 13305,
+    "source_sha256": "bda27230cb7c71c98990924cc5a6699273d1eaa50e288ffd88c90f6ca56072d2",
+    "binary_sha256": "fb0335fd6c4fe16f0500a742eea29314384b26508cedfe52e1f5dba892fdc43c",
+    "command": [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/callback-only.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-callback-only"
+    ]
+  }
+]

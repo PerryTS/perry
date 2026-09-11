@@ -1,0 +1,22 @@
+{
+  "source_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+  "previous_turn": "progress: R19 rebuild proof and R20 implemented/validated/measured/parked/pushed",
+  "scope": "Full objective unchanged. Source census and sharing audit before implementation.",
+  "setup_note": "Initial metadata collection referenced stale value.rs path; no command beyond file reading ran. Corrected to authoritative value/tags.rs and value/jsvalue.rs.",
+  "source_hashes": {
+    "crates/perry-runtime/src/json/parser.rs": "15c2de59de0e0ab7b3869aedba0d2295b1be4d5a78c21a6eaf9e22f410edbd95",
+    "crates/perry-runtime/src/string/json_construction.rs": "26acd6d946f4bd9198a02b38f2b4d13b50059a48bc791d965852bd5427a28356",
+    "crates/perry-runtime/src/string/mod.rs": "4baa5cb71410a293798160f94af1e42cc0ed326dc351ede219a3cb318e6d0282",
+    "crates/perry-runtime/src/string/append.rs": "ba98f337240439f762792bf53ae267a35cd688bf5e3a9450d8f8cf175e158047",
+    "crates/perry-runtime/src/string/concat.rs": "f75adc4d1583a4b35fc15838008faa8570a110158da90ee5035539bcb8203914",
+    "crates/perry-runtime/src/string/intern.rs": "60d237e62fdc2b81ebba029cfc3c9ee926fd6fcec53ada8caeb76f35bbc6763c",
+    "crates/perry-runtime/src/value/tags.rs": "303415bdf90d8be4f1fd3b9f13001558f01906cc424ffc5c57ae3995c6abc465",
+    "crates/perry-runtime/src/value/jsvalue.rs": "264d6b74c5c9036add57ef4eac8c4aea7de5dc9faf4f8d21f1fd04d372f9f8ac",
+    "crates/perry-runtime/src/gc/types.rs": "43608dd3c7fa62e07a214cc133479da00b5217c943d1ca49a065ccdc53431658"
+  },
+  "base_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+  "candidate": "Skip inline duplicate search while the captured ordered unique warm-shape prefix still matches; fallback unchanged after mismatch/exhaustion. No string cache added.",
+  "full_scope": "original38+12consumption+access+rotating+retained36+short+options; no qualification until all required evidence exists",
+  "screen": "Same18cases7reps asR20, required11pairobject1mrecheck; extend tests/cases if new findings require it",
+  "reference_build": "R19 independently rebuilt main artifacts; original-main byte equivalence verified again before copy"
+}

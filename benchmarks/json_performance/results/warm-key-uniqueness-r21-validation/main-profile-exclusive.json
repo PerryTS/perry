@@ -1,0 +1,327 @@
+{
+  "samples": 752,
+  "profile_source": {
+    "path": "records_array_1m-scan-main.sample.txt.gz",
+    "source_commit": "44426f53184029e55ece042e6b077f3e66b0eabf",
+    "source_path": "benchmarks/json_performance/results/quiet-tape-batch-r18-profiles/records_array_1m-scan-main.sample.txt.gz",
+    "sha256": "b74c15fb15d0b04e091be85ba3e646af5248fb3e7cd7aed1499156f3ad10d59a"
+  },
+  "note": "Re-analysis of an existing one-second R18 unchanged-main profile, not a new measurement or exact function timer. Exclusive samples exclude immediate children and sum to the main-thread total; symbol names retain inline frames where present.",
+  "functions": [
+    {
+      "function": "_RINvNtCs3gRpqoBkMHm_13perry_runtime9json_tape15build_tape_intoKb1_EB4_ ",
+      "exclusive_samples": 182,
+      "pct_main_thread_samples": 24.20212765957447
+    },
+    {
+      "function": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser20parse_object_untyped ",
+      "exclusive_samples": 121,
+      "pct_main_thread_samples": 16.090425531914892
+    },
+    {
+      "function": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7copying24run_copied_minor_attempt ",
+      "exclusive_samples": 46,
+      "pct_main_thread_samples": 6.117021276595745
+    },
+    {
+      "function": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value ",
+      "exclusive_samples": 33,
+      "pct_main_thread_samples": 4.388297872340425
+    },
+    {
+      "function": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser11parse_value ",
+      "exclusive_samples": 32,
+      "pct_main_thread_samples": 4.25531914893617
+    },
+    {
+      "function": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_bytes ",
+      "exclusive_samples": 26,
+      "pct_main_thread_samples": 3.4574468085106385
+    },
+    {
+      "function": "_platform_memmove ",
+      "exclusive_samples": 24,
+      "pct_main_thread_samples": 3.1914893617021276
+    },
+    {
+      "function": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction22string_from_json_bytes ",
+      "exclusive_samples": 20,
+      "pct_main_thread_samples": 2.6595744680851063
+    },
+    {
+      "function": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser12parse_number ",
+      "exclusive_samples": 20,
+      "pct_main_thread_samples": 2.6595744680851063
+    },
+    {
+      "function": "js_array_get_f64 ",
+      "exclusive_samples": 19,
+      "pct_main_thread_samples": 2.5265957446808507
+    },
+    {
+      "function": "_tlv_get_addr ",
+      "exclusive_samples": 15,
+      "pct_main_thread_samples": 1.9946808510638299
+    },
+    {
+      "function": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6object17json_construction36object_from_json_fields_preinstalled ",
+      "exclusive_samples": 14,
+      "pct_main_thread_samples": 1.8617021276595744
+    },
+    {
+      "function": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json9parse_api10parse_slow ",
+      "exclusive_samples": 14,
+      "pct_main_thread_samples": 1.8617021276595744
+    },
+    {
+      "function": "perry_fn_worker_ts__run$spec_b ",
+      "exclusive_samples": 13,
+      "pct_main_thread_samples": 1.7287234042553192
+    },
+    {
+      "function": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6object6shapes34try_birth_stamp_preinstalled_shape ",
+      "exclusive_samples": 13,
+      "pct_main_thread_samples": 1.7287234042553192
+    },
+    {
+      "function": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc13layout_tables20layout_forget_object ",
+      "exclusive_samples": 12,
+      "pct_main_thread_samples": 1.5957446808510638
+    },
+    {
+      "function": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push ",
+      "exclusive_samples": 7,
+      "pct_main_thread_samples": 0.9308510638297872
+    },
+    {
+      "function": "_RNCINvNtNtCs3gRpqoBkMHm_13perry_runtime2gc17layout_slot_visit22visit_gc_rewrite_slotsNCNvMs_NtB6_7copyingNtB1s_23CopyingNurseryCollector18scan_object_fields0E0B8_ ",
+      "exclusive_samples": 7,
+      "pct_main_thread_samples": 0.9308510638297872
+    },
+    {
+      "function": "_RNvMs_NtNtCs3gRpqoBkMHm_13perry_runtime2gc7copyingNtB4_23CopyingNurseryCollector9mark_addr ",
+      "exclusive_samples": 7,
+      "pct_main_thread_samples": 0.9308510638297872
+    },
+    {
+      "function": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueINtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots19GcRootRegistryGuardINtNtB4_6option6OptionINtNtNtNtCs8BpVhDwHqJW_3std11collections4hash3map7HashMapNtNtCsctvjasLqLe9_5alloc6string6StringINtNtB30_3vec3VecNtNtBI_16ui_text_registry14ForEachBindingEEEEEBI_ ",
+      "exclusive_samples": 6,
+      "pct_main_thread_samples": 0.7978723404255319
+    },
+    {
+      "function": "pthread_mutex_lock ",
+      "exclusive_samples": 6,
+      "pct_main_thread_samples": 0.7978723404255319
+    },
+    {
+      "function": "_RNvNtCs3gRpqoBkMHm_13perry_runtime14typed_feedback12object_shape ",
+      "exclusive_samples": 6,
+      "pct_main_thread_samples": 0.7978723404255319
+    },
+    {
+      "function": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array ",
+      "exclusive_samples": 6,
+      "pct_main_thread_samples": 0.7978723404255319
+    },
+    {
+      "function": "_RNvMNtNtCs3gRpqoBkMHm_13perry_runtime2gc19copying_pointer_setNtB2_17CopyingPointerSet14classify_arena ",
+      "exclusive_samples": 6,
+      "pct_main_thread_samples": 0.7978723404255319
+    },
+    {
+      "function": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_array_prefix ",
+      "exclusive_samples": 5,
+      "pct_main_thread_samples": 0.6648936170212766
+    },
+    {
+      "function": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18finish_short_array ",
+      "exclusive_samples": 5,
+      "pct_main_thread_samples": 0.6648936170212766
+    },
+    {
+      "function": "_RNvMNtNtCs3gRpqoBkMHm_13perry_runtime4json18construction_arrayNtB2_17ConstructionArray3new ",
+      "exclusive_samples": 5,
+      "pct_main_thread_samples": 0.6648936170212766
+    },
+    {
+      "function": "_platform_memset_pattern16 ",
+      "exclusive_samples": 5,
+      "pct_main_thread_samples": 0.6648936170212766
+    },
+    {
+      "function": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new ",
+      "exclusive_samples": 5,
+      "pct_main_thread_samples": 0.6648936170212766
+    },
+    {
+      "function": "js_packed_arraylike_index_get ",
+      "exclusive_samples": 5,
+      "pct_main_thread_samples": 0.6648936170212766
+    },
+    {
+      "function": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6object6shapes32debug_assert_object_shape_parity ",
+      "exclusive_samples": 4,
+      "pct_main_thread_samples": 0.5319148936170213
+    },
+    {
+      "function": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime5arena5stats18pointer_in_nursery ",
+      "exclusive_samples": 4,
+      "pct_main_thread_samples": 0.5319148936170213
+    },
+    {
+      "function": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc17layout_slot_visit32visit_gc_layout_slot_descriptors.specialized.10 ",
+      "exclusive_samples": 4,
+      "pct_main_thread_samples": 0.5319148936170213
+    },
+    {
+      "function": "_RINvMs6_NtCshsF3QZNC8Sh_9hashbrown3rawINtB6_8RawTableTjNtNtNtCs3gRpqoBkMHm_13perry_runtime5arena9page_meta11OldPageMetaEE14reserve_rehashNCINvNtB8_3map11make_hasherjBR_NtNtBX_9fast_hash9PtrHasherE0EBX_ ",
+      "exclusive_samples": 4,
+      "pct_main_thread_samples": 0.5319148936170213
+    },
+    {
+      "function": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser11parse_array ",
+      "exclusive_samples": 3,
+      "pct_main_thread_samples": 0.39893617021276595
+    },
+    {
+      "function": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser16parse_array_tail ",
+      "exclusive_samples": 3,
+      "pct_main_thread_samples": 0.39893617021276595
+    },
+    {
+      "function": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy25flush_deferred_gc_request ",
+      "exclusive_samples": 3,
+      "pct_main_thread_samples": 0.39893617021276595
+    },
+    {
+      "function": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc13layout_tables20typed_layouts_remove ",
+      "exclusive_samples": 3,
+      "pct_main_thread_samples": 0.39893617021276595
+    },
+    {
+      "function": "<deduplicated_symbol> ",
+      "exclusive_samples": 3,
+      "pct_main_thread_samples": 0.39893617021276595
+    },
+    {
+      "function": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime5arena7promote14flush_page_run ",
+      "exclusive_samples": 3,
+      "pct_main_thread_samples": 0.39893617021276595
+    },
+    {
+      "function": "_RNvMs_NtNtCs3gRpqoBkMHm_13perry_runtime2gc7copyingNtB4_23CopyingNurseryCollector22visit_slot_with_parent ",
+      "exclusive_samples": 3,
+      "pct_main_thread_samples": 0.39893617021276595
+    },
+    {
+      "function": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime5arena9page_meta24register_old_block_pages ",
+      "exclusive_samples": 3,
+      "pct_main_thread_samples": 0.39893617021276595
+    },
+    {
+      "function": "_RNvNtCs3gRpqoBkMHm_13perry_runtime14typed_feedback32invalidate_representation_change ",
+      "exclusive_samples": 2,
+      "pct_main_thread_samples": 0.26595744680851063
+    },
+    {
+      "function": "pthread_mutex_unlock ",
+      "exclusive_samples": 2,
+      "pct_main_thread_samples": 0.26595744680851063
+    },
+    {
+      "function": "_RNvNtCs3gRpqoBkMHm_13perry_runtime14typed_feedback8registry ",
+      "exclusive_samples": 2,
+      "pct_main_thread_samples": 0.26595744680851063
+    },
+    {
+      "function": "_RNvMNtNtCs3gRpqoBkMHm_13perry_runtime5arena12constructionNtB2_17ConstructionBatch17finish_json_slots ",
+      "exclusive_samples": 2,
+      "pct_main_thread_samples": 0.26595744680851063
+    },
+    {
+      "function": "DYLD-STUB$$memset_pattern16 ",
+      "exclusive_samples": 2,
+      "pct_main_thread_samples": 0.26595744680851063
+    },
+    {
+      "function": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_ ",
+      "exclusive_samples": 2,
+      "pct_main_thread_samples": 0.26595744680851063
+    },
+    {
+      "function": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get ",
+      "exclusive_samples": 1,
+      "pct_main_thread_samples": 0.13297872340425532
+    },
+    {
+      "function": "madvise ",
+      "exclusive_samples": 1,
+      "pct_main_thread_samples": 0.13297872340425532
+    },
+    {
+      "function": "mi_page_free_list_extend ",
+      "exclusive_samples": 1,
+      "pct_main_thread_samples": 0.13297872340425532
+    },
+    {
+      "function": "keys_array_len_capped_to_capacity ",
+      "exclusive_samples": 1,
+      "pct_main_thread_samples": 0.13297872340425532
+    },
+    {
+      "function": "_RINvMs2_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB6_13RuntimeHandle10across_mutNtNtBc_9json_tape15LazyArrayHeaderuNCNvB1D_19reparse_materializes_0EBc_ ",
+      "exclusive_samples": 1,
+      "pct_main_thread_samples": 0.13297872340425532
+    },
+    {
+      "function": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7barrier28write_barrier_decoded_parent ",
+      "exclusive_samples": 1,
+      "pct_main_thread_samples": 0.13297872340425532
+    },
+    {
+      "function": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6buffer6header20is_registered_buffer ",
+      "exclusive_samples": 1,
+      "pct_main_thread_samples": 0.13297872340425532
+    },
+    {
+      "function": "_RNvMs_NtCs3gRpqoBkMHm_13perry_runtime9json_tapeNtB4_10TapeSource5entry ",
+      "exclusive_samples": 1,
+      "pct_main_thread_samples": 0.13297872340425532
+    },
+    {
+      "function": "_RNvMNtNtCs3gRpqoBkMHm_13perry_runtime5arena12constructionNtB2_17ConstructionBatch3new ",
+      "exclusive_samples": 1,
+      "pct_main_thread_samples": 0.13297872340425532
+    },
+    {
+      "function": "__bzero ",
+      "exclusive_samples": 1,
+      "pct_main_thread_samples": 0.13297872340425532
+    },
+    {
+      "function": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6object21array_tail_transition21prune_invalid_entries ",
+      "exclusive_samples": 1,
+      "pct_main_thread_samples": 0.13297872340425532
+    },
+    {
+      "function": "_RNvNtNtNtNtCs3gRpqoBkMHm_13perry_runtime6object13native_module16callable_exports24builtin_closure_metadata42prune_dead_builtin_closure_metadata_owners ",
+      "exclusive_samples": 1,
+      "pct_main_thread_samples": 0.13297872340425532
+    },
+    {
+      "function": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6object21array_tail_transition10scan_table ",
+      "exclusive_samples": 1,
+      "pct_main_thread_samples": 0.13297872340425532
+    },
+    {
+      "function": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime5arena9page_meta43flush_deferred_old_page_registrations_batch ",
+      "exclusive_samples": 1,
+      "pct_main_thread_samples": 0.13297872340425532
+    },
+    {
+      "function": "_RNvNtCs3gRpqoBkMHm_13perry_runtime11async_hooks24is_async_resource_handle ",
+      "exclusive_samples": 1,
+      "pct_main_thread_samples": 0.13297872340425532
+    }
+  ]
+}

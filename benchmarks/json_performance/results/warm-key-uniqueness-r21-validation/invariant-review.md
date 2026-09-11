@@ -1,0 +1,9 @@
+# Warm key uniqueness
+
+The direct parser publishes parse shapes only from the ordered, deduplicated key vectors of completed objects. Its parser-local warm shape comes from that path; the bounded parse-boundary hint copies an entry from the same cache. All production callers of parse_shape_keys_array_with_id are the direct parser's shape-cache helper (the public-looking wrapper is crate-local and otherwise called only by tests). The generic tape materializer and typed hints do not independently insert entries into this parse-shape cache.
+
+While warm_shape_matches remains true, warm_shape_slot advances through this captured unique key sequence. A current matching key therefore cannot equal an earlier matching key. A mismatch, exhausted shape, escaped spelling that decodes differently, or fallback after key-cache identity changes clears that proof and retains the existing pointer/content duplicate search. The captured shape is a local snapshot, so nested values changing the parser's hot shape do not change this proof.
+
+No cache, allocation policy, rooting or GC schedule changes. The patch only bypasses a redundant search; all value/key writes and the fallback path stay intact. New tests cover every prefix length, decoded escaped duplicates, extra fields, nested shape changes and later duplicates. Existing old-key-identity/eviction coverage remains.
+
+The initial string-cache idea was abandoned: all19inputfixtures contain zero repeated heap-eligible value strings under direct or generic-tape SSO admission. The 1MiB array has30,400 value strings,15,200inline and15,200unique heap-eligible values. The census is source evidence, not an allocation measurement orCPU/RSSforecast. Existing parse-created heap strings have refcount0 and append requires refcount1, but sharing would not benefit these fixtures.

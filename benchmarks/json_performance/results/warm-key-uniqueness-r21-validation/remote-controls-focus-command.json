@@ -1,0 +1,23 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/warm-key-uniqueness-r21/run-focus.py",
+  "--worker",
+  ".work/warm-key-uniqueness-r21/candidate-worker",
+  "--baseline-worker",
+  ".work/warm-key-uniqueness-r21/main-worker",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--case",
+  "unicode_1m:stringify:19800:2:11",
+  "--case",
+  "small_record:stringify:10000000:5000:11",
+  "--case",
+  "records_array_16k:sparse:31472:2:11",
+  "--results-dir",
+  "results/quiet-warm-key-uniqueness-r21-controls-focus"
+]

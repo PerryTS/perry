@@ -1,0 +1,32 @@
+{
+  "owner": "json-perf-86149-1789097104",
+  "load_before": [
+    1.44189453125,
+    1.89892578125,
+    1.75341796875
+  ],
+  "started_utc": "2026-09-11T03:25:04Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/warm-key-uniqueness-r21/run-access.py",
+    "--worker",
+    ".work/warm-key-uniqueness-r21/candidate-access-worker",
+    "--baseline-worker",
+    ".work/warm-key-uniqueness-r21/main-access-worker",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--bun",
+    "/Users/perry/.bun/bin/bun",
+    "--results-dir",
+    "results/quiet-warm-key-uniqueness-r21-access"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.56787109375,
+    1.8896484375,
+    1.75341796875
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-11T03:25:30Z"
+}

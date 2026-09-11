@@ -1,0 +1,18 @@
+[
+  {
+    "exclusive": 13,
+    "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value  (in main-worker) + 352,32,...  [0x1027edf28,0x1027edde8,...]"
+  },
+  {
+    "exclusive": 11,
+    "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value  (in main-worker) + 148,128,...  [0x1027ede5c,0x1027ede48,...]"
+  },
+  {
+    "exclusive": 6,
+    "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value  (in main-worker) + 328,148,...  [0x1027edf10,0x1027ede5c,...]"
+  },
+  {
+    "exclusive": 3,
+    "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value  (in main-worker) + 116  [0x1027ede3c]"
+  }
+]

@@ -1,0 +1,70 @@
+{
+  "source_commit": "9236064ac4f01e7650d30e1ab4e34e928bd1513d",
+  "base_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+  "main_build": {
+    "source_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+    "command": [
+      "cargo",
+      "build",
+      "--release",
+      "-p",
+      "perry",
+      "-p",
+      "perry-runtime-static",
+      "-p",
+      "perry-stdlib-static"
+    ],
+    "started_utc": "2026-09-10T22:57:23.457002+00:00",
+    "elapsed_seconds": 333.5588140487671,
+    "files": {
+      "perry": {
+        "sha256": "ade63eddfdeca03926039d10e3310f9255d52c5b2721ccd2b0882f042a689156",
+        "bytes": 117699664,
+        "mtime": 1789081376.241057
+      },
+      "libperry_runtime.a": {
+        "sha256": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458",
+        "bytes": 36882304,
+        "mtime": 1789081299.1524603
+      },
+      "libperry_stdlib.a": {
+        "sha256": "61fac03f0405a48b8d390958e3002246061db6e009fcd078fe61a98d1a1068b0",
+        "bytes": 86372568,
+        "mtime": 1789081360.6254187
+      }
+    }
+  },
+  "candidate_build": {
+    "source_commit": "9236064ac4f01e7650d30e1ab4e34e928bd1513d",
+    "command": [
+      "cargo",
+      "build",
+      "--release",
+      "-p",
+      "perry",
+      "-p",
+      "perry-runtime-static",
+      "-p",
+      "perry-stdlib-static"
+    ],
+    "started_utc": "2026-09-11T00:14:24.867821+00:00",
+    "elapsed_seconds": 306.77325916290283,
+    "files": {
+      "perry": {
+        "sha256": "22a0d64dc10331051afdefe0ce2b28709d9827f713bf61a2c25d117e6f62dda5",
+        "bytes": 117699664,
+        "mtime": 1789085970.8637104
+      },
+      "libperry_runtime.a": {
+        "sha256": "0c0aeac07a22f46e0b5848dd93e7a5db4320689e3e64a167e8b8a6a58395d274",
+        "bytes": 36882616,
+        "mtime": 1789085899.1037874
+      },
+      "libperry_stdlib.a": {
+        "sha256": "83048648977f5375aa3c1966447fade874d076dfd5fbaaba86a7f5e960300ee9",
+        "bytes": 86372888,
+        "mtime": 1789085955.3162482
+      }
+    }
+  }
+}

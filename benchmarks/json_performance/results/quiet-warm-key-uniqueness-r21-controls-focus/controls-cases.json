@@ -1,0 +1,26 @@
+{
+  "selection": "R21 follow-up prompted by full matrix Unicode stringify +3.51% with only3/7slower and overlapping samples; persistent small stringify +0.55%6/7 and16k sparse +0.34%7/7. Longer work and11interleaved repetitions, four unchanged engines. Prepared before these control timings. Long-string cached parse needs a separate A/B-only long-work probe because peer costs bound the original count.",
+  "cases": [
+    {
+      "fixture": "unicode_1m",
+      "operation": "stringify",
+      "iterations": 19800,
+      "warmup": 2,
+      "repetitions": 11
+    },
+    {
+      "fixture": "small_record",
+      "operation": "stringify",
+      "iterations": 10000000,
+      "warmup": 5000,
+      "repetitions": 11
+    },
+    {
+      "fixture": "records_array_16k",
+      "operation": "sparse",
+      "iterations": 31472,
+      "warmup": 2,
+      "repetitions": 11
+    }
+  ]
+}

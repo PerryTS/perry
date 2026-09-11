@@ -1,0 +1,1 @@
+Parked without a runtime PR: large object parsing improves about1.7–2.1% and array scans about1.2–1.6%, but small-record stringify has a persistent adverse CPU trend across three quiet windows. Its longer recheck is +0.4566%,10/11slower pairs with overlapping ranges. No regression-free acceptance or remaining performance qualification is claimed.

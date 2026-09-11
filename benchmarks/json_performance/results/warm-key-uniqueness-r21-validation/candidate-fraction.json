@@ -1,0 +1,21 @@
+{
+  "command": [
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry",
+    "compile",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/fraction-spacer.ts",
+    "--no-auto-optimize",
+    "--no-cache",
+    "-o",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-fraction-spacer"
+  ],
+  "exit_code": 0,
+  "matches_main": true,
+  "note": "Preserves the separately recorded main/Bun vs Node fractional-spacing difference; not a Node conformance pass.",
+  "files": {
+    "benchmarks/json_performance/.work/warm-key-uniqueness-r21/fraction-spacer.ts": "2f11863b7ad102980a59991f0eeedd6bb0b863704b278078b012358882881ea5",
+    "benchmarks/json_performance/.work/warm-key-uniqueness-r21/candidate-fraction-spacer": "068426c79c4e2e52a16c31f98467decd2dea3090d1e294668aaac16291d9ceef",
+    "benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/perry": "22a0d64dc10331051afdefe0ce2b28709d9827f713bf61a2c25d117e6f62dda5",
+    "benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/libperry_runtime.a": "0c0aeac07a22f46e0b5848dd93e7a5db4320689e3e64a167e8b8a6a58395d274",
+    "benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-build/libperry_stdlib.a": "83048648977f5375aa3c1966447fade874d076dfd5fbaaba86a7f5e960300ee9"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "source_commit": "9236064ac4f01e7650d30e1ab4e34e928bd1513d",
+  "mtime_only_refresh": [
+    {
+      "path": "crates/perry-runtime-static/src/lib.rs",
+      "sha256": "0f320c88d8d2679b4af3bc1fbe882752744e210212076d3ebcd60b7c6fed10de",
+      "before_mtime": 1789082401.743979,
+      "after_mtime": 1789085381.922019
+    },
+    {
+      "path": "crates/perry-stdlib-static/src/lib.rs",
+      "sha256": "f66830b9af1aafaa3270e09d2ba00da466fe4ce7d715f7590bba9db99b0103a0",
+      "before_mtime": 1789082401.744009,
+      "after_mtime": 1789085381.922276
+    },
+    {
+      "path": "crates/perry/src/main.rs",
+      "sha256": "cc3d6d228a6c9e031ba8f0a26d152c7690f622ee914c8aa09d47eeb2199db870",
+      "before_mtime": 1789082401.744026,
+      "after_mtime": 1789085381.922562
+    }
+  ],
+  "reason": "Force exact production compiler and both static archives fresh; bytes and flags unchanged"
+}

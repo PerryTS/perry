@@ -1,0 +1,32 @@
+[
+  {
+    "path": "records_array_1m-scan-main.sample.txt.gz",
+    "source_commit": "44426f53184029e55ece042e6b077f3e66b0eabf",
+    "source_path": "benchmarks/json_performance/results/quiet-tape-batch-r18-profiles/records_array_1m-scan-main.sample.txt.gz",
+    "sha256": "b74c15fb15d0b04e091be85ba3e646af5248fb3e7cd7aed1499156f3ad10d59a"
+  },
+  {
+    "path": "profiles.json",
+    "source_commit": "44426f53184029e55ece042e6b077f3e66b0eabf",
+    "source_path": "benchmarks/json_performance/results/quiet-tape-batch-r18-profiles/profiles.json",
+    "sha256": "4300635a00d98f188dc8009bb20ffc5e0d81a8f08d82d41fe47d92601c6ca710"
+  },
+  {
+    "path": "window.json",
+    "source_commit": "44426f53184029e55ece042e6b077f3e66b0eabf",
+    "source_path": "benchmarks/json_performance/results/quiet-tape-batch-r18-profiles/window.json",
+    "sha256": "ba934eb67db7cff1c4564602c7a3389255eb833599468be01bb43fa120073a04"
+  },
+  {
+    "path": "main-build-provenance.json",
+    "source_commit": "44426f53184029e55ece042e6b077f3e66b0eabf",
+    "source_path": "benchmarks/json_performance/results/quiet-tape-batch-r18-profiles/main-build-provenance.json",
+    "sha256": "4f4251c68d3fab2317bc515589803a461e3c47f4a6310dcce5641da769ed93a7"
+  },
+  {
+    "path": "archive-manifest.json",
+    "source_commit": "44426f53184029e55ece042e6b077f3e66b0eabf",
+    "source_path": "benchmarks/json_performance/results/quiet-tape-batch-r18-profiles/archive-manifest.json",
+    "sha256": "91b280874e69662f7630f7c38d2375ba0005bd625f25a8b6dc395a7be2cc9457"
+  }
+]

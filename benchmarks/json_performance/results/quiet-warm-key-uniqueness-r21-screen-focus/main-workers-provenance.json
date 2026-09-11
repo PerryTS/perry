@@ -1,0 +1,134 @@
+[
+  {
+    "worker": "worker",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-main/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/harness/worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/main-worker.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/main-worker.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-main/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/main-worker"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/warm-key-uniqueness-r21/harness/worker.ts": "f3c42ec9f04fdb9ba84dc3cf50dc59f18685540033807f3db3a7f75c08a85d39",
+      "benchmarks/json_performance/.work/warm-key-uniqueness-r21/main-worker.o": "0734bb8fa3c548517c202289522f69647ef086dce3c17aa22a13a06ed32d8d35",
+      "benchmarks/json_performance/.work/warm-key-uniqueness-r21/main-worker": "a93daa1e188f54eb43935e98a118f79328ab3bb7d5068882ace55b1c5adb61b0",
+      "benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-main/perry": "ade63eddfdeca03926039d10e3310f9255d52c5b2721ccd2b0882f042a689156",
+      "benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-main/libperry_runtime.a": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458",
+      "benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-main/libperry_stdlib.a": "61fac03f0405a48b8d390958e3002246061db6e009fcd078fe61a98d1a1068b0"
+    }
+  },
+  {
+    "worker": "access-worker",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-main/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/harness/access-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/main-access-worker.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/main-access-worker.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-main/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/main-access-worker"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/warm-key-uniqueness-r21/harness/access-worker.ts": "dba0240ef6441a07657e664354982a04045c036e53f65c1d06df62d55c73be67",
+      "benchmarks/json_performance/.work/warm-key-uniqueness-r21/main-access-worker.o": "4ed5692818a60eddd1d8a3a81e6ecc177845c219165d9d1f6c1d646eb61d7ec9",
+      "benchmarks/json_performance/.work/warm-key-uniqueness-r21/main-access-worker": "59c1ea1e4312b06fca190e561f50ca09e910ff2a47097cb2178d0e4e12e2de59",
+      "benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-main/perry": "ade63eddfdeca03926039d10e3310f9255d52c5b2721ccd2b0882f042a689156",
+      "benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-main/libperry_runtime.a": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458",
+      "benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-main/libperry_stdlib.a": "61fac03f0405a48b8d390958e3002246061db6e009fcd078fe61a98d1a1068b0"
+    }
+  },
+  {
+    "worker": "rotating-worker",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-main/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/harness/rotating-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/main-rotating-worker.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/main-rotating-worker.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-main/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/main-rotating-worker"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/warm-key-uniqueness-r21/harness/rotating-worker.ts": "7541897acb2c7c35c0f5e762f8b2f28b9783feb26a42db107c1c4eb3af644b24",
+      "benchmarks/json_performance/.work/warm-key-uniqueness-r21/main-rotating-worker.o": "a30277055706dfe2518169addd0623c7652ca4307071462511f1548de0ae27b2",
+      "benchmarks/json_performance/.work/warm-key-uniqueness-r21/main-rotating-worker": "d3faa583aad7d5f708800fd09750e8ea2625930fbd7d2bf3da9fe8e3356430ec",
+      "benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-main/perry": "ade63eddfdeca03926039d10e3310f9255d52c5b2721ccd2b0882f042a689156",
+      "benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-main/libperry_runtime.a": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458",
+      "benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-main/libperry_stdlib.a": "61fac03f0405a48b8d390958e3002246061db6e009fcd078fe61a98d1a1068b0"
+    }
+  },
+  {
+    "worker": "options",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-main/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/options-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/main-options.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/main-options.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-main/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/warm-key-uniqueness-r21/main-options"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/warm-key-uniqueness-r21/options-worker.ts": "d08c6a916c18197b889a0de4a3777632ad307275752b85c5abd75daf4d6ad85d",
+      "benchmarks/json_performance/.work/warm-key-uniqueness-r21/main-options.o": "7f6d2f76248ac05c10b613b48ad74702104f8365c63189f1574f34e3a4dc3006",
+      "benchmarks/json_performance/.work/warm-key-uniqueness-r21/main-options": "14b0fd26e4edc296d766497f94a8aed511a06a2124b4afbf7c3b23c0ac3a9bae",
+      "benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-main/perry": "ade63eddfdeca03926039d10e3310f9255d52c5b2721ccd2b0882f042a689156",
+      "benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-main/libperry_runtime.a": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458",
+      "benchmarks/json_performance/.work/warm-key-uniqueness-r21/frozen-main/libperry_stdlib.a": "61fac03f0405a48b8d390958e3002246061db6e009fcd078fe61a98d1a1068b0"
+    }
+  }
+]

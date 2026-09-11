@@ -1,0 +1,78 @@
+{
+  "source_commit": "9236064ac4f01e7650d30e1ab4e34e928bd1513d",
+  "json_units": 293,
+  "behavior_runs_per_arm": 46,
+  "options_runs_per_arm": 14,
+  "all_worker_objects_identical": true,
+  "ir_files_per_arm": 18,
+  "native_unsuppressed_findings": 8,
+  "native_finding_classes": {
+    "unrooted_global": 5,
+    "unrooted_strhandle": 2,
+    "stale_alloc": 1
+  },
+  "native_safepoints": 2994,
+  "native_live_bundles": 2259,
+  "native_relocates": 10737,
+  "native_pairs": 10619,
+  "shadow_checks_pass": true,
+  "ordinary_and_callback_native_checks_pass": true,
+  "lazy_probe_count": 24,
+  "known_large_lazy_sigsegv_count": 6,
+  "known_noncanonical_raw_count": 2,
+  "fractional_spacing_reference": "reused recorded main/Node/Bun evidence with compiler/runtime/fixture hash equality; no fresh main fraction run",
+  "lint_passed": 73,
+  "lint_total": 74,
+  "lint_existing_failure": "public benchmark evidence freshness",
+  "compile_tier_skipped": true,
+  "ci_only_skips": 2,
+  "file_cap_pass": true,
+  "new_fixture_scheduled": {
+    "main": [
+      {
+        "parser": "auto",
+        "protected_retired_sets": 402,
+        "moved_objects": 39798,
+        "matches_node": true,
+        "exit_code": 0
+      },
+      {
+        "parser": "tape",
+        "protected_retired_sets": 402,
+        "moved_objects": 46606,
+        "matches_node": true,
+        "exit_code": 0
+      },
+      {
+        "parser": "direct",
+        "protected_retired_sets": 402,
+        "moved_objects": 38289,
+        "matches_node": true,
+        "exit_code": 0
+      }
+    ],
+    "candidate": [
+      {
+        "parser": "auto",
+        "protected_retired_sets": 402,
+        "moved_objects": 39798,
+        "matches_node": true,
+        "exit_code": 0
+      },
+      {
+        "parser": "tape",
+        "protected_retired_sets": 402,
+        "moved_objects": 46606,
+        "matches_node": true,
+        "exit_code": 0
+      },
+      {
+        "parser": "direct",
+        "protected_retired_sets": 402,
+        "moved_objects": 38289,
+        "matches_node": true,
+        "exit_code": 0
+      }
+    ]
+  }
+}
