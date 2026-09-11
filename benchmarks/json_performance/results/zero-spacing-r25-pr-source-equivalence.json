@@ -1,0 +1,43 @@
+{
+  "measured_source": "01f2878dad8efc92e394c49b88fe0800b871f593",
+  "files": [
+    {
+      "path": "crates/perry-runtime/src/json/replacer.rs",
+      "sha256": "c762be408303f10bc2ec9dfa2d9687892fad7760a105fc33ab53ad2f6c06da23"
+    },
+    {
+      "path": "crates/perry-runtime/src/json/stringify_record_output_tests.rs",
+      "sha256": "a97690741346d0668ce67122a855eb1be19d90ef763974f5b71a9db53bddf64a"
+    },
+    {
+      "path": "test-files/test_json_zero_spacing.ts",
+      "sha256": "9cca6718bfd28571f0e3ab9e677d1b11f9bf1aa250335bf3511ebf5e021e0797"
+    },
+    {
+      "path": "crates/perry-runtime/src/json_tape/cached_read.rs",
+      "sha256": "07a9b4b18608184c48941a420ae3e485f737b901592ce9a0c8d15e92d22f27b4"
+    },
+    {
+      "path": "crates/perry-runtime/src/json_tape.rs",
+      "sha256": "dbb8699b7bb3ed2b1a57574d7b12a237e58c05308c81c55ed98558971bf6246a"
+    },
+    {
+      "path": "crates/perry-runtime/src/gc/tests/runtime_roots/callback_scanners.rs",
+      "sha256": "459864915308c85634e448abf3aa81a1ea1c34b73e548f04fdcc599d937dd069"
+    },
+    {
+      "path": "test-files/test_json_cached_reads.ts",
+      "sha256": "c145732db64c711c572e8a5a7beeb797e1e06b695335f8140ca62f41654616ba"
+    }
+  ],
+  "note": "Implementation/test bytes identical to measured R25. PR is stacked on #10050 and has separate version/release metadata; this is not a fresh build/timing of the PR release metadata.",
+  "pr_number": 10052,
+  "release_version": "0.5.1534",
+  "pr_implementation_commit": "54a36eb3dc6169fa6a11bf8eefff731ef59ada18",
+  "release_metadata_sha256": {
+    "Cargo.toml": "14f56c2db41344de14bd5b96dfcdb03981a2ba32b7d4003b78cc4c710ef0e8c0",
+    "Cargo.lock": "bea467aec6d4841d21bc79b5a627978d55120982b6a767c33b8d4187426a83f1",
+    "CLAUDE.md": "faa4a8e512b03919147a849f347f6eb8942dc02c1f9df4da0fc42a51bff51dc0",
+    "changelog.d/10052-json-zero-spacing.md": "07e9cbb72ad2e1107ceb47ea4a968422ec4b91add800a04ddb8370fc94dd24e8"
+  }
+}
