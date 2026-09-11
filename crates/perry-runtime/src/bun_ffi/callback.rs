@@ -638,6 +638,10 @@ pub unsafe extern "C" fn perry_ffi_callback_dispatch(
 
 /// Execute foreign-thread callbacks on their owning JS thread. Called at the
 /// beginning of every microtask/event-loop pump.
+pub(crate) fn threadsafe_callback_work_pending() -> bool {
+    !PENDING_CALLBACKS.lock().unwrap().is_empty()
+}
+
 pub(crate) fn drain_threadsafe_callbacks() -> i32 {
     let owner = std::thread::current().id();
     let pending = {

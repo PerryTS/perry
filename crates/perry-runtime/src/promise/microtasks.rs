@@ -213,6 +213,20 @@ fn rooted_closure(h: &crate::gc::RuntimeHandle<'_>) -> ClosurePtr {
 fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     mt_profile_register();
     bump(&MT_DRAIN_COUNT);
+    if matches!(mode, MicrotaskDrainMode::EventLoop) && empty::can_skip_callback_phases() {
+        // No callback can run in this checkpoint, so no exception trap or
+        // async execution-reference stack is needed. The GC/box boundary is
+        // still required: synchronous allocation can leave collection work
+        // pending even though every callback queue is empty.
+        MICROTASK_RUN_DEPTH.with(|depth| depth.set(MicrotaskRunDepths { pump: 1, jobs: 0 }));
+        // The ordinary callback-timer phase stamps this even with no timers.
+        // Keep nodeTiming.loopStart/eventLoopUtilization observable on beforeExit.
+        crate::perf_hooks::note_event_loop_start();
+        finish_gc_and_box_boundary();
+        MICROTASK_RUN_DEPTH.with(|depth| depth.set(MicrotaskRunDepths { pump: 0, jobs: 0 }));
+        bump(&MT_EMPTY_DRAIN_COUNT);
+        return 0;
+    }
     let async_box_ref_depth = u32::try_from(async_box_execution_ref_depth())
         .expect("microtask execution-ref depth overflow");
     ASYNC_BOX_EXECUTION_REF_BASES.with(|bases| bases.borrow_mut().push(async_box_ref_depth));
@@ -302,6 +316,33 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     crate::exception::js_try_end();
     crate::node_submodules::diagnostics_channel_drain_uncaught();
 
+    finish_gc_and_box_boundary();
+
+    ASYNC_BOX_EXECUTION_REF_BASES.with(|bases| {
+        let base = bases
+            .borrow_mut()
+            .pop()
+            .expect("microtask execution-ref boundary");
+        debug_assert_eq!(async_box_execution_ref_depth(), base as usize);
+    });
+
+    MICROTASK_RUN_DEPTH.with(|depth| {
+        let mut current = depth.get();
+        current.pump = current.pump.saturating_sub(1);
+        depth.set(current);
+    });
+
+    ran
+}
+
+mod empty;
+
+#[cfg(test)]
+pub(crate) fn empty_checkpoint_eligible_for_test() -> bool {
+    empty::can_skip_callback_phases()
+}
+
+fn finish_gc_and_box_boundary() {
     let _ = crate::gc::gc_runtime_safepoint();
 
     // Phase 1 of the moving-GC project (see project_gc_one_great_moving_gc): at
@@ -326,22 +367,6 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     {
         crate::r#box::flush_released_boxes();
     }
-
-    ASYNC_BOX_EXECUTION_REF_BASES.with(|bases| {
-        let base = bases
-            .borrow_mut()
-            .pop()
-            .expect("microtask execution-ref boundary");
-        debug_assert_eq!(async_box_execution_ref_depth(), base as usize);
-    });
-
-    MICROTASK_RUN_DEPTH.with(|depth| {
-        let mut current = depth.get();
-        current.pump = current.pump.saturating_sub(1);
-        depth.set(current);
-    });
-
-    ran
 }
 
 /// The microtask trap's protected region (#9305): the recovery for a

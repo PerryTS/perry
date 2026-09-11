@@ -412,8 +412,8 @@ mod ref_states;
 #[cfg(test)] // #7680: not re-exported; reach via `crate::timer::test_shared_queues::`
 pub(crate) mod test_shared_queues;
 
-pub(crate) use ownership::purge_agent_timers;
 use ownership::{has_refed_callback_timer, has_refed_interval_timer, has_refed_promise_timer};
+pub(crate) use ownership::{purge_agent_timers, timer_phase_work_pending};
 
 pub(crate) use gc_scan::{new_timer_root_scan_state, scan_timer_roots_mut_step};
 use ref_states::{TimerRefStates, TIMER_REF_STATES_CAP};
