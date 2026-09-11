@@ -3,6 +3,11 @@
 
 use super::*;
 
+mod utf16_index;
+#[cfg(test)]
+pub(crate) use utf16_index::test_utf16_index_entries;
+pub(crate) use utf16_index::{prune_dead_utf16_indexes, scan_utf16_index_roots_mut};
+
 #[cfg(test)]
 mod computed_property_tests;
 
@@ -58,9 +63,8 @@ pub extern "C" fn js_string_end_index_to_i32(value: f64, len: i32) -> i32 {
 
 /// Get character code at index (returns UTF-16 code unit, or NaN if out of bounds).
 /// Index is in UTF-16 code units (matches JS spec). For ASCII strings this is
-/// equivalent to byte indexing; for multi-byte UTF-8 we walk codepoints without
-/// allocating — the old `encode_utf16().collect()` path made hashing a 68 MB
-/// string O(n²) (issue #65).
+/// equivalent to byte indexing. Non-ASCII strings use a lazy sparse index and
+/// cursor, so repeated access does not decode the entire prefix (#10055).
 #[no_mangle]
 pub extern "C" fn js_string_char_code_at(s: *const StringHeader, index: i32) -> f64 {
     if !is_valid_string_ptr(s) || index < 0 {
@@ -84,7 +88,7 @@ pub extern "C" fn js_string_char_code_at(s: *const StringHeader, index: i32) -> 
     // Non-ASCII: bounded WTF-8 walk counting UTF-16 units (#6085). The
     // previous `str_data.chars()` loop decoded through the UTF-8-validity
     // assumption, which over-reads an exact-sized payload ending in a
-    // truncated multi-byte lead. Allocation-free, never reads past byte_len.
+    // truncated multi-byte lead. Indexing never reads past byte_len.
     match utf16_unit_at(s, idx) {
         Some(unit) => unit as f64,
         None => f64::NAN,
@@ -97,28 +101,7 @@ pub extern "C" fn js_string_char_code_at(s: *const StringHeader, index: i32) -> 
 /// matching `wtf8_step`. Returns `None` when `idx` is past the last decodable
 /// unit (an invalid payload's header `utf16_len` can overcount).
 fn utf16_unit_at(s: *const StringHeader, idx: usize) -> Option<u16> {
-    let bytes = unsafe { slice::from_raw_parts(string_data(s), (*s).byte_len as usize) };
-    let mut utf16_pos = 0usize;
-    let mut i = 0usize;
-    while i < bytes.len() {
-        let (advance, units, cp) = crate::string::wtf8_step(bytes, i);
-        if units > 0 && utf16_pos + units > idx {
-            return Some(if units == 2 {
-                // Astral code point → the requested surrogate half.
-                let v = cp.wrapping_sub(0x10000);
-                if idx == utf16_pos {
-                    0xD800 + ((v >> 10) & 0x3FF) as u16
-                } else {
-                    0xDC00 + (v & 0x3FF) as u16
-                }
-            } else {
-                cp as u16
-            });
-        }
-        utf16_pos += units;
-        i += advance;
-    }
-    None
+    utf16_index::unit_at(s, idx)
 }
 
 /// SSO-safe `s[key]`: takes the receiver as a **NaN-boxed JSValue** rather than
@@ -636,14 +619,9 @@ pub extern "C" fn js_string_at(s: *const StringHeader, index: i32) -> f64 {
             None => return f64::from_bits(crate::value::TAG_UNDEFINED),
         }
     };
-    // Encode the single code unit. A lone surrogate (0xD800..=0xDFFF) is not a
-    // valid Rust `char`, so it materializes as U+FFFD — the documented WTF-8 /
-    // lone-surrogate categorical gap (same shim as `fromCharCode`). BMP units
-    // round-trip exactly.
-    let ch = char::from_u32(unit as u32).unwrap_or('\u{FFFD}');
-    let mut buf = [0u8; 4];
-    let encoded = ch.encode_utf8(&mut buf);
-    let ptr = js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32);
+    // Use charAt's WTF-8 builder: a surrogate half is a valid JS code unit
+    // even though it is not a Rust char.
+    let ptr = string_from_code_unit(unit);
     crate::value::js_nanbox_string(ptr as i64)
 }
 
