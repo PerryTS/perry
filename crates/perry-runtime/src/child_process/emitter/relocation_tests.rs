@@ -41,6 +41,15 @@ impl Drop for RestoreForwarding {
 
 #[test]
 fn child_dispatch_reloads_receiver_and_arguments_after_listener_relocation() {
+    dispatch_after_listener_relocation(false);
+}
+
+#[test]
+fn child_dispatch_forwards_relocated_receiver_and_arguments_to_stream_listeners() {
+    dispatch_after_listener_relocation(true);
+}
+
+fn dispatch_after_listener_relocation(shared_stream_listener: bool) {
     cp_register_arities();
     js_register_closure_arity(relocate as *const u8, 1);
     js_register_closure_arity(observe as *const u8, 1);
@@ -58,17 +67,36 @@ fn child_dispatch_reloads_receiver_and_arguments_after_listener_relocation() {
         scope.root_nanbox_f64(cp_box_ptr(js_closure_alloc(observe as *const u8, 0).cast()));
     let event = scope.root_nanbox_f64(cp_box_string("end"));
     for target in [&source, &destination] {
+        if shared_stream_listener {
+            cp_set_field(target.get_nanbox_f64(), b"readable", TAG_TRUE_F64);
+        }
         cp_register(
             target.get_nanbox_f64(),
             event.get_nanbox_f64(),
             first.get_nanbox_f64(),
         );
-        cp_register(
-            target.get_nanbox_f64(),
+        if !shared_stream_listener {
+            cp_register(
+                target.get_nanbox_f64(),
+                event.get_nanbox_f64(),
+                second.get_nanbox_f64(),
+            );
+        }
+    }
+    if shared_stream_listener {
+        // Only the destination's shared stream registry owns the observer.
+        // Child-local listeners cannot make this assertion pass, and stale
+        // pre-relocation receiver/argument bits cannot reach the expected value.
+        crate::node_stream::js_node_stream_method_on(
+            crate::value::js_nanbox_get_pointer(destination.get_nanbox_f64()) as i64,
             event.get_nanbox_f64(),
             second.get_nanbox_f64(),
         );
     }
+    assert!(
+        JSValue::from_bits(cp_get_field(destination.get_nanbox_f64(), b"seen").to_bits())
+            .is_undefined()
+    );
     let sources = [source.get_nanbox_f64(), argument.get_nanbox_f64()]
         .map(|v| crate::value::js_nanbox_get_pointer(v) as *mut u8);
     let destinations = [
@@ -94,6 +122,7 @@ fn child_dispatch_reloads_receiver_and_arguments_after_listener_relocation() {
     );
     assert_eq!(
         cp_get_field(destination.get_nanbox_f64(), b"seen").to_bits(),
-        moved_argument.get_nanbox_f64().to_bits()
+        moved_argument.get_nanbox_f64().to_bits(),
+        "selected listener must observe the relocated argument on the relocated receiver"
     );
 }
