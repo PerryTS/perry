@@ -1,0 +1,23 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/zero-spacing-r25/run-rotating.py",
+  "--worker",
+  ".work/zero-spacing-r25/candidate-rotating-worker",
+  "--baseline-worker",
+  ".work/zero-spacing-r25/main-rotating-worker",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--filter",
+  "unicode_1m,long_string_1m,escaped_1m,small_record,records_array_1m",
+  "--repeat",
+  "7",
+  "--source-commit",
+  "01f2878dad8efc92e394c49b88fe0800b871f593",
+  "--results-dir",
+  "results/quiet-zero-spacing-r25-rotating"
+]

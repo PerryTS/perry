@@ -1,0 +1,17 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/zero-spacing-r25/run-zero-retained.py",
+  "--worker",
+  ".work/zero-spacing-r25/candidate-retained-zero",
+  "--baseline-worker",
+  ".work/zero-spacing-r25/main-retained-zero",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--results-dir",
+  "results/quiet-zero-spacing-r25-zero-retained"
+]

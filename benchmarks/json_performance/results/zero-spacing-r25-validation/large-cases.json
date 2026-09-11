@@ -1,0 +1,32 @@
+{
+  "cases": [
+    {
+      "fixture": "long_string_1m",
+      "operation": "plain",
+      "iterations": 1024,
+      "warmup": 4,
+      "repetitions": 7
+    },
+    {
+      "fixture": "long_string_1m",
+      "operation": "dynamic-zero",
+      "iterations": 1024,
+      "warmup": 4,
+      "repetitions": 7
+    },
+    {
+      "fixture": "unicode_1m",
+      "operation": "plain",
+      "iterations": 1024,
+      "warmup": 4,
+      "repetitions": 7
+    },
+    {
+      "fixture": "unicode_1m",
+      "operation": "dynamic-zero",
+      "iterations": 1024,
+      "warmup": 4,
+      "repetitions": 7
+    }
+  ]
+}

@@ -1,0 +1,82 @@
+[
+  {
+    "arm": "main",
+    "fixture": "tiny_object",
+    "operation": "retain-stringify",
+    "mode": "normal",
+    "matches_node": true,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "binary_sha256": "2691705bdd98bcfce70bd273dda7f4380b88b31c640c605f4befe1b79e8986ca"
+  },
+  {
+    "arm": "main",
+    "fixture": "tiny_object",
+    "operation": "retain-stringify",
+    "mode": "scheduled",
+    "matches_node": true,
+    "protected_retired_sets": 6,
+    "moved_objects": 12740,
+    "binary_sha256": "2691705bdd98bcfce70bd273dda7f4380b88b31c640c605f4befe1b79e8986ca"
+  },
+  {
+    "arm": "main",
+    "fixture": "small_record",
+    "operation": "retain-stringify",
+    "mode": "normal",
+    "matches_node": true,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "binary_sha256": "2691705bdd98bcfce70bd273dda7f4380b88b31c640c605f4befe1b79e8986ca"
+  },
+  {
+    "arm": "main",
+    "fixture": "small_record",
+    "operation": "retain-stringify",
+    "mode": "scheduled",
+    "matches_node": true,
+    "protected_retired_sets": 6,
+    "moved_objects": 12756,
+    "binary_sha256": "2691705bdd98bcfce70bd273dda7f4380b88b31c640c605f4befe1b79e8986ca"
+  },
+  {
+    "arm": "main",
+    "fixture": "long_string_1m",
+    "operation": "retain-stringify",
+    "mode": "normal",
+    "matches_node": true,
+    "protected_retired_sets": 0,
+    "moved_objects": 12600,
+    "binary_sha256": "2691705bdd98bcfce70bd273dda7f4380b88b31c640c605f4befe1b79e8986ca"
+  },
+  {
+    "arm": "main",
+    "fixture": "long_string_1m",
+    "operation": "retain-stringify",
+    "mode": "scheduled",
+    "matches_node": true,
+    "protected_retired_sets": 8,
+    "moved_objects": 12614,
+    "binary_sha256": "2691705bdd98bcfce70bd273dda7f4380b88b31c640c605f4befe1b79e8986ca"
+  },
+  {
+    "arm": "main",
+    "fixture": "unicode_1m",
+    "operation": "retain-stringify",
+    "mode": "normal",
+    "matches_node": true,
+    "protected_retired_sets": 0,
+    "moved_objects": 6463,
+    "binary_sha256": "2691705bdd98bcfce70bd273dda7f4380b88b31c640c605f4befe1b79e8986ca"
+  },
+  {
+    "arm": "main",
+    "fixture": "unicode_1m",
+    "operation": "retain-stringify",
+    "mode": "scheduled",
+    "matches_node": true,
+    "protected_retired_sets": 7,
+    "moved_objects": 12614,
+    "binary_sha256": "2691705bdd98bcfce70bd273dda7f4380b88b31c640c605f4befe1b79e8986ca"
+  }
+]

@@ -1,0 +1,4 @@
+{
+  "exit_code": 1,
+  "note": "18 retained tiny outputs matched Node but triggered no copied/protected minor under the fixed schedule. The validator correctly rejected this vacuous witness. Increase to the existing options-validation work count (64+8), leaving all GC settings unchanged."
+}
