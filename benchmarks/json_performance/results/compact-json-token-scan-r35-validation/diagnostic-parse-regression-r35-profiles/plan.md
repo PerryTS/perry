@@ -1,0 +1,1 @@
+Four bounded sampling diagnostics, R26 andR35 interleaved per fixture: record-array and escaped-string fresh-source parse,4000calls and8warmup. Same source corpus and full pinnedNode oracle. Samples locate inclusive phases; do not use sampled process CPU/RSS for benchmark claims.20second/2GiBwatchdog each; archiveterminalfirst. No production changes pending attribution.

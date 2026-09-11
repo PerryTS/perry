@@ -1,0 +1,104 @@
+{
+  "arm": "candidate",
+  "source_commit": "891753f2cff604c87133ac2a4435af9a2286aa22",
+  "files": {
+    "test-files/test_json_primitive_tojson_keys.ts": "cc137a45ef6784735db43654dcb912dff75246e3f37fc4d4721fb0519321ea17",
+    "benchmarks/json_performance/.work/compact-json-token-scan-r35/frozen-build/perry": "6b3ab49161780802001557bbc60209524f143212e50287fa3ddd1fbe3376c989",
+    "benchmarks/json_performance/.work/compact-json-token-scan-r35/frozen-build/libperry_runtime.a": "7cbd1f09cf0d027b959a86c6d98216b4b57d69731529bd65d7c72d821c327020",
+    "benchmarks/json_performance/.work/compact-json-token-scan-r35/frozen-build/libperry_stdlib.a": "4e61bc120d203dc7eecc11829510d888e755ee02e4eccf9840777ae3b2836f9a"
+  },
+  "compiles": [
+    {
+      "command": [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/compact-json-token-scan-r35/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/test-files/test_json_primitive_tojson_keys.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/compact-json-token-scan-r35/candidate-primitive-keys-native"
+      ],
+      "env_overrides": {
+        "PERRY_RUNTIME_DIR": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/compact-json-token-scan-r35/frozen-build",
+        "PERRY_RS4GC": "1",
+        "PERRY_GC_MOVING_LOOP_POLLS": "1"
+      },
+      "binary_sha256": "11f9a2bddd601cf71b738148840f6e8af21602855594a47652d1798aa8bd7ea6"
+    },
+    {
+      "command": [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/compact-json-token-scan-r35/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/test-files/test_json_primitive_tojson_keys.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/compact-json-token-scan-r35/candidate-primitive-keys-shadow"
+      ],
+      "env_overrides": {
+        "PERRY_RUNTIME_DIR": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/compact-json-token-scan-r35/frozen-build",
+        "PERRY_RS4GC": "0",
+        "PERRY_GC_MOVING_LOOP_POLLS": "1"
+      },
+      "binary_sha256": "f2b3b731d6513cb8fc6155c7f9b39a2c0566fd0ff83120f0f51db9effdb95d63"
+    }
+  ],
+  "rows": [
+    {
+      "arm": "candidate",
+      "roots": "native",
+      "parser": "auto",
+      "mode": "normal",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0,
+      "env_overrides": {},
+      "stdout_sha256": "7bee9961468c115e0913b64a9bb5beee4ce64e45a1222d7e05130e3dc99c4a1b",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "arm": "candidate",
+      "roots": "native",
+      "parser": "auto",
+      "mode": "fullgc",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0,
+      "env_overrides": {
+        "PERRY_GEN_GC": "0"
+      },
+      "stdout_sha256": "7bee9961468c115e0913b64a9bb5beee4ce64e45a1222d7e05130e3dc99c4a1b",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "arm": "candidate",
+      "roots": "shadow",
+      "parser": "auto",
+      "mode": "normal",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0,
+      "env_overrides": {},
+      "stdout_sha256": "7bee9961468c115e0913b64a9bb5beee4ce64e45a1222d7e05130e3dc99c4a1b",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "arm": "candidate",
+      "roots": "shadow",
+      "parser": "auto",
+      "mode": "fullgc",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0,
+      "env_overrides": {
+        "PERRY_GEN_GC": "0"
+      },
+      "stdout_sha256": "7bee9961468c115e0913b64a9bb5beee4ce64e45a1222d7e05130e3dc99c4a1b",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}

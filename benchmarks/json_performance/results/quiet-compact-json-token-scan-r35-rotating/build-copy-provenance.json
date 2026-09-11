@@ -1,0 +1,124 @@
+{
+  "source_commit": "891753f2cff604c87133ac2a4435af9a2286aa22",
+  "actual_build_worktree": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29",
+  "validation_worktree": "/Users/amlug/projects/perry/json-merged-pr10022",
+  "copied_unix": 1789134484.481389,
+  "note": "Normal all-three-package production build from a clean committed separate worktree; both source trees match. Candidate timing/validation uses these immutable artifacts. Shared mutable target directory is not used for worker linking.",
+  "files": [
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/compact-json-token-scan-r35/frozen-build/perry",
+      "copy": "benchmarks/json_performance/.work/compact-json-token-scan-r35/frozen-build/perry",
+      "sha256": "6b3ab49161780802001557bbc60209524f143212e50287fa3ddd1fbe3376c989"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/compact-json-token-scan-r35/frozen-build/libperry_runtime.a",
+      "copy": "benchmarks/json_performance/.work/compact-json-token-scan-r35/frozen-build/libperry_runtime.a",
+      "sha256": "7cbd1f09cf0d027b959a86c6d98216b4b57d69731529bd65d7c72d821c327020"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/compact-json-token-scan-r35/frozen-build/libperry_stdlib.a",
+      "copy": "benchmarks/json_performance/.work/compact-json-token-scan-r35/frozen-build/libperry_stdlib.a",
+      "sha256": "4e61bc120d203dc7eecc11829510d888e755ee02e4eccf9840777ae3b2836f9a"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/compact-json-token-scan-r35/build-provenance.json",
+      "copy": "benchmarks/json_performance/.work/compact-json-token-scan-r35/build-provenance.json",
+      "sha256": "5e9c3b5424d44fb4f6e113b7bef002d9b30614f806b05f24ea3053e86bdfa9cf"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/compact-json-token-scan-r35/build-start.json",
+      "copy": "benchmarks/json_performance/.work/compact-json-token-scan-r35/build-start.json",
+      "sha256": "cfaa952a529afaa21a06726fa3e319793ffd3284a10fee4fe87d7d7d0199a044"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/compact-json-token-scan-r35/build-command-result.json",
+      "copy": "benchmarks/json_performance/.work/compact-json-token-scan-r35/build-command-result.json",
+      "sha256": "ca1ed73fe0e0240e395cd011af35b6e238b0e8b48096a9b8ab02ec5397b24342"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/compact-json-token-scan-r35/unit-source.json",
+      "copy": "benchmarks/json_performance/.work/compact-json-token-scan-r35/unit-source.json",
+      "sha256": "81db0a4e288a8c4fc8a109aca261977549ff88a3adf105280f891e1091a29349"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/compact-json-token-scan-r35/unit.log",
+      "copy": "benchmarks/json_performance/.work/compact-json-token-scan-r35/unit.log",
+      "sha256": "1c62780c132350ff7f7b262cb6b84770c31736e3ff45fe0bf6c001cca094f6e9"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/compact-json-token-scan-r35/build.log",
+      "copy": "benchmarks/json_performance/.work/compact-json-token-scan-r35/build.log",
+      "sha256": "8a00e969c0e8d23d6cb7c4f004edb1e2ee363f3aa67128e059b7900e5a007e38"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/compact-json-token-scan-r35/validate-and-build.log",
+      "copy": "benchmarks/json_performance/.work/compact-json-token-scan-r35/validate-and-build.log",
+      "sha256": "908556437ad3f62274d72160a794ba35543030d4f1ecf7a627c30af017f7cea1"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/compact-json-token-scan-r35/lint-results.json",
+      "copy": "benchmarks/json_performance/.work/compact-json-token-scan-r35/lint-results.json",
+      "sha256": "5269c5f896f6631cbde52eb8e4333b59f4af23056041f22bd9fe79dc016e80ee"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/compact-json-token-scan-r35/script-lint.log",
+      "copy": "benchmarks/json_performance/.work/compact-json-token-scan-r35/script-lint.log",
+      "sha256": "ff4d5b61ba498dd6d0bd511838c92bba1ae8767773e9c06711e76d2529b44964"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/compact-json-token-scan-r35/file-cap.log",
+      "copy": "benchmarks/json_performance/.work/compact-json-token-scan-r35/file-cap.log",
+      "sha256": "b0f283074d97912a169a14da638801e20dedc4981a521e2ef90e4028bdcdf8cd"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/compact-json-token-scan-r35/worktree-provenance.json",
+      "copy": "benchmarks/json_performance/.work/compact-json-token-scan-r35/worktree-provenance.json",
+      "sha256": "507a0d896a483f8339ed81a49787768ab3cff8a38c557f5d4f5dfccc7c1b5f5d"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/compact-json-token-scan-r35/lint-review.json",
+      "copy": "benchmarks/json_performance/.work/compact-json-token-scan-r35/lint-review.json",
+      "sha256": "c0b4ce87ba27754b612b276d80ad5dbd5cbdb4feae7625f604dd76b262b9c26d"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/compact-json-token-scan-r35/string-suite.log",
+      "copy": "benchmarks/json_performance/.work/compact-json-token-scan-r35/string-suite.log",
+      "sha256": "371437a6517389cc7c5a20cc2c85d9d6cf7f505f41393fd6437c6c89992eed24"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/compact-json-token-scan-r35/string-suite-provenance.json",
+      "copy": "benchmarks/json_performance/.work/compact-json-token-scan-r35/string-suite-provenance.json",
+      "sha256": "0a57f78d9c9258a59a849c46d4aa5bf1766de968fc510851345958c4219e7a20"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/compact-json-token-scan-r35/build-resume.json",
+      "copy": "benchmarks/json_performance/.work/compact-json-token-scan-r35/build-resume.json",
+      "sha256": "3a459c9a639408440fe660f23f92a0888d52dc52c271cfa89633d1f55b8bf5d1"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/compact-json-token-scan-r35/build-controller.log",
+      "copy": "benchmarks/json_performance/.work/compact-json-token-scan-r35/build-controller.log",
+      "sha256": "5e9c3b5424d44fb4f6e113b7bef002d9b30614f806b05f24ea3053e86bdfa9cf"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/compact-json-token-scan-r35/hold-production-reviewed.txt",
+      "copy": "benchmarks/json_performance/.work/compact-json-token-scan-r35/hold-production-reviewed.txt",
+      "sha256": "1fd7b3a3aadc84714ae736c8c6aac81ea2e33c5fa8ffa0e8ebb11492a4f91a3f"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/compact-json-token-scan-r35/build-release.py",
+      "copy": "benchmarks/json_performance/.work/compact-json-token-scan-r35/build-release.py",
+      "sha256": "f104da4b90eda0c4f2f28ef311a6bdd8b8cb4afc27c65a6d6569285b2955d1fe"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/compact-json-token-scan-r35/validate-and-build.py",
+      "copy": "benchmarks/json_performance/.work/compact-json-token-scan-r35/validate-and-build.py",
+      "sha256": "f86e9a55cf9d9c57c7b5b9f4361b39d8868bc7402d6a21556170ec3fc35f541a"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/compact-json-token-scan-r35/run-lint.py",
+      "copy": "benchmarks/json_performance/.work/compact-json-token-scan-r35/run-lint.py",
+      "sha256": "b228808035eba5472e845e534d7799d2222ee142cef0a273cb941810fdfd53f8"
+    }
+  ]
+}

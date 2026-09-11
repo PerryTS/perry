@@ -1,0 +1,31 @@
+{
+  "rows": [
+    {
+      "arm": "main",
+      "symbol": "__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_bytes",
+      "instructions": 276,
+      "binary_sha256": "d0e07f6395a32201f3988d4c9435d02d223d84697e8bb6b4e6637e8aba02c9f8",
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_bytes",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/compact-json-token-scan-r35/main-worker"
+      ],
+      "output_sha256": "27219879e201c39a7f10e4cae28a077c9ca00e38398d70f19bb28374c613be35"
+    },
+    {
+      "arm": "candidate",
+      "symbol": "__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_bytes",
+      "instructions": 348,
+      "binary_sha256": "b1678787731ab3719cca06405c4fbed37638bc66bb3227245190e33b08730484",
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_bytes",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/compact-json-token-scan-r35/candidate-worker"
+      ],
+      "output_sha256": "5aa5f45a2c467b9d9468d9aa5b8f5148db18229e4b70dbc3594fe0269baee25d"
+    }
+  ],
+  "note": "Linked production worker diagnostic only. Counts include cold paths and are not timing evidence."
+}

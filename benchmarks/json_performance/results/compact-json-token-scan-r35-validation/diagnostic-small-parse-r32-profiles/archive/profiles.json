@@ -1,0 +1,37 @@
+[
+  {
+    "case": {
+      "fixture": "small_record",
+      "operation": "parse",
+      "mode": "rotating",
+      "iterations": 20000000,
+      "warmup": 5000
+    },
+    "worker_command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/small-parse-r32-profiles/r32-rotating-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/rotating/small_record",
+      "parse",
+      "20000000",
+      "5000",
+      "verify",
+      "rotating"
+    ],
+    "worker_sha256": "5138a6bf48fec32aed3c49382a2adb06d93dec2cbbca041e0c0cc6f398ca7e09",
+    "env_overrides": {},
+    "sample_command": [
+      "/usr/bin/sample",
+      "39805",
+      "1",
+      "1",
+      "-mayDie",
+      "-file",
+      "results/quiet-small-parse-r32-profiles/small_record-parse-rotating.sample.txt"
+    ],
+    "worker_exit": 0,
+    "sampler_exit": 0,
+    "observed_peak_rss_bytes": 33079296,
+    "elapsed_seconds": 10.451582125,
+    "stop_reason": null,
+    "diagnostic_only": true
+  }
+]

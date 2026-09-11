@@ -1,0 +1,1 @@
+R35 first validates all105candidate executions,28IR andsixworkerobjects, preserving knownrootfindings. Measure rotating15 first, thenoptions7, largepretty/callback6, full50 andchanging2ifqualified. Ifpositive onhistoricalrows, add bounded Korean-string performance controls because ED falsepositive handling changed. NoGCpolicy orcacheadmission changes.

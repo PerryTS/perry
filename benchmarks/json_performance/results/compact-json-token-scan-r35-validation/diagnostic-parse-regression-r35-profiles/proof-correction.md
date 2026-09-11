@@ -1,0 +1,1 @@
+Initial local assertion refused the reference receipt before any SSH/staging because the original R26 worker was named candidate-rotating-worker at build time. The copied main receipt retains that original exact path. Require the full original R26 path and source SHA, retain original controller/refusal; do not rename or rewrite the build receipt.

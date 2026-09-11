@@ -1,0 +1,9 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/parse-regression-r35-profiles/run-parse-regression-profile.py",
+  "--results-dir",
+  "results/quiet-parse-regression-r35-profiles"
+]

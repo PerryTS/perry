@@ -1,0 +1,6 @@
+{
+  "source_commit": "891753f2cff604c87133ac2a4435af9a2286aa22",
+  "build_worktree": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29",
+  "target": "/Users/amlug/projects/perry/json-merged-pr10022/target",
+  "note": "Clean committed own R35 source; all three normal production packages will be built and copied immutably. R34 build was already terminal and frozen before editing."
+}

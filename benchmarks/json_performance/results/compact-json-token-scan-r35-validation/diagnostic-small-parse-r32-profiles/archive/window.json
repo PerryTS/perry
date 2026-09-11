@@ -1,0 +1,24 @@
+{
+  "owner": "json-perf-39802-1789134867",
+  "load_before": [
+    1.32421875,
+    1.5107421875,
+    1.49609375
+  ],
+  "started_utc": "2026-09-11T13:54:27Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/small-parse-r32-profiles/run-small-parse-profile.py",
+    "--results-dir",
+    "results/quiet-small-parse-r32-profiles"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.49462890625,
+    1.54248046875,
+    1.50732421875
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-11T13:54:37Z"
+}

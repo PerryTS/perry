@@ -1,0 +1,36 @@
+{
+  "cases": [
+    {
+      "fixture": "records_array_1m",
+      "operation": "parse",
+      "mode": "rotating",
+      "iterations": 4000,
+      "warmup": 8,
+      "arm": "r26"
+    },
+    {
+      "fixture": "records_array_1m",
+      "operation": "parse",
+      "mode": "rotating",
+      "iterations": 4000,
+      "warmup": 8,
+      "arm": "r35"
+    },
+    {
+      "fixture": "escaped_1m",
+      "operation": "parse",
+      "mode": "rotating",
+      "iterations": 4000,
+      "warmup": 8,
+      "arm": "r26"
+    },
+    {
+      "fixture": "escaped_1m",
+      "operation": "parse",
+      "mode": "rotating",
+      "iterations": 4000,
+      "warmup": 8,
+      "arm": "r35"
+    }
+  ]
+}

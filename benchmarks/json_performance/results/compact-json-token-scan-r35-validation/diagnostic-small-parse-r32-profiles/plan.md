@@ -1,0 +1,1 @@
+Bounded next diagnostic: exact frozen R32 rotating worker,20M fresh-source small parses plus5000warmup, one1second sample after0.5seconds.20second/2GiBwatchdog. Complete pinnedNode output/checksum oracle after terminalarchive. No performance comparison from sampled process CPU/RSS. New controller has not run; do not stage while another remote window is active.

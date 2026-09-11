@@ -1,0 +1,11 @@
+{
+  "cases": [
+    {
+      "fixture": "small_record",
+      "operation": "parse",
+      "mode": "rotating",
+      "iterations": 20000000,
+      "warmup": 5000
+    }
+  ]
+}

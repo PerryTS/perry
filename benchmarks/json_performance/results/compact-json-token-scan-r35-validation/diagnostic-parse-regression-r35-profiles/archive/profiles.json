@@ -1,0 +1,146 @@
+[
+  {
+    "case": {
+      "fixture": "records_array_1m",
+      "operation": "parse",
+      "mode": "rotating",
+      "iterations": 4000,
+      "warmup": 8,
+      "arm": "r26"
+    },
+    "worker_command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/parse-regression-r35-profiles/r26-rotating-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/rotating/records_array_1m",
+      "parse",
+      "4000",
+      "8",
+      "verify",
+      "rotating"
+    ],
+    "worker_sha256": "3b598695750a197791464e08199b55ae16ffe34f9984146ac5669067189516e1",
+    "env_overrides": {},
+    "sample_command": [
+      "/usr/bin/sample",
+      "39947",
+      "1",
+      "1",
+      "-mayDie",
+      "-file",
+      "results/quiet-parse-regression-r35-profiles/records_array_1m-parse-rotating-r26.sample.txt"
+    ],
+    "worker_exit": 0,
+    "sampler_exit": 0,
+    "observed_peak_rss_bytes": 79544320,
+    "elapsed_seconds": 4.597446125,
+    "stop_reason": null,
+    "diagnostic_only": true
+  },
+  {
+    "case": {
+      "fixture": "records_array_1m",
+      "operation": "parse",
+      "mode": "rotating",
+      "iterations": 4000,
+      "warmup": 8,
+      "arm": "r35"
+    },
+    "worker_command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/parse-regression-r35-profiles/r35-rotating-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/rotating/records_array_1m",
+      "parse",
+      "4000",
+      "8",
+      "verify",
+      "rotating"
+    ],
+    "worker_sha256": "a0d5f60aa47a1a5ff28f63496b626172f0d3f7d39c4320bb7614723330c35ce8",
+    "env_overrides": {},
+    "sample_command": [
+      "/usr/bin/sample",
+      "39985",
+      "1",
+      "1",
+      "-mayDie",
+      "-file",
+      "results/quiet-parse-regression-r35-profiles/records_array_1m-parse-rotating-r35.sample.txt"
+    ],
+    "worker_exit": 0,
+    "sampler_exit": 0,
+    "observed_peak_rss_bytes": 79429632,
+    "elapsed_seconds": 4.927895166000001,
+    "stop_reason": null,
+    "diagnostic_only": true
+  },
+  {
+    "case": {
+      "fixture": "escaped_1m",
+      "operation": "parse",
+      "mode": "rotating",
+      "iterations": 4000,
+      "warmup": 8,
+      "arm": "r26"
+    },
+    "worker_command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/parse-regression-r35-profiles/r26-rotating-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/rotating/escaped_1m",
+      "parse",
+      "4000",
+      "8",
+      "verify",
+      "rotating"
+    ],
+    "worker_sha256": "3b598695750a197791464e08199b55ae16ffe34f9984146ac5669067189516e1",
+    "env_overrides": {},
+    "sample_command": [
+      "/usr/bin/sample",
+      "40026",
+      "1",
+      "1",
+      "-mayDie",
+      "-file",
+      "results/quiet-parse-regression-r35-profiles/escaped_1m-parse-rotating-r26.sample.txt"
+    ],
+    "worker_exit": 0,
+    "sampler_exit": 0,
+    "observed_peak_rss_bytes": 67944448,
+    "elapsed_seconds": 4.137489708,
+    "stop_reason": null,
+    "diagnostic_only": true
+  },
+  {
+    "case": {
+      "fixture": "escaped_1m",
+      "operation": "parse",
+      "mode": "rotating",
+      "iterations": 4000,
+      "warmup": 8,
+      "arm": "r35"
+    },
+    "worker_command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/parse-regression-r35-profiles/r35-rotating-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/rotating/escaped_1m",
+      "parse",
+      "4000",
+      "8",
+      "verify",
+      "rotating"
+    ],
+    "worker_sha256": "a0d5f60aa47a1a5ff28f63496b626172f0d3f7d39c4320bb7614723330c35ce8",
+    "env_overrides": {},
+    "sample_command": [
+      "/usr/bin/sample",
+      "40060",
+      "1",
+      "1",
+      "-mayDie",
+      "-file",
+      "results/quiet-parse-regression-r35-profiles/escaped_1m-parse-rotating-r35.sample.txt"
+    ],
+    "worker_exit": 0,
+    "sampler_exit": 0,
+    "observed_peak_rss_bytes": 67829760,
+    "elapsed_seconds": 5.028453832999999,
+    "stop_reason": null,
+    "diagnostic_only": true
+  }
+]

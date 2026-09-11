@@ -1,0 +1,10 @@
+{
+  "source_commit": "891753f2cff604c87133ac2a4435af9a2286aa22",
+  "executed_checks": 74,
+  "passed": 73,
+  "failed": 1,
+  "sole_failure": "[Public benchmark evidence freshness] python3 benchmarks/ci_public_baseline_check.py",
+  "file_cap": "PASS",
+  "terminal_lint_sha256": "ff4d5b61ba498dd6d0bd511838c92bba1ae8767773e9c06711e76d2529b44964",
+  "reviewed_unix": 1789134079.6343172
+}

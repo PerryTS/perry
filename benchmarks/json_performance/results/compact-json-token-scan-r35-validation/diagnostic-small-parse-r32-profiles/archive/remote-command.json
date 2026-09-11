@@ -1,0 +1,9 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/small-parse-r32-profiles/run-small-parse-profile.py",
+  "--results-dir",
+  "results/quiet-small-parse-r32-profiles"
+]

@@ -1,0 +1,95 @@
+{
+  "rows": [
+    {
+      "arm": "r26",
+      "function": "23parse_string_bytes_slow",
+      "instructions": 846,
+      "entry_mod_64": 28,
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser23parse_string_bytes_slow",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/parse-regression-r35-profiles/r26-rotating-worker"
+      ],
+      "output": "r26-23parse_string_bytes_slow.s",
+      "sha256": "8f5c22662cf92e7d69c7ce1b3cf748e4566d72c5f842737d2320d5c1bf78fd78",
+      "binary_sha256": "3b598695750a197791464e08199b55ae16ffe34f9984146ac5669067189516e1"
+    },
+    {
+      "arm": "r26",
+      "function": "20parse_object_untyped",
+      "instructions": 1405,
+      "entry_mod_64": 24,
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser20parse_object_untyped",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/parse-regression-r35-profiles/r26-rotating-worker"
+      ],
+      "output": "r26-20parse_object_untyped.s",
+      "sha256": "5aae5b3e47dd781de3f8b2206a1729f7c3930e91d6c6a25895beb74af1d7dc6a",
+      "binary_sha256": "3b598695750a197791464e08199b55ae16ffe34f9984146ac5669067189516e1"
+    },
+    {
+      "arm": "r26",
+      "function": "18parse_string_value",
+      "instructions": 239,
+      "entry_mod_64": 8,
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/parse-regression-r35-profiles/r26-rotating-worker"
+      ],
+      "output": "r26-18parse_string_value.s",
+      "sha256": "326535725e0e87a9e35d74d98ee8ed2c2e38bf0c064562c540748e9eec7dd111",
+      "binary_sha256": "3b598695750a197791464e08199b55ae16ffe34f9984146ac5669067189516e1"
+    },
+    {
+      "arm": "r35",
+      "function": "23parse_string_bytes_slow",
+      "instructions": 846,
+      "entry_mod_64": 40,
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser23parse_string_bytes_slow",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/parse-regression-r35-profiles/r35-rotating-worker"
+      ],
+      "output": "r35-23parse_string_bytes_slow.s",
+      "sha256": "20732b1d0e68f492723e4b1fe3af8b0f77d61346847ae770a9483c0409649d99",
+      "binary_sha256": "a0d5f60aa47a1a5ff28f63496b626172f0d3f7d39c4320bb7614723330c35ce8"
+    },
+    {
+      "arm": "r35",
+      "function": "20parse_object_untyped",
+      "instructions": 2089,
+      "entry_mod_64": 52,
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser20parse_object_untyped",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/parse-regression-r35-profiles/r35-rotating-worker"
+      ],
+      "output": "r35-20parse_object_untyped.s",
+      "sha256": "70fbc3446976419d45a7cee50bc33dcd0ee6f321c456d66285bc1d49f1632e1f",
+      "binary_sha256": "a0d5f60aa47a1a5ff28f63496b626172f0d3f7d39c4320bb7614723330c35ce8"
+    },
+    {
+      "arm": "r35",
+      "function": "18parse_string_value",
+      "instructions": 702,
+      "entry_mod_64": 40,
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/parse-regression-r35-profiles/r35-rotating-worker"
+      ],
+      "output": "r35-18parse_string_value.s",
+      "sha256": "ae3c47290b47f66dda5df407ee345f30515bd07fcfb6a4ba18d73cfdaa0c4ac9",
+      "binary_sha256": "a0d5f60aa47a1a5ff28f63496b626172f0d3f7d39c4320bb7614723330c35ce8"
+    }
+  ],
+  "note": "Linked production function disassembly, not a timing result. Address/loop alignment is a hypothesis, not established causation."
+}
