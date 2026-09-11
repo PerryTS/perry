@@ -108,6 +108,14 @@ fn registry() -> &'static Mutex<NativeAsyncRegistry> {
     REGISTRY.get_or_init(|| Mutex::new(NativeAsyncRegistry::default()))
 }
 
+pub(super) fn completion_work_pending() -> bool {
+    REGISTRY.get().is_some_and(|registry| {
+        !crate::gc::lock_gc_root_registry(registry)
+            .pending
+            .is_empty()
+    })
+}
+
 fn current_thread_id() -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     std::thread::current().id().hash(&mut hasher);

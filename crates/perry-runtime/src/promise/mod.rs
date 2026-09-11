@@ -150,6 +150,7 @@ pub(crate) fn is_definitely_primitive(value: f64) -> bool {
 // Instrumentation counters (set PERRY_MT_PROFILE=1 to print at exit).
 pub static MT_RUN_COUNT: AtomicU64 = AtomicU64::new(0);
 pub static MT_DRAIN_COUNT: AtomicU64 = AtomicU64::new(0);
+pub static MT_EMPTY_DRAIN_COUNT: AtomicU64 = AtomicU64::new(0);
 pub static MT_THENABLE_PROBE_COUNT: AtomicU64 = AtomicU64::new(0);
 pub static MT_PROMISE_NEW_COUNT: AtomicU64 = AtomicU64::new(0);
 pub static MT_PROMISE_THEN_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -207,6 +208,10 @@ extern "C" fn mt_profile_atexit() {
     if std::env::var_os("PERRY_MT_PROFILE").is_none() {
         return;
     }
+    eprintln!(
+        "[mt-profile] empty_drains={}",
+        MT_EMPTY_DRAIN_COUNT.load(Ordering::Relaxed)
+    );
     eprintln!(
         "[mt-profile] runs={} resolved={} then={} new={} unwrap={} thenable_probe={} thenable_fast={}",
         MT_RUN_COUNT.load(Ordering::Relaxed),

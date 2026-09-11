@@ -854,6 +854,10 @@ pub(crate) fn schedule_uncaught(err: f64) {
     DIAG_PENDING_UNCAUGHT.with(|q| q.borrow_mut().push(err));
 }
 
+pub(crate) fn uncaught_work_pending() -> bool {
+    DIAG_PENDING_UNCAUGHT.with(|queue| !queue.borrow().is_empty())
+}
+
 pub fn diagnostics_channel_drain_uncaught() {
     if DIAG_SUPPRESS_UNCAUGHT_DRAIN.with(|n| *n.borrow() > 0) {
         return;

@@ -1236,6 +1236,36 @@ pub fn pump_process_stdin() {
     maybe_fire_stdin_end();
 }
 
+/// An active reader may publish bytes between queue checks. Conservatively
+/// keep its ordinary timer phase, including EOF delivery after the reader
+/// has exited. `stdin_push_bytes` can also populate the buffer without one.
+pub(crate) fn process_stdin_needs_pump() -> bool {
+    use std::sync::atomic::Ordering;
+    STDIN_READER_STARTED.load(Ordering::Acquire)
+        || (STDIN_EOF_SEEN.load(Ordering::Acquire) && !STDIN_END_FIRED.load(Ordering::Acquire))
+        || STDIN_BUFFER.lock().map(|b| !b.is_empty()).unwrap_or(true)
+}
+
+#[cfg(test)]
+mod empty_checkpoint_tests {
+    use super::*;
+
+    #[test]
+    fn reader_and_undelivered_eof_require_the_stdin_phase() {
+        use std::sync::atomic::Ordering;
+        assert!(!process_stdin_needs_pump());
+        STDIN_READER_STARTED.store(true, Ordering::Release);
+        assert!(process_stdin_needs_pump());
+        STDIN_READER_STARTED.store(false, Ordering::Release);
+        STDIN_EOF_SEEN.store(true, Ordering::Release);
+        assert!(process_stdin_needs_pump());
+        STDIN_END_FIRED.store(true, Ordering::Release);
+        assert!(!process_stdin_needs_pump());
+        STDIN_EOF_SEEN.store(false, Ordering::Release);
+        STDIN_END_FIRED.store(false, Ordering::Release);
+    }
+}
+
 fn pump_stdin_data_chunks() {
     let has_bytes = STDIN_BUFFER.lock().map(|b| !b.is_empty()).unwrap_or(false);
     if !has_bytes {

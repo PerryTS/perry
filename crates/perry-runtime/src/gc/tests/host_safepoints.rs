@@ -161,6 +161,37 @@ fn microtask_runner_tail_pays_bounded_safepoint_under_pressure() {
 }
 
 #[test]
+fn empty_event_loop_checkpoint_advances_gc_and_preserves_roots() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    reset_old_reclaim_pressure();
+    make_arena_pressure(&trigger_guard, b"empty_checkpoint_live");
+    assert!(crate::promise::microtasks::empty_checkpoint_eligible_for_test());
+
+    let before = gc_collection_count();
+    assert_eq!(crate::promise::js_promise_run_microtasks_event_loop(), 0);
+    let mut status = JsGcStepResult::default();
+    assert_eq!(js_gc_step_status(&mut status), JS_GC_STEP_STATUS_ACTIVE);
+    assert_eq!(status.trigger_kind, GcTriggerKind::ArenaBytes.ffi_code());
+    assert_eq!(gc_collection_count(), before);
+
+    // Drive completion through the optimized entry itself, rather than
+    // bypassing it with the scheduler helper used by the other tests.
+    for _ in 0..500_000 {
+        crate::promise::js_promise_run_microtasks_event_loop();
+        if gc_collection_count() > before {
+            break;
+        }
+    }
+    assert!(
+        gc_collection_count() > before,
+        "empty pumps must complete pending GC"
+    );
+    let live_after = (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::StringHeader;
+    unsafe { assert_string_bytes(live_after, b"empty_checkpoint_live") };
+}
+
+#[test]
 fn stdlib_pump_and_perry_poll_pay_debt_through_shared_scheduler_surfaces() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
