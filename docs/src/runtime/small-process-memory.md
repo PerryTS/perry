@@ -6,8 +6,12 @@ programs. This defaults mimalloc's `allow_thp` option to zero before startup
 allocations. The normal profile retains mimalloc's existing policy.
 
 ```sh
-PERRY_MEMORY_PROFILE=small ./hello
+PERRY_MEMORY_PROFILE=small ./app
 ```
+
+This profile applies to programs that retain the managed runtime. Automatically
+specialized [tiny programs](tiny-programs.md) already omit Perry's allocator and
+GC, so they do not need this setting.
 
 An explicit `MIMALLOC_ALLOW_THP=1` overrides the profile; `=0` also works without
 the profile. Mimalloc still parses these settings itself. Set the environment
