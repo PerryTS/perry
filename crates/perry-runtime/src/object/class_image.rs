@@ -134,8 +134,10 @@ pub struct ClassImageTables {
     pub(crate) parents: RwLock<Option<PtrHashMap<u32, u32>>>,
     /// `parent + 1` for every registered edge whose child id is
     /// `< PARENT_DENSE_CAP`; `0` means "no edge". Heap-allocated per image
-    /// (256 KiB) rather than `.bss`, because there is one per image now.
-    pub(crate) parent_dense: Box<[AtomicU32]>,
+    /// (256 KiB) on the first edge registration. Images that never register
+    /// an in-window parent edge answer absent reads without allocating it.
+    /// Once published, the backing allocation never moves or changes size.
+    pub(crate) parent_dense: OnceLock<Box<[AtomicU32]>>,
     pub(crate) fetch_parent_kind: RwLock<Option<PtrHashMap<u32, u8>>>,
     pub(crate) generic_origin: RwLock<Option<PtrHashMap<u32, u32>>>,
     pub(crate) extends_error: RwLock<Option<PtrHashSet<u32>>>,
@@ -161,7 +163,7 @@ impl ClassImageTables {
             static_method_bind_lengths: RwLock::new(None),
             registered_class_ids: RwLock::new(None),
             parents: RwLock::new(None),
-            parent_dense: (0..PARENT_DENSE_CAP).map(|_| AtomicU32::new(0)).collect(),
+            parent_dense: OnceLock::new(),
             fetch_parent_kind: RwLock::new(None),
             generic_origin: RwLock::new(None),
             extends_error: RwLock::new(None),
@@ -313,24 +315,77 @@ impl<T: 'static> ImageTable<RwLock<T>> {
     }
 }
 
-/// One relaxed-ordering load from the calling image's dense parent table.
+/// An acquire load from the calling image's dense parent table, if allocated.
 /// `idx` must be `< PARENT_DENSE_CAP`.
 #[inline]
 pub(crate) fn parent_dense_load(idx: usize) -> u32 {
-    current().parent_dense[idx].load(Ordering::Acquire)
+    current()
+        .parent_dense
+        .get()
+        .map_or(0, |table| table[idx].load(Ordering::Acquire))
 }
 
 /// Publish one biased parent edge into the calling image's dense table.
 /// `idx` must be `< PARENT_DENSE_CAP`.
 #[inline]
 pub(crate) fn parent_dense_store(idx: usize, biased_parent: u32) {
-    current().parent_dense[idx].store(biased_parent, Ordering::Release);
+    current()
+        .parent_dense
+        .get_or_init(|| (0..PARENT_DENSE_CAP).map(|_| AtomicU32::new(0)).collect())[idx]
+        .store(biased_parent, Ordering::Release);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::Barrier;
+
+    #[test]
+    fn absent_parent_reads_do_not_allocate_the_dense_table() {
+        let image = ClassImageHandle(Arc::new(ClassImageTables::new()));
+        std::thread::spawn(move || {
+            adopt_image(image);
+            for index in [0, 1, 1000, PARENT_DENSE_CAP - 1] {
+                assert_eq!(parent_dense_load(index), 0);
+            }
+            assert!(current().parent_dense.get().is_none());
+            // A first registration after reads publishes a real edge and
+            // leaves every other slot absent, including the boundary slots.
+            parent_dense_store(1000, 1);
+            assert_eq!(parent_dense_load(1000), 1);
+            assert_eq!(parent_dense_load(0), 0);
+            assert_eq!(parent_dense_load(PARENT_DENSE_CAP - 1), 0);
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn concurrent_first_parent_registrations_share_one_image_table() {
+        let image = ClassImageHandle(Arc::new(ClassImageTables::new()));
+        let barrier = Arc::new(Barrier::new(4));
+        let workers: Vec<_> = (0..4)
+            .map(|index| {
+                let image = image.clone();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    adopt_image(image);
+                    barrier.wait();
+                    parent_dense_store(index, (index + 1) as u32);
+                    barrier.wait();
+                    for other in 0..4 {
+                        assert_eq!(parent_dense_load(other), (other + 1) as u32);
+                    }
+                    current().parent_dense.get().unwrap().as_ptr() as usize
+                })
+            })
+            .collect();
+        let tables: Vec<_> = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect();
+        assert!(tables.iter().all(|table| *table == tables[0]));
+    }
 
     /// Register `method` on `class_id` the way codegen's module-init prelude
     /// does, with `func_ptr` standing in for the image's code address.
