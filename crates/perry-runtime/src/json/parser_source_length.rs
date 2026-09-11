@@ -2,6 +2,50 @@
 
 use crate::StringHeader;
 
+/// Choose the length-aware parser only when a dominant token may benefit.
+/// Both specializations still validate the complete document.
+#[inline]
+pub(super) fn use_source_length_parser(input: &[u8]) -> bool {
+    if input.len() <= 256 {
+        false
+    } else if input.len() <= 4096 {
+        true
+    } else {
+        large_source_may_have_dominant_token(input)
+    }
+}
+
+#[inline(never)]
+fn large_source_may_have_dominant_token(input: &[u8]) -> bool {
+    // A borrowed token leaving at most 256 surrounding bytes must open
+    // before byte 256 and extend beyond byte 512 in a >4096-byte input.
+    let prefix = &input[..512];
+    let mut cursor = 0;
+    let mut in_string = false;
+    let mut unescaped = true;
+    while let Some(hit) = super::super::simd::find_quote_or_backslash(&prefix[cursor..]) {
+        let pos = cursor + hit;
+        if prefix[pos] == b'"' {
+            if in_string {
+                in_string = false;
+            } else {
+                if pos >= 256 {
+                    return false;
+                }
+                in_string = true;
+                unescaped = true;
+            }
+            cursor = pos + 1;
+        } else if in_string {
+            unescaped = false;
+            cursor = (pos + 2).min(prefix.len());
+        } else {
+            cursor = pos + 1;
+        }
+    }
+    in_string && unescaped
+}
+
 /// Derive a token's UTF-16 length from its source metadata when all surrounding
 /// bytes are ASCII. Syntax and escape validation remain in the ordinary parser.
 ///

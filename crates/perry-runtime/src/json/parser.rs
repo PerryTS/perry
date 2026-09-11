@@ -1495,13 +1495,13 @@ pub(crate) use depth_blocks::nesting_depth_exceeds;
 mod depth_blocks_tests;
 
 /// The caller roots the source and suppresses GC before entering either arm.
-/// Small documents retain the parser specialization without length-proof code.
+/// Select length-proof code only where the source can benefit from it.
 #[inline(always)]
 pub(crate) unsafe fn parse_batched_from_source(
     input: &[u8],
     source: *const StringHeader,
 ) -> (JSValue, bool) {
-    if input.len() > 256 {
+    if source_length::use_source_length_parser(input) {
         parse_batched_specialized::<true>(input, source)
     } else {
         parse_batched_specialized::<false>(input, source)

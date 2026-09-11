@@ -162,7 +162,7 @@ fn json_source_length_parser_matches_standalone_allocation_and_escape_paths() {
 fn json_source_length_dispatch_boundaries_match_scanned_fallback() {
     let _guard = Suppressed::new();
     unsafe {
-        for total in [255usize, 256, 257, 258, 259] {
+        for total in [255usize, 256, 257, 258, 259, 4095, 4096, 4097, 4098, 8192] {
             for ending in [
                 &b"plain"[..],
                 "é".as_bytes(),
@@ -186,6 +186,68 @@ fn json_source_length_dispatch_boundaries_match_scanned_fallback() {
                 assert_eq!((*actual).utf16_len, (*reference).utf16_len);
                 assert_eq!((*actual).flags, (*reference).flags);
                 assert_eq!(bytes(actual), bytes(reference));
+            }
+        }
+    }
+}
+
+#[test]
+fn json_source_length_large_dispatch_preserves_complete_outputs_and_rejects_suffixes() {
+    let _guard = Suppressed::new();
+    let fields = (0..1000)
+        .map(|i| format!("\"field_{i}\":{i}"))
+        .collect::<Vec<_>>();
+    let payload = "한🙂".repeat(1000);
+    let cases = [
+        (format!("{{{}}}", fields.join(",")), false),
+        (
+            format!("[{}]", vec![r#"{"id":1,"text":"tiny"}"#; 300].join(",")),
+            false,
+        ),
+        (format!("\"{payload}\""), true),
+        (format!(r#"{{"prefix":"a\"b","text":"{payload}"}}"#), true),
+        (format!(r#""\n{payload}""#), false),
+        (
+            format!("{}{{\"crossing\":1}}{}", " ".repeat(248), " ".repeat(4096)),
+            false,
+        ),
+    ];
+    unsafe {
+        for (text, selected) in cases {
+            assert!(text.len() > 4096);
+            assert!(serde_json::from_str::<serde_json::Value>(&text).is_ok());
+            assert_eq!(super::use_source_length_parser(text.as_bytes()), selected);
+            let ptr = source(text.as_bytes());
+            let (value, valid) = super::super::parse_batched_from_source(bytes(ptr), ptr);
+            assert!(valid);
+            crate::json::parse_root_push(value);
+            let output = crate::json::js_json_stringify(
+                f64::from_bits(value.bits()),
+                crate::json::TYPE_UNKNOWN,
+            );
+            assert_eq!(crate::json::str_from_header(output), Some(text.trim()));
+            let invalid = text + "]";
+            let ptr = source(invalid.as_bytes());
+            let (_, valid) = super::super::parse_batched_from_source(bytes(ptr), ptr);
+            assert!(
+                !valid,
+                "dispatch must not bypass complete syntax validation"
+            );
+        }
+    }
+}
+
+#[test]
+fn json_source_length_large_dispatch_keeps_every_bounded_surround() {
+    for payload in ["a".repeat(4097), "한🙂".repeat(1000)] {
+        for outside in 2..=256 {
+            for before in 0..=outside - 2 {
+                let text = format!(
+                    "{}\"{payload}\"{}",
+                    " ".repeat(before),
+                    " ".repeat(outside - before - 2)
+                );
+                assert!(super::use_source_length_parser(text.as_bytes()));
             }
         }
     }
