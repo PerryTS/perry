@@ -6737,6 +6737,7 @@ pub fn run_with_parse_cache(
             &embedded_assets,
             &object_output_dir,
             &bunfs_text_modules,
+            ctx.bun_platform,
         )? {
             obj_cleanup_paths.push(obj.clone());
             obj_paths.push(obj);
