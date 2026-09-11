@@ -1,0 +1,194 @@
+{
+  "candidate_passes": 20,
+  "main_passes": 12,
+  "main_failures": [
+    {
+      "arm": "main",
+      "roots": "native",
+      "parser": "auto",
+      "mode": "scheduled",
+      "exit_code": -10,
+      "matches_node": false,
+      "protected_retired_sets": 62,
+      "moved_objects": 18967,
+      "env_overrides": {
+        "PERRY_GC_SCHEDULE_SEED": "10022",
+        "PERRY_GC_SCHEDULE_RATE": "0.1",
+        "PERRY_GC_SCHEDULE_ALLOC_KB": "0",
+        "PERRY_GC_PROTECT_FROMSPACE": "1",
+        "PERRY_GC_DIAG": "1"
+      },
+      "stdout_sha256": "7eb51f7f7b12d49aca041125cdc95ab88f49973c7010f1f85963f3423e02c4ea",
+      "stderr_sha256": "e613c1c0bd2146970cbb666403039a91f38c417e5188c94a62bc55d7afe4f01a"
+    },
+    {
+      "arm": "main",
+      "roots": "native",
+      "parser": "tape",
+      "mode": "scheduled",
+      "exit_code": -10,
+      "matches_node": false,
+      "protected_retired_sets": 62,
+      "moved_objects": 18967,
+      "env_overrides": {
+        "PERRY_JSON_TAPE": "1",
+        "PERRY_GC_SCHEDULE_SEED": "10022",
+        "PERRY_GC_SCHEDULE_RATE": "0.1",
+        "PERRY_GC_SCHEDULE_ALLOC_KB": "0",
+        "PERRY_GC_PROTECT_FROMSPACE": "1",
+        "PERRY_GC_DIAG": "1"
+      },
+      "stdout_sha256": "7eb51f7f7b12d49aca041125cdc95ab88f49973c7010f1f85963f3423e02c4ea",
+      "stderr_sha256": "905f0e12b98131555a355f11456715ec52e99077ee75622ba64a693bdd8651fb"
+    },
+    {
+      "arm": "main",
+      "roots": "native",
+      "parser": "direct",
+      "mode": "scheduled",
+      "exit_code": -10,
+      "matches_node": false,
+      "protected_retired_sets": 62,
+      "moved_objects": 18967,
+      "env_overrides": {
+        "PERRY_JSON_TAPE": "0",
+        "PERRY_GC_SCHEDULE_SEED": "10022",
+        "PERRY_GC_SCHEDULE_RATE": "0.1",
+        "PERRY_GC_SCHEDULE_ALLOC_KB": "0",
+        "PERRY_GC_PROTECT_FROMSPACE": "1",
+        "PERRY_GC_DIAG": "1"
+      },
+      "stdout_sha256": "7eb51f7f7b12d49aca041125cdc95ab88f49973c7010f1f85963f3423e02c4ea",
+      "stderr_sha256": "aa88cdff5aeda3ce65a43cb0e5215c97f95a213b44540e06b3b954213f50c124"
+    },
+    {
+      "arm": "main",
+      "roots": "native",
+      "parser": "auto",
+      "mode": "scheduled-depth64",
+      "exit_code": -10,
+      "matches_node": false,
+      "protected_retired_sets": 62,
+      "moved_objects": 18967,
+      "env_overrides": {
+        "PERRY_GC_SCHEDULE_SEED": "10022",
+        "PERRY_GC_SCHEDULE_RATE": "0.1",
+        "PERRY_GC_SCHEDULE_ALLOC_KB": "0",
+        "PERRY_GC_PROTECT_FROMSPACE": "1",
+        "PERRY_GC_DIAG": "1",
+        "PERRY_GC_PROTECT_FROMSPACE_DEPTH": "64"
+      },
+      "stdout_sha256": "7eb51f7f7b12d49aca041125cdc95ab88f49973c7010f1f85963f3423e02c4ea",
+      "stderr_sha256": "a4ef1231530cf6d30fb8f9b5b44d1c2bbd12d4f262a9338858224167326f089c"
+    },
+    {
+      "arm": "main",
+      "roots": "shadow",
+      "parser": "auto",
+      "mode": "scheduled",
+      "exit_code": -10,
+      "matches_node": false,
+      "protected_retired_sets": 62,
+      "moved_objects": 18967,
+      "env_overrides": {
+        "PERRY_GC_SCHEDULE_SEED": "10022",
+        "PERRY_GC_SCHEDULE_RATE": "0.1",
+        "PERRY_GC_SCHEDULE_ALLOC_KB": "0",
+        "PERRY_GC_PROTECT_FROMSPACE": "1",
+        "PERRY_GC_DIAG": "1"
+      },
+      "stdout_sha256": "7eb51f7f7b12d49aca041125cdc95ab88f49973c7010f1f85963f3423e02c4ea",
+      "stderr_sha256": "ca85c7a4831ea691a006986cbe86726f7ac772d16926b879190b12ac6c6f028e"
+    },
+    {
+      "arm": "main",
+      "roots": "shadow",
+      "parser": "tape",
+      "mode": "scheduled",
+      "exit_code": -10,
+      "matches_node": false,
+      "protected_retired_sets": 62,
+      "moved_objects": 18967,
+      "env_overrides": {
+        "PERRY_JSON_TAPE": "1",
+        "PERRY_GC_SCHEDULE_SEED": "10022",
+        "PERRY_GC_SCHEDULE_RATE": "0.1",
+        "PERRY_GC_SCHEDULE_ALLOC_KB": "0",
+        "PERRY_GC_PROTECT_FROMSPACE": "1",
+        "PERRY_GC_DIAG": "1"
+      },
+      "stdout_sha256": "7eb51f7f7b12d49aca041125cdc95ab88f49973c7010f1f85963f3423e02c4ea",
+      "stderr_sha256": "8fe60c4d8d2418123e36e5b44208c89c9701960ddaad0342881deafaa8b1a4f7"
+    },
+    {
+      "arm": "main",
+      "roots": "shadow",
+      "parser": "direct",
+      "mode": "scheduled",
+      "exit_code": -10,
+      "matches_node": false,
+      "protected_retired_sets": 62,
+      "moved_objects": 18967,
+      "env_overrides": {
+        "PERRY_JSON_TAPE": "0",
+        "PERRY_GC_SCHEDULE_SEED": "10022",
+        "PERRY_GC_SCHEDULE_RATE": "0.1",
+        "PERRY_GC_SCHEDULE_ALLOC_KB": "0",
+        "PERRY_GC_PROTECT_FROMSPACE": "1",
+        "PERRY_GC_DIAG": "1"
+      },
+      "stdout_sha256": "7eb51f7f7b12d49aca041125cdc95ab88f49973c7010f1f85963f3423e02c4ea",
+      "stderr_sha256": "0b3332b28e60c7fb56d18405f4f9d94f3188722a14953c896f247b9657ec37c2"
+    },
+    {
+      "arm": "main",
+      "roots": "shadow",
+      "parser": "auto",
+      "mode": "scheduled-depth64",
+      "exit_code": -10,
+      "matches_node": false,
+      "protected_retired_sets": 62,
+      "moved_objects": 18967,
+      "env_overrides": {
+        "PERRY_GC_SCHEDULE_SEED": "10022",
+        "PERRY_GC_SCHEDULE_RATE": "0.1",
+        "PERRY_GC_SCHEDULE_ALLOC_KB": "0",
+        "PERRY_GC_PROTECT_FROMSPACE": "1",
+        "PERRY_GC_DIAG": "1",
+        "PERRY_GC_PROTECT_FROMSPACE_DEPTH": "64"
+      },
+      "stdout_sha256": "7eb51f7f7b12d49aca041125cdc95ab88f49973c7010f1f85963f3423e02c4ea",
+      "stderr_sha256": "7d19955c733e7d2f442e4ea9ad9542f2cca4a0d39e8ef232daa3f73d298a0f4d"
+    }
+  ],
+  "ir_matches": [
+    {
+      "mode": "native",
+      "main_sha256": "7a614c5ec73ac65f9061d6c35c438ea4298202b3539d2ad2d112d9ff2d433745",
+      "candidate_sha256": "a8ec6573a4425cf0ff6e8ab1a65b81f345db1a84a05489913b9684ce08acf9f2",
+      "normalized_sha256": "3791b4692e3bb6d4201f09275e5875ce9553aaf71cfa2911348f6bc460dfec49"
+    },
+    {
+      "mode": "shadow",
+      "main_sha256": "c5217afee5467940920a410d560e8d9fd5479d1a8c9f9e8c14a600b520dd65e6",
+      "candidate_sha256": "c5217afee5467940920a410d560e8d9fd5479d1a8c9f9e8c14a600b520dd65e6",
+      "normalized_sha256": "c5217afee5467940920a410d560e8d9fd5479d1a8c9f9e8c14a600b520dd65e6"
+    }
+  ],
+  "static_findings": {
+    "main": {
+      "native_report_sha256": "e3fdb4be07c89f05f3b061f8347fcb0e67296bdb5a0945c13ffd786763b0ea92",
+      "fingerprints": [
+        "large-emitter.ll::perry_fn_test_json_large_string_emitters_ts__run::unrooted:strhandle->js_put_value_set_ic_overflow_store"
+      ]
+    },
+    "candidate": {
+      "native_report_sha256": "e3fdb4be07c89f05f3b061f8347fcb0e67296bdb5a0945c13ffd786763b0ea92",
+      "fingerprints": [
+        "large-emitter.ll::perry_fn_test_json_large_string_emitters_ts__run::unrooted:strhandle->js_put_value_set_ic_overflow_store"
+      ]
+    }
+  },
+  "checker_sha256": "067c5f538f7847b257212a6dc1eb0114e474b3dc7ff95c7930deedd22a1ba29b",
+  "note": "Candidate executions are fresh; exact frozen R26 reference receipts are reused with source/artifact hash checks. Candidate outputs must match complete Node output, with positive moving/protected witnesses. The fresh native checker has one unsuppressed non-moving string-handle/overflow-store finding in both arms, with identical IR and full reports. Both shadow variants pass; no checker or allowlist was changed."
+}

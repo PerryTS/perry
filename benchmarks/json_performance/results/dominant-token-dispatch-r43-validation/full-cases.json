@@ -1,0 +1,358 @@
+{
+  "scope": "R23 original 38 parse/stringify plus 12 consumption cases; original iteration counts and warmups reused unchanged, seven interleaved fresh-process repetitions per engine; prepared before R23 performance timing",
+  "iteration_reference_commit": "4fc51192eddce6efeb11fb70c5c10ba3c25978cc",
+  "iteration_reference_path": "benchmarks/json_performance/results/quiet-main-53df-all-r5/timing.jsonl",
+  "iteration_reference_sha256": "31027b5e01b853a5cc3aba43376a3638906ae8dc4ebe7e5cae26f172af745c6b",
+  "cases": [
+    {
+      "fixture": "null",
+      "operation": "parse",
+      "iterations": 2000000,
+      "warmup": 5000,
+      "repetitions": 7
+    },
+    {
+      "fixture": "null",
+      "operation": "stringify",
+      "iterations": 2000000,
+      "warmup": 5000,
+      "repetitions": 7
+    },
+    {
+      "fixture": "string_a",
+      "operation": "parse",
+      "iterations": 2000000,
+      "warmup": 5000,
+      "repetitions": 7
+    },
+    {
+      "fixture": "string_a",
+      "operation": "stringify",
+      "iterations": 2000000,
+      "warmup": 5000,
+      "repetitions": 7
+    },
+    {
+      "fixture": "empty_object",
+      "operation": "parse",
+      "iterations": 2000000,
+      "warmup": 5000,
+      "repetitions": 7
+    },
+    {
+      "fixture": "empty_object",
+      "operation": "stringify",
+      "iterations": 2000000,
+      "warmup": 5000,
+      "repetitions": 7
+    },
+    {
+      "fixture": "tiny_object",
+      "operation": "parse",
+      "iterations": 2000000,
+      "warmup": 5000,
+      "repetitions": 7
+    },
+    {
+      "fixture": "tiny_object",
+      "operation": "stringify",
+      "iterations": 2000000,
+      "warmup": 5000,
+      "repetitions": 7
+    },
+    {
+      "fixture": "small_record",
+      "operation": "parse",
+      "iterations": 1581369,
+      "warmup": 5000,
+      "repetitions": 7
+    },
+    {
+      "fixture": "small_record",
+      "operation": "stringify",
+      "iterations": 2000000,
+      "warmup": 5000,
+      "repetitions": 7
+    },
+    {
+      "fixture": "object_1k",
+      "operation": "parse",
+      "iterations": 1961848,
+      "warmup": 5000,
+      "repetitions": 7
+    },
+    {
+      "fixture": "object_1k",
+      "operation": "stringify",
+      "iterations": 1036867,
+      "warmup": 5000,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_16k",
+      "operation": "parse",
+      "iterations": 11284,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_16k",
+      "operation": "stringify",
+      "iterations": 12949,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_16k",
+      "operation": "sparse",
+      "iterations": 7868,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_16k",
+      "operation": "scan",
+      "iterations": 3761,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_16k",
+      "operation": "roundtrip",
+      "iterations": 7659,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_1m",
+      "operation": "parse",
+      "iterations": 170,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_1m",
+      "operation": "stringify",
+      "iterations": 229,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_1m",
+      "operation": "sparse",
+      "iterations": 161,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_1m",
+      "operation": "scan",
+      "iterations": 69,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_1m",
+      "operation": "roundtrip",
+      "iterations": 115,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_object_1m",
+      "operation": "parse",
+      "iterations": 81,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_object_1m",
+      "operation": "stringify",
+      "iterations": 229,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_8m",
+      "operation": "parse",
+      "iterations": 16,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_8m",
+      "operation": "stringify",
+      "iterations": 29,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_8m",
+      "operation": "sparse",
+      "iterations": 15,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_8m",
+      "operation": "scan",
+      "iterations": 8,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_8m",
+      "operation": "roundtrip",
+      "iterations": 11,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_object_8m",
+      "operation": "parse",
+      "iterations": 10,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_object_8m",
+      "operation": "stringify",
+      "iterations": 29,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_20m",
+      "operation": "parse",
+      "iterations": 4,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_20m",
+      "operation": "stringify",
+      "iterations": 12,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_20m",
+      "operation": "sparse",
+      "iterations": 4,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_20m",
+      "operation": "scan",
+      "iterations": 4,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_20m",
+      "operation": "roundtrip",
+      "iterations": 2,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_object_20m",
+      "operation": "parse",
+      "iterations": 4,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_object_20m",
+      "operation": "stringify",
+      "iterations": 12,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "numbers_1m",
+      "operation": "parse",
+      "iterations": 102,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "numbers_1m",
+      "operation": "stringify",
+      "iterations": 147,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "long_string_1m",
+      "operation": "parse",
+      "iterations": 2806,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "long_string_1m",
+      "operation": "stringify",
+      "iterations": 1922,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "escaped_1m",
+      "operation": "parse",
+      "iterations": 158,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "escaped_1m",
+      "operation": "stringify",
+      "iterations": 166,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "unicode_1m",
+      "operation": "parse",
+      "iterations": 2786,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "unicode_1m",
+      "operation": "stringify",
+      "iterations": 2475,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "wide_1m",
+      "operation": "parse",
+      "iterations": 64,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "wide_1m",
+      "operation": "stringify",
+      "iterations": 232,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "heterogeneous_1m",
+      "operation": "parse",
+      "iterations": 142,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "heterogeneous_1m",
+      "operation": "stringify",
+      "iterations": 218,
+      "warmup": 2,
+      "repetitions": 7
+    }
+  ]
+}

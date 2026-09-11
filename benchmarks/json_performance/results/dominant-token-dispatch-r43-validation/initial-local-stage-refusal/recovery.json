@@ -1,0 +1,5 @@
+{
+  "reason": "Stage expected the prior-round controller receipt filename. The complete canonical R43 validation actually exited zero and wrote candidate-validation-result.json. Stage now reads that actual receipt. No remote staging or benchmark ran in the refused attempt.",
+  "validation_receipt_sha256": "0e41a8d49ea6bd5e419a68eb0371ee9c14e6a486cab78083aeb2e2d649bd1313",
+  "validation_log_sha256": "bc75045d2a26708738f2912c616ffcc749f39ea88b8549408621e7bd450240cb"
+}

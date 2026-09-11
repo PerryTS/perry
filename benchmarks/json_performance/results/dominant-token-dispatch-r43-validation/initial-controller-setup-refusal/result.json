@@ -1,0 +1,5 @@
+{
+  "unit_controller_exit_code": 2,
+  "lint_controller_exit_code": 2,
+  "reason": "Both launch attempts occurred while the bootstrap tool session was still running, before it copied the controllers. No Cargo or lint gate executed. Bootstrap subsequently completed successfully; the actual validation starts after its terminal result."
+}

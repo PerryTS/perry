@@ -1,0 +1,19 @@
+{
+  "source_commit": "b9bfe3070f90f223e1d9d3526df54beb57308328",
+  "evidence_commit": "446ffd2a5e5947c35542399199c76cedda241e8e",
+  "note": "Historical R42 vectors from a separate earlier window; not R43 measurements.",
+  "files": [
+    {
+      "path": "regression-recheck-analysis.json",
+      "sha256": "3b8c285790bb366742e12ac9cea1c62a04d297a15d03f956e1d0e37022622ab8"
+    },
+    {
+      "path": "regression-cases.json",
+      "sha256": "1de44cff3fdc0dec230e778e534d551bf0b20ebc84eadd35113ed2374a0d911a"
+    },
+    {
+      "path": "build-provenance.json",
+      "sha256": "428bae469ddea963494383844813bc2ecb7a2fa99cd4f9da8337567bd38ebe04"
+    }
+  ]
+}

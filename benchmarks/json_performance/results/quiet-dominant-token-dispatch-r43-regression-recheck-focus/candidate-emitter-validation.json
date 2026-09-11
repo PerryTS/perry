@@ -1,0 +1,386 @@
+{
+  "arm": "candidate",
+  "source_commit": "9415ce52ec36e72d643a70b0833240b407ea31d1",
+  "files": {
+    "test-files/test_json_string_emitters.ts": "637762005ff59da90fab65d5ab0707de55d805efd72fb2ac00ec3c76f3125005",
+    "benchmarks/json_performance/.work/dominant-token-dispatch-r43/frozen-build/perry": "11430dea4ea8d091b5a2c110d1a31c58cbb777a66fcbbf938dc6110c5f3726d3",
+    "benchmarks/json_performance/.work/dominant-token-dispatch-r43/frozen-build/libperry_runtime.a": "8ee3250654040aab54d07ad934441be178e1637f4e75ec44fca3462167403006",
+    "benchmarks/json_performance/.work/dominant-token-dispatch-r43/frozen-build/libperry_stdlib.a": "0bb462ecef9facdc9892e162ceb4051f985ece8a15af3a25bbcfb3fa65473115"
+  },
+  "compiles": [
+    {
+      "command": [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/dominant-token-dispatch-r43/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/test-files/test_json_string_emitters.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/dominant-token-dispatch-r43/candidate-emitter-native"
+      ],
+      "env_overrides": {
+        "PERRY_RUNTIME_DIR": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/dominant-token-dispatch-r43/frozen-build",
+        "PERRY_RS4GC": "1",
+        "PERRY_GC_MOVING_LOOP_POLLS": "1"
+      },
+      "binary_sha256": "9044e759363f7b3bc89454e0b9872ad2b3fd70976680b848091b0f032d90c225"
+    },
+    {
+      "command": [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/dominant-token-dispatch-r43/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/test-files/test_json_string_emitters.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/dominant-token-dispatch-r43/candidate-emitter-shadow"
+      ],
+      "env_overrides": {
+        "PERRY_RUNTIME_DIR": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/dominant-token-dispatch-r43/frozen-build",
+        "PERRY_RS4GC": "0",
+        "PERRY_GC_MOVING_LOOP_POLLS": "1"
+      },
+      "binary_sha256": "a082301efd4451fbdf9117684cb014d05df20108ad19ae4db5af486db04606a3"
+    }
+  ],
+  "rows": [
+    {
+      "arm": "candidate",
+      "roots": "native",
+      "parser": "auto",
+      "mode": "normal",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0,
+      "env_overrides": {},
+      "stdout_sha256": "1cebc0c5eebe7a9323ad6152ec4cf652b90535477bb57b3078659b40c97376ad",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "arm": "candidate",
+      "roots": "native",
+      "parser": "auto",
+      "mode": "scheduled",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 480,
+      "moved_objects": 29097,
+      "env_overrides": {
+        "PERRY_GC_SCHEDULE_SEED": "10022",
+        "PERRY_GC_SCHEDULE_RATE": "0.1",
+        "PERRY_GC_SCHEDULE_ALLOC_KB": "0",
+        "PERRY_GC_PROTECT_FROMSPACE": "1",
+        "PERRY_GC_DIAG": "1"
+      },
+      "stdout_sha256": "1cebc0c5eebe7a9323ad6152ec4cf652b90535477bb57b3078659b40c97376ad",
+      "stderr_sha256": "3bcc957e02b40bb56ee951c8d0dafafb92ce0fa18c44f7b68c72bd0f179c31c9"
+    },
+    {
+      "arm": "candidate",
+      "roots": "native",
+      "parser": "auto",
+      "mode": "fullgc",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0,
+      "env_overrides": {
+        "PERRY_GEN_GC": "0"
+      },
+      "stdout_sha256": "1cebc0c5eebe7a9323ad6152ec4cf652b90535477bb57b3078659b40c97376ad",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "arm": "candidate",
+      "roots": "native",
+      "parser": "tape",
+      "mode": "normal",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0,
+      "env_overrides": {
+        "PERRY_JSON_TAPE": "1"
+      },
+      "stdout_sha256": "1cebc0c5eebe7a9323ad6152ec4cf652b90535477bb57b3078659b40c97376ad",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "arm": "candidate",
+      "roots": "native",
+      "parser": "tape",
+      "mode": "scheduled",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 480,
+      "moved_objects": 29529,
+      "env_overrides": {
+        "PERRY_JSON_TAPE": "1",
+        "PERRY_GC_SCHEDULE_SEED": "10022",
+        "PERRY_GC_SCHEDULE_RATE": "0.1",
+        "PERRY_GC_SCHEDULE_ALLOC_KB": "0",
+        "PERRY_GC_PROTECT_FROMSPACE": "1",
+        "PERRY_GC_DIAG": "1"
+      },
+      "stdout_sha256": "1cebc0c5eebe7a9323ad6152ec4cf652b90535477bb57b3078659b40c97376ad",
+      "stderr_sha256": "558862ac82ded226c47244f1767b55e62c6f5044dc3086b6e0aa119b50283184"
+    },
+    {
+      "arm": "candidate",
+      "roots": "native",
+      "parser": "tape",
+      "mode": "fullgc",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0,
+      "env_overrides": {
+        "PERRY_JSON_TAPE": "1",
+        "PERRY_GEN_GC": "0"
+      },
+      "stdout_sha256": "1cebc0c5eebe7a9323ad6152ec4cf652b90535477bb57b3078659b40c97376ad",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "arm": "candidate",
+      "roots": "native",
+      "parser": "direct",
+      "mode": "normal",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0,
+      "env_overrides": {
+        "PERRY_JSON_TAPE": "0"
+      },
+      "stdout_sha256": "1cebc0c5eebe7a9323ad6152ec4cf652b90535477bb57b3078659b40c97376ad",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "arm": "candidate",
+      "roots": "native",
+      "parser": "direct",
+      "mode": "scheduled",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 480,
+      "moved_objects": 29097,
+      "env_overrides": {
+        "PERRY_JSON_TAPE": "0",
+        "PERRY_GC_SCHEDULE_SEED": "10022",
+        "PERRY_GC_SCHEDULE_RATE": "0.1",
+        "PERRY_GC_SCHEDULE_ALLOC_KB": "0",
+        "PERRY_GC_PROTECT_FROMSPACE": "1",
+        "PERRY_GC_DIAG": "1"
+      },
+      "stdout_sha256": "1cebc0c5eebe7a9323ad6152ec4cf652b90535477bb57b3078659b40c97376ad",
+      "stderr_sha256": "1ef3ff93125846329eb620966c83d0fc0ab70c1c97f400dc766cbf5609181f70"
+    },
+    {
+      "arm": "candidate",
+      "roots": "native",
+      "parser": "direct",
+      "mode": "fullgc",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0,
+      "env_overrides": {
+        "PERRY_JSON_TAPE": "0",
+        "PERRY_GEN_GC": "0"
+      },
+      "stdout_sha256": "1cebc0c5eebe7a9323ad6152ec4cf652b90535477bb57b3078659b40c97376ad",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "arm": "candidate",
+      "roots": "native",
+      "parser": "auto",
+      "mode": "scheduled-depth64",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 455,
+      "moved_objects": 28541,
+      "env_overrides": {
+        "PERRY_GC_SCHEDULE_SEED": "10022",
+        "PERRY_GC_SCHEDULE_RATE": "0.1",
+        "PERRY_GC_SCHEDULE_ALLOC_KB": "0",
+        "PERRY_GC_PROTECT_FROMSPACE": "1",
+        "PERRY_GC_DIAG": "1",
+        "PERRY_GC_PROTECT_FROMSPACE_DEPTH": "64"
+      },
+      "stdout_sha256": "1cebc0c5eebe7a9323ad6152ec4cf652b90535477bb57b3078659b40c97376ad",
+      "stderr_sha256": "b16613324e6547d6c43ff0fc72d093db15e997733e6d442297ff2fe8fc9764f9"
+    },
+    {
+      "arm": "candidate",
+      "roots": "shadow",
+      "parser": "auto",
+      "mode": "normal",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0,
+      "env_overrides": {},
+      "stdout_sha256": "1cebc0c5eebe7a9323ad6152ec4cf652b90535477bb57b3078659b40c97376ad",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "arm": "candidate",
+      "roots": "shadow",
+      "parser": "auto",
+      "mode": "scheduled",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 480,
+      "moved_objects": 29097,
+      "env_overrides": {
+        "PERRY_GC_SCHEDULE_SEED": "10022",
+        "PERRY_GC_SCHEDULE_RATE": "0.1",
+        "PERRY_GC_SCHEDULE_ALLOC_KB": "0",
+        "PERRY_GC_PROTECT_FROMSPACE": "1",
+        "PERRY_GC_DIAG": "1"
+      },
+      "stdout_sha256": "1cebc0c5eebe7a9323ad6152ec4cf652b90535477bb57b3078659b40c97376ad",
+      "stderr_sha256": "c2e35e95d1098be0d816dd2d77362d80fd1aba448b5249ae8105ab7f57a41018"
+    },
+    {
+      "arm": "candidate",
+      "roots": "shadow",
+      "parser": "auto",
+      "mode": "fullgc",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0,
+      "env_overrides": {
+        "PERRY_GEN_GC": "0"
+      },
+      "stdout_sha256": "1cebc0c5eebe7a9323ad6152ec4cf652b90535477bb57b3078659b40c97376ad",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "arm": "candidate",
+      "roots": "shadow",
+      "parser": "tape",
+      "mode": "normal",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0,
+      "env_overrides": {
+        "PERRY_JSON_TAPE": "1"
+      },
+      "stdout_sha256": "1cebc0c5eebe7a9323ad6152ec4cf652b90535477bb57b3078659b40c97376ad",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "arm": "candidate",
+      "roots": "shadow",
+      "parser": "tape",
+      "mode": "scheduled",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 480,
+      "moved_objects": 29529,
+      "env_overrides": {
+        "PERRY_JSON_TAPE": "1",
+        "PERRY_GC_SCHEDULE_SEED": "10022",
+        "PERRY_GC_SCHEDULE_RATE": "0.1",
+        "PERRY_GC_SCHEDULE_ALLOC_KB": "0",
+        "PERRY_GC_PROTECT_FROMSPACE": "1",
+        "PERRY_GC_DIAG": "1"
+      },
+      "stdout_sha256": "1cebc0c5eebe7a9323ad6152ec4cf652b90535477bb57b3078659b40c97376ad",
+      "stderr_sha256": "7496f0846fc2865bfed8144e9ad3124a7b2b24782e42a08537e6098e6d85de7d"
+    },
+    {
+      "arm": "candidate",
+      "roots": "shadow",
+      "parser": "tape",
+      "mode": "fullgc",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0,
+      "env_overrides": {
+        "PERRY_JSON_TAPE": "1",
+        "PERRY_GEN_GC": "0"
+      },
+      "stdout_sha256": "1cebc0c5eebe7a9323ad6152ec4cf652b90535477bb57b3078659b40c97376ad",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "arm": "candidate",
+      "roots": "shadow",
+      "parser": "direct",
+      "mode": "normal",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0,
+      "env_overrides": {
+        "PERRY_JSON_TAPE": "0"
+      },
+      "stdout_sha256": "1cebc0c5eebe7a9323ad6152ec4cf652b90535477bb57b3078659b40c97376ad",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "arm": "candidate",
+      "roots": "shadow",
+      "parser": "direct",
+      "mode": "scheduled",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 480,
+      "moved_objects": 29097,
+      "env_overrides": {
+        "PERRY_JSON_TAPE": "0",
+        "PERRY_GC_SCHEDULE_SEED": "10022",
+        "PERRY_GC_SCHEDULE_RATE": "0.1",
+        "PERRY_GC_SCHEDULE_ALLOC_KB": "0",
+        "PERRY_GC_PROTECT_FROMSPACE": "1",
+        "PERRY_GC_DIAG": "1"
+      },
+      "stdout_sha256": "1cebc0c5eebe7a9323ad6152ec4cf652b90535477bb57b3078659b40c97376ad",
+      "stderr_sha256": "ee52c85716931f954b8a8fa82af935b013957ac82b07c129d0041753cb49d920"
+    },
+    {
+      "arm": "candidate",
+      "roots": "shadow",
+      "parser": "direct",
+      "mode": "fullgc",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0,
+      "env_overrides": {
+        "PERRY_JSON_TAPE": "0",
+        "PERRY_GEN_GC": "0"
+      },
+      "stdout_sha256": "1cebc0c5eebe7a9323ad6152ec4cf652b90535477bb57b3078659b40c97376ad",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "arm": "candidate",
+      "roots": "shadow",
+      "parser": "auto",
+      "mode": "scheduled-depth64",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 455,
+      "moved_objects": 28541,
+      "env_overrides": {
+        "PERRY_GC_SCHEDULE_SEED": "10022",
+        "PERRY_GC_SCHEDULE_RATE": "0.1",
+        "PERRY_GC_SCHEDULE_ALLOC_KB": "0",
+        "PERRY_GC_PROTECT_FROMSPACE": "1",
+        "PERRY_GC_DIAG": "1",
+        "PERRY_GC_PROTECT_FROMSPACE_DEPTH": "64"
+      },
+      "stdout_sha256": "1cebc0c5eebe7a9323ad6152ec4cf652b90535477bb57b3078659b40c97376ad",
+      "stderr_sha256": "13cbb7c4a65cc564df5e2f97b6530e7255b7c1618f8bb193f498b385f5ab05c0"
+    }
+  ]
+}

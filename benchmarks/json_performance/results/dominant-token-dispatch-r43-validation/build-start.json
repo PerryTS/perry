@@ -1,0 +1,20 @@
+{
+  "source_commit": "9415ce52ec36e72d643a70b0833240b407ea31d1",
+  "started_unix": 1789151086.496027,
+  "command": [
+    "cargo",
+    "build",
+    "--release",
+    "-p",
+    "perry",
+    "-p",
+    "perry-runtime-static",
+    "-p",
+    "perry-stdlib-static"
+  ],
+  "mtime_only_refresh": [
+    "crates/perry/src/main.rs",
+    "crates/perry-runtime-static/src/lib.rs",
+    "crates/perry-stdlib-static/src/lib.rs"
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "checker_source_commit": "e69d1292110cf9abee24f8690c584652805a4167",
+  "checker_sha256": "067c5f538f7847b257212a6dc1eb0114e474b3dc7ff95c7930deedd22a1ba29b",
+  "source_review": [
+    "Standalone runtime-source audits are selected only by --audit-* flags at gc_root_dominance_check.py:5660; none occur in these five recorded commands.",
+    "Normal corpus modes parse explicit LLVM files and derive poll reachability from that IR. No self-test or external allowlist is requested.",
+    "The entire scripts tree, rewrite passes, nine fixture source hashes, ten original log hashes, module counts and all normalized LLVM bytes are required unchanged before verdict reuse.",
+    "Flags, minimum statepoint/relocation counts, and zero finding budgets remain in the exact prior command receipts; native findings are not suppressed."
+  ],
+  "note": "This is review of checker inputs, not a fresh checker execution or a runtime GC proof. Fresh candidate moving/protected tests remain required."
+}

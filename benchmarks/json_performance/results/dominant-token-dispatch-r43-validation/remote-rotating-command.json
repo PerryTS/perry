@@ -1,0 +1,23 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/dominant-token-dispatch-r43/run-rotating.py",
+  "--worker",
+  ".work/dominant-token-dispatch-r43/candidate-rotating-worker",
+  "--baseline-worker",
+  ".work/dominant-token-dispatch-r43/main-rotating-worker",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--filter",
+  "unicode_1m,long_string_1m,escaped_1m,small_record,records_array_1m",
+  "--repeat",
+  "7",
+  "--source-commit",
+  "9415ce52ec36e72d643a70b0833240b407ea31d1",
+  "--results-dir",
+  "results/quiet-dominant-token-dispatch-r43-rotating"
+]
