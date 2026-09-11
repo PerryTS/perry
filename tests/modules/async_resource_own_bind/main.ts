@@ -53,7 +53,7 @@ function ownOverrides(fn: any) {
   }
   check(calls === 4, 'all own implementations called');
   for (const key of ['bind', 'call', 'apply', 'toString']) {
-    for (const value of [undefined, null, 123]) {
+    for (const value of [undefined, null, 123, NaN, true, 'text', {}, []]) {
       fn[key] = value;
       let threw = false;
       try { fn[key](41); } catch (error) { threw = error instanceof TypeError; }
@@ -75,6 +75,14 @@ function ownOverrides(fn: any) {
   });
   check(fn.bind(41) === 42 && gets === 1, 'own accessor once');
   delete fn.bind;
+  const callableOwner: any = function() { throw new Error('original callable owner'); };
+  callableOwner.bind = new Proxy(function(this: any, n: number) {
+    check(this === callableOwner, 'callable proxy receiver');
+    return n + 1;
+  }, {});
+  check(callableOwner.bind(41) === 42, 'own callable proxy');
+  callableOwner.bind = Function.prototype;
+  check(callableOwner.bind(41) === undefined, 'Function.prototype itself is callable');
 }
 ownOverrides(function() { throw new Error('original must not run'); });
 
