@@ -112,7 +112,11 @@ impl<const SOURCE_LENGTH: bool> SpecializedDirectParser<'_, SOURCE_LENGTH> {
                     const LOW: u64 = 0x0101_0101_0101_0101;
                     const HIGH: u64 = 0x8080_8080_8080_8080;
                     let raw = unsafe {
-                        self.input.as_ptr().add(pos - 1).cast::<u64>().read_unaligned()
+                        self.input
+                            .as_ptr()
+                            .add(pos - 1)
+                            .cast::<u64>()
+                            .read_unaligned()
                     };
                     let word = u64::from_le(raw);
                     let quotes = word ^ 0x2222_2222_2222_2222;
