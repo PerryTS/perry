@@ -1,19 +1,19 @@
-//! Allocation-free reads of an unchanged lazy JSON array.
+//! Allocation-free reads of existing lazy JSON array elements.
 
 use super::{JSValue, LazyArrayHeader};
 
 /// Return a cached element, or materialize its subtree on first access.
 ///
 /// The caller must supply a live lazy header. This fast path cannot allocate,
-/// invoke user code or collect: it only loads the current cache slot. Rooting
-/// is needed when constructing a value, not when returning an existing one.
+/// invoke user code or collect: it resolves growth and loads an existing slot.
+/// Cold reads, holes and descriptors keep the rooted general accessor.
 #[inline]
 pub unsafe fn lazy_get(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
     if hdr.is_null() {
         return JSValue::undefined();
     }
     // Mutation/full materialization takes precedence over both the sparse
-    // cache and its length. The rooted accessor handles forwarding/getters.
+    // cache and its length.
     if (*hdr).materialized.is_null() {
         if i >= (*hdr).cached_length {
             return JSValue::undefined();
@@ -25,6 +25,27 @@ pub unsafe fn lazy_get(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
             && *bitmap.add(i as usize / 64) & (1u64 << (i % 64)) != 0
         {
             return *cache.add(i as usize);
+        }
+    } else {
+        // This edge always names an ordinary array. Resolving its growth
+        // forwarding cannot allocate or invoke user code; the fresh pointer
+        // also satisfies array_object_flags_resolved's no-safepoint contract.
+        let arr = super::resolve_materialized_array(hdr);
+        if !arr.is_null()
+            && crate::array::array_object_flags_resolved(arr)
+                & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS
+                == 0
+            && i < (*arr).length
+            && i < (*arr).capacity
+        {
+            let elements = (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>())
+                as *const u64;
+            let bits = *elements.add(i as usize);
+            // Holes must still consult prototypes; sparse and out-of-bounds
+            // reads can do the same. Those paths may invoke a getter.
+            if bits != crate::value::TAG_HOLE {
+                return JSValue::from_bits(bits);
+            }
         }
     }
     super::lazy_get_rooted(hdr, i)
@@ -107,13 +128,55 @@ mod tests {
             let arr = force_materialize_lazy(hdr);
             crate::array::js_array_set(arr, 1, JSValue::number(99.0));
             assert_eq!(lazy_get(hdr, 1).as_number(), 99.0);
-            assert_eq!(ROOTED_READS.load(Ordering::Relaxed), 2);
+            assert_eq!(ROOTED_READS.load(Ordering::Relaxed), 1);
             let grown =
                 crate::array::js_array_set_jsvalue_extend(arr, 7, JSValue::number(77.0).bits());
             assert!(!grown.is_null());
             assert_eq!(lazy_get(hdr, 7).as_number(), 77.0);
+            assert_eq!(ROOTED_READS.load(Ordering::Relaxed), 1);
             assert!(lazy_get(hdr, 6).is_undefined());
-            assert_eq!(ROOTED_READS.load(Ordering::Relaxed), 4);
+            assert_eq!(ROOTED_READS.load(Ordering::Relaxed), 2);
+        }
+    }
+
+    extern "C" fn descriptor_getter(_: *const crate::closure::ClosureHeader) -> f64 {
+        61.0
+    }
+
+    #[test]
+    fn materialized_descriptor_invokes_getter_through_rooted_fallback() {
+        let _hook = HookGuard::install_counting_hook();
+        unsafe {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let hdr = scope.root_raw_mut_ptr(fixture(b"[10,20,30]"));
+            let arr = scope.root_raw_mut_ptr(force_materialize_lazy(hdr.get_raw_mut_ptr()));
+            let getter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+                descriptor_getter as *const u8,
+                0,
+            ));
+            let desc = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+            let key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
+            crate::object::js_object_set_field_by_name(
+                desc.get_raw_mut_ptr(),
+                key,
+                crate::value::js_nanbox_pointer(getter.get_raw_mut_ptr::<u8>() as i64),
+            );
+            let key = crate::string::js_string_from_bytes(b"1".as_ptr(), 1);
+            crate::object::js_object_define_property(
+                crate::value::js_nanbox_pointer(arr.get_raw_mut_ptr::<u8>() as i64),
+                f64::from_bits(JSValue::string_ptr(key).bits()),
+                crate::value::js_nanbox_pointer(desc.get_raw_mut_ptr::<u8>() as i64),
+            );
+            let resolved = resolve_materialized_array(hdr.get_raw_mut_ptr());
+            assert_ne!(
+                crate::array::array_object_flags_resolved(resolved)
+                    & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS,
+                0,
+                "the real defineProperty path must install a descriptor"
+            );
+            assert_eq!(ROOTED_READS.load(Ordering::Relaxed), 0);
+            assert_eq!(lazy_get(hdr.get_raw_mut_ptr(), 1).as_number(), 61.0);
+            assert_eq!(ROOTED_READS.load(Ordering::Relaxed), 1);
         }
     }
 }

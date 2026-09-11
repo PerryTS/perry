@@ -510,6 +510,11 @@ fn test_json_tape_force_materialize_sparse_cache_handles_survive_copied_minor_gc
             cached_handle.get_nanbox_u64(),
             "sparse cache hit should preserve element identity after copied-minor GC"
         );
+        assert_eq!(
+            crate::json_tape::lazy_get(hdr_after, 2).bits(),
+            cached_handle.get_nanbox_u64(),
+            "the materialized fast read must use the array's moved home"
+        );
     }
 
     let arr_handle = scope.root_nanbox_u64(ptr_bits(arr as usize));
