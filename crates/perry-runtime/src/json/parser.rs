@@ -1076,8 +1076,16 @@ impl<'a> DirectParser<'a> {
                         // The object-local content index already proves this
                         // key is new. Avoid duplicating every wide key in the
                         // global interning table only to clear it at return.
-                        let key_ptr =
-                            crate::string::string_from_json_bytes(&mut self.batch, key_bytes);
+                        let key_ptr = match key {
+                            ParsedStr::Borrowed(_) => {
+                                crate::string::string_from_json_bytes(&mut self.batch, key_bytes)
+                            }
+                            // Decoded keys may contain quotes/control bytes;
+                            // syntax cannot certify them as escape-free.
+                            ParsedStr::Owned(_) => {
+                                crate::string::js_string_from_builder_bytes(key_bytes)
+                            }
+                        };
                         index.insert_hash(hash, keys.len());
                         keys.push(key_ptr);
                         values.push(value);

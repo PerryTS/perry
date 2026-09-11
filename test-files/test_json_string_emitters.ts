@@ -47,3 +47,16 @@ for (let i = 0; i < rawValues.length; i++) {
     console.log('raw-callback', i, JSON.stringify(parsed, identity));
     console.log('raw-callback-pretty', i, JSON.stringify(parsed, identity, 2));
 }
+
+// Decoded keys past the wide-object content-index boundary remain escaped.
+let wideText = '{';
+for (let i = 0; i < 140; i++) {
+    if (i > 0) wideText += ',';
+    wideText += JSON.stringify('key-' + i + (i >= 128 ? '\n"' : '')) + ':' + i;
+}
+wideText += '}';
+const wideParsed: any = JSON.parse(wideText);
+const wideKeys = Object.keys(wideParsed);
+console.log(JSON.stringify(wideKeys));
+console.log(JSON.stringify(wideKeys, null, 2));
+console.log(JSON.stringify(wideKeys, identity));

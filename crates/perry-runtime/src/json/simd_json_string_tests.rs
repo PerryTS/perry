@@ -83,3 +83,24 @@ fn json_surrogate_scan_stops_at_guard_page() {
         assert_eq!(libc::munmap(allocation, page * 2), 0);
     }
 }
+
+#[test]
+fn json_surrogate_scan_routes_tokens_to_the_normalizing_builder() {
+    use crate::json::parser::{DirectParser, ParsedStr};
+    for prefix in [0, 13, 14, 15, 16, 61, 62, 63, 64, 127, 128, 255, 256] {
+        for (payload, owned) in [
+            (&[0xed, 0xa0, 0x80][..], true),
+            (&[0xed, 0xb0, 0x80][..], true),
+            ("한🙂".as_bytes(), false),
+        ] {
+            let mut token = vec![b'"'];
+            token.extend(std::iter::repeat_n(b'a', prefix));
+            token.extend_from_slice(payload);
+            token.push(b'"');
+            let mut parser = DirectParser::new(&token);
+            let parsed = parser.parse_string_bytes().expect("valid JSON token");
+            assert_eq!(matches!(parsed, ParsedStr::Owned(_)), owned);
+            assert_eq!(parsed.as_bytes(), &token[1..token.len() - 1]);
+        }
+    }
+}
