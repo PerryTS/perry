@@ -23,6 +23,7 @@ mod side_table_scanners;
 mod sort_collection;
 mod string_normalize_form;
 mod string_slice;
+mod string_trim;
 mod symbol_description;
 mod thenable_assimilation;
 mod transient_handles;

@@ -1,0 +1,386 @@
+{
+  "label": "baseline",
+  "sha": "603b074ace01464bc66fc07cc8d532f26ccf5a0f",
+  "node": "v26.5.1",
+  "host": "macOS-26.5-arm64-arm-64bit-Mach-O",
+  "load_start": [
+    66.587890625,
+    63.22119140625,
+    58.33251953125
+  ],
+  "benchmarks": {
+    "string-trim-ascii": {
+      "source_sha256": "72458cfb33c59bb3899a40effa9dc185b17da92eb61b71d3bc41bfa11550cee6",
+      "binary_sha256": "dd7ce5e0a69068802baa66866e36a2a9f81e73690f5718b72cfc529eeb4ebb5a",
+      "node": [
+        {
+          "name": "string-trim-ascii",
+          "category": "strings",
+          "n": 100,
+          "ms_per_run": 0.01468867914831128,
+          "runs": 9558,
+          "checksum": 3299494000
+        },
+        {
+          "name": "string-trim-ascii",
+          "category": "strings",
+          "n": 1000,
+          "ms_per_run": 0.013382818729096843,
+          "runs": 10481,
+          "checksum": 3920510048
+        },
+        {
+          "name": "string-trim-ascii",
+          "category": "strings",
+          "n": 10000,
+          "ms_per_run": 0.014669740469208624,
+          "runs": 9290,
+          "checksum": 14059261744
+        },
+        {
+          "name": "string-trim-ascii",
+          "category": "strings",
+          "n": 100000,
+          "ms_per_run": 0.014565685589519916,
+          "runs": 9651,
+          "checksum": 10385466752
+        },
+        {
+          "name": "string-trim-ascii",
+          "category": "strings",
+          "n": 1000000,
+          "ms_per_run": 0.014981558801498344,
+          "runs": 9379,
+          "checksum": 4515886736
+        }
+      ],
+      "perry": [
+        {
+          "name": "string-trim-ascii",
+          "category": "strings",
+          "n": 100,
+          "ms_per_run": 0.028459995732574545,
+          "runs": 4933,
+          "checksum": 3299494000
+        },
+        {
+          "name": "string-trim-ascii",
+          "category": "strings",
+          "n": 1000,
+          "ms_per_run": 0.1734845689655217,
+          "runs": 809,
+          "checksum": 3920510048
+        },
+        {
+          "name": "string-trim-ascii",
+          "category": "strings",
+          "n": 10000,
+          "ms_per_run": 1.6863922499999877,
+          "runs": 84,
+          "checksum": 14059261744
+        },
+        {
+          "name": "string-trim-ascii",
+          "category": "strings",
+          "n": 100000,
+          "ms_per_run": 16.730479000000017,
+          "runs": 14,
+          "checksum": 10385466752
+        },
+        {
+          "name": "string-trim-ascii",
+          "category": "strings",
+          "n": 1000000,
+          "ms_per_run": 171.5869580000001,
+          "runs": 7,
+          "checksum": 4515886736
+        }
+      ],
+      "slopes": {
+        "node": 0.005393185322456966,
+        "perry": 0.9544746412234775
+      }
+    },
+    "string-trim-unicode": {
+      "source_sha256": "1affa3053211a1eb0e73c6242f6cf192356d60269729f88dcee32abecea76b2b",
+      "binary_sha256": "da95c3f5e59a558959c2462533dd7f41a13d8251b8e28b98bfa5b6e020883dc6",
+      "node": [
+        {
+          "name": "string-trim-unicode",
+          "category": "strings",
+          "n": 100,
+          "ms_per_run": 0.014746795873249965,
+          "runs": 9419,
+          "checksum": 15682954032
+        },
+        {
+          "name": "string-trim-unicode",
+          "category": "strings",
+          "n": 1000,
+          "ms_per_run": 0.013858312326869512,
+          "runs": 10122,
+          "checksum": 14356907120
+        },
+        {
+          "name": "string-trim-unicode",
+          "category": "strings",
+          "n": 10000,
+          "ms_per_run": 0.013892763888888462,
+          "runs": 10023,
+          "checksum": 7400533984
+        },
+        {
+          "name": "string-trim-unicode",
+          "category": "strings",
+          "n": 100000,
+          "ms_per_run": 0.014943374906646977,
+          "runs": 9392,
+          "checksum": 11699376128
+        },
+        {
+          "name": "string-trim-unicode",
+          "category": "strings",
+          "n": 1000000,
+          "ms_per_run": 0.014705957352940276,
+          "runs": 9468,
+          "checksum": 8362401136
+        }
+      ],
+      "perry": [
+        {
+          "name": "string-trim-unicode",
+          "category": "strings",
+          "n": 100,
+          "ms_per_run": 0.23614772093023462,
+          "runs": 582,
+          "checksum": 15682954032
+        },
+        {
+          "name": "string-trim-unicode",
+          "category": "strings",
+          "n": 1000,
+          "ms_per_run": 2.28079144444444,
+          "runs": 63,
+          "checksum": 14356907120
+        },
+        {
+          "name": "string-trim-unicode",
+          "category": "strings",
+          "n": 10000,
+          "ms_per_run": 22.48950000000002,
+          "runs": 7,
+          "checksum": 7400533984
+        },
+        {
+          "name": "string-trim-unicode",
+          "category": "strings",
+          "n": 100000,
+          "ms_per_run": 206.24987499999975,
+          "runs": 7,
+          "checksum": 11699376128
+        },
+        {
+          "name": "string-trim-unicode",
+          "category": "strings",
+          "n": 1000000,
+          "ms_per_run": 3910.500792000006,
+          "runs": 7,
+          "checksum": 8362401136
+        }
+      ],
+      "slopes": {
+        "node": 0.003032961441315215,
+        "perry": 1.0394405358086467
+      }
+    },
+    "unicode-trim-only": {
+      "source_sha256": "9e6f7211b748d602dd99e4ef025b5c1fb654899597fa0d923d0d4425e10091ae",
+      "binary_sha256": "8902a71e4a79ca117730b054d8b1bea6830b7107548bd5bb5a8046fe511f4f8a",
+      "node": [
+        {
+          "name": "unicode-trim-only",
+          "category": "strings",
+          "n": 100,
+          "ms_per_run": 0.0005169916446432292,
+          "runs": 365273,
+          "checksum": 8000
+        },
+        {
+          "name": "unicode-trim-only",
+          "category": "strings",
+          "n": 1000,
+          "ms_per_run": 0.0007543998648851869,
+          "runs": 232032,
+          "checksum": 80000
+        },
+        {
+          "name": "unicode-trim-only",
+          "category": "strings",
+          "n": 10000,
+          "ms_per_run": 0.0004525200278496948,
+          "runs": 321680,
+          "checksum": 800000
+        },
+        {
+          "name": "unicode-trim-only",
+          "category": "strings",
+          "n": 100000,
+          "ms_per_run": 0.00044860763580129704,
+          "runs": 357182,
+          "checksum": 8000000
+        },
+        {
+          "name": "unicode-trim-only",
+          "category": "strings",
+          "n": 1000000,
+          "ms_per_run": 0.0007148840498333171,
+          "runs": 256712,
+          "checksum": 80000000
+        }
+      ],
+      "perry": [
+        {
+          "name": "unicode-trim-only",
+          "category": "strings",
+          "n": 100,
+          "ms_per_run": 0.0504350403022664,
+          "runs": 3137,
+          "checksum": 8000
+        },
+        {
+          "name": "unicode-trim-only",
+          "category": "strings",
+          "n": 1000,
+          "ms_per_run": 0.4128735185185161,
+          "runs": 270,
+          "checksum": 80000
+        },
+        {
+          "name": "unicode-trim-only",
+          "category": "strings",
+          "n": 10000,
+          "ms_per_run": 5.184155999999987,
+          "runs": 32,
+          "checksum": 800000
+        },
+        {
+          "name": "unicode-trim-only",
+          "category": "strings",
+          "n": 100000,
+          "ms_per_run": 52.68041600000004,
+          "runs": 7,
+          "checksum": 8000000
+        },
+        {
+          "name": "unicode-trim-only",
+          "category": "strings",
+          "n": 1000000,
+          "ms_per_run": 945.0563330000004,
+          "runs": 7,
+          "checksum": 80000000
+        }
+      ],
+      "slopes": {
+        "node": 0.00557692257201056,
+        "perry": 1.0651282816503316
+      }
+    },
+    "unicode-checksum-only": {
+      "source_sha256": "708a6e5cc18d2e66740a2f2587b093fa2ce0d092fc87cf6631334c1e67ada24d",
+      "binary_sha256": "ee7c9f34552c5a4046ec123328dc1b34a3e59321f705efb0d726e59e7a1de784",
+      "node": [
+        {
+          "name": "unicode-checksum-only",
+          "category": "strings",
+          "n": 100,
+          "ms_per_run": 0.01592436783439415,
+          "runs": 8833,
+          "checksum": 15682954032
+        },
+        {
+          "name": "unicode-checksum-only",
+          "category": "strings",
+          "n": 1000,
+          "ms_per_run": 0.014281409707351764,
+          "runs": 9480,
+          "checksum": 14356907120
+        },
+        {
+          "name": "unicode-checksum-only",
+          "category": "strings",
+          "n": 10000,
+          "ms_per_run": 0.013918752261656193,
+          "runs": 9958,
+          "checksum": 7400533984
+        },
+        {
+          "name": "unicode-checksum-only",
+          "category": "strings",
+          "n": 100000,
+          "ms_per_run": 0.014644904831624376,
+          "runs": 9527,
+          "checksum": 11699376128
+        },
+        {
+          "name": "unicode-checksum-only",
+          "category": "strings",
+          "n": 1000000,
+          "ms_per_run": 0.014655506959707137,
+          "runs": 9522,
+          "checksum": 8362401136
+        }
+      ],
+      "perry": [
+        {
+          "name": "unicode-checksum-only",
+          "category": "strings",
+          "n": 100,
+          "ms_per_run": 0.20777630927835022,
+          "runs": 672,
+          "checksum": 15682954032
+        },
+        {
+          "name": "unicode-checksum-only",
+          "category": "strings",
+          "n": 1000,
+          "ms_per_run": 1.9776517272727367,
+          "runs": 76,
+          "checksum": 14356907120
+        },
+        {
+          "name": "unicode-checksum-only",
+          "category": "strings",
+          "n": 10000,
+          "ms_per_run": 19.563499500000006,
+          "runs": 13,
+          "checksum": 7400533984
+        },
+        {
+          "name": "unicode-checksum-only",
+          "category": "strings",
+          "n": 100000,
+          "ms_per_run": 176.89862500000004,
+          "runs": 7,
+          "checksum": 11699376128
+        },
+        {
+          "name": "unicode-checksum-only",
+          "category": "strings",
+          "n": 1000000,
+          "ms_per_run": 1866.7699169999978,
+          "runs": 7,
+          "checksum": 8362401136
+        }
+      ],
+      "slopes": {
+        "node": -0.006120723399870104,
+        "perry": 0.9858564176241698
+      }
+    }
+  },
+  "load_end": [
+    31.310546875,
+    52.17822265625,
+    54.625
+  ]
+}

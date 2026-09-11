@@ -1,0 +1,3 @@
+63cb83cf87044443184687ac5eee3376a21dd46c7a1cbf3074789926f99d7b36  target/release/perry
+3c0467d1d7ebcd8bd53e98c43e027ff7e93b306024f68b9ba453f383fb8a6fb4  target/release/libperry_runtime.a
+a13fd68f3b01f814c7fcd031f57b34e978bc00612317f3c20bef68928f7067af  target/release/libperry_stdlib.a

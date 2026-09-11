@@ -1,0 +1,484 @@
+{
+  "label": "fixed",
+  "sha": "603b074ace01464bc66fc07cc8d532f26ccf5a0f",
+  "diff_sha256": "2c207799927f17bacfd7c6aa7ffb8107eef00642ded3a006f1bed7a5838cbda1",
+  "node": "v26.5.1",
+  "host": "macOS-26.5-arm64-arm-64bit-Mach-O",
+  "load_start": [
+    64.9306640625,
+    64.12451171875,
+    62.9033203125
+  ],
+  "artifacts": {
+    "perry": "fa3859c877cdd3a43ee4c15af6c83c3637b3c93440031890f91f3142e6f022e8",
+    "libperry_runtime.a": "d1c6ddd96e83627152940d1b12a48f29e31878ee5955e8233e00612355ca00fd",
+    "libperry_stdlib.a": "29a8e7923345e959ec28206013c83f6d4ef7a780d9bd86cebc9ba9599cfd3c36"
+  },
+  "benchmarks": {
+    "string-trim-ascii": {
+      "source_sha256": "72458cfb33c59bb3899a40effa9dc185b17da92eb61b71d3bc41bfa11550cee6",
+      "binary_sha256": "2b29f95b9bba9af60d33d84e45b36d0ff06ba82a63c520d099d313a0a456e76a",
+      "node": [
+        {
+          "name": "string-trim-ascii",
+          "category": "strings",
+          "n": 100,
+          "ms_per_run": 0.03492472474513219,
+          "runs": 4299,
+          "checksum": 3299494000
+        },
+        {
+          "name": "string-trim-ascii",
+          "category": "strings",
+          "n": 1000,
+          "ms_per_run": 0.032737512274959794,
+          "runs": 4853,
+          "checksum": 3920510048
+        },
+        {
+          "name": "string-trim-ascii",
+          "category": "strings",
+          "n": 10000,
+          "ms_per_run": 0.028253940677965512,
+          "runs": 4696,
+          "checksum": 14059261744
+        },
+        {
+          "name": "string-trim-ascii",
+          "category": "strings",
+          "n": 100000,
+          "ms_per_run": 0.04902156862745132,
+          "runs": 3644,
+          "checksum": 10385466752
+        },
+        {
+          "name": "string-trim-ascii",
+          "category": "strings",
+          "n": 1000000,
+          "ms_per_run": 0.043383222780571246,
+          "runs": 3115,
+          "checksum": 4515886736
+        }
+      ],
+      "perry": [
+        {
+          "name": "string-trim-ascii",
+          "category": "strings",
+          "n": 100,
+          "ms_per_run": 0.03473420486111061,
+          "runs": 3582,
+          "checksum": 3299494000
+        },
+        {
+          "name": "string-trim-ascii",
+          "category": "strings",
+          "n": 1000,
+          "ms_per_run": 0.034824278884462254,
+          "runs": 7007,
+          "checksum": 3920510048
+        },
+        {
+          "name": "string-trim-ascii",
+          "category": "strings",
+          "n": 10000,
+          "ms_per_run": 0.03509597719298364,
+          "runs": 4254,
+          "checksum": 14059261744
+        },
+        {
+          "name": "string-trim-ascii",
+          "category": "strings",
+          "n": 100000,
+          "ms_per_run": 0.028339707428572766,
+          "runs": 5849,
+          "checksum": 10385466752
+        },
+        {
+          "name": "string-trim-ascii",
+          "category": "strings",
+          "n": 1000000,
+          "ms_per_run": 0.03742374234234248,
+          "runs": 3949,
+          "checksum": 4515886736
+        }
+      ],
+      "slopes": {
+        "node": 0.036371916785269,
+        "perry": -0.0024707063737694542
+      }
+    },
+    "string-trim-unicode": {
+      "source_sha256": "1affa3053211a1eb0e73c6242f6cf192356d60269729f88dcee32abecea76b2b",
+      "binary_sha256": "4b8d8cb60ee518fc5ac53fed9b067f227f637626c6138729cfc2de00d20bee5a",
+      "node": [
+        {
+          "name": "string-trim-unicode",
+          "category": "strings",
+          "n": 100,
+          "ms_per_run": 0.06769777000000052,
+          "runs": 2475,
+          "checksum": 15682954032
+        },
+        {
+          "name": "string-trim-unicode",
+          "category": "strings",
+          "n": 1000,
+          "ms_per_run": 0.14969311724138262,
+          "runs": 2112,
+          "checksum": 14356907120
+        },
+        {
+          "name": "string-trim-unicode",
+          "category": "strings",
+          "n": 10000,
+          "ms_per_run": 0.1711846940298514,
+          "runs": 1885,
+          "checksum": 7400533984
+        },
+        {
+          "name": "string-trim-unicode",
+          "category": "strings",
+          "n": 100000,
+          "ms_per_run": 0.08155791760299791,
+          "runs": 3452,
+          "checksum": 11699376128
+        },
+        {
+          "name": "string-trim-unicode",
+          "category": "strings",
+          "n": 1000000,
+          "ms_per_run": 0.13161943949044536,
+          "runs": 2213,
+          "checksum": 8362401136
+        }
+      ],
+      "perry": [
+        {
+          "name": "string-trim-unicode",
+          "category": "strings",
+          "n": 100,
+          "ms_per_run": 0.5376445306122485,
+          "runs": 277,
+          "checksum": 15682954032
+        },
+        {
+          "name": "string-trim-unicode",
+          "category": "strings",
+          "n": 1000,
+          "ms_per_run": 7.471166666666666,
+          "runs": 36,
+          "checksum": 14356907120
+        },
+        {
+          "name": "string-trim-unicode",
+          "category": "strings",
+          "n": 10000,
+          "ms_per_run": 87.80391700000001,
+          "runs": 7,
+          "checksum": 7400533984
+        },
+        {
+          "name": "string-trim-unicode",
+          "category": "strings",
+          "n": 100000,
+          "ms_per_run": 1096.1205419999987,
+          "runs": 7,
+          "checksum": 11699376128
+        },
+        {
+          "name": "string-trim-unicode",
+          "category": "strings",
+          "n": 1000000,
+          "ms_per_run": 2035.4718329999996,
+          "runs": 7,
+          "checksum": 8362401136
+        }
+      ],
+      "slopes": {
+        "node": 0.03137556441281421,
+        "perry": 0.9322809621669077
+      }
+    },
+    "unicode-trim-only": {
+      "source_sha256": "9e6f7211b748d602dd99e4ef025b5c1fb654899597fa0d923d0d4425e10091ae",
+      "binary_sha256": "f75f7ebf254e77eec5782d9904b1fadc82b60d3e05d398eebda87c8279d3a40e",
+      "node": [
+        {
+          "name": "unicode-trim-only",
+          "category": "strings",
+          "n": 100,
+          "ms_per_run": 0.00022296470129290678,
+          "runs": 621794,
+          "checksum": 8000
+        },
+        {
+          "name": "unicode-trim-only",
+          "category": "strings",
+          "n": 1000,
+          "ms_per_run": 0.0003132938199377659,
+          "runs": 448994,
+          "checksum": 80000
+        },
+        {
+          "name": "unicode-trim-only",
+          "category": "strings",
+          "n": 10000,
+          "ms_per_run": 0.00022532224375300386,
+          "runs": 600544,
+          "checksum": 800000
+        },
+        {
+          "name": "unicode-trim-only",
+          "category": "strings",
+          "n": 100000,
+          "ms_per_run": 0.0002287298604757235,
+          "runs": 623859,
+          "checksum": 8000000
+        },
+        {
+          "name": "unicode-trim-only",
+          "category": "strings",
+          "n": 1000000,
+          "ms_per_run": 0.0003369410912765759,
+          "runs": 431440,
+          "checksum": 80000000
+        }
+      ],
+      "perry": [
+        {
+          "name": "unicode-trim-only",
+          "category": "strings",
+          "n": 100,
+          "ms_per_run": 0.00014562546691038712,
+          "runs": 922233,
+          "checksum": 8000
+        },
+        {
+          "name": "unicode-trim-only",
+          "category": "strings",
+          "n": 1000,
+          "ms_per_run": 0.00020745437571975968,
+          "runs": 713997,
+          "checksum": 80000
+        },
+        {
+          "name": "unicode-trim-only",
+          "category": "strings",
+          "n": 10000,
+          "ms_per_run": 0.00013396866438689306,
+          "runs": 1043234,
+          "checksum": 800000
+        },
+        {
+          "name": "unicode-trim-only",
+          "category": "strings",
+          "n": 100000,
+          "ms_per_run": 0.00012135694912168917,
+          "runs": 1029813,
+          "checksum": 8000000
+        },
+        {
+          "name": "unicode-trim-only",
+          "category": "strings",
+          "n": 1000000,
+          "ms_per_run": 0.0001427140879542425,
+          "runs": 940201,
+          "checksum": 80000000
+        }
+      ],
+      "slopes": {
+        "node": 0.022200676712678082,
+        "perry": -0.025039891855106047
+      }
+    },
+    "unicode-checksum-only": {
+      "source_sha256": "708a6e5cc18d2e66740a2f2587b093fa2ce0d092fc87cf6631334c1e67ada24d",
+      "binary_sha256": "b0f1f4b783e67c3c792e1a1ed6940d28a7d00b5a050a58063272f99c0fd10663",
+      "node": [
+        {
+          "name": "unicode-checksum-only",
+          "category": "strings",
+          "n": 100,
+          "ms_per_run": 0.018056776173285362,
+          "runs": 7858,
+          "checksum": 15682954032
+        },
+        {
+          "name": "unicode-checksum-only",
+          "category": "strings",
+          "n": 1000,
+          "ms_per_run": 0.024820789044289332,
+          "runs": 5208,
+          "checksum": 14356907120
+        },
+        {
+          "name": "unicode-checksum-only",
+          "category": "strings",
+          "n": 10000,
+          "ms_per_run": 0.019555223851417242,
+          "runs": 7445,
+          "checksum": 7400533984
+        },
+        {
+          "name": "unicode-checksum-only",
+          "category": "strings",
+          "n": 100000,
+          "ms_per_run": 0.03407243270868689,
+          "runs": 4857,
+          "checksum": 11699376128
+        },
+        {
+          "name": "unicode-checksum-only",
+          "category": "strings",
+          "n": 1000000,
+          "ms_per_run": 0.02402114765906348,
+          "runs": 5613,
+          "checksum": 8362401136
+        }
+      ],
+      "perry": [
+        {
+          "name": "unicode-checksum-only",
+          "category": "strings",
+          "n": 100,
+          "ms_per_run": 0.2512634999999982,
+          "runs": 578,
+          "checksum": 15682954032
+        },
+        {
+          "name": "unicode-checksum-only",
+          "category": "strings",
+          "n": 1000,
+          "ms_per_run": 3.120101428571437,
+          "runs": 53,
+          "checksum": 14356907120
+        },
+        {
+          "name": "unicode-checksum-only",
+          "category": "strings",
+          "n": 10000,
+          "ms_per_run": 33.208917000000014,
+          "runs": 7,
+          "checksum": 7400533984
+        },
+        {
+          "name": "unicode-checksum-only",
+          "category": "strings",
+          "n": 100000,
+          "ms_per_run": 347.40604200000007,
+          "runs": 7,
+          "checksum": 11699376128
+        },
+        {
+          "name": "unicode-checksum-only",
+          "category": "strings",
+          "n": 1000000,
+          "ms_per_run": 2324.477791000003,
+          "runs": 7,
+          "checksum": 8362401136
+        }
+      ],
+      "slopes": {
+        "node": 0.03854946353981505,
+        "perry": 0.9979060647155222
+      }
+    },
+    "string-trim-alternating-ascii": {
+      "source_sha256": "f2694b0826e66fca3e9f96c070fb6bbe067b5df86c42cf1e12be352e6f19e50f",
+      "binary_sha256": "47c17fc64fc3b41c9ff54c1b025b5d0a0428cb89d93c2166b6c8abefce99223f",
+      "node": [
+        {
+          "name": "string-trim-alternating-ascii",
+          "category": "strings",
+          "n": 100,
+          "ms_per_run": 0.018384160845588738,
+          "runs": 7711,
+          "checksum": 7377983936
+        },
+        {
+          "name": "string-trim-alternating-ascii",
+          "category": "strings",
+          "n": 1000,
+          "ms_per_run": 0.021098146624473332,
+          "runs": 6052,
+          "checksum": 4795209384
+        },
+        {
+          "name": "string-trim-alternating-ascii",
+          "category": "strings",
+          "n": 10000,
+          "ms_per_run": 0.02062634536082424,
+          "runs": 6535,
+          "checksum": 15015235456
+        },
+        {
+          "name": "string-trim-alternating-ascii",
+          "category": "strings",
+          "n": 100000,
+          "ms_per_run": 0.016727370401337954,
+          "runs": 8233,
+          "checksum": 12234515976
+        },
+        {
+          "name": "string-trim-alternating-ascii",
+          "category": "strings",
+          "n": 1000000,
+          "ms_per_run": 0.015628998437501228,
+          "runs": 8665,
+          "checksum": 6321236336
+        }
+      ],
+      "perry": [
+        {
+          "name": "string-trim-alternating-ascii",
+          "category": "strings",
+          "n": 100,
+          "ms_per_run": 0.01975178243902461,
+          "runs": 6626,
+          "checksum": 7377983936
+        },
+        {
+          "name": "string-trim-alternating-ascii",
+          "category": "strings",
+          "n": 1000,
+          "ms_per_run": 0.031742448170730894,
+          "runs": 5061,
+          "checksum": 4795209384
+        },
+        {
+          "name": "string-trim-alternating-ascii",
+          "category": "strings",
+          "n": 10000,
+          "ms_per_run": 0.12146032727273312,
+          "runs": 1170,
+          "checksum": 15015235456
+        },
+        {
+          "name": "string-trim-alternating-ascii",
+          "category": "strings",
+          "n": 100000,
+          "ms_per_run": 1.0202541904761964,
+          "runs": 142,
+          "checksum": 12234515976
+        },
+        {
+          "name": "string-trim-alternating-ascii",
+          "category": "strings",
+          "n": 1000000,
+          "ms_per_run": 10.768860999999987,
+          "runs": 17,
+          "checksum": 6321236336
+        }
+      ],
+      "slopes": {
+        "node": -0.02418419590262806,
+        "perry": 0.6980194924076883
+      }
+    }
+  },
+  "load_end": [
+    55.21435546875,
+    63.736328125,
+    63.16015625
+  ]
+}
