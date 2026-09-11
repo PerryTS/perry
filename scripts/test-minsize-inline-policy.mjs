@@ -8,8 +8,45 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { prepareRequireRuntime } from './test-require-runtime.mjs';
 
+// Text emission spells attributes inline; LLVM's native printer interns groups.
+function functionAttributes(ir, header) {
+  const groups = new Map();
+  for (const [, id, body] of ir.matchAll(/^attributes #(\d+) = \{(.*)\}$/gm)) {
+    assert(!groups.has(id), `duplicate LLVM attribute group #${id}`);
+    groups.set(id, body);
+  }
+  const unquoted = text => text.replace(/"(?:[^"\\]|\\.)*"/g, '');
+  const expanded = unquoted(header).replace(/#(\d+)\b/g, (_, id) => {
+    assert(groups.has(id), `missing LLVM attribute group #${id}`);
+    return unquoted(groups.get(id));
+  });
+  return new Set(expanded.split(/\s+/));
+}
+
+function testAttributeParser() {
+  const inline = functionAttributes('', 'define double @f(double %x) minsize optsize {');
+  assert(inline.has('minsize') && inline.has('optsize'));
+  assert(!inline.has('alwaysinline'));
+  const grouped = functionAttributes('attributes #9 = { alwaysinline optsize }',
+    'define double @f(double %x) #9 {');
+  assert(grouped.has('alwaysinline') && grouped.has('optsize'));
+  assert(!grouped.has('minsize'));
+  const mixed = functionAttributes('attributes #2 = { minsize "label"="alwaysinline" }',
+    'define double @f(double %x) inlinehint #2 {');
+  assert(mixed.has('minsize') && mixed.has('inlinehint') && !mixed.has('alwaysinline'));
+  assert.throws(() => functionAttributes('', 'define void @f() #9 {'), /missing.*#9/);
+  assert.throws(() => functionAttributes('attributes #9 = { broken', 'define void @f() #9 {'), /missing.*#9/);
+  assert.throws(() => functionAttributes('attributes #9 = { minsize }\nattributes #9 = { optsize }',
+    'define void @f() #9 {'), /duplicate.*#9/);
+}
+
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 assert.equal(process.versions.node, fs.readFileSync(path.join(root, '.node-version'), 'utf8').trim().replace(/^v/, ''));
+testAttributeParser();
+if (process.argv.includes('--self-test')) {
+  console.log('PASS minsize-inline attribute parser: inline/grouped/mixed and negative controls');
+  process.exit(0);
+}
 prepareRequireRuntime(root);
 const compiler = process.env.PERRY_BIN ?? path.join(root, 'target/perry-dev/perry');
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'perry-minsize-inline-'));
@@ -57,9 +94,10 @@ try {
           /^define .*@perry_fn_[^(]*__(?:identityLeaf|throwLeaf)\(/.test(line));
         assert.equal(headers.length, 2, 'both ordinary forced-inline witnesses must be present');
         for (const header of headers) {
-          assert.equal(header.includes(' minsize'), opt === 'z', header);
-          assert.equal(header.includes(' alwaysinline'), roots === 'shadow' && opt === 's', header);
-          assert.equal(header.includes(' inlinehint'), roots === 'native', header);
+          const attributes = functionAttributes(ir, header);
+          assert.equal(attributes.has('minsize'), opt === 'z', header);
+          assert.equal(attributes.has('alwaysinline'), roots === 'shadow' && opt === 's', header);
+          assert.equal(attributes.has('inlinehint'), roots === 'native', header);
         }
         const strategy = ir.includes('gc "statepoint-example"');
         assert.equal(strategy, roots === 'native', 'requested root mode must actually be emitted');
