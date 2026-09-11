@@ -517,23 +517,16 @@ impl<'a> DirectParser<'a> {
             // Keep the proof call out of small and many-token object loops.
             let ptr = match s {
                 ParsedStr::Borrowed(b) => {
-                    let known_len = if b.len() >= 256 && self.input.len() - b.len() <= 256 {
-                        source_length::source_token_utf16_len(
+                    if b.len() >= 256 && self.input.len() - b.len() <= 256 {
+                        source_length::string_from_dominant_token(
+                            &mut self.batch,
                             self.input,
                             self.source,
                             token_start,
-                            b.len(),
+                            b,
                         )
                     } else {
-                        None
-                    };
-                    match known_len {
-                        Some(len) => crate::string::string_from_json_bytes_known_utf16(
-                            &mut self.batch,
-                            b,
-                            len,
-                        ),
-                        None => crate::string::string_from_json_bytes(&mut self.batch, b),
+                        crate::string::string_from_json_bytes(&mut self.batch, b)
                     }
                 }
                 // Escaped strings live in a Rust Vec, so the builder can derive

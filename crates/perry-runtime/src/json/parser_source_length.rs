@@ -55,6 +55,21 @@ pub(super) unsafe fn source_token_utf16_len(
         .checked_sub((input.len() - byte_len) as u32)
 }
 
+/// Keep proof and large-leaf allocation out of the small-token parser frame.
+#[inline(never)]
+pub(super) unsafe fn string_from_dominant_token(
+    batch: &mut Option<crate::arena::ConstructionBatch>,
+    input: &[u8],
+    source: *const StringHeader,
+    token_start: usize,
+    bytes: &[u8],
+) -> *mut StringHeader {
+    match source_token_utf16_len(input, source, token_start, bytes.len()) {
+        Some(len) => crate::string::string_from_json_bytes_known_utf16(batch, bytes, len),
+        None => crate::string::string_from_json_bytes(batch, bytes),
+    }
+}
+
 #[cfg(test)]
 #[path = "parser_source_length_tests.rs"]
 mod tests;
