@@ -6377,7 +6377,7 @@ dependencies = [
 
 [[package]]
 name = "perry-native-registration"
-version = "0.5.1533"
+version = "0.5.1534"
 
 [[package]]
 name = "perry-parser"
