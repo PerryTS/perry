@@ -336,7 +336,7 @@ codegen-units = 1
 codegen-units = 1
 
 [workspace.package]
-version = "0.5.1532"
+version = "0.5.1533"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/PerryTS/perry"
@@ -475,7 +475,7 @@ perry-dispatch = { path = "crates/perry-dispatch" }
 # `wasm-host` must stay out of `default`, generalized to all heavy features.
 perry-runtime = { path = "crates/perry-runtime", version = "0.5.1011", default-features = false }
 perry-ffi = { path = "crates/perry-ffi", version = "0.5.1011" }
-perry-native-registration = { path = "crates/perry-native-registration", version = "0.5.1522" }
+perry-native-registration = { path = "crates/perry-native-registration", version = "0.5.1533" }
 perry-ext-dotenv = { path = "crates/perry-ext-dotenv" }
 perry-ext-nanoid = { path = "crates/perry-ext-nanoid" }
 perry-ext-uuid = { path = "crates/perry-ext-uuid" }
