@@ -1591,6 +1591,10 @@ fn string_value_content(value: f64) -> String {
     crate::string::string_as_str((bits & POINTER_MASK) as *const crate::StringHeader).to_string()
 }
 
+thread_local! {
+    static SORT_COPIED_OBJECTS: Cell<usize> = const { Cell::new(0) };
+}
+
 extern "C" fn test_sort_comparator_force_minor_gc(
     _closure: *const crate::closure::ClosureHeader,
     a: f64,
@@ -1599,7 +1603,14 @@ extern "C" fn test_sort_comparator_force_minor_gc(
     let scope = RuntimeHandleScope::new();
     let a_handle = scope.root_nanbox_f64(a);
     let b_handle = scope.root_nanbox_f64(b);
-    let _ = crate::gc::gc_collect_minor();
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    SORT_COPIED_OBJECTS.with(|count| {
+        count.set(
+            count.get()
+                + trace.copying_nursery.copied_objects
+                + trace.copying_nursery.promoted_objects,
+        );
+    });
     let a_str = string_value_content(a_handle.get_nanbox_f64());
     let b_str = string_value_content(b_handle.get_nanbox_f64());
     match a_str.cmp(&b_str) {
@@ -1610,17 +1621,18 @@ extern "C" fn test_sort_comparator_force_minor_gc(
 }
 
 /// `Array.prototype.sort(comparator)` where every comparator call forces a
-/// copied minor GC: the receiver, the #6076 temp copy, the merge scratch, and
-/// the comparator closure itself must all be re-derived from rooted handles.
-/// 40 elements exercises the run + bottom-up-merge engine (threshold 32); the
-/// 8-element pass covers the pure insertion-sort path.
+/// copied minor GC: the receiver, the private source snapshot, and the
+/// comparator closure itself must all be re-derived from rooted handles.
+/// Both monotone and shuffled inputs exercise run detection, binary insertion,
+/// merging, and the stack / GC-owned index workspace boundary.
 #[test]
 fn test_array_sort_comparator_rooted_buffers_survive_copied_minor_gc() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_runtime_handle_root_scanner_for_tests();
 
-    for count in [8usize, 40usize] {
+    for (count, shuffled) in [(8usize, false), (40, true), (128, false), (128, true)] {
+        SORT_COPIED_OBJECTS.with(|count| count.set(0));
         let scope = RuntimeHandleScope::new();
         let comparator =
             crate::closure::js_closure_alloc(test_sort_comparator_force_minor_gc as *const u8, 0);
@@ -1628,9 +1640,12 @@ fn test_array_sort_comparator_rooted_buffers_survive_copied_minor_gc() {
         let arr = crate::array::js_array_alloc(count as u32);
         let arr_handle = scope.root_raw_mut_ptr(arr);
         for i in 0..count {
-            // Descending heap strings ("s39", "s38", …) so the sort has real
-            // work and stale pre-move addresses are observable as garbage.
-            let text = format!("s{:02}", count - 1 - i);
+            let key = if shuffled {
+                (i * 17) % count
+            } else {
+                count - 1 - i
+            };
+            let text = format!("s{key:03}");
             let sp = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
             let sp_handle = scope.root_string_ptr(sp);
             let arr = crate::array::js_array_push(
@@ -1651,6 +1666,12 @@ fn test_array_sort_comparator_rooted_buffers_survive_copied_minor_gc() {
             gc_collection_count() > before,
             "comparator should force copied-minor GCs during the sort"
         );
+        SORT_COPIED_OBJECTS.with(|copied| {
+            assert!(
+                copied.get() >= count,
+                "the sort must actually relocate heap values"
+            );
+        });
         unsafe {
             assert_eq!((*sorted).length as usize, count);
             let elems = (sorted as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>())
@@ -1659,7 +1680,7 @@ fn test_array_sort_comparator_rooted_buffers_survive_copied_minor_gc() {
                 let got = string_value_content(*elems.add(i));
                 assert_eq!(
                     got,
-                    format!("s{i:02}"),
+                    format!("s{i:03}"),
                     "element {i} of the {count}-element sort should hold the \
                      post-move string, not a stale pre-move address"
                 );
