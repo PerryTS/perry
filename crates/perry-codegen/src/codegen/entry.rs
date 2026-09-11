@@ -1229,6 +1229,7 @@ pub(super) fn compile_module_entry(
                 let body_check_idx = ctx.new_block("event_loop.body_check");
                 let body_wait_idx = ctx.new_block("event_loop.body_wait");
                 let exit_idx = ctx.new_block("event_loop.exit");
+                let finalize_idx = ctx.new_block("event_loop.finalize");
                 let header_label = ctx.block_label(header_idx);
                 let pending_label = ctx.block_label(pending_idx);
                 let host_ret_label = ctx.block_label(host_ret_idx);
@@ -1236,6 +1237,7 @@ pub(super) fn compile_module_entry(
                 let body_check_label = ctx.block_label(body_check_idx);
                 let body_wait_label = ctx.block_label(body_wait_idx);
                 let exit_label = ctx.block_label(exit_idx);
+                let finalize_label = ctx.block_label(finalize_idx);
 
                 // Initial event-loop flush (4 rounds) before entering the
                 // main loop — handles fire-and-forget .then() chains that
@@ -1352,11 +1354,11 @@ pub(super) fn compile_module_entry(
                 ctx.block().call_void("js_wait_for_event", &[]);
                 ctx.block().br(&header_label);
 
-                // loop_exit: fire `beforeExit` (#2135) with the would-be
-                // exit code, then drain microtasks/timers once more so any
-                // last-minute work the listener queued still runs before
-                // we ret. Mirrors Node's "event loop drained → one
-                // beforeExit pass" semantics.
+                // loop_exit: fire beforeExit with the would-be exit code,
+                // then finish its ticks/promises without consuming timers or
+                // I/O completions. If it scheduled another event-loop turn,
+                // return to the loop; its next drain emits beforeExit again.
+                // Microtasks alone finish here and do not resurrect the loop.
                 //
                 // `beforeExit` is emitted with the PENDING `process.exitCode`
                 // rather than a literal `0`: Node passes the code the process
@@ -1377,7 +1379,12 @@ pub(super) fn compile_module_entry(
                     .call_void("js_process_emit_before_exit_pending", &[]);
                 let _ = ctx
                     .block()
-                    .call(I32, "js_promise_run_microtasks_event_loop", &[]);
+                    .call(I32, "js_promise_run_before_exit_checkpoint", &[]);
+                let resumed = emit_event_loop_liveness(&mut ctx, cross_module.needs_stdlib);
+                let resumed_cmp = ctx.block().icmp_ne(I32, &resumed, &zero);
+                ctx.block().cond_br(&resumed_cmp, &header_label, &finalize_label);
+
+                ctx.current_block = finalize_idx;
                 ctx.block().call_void("js_process_run_exit_sequence", &[]);
                 ctx.block()
                     .call_void("js_process_run_finalization_exit", &[]);

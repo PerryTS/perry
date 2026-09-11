@@ -719,6 +719,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // the microtask drain and the timer queues. Emitted only by
     // `codegen::entry`'s event loop, whose JS stack is fully unwound.
     module.declare_function("js_promise_run_microtasks_event_loop", I32, &[]);
+    module.declare_function("js_promise_run_before_exit_checkpoint", I32, &[]);
     module.declare_function("js_promise_run_microtasks_await_loop", I32, &[]);
     module.declare_function("js_await_loop_tick_timers", I32, &[]);
     // ESM entry marker: first microtask drain finishes promise jobs before

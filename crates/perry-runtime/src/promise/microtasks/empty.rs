@@ -51,6 +51,8 @@ mod tests {
         isolated(|| {
             assert!(can_skip_callback_phases());
             assert_eq!(js_promise_run_microtasks_event_loop(), 0);
+            assert_eq!(js_promise_run_before_exit_checkpoint(), 0);
+            assert_eq!(js_promise_run_promise_jobs(), 0);
             // The full runner's push allocates this Vec. Verify the branch
             // actually runs, independently of testing the guard itself.
             ASYNC_BOX_EXECUTION_REF_BASES.with(|bases| assert_eq!(bases.borrow().capacity(), 0));
@@ -162,6 +164,8 @@ mod tests {
             .join()
             .unwrap();
             assert!(!can_skip_callback_phases());
+            assert_eq!(js_promise_run_before_exit_checkpoint(), 0);
+            assert_eq!(crate::promise::js_promise_state(promise), 0);
             assert!(js_promise_run_microtasks_event_loop() > 0);
             assert_eq!(crate::promise::js_promise_state(promise), 1);
             assert_eq!(crate::promise::js_promise_value(promise), 37.0);
@@ -187,6 +191,47 @@ mod tests {
             assert_eq!(CALLED.load(Ordering::Relaxed), 1);
             assert!(!crate::os::process_stdin_needs_pump());
             crate::os::test_set_stdin_data_listener(None);
+        });
+    }
+
+    #[test]
+    fn before_exit_checkpoint_preserves_timer_for_the_next_turn() {
+        isolated(|| {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let promise = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                crate::timer::js_set_timeout_value_ref(0.0, 47.0, 1) as i64,
+            ));
+            assert_eq!(js_promise_run_before_exit_checkpoint(), 0);
+            assert_eq!(
+                crate::promise::js_promise_state(rooted_promise(&promise)),
+                0
+            );
+            assert_eq!(crate::timer::js_timer_has_pending(), 1);
+            assert!(js_promise_run_microtasks_event_loop() > 0);
+            assert_eq!(
+                crate::promise::js_promise_value(rooted_promise(&promise)),
+                47.0
+            );
+        });
+    }
+
+    #[test]
+    fn exit_promise_checkpoint_leaves_ticks_forbidden() {
+        isolated(|| {
+            static CALLED: AtomicU64 = AtomicU64::new(0);
+            extern "C" fn callback(_: *const crate::closure::ClosureHeader) -> f64 {
+                CALLED.fetch_add(1, Ordering::Relaxed);
+                0.0
+            }
+            crate::closure::js_register_closure_arity(callback as *const u8, 0);
+            let callback = crate::closure::js_closure_alloc(callback as *const u8, 0);
+            crate::builtins::js_queue_next_tick(callback as i64);
+            assert_eq!(js_promise_run_promise_jobs(), 0);
+            assert_eq!(CALLED.load(Ordering::Relaxed), 0);
+            assert!(crate::builtins::queued_microtasks_pending());
+            assert!(js_promise_run_before_exit_checkpoint() > 0);
+            assert_eq!(CALLED.load(Ordering::Relaxed), 1);
+            assert!(!crate::builtins::queued_microtasks_pending());
         });
     }
 }

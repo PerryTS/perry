@@ -53,7 +53,10 @@ pub use combinators::{
     js_promise_all_settled, js_promise_any, js_promise_new_with_executor, js_promise_race,
     js_promise_rejected, js_promise_schedule_resolve, js_promise_try, js_value_is_promise,
 };
-pub use microtasks::{js_promise_run_microtasks, js_promise_run_microtasks_event_loop};
+pub use microtasks::{
+    js_promise_run_before_exit_checkpoint, js_promise_run_microtasks,
+    js_promise_run_microtasks_event_loop,
+};
 pub use native_async::{
     js_native_async_completion_attach_handle, js_native_async_completion_cancel,
     js_native_async_completion_new, js_native_async_completion_promise,
