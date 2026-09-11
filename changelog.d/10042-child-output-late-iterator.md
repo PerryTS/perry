@@ -11,3 +11,5 @@
 - Add runtime regressions for late readers, delayed first pulls, pending empty
   pulls, and buffered chunks, plus a bounded real-child Node/native parity fixture
   at O0, Os, and Oz. The regression is independent of any application bundle.
+- Prepare its native providers in the same CI Cargo graph as stdlib, outside
+  per-fixture timeouts, use the pinned Node oracle, and publish compiler errors.
