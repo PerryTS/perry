@@ -130,7 +130,7 @@ pub(crate) fn cp_value_to_bytes(value: f64) -> Vec<u8> {
                 unsafe {
                     let len = (*buf).length as usize;
                     let data =
-                        (buf as *const u8).add(std::mem::size_of::<crate::buffer::BufferHeader>());
+                        crate::buffer::buffer_data(buf as *const crate::buffer::BufferHeader);
                     return std::slice::from_raw_parts(data, len).to_vec();
                 }
             }

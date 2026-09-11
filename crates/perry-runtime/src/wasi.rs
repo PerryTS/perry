@@ -1046,12 +1046,6 @@ fn write_u32(buffer: *mut crate::buffer::BufferHeader, offset: f64, value: u32) 
     unsafe {
         let target = crate::buffer::buffer_data_mut(buffer).add(offset);
         std::ptr::copy_nonoverlapping(value.to_le_bytes().as_ptr(), target, 4);
-        crate::buffer::view::propagate_written_range_from_receiver(
-            buffer as usize,
-            offset as u32,
-            target,
-            4,
-        );
     }
     true
 }
@@ -1067,12 +1061,6 @@ fn write_u64(buffer: *mut crate::buffer::BufferHeader, offset: f64, value: u64) 
     unsafe {
         let target = crate::buffer::buffer_data_mut(buffer).add(offset);
         std::ptr::copy_nonoverlapping(value.to_le_bytes().as_ptr(), target, 8);
-        crate::buffer::view::propagate_written_range_from_receiver(
-            buffer as usize,
-            offset as u32,
-            target,
-            8,
-        );
     }
     true
 }
@@ -1137,12 +1125,6 @@ fn snapshot_get(import: f64, key: &[u8], pointers: f64, strings: f64) -> f64 {
             let target = crate::buffer::buffer_data_mut(buffer).add(strings);
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), target, bytes.len());
             *target.add(bytes.len()) = 0;
-            crate::buffer::view::propagate_written_range_from_receiver(
-                buffer as usize,
-                strings as u32,
-                target,
-                (bytes.len() + 1) as u32,
-            );
         }
         pointers += 4;
         strings += bytes.len() + 1;
@@ -1273,12 +1255,6 @@ pub extern "C" fn js_wasi_import_stub(
                     for index in 0..len {
                         *target.add(index) = (seed >> ((index % 8) * 8)) as u8;
                     }
-                    crate::buffer::view::propagate_written_range_from_receiver(
-                        buffer as usize,
-                        offset as u32,
-                        target,
-                        len as u32,
-                    );
                 }
             }
             0.0

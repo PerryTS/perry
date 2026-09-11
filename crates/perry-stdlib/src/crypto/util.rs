@@ -67,7 +67,7 @@ pub(super) unsafe fn bytes_from_ptr(ptr: i64) -> Vec<u8> {
         let buf = ptr as *const perry_runtime::buffer::BufferHeader;
         let len = (*buf).length as usize;
         let data =
-            (buf as *const u8).add(std::mem::size_of::<perry_runtime::buffer::BufferHeader>());
+            perry_runtime::buffer::buffer_data(buf as *const perry_runtime::buffer::BufferHeader);
         return std::slice::from_raw_parts(data, len).to_vec();
     }
     // Fall back to StringHeader layout — the common case for literal

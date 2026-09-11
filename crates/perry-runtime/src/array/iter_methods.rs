@@ -863,7 +863,7 @@ pub extern "C" fn js_array_at(arr: *const ArrayHeader, index: f64) -> f64 {
             if idx < 0 || idx >= length {
                 return f64::from_bits(crate::value::TAG_UNDEFINED);
             }
-            let data = (buf as *const u8).add(std::mem::size_of::<crate::buffer::BufferHeader>());
+            let data = crate::buffer::buffer_data(buf as *const crate::buffer::BufferHeader);
             return *data.add(idx as usize) as f64;
         }
     }

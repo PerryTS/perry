@@ -717,11 +717,12 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
             let start = uint8_relative_index_arg(args, 0, len, 0);
             let end = uint8_relative_index_arg(args, 1, len, len);
             let (addr, _) = recv.live();
-            let result = crate::buffer::js_buffer_slice(
-                addr as *mut crate::buffer::BufferHeader,
-                start as i32,
-                end as i32,
-            );
+            let source = addr as *const crate::buffer::BufferHeader;
+            let result = if method == "slice" {
+                crate::buffer::buffer_slice_copy(source, start as i32, end as i32)
+            } else {
+                crate::buffer::js_buffer_slice(source, start as i32, end as i32)
+            };
             if crate::buffer::is_uint8array_buffer(addr) {
                 crate::buffer::mark_as_uint8array(result as usize);
             }

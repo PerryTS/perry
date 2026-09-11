@@ -424,7 +424,8 @@ pub extern "C" fn perry_updater_sha256_buffer(buf_ptr: i64) -> *mut BufferHeader
     unsafe {
         let buf = buf_ptr as *const BufferHeader;
         let len = (*buf).length as usize;
-        let data = (buf as *const u8).add(std::mem::size_of::<BufferHeader>());
+        let data =
+            perry_runtime::buffer::buffer_data(buf as *const perry_runtime::buffer::BufferHeader);
         let bytes = std::slice::from_raw_parts(data, len);
 
         let mut hasher = Sha256::new();

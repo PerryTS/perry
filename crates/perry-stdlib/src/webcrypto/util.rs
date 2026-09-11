@@ -79,10 +79,10 @@ extern "C" {
     );
 }
 
-/// `buffer_data` is private to perry-runtime — open-code the same offset.
+/// Resolve inline, shared-view, and foreign-backed buffer storage.
 #[inline]
 pub(super) unsafe fn buffer_payload(buf: *const BufferHeader) -> *const u8 {
-    (buf as *const u8).add(std::mem::size_of::<BufferHeader>())
+    perry_runtime::buffer::buffer_data(buf as *const perry_runtime::buffer::BufferHeader)
 }
 
 // #854: NaN-boxing tag contract — see CLAUDE.md. `POINTER_TAG`,

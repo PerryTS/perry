@@ -1,0 +1,92 @@
+[
+  {
+    "engine": "node",
+    "name": "binary-uint8array-subarray",
+    "category": "binary-node",
+    "n": 100,
+    "ms_per_run": 0.0023384273863765646,
+    "runs": 58206,
+    "checksum": 18622
+  },
+  {
+    "engine": "perry",
+    "name": "binary-uint8array-subarray",
+    "category": "binary-node",
+    "n": 100,
+    "ms_per_run": 0.09703864734299485,
+    "runs": 1416,
+    "checksum": 18622
+  },
+  {
+    "engine": "node",
+    "name": "binary-uint8array-subarray",
+    "category": "binary-node",
+    "n": 1000,
+    "ms_per_run": 0.02290389016018349,
+    "runs": 6003,
+    "checksum": 630318
+  },
+  {
+    "engine": "perry",
+    "name": "binary-uint8array-subarray",
+    "category": "binary-node",
+    "n": 1000,
+    "ms_per_run": 0.9462590909090897,
+    "runs": 155,
+    "checksum": 630318
+  },
+  {
+    "engine": "node",
+    "name": "binary-uint8array-subarray",
+    "category": "binary-node",
+    "n": 10000,
+    "ms_per_run": 0.22814431818181707,
+    "runs": 617,
+    "checksum": 51281607
+  },
+  {
+    "engine": "perry",
+    "name": "binary-uint8array-subarray",
+    "category": "binary-node",
+    "n": 10000,
+    "ms_per_run": 8.567999999999984,
+    "runs": 21,
+    "checksum": 51281607
+  },
+  {
+    "engine": "node",
+    "name": "binary-uint8array-subarray",
+    "category": "binary-node",
+    "n": 100000,
+    "ms_per_run": 2.2575333333333307,
+    "runs": 63,
+    "checksum": 12816444
+  },
+  {
+    "engine": "perry",
+    "name": "binary-uint8array-subarray",
+    "category": "binary-node",
+    "n": 100000,
+    "ms_per_run": 101.4921,
+    "runs": 7,
+    "checksum": 12816444
+  },
+  {
+    "engine": "node",
+    "name": "binary-uint8array-subarray",
+    "category": "binary-node",
+    "n": 1000000,
+    "ms_per_run": 22.595200000000006,
+    "runs": 7,
+    "checksum": 127857054
+  },
+  {
+    "engine": "perry",
+    "name": "binary-uint8array-subarray",
+    "category": "binary-node",
+    "n": 1000000,
+    "ms_per_run": 1184.1897000000008,
+    "runs": 7,
+    "checksum": 127857054
+  }
+]

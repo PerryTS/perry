@@ -700,9 +700,7 @@ pub(crate) unsafe fn extract_buffer_bytes(value: f64) -> Option<Vec<u8>> {
     if buf.is_null() {
         return None;
     }
-    let len = (*buf).length as usize;
-    let data = (buf as *const u8).add(std::mem::size_of::<BufferHeader>());
-    Some(std::slice::from_raw_parts(data, len).to_vec())
+    perry_ffi::read_buffer_bytes(buf.cast()).map(<[u8]>::to_vec)
 }
 
 /// Serialize a NaN-boxed JsValue as a JSON string.

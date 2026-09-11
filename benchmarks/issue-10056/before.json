@@ -1,0 +1,52 @@
+[
+  {
+    "engine": "node",
+    "name": "binary-uint8array-subarray",
+    "category": "binary-node",
+    "n": 100,
+    "ms_per_run": 0.002410836547733825,
+    "runs": 57296,
+    "checksum": 18622
+  },
+  {
+    "engine": "perry",
+    "n": 100,
+    "status": "TIMEOUT"
+  },
+  {
+    "engine": "node",
+    "name": "binary-uint8array-subarray",
+    "category": "binary-node",
+    "n": 1000,
+    "ms_per_run": 0.024942768079801978,
+    "runs": 5618,
+    "checksum": 630318
+  },
+  {
+    "engine": "node",
+    "name": "binary-uint8array-subarray",
+    "category": "binary-node",
+    "n": 10000,
+    "ms_per_run": 0.23917857142857152,
+    "runs": 565,
+    "checksum": 51281607
+  },
+  {
+    "engine": "node",
+    "name": "binary-uint8array-subarray",
+    "category": "binary-node",
+    "n": 100000,
+    "ms_per_run": 2.3723222222222122,
+    "runs": 63,
+    "checksum": 12816444
+  },
+  {
+    "engine": "node",
+    "name": "binary-uint8array-subarray",
+    "category": "binary-node",
+    "n": 1000000,
+    "ms_per_run": 23.595500000000015,
+    "runs": 7,
+    "checksum": 127857054
+  }
+]

@@ -37,13 +37,8 @@ pub extern "C" fn js_buffer_copy(
 
         let src_data = buffer_data(src_ptr).add(source_start as usize);
         let dst_data = buffer_data_mut(dst_ptr).add(target_start as usize);
-        ptr::copy_nonoverlapping(src_data, dst_data, copy_len as usize);
-        super::view::propagate_written_range_from_receiver(
-            dst_ptr as usize,
-            target_start as u32,
-            dst_data,
-            copy_len as u32,
-        );
+        // Source and destination can be overlapping views of one backing.
+        ptr::copy(src_data, dst_data, copy_len as usize);
 
         copy_len
     }
@@ -81,12 +76,6 @@ pub extern "C" fn js_buffer_write(
 
         let dst_data = buffer_data_mut(buf_ptr).add(offset as usize);
         ptr::copy_nonoverlapping(bytes_to_write.as_ptr(), dst_data, write_len);
-        super::view::propagate_written_range_from_receiver(
-            buf_ptr as usize,
-            offset as u32,
-            dst_data,
-            write_len as u32,
-        );
 
         write_len as i32
     }
@@ -125,12 +114,6 @@ pub extern "C" fn js_buffer_write_len(
 
         let dst_data = buffer_data_mut(buf_ptr).add(offset as usize);
         ptr::copy_nonoverlapping(bytes_to_write.as_ptr(), dst_data, write_len);
-        super::view::propagate_written_range_from_receiver(
-            buf_ptr as usize,
-            offset as u32,
-            dst_data,
-            write_len as u32,
-        );
 
         write_len as i32
     }

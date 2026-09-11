@@ -199,7 +199,7 @@ fn message_bytes_inner(value: f64, allow_list: bool) -> Option<Vec<u8>> {
         let buf = raw as *const crate::buffer::BufferHeader;
         unsafe {
             let len = (*buf).length as usize;
-            let data = (raw as *const u8).add(std::mem::size_of::<crate::buffer::BufferHeader>());
+            let data = crate::buffer::buffer_data(raw as *const crate::buffer::BufferHeader);
             return Some(std::slice::from_raw_parts(data, len).to_vec());
         }
     }

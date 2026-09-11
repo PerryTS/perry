@@ -34,17 +34,19 @@ mod transcode;
 mod u8_codec;
 pub mod validate;
 pub(crate) mod view;
+#[cfg(test)]
+mod view_tests;
 
 // Canonical view-resolving span accessor. Every path that hands a raw data
 // pointer to native code routes through this so a Uint8Array view over an
-// ArrayBuffer exposes its backing bytes, not its stale local copy (#6515).
+// ArrayBuffer exposes the same shared bytes to JavaScript and native code.
 pub(crate) use view::resolve_data_ptr as resolve_span_data_ptr;
 
 // ---- Re-exports: types & constants ----
 pub use header::{BufferHeader, BUFFER_TYPE_ID, SMALL_BUF_THRESHOLD};
 
 // ---- Re-exports: allocation / registry helpers ----
-pub(crate) use header::is_small_buf_slab_addr;
+pub(crate) use header::{is_small_buf_slab_addr, visit_ab_alias_slot};
 // #9342: primed by `typedarray::js_u8_buffer_read_f64` (codegen slow arm).
 #[cfg(test)]
 pub(crate) use header::test_u8_inline_cache_holds;
@@ -130,6 +132,7 @@ pub use u8_codec::{
 };
 
 // ---- Re-exports: indexed access / slice / Uint8Array.set ----
+pub(crate) use access::buffer_slice_copy;
 pub use access::{
     js_buffer_get, js_buffer_index_get_value, js_buffer_set, js_buffer_set_from,
     js_buffer_set_from_value, js_buffer_slice,

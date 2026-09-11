@@ -385,7 +385,7 @@ unsafe fn validate_timing_safe_equal_buffer_source(value: f64, arg_name: &str) -
         let buf = addr as *const perry_runtime::buffer::BufferHeader;
         let len = (*buf).length as usize;
         let data =
-            (buf as *const u8).add(std::mem::size_of::<perry_runtime::buffer::BufferHeader>());
+            perry_runtime::buffer::buffer_data(buf as *const perry_runtime::buffer::BufferHeader);
         return std::slice::from_raw_parts(data, len).to_vec();
     }
     let message = format!(

@@ -54,7 +54,8 @@ pub fn detach_array_buffer(addr: usize) {
     if is_detached_buffer(addr) {
         return;
     }
-    let buf = addr as *mut BufferHeader;
+    let backing = super::view::backing_of(addr);
+    let buf = backing as *mut BufferHeader;
     let capacity = unsafe { (*buf).capacity };
     unsafe {
         (*buf).length = 0;
@@ -63,31 +64,27 @@ pub fn detach_array_buffer(addr: usize) {
     // Arm before the insert — see `crate::registry_latch`.
     EVER_DETACHED.arm();
     DETACHED_BUFFER_REGISTRY.with(|r| {
-        r.borrow_mut().insert(addr);
+        let mut r = r.borrow_mut();
+        r.insert(addr);
+        r.insert(backing);
     });
     // Buffer-shaped views (`new Uint8Array(ab)`, DataView slices): zero their
     // own header lengths so `.length`/`.byteLength` report 0 and every indexed
     // access is out-of-bounds, matching Node's view-over-detached semantics.
-    // `ArrayBuffer.prototype.slice` results also land in the view table (the
-    // Buffer.slice aliasing mechanism registers them), but they are
-    // independent COPIES per spec and must survive the source's detach —
-    // they're the only view-table entries marked as ArrayBuffers, so skip
-    // those.
-    super::view::for_each_view(addr, |view_ptr, _info| {
-        if is_array_buffer(view_ptr) {
-            return;
-        }
-        unsafe {
-            (*(view_ptr as *mut BufferHeader)).length = 0;
-        }
+    // Independent ArrayBuffer.slice copies are never in the view table.
+    super::view::for_each_view(backing, |view_ptr, _info| unsafe {
+        (*(view_ptr as *mut BufferHeader)).length = 0;
     });
     // Typed-array views (`new Float32Array(ab, ...)`) record their backing in
     // a separate side table; zero those lengths too.
     crate::typedarray_view::zero_views_of_detached_backing(addr);
+    if backing != addr {
+        crate::typedarray_view::zero_views_of_detached_backing(backing);
+    }
     // External ArrayBuffers borrow addon-owned memory. Detaching severs the
     // JavaScript view but must never decommit pages which Perry did not
     // allocate; the registered finalizer still receives the original pointer.
-    if !super::is_foreign_backed_buffer(addr) {
+    if !super::is_foreign_backed_buffer(backing) {
         decommit_payload_pages(buffer_data_mut(buf), capacity as usize);
     }
 }
