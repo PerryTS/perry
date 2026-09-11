@@ -6,6 +6,12 @@ invoked once, and non-callable own properties throw instead of falling through
 to an intrinsic. Ordinary Function.prototype fast paths remain unchanged,
 including `apply` with an arguments object.
 
+Named builtin ESM imports now install their module's dispatch/attachment bucket
+before initializing the export snapshot. This prevents an early named import
+from caching an AsyncResource/AsyncLocalStorage constructor without its own
+static methods or prototype. Installation remains per-module, so unrelated
+native modules remain eligible for dead stripping.
+
 Adds a runtime regression and a bounded, application-independent native matrix
 covering builtin/import/require/alias forms, async context and receiver capture,
 custom own methods/accessors, non-callable overrides, and intrinsic fallbacks.
