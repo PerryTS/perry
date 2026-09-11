@@ -7,7 +7,8 @@ extern "C" fn relocate(closure: *const ClosureHeader, _arg: f64) -> f64 {
         let source = js_closure_get_capture_ptr(closure, pair * 2) as *mut u8;
         let destination = js_closure_get_capture_ptr(closure, pair * 2 + 1) as *mut u8;
         unsafe {
-            let header = source.sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+            // Both addresses originate from js_object_alloc in this fixture.
+            let header = crate::gc::header_from_trusted_user_ptr(source).cast_mut();
             crate::gc::set_forwarding_address(header, destination);
         }
     }
@@ -30,7 +31,8 @@ impl Drop for RestoreForwarding {
                 // GC_STORE_AUDIT(POINTER_FREE): restore the original object
                 // header word after this synthetic forwarding-only test.
                 source.cast::<usize>().write(first_word);
-                let header = source.sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+                // Restore the same fixture-owned js_object_alloc allocation.
+                let header = crate::gc::header_from_trusted_user_ptr(source).cast_mut();
                 (*header).gc_flags &= !crate::gc::GC_FLAG_FORWARDED;
             }
         }
