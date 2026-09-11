@@ -1,0 +1,24 @@
+{
+  "source_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+  "probe": "initial-validation/test_json_cached_reads.ts",
+  "diagnostic_source": "diagnose-cached-reads.ts",
+  "main_results": {
+    "auto": {
+      "exit_code": 1,
+      "error": "Cannot read properties of undefined at rows[65].id after defineProperty"
+    },
+    "tape": {
+      "exit_code": 1,
+      "error": "same"
+    },
+    "direct": {
+      "exit_code": 0,
+      "stdout": "cached-reads 80 451800\n"
+    }
+  },
+  "status": "Existing lazy descriptor failure, separate from cached-read candidate; preserve unsuppressed probe.",
+  "source_investigation": {
+    "location": "crates/perry-runtime/src/object/array_object_ops.rs:8",
+    "finding": "is_array_object only accepts GC_TYPE_ARRAY; a lazy wrapper remains GC_TYPE_LAZY_ARRAY after materialization, so define_array_property declines it. Indexed reads instead resolve the materialized ordinary array. This is a concrete routing mismatch to repair; no getter fix included in R22."
+  }
+}

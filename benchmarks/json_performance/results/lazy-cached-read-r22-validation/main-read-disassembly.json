@@ -1,0 +1,28 @@
+{
+  "binary_sha256": "d5725f384fad7699aed3ead7effd3215f0a9520a16ec53e31fe88f562a393efc",
+  "functions": [
+    {
+      "symbol": "__RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get",
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get",
+        "--no-show-raw-insn",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/main-access-worker"
+      ],
+      "output": "main-lazy-get.s",
+      "sha256": "ff02127b543ee247ab70253afadb674a972d28ce3bbf3bb48bf9d94a0ba6984e"
+    },
+    {
+      "symbol": "_js_array_get_f64",
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=_js_array_get_f64",
+        "--no-show-raw-insn",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/main-access-worker"
+      ],
+      "output": "main-array-get.s",
+      "sha256": "bf45d28885ec55e3325b0157e14d5171e3be920e7d16c169f472e95b1003f10b"
+    }
+  ],
+  "selection_note": "First selector also included a nested closure; narrowed to exact function suffix before disassembly."
+}

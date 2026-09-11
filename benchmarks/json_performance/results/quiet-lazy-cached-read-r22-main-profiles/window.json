@@ -1,0 +1,24 @@
+{
+  "owner": "json-perf-87462-1789100443",
+  "load_before": [
+    1.8115234375,
+    1.64013671875,
+    1.57470703125
+  ],
+  "started_utc": "2026-09-11T04:20:43Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/lazy-cached-read-r22/run-access-profiles.py",
+    "--results-dir",
+    "results/quiet-lazy-cached-read-r22-main-profiles"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.826171875,
+    1.64599609375,
+    1.5771484375
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-11T04:20:46Z"
+}

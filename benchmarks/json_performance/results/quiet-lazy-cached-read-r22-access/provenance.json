@@ -1,0 +1,75 @@
+{
+  "source_commit": "8b7ffae96e733c96b31aa41d064902bc4f9a50ce",
+  "base_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+  "main_build": {
+    "source_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+    "command": [
+      "cargo",
+      "build",
+      "--release",
+      "-p",
+      "perry",
+      "-p",
+      "perry-runtime-static",
+      "-p",
+      "perry-stdlib-static"
+    ],
+    "started_utc": "2026-09-10T22:57:23.457002+00:00",
+    "elapsed_seconds": 333.5588140487671,
+    "files": {
+      "perry": {
+        "sha256": "ade63eddfdeca03926039d10e3310f9255d52c5b2721ccd2b0882f042a689156",
+        "bytes": 117699664,
+        "mtime": 1789081376.241057
+      },
+      "libperry_runtime.a": {
+        "sha256": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458",
+        "bytes": 36882304,
+        "mtime": 1789081299.1524603
+      },
+      "libperry_stdlib.a": {
+        "sha256": "61fac03f0405a48b8d390958e3002246061db6e009fcd078fe61a98d1a1068b0",
+        "bytes": 86372568,
+        "mtime": 1789081360.6254187
+      }
+    }
+  },
+  "candidate_build": {
+    "source_commit": "8b7ffae96e733c96b31aa41d064902bc4f9a50ce",
+    "command": [
+      "cargo",
+      "build",
+      "--release",
+      "-p",
+      "perry",
+      "-p",
+      "perry-runtime-static",
+      "-p",
+      "perry-stdlib-static"
+    ],
+    "started_utc": "2026-09-11T04:46:36.775003+00:00",
+    "elapsed_seconds": 507.0692639350891,
+    "files": {
+      "perry": {
+        "sha256": "067bbfa68dce9a351476081a66efe9ac2076389bb96b948c046f21debe8215b9",
+        "bytes": 117699680,
+        "mtime": 1789102502.4574094
+      },
+      "libperry_runtime.a": {
+        "sha256": "089dca2e0e09b8ecf6909fdd68a024036d51e28e5e4a1e39ac77d6409626d727",
+        "bytes": 36882520,
+        "mtime": 1789102364.4566753
+      },
+      "libperry_stdlib.a": {
+        "sha256": "093ea8ff15f2025b281adda4ce9ac488c8add2c0533fb4ab5cf2191e4beba2ad",
+        "bytes": 86372784,
+        "mtime": 1789102482.653404
+      }
+    },
+    "mtime_only_refresh": [
+      "crates/perry/src/main.rs",
+      "crates/perry-runtime-static/src/lib.rs",
+      "crates/perry-stdlib-static/src/lib.rs"
+    ]
+  }
+}

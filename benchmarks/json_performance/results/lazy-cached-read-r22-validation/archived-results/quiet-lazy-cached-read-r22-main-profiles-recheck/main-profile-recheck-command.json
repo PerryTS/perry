@@ -1,0 +1,9 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/lazy-cached-read-r22/run-access-profiles-recheck.py",
+  "--results-dir",
+  "results/quiet-lazy-cached-read-r22-main-profiles-recheck"
+]

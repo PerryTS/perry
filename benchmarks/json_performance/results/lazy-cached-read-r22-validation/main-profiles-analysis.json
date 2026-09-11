@@ -1,0 +1,950 @@
+{
+  "diagnostic_only": true,
+  "cases": [
+    {
+      "case": {
+        "fixture": "records_array_16k",
+        "operation": "fields",
+        "mode": "main",
+        "iterations": 10000000,
+        "warmup": 10000
+      },
+      "window": "main-profiles",
+      "workload_samples": 143,
+      "coverage_qualified": false,
+      "oracle_command": [
+        "/opt/homebrew/bin/node",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/harness/access-worker.js",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/fixtures/records_array_16k.json",
+        "fields",
+        "10000000",
+        "10000"
+      ],
+      "checksum_matches_node": true,
+      "phases": {
+        "workload": {
+          "samples": 143,
+          "frames": [
+            {
+              "depth": 10,
+              "count": 51,
+              "name": "perry_fn_access_worker_ts__run$spec_b_b  (in main-access-worker) + 5100  [0x100591cac]",
+              "parent": 68
+            },
+            {
+              "depth": 10,
+              "count": 35,
+              "name": "perry_fn_access_worker_ts__run$spec_b_b  (in main-access-worker) + 8088  [0x100592858]",
+              "parent": 68
+            },
+            {
+              "depth": 10,
+              "count": 32,
+              "name": "perry_fn_access_worker_ts__run$spec_b_b  (in main-access-worker) + 6540  [0x10059224c]",
+              "parent": 68
+            },
+            {
+              "depth": 10,
+              "count": 25,
+              "name": "perry_fn_access_worker_ts__run$spec_b_b  (in main-access-worker) + 4308  [0x100591994]",
+              "parent": 68
+            }
+          ],
+          "pct_of_workload_samples": 100.0
+        },
+        "array_access": {
+          "samples": 52,
+          "frames": [
+            {
+              "depth": 12,
+              "count": 20,
+              "name": "js_array_get_f64  (in main-access-worker) + 132  [0x100d4ccd4]",
+              "parent": 69
+            },
+            {
+              "depth": 12,
+              "count": 3,
+              "name": "js_array_get_f64  (in main-access-worker) + 44,48,...  [0x100d4cc7c,0x100d4cc80,...]",
+              "parent": 69
+            },
+            {
+              "depth": 12,
+              "count": 10,
+              "name": "js_array_get_f64  (in main-access-worker) + 132  [0x100d4ccd4]",
+              "parent": 85
+            },
+            {
+              "depth": 12,
+              "count": 2,
+              "name": "js_array_get_f64  (in main-access-worker) + 100,136  [0x100d4ccb4,0x100d4ccd8]",
+              "parent": 85
+            },
+            {
+              "depth": 12,
+              "count": 17,
+              "name": "js_array_get_f64  (in main-access-worker) + 132  [0x100d4ccd4]",
+              "parent": 98
+            }
+          ],
+          "pct_of_workload_samples": 36.36363636363637
+        },
+        "lazy_access": {
+          "samples": 42,
+          "frames": [
+            {
+              "depth": 14,
+              "count": 6,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 84  [0x100907790]",
+              "parent": 71
+            },
+            {
+              "depth": 14,
+              "count": 5,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 44,60,...  [0x100907768,0x100907778,...]",
+              "parent": 71
+            },
+            {
+              "depth": 14,
+              "count": 3,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 1112  [0x100907b94]",
+              "parent": 71
+            },
+            {
+              "depth": 14,
+              "count": 2,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 56  [0x100907774]",
+              "parent": 71
+            },
+            {
+              "depth": 14,
+              "count": 1,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 232  [0x100907824]",
+              "parent": 71
+            },
+            {
+              "depth": 14,
+              "count": 3,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 84  [0x100907790]",
+              "parent": 87
+            },
+            {
+              "depth": 14,
+              "count": 2,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 56  [0x100907774]",
+              "parent": 87
+            },
+            {
+              "depth": 14,
+              "count": 2,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 1112  [0x100907b94]",
+              "parent": 87
+            },
+            {
+              "depth": 14,
+              "count": 2,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 108  [0x1009077a8]",
+              "parent": 87
+            },
+            {
+              "depth": 14,
+              "count": 5,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 64,24,...  [0x10090777c,0x100907754,...]",
+              "parent": 99
+            },
+            {
+              "depth": 14,
+              "count": 4,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 56  [0x100907774]",
+              "parent": 99
+            },
+            {
+              "depth": 14,
+              "count": 4,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 84  [0x100907790]",
+              "parent": 99
+            },
+            {
+              "depth": 14,
+              "count": 3,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 1112  [0x100907b94]",
+              "parent": 99
+            }
+          ],
+          "pct_of_workload_samples": 29.37062937062937
+        },
+        "root_scope_helpers": {
+          "samples": 34,
+          "frames": [
+            {
+              "depth": 16,
+              "count": 6,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in main-access-worker) + 100,96  [0x10081a404,0x10081a400]",
+              "parent": 72
+            },
+            {
+              "depth": 16,
+              "count": 3,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 32  [0x1006f5d1c]",
+              "parent": 75
+            },
+            {
+              "depth": 14,
+              "count": 2,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in main-access-worker) + 236  [0x10081a48c]",
+              "parent": 71
+            },
+            {
+              "depth": 16,
+              "count": 2,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new  (in main-access-worker) + 32  [0x10081a2b8]",
+              "parent": 78
+            },
+            {
+              "depth": 14,
+              "count": 1,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 144  [0x1006f5d8c]",
+              "parent": 71
+            },
+            {
+              "depth": 16,
+              "count": 3,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in main-access-worker) + 100,232  [0x10081a404,0x10081a488]",
+              "parent": 88
+            },
+            {
+              "depth": 16,
+              "count": 2,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new  (in main-access-worker) + 32  [0x10081a2b8]",
+              "parent": 90
+            },
+            {
+              "depth": 16,
+              "count": 2,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 32  [0x1006f5d1c]",
+              "parent": 92
+            },
+            {
+              "depth": 14,
+              "count": 1,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 144  [0x1006f5d8c]",
+              "parent": 87
+            },
+            {
+              "depth": 16,
+              "count": 4,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new  (in main-access-worker) + 32  [0x10081a2b8]",
+              "parent": 101
+            },
+            {
+              "depth": 16,
+              "count": 4,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in main-access-worker) + 100  [0x10081a404]",
+              "parent": 103
+            },
+            {
+              "depth": 16,
+              "count": 3,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 32,140  [0x1006f5d1c,0x1006f5d88]",
+              "parent": 105
+            },
+            {
+              "depth": 14,
+              "count": 1,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 144  [0x1006f5d8c]",
+              "parent": 99
+            }
+          ],
+          "pct_of_workload_samples": 23.776223776223777
+        },
+        "resolve_materialized": {
+          "samples": 1,
+          "frames": [
+            {
+              "depth": 16,
+              "count": 1,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in main-access-worker) + 1096  [0x100c17524]",
+              "parent": 81
+            }
+          ],
+          "pct_of_workload_samples": 0.6993006993006993
+        }
+      },
+      "profile_sha256": "e9c1b719c673a9ad5ebc0dd03ec85d8ddaa540370c2bf231c662a1d408f300d2",
+      "note": "Instrumented diagnostic. Inclusive phases overlap and must not be added. Initial 16k sample includes startup and has insufficient workload coverage."
+    },
+    {
+      "case": {
+        "fixture": "records_array_1m",
+        "operation": "fields",
+        "mode": "main",
+        "iterations": 10000000,
+        "warmup": 10000
+      },
+      "window": "main-profiles",
+      "workload_samples": 754,
+      "coverage_qualified": true,
+      "oracle_command": [
+        "/opt/homebrew/bin/node",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/harness/access-worker.js",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/fixtures/records_array_1m.json",
+        "fields",
+        "10000000",
+        "10000"
+      ],
+      "checksum_matches_node": true,
+      "phases": {
+        "workload": {
+          "samples": 754,
+          "frames": [
+            {
+              "depth": 10,
+              "count": 252,
+              "name": "perry_fn_access_worker_ts__run$spec_b_b  (in main-access-worker) + 8088  [0x102326858]",
+              "parent": 2
+            },
+            {
+              "depth": 10,
+              "count": 221,
+              "name": "perry_fn_access_worker_ts__run$spec_b_b  (in main-access-worker) + 5100  [0x102325cac]",
+              "parent": 2
+            },
+            {
+              "depth": 10,
+              "count": 204,
+              "name": "perry_fn_access_worker_ts__run$spec_b_b  (in main-access-worker) + 6540  [0x10232624c]",
+              "parent": 2
+            },
+            {
+              "depth": 10,
+              "count": 77,
+              "name": "perry_fn_access_worker_ts__run$spec_b_b  (in main-access-worker) + 4308  [0x102325994]",
+              "parent": 2
+            }
+          ],
+          "pct_of_workload_samples": 100.0
+        },
+        "array_access": {
+          "samples": 508,
+          "frames": [
+            {
+              "depth": 12,
+              "count": 170,
+              "name": "js_array_get_f64  (in main-access-worker) + 132  [0x102ae0cd4]",
+              "parent": 3
+            },
+            {
+              "depth": 12,
+              "count": 7,
+              "name": "js_array_get_f64  (in main-access-worker) + 1788,100,...  [0x102ae134c,0x102ae0cb4,...]",
+              "parent": 3
+            },
+            {
+              "depth": 12,
+              "count": 164,
+              "name": "js_array_get_f64  (in main-access-worker) + 132  [0x102ae0cd4]",
+              "parent": 26
+            },
+            {
+              "depth": 12,
+              "count": 7,
+              "name": "js_array_get_f64  (in main-access-worker) + 120,1788,...  [0x102ae0cc8,0x102ae134c,...]",
+              "parent": 26
+            },
+            {
+              "depth": 12,
+              "count": 150,
+              "name": "js_array_get_f64  (in main-access-worker) + 132  [0x102ae0cd4]",
+              "parent": 48
+            },
+            {
+              "depth": 12,
+              "count": 10,
+              "name": "js_array_get_f64  (in main-access-worker) + 100,84,...  [0x102ae0cb4,0x102ae0ca4,...]",
+              "parent": 48
+            }
+          ],
+          "pct_of_workload_samples": 67.37400530503979
+        },
+        "lazy_access": {
+          "samples": 452,
+          "frames": [
+            {
+              "depth": 14,
+              "count": 61,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 244  [0x10269b830]",
+              "parent": 4
+            },
+            {
+              "depth": 14,
+              "count": 28,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 232  [0x10269b824]",
+              "parent": 4
+            },
+            {
+              "depth": 14,
+              "count": 20,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 56  [0x10269b774]",
+              "parent": 4
+            },
+            {
+              "depth": 14,
+              "count": 18,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 176,24,...  [0x10269b7ec,0x10269b754,...]",
+              "parent": 4
+            },
+            {
+              "depth": 14,
+              "count": 17,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 1112  [0x10269bb94]",
+              "parent": 4
+            },
+            {
+              "depth": 14,
+              "count": 12,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 84  [0x10269b790]",
+              "parent": 4
+            },
+            {
+              "depth": 14,
+              "count": 61,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 244  [0x10269b830]",
+              "parent": 27
+            },
+            {
+              "depth": 14,
+              "count": 23,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 232  [0x10269b824]",
+              "parent": 27
+            },
+            {
+              "depth": 14,
+              "count": 23,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 108,180,...  [0x10269b7a8,0x10269b7f0,...]",
+              "parent": 27
+            },
+            {
+              "depth": 14,
+              "count": 18,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 84  [0x10269b790]",
+              "parent": 27
+            },
+            {
+              "depth": 14,
+              "count": 17,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 56  [0x10269b774]",
+              "parent": 27
+            },
+            {
+              "depth": 14,
+              "count": 16,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 1112  [0x10269bb94]",
+              "parent": 27
+            },
+            {
+              "depth": 14,
+              "count": 70,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 244  [0x10269b830]",
+              "parent": 49
+            },
+            {
+              "depth": 14,
+              "count": 19,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 232  [0x10269b824]",
+              "parent": 49
+            },
+            {
+              "depth": 14,
+              "count": 18,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 1112  [0x10269bb94]",
+              "parent": 49
+            },
+            {
+              "depth": 14,
+              "count": 12,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 56  [0x10269b774]",
+              "parent": 49
+            },
+            {
+              "depth": 14,
+              "count": 10,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 84  [0x10269b790]",
+              "parent": 49
+            },
+            {
+              "depth": 14,
+              "count": 9,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 108,236,...  [0x10269b7a8,0x10269b828,...]",
+              "parent": 49
+            }
+          ],
+          "pct_of_workload_samples": 59.94694960212201
+        },
+        "root_scope_helpers": {
+          "samples": 150,
+          "frames": [
+            {
+              "depth": 16,
+              "count": 20,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new  (in main-access-worker) + 32,20  [0x1025ae2b8,0x1025ae2ac]",
+              "parent": 12
+            },
+            {
+              "depth": 16,
+              "count": 17,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 32,20  [0x102489d1c,0x102489d10]",
+              "parent": 15
+            },
+            {
+              "depth": 16,
+              "count": 12,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in main-access-worker) + 100,180,...  [0x1025ae404,0x1025ae454,...]",
+              "parent": 17
+            },
+            {
+              "depth": 14,
+              "count": 1,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 144  [0x102489d8c]",
+              "parent": 4
+            },
+            {
+              "depth": 14,
+              "count": 1,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in main-access-worker) + 236  [0x1025ae48c]",
+              "parent": 4
+            },
+            {
+              "depth": 16,
+              "count": 18,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in main-access-worker) + 100,180,...  [0x1025ae404,0x1025ae454,...]",
+              "parent": 36
+            },
+            {
+              "depth": 16,
+              "count": 17,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new  (in main-access-worker) + 32,20  [0x1025ae2b8,0x1025ae2ac]",
+              "parent": 38
+            },
+            {
+              "depth": 16,
+              "count": 16,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 32,20  [0x102489d1c,0x102489d10]",
+              "parent": 40
+            },
+            {
+              "depth": 14,
+              "count": 2,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in main-access-worker) + 236  [0x1025ae48c]",
+              "parent": 27
+            },
+            {
+              "depth": 14,
+              "count": 1,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 144  [0x102489d8c]",
+              "parent": 27
+            },
+            {
+              "depth": 16,
+              "count": 18,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 32,20  [0x102489d1c,0x102489d10]",
+              "parent": 57
+            },
+            {
+              "depth": 16,
+              "count": 12,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new  (in main-access-worker) + 32,24,...  [0x1025ae2b8,0x1025ae2b0,...]",
+              "parent": 59
+            },
+            {
+              "depth": 16,
+              "count": 10,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in main-access-worker) + 100,40,...  [0x1025ae404,0x1025ae3c8,...]",
+              "parent": 61
+            },
+            {
+              "depth": 14,
+              "count": 3,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 144  [0x102489d8c]",
+              "parent": 49
+            },
+            {
+              "depth": 14,
+              "count": 2,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in main-access-worker) + 236  [0x1025ae48c]",
+              "parent": 49
+            }
+          ],
+          "pct_of_workload_samples": 19.893899204244033
+        },
+        "resolve_materialized": {
+          "samples": 88,
+          "frames": [
+            {
+              "depth": 16,
+              "count": 28,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in main-access-worker) + 124,472,...  [0x1029ab158,0x1029ab2b4,...]",
+              "parent": 10
+            },
+            {
+              "depth": 14,
+              "count": 10,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in main-access-worker) + 1116,1112  [0x1029ab538,0x1029ab534]",
+              "parent": 4
+            },
+            {
+              "depth": 16,
+              "count": 23,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in main-access-worker) + 124,96,...  [0x1029ab158,0x1029ab13c,...]",
+              "parent": 33
+            },
+            {
+              "depth": 14,
+              "count": 3,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in main-access-worker) + 1116,1112  [0x1029ab538,0x1029ab534]",
+              "parent": 27
+            },
+            {
+              "depth": 16,
+              "count": 19,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in main-access-worker) + 124,364,...  [0x1029ab158,0x1029ab248,...]",
+              "parent": 55
+            },
+            {
+              "depth": 14,
+              "count": 5,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in main-access-worker) + 1112,1116  [0x1029ab534,0x1029ab538]",
+              "parent": 49
+            }
+          ],
+          "pct_of_workload_samples": 11.671087533156498
+        }
+      },
+      "profile_sha256": "0fe87720c610c2ec5f415fce6a5d010211b4f6562a519c7a95d67989b42b14aa",
+      "note": "Instrumented diagnostic. Inclusive phases overlap and must not be added. Initial 16k sample includes startup and has insufficient workload coverage."
+    },
+    {
+      "case": {
+        "fixture": "records_array_16k",
+        "operation": "fields",
+        "mode": "main",
+        "iterations": 50000000,
+        "warmup": 10000
+      },
+      "window": "main-profiles-recheck",
+      "workload_samples": 725,
+      "coverage_qualified": true,
+      "oracle_command": [
+        "/opt/homebrew/bin/node",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/harness/access-worker.js",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/fixtures/records_array_16k.json",
+        "fields",
+        "50000000",
+        "10000"
+      ],
+      "checksum_matches_node": true,
+      "phases": {
+        "workload": {
+          "samples": 725,
+          "frames": [
+            {
+              "depth": 10,
+              "count": 219,
+              "name": "perry_fn_access_worker_ts__run$spec_b_b  (in main-access-worker) + 5100  [0x10208dcac]",
+              "parent": 2
+            },
+            {
+              "depth": 10,
+              "count": 206,
+              "name": "perry_fn_access_worker_ts__run$spec_b_b  (in main-access-worker) + 8088  [0x10208e858]",
+              "parent": 2
+            },
+            {
+              "depth": 10,
+              "count": 159,
+              "name": "perry_fn_access_worker_ts__run$spec_b_b  (in main-access-worker) + 6540  [0x10208e24c]",
+              "parent": 2
+            },
+            {
+              "depth": 10,
+              "count": 141,
+              "name": "perry_fn_access_worker_ts__run$spec_b_b  (in main-access-worker) + 4308  [0x10208d994]",
+              "parent": 2
+            }
+          ],
+          "pct_of_workload_samples": 100.0
+        },
+        "array_access": {
+          "samples": 298,
+          "frames": [
+            {
+              "depth": 12,
+              "count": 113,
+              "name": "js_array_get_f64  (in main-access-worker) + 132  [0x102848cd4]",
+              "parent": 3
+            },
+            {
+              "depth": 12,
+              "count": 20,
+              "name": "js_array_get_f64  (in main-access-worker) + 88,0,...  [0x102848ca8,0x102848c50,...]",
+              "parent": 3
+            },
+            {
+              "depth": 12,
+              "count": 82,
+              "name": "js_array_get_f64  (in main-access-worker) + 132  [0x102848cd4]",
+              "parent": 20
+            },
+            {
+              "depth": 12,
+              "count": 6,
+              "name": "js_array_get_f64  (in main-access-worker) + 100,76,...  [0x102848cb4,0x102848c9c,...]",
+              "parent": 20
+            },
+            {
+              "depth": 12,
+              "count": 71,
+              "name": "js_array_get_f64  (in main-access-worker) + 132  [0x102848cd4]",
+              "parent": 36
+            },
+            {
+              "depth": 12,
+              "count": 6,
+              "name": "js_array_get_f64  (in main-access-worker) + 88,120,...  [0x102848ca8,0x102848cc8,...]",
+              "parent": 36
+            }
+          ],
+          "pct_of_workload_samples": 41.10344827586207
+        },
+        "lazy_access": {
+          "samples": 266,
+          "frames": [
+            {
+              "depth": 14,
+              "count": 32,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 84  [0x102403790]",
+              "parent": 4
+            },
+            {
+              "depth": 14,
+              "count": 27,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 56  [0x102403774]",
+              "parent": 4
+            },
+            {
+              "depth": 14,
+              "count": 24,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 1112  [0x102403b94]",
+              "parent": 4
+            },
+            {
+              "depth": 14,
+              "count": 22,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 108,272,...  [0x1024037a8,0x10240384c,...]",
+              "parent": 4
+            },
+            {
+              "depth": 14,
+              "count": 3,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 232  [0x102403824]",
+              "parent": 4
+            },
+            {
+              "depth": 12,
+              "count": 1,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 1136  [0x102403bac]",
+              "parent": 3
+            },
+            {
+              "depth": 14,
+              "count": 25,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 56  [0x102403774]",
+              "parent": 22
+            },
+            {
+              "depth": 14,
+              "count": 18,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 84  [0x102403790]",
+              "parent": 22
+            },
+            {
+              "depth": 14,
+              "count": 17,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 1112  [0x102403b94]",
+              "parent": 22
+            },
+            {
+              "depth": 14,
+              "count": 16,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 40,108,...  [0x102403764,0x1024037a8,...]",
+              "parent": 22
+            },
+            {
+              "depth": 14,
+              "count": 4,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 232  [0x102403824]",
+              "parent": 22
+            },
+            {
+              "depth": 12,
+              "count": 1,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 1136  [0x102403bac]",
+              "parent": 20
+            },
+            {
+              "depth": 14,
+              "count": 21,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 1112  [0x102403b94]",
+              "parent": 37
+            },
+            {
+              "depth": 14,
+              "count": 19,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 108,24,...  [0x1024037a8,0x102403754,...]",
+              "parent": 37
+            },
+            {
+              "depth": 14,
+              "count": 13,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 56  [0x102403774]",
+              "parent": 37
+            },
+            {
+              "depth": 14,
+              "count": 13,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 84  [0x102403790]",
+              "parent": 37
+            },
+            {
+              "depth": 14,
+              "count": 3,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 232  [0x102403824]",
+              "parent": 37
+            },
+            {
+              "depth": 12,
+              "count": 7,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 1136,1128  [0x102403bac,0x102403ba4]",
+              "parent": 36
+            }
+          ],
+          "pct_of_workload_samples": 36.689655172413794
+        },
+        "root_scope_helpers": {
+          "samples": 199,
+          "frames": [
+            {
+              "depth": 16,
+              "count": 32,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in main-access-worker) + 100,48,...  [0x102316404,0x1023163d0,...]",
+              "parent": 5
+            },
+            {
+              "depth": 16,
+              "count": 27,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new  (in main-access-worker) + 32,20,...  [0x1023162b8,0x1023162ac,...]",
+              "parent": 7
+            },
+            {
+              "depth": 16,
+              "count": 24,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 32,20  [0x1021f1d1c,0x1021f1d10]",
+              "parent": 9
+            },
+            {
+              "depth": 14,
+              "count": 3,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in main-access-worker) + 236  [0x10231648c]",
+              "parent": 4
+            },
+            {
+              "depth": 14,
+              "count": 2,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 144  [0x1021f1d8c]",
+              "parent": 4
+            },
+            {
+              "depth": 16,
+              "count": 25,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new  (in main-access-worker) + 32,20  [0x1023162b8,0x1023162ac]",
+              "parent": 23
+            },
+            {
+              "depth": 16,
+              "count": 18,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in main-access-worker) + 100,40,...  [0x102316404,0x1023163c8,...]",
+              "parent": 25
+            },
+            {
+              "depth": 16,
+              "count": 17,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 32,20  [0x1021f1d1c,0x1021f1d10]",
+              "parent": 27
+            },
+            {
+              "depth": 14,
+              "count": 2,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 144  [0x1021f1d8c]",
+              "parent": 22
+            },
+            {
+              "depth": 16,
+              "count": 21,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 32,20,...  [0x1021f1d1c,0x1021f1d10,...]",
+              "parent": 38
+            },
+            {
+              "depth": 16,
+              "count": 13,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new  (in main-access-worker) + 32,20  [0x1023162b8,0x1023162ac]",
+              "parent": 41
+            },
+            {
+              "depth": 16,
+              "count": 13,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in main-access-worker) + 100,180  [0x102316404,0x102316454]",
+              "parent": 43
+            },
+            {
+              "depth": 14,
+              "count": 1,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 144  [0x1021f1d8c]",
+              "parent": 37
+            },
+            {
+              "depth": 14,
+              "count": 1,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in main-access-worker) + 236  [0x10231648c]",
+              "parent": 37
+            }
+          ],
+          "pct_of_workload_samples": 27.448275862068964
+        },
+        "resolve_materialized": {
+          "samples": 10,
+          "frames": [
+            {
+              "depth": 16,
+              "count": 3,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in main-access-worker) + 1096  [0x102713524]",
+              "parent": 13
+            },
+            {
+              "depth": 16,
+              "count": 4,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in main-access-worker) + 1096  [0x102713524]",
+              "parent": 30
+            },
+            {
+              "depth": 16,
+              "count": 3,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in main-access-worker) + 1096  [0x102713524]",
+              "parent": 45
+            }
+          ],
+          "pct_of_workload_samples": 1.3793103448275863
+        }
+      },
+      "profile_sha256": "fe104b4dcf048cf92c1004e418c160b503f2f01700bf3d678e38a30cb67ca666",
+      "note": "Instrumented diagnostic. Inclusive phases overlap and must not be added. Initial 16k sample includes startup and has insufficient workload coverage."
+    }
+  ]
+}

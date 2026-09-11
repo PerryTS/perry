@@ -1,0 +1,134 @@
+[
+  {
+    "worker": "worker",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/harness/worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/candidate-worker.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/candidate-worker.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/frozen-build/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/candidate-worker"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/lazy-cached-read-r22/harness/worker.ts": "f3c42ec9f04fdb9ba84dc3cf50dc59f18685540033807f3db3a7f75c08a85d39",
+      "benchmarks/json_performance/.work/lazy-cached-read-r22/candidate-worker.o": "abcebdfb8f65fc34b84e0faa11637df6c63b5509ce3e11404ae9c4159adf0fcf",
+      "benchmarks/json_performance/.work/lazy-cached-read-r22/candidate-worker": "afc1fda5f5c90d3a56a9cc0c864f73a8718c6b313989e3328cf548a524d2fe8e",
+      "benchmarks/json_performance/.work/lazy-cached-read-r22/frozen-build/perry": "067bbfa68dce9a351476081a66efe9ac2076389bb96b948c046f21debe8215b9",
+      "benchmarks/json_performance/.work/lazy-cached-read-r22/frozen-build/libperry_runtime.a": "089dca2e0e09b8ecf6909fdd68a024036d51e28e5e4a1e39ac77d6409626d727",
+      "benchmarks/json_performance/.work/lazy-cached-read-r22/frozen-build/libperry_stdlib.a": "093ea8ff15f2025b281adda4ce9ac488c8add2c0533fb4ab5cf2191e4beba2ad"
+    }
+  },
+  {
+    "worker": "access-worker",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/harness/access-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/candidate-access-worker.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/candidate-access-worker.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/frozen-build/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/candidate-access-worker"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/lazy-cached-read-r22/harness/access-worker.ts": "dba0240ef6441a07657e664354982a04045c036e53f65c1d06df62d55c73be67",
+      "benchmarks/json_performance/.work/lazy-cached-read-r22/candidate-access-worker.o": "25e8c22e77171b51ac428dcefe41385b83bf7439c995bf06bf03ce1d4d525658",
+      "benchmarks/json_performance/.work/lazy-cached-read-r22/candidate-access-worker": "5f6757bf66c4110fabfee4cef47189c684a296b9d4672265806e46bd69533a9c",
+      "benchmarks/json_performance/.work/lazy-cached-read-r22/frozen-build/perry": "067bbfa68dce9a351476081a66efe9ac2076389bb96b948c046f21debe8215b9",
+      "benchmarks/json_performance/.work/lazy-cached-read-r22/frozen-build/libperry_runtime.a": "089dca2e0e09b8ecf6909fdd68a024036d51e28e5e4a1e39ac77d6409626d727",
+      "benchmarks/json_performance/.work/lazy-cached-read-r22/frozen-build/libperry_stdlib.a": "093ea8ff15f2025b281adda4ce9ac488c8add2c0533fb4ab5cf2191e4beba2ad"
+    }
+  },
+  {
+    "worker": "rotating-worker",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/harness/rotating-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/candidate-rotating-worker.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/candidate-rotating-worker.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/frozen-build/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/candidate-rotating-worker"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/lazy-cached-read-r22/harness/rotating-worker.ts": "7541897acb2c7c35c0f5e762f8b2f28b9783feb26a42db107c1c4eb3af644b24",
+      "benchmarks/json_performance/.work/lazy-cached-read-r22/candidate-rotating-worker.o": "6d4b96162cf92d990480894852f48fdf44f957afb0cd328895151152abdc02db",
+      "benchmarks/json_performance/.work/lazy-cached-read-r22/candidate-rotating-worker": "b2e67ebed3304e9e2b7c95fdb63402275431763fbb3b69e82a91d0bcfd9a15f0",
+      "benchmarks/json_performance/.work/lazy-cached-read-r22/frozen-build/perry": "067bbfa68dce9a351476081a66efe9ac2076389bb96b948c046f21debe8215b9",
+      "benchmarks/json_performance/.work/lazy-cached-read-r22/frozen-build/libperry_runtime.a": "089dca2e0e09b8ecf6909fdd68a024036d51e28e5e4a1e39ac77d6409626d727",
+      "benchmarks/json_performance/.work/lazy-cached-read-r22/frozen-build/libperry_stdlib.a": "093ea8ff15f2025b281adda4ce9ac488c8add2c0533fb4ab5cf2191e4beba2ad"
+    }
+  },
+  {
+    "worker": "options",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/options-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/candidate-options.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/candidate-options.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/frozen-build/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/candidate-options"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/lazy-cached-read-r22/options-worker.ts": "d08c6a916c18197b889a0de4a3777632ad307275752b85c5abd75daf4d6ad85d",
+      "benchmarks/json_performance/.work/lazy-cached-read-r22/candidate-options.o": "383e2abf33263727ef75215fbee9d07e28e69d964e33a17a3522138e78e04304",
+      "benchmarks/json_performance/.work/lazy-cached-read-r22/candidate-options": "e31dcf073ecfa428210be25ce33e86c66aac7ee73303a20a795e49f5a743c069",
+      "benchmarks/json_performance/.work/lazy-cached-read-r22/frozen-build/perry": "067bbfa68dce9a351476081a66efe9ac2076389bb96b948c046f21debe8215b9",
+      "benchmarks/json_performance/.work/lazy-cached-read-r22/frozen-build/libperry_runtime.a": "089dca2e0e09b8ecf6909fdd68a024036d51e28e5e4a1e39ac77d6409626d727",
+      "benchmarks/json_performance/.work/lazy-cached-read-r22/frozen-build/libperry_stdlib.a": "093ea8ff15f2025b281adda4ce9ac488c8add2c0533fb4ab5cf2191e4beba2ad"
+    }
+  }
+]

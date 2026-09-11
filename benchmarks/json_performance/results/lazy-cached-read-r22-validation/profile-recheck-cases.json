@@ -1,0 +1,11 @@
+{
+  "cases": [
+    {
+      "fixture": "records_array_16k",
+      "operation": "fields",
+      "mode": "main",
+      "iterations": 50000000,
+      "warmup": 10000
+    }
+  ]
+}

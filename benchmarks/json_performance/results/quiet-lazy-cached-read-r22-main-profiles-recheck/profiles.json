@@ -1,0 +1,36 @@
+[
+  {
+    "case": {
+      "fixture": "records_array_16k",
+      "operation": "fields",
+      "mode": "main",
+      "iterations": 50000000,
+      "warmup": 10000
+    },
+    "worker_command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/lazy-cached-read-r22/main-access-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/fixtures/records_array_16k.json",
+      "fields",
+      "50000000",
+      "10000",
+      "verify"
+    ],
+    "worker_sha256": "d5725f384fad7699aed3ead7effd3215f0a9520a16ec53e31fe88f562a393efc",
+    "env_overrides": {},
+    "sample_command": [
+      "/usr/bin/sample",
+      "87542",
+      "1",
+      "1",
+      "-mayDie",
+      "-file",
+      "results/quiet-lazy-cached-read-r22-main-profiles-recheck/records_array_16k-fields-main.sample.txt"
+    ],
+    "worker_exit": 0,
+    "sampler_exit": 0,
+    "observed_peak_rss_bytes": 12779520,
+    "elapsed_seconds": 5.255496207999999,
+    "stop_reason": null,
+    "diagnostic_only": true
+  }
+]

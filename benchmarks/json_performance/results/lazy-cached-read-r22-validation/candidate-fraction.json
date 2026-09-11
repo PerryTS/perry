@@ -1,0 +1,21 @@
+{
+  "command": [
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/frozen-build/perry",
+    "compile",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/fraction-spacer.ts",
+    "--no-auto-optimize",
+    "--no-cache",
+    "-o",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/candidate-fraction-spacer"
+  ],
+  "exit_code": 0,
+  "matches_main": true,
+  "note": "Preserves the separately recorded main/Bun vs Node fractional-spacing difference; not a Node conformance pass.",
+  "files": {
+    "benchmarks/json_performance/.work/lazy-cached-read-r22/fraction-spacer.ts": "2f11863b7ad102980a59991f0eeedd6bb0b863704b278078b012358882881ea5",
+    "benchmarks/json_performance/.work/lazy-cached-read-r22/candidate-fraction-spacer": "0c78292c407a6e1ca4fe122d305b14ce70d9bc4de93cc7090573d47c69224c9f",
+    "benchmarks/json_performance/.work/lazy-cached-read-r22/frozen-build/perry": "067bbfa68dce9a351476081a66efe9ac2076389bb96b948c046f21debe8215b9",
+    "benchmarks/json_performance/.work/lazy-cached-read-r22/frozen-build/libperry_runtime.a": "089dca2e0e09b8ecf6909fdd68a024036d51e28e5e4a1e39ac77d6409626d727",
+    "benchmarks/json_performance/.work/lazy-cached-read-r22/frozen-build/libperry_stdlib.a": "093ea8ff15f2025b281adda4ce9ac488c8add2c0533fb4ab5cf2191e4beba2ad"
+  }
+}

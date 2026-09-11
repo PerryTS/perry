@@ -1,0 +1,131 @@
+{
+  "selection": "Predeclared R21 screen uses the same 18 cases, iteration counts, warmups and seven fresh-process interleaved repetitions as R20. No R21 timing has run. Full50/consumption/access/rotating/retained36/short/options scope remains unchanged.",
+  "cases": [
+    {
+      "fixture": "tiny_object",
+      "operation": "parse",
+      "iterations": 2000000,
+      "warmup": 5000,
+      "repetitions": 7
+    },
+    {
+      "fixture": "tiny_object",
+      "operation": "stringify",
+      "iterations": 2000000,
+      "warmup": 5000,
+      "repetitions": 7
+    },
+    {
+      "fixture": "small_record",
+      "operation": "parse",
+      "iterations": 1581369,
+      "warmup": 5000,
+      "repetitions": 7
+    },
+    {
+      "fixture": "small_record",
+      "operation": "stringify",
+      "iterations": 2000000,
+      "warmup": 5000,
+      "repetitions": 7
+    },
+    {
+      "fixture": "object_1k",
+      "operation": "parse",
+      "iterations": 1961848,
+      "warmup": 5000,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_1m",
+      "operation": "scan",
+      "iterations": 138,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_object_1m",
+      "operation": "parse",
+      "iterations": 162,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_object_8m",
+      "operation": "parse",
+      "iterations": 20,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_20m",
+      "operation": "parse",
+      "iterations": 8,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_20m",
+      "operation": "sparse",
+      "iterations": 8,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_20m",
+      "operation": "scan",
+      "iterations": 8,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_object_20m",
+      "operation": "parse",
+      "iterations": 8,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_16k",
+      "operation": "parse",
+      "iterations": 22568,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_16k",
+      "operation": "sparse",
+      "iterations": 15736,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_16k",
+      "operation": "scan",
+      "iterations": 7522,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_1m",
+      "operation": "parse",
+      "iterations": 340,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_1m",
+      "operation": "sparse",
+      "iterations": 322,
+      "warmup": 2,
+      "repetitions": 7
+    },
+    {
+      "fixture": "records_array_8m",
+      "operation": "scan",
+      "iterations": 16,
+      "warmup": 2,
+      "repetitions": 7
+    }
+  ]
+}

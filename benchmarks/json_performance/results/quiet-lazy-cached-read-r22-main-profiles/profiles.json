@@ -1,0 +1,70 @@
+[
+  {
+    "case": {
+      "fixture": "records_array_16k",
+      "operation": "fields",
+      "mode": "main",
+      "iterations": 10000000,
+      "warmup": 10000
+    },
+    "worker_command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/lazy-cached-read-r22/main-access-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/fixtures/records_array_16k.json",
+      "fields",
+      "10000000",
+      "10000",
+      "verify"
+    ],
+    "worker_sha256": "d5725f384fad7699aed3ead7effd3215f0a9520a16ec53e31fe88f562a393efc",
+    "env_overrides": {},
+    "sample_command": [
+      "/usr/bin/sample",
+      "87465",
+      "1",
+      "1",
+      "-mayDie",
+      "-file",
+      "results/quiet-lazy-cached-read-r22-main-profiles/records_array_16k-fields-main.sample.txt"
+    ],
+    "worker_exit": 0,
+    "sampler_exit": 0,
+    "observed_peak_rss_bytes": 12795904,
+    "elapsed_seconds": 1.83005175,
+    "stop_reason": null,
+    "diagnostic_only": true
+  },
+  {
+    "case": {
+      "fixture": "records_array_1m",
+      "operation": "fields",
+      "mode": "main",
+      "iterations": 10000000,
+      "warmup": 10000
+    },
+    "worker_command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/lazy-cached-read-r22/main-access-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/fixtures/records_array_1m.json",
+      "fields",
+      "10000000",
+      "10000",
+      "verify"
+    ],
+    "worker_sha256": "d5725f384fad7699aed3ead7effd3215f0a9520a16ec53e31fe88f562a393efc",
+    "env_overrides": {},
+    "sample_command": [
+      "/usr/bin/sample",
+      "87483",
+      "1",
+      "1",
+      "-mayDie",
+      "-file",
+      "results/quiet-lazy-cached-read-r22-main-profiles/records_array_1m-fields-main.sample.txt"
+    ],
+    "worker_exit": 0,
+    "sampler_exit": 0,
+    "observed_peak_rss_bytes": 18137088,
+    "elapsed_seconds": 1.2465359580000002,
+    "stop_reason": null,
+    "diagnostic_only": true
+  }
+]

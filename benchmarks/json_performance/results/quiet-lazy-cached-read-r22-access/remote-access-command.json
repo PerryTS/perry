@@ -1,0 +1,17 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/lazy-cached-read-r22/run-access.py",
+  "--worker",
+  ".work/lazy-cached-read-r22/candidate-access-worker",
+  "--baseline-worker",
+  ".work/lazy-cached-read-r22/main-access-worker",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--results-dir",
+  "results/quiet-lazy-cached-read-r22-access"
+]

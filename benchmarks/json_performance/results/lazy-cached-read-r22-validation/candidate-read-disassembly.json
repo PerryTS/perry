@@ -1,0 +1,28 @@
+{
+  "binary_sha256": "5f6757bf66c4110fabfee4cef47189c684a296b9d4672265806e46bd69533a9c",
+  "functions": [
+    {
+      "symbol": "__RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape15lazy_get_rooted",
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape15lazy_get_rooted",
+        "--no-show-raw-insn",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/candidate-access-worker"
+      ],
+      "output": "candidate-lazy-get-rooted.s",
+      "sha256": "b7ce78daa9eb0832752e596c1bba9ae8fd7ae2b6d654bbf8bad8e7be753bc610"
+    },
+    {
+      "symbol": "_js_array_get_f64",
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=_js_array_get_f64",
+        "--no-show-raw-insn",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/candidate-access-worker"
+      ],
+      "output": "candidate-array-get.s",
+      "sha256": "b7615b0353ce828c0195873e3c30618efcedce2dccd18332f010e8d4e0662e4f"
+    }
+  ],
+  "all_four_worker_objects_identical_to_main": true
+}

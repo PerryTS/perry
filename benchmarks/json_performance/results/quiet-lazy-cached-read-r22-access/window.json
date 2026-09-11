@@ -1,0 +1,32 @@
+{
+  "owner": "json-perf-87825-1789102963",
+  "load_before": [
+    1.87841796875,
+    1.68359375,
+    1.61572265625
+  ],
+  "started_utc": "2026-09-11T05:02:43Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/lazy-cached-read-r22/run-access.py",
+    "--worker",
+    ".work/lazy-cached-read-r22/candidate-access-worker",
+    "--baseline-worker",
+    ".work/lazy-cached-read-r22/main-access-worker",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--bun",
+    "/Users/perry/.bun/bin/bun",
+    "--results-dir",
+    "results/quiet-lazy-cached-read-r22-access"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.95263671875,
+    1.70947265625,
+    1.62548828125
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-11T05:03:07Z"
+}

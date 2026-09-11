@@ -1,0 +1,4 @@
+{
+  "reason": "Preserve the exact original sample, whose terminal blank line fails git diff --check, using deterministic gzip; no sample bytes changed.",
+  "original_sha256": "e9c1b719c673a9ad5ebc0dd03ec85d8ddaa540370c2bf231c662a1d408f300d2"
+}
