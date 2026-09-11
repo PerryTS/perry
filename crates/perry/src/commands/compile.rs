@@ -50,6 +50,7 @@ mod precompile_capture;
 mod reachability;
 mod size_report;
 mod typed_feedback_profile;
+mod tiny_program;
 mod update_config;
 mod windows_target;
 // pub(crate): commands/deps.rs (the `check --check-deps` dependency checker)
