@@ -112,6 +112,30 @@ pub extern "C" fn js_promise_run_microtasks_event_loop() -> i32 {
     run_microtasks(MicrotaskDrainMode::EventLoop)
 }
 
+/// The entry's checkpoint after beforeExit. Finish ticks, promise jobs, and
+/// rejection reporting before deciding whether the listener created another
+/// event-loop turn. Leave timers and foreign completions for that turn.
+#[no_mangle]
+pub extern "C" fn js_promise_run_before_exit_checkpoint() -> i32 {
+    let mut ran = 0;
+    loop {
+        ran += run_microtasks(MicrotaskDrainMode::BeforeExit);
+        // A rejection listener can queue more jobs after the ordinary job
+        // drain. Finish those here too; microtasks alone must not re-emit
+        // beforeExit as if a new timer/I/O turn had occurred.
+        if TASK_QUEUE.with(|queue| queue.borrow().is_empty())
+            && !crate::builtins::queued_microtasks_pending()
+        {
+            return ran;
+        }
+    }
+}
+
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_PROMISE_RUN_BEFORE_EXIT_CHECKPOINT: extern "C" fn() -> i32 =
+    js_promise_run_before_exit_checkpoint;
+
 // The entry event loop is generated code, so nothing in the Rust runtime
 // references this symbol — anchor it like the other codegen-only hooks so the
 // auto-optimize internalize+dead-strip pass can't drop it (#4876).
@@ -152,6 +176,9 @@ enum MicrotaskDrainMode {
     /// drain and the timer queues (#6077). Reserved for the compiled entry's
     /// event loop — see `js_promise_run_microtasks_event_loop`.
     EventLoop,
+    /// Entry-only tick/promise/rejection checkpoint after beforeExit; foreign
+    /// callbacks and timers stay pending for the next event-loop iteration.
+    BeforeExit,
     MicrotasksOnly,
     /// Promise/queueMicrotask jobs only — no nextTick drain, no timers.
     PromiseJobsOnly,
@@ -213,7 +240,13 @@ fn rooted_closure(h: &crate::gc::RuntimeHandle<'_>) -> ClosurePtr {
 fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     mt_profile_register();
     bump(&MT_DRAIN_COUNT);
-    if matches!(mode, MicrotaskDrainMode::EventLoop) && empty::can_skip_callback_phases() {
+    if matches!(
+        mode,
+        MicrotaskDrainMode::EventLoop
+            | MicrotaskDrainMode::BeforeExit
+            | MicrotaskDrainMode::PromiseJobsOnly
+    ) && empty::can_skip_callback_phases()
+    {
         // No callback can run in this checkpoint, so no exception trap or
         // async execution-reference stack is needed. The GC/box boundary is
         // still required: synchronous allocation can leave collection work
@@ -221,7 +254,9 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
         MICROTASK_RUN_DEPTH.with(|depth| depth.set(MicrotaskRunDepths { pump: 1, jobs: 0 }));
         // The ordinary callback-timer phase stamps this even with no timers.
         // Keep nodeTiming.loopStart/eventLoopUtilization observable on beforeExit.
-        crate::perf_hooks::note_event_loop_start();
+        if matches!(mode, MicrotaskDrainMode::EventLoop) {
+            crate::perf_hooks::note_event_loop_start();
+        }
         finish_gc_and_box_boundary();
         MICROTASK_RUN_DEPTH.with(|depth| depth.set(MicrotaskRunDepths { pump: 0, jobs: 0 }));
         bump(&MT_EMPTY_DRAIN_COUNT);
@@ -240,7 +275,9 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     });
     let mut ran = 0;
 
-    ran += crate::bun_ffi::callback::drain_threadsafe_callbacks();
+    if !matches!(mode, MicrotaskDrainMode::BeforeExit) {
+        ran += crate::bun_ffi::callback::drain_threadsafe_callbacks();
+    }
 
     ran += crate::async_hooks::drain_gc_destroy_queue();
 
@@ -252,16 +289,20 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     ran += crate::weakref::drain_pending_finalization_jobs();
 
     // Native async tokens settle only through the main-thread handoff path.
-    ran += super::native_async::js_native_async_process_pending();
+    if !matches!(mode, MicrotaskDrainMode::BeforeExit) {
+        ran += super::native_async::js_native_async_process_pending();
+    }
 
     // Process any scheduled resolutions (simulates async completions)
     ran += super::combinators::process_scheduled_resolves();
 
     // Process diagnostics_channel publishes queued by perry/thread workers.
-    ran += crate::node_submodules::diagnostics_channel_process_pending();
+    if !matches!(mode, MicrotaskDrainMode::BeforeExit) {
+        ran += crate::node_submodules::diagnostics_channel_process_pending();
 
-    // Process pending thread results (from perry/thread spawn)
-    ran += crate::thread::js_thread_process_pending();
+        // Process pending thread results (from perry/thread spawn)
+        ran += crate::thread::js_thread_process_pending();
+    }
 
     // Then process the task queue.
     //
@@ -1148,7 +1189,11 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
     // Only the codegen event-loop pump qualifies (see the doc comment on
     // `js_promise_run_microtasks_event_loop`); a nested drain is not a
     // checkpoint boundary.
-    if matches!(mode, MicrotaskDrainMode::EventLoop) && !reentrant {
+    if matches!(
+        mode,
+        MicrotaskDrainMode::EventLoop | MicrotaskDrainMode::BeforeExit
+    ) && !reentrant
+    {
         super::rejection::process_rejections();
     }
 
