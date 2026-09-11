@@ -1,0 +1,204 @@
+{
+  "revision": "0c5348ce5694654d8aa6e4477900ebc9fffe67de",
+  "node": "v26.5.1",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "processor": "AMD64 Family 25 Model 116 Stepping 1, AuthenticAMD",
+  "workloads": {
+    "ascii": {
+      "sha256": "3895cd80f04d760f98c3447607347ff5ea0c8d900129a187ddfd6f55be100bfb",
+      "engines": {
+        "node": [
+          {
+            "name": "string-slice-parse-loop-ascii",
+            "category": "strings",
+            "n": 100,
+            "ms_per_run": 0.0067449426837486726,
+            "runs": 19904,
+            "checksum": 464151292
+          },
+          {
+            "name": "string-slice-parse-loop-ascii",
+            "category": "strings",
+            "n": 1000,
+            "ms_per_run": 0.08074435483871113,
+            "runs": 1718,
+            "checksum": 710929850
+          },
+          {
+            "name": "string-slice-parse-loop-ascii",
+            "category": "strings",
+            "n": 10000,
+            "ms_per_run": 0.8042599999999948,
+            "runs": 175,
+            "checksum": 535454277
+          },
+          {
+            "name": "string-slice-parse-loop-ascii",
+            "category": "strings",
+            "n": 100000,
+            "ms_per_run": 7.428233333333348,
+            "runs": 21,
+            "checksum": 35382078
+          },
+          {
+            "name": "string-slice-parse-loop-ascii",
+            "category": "strings",
+            "n": 1000000,
+            "ms_per_run": 71.59320000000002,
+            "runs": 7,
+            "checksum": 153135489
+          }
+        ],
+        "perry": [
+          {
+            "name": "string-slice-parse-loop-ascii",
+            "category": "strings",
+            "n": 100,
+            "ms_per_run": 0.005188482490272402,
+            "runs": 26905,
+            "checksum": 464151292,
+            "checksum_match": true
+          },
+          {
+            "name": "string-slice-parse-loop-ascii",
+            "category": "strings",
+            "n": 1000,
+            "ms_per_run": 0.05281160949868106,
+            "runs": 2656,
+            "checksum": 710929850,
+            "checksum_match": true
+          },
+          {
+            "name": "string-slice-parse-loop-ascii",
+            "category": "strings",
+            "n": 10000,
+            "ms_per_run": 0.5264789473684213,
+            "runs": 269,
+            "checksum": 535454277,
+            "checksum_match": true
+          },
+          {
+            "name": "string-slice-parse-loop-ascii",
+            "category": "strings",
+            "n": 100000,
+            "ms_per_run": 5.251350000000002,
+            "runs": 28,
+            "checksum": 35382078,
+            "checksum_match": true
+          },
+          {
+            "name": "string-slice-parse-loop-ascii",
+            "category": "strings",
+            "n": 1000000,
+            "ms_per_run": 52.08860000000004,
+            "runs": 7,
+            "checksum": 153135489,
+            "checksum_match": true
+          }
+        ]
+      },
+      "slopes": {
+        "node": 1.001556039034457,
+        "perry": 1.0000946220402622
+      }
+    },
+    "unicode": {
+      "sha256": "ca1ea8b7ce414346c145e60062c2dbe2be6209f78e203df1567f9f86da9efedb",
+      "engines": {
+        "node": [
+          {
+            "name": "string-slice-parse-loop-unicode",
+            "category": "strings",
+            "n": 100,
+            "ms_per_run": 0.01004327309236978,
+            "runs": 14125,
+            "checksum": 319467163
+          },
+          {
+            "name": "string-slice-parse-loop-unicode",
+            "category": "strings",
+            "n": 1000,
+            "ms_per_run": 0.10087537688442307,
+            "runs": 1435,
+            "checksum": 431622199
+          },
+          {
+            "name": "string-slice-parse-loop-unicode",
+            "category": "strings",
+            "n": 10000,
+            "ms_per_run": 1.004910000000001,
+            "runs": 142,
+            "checksum": 36132863
+          },
+          {
+            "name": "string-slice-parse-loop-unicode",
+            "category": "strings",
+            "n": 100000,
+            "ms_per_run": 8.955499999999992,
+            "runs": 21,
+            "checksum": 49951631
+          },
+          {
+            "name": "string-slice-parse-loop-unicode",
+            "category": "strings",
+            "n": 1000000,
+            "ms_per_run": 89.63160000000005,
+            "runs": 7,
+            "checksum": 481167302
+          }
+        ],
+        "perry": [
+          {
+            "name": "string-slice-parse-loop-unicode",
+            "category": "strings",
+            "n": 100,
+            "ms_per_run": 0.006948454324418352,
+            "runs": 20095,
+            "checksum": 319467163,
+            "checksum_match": true
+          },
+          {
+            "name": "string-slice-parse-loop-unicode",
+            "category": "strings",
+            "n": 1000,
+            "ms_per_run": 0.07011328671328723,
+            "runs": 1994,
+            "checksum": 431622199,
+            "checksum_match": true
+          },
+          {
+            "name": "string-slice-parse-loop-unicode",
+            "category": "strings",
+            "n": 10000,
+            "ms_per_run": 0.699286206896551,
+            "runs": 202,
+            "checksum": 36132863,
+            "checksum_match": true
+          },
+          {
+            "name": "string-slice-parse-loop-unicode",
+            "category": "strings",
+            "n": 100000,
+            "ms_per_run": 7.232333333333344,
+            "runs": 21,
+            "checksum": 49951631,
+            "checksum_match": true
+          },
+          {
+            "name": "string-slice-parse-loop-unicode",
+            "category": "strings",
+            "n": 1000000,
+            "ms_per_run": 69.96260000000007,
+            "runs": 7,
+            "checksum": 481167302,
+            "checksum_match": true
+          }
+        ]
+      },
+      "slopes": {
+        "node": 0.9849476421934262,
+        "perry": 1.0019433575448282
+      }
+    }
+  }
+}
