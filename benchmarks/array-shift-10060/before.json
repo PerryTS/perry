@@ -1,0 +1,235 @@
+{
+  "revision": "603b074ace01464bc66fc07cc8d532f26ccf5a0f",
+  "node": "v26.5.1",
+  "host": "Windows-11-10.0.26200-SP0",
+  "workloads": {
+    "array-shift-queue": {
+      "rows": [
+        {
+          "n": 100,
+          "node": {
+            "name": "array-shift-queue",
+            "category": "arrays",
+            "n": 100,
+            "ms_per_run": 0.0020512923076925617,
+            "runs": 68006,
+            "checksum": 534569475,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-shift-queue",
+            "category": "arrays",
+            "n": 100,
+            "ms_per_run": 0.01655653973509805,
+            "runs": 7959,
+            "checksum": 534569475,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 1000,
+          "node": {
+            "name": "array-shift-queue",
+            "category": "arrays",
+            "n": 1000,
+            "ms_per_run": 0.039113085937499736,
+            "runs": 3499,
+            "checksum": 965032923,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-shift-queue",
+            "category": "arrays",
+            "n": 1000,
+            "ms_per_run": 1.3881666666666737,
+            "runs": 100,
+            "checksum": 965032923,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 10000,
+          "node": {
+            "name": "array-shift-queue",
+            "category": "arrays",
+            "n": 10000,
+            "ms_per_run": 0.3938921568627453,
+            "runs": 351,
+            "checksum": 663245961,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-shift-queue",
+            "category": "arrays",
+            "n": 10000,
+            "ms_per_run": 401.9228000000003,
+            "runs": 7,
+            "checksum": 663245961,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 100000,
+          "node": {
+            "name": "array-shift-queue",
+            "category": "arrays",
+            "n": 100000,
+            "ms_per_run": 519.9770999999992,
+            "runs": 7,
+            "checksum": 987888354,
+            "status": "OK"
+          },
+          "perry": {
+            "status": "TIMEOUT"
+          }
+        },
+        {
+          "n": 1000000,
+          "node": {
+            "status": "TIMEOUT"
+          },
+          "perry": {
+            "status": "SKIPPED"
+          }
+        }
+      ],
+      "common_sizes": [
+        100,
+        1000,
+        10000
+      ],
+      "common_slopes": {
+        "node": 1.1416748909194272,
+        "perry": 2.192586533751063
+      }
+    },
+    "array-push": {
+      "rows": [
+        {
+          "n": 100,
+          "node": {
+            "name": "array-push",
+            "category": "arrays",
+            "n": 100,
+            "ms_per_run": 0.0023072095974161896,
+            "runs": 59952,
+            "checksum": 397536938,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-push",
+            "category": "arrays",
+            "n": 100,
+            "ms_per_run": 0.004117620419925205,
+            "runs": 33988,
+            "checksum": 397536938,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 1000,
+          "node": {
+            "name": "array-push",
+            "category": "arrays",
+            "n": 1000,
+            "ms_per_run": 0.02357915194346346,
+            "runs": 5990,
+            "checksum": 60977410,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-push",
+            "category": "arrays",
+            "n": 1000,
+            "ms_per_run": 0.02997994011975865,
+            "runs": 4575,
+            "checksum": 60977410,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 10000,
+          "node": {
+            "name": "array-push",
+            "category": "arrays",
+            "n": 10000,
+            "ms_per_run": 0.21355106382978487,
+            "runs": 644,
+            "checksum": 840530610,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-push",
+            "category": "arrays",
+            "n": 10000,
+            "ms_per_run": 0.32209682539681644,
+            "runs": 439,
+            "checksum": 840530610,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 100000,
+          "node": {
+            "name": "array-push",
+            "category": "arrays",
+            "n": 100000,
+            "ms_per_run": 2.1039800000000013,
+            "runs": 70,
+            "checksum": 810288076,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-push",
+            "category": "arrays",
+            "n": 100000,
+            "ms_per_run": 3.4687857142857217,
+            "runs": 45,
+            "checksum": 810288076,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 1000000,
+          "node": {
+            "name": "array-push",
+            "category": "arrays",
+            "n": 1000000,
+            "ms_per_run": 24.169399999999996,
+            "runs": 7,
+            "checksum": 863996427,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-push",
+            "category": "arrays",
+            "n": 1000000,
+            "ms_per_run": 36.18619999999987,
+            "runs": 7,
+            "checksum": 863996427,
+            "status": "OK"
+          }
+        }
+      ],
+      "common_sizes": [
+        100,
+        1000,
+        10000,
+        100000,
+        1000000
+      ],
+      "common_slopes": {
+        "node": 0.9990871065499047,
+        "perry": 0.9951140051289211
+      }
+    }
+  },
+  "cpu": "AMD64 Family 25 Model 116 Stepping 1, AuthenticAMD",
+  "artifact_sha256": {
+    "perry": "d860bb96cfa8086b780cfc81ae274c0d191f2d1383164674715f205a6b8f67c4",
+    "node": "b48b0224081224cda1f49374e2fc63d143041ade51754f0cc6608fe8510ba29e",
+    "runtime": "e0c45bbccd7fa9f4dfced0b421f72beb110fd57e81a3e2c2134cf479664f40f5",
+    "stdlib": "ffaa589e113a24adecf57d3de74747690f4206bd21069c7550071347168814e4",
+    "array-shift-queue.ts": "9bb352c176b20fa1d05365246f0f9161d5d4e103d23dedfb6f4e7ca0ccb012cf"
+  }
+}

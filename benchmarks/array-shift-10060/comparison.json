@@ -1,0 +1,67 @@
+{
+  "array-shift-queue": {
+    "common_completed_sizes_before_and_after": [
+      100,
+      1000,
+      10000
+    ],
+    "slopes_common": {
+      "before": {
+        "node": 1.1416748909194272,
+        "perry": 2.192586533751063
+      },
+      "after": {
+        "node": 1.1502161744764081,
+        "perry": 0.994809667647383
+      }
+    },
+    "after_completed_slopes": {
+      "node": 1.7008585224432438,
+      "perry": 0.9985930364176875
+    },
+    "after_common_sizes": [
+      100,
+      1000,
+      10000,
+      100000
+    ],
+    "after_common_slopes": {
+      "node": 1.7008585224432438,
+      "perry": 0.9976993367688158
+    }
+  },
+  "array-push": {
+    "common_completed_sizes_before_and_after": [
+      100,
+      1000,
+      10000,
+      100000,
+      1000000
+    ],
+    "slopes_common": {
+      "before": {
+        "node": 0.9990871065499047,
+        "perry": 0.9951140051289211
+      },
+      "after": {
+        "node": 1.0161452416944852,
+        "perry": 0.9832671902629404
+      }
+    },
+    "after_completed_slopes": {
+      "node": 1.0161452416944852,
+      "perry": 0.9832671902629404
+    },
+    "after_common_sizes": [
+      100,
+      1000,
+      10000,
+      100000,
+      1000000
+    ],
+    "after_common_slopes": {
+      "node": 1.0161452416944852,
+      "perry": 0.9832671902629404
+    }
+  }
+}

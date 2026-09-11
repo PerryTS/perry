@@ -1,0 +1,249 @@
+{
+  "revision": "1e79ee9e431c8a3791cac534ecb08b58d53df0c9",
+  "node": "v26.5.1",
+  "host": "Windows-11-10.0.26200-SP0",
+  "cpu": "AMD64 Family 25 Model 116 Stepping 1, AuthenticAMD",
+  "artifact_sha256": {
+    "perry": "93a63d8e953ac61cf9a88ea34ecaeb334bce38d48627fe545c0f84138a6f73d0",
+    "node": "b48b0224081224cda1f49374e2fc63d143041ade51754f0cc6608fe8510ba29e",
+    "runtime": "55d5307dae1afe575d772013ab6b9575d2461ccb627746be5aa21fa675843816",
+    "stdlib": "2f203e0e90005ad7b5437b0e639d55636db3b621e5b8506240b9d42b8fa24bd6",
+    "array-shift-queue.ts": "9bb352c176b20fa1d05365246f0f9161d5d4e103d23dedfb6f4e7ca0ccb012cf",
+    "array-push.ts": "bacabb7fd2d4d5b0860142b02f1b054dea636fd7dcd6144ca04482747a521e64"
+  },
+  "workloads": {
+    "array-shift-queue": {
+      "rows": [
+        {
+          "n": 100,
+          "node": {
+            "name": "array-shift-queue",
+            "category": "arrays",
+            "n": 100,
+            "ms_per_run": 0.0018184471315575545,
+            "runs": 76729,
+            "checksum": 534569475,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-shift-queue",
+            "category": "arrays",
+            "n": 100,
+            "ms_per_run": 0.001970571428571307,
+            "runs": 71052,
+            "checksum": 534569475,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 1000,
+          "node": {
+            "name": "array-shift-queue",
+            "category": "arrays",
+            "n": 1000,
+            "ms_per_run": 0.03647067395264273,
+            "runs": 3826,
+            "checksum": 965032923,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-shift-queue",
+            "category": "arrays",
+            "n": 1000,
+            "ms_per_run": 0.019170498084291523,
+            "runs": 7303,
+            "checksum": 965032923,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 10000,
+          "node": {
+            "name": "array-shift-queue",
+            "category": "arrays",
+            "n": 10000,
+            "ms_per_run": 0.36318928571428544,
+            "runs": 388,
+            "checksum": 663245961,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-shift-queue",
+            "category": "arrays",
+            "n": 10000,
+            "ms_per_run": 0.19240285714285316,
+            "runs": 733,
+            "checksum": 663245961,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 100000,
+          "node": {
+            "name": "array-shift-queue",
+            "category": "arrays",
+            "n": 100000,
+            "ms_per_run": 394.9110999999998,
+            "runs": 7,
+            "checksum": 987888354,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-shift-queue",
+            "category": "arrays",
+            "n": 100000,
+            "ms_per_run": 1.9337363636364195,
+            "runs": 77,
+            "checksum": 987888354,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 1000000,
+          "node": {
+            "status": "TIMEOUT"
+          },
+          "perry": {
+            "name": "array-shift-queue",
+            "category": "arrays",
+            "n": 1000000,
+            "ms_per_run": 19.30525,
+            "runs": 14,
+            "checksum": 755413900,
+            "status": "OK"
+          }
+        }
+      ],
+      "common_sizes": [
+        100,
+        1000,
+        10000,
+        100000
+      ],
+      "common_slopes": {
+        "node": 1.7008585224432438,
+        "perry": 0.9976993367688158
+      }
+    },
+    "array-push": {
+      "rows": [
+        {
+          "n": 100,
+          "node": {
+            "name": "array-push",
+            "category": "arrays",
+            "n": 100,
+            "ms_per_run": 0.0017794306049822746,
+            "runs": 77124,
+            "checksum": 397536938,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-push",
+            "category": "arrays",
+            "n": 100,
+            "ms_per_run": 0.0032718510573109764,
+            "runs": 47026,
+            "checksum": 397536938,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 1000,
+          "node": {
+            "name": "array-push",
+            "category": "arrays",
+            "n": 1000,
+            "ms_per_run": 0.01914937799043073,
+            "runs": 7313,
+            "checksum": 60977410,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-push",
+            "category": "arrays",
+            "n": 1000,
+            "ms_per_run": 0.023626446280998768,
+            "runs": 5955,
+            "checksum": 60977410,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 10000,
+          "node": {
+            "name": "array-push",
+            "category": "arrays",
+            "n": 10000,
+            "ms_per_run": 0.19196571428571285,
+            "runs": 726,
+            "checksum": 840530610,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-push",
+            "category": "arrays",
+            "n": 10000,
+            "ms_per_run": 0.2483493827160539,
+            "runs": 557,
+            "checksum": 840530610,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 100000,
+          "node": {
+            "name": "array-push",
+            "category": "arrays",
+            "n": 100000,
+            "ms_per_run": 1.9199454545454429,
+            "runs": 75,
+            "checksum": 810288076,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-push",
+            "category": "arrays",
+            "n": 100000,
+            "ms_per_run": 2.6332875000000087,
+            "runs": 54,
+            "checksum": 810288076,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 1000000,
+          "node": {
+            "name": "array-push",
+            "category": "arrays",
+            "n": 1000000,
+            "ms_per_run": 21.401299999999992,
+            "runs": 8,
+            "checksum": 863996427,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-push",
+            "category": "arrays",
+            "n": 1000000,
+            "ms_per_run": 25.561099999999897,
+            "runs": 7,
+            "checksum": 863996427,
+            "status": "OK"
+          }
+        }
+      ],
+      "common_sizes": [
+        100,
+        1000,
+        10000,
+        100000,
+        1000000
+      ],
+      "common_slopes": {
+        "node": 1.0161452416944852,
+        "perry": 0.9832671902629404
+      }
+    }
+  }
+}
