@@ -297,12 +297,9 @@ const PIC_LATCH_RETRY: i64 = 2048;
 
 /// Prime the MRU entry, cascading the shape it evicts into the ways.
 ///
-/// Word 0 keeps exactly its pre-#7753 meaning — last shape seen, always
-/// overwritten — so a genuinely monomorphic site behaves identically. What
-/// changes is that the *evicted* shape is no longer thrown away: it moves into
-/// a way, and the emitted poly block (reached only after word 0 misses)
-/// resolves it inline instead of calling back into this handler. A site that
-/// alternates between k ≤ `PIC_WAYS + 1` shapes therefore stops thrashing.
+/// Word 0 holds the last cacheable shape. An evicted shape moves into a way,
+/// which generated code consults after the MRU misses. Sites alternating
+/// between k ≤ `PIC_WAYS + 1` shapes therefore stop thrashing.
 ///
 /// Every token is derived from an authoritative, never-reused ShapeId. A shape
 /// transition therefore makes an old way go cold without requiring an address
@@ -312,6 +309,11 @@ const PIC_LATCH_RETRY: i64 = 2048;
 /// `cache` must point at a live `[i64; PIC_CACHE_WORDS]` (the codegen-emitted
 /// per-site global, or a stack array of that type).
 pub(crate) unsafe fn pic_prime_get(cache: *mut PicCache, token: i64, slot: i64) {
+    // A token hit must prove a nonzero ShapeId, including in polymorphic ways.
+    // Keyless/unstamped receivers require the full prototype lookup.
+    if token == crate::object::shapes::PIC_ID_TOKEN_BIT as i64 {
+        return;
+    }
     let c = &mut *cache;
     let prev_tok = c[0];
     let prev_slot = c[1];
@@ -531,11 +533,15 @@ fn ic_diag_note(
     crate::hot_diag::ic_note(site, bytes, reason);
 }
 
-#[no_mangle]
-pub extern "C" fn js_object_get_field_ic_miss(
+#[path = "ic_miss/packed_get.rs"]
+mod packed_get;
+pub use packed_get::{js_object_get_field_ic_miss, js_object_get_field_ic_miss_packed};
+
+fn get_field_ic_miss_impl(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
     cache_slot: *mut PicCacheSlot,
+    packed: *const std::sync::atomic::AtomicU64,
 ) -> f64 {
     use crate::hot_diag::IcMissReason as R;
     if crate::hot_diag::receiver_repr_on() {
@@ -915,10 +921,11 @@ pub extern "C" fn js_object_get_field_ic_miss(
                                     // overflow-primed entry.
                                     let cache = pic_slot_resolve(cache_slot);
                                     (*cache)[2] = 0;
-                                    pic_prime_get(
+                                    packed_get::prime_get(
                                         cache,
                                         token,
                                         (i as u32 | crate::proxy::IC_SLOT_OVERFLOW_BIT) as i64,
+                                        packed,
                                     );
                                     if diag {
                                         ic_diag_note(cache_slot, key, R::OwnOverflowPrimed);
@@ -970,7 +977,7 @@ pub extern "C" fn js_object_get_field_ic_miss(
                     }
                     let cache = pic_slot_resolve(cache_slot);
                     (*cache)[2] = named_prefix_token;
-                    pic_prime_get(cache, token, i as i64);
+                    packed_get::prime_get(cache, token, i as i64, packed);
                     if diag {
                         ic_diag_note(cache_slot, key, R::OwnInlinePrimed);
                     }

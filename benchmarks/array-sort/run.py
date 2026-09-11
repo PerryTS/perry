@@ -25,21 +25,27 @@ parser.add_argument("--size", type=int, default=100000)
 parser.add_argument("--samples", type=int, default=7)
 parser.add_argument("--warmups", type=int, default=2)
 parser.add_argument("--output", type=Path)
+parser.add_argument("--cases", choices=["all", "matrix", "issue"], default="all")
 args = parser.parse_args()
 if args.size < 1 or args.samples < 1 or args.warmups < 0:
     parser.error("size and samples must be positive; warmups must be nonnegative")
 out = (args.output or Path(tempfile.mkdtemp(prefix="perry-array-sort-"))).resolve()
 out.mkdir(parents=True, exist_ok=True)
-source = out / "bench.ts"
-shutil.copyfile(Path(__file__).with_name("bench.ts"), source)
+sources = {"matrix": out / "bench.ts", "issue": out / "issue-289.ts"}
+if args.cases != "all":
+    sources = {args.cases: sources[args.cases]}
+for source in sources.values():
+    shutil.copyfile(Path(__file__).with_name(source.name), source)
 env = {k: v for k, v in os.environ.items() if not k.startswith("PERRY_")}
 report = {
     "platform": platform.platform(), "size": args.size,
-    "method": f"{args.warmups} warmups + {args.samples} randomized interleaved fresh-process samples per engine. performance.now measures sort only. Identical pre-generated JSON inputs; every output element, type and stable object order checked against Node on every run. Matching compiler/runtime pairs; compiler sources and build flags must be held fixed across the A/B.",
+    "method": f"{args.warmups} warmups + {args.samples} randomized interleaved fresh-process samples per engine. performance.now measures sort only. Matrix: identical pre-generated JSON inputs; every output element, type and stable object order checked against Node. Issue 289: each engine constructs the original negative-number input; the program verifies every output element. Matching compiler/runtime pairs and identical build flags; source differences are the intended optimization patch.",
     "node": subprocess.check_output([args.node, "--version"], text=True).strip(),
+    "source_sha256": {source.name: hashlib.sha256(source.read_bytes()).hexdigest() for source in sources.values()},
+    "harness_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
     "builds": {}, "rows": [],
 }
-commands = {"node": [args.node, str(source)]}
+commands = {case: {"node": [args.node, str(source)]} for case, source in sources.items()}
 for name, directory in [("baseline", args.baseline), ("candidate", args.candidate)]:
     directory = directory.resolve()
     compiler = directory / "perry"
@@ -49,13 +55,14 @@ for name, directory in [("baseline", args.baseline), ("candidate", args.candidat
         "sha256": {file: hashlib.sha256((directory / file).read_bytes()).hexdigest()
                    for file in ["perry", "libperry_runtime.a", "libperry_stdlib.a"]},
     }
-    binary = out / name
-    compile_cmd = [str(compiler), "compile", str(source), "-o", str(binary),
-                   "--no-auto-optimize", "--cache-dir", str(out / "cache")]
-    with (out / f"compile-{name}.log").open("w") as log:
-        subprocess.run(compile_cmd, cwd=out, env={**env, "PERRY_RUNTIME_DIR": str(directory)},
-                       stdout=log, stderr=subprocess.STDOUT, timeout=180, check=True)
-    commands[name] = [str(binary)]
+    for case, source in sources.items():
+        binary = out / f"{name}-{case}"
+        compile_cmd = [str(compiler), "compile", str(source), "-o", str(binary),
+                       "--no-auto-optimize", "--cache-dir", str(out / "cache")]
+        with (out / f"compile-{name}-{case}.log").open("w") as log:
+            subprocess.run(compile_cmd, cwd=out, env={**env, "PERRY_RUNTIME_DIR": str(directory)},
+                           stdout=log, stderr=subprocess.STDOUT, timeout=180, check=True)
+        commands[case][name] = [str(binary)]
 
 n = args.size
 rng = random.Random(289)
@@ -71,7 +78,9 @@ fixtures = {
 
 
 def run(engine, distribution, kind, fixture):
-    command = commands[engine] + [distribution, kind, str(n), "1", str(fixture)]
+    case = "issue" if distribution == "issue_289" else "matrix"
+    extra = [str(n)] if case == "issue" else [distribution, kind, str(n), "1", str(fixture)]
+    command = commands[case][engine] + extra
     result = subprocess.run(command, cwd=out, env=env, capture_output=True,
                             text=True, timeout=60, check=True)
     if result.stderr:
@@ -82,30 +91,35 @@ def run(engine, distribution, kind, fixture):
     return elapsed, record
 
 
-for distribution, values in fixtures.items():
-    fixture = out / f"input-{distribution}.json"
-    fixture.write_text(json.dumps(values, separators=(",", ":")))
-    for kind in ["number", "object", "string"]:
-        _, expected = run("node", distribution, kind, fixture)
-        # Python considers True == 1. Compare canonical JSON so a wrong JS
-        # value type cannot pass the oracle check through Python equality.
-        expected_json = json.dumps(expected, sort_keys=True, separators=(",", ":"))
-        samples = {name: [] for name in commands}
-        for iteration in range(args.warmups + args.samples):
-            order = list(commands)
-            rng.shuffle(order)
-            for name in order:
-                elapsed, record = run(name, distribution, kind, fixture)
-                assert json.dumps(record, sort_keys=True, separators=(",", ":")) == expected_json, (name, distribution, kind, "output differs from Node")
-                if iteration >= args.warmups:
-                    samples[name].append(elapsed)
-        row = {"distribution": distribution, "kind": kind,
-               "output_sha256": hashlib.sha256(json.dumps(expected, separators=(",", ":")).encode()).hexdigest(),
-               "timings_ms": {name: {"median": statistics.median(times), "min": min(times),
-                                     "max": max(times), "samples": times}
-                              for name, times in samples.items()}}
-        report["rows"].append(row)
-        (out / "results.json").write_text(json.dumps(report, indent=2) + "\n")
-        medians = {name: round(v["median"], 4) for name, v in row["timings_ms"].items()}
-        print(distribution, kind, medians, flush=True)
+cases = []
+if "matrix" in commands:
+    for distribution, values in fixtures.items():
+        fixture = out / f"input-{distribution}.json"
+        fixture.write_text(json.dumps(values, separators=(",", ":")))
+        cases.extend(("matrix", distribution, kind, fixture) for kind in ["number", "object", "string"])
+if "issue" in commands:
+    cases.append(("issue", "issue_289", "number", None))
+for case, distribution, kind, fixture in cases:
+    _, expected = run("node", distribution, kind, fixture)
+    # Python considers True == 1. Compare canonical JSON so a wrong JS
+    # value type cannot pass the oracle check through Python equality.
+    expected_json = json.dumps(expected, sort_keys=True, separators=(",", ":"))
+    samples = {name: [] for name in commands[case]}
+    for iteration in range(args.warmups + args.samples):
+        order = list(commands[case])
+        rng.shuffle(order)
+        for name in order:
+            elapsed, record = run(name, distribution, kind, fixture)
+            assert json.dumps(record, sort_keys=True, separators=(",", ":")) == expected_json, (name, distribution, kind, "output differs from Node")
+            if iteration >= args.warmups:
+                samples[name].append(elapsed)
+    row = {"distribution": distribution, "kind": kind,
+           "output_sha256": hashlib.sha256(json.dumps(expected, separators=(",", ":")).encode()).hexdigest(),
+           "timings_ms": {name: {"median": statistics.median(times), "min": min(times),
+                                 "max": max(times), "samples": times}
+                          for name, times in samples.items()}}
+    report["rows"].append(row)
+    (out / "results.json").write_text(json.dumps(report, indent=2) + "\n")
+    medians = {name: round(v["median"], 4) for name, v in row["timings_ms"].items()}
+    print(distribution, kind, medians, flush=True)
 print("Results:", out / "results.json", flush=True)

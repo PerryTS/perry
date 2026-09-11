@@ -48,6 +48,9 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         // invokes JavaScript getters, proxies, coercions, or callbacks.
         | "js_param_type_guard"
         | "js_is_truthy"
+        // string/compare.rs: immutable byte reads and bounded UTF-16 decoding;
+        // no allocation, runtime state access, coercion, or collector entry.
+        | "js_string_compare"
         | "js_typed_feedback_plain_array_index_get_guard"
         | "js_typed_feedback_numeric_array_index_get_guard"
         | "js_typed_feedback_plain_array_index_set_guard"
@@ -729,7 +732,19 @@ mod tests {
     /// thing to reach for next; it is not admissible.
     #[test]
     fn allocating_helpers_are_not_cannot_collect() {
-        for name in ["js_nanbox_string", "js_string_from_bytes", "js_array_alloc"] {
+        assert_eq!(
+            classify_direct_callee("js_string_compare"),
+            GcCallEffect::CannotCollect
+        );
+        for name in [
+            "js_nanbox_string",
+            "js_string_from_bytes",
+            "js_array_alloc",
+            "js_string_compare_value",
+            "js_rel_lt",
+            "js_rel_gt",
+            "js_object_get_field_ic_miss_packed",
+        ] {
             assert_ne!(
                 classify_direct_callee(name),
                 GcCallEffect::CannotCollect,

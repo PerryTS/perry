@@ -1651,6 +1651,8 @@ mod tests {
         let mut m = LlModule::new("arm64-apple-macosx15.0.0");
         m.declare_function("js_nanbox_get_pointer", I64, &[DOUBLE]);
         m.declare_function("js_is_truthy", I32, &[DOUBLE]);
+        m.declare_function("js_string_compare", I32, &[I64, I64]);
+        m.declare_function("js_string_compare_value", I32, &[DOUBLE, DOUBLE]);
         m.declare_function("js_nanbox_string", DOUBLE, &[I64]);
         m.declare_function(
             "js_typed_feedback_numeric_array_index_get_guard",
@@ -1673,6 +1675,8 @@ mod tests {
             ir.contains("declare double @js_nanbox_string(i64)\n"),
             "allocating helper must stay attribute-free"
         );
+        assert!(ir.contains("declare i32 @js_string_compare(i64, i64) #3"));
+        assert!(ir.contains("declare i32 @js_string_compare_value(double, double)\n"));
         assert!(!ir.contains("js_nanbox_string(i64) #"));
         assert_eq!(
             ir.matches("attributes #2 = { nounwind willreturn readnone }")

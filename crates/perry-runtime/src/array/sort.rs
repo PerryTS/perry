@@ -27,32 +27,33 @@ impl ComparatorCall {
         }
     }
 
-    /// ECMA-262 `CompareArrayElements` numeric result: `ToNumber(Call(...))`
-    /// with NaN → +0. A plain finite/±inf f64 result skips the coercion; any
-    /// NaN-boxed value (boolean, string, object with `valueOf`, undefined)
-    /// goes through real ToNumber (firing user `valueOf`, throwing on
-    /// BigInt/Symbol per spec).
+    /// Refresh immediately before handing off to another rooted sort phase.
+    /// Collection getters can relocate the closure before comparison starts.
+    pub(crate) fn current(self, handle: &crate::gc::RuntimeHandle<'_>) -> Self {
+        handle.with_const_ptr(|comparator| Self { comparator, ..self })
+    }
+
+    /// Stable merge predicate for `CompareArrayElements`: ToNumber of the
+    /// callback result, with NaN treated as equality. Ordered comparisons
+    /// classify every ordinary number using one set of floating-point flags;
+    /// only an unordered (NaN or boxed) result needs coercion.
     ///
-    /// Takes an explicitly re-derived closure header rather than using the
-    /// one cached in `self`: the sorting engines root the comparator in a
-    /// `RuntimeHandleScope` and pass the CURRENT address here after every
-    /// user-code window — a comparator that allocates can trigger a moving
-    /// minor GC that relocates its own closure header, and the raw pointer
-    /// cached in `self.comparator` then points at from-space. `direct` stays
-    /// valid: it is a static code address resolved from the closure's shape,
-    /// which relocation does not change.
+    /// The closure address is re-read from its root before each callback;
+    /// `direct` is a static code address and remains valid across relocation.
     #[inline(always)]
-    pub(crate) fn compare_at(&self, comparator: *const ClosureHeader, a: f64, b: f64) -> f64 {
+    pub(crate) fn less_equal_at(&self, comparator: *const ClosureHeader, a: f64, b: f64) -> bool {
         let r = self.direct.call(comparator, a, b);
-        if !r.is_nan() {
-            return r;
+        if r <= 0.0 {
+            return true;
         }
-        let n = crate::builtins::js_number_coerce(r);
-        if n.is_nan() {
-            0.0
-        } else {
-            n
+        if r > 0.0 {
+            return false;
         }
+        // Unary plus implements abstract ToNumber, including rejection of
+        // BigInt returned directly or by an object's coercion hook. Number()
+        // deliberately accepts BigInt and is not the sort coercion contract.
+        let n = unsafe { crate::value::js_dynamic_pos(r) };
+        n <= 0.0 || n.is_nan()
     }
 }
 
@@ -123,18 +124,19 @@ impl<'s> RootedArrayElems<'s> {
 /// Sort indices into the rooted source instead of moving GC values during
 /// comparisons. The source is private to this sort, so callbacks can move its
 /// objects but cannot mutate its slots. No copied heap value survives a call.
-unsafe fn sort_comparator_rooted(
+unsafe fn with_sorted_indices<R>(
     data: &RootedArrayElems<'_>,
     n: usize,
     c: &ComparatorCall,
     cmp_handle: &crate::gc::RuntimeHandle<'_>,
-) {
+    apply: impl FnOnce(&mut [u32]) -> R,
+) -> R {
     const STACK_INDICES: usize = 64;
     if n <= STACK_INDICES {
         let mut order = [0u32; STACK_INDICES];
         let mut scratch = [0u32; STACK_INDICES];
         sort_permutation(data, &mut order[..n], &mut scratch[..n], c, cmp_handle);
-        return;
+        return apply(&mut order[..n]);
     }
 
     // JS throws bypass Rust destructors. GC-owned workspaces are reclaimed
@@ -160,6 +162,7 @@ unsafe fn sort_comparator_rooted(
         n,
     );
     sort_permutation(data, order, scratch, c, cmp_handle);
+    apply(order)
 }
 
 unsafe fn sort_permutation(
@@ -172,18 +175,36 @@ unsafe fn sort_permutation(
     for (i, index) in order.iter_mut().enumerate() {
         *index = i as u32;
     }
-    indices::sort_indices(order, scratch, |a, b| {
-        // One fresh root lookup for both operands. The comparator closure
-        // is re-derived too; none of these pointers is used after the call.
-        let arr = data.arr();
-        let elements = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
-        c.compare_at(
-            cmp_handle.get_raw_const_ptr::<ClosureHeader>(),
-            *elements.add(a as usize),
-            *elements.add(b as usize),
-        ) <= 0.0
-    });
+    crate::gc::with_stack_roots(
+        [
+            data.arr() as u64,
+            cmp_handle.get_raw_const_ptr::<ClosureHeader>() as u64,
+        ],
+        |roots| {
+            indices::sort_indices(
+                order,
+                scratch,
+                #[inline(always)]
+                |a, b| {
+                    // Each slot is bound to the shadow stack and rewritten by
+                    // moving GC. Read both anew after every user-code window;
+                    // no interior pointer or copied value survives a callback.
+                    let arr = roots.get(0) as *const ArrayHeader;
+                    let comparator = roots.get(1) as *const ClosureHeader;
+                    let elements =
+                        (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+                    c.less_equal_at(
+                        comparator,
+                        *elements.add(a as usize),
+                        *elements.add(b as usize),
+                    )
+                },
+            );
+        },
+    );
+}
 
+unsafe fn apply_sorted_indices(data: &RootedArrayElems<'_>, order: &mut [u32]) {
     // No user code or GC allocation below. Apply the permutation by cycles,
     // then rebuild the layout and remembered edges once, as in sort's dense
     // receiver write-back. This replaces O(n log n) barriered element writes
@@ -258,7 +279,9 @@ pub(crate) unsafe fn sort_rooted_values(
     match cmp {
         Some(c) => {
             let cmp_handle = scope.root_raw_const_ptr(c.comparator);
-            sort_comparator_rooted(&data, count, &c, &cmp_handle);
+            with_sorted_indices(&data, count, &c, &cmp_handle, |order| {
+                apply_sorted_indices(&data, order);
+            });
         }
         None => sort_default_rooted(&data, count),
     }
@@ -294,6 +317,13 @@ fn object_prototype_value() -> Option<f64> {
 /// Own array-index keys of `Object.prototype` (usually empty). Computed once
 /// per sort call; the result gates the per-index inherited reads below.
 fn object_prototype_numeric_keys() -> Vec<u32> {
+    // The shared write/defineProperty latch is false until an indexed own
+    // property can exist. Consult it before resolving the builtin Object:
+    // doing that unconditionally bootstraps all global builtins on the first
+    // sort, even when this program has never touched Object.prototype.
+    if !crate::array::object_prototype_has_index_flag() {
+        return Vec::new();
+    }
     let Some(proto) = object_prototype_value() else {
         return Vec::new();
     };
@@ -411,6 +441,10 @@ unsafe fn sort_spec_set(
                         ),
                         value_handle.get_nanbox_f64(),
                     );
+                } else {
+                    crate::collection_iter::throw_type_error(&format!(
+                        "Cannot set property {index} which has only a getter"
+                    ));
                 }
                 return;
             }
@@ -422,6 +456,89 @@ unsafe fn sort_spec_set(
         value_handle.get_nanbox_f64(),
     );
     arr_handle.set_raw_mut_ptr(updated);
+}
+
+unsafe fn sort_spec_delete(receiver: &crate::gc::RuntimeHandle<'_>, index: u32) {
+    let (deleted, _) = receiver.across_mut::<ArrayHeader, _>(|| {
+        receiver.with_mut_ptr(|arr| crate::array::js_array_delete(arr, index))
+    });
+    if deleted == 0 {
+        super::push_pop::throw_cannot_delete_array_index(index);
+    }
+}
+
+/// Publish the private sorted snapshot. A comparator may have grown or
+/// truncated the receiver, changed its descriptors, or modified its prototype.
+/// Resolve forwarding and recheck the store protocol after the last callback.
+unsafe fn publish_sorted_values(
+    receiver: &crate::gc::RuntimeHandle<'_>,
+    values: &RootedArrayElems<'_>,
+    count: usize,
+    undefined_count: usize,
+    original_length: usize,
+    order: Option<&[u32]>,
+) -> *mut ArrayHeader {
+    let arr = receiver.with_mut_ptr(clean_arr_ptr_mut);
+    receiver.set_raw_mut_ptr(arr);
+    let flags = array_object_flags_resolved(arr);
+    if (*arr).length as usize >= original_length
+        && (*arr).capacity as usize >= original_length
+        && flags
+            & (crate::gc::OBJ_FLAG_FROZEN
+                | crate::gc::OBJ_FLAG_SEALED
+                | crate::gc::OBJ_FLAG_NO_EXTEND)
+            == 0
+        && !super::indexing::array_iteration_is_exotic_resolved(arr, flags)
+    {
+        // No user code or allocation in this region. Resolve each root once,
+        // copy the dense prefix, and rebuild layout/barriers after all stores.
+        let source =
+            (values.arr() as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let dest = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        mark_array_layout_unknown(arr);
+        if let Some(order) = order {
+            debug_assert_eq!(order.len(), count);
+            for (i, &index) in order.iter().enumerate() {
+                // GC_STORE_AUDIT(BARRIERED): the rebuild below covers these indexed stores, with no intervening safepoint.
+                *dest.add(i) = *source.add(index as usize);
+            }
+        } else {
+            // GC_STORE_AUDIT(BARRIERED): the bulk copy is covered by the rebuild below.
+            std::ptr::copy_nonoverlapping(source, dest, count);
+        }
+        for i in count..count + undefined_count {
+            // GC_STORE_AUDIT(POINTER_FREE): undefined has no child edge.
+            *dest.add(i) = f64::from_bits(crate::value::TAG_UNDEFINED);
+        }
+        for i in count + undefined_count..original_length {
+            // GC_STORE_AUDIT(POINTER_FREE): a deleted slot has no child edge.
+            *dest.add(i) = f64::from_bits(crate::value::TAG_HOLE);
+        }
+        rebuild_array_layout(arr);
+        return arr;
+    }
+
+    let prototype_keys = object_prototype_numeric_keys();
+    for i in 0..count {
+        sort_spec_set(
+            receiver,
+            i as u32,
+            values.get(order.map_or(i, |indices| indices[i] as usize)),
+            &prototype_keys,
+        );
+    }
+    for i in count..count + undefined_count {
+        sort_spec_set(
+            receiver,
+            i as u32,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+            &prototype_keys,
+        );
+    }
+    for i in count + undefined_count..original_length {
+        sort_spec_delete(receiver, i as u32);
+    }
+    receiver.get_raw_mut_ptr::<ArrayHeader>()
 }
 
 // ---------------------------------------------------------------------------
@@ -444,6 +561,7 @@ unsafe fn array_sort_spec_path(
     // [[Set]] fire user accessors that can allocate, sweeping or moving it.
     let scope = crate::gc::RuntimeHandleScope::new();
     let arr_handle = scope.root_raw_mut_ptr(arr);
+    let cmp_handle = cmp.map(|c| scope.root_raw_const_ptr(c.comparator));
 
     // Collect present elements into a GC-rooted temp array whose element
     // buffer keeps accessor-produced values alive — and CURRENT — across
@@ -477,6 +595,7 @@ unsafe fn array_sort_spec_path(
     let item_count = count + undef_count;
 
     // Sort the defined values; the scratch buffer is a second rooted array.
+    let cmp = cmp.map(|c| c.current(cmp_handle.as_ref().unwrap()));
     let _ = sort_rooted_values(temp.arr(), count, cmp);
 
     // Write back via [[Set]] (fires index setters / honors attrs), then
@@ -496,7 +615,7 @@ unsafe fn array_sort_spec_path(
         );
     }
     for j in item_count..len as usize {
-        crate::array::js_array_delete(arr_handle.get_raw_mut_ptr::<ArrayHeader>(), j as u32);
+        sort_spec_delete(&arr_handle, j as u32);
     }
     arr_handle.get_raw_mut_ptr::<ArrayHeader>()
 }
@@ -530,8 +649,8 @@ pub extern "C" fn js_array_sort_default(arr: *mut ArrayHeader) -> *mut ArrayHead
         // Probe the RAW pointer BEFORE the array-plausibility clean (which
         // may NULL an object receiver out, silently no-op'ing the sort).
         if let Some(recv) = crate::array::non_array_object_receiver(arr) {
-            crate::array::object_sort(recv, std::ptr::null());
-            return arr;
+            let sorted = crate::array::object_sort(recv, std::ptr::null());
+            return (sorted.to_bits() & crate::value::POINTER_MASK) as *mut ArrayHeader;
         }
         // Issue #654: route typed-array receivers (compiler statically typed
         // `arr` as `Float64Array | Int32Array | …` and emitted the ArraySort
@@ -653,8 +772,8 @@ pub extern "C" fn js_array_sort_with_comparator(
         // Runtime plain-object receiver behind a statically-Array variable —
         // probe the RAW pointer before the array-plausibility clean.
         if let Some(recv) = crate::array::non_array_object_receiver(arr) {
-            crate::array::object_sort(recv, comparator);
-            return arr;
+            let sorted = crate::array::object_sort(recv, comparator);
+            return (sorted.to_bits() & crate::value::POINTER_MASK) as *mut ArrayHeader;
         }
         // Issue #654 / #8096: same routing as `js_array_sort_default`, and
         // asked at the same point — before `clean_arr_ptr` rejects the
@@ -683,9 +802,11 @@ unsafe fn sort_array_receiver(
     // it again, and a bare Rust local is invisible to the collector.
     let scope = crate::gc::RuntimeHandleScope::new();
     let arr_handle = scope.root_raw_mut_ptr(arr);
+    let cmp_handle = cmp.map(|c| scope.root_raw_const_ptr(c.comparator));
     let objproto_keys = object_prototype_numeric_keys();
     let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
     if sort_needs_spec_path(arr, &objproto_keys) {
+        let cmp = cmp.map(|c| c.current(cmp_handle.as_ref().unwrap()));
         return array_sort_spec_path(arr, cmp, &objproto_keys);
     }
 
@@ -737,31 +858,10 @@ unsafe fn sort_array_receiver(
         }
         (*temp.arr()).length = count as u32;
         rebuild_array_layout(temp.arr());
+        let cmp = cmp.map(|c| c.current(cmp_handle.as_ref().unwrap()));
         let _ = sort_rooted_values(temp.arr(), count, cmp);
-        // Write back (no user code below): sorted defined values, then
-        // `undefined` ×N, then holes ×N — restoring the exotic sparseness.
-        let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-        let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
-        mark_array_layout_unknown(arr);
-        let mut idx = 0usize;
-        // GC_STORE_AUDIT(BARRIERED): write-back is included in the rebuild below.
-        for i in 0..count {
-            *elements_ptr.add(idx) = temp.get(i);
-            idx += 1;
-        }
-        // GC_STORE_AUDIT(POINTER_FREE): undefined/hole suffix has no child pointer;
-        // covered by the rebuild below anyway.
-        for _ in 0..undef_count {
-            *elements_ptr.add(idx) = f64::from_bits(crate::value::TAG_UNDEFINED);
-            idx += 1;
-        }
-        // GC_STORE_AUDIT(POINTER_FREE): hole suffix has no child pointer.
-        for _ in 0..hole_count {
-            *elements_ptr.add(idx) = f64::from_bits(crate::value::TAG_HOLE);
-            idx += 1;
-        }
-        rebuild_array_layout(arr);
-        return arr;
+        debug_assert_eq!(count + undef_count + hole_count, length);
+        return publish_sorted_values(&arr_handle, &temp, count, undef_count, length, None);
     }
 
     let Some(c) = cmp else {
@@ -781,7 +881,7 @@ unsafe fn sort_array_receiver(
     // The copy stays rooted and unchanged throughout the comparator phase.
     // The merge engine moves only indices; every comparison reads the source
     // through its current handle after any prior callback moved its values.
-    let cmp_handle = scope.root_raw_const_ptr(c.comparator);
+    let cmp_handle = cmp_handle.unwrap();
     let temp = RootedArrayElems::new(&scope, js_array_alloc_with_length(length as u32));
     {
         // Re-derive after the temp allocation above (which can GC).
@@ -793,18 +893,11 @@ unsafe fn sort_array_receiver(
         std::ptr::copy_nonoverlapping(recv_elems, dest, length);
     }
     rebuild_array_layout(temp.arr());
-    sort_comparator_rooted(&temp, length, &c, &cmp_handle);
-
-    // The comparator sort completed without a throw — publish the sorted temp
-    // back into the receiver (no user code below; both sides re-derived).
-    let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-    let recv_elems = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
-    mark_array_layout_unknown(arr);
-    for i in 0..length {
-        // GC_STORE_AUDIT(BARRIERED): dense write-back is followed by the rebuild below.
-        *recv_elems.add(i) = temp.get(i);
-    }
-    rebuild_array_layout(arr);
-
-    arr
+    // Consume the permutation directly while its workspace is still rooted.
+    // The source stays immutable; this avoids permuting/rebuilding it only
+    // to copy it into the receiver. Exotic write-back may call setters and
+    // move values, so it continues to read the source through current roots.
+    with_sorted_indices(&temp, length, &c, &cmp_handle, |order| {
+        publish_sorted_values(&arr_handle, &temp, length, 0, length, Some(order))
+    })
 }

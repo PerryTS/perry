@@ -199,7 +199,28 @@ pub(crate) unsafe fn rebuild_array_layout(arr: *mut ArrayHeader) {
         crate::gc::layout_init_all_pointer_slots(arr as *mut u8);
         return;
     }
-    crate::gc::layout_rebuild_from_slots(arr as *mut u8, array_elements_ptr(arr), length);
+    if length != 0 {
+        // Numeric canonicalization proves the complete payload pointer-free
+        // and installs that GC layout itself. Do it before allocating and
+        // building a pointer mask, and avoid replaying barriers for numbers.
+        // This reads the actual slots; bulk stores may have invalidated the
+        // array's previous representation or introduced a class-ref tag.
+        super::header::refresh_array_numeric_layout_resolved(arr);
+        if array_has_raw_f64_layout_flag(arr) {
+            return;
+        }
+    }
+    if length != 0
+        && crate::gc::layout_all_pointer_slots_would_hold(array_elements_ptr(arr), length)
+    {
+        // A homogeneous pointer payload needs only the existing all-pointer
+        // header claim, not an allocated bit mask with every bit set. The
+        // predicate reads every actual slot, including after arbitrary bulk
+        // stores; no previous layout claim is trusted here.
+        crate::gc::layout_init_all_pointer_slots(arr as *mut u8);
+    } else {
+        crate::gc::layout_rebuild_from_slots(arr as *mut u8, array_elements_ptr(arr), length);
+    }
     if length == 0 {
         // `layout_rebuild_from_slots` just left the head POINTER_FREE with its
         // per-object records dropped and the typed-intact bit cleared, which
@@ -225,13 +246,14 @@ pub(crate) unsafe fn rebuild_array_layout(arr: *mut ArrayHeader) {
         }
         return;
     }
-    super::header::refresh_array_numeric_layout_resolved(arr);
     if crate::arena::pointer_in_old_gen(arr as usize) {
-        let slots = array_elements_ptr(arr);
-        for i in 0..length {
-            let slot = slots.add(i);
-            crate::gc::runtime_write_barrier_slot(arr as usize, slot as usize, *slot);
-        }
+        // The range barrier keeps incremental shading and records old→young
+        // edges page by page, hoisting the invariant parent checks.
+        crate::gc::replay_old_parent_slot_range_barriers(
+            arr as usize,
+            array_elements_ptr(arr),
+            length,
+        );
     }
 }
 

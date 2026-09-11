@@ -160,7 +160,8 @@ pub use compare::{
 // `is_string() && js_string_equals(key, key_val.as_string_ptr())` shape
 // across object/.
 pub(crate) use compare::{
-    js_string_key_bytes, js_string_key_matches, js_string_key_matches_bytes, utf16_cmp_bytes,
+    compare_primitive_strings, js_string_key_bytes, js_string_key_matches,
+    js_string_key_matches_bytes, utf16_cmp_bytes,
 };
 pub use concat::{
     js_string_add_value, js_string_append_chain, js_string_concat, js_string_concat_box,

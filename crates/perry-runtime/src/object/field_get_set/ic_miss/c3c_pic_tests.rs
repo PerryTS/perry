@@ -302,3 +302,17 @@ fn a_fresh_class_instance_computes_the_token_the_miss_handler_primed() {
         );
     }
 }
+
+#[test]
+fn unstamped_receiver_cannot_prime_or_poison_get_cache() {
+    let empty = crate::object::shapes::PIC_ID_TOKEN_BIT as i64;
+    let mut cache = [0i64; super::PIC_CACHE_WORDS];
+    unsafe { super::pic_prime_get(&mut cache, empty, 0) };
+    assert_eq!(cache, [0; super::PIC_CACHE_WORDS]);
+    for id in 1..=4 {
+        unsafe { super::pic_prime_get(&mut cache, empty | id, id) };
+        let before = cache;
+        unsafe { super::pic_prime_get(&mut cache, empty, 123) };
+        assert_eq!(cache, before, "unstamped reads must preserve MRU and ways");
+    }
+}

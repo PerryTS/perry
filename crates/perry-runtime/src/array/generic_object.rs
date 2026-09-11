@@ -369,20 +369,22 @@ pub(crate) fn object_splice(recv: f64, args_ptr: *const f64, args_len: usize) ->
 /// via `Set` and `Delete` the trailing range. Returns the receiver.
 /// `cmp_validated` is the already-validated comparator (null = default sort).
 pub(crate) fn object_sort(recv: f64, cmp_validated: *const ClosureHeader) -> f64 {
+    // Length and indexed getters may collect before comparison begins.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv_handle = scope.root_nanbox_f64(recv);
+    let cmp_handle = scope.root_raw_const_ptr(cmp_validated);
     let cmp = if cmp_validated.is_null() {
         None
     } else {
         Some(super::sort::ComparatorCall::new(cmp_validated))
     };
-    let len = al_length(recv);
+    let len = al_length(recv_handle.get_nanbox_f64());
     unsafe {
         // Root BOTH the receiver value and the collection temp for the whole
         // protocol: `al_has`/`al_get`/`al_set` fire user accessors (and the
         // comparator runs inside `sort_rooted_values`) — any of them can
         // allocate and sweep or move either object, so every raw pointer is
         // re-derived from its rooted handle after each such call.
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let recv_handle = scope.root_nanbox_f64(recv);
         let temp = super::sort::RootedArrayElems::new(
             &scope,
             js_array_alloc_with_length(len.clamp(0, u32::MAX as i64) as u32),
@@ -402,6 +404,7 @@ pub(crate) fn object_sort(recv: f64, cmp_validated: *const ClosureHeader) -> f64
         }
         (*temp.arr()).length = count as u32;
         rebuild_array_layout(temp.arr());
+        let cmp = cmp.map(|c| c.current(&cmp_handle));
         let _ = super::sort::sort_rooted_values(temp.arr(), count, cmp);
         for j in 0..count {
             al_set(recv_handle.get_nanbox_f64(), j as i64, temp.get(j));

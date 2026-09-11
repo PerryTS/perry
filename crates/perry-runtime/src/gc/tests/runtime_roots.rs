@@ -20,6 +20,7 @@ mod prototype_addr_cache;
 mod regexp_last_index;
 mod segment_record_keys;
 mod side_table_scanners;
+mod sort_collection;
 mod string_normalize_form;
 mod string_slice;
 mod symbol_description;

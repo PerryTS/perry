@@ -41,7 +41,7 @@ fn throw_non_writable_length() -> ! {
 }
 
 #[cold]
-fn throw_cannot_delete_array_index(index: u32) -> ! {
+pub(super) fn throw_cannot_delete_array_index(index: u32) -> ! {
     crate::collection_iter::throw_type_error(&format!(
         "Cannot delete property '{index}' of [object Array]"
     ));

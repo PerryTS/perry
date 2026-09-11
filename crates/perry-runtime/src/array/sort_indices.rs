@@ -107,18 +107,21 @@ fn merge_at(
     if le(order[mid - 1], order[mid]) {
         return;
     }
-    scratch[start..end].copy_from_slice(&order[start..end]);
+    // Only the left run needs a snapshot. While it has unconsumed values,
+    // dest < right, so forward stores cannot overwrite the right run's next
+    // unread index. Once the left run is empty, the right tail is in place.
+    scratch[start..mid].copy_from_slice(&order[start..mid]);
     let (mut left, mut right, mut dest) = (start, mid, start);
     let (mut left_wins, mut right_wins) = (0, 0);
     while left < mid && right < end {
         // Left wins ties, preserving the order of equivalent source values.
-        if le(scratch[left], scratch[right]) {
+        if le(scratch[left], order[right]) {
             order[dest] = scratch[left];
             left += 1;
             left_wins += 1;
             right_wins = 0;
         } else {
-            order[dest] = scratch[right];
+            order[dest] = order[right];
             right += 1;
             right_wins += 1;
             left_wins = 0;
@@ -128,23 +131,21 @@ fn merge_at(
         // then binary search. This helps clustered and duplicate-heavy data
         // without imposing a binary search on each random-data comparison.
         if left_wins >= 7 && left < mid && right < end {
-            let take = gallop_prefix(&scratch[left..mid], |item| le(item, scratch[right]));
+            let take = gallop_prefix(&scratch[left..mid], |item| le(item, order[right]));
             order[dest..dest + take].copy_from_slice(&scratch[left..left + take]);
             left += take;
             dest += take;
             left_wins = 0;
         } else if right_wins >= 7 && left < mid && right < end {
             // Strictly less on the right: ties must stay behind the left run.
-            let take = gallop_prefix(&scratch[right..end], |item| !le(scratch[left], item));
-            order[dest..dest + take].copy_from_slice(&scratch[right..right + take]);
+            let take = gallop_prefix(&order[right..end], |item| !le(scratch[left], item));
+            order.copy_within(right..right + take, dest);
             right += take;
             dest += take;
             right_wins = 0;
         }
     }
     order[dest..dest + mid - left].copy_from_slice(&scratch[left..mid]);
-    dest += mid - left;
-    order[dest..end].copy_from_slice(&scratch[right..end]);
 }
 
 fn gallop_prefix(values: &[u32], mut belongs: impl FnMut(u32) -> bool) -> usize {

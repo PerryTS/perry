@@ -321,16 +321,22 @@ pub(crate) fn lower_generic_property_get(
         ctx.current_block = not_string_idx;
     }
 
-    // Monomorphic inline cache. The per-site global holds an authoritative
-    // ShapeId token and its cached slot; word 2 optionally carries the proved
-    // Array-subclass named-prefix family token.
-    // The fast path compares the receiver's discriminated ShapeId token to
-    // cache[0] and, on match, loads
-    // the field directly at obj+ObjectHeader::SIZE+slot*8: no function call, no hash,
-    // no linear scan. On miss, calls the slow helper which does the
-    // full lookup and primes the cache for next time.
+    // A compact per-site word holds the exact ShapeId and slot for the last
+    // cacheable receiver. The lazily allocated full cache retains bounded
+    // polymorphic ways and the Array-subclass named-prefix proof.
     let cache_name = overridden_cache_name(ctx, object, property)
         .unwrap_or_else(|| allocate_property_cache(ctx));
+    // A compact atomic MRU removes the cache-pointer dependency on a hit.
+    // The full cache stays lazy and serves prefix/overflow/polymorphic misses.
+    let packed_site = ctx.ic_site_counter;
+    ctx.ic_site_counter += 1;
+    let packed_name = format!(
+        "{}_packed_get",
+        crate::expr::inline_cache_global_name(ctx, packed_site)
+    );
+    ctx.typed_parse_rodata
+        .push(format!("@{packed_name} = private global i64 0, align 8"));
+    let packed_ref = format!("@{packed_name}");
 
     // Issue #72: validate the receiver is actually a GC_TYPE_OBJECT
     // before reading its ShapeId. The receiver
@@ -419,14 +425,25 @@ pub(crate) fn lower_generic_property_get(
     ctx.block().cond_br(&is_real_ptr, &hdr_label, &cold_label);
     ctx.current_block = hdr_idx;
 
-    // GcHeader sits 8 bytes before the user pointer; obj_type is the
-    // first u8 (GC_TYPE_OBJECT=2). Cost: 1 sub + 1 load i8 + 1 cmp
-    // i8 + 1 and i1 — the cond_br's `is_object` operand is folded
-    // into the existing branch instruction by LLVM. Branch-predicted
-    // taken since real PropertyGet receivers are objects.
+    // The compact cache is a permanently valid scalar global. Load it before
+    // receiver-dependent shape probing so its latency overlaps header reads.
+    let packed_word = ctx.block().load_atomic_monotonic(I64, &packed_ref, 8);
+    let packed_present = ctx.block().icmp_ne(I64, &packed_word, "0");
+
+    // GcHeader starts with obj_type:u8, gc_flags:u8, reserved:u16. On
+    // known little-endian targets one load tests both kind and descriptors;
+    // other targets retain byte/halfword loads with native endianness.
     let gc_type_addr = ctx.block().sub(I64, &obj_handle, "8");
     let gc_type_ptr = ctx.block().inttoptr(I64, &gc_type_addr);
-    let gc_type = ctx.block().load(I8, &gc_type_ptr);
+    let packed_header = matches!(
+        ctx.target_triple.split('-').next().unwrap_or(""),
+        "aarch64" | "arm64" | "arm64_32" | "x86_64" | "i686" | "i386" | "riscv64" | "wasm32"
+    )
+    .then(|| ctx.block().load(I32, &gc_type_ptr));
+    let gc_type = match &packed_header {
+        Some(word) => ctx.block().trunc(I32, word, I8),
+        None => ctx.block().load(I8, &gc_type_ptr),
+    };
 
     // `MapHeader` and `SetHeader` both begin with `size: u32`. A native
     // collection is not an ObjectHeader and can never hit this PIC, so split
@@ -457,45 +474,31 @@ pub(crate) fn lower_generic_property_get(
     // data property and `defineProperty` later converts that key to a getter
     // (or a different descriptor), `keys_array` is unchanged, so the stale
     // hit path would return the raw slot and bypass the getter entirely.
-    // OBJ_FLAG_HAS_DESCRIPTORS lives in the GcHeader `_reserved` i16 at
-    // offset -6; force a miss (→ `js_object_get_field_ic_miss`, which honors
-    // descriptors) whenever it is set. Mirrors the guard in
-    // `class_field_inline_guard.rs`. Cost: 1 sub + load i16 + and + cmp,
-    // folded into the existing `hit` cond_br.
-    let reserved_addr = ctx.block().sub(I64, &obj_handle, "6");
-    let reserved_ptr = ctx.block().inttoptr(I64, &reserved_addr);
-    let reserved = ctx.block().load(crate::types::I16, &reserved_ptr);
-    let has_desc = ctx.block().and(crate::types::I16, &reserved, "2048"); // OBJ_FLAG_HAS_DESCRIPTORS (0x800)
-    let no_desc = ctx.block().icmp_eq(crate::types::I16, &has_desc, "0");
-    // #9708: the site's cache lives behind a pointer slot that is null until
-    // the first priming miss. The slot load does not depend on the receiver,
-    // so it issues alongside the header loads, and its non-null test joins
-    // the flat header predicate as one more fused compare. Both edges that
-    // read a cache word (`pic.token` and the descriptor prefix path) require
-    // `cache_present`; the slot itself is what the miss handler takes, so a
-    // fresh site goes straight to it. `cache_ref` is the LOADED pointer from
-    // here on, never the global: every GEP below goes through it, and only
-    // the runtime calls take `cache_slot_ref`.
+    // OBJ_FLAG_HAS_DESCRIPTORS is bit 11 of reserved (bit 27 of the
+    // little-endian header word). Ignore gc_flags and every other flag.
+    let is_plain_kind = if let Some(word) = &packed_header {
+        let kind_and_desc = ctx.block().and(I32, word, "134217983"); // 0x080000ff
+        ctx.block().icmp_eq(I32, &kind_and_desc, "2")
+    } else {
+        let reserved_addr = ctx.block().sub(I64, &obj_handle, "6");
+        let reserved_ptr = ctx.block().inttoptr(I64, &reserved_addr);
+        let reserved = ctx.block().load(crate::types::I16, &reserved_ptr);
+        let has_desc = ctx.block().and(crate::types::I16, &reserved, "2048");
+        let no_desc = ctx.block().icmp_eq(crate::types::I16, &has_desc, "0");
+        ctx.block().and(I1, &is_object_kind, &no_desc)
+    };
+    // The full cache remains null until a priming miss. Every prefix/way
+    // dereference is dominated by cache_present; the compact MRU can hit
+    // without loading this pointer. Runtime miss entries take the slot itself.
     let ic_slot = crate::expr::emit_inline_cache_slot(ctx, &cache_name);
     let cache_ref = ic_slot.cache.clone();
     let cache_slot_ref = ic_slot.slot_ref.clone();
     let cache_present = ic_slot.present.clone();
-    let is_plain_object = ctx.block().and(I1, &is_object_kind, &no_desc);
-    let is_plain_object = ctx.block().and(I1, &is_plain_object, &cache_present);
+    let is_plain_object = ctx.block().and(I1, &is_plain_kind, &packed_present);
 
-    // #7883: first exit. The header predicates above are kept as one flat
-    // `and` on purpose — they are loads from the same cache line and LLVM
-    // fuses their compares into a `ccmp` chain, which is
-    // cheaper than four branches. What was NOT worth folding is everything
-    // below: the ShapeId load and token select hang off the same predicate,
-    // so a non-object receiver used to execute
-    // them before the flat `hit` could reject it.
-    //
-    // #7907: the false edge goes to `pic.miss.cold`, not `pic.miss` — a
-    // receiver that is not a plain descriptor-free `ObjectHeader` fails
-    // `way_hit` by construction, so consulting the ways for it was always dead
-    // work, and keeping it out is what lets `pic.miss` reuse this block's
-    // values instead of re-deriving them.
+    // Validate kind, descriptor policy, and initialized MRU before reading
+    // ObjectHeader's ShapeId. Header failures bypass the shape ways; the
+    // descriptor-aware named-prefix path keeps its own full-cache guard.
     ctx.block()
         .cond_br(&is_plain_object, &tok_label, &desc_classify_label);
 
@@ -505,7 +508,7 @@ pub(crate) fn lower_generic_property_get(
     // this classification off the ordinary descriptor-free hit path.
     ctx.current_block = desc_classify_idx;
     // #9708: the descriptor prefix path reads cache word 2, so it needs the
-    // same non-null proof `pic.token` has; without a cache the receiver is
+    // full-cache non-null proof as the shape-miss path; without a cache it is
     // simply a cold miss.
     let desc_object_with_cache = ctx.block().and(I1, &is_object_kind, &cache_present);
     ctx.block().cond_br(
@@ -522,60 +525,33 @@ pub(crate) fn lower_generic_property_get(
     let pcid_ptr = ctx.block().inttoptr(I64, &pcid_addr);
     let pcid = ctx.block().load(I32, &pcid_ptr);
     let pcid64 = ctx.block().zext(I32, &pcid, I64);
-    // PIC_ID_TOKEN_BIT = 1 << 62. The token is formed UNCONDITIONALLY — the
-    // in-range test the emitted code used to run first
-    // (`(pcid - 0x8000_0000) <u 0x4000_0000`, then a `select` to zero, then a
-    // separate non-zero compare) was redundant against the cache compare below,
-    // and cost six AArch64 instructions on the hit path of EVERY generic
-    // property read.
-    //
-    // # Why the range test was implied
-    //
-    // `pic_prime_get` is the only writer of word 0 (`js_put_value_set_ic_miss`
-    // writes a *different*, set-side cache), and it is only ever handed
-    // `object_shape_stamp(obj) | PIC_ID_TOKEN_BIT` — and `object_shape_stamp`
-    // answers `0` for anything outside `SHAPE_ID_BASE..SHAPE_ID_END`. So a
-    // cached token's low 32 bits are either a *valid ShapeId* or *zero*:
-    //
-    // * cached low32 is a valid ShapeId ⇒ `pcid == cached_low32` puts `pcid`
-    //   inside the id range, which is exactly what `is_stamp` tested. An equal
-    //   token therefore proves the receiver carries that shape, as before.
-    // * cached low32 is zero (primed by an unstamped receiver) ⇒ the only
-    //   `pcid` that could alias it is `0`, and `pcid != 0` below excludes it.
-    //   That single compare replaces the range test: it is what keeps a
-    //   `parent_class_id == 0` receiver — a class instance with no parent, or
-    //   an `Object.create(proto)` result with no own string props (#809) —
-    //   from spuriously hitting the empty slot instead of taking the
-    //   prototype-chain walk in `js_object_get_field_by_name`.
-    //
-    // A receiver whose `parent_class_id` holds a real (non-shape) parent class
-    // id keeps missing exactly as it did: its token is `id | bit62`, and no
-    // cached token can ever carry a non-shape low32.
-    //
-    // `token_nonnull` keeps its old NAME and its old JOB (#809 — a keyless
-    // receiver must reach `js_object_get_field_by_name`'s prototype-chain walk
-    // instead of hitting an empty cache), only now it tests the stamp word
-    // rather than the derived token. The ways below AND it in for the same
-    // reason: a way primed from an unstamped receiver holds exactly
-    // `PIC_ID_TOKEN_BIT`, which is what a `pcid == 0` receiver would compute.
+    // pic_prime_get is the only production writer of get-cache tokens and
+    // refuses the zero-ShapeId token. All remaining tokens carry a valid,
+    // never-reused ShapeId; vacant entries are zero. Equality therefore
+    // proves a nonzero stamp without another check on every property read.
+    // Keyless Object.create(proto) receivers still miss and walk prototypes.
     let token = ctx.block().or(I64, &pcid64, "4611686018427387904");
-    let token_nonnull = ctx.block().icmp_ne(I32, &pcid, "0");
 
-    // Load the cached token from the per-site global.
-    let cache_keys_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "0")]);
-    let cached_token = ctx.block().load(I64, &cache_keys_ptr);
-    let token_eq = ctx.block().icmp_eq(I64, &token, &cached_token);
-    let hit = ctx.block().and(I1, &token_eq, &token_nonnull);
-
-    ctx.block().cond_br(&hit, &hit_label, &prefix_guard_label);
+    // A nonzero packed word contains a valid ShapeId and its slot. The
+    // header guard above rejects a fresh site; matching the low 32 bits then
+    // proves the shape without a discriminator OR or a wide token mask.
+    let packed_stamp = ctx.block().trunc(I64, &packed_word, I32);
+    let token_eq = ctx.block().icmp_eq(I32, &pcid, &packed_stamp);
+    let token_miss_idx = ctx.new_block("pic.token.miss");
+    let token_miss_label = ctx.block_label(token_miss_idx);
+    ctx.block()
+        .cond_br(&token_eq, &hit_label, &token_miss_label);
+    ctx.current_block = token_miss_idx;
+    // Every subsequent prefix/way load still requires a resolved full cache.
+    ctx.block()
+        .cond_br(&cache_present, &prefix_guard_label, &cold_label);
 
     // `js_object_get_field_ic_miss` primes only slots below the descriptor's
     // exact `live_inline_slot_count`. ShapeIds are never reused, so an exact
     // token hit permanently proves that the cached slot remains live and
     // makes the raw load below safe without a compatibility-header bound.
     ctx.current_block = hit_idx;
-    let cache_slot_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "1")]);
-    let slot = ctx.block().load(I64, &cache_slot_ptr);
+    let slot = ctx.block().lshr(I64, &packed_word, "32");
 
     // #9287: the primed slot word may carry IC_SLOT_OVERFLOW_BIT (1 << 30) —
     // the field lives past the inline region, in the object's spill buffer,
@@ -801,8 +777,8 @@ pub(crate) fn lower_generic_property_get(
     // # Why this block is DOMINATED by `pic.token` (#7907)
     //
     // Its only predecessor is `pic.token` after the MRU token did not match.
-    // The exact descriptor identity proves cached-slot bounds, so `token` and
-    // `token_nonnull` are everything the way compares need.
+    // The exact descriptor identity proves cached-slot bounds, so `token`
+    // is everything the way compares need.
     //
     // #7883 could not rely on that: it routed the two receiver-validation
     // failures here as well, which left the values live on only some edges, so
@@ -857,12 +833,9 @@ pub(crate) fn lower_generic_property_get(
     ctx.current_block = ways_idx;
     // `is_object` is not ANDed in any more: it is statically true on every edge
     // that reaches here (#7907 — see the dominance note above).
-    // `token_nonnull` is the value `pic.token` computed, from the same memory
-    // with no intervening store, so the predicate is unchanged.
-    let mut way_hit = token_nonnull.clone();
     // Reduced as a BALANCED TREE, not as a left fold. At most one way can hold
     // a given token (`pic_prime_get` evicts a duplicate before it writes one,
-    // and a zero token is excluded by `token_nonnull`), so the association is
+    // and pic_prime_get excludes zero-ShapeId tokens), so the association is
     // free to change — but the fold made `way_slot` a chain of `PIC_WAYS`
     // dependent `csel`s whose last node is the operand of the bounds compare
     // that gates the branch out of this block. On `interp.ts` that node was the
@@ -903,12 +876,11 @@ pub(crate) fn lower_generic_property_get(
     let (way_any, way_slot) = lanes
         .pop()
         .expect("PIC_WAYS is non-zero, so the reduction leaves exactly one lane");
-    way_hit = ctx.block().and(I1, &way_hit, &way_any);
     let way_load_idx = ctx.new_block("pic.way.load");
     let way_live_idx = ctx.new_block("pic.way.live");
     let way_load_label = ctx.block_label(way_load_idx);
     let way_live_label = ctx.block_label(way_live_idx);
-    ctx.block().cond_br(&way_hit, &way_load_label, &call_label);
+    ctx.block().cond_br(&way_any, &way_load_label, &call_label);
 
     ctx.current_block = way_load_idx;
     let way_offset = ctx.block().shl(I64, &way_slot, "3");
@@ -953,11 +925,12 @@ pub(crate) fn lower_generic_property_get(
     let miss_key_handle = emit_key_handle(ctx, &key_handle_global);
     let val_miss = ctx.block().call(
         DOUBLE,
-        "js_object_get_field_ic_miss",
+        "js_object_get_field_ic_miss_packed",
         &[
             (I64, &obj_handle),
             (I64, &miss_key_handle),
             (PTR, &cache_slot_ref),
+            (PTR, &packed_ref),
         ],
     );
     let miss_end_label = ctx.block().label.clone();

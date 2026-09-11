@@ -4,6 +4,9 @@
 //! Pure mechanical move — match arm bodies are verbatim copies, called from
 //! `lower_expr`'s outer dispatch.
 
+#[path = "compare_short_string.rs"]
+mod short_string;
+
 use anyhow::Result;
 use perry_hir::types::Type as HirType;
 use perry_hir::{CompareOp, Expr};
@@ -376,30 +379,25 @@ fn lower_string_literal_strict_eq(
 ///
 /// Returns an i64 holding `TAG_TRUE`/`TAG_FALSE` (or `js_eq`'s own tagged
 /// boolean), i.e. the same value the bare call produced.
-/// Quiet-NaN prefix (`0x7FF8_0000_0000_0000`) shared by every Perry NaN-box
-/// tag and by the canonical NaN itself.
-const QNAN_PREFIX_I64: &str = "9221120237041090560";
-
-/// `(bits & 0x7FF8…) != 0x7FF8…`: the operand is an ordinary IEEE double —
-/// finite, ±Infinity, or a signaling-NaN pattern no Perry encoding occupies.
-/// Every NaN-box tag (top-16 `0x7FF9`..=`0x7FFF`, sign-clear) and the quiet
-/// NaN carry the prefix, so one mask+compare separates "plain number" from
-/// "tagged or NaN" without decoding either side. Two plain numbers answer
-/// every relational and (strict or loose) equality operator with the raw
-/// `fcmp`; the helper keeps NaN, so the unordered edge never reaches the
-/// inline predicate.
-fn emit_is_plain_double(ctx: &mut FnCtx<'_>, bits: &str) -> String {
-    let blk = ctx.block();
-    let masked = blk.and(I64, bits, QNAN_PREFIX_I64);
-    blk.icmp_ne(I64, &masked, QNAN_PREFIX_I64)
+/// All unboxed IEEE doubles, including NaNs. Boxed values occupy the
+/// positive signed suffix starting at SHORT_STRING_TAG; one signed compare
+/// rejects it. The ordered fcmp predicates below already make NaN unequal
+/// and unordered, so a NaN does not need the coercing helper.
+fn emit_is_unboxed_number(ctx: &mut FnCtx<'_>, bits: &str) -> String {
+    ctx.block().icmp_slt(
+        I64,
+        bits,
+        &crate::nanbox::i64_literal(crate::nanbox::SHORT_STRING_TAG),
+    )
 }
 
 /// Dynamic-operand comparison with an inline plain-number fast path.
 ///
 /// When both NaN-boxed operands are ordinary doubles the result is
-/// `select(fcmp <pred> l, r, TAG_TRUE, TAG_FALSE)`; every other shape —
-/// strings, BigInt, objects with `valueOf`/`toString`, null/undefined/boolean
-/// coercions, NaN — takes `helper`, which owns the full ECMAScript semantics.
+/// `select(fcmp <pred> l, r, TAG_TRUE, TAG_FALSE)`. Relational comparisons
+/// also handle two heap strings directly, using checked short ASCII words
+/// or the UTF-16 helper. Mixed values and objects with coercion hooks retain
+/// `helper`, which owns the full ECMAScript semantics.
 /// `helper_takes_bits` selects the `(i64, i64) -> i64` helper ABI
 /// (`js_eq`, `js_loose_eq`) over the `(double, double) -> double` one
 /// (`js_rel_*`). Returns the NaN-boxed boolean as i64 bits.
@@ -413,8 +411,8 @@ fn lower_dynamic_compare_bits(
 ) -> String {
     let l_bits = ctx.block().bitcast_double_to_i64(l);
     let r_bits = ctx.block().bitcast_double_to_i64(r);
-    let l_plain = emit_is_plain_double(ctx, &l_bits);
-    let r_plain = emit_is_plain_double(ctx, &r_bits);
+    let l_plain = emit_is_unboxed_number(ctx, &l_bits);
+    let r_plain = emit_is_unboxed_number(ctx, &r_bits);
     let both_plain = ctx.block().and(I1, &l_plain, &r_plain);
 
     let fast_idx = ctx.new_block("dyncmp.num");
@@ -438,6 +436,56 @@ fn lower_dynamic_compare_bits(
     ctx.block().br(&merge_l);
 
     ctx.current_block = slow_idx;
+    let mut string_incoming = None;
+    if !helper_takes_bits {
+        // Relational comparisons of two heap strings cannot run coercion
+        // hooks. Guard their representation here and call the shared UTF-16
+        // comparator directly; mixed values and inline strings retain the
+        // complete relational helper below.
+        let l_tag = ctx.block().lshr(I64, &l_bits, "48");
+        let r_tag = ctx.block().lshr(I64, &r_bits, "48");
+        let l_string = ctx
+            .block()
+            .icmp_eq(I64, &l_tag, crate::nanbox::STRING_TAG_TOP16_I64);
+        let r_string = ctx
+            .block()
+            .icmp_eq(I64, &r_tag, crate::nanbox::STRING_TAG_TOP16_I64);
+        let tags_match = ctx.block().and(I1, &l_string, &r_string);
+        let a = ctx.block().and(I64, &l_bits, POINTER_MASK_I64);
+        let b = ctx.block().and(I64, &r_bits, POINTER_MASK_I64);
+        // Keep the boxed helper's legacy null-string view semantics.
+        let a_present = ctx.block().icmp_ne(I64, &a, "0");
+        let b_present = ctx.block().icmp_ne(I64, &b, "0");
+        let both_present = ctx.block().and(I1, &a_present, &b_present);
+        let both_strings = ctx.block().and(I1, &tags_match, &both_present);
+        let string_idx = ctx.new_block("dyncmp.string");
+        let coerce_idx = ctx.new_block("dyncmp.coerce");
+        let string_label = ctx.block_label(string_idx);
+        let coerce_label = ctx.block_label(coerce_idx);
+        ctx.block()
+            .cond_br(&both_strings, &string_label, &coerce_label);
+
+        ctx.current_block = string_idx;
+        let order = short_string::heap_string_order(ctx, &a, &b);
+        let bit = match pred {
+            "olt" => ctx.block().icmp_slt(I32, &order, "0"),
+            "ole" => ctx.block().icmp_sle(I32, &order, "0"),
+            "ogt" => ctx.block().icmp_sgt(I32, &order, "0"),
+            "oge" => ctx.block().icmp_sge(I32, &order, "0"),
+            _ => unreachable!("non-relational helper uses the boxed-bits ABI"),
+        };
+        let result = ctx.block().select(
+            I1,
+            &bit,
+            I64,
+            crate::nanbox::TAG_TRUE_I64,
+            crate::nanbox::TAG_FALSE_I64,
+        );
+        let predecessor = ctx.block().label.clone();
+        ctx.block().br(&merge_l);
+        string_incoming = Some((result, predecessor));
+        ctx.current_block = coerce_idx;
+    }
     let slow_res = if helper_takes_bits {
         ctx.block()
             .call(I64, helper, &[(I64, &l_bits), (I64, &r_bits)])
@@ -451,8 +499,14 @@ fn lower_dynamic_compare_bits(
     ctx.block().br(&merge_l);
 
     ctx.current_block = merge_idx;
-    ctx.block()
-        .phi(I64, &[(&fast_res, &fast_pred), (&slow_res, &slow_pred)])
+    let mut incoming = vec![
+        (&fast_res[..], &fast_pred[..]),
+        (&slow_res[..], &slow_pred[..]),
+    ];
+    if let Some((result, predecessor)) = &string_incoming {
+        incoming.push((&result[..], &predecessor[..]));
+    }
+    ctx.block().phi(I64, &incoming)
 }
 
 fn lower_strict_eq_inline_any(ctx: &mut FnCtx<'_>, l: &str, r: &str) -> String {
@@ -500,8 +554,8 @@ fn lower_strict_eq_inline_any(ctx: &mut FnCtx<'_>, l: &str, r: &str) -> String {
     let tag_idx = ctx.new_block("anyeq.tag");
     let num_l = ctx.block_label(num_idx);
     let tag_l = ctx.block_label(tag_idx);
-    let l_plain = emit_is_plain_double(ctx, &l_bits);
-    let r_plain = emit_is_plain_double(ctx, &r_bits);
+    let l_plain = emit_is_unboxed_number(ctx, &l_bits);
+    let r_plain = emit_is_unboxed_number(ctx, &r_bits);
     let both_plain = ctx.block().and(I1, &l_plain, &r_plain);
     ctx.block().cond_br(&both_plain, &num_l, &tag_l);
 

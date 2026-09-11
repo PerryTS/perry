@@ -374,6 +374,10 @@ fn pic_cache_layout_matches_runtime() {
         "test premise: the generic read emits a per-site cache slot:\n{ir}"
     );
     for def in &ic_defs {
+        if def.contains("_packed_get =") {
+            assert!(def.ends_with(" = private global i64 0, align 8"), "{def}");
+            continue;
+        }
         assert!(
             def.ends_with(" = private global ptr null"),
             "every @perry_ic_N must be an 8-byte null pointer slot the runtime \
@@ -382,7 +386,7 @@ fn pic_cache_layout_matches_runtime() {
     }
     assert!(
         ir.contains("load ptr, ptr @perry_ic_") && ir.contains("icmp ne ptr "),
-        "the hit path must load the slot and prove it non-null before reading \
+        "the full-cache fallback must prove the slot non-null before reading \
          a cache word:\n{ir}"
     );
 }
@@ -842,12 +846,40 @@ fn generic_property_get_slot_load_is_reached_only_through_every_guard() {
         }
     }
     let chain = reached.join("\n");
+    let packed = defs
+        .iter()
+        .find(|(_, rhs)| rhs.starts_with("load atomic i64") && rhs.contains("_packed_get"))
+        .map(|(reg, _)| reg)
+        .expect("compact MRU load");
+    assert!(
+        chain.contains(&format!("icmp ne i64 {packed}, 0")),
+        "the initial zero cache must not reach a field load: {chain}"
+    );
+    assert!(
+        chain.contains(&format!("trunc i64 {packed} to i32")),
+        "the exact packed ShapeId must gate the field load: {chain}"
+    );
+
+    if func.contains(", 134217983") {
+        let masked = defs
+            .iter()
+            .find(|(_, rhs)| rhs.starts_with("and i32 ") && rhs.ends_with(", 134217983"))
+            .map(|(reg, _)| reg)
+            .expect("packed kind/descriptor mask");
+        assert!(
+            chain.contains(&format!("icmp eq i32 {masked}, 2")),
+            "both kind and descriptor bits must gate the slot load: {chain}"
+        );
+    } else {
+        assert!(
+            chain.contains("icmp eq i8") && chain.contains("2048"),
+            "native-endian kind/descriptor guards must gate the slot load: {chain}"
+        );
+    }
+
     for (needle, what) in [
         ("32765", "the POINTER/STRING receiver-tag test"),
         ("1048575", "the small-handle (native registry id) test"),
-        ("icmp eq i8", "the GcHeader obj_type == GC_TYPE_OBJECT test"),
-        ("2048", "the OBJ_FLAG_HAS_DESCRIPTORS test"),
-        ("4611686018427387904", "the discriminated ShapeId token"),
         ("@perry_ic_", "the per-site cached shape-token compare"),
     ] {
         assert!(
@@ -1017,5 +1049,52 @@ fn the_length_tier_probes_the_elements_store_before_the_shape_ic() {
     assert!(
         store.contains("plen.ic.shape"),
         "a missing store must fall through to the shape IC:\n{store}"
+    );
+}
+
+#[test]
+fn packed_pic_header_guard_is_endianness_aware() {
+    for (target, packed) in [
+        ("aarch64-apple-darwin", true),
+        ("x86_64-unknown-linux-gnu", true),
+        ("powerpc64-unknown-linux-gnu", false),
+    ] {
+        let mut opts = ir_opts(false, None);
+        opts.target = Some(target.to_string());
+        let ir =
+            String::from_utf8(compile_module(&module_with_nullish_read(), opts).unwrap()).unwrap();
+        assert_eq!(ir.contains(", 134217983"), packed, "{target}: {ir}");
+        if !packed {
+            assert!(
+                ir.contains("load i16"),
+                "descriptor guard must retain native endianness: {ir}"
+            );
+        }
+        assert!(
+            ir.contains("pic.desc.prefix.guard"),
+            "descriptor fallback must remain: {ir}"
+        );
+    }
+}
+
+#[test]
+fn compact_get_mru_is_atomic_and_full_cache_remains_lazy() {
+    let ir = emit(false, None);
+    assert!(
+        ir.contains("_packed_get = private global i64 0, align 8"),
+        "{ir}"
+    );
+    assert!(
+        ir.contains("load atomic i64") && ir.contains("monotonic, align 8"),
+        "{ir}"
+    );
+    assert!(ir.contains("@js_object_get_field_ic_miss_packed("), "{ir}");
+    assert!(
+        ir.contains("trunc i64") && ir.contains("icmp ne i64"),
+        "{ir}"
+    );
+    assert!(
+        ir.contains("pic.token.miss"),
+        "a full-cache dereference must still guard a null site: {ir}"
     );
 }

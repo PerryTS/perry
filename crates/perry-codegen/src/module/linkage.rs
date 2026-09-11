@@ -247,6 +247,11 @@ pub(crate) fn external_decl_for_global(line: &str) -> Option<String> {
 /// a lock acquisition writes memory).
 pub(crate) fn helper_decl_attrs(name: &str) -> &'static str {
     match name {
+        // These calls sit behind cache-hit / inactive-marking guards. Keep
+        // register saves and code layout focused on the inline continuation.
+        // `cold` is only a profitability hint: both calls remain fully
+        // memory-clobbering and the cache miss remains GC-capable/throwing.
+        "js_object_get_field_ic_miss_packed" | "js_write_barrier_root_nanbox" => " cold",
         // PURE — each verified: pure bit tests/masking on the f64/i64 args,
         // total over arbitrary bits, no memory access anywhere in the body.
         //   js_nanbox_pointer        value/nanbox.rs — tag ladder, 0 → TAG_NULL
@@ -270,6 +275,12 @@ pub(crate) fn helper_decl_attrs(name: &str) -> &'static str {
         // (js_bigint_is_zero via clean_bigint_ptr, pure bit cleanup). No
         // registry/lock access, no allocation, no throw, no writes.
         "js_is_truthy" => " #3",
+        // string/compare.rs: pointer magnitude guards, immutable byte views,
+        // bounded word scans / UTF-16 decoder iteration only. No allocation,
+        // GC, locks, writes, or JavaScript coercion. Read-any (not argmem:
+        // operands are i64 handles) orders it against every GC-capable call.
+        // js_string_compare_value is NOT eligible: number coercion allocates.
+        "js_string_compare" => " #3",
         // NOUNWIND+WILLRETURN only (#4, repsel Phase 4a.0) — each verified
         // (`typed_feedback.rs` / `array/header.rs`): no `js_throw` (longjmp)
         // anywhere in the body, every loop bounded by the 16M length/capacity
