@@ -1,6 +1,7 @@
 use super::WEAK_HOLDERS;
 
 thread_local! {
+    static WEAK_ENTRY_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static FULL_WEAK_PROCESSING_WORK_UNITS: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
     /// #7900: how many white objects the weak-READ barrier actually shaded.
@@ -35,6 +36,7 @@ pub(crate) fn note_full_weak_processing_work_unit() {
 }
 
 pub(crate) fn clear_weak_holders() {
+    super::index::clear_weak_collection_indexes();
     WEAK_HOLDERS.with(|holders| holders.borrow_mut().clear());
 }
 
@@ -49,4 +51,27 @@ pub(crate) fn register_weak_holder_address(addr: usize) {
     WEAK_HOLDERS.with(|holders| {
         holders.borrow_mut().insert(addr);
     });
+}
+
+pub(crate) fn note_weak_entry_visit() {
+    WEAK_ENTRY_VISITS.with(|visits| visits.set(visits.get() + 1));
+}
+
+pub(crate) fn reset_weak_entry_visits() {
+    WEAK_ENTRY_VISITS.with(|visits| visits.set(0));
+}
+
+pub(crate) fn weak_entry_visits() -> usize {
+    WEAK_ENTRY_VISITS.with(std::cell::Cell::get)
+}
+
+pub(crate) fn cached_weak_collections() -> usize {
+    super::index::cached_collections()
+}
+
+pub(crate) fn weak_entry_extent(map: f64) -> u32 {
+    unsafe {
+        let map = super::js_nanbox_get_pointer(map) as *mut super::ObjectHeader;
+        super::js_array_length(super::entries_array(map))
+    }
 }

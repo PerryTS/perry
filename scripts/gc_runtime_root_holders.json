@@ -34,6 +34,12 @@
   ],
   "holders": [
     {
+      "file": "crates/perry-runtime/src/weakref/test_support.rs",
+      "name": "WEAK_ENTRY_VISITS",
+      "verdict": "test_only",
+      "why": "Entry-array visit counter for the WeakMap operation-scaling regression; contains only a usize count and the parent module is cfg(test)."
+    },
+    {
       "file": "crates/perry-ext-exponential-backoff/src/lib.rs",
       "name": "NEXT_ID",
       "verdict": "not_a_gc_pointer",
