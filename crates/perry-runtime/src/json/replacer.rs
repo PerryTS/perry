@@ -14,7 +14,24 @@ use std::fmt::Write as FmtWrite;
 
 #[path = "replacer_tojson.rs"]
 mod tojson;
-use tojson::{apply_to_json_keyed, ptr_derefable};
+use tojson::apply_to_json_keyed;
+
+#[inline]
+/// #5989: a real GC heap object pointer is in the low canonical VA range
+/// (top 16 bits 0 or 1) and 8-byte aligned. A value whose extracted
+/// "pointer" fails this is a corrupted / mis-encoded pointer, never a
+/// dereferenceable `GcHeader` — feeding it to `gc_obj_type` SIGBUSes.
+fn ptr_derefable(ptr: usize) -> bool {
+    // Top-16-bits check: a real heap pointer sits in the low canonical VA
+    // range (bits 48-63 are 0 or 1). On 32-bit targets (arm64_32/watchOS)
+    // `usize` has no bits above 31, so this is vacuously true — and emitting
+    // `ptr >> 48` there is a compile-time overflow. Gate it by pointer width.
+    #[cfg(target_pointer_width = "64")]
+    let high_bits_ok = (ptr >> 48) <= 1;
+    #[cfg(not(target_pointer_width = "64"))]
+    let high_bits_ok = true;
+    high_bits_ok && ptr >= 0x10000 && (ptr & 0x7) == 0
+}
 
 // ─── JSON.stringify with replacer ────────────────────────────────────────────
 
