@@ -34,13 +34,14 @@ pub unsafe fn lazy_get(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
 mod tests {
     use super::super::*;
 
-    thread_local! {
-        static ROOTED_READS: Cell<u32> = const { Cell::new(0) };
-    }
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    // The runtime suite is serial. This witness holds no managed values.
+    static ROOTED_READS: AtomicU32 = AtomicU32::new(0);
 
     fn count_rooted_reads(point: JsonTapeSafepoint, _: usize) {
         if point == JsonTapeSafepoint::LazyGetHeaderRooted {
-            ROOTED_READS.with(|n| n.set(n.get() + 1));
+            ROOTED_READS.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -48,7 +49,7 @@ mod tests {
 
     impl HookGuard {
         fn install_counting_hook() -> Self {
-            ROOTED_READS.with(|n| n.set(0));
+            ROOTED_READS.store(0, Ordering::Relaxed);
             Self(test_set_safepoint_hook(Some(count_rooted_reads)))
         }
     }
@@ -78,7 +79,7 @@ mod tests {
             let hdr = fixture(input.as_bytes());
             for (cold_reads, i) in [0, 63, 64, 65, 127, 128, 129].into_iter().enumerate() {
                 let first = lazy_get(hdr, i);
-                assert_eq!(ROOTED_READS.with(Cell::get), cold_reads as u32 + 1);
+                assert_eq!(ROOTED_READS.load(Ordering::Relaxed), cold_reads as u32 + 1);
                 assert!(first.is_pointer(), "the identity subject must be an object");
                 assert!(
                     (*hdr).materialized.is_null(),
@@ -89,7 +90,7 @@ mod tests {
                     assert!(lazy_get(hdr, 130).is_undefined());
                     assert!(lazy_get(hdr, u32::MAX).is_undefined());
                 }
-                assert_eq!(ROOTED_READS.with(Cell::get), cold_reads as u32 + 1);
+                assert_eq!(ROOTED_READS.load(Ordering::Relaxed), cold_reads as u32 + 1);
             }
             assert!(lazy_get(std::ptr::null_mut(), 0).is_undefined());
         }
@@ -102,17 +103,17 @@ mod tests {
             let hdr = fixture(b"[10,20,30]");
             assert_eq!(lazy_get(hdr, 1).as_number(), 20.0);
             assert_eq!(lazy_get(hdr, 1).as_number(), 20.0);
-            assert_eq!(ROOTED_READS.with(Cell::get), 1);
+            assert_eq!(ROOTED_READS.load(Ordering::Relaxed), 1);
             let arr = force_materialize_lazy(hdr);
             crate::array::js_array_set(arr, 1, JSValue::number(99.0));
             assert_eq!(lazy_get(hdr, 1).as_number(), 99.0);
-            assert_eq!(ROOTED_READS.with(Cell::get), 2);
+            assert_eq!(ROOTED_READS.load(Ordering::Relaxed), 2);
             let grown =
                 crate::array::js_array_set_jsvalue_extend(arr, 7, JSValue::number(77.0).bits());
             assert!(!grown.is_null());
             assert_eq!(lazy_get(hdr, 7).as_number(), 77.0);
             assert!(lazy_get(hdr, 6).is_undefined());
-            assert_eq!(ROOTED_READS.with(Cell::get), 4);
+            assert_eq!(ROOTED_READS.load(Ordering::Relaxed), 4);
         }
     }
 }
