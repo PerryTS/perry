@@ -121,6 +121,33 @@ try:
         save()
         print(name, 'passed', flush=True)
 
+    # Machine-readable output keeps the ordinary compiler's success envelope.
+    # Compare against a real normal build when full archives are available.
+    result['jsonCli'] = {}
+    for label in ['tiny'] + ([] if args.tiny_only else ['normal']):
+        binary = work / ('json-' + label + '.bin')
+        argv = [compiler, '--format', 'json', 'compile', str(work / 'literal.ts'),
+                '--no-cache', '-o', str(binary)]
+        if label == 'normal':
+            argv.append('--no-auto-optimize')
+        built = subprocess.run(argv, cwd=work, env=build_env, capture_output=True, timeout=240)
+        assert built.returncode == 0, f'JSON {label} compile failed: {built.stderr!r}'
+        response = json.loads(built.stdout)
+        assert response['success'] is True and response['output'] == str(binary)
+        assert response['native_modules'] == 1 and response['js_modules'] == 0
+        assert {'build_cache', 'codegen_cache', 'link_cache'} <= response.keys()
+        actual = run([str(binary)])
+        assert (actual.returncode, actual.stdout, actual.stderr) == (0, b'hello\n', b'')
+        result['jsonCli'][label] = {'argv': argv, 'response': response,
+                                    'binary': file_record(binary), 'stderr': captured(built.stderr)}
+    assert result['jsonCli']['tiny']['response']['runtimeProfile'] == 'tiny'
+    if not args.tiny_only:
+        normal = result['jsonCli']['normal']['response']
+        tiny = result['jsonCli']['tiny']['response']
+        assert normal.keys() <= tiny.keys(), 'Tiny dropped ordinary JSON result fields'
+        assert normal['link_cache'].keys() == tiny['link_cache'].keys()
+    save()
+
     pipe_source = work / 'pipe-survival.ts'
     pipe_binary = work / 'pipe-survival.bin'
     result['pipeCases'] = {}
