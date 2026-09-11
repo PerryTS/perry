@@ -1,0 +1,10 @@
+{
+  "source_commit": "5f6448ce7b38754481ab020f2f6d059c40dac0d2",
+  "controller_exit": 0,
+  "analysis_exit": 1,
+  "qualification": false,
+  "reason": "Quiet gate false: ending load3.25 exceeded required ceiling; all420timed/100verify/60calibration raw records preserved, excluded from performance conclusions.",
+  "results_directory": "results/quiet-native-buffer-escape-r38-rotating",
+  "original_analyzer_sha256": "fd2e84685baf7e6525dd96e7187dc4595db523740aa69e7944a56b2c9f574423",
+  "retry": "Same immutable workers, fixtures and7repetitions; distinct results directory."
+}

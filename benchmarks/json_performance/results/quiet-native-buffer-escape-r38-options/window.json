@@ -1,0 +1,32 @@
+{
+  "owner": "json-perf-47019-1789141318",
+  "load_before": [
+    1.515625,
+    1.7734375,
+    1.8203125
+  ],
+  "started_utc": "2026-09-11T15:41:58Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/native-buffer-escape-r38/run-options.py",
+    "--worker",
+    ".work/native-buffer-escape-r38/candidate-options",
+    "--baseline-worker",
+    ".work/native-buffer-escape-r38/main-options",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--bun",
+    "/Users/perry/.bun/bin/bun",
+    "--results-dir",
+    "results/quiet-native-buffer-escape-r38-options"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.6689453125,
+    1.75732421875,
+    1.8095703125
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-11T15:43:01Z"
+}

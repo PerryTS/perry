@@ -1,0 +1,758 @@
+[
+  {
+    "fixture": "small_record",
+    "operation": "plain",
+    "iterations": 2000000,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 0.0448185,
+    "cpu_samples_us": [
+      0.0451405,
+      0.0446375,
+      0.0447825,
+      0.0449295,
+      0.0448715,
+      0.0448185,
+      0.0447555
+    ],
+    "peak_rss_mib": 33.375,
+    "peak_rss_samples_mib": [
+      33.375,
+      33.375,
+      33.40625,
+      33.375,
+      33.375,
+      33.40625,
+      33.375
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "plain",
+    "iterations": 2000000,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 0.044866,
+    "cpu_samples_us": [
+      0.0449925,
+      0.044779,
+      0.0448285,
+      0.044883,
+      0.044926,
+      0.044866,
+      0.044832
+    ],
+    "peak_rss_mib": 33.421875,
+    "peak_rss_samples_mib": [
+      33.421875,
+      33.421875,
+      33.421875,
+      33.375,
+      33.390625,
+      33.421875,
+      33.390625
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "plain",
+    "iterations": 2000000,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 0.107807,
+    "cpu_samples_us": [
+      0.107807,
+      0.1083495,
+      0.1077005,
+      0.1076785,
+      0.1090335,
+      0.1084865,
+      0.1077435
+    ],
+    "peak_rss_mib": 59.578125,
+    "peak_rss_samples_mib": [
+      59.625,
+      59.578125,
+      59.515625,
+      59.53125,
+      59.625,
+      59.65625,
+      59.578125
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "plain",
+    "iterations": 2000000,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 0.119477,
+    "cpu_samples_us": [
+      0.1194295,
+      0.1194,
+      0.119145,
+      0.1196085,
+      0.119701,
+      0.119477,
+      0.1196475
+    ],
+    "peak_rss_mib": 378.578125,
+    "peak_rss_samples_mib": [
+      378.59375,
+      378.609375,
+      378.578125,
+      378.578125,
+      378.609375,
+      378.5625,
+      378.5625
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "dynamic-zero",
+    "iterations": 2000000,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 0.044595,
+    "cpu_samples_us": [
+      0.044652,
+      0.0445365,
+      0.0445155,
+      0.044595,
+      0.046617,
+      0.044724,
+      0.044543
+    ],
+    "peak_rss_mib": 33.375,
+    "peak_rss_samples_mib": [
+      33.375,
+      33.375,
+      33.40625,
+      33.375,
+      33.40625,
+      33.375,
+      33.375
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "dynamic-zero",
+    "iterations": 2000000,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 0.044582,
+    "cpu_samples_us": [
+      0.0445265,
+      0.044496,
+      0.044582,
+      0.04447,
+      0.0446415,
+      0.0446485,
+      0.0446345
+    ],
+    "peak_rss_mib": 33.40625,
+    "peak_rss_samples_mib": [
+      33.40625,
+      33.390625,
+      33.421875,
+      33.421875,
+      33.375,
+      33.390625,
+      33.421875
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "dynamic-zero",
+    "iterations": 2000000,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 0.247524,
+    "cpu_samples_us": [
+      0.2481385,
+      0.247562,
+      0.24797,
+      0.2473795,
+      0.2472935,
+      0.2471425,
+      0.247524
+    ],
+    "peak_rss_mib": 59.65625,
+    "peak_rss_samples_mib": [
+      59.609375,
+      59.6875,
+      59.65625,
+      59.6875,
+      59.75,
+      59.59375,
+      59.640625
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "dynamic-zero",
+    "iterations": 2000000,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 0.394202,
+    "cpu_samples_us": [
+      0.3950775,
+      0.3940435,
+      0.3942665,
+      0.394202,
+      0.393914,
+      0.3934605,
+      0.3949635
+    ],
+    "peak_rss_mib": 378.640625,
+    "peak_rss_samples_mib": [
+      378.640625,
+      378.640625,
+      378.640625,
+      378.625,
+      378.671875,
+      378.625,
+      378.640625
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "zero",
+    "iterations": 2000000,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 0.0448205,
+    "cpu_samples_us": [
+      0.0448205,
+      0.044834,
+      0.044797,
+      0.0448855,
+      0.0447355,
+      0.0447385,
+      0.0449715
+    ],
+    "peak_rss_mib": 33.40625,
+    "peak_rss_samples_mib": [
+      33.40625,
+      33.390625,
+      33.40625,
+      33.375,
+      33.40625,
+      33.40625,
+      33.390625
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "zero",
+    "iterations": 2000000,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 0.044904,
+    "cpu_samples_us": [
+      0.044844,
+      0.044932,
+      0.044941,
+      0.044904,
+      0.0448625,
+      0.0452185,
+      0.0448935
+    ],
+    "peak_rss_mib": 33.40625,
+    "peak_rss_samples_mib": [
+      33.40625,
+      33.40625,
+      33.390625,
+      33.390625,
+      33.421875,
+      33.390625,
+      33.421875
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "zero",
+    "iterations": 2000000,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 0.2475895,
+    "cpu_samples_us": [
+      0.2475895,
+      0.247304,
+      0.247236,
+      0.2499195,
+      0.247854,
+      0.247516,
+      0.2479465
+    ],
+    "peak_rss_mib": 59.59375,
+    "peak_rss_samples_mib": [
+      59.625,
+      59.578125,
+      59.578125,
+      59.546875,
+      59.59375,
+      59.609375,
+      59.59375
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "zero",
+    "iterations": 2000000,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 0.3942345,
+    "cpu_samples_us": [
+      0.3942345,
+      0.3937875,
+      0.393787,
+      0.393738,
+      0.3964065,
+      0.3951795,
+      0.3947695
+    ],
+    "peak_rss_mib": 378.640625,
+    "peak_rss_samples_mib": [
+      378.640625,
+      378.640625,
+      378.65625,
+      378.65625,
+      378.65625,
+      378.640625,
+      378.640625
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "pretty",
+    "iterations": 1000000,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 0.451657,
+    "cpu_samples_us": [
+      0.450961,
+      0.451657,
+      0.451716,
+      0.450748,
+      0.451778,
+      0.450742,
+      0.452224
+    ],
+    "peak_rss_mib": 33.765625,
+    "peak_rss_samples_mib": [
+      33.78125,
+      33.75,
+      33.78125,
+      33.765625,
+      33.75,
+      33.78125,
+      33.75
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "pretty",
+    "iterations": 1000000,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 0.48628,
+    "cpu_samples_us": [
+      0.484868,
+      0.486965,
+      0.482736,
+      0.48524,
+      0.48628,
+      0.486988,
+      0.4869
+    ],
+    "peak_rss_mib": 33.75,
+    "peak_rss_samples_mib": [
+      33.75,
+      33.75,
+      33.765625,
+      33.75,
+      33.734375,
+      33.75,
+      33.734375
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "pretty",
+    "iterations": 1000000,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 0.304145,
+    "cpu_samples_us": [
+      0.305464,
+      0.303625,
+      0.303251,
+      0.304145,
+      0.304741,
+      0.302629,
+      0.304907
+    ],
+    "peak_rss_mib": 59.640625,
+    "peak_rss_samples_mib": [
+      59.5625,
+      59.640625,
+      59.625,
+      59.671875,
+      59.671875,
+      59.65625,
+      59.640625
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "pretty",
+    "iterations": 1000000,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 0.524904,
+    "cpu_samples_us": [
+      0.52358,
+      0.526152,
+      0.524462,
+      0.524388,
+      0.525769,
+      0.525314,
+      0.524904
+    ],
+    "peak_rss_mib": 239.390625,
+    "peak_rss_samples_mib": [
+      239.4375,
+      239.453125,
+      239.359375,
+      239.359375,
+      239.359375,
+      239.390625,
+      239.390625
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "keys",
+    "iterations": 1000000,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 0.449846,
+    "cpu_samples_us": [
+      0.450329,
+      0.44856,
+      0.44936,
+      0.449846,
+      0.450358,
+      0.453602,
+      0.448646
+    ],
+    "peak_rss_mib": 33.734375,
+    "peak_rss_samples_mib": [
+      33.734375,
+      33.71875,
+      33.734375,
+      33.71875,
+      33.71875,
+      33.75,
+      33.765625
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "keys",
+    "iterations": 1000000,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 0.46101,
+    "cpu_samples_us": [
+      0.461193,
+      0.46101,
+      0.460347,
+      0.46052,
+      0.460774,
+      0.462055,
+      0.461715
+    ],
+    "peak_rss_mib": 33.71875,
+    "peak_rss_samples_mib": [
+      33.71875,
+      33.75,
+      33.71875,
+      33.71875,
+      33.734375,
+      33.71875,
+      33.734375
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "keys",
+    "iterations": 1000000,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 0.598825,
+    "cpu_samples_us": [
+      0.597935,
+      0.609022,
+      0.595458,
+      0.598825,
+      0.622051,
+      0.601161,
+      0.586478
+    ],
+    "peak_rss_mib": 59.703125,
+    "peak_rss_samples_mib": [
+      59.640625,
+      59.75,
+      59.640625,
+      59.71875,
+      59.703125,
+      59.765625,
+      59.703125
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "keys",
+    "iterations": 1000000,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 0.484222,
+    "cpu_samples_us": [
+      0.484292,
+      0.484107,
+      0.484602,
+      0.485437,
+      0.483949,
+      0.484191,
+      0.484222
+    ],
+    "peak_rss_mib": 207.765625,
+    "peak_rss_samples_mib": [
+      207.78125,
+      207.75,
+      207.75,
+      207.765625,
+      207.765625,
+      207.75,
+      207.78125
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "callback",
+    "iterations": 200000,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 0.88989,
+    "cpu_samples_us": [
+      0.891045,
+      0.88921,
+      0.88989,
+      0.88978,
+      0.88926,
+      0.891845,
+      0.890555
+    ],
+    "peak_rss_mib": 32.515625,
+    "peak_rss_samples_mib": [
+      32.515625,
+      32.515625,
+      32.484375,
+      32.46875,
+      32.515625,
+      32.515625,
+      32.515625
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "callback",
+    "iterations": 200000,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 0.947505,
+    "cpu_samples_us": [
+      0.94725,
+      0.948185,
+      0.948655,
+      0.947505,
+      0.94703,
+      0.95274,
+      0.947385
+    ],
+    "peak_rss_mib": 32.5,
+    "peak_rss_samples_mib": [
+      32.5,
+      32.46875,
+      32.5,
+      32.484375,
+      32.5,
+      32.5,
+      32.453125
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "callback",
+    "iterations": 200000,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 0.60366,
+    "cpu_samples_us": [
+      0.603785,
+      0.60131,
+      0.59767,
+      0.60366,
+      0.612025,
+      0.603315,
+      0.60942
+    ],
+    "peak_rss_mib": 59.625,
+    "peak_rss_samples_mib": [
+      59.640625,
+      59.578125,
+      59.625,
+      59.671875,
+      59.671875,
+      59.578125,
+      59.53125
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "callback",
+    "iterations": 200000,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 0.58167,
+    "cpu_samples_us": [
+      0.5807,
+      0.583185,
+      0.579945,
+      0.582825,
+      0.58167,
+      0.58035,
+      0.586185
+    ],
+    "peak_rss_mib": 97.734375,
+    "peak_rss_samples_mib": [
+      97.6875,
+      97.671875,
+      97.734375,
+      97.734375,
+      97.78125,
+      97.6875,
+      97.765625
+    ]
+  },
+  {
+    "fixture": "records_array_16k",
+    "operation": "pretty",
+    "iterations": 1000,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 42.351,
+    "cpu_samples_us": [
+      42.45,
+      42.351,
+      42.164,
+      42.437,
+      42.295,
+      42.55,
+      42.264
+    ],
+    "peak_rss_mib": 35.046875,
+    "peak_rss_samples_mib": [
+      35.046875,
+      35.046875,
+      35.0625,
+      35.0625,
+      35.0625,
+      35.046875,
+      35.046875
+    ]
+  },
+  {
+    "fixture": "records_array_16k",
+    "operation": "pretty",
+    "iterations": 1000,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 46.204,
+    "cpu_samples_us": [
+      46.427,
+      46.204,
+      46.159,
+      46.151,
+      46.425,
+      46.203,
+      46.288
+    ],
+    "peak_rss_mib": 35.0625,
+    "peak_rss_samples_mib": [
+      35.0625,
+      35.0625,
+      35.046875,
+      35.0625,
+      35.0625,
+      35.046875,
+      35.046875
+    ]
+  },
+  {
+    "fixture": "records_array_16k",
+    "operation": "pretty",
+    "iterations": 1000,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 33.764,
+    "cpu_samples_us": [
+      33.58,
+      33.703,
+      33.764,
+      33.993,
+      33.767,
+      33.823,
+      33.199
+    ],
+    "peak_rss_mib": 57.046875,
+    "peak_rss_samples_mib": [
+      56.984375,
+      56.96875,
+      57.046875,
+      57.109375,
+      56.96875,
+      57.078125,
+      57.09375
+    ]
+  },
+  {
+    "fixture": "records_array_16k",
+    "operation": "pretty",
+    "iterations": 1000,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 45.714,
+    "cpu_samples_us": [
+      45.671,
+      45.647,
+      45.676,
+      45.816,
+      45.746,
+      45.831,
+      45.714
+    ],
+    "peak_rss_mib": 49.734375,
+    "peak_rss_samples_mib": [
+      49.734375,
+      49.734375,
+      49.734375,
+      49.75,
+      49.71875,
+      49.71875,
+      49.71875
+    ]
+  }
+]

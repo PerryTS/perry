@@ -1,0 +1,13 @@
+{
+  "symbol": "__RNvNtCs3gRpqoBkMHm_13perry_runtime6string28js_string_from_builder_bytes",
+  "command": [
+    "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+    "--disassemble-symbols=__RNvNtCs3gRpqoBkMHm_13perry_runtime6string28js_string_from_builder_bytes",
+    "--no-show-raw-insn",
+    "benchmarks/json_performance/.work/native-buffer-escape-r38/candidate-worker"
+  ],
+  "binary_sha256": "a669495e4d388cb154610afd4cd1064bf41360ac9f2803c0f01cdf93159298a4",
+  "disassembly_sha256": "f49626048118629fed70ec6d85c144448858cf03dc400fcdb8bc6cd9a788311e",
+  "note": "Diagnostic linked-code view of final builder ASCII predicate; not a timing or causal proof.",
+  "observed_bulk_ascii_bytes_per_iteration": 64
+}

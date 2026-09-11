@@ -1,0 +1,67 @@
+{
+  "reference_source": "3aac4d6335da54abeeed73df842decbbe6dd5d71",
+  "link_command": [
+    "cc",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/native-buffer-escape-r38/main-large-emitter-ir-native/worker.o",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/native-buffer-escape-r38/frozen-main/libperry_runtime.a",
+    "-lc",
+    "-Wl,-dead_strip",
+    "-Wl,-no_exported_symbols",
+    "-o",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/native-buffer-escape-r38/reference-fault-diagnostic/worker"
+  ],
+  "env": {
+    "PERRY_GC_SCHEDULE_SEED": "10022",
+    "PERRY_GC_SCHEDULE_RATE": "0.1",
+    "PERRY_GC_SCHEDULE_ALLOC_KB": "0",
+    "PERRY_GC_PROTECT_FROMSPACE": "1",
+    "PERRY_GC_DIAG": "1"
+  },
+  "exit_code": -10,
+  "files": {
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/native-buffer-escape-r38/main-large-emitter-ir-native/worker.o": "ff23868d7c6e329c22b13c84837dfe9e8b3c43ea0813d4fd67018de6c68ab8ba",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/native-buffer-escape-r38/frozen-main/libperry_runtime.a": "48972667fc2bf53e57c2776eb8741e32e41d1da752017abbe2aa512325af23bb",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/native-buffer-escape-r38/reference-fault-diagnostic/worker": "d256c03c37ae0839464c5297cf001b9273a6b16214b7ed51ee73d0f26ff69396",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/native-buffer-escape-r38/reference-fault-diagnostic/run.stdout": "7eb51f7f7b12d49aca041125cdc95ab88f49973c7010f1f85963f3423e02c4ea",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/native-buffer-escape-r38/reference-fault-diagnostic/run.stderr": "718268f88136452334824c0d93763f9b0718db886e33637e4f275cd6194edb1a"
+  },
+  "frames": [],
+  "note": "Independent native fixture diagnostic linked with symbols from the exact fresh checker object. Not a replacement for the twenty reference validation receipts.",
+  "symbolized_frames": [
+    [
+      "0x0000000104bd0620",
+      "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime5arena10quarantine23fromspace_fault_handler",
+      "5248"
+    ],
+    [
+      "0x0000000104b4e5dc",
+      "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc8schedule22schedule_fault_handler",
+      "3132"
+    ],
+    [
+      "0x0000000104bc3994",
+      "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json8replacer37stringify_object_with_replacer_pretty",
+      "2196"
+    ],
+    [
+      "0x0000000104bc3994",
+      "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json8replacer37stringify_object_with_replacer_pretty",
+      "2196"
+    ],
+    [
+      "0x0000000104f066b4",
+      "js_json_stringify_full",
+      "4596"
+    ],
+    [
+      "0x00000001046c14b4",
+      "perry_fn_test_json_large_string_emitters_ts__run",
+      "3060"
+    ],
+    [
+      "0x00000001046c65e0",
+      "main",
+      "60"
+    ]
+  ]
+}

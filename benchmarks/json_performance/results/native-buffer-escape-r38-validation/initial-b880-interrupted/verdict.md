@@ -1,0 +1,1 @@
+Preproduction b880 attempt deliberately interrupted to include the equivalent bulk ASCII check identified in linked R37 builder disassembly. Unit and lint controllers were stopped only after verifying their exact owned process trees; interruption.json records identity and reason. No completed unit/lint or production-build verdict is claimed.

@@ -1,0 +1,70 @@
+[
+  {
+    "path": "korean-fixtures/korean_small.7.json",
+    "sha256": "8e07b24c6d595b6b5c5c99d389e7bf46f160aa19108420b2be9b31d472f3bfbf"
+  },
+  {
+    "path": "korean-fixtures/korean_1m.2.json",
+    "sha256": "2611f388c859fc832c14b1fe456da9524d2288752561d9cf673ec10788dd8e91"
+  },
+  {
+    "path": "korean-fixtures/korean_1m.3.json",
+    "sha256": "0554454442b3fc74169abfb21e3606f860d1d351a8c88efff0e8937f1e541934"
+  },
+  {
+    "path": "korean-fixtures/korean_small.6.json",
+    "sha256": "fe79c78f08112151015a5fc1fed520b9b36754d804bf1b398b046151393dd243"
+  },
+  {
+    "path": "korean-fixtures/korean_1m.4.json",
+    "sha256": "45612177522b345a89c558cc12e0967db2f58541afd06de78da0de962602e03f"
+  },
+  {
+    "path": "korean-fixtures/korean_small.1.json",
+    "sha256": "e8450f226b4c8b864950a509960aadf6ba905beecde5bcb01555a6aea241ebd1"
+  },
+  {
+    "path": "korean-fixtures/korean_small.0.json",
+    "sha256": "654d652b2f25d1ba0bef2a274a28e2de1bca84ad5c156f5c33c558d23964205b"
+  },
+  {
+    "path": "korean-fixtures/korean_1m.5.json",
+    "sha256": "088cc6d32db306a474cadd5b17047e3d1d258777ffc4004614390bece732c7af"
+  },
+  {
+    "path": "korean-fixtures/korean_1m.6.json",
+    "sha256": "4dcf6359cdfee379819f3071fb7a6e0fd1782aa8a5be07c7774778fc8f92d341"
+  },
+  {
+    "path": "korean-fixtures/korean_small.3.json",
+    "sha256": "fa1ac4462dd8c23e3bafa43951ea35e537060e835f7349c2de181cac9ac261cf"
+  },
+  {
+    "path": "korean-fixtures/korean_small.2.json",
+    "sha256": "116d2c09533728d2a1830bc7aad1fe7b48c94ceaf3e339f8f01008721d93f82c"
+  },
+  {
+    "path": "korean-fixtures/manifest.json",
+    "sha256": "4410298dcf200c08516794de6587aded7166cf26bcd5fa40d6c139ded6871b5b"
+  },
+  {
+    "path": "korean-fixtures/korean_1m.7.json",
+    "sha256": "b3fedc3af35a9de746601f5d13f69dde00c8a83000885489e67a4205d6ca3cd8"
+  },
+  {
+    "path": "korean-fixtures/korean_small.5.json",
+    "sha256": "14dfac81792a8d461d0deae2f9be798d1c018445654eefc260c83421d85590df"
+  },
+  {
+    "path": "korean-fixtures/korean_1m.0.json",
+    "sha256": "57a54008bef4ae522a5c775741e0b314e2220f73f5707777a69271097ad1befb"
+  },
+  {
+    "path": "korean-fixtures/korean_1m.1.json",
+    "sha256": "d2295bfc8233a9c661a05450e262585258dd852332d1553ca7e04b112ef2045b"
+  },
+  {
+    "path": "korean-fixtures/korean_small.4.json",
+    "sha256": "79434154b8dd7bd259fd0117303b72eaa6c3b5c466340f13780f80edf66ef10d"
+  }
+]

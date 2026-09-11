@@ -1,0 +1,35 @@
+[
+  {
+    "worker": "retained-zero",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/native-buffer-escape-r38/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/zero-spacing-r25/retained-zero-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/native-buffer-escape-r38/candidate-retained-zero.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/native-buffer-escape-r38/candidate-retained-zero.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/native-buffer-escape-r38/frozen-build/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/native-buffer-escape-r38/candidate-retained-zero"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/zero-spacing-r25/retained-zero-worker.ts": "5ead488614d020e33d7711aeb2d9d805426ff46c9283101c1f659b1d93f8d03c",
+      "benchmarks/json_performance/.work/native-buffer-escape-r38/candidate-retained-zero.o": "4aee07f3f1605fb9f81d2019dd2533306d7e39d3bfe6a858232f3ab70d63aae5",
+      "benchmarks/json_performance/.work/native-buffer-escape-r38/candidate-retained-zero": "47a589fb3a47417b01b4e2c2515dde97aa94d319c95526099cbf30ed9cab93a7",
+      "benchmarks/json_performance/.work/native-buffer-escape-r38/frozen-build/perry": "a57b0b9c33f2a337be58f26a8f860a6ee700ef2262d67f15486b45404d57f81a",
+      "benchmarks/json_performance/.work/native-buffer-escape-r38/frozen-build/libperry_runtime.a": "432c48a1ee523b6d9e424d6a901b018acecf5323702d15e69947244ab7450a8f",
+      "benchmarks/json_performance/.work/native-buffer-escape-r38/frozen-build/libperry_stdlib.a": "77348ba7de47a7c45db50f476defa7da912cb8c0b1a9667a4ca288db1cbe66f5"
+    }
+  }
+]

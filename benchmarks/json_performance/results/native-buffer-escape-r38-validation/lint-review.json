@@ -1,0 +1,10 @@
+{
+  "source_commit": "5f6448ce7b38754481ab020f2f6d059c40dac0d2",
+  "executed": 74,
+  "passed": 73,
+  "failed_gate": "Public benchmark evidence freshness",
+  "failure_detail": "  FAIL  [Public benchmark evidence freshness] python3 benchmarks/ci_public_baseline_check.py",
+  "file_cap_passed": true,
+  "log_sha256": "ff4d5b61ba498dd6d0bd511838c92bba1ae8767773e9c06711e76d2529b44964",
+  "note": "Final-source lint complete; formatting passes, compile/CI-only tiers recorded."
+}

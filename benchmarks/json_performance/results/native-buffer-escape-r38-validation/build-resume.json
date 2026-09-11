@@ -1,0 +1,4 @@
+{
+  "source_commit": "5f6448ce7b38754481ab020f2f6d059c40dac0d2",
+  "note": "309 JSON tests (2.94s),119 string-filter tests (1.63s), overlapping sets; fresh lint73/74, public benchmark freshness only, formatting/filecap PASS. Reviewed explicit hold; both initial attempts preserved."
+}

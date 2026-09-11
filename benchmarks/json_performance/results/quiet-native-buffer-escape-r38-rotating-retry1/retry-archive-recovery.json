@@ -1,0 +1,7 @@
+{
+  "exit_code": 0,
+  "initial_local_controller_exit_code": 1,
+  "archive_recovery_exit_code": 0,
+  "remote_completion_evidence": "with_lock completed its check=True subprocess, printed FINISHED and QUIET_GATE True, and archived window exactly matches the declared command. Original controller failed only the local archive slug-suffix assertion before any SSH archival.",
+  "note": "Exact retry slug admitted to archive validation; quietness/source/output checks unchanged. Recovery archive was first subsequent remote operation. Initial controller and archive script preserved under initial-retry-archive-refusal."
+}

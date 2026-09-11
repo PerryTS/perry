@@ -1,0 +1,6 @@
+{
+  "source_commit": "5f6448ce7b38754481ab020f2f6d059c40dac0d2",
+  "worktree": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29",
+  "created_utc": "2026-09-11T15:23:08.449001+00:00",
+  "note": "Owned experimental worktree, shared owned target, one Cargo build at a time. Initial a23 failed unit compilation; b880 was explicitly interrupted before production. Final source has completed JSON/string units and lint review."
+}

@@ -1,0 +1,6 @@
+{
+  "original_path": "benchmarks/json_performance/.work/stringify-token-proof-r31/large-cases.json",
+  "original_sha256": "b6e47dbbdec95615366d64ec2c77b58cde6a149b3c7f5b0d4e904059e1605f43",
+  "sha256": "3a53b58a65b267539485da0faeceb233b60f84949de6184a35229b30a2037238",
+  "adaptation": "Note only; all six cases and counts unchanged."
+}

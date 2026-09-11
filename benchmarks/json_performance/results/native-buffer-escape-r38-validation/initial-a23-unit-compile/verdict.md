@@ -1,0 +1,1 @@
+Initial sourcea23f8067feccf45230cd47b6ee2bceb9f5b8b025 failed unit compilation with E0277 in the new assertion: String + &String is ambiguous with the workspace smartstring Add implementation. No tests or production build ran. Use quoted.as_str() in the expected-output assertion; preserve the compiler failure.

@@ -1,0 +1,36 @@
+{
+  "owner": "json-perf-46517-1789141199",
+  "load_before": [
+    1.49658203125,
+    1.91357421875,
+    1.87548828125
+  ],
+  "started_utc": "2026-09-11T15:39:59Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/native-buffer-escape-r38/run-korean-rotating.py",
+    "--worker",
+    ".work/native-buffer-escape-r38/candidate-rotating-worker",
+    "--baseline-worker",
+    ".work/native-buffer-escape-r38/main-rotating-worker",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--bun",
+    "/Users/perry/.bun/bin/bun",
+    "--repeat",
+    "7",
+    "--source-commit",
+    "5f6448ce7b38754481ab020f2f6d059c40dac0d2",
+    "--results-dir",
+    "results/quiet-native-buffer-escape-r38-korean-rotating"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.3955078125,
+    1.82861328125,
+    1.84423828125
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-11T15:40:41Z"
+}

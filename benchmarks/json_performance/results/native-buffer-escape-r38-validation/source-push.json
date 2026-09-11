@@ -1,0 +1,5 @@
+{
+  "source_commit": "5f6448ce7b38754481ab020f2f6d059c40dac0d2",
+  "remote_ref": "5f6448ce7b38754481ab020f2f6d059c40dac0d2\trefs/heads/codex/json-native-buffer-escape-r38",
+  "note": "Experimental source only; no ready PR or performance qualification yet."
+}

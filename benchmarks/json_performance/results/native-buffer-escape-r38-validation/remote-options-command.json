@@ -1,0 +1,17 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/native-buffer-escape-r38/run-options.py",
+  "--worker",
+  ".work/native-buffer-escape-r38/candidate-options",
+  "--baseline-worker",
+  ".work/native-buffer-escape-r38/main-options",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--results-dir",
+  "results/quiet-native-buffer-escape-r38-options"
+]

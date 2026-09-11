@@ -1,0 +1,27 @@
+{
+  "base_source": "3d59ed5219ace6bf001df3de9108c52434dc4232",
+  "status": "Prepared only: not applied, compiled, measured or promoted.",
+  "files": [
+    {
+      "path": "crates/perry-runtime/src/json/stringify_escaped_output.rs",
+      "proposal_file": "stringify_escaped_output.rs",
+      "sha256": "c964180a46d8be902f312d913e1fb887a232d3f9d6f24313cd7bbc70d3bde98d"
+    },
+    {
+      "path": "crates/perry-runtime/src/json/stringify_scalars.rs",
+      "proposal_file": "stringify_scalars.rs",
+      "sha256": "c438afd1184e2954fce20f85ffab3918a8641ccbf9bea07f5d050315cc51569f"
+    },
+    {
+      "path": "crates/perry-runtime/src/json/stringify_escaped_output_tests.rs",
+      "proposal_file": "stringify_escaped_output_tests.rs",
+      "sha256": "0d05a636f127f87a738ccdc11e8ba9f5cabc13512d04de74df668f31475bb3a1"
+    },
+    {
+      "path": "test-files/test_json_large_string_emitters.ts",
+      "proposal_file": "test_json_large_string_emitters.ts",
+      "sha256": "a4316c0cae70b19a8ef0c5ffa0f1b5462981f29ab3e1819c5c6ceb8d9718bab8"
+    }
+  ],
+  "note": "Reuse the existing UTF8-validated SIMD expansion plan and raw bounded writer for large general serializer buffers. No GC policy or rooting changes. Invalid UTF8/WTF8 declines before mutation and retains old writer. Buffer growth follows current geometric capacity rather than exact-string reserve that could force an immediate doubling for closing punctuation. Requires final production pretty/replacer/full controls, native/shadow and actual moving/protection checks. New independent large-emitter fixture requires fresh both-arm execution and native/shadow IR checks, including allocating callbacks with positive moved/protected witnesses."
+}

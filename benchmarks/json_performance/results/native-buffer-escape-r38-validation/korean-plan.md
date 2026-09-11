@@ -1,0 +1,1 @@
+Same bounded Korean controls as R37: 978-byte and approximately1MB valid UTF-8 string objects, eight equal-length rotating inputs plus cached/selection controls. R38 must remove escaped-input regressions while retaining the Korean improvement. No UTF-8 source or GC/cache-admission changes in this round.

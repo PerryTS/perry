@@ -1,0 +1,5 @@
+The final linked builder uses four 128-bit loads per 64-byte ASCII iteration with vector OR/reduction, replacing R37's scalar byte loop. This is a code-shape observation; timing remains a separate measurement.
+
+The new large-emitter fixture reproduces a reference stale-pointer fault after 62 copying/protected cycles. A separate native object linked with symbols places the stale use in stringify_object_with_replacer_pretty. R38 completes all 20 fresh runs and retains exact Node output after allocating callbacks and 167766 moved objects. The native static checker separately reports one nonmoving string-handle/overflow-store finding; it has identical IR and full reports in both arms and remains unsuppressed. Both shadow variants pass. This static finding is not the moving runtime failure just repaired.
+
+The initial rotating timing window ended above the existing 2.5 load ceiling (load 3.25), despite no named competing workload. Its full raw data and terminal receipt are retained and excluded from performance conclusions. A distinct retry uses the same source, immutable binaries, fixture bytes, counts and seven repetitions. No quietness threshold was changed.

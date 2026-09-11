@@ -1,0 +1,23 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/native-buffer-escape-r38/run-rotating.py",
+  "--worker",
+  ".work/native-buffer-escape-r38/candidate-rotating-worker",
+  "--baseline-worker",
+  ".work/native-buffer-escape-r38/main-rotating-worker",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--filter",
+  "unicode_1m,long_string_1m,escaped_1m,small_record,records_array_1m",
+  "--repeat",
+  "7",
+  "--source-commit",
+  "5f6448ce7b38754481ab020f2f6d059c40dac0d2",
+  "--results-dir",
+  "results/quiet-native-buffer-escape-r38-rotating-retry1"
+]
