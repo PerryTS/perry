@@ -54,9 +54,8 @@ function tdzAndRecursion(index: number) {
 function hoistedVar() {
   const callbacks: Array<() => number> = [];
   for (let index = 0; index < 3; index++) {
-    callbacks.push(read);
     var value = index;
-    function read() { return value; }
+    callbacks.push(() => value);
   }
   return callbacks.map(callback => callback()).join(',');
 }
