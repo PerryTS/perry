@@ -1,0 +1,44 @@
+{
+  "owner": "json-perf-54843-1789146437",
+  "load_before": [
+    1.36376953125,
+    1.6640625,
+    1.66552734375
+  ],
+  "started_utc": "2026-09-11T17:07:17Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/compact-template-capture-r39/run-options.py",
+    "--worker",
+    ".work/compact-template-capture-r39/candidate-options",
+    "--baseline-worker",
+    ".work/compact-template-capture-r39/main-options",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--bun",
+    "/Users/perry/.bun/bin/bun",
+    "--case",
+    "long_string_1m:pretty:256:4:7",
+    "--case",
+    "long_string_1m:callback:128:4:7",
+    "--case",
+    "unicode_1m:pretty:256:4:7",
+    "--case",
+    "unicode_1m:callback:128:4:7",
+    "--case",
+    "escaped_1m:pretty:256:4:7",
+    "--case",
+    "escaped_1m:callback:128:4:7",
+    "--results-dir",
+    "results/quiet-compact-template-capture-r39-large-options"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.43212890625,
+    1.65771484375,
+    1.66259765625
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-11T17:07:43Z"
+}

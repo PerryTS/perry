@@ -1,0 +1,6 @@
+{
+  "source_commit": "3bde9394e021039603c84801762af4f083b1f9c4",
+  "controller_exit": 1,
+  "candidate_output_checks_passed": 20,
+  "reason": "The alternate validation worktree changes embedded absolute source filenames and anonymous shape identifiers. Native and shadow static checks reproduced their expected verdicts, but exact IR comparison properly refused these different artifacts. No normalization is broadened. Complete canonical validation will run at the original reference worktree path using this same frozen production build."
+}

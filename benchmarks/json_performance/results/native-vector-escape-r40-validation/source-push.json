@@ -1,0 +1,13 @@
+{
+  "source_commit": "3bde9394e021039603c84801762af4f083b1f9c4",
+  "branch": "codex/json-native-vector-escape-r40",
+  "command": [
+    "git",
+    "push",
+    "-u",
+    "origin",
+    "codex/json-native-vector-escape-r40"
+  ],
+  "exit_code": 0,
+  "ls_remote": "3bde9394e021039603c84801762af4f083b1f9c4\trefs/heads/codex/json-native-vector-escape-r40\n"
+}

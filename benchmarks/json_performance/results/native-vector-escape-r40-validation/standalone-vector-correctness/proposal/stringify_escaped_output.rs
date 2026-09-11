@@ -1,0 +1,189 @@
+//! Exact escaped-string output with native scalar planning and no scratch buffer.
+//! Invalid UTF-8 (including WTF-8 surrogates) retains the general serializer.
+
+use crate::string::{init_string_header, string_data, string_storage_alloc, StringHeader};
+
+#[cfg(target_arch = "aarch64")]
+#[path = "stringify_native_escape.rs"]
+mod native_escape;
+
+#[derive(Clone, Copy)]
+pub(super) struct Plan {
+    source_bytes: u32,
+    pub(super) bytes: u32,
+    pub(super) units: u32,
+}
+
+impl Plan {
+    #[inline(never)]
+    pub(super) fn new(source: &[u8], units: u32) -> Option<Self> {
+        let len = u32::try_from(source.len()).ok()?;
+        // Raw internal strings and synthetic SSO values need not be valid UTF-8.
+        // Never infer validity from the string flags, which can propagate by OR.
+        std::str::from_utf8(source).ok()?;
+        let extra = count_expansion(source);
+        Self::with_expansion(len, units, extra)
+    }
+
+    fn with_expansion(source_bytes: u32, units: u32, extra: u64) -> Option<Self> {
+        let expansion = u32::try_from(extra.checked_add(2)?).ok()?;
+        Some(Self {
+            source_bytes,
+            bytes: source_bytes.checked_add(expansion)?,
+            units: units.checked_add(expansion)?,
+        })
+    }
+
+    /// Source must be rederived after the final allocation, with its original
+    /// bytes unchanged. Output has `self.bytes` writable, nonoverlapping bytes.
+    /// No allocation, callbacks or collection may occur during this write.
+    pub(super) unsafe fn write(self, source: *const u8, output: *mut u8) -> usize {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+        output.write(b'"');
+        let mut at = 1usize;
+        for i in 0..self.source_bytes as usize {
+            let b = source.add(i).read();
+            if b >= 0x20 && b != b'"' && b != b'\\' {
+                // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+                output.add(at).write(b);
+                at += 1;
+                continue;
+            }
+            // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+            output.add(at).write(b'\\');
+            let short = match b {
+                b'"' | b'\\' => b,
+                b'\n' => b'n',
+                b'\r' => b'r',
+                b'\t' => b't',
+                8 => b'b',
+                12 => b'f',
+                _ => 0,
+            };
+            if short != 0 {
+                // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+                output.add(at + 1).write(short);
+                at += 2;
+            } else {
+                // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+                output.add(at + 1).write(b'u');
+                // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+                output.add(at + 2).write(b'0');
+                // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+                output.add(at + 3).write(b'0');
+                // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+                output.add(at + 4).write(HEX[(b >> 4) as usize]);
+                // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+                output.add(at + 5).write(HEX[(b & 15) as usize]);
+                at += 6;
+            }
+        }
+        // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+        output.add(at).write(b'"');
+        debug_assert_eq!(at + 1, self.bytes as usize);
+        at + 1
+    }
+}
+
+// Only ASCII controls, quotes and backslashes expand valid UTF-8. Controls
+// use six output bytes except the five two-byte short escapes.
+const EXPANSION: [u8; 256] = {
+    let mut table = [0; 256];
+    let mut i = 0;
+    while i < 32 {
+        table[i] = 5;
+        i += 1;
+    }
+    table[8] = 1;
+    table[9] = 1;
+    table[10] = 1;
+    table[12] = 1;
+    table[13] = 1;
+    table[b'"' as usize] = 1;
+    table[b'\\' as usize] = 1;
+    table
+};
+
+fn count_expansion(bytes: &[u8]) -> u64 {
+    let at = 0;
+    #[cfg(target_arch = "aarch64")]
+    let mut at = at;
+    let mut extra = 0u64;
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        use std::arch::aarch64::*;
+        let controls = uint8x16x2_t(vld1q_u8(EXPANSION.as_ptr()), vdupq_n_u8(5));
+        while bytes.len() - at >= 16 {
+            let chunk = vld1q_u8(bytes.as_ptr().add(at));
+            // A table lookup yields zero for byte values outside 0..32.
+            let control_extra = vqtbl2q_u8(controls, chunk);
+            let punctuation = vorrq_u8(
+                vceqq_u8(chunk, vdupq_n_u8(b'"')),
+                vceqq_u8(chunk, vdupq_n_u8(b'\\')),
+            );
+            let expansion = vorrq_u8(control_extra, vandq_u8(punctuation, vdupq_n_u8(1)));
+            // At most 16 * 5 = 80, so the byte reduction cannot overflow.
+            extra += vaddvq_u8(expansion) as u64;
+            at += 16;
+        }
+    }
+    for &b in &bytes[at..] {
+        extra += EXPANSION[b as usize] as u64;
+    }
+    extra
+}
+
+/// Append into the general serializer's native buffer using the same checked
+/// plan and bounded writer as direct JSON output. UTF-16 metadata is unused in
+/// this buffer; the eventual managed string constructor counts the final text.
+/// This routine performs no managed allocation, callback or GC entry.
+#[inline(never)]
+pub(super) unsafe fn append_to_native_buffer(buf: &mut String, source: &[u8]) -> bool {
+    let Some(plan) = Plan::new(source, 0) else {
+        return false;
+    };
+    let used = buf.len();
+    let Some(required) = used.checked_add(plan.bytes as usize) else {
+        return false;
+    };
+    let bytes = buf.as_mut_vec();
+    if bytes.capacity() < required {
+        // Preserve the buffer's ordinary geometric growth, including spare
+        // space for the containing object's closing punctuation. Reserving
+        // exactly the string length could immediately double it on that suffix.
+        let mut capacity = bytes.capacity().max(8);
+        while capacity < required {
+            let Some(next) = capacity.checked_mul(2) else {
+                return false;
+            };
+            capacity = next;
+        }
+        bytes.reserve(capacity - used);
+    }
+    #[cfg(target_arch = "aarch64")]
+    let written = native_escape::write(source, bytes.as_mut_ptr().add(used));
+    #[cfg(not(target_arch = "aarch64"))]
+    let written = plan.write(source.as_ptr(), bytes.as_mut_ptr().add(used));
+    debug_assert_eq!(written, plan.bytes as usize);
+    bytes.set_len(used + written);
+    true
+}
+
+#[inline(never)]
+pub(super) unsafe fn quote(source: *const StringHeader) -> Option<*mut StringHeader> {
+    let bytes = std::slice::from_raw_parts(string_data(source), (*source).byte_len as usize);
+    let plan = Plan::new(bytes, (*source).utf16_len)?;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let input = scope.root_string_ptr(source);
+    let (result, output) = string_storage_alloc(plan.bytes);
+    input.with_const_ptr(|source: *const StringHeader| {
+        init_string_header(result, plan.units, plan.bytes, plan.bytes, 0, 0);
+        plan.write(string_data(source), output);
+    });
+    Some(result)
+}
+
+#[cfg(test)]
+#[path = "stringify_escaped_output_tests.rs"]
+mod tests;

@@ -1,0 +1,9 @@
+{
+  "node_version": "v26.5.1",
+  "cases": 509,
+  "all_complete_outputs_match": true,
+  "source_sha256": "42a9684a57d47be6bcf948491b8b9f258340d6de718db49ae020c9c2d0a237d1",
+  "binary_sha256": "6f3035036e60bbcc2b147bad3fcb002ba0f1eed6913228f5dbd7586f62559574",
+  "output_sha256": "41f65f63ca76f5924975098ee8150426d95edb56643d644b45302eb0432ee7e5",
+  "note": "Standalone local algorithm correctness only. Bounds assertions and output sentinels pass; no Perry integration or performance claim."
+}

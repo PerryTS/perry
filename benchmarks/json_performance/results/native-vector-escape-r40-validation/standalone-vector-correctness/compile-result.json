@@ -1,0 +1,13 @@
+{
+  "command": [
+    "rustc",
+    "--edition",
+    "2021",
+    "-O",
+    "benchmarks/json_performance/.work/native-escape-vector-next/prototype.rs",
+    "-o",
+    "benchmarks/json_performance/.work/native-escape-vector-next/prototype"
+  ],
+  "exit_code": 0,
+  "source_sha256": "42a9684a57d47be6bcf948491b8b9f258340d6de718db49ae020c9c2d0a237d1"
+}

@@ -1,0 +1,21 @@
+{
+  "source_commit": "3bde9394e021039603c84801762af4f083b1f9c4",
+  "gates_passed": 72,
+  "gates_total": 74,
+  "unresolved": [
+    "Public benchmark evidence freshness",
+    "Raw-handle debt ceiling vs updated main"
+  ],
+  "file_cap_passed": true,
+  "format_passed_before_commit": true,
+  "raw_handle_pinned_command": [
+    "python3",
+    "scripts/raw_handle_debt.py",
+    "--no-raise-vs",
+    "f6c6879613c0b00b5e3ae873b8d102710d2d0585"
+  ],
+  "raw_handle_pinned_exit": 1,
+  "raw_handle_stdout_sha256": "ff5f008970ff99cef3fbf5741e48f7161493b778d71e7fd7d5aeee4a88350534",
+  "raw_handle_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "note": "No implementation audit failures. No threshold, allowlist, checker or raw-handle baseline changes."
+}

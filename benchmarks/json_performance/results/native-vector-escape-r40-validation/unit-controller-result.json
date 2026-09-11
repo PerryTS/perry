@@ -1,0 +1,8 @@
+{
+  "source_commit": "3bde9394e021039603c84801762af4f083b1f9c4",
+  "controller_exit_code": 1,
+  "unit_exit_code": 0,
+  "unit_tests_passed": 312,
+  "unit_test_seconds": 2.9,
+  "reason": "The explicit production hold stopped the controller only after the successful serial JSON suite. No production build ran before audit review."
+}

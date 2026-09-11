@@ -1,0 +1,5 @@
+{
+  "exit_code": 1,
+  "reason": "Default rustfmt module traversal looked for the original tests file under the standalone proposal directory. No runtime source or production build changed.",
+  "recovery": "Format these explicit proposal files with skip_children=true."
+}

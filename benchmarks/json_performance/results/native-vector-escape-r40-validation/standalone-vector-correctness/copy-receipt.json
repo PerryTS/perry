@@ -1,0 +1,165 @@
+{
+  "files": [
+    {
+      "source": "benchmarks/json_performance/.work/native-escape-vector-next/compile-result.json",
+      "path": "compile-result.json",
+      "original_bytes": 346,
+      "original_sha256": "7b7fa6715c9ce571068b698b8e8c2d21d1d523107b86592be97123dea62f527a",
+      "sha256": "7b7fa6715c9ce571068b698b8e8c2d21d1d523107b86592be97123dea62f527a",
+      "gzip": false
+    },
+    {
+      "source": "benchmarks/json_performance/.work/native-escape-vector-next/compile.log",
+      "path": "compile.log",
+      "original_bytes": 0,
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gzip": false
+    },
+    {
+      "source": "benchmarks/json_performance/.work/native-escape-vector-next/initial-vector/compile-result.json",
+      "path": "initial-vector/compile-result.json",
+      "original_bytes": 346,
+      "original_sha256": "7b7fa6715c9ce571068b698b8e8c2d21d1d523107b86592be97123dea62f527a",
+      "sha256": "7b7fa6715c9ce571068b698b8e8c2d21d1d523107b86592be97123dea62f527a",
+      "gzip": false
+    },
+    {
+      "source": "benchmarks/json_performance/.work/native-escape-vector-next/initial-vector/compile.log",
+      "path": "initial-vector/compile.log",
+      "original_bytes": 0,
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gzip": false
+    },
+    {
+      "source": "benchmarks/json_performance/.work/native-escape-vector-next/initial-vector/oracle-verdict.json",
+      "path": "initial-vector/oracle-verdict.json",
+      "original_bytes": 493,
+      "original_sha256": "9f855be27b40429afbb1e5f9acee334806b8ae2820bc326c9ca724deaf7f99cb",
+      "sha256": "9f855be27b40429afbb1e5f9acee334806b8ae2820bc326c9ca724deaf7f99cb",
+      "gzip": false
+    },
+    {
+      "source": "benchmarks/json_performance/.work/native-escape-vector-next/initial-vector/prototype.rs",
+      "path": "initial-vector/prototype.rs",
+      "original_bytes": 4358,
+      "original_sha256": "42a9684a57d47be6bcf948491b8b9f258340d6de718db49ae020c9c2d0a237d1",
+      "sha256": "42a9684a57d47be6bcf948491b8b9f258340d6de718db49ae020c9c2d0a237d1",
+      "gzip": false
+    },
+    {
+      "source": "benchmarks/json_performance/.work/native-escape-vector-next/initial-vector/run-result.json",
+      "path": "initial-vector/run-result.json",
+      "original_bytes": 119,
+      "original_sha256": "d1c236643e51d42c7ab677095825e03ebea8972f45727a4a0e9f09dd35f7f704",
+      "sha256": "d1c236643e51d42c7ab677095825e03ebea8972f45727a4a0e9f09dd35f7f704",
+      "gzip": false
+    },
+    {
+      "source": "benchmarks/json_performance/.work/native-escape-vector-next/initial-vector/run.stderr",
+      "path": "initial-vector/run.stderr",
+      "original_bytes": 0,
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gzip": false
+    },
+    {
+      "source": "benchmarks/json_performance/.work/native-escape-vector-next/oracle-verdict.json",
+      "path": "oracle-verdict.json",
+      "original_bytes": 493,
+      "original_sha256": "9f855be27b40429afbb1e5f9acee334806b8ae2820bc326c9ca724deaf7f99cb",
+      "sha256": "9f855be27b40429afbb1e5f9acee334806b8ae2820bc326c9ca724deaf7f99cb",
+      "gzip": false
+    },
+    {
+      "source": "benchmarks/json_performance/.work/native-escape-vector-next/output.tsv",
+      "path": "output.tsv.gz",
+      "original_bytes": 9939610,
+      "original_sha256": "41f65f63ca76f5924975098ee8150426d95edb56643d644b45302eb0432ee7e5",
+      "sha256": "83e54be87e06865a188b00cea975613f7bd4c4880258926e647d509c0d08bd02",
+      "gzip": true
+    },
+    {
+      "source": "benchmarks/json_performance/.work/native-escape-vector-next/proposal/stringify_escaped_output.rs",
+      "path": "proposal/stringify_escaped_output.rs",
+      "original_bytes": 7248,
+      "original_sha256": "a47f2ea3b2b938665c8d705f3da90db0d5dd5c04f713b65d1b192c1b412fb408",
+      "sha256": "a47f2ea3b2b938665c8d705f3da90db0d5dd5c04f713b65d1b192c1b412fb408",
+      "gzip": false
+    },
+    {
+      "source": "benchmarks/json_performance/.work/native-escape-vector-next/proposal/stringify_native_escape.rs",
+      "path": "proposal/stringify_native_escape.rs",
+      "original_bytes": 3483,
+      "original_sha256": "b3ce42fbf04fd3e34a36db4f47b51f0f9a3f92a7744669a0801af213c230dd47",
+      "sha256": "b3ce42fbf04fd3e34a36db4f47b51f0f9a3f92a7744669a0801af213c230dd47",
+      "gzip": false
+    },
+    {
+      "source": "benchmarks/json_performance/.work/native-escape-vector-next/proposal-format-refusal.json",
+      "path": "proposal-format-refusal.json",
+      "original_bytes": 271,
+      "original_sha256": "64437c6ccee32b3b987889763071b4128ab370548a9fd5b792e803dd1d865168",
+      "sha256": "64437c6ccee32b3b987889763071b4128ab370548a9fd5b792e803dd1d865168",
+      "gzip": false
+    },
+    {
+      "source": "benchmarks/json_performance/.work/native-escape-vector-next/proposal-provenance.json",
+      "path": "proposal-provenance.json",
+      "original_bytes": 910,
+      "original_sha256": "1474783ced479d59cbb8b76b6b50ec5e4f9c298f2b7b21a61853fa4f68ac78fc",
+      "sha256": "1474783ced479d59cbb8b76b6b50ec5e4f9c298f2b7b21a61853fa4f68ac78fc",
+      "gzip": false
+    },
+    {
+      "source": "benchmarks/json_performance/.work/native-escape-vector-next/proposed-compile.log",
+      "path": "proposed-compile.log",
+      "original_bytes": 0,
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gzip": false
+    },
+    {
+      "source": "benchmarks/json_performance/.work/native-escape-vector-next/proposed-output.tsv",
+      "path": "proposed-output.tsv.gz",
+      "original_bytes": 9939610,
+      "original_sha256": "41f65f63ca76f5924975098ee8150426d95edb56643d644b45302eb0432ee7e5",
+      "sha256": "83e54be87e06865a188b00cea975613f7bd4c4880258926e647d509c0d08bd02",
+      "gzip": true
+    },
+    {
+      "source": "benchmarks/json_performance/.work/native-escape-vector-next/proposed-run.stderr",
+      "path": "proposed-run.stderr",
+      "original_bytes": 0,
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gzip": false
+    },
+    {
+      "source": "benchmarks/json_performance/.work/native-escape-vector-next/prototype.rs",
+      "path": "prototype.rs",
+      "original_bytes": 2597,
+      "original_sha256": "5f5e02b6f0d039097c35258c6b17603d1bd43b8bf60db698517b2faab26ead45",
+      "sha256": "5f5e02b6f0d039097c35258c6b17603d1bd43b8bf60db698517b2faab26ead45",
+      "gzip": false
+    },
+    {
+      "source": "benchmarks/json_performance/.work/native-escape-vector-next/run-result.json",
+      "path": "run-result.json",
+      "original_bytes": 119,
+      "original_sha256": "d1c236643e51d42c7ab677095825e03ebea8972f45727a4a0e9f09dd35f7f704",
+      "sha256": "d1c236643e51d42c7ab677095825e03ebea8972f45727a4a0e9f09dd35f7f704",
+      "gzip": false
+    },
+    {
+      "source": "benchmarks/json_performance/.work/native-escape-vector-next/run.stderr",
+      "path": "run.stderr",
+      "original_bytes": 0,
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gzip": false
+    }
+  ],
+  "note": "Supplementary standalone full-output vectors verified before runtime integration; no standalone timing claim. The two vector-writer variants share the exact Node-verified output bytes."
+}

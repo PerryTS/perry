@@ -1,0 +1,269 @@
+{
+  "candidate_source": "3bde9394e021039603c84801762af4f083b1f9c4",
+  "parent_source": "e69d1292110cf9abee24f8690c584652805a4167",
+  "candidate_window": {
+    "owner": "json-perf-54419-1789146269",
+    "load_before": [
+      2.1484375,
+      1.80615234375,
+      1.705078125
+    ],
+    "started_utc": "2026-09-11T17:04:29Z",
+    "quiet_gate_passed": true,
+    "command": [
+      "python3",
+      ".work/native-vector-escape-r40/run-options.py",
+      "--worker",
+      ".work/native-vector-escape-r40/candidate-options",
+      "--baseline-worker",
+      ".work/native-vector-escape-r40/main-options",
+      "--node",
+      "/opt/homebrew/bin/node",
+      "--bun",
+      "/Users/perry/.bun/bin/bun",
+      "--case",
+      "long_string_1m:pretty:256:4:7",
+      "--case",
+      "long_string_1m:callback:128:4:7",
+      "--case",
+      "unicode_1m:pretty:256:4:7",
+      "--case",
+      "unicode_1m:callback:128:4:7",
+      "--case",
+      "escaped_1m:pretty:256:4:7",
+      "--case",
+      "escaped_1m:callback:128:4:7",
+      "--results-dir",
+      "results/quiet-native-vector-escape-r40-large-options"
+    ],
+    "competing_workloads_before": [],
+    "load_after": [
+      2.36865234375,
+      1.884765625,
+      1.73583984375
+    ],
+    "competing_workloads_after": [],
+    "finished_utc": "2026-09-11T17:04:57Z"
+  },
+  "parent_window": {
+    "owner": "json-perf-54843-1789146437",
+    "load_before": [
+      1.36376953125,
+      1.6640625,
+      1.66552734375
+    ],
+    "started_utc": "2026-09-11T17:07:17Z",
+    "quiet_gate_passed": true,
+    "command": [
+      "python3",
+      ".work/compact-template-capture-r39/run-options.py",
+      "--worker",
+      ".work/compact-template-capture-r39/candidate-options",
+      "--baseline-worker",
+      ".work/compact-template-capture-r39/main-options",
+      "--node",
+      "/opt/homebrew/bin/node",
+      "--bun",
+      "/Users/perry/.bun/bin/bun",
+      "--case",
+      "long_string_1m:pretty:256:4:7",
+      "--case",
+      "long_string_1m:callback:128:4:7",
+      "--case",
+      "unicode_1m:pretty:256:4:7",
+      "--case",
+      "unicode_1m:callback:128:4:7",
+      "--case",
+      "escaped_1m:pretty:256:4:7",
+      "--case",
+      "escaped_1m:callback:128:4:7",
+      "--results-dir",
+      "results/quiet-compact-template-capture-r39-large-options"
+    ],
+    "competing_workloads_before": [],
+    "load_after": [
+      1.43212890625,
+      1.65771484375,
+      1.66259765625
+    ],
+    "competing_workloads_after": [],
+    "finished_utc": "2026-09-11T17:07:43Z"
+  },
+  "note": "Two separately qualified quiet windows, not interleaved R39/R40 pairs. Both use identical case counts, workloads, iterations and warmup with their own interleaved R26/Node/Bun controls. Parent observations are collected specifically for this R40 investigation and are additional to the earlier R39 evidence commit.",
+  "cases": [
+    {
+      "fixture": "long_string_1m",
+      "operation": "pretty",
+      "r39_cpu_us": 87.19921875,
+      "r40_cpu_us": 87.6875,
+      "cpu_delta_pct": 0.5599605787752537,
+      "r39_peak_rss_mib": 55.671875,
+      "r40_peak_rss_mib": 55.671875,
+      "rss_delta_mib": 0.0,
+      "separated_regression": false,
+      "r39_samples": [
+        89.53125,
+        87.81640625,
+        86.54296875,
+        86.890625,
+        85.5,
+        88.359375,
+        87.19921875
+      ],
+      "r40_samples": [
+        88.5078125,
+        87.27734375,
+        88.05078125,
+        86.89453125,
+        86.98828125,
+        87.6875,
+        87.95703125
+      ]
+    },
+    {
+      "fixture": "long_string_1m",
+      "operation": "callback",
+      "r39_cpu_us": 114.8984375,
+      "r40_cpu_us": 114.640625,
+      "cpu_delta_pct": -0.2243829468960401,
+      "r39_peak_rss_mib": 55.78125,
+      "r40_peak_rss_mib": 55.765625,
+      "rss_delta_mib": -0.015625,
+      "separated_regression": false,
+      "r39_samples": [
+        114.8984375,
+        114.3515625,
+        112.125,
+        115.703125,
+        115.8203125,
+        115.1640625,
+        113.984375
+      ],
+      "r40_samples": [
+        114.0,
+        115.328125,
+        115.0625,
+        114.4375,
+        114.640625,
+        115.0078125,
+        114.3203125
+      ]
+    },
+    {
+      "fixture": "unicode_1m",
+      "operation": "pretty",
+      "r39_cpu_us": 134.0390625,
+      "r40_cpu_us": 133.33203125,
+      "cpu_delta_pct": -0.5274814944337569,
+      "r39_peak_rss_mib": 55.109375,
+      "r40_peak_rss_mib": 55.09375,
+      "rss_delta_mib": -0.015625,
+      "separated_regression": false,
+      "r39_samples": [
+        133.671875,
+        134.8046875,
+        136.984375,
+        134.0390625,
+        132.296875,
+        134.67578125,
+        131.734375
+      ],
+      "r40_samples": [
+        133.33203125,
+        132.40234375,
+        133.6796875,
+        131.9296875,
+        132.58984375,
+        133.4921875,
+        134.296875
+      ]
+    },
+    {
+      "fixture": "unicode_1m",
+      "operation": "callback",
+      "r39_cpu_us": 160.2109375,
+      "r40_cpu_us": 159.71875,
+      "cpu_delta_pct": -0.3072121714536524,
+      "r39_peak_rss_mib": 55.21875,
+      "r40_peak_rss_mib": 55.203125,
+      "rss_delta_mib": -0.015625,
+      "separated_regression": false,
+      "r39_samples": [
+        159.78125,
+        160.328125,
+        161.1640625,
+        160.2109375,
+        158.9140625,
+        160.3984375,
+        159.2578125
+      ],
+      "r40_samples": [
+        160.2109375,
+        159.71875,
+        159.6171875,
+        159.359375,
+        161.53125,
+        159.1953125,
+        160.1171875
+      ]
+    },
+    {
+      "fixture": "escaped_1m",
+      "operation": "pretty",
+      "r39_cpu_us": 897.77734375,
+      "r40_cpu_us": 1775.85546875,
+      "cpu_delta_pct": 97.80577902893866,
+      "r39_peak_rss_mib": 55.5625,
+      "r40_peak_rss_mib": 55.578125,
+      "rss_delta_mib": 0.015625,
+      "separated_regression": true,
+      "r39_samples": [
+        896.625,
+        897.13671875,
+        897.77734375,
+        898.0625,
+        897.51953125,
+        898.48046875,
+        897.9921875
+      ],
+      "r40_samples": [
+        1775.85546875,
+        1775.21875,
+        1777.09375,
+        1777.29296875,
+        1776.97265625,
+        1774.97265625,
+        1775.625
+      ]
+    },
+    {
+      "fixture": "escaped_1m",
+      "operation": "callback",
+      "r39_cpu_us": 924.234375,
+      "r40_cpu_us": 1793.2421875,
+      "cpu_delta_pct": 94.02461496847052,
+      "r39_peak_rss_mib": 55.640625,
+      "r40_peak_rss_mib": 55.625,
+      "rss_delta_mib": -0.015625,
+      "separated_regression": true,
+      "r39_samples": [
+        922.6484375,
+        925.4375,
+        924.1875,
+        924.0625,
+        924.390625,
+        924.234375,
+        926.234375
+      ],
+      "r40_samples": [
+        1796.5078125,
+        1793.109375,
+        1795.796875,
+        1792.53125,
+        1796.875,
+        1793.2421875,
+        1793.171875
+      ]
+    }
+  ]
+}

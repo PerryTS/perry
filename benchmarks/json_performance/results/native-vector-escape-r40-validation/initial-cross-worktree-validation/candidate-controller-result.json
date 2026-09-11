@@ -1,0 +1,8 @@
+{
+  "source_commit": "3bde9394e021039603c84801762af4f083b1f9c4",
+  "command": [
+    "python3",
+    "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/native-vector-escape-r40/complete-candidate-validation.py"
+  ],
+  "exit_code": 1
+}

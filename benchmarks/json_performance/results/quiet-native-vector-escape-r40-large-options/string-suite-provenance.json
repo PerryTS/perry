@@ -1,0 +1,17 @@
+{
+  "source_commit": "3bde9394e021039603c84801762af4f083b1f9c4",
+  "command": [
+    "cargo",
+    "test",
+    "--release",
+    "-p",
+    "perry-runtime",
+    "--lib",
+    "string"
+  ],
+  "env": {
+    "RUST_TEST_THREADS": "1"
+  },
+  "exit_code": 0,
+  "note": "The string filter overlaps JSON scanner and stringification tests; counts are not disjoint."
+}

@@ -1,0 +1,19 @@
+{
+  "parent_source": "e69d1292110cf9abee24f8690c584652805a4167",
+  "original_plan_sha256": "c964180a46d8be902f312d913e1fb887a232d3f9d6f24313cd7bbc70d3bde98d",
+  "proposed_files": {
+    "stringify_native_escape.rs": "b3ce42fbf04fd3e34a36db4f47b51f0f9a3f92a7744669a0801af213c230dd47",
+    "stringify_escaped_output.rs": "a47f2ea3b2b938665c8d705f3da90db0d5dd5c04f713b65d1b192c1b412fb408"
+  },
+  "standalone_command": [
+    "rustc",
+    "--edition",
+    "2021",
+    "-O",
+    "benchmarks/json_performance/.work/native-escape-vector-next/prototype.rs",
+    "-o",
+    "benchmarks/json_performance/.work/native-escape-vector-next/proposed-writer-test"
+  ],
+  "exit_code": 0,
+  "note": "Unapplied proposal. Only native-buffer escaping uses the ARM writer; existing direct-output Plan::write and non-ARM behavior are unchanged. All509 complete vectors are byte-identical to the already verified Node oracle outputs."
+}
