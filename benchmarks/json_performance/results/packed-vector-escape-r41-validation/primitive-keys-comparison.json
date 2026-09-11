@@ -1,0 +1,36 @@
+{
+  "candidate_all_pass": true,
+  "main_passes": 4,
+  "candidate_passes": 4,
+  "ir_matches": [
+    {
+      "mode": "native",
+      "main_sha256": "cb30d5d741c5455be195e334126b55e1f9246ef67e00ad61b5f777b328a7ff12",
+      "candidate_sha256": "54a40d05f1e12b3544773bf83a42553b097be3a7ae091eb85b02c7d370035d4c",
+      "normalized_sha256": "2ca842c1b514d5f87ab224e283945b9609f7f507b0e1e558ce9a0f5d2f051d4c"
+    },
+    {
+      "mode": "shadow",
+      "main_sha256": "9438e6ad11f499a113d561ffcb6798859382f4f88836ba0c34762eb7070dec23",
+      "candidate_sha256": "9438e6ad11f499a113d561ffcb6798859382f4f88836ba0c34762eb7070dec23",
+      "normalized_sha256": "9438e6ad11f499a113d561ffcb6798859382f4f88836ba0c34762eb7070dec23"
+    }
+  ],
+  "unsuppressed_native_root_findings": [
+    {
+      "arm": "main",
+      "checker_exit": 1,
+      "fingerprint": "primitive-keys.ll::perry_closure_test_json_primitive_tojson_keys_ts__2::unrooted:global->js_array_push_f64_spec",
+      "moving": false,
+      "report_sha256": "16eb8ad90de1b4e745d419fabcd4fc817396f06b045caf5ebe3fc262c5054748"
+    },
+    {
+      "arm": "candidate",
+      "checker_exit": 1,
+      "fingerprint": "primitive-keys.ll::perry_closure_test_json_primitive_tojson_keys_ts__2::unrooted:global->js_array_push_f64_spec",
+      "moving": false,
+      "report_sha256": "16eb8ad90de1b4e745d419fabcd4fc817396f06b045caf5ebe3fc262c5054748"
+    }
+  ],
+  "note": "Fresh complete Node output checks for toJSON keys, callback order, reentrancy and BigInt. Shadow static checks pass. Native checker fails with one byte-identical non-moving global-load finding in both arms; IR also matches. No checker allowance or source exemption was changed. This fixture has no forced GC liveness claim; the separate expanded emitter fixture requires positive moving/protected collection."
+}

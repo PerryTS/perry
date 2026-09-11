@@ -1,0 +1,1326 @@
+{
+  "source_commit": "e69d1292110cf9abee24f8690c584652805a4167",
+  "reference_source_commit": "3aac4d6335da54abeeed73df842decbbe6dd5d71",
+  "diagnostic_only": true,
+  "note": "Four-case follow-up: both wide-object stringify and large-record-object parse profiles retain the500-sample floor. Both wide-object parse profiles remain excluded for insufficient samples. The original six-case analyzer refusal remains preserved; pinned Node executes the complete identical loop and warmup, and checksum plus every VERIFY/LAST/KEEP byte match. CPU/RSS of sampled processes is not benchmark evidence. Inclusive attribution overlaps and cannot be added.",
+  "cases": [
+    {
+      "case": {
+        "fixture": "wide_1m",
+        "operation": "stringify",
+        "iterations": 4736,
+        "warmup": 2,
+        "arm": "r26"
+      },
+      "workload_samples": 627,
+      "phases": {
+        "workload": {
+          "samples": 627,
+          "frames": [
+            {
+              "depth": 10,
+              "count": 622,
+              "name": "perry_fn_worker_ts__run$spec_b  (in r26-worker) + 9428  [0x102d56d94]",
+              "parent": 2
+            },
+            {
+              "depth": 10,
+              "count": 5,
+              "name": "perry_fn_worker_ts__run$spec_b  (in r26-worker) + 10708  [0x102d57294]",
+              "parent": 2
+            }
+          ],
+          "pct_of_workload_samples": 100.0
+        },
+        "parse_api": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "string_scan": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "string_value": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "number_parse": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "object_parse": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "root_scope": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "construction_batch": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "allocation": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "collection": {
+          "samples": 5,
+          "frames": [
+            {
+              "depth": 12,
+              "count": 5,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy25gc_safepoint_moving_minor  (in r26-worker) + 2808  [0x1031b0d24]",
+              "parent": 41,
+              "self_samples": 0
+            }
+          ],
+          "pct_of_workload_samples": 0.7974481658692184
+        }
+      },
+      "top_self_sample_nodes": [
+        {
+          "depth": 16,
+          "count": 249,
+          "name": "_RINvNtNtCs3gRpqoBkMHm_13perry_runtime4json26stringify_primitive_object4emitKb1_EB6_  (in r26-worker) + 836,1072,...  [0x102ec4744,0x102ec4830,...]",
+          "parent": 5,
+          "self_samples": 249
+        },
+        {
+          "depth": 18,
+          "count": 125,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json17stringify_scalars12write_number  (in r26-worker) + 24,220,...  [0x103247104,0x1032471c8,...]",
+          "parent": 7,
+          "self_samples": 125
+        },
+        {
+          "depth": 18,
+          "count": 105,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json17stringify_scalars17write_heap_string  (in r26-worker) + 112,504,...  [0x103247dfc,0x103247f84,...]",
+          "parent": 9,
+          "self_samples": 105
+        },
+        {
+          "depth": 16,
+          "count": 55,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime11node_stream11json_stream30try_stringify_node_stream_json  (in r26-worker) + 384,352,...  [0x1030f0a40,0x1030f0a20,...]",
+          "parent": 14,
+          "self_samples": 55
+        },
+        {
+          "depth": 16,
+          "count": 42,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json17stringify_scalars17write_heap_string  (in r26-worker) + 548,552  [0x103247fb0,0x103247fb4]",
+          "parent": 5,
+          "self_samples": 42
+        },
+        {
+          "depth": 18,
+          "count": 19,
+          "name": "_platform_memmove  (in libsystem_platform.dylib) + 88  [0x18171f3b8]",
+          "parent": 18,
+          "self_samples": 19
+        },
+        {
+          "depth": 14,
+          "count": 12,
+          "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime4json36json_string_from_native_output_bytes  (in r26-worker) + 268,276,...  [0x10307df94,0x10307df9c,...]",
+          "parent": 16,
+          "self_samples": 12
+        },
+        {
+          "depth": 16,
+          "count": 11,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json17stringify_scalars12write_number  (in r26-worker) + 1860,1864,...  [0x103247830,0x103247834,...]",
+          "parent": 5,
+          "self_samples": 11
+        },
+        {
+          "depth": 18,
+          "count": 1,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json17stringify_scalars20write_escaped_string  (in r26-worker) + 1396  [0x103248d38]",
+          "parent": 9,
+          "self_samples": 1
+        },
+        {
+          "depth": 36,
+          "count": 1,
+          "name": "madvise  (in libsystem_kernel.dylib) + 8  [0x1816d49b0]",
+          "parent": 29,
+          "self_samples": 1
+        },
+        {
+          "depth": 26,
+          "count": 1,
+          "name": "_mi_arenas_page_alloc  (in r26-worker) + 36  [0x1038540f8]",
+          "parent": 24,
+          "self_samples": 1
+        },
+        {
+          "depth": 34,
+          "count": 1,
+          "name": "madvise  (in libsystem_kernel.dylib) + 8  [0x1816d49b0]",
+          "parent": 38,
+          "self_samples": 1
+        },
+        {
+          "depth": 20,
+          "count": 1,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6object21array_tail_transition21prune_invalid_entries  (in r26-worker) + 124  [0x10389e5ec]",
+          "parent": 45,
+          "self_samples": 1
+        },
+        {
+          "depth": 20,
+          "count": 1,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc10dead_owner37owner_is_dead_copied_minor_from_space  (in r26-worker) + 56  [0x10317f938]",
+          "parent": 47,
+          "self_samples": 1
+        },
+        {
+          "depth": 20,
+          "count": 1,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6symbol8gc_roots32scan_symbol_side_table_roots_mut  (in r26-worker) + 0  [0x1033492fc]",
+          "parent": 50,
+          "self_samples": 1
+        },
+        {
+          "depth": 22,
+          "count": 1,
+          "name": "_RNvMs1_NtNtCs3gRpqoBkMHm_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor21visit_tagged_raw_addr  (in r26-worker) + 12  [0x102faea40]",
+          "parent": 54,
+          "self_samples": 1
+        },
+        {
+          "depth": 20,
+          "count": 1,
+          "name": "_mi_arenas_page_free  (in r26-worker) + 420  [0x1038b3458]",
+          "parent": 57,
+          "self_samples": 1
+        }
+      ],
+      "profile_sha256": "8b62c3c45365c82b34ca7e96232b76026c63608b946b46b85951b725d8208484",
+      "oracle_command": [
+        "/opt/homebrew/bin/node",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/worker.js",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/fixtures/wide_1m.json",
+        "stringify",
+        "4736",
+        "2",
+        "verify"
+      ],
+      "oracle_output_sha256": "9845971e00af00e9d5cbb409f3714377a7a2a00737e50aad18aca63bde4e006d",
+      "complete_workload_checksum_and_keep_match_node": true,
+      "diagnostic_only": true
+    },
+    {
+      "case": {
+        "fixture": "wide_1m",
+        "operation": "stringify",
+        "iterations": 4736,
+        "warmup": 2,
+        "arm": "r39"
+      },
+      "workload_samples": 630,
+      "phases": {
+        "workload": {
+          "samples": 630,
+          "frames": [
+            {
+              "depth": 10,
+              "count": 626,
+              "name": "perry_fn_worker_ts__run$spec_b  (in r39-worker) + 9428  [0x100cb6d94]",
+              "parent": 2
+            },
+            {
+              "depth": 10,
+              "count": 4,
+              "name": "perry_fn_worker_ts__run$spec_b  (in r39-worker) + 10708  [0x100cb7294]",
+              "parent": 2
+            }
+          ],
+          "pct_of_workload_samples": 100.0
+        },
+        "parse_api": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "string_scan": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "string_value": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "number_parse": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "object_parse": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "root_scope": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "construction_batch": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "allocation": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "collection": {
+          "samples": 4,
+          "frames": [
+            {
+              "depth": 12,
+              "count": 4,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy25gc_safepoint_moving_minor  (in r39-worker) + 2808  [0x1011137e4]",
+              "parent": 38,
+              "self_samples": 0
+            }
+          ],
+          "pct_of_workload_samples": 0.6349206349206349
+        }
+      },
+      "top_self_sample_nodes": [
+        {
+          "depth": 16,
+          "count": 245,
+          "name": "_RINvNtNtCs3gRpqoBkMHm_13perry_runtime4json26stringify_primitive_object4emitKb1_EB6_  (in r39-worker) + 1048,836,...  [0x100e24718,0x100e24644,...]",
+          "parent": 5,
+          "self_samples": 245
+        },
+        {
+          "depth": 18,
+          "count": 129,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json17stringify_scalars12write_number  (in r39-worker) + 220,144,...  [0x1011a9e88,0x1011a9e3c,...]",
+          "parent": 7,
+          "self_samples": 129
+        },
+        {
+          "depth": 18,
+          "count": 100,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json17stringify_scalars17write_heap_string  (in r39-worker) + 504,72,...  [0x1011aac44,0x1011aaa94,...]",
+          "parent": 9,
+          "self_samples": 100
+        },
+        {
+          "depth": 16,
+          "count": 62,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime11node_stream11json_stream30try_stringify_node_stream_json  (in r39-worker) + 384,352,...  [0x101053500,0x1010534e0,...]",
+          "parent": 13,
+          "self_samples": 62
+        },
+        {
+          "depth": 16,
+          "count": 34,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json17stringify_scalars17write_heap_string  (in r39-worker) + 548  [0x1011aac70]",
+          "parent": 5,
+          "self_samples": 34
+        },
+        {
+          "depth": 16,
+          "count": 32,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json17stringify_scalars12write_number  (in r39-worker) + 1864,1860  [0x1011aa4f4,0x1011aa4f0]",
+          "parent": 5,
+          "self_samples": 32
+        },
+        {
+          "depth": 14,
+          "count": 13,
+          "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime4json36json_string_from_native_output_bytes  (in r39-worker) + 268,276,...  [0x100fe0954,0x100fe095c,...]",
+          "parent": 15,
+          "self_samples": 13
+        },
+        {
+          "depth": 18,
+          "count": 9,
+          "name": "_platform_memmove  (in libsystem_platform.dylib) + 88,108  [0x18171f3b8,0x18171f3cc]",
+          "parent": 18,
+          "self_samples": 9
+        },
+        {
+          "depth": 34,
+          "count": 1,
+          "name": "madvise  (in libsystem_kernel.dylib) + 8  [0x1816d49b0]",
+          "parent": 28,
+          "self_samples": 1
+        },
+        {
+          "depth": 26,
+          "count": 1,
+          "name": "js_object_get_field_by_name  (in r39-worker) + 1852  [0x10153c63c]",
+          "parent": 36,
+          "self_samples": 1
+        },
+        {
+          "depth": 22,
+          "count": 1,
+          "name": "_RINvYNtNtNtCs8BpVhDwHqJW_3std4hash6random11RandomStateNtNtCsjgY6bXVaRmE_4core4hash11BuildHasher8hash_oneRjECshmRrZkQ68dv_11fancy_regex  (in r39-worker) + 264  [0x100cefda8]",
+          "parent": 43,
+          "self_samples": 1
+        },
+        {
+          "depth": 20,
+          "count": 1,
+          "name": "_RINvYNtNtNtCs8BpVhDwHqJW_3std4hash6random11RandomStateNtNtCsjgY6bXVaRmE_4core4hash11BuildHasher8hash_oneRjECshmRrZkQ68dv_11fancy_regex  (in r39-worker) + 268  [0x100cefdac]",
+          "parent": 42,
+          "self_samples": 1
+        },
+        {
+          "depth": 18,
+          "count": 1,
+          "name": "_RNvMNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots10stack_maps5indexNtB4_13StackMapIndex13match_records  (in r39-worker) + 512  [0x100ef1740]",
+          "parent": 46,
+          "self_samples": 1
+        },
+        {
+          "depth": 20,
+          "count": 1,
+          "name": "_RNvMs1_NtNtCs3gRpqoBkMHm_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor21visit_tagged_raw_addr  (in r39-worker) + 420  [0x100f11058]",
+          "parent": 49,
+          "self_samples": 1
+        }
+      ],
+      "profile_sha256": "7c5d2660c9ea8e5867f3965eb6665374ea574b895e338796ae3541164dfe327a",
+      "oracle_command": [
+        "/opt/homebrew/bin/node",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/worker.js",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/fixtures/wide_1m.json",
+        "stringify",
+        "4736",
+        "2",
+        "verify"
+      ],
+      "oracle_output_sha256": "fb15f4f03a66a771e6c6a8951da351acc00244cf3cfecadd5739e5ece4a5cdb7",
+      "complete_workload_checksum_and_keep_match_node": true,
+      "diagnostic_only": true
+    },
+    {
+      "case": {
+        "fixture": "records_object_8m",
+        "operation": "parse",
+        "iterations": 96,
+        "warmup": 2,
+        "arm": "r26"
+      },
+      "workload_samples": 755,
+      "phases": {
+        "workload": {
+          "samples": 755,
+          "frames": [
+            {
+              "depth": 10,
+              "count": 618,
+              "name": "perry_fn_worker_ts__run$spec_b  (in r26-worker) + 704  [0x1047a0b80]",
+              "parent": 2
+            },
+            {
+              "depth": 10,
+              "count": 137,
+              "name": "perry_fn_worker_ts__run$spec_b  (in r26-worker) + 1404  [0x1047a0e3c]",
+              "parent": 2
+            }
+          ],
+          "pct_of_workload_samples": 100.0
+        },
+        "parse_api": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "string_scan": {
+          "samples": 42,
+          "frames": [
+            {
+              "depth": 26,
+              "count": 10,
+              "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_bytes  (in r26-worker) + 112,392,...  [0x1049e59e8,0x1049e5b00,...]",
+              "parent": 45,
+              "self_samples": 10
+            },
+            {
+              "depth": 24,
+              "count": 2,
+              "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_bytes  (in r26-worker) + 1036  [0x1049e5d84]",
+              "parent": 44,
+              "self_samples": 2
+            },
+            {
+              "depth": 24,
+              "count": 21,
+              "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_bytes  (in r26-worker) + 112,12,...  [0x1049e59e8,0x1049e5984,...]",
+              "parent": 50,
+              "self_samples": 21
+            },
+            {
+              "depth": 26,
+              "count": 7,
+              "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_bytes  (in r26-worker) + 444,500,...  [0x1049e5b34,0x1049e5b6c,...]",
+              "parent": 54,
+              "self_samples": 7
+            },
+            {
+              "depth": 24,
+              "count": 1,
+              "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_bytes  (in r26-worker) + 1036  [0x1049e5d84]",
+              "parent": 53,
+              "self_samples": 1
+            },
+            {
+              "depth": 22,
+              "count": 1,
+              "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_bytes  (in r26-worker) + 1036  [0x1049e5d84]",
+              "parent": 8,
+              "self_samples": 1
+            }
+          ],
+          "pct_of_workload_samples": 5.562913907284768
+        },
+        "string_value": {
+          "samples": 122,
+          "frames": [
+            {
+              "depth": 22,
+              "count": 49,
+              "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value  (in r26-worker) + 368  [0x1049e5f38]",
+              "parent": 8,
+              "self_samples": 0
+            },
+            {
+              "depth": 24,
+              "count": 10,
+              "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value  (in r26-worker) + 60  [0x1049e5e04]",
+              "parent": 44,
+              "self_samples": 0
+            },
+            {
+              "depth": 24,
+              "count": 9,
+              "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value  (in r26-worker) + 32,668,...  [0x1049e5de8,0x1049e6064,...]",
+              "parent": 44,
+              "self_samples": 9
+            },
+            {
+              "depth": 22,
+              "count": 21,
+              "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value  (in r26-worker) + 60  [0x1049e5e04]",
+              "parent": 8,
+              "self_samples": 0
+            },
+            {
+              "depth": 22,
+              "count": 18,
+              "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value  (in r26-worker) + 112,280,...  [0x1049e5e38,0x1049e5ee0,...]",
+              "parent": 8,
+              "self_samples": 18
+            },
+            {
+              "depth": 24,
+              "count": 7,
+              "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value  (in r26-worker) + 60  [0x1049e5e04]",
+              "parent": 53,
+              "self_samples": 0
+            },
+            {
+              "depth": 24,
+              "count": 6,
+              "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value  (in r26-worker) + 128,188,...  [0x1049e5e48,0x1049e5e84,...]",
+              "parent": 53,
+              "self_samples": 6
+            },
+            {
+              "depth": 20,
+              "count": 2,
+              "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value  (in r26-worker) + 116  [0x1049e5e3c]",
+              "parent": 7,
+              "self_samples": 2
+            }
+          ],
+          "pct_of_workload_samples": 16.158940397350992
+        },
+        "number_parse": {
+          "samples": 29,
+          "frames": [
+            {
+              "depth": 22,
+              "count": 28,
+              "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser12parse_number  (in r26-worker) + 188,304,...  [0x1049e4b58,0x1049e4bcc,...]",
+              "parent": 8,
+              "self_samples": 28
+            },
+            {
+              "depth": 20,
+              "count": 1,
+              "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser12parse_number  (in r26-worker) + 648  [0x1049e4d24]",
+              "parent": 7,
+              "self_samples": 1
+            }
+          ],
+          "pct_of_workload_samples": 3.8410596026490067
+        },
+        "object_parse": {
+          "samples": 527,
+          "frames": [
+            {
+              "depth": 14,
+              "count": 527,
+              "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser20parse_object_untyped  (in r26-worker) + 828  [0x1049e64d4]",
+              "parent": 4,
+              "self_samples": 0
+            }
+          ],
+          "pct_of_workload_samples": 69.80132450331126
+        },
+        "root_scope": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "construction_batch": {
+          "samples": 9,
+          "frames": [
+            {
+              "depth": 24,
+              "count": 8,
+              "name": "_RNvMNtNtCs3gRpqoBkMHm_13perry_runtime5arena12constructionNtB2_17ConstructionBatch17finish_json_slots  (in r26-worker) + 64,448  [0x1049d7ddc,0x1049d7f5c]",
+              "parent": 96,
+              "self_samples": 8
+            },
+            {
+              "depth": 20,
+              "count": 1,
+              "name": "_RNvMNtNtCs3gRpqoBkMHm_13perry_runtime5arena12constructionNtB2_17ConstructionBatch17finish_json_slots  (in r26-worker) + 580  [0x1049d7fe0]",
+              "parent": 137,
+              "self_samples": 0
+            }
+          ],
+          "pct_of_workload_samples": 1.1920529801324504
+        },
+        "allocation": {
+          "samples": 4,
+          "frames": [
+            {
+              "depth": 26,
+              "count": 2,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime6string20string_storage_alloc  (in r26-worker) + 292  [0x104aeb2d0]",
+              "parent": 13,
+              "self_samples": 0
+            },
+            {
+              "depth": 24,
+              "count": 2,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6object5alloc35object_alloc_class_inline_keys_impl  (in r26-worker) + 488  [0x104d7a5e8]",
+              "parent": 101,
+              "self_samples": 0
+            }
+          ],
+          "pct_of_workload_samples": 0.5298013245033113
+        },
+        "collection": {
+          "samples": 137,
+          "frames": [
+            {
+              "depth": 12,
+              "count": 137,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy25gc_safepoint_moving_minor  (in r26-worker) + 2808  [0x104bfcd24]",
+              "parent": 148,
+              "self_samples": 0
+            }
+          ],
+          "pct_of_workload_samples": 18.14569536423841
+        }
+      },
+      "top_self_sample_nodes": [
+        {
+          "depth": 20,
+          "count": 167,
+          "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser20parse_object_untyped  (in r26-worker) + 660,668,...  [0x1049e642c,0x1049e6434,...]",
+          "parent": 7,
+          "self_samples": 167
+        },
+        {
+          "depth": 14,
+          "count": 86,
+          "name": "_RNvNtNtNtCs3gRpqoBkMHm_13perry_runtime4json6parser12depth_blocks21nesting_depth_exceeds  (in r26-worker) + 340,688,...  [0x104e64ee8,0x104e65044,...]",
+          "parent": 144,
+          "self_samples": 86
+        },
+        {
+          "depth": 18,
+          "count": 45,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7copying24run_copied_minor_attempt  (in r26-worker) + 68284,68424,...  [0x104c27ed8,0x104c27f64,...]",
+          "parent": 151,
+          "self_samples": 45
+        },
+        {
+          "depth": 24,
+          "count": 30,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction22string_from_json_bytes  (in r26-worker) + 1044,16,...  [0x104d8b318,0x104d8af14,...]",
+          "parent": 9,
+          "self_samples": 30
+        },
+        {
+          "depth": 22,
+          "count": 28,
+          "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser12parse_number  (in r26-worker) + 188,304,...  [0x1049e4b58,0x1049e4bcc,...]",
+          "parent": 8,
+          "self_samples": 28
+        },
+        {
+          "depth": 22,
+          "count": 27,
+          "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser11parse_value  (in r26-worker) + 104,84,...  [0x1049e4930,0x1049e491c,...]",
+          "parent": 8,
+          "self_samples": 27
+        },
+        {
+          "depth": 22,
+          "count": 27,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6object17json_construction36object_from_json_fields_preinstalled  (in r26-worker) + 288,132,...  [0x104d5c8e8,0x104d5c84c,...]",
+          "parent": 69,
+          "self_samples": 27
+        },
+        {
+          "depth": 24,
+          "count": 21,
+          "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_bytes  (in r26-worker) + 112,12,...  [0x1049e59e8,0x1049e5984,...]",
+          "parent": 50,
+          "self_samples": 21
+        },
+        {
+          "depth": 22,
+          "count": 18,
+          "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value  (in r26-worker) + 112,280,...  [0x1049e5e38,0x1049e5ee0,...]",
+          "parent": 8,
+          "self_samples": 18
+        },
+        {
+          "depth": 26,
+          "count": 17,
+          "name": "_platform_memmove  (in libsystem_platform.dylib) + 428,0,...  [0x18171f50c,0x18171f360,...]",
+          "parent": 11,
+          "self_samples": 17
+        },
+        {
+          "depth": 20,
+          "count": 13,
+          "name": "_RNCINvNtNtCs3gRpqoBkMHm_13perry_runtime2gc17layout_slot_visit22visit_gc_rewrite_slotsNCNvMs_NtB6_7copyingNtB1s_23CopyingNurseryCollector18scan_object_fields0E0B8_  (in r26-worker) + 248,500,...  [0x1049ab350,0x1049ab44c,...]",
+          "parent": 155,
+          "self_samples": 13
+        },
+        {
+          "depth": 22,
+          "count": 12,
+          "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_array_prefix  (in r26-worker) + 188,240,...  [0x1049e537c,0x1049e53b0,...]",
+          "parent": 8,
+          "self_samples": 12
+        },
+        {
+          "depth": 18,
+          "count": 12,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7copying24run_copied_minor_attempt  (in r26-worker) + 68688,68792,...  [0x104c2806c,0x104c280d4,...]",
+          "parent": 211,
+          "self_samples": 12
+        },
+        {
+          "depth": 24,
+          "count": 11,
+          "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18finish_short_array  (in r26-worker) + 168,184,...  [0x1049e517c,0x1049e518c,...]",
+          "parent": 30,
+          "self_samples": 11
+        },
+        {
+          "depth": 26,
+          "count": 10,
+          "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_bytes  (in r26-worker) + 112,392,...  [0x1049e59e8,0x1049e5b00,...]",
+          "parent": 45,
+          "self_samples": 10
+        },
+        {
+          "depth": 24,
+          "count": 9,
+          "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value  (in r26-worker) + 32,668,...  [0x1049e5de8,0x1049e6064,...]",
+          "parent": 44,
+          "self_samples": 9
+        },
+        {
+          "depth": 26,
+          "count": 9,
+          "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueINtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots19GcRootRegistryGuardINtNtB4_6option6OptionINtNtNtNtCs8BpVhDwHqJW_3std11collections4hash3map7HashMapNtNtCsctvjasLqLe9_5alloc6string6StringINtNtB30_3vec3VecNtNtBI_16ui_text_registry14ForEachBindingEEEEEBI_  (in r26-worker) + 100,60,...  [0x1048fa51c,0x1048fa4f4,...]",
+          "parent": 71,
+          "self_samples": 9
+        },
+        {
+          "depth": 28,
+          "count": 8,
+          "name": "_platform_memset_pattern16  (in libsystem_platform.dylib) + 268,272,...  [0x18171d22c,0x18171d230,...]",
+          "parent": 32,
+          "self_samples": 8
+        },
+        {
+          "depth": 28,
+          "count": 8,
+          "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime14typed_feedback12object_shape  (in r26-worker) + 104,384  [0x104a76928,0x104a76a40]",
+          "parent": 77,
+          "self_samples": 8
+        },
+        {
+          "depth": 24,
+          "count": 8,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6object6shapes34try_birth_stamp_preinstalled_shape  (in r26-worker) + 68,476,...  [0x104d85838,0x104d859d0,...]",
+          "parent": 86,
+          "self_samples": 8
+        },
+        {
+          "depth": 24,
+          "count": 8,
+          "name": "_RNvMNtNtCs3gRpqoBkMHm_13perry_runtime5arena12constructionNtB2_17ConstructionBatch17finish_json_slots  (in r26-worker) + 64,448  [0x1049d7ddc,0x1049d7f5c]",
+          "parent": 96,
+          "self_samples": 8
+        },
+        {
+          "depth": 26,
+          "count": 7,
+          "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_bytes  (in r26-worker) + 444,500,...  [0x1049e5b34,0x1049e5b6c,...]",
+          "parent": 54,
+          "self_samples": 7
+        },
+        {
+          "depth": 24,
+          "count": 6,
+          "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value  (in r26-worker) + 128,188,...  [0x1049e5e48,0x1049e5e84,...]",
+          "parent": 53,
+          "self_samples": 6
+        },
+        {
+          "depth": 26,
+          "count": 6,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime5arena5stats18pointer_in_nursery  (in r26-worker) + 36,24  [0x104cb9d44,0x104cb9d38]",
+          "parent": 88,
+          "self_samples": 6
+        },
+        {
+          "depth": 18,
+          "count": 6,
+          "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser16parse_array_tail  (in r26-worker) + 388,320,...  [0x1049e4fc4,0x1049e4f80,...]",
+          "parent": 6,
+          "self_samples": 6
+        },
+        {
+          "depth": 26,
+          "count": 6,
+          "name": "_RNvMNtNtCs3gRpqoBkMHm_13perry_runtime2gc19copying_pointer_setNtB2_17CopyingPointerSet14classify_arena  (in r26-worker) + 524,12,...  [0x1049d2cb8,0x1049d2ab8,...]",
+          "parent": 158,
+          "self_samples": 6
+        },
+        {
+          "depth": 24,
+          "count": 5,
+          "name": "_tlv_get_addr  (in libdyld.dylib) + 4  [0x18132038c]",
+          "parent": 60,
+          "self_samples": 5
+        },
+        {
+          "depth": 24,
+          "count": 5,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc13layout_tables20typed_layouts_remove  (in r26-worker) + 32,72  [0x104bd4e40,0x104bd4e68]",
+          "parent": 98,
+          "self_samples": 5
+        },
+        {
+          "depth": 16,
+          "count": 5,
+          "name": "_RNvNtNtNtCs3gRpqoBkMHm_13perry_runtime4json6parser12depth_string8long_run  (in r26-worker) + 0,68,...  [0x104e661a8,0x104e661ec,...]",
+          "parent": 146,
+          "self_samples": 5
+        },
+        {
+          "depth": 32,
+          "count": 5,
+          "name": "_RNvMNtNtCs3gRpqoBkMHm_13perry_runtime2gc19copying_pointer_setNtB2_17CopyingPointerSet14classify_arena  (in r26-worker) + 280,364,...  [0x1049d2bc4,0x1049d2c18,...]",
+          "parent": 200,
+          "self_samples": 5
+        },
+        {
+          "depth": 18,
+          "count": 5,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7copying24run_copied_minor_attempt  (in r26-worker) + 78468,78440,...  [0x104c2a6a0,0x104c2a684,...]",
+          "parent": 219,
+          "self_samples": 5
+        },
+        {
+          "depth": 26,
+          "count": 4,
+          "name": "_RNvMNtNtCs3gRpqoBkMHm_13perry_runtime4json18construction_arrayNtB2_17ConstructionArray3new  (in r26-worker) + 332,328,...  [0x1049d5c1c,0x1049d5c18,...]",
+          "parent": 31,
+          "self_samples": 4
+        },
+        {
+          "depth": 26,
+          "count": 4,
+          "name": "_tlv_get_addr  (in libdyld.dylib) + 4,0  [0x18132038c,0x181320388]",
+          "parent": 38,
+          "self_samples": 4
+        },
+        {
+          "depth": 22,
+          "count": 4,
+          "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser11parse_array  (in r26-worker) + 104,56,...  [0x1049e47d0,0x1049e47a0,...]",
+          "parent": 8,
+          "self_samples": 4
+        },
+        {
+          "depth": 28,
+          "count": 4,
+          "name": "pthread_mutex_lock  (in libsystem_pthread.dylib) + 52,32  [0x181710430,0x18171041c]",
+          "parent": 80,
+          "self_samples": 4
+        }
+      ],
+      "profile_sha256": "b1ab425e21fe0270781ec8fea929de69272b47783d93e32fdf99c4906665fdd9",
+      "oracle_command": [
+        "/opt/homebrew/bin/node",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/worker.js",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/fixtures/records_object_8m.json",
+        "parse",
+        "96",
+        "2",
+        "verify"
+      ],
+      "oracle_output_sha256": "eb836027d207aabd861b06ebd76645af91114d5ef9d0fa9e6f3add0965e4cbbd",
+      "complete_workload_checksum_and_keep_match_node": true,
+      "diagnostic_only": true
+    },
+    {
+      "case": {
+        "fixture": "records_object_8m",
+        "operation": "parse",
+        "iterations": 96,
+        "warmup": 2,
+        "arm": "r39"
+      },
+      "workload_samples": 745,
+      "phases": {
+        "workload": {
+          "samples": 745,
+          "frames": [
+            {
+              "depth": 10,
+              "count": 609,
+              "name": "perry_fn_worker_ts__run$spec_b  (in r39-worker) + 704  [0x102490b80]",
+              "parent": 2
+            },
+            {
+              "depth": 10,
+              "count": 136,
+              "name": "perry_fn_worker_ts__run$spec_b  (in r39-worker) + 1404  [0x102490e3c]",
+              "parent": 2
+            }
+          ],
+          "pct_of_workload_samples": 100.0
+        },
+        "parse_api": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "string_scan": {
+          "samples": 33,
+          "frames": [
+            {
+              "depth": 26,
+              "count": 9,
+              "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserINtB5_23SpecializedDirectParserKb0_E18parse_string_bytesB9_  (in r39-worker) + 28,168,...  [0x1026d58d4,0x1026d5960,...]",
+              "parent": 41,
+              "self_samples": 9
+            },
+            {
+              "depth": 24,
+              "count": 2,
+              "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserINtB5_23SpecializedDirectParserKb0_E18parse_string_bytesB9_  (in r39-worker) + 1268  [0x1026d5dac]",
+              "parent": 40,
+              "self_samples": 2
+            },
+            {
+              "depth": 24,
+              "count": 17,
+              "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserINtB5_23SpecializedDirectParserKb0_E18parse_string_bytesB9_  (in r39-worker) + 168,28,...  [0x1026d5960,0x1026d58d4,...]",
+              "parent": 45,
+              "self_samples": 17
+            },
+            {
+              "depth": 26,
+              "count": 3,
+              "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserINtB5_23SpecializedDirectParserKb0_E18parse_string_bytesB9_  (in r39-worker) + 60,168,...  [0x1026d58f4,0x1026d5960,...]",
+              "parent": 49,
+              "self_samples": 3
+            },
+            {
+              "depth": 22,
+              "count": 2,
+              "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserINtB5_23SpecializedDirectParserKb0_E18parse_string_bytesB9_  (in r39-worker) + 1264,1268  [0x1026d5da8,0x1026d5dac]",
+              "parent": 8,
+              "self_samples": 2
+            }
+          ],
+          "pct_of_workload_samples": 4.429530201342282
+        },
+        "string_value": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "number_parse": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "object_parse": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "root_scope": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "construction_batch": {
+          "samples": 4,
+          "frames": [
+            {
+              "depth": 24,
+              "count": 1,
+              "name": "_RNvMNtNtCs3gRpqoBkMHm_13perry_runtime5arena12constructionNtB2_17ConstructionBatch17finish_json_slots  (in r39-worker) + 64  [0x1026c7d1c]",
+              "parent": 98,
+              "self_samples": 1
+            },
+            {
+              "depth": 22,
+              "count": 2,
+              "name": "_RNvMNtNtCs3gRpqoBkMHm_13perry_runtime5arena12constructionNtB2_17ConstructionBatch17finish_json_slots  (in r39-worker) + 492  [0x1026c7ec8]",
+              "parent": 111,
+              "self_samples": 0
+            },
+            {
+              "depth": 20,
+              "count": 1,
+              "name": "_RNvMNtNtCs3gRpqoBkMHm_13perry_runtime5arena12constructionNtB2_17ConstructionBatch17finish_json_slots  (in r39-worker) + 580  [0x1026c7f20]",
+              "parent": 120,
+              "self_samples": 0
+            }
+          ],
+          "pct_of_workload_samples": 0.5369127516778524
+        },
+        "allocation": {
+          "samples": 1,
+          "frames": [
+            {
+              "depth": 26,
+              "count": 1,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime6string20string_storage_alloc  (in r39-worker) + 292  [0x1027ddc90]",
+              "parent": 15,
+              "self_samples": 0
+            }
+          ],
+          "pct_of_workload_samples": 0.1342281879194631
+        },
+        "collection": {
+          "samples": 136,
+          "frames": [
+            {
+              "depth": 12,
+              "count": 136,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy25gc_safepoint_moving_minor  (in r39-worker) + 2808  [0x1028ef7e4]",
+              "parent": 128,
+              "self_samples": 0
+            }
+          ],
+          "pct_of_workload_samples": 18.25503355704698
+        }
+      },
+      "top_self_sample_nodes": [
+        {
+          "depth": 20,
+          "count": 173,
+          "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserINtB5_23SpecializedDirectParserKb1_E11parse_valueB9_  (in r39-worker) + 1844,1824,...  [0x1026d8940,0x1026d892c,...]",
+          "parent": 7,
+          "self_samples": 173
+        },
+        {
+          "depth": 14,
+          "count": 90,
+          "name": "_RNvNtNtNtCs3gRpqoBkMHm_13perry_runtime4json6parser12depth_blocks21nesting_depth_exceeds  (in r39-worker) + 340,688,...  [0x102b58d10,0x102b58e6c,...]",
+          "parent": 124,
+          "self_samples": 90
+        },
+        {
+          "depth": 22,
+          "count": 67,
+          "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserINtB5_23SpecializedDirectParserKb1_E11parse_valueB9_  (in r39-worker) + 6104,1032,...  [0x1026d99e4,0x1026d8614,...]",
+          "parent": 8,
+          "self_samples": 67
+        },
+        {
+          "depth": 18,
+          "count": 44,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7copying24run_copied_minor_attempt  (in r39-worker) + 68336,68284,...  [0x10291a9cc,0x10291a998,...]",
+          "parent": 131,
+          "self_samples": 44
+        },
+        {
+          "depth": 22,
+          "count": 40,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6object17json_construction36object_from_json_fields_preinstalled  (in r39-worker) + 1376,1388,...  [0x102a4fce8,0x102a4fcf4,...]",
+          "parent": 61,
+          "self_samples": 40
+        },
+        {
+          "depth": 24,
+          "count": 28,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction30string_from_scanned_json_bytes  (in r39-worker) + 1044,816,...  [0x102a7ed18,0x102a7ec34,...]",
+          "parent": 10,
+          "self_samples": 28
+        },
+        {
+          "depth": 24,
+          "count": 17,
+          "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserINtB5_23SpecializedDirectParserKb0_E18parse_string_bytesB9_  (in r39-worker) + 168,28,...  [0x1026d5960,0x1026d58d4,...]",
+          "parent": 45,
+          "self_samples": 17
+        },
+        {
+          "depth": 26,
+          "count": 14,
+          "name": "_platform_memmove  (in libsystem_platform.dylib) + 428,452,...  [0x18171f50c,0x18171f524,...]",
+          "parent": 12,
+          "self_samples": 14
+        },
+        {
+          "depth": 24,
+          "count": 12,
+          "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserINtB5_23SpecializedDirectParserKb1_E11parse_valueB9_  (in r39-worker) + 580,1176,...  [0x1026d8450,0x1026d86a4,...]",
+          "parent": 47,
+          "self_samples": 12
+        },
+        {
+          "depth": 26,
+          "count": 10,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime5arena5stats18pointer_in_nursery  (in r39-worker) + 36,24  [0x1029acd04,0x1029accf8]",
+          "parent": 80,
+          "self_samples": 10
+        },
+        {
+          "depth": 18,
+          "count": 10,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7copying24run_copied_minor_attempt  (in r39-worker) + 68896,68676,...  [0x10291abfc,0x10291ab20,...]",
+          "parent": 187,
+          "self_samples": 10
+        },
+        {
+          "depth": 26,
+          "count": 9,
+          "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserINtB5_23SpecializedDirectParserKb0_E18parse_string_bytesB9_  (in r39-worker) + 28,168,...  [0x1026d58d4,0x1026d5960,...]",
+          "parent": 41,
+          "self_samples": 9
+        },
+        {
+          "depth": 20,
+          "count": 9,
+          "name": "_RNCINvNtNtCs3gRpqoBkMHm_13perry_runtime2gc17layout_slot_visit22visit_gc_rewrite_slotsNCNvMs_NtB6_7copyingNtB1s_23CopyingNurseryCollector18scan_object_fields0E0B8_  (in r39-worker) + 36,220,...  [0x10269b17c,0x10269b234,...]",
+          "parent": 135,
+          "self_samples": 9
+        },
+        {
+          "depth": 24,
+          "count": 8,
+          "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserINtB5_23SpecializedDirectParserKb1_E11parse_valueB9_  (in r39-worker) + 1176,1236,...  [0x1026d86a4,0x1026d86e0,...]",
+          "parent": 40,
+          "self_samples": 8
+        },
+        {
+          "depth": 22,
+          "count": 8,
+          "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserINtB5_23SpecializedDirectParserKb1_E18parse_array_prefixB9_  (in r39-worker) + 356,56,...  [0x1026da370,0x1026da244,...]",
+          "parent": 8,
+          "self_samples": 8
+        },
+        {
+          "depth": 26,
+          "count": 7,
+          "name": "_RNvMNtNtCs3gRpqoBkMHm_13perry_runtime4json18construction_arrayNtB2_17ConstructionArray3new  (in r39-worker) + 28,44,...  [0x1026c59ec,0x1026c59fc,...]",
+          "parent": 27,
+          "self_samples": 7
+        },
+        {
+          "depth": 22,
+          "count": 7,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction30string_from_scanned_json_bytes  (in r39-worker) + 836  [0x102a7ec48]",
+          "parent": 8,
+          "self_samples": 7
+        },
+        {
+          "depth": 28,
+          "count": 7,
+          "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime14typed_feedback12object_shape  (in r39-worker) + 104,176  [0x1027692e8,0x102769330]",
+          "parent": 76,
+          "self_samples": 7
+        },
+        {
+          "depth": 24,
+          "count": 6,
+          "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserINtB5_23SpecializedDirectParserKb1_E18finish_short_arrayB9_  (in r39-worker) + 168,328,...  [0x1026da0c8,0x1026da168,...]",
+          "parent": 26,
+          "self_samples": 6
+        },
+        {
+          "depth": 28,
+          "count": 6,
+          "name": "pthread_mutex_unlock  (in libsystem_pthread.dylib) + 120,12,...  [0x1817109bc,0x181710950,...]",
+          "parent": 65,
+          "self_samples": 6
+        },
+        {
+          "depth": 24,
+          "count": 6,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6object6shapes34try_birth_stamp_preinstalled_shape  (in r39-worker) + 68,60,...  [0x102a787f8,0x102a787f0,...]",
+          "parent": 79,
+          "self_samples": 6
+        },
+        {
+          "depth": 26,
+          "count": 6,
+          "name": "_platform_memset_pattern16  (in libsystem_platform.dylib) + 84  [0x18171d174]",
+          "parent": 103,
+          "self_samples": 6
+        },
+        {
+          "depth": 22,
+          "count": 6,
+          "name": "_RNvMs_NtNtCs3gRpqoBkMHm_13perry_runtime2gc7copyingNtB4_23CopyingNurseryCollector22visit_slot_with_parent  (in r39-worker) + 376,16,...  [0x102719d38,0x102719bd0,...]",
+          "parent": 136,
+          "self_samples": 6
+        },
+        {
+          "depth": 18,
+          "count": 6,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7copying24run_copied_minor_attempt  (in r39-worker) + 78456,78476  [0x10291d154,0x10291d168]",
+          "parent": 200,
+          "self_samples": 6
+        },
+        {
+          "depth": 26,
+          "count": 5,
+          "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueINtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots19GcRootRegistryGuardINtNtB4_6option6OptionINtNtNtNtCs8BpVhDwHqJW_3std11collections4hash3map7HashMapNtNtCsctvjasLqLe9_5alloc6string6StringINtNtB30_3vec3VecNtNtBI_16ui_text_registry14ForEachBindingEEEEEBI_  (in r39-worker) + 100,60,...  [0x1025ea41c,0x1025ea3f4,...]",
+          "parent": 64,
+          "self_samples": 5
+        },
+        {
+          "depth": 26,
+          "count": 5,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy25flush_deferred_gc_request  (in r39-worker) + 76,660  [0x1028ee68c,0x1028ee8d4]",
+          "parent": 64,
+          "self_samples": 5
+        },
+        {
+          "depth": 28,
+          "count": 5,
+          "name": "pthread_mutex_lock  (in libsystem_pthread.dylib) + 52,32  [0x181710430,0x18171041c]",
+          "parent": 71,
+          "self_samples": 5
+        },
+        {
+          "depth": 18,
+          "count": 5,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc17layout_slot_visit32visit_gc_layout_slot_descriptors.specialized.10  (in r39-worker) + 2912,2220,...  [0x102dd2e20,0x102dd2b6c,...]",
+          "parent": 134,
+          "self_samples": 5
+        },
+        {
+          "depth": 32,
+          "count": 5,
+          "name": "_RNvMNtNtCs3gRpqoBkMHm_13perry_runtime2gc19copying_pointer_setNtB2_17CopyingPointerSet14classify_arena  (in r39-worker) + 44,364,...  [0x1026c29d8,0x1026c2b18,...]",
+          "parent": 175,
+          "self_samples": 5
+        },
+        {
+          "depth": 26,
+          "count": 4,
+          "name": "_RNvMNtNtCs3gRpqoBkMHm_13perry_runtime4json18construction_arrayNtB2_17ConstructionArray13finish_layout  (in r39-worker) + 396,156  [0x1026c5998,0x1026c58a8]",
+          "parent": 35,
+          "self_samples": 4
+        },
+        {
+          "depth": 26,
+          "count": 4,
+          "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime14typed_feedback8registry  (in r39-worker) + 120,92  [0x10276b9dc,0x10276b9c0]",
+          "parent": 70,
+          "self_samples": 4
+        },
+        {
+          "depth": 26,
+          "count": 4,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6object6shapes32debug_assert_object_shape_parity  (in r39-worker) + 64,52,...  [0x102a77880,0x102a77874,...]",
+          "parent": 83,
+          "self_samples": 4
+        },
+        {
+          "depth": 24,
+          "count": 4,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc13layout_tables20typed_layouts_remove  (in r39-worker) + 32,72  [0x1028c7900,0x1028c7928]",
+          "parent": 88,
+          "self_samples": 4
+        },
+        {
+          "depth": 22,
+          "count": 4,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6object6shapes34try_birth_stamp_preinstalled_shape  (in r39-worker) + 564,552,...  [0x102a789e8,0x102a789dc,...]",
+          "parent": 61,
+          "self_samples": 4
+        },
+        {
+          "depth": 26,
+          "count": 4,
+          "name": "_RNvMNtNtCs3gRpqoBkMHm_13perry_runtime2gc19copying_pointer_setNtB2_17CopyingPointerSet14classify_arena  (in r39-worker) + 44,600,...  [0x1026c29d8,0x1026c2c04,...]",
+          "parent": 138,
+          "self_samples": 4
+        }
+      ],
+      "profile_sha256": "a06db15c8a71fb17f338153e83f8e0c3e002ade4ede6ce677fbe0debb2a15b61",
+      "oracle_command": [
+        "/opt/homebrew/bin/node",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/worker.js",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/fixtures/records_object_8m.json",
+        "parse",
+        "96",
+        "2",
+        "verify"
+      ],
+      "oracle_output_sha256": "388fce6b6f3f82a25f2b7ef127e4fbdee9a2db4277dcc21c815f12902c0bc03e",
+      "complete_workload_checksum_and_keep_match_node": true,
+      "diagnostic_only": true
+    }
+  ]
+}

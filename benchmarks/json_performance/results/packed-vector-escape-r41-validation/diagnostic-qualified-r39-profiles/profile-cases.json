@@ -1,0 +1,47 @@
+{
+  "cases": [
+    {
+      "fixture": "wide_1m",
+      "operation": "parse",
+      "iterations": 384,
+      "warmup": 2,
+      "arm": "r26"
+    },
+    {
+      "fixture": "wide_1m",
+      "operation": "parse",
+      "iterations": 384,
+      "warmup": 2,
+      "arm": "r39"
+    },
+    {
+      "fixture": "wide_1m",
+      "operation": "stringify",
+      "iterations": 4736,
+      "warmup": 2,
+      "arm": "r26"
+    },
+    {
+      "fixture": "wide_1m",
+      "operation": "stringify",
+      "iterations": 4736,
+      "warmup": 2,
+      "arm": "r39"
+    },
+    {
+      "fixture": "records_object_8m",
+      "operation": "parse",
+      "iterations": 96,
+      "warmup": 2,
+      "arm": "r26"
+    },
+    {
+      "fixture": "records_object_8m",
+      "operation": "parse",
+      "iterations": 96,
+      "warmup": 2,
+      "arm": "r39"
+    }
+  ],
+  "note": "Initial frozen R26 wide parse exceeded the unchanged 2 GiB diagnostic RSS cap. Shorter fixed parse loops are applied to both arms. The one-second sampler, 500-workload-sample floor and watchdog are unchanged; no GC setting changes."
+}

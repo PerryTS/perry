@@ -1,0 +1,6 @@
+{
+  "archive_subprocess_exit_code": 0,
+  "wrapper_exit_code": 1,
+  "reason": "Incorrect local comparison stripped two wrapper argv elements instead of the three ending at --. Remote archive was already complete. The analyzer refused missing controller-exit.json after both original and first recovery attempts. Final correction is local only.",
+  "benchmark_rerun": false
+}

@@ -1,0 +1,44 @@
+{
+  "owner": "json-perf-55375-1789147596",
+  "load_before": [
+    1.63232421875,
+    1.74609375,
+    1.69482421875
+  ],
+  "started_utc": "2026-09-11T17:26:36Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/packed-vector-escape-r41/run-options.py",
+    "--worker",
+    ".work/packed-vector-escape-r41/candidate-options",
+    "--baseline-worker",
+    ".work/packed-vector-escape-r41/main-options",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--bun",
+    "/Users/perry/.bun/bin/bun",
+    "--case",
+    "long_string_1m:pretty:256:4:7",
+    "--case",
+    "long_string_1m:callback:128:4:7",
+    "--case",
+    "unicode_1m:pretty:256:4:7",
+    "--case",
+    "unicode_1m:callback:128:4:7",
+    "--case",
+    "escaped_1m:pretty:256:4:7",
+    "--case",
+    "escaped_1m:callback:128:4:7",
+    "--results-dir",
+    "results/quiet-packed-vector-escape-r41-large-options"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.73583984375,
+    1.76416015625,
+    1.7021484375
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-11T17:27:00Z"
+}

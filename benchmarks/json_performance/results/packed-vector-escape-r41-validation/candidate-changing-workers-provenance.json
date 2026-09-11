@@ -1,0 +1,35 @@
+[
+  {
+    "worker": "changing-options",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/packed-vector-escape-r41/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/zero-spacing-r25/changing-options-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/packed-vector-escape-r41/candidate-changing-options.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/packed-vector-escape-r41/candidate-changing-options.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/packed-vector-escape-r41/frozen-build/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/packed-vector-escape-r41/candidate-changing-options"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/zero-spacing-r25/changing-options-worker.ts": "5d710b4446795b37edc6f2792fd7e6aeda63d99d17cceaff199d8d27f212a87e",
+      "benchmarks/json_performance/.work/packed-vector-escape-r41/candidate-changing-options.o": "616fea662f8f9602b9a02ce8e25421fe4acc9b53d751ce7b20364136a073e767",
+      "benchmarks/json_performance/.work/packed-vector-escape-r41/candidate-changing-options": "08f067f534f2053bdf7b029ef0b2e23e4d4cfe23e16e35a6f4bd72079ff6253d",
+      "benchmarks/json_performance/.work/packed-vector-escape-r41/frozen-build/perry": "57473af5d83a4306cd8fd2bef4235c4f2e3c90f99a9e7dc332b5a595059a3cc2",
+      "benchmarks/json_performance/.work/packed-vector-escape-r41/frozen-build/libperry_runtime.a": "a012ccf90225bfebd7f4254f93b2828731f4ed1beb70c6fd3ec7a0e2236ab9ad",
+      "benchmarks/json_performance/.work/packed-vector-escape-r41/frozen-build/libperry_stdlib.a": "ff1496076e3e07a697d2e58ee4a4aa765fba732b799db911faeb2178d8cf97a6"
+    }
+  }
+]

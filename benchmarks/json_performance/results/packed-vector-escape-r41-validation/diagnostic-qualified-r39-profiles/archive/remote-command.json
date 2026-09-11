@@ -1,0 +1,9 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/wide-regression-r39-profiles/run-parse-regression-profile.py",
+  "--results-dir",
+  "results/quiet-wide-regression-r39-profiles-retry1"
+]

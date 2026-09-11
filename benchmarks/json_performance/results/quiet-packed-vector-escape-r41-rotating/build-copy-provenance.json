@@ -1,0 +1,159 @@
+{
+  "source_commit": "3952e832058a5e1efcd4cdf9cf28f26e31d60ea3",
+  "actual_build_worktree": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29",
+  "validation_worktree": "/Users/amlug/projects/perry/json-merged-pr10022",
+  "copied_unix": 1789147313.331244,
+  "note": "Normal three-package release build copied from immutable artifacts. Both committed source trees and unit source hashes match. Canonical validation uses the original fixture source paths, so no path or anonymous-shape normalization is added. Canonical validation uses the original source paths. No alternate-worktree validation is claimed for this round.",
+  "files": [
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/packed-vector-escape-r41/frozen-build/perry",
+      "copy": "benchmarks/json_performance/.work/packed-vector-escape-r41/frozen-build/perry",
+      "sha256": "57473af5d83a4306cd8fd2bef4235c4f2e3c90f99a9e7dc332b5a595059a3cc2"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/packed-vector-escape-r41/frozen-build/libperry_runtime.a",
+      "copy": "benchmarks/json_performance/.work/packed-vector-escape-r41/frozen-build/libperry_runtime.a",
+      "sha256": "a012ccf90225bfebd7f4254f93b2828731f4ed1beb70c6fd3ec7a0e2236ab9ad"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/packed-vector-escape-r41/frozen-build/libperry_stdlib.a",
+      "copy": "benchmarks/json_performance/.work/packed-vector-escape-r41/frozen-build/libperry_stdlib.a",
+      "sha256": "ff1496076e3e07a697d2e58ee4a4aa765fba732b799db911faeb2178d8cf97a6"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/packed-vector-escape-r41/build-provenance.json",
+      "copy": "benchmarks/json_performance/.work/packed-vector-escape-r41/build-provenance.json",
+      "sha256": "66e996ac893e0d940b078ffe3d4608ced9f9d973e5e44f2d33e3736e4079b254"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/packed-vector-escape-r41/build-start.json",
+      "copy": "benchmarks/json_performance/.work/packed-vector-escape-r41/build-start.json",
+      "sha256": "d061ef0b8f0e0fa76b057b66a9d93f8c5c38ce9290b87ec607879147e882e517"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/packed-vector-escape-r41/build-command-result.json",
+      "copy": "benchmarks/json_performance/.work/packed-vector-escape-r41/build-command-result.json",
+      "sha256": "5445a2759e06ecb23aab7783a1b00bb579146fec2d89ce15f77811bd29b377a7"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/packed-vector-escape-r41/unit-source.json",
+      "copy": "benchmarks/json_performance/.work/packed-vector-escape-r41/unit-source.json",
+      "sha256": "2241248943046f8a8615cf5b9ecec86faad2842b624ea557b2b11d635e5b27fb"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/packed-vector-escape-r41/unit.log",
+      "copy": "benchmarks/json_performance/.work/packed-vector-escape-r41/unit.log",
+      "sha256": "c3a15bf979da4af7e9f90367c826cca1535f59917033fe1bf254dabb1734e6fa"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/packed-vector-escape-r41/unit-controller-result.json",
+      "copy": "benchmarks/json_performance/.work/packed-vector-escape-r41/unit-controller-result.json",
+      "sha256": "184a058105d3b150b27068f9f4d654640360372738b93a6ac7ecba0f2d08d2f7"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/packed-vector-escape-r41/build.log",
+      "copy": "benchmarks/json_performance/.work/packed-vector-escape-r41/build.log",
+      "sha256": "7f82dfc14b1785474d0331f436a958c72097e50ce60e3f3a8687172dd582a0eb"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/packed-vector-escape-r41/lint-results.json",
+      "copy": "benchmarks/json_performance/.work/packed-vector-escape-r41/lint-results.json",
+      "sha256": "f7471450cb8b09c85ca943f8f99e344fe794e53c147aedbfcfe5f2a3b3d069f0"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/packed-vector-escape-r41/script-lint.log",
+      "copy": "benchmarks/json_performance/.work/packed-vector-escape-r41/script-lint.log",
+      "sha256": "ccb406c6d6d719f271354be640417b56dd943d520aaa01eccf675dcab7f69df0"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/packed-vector-escape-r41/file-cap.log",
+      "copy": "benchmarks/json_performance/.work/packed-vector-escape-r41/file-cap.log",
+      "sha256": "b0f283074d97912a169a14da638801e20dedc4981a521e2ef90e4028bdcdf8cd"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/packed-vector-escape-r41/worktree-provenance.json",
+      "copy": "benchmarks/json_performance/.work/packed-vector-escape-r41/worktree-provenance.json",
+      "sha256": "3b8da6fc2cdd8ce760b7e43128ae45efc55eec4600876bb1e4fc57bf63eb8ca2"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/packed-vector-escape-r41/lint-review.json",
+      "copy": "benchmarks/json_performance/.work/packed-vector-escape-r41/lint-review.json",
+      "sha256": "7ec1e7f8af18f5c904e390c0f21a32b6a4febebeeb3a4ee188d7925900a1266d"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/packed-vector-escape-r41/string-suite.log",
+      "copy": "benchmarks/json_performance/.work/packed-vector-escape-r41/string-suite.log",
+      "sha256": "c8f7925c0248a8a5e54b3648333157321162344652ca8a1961c22d132ee85d59"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/packed-vector-escape-r41/string-suite-provenance.json",
+      "copy": "benchmarks/json_performance/.work/packed-vector-escape-r41/string-suite-provenance.json",
+      "sha256": "419e750aeff8668b6ab9d34bae590e201e66b15f2610f4c6d69b7d3f6b3c9254"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/packed-vector-escape-r41/build-resume.json",
+      "copy": "benchmarks/json_performance/.work/packed-vector-escape-r41/build-resume.json",
+      "sha256": "d523c13dd3d053b098eea48d43e30f7ad3117ea612f34a2d840d393b5d25b0e0"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/packed-vector-escape-r41/build-controller.log",
+      "copy": "benchmarks/json_performance/.work/packed-vector-escape-r41/build-controller.log",
+      "sha256": "66e996ac893e0d940b078ffe3d4608ced9f9d973e5e44f2d33e3736e4079b254"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/packed-vector-escape-r41/hold-production-reviewed.txt",
+      "copy": "benchmarks/json_performance/.work/packed-vector-escape-r41/hold-production-reviewed.txt",
+      "sha256": "cffc730a922bbd11d4013d6ba3fe644fb9a756512938ab29ce03d7e0c7529923"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/packed-vector-escape-r41/format.log",
+      "copy": "benchmarks/json_performance/.work/packed-vector-escape-r41/format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/packed-vector-escape-r41/source-push.json",
+      "copy": "benchmarks/json_performance/.work/packed-vector-escape-r41/source-push.json",
+      "sha256": "dddcb93fac99070f1dc98e1ca6983d69b554c6469cf8b30454fa2a1227dbd6be"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/packed-vector-escape-r41/source-push.stdout",
+      "copy": "benchmarks/json_performance/.work/packed-vector-escape-r41/source-push.stdout",
+      "sha256": "88d23a9197c64539c709e911e47631f53e0032f43f85dcf413c4e0c02841dd2a"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/packed-vector-escape-r41/source-push.stderr",
+      "copy": "benchmarks/json_performance/.work/packed-vector-escape-r41/source-push.stderr",
+      "sha256": "797150a13c685231f44d0b3ab4e50d27dc2b0c2d5c87c30b26271a92f2a8ee3f"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/packed-vector-escape-r41/proposal-provenance.json",
+      "copy": "benchmarks/json_performance/.work/packed-vector-escape-r41/proposal-provenance.json",
+      "sha256": "ab0dc19643415ec0c0e9b764e35a4cfb1b7ff9f087f181191fb0347d50949db7"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/packed-vector-escape-r41/raw-handle-pinned-main.stdout",
+      "copy": "benchmarks/json_performance/.work/packed-vector-escape-r41/raw-handle-pinned-main.stdout",
+      "sha256": "ff5f008970ff99cef3fbf5741e48f7161493b778d71e7fd7d5aeee4a88350534"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/packed-vector-escape-r41/raw-handle-pinned-main.stderr",
+      "copy": "benchmarks/json_performance/.work/packed-vector-escape-r41/raw-handle-pinned-main.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/packed-vector-escape-r41/build-release.py",
+      "copy": "benchmarks/json_performance/.work/packed-vector-escape-r41/build-release.py",
+      "sha256": "f104da4b90eda0c4f2f28ef311a6bdd8b8cb4afc27c65a6d6569285b2955d1fe"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/packed-vector-escape-r41/validate-and-build.py",
+      "copy": "benchmarks/json_performance/.work/packed-vector-escape-r41/validate-and-build.py",
+      "sha256": "efc9b9871612eab0c90b5eb5646ef57875267958b25000cd02e9373eba944547"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/packed-vector-escape-r41/run-lint.py",
+      "copy": "benchmarks/json_performance/.work/packed-vector-escape-r41/run-lint.py",
+      "sha256": "b228808035eba5472e845e534d7799d2222ee142cef0a273cb941810fdfd53f8"
+    }
+  ]
+}

@@ -1,0 +1,99 @@
+{
+  "reference_evidence_commit": "df1c4e18edc15ea37ec294a2b7c25af070001276",
+  "reference_source_commit": "e69d1292110cf9abee24f8690c584652805a4167",
+  "note": "R39 is the earlier scalar writer, not the immediate parent (R40). These are separately qualified windows; no paired R39/R41 measurement. Parent window and raw vectors are committed in R40 evidence.",
+  "reference_window": {
+    "owner": "json-perf-54843-1789146437",
+    "load_before": [
+      1.36376953125,
+      1.6640625,
+      1.66552734375
+    ],
+    "started_utc": "2026-09-11T17:07:17Z",
+    "quiet_gate_passed": true,
+    "command": [
+      "python3",
+      ".work/compact-template-capture-r39/run-options.py",
+      "--worker",
+      ".work/compact-template-capture-r39/candidate-options",
+      "--baseline-worker",
+      ".work/compact-template-capture-r39/main-options",
+      "--node",
+      "/opt/homebrew/bin/node",
+      "--bun",
+      "/Users/perry/.bun/bin/bun",
+      "--case",
+      "long_string_1m:pretty:256:4:7",
+      "--case",
+      "long_string_1m:callback:128:4:7",
+      "--case",
+      "unicode_1m:pretty:256:4:7",
+      "--case",
+      "unicode_1m:callback:128:4:7",
+      "--case",
+      "escaped_1m:pretty:256:4:7",
+      "--case",
+      "escaped_1m:callback:128:4:7",
+      "--results-dir",
+      "results/quiet-compact-template-capture-r39-large-options"
+    ],
+    "competing_workloads_before": [],
+    "load_after": [
+      1.43212890625,
+      1.65771484375,
+      1.66259765625
+    ],
+    "competing_workloads_after": [],
+    "finished_utc": "2026-09-11T17:07:43Z"
+  },
+  "cases": [
+    {
+      "fixture": "long_string_1m",
+      "operation": "pretty",
+      "r39_cpu_us": 87.19921875,
+      "r41_cpu_us": 86.68359375,
+      "cpu_delta_pct": -0.5913183711866665,
+      "rss_delta_mib": -0.015625
+    },
+    {
+      "fixture": "long_string_1m",
+      "operation": "callback",
+      "r39_cpu_us": 114.8984375,
+      "r41_cpu_us": 115.5625,
+      "cpu_delta_pct": 0.5779560753382817,
+      "rss_delta_mib": -0.015625
+    },
+    {
+      "fixture": "unicode_1m",
+      "operation": "pretty",
+      "r39_cpu_us": 134.0390625,
+      "r41_cpu_us": 133.02734375,
+      "cpu_delta_pct": -0.7547939616483035,
+      "rss_delta_mib": -0.015625
+    },
+    {
+      "fixture": "unicode_1m",
+      "operation": "callback",
+      "r39_cpu_us": 160.2109375,
+      "r41_cpu_us": 159.84375,
+      "cpu_delta_pct": -0.22919003267176663,
+      "rss_delta_mib": -0.015625
+    },
+    {
+      "fixture": "escaped_1m",
+      "operation": "pretty",
+      "r39_cpu_us": 897.77734375,
+      "r41_cpu_us": 336.78125,
+      "cpu_delta_pct": -62.48721886951717,
+      "rss_delta_mib": -0.015625
+    },
+    {
+      "fixture": "escaped_1m",
+      "operation": "callback",
+      "r39_cpu_us": 924.234375,
+      "r41_cpu_us": 363.65625,
+      "cpu_delta_pct": -60.65324339402546,
+      "rss_delta_mib": -0.015625
+    }
+  ]
+}

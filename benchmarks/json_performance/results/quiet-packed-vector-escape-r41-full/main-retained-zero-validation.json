@@ -1,0 +1,82 @@
+[
+  {
+    "arm": "candidate",
+    "fixture": "tiny_object",
+    "operation": "retain-stringify",
+    "mode": "normal",
+    "matches_node": true,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "binary_sha256": "e0c27a1b2c49177485d7b3263634958269a67bbb5f13a639c8a9faa63d2ed6f3"
+  },
+  {
+    "arm": "candidate",
+    "fixture": "tiny_object",
+    "operation": "retain-stringify",
+    "mode": "scheduled",
+    "matches_node": true,
+    "protected_retired_sets": 6,
+    "moved_objects": 12740,
+    "binary_sha256": "e0c27a1b2c49177485d7b3263634958269a67bbb5f13a639c8a9faa63d2ed6f3"
+  },
+  {
+    "arm": "candidate",
+    "fixture": "small_record",
+    "operation": "retain-stringify",
+    "mode": "normal",
+    "matches_node": true,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "binary_sha256": "e0c27a1b2c49177485d7b3263634958269a67bbb5f13a639c8a9faa63d2ed6f3"
+  },
+  {
+    "arm": "candidate",
+    "fixture": "small_record",
+    "operation": "retain-stringify",
+    "mode": "scheduled",
+    "matches_node": true,
+    "protected_retired_sets": 6,
+    "moved_objects": 12756,
+    "binary_sha256": "e0c27a1b2c49177485d7b3263634958269a67bbb5f13a639c8a9faa63d2ed6f3"
+  },
+  {
+    "arm": "candidate",
+    "fixture": "long_string_1m",
+    "operation": "retain-stringify",
+    "mode": "normal",
+    "matches_node": true,
+    "protected_retired_sets": 0,
+    "moved_objects": 12600,
+    "binary_sha256": "e0c27a1b2c49177485d7b3263634958269a67bbb5f13a639c8a9faa63d2ed6f3"
+  },
+  {
+    "arm": "candidate",
+    "fixture": "long_string_1m",
+    "operation": "retain-stringify",
+    "mode": "scheduled",
+    "matches_node": true,
+    "protected_retired_sets": 8,
+    "moved_objects": 12614,
+    "binary_sha256": "e0c27a1b2c49177485d7b3263634958269a67bbb5f13a639c8a9faa63d2ed6f3"
+  },
+  {
+    "arm": "candidate",
+    "fixture": "unicode_1m",
+    "operation": "retain-stringify",
+    "mode": "normal",
+    "matches_node": true,
+    "protected_retired_sets": 0,
+    "moved_objects": 6463,
+    "binary_sha256": "e0c27a1b2c49177485d7b3263634958269a67bbb5f13a639c8a9faa63d2ed6f3"
+  },
+  {
+    "arm": "candidate",
+    "fixture": "unicode_1m",
+    "operation": "retain-stringify",
+    "mode": "scheduled",
+    "matches_node": true,
+    "protected_retired_sets": 7,
+    "moved_objects": 12614,
+    "binary_sha256": "e0c27a1b2c49177485d7b3263634958269a67bbb5f13a639c8a9faa63d2ed6f3"
+  }
+]

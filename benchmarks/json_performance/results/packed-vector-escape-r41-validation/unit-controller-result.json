@@ -1,0 +1,9 @@
+{
+  "source_commit": "3952e832058a5e1efcd4cdf9cf28f26e31d60ea3",
+  "controller_exit_code": 1,
+  "unit_exit_code": 0,
+  "unit_tests_passed": 312,
+  "unit_test_seconds": 2.92,
+  "guarded_cases": 8587,
+  "reason": "The explicit production hold stopped the controller only after successful exact-source tests. No production build preceded this review."
+}

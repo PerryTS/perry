@@ -1,0 +1,18 @@
+{
+  "parent_source": "3bde9394e021039603c84801762af4f083b1f9c4",
+  "source_sha256": "b8442a8d37ec81d898cca9bc5b118a29cd382f0cb37edbe818fb9410f838c3dc",
+  "binary_sha256": "35c7b4f7fa864e9aa72f879ccf4ddfddbd94a38a8685a237c7255241ac67db25",
+  "full_output_sha256": "41f65f63ca76f5924975098ee8150426d95edb56643d644b45302eb0432ee7e5",
+  "prior_node_verified_output_sha256": "41f65f63ca76f5924975098ee8150426d95edb56643d644b45302eb0432ee7e5",
+  "compile_command": [
+    "rustc",
+    "--edition",
+    "2021",
+    "-O",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/native-escape-packed-next/prototype.rs",
+    "-o",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/native-escape-packed-next/packed-writer-test"
+  ],
+  "exit_code": 0,
+  "note": "Unapplied standalone proposal. All509 complete vectors and output sentinels match the previously Node-verified corpus byte-for-byte. Eight common escapes are packed together with a4KiB byte-only table. No runtime, guard-page or performance result is claimed."
+}

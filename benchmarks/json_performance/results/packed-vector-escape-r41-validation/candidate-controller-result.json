@@ -1,0 +1,8 @@
+{
+  "source_commit": "3952e832058a5e1efcd4cdf9cf28f26e31d60ea3",
+  "command": [
+    "python3",
+    "benchmarks/json_performance/.work/packed-vector-escape-r41/complete-candidate-validation.py"
+  ],
+  "exit_code": 0
+}

@@ -1,0 +1,880 @@
+{
+  "note": "Standalone byte-for-byte correctness proposal plus the complete earlier profile attempts and new four-case qualifying analysis. Earlier failed profiles and original six-case analysis refusal remain. These are not R41 timing measurements.",
+  "files": [
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/native-escape-packed-next/compile.log",
+      "destination": "standalone-packed-correctness/compile.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/native-escape-packed-next/proposal/stringify_native_escape.rs",
+      "destination": "standalone-packed-correctness/proposal/stringify_native_escape.rs",
+      "sha256": "b8442a8d37ec81d898cca9bc5b118a29cd382f0cb37edbe818fb9410f838c3dc"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/native-escape-packed-next/proposal-provenance.json",
+      "destination": "standalone-packed-correctness/proposal-provenance.json",
+      "sha256": "ab0dc19643415ec0c0e9b764e35a4cfb1b7ff9f087f181191fb0347d50949db7"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/native-escape-packed-next/prototype.rs",
+      "destination": "standalone-packed-correctness/prototype.rs",
+      "sha256": "5f5e02b6f0d039097c35258c6b17603d1bd43b8bf60db698517b2faab26ead45"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/native-escape-packed-next/run.stderr",
+      "destination": "standalone-packed-correctness/run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/analysis-refusal.json",
+      "destination": "diagnostic-qualified-r39-profiles/analysis-refusal.json",
+      "sha256": "ac5ae0f3bfce60121386b667576cb7d6bdc234a7815167b73dc58ac795aabf22"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/analyze-qualified-subset.py",
+      "destination": "diagnostic-qualified-r39-profiles/analyze-qualified-subset.py",
+      "sha256": "12164502def815399a792c0c9d011d860bc2d84cc22942a7468253ce09744c78"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/analyze.py",
+      "destination": "diagnostic-qualified-r39-profiles/analyze.py",
+      "sha256": "f184480492937fdb91b9c9836c768f548a62f627e5f14e44a063cc62bdb7eb21"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/build-provenance.json",
+      "destination": "diagnostic-qualified-r39-profiles/archive/build-provenance.json",
+      "sha256": "17a02f4c41707a5d66ac826a42e0b259cffb2d53aae721cac136db4b4937b7eb"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/controller-exit.json",
+      "destination": "diagnostic-qualified-r39-profiles/archive/controller-exit.json",
+      "sha256": "81868a6e94ffc0178bf833deb1c9013d9fab4ee95ddb876a5e8ec4f1d26376d2"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/controller.log",
+      "destination": "diagnostic-qualified-r39-profiles/archive/controller.log",
+      "sha256": "a9d3110c15681555460c75bcda5cf94d3e2b10a866fdc177b6e600251cb49fd0"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/main-build-provenance.json",
+      "destination": "diagnostic-qualified-r39-profiles/archive/main-build-provenance.json",
+      "sha256": "c7cdea74ece097733885a1fb12d7be44caf00ae9ab96359d225764322eb609db"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/main-workers-provenance.json",
+      "destination": "diagnostic-qualified-r39-profiles/archive/main-workers-provenance.json",
+      "sha256": "b3dccb4d52c9d2f365bfa9a215a98106e73c6fc76331d6542a45b3eb9ec08633"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/measure.py",
+      "destination": "diagnostic-qualified-r39-profiles/archive/measure.py",
+      "sha256": "a5b58cd7c9b3e134c24eab35d53b0fc8a804403ddb8a60579f71f4a10561a091"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/processes-after.txt",
+      "destination": "diagnostic-qualified-r39-profiles/archive/processes-after.txt",
+      "sha256": "e230431b8932d6397a54bd808372f99df99b9a033b918bb8b35de5bd2c2e1eb6"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/processes-before.txt",
+      "destination": "diagnostic-qualified-r39-profiles/archive/processes-before.txt",
+      "sha256": "d2f6e2ce58c8ec002b76eb9439687d00a46b1cedb23ecbc776efd39ca19e8156"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/profile-cases.json",
+      "destination": "diagnostic-qualified-r39-profiles/archive/profile-cases.json",
+      "sha256": "0b0eef958465462ccafdd854712e3baa46d1fb53fb259ad1c9a2ae7955d567e8"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/profiles.json",
+      "destination": "diagnostic-qualified-r39-profiles/archive/profiles.json",
+      "sha256": "a38d658487b9ef1c412abda1f7cb11fc1b45a6b1ec2e58ba13e62e1323ca4cd9"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/records_object_8m-parse-r26.node-oracle.stderr",
+      "destination": "diagnostic-qualified-r39-profiles/archive/records_object_8m-parse-r26.node-oracle.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/records_object_8m-parse-r26.node-oracle.stdout",
+      "destination": "diagnostic-qualified-r39-profiles/archive/records_object_8m-parse-r26.node-oracle.stdout",
+      "sha256": "eb836027d207aabd861b06ebd76645af91114d5ef9d0fa9e6f3add0965e4cbbd"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/records_object_8m-parse-r26.sample.txt",
+      "destination": "diagnostic-qualified-r39-profiles/archive/records_object_8m-parse-r26.sample.txt",
+      "sha256": "b1ab425e21fe0270781ec8fea929de69272b47783d93e32fdf99c4906665fdd9"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/records_object_8m-parse-r26.sampler.stderr",
+      "destination": "diagnostic-qualified-r39-profiles/archive/records_object_8m-parse-r26.sampler.stderr",
+      "sha256": "b4af529e2e71e7065d58ef3b21798bff25c2cbcef44be1b14eb350fe1d6fe269"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/records_object_8m-parse-r26.sampler.stdout",
+      "destination": "diagnostic-qualified-r39-profiles/archive/records_object_8m-parse-r26.sampler.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/records_object_8m-parse-r26.stderr",
+      "destination": "diagnostic-qualified-r39-profiles/archive/records_object_8m-parse-r26.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/records_object_8m-parse-r26.stdout",
+      "destination": "diagnostic-qualified-r39-profiles/archive/records_object_8m-parse-r26.stdout",
+      "sha256": "e305bb3931ff2de7db8cf9b90ece3e2624b039bb28f57f684a94c68c8577f6b7"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/records_object_8m-parse-r39.node-oracle.stderr",
+      "destination": "diagnostic-qualified-r39-profiles/archive/records_object_8m-parse-r39.node-oracle.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/records_object_8m-parse-r39.node-oracle.stdout",
+      "destination": "diagnostic-qualified-r39-profiles/archive/records_object_8m-parse-r39.node-oracle.stdout",
+      "sha256": "388fce6b6f3f82a25f2b7ef127e4fbdee9a2db4277dcc21c815f12902c0bc03e"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/records_object_8m-parse-r39.sample.txt",
+      "destination": "diagnostic-qualified-r39-profiles/archive/records_object_8m-parse-r39.sample.txt",
+      "sha256": "a06db15c8a71fb17f338153e83f8e0c3e002ade4ede6ce677fbe0debb2a15b61"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/records_object_8m-parse-r39.sampler.stderr",
+      "destination": "diagnostic-qualified-r39-profiles/archive/records_object_8m-parse-r39.sampler.stderr",
+      "sha256": "6d724d6ba1448a971d9c0e41ea4054f12da768ac73f86982ccd80ab4c2b47f90"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/records_object_8m-parse-r39.sampler.stdout",
+      "destination": "diagnostic-qualified-r39-profiles/archive/records_object_8m-parse-r39.sampler.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/records_object_8m-parse-r39.stderr",
+      "destination": "diagnostic-qualified-r39-profiles/archive/records_object_8m-parse-r39.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/records_object_8m-parse-r39.stdout",
+      "destination": "diagnostic-qualified-r39-profiles/archive/records_object_8m-parse-r39.stdout",
+      "sha256": "d915c182080f4bc433e1424067ba905658eb6cb952c291392a9f0a659a1214dd"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/remote-command.json",
+      "destination": "diagnostic-qualified-r39-profiles/archive/remote-command.json",
+      "sha256": "dbd45480cd883568c67ac5a8994df03a9d0e450d37154b0ba5ff04b59d322b75"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/remote.log",
+      "destination": "diagnostic-qualified-r39-profiles/archive/remote.log",
+      "sha256": "9e3561f5e0d6290d4252a6afa0cc7c265ae7195ebc342e6f67e69610c6724e9e"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/run-parse-regression-profile.py",
+      "destination": "diagnostic-qualified-r39-profiles/archive/run-parse-regression-profile.py",
+      "sha256": "1935ca632a6de43f75d503064e6ae0371822290abcd4c8691cdcae21c9ec7839"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/run_dispatch_focus.py",
+      "destination": "diagnostic-qualified-r39-profiles/archive/run_dispatch_focus.py",
+      "sha256": "100ba3e1bd5c0cd451d1a3528f95b5f4b8d0ff2f4771796ab8598b36a46fbcc4"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/source.patch.gz",
+      "destination": "diagnostic-qualified-r39-profiles/archive/source.patch.gz",
+      "sha256": "111c6aedb1db19c75e2eae53402e62aff9c4e9b16231c03fb2470ff05cf6cc97"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/source.patch.json",
+      "destination": "diagnostic-qualified-r39-profiles/archive/source.patch.json",
+      "sha256": "1246e2223da4d3db9e1b90f6ccc3d3ff21af16f4669850686278bff719ecbff6"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/stage-hashes.json",
+      "destination": "diagnostic-qualified-r39-profiles/archive/stage-hashes.json",
+      "sha256": "be4169652b26cf978d26c6ed08121435dc7e0471f5beb5ed44766fa7a1830b2d"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/wide_1m-parse-r26.node-oracle.stderr",
+      "destination": "diagnostic-qualified-r39-profiles/archive/wide_1m-parse-r26.node-oracle.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/wide_1m-parse-r26.node-oracle.stdout",
+      "destination": "diagnostic-qualified-r39-profiles/archive/wide_1m-parse-r26.node-oracle.stdout",
+      "sha256": "549863b8becd8a58838f6428b05fd6591cb1103ab5c2e02b01582630d62feb1d"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/wide_1m-parse-r26.sample.txt",
+      "destination": "diagnostic-qualified-r39-profiles/archive/wide_1m-parse-r26.sample.txt",
+      "sha256": "9d293bb4991ddf05470792f3987a99511e919557951ae6337faecb4cde1aa624"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/wide_1m-parse-r26.sampler.stderr",
+      "destination": "diagnostic-qualified-r39-profiles/archive/wide_1m-parse-r26.sampler.stderr",
+      "sha256": "e111b80dac8d2c96e73353c4577090aa99f0e84c7dfc985d7c773a17b8809d0f"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/wide_1m-parse-r26.sampler.stdout",
+      "destination": "diagnostic-qualified-r39-profiles/archive/wide_1m-parse-r26.sampler.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/wide_1m-parse-r26.stderr",
+      "destination": "diagnostic-qualified-r39-profiles/archive/wide_1m-parse-r26.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/wide_1m-parse-r26.stdout",
+      "destination": "diagnostic-qualified-r39-profiles/archive/wide_1m-parse-r26.stdout",
+      "sha256": "67889d943c6508e20f1b9fb70a3fbd13bc48a6373c9e00f2bf83f65eb7d6676d"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/wide_1m-parse-r39.sample.txt",
+      "destination": "diagnostic-qualified-r39-profiles/archive/wide_1m-parse-r39.sample.txt",
+      "sha256": "4da0c61f134c04171e0a3a04da549c322a0948e93b2665b0e2697744e7306264"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/wide_1m-parse-r39.sampler.stderr",
+      "destination": "diagnostic-qualified-r39-profiles/archive/wide_1m-parse-r39.sampler.stderr",
+      "sha256": "10469f9df3aa7c7196bf6715eed405f940b4fdf5ba79d836ef9003b33f8b42eb"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/wide_1m-parse-r39.sampler.stdout",
+      "destination": "diagnostic-qualified-r39-profiles/archive/wide_1m-parse-r39.sampler.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/wide_1m-parse-r39.stderr",
+      "destination": "diagnostic-qualified-r39-profiles/archive/wide_1m-parse-r39.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/wide_1m-parse-r39.stdout",
+      "destination": "diagnostic-qualified-r39-profiles/archive/wide_1m-parse-r39.stdout",
+      "sha256": "0b7ca41fca8e1d16a0b8a8102e369adcb75d1f7d4ab6118d2b6ec8ab91bbf9b7"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/wide_1m-stringify-r26.node-oracle.stderr",
+      "destination": "diagnostic-qualified-r39-profiles/archive/wide_1m-stringify-r26.node-oracle.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/wide_1m-stringify-r26.node-oracle.stdout",
+      "destination": "diagnostic-qualified-r39-profiles/archive/wide_1m-stringify-r26.node-oracle.stdout",
+      "sha256": "9845971e00af00e9d5cbb409f3714377a7a2a00737e50aad18aca63bde4e006d"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/wide_1m-stringify-r26.sample.txt",
+      "destination": "diagnostic-qualified-r39-profiles/archive/wide_1m-stringify-r26.sample.txt",
+      "sha256": "8b62c3c45365c82b34ca7e96232b76026c63608b946b46b85951b725d8208484"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/wide_1m-stringify-r26.sampler.stderr",
+      "destination": "diagnostic-qualified-r39-profiles/archive/wide_1m-stringify-r26.sampler.stderr",
+      "sha256": "25d2d5ca9b81c857365ab1c2b4fed5e45340e585e21a40e74d5a8c63598e1f4d"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/wide_1m-stringify-r26.sampler.stdout",
+      "destination": "diagnostic-qualified-r39-profiles/archive/wide_1m-stringify-r26.sampler.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/wide_1m-stringify-r26.stderr",
+      "destination": "diagnostic-qualified-r39-profiles/archive/wide_1m-stringify-r26.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/wide_1m-stringify-r26.stdout",
+      "destination": "diagnostic-qualified-r39-profiles/archive/wide_1m-stringify-r26.stdout",
+      "sha256": "2394fcde800d69e0ae88a373ce211b4cce813ba1516932aa7a2014047fe6ca42"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/wide_1m-stringify-r39.node-oracle.stderr",
+      "destination": "diagnostic-qualified-r39-profiles/archive/wide_1m-stringify-r39.node-oracle.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/wide_1m-stringify-r39.node-oracle.stdout",
+      "destination": "diagnostic-qualified-r39-profiles/archive/wide_1m-stringify-r39.node-oracle.stdout",
+      "sha256": "fb15f4f03a66a771e6c6a8951da351acc00244cf3cfecadd5739e5ece4a5cdb7"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/wide_1m-stringify-r39.sample.txt",
+      "destination": "diagnostic-qualified-r39-profiles/archive/wide_1m-stringify-r39.sample.txt",
+      "sha256": "7c5d2660c9ea8e5867f3965eb6665374ea574b895e338796ae3541164dfe327a"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/wide_1m-stringify-r39.sampler.stderr",
+      "destination": "diagnostic-qualified-r39-profiles/archive/wide_1m-stringify-r39.sampler.stderr",
+      "sha256": "aa20f58c5b9125baa239f3386db536184be36b6cb0e33376cbfd3d52f7406f6b"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/wide_1m-stringify-r39.sampler.stdout",
+      "destination": "diagnostic-qualified-r39-profiles/archive/wide_1m-stringify-r39.sampler.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/wide_1m-stringify-r39.stderr",
+      "destination": "diagnostic-qualified-r39-profiles/archive/wide_1m-stringify-r39.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/wide_1m-stringify-r39.stdout",
+      "destination": "diagnostic-qualified-r39-profiles/archive/wide_1m-stringify-r39.stdout",
+      "sha256": "d8cd8765bf8dfc0c77dc830c81a97adbdfdccf667b757f302465c595979f3bef"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/window.json",
+      "destination": "diagnostic-qualified-r39-profiles/archive/window.json",
+      "sha256": "43b56aa59c5253318f39f5e6d097a150a4a874f9099fb350a1c4c35985771089"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/with_lock.py",
+      "destination": "diagnostic-qualified-r39-profiles/archive/with_lock.py",
+      "sha256": "443df89997be22f22f16b475d76c45ea2b560ab9550e4e6c028777e1e3b74b49"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/worker.js",
+      "destination": "diagnostic-qualified-r39-profiles/archive/worker.js",
+      "sha256": "55c11d12296f896212d6abd76bcf8d551d0590b0ad24b262018b7a707369a2f4"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/worker.ts",
+      "destination": "diagnostic-qualified-r39-profiles/archive/worker.ts",
+      "sha256": "f3c42ec9f04fdb9ba84dc3cf50dc59f18685540033807f3db3a7f75c08a85d39"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/archive/workers-provenance.json",
+      "destination": "diagnostic-qualified-r39-profiles/archive/workers-provenance.json",
+      "sha256": "ec4fb153cc4355c2eea55ffa14fa34647e923d0e44dd352f17c0c046fe7a9824"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/build-provenance.json",
+      "destination": "diagnostic-qualified-r39-profiles/build-provenance.json",
+      "sha256": "17a02f4c41707a5d66ac826a42e0b259cffb2d53aae721cac136db4b4937b7eb"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-path-reuse-refusal/build-provenance.json",
+      "destination": "diagnostic-qualified-r39-profiles/initial-path-reuse-refusal/build-provenance.json",
+      "sha256": "17a02f4c41707a5d66ac826a42e0b259cffb2d53aae721cac136db4b4937b7eb"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-path-reuse-refusal/controller-exit.json",
+      "destination": "diagnostic-qualified-r39-profiles/initial-path-reuse-refusal/controller-exit.json",
+      "sha256": "56296949d3a02e635b050fd6b4762f0f0b52c23d05b925203095f7daf8e19027"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-path-reuse-refusal/controller.log",
+      "destination": "diagnostic-qualified-r39-profiles/initial-path-reuse-refusal/controller.log",
+      "sha256": "19307c765f19709145b318b568ddc6031f62048708a2f2038591f06427729784"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-path-reuse-refusal/main-build-provenance.json",
+      "destination": "diagnostic-qualified-r39-profiles/initial-path-reuse-refusal/main-build-provenance.json",
+      "sha256": "c7cdea74ece097733885a1fb12d7be44caf00ae9ab96359d225764322eb609db"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-path-reuse-refusal/main-workers-provenance.json",
+      "destination": "diagnostic-qualified-r39-profiles/initial-path-reuse-refusal/main-workers-provenance.json",
+      "sha256": "b3dccb4d52c9d2f365bfa9a215a98106e73c6fc76331d6542a45b3eb9ec08633"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-path-reuse-refusal/measure.py",
+      "destination": "diagnostic-qualified-r39-profiles/initial-path-reuse-refusal/measure.py",
+      "sha256": "e16191dc9467e392e3d3f953d73b0c56d8c61afa88937069c9134403f1433772"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-path-reuse-refusal/processes-after.txt",
+      "destination": "diagnostic-qualified-r39-profiles/initial-path-reuse-refusal/processes-after.txt",
+      "sha256": "a2d48cdfd7fb35324c27899366bca8ddc85b5b58426d1bc8aa79927dfc07d1be"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-path-reuse-refusal/processes-before.txt",
+      "destination": "diagnostic-qualified-r39-profiles/initial-path-reuse-refusal/processes-before.txt",
+      "sha256": "a4c2efeb4a0b1fb4ac6b93b692141c21ac832c270a44dcc14e2cdeb00a284d87"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-path-reuse-refusal/profile-cases.json",
+      "destination": "diagnostic-qualified-r39-profiles/initial-path-reuse-refusal/profile-cases.json",
+      "sha256": "7c517af4ec10644e6e4e6d9176bdbe1ac30a84a9c4f8aab1761f4049df314a39"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-path-reuse-refusal/profiles.json",
+      "destination": "diagnostic-qualified-r39-profiles/initial-path-reuse-refusal/profiles.json",
+      "sha256": "e66b06d6d273cdcb4628c75760c586756ed328d35a937ea837922723277ce95c"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-path-reuse-refusal/remote-command.json",
+      "destination": "diagnostic-qualified-r39-profiles/initial-path-reuse-refusal/remote-command.json",
+      "sha256": "ec83282cc949f66c1855aa8de020dacde345d11c233043f453618017c142f5b0"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-path-reuse-refusal/remote.log",
+      "destination": "diagnostic-qualified-r39-profiles/initial-path-reuse-refusal/remote.log",
+      "sha256": "316424c50f70f9416758930b03abed4115fe7aad1957cbdefab1d9902694d081"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-path-reuse-refusal/run-parse-regression-profile.py",
+      "destination": "diagnostic-qualified-r39-profiles/initial-path-reuse-refusal/run-parse-regression-profile.py",
+      "sha256": "e7785f81076a6c25c97593454c58b479c8e573d8363a3f46a8b0ee3167733a83"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-path-reuse-refusal/run_dispatch_focus.py",
+      "destination": "diagnostic-qualified-r39-profiles/initial-path-reuse-refusal/run_dispatch_focus.py",
+      "sha256": "100ba3e1bd5c0cd451d1a3528f95b5f4b8d0ff2f4771796ab8598b36a46fbcc4"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-path-reuse-refusal/source.patch.gz",
+      "destination": "diagnostic-qualified-r39-profiles/initial-path-reuse-refusal/source.patch.gz",
+      "sha256": "111c6aedb1db19c75e2eae53402e62aff9c4e9b16231c03fb2470ff05cf6cc97"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-path-reuse-refusal/source.patch.json",
+      "destination": "diagnostic-qualified-r39-profiles/initial-path-reuse-refusal/source.patch.json",
+      "sha256": "1246e2223da4d3db9e1b90f6ccc3d3ff21af16f4669850686278bff719ecbff6"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-path-reuse-refusal/stage-hashes.json",
+      "destination": "diagnostic-qualified-r39-profiles/initial-path-reuse-refusal/stage-hashes.json",
+      "sha256": "b56fe834801f956712c4abaeebb3455620981f44ffe2c96eae5012a2a7ee9d67"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-path-reuse-refusal/wide_1m-parse-r26.sample.txt",
+      "destination": "diagnostic-qualified-r39-profiles/initial-path-reuse-refusal/wide_1m-parse-r26.sample.txt",
+      "sha256": "d6c6f252e6af105cbe5f67ce7ba60ce644b90a0d8eb5417d9909bae8bffa8a49"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-path-reuse-refusal/wide_1m-parse-r26.sampler.stderr",
+      "destination": "diagnostic-qualified-r39-profiles/initial-path-reuse-refusal/wide_1m-parse-r26.sampler.stderr",
+      "sha256": "836b57fafe090dfc4c356270991803bfa401f014032342a6549f592ccfa2a121"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-path-reuse-refusal/wide_1m-parse-r26.sampler.stdout",
+      "destination": "diagnostic-qualified-r39-profiles/initial-path-reuse-refusal/wide_1m-parse-r26.sampler.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-path-reuse-refusal/wide_1m-parse-r26.stderr",
+      "destination": "diagnostic-qualified-r39-profiles/initial-path-reuse-refusal/wide_1m-parse-r26.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-path-reuse-refusal/wide_1m-parse-r26.stdout",
+      "destination": "diagnostic-qualified-r39-profiles/initial-path-reuse-refusal/wide_1m-parse-r26.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-path-reuse-refusal/window.json",
+      "destination": "diagnostic-qualified-r39-profiles/initial-path-reuse-refusal/window.json",
+      "sha256": "2405d94600ad9bd148462a342cd82ca8eeb8a6b8f61dbcd03aad4f81f2d2a8b3"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-path-reuse-refusal/with_lock.py",
+      "destination": "diagnostic-qualified-r39-profiles/initial-path-reuse-refusal/with_lock.py",
+      "sha256": "443df89997be22f22f16b475d76c45ea2b560ab9550e4e6c028777e1e3b74b49"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-path-reuse-refusal/worker.js",
+      "destination": "diagnostic-qualified-r39-profiles/initial-path-reuse-refusal/worker.js",
+      "sha256": "55c11d12296f896212d6abd76bcf8d551d0590b0ad24b262018b7a707369a2f4"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-path-reuse-refusal/worker.ts",
+      "destination": "diagnostic-qualified-r39-profiles/initial-path-reuse-refusal/worker.ts",
+      "sha256": "f3c42ec9f04fdb9ba84dc3cf50dc59f18685540033807f3db3a7f75c08a85d39"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-path-reuse-refusal/workers-provenance.json",
+      "destination": "diagnostic-qualified-r39-profiles/initial-path-reuse-refusal/workers-provenance.json",
+      "sha256": "ec4fb153cc4355c2eea55ffa14fa34647e923d0e44dd352f17c0c046fe7a9824"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-rss-stop/build-provenance.json",
+      "destination": "diagnostic-qualified-r39-profiles/initial-rss-stop/build-provenance.json",
+      "sha256": "17a02f4c41707a5d66ac826a42e0b259cffb2d53aae721cac136db4b4937b7eb"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-rss-stop/main-build-provenance.json",
+      "destination": "diagnostic-qualified-r39-profiles/initial-rss-stop/main-build-provenance.json",
+      "sha256": "c7cdea74ece097733885a1fb12d7be44caf00ae9ab96359d225764322eb609db"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-rss-stop/main-workers-provenance.json",
+      "destination": "diagnostic-qualified-r39-profiles/initial-rss-stop/main-workers-provenance.json",
+      "sha256": "b3dccb4d52c9d2f365bfa9a215a98106e73c6fc76331d6542a45b3eb9ec08633"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-rss-stop/measure.py",
+      "destination": "diagnostic-qualified-r39-profiles/initial-rss-stop/measure.py",
+      "sha256": "e16191dc9467e392e3d3f953d73b0c56d8c61afa88937069c9134403f1433772"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-rss-stop/preserved-payload-hashes.json",
+      "destination": "diagnostic-qualified-r39-profiles/initial-rss-stop/preserved-payload-hashes.json",
+      "sha256": "865be12e86a041d25752ebbf8d17f39fc3bd623fdafea1295cc00e5ba131140f"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-rss-stop/processes-after.txt",
+      "destination": "diagnostic-qualified-r39-profiles/initial-rss-stop/processes-after.txt",
+      "sha256": "a2d48cdfd7fb35324c27899366bca8ddc85b5b58426d1bc8aa79927dfc07d1be"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-rss-stop/processes-before.txt",
+      "destination": "diagnostic-qualified-r39-profiles/initial-rss-stop/processes-before.txt",
+      "sha256": "a4c2efeb4a0b1fb4ac6b93b692141c21ac832c270a44dcc14e2cdeb00a284d87"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-rss-stop/profile-cases.json",
+      "destination": "diagnostic-qualified-r39-profiles/initial-rss-stop/profile-cases.json",
+      "sha256": "7c517af4ec10644e6e4e6d9176bdbe1ac30a84a9c4f8aab1761f4049df314a39"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-rss-stop/profiles.json",
+      "destination": "diagnostic-qualified-r39-profiles/initial-rss-stop/profiles.json",
+      "sha256": "e66b06d6d273cdcb4628c75760c586756ed328d35a937ea837922723277ce95c"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-rss-stop/recovered-window-observation.json",
+      "destination": "diagnostic-qualified-r39-profiles/initial-rss-stop/recovered-window-observation.json",
+      "sha256": "e9876e59fd9762551ad05377c0c8939058c71bc99cf0f822f24e7b1cacd67b32"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-rss-stop/remote-command.json",
+      "destination": "diagnostic-qualified-r39-profiles/initial-rss-stop/remote-command.json",
+      "sha256": "ec83282cc949f66c1855aa8de020dacde345d11c233043f453618017c142f5b0"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-rss-stop/run-parse-regression-profile.py",
+      "destination": "diagnostic-qualified-r39-profiles/initial-rss-stop/run-parse-regression-profile.py",
+      "sha256": "e7785f81076a6c25c97593454c58b479c8e573d8363a3f46a8b0ee3167733a83"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-rss-stop/run_dispatch_focus.py",
+      "destination": "diagnostic-qualified-r39-profiles/initial-rss-stop/run_dispatch_focus.py",
+      "sha256": "100ba3e1bd5c0cd451d1a3528f95b5f4b8d0ff2f4771796ab8598b36a46fbcc4"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-rss-stop/source.patch.gz",
+      "destination": "diagnostic-qualified-r39-profiles/initial-rss-stop/source.patch.gz",
+      "sha256": "111c6aedb1db19c75e2eae53402e62aff9c4e9b16231c03fb2470ff05cf6cc97"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-rss-stop/source.patch.json",
+      "destination": "diagnostic-qualified-r39-profiles/initial-rss-stop/source.patch.json",
+      "sha256": "1246e2223da4d3db9e1b90f6ccc3d3ff21af16f4669850686278bff719ecbff6"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-rss-stop/stage-hashes.json",
+      "destination": "diagnostic-qualified-r39-profiles/initial-rss-stop/stage-hashes.json",
+      "sha256": "b56fe834801f956712c4abaeebb3455620981f44ffe2c96eae5012a2a7ee9d67"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-rss-stop/wide_1m-parse-r26.sample.txt",
+      "destination": "diagnostic-qualified-r39-profiles/initial-rss-stop/wide_1m-parse-r26.sample.txt",
+      "sha256": "d6c6f252e6af105cbe5f67ce7ba60ce644b90a0d8eb5417d9909bae8bffa8a49"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-rss-stop/wide_1m-parse-r26.sampler.stderr",
+      "destination": "diagnostic-qualified-r39-profiles/initial-rss-stop/wide_1m-parse-r26.sampler.stderr",
+      "sha256": "836b57fafe090dfc4c356270991803bfa401f014032342a6549f592ccfa2a121"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-rss-stop/wide_1m-parse-r26.sampler.stdout",
+      "destination": "diagnostic-qualified-r39-profiles/initial-rss-stop/wide_1m-parse-r26.sampler.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-rss-stop/wide_1m-parse-r26.stderr",
+      "destination": "diagnostic-qualified-r39-profiles/initial-rss-stop/wide_1m-parse-r26.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-rss-stop/wide_1m-parse-r26.stdout",
+      "destination": "diagnostic-qualified-r39-profiles/initial-rss-stop/wide_1m-parse-r26.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-rss-stop/with_lock.py",
+      "destination": "diagnostic-qualified-r39-profiles/initial-rss-stop/with_lock.py",
+      "sha256": "443df89997be22f22f16b475d76c45ea2b560ab9550e4e6c028777e1e3b74b49"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-rss-stop/worker.js",
+      "destination": "diagnostic-qualified-r39-profiles/initial-rss-stop/worker.js",
+      "sha256": "55c11d12296f896212d6abd76bcf8d551d0590b0ad24b262018b7a707369a2f4"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-rss-stop/worker.ts",
+      "destination": "diagnostic-qualified-r39-profiles/initial-rss-stop/worker.ts",
+      "sha256": "f3c42ec9f04fdb9ba84dc3cf50dc59f18685540033807f3db3a7f75c08a85d39"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/initial-rss-stop/workers-provenance.json",
+      "destination": "diagnostic-qualified-r39-profiles/initial-rss-stop/workers-provenance.json",
+      "sha256": "ec4fb153cc4355c2eea55ffa14fa34647e923d0e44dd352f17c0c046fe7a9824"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/main-build-provenance.json",
+      "destination": "diagnostic-qualified-r39-profiles/main-build-provenance.json",
+      "sha256": "c7cdea74ece097733885a1fb12d7be44caf00ae9ab96359d225764322eb609db"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/main-workers-provenance.json",
+      "destination": "diagnostic-qualified-r39-profiles/main-workers-provenance.json",
+      "sha256": "b3dccb4d52c9d2f365bfa9a215a98106e73c6fc76331d6542a45b3eb9ec08633"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/measure.py",
+      "destination": "diagnostic-qualified-r39-profiles/measure.py",
+      "sha256": "a5b58cd7c9b3e134c24eab35d53b0fc8a804403ddb8a60579f71f4a10561a091"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/plan.md",
+      "destination": "diagnostic-qualified-r39-profiles/plan.md",
+      "sha256": "d15dab256393205be830f04ce4987f704d0b46aafa758b2462d6f60b3d2ac448"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/profile-cases.json",
+      "destination": "diagnostic-qualified-r39-profiles/profile-cases.json",
+      "sha256": "0b0eef958465462ccafdd854712e3baa46d1fb53fb259ad1c9a2ae7955d567e8"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/qualified-subset-analysis.json",
+      "destination": "diagnostic-qualified-r39-profiles/qualified-subset-analysis.json",
+      "sha256": "f8104b801a0d27f782c65e04efaf22d1ed17b3c187f2b095e03f4a3c62f29039"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/qualified-subset-controller-result.json",
+      "destination": "diagnostic-qualified-r39-profiles/qualified-subset-controller-result.json",
+      "sha256": "81868a6e94ffc0178bf833deb1c9013d9fab4ee95ddb876a5e8ec4f1d26376d2"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/qualified-subset-controller.log",
+      "destination": "diagnostic-qualified-r39-profiles/qualified-subset-controller.log",
+      "sha256": "f7bcfeab297e01dbe63e921259f2e06a7df20403a41e56af357e3d3da5bfc5a2"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/qualified-subset-plan.json",
+      "destination": "diagnostic-qualified-r39-profiles/qualified-subset-plan.json",
+      "sha256": "35eec53f15eee6d6efba5250b32663a6161c3806c31271fd0ac759f7b53c29e1"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/remote-command.json",
+      "destination": "diagnostic-qualified-r39-profiles/remote-command.json",
+      "sha256": "dbd45480cd883568c67ac5a8994df03a9d0e450d37154b0ba5ff04b59d322b75"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/remote.log",
+      "destination": "diagnostic-qualified-r39-profiles/remote.log",
+      "sha256": "9e3561f5e0d6290d4252a6afa0cc7c265ae7195ebc342e6f67e69610c6724e9e"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/run-parse-regression-profile.py",
+      "destination": "diagnostic-qualified-r39-profiles/run-parse-regression-profile.py",
+      "sha256": "1935ca632a6de43f75d503064e6ae0371822290abcd4c8691cdcae21c9ec7839"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/analyze.py",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/analyze.py",
+      "sha256": "f184480492937fdb91b9c9836c768f548a62f627e5f14e44a063cc62bdb7eb21"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/archive/build-provenance.json",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/archive/build-provenance.json",
+      "sha256": "17a02f4c41707a5d66ac826a42e0b259cffb2d53aae721cac136db4b4937b7eb"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/archive/controller-exit.json",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/archive/controller-exit.json",
+      "sha256": "56296949d3a02e635b050fd6b4762f0f0b52c23d05b925203095f7daf8e19027"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/archive/controller.log",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/archive/controller.log",
+      "sha256": "19307c765f19709145b318b568ddc6031f62048708a2f2038591f06427729784"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/archive/main-build-provenance.json",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/archive/main-build-provenance.json",
+      "sha256": "c7cdea74ece097733885a1fb12d7be44caf00ae9ab96359d225764322eb609db"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/archive/main-workers-provenance.json",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/archive/main-workers-provenance.json",
+      "sha256": "b3dccb4d52c9d2f365bfa9a215a98106e73c6fc76331d6542a45b3eb9ec08633"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/archive/measure.py",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/archive/measure.py",
+      "sha256": "e16191dc9467e392e3d3f953d73b0c56d8c61afa88937069c9134403f1433772"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/archive/processes-after.txt",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/archive/processes-after.txt",
+      "sha256": "a2d48cdfd7fb35324c27899366bca8ddc85b5b58426d1bc8aa79927dfc07d1be"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/archive/processes-before.txt",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/archive/processes-before.txt",
+      "sha256": "a4c2efeb4a0b1fb4ac6b93b692141c21ac832c270a44dcc14e2cdeb00a284d87"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/archive/profile-cases.json",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/archive/profile-cases.json",
+      "sha256": "7c517af4ec10644e6e4e6d9176bdbe1ac30a84a9c4f8aab1761f4049df314a39"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/archive/profiles.json",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/archive/profiles.json",
+      "sha256": "e66b06d6d273cdcb4628c75760c586756ed328d35a937ea837922723277ce95c"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/archive/remote-command.json",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/archive/remote-command.json",
+      "sha256": "ec83282cc949f66c1855aa8de020dacde345d11c233043f453618017c142f5b0"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/archive/remote.log",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/archive/remote.log",
+      "sha256": "316424c50f70f9416758930b03abed4115fe7aad1957cbdefab1d9902694d081"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/archive/run-parse-regression-profile.py",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/archive/run-parse-regression-profile.py",
+      "sha256": "e7785f81076a6c25c97593454c58b479c8e573d8363a3f46a8b0ee3167733a83"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/archive/run_dispatch_focus.py",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/archive/run_dispatch_focus.py",
+      "sha256": "100ba3e1bd5c0cd451d1a3528f95b5f4b8d0ff2f4771796ab8598b36a46fbcc4"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/archive/source.patch.gz",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/archive/source.patch.gz",
+      "sha256": "111c6aedb1db19c75e2eae53402e62aff9c4e9b16231c03fb2470ff05cf6cc97"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/archive/source.patch.json",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/archive/source.patch.json",
+      "sha256": "1246e2223da4d3db9e1b90f6ccc3d3ff21af16f4669850686278bff719ecbff6"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/archive/stage-hashes.json",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/archive/stage-hashes.json",
+      "sha256": "b56fe834801f956712c4abaeebb3455620981f44ffe2c96eae5012a2a7ee9d67"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/archive/wide_1m-parse-r26.sample.txt",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/archive/wide_1m-parse-r26.sample.txt",
+      "sha256": "d6c6f252e6af105cbe5f67ce7ba60ce644b90a0d8eb5417d9909bae8bffa8a49"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/archive/wide_1m-parse-r26.sampler.stderr",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/archive/wide_1m-parse-r26.sampler.stderr",
+      "sha256": "836b57fafe090dfc4c356270991803bfa401f014032342a6549f592ccfa2a121"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/archive/wide_1m-parse-r26.sampler.stdout",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/archive/wide_1m-parse-r26.sampler.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/archive/wide_1m-parse-r26.stderr",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/archive/wide_1m-parse-r26.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/archive/wide_1m-parse-r26.stdout",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/archive/wide_1m-parse-r26.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/archive/window.json",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/archive/window.json",
+      "sha256": "2405d94600ad9bd148462a342cd82ca8eeb8a6b8f61dbcd03aad4f81f2d2a8b3"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/archive/with_lock.py",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/archive/with_lock.py",
+      "sha256": "443df89997be22f22f16b475d76c45ea2b560ab9550e4e6c028777e1e3b74b49"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/archive/worker.js",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/archive/worker.js",
+      "sha256": "55c11d12296f896212d6abd76bcf8d551d0590b0ad24b262018b7a707369a2f4"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/archive/worker.ts",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/archive/worker.ts",
+      "sha256": "f3c42ec9f04fdb9ba84dc3cf50dc59f18685540033807f3db3a7f75c08a85d39"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/archive/workers-provenance.json",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/archive/workers-provenance.json",
+      "sha256": "ec4fb153cc4355c2eea55ffa14fa34647e923d0e44dd352f17c0c046fe7a9824"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/measure.py",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/measure.py",
+      "sha256": "e16191dc9467e392e3d3f953d73b0c56d8c61afa88937069c9134403f1433772"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/plan.md",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/plan.md",
+      "sha256": "0e9cb63da52425b59eb02c27069fb17cba7c9f0c97beffc77332345288f2e749"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/profile-cases.json",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/profile-cases.json",
+      "sha256": "7c517af4ec10644e6e4e6d9176bdbe1ac30a84a9c4f8aab1761f4049df314a39"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/reason.json",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/reason.json",
+      "sha256": "954407364107065bce059634bcdef88ac25b428aadf4fe63133b00b7a2e201e8"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/remote-command.json",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/remote-command.json",
+      "sha256": "ec83282cc949f66c1855aa8de020dacde345d11c233043f453618017c142f5b0"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/remote.log",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/remote.log",
+      "sha256": "316424c50f70f9416758930b03abed4115fe7aad1957cbdefab1d9902694d081"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/run-parse-regression-profile.py",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/run-parse-regression-profile.py",
+      "sha256": "e7785f81076a6c25c97593454c58b479c8e573d8363a3f46a8b0ee3167733a83"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/setup-syntax-refusal/stage-hashes.json",
+      "destination": "diagnostic-qualified-r39-profiles/setup-syntax-refusal/stage-hashes.json",
+      "sha256": "b56fe834801f956712c4abaeebb3455620981f44ffe2c96eae5012a2a7ee9d67"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/stage-hashes.json",
+      "destination": "diagnostic-qualified-r39-profiles/stage-hashes.json",
+      "sha256": "be4169652b26cf978d26c6ed08121435dc7e0471f5beb5ed44766fa7a1830b2d"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/worker.js",
+      "destination": "diagnostic-qualified-r39-profiles/worker.js",
+      "sha256": "55c11d12296f896212d6abd76bcf8d551d0590b0ad24b262018b7a707369a2f4"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/worker.ts",
+      "destination": "diagnostic-qualified-r39-profiles/worker.ts",
+      "sha256": "f3c42ec9f04fdb9ba84dc3cf50dc59f18685540033807f3db3a7f75c08a85d39"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/wide-regression-r39-profiles/workers-provenance.json",
+      "destination": "diagnostic-qualified-r39-profiles/workers-provenance.json",
+      "sha256": "ec4fb153cc4355c2eea55ffa14fa34647e923d0e44dd352f17c0c046fe7a9824"
+    }
+  ]
+}

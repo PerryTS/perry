@@ -1,0 +1,11 @@
+{
+  "exit_code": 0,
+  "controller": "final local archive verification",
+  "initial_local_controller_exit_code": 1,
+  "archive_transfer_exit_code": 0,
+  "first_recovery_wrapper_exit_code": 1,
+  "final_local_verification_exit_code": 0,
+  "with_lock_sha256": "443df89997be22f22f16b475d76c45ea2b560ab9550e4e6c028777e1e3b74b49",
+  "remote_completion_evidence": "The hash-matched with_lock.py prints FINISHED only after subprocess.run(check=True) completes. Its exact declared command, completed quiet window and original FINISHED/QUIET_GATE True/RELEASED log are preserved.",
+  "note": "Initial controller failed a local retry-suffix assertion before remote archival. The first subsequent remote operation successfully archived this window. A subsequent local verification used the wrong wrapper argument offset and refused before writing its receipt; the exact command is now matched after the -- separator. No benchmark was rerun and no raw evidence was overwritten. Quietness, source, output and sample gates remain unchanged. Earlier controllers and failed local analyzer observations are recorded under initial-full-retry-archive-refusal."
+}

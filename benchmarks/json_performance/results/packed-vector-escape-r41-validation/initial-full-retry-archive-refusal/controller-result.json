@@ -1,0 +1,4 @@
+{
+  "exit_code": 1,
+  "reason": "Local archive-results.py line 4 rejected the distinct full-retry1 suffix before its first SSH operation. Original remote log already records FINISHED, QUIET_GATE True and RELEASED. A local analyzer attempt then refused the missing archive. No subsequent remote operation has occurred."
+}

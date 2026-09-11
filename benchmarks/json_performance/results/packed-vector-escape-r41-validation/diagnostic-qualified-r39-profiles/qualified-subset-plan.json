@@ -1,0 +1,14 @@
+{
+  "selected_cases": [
+    "wide_1m/stringify/r26",
+    "wide_1m/stringify/r39",
+    "records_object_8m/parse/r26",
+    "records_object_8m/parse/r39"
+  ],
+  "excluded_cases": {
+    "wide_1m/parse/r26": 293,
+    "wide_1m/parse/r39": 448
+  },
+  "minimum_workload_samples": 500,
+  "note": "A new analysis of the four independently qualifying recorded profiles. Original full-batch refusal remains; sample floor is not lowered, and both excluded parse profiles remain excluded. Four complete pinned-Node oracles are required before accepting this subset. No new remote sampling."
+}

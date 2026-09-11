@@ -1,0 +1,23 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/packed-vector-escape-r41/run-rotating.py",
+  "--worker",
+  ".work/packed-vector-escape-r41/candidate-rotating-worker",
+  "--baseline-worker",
+  ".work/packed-vector-escape-r41/main-rotating-worker",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--filter",
+  "unicode_1m,long_string_1m,escaped_1m,small_record,records_array_1m",
+  "--repeat",
+  "7",
+  "--source-commit",
+  "3952e832058a5e1efcd4cdf9cf28f26e31d60ea3",
+  "--results-dir",
+  "results/quiet-packed-vector-escape-r41-rotating"
+]
