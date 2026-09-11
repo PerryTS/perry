@@ -1,0 +1,23 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/trusted-materialized-read-r26/run-rotating.py",
+  "--worker",
+  ".work/trusted-materialized-read-r26/candidate-rotating-worker",
+  "--baseline-worker",
+  ".work/trusted-materialized-read-r26/main-rotating-worker",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--filter",
+  "unicode_1m,long_string_1m,escaped_1m,small_record,records_array_1m",
+  "--repeat",
+  "7",
+  "--source-commit",
+  "3aac4d6335da54abeeed73df842decbbe6dd5d71",
+  "--results-dir",
+  "results/quiet-trusted-materialized-read-r26-rotating"
+]

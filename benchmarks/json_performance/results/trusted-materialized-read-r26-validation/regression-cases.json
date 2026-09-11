@@ -1,0 +1,40 @@
+{
+  "purpose": "Historical R22/R23 regression screen, reused from R24 with unchanged iterations/warmups and 11 repetitions; not a claim that R26 has already regressed.",
+  "cases": [
+    {
+      "fixture": "tiny_object",
+      "operation": "parse",
+      "iterations": 2000000,
+      "warmup": 5000,
+      "repetitions": 11
+    },
+    {
+      "fixture": "records_array_16k",
+      "operation": "roundtrip",
+      "iterations": 7659,
+      "warmup": 2,
+      "repetitions": 11
+    },
+    {
+      "fixture": "records_array_1m",
+      "operation": "roundtrip",
+      "iterations": 115,
+      "warmup": 2,
+      "repetitions": 11
+    },
+    {
+      "fixture": "records_object_1m",
+      "operation": "parse",
+      "iterations": 81,
+      "warmup": 2,
+      "repetitions": 11
+    },
+    {
+      "fixture": "heterogeneous_1m",
+      "operation": "stringify",
+      "iterations": 218,
+      "warmup": 2,
+      "repetitions": 11
+    }
+  ]
+}

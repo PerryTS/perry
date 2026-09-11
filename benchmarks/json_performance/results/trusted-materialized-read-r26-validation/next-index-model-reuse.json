@@ -1,0 +1,7 @@
+{
+  "source_commit": "3aac4d6335da54abeeed73df842decbbe6dd5d71",
+  "original_provenance": "benchmarks/json_performance/.work/materialized-read-r23/index-roundtrip-provenance.json",
+  "original_provenance_sha256": "4adfceab491110138191b2e67b3899908358d5c6045dbc7a2dafb105f354671f",
+  "all_source_and_artifact_hashes_match": true,
+  "note": "Original standalone R23 model only; not integrated code, new execution or a measured gain."
+}

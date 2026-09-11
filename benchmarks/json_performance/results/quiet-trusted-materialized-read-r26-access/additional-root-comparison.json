@@ -1,0 +1,34 @@
+{
+  "matches": true,
+  "files": [
+    {
+      "subject": "changing",
+      "mode": "native",
+      "main_sha256": "ffc81e84d13930748c455b0b2c005008e02d016ce086f175e7b402535f126e79",
+      "candidate_sha256": "7c090abe68ecbbc965229ca8bea09285345a9103b709d12ef2628c028decd78a",
+      "normalized_sha256": "630457db94e5b10ad30e7df0933b1545be2d702de1342e6d08afa4e04a7a831e"
+    },
+    {
+      "subject": "changing",
+      "mode": "shadow",
+      "main_sha256": "41c94f2eb4ebd9afd04754abdab3850611627688519a25d8768068737f6928ad",
+      "candidate_sha256": "41c94f2eb4ebd9afd04754abdab3850611627688519a25d8768068737f6928ad",
+      "normalized_sha256": "41c94f2eb4ebd9afd04754abdab3850611627688519a25d8768068737f6928ad"
+    },
+    {
+      "subject": "retained",
+      "mode": "native",
+      "main_sha256": "b595f4e234a79727693e83a1309bc794585231a7ec309d69d85fff7a0bb188df",
+      "candidate_sha256": "c25fb3c51c9d05646ecdcafa9acff97801d50d10d823e5451b66d45777dc936b",
+      "normalized_sha256": "e2413fabf0d549ac10598e9bfd5fb8cb869a23110e6e4305166ede1a741365dd"
+    },
+    {
+      "subject": "retained",
+      "mode": "shadow",
+      "main_sha256": "e004e8e3303d69850a581ef26185a89115d73b3e1926b7f9836562cdb29967ec",
+      "candidate_sha256": "e004e8e3303d69850a581ef26185a89115d73b3e1926b7f9836562cdb29967ec",
+      "normalized_sha256": "e004e8e3303d69850a581ef26185a89115d73b3e1926b7f9836562cdb29967ec"
+    }
+  ],
+  "note": "Retained-zero native/shadow checks pass. Changing-record shadow checks pass; native retains four unsuppressed R25 unrooted/global property-write findings, with identical IR and fingerprints. Not a clean native verdict."
+}

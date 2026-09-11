@@ -1,0 +1,9 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/parse-gaps-r25-profiles/run-parse-profiles.py",
+  "--results-dir",
+  "results/quiet-parse-gaps-r25-profiles"
+]
