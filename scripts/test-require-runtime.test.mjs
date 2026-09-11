@@ -59,3 +59,56 @@ test('unwind-enabled debug profiles remain rejected', t => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /panic=abort runtime profile/);
 });
+
+// Exercise the checked-in workflow branch with Cargo stubbed: this proves the
+// setup protocol, not that a release archive was built or linked successfully.
+function ciSetup(suites, cargoExit = 0) {
+  const workflow = fs.readFileSync(path.join(root, '.github/workflows/test.yml'), 'utf8');
+  const scoped = workflow.match(/^ {6}- name: Run scoped integration suites\n[\s\S]*?^ {10}status=0$/m);
+  assert(scoped, 'scoped integration setup must be present');
+  const start = scoped[0].indexOf('          if printf');
+  assert(start >= 0, 'runtime selection must be present');
+  const setup = scoped[0].slice(start);
+  const script = `set -eu
+cargo() { printf 'cargo:%s\\n' "$*"; return ${cargoExit}; }
+${setup}
+printf 'prepared:%s\\nruntime:%s\\n' "\${PERRY_TEST_RUNTIME_PREBUILT-unset}" "\${PERRY_RUNTIME_DIR-unset}"
+`;
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('PERRY_')));
+  return spawnSync('bash', ['-c', script], { cwd: root, env: { ...env, SUITES: suites },
+    encoding: 'utf8', timeout: 10_000 });
+}
+
+test('scoped CI prepares coherent providers for each standalone native consumer', () => {
+  for (const suite of ['bun_text_modules', 'import_meta_require_value', 'minsize_inline_policy']) {
+    const result = ciSetup(`perry-codegen typed_feedback 300\nperry ${suite} 1500`);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /prepared:1\n/, suite);
+    assert(result.stdout.includes(`runtime:${root}target/release\n`), result.stdout);
+    const calls = result.stdout.split('\n').filter(line => line.startsWith('cargo:'));
+    assert.equal(calls.length, 1, suite);
+    assert.match(calls[0], /^cargo:build --release /);
+    for (const name of ['perry', 'perry-runtime', 'perry-stdlib', 'perry-runtime-static',
+      'perry-stdlib-static', 'perry-ext-events', 'perry-ext-http', 'perry-ext-net',
+      'perry-ext-typescript', 'perry-ext-ws', 'perry-ext-zlib']) {
+      assert(calls[0].includes(`-p ${name} `), name);
+    }
+    assert.match(calls[0], /--features perry-stdlib\/external-net-pump$/);
+  }
+});
+
+test('scoped CI does not mark unrelated or partial runtime setup prepared', () => {
+  for (const suites of ['', 'perry-codegen minsize_inline_policy 300',
+    'perry minsize_inline_policy_extra 1500', 'perry unrelated 1500']) {
+    const result = ciSetup(suites);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /prepared:unset\n/, suites);
+    assert.doesNotMatch(result.stdout, /-p perry-ext-/);
+  }
+});
+
+test('scoped CI propagates provider-build failure before declaring prepared', () => {
+  const result = ciSetup('perry minsize_inline_policy 1500', 73);
+  assert.equal(result.status, 73, result.stderr);
+  assert.doesNotMatch(result.stdout, /^prepared:/m);
+});
