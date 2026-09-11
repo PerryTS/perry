@@ -1,0 +1,6 @@
+{
+  "source_commit": "b9bfe3070f90f223e1d9d3526df54beb57308328",
+  "parent_source": "3952e832058a5e1efcd4cdf9cf28f26e31d60ea3",
+  "patch_sha256": "62170d2114cb1dcc0563791d194bb09549cdcd684253ba5e6fa2bd6877b027bf",
+  "note": "Only an inline(never) annotation and explanatory comment on parse_object_untyped. Source remains frozen during the normal production build. Existing semantic and GC stress checks will execute against the fresh binary; linked assembly will verify that the intended parser boundary changed."
+}

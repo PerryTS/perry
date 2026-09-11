@@ -1,0 +1,8 @@
+{
+  "source_commit": "b9bfe3070f90f223e1d9d3526df54beb57308328",
+  "command": [
+    "python3",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-object-parser-r42/complete-candidate-validation.py"
+  ],
+  "exit_code": 0
+}

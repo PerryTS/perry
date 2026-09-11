@@ -1,0 +1,5 @@
+{
+  "source_commit": "3952e832058a5e1efcd4cdf9cf28f26e31d60ea3",
+  "evidence_commit": "b5bb7ecd299e9c9513964dcc423e3c33e46fa4d4",
+  "note": "Qualified R41 full retry. Historical immediate-parent control, measured in a separate window; no interleaved R41/R42 pair or new R42 trial count."
+}

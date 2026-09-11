@@ -1,0 +1,4 @@
+{
+  "exit_code": 1,
+  "note": "All serial JSON tests passed; explicit review hold stopped entry to production build."
+}

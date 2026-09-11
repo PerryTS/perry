@@ -1,0 +1,7 @@
+{
+  "controller_exit_code": 1,
+  "reason": "Remote rsync reported No space left on device while writing the R42 main-options temporary file. This occurred before remote hash verification or any R42 benchmark execution. The owned staging lock was released by the existing finally block.",
+  "observed_free_bytes": 126849024,
+  "partial_stage": true,
+  "timing_started": false
+}

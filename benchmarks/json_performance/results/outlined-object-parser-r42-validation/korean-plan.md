@@ -1,0 +1,1 @@
+R39 retains the R38 Korean fixture bytes and seven-repetition fresh/same/selection controls. This screens the inherited valid-ED continuation and source-length proof after the template-only change. No source admission or GC policy change.

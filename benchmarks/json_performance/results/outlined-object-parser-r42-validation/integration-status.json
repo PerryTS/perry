@@ -1,0 +1,26 @@
+{
+  "observed_main": "435d6396c14a5e82ae8fb4cec2df9206aceb2a5d",
+  "zero_spacing_pr": 10052,
+  "landing_train": 10082,
+  "landed_code_commit": "0169e05d48f7aff9fce57e9f70d0acc593d98e7b",
+  "pr_head": "cd87b5cf962638029fcc716dfe296e2279cf00ce",
+  "code_and_test_files_identical": [
+    {
+      "path": "crates/perry-runtime/src/json/replacer.rs",
+      "sha256": "c762be408303f10bc2ec9dfa2d9687892fad7760a105fc33ab53ad2f6c06da23"
+    },
+    {
+      "path": "crates/perry-runtime/src/json/stringify_record_output_tests.rs",
+      "sha256": "a97690741346d0668ce67122a855eb1be19d90ef763974f5b71a9db53bddf64a"
+    },
+    {
+      "path": "test-files/test_json_zero_spacing.ts",
+      "sha256": "9cca6718bfd28571f0e3ab9e677d1b11f9bf1aa250335bf3511ebf5e021e0797"
+    }
+  ],
+  "open_ready_prs": [
+    10064,
+    10074
+  ],
+  "note": "Read-only landing check. No CI waiting, administrative merge or current-main measurement. Candidate build/lint remain pinned to their explicitly recorded experimental source and main comparison."
+}

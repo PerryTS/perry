@@ -1,0 +1,18 @@
+{
+  "source_commit": "b9bfe3070f90f223e1d9d3526df54beb57308328",
+  "command": [
+    "cargo",
+    "test",
+    "--release",
+    "-p",
+    "perry-runtime",
+    "--lib",
+    "string"
+  ],
+  "env": {
+    "RUST_TEST_THREADS": "1"
+  },
+  "exit_code": 0,
+  "log_sha256": "5099021e790987f7cdd3732dcc42a913fffec737d1ee6f86aed607f79ad000b1",
+  "note": "Broad string filter overlaps the JSON suite."
+}
