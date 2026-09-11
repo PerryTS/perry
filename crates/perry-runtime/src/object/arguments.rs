@@ -15,6 +15,10 @@ struct ArgumentsMeta {
 crate::perry_thread_local! {
     static ARGUMENTS_OBJECTS: RefCell<crate::fast_hash::PtrHashMap<usize, ArgumentsMeta>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
+    // Bounded, agent-local cache of immutable ordered keys. Values, descriptors,
+    // and mapped boxes still belong to each individual arguments object.
+    static ARGUMENTS_KEYS: RefCell<[*mut ArrayHeader; 65]> =
+        RefCell::new([std::ptr::null_mut(); 65]);
 }
 
 /// Latched by the one and only registry insert (`js_arguments_object_create`).
@@ -45,6 +49,11 @@ fn arguments_registry_never_used() -> bool {
 }
 
 pub fn scan_arguments_object_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    ARGUMENTS_KEYS.with(|cache| {
+        for keys in cache.borrow_mut().iter_mut() {
+            visitor.visit_raw_mut_ptr_slot(keys);
+        }
+    });
     let mut moved = Vec::new();
     ARGUMENTS_OBJECTS.with(|m| {
         let mut map = m.borrow_mut();
@@ -88,6 +97,7 @@ pub(crate) fn prune_dead_arguments_object_entries(is_dead_owner: &dyn Fn(usize) 
 #[cfg(test)]
 pub(crate) fn test_clear_arguments_object_roots() {
     ARGUMENTS_OBJECTS.with(|m| m.borrow_mut().clear());
+    ARGUMENTS_KEYS.with(|cache| cache.borrow_mut().fill(std::ptr::null_mut()));
 }
 
 #[cfg(test)]
@@ -158,81 +168,138 @@ fn thrower_closure_value() -> f64 {
     crate::value::js_nanbox_pointer(closure as i64)
 }
 
+/// Build the complete own-key layout once for common arities. Larger calls use
+/// the same bulk construction without retaining an unbounded cache of keys.
+fn arguments_keys(len: u32) -> *mut ArrayHeader {
+    if let Some(keys) = ARGUMENTS_KEYS.with(|cache| cache.borrow().get(len as usize).copied()) {
+        if !keys.is_null() {
+            return keys;
+        }
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let keys = scope.root_raw_mut_ptr(crate::array::js_array_alloc(len.saturating_add(2)));
+    for i in 0..len {
+        let key = intern_key(&i.to_string());
+        let array = keys.with_mut_ptr(|array| {
+            crate::array::js_array_push_f64(array, crate::value::js_nanbox_string(key as i64))
+        });
+        keys.set_raw_mut_ptr(array);
+    }
+    for name in ["length", "callee"] {
+        let key = intern_key(name);
+        let array = keys.with_mut_ptr(|array| {
+            crate::array::js_array_push_f64(array, crate::value::js_nanbox_string(key as i64))
+        });
+        keys.set_raw_mut_ptr(array);
+    }
+    keys.with_mut_ptr(|keys| unsafe {
+        // Every receiver must copy before adding/deleting keys, including the
+        // first receiver: later calls can reuse the cached layout after it dies.
+        let header = crate::value::addr_class::try_read_tracked_gc_header(keys as usize)
+            .expect("arguments keys have a tracked array header");
+        (*header.as_ptr()).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
+        ARGUMENTS_KEYS.with(|cache| {
+            if let Some(slot) = cache.borrow_mut().get_mut(len as usize) {
+                // GC_STORE_AUDIT(ROOT): the arguments scanner traces and rewrites this slot.
+                crate::gc::runtime_store_root_raw_mut_ptr_slot(slot, keys);
+            }
+        });
+        keys
+    })
+}
+
 #[no_mangle]
 pub extern "C" fn js_arguments_object_alloc(
     raw_args: f64,
     callee: f64,
     restricted_callee: i32,
 ) -> *mut ObjectHeader {
-    let arr_ptr = crate::array::clean_arr_ptr(
-        crate::value::js_nanbox_get_pointer(raw_args) as *const crate::array::ArrayHeader
-    );
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let raw_args = scope.root_nanbox_f64(raw_args);
+    let callee = scope.root_nanbox_f64(callee);
+    let arr_ptr = crate::array::clean_arr_ptr(crate::value::js_nanbox_get_pointer(
+        raw_args.get_nanbox_f64(),
+    ) as *const ArrayHeader);
     let len = if arr_ptr.is_null() {
         0
     } else {
         crate::array::js_array_length(arr_ptr)
     };
 
-    let obj = js_object_alloc(0, len.saturating_add(2));
+    let keys = scope.root_raw_mut_ptr(arguments_keys(len));
+    let obj = scope.root_raw_mut_ptr(js_object_alloc(0, len.saturating_add(2)));
+    obj.with_mut_ptr(|obj| {
+        keys.with_mut_ptr(|keys| unsafe {
+            set_object_keys_array_with_live(obj, keys, len.saturating_add(2));
+        });
+    });
     for i in 0..len {
-        let name = i.to_string();
-        let key = intern_key(&name);
-        let value = if arr_ptr.is_null() {
-            f64::from_bits(crate::value::TAG_UNDEFINED)
-        } else {
-            crate::array::js_array_get_f64(arr_ptr, i)
-        };
-        js_object_set_field_by_name(obj, key, value);
-        set_property_attrs(obj as usize, name, PropertyAttrs::new(true, true, true));
+        let arr_ptr = crate::array::clean_arr_ptr(crate::value::js_nanbox_get_pointer(
+            raw_args.get_nanbox_f64(),
+        ) as *const ArrayHeader);
+        let value = crate::array::js_array_get(arr_ptr, i);
+        // Creation defines own data properties: no inherited setter can
+        // intercept them. The field helper also maintains the GC slot layout.
+        obj.with_mut_ptr(|obj| js_object_set_field(obj, i, value));
     }
 
-    let length_key = intern_key("length");
-    js_object_set_field_by_name(obj, length_key, len as f64);
-    set_property_attrs(
-        obj as usize,
-        "length".to_string(),
-        PropertyAttrs::new(true, false, true),
-    );
+    // Indexed properties already have the default all-true attributes. Storing
+    // those defaults individually created a semantic shape transition, several
+    // descriptor-table entries, and later GC work for every supplied argument.
+    obj.with_mut_ptr(|obj| {
+        js_object_set_field(obj, len, JSValue::number(len as f64));
+    });
 
-    let callee_key = intern_key("callee");
     if restricted_callee != 0 {
-        js_object_set_field_by_name(obj, callee_key, f64::from_bits(crate::value::TAG_UNDEFINED));
         let thrower = thrower_closure_value();
-        set_accessor_descriptor(
-            obj as usize,
-            "callee".to_string(),
-            AccessorDescriptor {
-                get: thrower.to_bits(),
-                set: thrower.to_bits(),
-            },
-        );
-        set_property_attrs(
-            obj as usize,
-            "callee".to_string(),
-            PropertyAttrs::new(false, false, false),
-        );
+        obj.with_mut_ptr::<ObjectHeader, _>(|obj| {
+            set_property_attrs(
+                obj as usize,
+                "length".to_string(),
+                PropertyAttrs::new(true, false, true),
+            );
+            super::descriptor_state::install_fresh_accessor_property(
+                obj as usize,
+                "callee".to_string(),
+                AccessorDescriptor {
+                    get: thrower.to_bits(),
+                    set: thrower.to_bits(),
+                },
+                PropertyAttrs::new(false, false, false),
+            );
+        });
     } else {
-        js_object_set_field_by_name(obj, callee_key, callee);
-        set_property_attrs(
-            obj as usize,
-            "callee".to_string(),
-            PropertyAttrs::new(true, false, true),
-        );
+        obj.with_mut_ptr(|obj| {
+            js_object_set_field(
+                obj,
+                len + 1,
+                JSValue::from_bits(callee.get_nanbox_f64().to_bits()),
+            );
+            super::descriptor_state::set_property_attrs_batch(
+                obj as usize,
+                &[
+                    ("length", PropertyAttrs::new(true, false, true)),
+                    ("callee", PropertyAttrs::new(true, false, true)),
+                ],
+            );
+        });
     }
 
     // Latch BEFORE the insert, so no probe can observe a populated registry
     // through a `false` flag.
-    ARGUMENTS_OBJECTS_EVER_USED.store(true, std::sync::atomic::Ordering::Relaxed);
-    ARGUMENTS_OBJECTS.with(|m| {
-        m.borrow_mut().insert(
-            obj as usize,
-            ArgumentsMeta {
-                mapped: HashMap::new(),
-                restricted_callee: restricted_callee != 0,
-            },
-        );
-    });
-    obj
+    obj.with_mut_ptr(|obj| {
+        ARGUMENTS_OBJECTS_EVER_USED.store(true, std::sync::atomic::Ordering::Relaxed);
+        ARGUMENTS_OBJECTS.with(|m| {
+            m.borrow_mut().insert(
+                obj as usize,
+                ArgumentsMeta {
+                    mapped: HashMap::new(),
+                    restricted_callee: restricted_callee != 0,
+                },
+            );
+        });
+        obj
+    })
 }
 
 #[no_mangle]
