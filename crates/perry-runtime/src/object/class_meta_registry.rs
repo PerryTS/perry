@@ -32,8 +32,10 @@ pub(crate) static CLASS_REGISTRY: ImageTable<RwLock<Option<PtrHashMap<u32, u32>>
 // the window (the reserved builtin bands `0xFFFF_00xx` / `0x7FFF_FFxx` and
 // the high-bit synthetic ids) keep using the map.
 //
-// The table is one 256 KiB zero-filled allocation per image (#8546: it lives
-// in `ClassImageTables::parent_dense`, one per hosted application), reached
+// The table is one 256 KiB zero-filled allocation per image, created on its
+// first representable edge (#8546: `ClassImageTables::parent_dense`, one per
+// hosted application). Reads before registration answer absent without an
+// allocation. Initialized reads retain the atomic indexed load, reached
 // through the same thread-local image resolution as every other class table.
 //
 // Encoding: `parent + 1` for every registered edge whose child id is
@@ -71,7 +73,7 @@ pub(crate) fn parent_dense_store(class_id: u32, parent_class_id: u32) {
 
 /// Look up parent class ID from the registry.
 ///
-/// In-window ids answer from one relaxed-ordering atomic load. Everything else
+/// In-window ids answer from an acquire atomic load once initialized. Everything else
 /// (builtin reserved bands, synthetic high-bit ids) falls back to the locked
 /// map, exactly as before.
 #[inline]
