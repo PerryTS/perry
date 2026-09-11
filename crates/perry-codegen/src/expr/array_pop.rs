@@ -184,7 +184,7 @@ pub(crate) fn lower_array_pop_inline(ctx: &mut FnCtx<'_>, recv_box: &str) -> Str
         let blk = ctx.block();
         let new_length_i64 = blk.zext(I32, &new_length, I64);
         let elem_off = blk.shl(I64, &new_length_i64, "3");
-        let elements_addr = blk.add(I64, &payload, "8");
+        let elements_addr = blk.array_elements_addr(&payload);
         let elem_addr = blk.add(I64, &elements_addr, &elem_off);
         let elem_ptr = blk.inttoptr(I64, &elem_addr);
         let elem = blk.load(DOUBLE, &elem_ptr);

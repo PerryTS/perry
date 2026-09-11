@@ -195,7 +195,7 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
     // inline limit are read through `template_field_bits`, which routes them to
     // `js_object_get_field`'s overflow fallback.
     let keys_elements =
-        (keys_arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
+        crate::array::array_elements_ptr(keys_arr as *const crate::ArrayHeader) as *const f64;
     let mut prefixes: Vec<String> = Vec::with_capacity(shape_fields as usize);
     let mut key_sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let mut own_keys_exclude_to_json = true;
@@ -298,7 +298,7 @@ unsafe fn set_to_json_key_for_template_field(keys_arr: *mut crate::ArrayHeader, 
         return;
     }
     let keys_elements =
-        (keys_arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
+        crate::array::array_elements_ptr(keys_arr as *const crate::ArrayHeader) as *const f64;
     let key_bits = (*keys_elements.add(f)).to_bits();
     let mut key_sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let key_str = crate::string::js_string_key_bytes(JSValue::from_bits(key_bits), &mut key_sso)

@@ -297,7 +297,7 @@ pub fn buffer_to_array(buf_ptr: *const BufferHeader) -> *mut ArrayHeader {
             return result;
         }
         let src = buffer_data(buf_ptr);
-        let dst = (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let dst = crate::array::array_elements_ptr(result as *const ArrayHeader) as *mut f64;
         for i in 0..len {
             *dst.add(i) = (*src.add(i)) as f64;
         }

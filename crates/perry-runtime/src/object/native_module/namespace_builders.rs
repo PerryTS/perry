@@ -98,7 +98,8 @@ pub(crate) unsafe fn http_methods_array() -> f64 {
         "UNSUBSCRIBE",
     ];
     let arr = crate::array::js_array_alloc_with_length_longlived(METHODS.len() as u32);
-    let elements_ptr = (arr as *mut u8).add(8) as *mut f64;
+    let elements_ptr =
+        crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader) as *mut f64;
     for (i, m) in METHODS.iter().enumerate() {
         let bytes = m.as_bytes();
         let str_ptr =

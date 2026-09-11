@@ -54,8 +54,8 @@ fn emit_raw_window_load(
     let blk = ctx.block();
     let idx_i64 = blk.zext(I32, idx_i32, I64);
     let byte_offset = blk.shl(I64, &idx_i64, "3");
-    let with_header = blk.add(I64, &byte_offset, "8");
-    let element_addr = blk.add(I64, &arr_handle, &with_header);
+    let elements_addr = blk.array_elements_addr(&arr_handle);
+    let element_addr = blk.add(I64, &elements_addr, &byte_offset);
     let element_ptr = blk.inttoptr(I64, &element_addr);
     blk.load(DOUBLE, &element_ptr)
 }
@@ -292,8 +292,8 @@ pub(crate) fn lower_masked_window_index_set(
         let blk = ctx.block();
         let idx_i64 = blk.zext(I32, idx_i32, I64);
         let byte_offset = blk.shl(I64, &idx_i64, "3");
-        let with_header = blk.add(I64, &byte_offset, "8");
-        let element_addr = blk.add(I64, &arr_handle, &with_header);
+        let elements_addr = blk.array_elements_addr(&arr_handle);
+        let element_addr = blk.add(I64, &elements_addr, &byte_offset);
         let element_ptr = blk.inttoptr(I64, &element_addr);
         // GC_STORE_AUDIT(POINTER_FREE): masked-window dense store — the
         // matcher/lowering proved `val_double` is a genuine (unboxed) double,

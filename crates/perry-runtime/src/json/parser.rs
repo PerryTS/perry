@@ -394,7 +394,8 @@ impl<'a> DirectParser<'a> {
     ) -> *mut ArrayHeader {
         let length = (*arr).length;
         if length < (*arr).capacity {
-            let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64;
+            let elements_ptr =
+                crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut u64;
             let value_bits = value.bits();
             let slot = elements_ptr.add(length as usize);
             // GC_STORE_AUDIT(INIT): JSON.parse suppresses GC and notes layout for same-parse arrays below.

@@ -122,7 +122,8 @@ pub extern "C" fn js_array_concat(
             return dest;
         }
 
-        let src_elements = (src as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let src_elements =
+            crate::array::array_elements_ptr(src as *const ArrayHeader) as *const f64;
 
         // Bulk-copy fast path: pre-grow once to fit dest_len+src_len,
         // then memcpy the source elements into the dest tail and update
@@ -141,7 +142,7 @@ pub extern "C" fn js_array_concat(
                 dest_resolved
             };
             let dst_elements =
-                (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+                crate::array::array_elements_ptr(result as *const ArrayHeader) as *mut f64;
             // GC_STORE_AUDIT(BARRIERED): concat bulk copy is followed by exact layout/barrier rebuild.
             ptr::copy_nonoverlapping(
                 src_elements,
@@ -182,13 +183,13 @@ pub extern "C" fn js_array_concat_new(
 
         let mut result = js_array_alloc(total);
         if !a.is_null() && a_len > 0 {
-            let src = (a as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+            let src = crate::array::array_elements_ptr(a as *const ArrayHeader) as *const f64;
             for i in 0..a_len as usize {
                 result = js_array_push_f64(result, *src.add(i));
             }
         }
         if !b.is_null() && b_len > 0 {
-            let src = (b as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+            let src = crate::array::array_elements_ptr(b as *const ArrayHeader) as *const f64;
             for i in 0..b_len as usize {
                 result = js_array_push_f64(result, *src.add(i));
             }
@@ -233,7 +234,7 @@ pub extern "C" fn js_array_reverse(arr: *mut ArrayHeader) -> *mut ArrayHeader {
         if crate::array::array_iteration_is_exotic(arr) {
             return reverse_array_spec_path(arr);
         }
-        let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
         let mut i = 0usize;
         let mut j = len - 1;
         while i < j {
@@ -474,7 +475,7 @@ pub extern "C" fn js_array_fill(arr: *mut ArrayHeader, value: f64) -> *mut Array
         if len == 0 {
             return arr;
         }
-        let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
         for i in 0..len {
             // GC_STORE_AUDIT(BARRIERED): fill slot writes are followed by layout/barrier rebuild.
             *elements.add(i) = value;
@@ -558,7 +559,7 @@ pub extern "C" fn js_array_fill_range(
         if s >= e {
             return arr;
         }
-        let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
         for i in s..e {
             // GC_STORE_AUDIT(BARRIERED): fill range writes are followed by layout/barrier rebuild.
             *elements.add(i as usize) = value;

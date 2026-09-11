@@ -153,7 +153,8 @@ pub(crate) unsafe fn params_from_array(
         return vec![];
     }
     let len = (*arr_ptr).length as usize;
-    let elements = (arr_ptr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+    let elements =
+        perry_runtime::array::array_elements_ptr(arr_ptr as *const ArrayHeader) as *const f64;
     let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(len);
 
     for i in 0..len {

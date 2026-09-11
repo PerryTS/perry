@@ -694,7 +694,7 @@ fn build_numeric_access(
     contiguous_u32_prefix: bool,
 ) -> StablePackedNumericAccess {
     let (is_plain, payload) = plain_payload_base(ctx, descriptor, live_raw);
-    let plain_base = ctx.block().add(I64, &payload, "8");
+    let plain_base = ctx.block().array_elements_addr(&payload);
 
     let element_base = descriptor_word(ctx, descriptor, 4);
     let packed_bounds = descriptor_word(ctx, descriptor, 5);
@@ -764,8 +764,8 @@ fn build_numeric_access(
     );
     let has_spill = ctx.block().icmp_ne(I64, &spill, "0");
     let safe_spill = ctx.block().select(I1, &has_spill, I64, &spill, live_raw);
-    let spill_offset = ctx.block().add(I64, &element_bytes, "8");
-    let object_spill_base = ctx.block().add(I64, &safe_spill, &spill_offset);
+    let spill_base = ctx.block().array_elements_addr(&safe_spill);
+    let object_spill_base = ctx.block().add(I64, &spill_base, &element_bytes);
     let contiguous_base = contiguous_u32_prefix.then(|| {
         // Mode-2 admission rejects prefixes that cross the inline/spill
         // boundary (and rejects plain Arrays), so storage selection belongs
@@ -1062,8 +1062,8 @@ pub(crate) fn try_lower_index_get(
 
     ctx.current_block = plain_idx;
     let byte_offset = ctx.block().shl(I64, &idx_i64, "3");
-    let with_header = ctx.block().add(I64, &byte_offset, "8");
-    let element_addr = ctx.block().add(I64, &payload, &with_header);
+    let elements = ctx.block().array_elements_addr(&payload);
+    let element_addr = ctx.block().add(I64, &elements, &byte_offset);
     let element_ptr = ctx.block().inttoptr(I64, &element_addr);
     let plain_raw = ctx.block().load(DOUBLE, &element_ptr);
     let plain_bits = ctx.block().bitcast_double_to_i64(&plain_raw);

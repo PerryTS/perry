@@ -111,7 +111,7 @@ impl<'s> RootedArrayElems<'s> {
     #[inline(always)]
     pub(crate) unsafe fn get(&self, index: usize) -> f64 {
         let arr = self.arr();
-        *((arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64).add(index)
+        *(crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64).add(index)
     }
 
     /// Barriered store (`note_array_slot`): keeps the layout side-table and
@@ -540,7 +540,7 @@ unsafe fn sort_needs_spec_path(arr: *const ArrayHeader, objproto_keys: &[u32]) -
         return false;
     }
     let length = (*arr).length as usize;
-    let elements = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+    let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
     (0..length).any(|i| (*elements.add(i)).to_bits() == crate::value::TAG_HOLE)
 }
 
@@ -720,7 +720,7 @@ unsafe fn sort_array_receiver(
     if length <= 1 {
         return arr;
     }
-    let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+    let elements_ptr = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
 
     // ECMAScript SortIndexedProperties + CompareArrayElements: array holes
     // are excluded from the sort and trail every element, and `undefined`
@@ -748,7 +748,8 @@ unsafe fn sort_array_receiver(
         {
             // Re-derive after the temp allocation above (which can GC).
             let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-            let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+            let elements_ptr =
+                crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
             for i in 0..length {
                 let v = *elements_ptr.add(i);
                 let bits = v.to_bits();
@@ -768,7 +769,7 @@ unsafe fn sort_array_receiver(
         // Write back (no user code below): sorted defined values, then
         // `undefined` ×N, then holes ×N — restoring the exotic sparseness.
         let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-        let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let elements_ptr = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
         mark_array_layout_unknown(arr);
         let mut idx = 0usize;
         // GC_STORE_AUDIT(BARRIERED): write-back is included in the rebuild below.
@@ -815,7 +816,7 @@ unsafe fn sort_array_receiver(
     {
         // Re-derive after the temp allocation above (which can GC).
         let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-        let recv_elems = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let recv_elems = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
         for i in 0..length {
             temp.set(i, *recv_elems.add(i));
         }
@@ -827,7 +828,7 @@ unsafe fn sort_array_receiver(
     // The comparator sort completed without a throw — publish the sorted temp
     // back into the receiver (no user code below; both sides re-derived).
     let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-    let recv_elems = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+    let recv_elems = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
     mark_array_layout_unknown(arr);
     for i in 0..length {
         // GC_STORE_AUDIT(BARRIERED): dense write-back is followed by the rebuild below.

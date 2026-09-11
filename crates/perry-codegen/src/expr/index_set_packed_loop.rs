@@ -117,8 +117,8 @@ pub(super) fn lower_packed_f64_range_loop_index_set(
         let blk = ctx.block();
         let idx_i64 = blk.zext(I32, idx_i32, I64);
         let byte_offset = blk.shl(I64, &idx_i64, "3");
-        let with_header = blk.add(I64, &byte_offset, "8");
-        let element_addr = blk.add(I64, &arr_handle, &with_header);
+        let elements_addr = blk.array_elements_addr(&arr_handle);
+        let element_addr = blk.add(I64, &elements_addr, &byte_offset);
         let element_ptr = blk.inttoptr(I64, &element_addr);
         // GC_STORE_AUDIT(POINTER_FREE): statically-genuine packed store —
         // the RHS predicate proves an unboxed double, never a heap pointer.
@@ -228,8 +228,8 @@ pub(super) fn lower_packed_f64_range_loop_index_set(
         let blk = ctx.block();
         let idx_i64 = blk.zext(I32, idx_i32, I64);
         let byte_offset = blk.shl(I64, &idx_i64, "3");
-        let with_header = blk.add(I64, &byte_offset, "8");
-        let element_addr = blk.add(I64, &arr_handle, &with_header);
+        let elements_addr = blk.array_elements_addr(&arr_handle);
+        let element_addr = blk.add(I64, &elements_addr, &byte_offset);
         let element_ptr = blk.inttoptr(I64, &element_addr);
         // GC_STORE_AUDIT(POINTER_FREE): range-guarded packed numeric element
         // store — the inline tag check above proved `val_double` is a genuine
@@ -422,8 +422,8 @@ pub(super) fn lower_packed_numeric_loop_index_set(
         let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
         let idx_i64 = blk.zext(I32, idx_i32, I64);
         let byte_offset = blk.shl(I64, &idx_i64, "3");
-        let with_header = blk.add(I64, &byte_offset, "8");
-        let element_addr = blk.add(I64, &arr_handle, &with_header);
+        let elements_addr = blk.array_elements_addr(&arr_handle);
+        let element_addr = blk.add(I64, &elements_addr, &byte_offset);
         let element_ptr = blk.inttoptr(I64, &element_addr);
         // GC_STORE_AUDIT(POINTER_FREE): packed numeric-array element store —
         // `slot_value` is a raw numeric f64 (canonicalized via

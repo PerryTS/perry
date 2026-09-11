@@ -75,9 +75,8 @@ unsafe fn emit<const VALIDATE: bool>(
     let fields = (obj as *const u8)
         .add(std::mem::size_of::<crate::ObjectHeader>())
         .cast::<u64>();
-    let key_slots = (keys as *const u8)
-        .add(std::mem::size_of::<crate::ArrayHeader>())
-        .cast::<u64>();
+    let key_slots =
+        crate::array::array_elements_ptr(keys as *const crate::ArrayHeader).cast::<u64>();
     buf.push('{');
     let mut first = true;
     for j in 0..(*keys).length as usize {

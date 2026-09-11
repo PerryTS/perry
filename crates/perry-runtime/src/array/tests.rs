@@ -63,7 +63,7 @@ fn assert_canonical_raw_slot(arr: *mut ArrayHeader, index: u32, expected: f64) {
 }
 
 unsafe fn raw_slot_bits(arr: *mut ArrayHeader, index: usize) -> u64 {
-    let elements = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const u64;
+    let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const u64;
     *elements.add(index)
 }
 
@@ -752,7 +752,7 @@ fn test_new_array_holes_flag_walk_free_guard_and_sound_downgrade() {
         // loop's raw-f64 loads.
         let int32_value = f64::from_bits(crate::value::INT32_TAG | 7u64);
         js_array_set_f64(arr, 0, int32_value);
-        let elements = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const u64;
+        let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const u64;
         assert_eq!(
             *elements, // slot 0
             7.0f64.to_bits(),

@@ -408,9 +408,10 @@ pub extern "C" fn js_object_delete_field(
             obj = reloaded_obj;
             keys = crate::object::object_keys_array(obj);
             let src_elements =
-                (keys as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
+                crate::array::array_elements_ptr(keys as *const crate::ArrayHeader) as *const f64;
             let dst_elements =
-                (keys_cloned as *mut u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *mut f64;
+                crate::array::array_elements_ptr(keys_cloned as *const crate::ArrayHeader)
+                    as *mut f64;
             if key_count != 0 {
                 // GC_STORE_AUDIT(INIT): the clone is unpublished; its layout
                 // is rebuilt before set_object_keys_array publishes the edge.
@@ -484,8 +485,9 @@ pub extern "C" fn js_object_delete_field(
                     if !stable {
                         (*obj_gc)._reserved &= !crate::gc::OBJ_FLAG_STABLE_TOMBSTONES;
                     }
-                    let elements = (keys as *mut u8).add(std::mem::size_of::<crate::ArrayHeader>())
-                        as *mut f64;
+                    let elements =
+                        crate::array::array_elements_ptr(keys as *const crate::ArrayHeader)
+                            as *mut f64;
                     // Barriered stores, exactly the Map delete's idiom: the
                     // hole overwrites a key POINTER and the clear overwrites
                     // the value, so SATB marking must shade both children.
@@ -549,7 +551,7 @@ pub extern "C" fn js_object_delete_field(
             // cannot reuse an old count-matching token for a new slot order.
             super::shapes::retire_owned_shape_history(obj, keys);
             let elements =
-                (keys as *mut u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *mut f64;
+                crate::array::array_elements_ptr(keys as *const crate::ArrayHeader) as *mut f64;
             // Overlapping ranges inside ONE allocation: `copy` (memmove).
             //
             // Unlike the clone arm below, this destination is the LIVE,
@@ -579,9 +581,10 @@ pub extern "C" fn js_object_delete_field(
         } else {
             let keys_cloned = crate::array::js_array_alloc(new_count.max(1) as u32 + 4);
             let src_elements =
-                (keys as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
+                crate::array::array_elements_ptr(keys as *const crate::ArrayHeader) as *const f64;
             let dst_elements =
-                (keys_cloned as *mut u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *mut f64;
+                crate::array::array_elements_ptr(keys_cloned as *const crate::ArrayHeader)
+                    as *mut f64;
             // Copy keys [0..i) ++ [i+1..N) into [0..new_count) as two contiguous
             // runs. These were scalar element loops, which is O(resident keys) of
             // load/store pairs on a path that already allocates and rebuilds a
@@ -847,7 +850,7 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
 
     let mut key_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let key_bytes = crate::string::js_string_key_bytes(key, &mut key_buf)?;
-    let elements = (keys as *mut u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *mut f64;
+    let elements = crate::array::array_elements_ptr(keys as *const crate::ArrayHeader) as *mut f64;
     // The one-live-key cycle appends its sole live key at the tail. Validate
     // that constructive position directly; broader small receivers retain
     // the byte-lookup fallback.
@@ -1577,7 +1580,7 @@ unsafe fn squeeze_holes_and_delete(
     reserved_floor: usize,
 ) {
     let keys = keys as *mut crate::ArrayHeader;
-    let elements = (keys as *mut u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *mut f64;
+    let elements = crate::array::array_elements_ptr(keys as *const crate::ArrayHeader) as *mut f64;
     let fields_ptr = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
     let floor = reserved_floor.min(key_count);
     let mut out = floor;

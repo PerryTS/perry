@@ -83,7 +83,7 @@ pub extern "C" fn js_array_fill_f64_const_extend(
             }
             return fallback;
         }
-        let elements_ptr = (out as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let elements_ptr = crate::array::array_elements_ptr(out as *const ArrayHeader) as *mut f64;
         for i in 0..end as usize {
             // GC_STORE_AUDIT(POINTER_FREE): bulk numeric fill writes raw f64s only.
             ptr::write(elements_ptr.add(i), number);
@@ -191,7 +191,7 @@ pub extern "C" fn js_array_fill_f64_iota_extend(
             }
             return fallback;
         }
-        let elements_ptr = (out as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let elements_ptr = crate::array::array_elements_ptr(out as *const ArrayHeader) as *mut f64;
         for i in 0..end as usize {
             // GC_STORE_AUDIT(POINTER_FREE): bulk iota fill writes raw f64s only.
             ptr::write(elements_ptr.add(i), i as f64);

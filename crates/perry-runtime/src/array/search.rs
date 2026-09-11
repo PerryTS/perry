@@ -3,7 +3,7 @@ use super::*;
 
 #[inline(always)]
 unsafe fn array_elements_ptr(arr: *const ArrayHeader) -> *const f64 {
-    (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64
+    crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64
 }
 
 #[inline(always)]

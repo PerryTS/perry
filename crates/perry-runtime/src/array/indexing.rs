@@ -144,7 +144,7 @@ pub(crate) unsafe fn array_has_own_index(arr: *const ArrayHeader, index: u32) ->
         return true;
     }
     if index < (*arr).length && index < (*arr).capacity {
-        let elements = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const u64;
+        let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const u64;
         if ptr::read(elements.add(index as usize)) != crate::value::TAG_HOLE {
             return true;
         }
@@ -403,7 +403,8 @@ pub extern "C" fn js_array_get_f64_unchecked(arr: *const ArrayHeader, index: u32
             }
             return array_oob_prototype_get(arr as usize, index);
         }
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let elements_ptr =
+            crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
         let raw = *elements_ptr.add(index as usize);
         // Issue #323: translate HOLE sentinel (set by `new Array(n)`) back to
         // `undefined`. The sentinel is internal — user code only ever sees
@@ -435,7 +436,7 @@ pub extern "C" fn js_array_numeric_get_f64_unboxed(arr: *mut ArrayHeader, index:
             && index < (*arr).length
         {
             let elements_ptr =
-                (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+                crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
             return *elements_ptr.add(index as usize);
         }
 
@@ -632,7 +633,8 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
             }
             return array_oob_prototype_get(arr as usize, index);
         }
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let elements_ptr =
+            crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
         let raw = *elements_ptr.add(index as usize);
         // Issue #323: translate HOLE sentinel back to `undefined` (see
         // `js_array_alloc_with_length` for context). Per OrdinaryGet a hole
@@ -724,7 +726,8 @@ pub extern "C" fn js_array_numeric_set_f64_unboxed(
                 clear_array_numeric_layout(arr);
                 return 0;
             };
-            let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+            let elements_ptr =
+                crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
             // GC_STORE_AUDIT(POINTER_FREE): RawF64-layout payload slot —
             // `number` is a plain f64, never a NaN-boxed pointer, so no
             // write barrier is needed.
@@ -1302,8 +1305,7 @@ pub(crate) fn try_strict_dense_index_set(
                     let length = (*arr).length;
                     let capacity = (*arr).capacity;
                     if index < length && length <= capacity && length <= 100_000_000 {
-                        let elements = (arr as *mut u8)
-                            .add(std::mem::size_of::<ArrayHeader>())
+                        let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader)
                             .cast::<f64>();
                         let slot = elements.add(index as usize);
                         let old = ptr::read(slot);
@@ -1347,7 +1349,7 @@ pub(crate) fn try_strict_dense_index_set(
         if index >= (*resolved).length || index >= (*resolved).capacity {
             return None;
         }
-        let elements = (resolved as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let elements = crate::array::array_elements_ptr(resolved as *const ArrayHeader) as *mut f64;
         if flags & crate::gc::GC_ARRAY_RAW_F64_LAYOUT != 0 {
             if let Some(number) = number {
                 // GC_STORE_AUDIT(POINTER_FREE): `GC_ARRAY_RAW_F64_LAYOUT`

@@ -1980,7 +1980,7 @@ pub extern "C" fn js_set_to_array(set: *const SetHeader) -> *mut crate::array::A
             let set = set_handle.get_raw_const_ptr::<SetHeader>();
             let result = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
             let src = (*set).elements as *const f64;
-            let dst = (result as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>())
+            let dst = crate::array::array_elements_ptr(result as *const crate::array::ArrayHeader)
                 as *mut f64;
             // GC_STORE_AUDIT(BARRIERED): Set-to-array bulk copy is followed by exact layout/barrier rebuild.
             ptr::copy_nonoverlapping(src, dst, size);

@@ -316,7 +316,7 @@ unsafe fn group_by_make_array(
     let len = items_for_key.len();
     let arr = crate::array::js_array_alloc(len as u32);
     (*arr).length = len as u32;
-    let arr_data = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+    let arr_data = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
     for i in 0..len {
         // GC_STORE_AUDIT(INIT): groupBy result array is unpublished; layout is rebuilt before publication.
         std::ptr::write(arr_data.add(i), items_for_key.get(i));

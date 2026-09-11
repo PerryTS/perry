@@ -429,7 +429,7 @@ fn an_untraced_promotion_indexes_the_objects_it_could_not_prove_live() {
         (*arr).length = 1;
         (*arr).capacity = 1;
         let elements =
-            (arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64;
+            crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader) as *mut u64;
         *elements = 0;
         (arr, elements)
     };

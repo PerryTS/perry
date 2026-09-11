@@ -284,7 +284,8 @@ pub extern "C" fn js_array_concat_variadic(
     if !result_is_plain {
         unsafe {
             let len = (*result).length as usize;
-            let elems = (result as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+            let elems =
+                crate::array::array_elements_ptr(result as *const ArrayHeader) as *const f64;
             for i in 0..len {
                 let v = *elems.add(i);
                 if v.to_bits() != crate::value::TAG_HOLE {
@@ -915,7 +916,7 @@ unsafe fn dense_concat_array_source(src: *const ArrayHeader) -> Option<(*const A
     if len > (*src).capacity {
         return None;
     }
-    let elems = (src as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+    let elems = crate::array::array_elements_ptr(src as *const ArrayHeader) as *const f64;
     for i in 0..len as usize {
         if (*elems.add(i)).to_bits() == crate::value::TAG_HOLE {
             return None;
@@ -982,13 +983,13 @@ unsafe fn try_concat_all_dense(
     // Pass 2: copy. Nothing below allocates or bails, so no GC can move a
     // source or the result mid-copy and no shared-demote runs twice — which
     // is what makes the single deferred rebuild sound.
-    let dst = (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+    let dst = crate::array::array_elements_ptr(result as *const ArrayHeader) as *mut f64;
     let mut off: usize = 0;
     let copy_array = |src: *const ArrayHeader, len: u32, off: &mut usize| {
         if len == 0 {
             return;
         }
-        let elems = (src as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let elems = crate::array::array_elements_ptr(src as *const ArrayHeader) as *const f64;
         // GC_STORE_AUDIT(BARRIERED): all-dense concat bulk copy; one exact
         // layout/barrier rebuild follows after all sources are copied.
         std::ptr::copy_nonoverlapping(elems, dst.add(*off), len as usize);
@@ -1082,7 +1083,7 @@ unsafe fn try_append_spread_array_dense(
     // punt those to the slow path. String addrefs happen only after the copy
     // has committed below, so a mid-scan bail can't leave the fallback path
     // double-retaining an already-addref'd string.
-    let src_elems = (src as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+    let src_elems = crate::array::array_elements_ptr(src as *const ArrayHeader) as *const f64;
     for i in 0..src_len as usize {
         if (*src_elems.add(i)).to_bits() == crate::value::TAG_HOLE {
             return None;
@@ -1107,8 +1108,8 @@ unsafe fn try_append_spread_array_dense(
     if result.is_null() || src.is_null() {
         return None;
     }
-    let src_elems = (src as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
-    let dst_elems = (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+    let src_elems = crate::array::array_elements_ptr(src as *const ArrayHeader) as *const f64;
+    let dst_elems = crate::array::array_elements_ptr(result as *const ArrayHeader) as *mut f64;
     // GC_STORE_AUDIT(BARRIERED): concat bulk copy is followed by exact layout/barrier rebuild.
     std::ptr::copy_nonoverlapping(
         src_elems,
@@ -1146,7 +1147,7 @@ fn append_spread_array(result: *mut ArrayHeader, src: *const ArrayHeader) -> *mu
     unsafe {
         let len = (*materialized).length;
         let elems =
-            (materialized as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+            crate::array::array_elements_ptr(materialized as *const ArrayHeader) as *const f64;
         let mut out = result;
         // ECMA-262 §23.1.3.5 step 5.c.iii: each index goes through
         // `HasProperty(E, k)` / `Get(E, k)` — a hole filled by an inherited

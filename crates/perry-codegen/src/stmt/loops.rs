@@ -4901,8 +4901,10 @@ fn lower_object_array_write_versioned_for(
         let object_ptr = {
             let blk = ctx.block();
             let inner_i64 = blk.sext(I32, &inner, I64);
-            let element_word = blk.add(I64, &inner_i64, "1");
-            let element_ptr = blk.gep_inbounds(I64, &array_ptr, &[(I64, &element_word)]);
+            let handle = blk.ptrtoint(&array_ptr, I64);
+            let elements = blk.array_elements_addr(&handle);
+            let elements_ptr = blk.inttoptr(I64, &elements);
+            let element_ptr = blk.gep_inbounds(I64, &elements_ptr, &[(I64, &inner_i64)]);
             let object_box = blk.load(DOUBLE, &element_ptr);
             let object_bits = blk.bitcast_double_to_i64(&object_box);
             let object_handle = blk.and(I64, &object_bits, crate::nanbox::POINTER_MASK_I64);
@@ -4969,8 +4971,10 @@ fn lower_object_array_write_versioned_for(
         let object_ptr = {
             let blk = ctx.block();
             let inner_i64 = blk.sext(I32, &inner, I64);
-            let element_word = blk.add(I64, &inner_i64, "1");
-            let element_ptr = blk.gep_inbounds(I64, g_array_ptr, &[(I64, &element_word)]);
+            let handle = blk.ptrtoint(g_array_ptr, I64);
+            let elements = blk.array_elements_addr(&handle);
+            let elements_ptr = blk.inttoptr(I64, &elements);
+            let element_ptr = blk.gep_inbounds(I64, &elements_ptr, &[(I64, &inner_i64)]);
             let object_box = blk.load(DOUBLE, &element_ptr);
             let object_bits = blk.bitcast_double_to_i64(&object_box);
             let object_handle = blk.and(I64, &object_bits, crate::nanbox::POINTER_MASK_I64);

@@ -1584,7 +1584,7 @@ pub extern "C" fn js_async_resource_run_in_async_scope(
                 } else {
                     let len = js_array_length(arr) as i64;
                     let data = unsafe {
-                        (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64
+                        crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64
                     };
                     unsafe { js_closure_call_array(callback as i64, data, len) }
                 }
@@ -1845,7 +1845,7 @@ fn call_callback_with_rest(callback_value: f64, this_arg: f64, rest: f64) -> f64
         let data = if arr.is_null() || len == 0 {
             ptr::null()
         } else {
-            unsafe { (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64 }
+            unsafe { crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64 }
         };
         unsafe { js_closure_call_array(callback as i64, data, len) }
     };

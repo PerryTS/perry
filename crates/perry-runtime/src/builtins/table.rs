@@ -259,7 +259,7 @@ fn table_properties_from_value(value: f64) -> Option<Vec<String>> {
             return None;
         }
         let length = (*arr_ptr).length as usize;
-        let data_ptr = (arr_ptr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>())
+        let data_ptr = crate::array::array_elements_ptr(arr_ptr as *const crate::array::ArrayHeader)
             as *const f64;
         let mut out = Vec::with_capacity(length);
         for i in 0..length {
@@ -329,9 +329,9 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
                 return;
             }
             let length = (*arr_ptr).length as usize;
-            let data_ptr = (arr_ptr as *const u8)
-                .add(std::mem::size_of::<crate::array::ArrayHeader>())
-                as *const f64;
+            let data_ptr =
+                crate::array::array_elements_ptr(arr_ptr as *const crate::array::ArrayHeader)
+                    as *const f64;
 
             if length == 0 {
                 render_table(&["(index)".to_string()], &[]);
@@ -452,9 +452,9 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
                     let sub = JSValue::from_bits(elem.to_bits())
                         .as_pointer::<crate::array::ArrayHeader>();
                     let sub_len = ((*sub).length as usize).min(max_len);
-                    let sub_data = (sub as *const u8)
-                        .add(std::mem::size_of::<crate::array::ArrayHeader>())
-                        as *const f64;
+                    let sub_data =
+                        crate::array::array_elements_ptr(sub as *const crate::array::ArrayHeader)
+                            as *const f64;
                     for (j, slot) in present.iter_mut().enumerate().take(sub_len) {
                         if (*sub_data.add(j)).to_bits() != crate::value::TAG_HOLE {
                             *slot = true;
@@ -482,9 +482,9 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
                     if get_gc_type(elem) == crate::gc::GC_TYPE_ARRAY {
                         let sub = elem_jsval.as_pointer::<crate::array::ArrayHeader>();
                         let sub_len = (*sub).length as usize;
-                        let sub_data = (sub as *const u8)
-                            .add(std::mem::size_of::<crate::array::ArrayHeader>())
-                            as *const f64;
+                        let sub_data = crate::array::array_elements_ptr(
+                            sub as *const crate::array::ArrayHeader,
+                        ) as *const f64;
                         for &j in &columns {
                             // A slot this row does not own renders as an empty
                             // cell, exactly like a short row's missing tail —

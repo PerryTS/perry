@@ -84,7 +84,7 @@ pub(crate) unsafe fn rebuild_array_layout_from_slots(arr: *mut ArrayHeader) {
         return;
     }
     let len = (*arr).length as usize;
-    let slots = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64;
+    let slots = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut u64;
     crate::gc::layout_rebuild_from_slots(arr as *mut u8, slots, len);
     if crate::arena::pointer_in_old_gen(arr as usize) {
         for i in 0..len {

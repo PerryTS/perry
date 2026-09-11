@@ -465,7 +465,9 @@ pub extern "C" fn js_build_class_keys_array(
     // in a loop, which cascaded via block-persistence into every
     // subsequent iteration's allocations.
     let arr = crate::array::js_array_alloc_with_length_longlived(num_keys as u32);
-    let elements_ptr = unsafe { (arr as *mut u8).add(8) as *mut f64 };
+    let elements_ptr = unsafe {
+        crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader) as *mut f64
+    };
     for (i, key_bytes) in keys.iter().enumerate() {
         let str_ptr = crate::string::js_string_from_bytes_longlived(
             key_bytes.as_ptr(),
@@ -563,7 +565,9 @@ pub extern "C" fn js_object_alloc_class_with_keys(
         // Issue #179: shape-cache keys_array lives in the longlived arena
         // (see `js_build_class_keys_array` for the rationale).
         let arr = crate::array::js_array_alloc_with_length_longlived(num_keys as u32);
-        let elements_ptr = unsafe { (arr as *mut u8).add(8) as *mut f64 };
+        let elements_ptr = unsafe {
+            crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader) as *mut f64
+        };
         for (i, key_bytes) in keys.iter().enumerate() {
             let str_ptr = crate::string::js_string_from_bytes_longlived(
                 key_bytes.as_ptr(),
@@ -667,8 +671,13 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
         };
         let merged_len = parent_len as usize + own_keys.len();
         let arr = crate::array::js_array_alloc_with_length_longlived(merged_len as u32);
-        let dst = unsafe { (arr as *mut u8).add(8) as *mut f64 };
-        let src = unsafe { (parent_arr as *mut u8).add(8) as *const f64 };
+        let dst = unsafe {
+            crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader) as *mut f64
+        };
+        let src = unsafe {
+            crate::array::array_elements_ptr(parent_arr as *const crate::array::ArrayHeader)
+                as *const f64
+        };
         unsafe {
             for i in 0..parent_len as usize {
                 let bits = (*src.add(i)).to_bits();
@@ -796,7 +805,10 @@ pub extern "C" fn js_object_alloc_with_shape(
                 key_bytes.len() as u32,
             );
             let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-            let elements_ptr = unsafe { (arr as *mut u8).add(8) as *mut f64 };
+            let elements_ptr = unsafe {
+                crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader)
+                    as *mut f64
+            };
             let nanboxed = f64::from_bits(
                 crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK),
             );
@@ -978,11 +990,15 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
     // js_array_push. Pre-size the keys capacity to avoid immediate reallocation on append.
     let src_keys_arr = crate::object::object_keys_array(src_ptr);
     let new_keys_arr = crate::array::js_array_alloc(src_field_count + extra_count);
-    let new_keys_elements = (new_keys_arr as *mut u8).add(8) as *mut f64;
+    let new_keys_elements =
+        crate::array::array_elements_ptr(new_keys_arr as *const crate::array::ArrayHeader)
+            as *mut f64;
 
     if !src_keys_arr.is_null() && (src_keys_arr as usize) >= 0x10000 {
         let src_key_len = (*src_keys_arr).length as usize;
-        let src_key_elements = (src_keys_arr as *const u8).add(8) as *const f64;
+        let src_key_elements =
+            crate::array::array_elements_ptr(src_keys_arr as *const crate::array::ArrayHeader)
+                as *const f64;
         let copy_count = src_key_len.min(src_field_count as usize);
         for i in 0..copy_count {
             // GC_STORE_AUDIT(INIT): cloned keys array is unpublished; layout is rebuilt before publication.

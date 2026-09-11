@@ -27,8 +27,8 @@ pub fn typed_array_to_array(ta: *const TypedArrayHeader) -> *mut crate::array::A
         if len == 0 {
             return result;
         }
-        let dst =
-            (result as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut f64;
+        let dst = crate::array::array_elements_ptr(result as *const crate::array::ArrayHeader)
+            as *mut f64;
         for i in 0..len {
             *dst.add(i) = load_at(ta, i);
         }

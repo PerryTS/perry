@@ -56,8 +56,8 @@ pub(crate) fn try_lower_index_get(
     let block = ctx.block();
     let index_i64 = block.zext(I32, &index_i32, I64);
     let byte_offset = block.shl(I64, &index_i64, "3");
-    let slot_offset = block.add(I64, &byte_offset, "8");
-    let slot_addr = block.add(I64, &handle, &slot_offset);
+    let elements_addr = block.array_elements_addr(&handle);
+    let slot_addr = block.add(I64, &elements_addr, &byte_offset);
     let slot_ptr = block.inttoptr(I64, &slot_addr);
     Ok(Some(block.load(DOUBLE, &slot_ptr)))
 }

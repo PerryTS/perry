@@ -26,7 +26,7 @@ fn dense(values: &[f64]) -> *mut ArrayHeader {
 }
 
 unsafe fn slot_bits(arr: *const ArrayHeader, index: usize) -> u64 {
-    let elements = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const u64;
+    let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const u64;
     std::ptr::read(elements.add(index))
 }
 

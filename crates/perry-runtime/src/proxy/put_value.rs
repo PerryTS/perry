@@ -1504,7 +1504,7 @@ fn object_array_numeric_write_slots(
     }
 
     let elements = unsafe {
-        (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64
+        crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader) as *const f64
     };
     let first_bits = unsafe { (*elements.add(receiver_start as usize)).to_bits() };
     if first_bits == crate::value::TAG_HOLE {

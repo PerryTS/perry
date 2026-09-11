@@ -307,7 +307,7 @@ pub(crate) fn emit_element_shape_loop_preheader_check(
     };
 
     // Elements base: `arr + size_of::<ArrayHeader>()`.
-    let base_addr = blk.add(I64, &handle1, "8");
+    let base_addr = blk.array_elements_addr(&handle1);
     let elements_base = blk.inttoptr(I64, &base_addr);
 
     // Hoisted loop-invariant words for the residual check. The volatile gate

@@ -17,7 +17,7 @@ const CAPACITY_SAMPLE_SIZE: usize = 32;
 
 #[inline(always)]
 unsafe fn array_elements_ptr(arr: *const ArrayHeader) -> *const f64 {
-    unsafe { (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64 }
+    unsafe { crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64 }
 }
 
 #[cold]

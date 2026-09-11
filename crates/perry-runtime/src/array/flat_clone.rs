@@ -139,7 +139,7 @@ pub unsafe extern "C" fn js_short_packed_spread_values(value: f64, out: *mut f64
     if len > 4 || (len != 0 && out.is_null()) {
         return -1;
     }
-    let elements = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const u64;
+    let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const u64;
     for index in 0..len {
         let bits = std::ptr::read(elements.add(index));
         if bits == crate::value::TAG_HOLE {
@@ -194,9 +194,9 @@ pub(crate) fn dense_spread_copy(value: f64) -> *mut ArrayHeader {
         }
         if len > 0 {
             let src_elements =
-                (src as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const u64;
+                crate::array::array_elements_ptr(src as *const ArrayHeader) as *const u64;
             let dst_elements =
-                (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64;
+                crate::array::array_elements_ptr(result as *const ArrayHeader) as *mut u64;
             // GC_STORE_AUDIT(BARRIERED): bulk copy into an unpublished array,
             // followed by the exact layout/barrier rebuild below.
             ptr::copy_nonoverlapping(src_elements, dst_elements, len as usize);
@@ -328,7 +328,7 @@ unsafe fn js_array_flat_into(
             crate::array::array_spec_get(live_src, i as u32)
         } else {
             let elements =
-                (live_src as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+                crate::array::array_elements_ptr(live_src as *const ArrayHeader) as *const f64;
             let element = *elements.add(i);
             // Per FlattenIntoArray, holes are absent and skipped.
             if element.to_bits() == crate::value::TAG_HOLE {
@@ -362,7 +362,7 @@ pub extern "C" fn js_array_flat(arr: *const ArrayHeader) -> *mut ArrayHeader {
     }
     unsafe {
         let len = (*arr).length as usize;
-        let elements = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
         let mut result = js_array_alloc(0);
 
         for i in 0..len {
@@ -376,9 +376,9 @@ pub extern "C" fn js_array_flat(arr: *const ArrayHeader) -> *mut ArrayHeader {
                 let sub_len = (*sub_arr).length as usize;
                 // Sanity check: if length is unreasonably large, treat as non-array.
                 if sub_len <= 1_000_000 {
-                    let sub_elements = (sub_arr as *const u8)
-                        .add(std::mem::size_of::<ArrayHeader>())
-                        as *const f64;
+                    let sub_elements =
+                        crate::array::array_elements_ptr(sub_arr as *const ArrayHeader)
+                            as *const f64;
                     for j in 0..sub_len {
                         let sub = *sub_elements.add(j);
                         // Skip holes in the flattened sub-array too.
@@ -641,9 +641,9 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
             crate::value::js_nanbox_get_pointer(result_h.get_nanbox_f64()) as *mut ArrayHeader;
         if len > 0 {
             let src_elements =
-                (src as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+                crate::array::array_elements_ptr(src as *const ArrayHeader) as *const f64;
             let dst_elements =
-                (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+                crate::array::array_elements_ptr(result as *const ArrayHeader) as *mut f64;
             // GC_STORE_AUDIT(BARRIERED): clone bulk copy is followed by exact layout/barrier rebuild.
             ptr::copy_nonoverlapping(src_elements, dst_elements, len as usize);
             (*result).length = len;
@@ -699,13 +699,16 @@ pub extern "C" fn js_array_entries(arr: *const ArrayHeader) -> *mut ArrayHeader 
         let result = js_array_alloc(len);
         (*result).length = len;
         clear_array_numeric_layout(result);
-        let src_elements = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
-        let dst_elements = (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let src_elements =
+            crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
+        let dst_elements =
+            crate::array::array_elements_ptr(result as *const ArrayHeader) as *mut f64;
         for i in 0..len as usize {
             // Build a 2-element [index, value] pair as an inner array.
             let pair = js_array_alloc(2);
             (*pair).length = 2;
-            let pair_elems = (pair as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+            let pair_elems =
+                crate::array::array_elements_ptr(pair as *const ArrayHeader) as *mut f64;
             // GC_STORE_AUDIT(BARRIERED): entries pair slots are immediately recorded via note_array_slot.
             *pair_elems.add(0) = i as f64;
             *pair_elems.add(1) = *src_elements.add(i);
@@ -744,7 +747,8 @@ pub extern "C" fn js_array_keys(arr: *const ArrayHeader) -> *mut ArrayHeader {
         let len = (*arr).length;
         let result = js_array_alloc(len);
         (*result).length = len;
-        let dst_elements = (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let dst_elements =
+            crate::array::array_elements_ptr(result as *const ArrayHeader) as *mut f64;
         for i in 0..len as usize {
             // GC_STORE_AUDIT(POINTER_FREE): keys array stores numeric indices only.
             *dst_elements.add(i) = i as f64;
@@ -786,9 +790,9 @@ pub extern "C" fn js_array_values(arr: *const ArrayHeader) -> *mut ArrayHeader {
             crate::value::js_nanbox_get_pointer(result_h.get_nanbox_f64()) as *mut ArrayHeader;
         if len > 0 {
             let src_elements =
-                (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+                crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
             let dst_elements =
-                (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+                crate::array::array_elements_ptr(result as *const ArrayHeader) as *mut f64;
             // GC_STORE_AUDIT(BARRIERED): values bulk copy is followed by layout/barrier rebuild.
             ptr::copy_nonoverlapping(src_elements, dst_elements, len as usize);
             (*result).length = len;

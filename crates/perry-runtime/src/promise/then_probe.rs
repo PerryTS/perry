@@ -360,7 +360,7 @@ unsafe fn own_then_scan(obj: *const ObjectHeader) -> OwnScan {
         return OwnScan::Unknown;
     }
     let elements =
-        (keys as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64;
+        crate::array::array_elements_ptr(keys as *const crate::array::ArrayHeader) as *const f64;
     for i in 0..len as usize {
         let raw = std::ptr::read(elements.add(i));
         let bits = raw.to_bits();

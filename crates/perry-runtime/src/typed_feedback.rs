@@ -571,7 +571,7 @@ fn array_element_kind(addr: usize, index: Option<u32>, len: u64, layout_kind: u8
         return STABLE_VALUE_UNDEFINED;
     }
     unsafe {
-        let elements = (addr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const u64;
+        let elements = crate::array::array_elements_ptr(addr as *const ArrayHeader) as *const u64;
         stable_value_kind(*elements.add(index as usize))
     }
 }
@@ -1505,7 +1505,7 @@ pub extern "C" fn js_string_array_range_loop_guard(
             return 0;
         }
         let elements =
-            (raw_addr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+            crate::array::array_elements_ptr(raw_addr as *const ArrayHeader) as *const f64;
         for index in min_idx..max_idx_exclusive {
             let value = *elements.add(index as usize);
             if !crate::value::JSValue::from_bits(value.to_bits()).is_any_string() {
@@ -1738,7 +1738,7 @@ fn packed_i32_array_loop_guard(arr: *const ArrayHeader) -> bool {
             return false;
         }
         let elements =
-            (raw_addr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+            crate::array::array_elements_ptr(raw_addr as *const ArrayHeader) as *const f64;
         for i in 0..len {
             let value = *elements.add(i);
             if !value.is_finite()
@@ -1765,7 +1765,7 @@ fn packed_u32_array_loop_guard(arr: *const ArrayHeader) -> bool {
             return false;
         }
         let elements =
-            (raw_addr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+            crate::array::array_elements_ptr(raw_addr as *const ArrayHeader) as *const f64;
         for i in 0..len {
             let value = *elements.add(i);
             if !value.is_finite() || value.fract() != 0.0 || value < 0.0 || value > u32::MAX as f64

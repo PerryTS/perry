@@ -487,7 +487,8 @@ const INDEXED_KEYS: u32 = 40;
 /// NaN-boxed layout `keys_array_dense_slots` reads.
 unsafe fn young_indexed_keys_array() -> (*mut crate::array::ArrayHeader, Vec<Vec<u8>>) {
     let arr = crate::array::js_array_alloc_with_length(INDEXED_KEYS);
-    let slots = (arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut f64;
+    let slots =
+        crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader) as *mut f64;
     let mut names = Vec::new();
     for i in 0..INDEXED_KEYS {
         let name = format!("young_key_{i:04}");
@@ -730,7 +731,7 @@ fn shape_mutation_to_new_young_key_rearms_minor_log() {
         (*keys).length = 1;
         (*keys).capacity = 1;
         let slot =
-            (keys as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut f64;
+            crate::array::array_elements_ptr(keys as *const crate::array::ArrayHeader) as *mut f64;
         *slot = f64::from_bits(string_bits(old_leaf()));
         let id = crate::object::shapes::shape_descriptor_ensure(keys, 1, 0).expect("shape");
         let (owner, _) = alloc_old_test_object(0);

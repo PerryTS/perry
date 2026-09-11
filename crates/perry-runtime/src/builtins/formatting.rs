@@ -685,9 +685,9 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                         };
                         return inspect_finish_circular(ptr as usize, empty);
                     }
-                    let data_ptr = (maybe_arr as *const u8)
-                        .add(std::mem::size_of::<crate::array::ArrayHeader>())
-                        as *const f64;
+                    let data_ptr = crate::array::array_elements_ptr(
+                        maybe_arr as *const crate::array::ArrayHeader,
+                    ) as *const f64;
                     // #9415: a hole slot is `TAG_HOLE`, whose bits read back as
                     // a NaN, so element-by-element recursion printed
                     // `new Array(3)` as `[ NaN, NaN, NaN ]`. Runs of holes are
@@ -1418,9 +1418,9 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                         if length > 1_000_000 {
                             return inspect_finish_circular(ptr as usize, "[Array]".to_string());
                         }
-                        let data_ptr = (maybe_arr as *const u8)
-                            .add(std::mem::size_of::<crate::array::ArrayHeader>())
-                            as *const f64;
+                        let data_ptr = crate::array::array_elements_ptr(
+                            maybe_arr as *const crate::array::ArrayHeader,
+                        ) as *const f64;
                         // #9415: the same hole grouping the `format_jsvalue`
                         // array arm does. This is the twin that renders an
                         // array reached as an object FIELD, so without it
@@ -1605,7 +1605,7 @@ pub extern "C" fn js_array_print(arr_ptr: *const crate::array::ArrayHeader) {
 
     unsafe {
         let length = (*arr_ptr).length as usize;
-        let data_ptr = (arr_ptr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>())
+        let data_ptr = crate::array::array_elements_ptr(arr_ptr as *const crate::array::ArrayHeader)
             as *const f64;
 
         let mut parts: Vec<String> = Vec::with_capacity(length);

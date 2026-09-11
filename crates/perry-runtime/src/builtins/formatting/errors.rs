@@ -72,7 +72,7 @@ unsafe fn format_error_array(arr_ptr: *const crate::array::ArrayHeader, depth: u
         return "[]".to_string();
     }
     let data_ptr =
-        (arr_ptr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64;
+        crate::array::array_elements_ptr(arr_ptr as *const crate::array::ArrayHeader) as *const f64;
     let mut out = String::from("[");
     for i in 0..length {
         out.push('\n');

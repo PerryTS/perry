@@ -837,16 +837,16 @@ fn js_structured_clone_inner(value: f64, depth: usize) -> f64 {
                     for i in 0..len as usize {
                         let new_arr = pointer_addr(structured_clone_memo_value(memo_index)).unwrap()
                             as *mut crate::array::ArrayHeader;
-                        let elements = (new_arr as *mut u8)
-                            .add(std::mem::size_of::<crate::array::ArrayHeader>())
-                            as *mut f64;
+                        let elements = crate::array::array_elements_ptr(
+                            new_arr as *const crate::array::ArrayHeader,
+                        ) as *mut f64;
                         let elem = *elements.add(i);
                         let cloned = js_structured_clone_inner(elem, depth + 1);
                         let new_arr = pointer_addr(structured_clone_memo_value(memo_index)).unwrap()
                             as *mut crate::array::ArrayHeader;
-                        let elements = (new_arr as *mut u8)
-                            .add(std::mem::size_of::<crate::array::ArrayHeader>())
-                            as *mut f64;
+                        let elements = crate::array::array_elements_ptr(
+                            new_arr as *const crate::array::ArrayHeader,
+                        ) as *mut f64;
                         // GC_STORE_AUDIT(BARRIERED): note_array_slot below re-stores this slot with the barrier.
                         *elements.add(i) = cloned;
                         crate::array::note_array_slot(new_arr, i, cloned.to_bits());

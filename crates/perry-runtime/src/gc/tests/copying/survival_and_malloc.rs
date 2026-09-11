@@ -728,7 +728,7 @@ fn test_copying_minor_falls_back_for_transitive_pinned_young_child() {
     let elements = unsafe {
         (*arr).length = 1;
         let elements =
-            (arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64;
+            crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader) as *mut u64;
         *elements = ptr_bits(child);
         layout_note_slot(arr as usize, 0, *elements);
         crate::gc::pin_object(header_from_user_ptr(child as *const u8));

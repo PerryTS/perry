@@ -63,7 +63,7 @@ unsafe fn call_with_forwarded_args(cb: *const ClosureHeader, args_array: i64) ->
     let data = if arr.is_null() || len == 0 {
         std::ptr::null()
     } else {
-        (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64
+        perry_runtime::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64
     };
     js_closure_call_array(closure_env, data, len)
 }

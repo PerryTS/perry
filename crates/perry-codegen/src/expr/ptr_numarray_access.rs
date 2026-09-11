@@ -53,8 +53,8 @@ fn lower_num_array_guard_free_get(
         let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
         let idx_i64 = blk.zext(I32, idx_i32, I64);
         let byte_offset = blk.shl(I64, &idx_i64, "3");
-        let with_header = blk.add(I64, &byte_offset, "8");
-        let element_addr = blk.add(I64, &arr_handle, &with_header);
+        let elements_addr = blk.array_elements_addr(&arr_handle);
+        let element_addr = blk.add(I64, &elements_addr, &byte_offset);
         let element_ptr = blk.inttoptr(I64, &element_addr);
         let raw = blk.load(DOUBLE, &element_ptr);
         if fact.density == crate::collectors::NumArrayDensity::HolesOk {
@@ -223,8 +223,8 @@ pub(crate) fn try_lower_num_array_guard_free_set(
             let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
             let idx_i64 = blk.zext(I32, &idx_i32, I64);
             let byte_offset = blk.shl(I64, &idx_i64, "3");
-            let with_header = blk.add(I64, &byte_offset, "8");
-            let element_addr = blk.add(I64, &arr_handle, &with_header);
+            let elements_addr = blk.array_elements_addr(&arr_handle);
+            let element_addr = blk.add(I64, &elements_addr, &byte_offset);
             let element_ptr = blk.inttoptr(I64, &element_addr);
             // GC_STORE_AUDIT(POINTER_FREE): canonical raw-f64 store under the
             // `Ptr<NumArray>` local proof — never a GC pointer, no barrier, no

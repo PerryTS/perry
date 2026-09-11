@@ -57,8 +57,8 @@ pub extern "C" fn js_array_to_reversed(arr: *const ArrayHeader) -> *mut ArrayHea
         let len = (*arr).length as usize;
         let new_arr = js_array_alloc(len as u32);
         (*new_arr).length = len as u32;
-        let src = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
-        let dst = (new_arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let src = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
+        let dst = crate::array::array_elements_ptr(new_arr as *const ArrayHeader) as *mut f64;
         for i in 0..len {
             // GC_STORE_AUDIT(BARRIERED): reversed copy initializes a fresh array rebuilt below.
             *dst.add(i) = *src.add(len - 1 - i);
@@ -103,8 +103,8 @@ pub extern "C" fn js_array_to_sorted_default(arr: *const ArrayHeader) -> *mut Ar
         // Clone the array
         let new_arr = js_array_alloc(len as u32);
         (*new_arr).length = len as u32;
-        let src = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
-        let dst = (new_arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let src = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
+        let dst = crate::array::array_elements_ptr(new_arr as *const ArrayHeader) as *mut f64;
         // GC_STORE_AUDIT(BARRIERED): sorted clone copy initializes a fresh array rebuilt below.
         // toSorted reads via Get (no HasProperty skip): holes become present
         // `undefined` elements in the dense copy (ECMA-262 §23.1.3.34).
@@ -163,8 +163,8 @@ pub extern "C" fn js_array_to_sorted_with_comparator(
         // Clone the array
         let new_arr = js_array_alloc(len as u32);
         (*new_arr).length = len as u32;
-        let src = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
-        let dst = (new_arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let src = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
+        let dst = crate::array::array_elements_ptr(new_arr as *const ArrayHeader) as *mut f64;
         // GC_STORE_AUDIT(BARRIERED): comparator sorted clone copy initializes a fresh array rebuilt below.
         // toSorted reads via Get (no HasProperty skip): holes become present
         // `undefined` elements in the dense copy (ECMA-262 §23.1.3.34).
@@ -198,7 +198,7 @@ pub extern "C" fn js_array_to_spliced(
     }
     unsafe {
         let len = (*arr).length as isize;
-        let src = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let src = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
 
         // Normalize start index (ECMA ToIntegerOrInfinity). NaN -> 0,
         // +Infinity -> len, -Infinity -> 0. Avoid `f as isize` on non-finite.
@@ -249,7 +249,7 @@ pub extern "C" fn js_array_to_spliced(
         let new_len = (len - dc + items_count as isize) as usize;
         let new_arr = js_array_alloc(new_len as u32);
         (*new_arr).length = new_len as u32;
-        let dst = (new_arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let dst = crate::array::array_elements_ptr(new_arr as *const ArrayHeader) as *mut f64;
 
         // Copy elements before start
         // GC_STORE_AUDIT(BARRIERED): toSpliced result writes are followed by layout/barrier rebuild.
@@ -324,10 +324,10 @@ pub extern "C" fn js_array_with(
             throw_invalid_index(index);
         }
         let idx = resolved as isize;
-        let src = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let src = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
         let new_arr = js_array_alloc(len as u32);
         (*new_arr).length = len as u32;
-        let dst = (new_arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let dst = crate::array::array_elements_ptr(new_arr as *const ArrayHeader) as *mut f64;
         // GC_STORE_AUDIT(BARRIERED): with() clone and replacement are followed by layout/barrier rebuild.
         std::ptr::copy_nonoverlapping(src, dst, len as usize);
         *dst.add(idx as usize) = value;
@@ -416,7 +416,7 @@ pub extern "C" fn js_array_copy_within(
         }
         let len = len_i64 as isize;
         let (t, s, e) = (t as isize, s as isize, e as isize);
-        let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
 
         let count = (e - s).min(len - t);
         if count <= 0 {

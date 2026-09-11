@@ -33,7 +33,7 @@ impl ConstructionArray {
             let ptr = raw.cast::<ArrayHeader>();
             (*ptr).length = 0;
             (*ptr).capacity = capacity;
-            let slots = raw.add(std::mem::size_of::<ArrayHeader>()).cast::<u64>();
+            let slots = crate::array::array_elements_ptr(raw as *const ArrayHeader).cast::<u64>();
             for index in 0..capacity as usize {
                 // GC_STORE_AUDIT(INIT): initialize all physical slack for the
                 // whole-heap verifier; live length advances only after writes.
@@ -71,10 +71,7 @@ impl ConstructionArray {
             return;
         }
         let length = (*self.ptr).length as usize;
-        let slot = self
-            .ptr
-            .cast::<u8>()
-            .add(std::mem::size_of::<ArrayHeader>())
+        let slot = crate::array::array_elements_ptr(self.ptr)
             .cast::<JSValue>()
             .add(length);
         // GC_STORE_AUDIT(INIT): no marking phase or callbacks;
@@ -97,17 +94,9 @@ impl ConstructionArray {
         let capacity = (*self.ptr).capacity.saturating_mul(2).max(16);
         let mut next = Self::new(batch, capacity);
         let length = (*self.ptr).length as usize;
-        let old_slots = self
-            .ptr
-            .cast::<u8>()
-            .add(std::mem::size_of::<ArrayHeader>())
-            .cast::<JSValue>();
+        let old_slots = crate::array::array_elements_ptr(self.ptr).cast::<JSValue>();
         debug_assert!(next.batched);
-        let new_slots = next
-            .ptr
-            .cast::<u8>()
-            .add(std::mem::size_of::<ArrayHeader>())
-            .cast::<JSValue>();
+        let new_slots = crate::array::array_elements_ptr(next.ptr).cast::<JSValue>();
         // GC_STORE_AUDIT(INIT): completed nursery or old destination; aggregate
         // layout and page-level remembering are installed before publication.
         std::ptr::copy_nonoverlapping(old_slots, new_slots, length);
@@ -131,11 +120,7 @@ impl ConstructionArray {
             // Preserve selective tracing for mixed arrays. Build its mask in
             // one pass over the completed payload, rather than updating a
             // per-object table for every element while parsing.
-            let slots = self
-                .ptr
-                .cast::<u8>()
-                .add(std::mem::size_of::<ArrayHeader>())
-                .cast::<u64>();
+            let slots = crate::array::array_elements_ptr(self.ptr).cast::<u64>();
             crate::gc::layout_rebuild_from_slots(
                 self.ptr.cast(),
                 slots,
@@ -150,11 +135,7 @@ impl ConstructionArray {
         }
         if self.any_pointer {
             if let Some(batch) = batch {
-                let slots = self
-                    .ptr
-                    .cast::<u8>()
-                    .add(std::mem::size_of::<ArrayHeader>())
-                    .cast::<u64>();
+                let slots = crate::array::array_elements_ptr(self.ptr).cast::<u64>();
                 batch.finish_json_slots(self.ptr.cast(), slots, (*self.ptr).length as usize);
             }
         }

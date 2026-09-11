@@ -177,8 +177,8 @@ pub extern "C" fn js_object_get_own_field_or_undef(
         if key_count > (*keys).capacity as usize || key_count > 65536 {
             return f64::from_bits(TAG_UNDEF);
         }
-        let key_slots =
-            (keys as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64;
+        let key_slots = crate::array::array_elements_ptr(keys as *const crate::array::ArrayHeader)
+            as *const f64;
         let alloc_limit = std::cmp::max(
             crate::object::object_live_slot_count(obj),
             crate::object::INLINE_SLOT_FLOOR as u32,

@@ -789,8 +789,7 @@ unsafe fn ensure_subclass_numeric_prefix(
             if spill.is_null() || slot >= (*spill).length {
                 return false;
             }
-            (spill as *mut u8)
-                .add(std::mem::size_of::<ArrayHeader>())
+            crate::array::array_elements_ptr(spill as *const ArrayHeader)
                 .cast::<u64>()
                 .add(slot as usize)
         };
@@ -864,7 +863,7 @@ fn layout_field_value(obj: *const ObjectHeader, slot: u32, live_inline_slots: u3
                 let spill = (*meta).spill as *const ArrayHeader;
                 if !spill.is_null() && slot < (*spill).length {
                     let elements =
-                        (spill as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const u64;
+                        crate::array::array_elements_ptr(spill as *const ArrayHeader) as *const u64;
                     return JSValue::from_bits(*elements.add(slot as usize));
                 }
             }
@@ -1032,9 +1031,7 @@ unsafe fn store_dense_slot(
         return false;
     }
     note_packed_subclass_spill_store(obj, meta);
-    let elements = (spill as *mut u8)
-        .add(std::mem::size_of::<ArrayHeader>())
-        .cast::<u64>();
+    let elements = crate::array::array_elements_ptr(spill as *const ArrayHeader).cast::<u64>();
     // GC_STORE_AUDIT(BARRIERED): the `note_array_slot` below records layout and emits the spill slot barrier.
     ptr::write(elements.add(slot as usize), value_bits);
     note_array_slot(spill, slot as usize, value_bits);
@@ -1079,9 +1076,7 @@ unsafe fn store_dense_nonpointer_number_slot(
     if spill.is_null() || slot >= (*spill).length || slot >= (*spill).capacity {
         return false;
     }
-    let elements = (spill as *mut u8)
-        .add(std::mem::size_of::<ArrayHeader>())
-        .cast::<u64>();
+    let elements = crate::array::array_elements_ptr(spill as *const ArrayHeader).cast::<u64>();
     // GC_STORE_AUDIT(POINTER_FREE): raw Number into a spill slot the caller proved pointer-free; no edge changes.
     ptr::write(elements.add(slot as usize), value_bits);
     true
@@ -1112,9 +1107,7 @@ unsafe fn clear_retired_dense_slot(
     if spill.is_null() || slot >= (*spill).length {
         return;
     }
-    let elements = (spill as *mut u8)
-        .add(std::mem::size_of::<ArrayHeader>())
-        .cast::<u64>();
+    let elements = crate::array::array_elements_ptr(spill as *const ArrayHeader).cast::<u64>();
     // GC_STORE_AUDIT(POINTER_FREE): retiring a spill tail slot to `undefined` publishes no edge.
     ptr::write(elements.add(slot as usize), crate::value::TAG_UNDEFINED);
     note_array_slot(spill, slot as usize, crate::value::TAG_UNDEFINED);
@@ -1147,9 +1140,7 @@ unsafe fn clear_retired_dense_numeric_tail_slot(
     if spill.is_null() || slot >= (*spill).length {
         return;
     }
-    let elements = (spill as *mut u8)
-        .add(std::mem::size_of::<ArrayHeader>())
-        .cast::<u64>();
+    let elements = crate::array::array_elements_ptr(spill as *const ArrayHeader).cast::<u64>();
     // GC_STORE_AUDIT(POINTER_FREE): retiring a spill tail slot to `undefined` publishes no edge.
     ptr::write(elements.add(slot as usize), crate::value::TAG_UNDEFINED);
 }
@@ -1622,7 +1613,8 @@ pub fn array_subclass_dense_snapshot(recv: f64) -> f64 {
         crate::array::array_length_range_error();
     }
     let result = js_array_alloc_with_length(len as u32);
-    let elems = unsafe { (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64 };
+    let elems =
+        unsafe { crate::array::array_elements_ptr(result as *const ArrayHeader) as *mut f64 };
     for k in 0..len {
         let v = al_get(recv, k);
         unsafe {

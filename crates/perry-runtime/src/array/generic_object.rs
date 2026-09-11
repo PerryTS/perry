@@ -305,7 +305,7 @@ pub(crate) fn object_splice(recv: f64, args_ptr: *const f64, args_len: usize) ->
     }
     let removed = js_array_alloc_with_length(delete_count.max(0) as u32);
     let removed_elems =
-        unsafe { (removed as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64 };
+        unsafe { crate::array::array_elements_ptr(removed as *const ArrayHeader) as *mut f64 };
     for k in 0..delete_count {
         let from = actual_start + k;
         if al_has(recv, from) {

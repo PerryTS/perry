@@ -1365,7 +1365,7 @@ pub extern "C" fn js_console_assert_spread(cond: f64, args_arr_handle: i64) {
             eprintln!("Assertion failed");
             return;
         }
-        let elements = (arr_ptr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>())
+        let elements = crate::array::array_elements_ptr(arr_ptr as *const crate::array::ArrayHeader)
             as *const f64;
         let first = JSValue::from_bits((*elements).to_bits());
         let formatted = js_util_format(arr_ptr);

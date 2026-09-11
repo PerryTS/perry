@@ -298,10 +298,11 @@ pub(super) fn try_emit_cached_field_index_return(
 
     ctx.current_block = array_load_idx;
     let index_i64 = ctx.block().zext(I32, &index_i32, I64);
-    let element_word = ctx.block().add(I64, &index_i64, "1");
+    let elements = ctx.block().array_elements_addr(&array_raw);
+    let elements_ptr = ctx.block().inttoptr(I64, &elements);
     let element_ptr = ctx
         .block()
-        .gep_inbounds(I64, &array_ptr, &[(I64, &element_word)]);
+        .gep_inbounds(I64, &elements_ptr, &[(I64, &index_i64)]);
     let raw_value = ctx.block().load(DOUBLE, &element_ptr);
     let raw_bits = ctx.block().bitcast_double_to_i64(&raw_value);
     let is_hole = ctx

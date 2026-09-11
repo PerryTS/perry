@@ -517,7 +517,7 @@ pub(super) fn lower_inline_dyn_typed_array_get(
         .cond_br(&elem_ok, &elem_load_label, &object_miss_label);
     ctx.current_block = elem_load_idx;
     let elem_bytes = ctx.block().shl(I64, &object_idx_i64, "3");
-    let elem_elements_addr = ctx.block().add(I64, &elem_store_i64, "8");
+    let elem_elements_addr = ctx.block().array_elements_addr(&elem_store_i64);
     let elem_addr = ctx.block().add(I64, &elem_elements_addr, &elem_bytes);
     let elem_ptr = ctx.block().inttoptr(I64, &elem_addr);
     let elem_raw = ctx.block().load(DOUBLE, &elem_ptr);
@@ -581,10 +581,11 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     );
 
     ctx.current_block = object_array_load_idx;
-    let array_element_word = ctx.block().add(I64, &object_idx_i64, "1");
+    let array_base = ctx.block().array_elements_addr(&object_raw);
+    let array_base_ptr = ctx.block().inttoptr(I64, &array_base);
     let array_element_ptr =
         ctx.block()
-            .gep_inbounds(I64, &array_ptr, &[(I64, &array_element_word)]);
+            .gep_inbounds(I64, &array_base_ptr, &[(I64, &object_idx_i64)]);
     let array_raw = ctx.block().load(DOUBLE, &array_element_ptr);
     let array_raw_bits = ctx.block().bitcast_double_to_i64(&array_raw);
     let array_is_hole = ctx

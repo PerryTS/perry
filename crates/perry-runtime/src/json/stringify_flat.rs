@@ -301,7 +301,7 @@ pub(super) unsafe fn try_object(bits: u64) -> Option<JSValue> {
 #[inline]
 unsafe fn emit_one_field_object(obj: *const crate::ObjectHeader) -> Option<JSValue> {
     let keys = crate::object::object_keys_array(obj);
-    let key_bits = slot(keys.cast(), std::mem::size_of::<crate::ArrayHeader>(), 0);
+    let key_bits = slot(crate::array::array_elements_ptr(keys).cast(), 0, 0);
     let value_bits = slot(obj.cast(), std::mem::size_of::<crate::ObjectHeader>(), 0);
     let key = key_piece(key_bits)?;
     let value = scalar_piece(value_bits)?;
@@ -323,7 +323,7 @@ unsafe fn emit_one_field_object(obj: *const crate::ObjectHeader) -> Option<JSVal
         output.write(b'{');
         let at = 1 + emit_piece(
             key,
-            slot(keys.cast(), std::mem::size_of::<crate::ArrayHeader>(), 0),
+            slot(crate::array::array_elements_ptr(keys).cast(), 0, 0),
             output.add(1),
         );
         // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
@@ -382,11 +382,7 @@ unsafe fn emit_two_field_parsed_string_object(
     let mut bytes = 2u32;
     let mut units = 2u32;
     for i in 0..2 {
-        key_plan[i] = key_piece(slot(
-            keys.cast(),
-            std::mem::size_of::<crate::ArrayHeader>(),
-            i,
-        ))?;
+        key_plan[i] = key_piece(slot(crate::array::array_elements_ptr(keys).cast(), 0, i))?;
         value_plan[i] = if i == proven_index {
             proven_value
         } else {
@@ -435,7 +431,7 @@ unsafe fn emit_two_field_parsed_string_object(
             }
             at += emit_piece(
                 key_plan[i],
-                slot(keys.cast(), std::mem::size_of::<crate::ArrayHeader>(), i),
+                slot(crate::array::array_elements_ptr(keys).cast(), 0, i),
                 output.add(at),
             );
             // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
@@ -488,11 +484,7 @@ unsafe fn emit_object(obj: *const crate::ObjectHeader, fields: usize) -> Option<
     let mut bytes = 2u32;
     let mut units = 2u32;
     for i in 0..fields {
-        key_plan[i] = key_piece(slot(
-            keys.cast(),
-            std::mem::size_of::<crate::ArrayHeader>(),
-            i,
-        ))?;
+        key_plan[i] = key_piece(slot(crate::array::array_elements_ptr(keys).cast(), 0, i))?;
         value_plan[i] = scalar_piece(slot(
             obj.cast(),
             std::mem::size_of::<crate::ObjectHeader>(),
@@ -535,7 +527,7 @@ unsafe fn emit_object(obj: *const crate::ObjectHeader, fields: usize) -> Option<
             }
             at += emit_piece(
                 key_plan[i],
-                slot(keys.cast(), std::mem::size_of::<crate::ArrayHeader>(), i),
+                slot(crate::array::array_elements_ptr(keys).cast(), 0, i),
                 output.add(at),
             );
             // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.

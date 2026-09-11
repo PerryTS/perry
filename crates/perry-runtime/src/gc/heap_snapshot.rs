@@ -222,7 +222,7 @@ unsafe fn object_field_name(
     if field_index >= (*keys).length as usize {
         return None;
     }
-    let elements = (keys_addr + std::mem::size_of::<crate::array::ArrayHeader>()) as *const u64;
+    let elements = crate::array::array_elements_ptr(keys_addr as *const crate::array::ArrayHeader);
     read_heap_string(*elements.add(field_index), 256)
 }
 
@@ -331,7 +331,7 @@ pub fn gc_build_v8_heap_snapshot_json() -> String {
         let (elems_base, elems_len) = if rec.obj_type == GC_TYPE_ARRAY {
             let arr = rec.user as *const crate::array::ArrayHeader;
             (
-                rec.user + std::mem::size_of::<crate::array::ArrayHeader>(),
+                unsafe { crate::array::array_elements_ptr(arr) as usize },
                 unsafe { (*arr).length } as usize * 8,
             )
         } else {

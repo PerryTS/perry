@@ -441,9 +441,9 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
     let mut first = true;
     for f in 0..actual_fields {
         let obj = obj_root.get_raw_const_ptr::<crate::ObjectHeader>();
-        let keys_elements = (keys_root.get_raw_const_ptr::<u8>())
-            .add(std::mem::size_of::<crate::ArrayHeader>())
-            as *const f64;
+        let keys_elements =
+            crate::array::array_elements_ptr(keys_root.get_raw_const_ptr::<crate::ArrayHeader>())
+                as *const f64;
         let fields_ptr = (obj_root.get_raw_const_ptr::<u8>())
             .add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
         let replacer = replacer_root.get_raw_const_ptr::<crate::ClosureHeader>();
@@ -619,7 +619,8 @@ pub(crate) unsafe fn stringify_array_with_replacer_pretty(
             }
         }
         let arr_base = arr_root.get_raw_const_ptr::<u8>();
-        let elements = arr_base.add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
+        let elements =
+            crate::array::array_elements_ptr(arr_base as *const crate::ArrayHeader) as *const f64;
         let replacer = replacer_root.get_raw_const_ptr::<crate::ClosureHeader>();
         let elem = *elements.add(i as usize);
         // #5989: a sparse-array HOLE slot must surface to toJSON / the replacer
@@ -1013,7 +1014,7 @@ pub(crate) unsafe fn stringify_object_pretty(
     };
     let keys_len = (*keys_arr).length;
     let keys_elements =
-        (keys_arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
+        crate::array::array_elements_ptr(keys_arr as *const crate::ArrayHeader) as *const f64;
     let fields_ptr =
         (ptr as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
     // Iterate keys_len, not min(...): ≥9-field objects keep overflow values in
@@ -1132,7 +1133,7 @@ pub(crate) unsafe fn stringify_array_pretty(
     }
     let arr = ptr as *const crate::ArrayHeader;
     let len = (*arr).length;
-    let elements = (arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
+    let elements = crate::array::array_elements_ptr(arr as *const crate::ArrayHeader) as *const f64;
 
     if len == 0 {
         buf.push_str("[]");
@@ -1208,7 +1209,7 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
     };
     let keys_len = (*keys_arr).length;
     let keys_elements =
-        (keys_arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
+        crate::array::array_elements_ptr(keys_arr as *const crate::ArrayHeader) as *const f64;
     let fields_ptr =
         (ptr as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
     // Iterate keys_len, not min(...): ≥9-field objects keep overflow values in
@@ -1396,7 +1397,7 @@ pub(crate) unsafe fn stringify_array_with_array_replacer(
 
     let arr = ptr as *const crate::ArrayHeader;
     let len = (*arr).length;
-    let elements = (arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
+    let elements = crate::array::array_elements_ptr(arr as *const crate::ArrayHeader) as *const f64;
     if len == 0 {
         buf.push_str("[]");
         STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
@@ -1455,7 +1456,7 @@ pub(crate) unsafe fn extract_string_array(ptr: *const u8) -> Vec<String> {
     }
     let arr = ptr as *const crate::ArrayHeader;
     let len = (*arr).length;
-    let elements = (arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
+    let elements = crate::array::array_elements_ptr(arr as *const crate::ArrayHeader) as *const f64;
     let mut result: Vec<String> = Vec::new();
     for i in 0..len {
         let elem = *elements.add(i as usize);
