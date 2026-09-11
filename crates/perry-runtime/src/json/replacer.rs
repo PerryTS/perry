@@ -502,12 +502,14 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
             }
         }
         let field_after_to_json = apply_to_json_keyed(field_val, key_root.get_nanbox_f64());
-        let replaced = call_replacer(
-            replacer_root.get_raw_const_ptr::<crate::ClosureHeader>(),
-            key_root.get_nanbox_f64(),
-            field_after_to_json,
-            holder_value(obj_root.get_raw_const_ptr::<u8>()),
-        );
+        let replaced = replacer_root.with_const_ptr::<crate::ClosureHeader, _>(|replacer| {
+            call_replacer(
+                replacer,
+                key_root.get_nanbox_f64(),
+                field_after_to_json,
+                holder_value(obj_root.get_raw_const_ptr::<u8>()),
+            )
+        });
         let replaced_bits = replaced.to_bits();
 
         // Omit the property if the replacer returns undefined or a function.
@@ -541,14 +543,16 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
         // Write scalar inline, or recurse into the pointer with the replacer.
         if !write_replaced_scalar(buf, replaced) {
             let inner_ptr = extract_pointer(replaced_bits).unwrap();
-            dispatch_pointer_with_replacer(
-                inner_ptr,
-                replaced,
-                replacer_root.get_raw_const_ptr::<crate::ClosureHeader>(),
-                buf,
-                indent,
-                inner_depth,
-            );
+            replacer_root.with_const_ptr::<crate::ClosureHeader, _>(|replacer| {
+                dispatch_pointer_with_replacer(
+                    inner_ptr,
+                    replaced,
+                    replacer,
+                    buf,
+                    indent,
+                    inner_depth,
+                );
+            });
         }
     }
     if use_pretty && !first {
