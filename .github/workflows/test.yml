@@ -110,7 +110,9 @@ jobs:
           persist-credentials: false
 
       - name: Self-test the planner
-        run: python3 scripts/ci_plan.py --self-test
+        run: |
+          python3 scripts/ci_plan.py --self-test
+          python3 scripts/ci_pr_files.py --self-test
 
       - name: List changed files (pull_request only)
         if: github.event_name == 'pull_request'
@@ -118,13 +120,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           # An API failure aborts here (set -e), which fails `plan` and with it
           # the gate. It must NOT fall through to an empty list: ci_plan.py
           # treats an empty listing as `core` for the same reason, but a
           # loud failure is better than a silent full run.
-          gh api "repos/$REPOSITORY/pulls/$PR_NUMBER/files" --paginate --jq '.[].filename' > changed-files.txt
+          python3 scripts/ci_pr_files.py "$REPOSITORY" "$PR_NUMBER" \
+            --expected-head "$PR_HEAD_SHA" > changed-files.txt
           echo "Changed files ($(wc -l < changed-files.txt)):"
           sed 's/^/  /' changed-files.txt
 
@@ -242,6 +246,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           python3 scripts/ci_plan.py --self-test
+          python3 scripts/ci_pr_files.py --self-test
           python3 scripts/ci_cargo_test_shard.py --self-test
           python3 scripts/ci_cargo_test_shard.py --package perry \
             --total-shards "${{ fromJSON(needs.plan.outputs.plan).cargo_test_perry.total }}" \
@@ -1052,8 +1057,11 @@ jobs:
           # test builds accumulated in target/debug.
           CARGO_PROFILE_TEST_DEBUG: "0"
           CARGO_PROFILE_DEV_DEBUG: "0"
-          # For `gh pr view` (PR changed-file list → affected-crate scope).
+          # Complete, expected-head-pinned PR changed-file list for crate scope.
           GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           (
             while sleep 60; do
@@ -1070,8 +1078,8 @@ jobs:
           # workflow_dispatch run the FULL workspace as the safety net. See
           # scripts/ci_test_scope.py for the rules.
           if [ "${{ fromJSON(needs.plan.outputs.plan).cargo_test_scope }}" = "pr" ]; then
-            changed_files="$(gh pr view "${{ github.event.pull_request.number }}" \
-              --json files --jq '.files[].path')"
+            changed_files="$(python3 scripts/ci_pr_files.py "$REPOSITORY" "$PR_NUMBER" \
+              --expected-head "$PR_HEAD_SHA")"
             echo "Changed files in PR:"; printf '%s\n' "$changed_files"
             scope="$(printf '%s\n' "$changed_files" | python3 scripts/ci_test_scope.py)"
           else
@@ -1393,10 +1401,13 @@ jobs:
         id: scope
         env:
           GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           python3 scripts/ci_e2e_scope.py --self-test
-          changed_files="$(gh pr view "${{ github.event.pull_request.number }}" \
-            --json files --jq '.files[].path')"
+          changed_files="$(python3 scripts/ci_pr_files.py "$REPOSITORY" "$PR_NUMBER" \
+            --expected-head "$PR_HEAD_SHA")"
           suites="$(printf '%s\n' "$changed_files" | python3 scripts/ci_e2e_scope.py)"
           # #7708/#8266: selected suites skip held-out tests, while a separate
           # scope-independent step below asserts every held-out test still

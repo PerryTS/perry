@@ -304,7 +304,7 @@ def plan(
             else:
                 on = on and scope["core"]
         if job == "e2e_scoped":
-            # Reads the PR's file list via `gh pr view`; there is no PR on a
+            # Reads the PR's complete file list via ci_pr_files.py; no PR on a
             # `workflow_dispatch --tier pr`, so the job would fail on a
             # missing PR number rather than skip.
             on = on and event == "pull_request"

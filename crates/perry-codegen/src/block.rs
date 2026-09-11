@@ -1610,7 +1610,7 @@ fn format_args(args: &[(LlvmType, &str)]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{DOUBLE, I64, PTR};
+    use crate::types::{DOUBLE, I32, I64, PTR};
     use std::thread;
 
     fn fresh() -> LlBlock {
@@ -1818,6 +1818,30 @@ mod tests {
             b.to_ir(),
             "entry.0:\n  %r1 = invoke double %callback(i64 %closure, double %arg) \"gc-leaf-function\" to label %eh.cont2 unwind label %catch.0\neh.cont2:"
         );
+    }
+
+    #[test]
+    fn cold_property_miss_keeps_the_active_exception_edge() {
+        let mut b = fresh();
+        b.counter.push_eh_scope("catch.0".to_string());
+        b.call(
+            DOUBLE,
+            "js_object_get_field_ic_miss_packed",
+            &[
+                (I64, "%receiver"),
+                (I64, "%key"),
+                (PTR, "%cache"),
+                (PTR, "%packed"),
+            ],
+        );
+        let ir = b.to_ir();
+        assert!(
+            ir.contains("invoke double @js_object_get_field_ic_miss_packed("),
+            "{ir}"
+        );
+        assert!(ir.contains("unwind label %catch.0"), "{ir}");
+        b.call(I32, "js_string_compare", &[(I64, "%a"), (I64, "%b")]);
+        assert!(b.to_ir().contains("call i32 @js_string_compare("));
     }
 
     #[test]

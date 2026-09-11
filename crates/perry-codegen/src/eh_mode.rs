@@ -93,12 +93,37 @@ pub(crate) fn callee_is_nothrow(name: &str) -> bool {
                 | "js_derived_super_scope_push"
                 | "js_derived_super_scope_pop"
         )
-        || !crate::module::helper_decl_attrs(name).is_empty()
+        // Only these groups carry an audited nounwind promise. Profitability
+        // hints such as `cold` do not rule out a JavaScript getter throwing.
+        // Unknown/new attributes conservatively retain the invoke edge.
+        || matches!(crate::module::helper_decl_attrs(name), " #2" | " #3" | " #4")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cold_property_miss_is_still_throwing() {
+        let name = "js_object_get_field_ic_miss_packed";
+        assert_eq!(crate::module::helper_decl_attrs(name), " cold");
+        assert!(!callee_is_nothrow(name));
+        assert!(!callee_is_nothrow("js_object_get_field_ic_miss"));
+        assert!(!callee_is_nothrow("unknown_runtime_helper"));
+    }
+
+    #[test]
+    fn semantic_nounwind_groups_keep_their_contract() {
+        for name in [
+            "js_nanbox_pointer",
+            "js_is_truthy",
+            "js_string_compare",
+            "js_array_numeric_value_to_raw_f64",
+        ] {
+            assert!(callee_is_nothrow(name), "{name}");
+        }
+        assert!(!callee_is_nothrow("js_string_compare_value"));
+    }
 
     #[test]
     fn phi_predecessors_follow_the_split_tail() {
