@@ -34,9 +34,8 @@
 //!   cycle in flight reads as "already live" to the NEXT cycle's trace. The
 //!   inertness is pinned by `weak_read_barrier_is_inert_outside_a_cycle`.
 //!
-//! Cost is one relaxed load of the process-wide barrier-active count on a path
-//! that is already a linear scan (`WeakMap`) or a by-name field read
-//! (`WeakRef`). It is not a hot path.
+//! Cost is one relaxed load of the process-wide barrier-active count on each
+//! successful WeakMap/WeakSet lookup or WeakRef target read.
 //!
 //! # Scope
 //!

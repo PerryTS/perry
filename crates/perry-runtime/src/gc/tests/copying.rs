@@ -11,6 +11,7 @@ mod verify_malloc_borrow;
 mod verify_parent_context;
 mod weak_holder_registry;
 mod weak_semantics;
+mod weakmap_index;
 use super::super::*;
 use super::support::*;
 
