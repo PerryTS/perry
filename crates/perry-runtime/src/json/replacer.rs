@@ -231,6 +231,13 @@ unsafe fn apply_to_json_keyed(value: f64, key_f64: f64) -> f64 {
     // member, stringified index for an element); record it so the shared
     // `object_get_to_json` / `array_get_to_json` / `bigint_apply_to_json` probes
     // hand it to `toJSON`.
+    // Only objects and BigInt can have a toJSON hook. Primitive properties
+    // still reach the replacer, but need no owned pending-key copy for toJSON.
+    // Keep legacy raw-pointer classification identical to apply_to_json.
+    let bits = value.to_bits();
+    if (bits & 0xFFFF_0000_0000_0000) != BIGINT_TAG && extract_pointer(bits).is_none() {
+        return value;
+    }
     set_to_json_key_value(key_f64);
     apply_to_json(value)
 }
