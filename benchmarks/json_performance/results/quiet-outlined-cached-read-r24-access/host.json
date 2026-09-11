@@ -1,0 +1,48 @@
+{
+  "started_utc": "2026-09-11T06:49:07Z",
+  "load_before": [
+    1.5146484375,
+    1.669921875,
+    1.609375
+  ],
+  "iterations": 1000000,
+  "repeat": 7,
+  "warmup": 0,
+  "commands": {
+    "perry": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-access-worker"
+    ],
+    "baseline": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/outlined-cached-read-r24/main-access-worker"
+    ],
+    "node": [
+      "/opt/homebrew/bin/node",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/outlined-cached-read-r24/harness/access-worker.js"
+    ],
+    "bun": [
+      "/Users/perry/.bun/bin/bun",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/outlined-cached-read-r24/harness/access-worker.js"
+    ]
+  },
+  "hashes": {
+    "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-access-worker": "af4404992b9aebed880c3fd91c966a767d246b3d06bbf0553d4ef5816dc60d7e",
+    "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/outlined-cached-read-r24/main-access-worker": "8d0b2b25e1890123411918d424609480dcf94faec607efa1fac2e09fc19907b7",
+    "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/outlined-cached-read-r24/harness/access-worker.ts": "dba0240ef6441a07657e664354982a04045c036e53f65c1d06df62d55c73be67",
+    "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/outlined-cached-read-r24/harness/access-worker.js": "bfe066c9d1065102d7b0ec9f7b2909d2faae8935b104709865308422d8489957",
+    "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/outlined-cached-read-r24/run-access.py": "66fe9672332f5aea8d00f06f35d378ab082f88b44afb2f16f51a4a32603afb8c",
+    "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/run_dispatch_focus.py": "100ba3e1bd5c0cd451d1a3528f95b5f4b8d0ff2f4771796ab8598b36a46fbcc4",
+    "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/fixtures/records_array_16k.json": "1545f910dad456bca2fcd7c43c2e4de63caf851f59424f8b56b0c2da08c29b63",
+    "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/fixtures/records_array_1m.json": "b827b3f0f5ee2a0eed75ace761a1bdd6424d6a0b524654516503a3265a5685de",
+    "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/fixtures/records_array_20m.json": "554f4c3a4ff68567a10c21b07da3b4cb221abc8aa09a04595fc927aa07974265"
+  },
+  "versions": {
+    "node": "v26.5.1",
+    "bun": "1.3.14"
+  },
+  "finished_utc": "2026-09-11T06:49:31Z",
+  "load_after": [
+    1.810546875,
+    1.7236328125,
+    1.62890625
+  ]
+}

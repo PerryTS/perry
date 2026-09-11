@@ -1,0 +1,23 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/outlined-cached-read-r24/run-rotating.py",
+  "--worker",
+  ".work/outlined-cached-read-r24/candidate-rotating-worker",
+  "--baseline-worker",
+  ".work/outlined-cached-read-r24/main-rotating-worker",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--filter",
+  "unicode_1m,long_string_1m,escaped_1m,small_record,records_array_1m",
+  "--repeat",
+  "7",
+  "--source-commit",
+  "9495bfc95e2afcfb5a7cb535e440e61ec0722cb1",
+  "--results-dir",
+  "results/quiet-outlined-cached-read-r24-rotating"
+]

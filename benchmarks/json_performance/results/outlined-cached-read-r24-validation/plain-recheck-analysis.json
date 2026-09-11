@@ -1,0 +1,211 @@
+{
+  "trials": 44,
+  "phases": {
+    "options": {
+      "window": {
+        "owner": "json-perf-3635-1789110657",
+        "load_before": [
+          1.775390625,
+          1.76220703125,
+          1.71435546875
+        ],
+        "started_utc": "2026-09-11T07:10:57Z",
+        "quiet_gate_passed": true,
+        "command": [
+          "python3",
+          ".work/outlined-cached-read-r24/run-options.py",
+          "--worker",
+          ".work/outlined-cached-read-r24/candidate-options",
+          "--baseline-worker",
+          ".work/outlined-cached-read-r24/main-options",
+          "--node",
+          "/opt/homebrew/bin/node",
+          "--bun",
+          "/Users/perry/.bun/bin/bun",
+          "--case",
+          "small_record:plain:2000000:5000:11",
+          "--results-dir",
+          "results/quiet-outlined-cached-read-r24-plain-recheck-options"
+        ],
+        "competing_workloads_before": [],
+        "load_after": [
+          1.88916015625,
+          1.7861328125,
+          1.72314453125
+        ],
+        "competing_workloads_after": [],
+        "finished_utc": "2026-09-11T07:11:05Z"
+      },
+      "timed_trials": 44,
+      "cases": [
+        {
+          "fixture": "small_record",
+          "operation": "plain",
+          "engines": {
+            "perry": {
+              "fixture": "small_record",
+              "operation": "plain",
+              "iterations": 2000000,
+              "engine": "perry",
+              "repetitions": 11,
+              "cpu_us": 0.045298,
+              "cpu_samples_us": [
+                0.045302,
+                0.045243,
+                0.0453075,
+                0.0454285,
+                0.0452845,
+                0.045268,
+                0.0453385,
+                0.045298,
+                0.0452195,
+                0.045337,
+                0.0452885
+              ],
+              "peak_rss_mib": 33.40625,
+              "peak_rss_samples_mib": [
+                33.40625,
+                33.421875,
+                33.40625,
+                33.421875,
+                33.421875,
+                33.4375,
+                33.40625,
+                33.421875,
+                33.40625,
+                33.390625,
+                33.40625
+              ]
+            },
+            "baseline": {
+              "fixture": "small_record",
+              "operation": "plain",
+              "iterations": 2000000,
+              "engine": "baseline",
+              "repetitions": 11,
+              "cpu_us": 0.044727,
+              "cpu_samples_us": [
+                0.0448075,
+                0.044703,
+                0.044701,
+                0.0447055,
+                0.044809,
+                0.0448055,
+                0.044656,
+                0.044727,
+                0.044692,
+                0.044807,
+                0.0447605
+              ],
+              "peak_rss_mib": 33.40625,
+              "peak_rss_samples_mib": [
+                33.40625,
+                33.4375,
+                33.40625,
+                33.40625,
+                33.4375,
+                33.40625,
+                33.4375,
+                33.40625,
+                33.390625,
+                33.40625,
+                33.390625
+              ]
+            },
+            "node": {
+              "fixture": "small_record",
+              "operation": "plain",
+              "iterations": 2000000,
+              "engine": "node",
+              "repetitions": 11,
+              "cpu_us": 0.1082955,
+              "cpu_samples_us": [
+                0.108281,
+                0.1081425,
+                0.108293,
+                0.1083665,
+                0.1080365,
+                0.1084025,
+                0.108483,
+                0.1082955,
+                0.107872,
+                0.1106445,
+                0.108548
+              ],
+              "peak_rss_mib": 59.578125,
+              "peak_rss_samples_mib": [
+                59.546875,
+                59.578125,
+                59.625,
+                59.578125,
+                59.53125,
+                59.71875,
+                59.578125,
+                59.609375,
+                59.40625,
+                59.6875,
+                59.609375
+              ]
+            },
+            "bun": {
+              "fixture": "small_record",
+              "operation": "plain",
+              "iterations": 2000000,
+              "engine": "bun",
+              "repetitions": 11,
+              "cpu_us": 0.1199265,
+              "cpu_samples_us": [
+                0.1204665,
+                0.119592,
+                0.1196155,
+                0.1199265,
+                0.1195255,
+                0.1198005,
+                0.120226,
+                0.119995,
+                0.120021,
+                0.120066,
+                0.119805
+              ],
+              "peak_rss_mib": 378.578125,
+              "peak_rss_samples_mib": [
+                378.546875,
+                378.578125,
+                378.578125,
+                378.53125,
+                378.578125,
+                378.578125,
+                378.53125,
+                378.5625,
+                378.578125,
+                378.59375,
+                378.546875
+              ]
+            }
+          },
+          "delta_pct": 1.2766338006126032,
+          "paired_delta_pct": [
+            1.103609886737722,
+            1.2079726192872897,
+            1.356792912910243,
+            1.6172506738544312,
+            1.061170746948159,
+            1.0322393456160706,
+            1.5283500537441652,
+            1.2766338006126032,
+            1.180300724961958,
+            1.1828508938335647,
+            1.1796114878073416
+          ],
+          "slower_pairs": 11,
+          "rss_delta_mib": 0.0,
+          "separated_regression": true,
+          "separated_improvement": false,
+          "beats_both_peers": true,
+          "rss_beats_both_peers": true,
+          "all_samples_beat_both_peers": true
+        }
+      ]
+    }
+  }
+}

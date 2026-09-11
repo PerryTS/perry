@@ -1,0 +1,142 @@
+[
+  {
+    "arm": "main",
+    "fixture": "small_record",
+    "operation": "plain",
+    "mode": "normal",
+    "matches_node": true,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "binary_sha256": "ff86e730996d0fdb9539767d146f7ba7832e93b16de21c7c253c664bb1e79da9"
+  },
+  {
+    "arm": "main",
+    "fixture": "small_record",
+    "operation": "plain",
+    "mode": "scheduled",
+    "matches_node": true,
+    "protected_retired_sets": 6,
+    "moved_objects": 12640,
+    "binary_sha256": "ff86e730996d0fdb9539767d146f7ba7832e93b16de21c7c253c664bb1e79da9"
+  },
+  {
+    "arm": "main",
+    "fixture": "small_record",
+    "operation": "zero",
+    "mode": "normal",
+    "matches_node": true,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "binary_sha256": "ff86e730996d0fdb9539767d146f7ba7832e93b16de21c7c253c664bb1e79da9"
+  },
+  {
+    "arm": "main",
+    "fixture": "small_record",
+    "operation": "zero",
+    "mode": "scheduled",
+    "matches_node": true,
+    "protected_retired_sets": 6,
+    "moved_objects": 12640,
+    "binary_sha256": "ff86e730996d0fdb9539767d146f7ba7832e93b16de21c7c253c664bb1e79da9"
+  },
+  {
+    "arm": "main",
+    "fixture": "small_record",
+    "operation": "dynamic-zero",
+    "mode": "normal",
+    "matches_node": true,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "binary_sha256": "ff86e730996d0fdb9539767d146f7ba7832e93b16de21c7c253c664bb1e79da9"
+  },
+  {
+    "arm": "main",
+    "fixture": "small_record",
+    "operation": "dynamic-zero",
+    "mode": "scheduled",
+    "matches_node": true,
+    "protected_retired_sets": 6,
+    "moved_objects": 12640,
+    "binary_sha256": "ff86e730996d0fdb9539767d146f7ba7832e93b16de21c7c253c664bb1e79da9"
+  },
+  {
+    "arm": "main",
+    "fixture": "small_record",
+    "operation": "pretty",
+    "mode": "normal",
+    "matches_node": true,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "binary_sha256": "ff86e730996d0fdb9539767d146f7ba7832e93b16de21c7c253c664bb1e79da9"
+  },
+  {
+    "arm": "main",
+    "fixture": "small_record",
+    "operation": "pretty",
+    "mode": "scheduled",
+    "matches_node": true,
+    "protected_retired_sets": 6,
+    "moved_objects": 12640,
+    "binary_sha256": "ff86e730996d0fdb9539767d146f7ba7832e93b16de21c7c253c664bb1e79da9"
+  },
+  {
+    "arm": "main",
+    "fixture": "small_record",
+    "operation": "keys",
+    "mode": "normal",
+    "matches_node": true,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "binary_sha256": "ff86e730996d0fdb9539767d146f7ba7832e93b16de21c7c253c664bb1e79da9"
+  },
+  {
+    "arm": "main",
+    "fixture": "small_record",
+    "operation": "keys",
+    "mode": "scheduled",
+    "matches_node": true,
+    "protected_retired_sets": 6,
+    "moved_objects": 12640,
+    "binary_sha256": "ff86e730996d0fdb9539767d146f7ba7832e93b16de21c7c253c664bb1e79da9"
+  },
+  {
+    "arm": "main",
+    "fixture": "small_record",
+    "operation": "callback",
+    "mode": "normal",
+    "matches_node": true,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "binary_sha256": "ff86e730996d0fdb9539767d146f7ba7832e93b16de21c7c253c664bb1e79da9"
+  },
+  {
+    "arm": "main",
+    "fixture": "small_record",
+    "operation": "callback",
+    "mode": "scheduled",
+    "matches_node": true,
+    "protected_retired_sets": 6,
+    "moved_objects": 12652,
+    "binary_sha256": "ff86e730996d0fdb9539767d146f7ba7832e93b16de21c7c253c664bb1e79da9"
+  },
+  {
+    "arm": "main",
+    "fixture": "records_array_16k",
+    "operation": "pretty",
+    "mode": "normal",
+    "matches_node": true,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "binary_sha256": "ff86e730996d0fdb9539767d146f7ba7832e93b16de21c7c253c664bb1e79da9"
+  },
+  {
+    "arm": "main",
+    "fixture": "records_array_16k",
+    "operation": "pretty",
+    "mode": "scheduled",
+    "matches_node": true,
+    "protected_retired_sets": 6,
+    "moved_objects": 13588,
+    "binary_sha256": "ff86e730996d0fdb9539767d146f7ba7832e93b16de21c7c253c664bb1e79da9"
+  }
+]

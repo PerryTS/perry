@@ -1,0 +1,4 @@
+records_array_16k-fields-main worker 0 sampler 0 peak MiB 12.17
+records_array_16k-fields-candidate worker 0 sampler 0 peak MiB 12.19
+records_array_1m-fields-main worker 0 sampler 0 peak MiB 17.27
+records_array_1m-fields-candidate worker 0 sampler 0 peak MiB 17.3
