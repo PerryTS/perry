@@ -1,0 +1,126 @@
+Analysis of sampling candidate-access-worker (pid 4033) every 1 millisecond
+Process:         candidate-access-worker [4033]
+Path:            /Users/USER/*/candidate-access-worker
+Load Address:    0x100744000
+Identifier:      candidate-access-worker
+Version:         0
+Code Type:       ARM64
+Platform:        macOS
+Parent Process:  Python [3777]
+Target Type:     live task
+
+Date/Time:       2026-09-11 00:12:20.166 -0700
+Launch Time:     2026-09-11 00:12:19.624 -0700
+OS Version:      macOS 26.5.1 (25F80)
+Report Version:  7
+Analysis Tool:   /usr/bin/sample
+
+Physical footprint:         12.8M
+Physical footprint (peak):  12.8M
+Idle exit:                  untracked
+----
+
+Call graph:
+    764 Thread_12994066   DispatchQueue_1: com.apple.main-thread  (serial)
+      764 start  (in dyld) + 6992  [0x181357e00]
+        764 main  (in candidate-access-worker) + 2304  [0x10074a8a8]
+          220 perry_fn_access_worker_ts__run$spec_b_b  (in candidate-access-worker) + 8088  [0x100746858]
+          + 129 perry_fn_access_worker_ts__run$spec_b_b  (in candidate-access-worker) + 8660,8712,...  [0x100746a94,0x100746ac8,...]
+          + 59 js_array_get_f64  (in candidate-access-worker) + 132  [0x100f00dd4]
+          + ! 44 _RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 48  [0x100dcadb4]
+          + ! : 44 _RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in candidate-access-worker) + 124,24,...  [0x100dcb228,0x100dcb1c4,...]
+          + ! 9 _RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 8,84,...  [0x100dcad8c,0x100dcadd8,...]
+          + ! 6 _RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in candidate-access-worker) + 1112,1116  [0x100dcb604,0x100dcb608]
+          + 25 js_packed_arraylike_index_get  (in candidate-access-worker) + 160,172,...  [0x100fe0340,0x100fe034c,...]
+          + 5 js_array_get_f64  (in candidate-access-worker) + 100,0,...  [0x100f00db4,0x100f00d50,...]
+          + 2 _RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 184  [0x100dcae3c]
+          202 perry_fn_access_worker_ts__run$spec_b_b  (in candidate-access-worker) + 5100  [0x100745cac]
+          + 79 js_array_get_f64  (in candidate-access-worker) + 132  [0x100f00dd4]
+          + ! 56 _RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 48  [0x100dcadb4]
+          + ! : 56 _RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in candidate-access-worker) + 124,24,...  [0x100dcb228,0x100dcb1c4,...]
+          + ! 20 _RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 8,84,...  [0x100dcad8c,0x100dcadd8,...]
+          + ! 3 _RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in candidate-access-worker) + 1112  [0x100dcb604]
+          + 72 perry_fn_access_worker_ts__run$spec_b_b  (in candidate-access-worker) + 5844,5148,...  [0x100745f94,0x100745cdc,...]
+          + 37 js_packed_arraylike_index_get  (in candidate-access-worker) + 160,212,...  [0x100fe0340,0x100fe0374,...]
+          + 11 js_array_get_f64  (in candidate-access-worker) + 88,0,...  [0x100f00da8,0x100f00d50,...]
+          + 3 _RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 184  [0x100dcae3c]
+          181 perry_fn_access_worker_ts__run$spec_b_b  (in candidate-access-worker) + 6540  [0x10074624c]
+          + 64 js_array_get_f64  (in candidate-access-worker) + 132  [0x100f00dd4]
+          + ! 50 _RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 48  [0x100dcadb4]
+          + ! : 50 _RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in candidate-access-worker) + 124,24,...  [0x100dcb228,0x100dcb1c4,...]
+          + ! 12 _RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 36,84,...  [0x100dcada8,0x100dcadd8,...]
+          + ! 2 _RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in candidate-access-worker) + 1112,1116  [0x100dcb604,0x100dcb608]
+          + 64 perry_fn_access_worker_ts__run$spec_b_b  (in candidate-access-worker) + 7432,7460,...  [0x1007465c8,0x1007465e4,...]
+          + 37 js_packed_arraylike_index_get  (in candidate-access-worker) + 160,28,...  [0x100fe0340,0x100fe02bc,...]
+          + 11 js_array_get_f64  (in candidate-access-worker) + 76,88,...  [0x100f00d9c,0x100f00da8,...]
+          + 5 _RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 184  [0x100dcae3c]
+          130 perry_fn_access_worker_ts__run$spec_b_b  (in candidate-access-worker) + 4308  [0x100745994]
+          + 89 js_dynamic_mod  (in candidate-access-worker) + 84  [0x100f61a28]
+          + ! 87 fmod  (in libsystem_m.dylib) + 252,256,...  [0x1914bd6bc,0x1914bd6c0,...]
+          + ! 2 DYLD-STUB$$fmod  (in candidate-access-worker) + 4  [0x1012a4738]
+          + 35 perry_fn_access_worker_ts__run$spec_b_b  (in candidate-access-worker) + 4348,4448,...  [0x1007459bc,0x100745a20,...]
+          + 6 js_dynamic_mod  (in candidate-access-worker) + 12,32,...  [0x100f619e0,0x100f619f4,...]
+          20 js_array_get_f64  (in candidate-access-worker) + 1804,1812,...  [0x100f0145c,0x100f01464,...]
+          8 js_packed_arraylike_index_get  (in candidate-access-worker) + 292,300  [0x100fe03c4,0x100fe03cc]
+          3 js_dynamic_mod  (in candidate-access-worker) + 492  [0x100f61bc0]
+
+Total number in stack (recursive counted multiple, when >=5):
+        6       _RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 0  [0x100dcad84]
+        6       _RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in candidate-access-worker) + 0  [0x100dcb1ac]
+
+Sort by top of stack, same collapsed (when >= 5):
+        perry_fn_access_worker_ts__run$spec_b_b  (in candidate-access-worker)        300
+        _RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in candidate-access-worker)        161
+        js_packed_arraylike_index_get  (in candidate-access-worker)        107
+        fmod  (in libsystem_m.dylib)        87
+        _RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker)        51
+        js_array_get_f64  (in candidate-access-worker)        47
+        js_dynamic_mod  (in candidate-access-worker)        9
+
+Binary Images:
+       0x100744000 -        0x1015d627f +candidate-access-worker (0) <5BB311F4-C2A6-3673-8D9D-FD7B77C52968> /Users/*/candidate-access-worker
+       0x1812b0000 -        0x181302b4b  libobjc.A.dylib (951.7) <FF1D8AE4-ABEF-35F1-A30A-1183B9CB414F> /usr/lib/libobjc.A.dylib
+       0x181303000 -        0x181337d07  libdyld.dylib (1378) <B147D877-D0C2-388F-B38D-D3132E39905F> /usr/lib/system/libdyld.dylib
+       0x181338000 -        0x1813de217  dyld (1.0.0 - 1378) <A237EF81-B68B-37BA-A165-92C965529534> /usr/lib/dyld
+       0x1813df000 -        0x1813e2228  libsystem_blocks.dylib (96) <CC947089-488D-316B-A9C7-46DEC0F73145> /usr/lib/system/libsystem_blocks.dylib
+       0x1813e3000 -        0x18143755f  libxpc.dylib (3102.120.13) <C40FCAE8-7A17-3D82-87CB-3DA4802ADEF1> /usr/lib/system/libxpc.dylib
+       0x181438000 -        0x1814589ff  libsystem_trace.dylib (1861.120.4) <D0FABAB3-5AE7-3F10-8C62-60CBF5D70850> /usr/lib/system/libsystem_trace.dylib
+       0x181459000 -        0x1815075f7  libcorecrypto.dylib (1922.121.1) <A01A158D-6FE7-3B1C-A2C4-6BCB90D7314A> /usr/lib/system/libcorecrypto.dylib
+       0x181508000 -        0x1815581d7  libsystem_malloc.dylib (812.100.31) <5FAE4807-4D2B-3A95-A63A-DD96D3DA11B4> /usr/lib/system/libsystem_malloc.dylib
+       0x181559000 -        0x1815a023f  libdispatch.dylib (1542.100.32) <F071EFE4-299F-3089-ACC4-0025B8FFB52A> /usr/lib/system/libdispatch.dylib
+       0x1815a1000 -        0x1815a3ffb  libsystem_featureflags.dylib (103) <71FCFFBD-85F8-3365-AFE0-BECEA4369122> /usr/lib/system/libsystem_featureflags.dylib
+       0x1815a4000 -        0x181624d9f  libsystem_c.dylib (1752.120.2) <694B7881-1BF3-3D0F-8F19-B50AE4E8EF8A> /usr/lib/system/libsystem_c.dylib
+       0x181625000 -        0x1816b5ae7  libc++.1.dylib (2100.43) <5013C0F8-84A9-3B56-9FEB-C353816A750F> /usr/lib/libc++.1.dylib
+       0x1816b6000 -        0x1816d075f  libc++abi.dylib (2100.43) <E482D257-E5A0-3816-BD97-7B39342958DA> /usr/lib/libc++abi.dylib
+       0x1816d1000 -        0x18170e2af  libsystem_kernel.dylib (12377.121.6) <CC1CF985-BC65-3725-809F-4C1E36B8F4BA> /usr/lib/system/libsystem_kernel.dylib
+       0x18170f000 -        0x18171bb3b  libsystem_pthread.dylib (539.100.4) <4F33683C-18C8-39A1-800B-2E3BD43BCC13> /usr/lib/system/libsystem_pthread.dylib
+       0x18171c000 -        0x181724963  libsystem_platform.dylib (375.120.2) <160FD864-8D15-36FC-9E97-9725388CFAFE> /usr/lib/system/libsystem_platform.dylib
+       0x181725000 -        0x1817546eb  libsystem_info.dylib (600) <3D62F2D9-F516-31BF-83C7-E203D872300B> /usr/lib/system/libsystem_info.dylib
+       0x1856ec000 -        0x1856f5e5f  libsystem_darwin.dylib (1752.120.2) <8858F025-745A-388E-9544-080781CC9A69> /usr/lib/system/libsystem_darwin.dylib
+       0x185b57000 -        0x185b691b6  libsystem_notify.dylib (348.120.4) <64D76451-1E0C-369B-A631-54DA3140E083> /usr/lib/system/libsystem_notify.dylib
+       0x187e24000 -        0x187e3ef7b  libsystem_networkextension.dylib (2226.121.1) <0331EE20-A1FB-3C0D-990A-F65939CFF505> /usr/lib/system/libsystem_networkextension.dylib
+       0x187ec1000 -        0x187ed8fdf  libsystem_asl.dylib (406) <F40838DF-2F15-3F62-970F-DEE25706BF1B> /usr/lib/system/libsystem_asl.dylib
+       0x189a7f000 -        0x189a87387  libsystem_symptoms.dylib (2169.120.7) <F5029F5C-1BF3-31C7-892E-BC8606AC829E> /usr/lib/system/libsystem_symptoms.dylib
+       0x18dd23000 -        0x18dd5b257  libsystem_containermanager.dylib (725.120.2) <518BE44D-AA31-31E6-B44B-A37AD5E47040> /usr/lib/system/libsystem_containermanager.dylib
+       0x18f134000 -        0x18f1385d7  libsystem_configuration.dylib (1405.120.5) <0F7BBC1C-3D50-3E59-A31F-E4672A80BCEB> /usr/lib/system/libsystem_configuration.dylib
+       0x18f139000 -        0x18f13f8cf  libsystem_sandbox.dylib (2680.120.12) <EC3A75EA-44C0-3A0B-9BF7-71C117B0A9C6> /usr/lib/system/libsystem_sandbox.dylib
+       0x190793000 -        0x1907961fb  libquarantine.dylib (196.120.2) <5849009B-ACA3-3796-94C4-BBDF8D300EBA> /usr/lib/system/libquarantine.dylib
+       0x190f32000 -        0x190f38d03  libsystem_coreservices.dylib (191.4.5) <9576143B-C303-35A3-BA63-1FD06EDA2BB1> /usr/lib/system/libsystem_coreservices.dylib
+       0x1914bd000 -        0x1914faa77  libsystem_m.dylib (3312.100.1) <A7E0863C-101A-31A0-922B-ED9B02626151> /usr/lib/system/libsystem_m.dylib
+       0x1914fc000 -        0x1914ff527  libmacho.dylib (1378) <755441B4-C034-3E3A-8E3C-F424FBB28261> /usr/lib/system/libmacho.dylib
+       0x191519000 -        0x1915263a7  libcommonCrypto.dylib (600035) <CE357BB1-2D49-37CC-9FFE-D093936B1475> /usr/lib/system/libcommonCrypto.dylib
+       0x191527000 -        0x191530ca3  libunwind.dylib (2100.2) <FC8F0C4E-6FB0-3E27-ABEF-B0FA720CD5E4> /usr/lib/system/libunwind.dylib
+       0x191539000 -        0x1915437ff  libcopyfile.dylib (240) <8ACFAC7A-88E9-3EF4-853F-A9140FF110E5> /usr/lib/system/libcopyfile.dylib
+       0x191544000 -        0x191547987  libcompiler_rt.dylib (103.3) <AA79151F-C19D-3C7C-92F8-B10F04D82C1C> /usr/lib/system/libcompiler_rt.dylib
+       0x191548000 -        0x19154c78b  libsystem_collections.dylib (1752.120.2) <72DB5BE7-EF78-37D0-8AAD-53E37CFE4287> /usr/lib/system/libsystem_collections.dylib
+       0x19154d000 -        0x1915504cf  libsystem_secinit.dylib (168.100.7) <E525C566-CDA4-3D99-B12B-1615FD54A1F3> /usr/lib/system/libsystem_secinit.dylib
+       0x191551000 -        0x191553bf7  libremovefile.dylib (85.100.6) <635E661D-80A7-340D-A165-3F7D318FDFC9> /usr/lib/system/libremovefile.dylib
+       0x191554000 -        0x191554f27  libkeymgr.dylib (31) <8C08891A-DF1C-3DCC-AB64-4742FD6BE9BA> /usr/lib/system/libkeymgr.dylib
+       0x191555000 -        0x19155de37  libsystem_dnssd.dylib (2881.120.11) <6F45DF3F-233B-3BC3-BA8C-B43E7DA884BF> /usr/lib/system/libsystem_dnssd.dylib
+       0x19155e000 -        0x19156309b  libcache.dylib (95) <189B576E-6176-3F82-8FA4-5914B0BEAEE7> /usr/lib/system/libcache.dylib
+       0x191564000 -        0x191565ce3  libSystem.B.dylib (1356) <D65E4112-C151-3FF8-BEB7-4841436012D6> /usr/lib/libSystem.B.dylib
+       0x28479b000 -        0x2847a2349  libRosetta.dylib (367.9) <8651ED4F-6506-3788-B56B-32EE414A85CA> /usr/lib/libRosetta.dylib
+       0x2863b8000 -        0x2863bba4b  libsystem_darwindirectory.dylib (122) <CF277A2C-C818-3F16-8B3F-3C7B39FCD164> /usr/lib/system/libsystem_darwindirectory.dylib
+       0x2863bc000 -        0x2863c55d3  libsystem_eligibility.dylib (319.121.1) <DDAC0531-0262-3DDC-8EC8-80EB9438847A> /usr/lib/system/libsystem_eligibility.dylib
+       0x2863c6000 -        0x2863cd88b  libsystem_sanitizers.dylib (26.1) <44C4234F-8B2D-38D3-A774-B4B3C75AF3A7> /usr/lib/system/libsystem_sanitizers.dylib
+       0x2863ce000 -        0x2863cebb7  libsystem_trial.dylib (474.2.18.2) <68C583BA-AFF5-3916-86AE-6E38BFEF98D6> /usr/lib/system/libsystem_trial.dylib

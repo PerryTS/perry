@@ -1,0 +1,32 @@
+{
+  "purpose": "symbolized diagnostic only, no performance claim",
+  "source_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+  "commands": [
+    [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/frozen-main/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/lazy-space-probe.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "--no-link",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/main-lazy-debug.o"
+    ],
+    [
+      "cc",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/main-lazy-debug.o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/frozen-main/libperry_runtime.a",
+      "-lc",
+      "-Wl,-dead_strip",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/main-lazy-debug"
+    ]
+  ],
+  "files": {
+    "benchmarks/json_performance/.work/materialized-read-r23/lazy-space-probe.ts": "414396d09f9ddafd606942015125ae17445e29b0b8cf47a229ccc1498be09234",
+    "benchmarks/json_performance/.work/materialized-read-r23/main-lazy-debug.o": "faa8b85ea440ab69adfc07d8c56ccdf29f876e3c1a7ec34fd9c59e109457a49e",
+    "benchmarks/json_performance/.work/materialized-read-r23/main-lazy-debug": "4abc04e908f8fe44a24da2c5d9e5565432bfe9682abcd61376ecf205f09c3651",
+    "benchmarks/json_performance/.work/materialized-read-r23/frozen-main/perry": "ade63eddfdeca03926039d10e3310f9255d52c5b2721ccd2b0882f042a689156",
+    "benchmarks/json_performance/.work/materialized-read-r23/frozen-main/libperry_runtime.a": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458"
+  }
+}

@@ -1,0 +1,23 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/outlined-cached-read-r24/run-focus.py",
+  "--worker",
+  ".work/outlined-cached-read-r24/candidate-worker",
+  "--baseline-worker",
+  ".work/outlined-cached-read-r24/main-worker",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--case",
+  "small_record:stringify:2000000:5000:11",
+  "--case",
+  "long_string_1m:stringify:1922:2:11",
+  "--case",
+  "unicode_1m:stringify:2475:2:11",
+  "--results-dir",
+  "results/quiet-outlined-cached-read-r24-stringify-recheck-focus"
+]

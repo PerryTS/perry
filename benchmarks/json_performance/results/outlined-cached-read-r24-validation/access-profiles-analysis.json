@@ -1,0 +1,2101 @@
+{
+  "diagnostic_only": true,
+  "cases": [
+    {
+      "top_self_sample_nodes": [
+        {
+          "depth": 14,
+          "count": 110,
+          "name": "fmod  (in libsystem_m.dylib) + 252,268,...  [0x1914bd6bc,0x1914bd6cc,...]",
+          "parent": 54,
+          "self_samples": 110
+        },
+        {
+          "depth": 12,
+          "count": 86,
+          "name": "perry_fn_access_worker_ts__run$spec_b_b  (in main-access-worker) + 8660,8544,...  [0x104c06a94,0x104c06a20,...]",
+          "parent": 20,
+          "self_samples": 86
+        },
+        {
+          "depth": 12,
+          "count": 68,
+          "name": "perry_fn_access_worker_ts__run$spec_b_b  (in main-access-worker) + 6588,7432,...  [0x104c0627c,0x104c065c8,...]",
+          "parent": 36,
+          "self_samples": 68
+        },
+        {
+          "depth": 12,
+          "count": 42,
+          "name": "perry_fn_access_worker_ts__run$spec_b_b  (in main-access-worker) + 5416,5644,...  [0x104c05de8,0x104c05ecc,...]",
+          "parent": 3,
+          "self_samples": 42
+        },
+        {
+          "depth": 12,
+          "count": 37,
+          "name": "perry_fn_access_worker_ts__run$spec_b_b  (in main-access-worker) + 5080,4396,...  [0x104c05c98,0x104c059ec,...]",
+          "parent": 53,
+          "self_samples": 37
+        },
+        {
+          "depth": 12,
+          "count": 32,
+          "name": "js_packed_arraylike_index_get  (in main-access-worker) + 160,196,...  [0x1054a0240,0x1054a0264,...]",
+          "parent": 3,
+          "self_samples": 32
+        },
+        {
+          "depth": 16,
+          "count": 29,
+          "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 32,20  [0x104d69d1c,0x104d69d10]",
+          "parent": 5,
+          "self_samples": 29
+        },
+        {
+          "depth": 16,
+          "count": 28,
+          "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in main-access-worker) + 100,40,...  [0x104e8e404,0x104e8e3c8,...]",
+          "parent": 7,
+          "self_samples": 28
+        },
+        {
+          "depth": 14,
+          "count": 24,
+          "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 108,24,...  [0x104f7b7a8,0x104f7b754,...]",
+          "parent": 4,
+          "self_samples": 24
+        },
+        {
+          "depth": 14,
+          "count": 24,
+          "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 108,272,...  [0x104f7b7a8,0x104f7b84c,...]",
+          "parent": 37,
+          "self_samples": 24
+        },
+        {
+          "depth": 14,
+          "count": 23,
+          "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 108,40,...  [0x104f7b7a8,0x104f7b764,...]",
+          "parent": 22,
+          "self_samples": 23
+        },
+        {
+          "depth": 12,
+          "count": 23,
+          "name": "js_packed_arraylike_index_get  (in main-access-worker) + 160,28,...  [0x1054a0240,0x1054a01bc,...]",
+          "parent": 36,
+          "self_samples": 23
+        },
+        {
+          "depth": 16,
+          "count": 22,
+          "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new  (in main-access-worker) + 32,20,...  [0x104e8e2b8,0x104e8e2ac,...]",
+          "parent": 10,
+          "self_samples": 22
+        },
+        {
+          "depth": 16,
+          "count": 21,
+          "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in main-access-worker) + 100,40,...  [0x104e8e404,0x104e8e3c8,...]",
+          "parent": 39,
+          "self_samples": 21
+        },
+        {
+          "depth": 16,
+          "count": 20,
+          "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new  (in main-access-worker) + 32  [0x104e8e2b8]",
+          "parent": 41,
+          "self_samples": 20
+        },
+        {
+          "depth": 16,
+          "count": 20,
+          "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 32,20,...  [0x104d69d1c,0x104d69d10,...]",
+          "parent": 43,
+          "self_samples": 20
+        },
+        {
+          "depth": 16,
+          "count": 18,
+          "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new  (in main-access-worker) + 32,20  [0x104e8e2b8,0x104e8e2ac]",
+          "parent": 24,
+          "self_samples": 18
+        },
+        {
+          "depth": 16,
+          "count": 17,
+          "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in main-access-worker) + 100,232,...  [0x104e8e404,0x104e8e488,...]",
+          "parent": 26,
+          "self_samples": 17
+        },
+        {
+          "depth": 12,
+          "count": 17,
+          "name": "js_packed_arraylike_index_get  (in main-access-worker) + 160,28,...  [0x1054a0240,0x1054a01bc,...]",
+          "parent": 20,
+          "self_samples": 17
+        },
+        {
+          "depth": 16,
+          "count": 16,
+          "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 32,20  [0x104d69d1c,0x104d69d10]",
+          "parent": 28,
+          "self_samples": 16
+        },
+        {
+          "depth": 12,
+          "count": 11,
+          "name": "js_array_get_f64  (in main-access-worker) + 100,120,...  [0x1053c0cb4,0x1053c0cc8,...]",
+          "parent": 3,
+          "self_samples": 11
+        },
+        {
+          "depth": 12,
+          "count": 7,
+          "name": "js_array_get_f64  (in main-access-worker) + 100,76,...  [0x1053c0cb4,0x1053c0c9c,...]",
+          "parent": 20,
+          "self_samples": 7
+        },
+        {
+          "depth": 14,
+          "count": 4,
+          "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 144  [0x104d69d8c]",
+          "parent": 4,
+          "self_samples": 4
+        },
+        {
+          "depth": 14,
+          "count": 4,
+          "name": "DYLD-STUB$$fmod  (in main-access-worker) + 4  [0x105764638]",
+          "parent": 54,
+          "self_samples": 4
+        },
+        {
+          "depth": 16,
+          "count": 3,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in main-access-worker) + 1096,24  [0x10528b524,0x10528b0f4]",
+          "parent": 13,
+          "self_samples": 3
+        },
+        {
+          "depth": 12,
+          "count": 3,
+          "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 1136  [0x104f7bbac]",
+          "parent": 3,
+          "self_samples": 3
+        },
+        {
+          "depth": 14,
+          "count": 3,
+          "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 144  [0x104d69d8c]",
+          "parent": 22,
+          "self_samples": 3
+        },
+        {
+          "depth": 12,
+          "count": 3,
+          "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 1136  [0x104f7bbac]",
+          "parent": 20,
+          "self_samples": 3
+        },
+        {
+          "depth": 12,
+          "count": 3,
+          "name": "js_dynamic_mod  (in main-access-worker) + 52  [0x105421908]",
+          "parent": 53,
+          "self_samples": 3
+        },
+        {
+          "depth": 14,
+          "count": 2,
+          "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in main-access-worker) + 236  [0x104e8e48c]",
+          "parent": 4,
+          "self_samples": 2
+        }
+      ],
+      "case": {
+        "fixture": "records_array_16k",
+        "operation": "fields",
+        "mode": "main",
+        "iterations": 100000000,
+        "warmup": 100000
+      },
+      "window": "access-profiles",
+      "workload_samples": 731,
+      "coverage_qualified": true,
+      "oracle_command": [
+        "/opt/homebrew/bin/node",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/harness/access-worker.js",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/fixtures/records_array_16k.json",
+        "fields",
+        "100000000",
+        "100000"
+      ],
+      "oracle_output_sha256": "ab1147556307f1c8cec8b6bb2749f24d9643401f72ca20d2a640b9aafb3ffdba",
+      "oracle_output_reused_from_prior_verified_analysis": true,
+      "checksum_matches_node": true,
+      "phases": {
+        "workload": {
+          "samples": 731,
+          "frames": [
+            {
+              "depth": 10,
+              "count": 200,
+              "name": "perry_fn_access_worker_ts__run$spec_b_b  (in main-access-worker) + 5100  [0x104c05cac]",
+              "parent": 2
+            },
+            {
+              "depth": 10,
+              "count": 192,
+              "name": "perry_fn_access_worker_ts__run$spec_b_b  (in main-access-worker) + 8088  [0x104c06858]",
+              "parent": 2
+            },
+            {
+              "depth": 10,
+              "count": 184,
+              "name": "perry_fn_access_worker_ts__run$spec_b_b  (in main-access-worker) + 6540  [0x104c0624c]",
+              "parent": 2
+            },
+            {
+              "depth": 10,
+              "count": 154,
+              "name": "perry_fn_access_worker_ts__run$spec_b_b  (in main-access-worker) + 4308  [0x104c05994]",
+              "parent": 2
+            },
+            {
+              "depth": 10,
+              "count": 1,
+              "name": "perry_fn_access_worker_ts__run$spec_b_b  (in main-access-worker) + 8892  [0x104c06b7c]",
+              "parent": 2
+            }
+          ],
+          "pct_of_workload_samples": 100.0
+        },
+        "array_access": {
+          "samples": 300,
+          "frames": [
+            {
+              "depth": 12,
+              "count": 112,
+              "name": "js_array_get_f64  (in main-access-worker) + 132  [0x1053c0cd4]",
+              "parent": 3,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 11,
+              "name": "js_array_get_f64  (in main-access-worker) + 100,120,...  [0x1053c0cb4,0x1053c0cc8,...]",
+              "parent": 3,
+              "self_samples": 11
+            },
+            {
+              "depth": 12,
+              "count": 79,
+              "name": "js_array_get_f64  (in main-access-worker) + 132  [0x1053c0cd4]",
+              "parent": 20,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 7,
+              "name": "js_array_get_f64  (in main-access-worker) + 100,76,...  [0x1053c0cb4,0x1053c0c9c,...]",
+              "parent": 20,
+              "self_samples": 7
+            },
+            {
+              "depth": 12,
+              "count": 90,
+              "name": "js_array_get_f64  (in main-access-worker) + 132  [0x1053c0cd4]",
+              "parent": 36,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 1,
+              "name": "js_array_get_f64  (in main-access-worker) + 100  [0x1053c0cb4]",
+              "parent": 36,
+              "self_samples": 1
+            }
+          ],
+          "pct_of_workload_samples": 41.03967168262654
+        },
+        "lazy_access": {
+          "samples": 276,
+          "frames": [
+            {
+              "depth": 14,
+              "count": 29,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 1112  [0x104f7bb94]",
+              "parent": 4,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 28,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 84  [0x104f7b790]",
+              "parent": 4,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 24,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 108,24,...  [0x104f7b7a8,0x104f7b754,...]",
+              "parent": 4,
+              "self_samples": 24
+            },
+            {
+              "depth": 14,
+              "count": 22,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 56  [0x104f7b774]",
+              "parent": 4,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 3,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 232  [0x104f7b824]",
+              "parent": 4,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 3,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 1136  [0x104f7bbac]",
+              "parent": 3,
+              "self_samples": 3
+            },
+            {
+              "depth": 14,
+              "count": 23,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 108,40,...  [0x104f7b7a8,0x104f7b764,...]",
+              "parent": 22,
+              "self_samples": 23
+            },
+            {
+              "depth": 14,
+              "count": 18,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 56  [0x104f7b774]",
+              "parent": 22,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 17,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 84  [0x104f7b790]",
+              "parent": 22,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 16,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 1112  [0x104f7bb94]",
+              "parent": 22,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 2,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 232  [0x104f7b824]",
+              "parent": 22,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 3,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 1136  [0x104f7bbac]",
+              "parent": 20,
+              "self_samples": 3
+            },
+            {
+              "depth": 14,
+              "count": 24,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 108,272,...  [0x104f7b7a8,0x104f7b84c,...]",
+              "parent": 37,
+              "self_samples": 24
+            },
+            {
+              "depth": 14,
+              "count": 21,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 84  [0x104f7b790]",
+              "parent": 37,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 20,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 56  [0x104f7b774]",
+              "parent": 37,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 20,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 1112  [0x104f7bb94]",
+              "parent": 37,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 1,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 232  [0x104f7b824]",
+              "parent": 37,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 2,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 1136  [0x104f7bbac]",
+              "parent": 36,
+              "self_samples": 2
+            }
+          ],
+          "pct_of_workload_samples": 37.75649794801642
+        },
+        "packed_index": {
+          "samples": 72,
+          "frames": [
+            {
+              "depth": 12,
+              "count": 32,
+              "name": "js_packed_arraylike_index_get  (in main-access-worker) + 160,196,...  [0x1054a0240,0x1054a0264,...]",
+              "parent": 3,
+              "self_samples": 32
+            },
+            {
+              "depth": 12,
+              "count": 17,
+              "name": "js_packed_arraylike_index_get  (in main-access-worker) + 160,28,...  [0x1054a0240,0x1054a01bc,...]",
+              "parent": 20,
+              "self_samples": 17
+            },
+            {
+              "depth": 12,
+              "count": 23,
+              "name": "js_packed_arraylike_index_get  (in main-access-worker) + 160,28,...  [0x1054a0240,0x1054a01bc,...]",
+              "parent": 36,
+              "self_samples": 23
+            }
+          ],
+          "pct_of_workload_samples": 9.849521203830369
+        },
+        "generic_index": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "named_property_helpers": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "fmod": {
+          "samples": 110,
+          "frames": [
+            {
+              "depth": 14,
+              "count": 110,
+              "name": "fmod  (in libsystem_m.dylib) + 252,268,...  [0x1914bd6bc,0x1914bd6cc,...]",
+              "parent": 54,
+              "self_samples": 110
+            }
+          ],
+          "pct_of_workload_samples": 15.047879616963064
+        },
+        "root_scope_helpers": {
+          "samples": 204,
+          "frames": [
+            {
+              "depth": 16,
+              "count": 29,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 32,20  [0x104d69d1c,0x104d69d10]",
+              "parent": 5,
+              "self_samples": 29
+            },
+            {
+              "depth": 16,
+              "count": 28,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in main-access-worker) + 100,40,...  [0x104e8e404,0x104e8e3c8,...]",
+              "parent": 7,
+              "self_samples": 28
+            },
+            {
+              "depth": 16,
+              "count": 22,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new  (in main-access-worker) + 32,20,...  [0x104e8e2b8,0x104e8e2ac,...]",
+              "parent": 10,
+              "self_samples": 22
+            },
+            {
+              "depth": 14,
+              "count": 4,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 144  [0x104d69d8c]",
+              "parent": 4,
+              "self_samples": 4
+            },
+            {
+              "depth": 14,
+              "count": 2,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in main-access-worker) + 236  [0x104e8e48c]",
+              "parent": 4,
+              "self_samples": 2
+            },
+            {
+              "depth": 16,
+              "count": 18,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new  (in main-access-worker) + 32,20  [0x104e8e2b8,0x104e8e2ac]",
+              "parent": 24,
+              "self_samples": 18
+            },
+            {
+              "depth": 16,
+              "count": 17,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in main-access-worker) + 100,232,...  [0x104e8e404,0x104e8e488,...]",
+              "parent": 26,
+              "self_samples": 17
+            },
+            {
+              "depth": 16,
+              "count": 16,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 32,20  [0x104d69d1c,0x104d69d10]",
+              "parent": 28,
+              "self_samples": 16
+            },
+            {
+              "depth": 14,
+              "count": 3,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 144  [0x104d69d8c]",
+              "parent": 22,
+              "self_samples": 3
+            },
+            {
+              "depth": 16,
+              "count": 21,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in main-access-worker) + 100,40,...  [0x104e8e404,0x104e8e3c8,...]",
+              "parent": 39,
+              "self_samples": 21
+            },
+            {
+              "depth": 16,
+              "count": 20,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new  (in main-access-worker) + 32  [0x104e8e2b8]",
+              "parent": 41,
+              "self_samples": 20
+            },
+            {
+              "depth": 16,
+              "count": 20,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 32,20,...  [0x104d69d1c,0x104d69d10,...]",
+              "parent": 43,
+              "self_samples": 20
+            },
+            {
+              "depth": 14,
+              "count": 2,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 144  [0x104d69d8c]",
+              "parent": 37,
+              "self_samples": 2
+            },
+            {
+              "depth": 14,
+              "count": 2,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in main-access-worker) + 236  [0x104e8e48c]",
+              "parent": 37,
+              "self_samples": 2
+            }
+          ],
+          "pct_of_workload_samples": 27.906976744186046
+        },
+        "resolve_materialized": {
+          "samples": 6,
+          "frames": [
+            {
+              "depth": 16,
+              "count": 3,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in main-access-worker) + 1096,24  [0x10528b524,0x10528b0f4]",
+              "parent": 13,
+              "self_samples": 3
+            },
+            {
+              "depth": 16,
+              "count": 2,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in main-access-worker) + 1096  [0x10528b524]",
+              "parent": 31,
+              "self_samples": 2
+            },
+            {
+              "depth": 16,
+              "count": 1,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in main-access-worker) + 1096  [0x10528b524]",
+              "parent": 47,
+              "self_samples": 1
+            }
+          ],
+          "pct_of_workload_samples": 0.8207934336525308
+        }
+      },
+      "profile_sha256": "0fa3ee51cd947cb6be905fc2145e034749a88707a72e2f0cd764110613a328e5",
+      "note": "Instrumented diagnostic with at least 500 workload samples. Inclusive phases overlap and must not be added. CPU/RSS from sampled processes is not used as benchmark evidence. Inlined property reads remain in the generated workload frame; zero named-helper samples does not mean zero property-read cost."
+    },
+    {
+      "top_self_sample_nodes": [
+        {
+          "depth": 14,
+          "count": 131,
+          "name": "fmod  (in libsystem_m.dylib) + 252,268,...  [0x1914bd6bc,0x1914bd6cc,...]",
+          "parent": 4,
+          "self_samples": 131
+        },
+        {
+          "depth": 12,
+          "count": 119,
+          "name": "perry_fn_access_worker_ts__run$spec_b_b  (in candidate-access-worker) + 8660,8544,...  [0x1000dea94,0x1000dea20,...]",
+          "parent": 16,
+          "self_samples": 119
+        },
+        {
+          "depth": 12,
+          "count": 85,
+          "name": "perry_fn_access_worker_ts__run$spec_b_b  (in candidate-access-worker) + 5844,5748,...  [0x1000ddf94,0x1000ddf34,...]",
+          "parent": 9,
+          "self_samples": 85
+        },
+        {
+          "depth": 12,
+          "count": 85,
+          "name": "perry_fn_access_worker_ts__run$spec_b_b  (in candidate-access-worker) + 7180,7432,...  [0x1000de4cc,0x1000de5c8,...]",
+          "parent": 23,
+          "self_samples": 85
+        },
+        {
+          "depth": 12,
+          "count": 65,
+          "name": "perry_fn_access_worker_ts__run$spec_b_b  (in candidate-access-worker) + 4448,5080,...  [0x1000dda20,0x1000ddc98,...]",
+          "parent": 3,
+          "self_samples": 65
+        },
+        {
+          "depth": 12,
+          "count": 61,
+          "name": "js_packed_arraylike_index_get  (in candidate-access-worker) + 160,236,...  [0x100978340,0x10097838c,...]",
+          "parent": 23,
+          "self_samples": 61
+        },
+        {
+          "depth": 12,
+          "count": 52,
+          "name": "js_packed_arraylike_index_get  (in candidate-access-worker) + 160,236,...  [0x100978340,0x10097838c,...]",
+          "parent": 9,
+          "self_samples": 52
+        },
+        {
+          "depth": 12,
+          "count": 30,
+          "name": "js_packed_arraylike_index_get  (in candidate-access-worker) + 160,184,...  [0x100978340,0x100978358,...]",
+          "parent": 16,
+          "self_samples": 30
+        },
+        {
+          "depth": 12,
+          "count": 23,
+          "name": "js_array_get_f64  (in candidate-access-worker) + 76,0,...  [0x100898d9c,0x100898d50,...]",
+          "parent": 23,
+          "self_samples": 23
+        },
+        {
+          "depth": 12,
+          "count": 22,
+          "name": "js_array_get_f64  (in candidate-access-worker) + 88,100,...  [0x100898da8,0x100898db4,...]",
+          "parent": 9,
+          "self_samples": 22
+        },
+        {
+          "depth": 14,
+          "count": 17,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 120,28,...  [0x100762dfc,0x100762da0,...]",
+          "parent": 13,
+          "self_samples": 17
+        },
+        {
+          "depth": 12,
+          "count": 17,
+          "name": "js_array_get_f64  (in candidate-access-worker) + 76,100,...  [0x100898d9c,0x100898db4,...]",
+          "parent": 16,
+          "self_samples": 17
+        },
+        {
+          "depth": 14,
+          "count": 9,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 140,128,...  [0x100762e10,0x100762e04,...]",
+          "parent": 20,
+          "self_samples": 9
+        },
+        {
+          "depth": 14,
+          "count": 6,
+          "name": "DYLD-STUB$$fmod  (in candidate-access-worker) + 4  [0x100c3c738]",
+          "parent": 4,
+          "self_samples": 6
+        },
+        {
+          "depth": 14,
+          "count": 6,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 28,140,...  [0x100762da0,0x100762e10,...]",
+          "parent": 27,
+          "self_samples": 6
+        },
+        {
+          "depth": 12,
+          "count": 3,
+          "name": "js_dynamic_mod  (in candidate-access-worker) + 72,12  [0x1008f9a1c,0x1008f99e0]",
+          "parent": 3,
+          "self_samples": 3
+        },
+        {
+          "depth": 12,
+          "count": 3,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 184  [0x100762e3c]",
+          "parent": 9,
+          "self_samples": 3
+        },
+        {
+          "depth": 12,
+          "count": 2,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 184  [0x100762e3c]",
+          "parent": 16,
+          "self_samples": 2
+        },
+        {
+          "depth": 12,
+          "count": 1,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 184  [0x100762e3c]",
+          "parent": 23,
+          "self_samples": 1
+        }
+      ],
+      "case": {
+        "fixture": "records_array_16k",
+        "operation": "fields",
+        "mode": "candidate",
+        "iterations": 100000000,
+        "warmup": 100000
+      },
+      "window": "access-profiles",
+      "workload_samples": 737,
+      "coverage_qualified": true,
+      "oracle_command": [
+        "/opt/homebrew/bin/node",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/harness/access-worker.js",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/fixtures/records_array_16k.json",
+        "fields",
+        "100000000",
+        "100000"
+      ],
+      "oracle_output_sha256": "a703dd4fd278be2d388e2feba471108b9673d892a43cf23a137aa51211fb05ea",
+      "oracle_output_reused_from_prior_verified_analysis": true,
+      "checksum_matches_node": true,
+      "phases": {
+        "workload": {
+          "samples": 737,
+          "frames": [
+            {
+              "depth": 10,
+              "count": 205,
+              "name": "perry_fn_access_worker_ts__run$spec_b_b  (in candidate-access-worker) + 4308  [0x1000dd994]",
+              "parent": 2
+            },
+            {
+              "depth": 10,
+              "count": 179,
+              "name": "perry_fn_access_worker_ts__run$spec_b_b  (in candidate-access-worker) + 5100  [0x1000ddcac]",
+              "parent": 2
+            },
+            {
+              "depth": 10,
+              "count": 177,
+              "name": "perry_fn_access_worker_ts__run$spec_b_b  (in candidate-access-worker) + 8088  [0x1000de858]",
+              "parent": 2
+            },
+            {
+              "depth": 10,
+              "count": 176,
+              "name": "perry_fn_access_worker_ts__run$spec_b_b  (in candidate-access-worker) + 6540  [0x1000de24c]",
+              "parent": 2
+            }
+          ],
+          "pct_of_workload_samples": 100.0
+        },
+        "array_access": {
+          "samples": 94,
+          "frames": [
+            {
+              "depth": 12,
+              "count": 22,
+              "name": "js_array_get_f64  (in candidate-access-worker) + 88,100,...  [0x100898da8,0x100898db4,...]",
+              "parent": 9,
+              "self_samples": 22
+            },
+            {
+              "depth": 12,
+              "count": 17,
+              "name": "js_array_get_f64  (in candidate-access-worker) + 132  [0x100898dd4]",
+              "parent": 9,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 17,
+              "name": "js_array_get_f64  (in candidate-access-worker) + 76,100,...  [0x100898d9c,0x100898db4,...]",
+              "parent": 16,
+              "self_samples": 17
+            },
+            {
+              "depth": 12,
+              "count": 9,
+              "name": "js_array_get_f64  (in candidate-access-worker) + 132  [0x100898dd4]",
+              "parent": 16,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 23,
+              "name": "js_array_get_f64  (in candidate-access-worker) + 76,0,...  [0x100898d9c,0x100898d50,...]",
+              "parent": 23,
+              "self_samples": 23
+            },
+            {
+              "depth": 12,
+              "count": 6,
+              "name": "js_array_get_f64  (in candidate-access-worker) + 132  [0x100898dd4]",
+              "parent": 23,
+              "self_samples": 0
+            }
+          ],
+          "pct_of_workload_samples": 12.754409769335142
+        },
+        "lazy_access": {
+          "samples": 38,
+          "frames": [
+            {
+              "depth": 14,
+              "count": 17,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 120,28,...  [0x100762dfc,0x100762da0,...]",
+              "parent": 13,
+              "self_samples": 17
+            },
+            {
+              "depth": 12,
+              "count": 3,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 184  [0x100762e3c]",
+              "parent": 9,
+              "self_samples": 3
+            },
+            {
+              "depth": 14,
+              "count": 9,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 140,128,...  [0x100762e10,0x100762e04,...]",
+              "parent": 20,
+              "self_samples": 9
+            },
+            {
+              "depth": 12,
+              "count": 2,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 184  [0x100762e3c]",
+              "parent": 16,
+              "self_samples": 2
+            },
+            {
+              "depth": 14,
+              "count": 6,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 28,140,...  [0x100762da0,0x100762e10,...]",
+              "parent": 27,
+              "self_samples": 6
+            },
+            {
+              "depth": 12,
+              "count": 1,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 184  [0x100762e3c]",
+              "parent": 23,
+              "self_samples": 1
+            }
+          ],
+          "pct_of_workload_samples": 5.156037991858888
+        },
+        "packed_index": {
+          "samples": 143,
+          "frames": [
+            {
+              "depth": 12,
+              "count": 52,
+              "name": "js_packed_arraylike_index_get  (in candidate-access-worker) + 160,236,...  [0x100978340,0x10097838c,...]",
+              "parent": 9,
+              "self_samples": 52
+            },
+            {
+              "depth": 12,
+              "count": 30,
+              "name": "js_packed_arraylike_index_get  (in candidate-access-worker) + 160,184,...  [0x100978340,0x100978358,...]",
+              "parent": 16,
+              "self_samples": 30
+            },
+            {
+              "depth": 12,
+              "count": 61,
+              "name": "js_packed_arraylike_index_get  (in candidate-access-worker) + 160,236,...  [0x100978340,0x10097838c,...]",
+              "parent": 23,
+              "self_samples": 61
+            }
+          ],
+          "pct_of_workload_samples": 19.402985074626866
+        },
+        "generic_index": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "named_property_helpers": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "fmod": {
+          "samples": 131,
+          "frames": [
+            {
+              "depth": 14,
+              "count": 131,
+              "name": "fmod  (in libsystem_m.dylib) + 252,268,...  [0x1914bd6bc,0x1914bd6cc,...]",
+              "parent": 4,
+              "self_samples": 131
+            }
+          ],
+          "pct_of_workload_samples": 17.774762550881952
+        },
+        "root_scope_helpers": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "resolve_materialized": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        }
+      },
+      "profile_sha256": "2ba0eb0d93b622371284729fa05a50ef62d76b8f4827f40ce10a65682ee0c66a",
+      "note": "Instrumented diagnostic with at least 500 workload samples. Inclusive phases overlap and must not be added. CPU/RSS from sampled processes is not used as benchmark evidence. Inlined property reads remain in the generated workload frame; zero named-helper samples does not mean zero property-read cost."
+    },
+    {
+      "top_self_sample_nodes": [
+        {
+          "depth": 12,
+          "count": 71,
+          "name": "perry_fn_access_worker_ts__run$spec_b_b  (in main-access-worker) + 8660,8544,...  [0x1009faa94,0x1009faa20,...]",
+          "parent": 3,
+          "self_samples": 71
+        },
+        {
+          "depth": 16,
+          "count": 58,
+          "name": "js_array_get_f64  (in main-access-worker) + 412,400,...  [0x1011b4dec,0x1011b4de0,...]",
+          "parent": 5,
+          "self_samples": 58
+        },
+        {
+          "depth": 14,
+          "count": 56,
+          "name": "fmod  (in libsystem_m.dylib) + 252,244,...  [0x1914bd6bc,0x1914bd6b4,...]",
+          "parent": 71,
+          "self_samples": 56
+        },
+        {
+          "depth": 16,
+          "count": 48,
+          "name": "js_array_get_f64  (in main-access-worker) + 412,1652,...  [0x1011b4dec,0x1011b52c4,...]",
+          "parent": 51,
+          "self_samples": 48
+        },
+        {
+          "depth": 16,
+          "count": 46,
+          "name": "js_array_get_f64  (in main-access-worker) + 412,140,...  [0x1011b4dec,0x1011b4cdc,...]",
+          "parent": 27,
+          "self_samples": 46
+        },
+        {
+          "depth": 12,
+          "count": 32,
+          "name": "perry_fn_access_worker_ts__run$spec_b_b  (in main-access-worker) + 5924,5648,...  [0x1009f9fe4,0x1009f9ed0,...]",
+          "parent": 25,
+          "self_samples": 32
+        },
+        {
+          "depth": 16,
+          "count": 31,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in main-access-worker) + 124,112,...  [0x10107f158,0x10107f14c,...]",
+          "parent": 32,
+          "self_samples": 31
+        },
+        {
+          "depth": 12,
+          "count": 29,
+          "name": "perry_fn_access_worker_ts__run$spec_b_b  (in main-access-worker) + 7176,8068,...  [0x1009fa4c8,0x1009fa844,...]",
+          "parent": 49,
+          "self_samples": 29
+        },
+        {
+          "depth": 16,
+          "count": 25,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in main-access-worker) + 124,376,...  [0x10107f158,0x10107f254,...]",
+          "parent": 54,
+          "self_samples": 25
+        },
+        {
+          "depth": 12,
+          "count": 24,
+          "name": "perry_fn_access_worker_ts__run$spec_b_b  (in main-access-worker) + 4396,4348,...  [0x1009f99ec,0x1009f99bc,...]",
+          "parent": 70,
+          "self_samples": 24
+        },
+        {
+          "depth": 16,
+          "count": 22,
+          "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 32,20  [0x100b5dd1c,0x100b5dd10]",
+          "parent": 34,
+          "self_samples": 22
+        },
+        {
+          "depth": 16,
+          "count": 20,
+          "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in main-access-worker) + 100,180,...  [0x100c82404,0x100c82454,...]",
+          "parent": 36,
+          "self_samples": 20
+        },
+        {
+          "depth": 14,
+          "count": 20,
+          "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 108,236,...  [0x100d6f7a8,0x100d6f828,...]",
+          "parent": 26,
+          "self_samples": 20
+        },
+        {
+          "depth": 12,
+          "count": 19,
+          "name": "js_packed_arraylike_index_get  (in main-access-worker) + 160,28,...  [0x101294240,0x1012941bc,...]",
+          "parent": 25,
+          "self_samples": 19
+        },
+        {
+          "depth": 16,
+          "count": 18,
+          "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new  (in main-access-worker) + 32,24,...  [0x100c822b8,0x100c822b0,...]",
+          "parent": 56,
+          "self_samples": 18
+        },
+        {
+          "depth": 14,
+          "count": 18,
+          "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 108,24,...  [0x100d6f7a8,0x100d6f754,...]",
+          "parent": 50,
+          "self_samples": 18
+        },
+        {
+          "depth": 16,
+          "count": 17,
+          "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in main-access-worker) + 100,40,...  [0x100c82404,0x100c823c8,...]",
+          "parent": 10,
+          "self_samples": 17
+        },
+        {
+          "depth": 16,
+          "count": 16,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in main-access-worker) + 124,364,...  [0x10107f158,0x10107f248,...]",
+          "parent": 12,
+          "self_samples": 16
+        },
+        {
+          "depth": 14,
+          "count": 16,
+          "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 44,108,...  [0x100d6f768,0x100d6f7a8,...]",
+          "parent": 4,
+          "self_samples": 16
+        },
+        {
+          "depth": 12,
+          "count": 15,
+          "name": "js_packed_arraylike_index_get  (in main-access-worker) + 160,188,...  [0x101294240,0x10129425c,...]",
+          "parent": 49,
+          "self_samples": 15
+        },
+        {
+          "depth": 16,
+          "count": 14,
+          "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new  (in main-access-worker) + 32,20  [0x100c822b8,0x100c822ac]",
+          "parent": 15,
+          "self_samples": 14
+        },
+        {
+          "depth": 16,
+          "count": 14,
+          "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 32,20  [0x100b5dd1c,0x100b5dd10]",
+          "parent": 17,
+          "self_samples": 14
+        },
+        {
+          "depth": 16,
+          "count": 14,
+          "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new  (in main-access-worker) + 32,20  [0x100c822b8,0x100c822ac]",
+          "parent": 39,
+          "self_samples": 14
+        },
+        {
+          "depth": 12,
+          "count": 13,
+          "name": "js_packed_arraylike_index_get  (in main-access-worker) + 160,28,...  [0x101294240,0x1012941bc,...]",
+          "parent": 3,
+          "self_samples": 13
+        },
+        {
+          "depth": 16,
+          "count": 13,
+          "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in main-access-worker) + 100,48  [0x100c82404,0x100c823d0]",
+          "parent": 59,
+          "self_samples": 13
+        },
+        {
+          "depth": 16,
+          "count": 11,
+          "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 32  [0x100b5dd1c]",
+          "parent": 61,
+          "self_samples": 11
+        },
+        {
+          "depth": 12,
+          "count": 10,
+          "name": "js_array_get_f64  (in main-access-worker) + 1788,100,...  [0x1011b534c,0x1011b4cb4,...]",
+          "parent": 49,
+          "self_samples": 10
+        },
+        {
+          "depth": 14,
+          "count": 7,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in main-access-worker) + 1116,1112  [0x10107f538,0x10107f534]",
+          "parent": 50,
+          "self_samples": 7
+        },
+        {
+          "depth": 12,
+          "count": 7,
+          "name": "js_dynamic_mod  (in main-access-worker) + 12,72  [0x1012158e0,0x10121591c]",
+          "parent": 70,
+          "self_samples": 7
+        },
+        {
+          "depth": 14,
+          "count": 6,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in main-access-worker) + 1112,1116  [0x10107f534,0x10107f538]",
+          "parent": 4,
+          "self_samples": 6
+        }
+      ],
+      "case": {
+        "fixture": "records_array_1m",
+        "operation": "fields",
+        "mode": "main",
+        "iterations": 100000000,
+        "warmup": 100000
+      },
+      "window": "access-profiles",
+      "workload_samples": 755,
+      "coverage_qualified": true,
+      "oracle_command": [
+        "/opt/homebrew/bin/node",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/harness/access-worker.js",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/fixtures/records_array_1m.json",
+        "fields",
+        "100000000",
+        "100000"
+      ],
+      "oracle_output_sha256": "13569c6647fe9065dc99bdca7bba965ad4c4cd45dbeb7410215f28278500498c",
+      "oracle_output_reused_from_prior_verified_analysis": true,
+      "checksum_matches_node": true,
+      "phases": {
+        "workload": {
+          "samples": 755,
+          "frames": [
+            {
+              "depth": 10,
+              "count": 240,
+              "name": "perry_fn_access_worker_ts__run$spec_b_b  (in main-access-worker) + 8088  [0x1009fa858]",
+              "parent": 2
+            },
+            {
+              "depth": 10,
+              "count": 222,
+              "name": "perry_fn_access_worker_ts__run$spec_b_b  (in main-access-worker) + 5100  [0x1009f9cac]",
+              "parent": 2
+            },
+            {
+              "depth": 10,
+              "count": 204,
+              "name": "perry_fn_access_worker_ts__run$spec_b_b  (in main-access-worker) + 6540  [0x1009fa24c]",
+              "parent": 2
+            },
+            {
+              "depth": 10,
+              "count": 89,
+              "name": "perry_fn_access_worker_ts__run$spec_b_b  (in main-access-worker) + 4308  [0x1009f9994]",
+              "parent": 2
+            }
+          ],
+          "pct_of_workload_samples": 100.0
+        },
+        "array_access": {
+          "samples": 487,
+          "frames": [
+            {
+              "depth": 12,
+              "count": 150,
+              "name": "js_array_get_f64  (in main-access-worker) + 132  [0x1011b4cd4]",
+              "parent": 3,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 6,
+              "name": "js_array_get_f64  (in main-access-worker) + 76,100,...  [0x1011b4c9c,0x1011b4cb4,...]",
+              "parent": 3,
+              "self_samples": 6
+            },
+            {
+              "depth": 12,
+              "count": 168,
+              "name": "js_array_get_f64  (in main-access-worker) + 132  [0x1011b4cd4]",
+              "parent": 25,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 3,
+              "name": "js_array_get_f64  (in main-access-worker) + 0,88  [0x1011b4c50,0x1011b4ca8]",
+              "parent": 25,
+              "self_samples": 3
+            },
+            {
+              "depth": 12,
+              "count": 150,
+              "name": "js_array_get_f64  (in main-access-worker) + 132  [0x1011b4cd4]",
+              "parent": 49,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 10,
+              "name": "js_array_get_f64  (in main-access-worker) + 1788,100,...  [0x1011b534c,0x1011b4cb4,...]",
+              "parent": 49,
+              "self_samples": 10
+            }
+          ],
+          "pct_of_workload_samples": 64.50331125827815
+        },
+        "lazy_access": {
+          "samples": 433,
+          "frames": [
+            {
+              "depth": 14,
+              "count": 63,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 244  [0x100d6f830]",
+              "parent": 4,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 17,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 84  [0x100d6f790]",
+              "parent": 4,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 16,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 232  [0x100d6f824]",
+              "parent": 4,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 16,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 44,108,...  [0x100d6f768,0x100d6f7a8,...]",
+              "parent": 4,
+              "self_samples": 16
+            },
+            {
+              "depth": 14,
+              "count": 14,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 56  [0x100d6f774]",
+              "parent": 4,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 14,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 1112  [0x100d6fb94]",
+              "parent": 4,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 49,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 244  [0x100d6f830]",
+              "parent": 26,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 31,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 232  [0x100d6f824]",
+              "parent": 26,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 22,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 1112  [0x100d6fb94]",
+              "parent": 26,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 20,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 84  [0x100d6f790]",
+              "parent": 26,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 20,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 108,236,...  [0x100d6f7a8,0x100d6f828,...]",
+              "parent": 26,
+              "self_samples": 20
+            },
+            {
+              "depth": 14,
+              "count": 14,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 56  [0x100d6f774]",
+              "parent": 26,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 52,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 244  [0x100d6f830]",
+              "parent": 50,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 25,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 232  [0x100d6f824]",
+              "parent": 50,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 18,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 56  [0x100d6f774]",
+              "parent": 50,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 18,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 108,24,...  [0x100d6f7a8,0x100d6f754,...]",
+              "parent": 50,
+              "self_samples": 18
+            },
+            {
+              "depth": 14,
+              "count": 13,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 84  [0x100d6f790]",
+              "parent": 50,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 11,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get  (in main-access-worker) + 1112  [0x100d6fb94]",
+              "parent": 50,
+              "self_samples": 0
+            }
+          ],
+          "pct_of_workload_samples": 57.35099337748344
+        },
+        "packed_index": {
+          "samples": 47,
+          "frames": [
+            {
+              "depth": 12,
+              "count": 13,
+              "name": "js_packed_arraylike_index_get  (in main-access-worker) + 160,28,...  [0x101294240,0x1012941bc,...]",
+              "parent": 3,
+              "self_samples": 13
+            },
+            {
+              "depth": 12,
+              "count": 19,
+              "name": "js_packed_arraylike_index_get  (in main-access-worker) + 160,28,...  [0x101294240,0x1012941bc,...]",
+              "parent": 25,
+              "self_samples": 19
+            },
+            {
+              "depth": 12,
+              "count": 15,
+              "name": "js_packed_arraylike_index_get  (in main-access-worker) + 160,188,...  [0x101294240,0x10129425c,...]",
+              "parent": 49,
+              "self_samples": 15
+            }
+          ],
+          "pct_of_workload_samples": 6.225165562913907
+        },
+        "generic_index": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "named_property_helpers": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "fmod": {
+          "samples": 56,
+          "frames": [
+            {
+              "depth": 14,
+              "count": 56,
+              "name": "fmod  (in libsystem_m.dylib) + 252,244,...  [0x1914bd6bc,0x1914bd6b4,...]",
+              "parent": 71,
+              "self_samples": 56
+            }
+          ],
+          "pct_of_workload_samples": 7.417218543046358
+        },
+        "root_scope_helpers": {
+          "samples": 153,
+          "frames": [
+            {
+              "depth": 16,
+              "count": 17,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in main-access-worker) + 100,40,...  [0x100c82404,0x100c823c8,...]",
+              "parent": 10,
+              "self_samples": 17
+            },
+            {
+              "depth": 16,
+              "count": 14,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new  (in main-access-worker) + 32,20  [0x100c822b8,0x100c822ac]",
+              "parent": 15,
+              "self_samples": 14
+            },
+            {
+              "depth": 16,
+              "count": 14,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 32,20  [0x100b5dd1c,0x100b5dd10]",
+              "parent": 17,
+              "self_samples": 14
+            },
+            {
+              "depth": 14,
+              "count": 2,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 144  [0x100b5dd8c]",
+              "parent": 4,
+              "self_samples": 2
+            },
+            {
+              "depth": 16,
+              "count": 22,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 32,20  [0x100b5dd1c,0x100b5dd10]",
+              "parent": 34,
+              "self_samples": 22
+            },
+            {
+              "depth": 16,
+              "count": 20,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in main-access-worker) + 100,180,...  [0x100c82404,0x100c82454,...]",
+              "parent": 36,
+              "self_samples": 20
+            },
+            {
+              "depth": 16,
+              "count": 14,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new  (in main-access-worker) + 32,20  [0x100c822b8,0x100c822ac]",
+              "parent": 39,
+              "self_samples": 14
+            },
+            {
+              "depth": 14,
+              "count": 2,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 144  [0x100b5dd8c]",
+              "parent": 26,
+              "self_samples": 2
+            },
+            {
+              "depth": 14,
+              "count": 2,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in main-access-worker) + 236  [0x100c8248c]",
+              "parent": 26,
+              "self_samples": 2
+            },
+            {
+              "depth": 14,
+              "count": 1,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new  (in main-access-worker) + 180  [0x100c8234c]",
+              "parent": 26,
+              "self_samples": 1
+            },
+            {
+              "depth": 16,
+              "count": 18,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new  (in main-access-worker) + 32,24,...  [0x100c822b8,0x100c822b0,...]",
+              "parent": 56,
+              "self_samples": 18
+            },
+            {
+              "depth": 16,
+              "count": 13,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in main-access-worker) + 100,48  [0x100c82404,0x100c823d0]",
+              "parent": 59,
+              "self_samples": 13
+            },
+            {
+              "depth": 16,
+              "count": 11,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 32  [0x100b5dd1c]",
+              "parent": 61,
+              "self_samples": 11
+            },
+            {
+              "depth": 14,
+              "count": 2,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in main-access-worker) + 236  [0x100c8248c]",
+              "parent": 50,
+              "self_samples": 2
+            },
+            {
+              "depth": 14,
+              "count": 1,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in main-access-worker) + 144  [0x100b5dd8c]",
+              "parent": 50,
+              "self_samples": 1
+            }
+          ],
+          "pct_of_workload_samples": 20.264900662251655
+        },
+        "resolve_materialized": {
+          "samples": 88,
+          "frames": [
+            {
+              "depth": 16,
+              "count": 16,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in main-access-worker) + 124,364,...  [0x10107f158,0x10107f248,...]",
+              "parent": 12,
+              "self_samples": 16
+            },
+            {
+              "depth": 14,
+              "count": 6,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in main-access-worker) + 1112,1116  [0x10107f534,0x10107f538]",
+              "parent": 4,
+              "self_samples": 6
+            },
+            {
+              "depth": 16,
+              "count": 31,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in main-access-worker) + 124,112,...  [0x10107f158,0x10107f14c,...]",
+              "parent": 32,
+              "self_samples": 31
+            },
+            {
+              "depth": 14,
+              "count": 3,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in main-access-worker) + 1116,1112  [0x10107f538,0x10107f534]",
+              "parent": 26,
+              "self_samples": 3
+            },
+            {
+              "depth": 16,
+              "count": 25,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in main-access-worker) + 124,376,...  [0x10107f158,0x10107f254,...]",
+              "parent": 54,
+              "self_samples": 25
+            },
+            {
+              "depth": 14,
+              "count": 7,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in main-access-worker) + 1116,1112  [0x10107f538,0x10107f534]",
+              "parent": 50,
+              "self_samples": 7
+            }
+          ],
+          "pct_of_workload_samples": 11.655629139072849
+        }
+      },
+      "profile_sha256": "7efcc130f1c39b8d4d2b3240ac8769ef53b0f215020ff51aea9146ffa546fadc",
+      "note": "Instrumented diagnostic with at least 500 workload samples. Inclusive phases overlap and must not be added. CPU/RSS from sampled processes is not used as benchmark evidence. Inlined property reads remain in the generated workload frame; zero named-helper samples does not mean zero property-read cost."
+    },
+    {
+      "top_self_sample_nodes": [
+        {
+          "depth": 12,
+          "count": 129,
+          "name": "perry_fn_access_worker_ts__run$spec_b_b  (in candidate-access-worker) + 8660,8712,...  [0x100746a94,0x100746ac8,...]",
+          "parent": 3,
+          "self_samples": 129
+        },
+        {
+          "depth": 14,
+          "count": 87,
+          "name": "fmod  (in libsystem_m.dylib) + 252,256,...  [0x1914bd6bc,0x1914bd6c0,...]",
+          "parent": 34,
+          "self_samples": 87
+        },
+        {
+          "depth": 12,
+          "count": 72,
+          "name": "perry_fn_access_worker_ts__run$spec_b_b  (in candidate-access-worker) + 5844,5148,...  [0x100745f94,0x100745cdc,...]",
+          "parent": 13,
+          "self_samples": 72
+        },
+        {
+          "depth": 12,
+          "count": 64,
+          "name": "perry_fn_access_worker_ts__run$spec_b_b  (in candidate-access-worker) + 7432,7460,...  [0x1007465c8,0x1007465e4,...]",
+          "parent": 23,
+          "self_samples": 64
+        },
+        {
+          "depth": 16,
+          "count": 56,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in candidate-access-worker) + 124,24,...  [0x100dcb228,0x100dcb1c4,...]",
+          "parent": 15,
+          "self_samples": 56
+        },
+        {
+          "depth": 16,
+          "count": 50,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in candidate-access-worker) + 124,24,...  [0x100dcb228,0x100dcb1c4,...]",
+          "parent": 25,
+          "self_samples": 50
+        },
+        {
+          "depth": 16,
+          "count": 44,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in candidate-access-worker) + 124,24,...  [0x100dcb228,0x100dcb1c4,...]",
+          "parent": 6,
+          "self_samples": 44
+        },
+        {
+          "depth": 12,
+          "count": 37,
+          "name": "js_packed_arraylike_index_get  (in candidate-access-worker) + 160,212,...  [0x100fe0340,0x100fe0374,...]",
+          "parent": 13,
+          "self_samples": 37
+        },
+        {
+          "depth": 12,
+          "count": 37,
+          "name": "js_packed_arraylike_index_get  (in candidate-access-worker) + 160,28,...  [0x100fe0340,0x100fe02bc,...]",
+          "parent": 23,
+          "self_samples": 37
+        },
+        {
+          "depth": 12,
+          "count": 35,
+          "name": "perry_fn_access_worker_ts__run$spec_b_b  (in candidate-access-worker) + 4348,4448,...  [0x1007459bc,0x100745a20,...]",
+          "parent": 33,
+          "self_samples": 35
+        },
+        {
+          "depth": 12,
+          "count": 25,
+          "name": "js_packed_arraylike_index_get  (in candidate-access-worker) + 160,172,...  [0x100fe0340,0x100fe034c,...]",
+          "parent": 3,
+          "self_samples": 25
+        },
+        {
+          "depth": 14,
+          "count": 20,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 8,84,...  [0x100dcad8c,0x100dcadd8,...]",
+          "parent": 14,
+          "self_samples": 20
+        },
+        {
+          "depth": 14,
+          "count": 12,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 36,84,...  [0x100dcada8,0x100dcadd8,...]",
+          "parent": 24,
+          "self_samples": 12
+        },
+        {
+          "depth": 12,
+          "count": 11,
+          "name": "js_array_get_f64  (in candidate-access-worker) + 88,0,...  [0x100f00da8,0x100f00d50,...]",
+          "parent": 13,
+          "self_samples": 11
+        },
+        {
+          "depth": 12,
+          "count": 11,
+          "name": "js_array_get_f64  (in candidate-access-worker) + 76,88,...  [0x100f00d9c,0x100f00da8,...]",
+          "parent": 23,
+          "self_samples": 11
+        },
+        {
+          "depth": 14,
+          "count": 9,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 8,84,...  [0x100dcad8c,0x100dcadd8,...]",
+          "parent": 5,
+          "self_samples": 9
+        },
+        {
+          "depth": 14,
+          "count": 6,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in candidate-access-worker) + 1112,1116  [0x100dcb604,0x100dcb608]",
+          "parent": 5,
+          "self_samples": 6
+        },
+        {
+          "depth": 12,
+          "count": 6,
+          "name": "js_dynamic_mod  (in candidate-access-worker) + 12,32,...  [0x100f619e0,0x100f619f4,...]",
+          "parent": 33,
+          "self_samples": 6
+        },
+        {
+          "depth": 12,
+          "count": 5,
+          "name": "js_array_get_f64  (in candidate-access-worker) + 100,0,...  [0x100f00db4,0x100f00d50,...]",
+          "parent": 3,
+          "self_samples": 5
+        },
+        {
+          "depth": 12,
+          "count": 5,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 184  [0x100dcae3c]",
+          "parent": 23,
+          "self_samples": 5
+        },
+        {
+          "depth": 14,
+          "count": 3,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in candidate-access-worker) + 1112  [0x100dcb604]",
+          "parent": 14,
+          "self_samples": 3
+        },
+        {
+          "depth": 12,
+          "count": 3,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 184  [0x100dcae3c]",
+          "parent": 13,
+          "self_samples": 3
+        },
+        {
+          "depth": 12,
+          "count": 2,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 184  [0x100dcae3c]",
+          "parent": 3,
+          "self_samples": 2
+        },
+        {
+          "depth": 14,
+          "count": 2,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in candidate-access-worker) + 1112,1116  [0x100dcb604,0x100dcb608]",
+          "parent": 24,
+          "self_samples": 2
+        },
+        {
+          "depth": 14,
+          "count": 2,
+          "name": "DYLD-STUB$$fmod  (in candidate-access-worker) + 4  [0x1012a4738]",
+          "parent": 34,
+          "self_samples": 2
+        }
+      ],
+      "case": {
+        "fixture": "records_array_1m",
+        "operation": "fields",
+        "mode": "candidate",
+        "iterations": 100000000,
+        "warmup": 100000
+      },
+      "window": "access-profiles",
+      "workload_samples": 733,
+      "coverage_qualified": true,
+      "oracle_command": [
+        "/opt/homebrew/bin/node",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/harness/access-worker.js",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/fixtures/records_array_1m.json",
+        "fields",
+        "100000000",
+        "100000"
+      ],
+      "oracle_output_sha256": "c00b499edc332e5149d091949754c147f1d71fb9e10ba2cec6916bf6410f9323",
+      "oracle_output_reused_from_prior_verified_analysis": true,
+      "checksum_matches_node": true,
+      "phases": {
+        "workload": {
+          "samples": 733,
+          "frames": [
+            {
+              "depth": 10,
+              "count": 220,
+              "name": "perry_fn_access_worker_ts__run$spec_b_b  (in candidate-access-worker) + 8088  [0x100746858]",
+              "parent": 2
+            },
+            {
+              "depth": 10,
+              "count": 202,
+              "name": "perry_fn_access_worker_ts__run$spec_b_b  (in candidate-access-worker) + 5100  [0x100745cac]",
+              "parent": 2
+            },
+            {
+              "depth": 10,
+              "count": 181,
+              "name": "perry_fn_access_worker_ts__run$spec_b_b  (in candidate-access-worker) + 6540  [0x10074624c]",
+              "parent": 2
+            },
+            {
+              "depth": 10,
+              "count": 130,
+              "name": "perry_fn_access_worker_ts__run$spec_b_b  (in candidate-access-worker) + 4308  [0x100745994]",
+              "parent": 2
+            }
+          ],
+          "pct_of_workload_samples": 100.0
+        },
+        "array_access": {
+          "samples": 229,
+          "frames": [
+            {
+              "depth": 12,
+              "count": 59,
+              "name": "js_array_get_f64  (in candidate-access-worker) + 132  [0x100f00dd4]",
+              "parent": 3,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 5,
+              "name": "js_array_get_f64  (in candidate-access-worker) + 100,0,...  [0x100f00db4,0x100f00d50,...]",
+              "parent": 3,
+              "self_samples": 5
+            },
+            {
+              "depth": 12,
+              "count": 79,
+              "name": "js_array_get_f64  (in candidate-access-worker) + 132  [0x100f00dd4]",
+              "parent": 13,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 11,
+              "name": "js_array_get_f64  (in candidate-access-worker) + 88,0,...  [0x100f00da8,0x100f00d50,...]",
+              "parent": 13,
+              "self_samples": 11
+            },
+            {
+              "depth": 12,
+              "count": 64,
+              "name": "js_array_get_f64  (in candidate-access-worker) + 132  [0x100f00dd4]",
+              "parent": 23,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 11,
+              "name": "js_array_get_f64  (in candidate-access-worker) + 76,88,...  [0x100f00d9c,0x100f00da8,...]",
+              "parent": 23,
+              "self_samples": 11
+            }
+          ],
+          "pct_of_workload_samples": 31.241473396998636
+        },
+        "lazy_access": {
+          "samples": 201,
+          "frames": [
+            {
+              "depth": 14,
+              "count": 44,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 48  [0x100dcadb4]",
+              "parent": 5,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 9,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 8,84,...  [0x100dcad8c,0x100dcadd8,...]",
+              "parent": 5,
+              "self_samples": 9
+            },
+            {
+              "depth": 12,
+              "count": 2,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 184  [0x100dcae3c]",
+              "parent": 3,
+              "self_samples": 2
+            },
+            {
+              "depth": 14,
+              "count": 56,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 48  [0x100dcadb4]",
+              "parent": 14,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 20,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 8,84,...  [0x100dcad8c,0x100dcadd8,...]",
+              "parent": 14,
+              "self_samples": 20
+            },
+            {
+              "depth": 12,
+              "count": 3,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 184  [0x100dcae3c]",
+              "parent": 13,
+              "self_samples": 3
+            },
+            {
+              "depth": 14,
+              "count": 50,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 48  [0x100dcadb4]",
+              "parent": 24,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 12,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 36,84,...  [0x100dcada8,0x100dcadd8,...]",
+              "parent": 24,
+              "self_samples": 12
+            },
+            {
+              "depth": 12,
+              "count": 5,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get  (in candidate-access-worker) + 184  [0x100dcae3c]",
+              "parent": 23,
+              "self_samples": 5
+            }
+          ],
+          "pct_of_workload_samples": 27.421555252387446
+        },
+        "packed_index": {
+          "samples": 99,
+          "frames": [
+            {
+              "depth": 12,
+              "count": 25,
+              "name": "js_packed_arraylike_index_get  (in candidate-access-worker) + 160,172,...  [0x100fe0340,0x100fe034c,...]",
+              "parent": 3,
+              "self_samples": 25
+            },
+            {
+              "depth": 12,
+              "count": 37,
+              "name": "js_packed_arraylike_index_get  (in candidate-access-worker) + 160,212,...  [0x100fe0340,0x100fe0374,...]",
+              "parent": 13,
+              "self_samples": 37
+            },
+            {
+              "depth": 12,
+              "count": 37,
+              "name": "js_packed_arraylike_index_get  (in candidate-access-worker) + 160,28,...  [0x100fe0340,0x100fe02bc,...]",
+              "parent": 23,
+              "self_samples": 37
+            }
+          ],
+          "pct_of_workload_samples": 13.506139154160982
+        },
+        "generic_index": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "named_property_helpers": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "fmod": {
+          "samples": 87,
+          "frames": [
+            {
+              "depth": 14,
+              "count": 87,
+              "name": "fmod  (in libsystem_m.dylib) + 252,256,...  [0x1914bd6bc,0x1914bd6c0,...]",
+              "parent": 34,
+              "self_samples": 87
+            }
+          ],
+          "pct_of_workload_samples": 11.869031377899045
+        },
+        "root_scope_helpers": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "resolve_materialized": {
+          "samples": 161,
+          "frames": [
+            {
+              "depth": 16,
+              "count": 44,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in candidate-access-worker) + 124,24,...  [0x100dcb228,0x100dcb1c4,...]",
+              "parent": 6,
+              "self_samples": 44
+            },
+            {
+              "depth": 14,
+              "count": 6,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in candidate-access-worker) + 1112,1116  [0x100dcb604,0x100dcb608]",
+              "parent": 5,
+              "self_samples": 6
+            },
+            {
+              "depth": 16,
+              "count": 56,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in candidate-access-worker) + 124,24,...  [0x100dcb228,0x100dcb1c4,...]",
+              "parent": 15,
+              "self_samples": 56
+            },
+            {
+              "depth": 14,
+              "count": 3,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in candidate-access-worker) + 1112  [0x100dcb604]",
+              "parent": 14,
+              "self_samples": 3
+            },
+            {
+              "depth": 16,
+              "count": 50,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in candidate-access-worker) + 124,24,...  [0x100dcb228,0x100dcb1c4,...]",
+              "parent": 25,
+              "self_samples": 50
+            },
+            {
+              "depth": 14,
+              "count": 2,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array  (in candidate-access-worker) + 1112,1116  [0x100dcb604,0x100dcb608]",
+              "parent": 24,
+              "self_samples": 2
+            }
+          ],
+          "pct_of_workload_samples": 21.964529331514324
+        }
+      },
+      "profile_sha256": "ed33d4cb4bd04cebe22916e24c249436e31bce7c2836b81a92a57b6633a68d6e",
+      "note": "Instrumented diagnostic with at least 500 workload samples. Inclusive phases overlap and must not be added. CPU/RSS from sampled processes is not used as benchmark evidence. Inlined property reads remain in the generated workload frame; zero named-helper samples does not mean zero property-read cost."
+    }
+  ]
+}

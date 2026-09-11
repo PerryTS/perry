@@ -1,0 +1,6770 @@
+[
+  {
+    "fixture": "tiny_object",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 32.0,
+    "cpu_samples_us": [
+      35.0,
+      33.0,
+      32.0,
+      38.0,
+      31.0,
+      31.0,
+      31.0
+    ],
+    "peak_rss_mib": 13.0,
+    "peak_rss_samples_mib": [
+      13.0,
+      13.0,
+      13.0,
+      13.015625,
+      13.0,
+      13.0,
+      13.015625
+    ],
+    "rss_after_mib": 11.921875,
+    "rss_after_samples_mib": [
+      11.921875,
+      11.921875,
+      11.921875,
+      11.9375,
+      11.921875,
+      11.921875,
+      11.9375
+    ],
+    "rss_before_mib": 11.625,
+    "rss_before_samples_mib": [
+      11.625,
+      11.625,
+      11.625,
+      11.640625,
+      11.625,
+      11.625,
+      11.640625
+    ]
+  },
+  {
+    "fixture": "tiny_object",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 32.0,
+    "cpu_samples_us": [
+      31.0,
+      32.0,
+      37.0,
+      35.0,
+      32.0,
+      33.0,
+      30.0
+    ],
+    "peak_rss_mib": 12.984375,
+    "peak_rss_samples_mib": [
+      12.984375,
+      12.984375,
+      12.984375,
+      13.0,
+      12.984375,
+      13.0,
+      13.0
+    ],
+    "rss_after_mib": 11.921875,
+    "rss_after_samples_mib": [
+      11.921875,
+      11.921875,
+      11.921875,
+      11.9375,
+      11.921875,
+      11.9375,
+      11.9375
+    ],
+    "rss_before_mib": 11.625,
+    "rss_before_samples_mib": [
+      11.625,
+      11.625,
+      11.625,
+      11.640625,
+      11.625,
+      11.640625,
+      11.640625
+    ]
+  },
+  {
+    "fixture": "tiny_object",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 381.0,
+    "cpu_samples_us": [
+      376.0,
+      372.0,
+      389.0,
+      381.0,
+      382.0,
+      377.0,
+      382.0
+    ],
+    "peak_rss_mib": 53.640625,
+    "peak_rss_samples_mib": [
+      53.578125,
+      53.640625,
+      53.59375,
+      53.578125,
+      53.671875,
+      53.65625,
+      53.6875
+    ],
+    "rss_after_mib": 52.828125,
+    "rss_after_samples_mib": [
+      52.828125,
+      52.8125,
+      52.796875,
+      52.8125,
+      52.921875,
+      52.875,
+      52.875
+    ],
+    "rss_before_mib": 52.25,
+    "rss_before_samples_mib": [
+      52.25,
+      52.234375,
+      52.203125,
+      52.1875,
+      52.28125,
+      52.28125,
+      52.25
+    ]
+  },
+  {
+    "fixture": "tiny_object",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 9.0,
+    "cpu_samples_us": [
+      9.0,
+      8.0,
+      10.0,
+      9.0,
+      9.0,
+      9.0,
+      9.0
+    ],
+    "peak_rss_mib": 28.703125,
+    "peak_rss_samples_mib": [
+      28.703125,
+      28.71875,
+      28.703125,
+      28.703125,
+      28.6875,
+      28.703125,
+      28.703125
+    ],
+    "rss_after_mib": 28.3125,
+    "rss_after_samples_mib": [
+      28.3125,
+      28.328125,
+      28.3125,
+      28.3125,
+      28.296875,
+      28.3125,
+      28.328125
+    ],
+    "rss_before_mib": 28.234375,
+    "rss_before_samples_mib": [
+      28.234375,
+      28.25,
+      28.234375,
+      28.234375,
+      28.21875,
+      28.234375,
+      28.25
+    ]
+  },
+  {
+    "fixture": "tiny_object",
+    "operation": "retain-parse",
+    "iterations": 200000,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 0.04436,
+    "cpu_samples_us": [
+      0.04436,
+      0.04431,
+      0.04441,
+      0.04442,
+      0.0445,
+      0.04416,
+      0.044355
+    ],
+    "peak_rss_mib": 25.453125,
+    "peak_rss_samples_mib": [
+      25.46875,
+      25.453125,
+      25.46875,
+      25.453125,
+      25.46875,
+      25.453125,
+      25.453125
+    ],
+    "rss_after_mib": 24.40625,
+    "rss_after_samples_mib": [
+      24.421875,
+      24.40625,
+      24.421875,
+      24.40625,
+      24.421875,
+      24.40625,
+      24.40625
+    ],
+    "rss_before_mib": 11.625,
+    "rss_before_samples_mib": [
+      11.625,
+      11.625,
+      11.625,
+      11.625,
+      11.625,
+      11.625,
+      11.625
+    ]
+  },
+  {
+    "fixture": "tiny_object",
+    "operation": "retain-parse",
+    "iterations": 200000,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 0.04432,
+    "cpu_samples_us": [
+      0.04421,
+      0.04443,
+      0.04432,
+      0.04441,
+      0.044605,
+      0.04425,
+      0.04428
+    ],
+    "peak_rss_mib": 25.453125,
+    "peak_rss_samples_mib": [
+      25.453125,
+      25.453125,
+      25.453125,
+      25.453125,
+      25.4375,
+      25.453125,
+      25.453125
+    ],
+    "rss_after_mib": 24.421875,
+    "rss_after_samples_mib": [
+      24.421875,
+      24.421875,
+      24.421875,
+      24.421875,
+      24.40625,
+      24.421875,
+      24.421875
+    ],
+    "rss_before_mib": 11.640625,
+    "rss_before_samples_mib": [
+      11.625,
+      11.640625,
+      11.640625,
+      11.640625,
+      11.625,
+      11.625,
+      11.640625
+    ]
+  },
+  {
+    "fixture": "tiny_object",
+    "operation": "retain-parse",
+    "iterations": 200000,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 0.132465,
+    "cpu_samples_us": [
+      0.133245,
+      0.124955,
+      0.132465,
+      0.13319,
+      0.13335,
+      0.12567,
+      0.126585
+    ],
+    "peak_rss_mib": 75.734375,
+    "peak_rss_samples_mib": [
+      75.5625,
+      75.734375,
+      75.640625,
+      75.640625,
+      75.75,
+      75.75,
+      75.75
+    ],
+    "rss_after_mib": 74.984375,
+    "rss_after_samples_mib": [
+      74.859375,
+      74.984375,
+      74.9375,
+      74.953125,
+      75.046875,
+      75.0,
+      75.03125
+    ],
+    "rss_before_mib": 52.3125,
+    "rss_before_samples_mib": [
+      52.28125,
+      52.203125,
+      52.328125,
+      52.328125,
+      52.3125,
+      52.3125,
+      52.28125
+    ]
+  },
+  {
+    "fixture": "tiny_object",
+    "operation": "retain-parse",
+    "iterations": 200000,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 0.058435,
+    "cpu_samples_us": [
+      0.05879,
+      0.05837,
+      0.058435,
+      0.058625,
+      0.058775,
+      0.058195,
+      0.05811
+    ],
+    "peak_rss_mib": 50.640625,
+    "peak_rss_samples_mib": [
+      50.640625,
+      50.65625,
+      50.65625,
+      50.640625,
+      50.640625,
+      50.625,
+      50.65625
+    ],
+    "rss_after_mib": 50.25,
+    "rss_after_samples_mib": [
+      50.25,
+      50.265625,
+      50.265625,
+      50.25,
+      50.25,
+      50.234375,
+      50.265625
+    ],
+    "rss_before_mib": 28.234375,
+    "rss_before_samples_mib": [
+      28.234375,
+      28.25,
+      28.25,
+      28.234375,
+      28.234375,
+      28.21875,
+      28.25
+    ]
+  },
+  {
+    "fixture": "tiny_object",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 11.0,
+    "cpu_samples_us": [
+      11.0,
+      11.0,
+      11.0,
+      10.0,
+      11.0,
+      10.0,
+      11.0
+    ],
+    "peak_rss_mib": 13.09375,
+    "peak_rss_samples_mib": [
+      13.09375,
+      13.09375,
+      13.09375,
+      13.09375,
+      13.109375,
+      13.09375,
+      13.09375
+    ],
+    "rss_after_mib": 12.015625,
+    "rss_after_samples_mib": [
+      12.015625,
+      12.015625,
+      12.015625,
+      12.015625,
+      12.03125,
+      12.015625,
+      12.015625
+    ],
+    "rss_before_mib": 11.9375,
+    "rss_before_samples_mib": [
+      11.9375,
+      11.9375,
+      11.9375,
+      11.9375,
+      11.953125,
+      11.9375,
+      11.9375
+    ]
+  },
+  {
+    "fixture": "tiny_object",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 11.0,
+    "cpu_samples_us": [
+      10.0,
+      11.0,
+      11.0,
+      10.0,
+      11.0,
+      11.0,
+      10.0
+    ],
+    "peak_rss_mib": 13.078125,
+    "peak_rss_samples_mib": [
+      13.078125,
+      13.078125,
+      13.09375,
+      13.078125,
+      13.078125,
+      13.078125,
+      13.09375
+    ],
+    "rss_after_mib": 12.015625,
+    "rss_after_samples_mib": [
+      12.015625,
+      12.015625,
+      12.03125,
+      12.015625,
+      12.015625,
+      12.015625,
+      12.03125
+    ],
+    "rss_before_mib": 11.9375,
+    "rss_before_samples_mib": [
+      11.9375,
+      11.9375,
+      11.953125,
+      11.9375,
+      11.9375,
+      11.9375,
+      11.953125
+    ]
+  },
+  {
+    "fixture": "tiny_object",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 363.0,
+    "cpu_samples_us": [
+      368.0,
+      360.0,
+      362.0,
+      363.0,
+      380.0,
+      363.0,
+      361.0
+    ],
+    "peak_rss_mib": 53.734375,
+    "peak_rss_samples_mib": [
+      53.703125,
+      53.75,
+      53.734375,
+      53.734375,
+      53.703125,
+      53.78125,
+      53.671875
+    ],
+    "rss_after_mib": 52.96875,
+    "rss_after_samples_mib": [
+      52.9375,
+      52.96875,
+      52.984375,
+      52.984375,
+      52.921875,
+      52.984375,
+      52.921875
+    ],
+    "rss_before_mib": 52.390625,
+    "rss_before_samples_mib": [
+      52.359375,
+      52.390625,
+      52.4375,
+      52.453125,
+      52.34375,
+      52.390625,
+      52.375
+    ]
+  },
+  {
+    "fixture": "tiny_object",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 8.0,
+    "cpu_samples_us": [
+      7.0,
+      7.0,
+      8.0,
+      8.0,
+      8.0,
+      8.0,
+      7.0
+    ],
+    "peak_rss_mib": 28.75,
+    "peak_rss_samples_mib": [
+      28.71875,
+      28.765625,
+      28.765625,
+      28.75,
+      28.75,
+      28.796875,
+      28.75
+    ],
+    "rss_after_mib": 28.34375,
+    "rss_after_samples_mib": [
+      28.328125,
+      28.375,
+      28.359375,
+      28.34375,
+      28.34375,
+      28.390625,
+      28.34375
+    ],
+    "rss_before_mib": 28.296875,
+    "rss_before_samples_mib": [
+      28.28125,
+      28.328125,
+      28.3125,
+      28.296875,
+      28.296875,
+      28.34375,
+      28.296875
+    ]
+  },
+  {
+    "fixture": "tiny_object",
+    "operation": "retain-stringify",
+    "iterations": 200000,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 0.047365,
+    "cpu_samples_us": [
+      0.04748,
+      0.04686,
+      0.04761,
+      0.04752,
+      0.047365,
+      0.046945,
+      0.046985
+    ],
+    "peak_rss_mib": 25.546875,
+    "peak_rss_samples_mib": [
+      25.546875,
+      25.546875,
+      25.5625,
+      25.546875,
+      25.546875,
+      25.5625,
+      25.546875
+    ],
+    "rss_after_mib": 24.5,
+    "rss_after_samples_mib": [
+      24.5,
+      24.5,
+      24.515625,
+      24.5,
+      24.5,
+      24.515625,
+      24.5
+    ],
+    "rss_before_mib": 11.9375,
+    "rss_before_samples_mib": [
+      11.9375,
+      11.9375,
+      11.9375,
+      11.9375,
+      11.9375,
+      11.953125,
+      11.9375
+    ]
+  },
+  {
+    "fixture": "tiny_object",
+    "operation": "retain-stringify",
+    "iterations": 200000,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 0.04703,
+    "cpu_samples_us": [
+      0.04703,
+      0.047635,
+      0.046955,
+      0.046965,
+      0.04682,
+      0.04712,
+      0.047065
+    ],
+    "peak_rss_mib": 25.546875,
+    "peak_rss_samples_mib": [
+      25.546875,
+      25.546875,
+      25.53125,
+      25.546875,
+      25.546875,
+      25.546875,
+      25.546875
+    ],
+    "rss_after_mib": 24.515625,
+    "rss_after_samples_mib": [
+      24.515625,
+      24.515625,
+      24.5,
+      24.515625,
+      24.515625,
+      24.515625,
+      24.515625
+    ],
+    "rss_before_mib": 11.9375,
+    "rss_before_samples_mib": [
+      11.9375,
+      11.953125,
+      11.9375,
+      11.9375,
+      11.953125,
+      11.9375,
+      11.9375
+    ]
+  },
+  {
+    "fixture": "tiny_object",
+    "operation": "retain-stringify",
+    "iterations": 200000,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 0.083575,
+    "cpu_samples_us": [
+      0.083225,
+      0.083575,
+      0.083055,
+      0.08388,
+      0.08312,
+      0.083575,
+      0.084135
+    ],
+    "peak_rss_mib": 72.109375,
+    "peak_rss_samples_mib": [
+      72.046875,
+      72.046875,
+      72.109375,
+      72.125,
+      72.140625,
+      72.046875,
+      72.140625
+    ],
+    "rss_after_mib": 71.421875,
+    "rss_after_samples_mib": [
+      71.328125,
+      71.359375,
+      71.421875,
+      71.421875,
+      71.46875,
+      71.3125,
+      71.453125
+    ],
+    "rss_before_mib": 52.40625,
+    "rss_before_samples_mib": [
+      52.40625,
+      52.34375,
+      52.453125,
+      52.4375,
+      52.40625,
+      52.3125,
+      52.453125
+    ]
+  },
+  {
+    "fixture": "tiny_object",
+    "operation": "retain-stringify",
+    "iterations": 200000,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 0.04952,
+    "cpu_samples_us": [
+      0.049855,
+      0.049765,
+      0.04944,
+      0.04952,
+      0.04942,
+      0.049655,
+      0.04948
+    ],
+    "peak_rss_mib": 47.5,
+    "peak_rss_samples_mib": [
+      47.5,
+      47.484375,
+      47.46875,
+      47.546875,
+      47.5,
+      47.5,
+      47.5
+    ],
+    "rss_after_mib": 47.09375,
+    "rss_after_samples_mib": [
+      47.09375,
+      47.078125,
+      47.0625,
+      47.140625,
+      47.09375,
+      47.09375,
+      47.09375
+    ],
+    "rss_before_mib": 28.3125,
+    "rss_before_samples_mib": [
+      28.3125,
+      28.296875,
+      28.28125,
+      28.359375,
+      28.3125,
+      28.3125,
+      28.3125
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 33.0,
+    "cpu_samples_us": [
+      40.0,
+      32.0,
+      37.0,
+      32.0,
+      36.0,
+      32.0,
+      33.0
+    ],
+    "peak_rss_mib": 12.984375,
+    "peak_rss_samples_mib": [
+      12.984375,
+      12.984375,
+      12.984375,
+      12.984375,
+      12.984375,
+      13.0,
+      12.984375
+    ],
+    "rss_after_mib": 11.90625,
+    "rss_after_samples_mib": [
+      11.90625,
+      11.90625,
+      11.90625,
+      11.90625,
+      11.90625,
+      11.921875,
+      11.90625
+    ],
+    "rss_before_mib": 11.625,
+    "rss_before_samples_mib": [
+      11.625,
+      11.625,
+      11.625,
+      11.625,
+      11.625,
+      11.640625,
+      11.625
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 32.0,
+    "cpu_samples_us": [
+      33.0,
+      34.0,
+      32.0,
+      32.0,
+      32.0,
+      31.0,
+      33.0
+    ],
+    "peak_rss_mib": 12.96875,
+    "peak_rss_samples_mib": [
+      12.984375,
+      12.96875,
+      12.96875,
+      12.984375,
+      12.96875,
+      12.96875,
+      12.96875
+    ],
+    "rss_after_mib": 11.90625,
+    "rss_after_samples_mib": [
+      11.921875,
+      11.90625,
+      11.90625,
+      11.921875,
+      11.90625,
+      11.90625,
+      11.90625
+    ],
+    "rss_before_mib": 11.625,
+    "rss_before_samples_mib": [
+      11.640625,
+      11.625,
+      11.625,
+      11.640625,
+      11.625,
+      11.625,
+      11.625
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 400.0,
+    "cpu_samples_us": [
+      413.0,
+      381.0,
+      411.0,
+      400.0,
+      389.0,
+      382.0,
+      400.0
+    ],
+    "peak_rss_mib": 53.625,
+    "peak_rss_samples_mib": [
+      53.71875,
+      53.53125,
+      53.5625,
+      53.640625,
+      53.65625,
+      53.625,
+      53.625
+    ],
+    "rss_after_mib": 52.890625,
+    "rss_after_samples_mib": [
+      52.953125,
+      52.796875,
+      52.78125,
+      52.890625,
+      52.953125,
+      52.890625,
+      52.859375
+    ],
+    "rss_before_mib": 52.265625,
+    "rss_before_samples_mib": [
+      52.296875,
+      52.203125,
+      52.109375,
+      52.265625,
+      52.28125,
+      52.265625,
+      52.1875
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 13.0,
+    "cpu_samples_us": [
+      12.0,
+      13.0,
+      13.0,
+      13.0,
+      14.0,
+      13.0,
+      17.0
+    ],
+    "peak_rss_mib": 28.703125,
+    "peak_rss_samples_mib": [
+      28.71875,
+      28.703125,
+      28.71875,
+      28.703125,
+      28.6875,
+      28.6875,
+      28.734375
+    ],
+    "rss_after_mib": 28.328125,
+    "rss_after_samples_mib": [
+      28.328125,
+      28.328125,
+      28.328125,
+      28.3125,
+      28.3125,
+      28.3125,
+      28.34375
+    ],
+    "rss_before_mib": 28.234375,
+    "rss_before_samples_mib": [
+      28.234375,
+      28.234375,
+      28.234375,
+      28.21875,
+      28.21875,
+      28.21875,
+      28.25
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "retain-parse",
+    "iterations": 100000,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 0.1041,
+    "cpu_samples_us": [
+      0.10372,
+      0.1041,
+      0.10331,
+      0.10519,
+      0.1041,
+      0.10459,
+      0.10418
+    ],
+    "peak_rss_mib": 25.5,
+    "peak_rss_samples_mib": [
+      25.5,
+      25.484375,
+      25.484375,
+      25.5,
+      25.5,
+      25.5,
+      25.5
+    ],
+    "rss_after_mib": 24.4375,
+    "rss_after_samples_mib": [
+      24.4375,
+      24.421875,
+      24.421875,
+      24.4375,
+      24.4375,
+      24.4375,
+      24.4375
+    ],
+    "rss_before_mib": 11.625,
+    "rss_before_samples_mib": [
+      11.640625,
+      11.625,
+      11.625,
+      11.625,
+      11.625,
+      11.625,
+      11.625
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "retain-parse",
+    "iterations": 100000,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 0.10408,
+    "cpu_samples_us": [
+      0.10409,
+      0.10474,
+      0.10408,
+      0.10374,
+      0.104,
+      0.10499,
+      0.10361
+    ],
+    "peak_rss_mib": 25.484375,
+    "peak_rss_samples_mib": [
+      25.46875,
+      25.484375,
+      25.484375,
+      25.46875,
+      25.484375,
+      25.484375,
+      25.484375
+    ],
+    "rss_after_mib": 24.4375,
+    "rss_after_samples_mib": [
+      24.421875,
+      24.4375,
+      24.4375,
+      24.421875,
+      24.4375,
+      24.4375,
+      24.4375
+    ],
+    "rss_before_mib": 11.625,
+    "rss_before_samples_mib": [
+      11.625,
+      11.640625,
+      11.640625,
+      11.625,
+      11.625,
+      11.640625,
+      11.625
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "retain-parse",
+    "iterations": 100000,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 0.46707,
+    "cpu_samples_us": [
+      0.48264,
+      0.4959,
+      0.46289,
+      0.47275,
+      0.46495,
+      0.46412,
+      0.46707
+    ],
+    "peak_rss_mib": 86.359375,
+    "peak_rss_samples_mib": [
+      86.359375,
+      86.21875,
+      86.203125,
+      86.21875,
+      86.390625,
+      86.359375,
+      86.59375
+    ],
+    "rss_after_mib": 85.625,
+    "rss_after_samples_mib": [
+      85.625,
+      85.484375,
+      85.515625,
+      85.515625,
+      85.65625,
+      85.640625,
+      85.890625
+    ],
+    "rss_before_mib": 52.234375,
+    "rss_before_samples_mib": [
+      52.234375,
+      52.21875,
+      52.1875,
+      52.25,
+      52.296875,
+      52.21875,
+      52.234375
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "retain-parse",
+    "iterations": 100000,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 0.26337,
+    "cpu_samples_us": [
+      0.26329,
+      0.26262,
+      0.26542,
+      0.26369,
+      0.2639,
+      0.26336,
+      0.26337
+    ],
+    "peak_rss_mib": 53.140625,
+    "peak_rss_samples_mib": [
+      53.109375,
+      53.15625,
+      53.140625,
+      53.140625,
+      53.140625,
+      53.125,
+      53.109375
+    ],
+    "rss_after_mib": 52.75,
+    "rss_after_samples_mib": [
+      52.71875,
+      52.765625,
+      52.75,
+      52.75,
+      52.75,
+      52.734375,
+      52.71875
+    ],
+    "rss_before_mib": 28.25,
+    "rss_before_samples_mib": [
+      28.21875,
+      28.265625,
+      28.25,
+      28.25,
+      28.25,
+      28.234375,
+      28.21875
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 13.0,
+    "cpu_samples_us": [
+      12.0,
+      13.0,
+      11.0,
+      13.0,
+      13.0,
+      16.0,
+      13.0
+    ],
+    "peak_rss_mib": 13.109375,
+    "peak_rss_samples_mib": [
+      13.109375,
+      13.109375,
+      13.125,
+      13.125,
+      13.109375,
+      13.109375,
+      13.109375
+    ],
+    "rss_after_mib": 12.03125,
+    "rss_after_samples_mib": [
+      12.03125,
+      12.03125,
+      12.046875,
+      12.046875,
+      12.03125,
+      12.03125,
+      12.03125
+    ],
+    "rss_before_mib": 11.921875,
+    "rss_before_samples_mib": [
+      11.921875,
+      11.921875,
+      11.9375,
+      11.9375,
+      11.921875,
+      11.921875,
+      11.921875
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 13.0,
+    "cpu_samples_us": [
+      13.0,
+      13.0,
+      13.0,
+      13.0,
+      12.0,
+      13.0,
+      12.0
+    ],
+    "peak_rss_mib": 13.09375,
+    "peak_rss_samples_mib": [
+      13.09375,
+      13.09375,
+      13.09375,
+      13.09375,
+      13.109375,
+      13.09375,
+      13.09375
+    ],
+    "rss_after_mib": 12.03125,
+    "rss_after_samples_mib": [
+      12.03125,
+      12.03125,
+      12.03125,
+      12.03125,
+      12.046875,
+      12.03125,
+      12.03125
+    ],
+    "rss_before_mib": 11.921875,
+    "rss_before_samples_mib": [
+      11.921875,
+      11.921875,
+      11.921875,
+      11.921875,
+      11.9375,
+      11.921875,
+      11.921875
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 369.0,
+    "cpu_samples_us": [
+      360.0,
+      391.0,
+      360.0,
+      387.0,
+      356.0,
+      371.0,
+      369.0
+    ],
+    "peak_rss_mib": 53.703125,
+    "peak_rss_samples_mib": [
+      53.703125,
+      53.609375,
+      53.734375,
+      53.65625,
+      53.734375,
+      53.75,
+      53.703125
+    ],
+    "rss_after_mib": 52.984375,
+    "rss_after_samples_mib": [
+      52.984375,
+      52.890625,
+      53.015625,
+      52.953125,
+      53.015625,
+      53.015625,
+      52.984375
+    ],
+    "rss_before_mib": 52.421875,
+    "rss_before_samples_mib": [
+      52.421875,
+      52.296875,
+      52.46875,
+      52.34375,
+      52.484375,
+      52.453125,
+      52.421875
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 9.0,
+    "cpu_samples_us": [
+      9.0,
+      10.0,
+      8.0,
+      10.0,
+      8.0,
+      9.0,
+      8.0
+    ],
+    "peak_rss_mib": 28.78125,
+    "peak_rss_samples_mib": [
+      28.75,
+      28.828125,
+      28.84375,
+      28.75,
+      28.78125,
+      28.75,
+      28.796875
+    ],
+    "rss_after_mib": 28.375,
+    "rss_after_samples_mib": [
+      28.34375,
+      28.421875,
+      28.4375,
+      28.34375,
+      28.375,
+      28.34375,
+      28.390625
+    ],
+    "rss_before_mib": 28.328125,
+    "rss_before_samples_mib": [
+      28.296875,
+      28.375,
+      28.390625,
+      28.296875,
+      28.328125,
+      28.296875,
+      28.34375
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "retain-stringify",
+    "iterations": 100000,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 0.06764,
+    "cpu_samples_us": [
+      0.06801,
+      0.06744,
+      0.06764,
+      0.06692,
+      0.06803,
+      0.0671,
+      0.06812
+    ],
+    "peak_rss_mib": 28.734375,
+    "peak_rss_samples_mib": [
+      28.734375,
+      28.734375,
+      28.734375,
+      28.71875,
+      28.71875,
+      28.734375,
+      28.734375
+    ],
+    "rss_after_mib": 27.6875,
+    "rss_after_samples_mib": [
+      27.6875,
+      27.6875,
+      27.6875,
+      27.671875,
+      27.671875,
+      27.6875,
+      27.6875
+    ],
+    "rss_before_mib": 11.921875,
+    "rss_before_samples_mib": [
+      11.921875,
+      11.9375,
+      11.921875,
+      11.921875,
+      11.921875,
+      11.9375,
+      11.921875
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "retain-stringify",
+    "iterations": 100000,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 0.06739,
+    "cpu_samples_us": [
+      0.06703,
+      0.06752,
+      0.06823,
+      0.06818,
+      0.06711,
+      0.0669,
+      0.06739
+    ],
+    "peak_rss_mib": 28.71875,
+    "peak_rss_samples_mib": [
+      28.71875,
+      28.71875,
+      28.703125,
+      28.703125,
+      28.703125,
+      28.71875,
+      28.71875
+    ],
+    "rss_after_mib": 27.6875,
+    "rss_after_samples_mib": [
+      27.6875,
+      27.6875,
+      27.671875,
+      27.671875,
+      27.671875,
+      27.6875,
+      27.6875
+    ],
+    "rss_before_mib": 11.921875,
+    "rss_before_samples_mib": [
+      11.921875,
+      11.9375,
+      11.921875,
+      11.921875,
+      11.921875,
+      11.9375,
+      11.9375
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "retain-stringify",
+    "iterations": 100000,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 0.18364,
+    "cpu_samples_us": [
+      0.1871,
+      0.18835,
+      0.18865,
+      0.18364,
+      0.18169,
+      0.18068,
+      0.18259
+    ],
+    "peak_rss_mib": 81.171875,
+    "peak_rss_samples_mib": [
+      81.171875,
+      81.171875,
+      81.15625,
+      81.234375,
+      81.09375,
+      81.109375,
+      81.203125
+    ],
+    "rss_after_mib": 80.484375,
+    "rss_after_samples_mib": [
+      80.484375,
+      80.46875,
+      80.5,
+      80.5,
+      80.40625,
+      80.421875,
+      80.5
+    ],
+    "rss_before_mib": 52.40625,
+    "rss_before_samples_mib": [
+      52.390625,
+      52.40625,
+      52.40625,
+      52.390625,
+      52.34375,
+      52.40625,
+      52.453125
+    ]
+  },
+  {
+    "fixture": "small_record",
+    "operation": "retain-stringify",
+    "iterations": 100000,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 0.13613,
+    "cpu_samples_us": [
+      0.13576,
+      0.13618,
+      0.13649,
+      0.13541,
+      0.13563,
+      0.13613,
+      0.1376
+    ],
+    "peak_rss_mib": 51.515625,
+    "peak_rss_samples_mib": [
+      51.515625,
+      51.53125,
+      51.515625,
+      51.515625,
+      51.53125,
+      51.5,
+      51.46875
+    ],
+    "rss_after_mib": 51.109375,
+    "rss_after_samples_mib": [
+      51.109375,
+      51.125,
+      51.109375,
+      51.109375,
+      51.125,
+      51.09375,
+      51.0625
+    ],
+    "rss_before_mib": 28.3125,
+    "rss_before_samples_mib": [
+      28.3125,
+      28.328125,
+      28.3125,
+      28.3125,
+      28.328125,
+      28.296875,
+      28.265625
+    ]
+  },
+  {
+    "fixture": "records_array_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 933.0,
+    "cpu_samples_us": [
+      988.0,
+      933.0,
+      932.0,
+      924.0,
+      1025.0,
+      922.0,
+      990.0
+    ],
+    "peak_rss_mib": 17.640625,
+    "peak_rss_samples_mib": [
+      17.640625,
+      17.640625,
+      17.640625,
+      17.640625,
+      17.640625,
+      17.640625,
+      17.640625
+    ],
+    "rss_after_mib": 16.609375,
+    "rss_after_samples_mib": [
+      16.609375,
+      16.609375,
+      16.609375,
+      16.609375,
+      16.609375,
+      16.609375,
+      16.609375
+    ],
+    "rss_before_mib": 13.53125,
+    "rss_before_samples_mib": [
+      13.53125,
+      13.53125,
+      13.53125,
+      13.53125,
+      13.53125,
+      13.53125,
+      13.53125
+    ]
+  },
+  {
+    "fixture": "records_array_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 953.0,
+    "cpu_samples_us": [
+      959.0,
+      962.0,
+      1003.0,
+      919.0,
+      937.0,
+      948.0,
+      953.0
+    ],
+    "peak_rss_mib": 17.609375,
+    "peak_rss_samples_mib": [
+      17.609375,
+      17.609375,
+      17.609375,
+      17.609375,
+      17.609375,
+      17.625,
+      17.609375
+    ],
+    "rss_after_mib": 16.59375,
+    "rss_after_samples_mib": [
+      16.59375,
+      16.59375,
+      16.59375,
+      16.59375,
+      16.59375,
+      16.609375,
+      16.59375
+    ],
+    "rss_before_mib": 13.515625,
+    "rss_before_samples_mib": [
+      13.515625,
+      13.515625,
+      13.515625,
+      13.515625,
+      13.515625,
+      13.53125,
+      13.515625
+    ]
+  },
+  {
+    "fixture": "records_array_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 3885.0,
+    "cpu_samples_us": [
+      4056.0,
+      3868.0,
+      3885.0,
+      4115.0,
+      4044.0,
+      3833.0,
+      3854.0
+    ],
+    "peak_rss_mib": 60.328125,
+    "peak_rss_samples_mib": [
+      60.421875,
+      60.375,
+      60.3125,
+      60.328125,
+      60.5,
+      60.3125,
+      60.3125
+    ],
+    "rss_after_mib": 58.5625,
+    "rss_after_samples_mib": [
+      58.640625,
+      58.546875,
+      58.46875,
+      58.625,
+      58.625,
+      58.5,
+      58.5625
+    ],
+    "rss_before_mib": 55.078125,
+    "rss_before_samples_mib": [
+      55.15625,
+      55.078125,
+      55.03125,
+      55.140625,
+      55.09375,
+      55.046875,
+      55.078125
+    ]
+  },
+  {
+    "fixture": "records_array_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 2417.0,
+    "cpu_samples_us": [
+      2405.0,
+      2403.0,
+      2417.0,
+      2430.0,
+      2412.0,
+      2696.0,
+      2678.0
+    ],
+    "peak_rss_mib": 32.078125,
+    "peak_rss_samples_mib": [
+      32.078125,
+      32.046875,
+      32.09375,
+      32.09375,
+      32.03125,
+      32.046875,
+      32.09375
+    ],
+    "rss_after_mib": 31.6875,
+    "rss_after_samples_mib": [
+      31.6875,
+      31.65625,
+      31.703125,
+      31.703125,
+      31.640625,
+      31.65625,
+      31.703125
+    ],
+    "rss_before_mib": 29.34375,
+    "rss_before_samples_mib": [
+      29.34375,
+      29.3125,
+      29.359375,
+      29.359375,
+      29.296875,
+      29.3125,
+      29.359375
+    ]
+  },
+  {
+    "fixture": "records_array_1m",
+    "operation": "retain-parse",
+    "iterations": 16,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 857.3125,
+    "cpu_samples_us": [
+      850.375,
+      857.4375,
+      869.125,
+      857.3125,
+      852.8125,
+      859.75,
+      853.0625
+    ],
+    "peak_rss_mib": 41.515625,
+    "peak_rss_samples_mib": [
+      41.515625,
+      41.515625,
+      41.515625,
+      41.515625,
+      41.515625,
+      41.515625,
+      41.515625
+    ],
+    "rss_after_mib": 40.484375,
+    "rss_after_samples_mib": [
+      40.484375,
+      40.484375,
+      40.484375,
+      40.484375,
+      40.484375,
+      40.484375,
+      40.484375
+    ],
+    "rss_before_mib": 13.515625,
+    "rss_before_samples_mib": [
+      13.53125,
+      13.515625,
+      13.515625,
+      13.53125,
+      13.515625,
+      13.53125,
+      13.515625
+    ]
+  },
+  {
+    "fixture": "records_array_1m",
+    "operation": "retain-parse",
+    "iterations": 16,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 852.625,
+    "cpu_samples_us": [
+      856.75,
+      866.125,
+      852.625,
+      852.3125,
+      855.8125,
+      849.5,
+      852.5
+    ],
+    "peak_rss_mib": 41.5,
+    "peak_rss_samples_mib": [
+      41.5,
+      41.5,
+      41.5,
+      41.5,
+      41.5,
+      41.5,
+      41.5
+    ],
+    "rss_after_mib": 40.484375,
+    "rss_after_samples_mib": [
+      40.484375,
+      40.484375,
+      40.484375,
+      40.484375,
+      40.484375,
+      40.484375,
+      40.484375
+    ],
+    "rss_before_mib": 13.515625,
+    "rss_before_samples_mib": [
+      13.515625,
+      13.515625,
+      13.53125,
+      13.515625,
+      13.515625,
+      13.53125,
+      13.515625
+    ]
+  },
+  {
+    "fixture": "records_array_1m",
+    "operation": "retain-parse",
+    "iterations": 16,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 3678.3125,
+    "cpu_samples_us": [
+      3678.3125,
+      3610.75,
+      3895.6875,
+      3696.875,
+      3611.0625,
+      3552.1875,
+      3757.0625
+    ],
+    "peak_rss_mib": 89.609375,
+    "peak_rss_samples_mib": [
+      89.796875,
+      89.59375,
+      89.8125,
+      89.609375,
+      89.546875,
+      89.453125,
+      89.703125
+    ],
+    "rss_after_mib": 88.890625,
+    "rss_after_samples_mib": [
+      89.09375,
+      88.859375,
+      89.09375,
+      88.890625,
+      88.75,
+      88.734375,
+      88.96875
+    ],
+    "rss_before_mib": 55.109375,
+    "rss_before_samples_mib": [
+      55.15625,
+      55.15625,
+      55.140625,
+      55.046875,
+      55.015625,
+      55.109375,
+      55.078125
+    ]
+  },
+  {
+    "fixture": "records_array_1m",
+    "operation": "retain-parse",
+    "iterations": 16,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 2138.1875,
+    "cpu_samples_us": [
+      2138.1875,
+      2137.375,
+      2139.875,
+      2141.6875,
+      2133.5625,
+      2139.625,
+      2130.75
+    ],
+    "peak_rss_mib": 56.34375,
+    "peak_rss_samples_mib": [
+      56.328125,
+      56.34375,
+      56.375,
+      56.421875,
+      56.328125,
+      56.34375,
+      56.34375
+    ],
+    "rss_after_mib": 55.953125,
+    "rss_after_samples_mib": [
+      55.9375,
+      55.953125,
+      55.984375,
+      56.03125,
+      55.9375,
+      55.953125,
+      55.953125
+    ],
+    "rss_before_mib": 29.328125,
+    "rss_before_samples_mib": [
+      29.3125,
+      29.328125,
+      29.359375,
+      29.40625,
+      29.3125,
+      29.328125,
+      29.328125
+    ]
+  },
+  {
+    "fixture": "records_array_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 808.0,
+    "cpu_samples_us": [
+      787.0,
+      805.0,
+      803.0,
+      819.0,
+      818.0,
+      817.0,
+      808.0
+    ],
+    "peak_rss_mib": 20.1875,
+    "peak_rss_samples_mib": [
+      20.171875,
+      20.1875,
+      20.1875,
+      20.171875,
+      20.1875,
+      20.1875,
+      20.1875
+    ],
+    "rss_after_mib": 19.15625,
+    "rss_after_samples_mib": [
+      19.140625,
+      19.15625,
+      19.15625,
+      19.140625,
+      19.15625,
+      19.15625,
+      19.15625
+    ],
+    "rss_before_mib": 16.34375,
+    "rss_before_samples_mib": [
+      16.34375,
+      16.34375,
+      16.359375,
+      16.34375,
+      16.34375,
+      16.359375,
+      16.34375
+    ]
+  },
+  {
+    "fixture": "records_array_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 801.0,
+    "cpu_samples_us": [
+      812.0,
+      801.0,
+      800.0,
+      796.0,
+      806.0,
+      800.0,
+      823.0
+    ],
+    "peak_rss_mib": 20.15625,
+    "peak_rss_samples_mib": [
+      20.15625,
+      20.15625,
+      20.171875,
+      20.15625,
+      20.15625,
+      20.171875,
+      20.15625
+    ],
+    "rss_after_mib": 19.140625,
+    "rss_after_samples_mib": [
+      19.140625,
+      19.140625,
+      19.15625,
+      19.140625,
+      19.140625,
+      19.15625,
+      19.140625
+    ],
+    "rss_before_mib": 16.34375,
+    "rss_before_samples_mib": [
+      16.34375,
+      16.34375,
+      16.359375,
+      16.34375,
+      16.34375,
+      16.359375,
+      16.34375
+    ]
+  },
+  {
+    "fixture": "records_array_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 1337.0,
+    "cpu_samples_us": [
+      1365.0,
+      1328.0,
+      1325.0,
+      1351.0,
+      1330.0,
+      1339.0,
+      1337.0
+    ],
+    "peak_rss_mib": 63.0,
+    "peak_rss_samples_mib": [
+      62.96875,
+      63.0,
+      63.015625,
+      62.96875,
+      62.828125,
+      63.03125,
+      63.015625
+    ],
+    "rss_after_mib": 60.71875,
+    "rss_after_samples_mib": [
+      60.734375,
+      60.71875,
+      60.734375,
+      60.671875,
+      60.640625,
+      60.71875,
+      60.71875
+    ],
+    "rss_before_mib": 58.46875,
+    "rss_before_samples_mib": [
+      58.5,
+      58.46875,
+      58.484375,
+      58.4375,
+      58.375,
+      58.453125,
+      58.46875
+    ]
+  },
+  {
+    "fixture": "records_array_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 1070.0,
+    "cpu_samples_us": [
+      1085.0,
+      1085.0,
+      1066.0,
+      1067.0,
+      1070.0,
+      1068.0,
+      1081.0
+    ],
+    "peak_rss_mib": 34.859375,
+    "peak_rss_samples_mib": [
+      34.859375,
+      34.84375,
+      34.890625,
+      34.859375,
+      34.84375,
+      34.9375,
+      34.859375
+    ],
+    "rss_after_mib": 34.46875,
+    "rss_after_samples_mib": [
+      34.46875,
+      34.453125,
+      34.5,
+      34.46875,
+      34.453125,
+      34.546875,
+      34.46875
+    ],
+    "rss_before_mib": 32.53125,
+    "rss_before_samples_mib": [
+      32.53125,
+      32.515625,
+      32.5625,
+      32.53125,
+      32.515625,
+      32.609375,
+      32.53125
+    ]
+  },
+  {
+    "fixture": "records_array_1m",
+    "operation": "retain-stringify",
+    "iterations": 16,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 659.0,
+    "cpu_samples_us": [
+      657.4375,
+      654.25,
+      657.6875,
+      664.8125,
+      667.6875,
+      669.0,
+      659.0
+    ],
+    "peak_rss_mib": 32.859375,
+    "peak_rss_samples_mib": [
+      32.859375,
+      32.859375,
+      32.859375,
+      32.859375,
+      32.859375,
+      32.859375,
+      32.859375
+    ],
+    "rss_after_mib": 31.828125,
+    "rss_after_samples_mib": [
+      31.828125,
+      31.828125,
+      31.828125,
+      31.828125,
+      31.828125,
+      31.828125,
+      31.828125
+    ],
+    "rss_before_mib": 16.34375,
+    "rss_before_samples_mib": [
+      16.34375,
+      16.34375,
+      16.34375,
+      16.359375,
+      16.359375,
+      16.359375,
+      16.34375
+    ]
+  },
+  {
+    "fixture": "records_array_1m",
+    "operation": "retain-stringify",
+    "iterations": 16,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 663.9375,
+    "cpu_samples_us": [
+      665.5625,
+      656.5,
+      658.5,
+      663.9375,
+      661.875,
+      665.125,
+      665.0
+    ],
+    "peak_rss_mib": 32.84375,
+    "peak_rss_samples_mib": [
+      32.84375,
+      32.84375,
+      32.84375,
+      32.828125,
+      32.84375,
+      32.84375,
+      32.828125
+    ],
+    "rss_after_mib": 31.828125,
+    "rss_after_samples_mib": [
+      31.828125,
+      31.828125,
+      31.828125,
+      31.8125,
+      31.828125,
+      31.828125,
+      31.8125
+    ],
+    "rss_before_mib": 16.359375,
+    "rss_before_samples_mib": [
+      16.34375,
+      16.359375,
+      16.359375,
+      16.34375,
+      16.359375,
+      16.359375,
+      16.34375
+    ]
+  },
+  {
+    "fixture": "records_array_1m",
+    "operation": "retain-stringify",
+    "iterations": 16,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 996.8125,
+    "cpu_samples_us": [
+      995.4375,
+      993.9375,
+      996.875,
+      1010.25,
+      996.8125,
+      1010.6875,
+      995.9375
+    ],
+    "peak_rss_mib": 77.1875,
+    "peak_rss_samples_mib": [
+      77.203125,
+      77.1875,
+      77.15625,
+      77.265625,
+      76.984375,
+      77.1875,
+      77.09375
+    ],
+    "rss_after_mib": 76.53125,
+    "rss_after_samples_mib": [
+      76.609375,
+      76.53125,
+      76.5,
+      76.625,
+      76.421875,
+      76.578125,
+      76.5
+    ],
+    "rss_before_mib": 58.5,
+    "rss_before_samples_mib": [
+      58.625,
+      58.5,
+      58.40625,
+      58.578125,
+      58.390625,
+      58.484375,
+      58.5
+    ]
+  },
+  {
+    "fixture": "records_array_1m",
+    "operation": "retain-stringify",
+    "iterations": 16,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 991.9375,
+    "cpu_samples_us": [
+      994.25,
+      991.9375,
+      991.8125,
+      992.0625,
+      990.25,
+      990.1875,
+      1004.4375
+    ],
+    "peak_rss_mib": 47.6875,
+    "peak_rss_samples_mib": [
+      47.90625,
+      47.765625,
+      47.6875,
+      47.671875,
+      47.75,
+      47.671875,
+      47.671875
+    ],
+    "rss_after_mib": 47.296875,
+    "rss_after_samples_mib": [
+      47.515625,
+      47.375,
+      47.296875,
+      47.28125,
+      47.359375,
+      47.28125,
+      47.28125
+    ],
+    "rss_before_mib": 32.53125,
+    "rss_before_samples_mib": [
+      32.53125,
+      32.625,
+      32.546875,
+      32.53125,
+      32.609375,
+      32.53125,
+      32.53125
+    ]
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 1867.0,
+    "cpu_samples_us": [
+      1864.0,
+      1865.0,
+      1889.0,
+      1865.0,
+      1867.0,
+      1878.0,
+      1878.0
+    ],
+    "peak_rss_mib": 16.421875,
+    "peak_rss_samples_mib": [
+      16.4375,
+      16.421875,
+      16.421875,
+      16.421875,
+      16.421875,
+      16.421875,
+      16.4375
+    ],
+    "rss_after_mib": 15.375,
+    "rss_after_samples_mib": [
+      15.390625,
+      15.375,
+      15.375,
+      15.375,
+      15.375,
+      15.375,
+      15.390625
+    ],
+    "rss_before_mib": 13.515625,
+    "rss_before_samples_mib": [
+      13.53125,
+      13.515625,
+      13.515625,
+      13.515625,
+      13.515625,
+      13.515625,
+      13.53125
+    ]
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 1861.0,
+    "cpu_samples_us": [
+      1861.0,
+      1875.0,
+      1889.0,
+      1860.0,
+      1856.0,
+      1857.0,
+      1873.0
+    ],
+    "peak_rss_mib": 16.421875,
+    "peak_rss_samples_mib": [
+      16.421875,
+      16.421875,
+      16.421875,
+      16.40625,
+      16.40625,
+      16.40625,
+      16.421875
+    ],
+    "rss_after_mib": 15.390625,
+    "rss_after_samples_mib": [
+      15.390625,
+      15.390625,
+      15.390625,
+      15.375,
+      15.375,
+      15.375,
+      15.390625
+    ],
+    "rss_before_mib": 13.53125,
+    "rss_before_samples_mib": [
+      13.53125,
+      13.53125,
+      13.53125,
+      13.515625,
+      13.515625,
+      13.515625,
+      13.53125
+    ]
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 3956.0,
+    "cpu_samples_us": [
+      3810.0,
+      4104.0,
+      3871.0,
+      4026.0,
+      3956.0,
+      3993.0,
+      3912.0
+    ],
+    "peak_rss_mib": 60.359375,
+    "peak_rss_samples_mib": [
+      60.40625,
+      60.375,
+      60.359375,
+      60.21875,
+      60.359375,
+      60.34375,
+      60.34375
+    ],
+    "rss_after_mib": 58.546875,
+    "rss_after_samples_mib": [
+      58.5625,
+      58.625,
+      58.546875,
+      58.40625,
+      58.546875,
+      58.515625,
+      58.53125
+    ],
+    "rss_before_mib": 55.078125,
+    "rss_before_samples_mib": [
+      55.125,
+      55.1875,
+      55.03125,
+      54.96875,
+      55.046875,
+      55.09375,
+      55.078125
+    ]
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 2413.0,
+    "cpu_samples_us": [
+      2413.0,
+      2408.0,
+      2425.0,
+      2408.0,
+      2694.0,
+      2392.0,
+      2456.0
+    ],
+    "peak_rss_mib": 32.046875,
+    "peak_rss_samples_mib": [
+      32.046875,
+      32.046875,
+      32.078125,
+      32.078125,
+      32.0625,
+      32.046875,
+      32.046875
+    ],
+    "rss_after_mib": 31.65625,
+    "rss_after_samples_mib": [
+      31.65625,
+      31.65625,
+      31.6875,
+      31.6875,
+      31.671875,
+      31.65625,
+      31.65625
+    ],
+    "rss_before_mib": 29.3125,
+    "rss_before_samples_mib": [
+      29.3125,
+      29.3125,
+      29.34375,
+      29.34375,
+      29.328125,
+      29.3125,
+      29.3125
+    ]
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "retain-parse",
+    "iterations": 16,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 2983.5,
+    "cpu_samples_us": [
+      2985.25,
+      2983.5,
+      2989.375,
+      2974.125,
+      2980.4375,
+      2974.875,
+      2984.8125
+    ],
+    "peak_rss_mib": 53.015625,
+    "peak_rss_samples_mib": [
+      53.0,
+      53.0,
+      53.015625,
+      53.015625,
+      53.015625,
+      53.015625,
+      53.015625
+    ],
+    "rss_after_mib": 52.5,
+    "rss_after_samples_mib": [
+      52.484375,
+      52.484375,
+      52.5,
+      52.5,
+      52.5,
+      52.5,
+      52.5
+    ],
+    "rss_before_mib": 13.515625,
+    "rss_before_samples_mib": [
+      13.515625,
+      13.515625,
+      13.515625,
+      13.53125,
+      13.53125,
+      13.515625,
+      13.53125
+    ]
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "retain-parse",
+    "iterations": 16,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 2989.1875,
+    "cpu_samples_us": [
+      3013.5,
+      2999.0625,
+      2978.9375,
+      2976.125,
+      2989.1875,
+      2981.8125,
+      2999.375
+    ],
+    "peak_rss_mib": 53.0,
+    "peak_rss_samples_mib": [
+      53.0,
+      52.984375,
+      53.0,
+      53.0,
+      53.0,
+      53.0,
+      53.0
+    ],
+    "rss_after_mib": 52.5,
+    "rss_after_samples_mib": [
+      52.5,
+      52.484375,
+      52.5,
+      52.5,
+      52.5,
+      52.5,
+      52.5
+    ],
+    "rss_before_mib": 13.53125,
+    "rss_before_samples_mib": [
+      13.53125,
+      13.515625,
+      13.53125,
+      13.53125,
+      13.515625,
+      13.53125,
+      13.515625
+    ]
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "retain-parse",
+    "iterations": 16,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 3662.875,
+    "cpu_samples_us": [
+      3569.875,
+      3749.9375,
+      3543.75,
+      3621.875,
+      3662.875,
+      3690.9375,
+      3801.625
+    ],
+    "peak_rss_mib": 89.546875,
+    "peak_rss_samples_mib": [
+      89.40625,
+      89.546875,
+      89.546875,
+      89.640625,
+      89.53125,
+      89.65625,
+      89.609375
+    ],
+    "rss_after_mib": 88.796875,
+    "rss_after_samples_mib": [
+      88.65625,
+      88.796875,
+      88.78125,
+      88.875,
+      88.78125,
+      88.90625,
+      88.84375
+    ],
+    "rss_before_mib": 55.078125,
+    "rss_before_samples_mib": [
+      54.953125,
+      55.125,
+      55.109375,
+      55.046875,
+      55.078125,
+      55.109375,
+      55.0625
+    ]
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "retain-parse",
+    "iterations": 16,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 2131.875,
+    "cpu_samples_us": [
+      2131.6875,
+      2131.0,
+      2138.9375,
+      2131.875,
+      2149.25,
+      2131.25,
+      2132.375
+    ],
+    "peak_rss_mib": 56.359375,
+    "peak_rss_samples_mib": [
+      56.34375,
+      56.34375,
+      56.359375,
+      56.359375,
+      56.34375,
+      56.359375,
+      56.359375
+    ],
+    "rss_after_mib": 55.96875,
+    "rss_after_samples_mib": [
+      55.953125,
+      55.953125,
+      55.96875,
+      55.96875,
+      55.953125,
+      55.96875,
+      55.96875
+    ],
+    "rss_before_mib": 29.34375,
+    "rss_before_samples_mib": [
+      29.328125,
+      29.328125,
+      29.34375,
+      29.34375,
+      29.328125,
+      29.34375,
+      29.34375
+    ]
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 811.0,
+    "cpu_samples_us": [
+      803.0,
+      819.0,
+      814.0,
+      808.0,
+      811.0,
+      823.0,
+      794.0
+    ],
+    "peak_rss_mib": 20.203125,
+    "peak_rss_samples_mib": [
+      20.1875,
+      20.1875,
+      20.203125,
+      20.203125,
+      20.203125,
+      20.203125,
+      20.1875
+    ],
+    "rss_after_mib": 19.171875,
+    "rss_after_samples_mib": [
+      19.15625,
+      19.15625,
+      19.171875,
+      19.171875,
+      19.171875,
+      19.171875,
+      19.15625
+    ],
+    "rss_before_mib": 16.359375,
+    "rss_before_samples_mib": [
+      16.34375,
+      16.34375,
+      16.359375,
+      16.359375,
+      16.359375,
+      16.359375,
+      16.34375
+    ]
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 803.0,
+    "cpu_samples_us": [
+      789.0,
+      824.0,
+      808.0,
+      801.0,
+      810.0,
+      801.0,
+      803.0
+    ],
+    "peak_rss_mib": 20.1875,
+    "peak_rss_samples_mib": [
+      20.1875,
+      20.1875,
+      20.171875,
+      20.1875,
+      20.1875,
+      20.171875,
+      20.171875
+    ],
+    "rss_after_mib": 19.171875,
+    "rss_after_samples_mib": [
+      19.171875,
+      19.171875,
+      19.15625,
+      19.171875,
+      19.171875,
+      19.15625,
+      19.15625
+    ],
+    "rss_before_mib": 16.34375,
+    "rss_before_samples_mib": [
+      16.359375,
+      16.359375,
+      16.34375,
+      16.359375,
+      16.34375,
+      16.34375,
+      16.34375
+    ]
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 1347.0,
+    "cpu_samples_us": [
+      1349.0,
+      1343.0,
+      1347.0,
+      1314.0,
+      1350.0,
+      1385.0,
+      1347.0
+    ],
+    "peak_rss_mib": 63.0,
+    "peak_rss_samples_mib": [
+      63.046875,
+      63.0,
+      63.046875,
+      62.859375,
+      63.09375,
+      62.921875,
+      63.0
+    ],
+    "rss_after_mib": 60.6875,
+    "rss_after_samples_mib": [
+      60.65625,
+      60.703125,
+      60.703125,
+      60.65625,
+      60.78125,
+      60.625,
+      60.6875
+    ],
+    "rss_before_mib": 58.46875,
+    "rss_before_samples_mib": [
+      58.359375,
+      58.46875,
+      58.484375,
+      58.4375,
+      58.484375,
+      58.359375,
+      58.46875
+    ]
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 1077.0,
+    "cpu_samples_us": [
+      1076.0,
+      1085.0,
+      1081.0,
+      1072.0,
+      1083.0,
+      1077.0,
+      1061.0
+    ],
+    "peak_rss_mib": 34.859375,
+    "peak_rss_samples_mib": [
+      34.859375,
+      34.828125,
+      34.84375,
+      34.875,
+      34.84375,
+      34.90625,
+      34.875
+    ],
+    "rss_after_mib": 34.46875,
+    "rss_after_samples_mib": [
+      34.46875,
+      34.4375,
+      34.453125,
+      34.484375,
+      34.453125,
+      34.515625,
+      34.484375
+    ],
+    "rss_before_mib": 32.53125,
+    "rss_before_samples_mib": [
+      32.53125,
+      32.5,
+      32.515625,
+      32.546875,
+      32.515625,
+      32.578125,
+      32.546875
+    ]
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "retain-stringify",
+    "iterations": 16,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 664.375,
+    "cpu_samples_us": [
+      653.625,
+      666.25,
+      669.75,
+      663.5,
+      656.125,
+      665.9375,
+      664.375
+    ],
+    "peak_rss_mib": 32.875,
+    "peak_rss_samples_mib": [
+      32.875,
+      32.875,
+      32.875,
+      32.859375,
+      32.875,
+      32.859375,
+      32.875
+    ],
+    "rss_after_mib": 31.84375,
+    "rss_after_samples_mib": [
+      31.84375,
+      31.84375,
+      31.84375,
+      31.828125,
+      31.84375,
+      31.828125,
+      31.84375
+    ],
+    "rss_before_mib": 16.359375,
+    "rss_before_samples_mib": [
+      16.359375,
+      16.359375,
+      16.359375,
+      16.34375,
+      16.359375,
+      16.34375,
+      16.34375
+    ]
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "retain-stringify",
+    "iterations": 16,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 663.5,
+    "cpu_samples_us": [
+      656.4375,
+      664.5625,
+      665.125,
+      669.5625,
+      661.9375,
+      663.5,
+      662.9375
+    ],
+    "peak_rss_mib": 32.859375,
+    "peak_rss_samples_mib": [
+      32.859375,
+      32.859375,
+      32.84375,
+      32.859375,
+      32.859375,
+      32.859375,
+      32.859375
+    ],
+    "rss_after_mib": 31.84375,
+    "rss_after_samples_mib": [
+      31.84375,
+      31.84375,
+      31.828125,
+      31.84375,
+      31.84375,
+      31.84375,
+      31.84375
+    ],
+    "rss_before_mib": 16.359375,
+    "rss_before_samples_mib": [
+      16.34375,
+      16.359375,
+      16.34375,
+      16.359375,
+      16.34375,
+      16.359375,
+      16.359375
+    ]
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "retain-stringify",
+    "iterations": 16,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 1002.5625,
+    "cpu_samples_us": [
+      999.375,
+      996.375,
+      1004.5625,
+      1002.5625,
+      1007.0,
+      1004.75,
+      1001.5625
+    ],
+    "peak_rss_mib": 77.140625,
+    "peak_rss_samples_mib": [
+      77.25,
+      77.09375,
+      77.1875,
+      77.125,
+      77.21875,
+      77.109375,
+      77.140625
+    ],
+    "rss_after_mib": 76.515625,
+    "rss_after_samples_mib": [
+      76.59375,
+      76.421875,
+      76.515625,
+      76.484375,
+      76.59375,
+      76.515625,
+      76.46875
+    ],
+    "rss_before_mib": 58.421875,
+    "rss_before_samples_mib": [
+      58.53125,
+      58.375,
+      58.375,
+      58.421875,
+      58.40625,
+      58.46875,
+      58.453125
+    ]
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "retain-stringify",
+    "iterations": 16,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 993.125,
+    "cpu_samples_us": [
+      993.125,
+      994.8125,
+      999.3125,
+      991.4375,
+      992.1875,
+      992.75,
+      997.625
+    ],
+    "peak_rss_mib": 47.671875,
+    "peak_rss_samples_mib": [
+      47.71875,
+      47.671875,
+      47.65625,
+      47.671875,
+      47.6875,
+      47.703125,
+      47.640625
+    ],
+    "rss_after_mib": 47.28125,
+    "rss_after_samples_mib": [
+      47.328125,
+      47.28125,
+      47.265625,
+      47.28125,
+      47.296875,
+      47.3125,
+      47.25
+    ],
+    "rss_before_mib": 32.53125,
+    "rss_before_samples_mib": [
+      32.578125,
+      32.53125,
+      32.515625,
+      32.53125,
+      32.546875,
+      32.5625,
+      32.5
+    ]
+  },
+  {
+    "fixture": "records_array_8m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 8330.0,
+    "cpu_samples_us": [
+      8220.0,
+      8258.0,
+      8561.0,
+      8330.0,
+      8562.0,
+      8415.0,
+      8160.0
+    ],
+    "peak_rss_mib": 49.59375,
+    "peak_rss_samples_mib": [
+      49.59375,
+      49.59375,
+      49.59375,
+      49.59375,
+      49.59375,
+      49.59375,
+      49.59375
+    ],
+    "rss_after_mib": 48.5625,
+    "rss_after_samples_mib": [
+      48.5625,
+      48.5625,
+      48.5625,
+      48.5625,
+      48.5625,
+      48.5625,
+      48.5625
+    ],
+    "rss_before_mib": 25.8125,
+    "rss_before_samples_mib": [
+      25.796875,
+      25.796875,
+      25.796875,
+      25.8125,
+      25.8125,
+      25.8125,
+      25.8125
+    ]
+  },
+  {
+    "fixture": "records_array_8m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 8256.0,
+    "cpu_samples_us": [
+      8292.0,
+      8167.0,
+      8300.0,
+      8256.0,
+      8383.0,
+      8015.0,
+      8043.0
+    ],
+    "peak_rss_mib": 49.578125,
+    "peak_rss_samples_mib": [
+      49.578125,
+      49.578125,
+      49.578125,
+      49.578125,
+      49.578125,
+      49.578125,
+      49.578125
+    ],
+    "rss_after_mib": 48.5625,
+    "rss_after_samples_mib": [
+      48.5625,
+      48.5625,
+      48.5625,
+      48.5625,
+      48.5625,
+      48.5625,
+      48.5625
+    ],
+    "rss_before_mib": 25.8125,
+    "rss_before_samples_mib": [
+      25.796875,
+      25.8125,
+      25.8125,
+      25.8125,
+      25.796875,
+      25.8125,
+      25.796875
+    ]
+  },
+  {
+    "fixture": "records_array_8m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 27782.0,
+    "cpu_samples_us": [
+      27729.0,
+      27782.0,
+      27491.0,
+      26936.0,
+      28227.0,
+      27900.0,
+      28955.0
+    ],
+    "peak_rss_mib": 97.78125,
+    "peak_rss_samples_mib": [
+      97.828125,
+      97.75,
+      97.828125,
+      97.78125,
+      97.8125,
+      97.71875,
+      97.78125
+    ],
+    "rss_after_mib": 94.4375,
+    "rss_after_samples_mib": [
+      94.46875,
+      94.390625,
+      94.453125,
+      94.421875,
+      94.4375,
+      94.375,
+      94.5
+    ],
+    "rss_before_mib": 74.046875,
+    "rss_before_samples_mib": [
+      74.09375,
+      74.046875,
+      74.046875,
+      74.046875,
+      74.046875,
+      74.0,
+      74.078125
+    ]
+  },
+  {
+    "fixture": "records_array_8m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 18719.0,
+    "cpu_samples_us": [
+      18758.0,
+      18632.0,
+      18686.0,
+      18778.0,
+      20783.0,
+      18642.0,
+      18719.0
+    ],
+    "peak_rss_mib": 52.765625,
+    "peak_rss_samples_mib": [
+      52.765625,
+      52.765625,
+      52.75,
+      52.8125,
+      52.75,
+      52.75,
+      52.765625
+    ],
+    "rss_after_mib": 52.375,
+    "rss_after_samples_mib": [
+      52.375,
+      52.375,
+      52.359375,
+      52.421875,
+      52.359375,
+      52.359375,
+      52.375
+    ],
+    "rss_before_mib": 35.265625,
+    "rss_before_samples_mib": [
+      35.28125,
+      35.265625,
+      35.265625,
+      35.328125,
+      35.265625,
+      35.25,
+      35.265625
+    ]
+  },
+  {
+    "fixture": "records_array_8m",
+    "operation": "retain-parse",
+    "iterations": 4,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 8231.75,
+    "cpu_samples_us": [
+      8216.75,
+      8254.25,
+      8188.5,
+      8226.0,
+      8231.75,
+      8250.0,
+      8336.5
+    ],
+    "peak_rss_mib": 85.84375,
+    "peak_rss_samples_mib": [
+      85.84375,
+      85.84375,
+      85.84375,
+      85.828125,
+      85.84375,
+      85.84375,
+      85.84375
+    ],
+    "rss_after_mib": 85.34375,
+    "rss_after_samples_mib": [
+      85.34375,
+      85.34375,
+      85.34375,
+      85.328125,
+      85.34375,
+      85.34375,
+      85.34375
+    ],
+    "rss_before_mib": 25.8125,
+    "rss_before_samples_mib": [
+      25.8125,
+      25.8125,
+      25.8125,
+      25.796875,
+      25.8125,
+      25.8125,
+      25.796875
+    ]
+  },
+  {
+    "fixture": "records_array_8m",
+    "operation": "retain-parse",
+    "iterations": 4,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 8244.5,
+    "cpu_samples_us": [
+      8225.75,
+      8270.5,
+      8237.25,
+      8244.5,
+      8309.5,
+      8259.5,
+      8244.0
+    ],
+    "peak_rss_mib": 85.828125,
+    "peak_rss_samples_mib": [
+      85.828125,
+      85.828125,
+      85.828125,
+      85.828125,
+      85.828125,
+      85.828125,
+      85.8125
+    ],
+    "rss_after_mib": 85.34375,
+    "rss_after_samples_mib": [
+      85.34375,
+      85.34375,
+      85.34375,
+      85.34375,
+      85.34375,
+      85.34375,
+      85.328125
+    ],
+    "rss_before_mib": 25.8125,
+    "rss_before_samples_mib": [
+      25.8125,
+      25.8125,
+      25.8125,
+      25.8125,
+      25.8125,
+      25.8125,
+      25.796875
+    ]
+  },
+  {
+    "fixture": "records_array_8m",
+    "operation": "retain-parse",
+    "iterations": 4,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 27927.5,
+    "cpu_samples_us": [
+      26131.75,
+      26818.25,
+      28159.0,
+      26860.5,
+      27927.5,
+      28592.25,
+      28386.0
+    ],
+    "peak_rss_mib": 159.28125,
+    "peak_rss_samples_mib": [
+      159.328125,
+      159.296875,
+      159.0625,
+      159.40625,
+      159.0,
+      159.28125,
+      159.109375
+    ],
+    "rss_after_mib": 147.015625,
+    "rss_after_samples_mib": [
+      147.015625,
+      147.0625,
+      146.828125,
+      147.171875,
+      146.828125,
+      147.078125,
+      146.90625
+    ],
+    "rss_before_mib": 74.078125,
+    "rss_before_samples_mib": [
+      74.015625,
+      74.03125,
+      74.109375,
+      74.109375,
+      74.078125,
+      74.078125,
+      74.09375
+    ]
+  },
+  {
+    "fixture": "records_array_8m",
+    "operation": "retain-parse",
+    "iterations": 4,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 21659.75,
+    "cpu_samples_us": [
+      21734.75,
+      21573.25,
+      21610.75,
+      21659.75,
+      21754.5,
+      21821.75,
+      21415.75
+    ],
+    "peak_rss_mib": 92.265625,
+    "peak_rss_samples_mib": [
+      92.21875,
+      92.546875,
+      92.125,
+      92.15625,
+      92.265625,
+      92.359375,
+      92.421875
+    ],
+    "rss_after_mib": 91.875,
+    "rss_after_samples_mib": [
+      91.828125,
+      92.15625,
+      91.734375,
+      91.765625,
+      91.875,
+      91.96875,
+      92.03125
+    ],
+    "rss_before_mib": 35.265625,
+    "rss_before_samples_mib": [
+      35.265625,
+      35.25,
+      35.25,
+      35.265625,
+      35.28125,
+      35.265625,
+      35.265625
+    ]
+  },
+  {
+    "fixture": "records_array_8m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 29840.0,
+    "cpu_samples_us": [
+      29900.0,
+      29733.0,
+      29840.0,
+      29755.0,
+      29739.0,
+      29924.0,
+      29893.0
+    ],
+    "peak_rss_mib": 79.953125,
+    "peak_rss_samples_mib": [
+      79.953125,
+      79.953125,
+      79.953125,
+      79.953125,
+      79.921875,
+      79.921875,
+      79.953125
+    ],
+    "rss_after_mib": 77.375,
+    "rss_after_samples_mib": [
+      77.375,
+      77.375,
+      77.375,
+      77.375,
+      77.34375,
+      77.34375,
+      77.375
+    ],
+    "rss_before_mib": 44.171875,
+    "rss_before_samples_mib": [
+      44.171875,
+      44.171875,
+      44.15625,
+      44.171875,
+      44.171875,
+      44.171875,
+      44.171875
+    ]
+  },
+  {
+    "fixture": "records_array_8m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 29760.0,
+    "cpu_samples_us": [
+      29729.0,
+      29778.0,
+      29759.0,
+      29855.0,
+      29756.0,
+      29917.0,
+      29760.0
+    ],
+    "peak_rss_mib": 79.90625,
+    "peak_rss_samples_mib": [
+      79.90625,
+      79.90625,
+      79.9375,
+      79.90625,
+      79.921875,
+      79.90625,
+      79.90625
+    ],
+    "rss_after_mib": 77.34375,
+    "rss_after_samples_mib": [
+      77.34375,
+      77.34375,
+      77.375,
+      77.34375,
+      77.34375,
+      77.34375,
+      77.34375
+    ],
+    "rss_before_mib": 44.171875,
+    "rss_before_samples_mib": [
+      44.171875,
+      44.171875,
+      44.15625,
+      44.171875,
+      44.171875,
+      44.171875,
+      44.171875
+    ]
+  },
+  {
+    "fixture": "records_array_8m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 7807.0,
+    "cpu_samples_us": [
+      7804.0,
+      7893.0,
+      7736.0,
+      7866.0,
+      7812.0,
+      7798.0,
+      7807.0
+    ],
+    "peak_rss_mib": 118.359375,
+    "peak_rss_samples_mib": [
+      118.5,
+      118.328125,
+      118.375,
+      118.328125,
+      118.25,
+      118.359375,
+      118.40625
+    ],
+    "rss_after_mib": 114.328125,
+    "rss_after_samples_mib": [
+      114.40625,
+      114.28125,
+      114.390625,
+      114.328125,
+      114.28125,
+      114.359375,
+      114.328125
+    ],
+    "rss_before_mib": 100.796875,
+    "rss_before_samples_mib": [
+      100.9375,
+      100.78125,
+      100.84375,
+      100.796875,
+      100.796875,
+      100.84375,
+      100.78125
+    ]
+  },
+  {
+    "fixture": "records_array_8m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 8250.0,
+    "cpu_samples_us": [
+      8230.0,
+      8270.0,
+      8463.0,
+      8284.0,
+      8199.0,
+      8250.0,
+      8219.0
+    ],
+    "peak_rss_mib": 73.90625,
+    "peak_rss_samples_mib": [
+      73.890625,
+      73.90625,
+      73.90625,
+      73.875,
+      73.921875,
+      73.921875,
+      73.890625
+    ],
+    "rss_after_mib": 73.515625,
+    "rss_after_samples_mib": [
+      73.5,
+      73.515625,
+      73.515625,
+      73.484375,
+      73.53125,
+      73.53125,
+      73.5
+    ],
+    "rss_before_mib": 59.140625,
+    "rss_before_samples_mib": [
+      59.125,
+      59.140625,
+      59.140625,
+      59.109375,
+      59.15625,
+      59.15625,
+      59.125
+    ]
+  },
+  {
+    "fixture": "records_array_8m",
+    "operation": "retain-stringify",
+    "iterations": 4,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 16222.0,
+    "cpu_samples_us": [
+      16222.0,
+      16172.75,
+      16174.25,
+      16232.25,
+      16218.5,
+      16230.5,
+      16266.25
+    ],
+    "peak_rss_mib": 99.140625,
+    "peak_rss_samples_mib": [
+      99.171875,
+      99.140625,
+      99.140625,
+      99.171875,
+      99.171875,
+      99.140625,
+      99.140625
+    ],
+    "rss_after_mib": 98.625,
+    "rss_after_samples_mib": [
+      98.65625,
+      98.625,
+      98.625,
+      98.65625,
+      98.65625,
+      98.625,
+      98.625
+    ],
+    "rss_before_mib": 44.171875,
+    "rss_before_samples_mib": [
+      44.171875,
+      44.171875,
+      44.171875,
+      44.171875,
+      44.171875,
+      44.171875,
+      44.15625
+    ]
+  },
+  {
+    "fixture": "records_array_8m",
+    "operation": "retain-stringify",
+    "iterations": 4,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 16176.5,
+    "cpu_samples_us": [
+      16176.5,
+      16161.5,
+      16199.5,
+      16187.25,
+      16164.0,
+      16178.25,
+      16164.25
+    ],
+    "peak_rss_mib": 99.15625,
+    "peak_rss_samples_mib": [
+      99.15625,
+      99.15625,
+      99.15625,
+      99.125,
+      99.15625,
+      99.125,
+      99.171875
+    ],
+    "rss_after_mib": 98.65625,
+    "rss_after_samples_mib": [
+      98.65625,
+      98.65625,
+      98.65625,
+      98.625,
+      98.65625,
+      98.625,
+      98.671875
+    ],
+    "rss_before_mib": 44.171875,
+    "rss_before_samples_mib": [
+      44.15625,
+      44.171875,
+      44.171875,
+      44.15625,
+      44.171875,
+      44.171875,
+      44.171875
+    ]
+  },
+  {
+    "fixture": "records_array_8m",
+    "operation": "retain-stringify",
+    "iterations": 4,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 8795.5,
+    "cpu_samples_us": [
+      8959.5,
+      8840.25,
+      8783.75,
+      8795.5,
+      8918.75,
+      8763.5,
+      8772.5
+    ],
+    "peak_rss_mib": 144.40625,
+    "peak_rss_samples_mib": [
+      144.3125,
+      144.75,
+      144.8125,
+      144.40625,
+      144.59375,
+      144.375,
+      144.375
+    ],
+    "rss_after_mib": 143.765625,
+    "rss_after_samples_mib": [
+      143.671875,
+      144.109375,
+      144.1875,
+      143.765625,
+      143.96875,
+      143.734375,
+      143.703125
+    ],
+    "rss_before_mib": 100.796875,
+    "rss_before_samples_mib": [
+      100.625,
+      100.828125,
+      100.796875,
+      100.796875,
+      100.8125,
+      100.796875,
+      100.75
+    ]
+  },
+  {
+    "fixture": "records_array_8m",
+    "operation": "retain-stringify",
+    "iterations": 4,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 9391.25,
+    "cpu_samples_us": [
+      9430.25,
+      9391.25,
+      9397.0,
+      9417.25,
+      9376.25,
+      9367.5,
+      9384.0
+    ],
+    "peak_rss_mib": 94.921875,
+    "peak_rss_samples_mib": [
+      94.921875,
+      94.90625,
+      94.921875,
+      94.90625,
+      94.921875,
+      94.921875,
+      94.90625
+    ],
+    "rss_after_mib": 94.53125,
+    "rss_after_samples_mib": [
+      94.53125,
+      94.515625,
+      94.53125,
+      94.515625,
+      94.53125,
+      94.53125,
+      94.515625
+    ],
+    "rss_before_mib": 59.125,
+    "rss_before_samples_mib": [
+      59.125,
+      59.140625,
+      59.125,
+      59.125,
+      59.140625,
+      59.125,
+      59.125
+    ]
+  },
+  {
+    "fixture": "records_object_8m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 14419.0,
+    "cpu_samples_us": [
+      14416.0,
+      14481.0,
+      14419.0,
+      14387.0,
+      14415.0,
+      14488.0,
+      14459.0
+    ],
+    "peak_rss_mib": 45.484375,
+    "peak_rss_samples_mib": [
+      45.484375,
+      45.484375,
+      45.484375,
+      45.484375,
+      45.46875,
+      45.484375,
+      45.484375
+    ],
+    "rss_after_mib": 33.1875,
+    "rss_after_samples_mib": [
+      33.1875,
+      33.1875,
+      33.1875,
+      33.171875,
+      33.171875,
+      33.1875,
+      33.1875
+    ],
+    "rss_before_mib": 25.8125,
+    "rss_before_samples_mib": [
+      25.796875,
+      25.8125,
+      25.8125,
+      25.796875,
+      25.796875,
+      25.8125,
+      25.8125
+    ]
+  },
+  {
+    "fixture": "records_object_8m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 14462.0,
+    "cpu_samples_us": [
+      14457.0,
+      14422.0,
+      14497.0,
+      14462.0,
+      14466.0,
+      14482.0,
+      14455.0
+    ],
+    "peak_rss_mib": 45.46875,
+    "peak_rss_samples_mib": [
+      45.46875,
+      45.46875,
+      45.453125,
+      45.46875,
+      45.46875,
+      45.453125,
+      45.46875
+    ],
+    "rss_after_mib": 33.1875,
+    "rss_after_samples_mib": [
+      33.1875,
+      33.1875,
+      33.171875,
+      33.1875,
+      33.171875,
+      33.171875,
+      33.1875
+    ],
+    "rss_before_mib": 25.8125,
+    "rss_before_samples_mib": [
+      25.8125,
+      25.8125,
+      25.796875,
+      25.8125,
+      25.796875,
+      25.796875,
+      25.8125
+    ]
+  },
+  {
+    "fixture": "records_object_8m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 27939.0,
+    "cpu_samples_us": [
+      28685.0,
+      26799.0,
+      28553.0,
+      27001.0,
+      27939.0,
+      29006.0,
+      27408.0
+    ],
+    "peak_rss_mib": 97.8125,
+    "peak_rss_samples_mib": [
+      97.78125,
+      97.8125,
+      97.828125,
+      97.796875,
+      97.890625,
+      97.875,
+      97.734375
+    ],
+    "rss_after_mib": 94.46875,
+    "rss_after_samples_mib": [
+      94.46875,
+      94.46875,
+      94.4375,
+      94.453125,
+      94.515625,
+      94.5,
+      94.4375
+    ],
+    "rss_before_mib": 74.078125,
+    "rss_before_samples_mib": [
+      74.078125,
+      74.046875,
+      74.046875,
+      74.0,
+      74.09375,
+      74.125,
+      74.09375
+    ]
+  },
+  {
+    "fixture": "records_object_8m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 18590.0,
+    "cpu_samples_us": [
+      18636.0,
+      18652.0,
+      18589.0,
+      18590.0,
+      18731.0,
+      18536.0,
+      18573.0
+    ],
+    "peak_rss_mib": 52.75,
+    "peak_rss_samples_mib": [
+      52.78125,
+      52.75,
+      52.75,
+      52.78125,
+      52.75,
+      52.75,
+      52.78125
+    ],
+    "rss_after_mib": 52.359375,
+    "rss_after_samples_mib": [
+      52.390625,
+      52.359375,
+      52.359375,
+      52.390625,
+      52.359375,
+      52.359375,
+      52.390625
+    ],
+    "rss_before_mib": 35.265625,
+    "rss_before_samples_mib": [
+      35.296875,
+      35.265625,
+      35.265625,
+      35.28125,
+      35.265625,
+      35.265625,
+      35.296875
+    ]
+  },
+  {
+    "fixture": "records_object_8m",
+    "operation": "retain-parse",
+    "iterations": 4,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 22259.5,
+    "cpu_samples_us": [
+      22285.25,
+      22308.75,
+      22259.5,
+      22237.0,
+      22234.75,
+      22312.25,
+      22255.75
+    ],
+    "peak_rss_mib": 94.203125,
+    "peak_rss_samples_mib": [
+      94.21875,
+      94.203125,
+      94.203125,
+      94.203125,
+      94.203125,
+      94.203125,
+      94.21875
+    ],
+    "rss_after_mib": 90.953125,
+    "rss_after_samples_mib": [
+      90.96875,
+      90.953125,
+      90.953125,
+      90.953125,
+      90.953125,
+      90.953125,
+      90.96875
+    ],
+    "rss_before_mib": 25.8125,
+    "rss_before_samples_mib": [
+      25.8125,
+      25.8125,
+      25.796875,
+      25.8125,
+      25.796875,
+      25.8125,
+      25.8125
+    ]
+  },
+  {
+    "fixture": "records_object_8m",
+    "operation": "retain-parse",
+    "iterations": 4,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 22268.25,
+    "cpu_samples_us": [
+      22333.25,
+      22337.25,
+      22262.25,
+      22239.5,
+      22259.25,
+      22369.5,
+      22268.25
+    ],
+    "peak_rss_mib": 94.1875,
+    "peak_rss_samples_mib": [
+      94.1875,
+      94.1875,
+      94.1875,
+      94.1875,
+      94.203125,
+      94.1875,
+      94.1875
+    ],
+    "rss_after_mib": 90.953125,
+    "rss_after_samples_mib": [
+      90.953125,
+      90.953125,
+      90.953125,
+      90.953125,
+      90.96875,
+      90.953125,
+      90.953125
+    ],
+    "rss_before_mib": 25.796875,
+    "rss_before_samples_mib": [
+      25.8125,
+      25.796875,
+      25.796875,
+      25.796875,
+      25.8125,
+      25.796875,
+      25.8125
+    ]
+  },
+  {
+    "fixture": "records_object_8m",
+    "operation": "retain-parse",
+    "iterations": 4,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 26976.75,
+    "cpu_samples_us": [
+      27313.0,
+      26673.5,
+      27037.25,
+      26780.5,
+      26307.75,
+      26976.75,
+      27093.75
+    ],
+    "peak_rss_mib": 159.3125,
+    "peak_rss_samples_mib": [
+      159.1875,
+      159.34375,
+      159.3125,
+      159.3125,
+      159.265625,
+      159.296875,
+      160.890625
+    ],
+    "rss_after_mib": 147.03125,
+    "rss_after_samples_mib": [
+      147.015625,
+      147.015625,
+      147.03125,
+      147.140625,
+      147.125,
+      147.03125,
+      147.03125
+    ],
+    "rss_before_mib": 74.046875,
+    "rss_before_samples_mib": [
+      73.953125,
+      73.984375,
+      74.0,
+      74.078125,
+      74.109375,
+      74.0625,
+      74.046875
+    ]
+  },
+  {
+    "fixture": "records_object_8m",
+    "operation": "retain-parse",
+    "iterations": 4,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 21756.25,
+    "cpu_samples_us": [
+      21678.75,
+      21699.75,
+      21838.0,
+      21767.5,
+      21828.0,
+      21579.75,
+      21756.25
+    ],
+    "peak_rss_mib": 92.25,
+    "peak_rss_samples_mib": [
+      92.25,
+      92.421875,
+      92.25,
+      92.25,
+      92.5,
+      92.5,
+      92.140625
+    ],
+    "rss_after_mib": 91.859375,
+    "rss_after_samples_mib": [
+      91.859375,
+      92.03125,
+      91.859375,
+      91.859375,
+      92.109375,
+      92.109375,
+      91.75
+    ],
+    "rss_before_mib": 35.265625,
+    "rss_before_samples_mib": [
+      35.265625,
+      35.28125,
+      35.265625,
+      35.265625,
+      35.265625,
+      35.265625,
+      35.25
+    ]
+  },
+  {
+    "fixture": "records_object_8m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 29791.0,
+    "cpu_samples_us": [
+      29706.0,
+      29779.0,
+      29791.0,
+      29702.0,
+      29791.0,
+      29894.0,
+      29800.0
+    ],
+    "peak_rss_mib": 79.9375,
+    "peak_rss_samples_mib": [
+      79.9375,
+      79.9375,
+      79.9375,
+      79.9375,
+      79.96875,
+      79.96875,
+      79.9375
+    ],
+    "rss_after_mib": 77.359375,
+    "rss_after_samples_mib": [
+      77.359375,
+      77.359375,
+      77.359375,
+      77.359375,
+      77.390625,
+      77.390625,
+      77.359375
+    ],
+    "rss_before_mib": 44.171875,
+    "rss_before_samples_mib": [
+      44.171875,
+      44.171875,
+      44.171875,
+      44.171875,
+      44.171875,
+      44.171875,
+      44.171875
+    ]
+  },
+  {
+    "fixture": "records_object_8m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 29792.0,
+    "cpu_samples_us": [
+      29869.0,
+      29703.0,
+      29792.0,
+      29713.0,
+      29774.0,
+      29806.0,
+      29795.0
+    ],
+    "peak_rss_mib": 79.9375,
+    "peak_rss_samples_mib": [
+      79.953125,
+      79.953125,
+      79.9375,
+      79.953125,
+      79.921875,
+      79.921875,
+      79.921875
+    ],
+    "rss_after_mib": 77.359375,
+    "rss_after_samples_mib": [
+      77.390625,
+      77.390625,
+      77.359375,
+      77.390625,
+      77.359375,
+      77.359375,
+      77.359375
+    ],
+    "rss_before_mib": 44.171875,
+    "rss_before_samples_mib": [
+      44.171875,
+      44.171875,
+      44.171875,
+      44.171875,
+      44.171875,
+      44.171875,
+      44.171875
+    ]
+  },
+  {
+    "fixture": "records_object_8m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 7712.0,
+    "cpu_samples_us": [
+      7706.0,
+      7712.0,
+      7761.0,
+      7749.0,
+      7705.0,
+      7922.0,
+      7680.0
+    ],
+    "peak_rss_mib": 118.375,
+    "peak_rss_samples_mib": [
+      118.375,
+      118.46875,
+      118.3125,
+      118.3125,
+      118.28125,
+      118.421875,
+      118.46875
+    ],
+    "rss_after_mib": 114.34375,
+    "rss_after_samples_mib": [
+      114.390625,
+      114.375,
+      114.34375,
+      114.265625,
+      114.1875,
+      114.265625,
+      114.46875
+    ],
+    "rss_before_mib": 100.796875,
+    "rss_before_samples_mib": [
+      100.890625,
+      100.828125,
+      100.796875,
+      100.71875,
+      100.640625,
+      100.734375,
+      100.9375
+    ]
+  },
+  {
+    "fixture": "records_object_8m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 8271.0,
+    "cpu_samples_us": [
+      8297.0,
+      8271.0,
+      8228.0,
+      8234.0,
+      8296.0,
+      8316.0,
+      8207.0
+    ],
+    "peak_rss_mib": 73.90625,
+    "peak_rss_samples_mib": [
+      73.90625,
+      73.875,
+      73.90625,
+      73.890625,
+      73.890625,
+      73.90625,
+      73.90625
+    ],
+    "rss_after_mib": 73.515625,
+    "rss_after_samples_mib": [
+      73.515625,
+      73.484375,
+      73.515625,
+      73.5,
+      73.5,
+      73.515625,
+      73.515625
+    ],
+    "rss_before_mib": 59.140625,
+    "rss_before_samples_mib": [
+      59.140625,
+      59.109375,
+      59.140625,
+      59.125,
+      59.125,
+      59.140625,
+      59.140625
+    ]
+  },
+  {
+    "fixture": "records_object_8m",
+    "operation": "retain-stringify",
+    "iterations": 4,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 16182.25,
+    "cpu_samples_us": [
+      16116.75,
+      16135.25,
+      16193.25,
+      16162.75,
+      16243.25,
+      16224.75,
+      16182.25
+    ],
+    "peak_rss_mib": 99.15625,
+    "peak_rss_samples_mib": [
+      99.15625,
+      99.15625,
+      99.15625,
+      99.1875,
+      99.15625,
+      99.1875,
+      99.15625
+    ],
+    "rss_after_mib": 98.640625,
+    "rss_after_samples_mib": [
+      98.640625,
+      98.640625,
+      98.640625,
+      98.671875,
+      98.640625,
+      98.671875,
+      98.640625
+    ],
+    "rss_before_mib": 44.171875,
+    "rss_before_samples_mib": [
+      44.171875,
+      44.171875,
+      44.171875,
+      44.171875,
+      44.171875,
+      44.171875,
+      44.171875
+    ]
+  },
+  {
+    "fixture": "records_object_8m",
+    "operation": "retain-stringify",
+    "iterations": 4,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 16187.25,
+    "cpu_samples_us": [
+      16164.5,
+      16182.75,
+      16211.5,
+      16238.5,
+      16119.75,
+      16187.25,
+      16249.25
+    ],
+    "peak_rss_mib": 99.140625,
+    "peak_rss_samples_mib": [
+      99.140625,
+      99.140625,
+      99.140625,
+      99.171875,
+      99.171875,
+      99.140625,
+      99.140625
+    ],
+    "rss_after_mib": 98.640625,
+    "rss_after_samples_mib": [
+      98.640625,
+      98.640625,
+      98.640625,
+      98.671875,
+      98.671875,
+      98.640625,
+      98.640625
+    ],
+    "rss_before_mib": 44.171875,
+    "rss_before_samples_mib": [
+      44.171875,
+      44.171875,
+      44.15625,
+      44.15625,
+      44.15625,
+      44.171875,
+      44.171875
+    ]
+  },
+  {
+    "fixture": "records_object_8m",
+    "operation": "retain-stringify",
+    "iterations": 4,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 8895.75,
+    "cpu_samples_us": [
+      8858.25,
+      8997.0,
+      8929.0,
+      8895.75,
+      8771.0,
+      8945.5,
+      8842.25
+    ],
+    "peak_rss_mib": 144.65625,
+    "peak_rss_samples_mib": [
+      144.84375,
+      144.6875,
+      144.34375,
+      144.78125,
+      144.640625,
+      144.65625,
+      144.34375
+    ],
+    "rss_after_mib": 144.046875,
+    "rss_after_samples_mib": [
+      144.21875,
+      144.09375,
+      143.640625,
+      144.15625,
+      143.953125,
+      144.046875,
+      143.703125
+    ],
+    "rss_before_mib": 100.796875,
+    "rss_before_samples_mib": [
+      100.84375,
+      100.828125,
+      100.65625,
+      100.859375,
+      100.703125,
+      100.796875,
+      100.78125
+    ]
+  },
+  {
+    "fixture": "records_object_8m",
+    "operation": "retain-stringify",
+    "iterations": 4,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 9402.5,
+    "cpu_samples_us": [
+      9364.75,
+      9432.0,
+      9595.0,
+      9366.5,
+      9387.0,
+      9402.5,
+      9406.25
+    ],
+    "peak_rss_mib": 94.921875,
+    "peak_rss_samples_mib": [
+      94.921875,
+      94.90625,
+      94.921875,
+      94.921875,
+      94.9375,
+      94.90625,
+      94.90625
+    ],
+    "rss_after_mib": 94.53125,
+    "rss_after_samples_mib": [
+      94.53125,
+      94.515625,
+      94.53125,
+      94.53125,
+      94.546875,
+      94.515625,
+      94.515625
+    ],
+    "rss_before_mib": 59.140625,
+    "rss_before_samples_mib": [
+      59.15625,
+      59.15625,
+      59.125,
+      59.140625,
+      59.15625,
+      59.140625,
+      59.125
+    ]
+  },
+  {
+    "fixture": "long_string_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 165.0,
+    "cpu_samples_us": [
+      162.0,
+      160.0,
+      169.0,
+      165.0,
+      162.0,
+      165.0,
+      166.0
+    ],
+    "peak_rss_mib": 16.359375,
+    "peak_rss_samples_mib": [
+      16.359375,
+      16.359375,
+      16.375,
+      16.375,
+      16.359375,
+      16.359375,
+      16.375
+    ],
+    "rss_after_mib": 15.3125,
+    "rss_after_samples_mib": [
+      15.3125,
+      15.3125,
+      15.328125,
+      15.328125,
+      15.3125,
+      15.3125,
+      15.328125
+    ],
+    "rss_before_mib": 13.984375,
+    "rss_before_samples_mib": [
+      13.984375,
+      13.984375,
+      14.0,
+      14.0,
+      13.984375,
+      13.984375,
+      14.0
+    ]
+  },
+  {
+    "fixture": "long_string_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 172.0,
+    "cpu_samples_us": [
+      174.0,
+      176.0,
+      163.0,
+      161.0,
+      181.0,
+      158.0,
+      172.0
+    ],
+    "peak_rss_mib": 16.34375,
+    "peak_rss_samples_mib": [
+      16.34375,
+      16.34375,
+      16.359375,
+      16.34375,
+      16.34375,
+      16.359375,
+      16.34375
+    ],
+    "rss_after_mib": 15.3125,
+    "rss_after_samples_mib": [
+      15.3125,
+      15.3125,
+      15.328125,
+      15.3125,
+      15.3125,
+      15.328125,
+      15.3125
+    ],
+    "rss_before_mib": 13.984375,
+    "rss_before_samples_mib": [
+      13.984375,
+      13.984375,
+      14.0,
+      13.984375,
+      13.984375,
+      14.0,
+      13.984375
+    ]
+  },
+  {
+    "fixture": "long_string_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 815.0,
+    "cpu_samples_us": [
+      826.0,
+      815.0,
+      820.0,
+      811.0,
+      808.0,
+      848.0,
+      800.0
+    ],
+    "peak_rss_mib": 57.765625,
+    "peak_rss_samples_mib": [
+      57.765625,
+      57.765625,
+      57.8125,
+      57.859375,
+      57.828125,
+      57.734375,
+      57.734375
+    ],
+    "rss_after_mib": 56.734375,
+    "rss_after_samples_mib": [
+      56.75,
+      56.71875,
+      56.734375,
+      56.84375,
+      56.78125,
+      56.71875,
+      56.671875
+    ],
+    "rss_before_mib": 55.125,
+    "rss_before_samples_mib": [
+      55.140625,
+      55.125,
+      55.109375,
+      55.21875,
+      55.15625,
+      55.0625,
+      55.0625
+    ]
+  },
+  {
+    "fixture": "long_string_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 132.0,
+    "cpu_samples_us": [
+      127.0,
+      121.0,
+      136.0,
+      132.0,
+      127.0,
+      133.0,
+      138.0
+    ],
+    "peak_rss_mib": 30.96875,
+    "peak_rss_samples_mib": [
+      31.046875,
+      30.96875,
+      30.984375,
+      30.96875,
+      30.953125,
+      30.96875,
+      30.96875
+    ],
+    "rss_after_mib": 30.59375,
+    "rss_after_samples_mib": [
+      30.671875,
+      30.59375,
+      30.609375,
+      30.59375,
+      30.578125,
+      30.59375,
+      30.578125
+    ],
+    "rss_before_mib": 29.484375,
+    "rss_before_samples_mib": [
+      29.5625,
+      29.484375,
+      29.5,
+      29.484375,
+      29.46875,
+      29.484375,
+      29.46875
+    ]
+  },
+  {
+    "fixture": "long_string_1m",
+    "operation": "retain-parse",
+    "iterations": 32,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 5.59375,
+    "cpu_samples_us": [
+      5.71875,
+      5.6875,
+      5.4375,
+      5.375,
+      5.59375,
+      5.9375,
+      5.46875
+    ],
+    "peak_rss_mib": 16.375,
+    "peak_rss_samples_mib": [
+      16.375,
+      16.375,
+      16.390625,
+      16.390625,
+      16.390625,
+      16.375,
+      16.375
+    ],
+    "rss_after_mib": 15.328125,
+    "rss_after_samples_mib": [
+      15.328125,
+      15.328125,
+      15.34375,
+      15.34375,
+      15.34375,
+      15.328125,
+      15.328125
+    ],
+    "rss_before_mib": 13.984375,
+    "rss_before_samples_mib": [
+      13.984375,
+      13.984375,
+      14.0,
+      14.0,
+      14.0,
+      13.984375,
+      13.984375
+    ]
+  },
+  {
+    "fixture": "long_string_1m",
+    "operation": "retain-parse",
+    "iterations": 32,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 5.5625,
+    "cpu_samples_us": [
+      5.46875,
+      5.5625,
+      5.8125,
+      5.40625,
+      5.53125,
+      5.90625,
+      5.65625
+    ],
+    "peak_rss_mib": 16.375,
+    "peak_rss_samples_mib": [
+      16.375,
+      16.375,
+      16.359375,
+      16.375,
+      16.359375,
+      16.375,
+      16.359375
+    ],
+    "rss_after_mib": 15.34375,
+    "rss_after_samples_mib": [
+      15.34375,
+      15.34375,
+      15.328125,
+      15.34375,
+      15.328125,
+      15.34375,
+      15.328125
+    ],
+    "rss_before_mib": 14.0,
+    "rss_before_samples_mib": [
+      14.0,
+      14.0,
+      13.984375,
+      14.0,
+      13.984375,
+      14.0,
+      13.984375
+    ]
+  },
+  {
+    "fixture": "long_string_1m",
+    "operation": "retain-parse",
+    "iterations": 32,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 465.59375,
+    "cpu_samples_us": [
+      465.8125,
+      464.0,
+      462.84375,
+      465.59375,
+      467.0625,
+      465.53125,
+      467.28125
+    ],
+    "peak_rss_mib": 90.203125,
+    "peak_rss_samples_mib": [
+      90.203125,
+      90.234375,
+      90.171875,
+      90.21875,
+      90.234375,
+      90.171875,
+      90.1875
+    ],
+    "rss_after_mib": 89.296875,
+    "rss_after_samples_mib": [
+      89.328125,
+      89.359375,
+      89.296875,
+      89.296875,
+      89.34375,
+      89.265625,
+      89.265625
+    ],
+    "rss_before_mib": 55.109375,
+    "rss_before_samples_mib": [
+      55.140625,
+      55.203125,
+      55.109375,
+      55.09375,
+      55.171875,
+      55.078125,
+      55.0625
+    ]
+  },
+  {
+    "fixture": "long_string_1m",
+    "operation": "retain-parse",
+    "iterations": 32,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 140.15625,
+    "cpu_samples_us": [
+      136.40625,
+      137.3125,
+      140.15625,
+      141.1875,
+      144.375,
+      145.4375,
+      139.34375
+    ],
+    "peak_rss_mib": 62.078125,
+    "peak_rss_samples_mib": [
+      62.03125,
+      62.078125,
+      62.078125,
+      62.09375,
+      62.078125,
+      62.125,
+      62.03125
+    ],
+    "rss_after_mib": 61.6875,
+    "rss_after_samples_mib": [
+      61.640625,
+      61.6875,
+      61.6875,
+      61.703125,
+      61.6875,
+      61.734375,
+      61.640625
+    ],
+    "rss_before_mib": 29.484375,
+    "rss_before_samples_mib": [
+      29.46875,
+      29.484375,
+      29.5,
+      29.484375,
+      29.515625,
+      29.484375,
+      29.484375
+    ]
+  },
+  {
+    "fixture": "long_string_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 133.0,
+    "cpu_samples_us": [
+      129.0,
+      137.0,
+      129.0,
+      131.0,
+      141.0,
+      135.0,
+      133.0
+    ],
+    "peak_rss_mib": 18.75,
+    "peak_rss_samples_mib": [
+      18.75,
+      18.75,
+      18.75,
+      18.75,
+      18.765625,
+      18.765625,
+      18.75
+    ],
+    "rss_after_mib": 17.703125,
+    "rss_after_samples_mib": [
+      17.703125,
+      17.703125,
+      17.703125,
+      17.703125,
+      17.71875,
+      17.71875,
+      17.703125
+    ],
+    "rss_before_mib": 16.59375,
+    "rss_before_samples_mib": [
+      16.59375,
+      16.59375,
+      16.59375,
+      16.59375,
+      16.609375,
+      16.609375,
+      16.59375
+    ]
+  },
+  {
+    "fixture": "long_string_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 133.0,
+    "cpu_samples_us": [
+      133.0,
+      130.0,
+      130.0,
+      129.0,
+      135.0,
+      137.0,
+      139.0
+    ],
+    "peak_rss_mib": 18.75,
+    "peak_rss_samples_mib": [
+      18.75,
+      18.734375,
+      18.75,
+      18.75,
+      18.75,
+      18.75,
+      18.75
+    ],
+    "rss_after_mib": 17.71875,
+    "rss_after_samples_mib": [
+      17.71875,
+      17.703125,
+      17.71875,
+      17.71875,
+      17.71875,
+      17.71875,
+      17.71875
+    ],
+    "rss_before_mib": 16.609375,
+    "rss_before_samples_mib": [
+      16.609375,
+      16.59375,
+      16.609375,
+      16.609375,
+      16.609375,
+      16.609375,
+      16.609375
+    ]
+  },
+  {
+    "fixture": "long_string_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 933.0,
+    "cpu_samples_us": [
+      948.0,
+      925.0,
+      946.0,
+      933.0,
+      931.0,
+      930.0,
+      948.0
+    ],
+    "peak_rss_mib": 61.6875,
+    "peak_rss_samples_mib": [
+      61.6875,
+      61.78125,
+      61.734375,
+      61.609375,
+      61.703125,
+      61.640625,
+      61.65625
+    ],
+    "rss_after_mib": 60.765625,
+    "rss_after_samples_mib": [
+      60.765625,
+      60.859375,
+      60.765625,
+      60.703125,
+      60.796875,
+      60.71875,
+      60.734375
+    ],
+    "rss_before_mib": 57.859375,
+    "rss_before_samples_mib": [
+      57.875,
+      57.90625,
+      57.859375,
+      57.796875,
+      57.90625,
+      57.796875,
+      57.859375
+    ]
+  },
+  {
+    "fixture": "long_string_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 154.0,
+    "cpu_samples_us": [
+      160.0,
+      150.0,
+      157.0,
+      153.0,
+      154.0,
+      158.0,
+      154.0
+    ],
+    "peak_rss_mib": 33.0625,
+    "peak_rss_samples_mib": [
+      33.0625,
+      33.09375,
+      33.078125,
+      33.078125,
+      33.046875,
+      33.0625,
+      33.046875
+    ],
+    "rss_after_mib": 32.671875,
+    "rss_after_samples_mib": [
+      32.65625,
+      32.6875,
+      32.6875,
+      32.671875,
+      32.65625,
+      32.671875,
+      32.65625
+    ],
+    "rss_before_mib": 31.59375,
+    "rss_before_samples_mib": [
+      31.59375,
+      31.609375,
+      31.625,
+      31.59375,
+      31.59375,
+      31.609375,
+      31.59375
+    ]
+  },
+  {
+    "fixture": "long_string_1m",
+    "operation": "retain-stringify",
+    "iterations": 32,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 168.8125,
+    "cpu_samples_us": [
+      168.59375,
+      168.8125,
+      169.90625,
+      168.96875,
+      168.65625,
+      167.6875,
+      170.1875
+    ],
+    "peak_rss_mib": 51.734375,
+    "peak_rss_samples_mib": [
+      51.734375,
+      51.734375,
+      51.765625,
+      51.734375,
+      51.734375,
+      51.734375,
+      51.734375
+    ],
+    "rss_after_mib": 51.203125,
+    "rss_after_samples_mib": [
+      51.203125,
+      51.203125,
+      51.234375,
+      51.203125,
+      51.203125,
+      51.203125,
+      51.203125
+    ],
+    "rss_before_mib": 16.609375,
+    "rss_before_samples_mib": [
+      16.609375,
+      16.59375,
+      16.609375,
+      16.609375,
+      16.59375,
+      16.609375,
+      16.59375
+    ]
+  },
+  {
+    "fixture": "long_string_1m",
+    "operation": "retain-stringify",
+    "iterations": 32,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 170.6875,
+    "cpu_samples_us": [
+      170.40625,
+      170.6875,
+      174.6875,
+      172.03125,
+      171.28125,
+      165.1875,
+      169.09375
+    ],
+    "peak_rss_mib": 51.71875,
+    "peak_rss_samples_mib": [
+      51.71875,
+      51.71875,
+      51.71875,
+      51.75,
+      51.71875,
+      51.71875,
+      51.75
+    ],
+    "rss_after_mib": 51.203125,
+    "rss_after_samples_mib": [
+      51.203125,
+      51.203125,
+      51.203125,
+      51.234375,
+      51.203125,
+      51.203125,
+      51.234375
+    ],
+    "rss_before_mib": 16.609375,
+    "rss_before_samples_mib": [
+      16.609375,
+      16.609375,
+      16.609375,
+      16.609375,
+      16.609375,
+      16.59375,
+      16.609375
+    ]
+  },
+  {
+    "fixture": "long_string_1m",
+    "operation": "retain-stringify",
+    "iterations": 32,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 195.375,
+    "cpu_samples_us": [
+      193.28125,
+      194.90625,
+      195.03125,
+      195.375,
+      200.875,
+      198.09375,
+      203.15625
+    ],
+    "peak_rss_mib": 93.359375,
+    "peak_rss_samples_mib": [
+      93.4375,
+      93.359375,
+      93.46875,
+      93.28125,
+      93.3125,
+      93.4375,
+      93.359375
+    ],
+    "rss_after_mib": 92.4375,
+    "rss_after_samples_mib": [
+      92.515625,
+      92.390625,
+      92.546875,
+      92.34375,
+      92.40625,
+      92.46875,
+      92.4375
+    ],
+    "rss_before_mib": 57.828125,
+    "rss_before_samples_mib": [
+      57.9375,
+      57.796875,
+      57.96875,
+      57.765625,
+      57.8125,
+      57.875,
+      57.828125
+    ]
+  },
+  {
+    "fixture": "long_string_1m",
+    "operation": "retain-stringify",
+    "iterations": 32,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 168.21875,
+    "cpu_samples_us": [
+      166.4375,
+      168.40625,
+      164.125,
+      165.40625,
+      169.53125,
+      169.09375,
+      168.21875
+    ],
+    "peak_rss_mib": 64.171875,
+    "peak_rss_samples_mib": [
+      64.140625,
+      64.171875,
+      64.140625,
+      64.234375,
+      64.203125,
+      64.171875,
+      64.234375
+    ],
+    "rss_after_mib": 63.765625,
+    "rss_after_samples_mib": [
+      63.734375,
+      63.765625,
+      63.734375,
+      63.828125,
+      63.796875,
+      63.765625,
+      63.828125
+    ],
+    "rss_before_mib": 31.609375,
+    "rss_before_samples_mib": [
+      31.59375,
+      31.59375,
+      31.59375,
+      31.65625,
+      31.640625,
+      31.609375,
+      31.65625
+    ]
+  },
+  {
+    "fixture": "unicode_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 199.0,
+    "cpu_samples_us": [
+      222.0,
+      203.0,
+      199.0,
+      198.0,
+      196.0,
+      202.0,
+      198.0
+    ],
+    "peak_rss_mib": 15.703125,
+    "peak_rss_samples_mib": [
+      15.6875,
+      15.6875,
+      15.703125,
+      15.6875,
+      15.703125,
+      15.703125,
+      15.703125
+    ],
+    "rss_after_mib": 14.65625,
+    "rss_after_samples_mib": [
+      14.640625,
+      14.640625,
+      14.65625,
+      14.640625,
+      14.65625,
+      14.65625,
+      14.65625
+    ],
+    "rss_before_mib": 13.5,
+    "rss_before_samples_mib": [
+      13.484375,
+      13.484375,
+      13.5,
+      13.484375,
+      13.5,
+      13.5,
+      13.5
+    ]
+  },
+  {
+    "fixture": "unicode_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 196.0,
+    "cpu_samples_us": [
+      198.0,
+      200.0,
+      196.0,
+      195.0,
+      198.0,
+      192.0,
+      193.0
+    ],
+    "peak_rss_mib": 15.6875,
+    "peak_rss_samples_mib": [
+      15.6875,
+      15.671875,
+      15.6875,
+      15.6875,
+      15.6875,
+      15.671875,
+      15.671875
+    ],
+    "rss_after_mib": 14.65625,
+    "rss_after_samples_mib": [
+      14.65625,
+      14.640625,
+      14.65625,
+      14.65625,
+      14.65625,
+      14.640625,
+      14.640625
+    ],
+    "rss_before_mib": 13.5,
+    "rss_before_samples_mib": [
+      13.5,
+      13.484375,
+      13.5,
+      13.5,
+      13.5,
+      13.484375,
+      13.484375
+    ]
+  },
+  {
+    "fixture": "unicode_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 1235.0,
+    "cpu_samples_us": [
+      1266.0,
+      1253.0,
+      1235.0,
+      1226.0,
+      1234.0,
+      1234.0,
+      1235.0
+    ],
+    "peak_rss_mib": 58.578125,
+    "peak_rss_samples_mib": [
+      58.515625,
+      58.625,
+      58.671875,
+      58.515625,
+      58.578125,
+      58.515625,
+      58.609375
+    ],
+    "rss_after_mib": 57.859375,
+    "rss_after_samples_mib": [
+      57.8125,
+      57.859375,
+      57.953125,
+      57.765625,
+      57.875,
+      57.75,
+      57.890625
+    ],
+    "rss_before_mib": 55.78125,
+    "rss_before_samples_mib": [
+      55.734375,
+      55.78125,
+      55.8125,
+      55.734375,
+      55.8125,
+      55.671875,
+      55.859375
+    ]
+  },
+  {
+    "fixture": "unicode_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 118.0,
+    "cpu_samples_us": [
+      121.0,
+      118.0,
+      117.0,
+      118.0,
+      115.0,
+      126.0,
+      118.0
+    ],
+    "peak_rss_mib": 31.671875,
+    "peak_rss_samples_mib": [
+      31.671875,
+      31.671875,
+      31.671875,
+      31.671875,
+      31.671875,
+      31.6875,
+      31.6875
+    ],
+    "rss_after_mib": 31.296875,
+    "rss_after_samples_mib": [
+      31.296875,
+      31.296875,
+      31.296875,
+      31.296875,
+      31.296875,
+      31.296875,
+      31.3125
+    ],
+    "rss_before_mib": 30.296875,
+    "rss_before_samples_mib": [
+      30.296875,
+      30.296875,
+      30.296875,
+      30.296875,
+      30.296875,
+      30.296875,
+      30.3125
+    ]
+  },
+  {
+    "fixture": "unicode_1m",
+    "operation": "retain-parse",
+    "iterations": 32,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 6.65625,
+    "cpu_samples_us": [
+      6.46875,
+      6.65625,
+      6.84375,
+      6.59375,
+      6.5625,
+      6.75,
+      6.75
+    ],
+    "peak_rss_mib": 15.703125,
+    "peak_rss_samples_mib": [
+      15.703125,
+      15.703125,
+      15.71875,
+      15.703125,
+      15.703125,
+      15.703125,
+      15.71875
+    ],
+    "rss_after_mib": 14.65625,
+    "rss_after_samples_mib": [
+      14.65625,
+      14.65625,
+      14.671875,
+      14.65625,
+      14.65625,
+      14.65625,
+      14.671875
+    ],
+    "rss_before_mib": 13.484375,
+    "rss_before_samples_mib": [
+      13.484375,
+      13.484375,
+      13.5,
+      13.484375,
+      13.484375,
+      13.484375,
+      13.5
+    ]
+  },
+  {
+    "fixture": "unicode_1m",
+    "operation": "retain-parse",
+    "iterations": 32,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 6.65625,
+    "cpu_samples_us": [
+      6.65625,
+      6.71875,
+      6.78125,
+      6.59375,
+      6.65625,
+      6.625,
+      6.84375
+    ],
+    "peak_rss_mib": 15.6875,
+    "peak_rss_samples_mib": [
+      15.6875,
+      15.703125,
+      15.6875,
+      15.6875,
+      15.703125,
+      15.6875,
+      15.6875
+    ],
+    "rss_after_mib": 14.65625,
+    "rss_after_samples_mib": [
+      14.65625,
+      14.671875,
+      14.65625,
+      14.65625,
+      14.671875,
+      14.65625,
+      14.65625
+    ],
+    "rss_before_mib": 13.484375,
+    "rss_before_samples_mib": [
+      13.484375,
+      13.5,
+      13.484375,
+      13.484375,
+      13.5,
+      13.484375,
+      13.484375
+    ]
+  },
+  {
+    "fixture": "unicode_1m",
+    "operation": "retain-parse",
+    "iterations": 32,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 528.09375,
+    "cpu_samples_us": [
+      527.0625,
+      528.09375,
+      528.25,
+      526.46875,
+      528.40625,
+      526.9375,
+      528.4375
+    ],
+    "peak_rss_mib": 87.078125,
+    "peak_rss_samples_mib": [
+      87.09375,
+      87.078125,
+      87.046875,
+      87.03125,
+      87.109375,
+      87.078125,
+      87.09375
+    ],
+    "rss_after_mib": 86.453125,
+    "rss_after_samples_mib": [
+      86.4375,
+      86.453125,
+      86.4375,
+      86.40625,
+      86.46875,
+      86.453125,
+      86.484375
+    ],
+    "rss_before_mib": 55.796875,
+    "rss_before_samples_mib": [
+      55.78125,
+      55.796875,
+      55.75,
+      55.75,
+      55.8125,
+      55.796875,
+      55.796875
+    ]
+  },
+  {
+    "fixture": "unicode_1m",
+    "operation": "retain-parse",
+    "iterations": 32,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 103.84375,
+    "cpu_samples_us": [
+      107.875,
+      103.84375,
+      101.6875,
+      104.71875,
+      100.3125,
+      100.09375,
+      105.34375
+    ],
+    "peak_rss_mib": 59.390625,
+    "peak_rss_samples_mib": [
+      59.375,
+      59.390625,
+      59.4375,
+      59.375,
+      59.390625,
+      59.390625,
+      59.390625
+    ],
+    "rss_after_mib": 59.0,
+    "rss_after_samples_mib": [
+      58.984375,
+      59.0,
+      59.046875,
+      58.984375,
+      59.0,
+      59.0,
+      59.0
+    ],
+    "rss_before_mib": 30.296875,
+    "rss_before_samples_mib": [
+      30.28125,
+      30.296875,
+      30.34375,
+      30.28125,
+      30.296875,
+      30.296875,
+      30.296875
+    ]
+  },
+  {
+    "fixture": "unicode_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 116.0,
+    "cpu_samples_us": [
+      116.0,
+      116.0,
+      113.0,
+      118.0,
+      114.0,
+      118.0,
+      114.0
+    ],
+    "peak_rss_mib": 17.609375,
+    "peak_rss_samples_mib": [
+      17.609375,
+      17.609375,
+      17.625,
+      17.609375,
+      17.625,
+      17.609375,
+      17.625
+    ],
+    "rss_after_mib": 16.5625,
+    "rss_after_samples_mib": [
+      16.5625,
+      16.5625,
+      16.578125,
+      16.5625,
+      16.578125,
+      16.5625,
+      16.578125
+    ],
+    "rss_before_mib": 15.609375,
+    "rss_before_samples_mib": [
+      15.609375,
+      15.609375,
+      15.625,
+      15.609375,
+      15.625,
+      15.609375,
+      15.625
+    ]
+  },
+  {
+    "fixture": "unicode_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 119.0,
+    "cpu_samples_us": [
+      118.0,
+      121.0,
+      119.0,
+      119.0,
+      118.0,
+      119.0,
+      117.0
+    ],
+    "peak_rss_mib": 17.59375,
+    "peak_rss_samples_mib": [
+      17.59375,
+      17.609375,
+      17.59375,
+      17.59375,
+      17.609375,
+      17.59375,
+      17.609375
+    ],
+    "rss_after_mib": 16.5625,
+    "rss_after_samples_mib": [
+      16.5625,
+      16.578125,
+      16.5625,
+      16.5625,
+      16.578125,
+      16.5625,
+      16.578125
+    ],
+    "rss_before_mib": 15.609375,
+    "rss_before_samples_mib": [
+      15.609375,
+      15.625,
+      15.609375,
+      15.609375,
+      15.625,
+      15.609375,
+      15.625
+    ]
+  },
+  {
+    "fixture": "unicode_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 1221.0,
+    "cpu_samples_us": [
+      1163.0,
+      1244.0,
+      1172.0,
+      1230.0,
+      1221.0,
+      1232.0,
+      1217.0
+    ],
+    "peak_rss_mib": 61.671875,
+    "peak_rss_samples_mib": [
+      61.671875,
+      61.625,
+      61.671875,
+      61.71875,
+      61.6875,
+      61.765625,
+      61.671875
+    ],
+    "rss_after_mib": 61.015625,
+    "rss_after_samples_mib": [
+      61.0,
+      61.0,
+      61.015625,
+      61.015625,
+      61.0,
+      61.140625,
+      61.015625
+    ],
+    "rss_before_mib": 58.296875,
+    "rss_before_samples_mib": [
+      58.296875,
+      58.28125,
+      58.28125,
+      58.296875,
+      58.25,
+      58.34375,
+      58.3125
+    ]
+  },
+  {
+    "fixture": "unicode_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 577.0,
+    "cpu_samples_us": [
+      619.0,
+      577.0,
+      572.0,
+      603.0,
+      581.0,
+      566.0,
+      568.0
+    ],
+    "peak_rss_mib": 34.5,
+    "peak_rss_samples_mib": [
+      34.921875,
+      34.5,
+      34.515625,
+      34.921875,
+      34.5,
+      34.46875,
+      34.46875
+    ],
+    "rss_after_mib": 34.09375,
+    "rss_after_samples_mib": [
+      34.515625,
+      34.09375,
+      34.109375,
+      34.515625,
+      34.09375,
+      34.0625,
+      34.0625
+    ],
+    "rss_before_mib": 32.171875,
+    "rss_before_samples_mib": [
+      32.171875,
+      32.203125,
+      32.203125,
+      32.171875,
+      32.1875,
+      32.171875,
+      32.171875
+    ]
+  },
+  {
+    "fixture": "unicode_1m",
+    "operation": "retain-stringify",
+    "iterations": 32,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 69.03125,
+    "cpu_samples_us": [
+      68.15625,
+      68.875,
+      69.03125,
+      70.0,
+      69.96875,
+      70.09375,
+      67.125
+    ],
+    "peak_rss_mib": 43.0,
+    "peak_rss_samples_mib": [
+      43.0,
+      43.0,
+      43.0,
+      43.0,
+      42.984375,
+      43.0,
+      43.0
+    ],
+    "rss_after_mib": 41.953125,
+    "rss_after_samples_mib": [
+      41.953125,
+      41.953125,
+      41.953125,
+      41.953125,
+      41.9375,
+      41.953125,
+      41.953125
+    ],
+    "rss_before_mib": 15.625,
+    "rss_before_samples_mib": [
+      15.625,
+      15.625,
+      15.625,
+      15.625,
+      15.609375,
+      15.625,
+      15.625
+    ]
+  },
+  {
+    "fixture": "unicode_1m",
+    "operation": "retain-stringify",
+    "iterations": 32,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 66.96875,
+    "cpu_samples_us": [
+      66.96875,
+      68.0,
+      70.3125,
+      68.09375,
+      64.84375,
+      63.5,
+      66.34375
+    ],
+    "peak_rss_mib": 42.984375,
+    "peak_rss_samples_mib": [
+      42.984375,
+      42.984375,
+      42.984375,
+      42.984375,
+      42.984375,
+      42.984375,
+      42.984375
+    ],
+    "rss_after_mib": 41.953125,
+    "rss_after_samples_mib": [
+      41.953125,
+      41.953125,
+      41.953125,
+      41.953125,
+      41.953125,
+      41.953125,
+      41.953125
+    ],
+    "rss_before_mib": 15.625,
+    "rss_before_samples_mib": [
+      15.625,
+      15.625,
+      15.625,
+      15.625,
+      15.609375,
+      15.625,
+      15.625
+    ]
+  },
+  {
+    "fixture": "unicode_1m",
+    "operation": "retain-stringify",
+    "iterations": 32,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 498.09375,
+    "cpu_samples_us": [
+      499.5625,
+      489.96875,
+      496.84375,
+      495.875,
+      499.5,
+      500.4375,
+      498.09375
+    ],
+    "peak_rss_mib": 89.921875,
+    "peak_rss_samples_mib": [
+      89.9375,
+      89.890625,
+      89.921875,
+      89.921875,
+      89.9375,
+      89.921875,
+      90.078125
+    ],
+    "rss_after_mib": 89.296875,
+    "rss_after_samples_mib": [
+      89.3125,
+      89.234375,
+      89.296875,
+      89.3125,
+      89.265625,
+      89.25,
+      89.4375
+    ],
+    "rss_before_mib": 58.234375,
+    "rss_before_samples_mib": [
+      58.234375,
+      58.234375,
+      58.28125,
+      58.265625,
+      58.203125,
+      58.21875,
+      58.328125
+    ]
+  },
+  {
+    "fixture": "unicode_1m",
+    "operation": "retain-stringify",
+    "iterations": 32,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 497.40625,
+    "cpu_samples_us": [
+      494.6875,
+      499.125,
+      497.625,
+      497.40625,
+      497.6875,
+      495.15625,
+      495.15625
+    ],
+    "peak_rss_mib": 62.234375,
+    "peak_rss_samples_mib": [
+      62.21875,
+      62.21875,
+      62.6875,
+      62.75,
+      62.234375,
+      62.21875,
+      62.25
+    ],
+    "rss_after_mib": 61.828125,
+    "rss_after_samples_mib": [
+      61.8125,
+      61.8125,
+      62.28125,
+      62.34375,
+      61.828125,
+      61.8125,
+      61.84375
+    ],
+    "rss_before_mib": 32.1875,
+    "rss_before_samples_mib": [
+      32.171875,
+      32.1875,
+      32.21875,
+      32.28125,
+      32.1875,
+      32.1875,
+      32.234375
+    ]
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 2596.0,
+    "cpu_samples_us": [
+      2596.0,
+      2599.0,
+      2573.0,
+      2589.0,
+      2595.0,
+      2606.0,
+      2619.0
+    ],
+    "peak_rss_mib": 21.46875,
+    "peak_rss_samples_mib": [
+      21.46875,
+      21.453125,
+      21.453125,
+      21.46875,
+      21.46875,
+      21.46875,
+      21.46875
+    ],
+    "rss_after_mib": 20.671875,
+    "rss_after_samples_mib": [
+      20.671875,
+      20.65625,
+      20.65625,
+      20.671875,
+      20.671875,
+      20.671875,
+      20.671875
+    ],
+    "rss_before_mib": 13.6875,
+    "rss_before_samples_mib": [
+      13.6875,
+      13.671875,
+      13.671875,
+      13.6875,
+      13.6875,
+      13.671875,
+      13.6875
+    ]
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 2614.0,
+    "cpu_samples_us": [
+      2620.0,
+      2601.0,
+      2617.0,
+      2613.0,
+      2614.0,
+      2597.0,
+      2616.0
+    ],
+    "peak_rss_mib": 21.453125,
+    "peak_rss_samples_mib": [
+      21.453125,
+      21.453125,
+      21.453125,
+      21.453125,
+      21.4375,
+      21.4375,
+      21.4375
+    ],
+    "rss_after_mib": 20.671875,
+    "rss_after_samples_mib": [
+      20.671875,
+      20.671875,
+      20.671875,
+      20.671875,
+      20.65625,
+      20.65625,
+      20.65625
+    ],
+    "rss_before_mib": 13.6875,
+    "rss_before_samples_mib": [
+      13.6875,
+      13.6875,
+      13.6875,
+      13.6875,
+      13.671875,
+      13.671875,
+      13.671875
+    ]
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 7525.0,
+    "cpu_samples_us": [
+      7503.0,
+      7525.0,
+      7589.0,
+      7689.0,
+      7435.0,
+      7525.0,
+      7716.0
+    ],
+    "peak_rss_mib": 66.59375,
+    "peak_rss_samples_mib": [
+      66.609375,
+      66.59375,
+      66.625,
+      66.5625,
+      66.484375,
+      66.453125,
+      66.609375
+    ],
+    "rss_after_mib": 65.828125,
+    "rss_after_samples_mib": [
+      65.84375,
+      65.84375,
+      65.859375,
+      65.78125,
+      65.71875,
+      65.65625,
+      65.828125
+    ],
+    "rss_before_mib": 55.265625,
+    "rss_before_samples_mib": [
+      55.34375,
+      55.25,
+      55.28125,
+      55.265625,
+      55.203125,
+      55.15625,
+      55.34375
+    ]
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "retain-parse",
+    "iterations": 1,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 5710.0,
+    "cpu_samples_us": [
+      5686.0,
+      5702.0,
+      5710.0,
+      5688.0,
+      5743.0,
+      5723.0,
+      5727.0
+    ],
+    "peak_rss_mib": 36.734375,
+    "peak_rss_samples_mib": [
+      36.734375,
+      36.734375,
+      36.734375,
+      36.71875,
+      36.703125,
+      36.8125,
+      36.71875
+    ],
+    "rss_after_mib": 36.34375,
+    "rss_after_samples_mib": [
+      36.34375,
+      36.34375,
+      36.34375,
+      36.328125,
+      36.3125,
+      36.421875,
+      36.328125
+    ],
+    "rss_before_mib": 29.40625,
+    "rss_before_samples_mib": [
+      29.40625,
+      29.40625,
+      29.40625,
+      29.390625,
+      29.375,
+      29.484375,
+      29.390625
+    ]
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "retain-parse",
+    "iterations": 16,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 3662.4375,
+    "cpu_samples_us": [
+      3664.5,
+      3669.375,
+      3655.125,
+      3668.1875,
+      3661.3125,
+      3662.125,
+      3662.4375
+    ],
+    "peak_rss_mib": 77.671875,
+    "peak_rss_samples_mib": [
+      77.671875,
+      77.671875,
+      77.6875,
+      77.671875,
+      77.671875,
+      77.6875,
+      77.671875
+    ],
+    "rss_after_mib": 77.15625,
+    "rss_after_samples_mib": [
+      77.15625,
+      77.15625,
+      77.171875,
+      77.15625,
+      77.15625,
+      77.171875,
+      77.15625
+    ],
+    "rss_before_mib": 13.6875,
+    "rss_before_samples_mib": [
+      13.6875,
+      13.671875,
+      13.6875,
+      13.6875,
+      13.671875,
+      13.6875,
+      13.671875
+    ]
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "retain-parse",
+    "iterations": 16,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 3662.8125,
+    "cpu_samples_us": [
+      3667.8125,
+      3660.9375,
+      3677.125,
+      3662.8125,
+      3659.6875,
+      3656.9375,
+      3663.625
+    ],
+    "peak_rss_mib": 77.65625,
+    "peak_rss_samples_mib": [
+      77.671875,
+      77.65625,
+      77.65625,
+      77.671875,
+      77.65625,
+      77.65625,
+      77.65625
+    ],
+    "rss_after_mib": 77.15625,
+    "rss_after_samples_mib": [
+      77.171875,
+      77.15625,
+      77.15625,
+      77.171875,
+      77.15625,
+      77.15625,
+      77.15625
+    ],
+    "rss_before_mib": 13.6875,
+    "rss_before_samples_mib": [
+      13.6875,
+      13.6875,
+      13.671875,
+      13.6875,
+      13.6875,
+      13.671875,
+      13.671875
+    ]
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "retain-parse",
+    "iterations": 16,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 5557.25,
+    "cpu_samples_us": [
+      5590.75,
+      5579.375,
+      5557.25,
+      5540.125,
+      5530.75,
+      5534.6875,
+      5561.6875
+    ],
+    "peak_rss_mib": 113.25,
+    "peak_rss_samples_mib": [
+      113.296875,
+      113.25,
+      113.25,
+      113.21875,
+      113.25,
+      113.234375,
+      113.234375
+    ],
+    "rss_after_mib": 112.578125,
+    "rss_after_samples_mib": [
+      112.640625,
+      112.578125,
+      112.578125,
+      112.5625,
+      112.578125,
+      112.578125,
+      112.578125
+    ],
+    "rss_before_mib": 55.21875,
+    "rss_before_samples_mib": [
+      55.25,
+      55.234375,
+      55.21875,
+      55.171875,
+      55.21875,
+      55.1875,
+      55.203125
+    ]
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "retain-parse",
+    "iterations": 16,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 4296.625,
+    "cpu_samples_us": [
+      4289.1875,
+      4307.8125,
+      4292.1875,
+      4293.0,
+      4296.625,
+      4303.125,
+      4314.3125
+    ],
+    "peak_rss_mib": 69.3125,
+    "peak_rss_samples_mib": [
+      69.296875,
+      69.34375,
+      69.3125,
+      69.296875,
+      69.296875,
+      69.375,
+      69.34375
+    ],
+    "rss_after_mib": 68.921875,
+    "rss_after_samples_mib": [
+      68.90625,
+      68.953125,
+      68.921875,
+      68.90625,
+      68.90625,
+      68.984375,
+      68.953125
+    ],
+    "rss_before_mib": 29.40625,
+    "rss_before_samples_mib": [
+      29.421875,
+      29.421875,
+      29.40625,
+      29.421875,
+      29.390625,
+      29.40625,
+      29.40625
+    ]
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 2497.0,
+    "cpu_samples_us": [
+      2497.0,
+      2508.0,
+      2483.0,
+      2500.0,
+      2507.0,
+      2493.0,
+      2497.0
+    ],
+    "peak_rss_mib": 23.90625,
+    "peak_rss_samples_mib": [
+      23.890625,
+      23.90625,
+      23.90625,
+      23.90625,
+      23.890625,
+      23.90625,
+      23.90625
+    ],
+    "rss_after_mib": 22.859375,
+    "rss_after_samples_mib": [
+      22.84375,
+      22.859375,
+      22.859375,
+      22.859375,
+      22.84375,
+      22.859375,
+      22.859375
+    ],
+    "rss_before_mib": 21.578125,
+    "rss_before_samples_mib": [
+      21.5625,
+      21.578125,
+      21.578125,
+      21.578125,
+      21.5625,
+      21.578125,
+      21.5625
+    ]
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 2503.0,
+    "cpu_samples_us": [
+      2503.0,
+      2512.0,
+      2510.0,
+      2517.0,
+      2491.0,
+      2496.0,
+      2498.0
+    ],
+    "peak_rss_mib": 23.875,
+    "peak_rss_samples_mib": [
+      23.890625,
+      23.890625,
+      23.875,
+      23.875,
+      23.875,
+      23.875,
+      23.890625
+    ],
+    "rss_after_mib": 22.84375,
+    "rss_after_samples_mib": [
+      22.859375,
+      22.859375,
+      22.84375,
+      22.84375,
+      22.84375,
+      22.84375,
+      22.859375
+    ],
+    "rss_before_mib": 21.5625,
+    "rss_before_samples_mib": [
+      21.578125,
+      21.578125,
+      21.5625,
+      21.5625,
+      21.5625,
+      21.5625,
+      21.578125
+    ]
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 7604.0,
+    "cpu_samples_us": [
+      7583.0,
+      7604.0,
+      7597.0,
+      7606.0,
+      7608.0,
+      7537.0,
+      7640.0
+    ],
+    "peak_rss_mib": 69.484375,
+    "peak_rss_samples_mib": [
+      69.453125,
+      69.46875,
+      69.359375,
+      69.546875,
+      69.5,
+      69.484375,
+      69.5
+    ],
+    "rss_after_mib": 68.8125,
+    "rss_after_samples_mib": [
+      68.765625,
+      68.765625,
+      68.6875,
+      68.859375,
+      68.8125,
+      68.8125,
+      68.84375
+    ],
+    "rss_before_mib": 66.546875,
+    "rss_before_samples_mib": [
+      66.46875,
+      66.4375,
+      66.390625,
+      66.546875,
+      66.5625,
+      66.546875,
+      66.546875
+    ]
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "retain-stringify",
+    "iterations": 1,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 775.0,
+    "cpu_samples_us": [
+      775.0,
+      770.0,
+      781.0,
+      780.0,
+      784.0,
+      774.0,
+      771.0
+    ],
+    "peak_rss_mib": 39.6875,
+    "peak_rss_samples_mib": [
+      39.703125,
+      39.65625,
+      39.6875,
+      39.734375,
+      39.6875,
+      39.703125,
+      39.6875
+    ],
+    "rss_after_mib": 39.296875,
+    "rss_after_samples_mib": [
+      39.3125,
+      39.265625,
+      39.296875,
+      39.34375,
+      39.296875,
+      39.3125,
+      39.296875
+    ],
+    "rss_before_mib": 37.296875,
+    "rss_before_samples_mib": [
+      37.296875,
+      37.265625,
+      37.296875,
+      37.34375,
+      37.296875,
+      37.296875,
+      37.296875
+    ]
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "retain-stringify",
+    "iterations": 16,
+    "engine": "perry",
+    "repetitions": 7,
+    "cpu_us": 750.125,
+    "cpu_samples_us": [
+      750.125,
+      753.375,
+      748.875,
+      747.8125,
+      755.0,
+      748.5,
+      754.8125
+    ],
+    "peak_rss_mib": 37.0625,
+    "peak_rss_samples_mib": [
+      37.0625,
+      37.0625,
+      37.046875,
+      37.0625,
+      37.0625,
+      37.0625,
+      37.0625
+    ],
+    "rss_after_mib": 36.015625,
+    "rss_after_samples_mib": [
+      36.015625,
+      36.015625,
+      36.0,
+      36.015625,
+      36.015625,
+      36.015625,
+      36.015625
+    ],
+    "rss_before_mib": 21.578125,
+    "rss_before_samples_mib": [
+      21.578125,
+      21.578125,
+      21.5625,
+      21.578125,
+      21.578125,
+      21.578125,
+      21.5625
+    ]
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "retain-stringify",
+    "iterations": 16,
+    "engine": "baseline",
+    "repetitions": 7,
+    "cpu_us": 754.4375,
+    "cpu_samples_us": [
+      752.6875,
+      760.1875,
+      749.5625,
+      754.4375,
+      761.125,
+      749.25,
+      758.125
+    ],
+    "peak_rss_mib": 37.046875,
+    "peak_rss_samples_mib": [
+      37.046875,
+      37.046875,
+      37.046875,
+      37.03125,
+      37.03125,
+      37.046875,
+      37.046875
+    ],
+    "rss_after_mib": 36.015625,
+    "rss_after_samples_mib": [
+      36.015625,
+      36.015625,
+      36.015625,
+      36.0,
+      36.0,
+      36.015625,
+      36.015625
+    ],
+    "rss_before_mib": 21.578125,
+    "rss_before_samples_mib": [
+      21.578125,
+      21.578125,
+      21.578125,
+      21.5625,
+      21.5625,
+      21.578125,
+      21.578125
+    ]
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "retain-stringify",
+    "iterations": 16,
+    "engine": "node",
+    "repetitions": 7,
+    "cpu_us": 6465.4375,
+    "cpu_samples_us": [
+      6465.4375,
+      6431.5625,
+      6464.875,
+      6436.0625,
+      6489.1875,
+      6497.8125,
+      6485.9375
+    ],
+    "peak_rss_mib": 87.296875,
+    "peak_rss_samples_mib": [
+      87.359375,
+      87.328125,
+      87.375,
+      87.296875,
+      87.1875,
+      87.25,
+      87.171875
+    ],
+    "rss_after_mib": 86.640625,
+    "rss_after_samples_mib": [
+      86.703125,
+      86.6875,
+      86.71875,
+      86.640625,
+      86.515625,
+      86.53125,
+      86.53125
+    ],
+    "rss_before_mib": 66.46875,
+    "rss_before_samples_mib": [
+      66.484375,
+      66.515625,
+      66.53125,
+      66.46875,
+      66.390625,
+      66.359375,
+      66.4375
+    ]
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "retain-stringify",
+    "iterations": 16,
+    "engine": "bun",
+    "repetitions": 7,
+    "cpu_us": 701.875,
+    "cpu_samples_us": [
+      700.625,
+      701.5625,
+      701.875,
+      705.8125,
+      699.75,
+      702.4375,
+      703.0
+    ],
+    "peak_rss_mib": 53.90625,
+    "peak_rss_samples_mib": [
+      53.859375,
+      53.90625,
+      53.890625,
+      53.90625,
+      53.953125,
+      53.90625,
+      53.875
+    ],
+    "rss_after_mib": 53.515625,
+    "rss_after_samples_mib": [
+      53.46875,
+      53.515625,
+      53.5,
+      53.515625,
+      53.5625,
+      53.515625,
+      53.484375
+    ],
+    "rss_before_mib": 37.28125,
+    "rss_before_samples_mib": [
+      37.25,
+      37.28125,
+      37.28125,
+      37.296875,
+      37.34375,
+      37.296875,
+      37.265625
+    ]
+  }
+]

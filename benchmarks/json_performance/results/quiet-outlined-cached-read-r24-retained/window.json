@@ -1,0 +1,32 @@
+{
+  "owner": "json-perf-1233-1789110547",
+  "load_before": [
+    1.51171875,
+    1.63623046875,
+    1.6640625
+  ],
+  "started_utc": "2026-09-11T07:09:07Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/outlined-cached-read-r24/run-retained.py",
+    "--worker",
+    ".work/outlined-cached-read-r24/candidate-worker",
+    "--baseline-worker",
+    ".work/outlined-cached-read-r24/main-worker",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--bun",
+    "/Users/perry/.bun/bin/bun",
+    "--results-dir",
+    "results/quiet-outlined-cached-read-r24-retained"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    2.04150390625,
+    1.8095703125,
+    1.72900390625
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-11T07:10:07Z"
+}

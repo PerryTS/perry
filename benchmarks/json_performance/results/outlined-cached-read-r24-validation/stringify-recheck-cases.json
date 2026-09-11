@@ -1,0 +1,26 @@
+{
+  "note": "Three uncertain or regressed R24 full-matrix stringify rows, original iteration/warmup counts with eleven repetitions.",
+  "cases": [
+    {
+      "fixture": "small_record",
+      "operation": "stringify",
+      "iterations": 2000000,
+      "warmup": 5000,
+      "repetitions": 11
+    },
+    {
+      "fixture": "long_string_1m",
+      "operation": "stringify",
+      "iterations": 1922,
+      "warmup": 2,
+      "repetitions": 11
+    },
+    {
+      "fixture": "unicode_1m",
+      "operation": "stringify",
+      "iterations": 2475,
+      "warmup": 2,
+      "repetitions": 11
+    }
+  ]
+}

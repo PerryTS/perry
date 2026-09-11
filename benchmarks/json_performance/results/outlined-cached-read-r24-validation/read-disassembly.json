@@ -1,0 +1,116 @@
+{
+  "arms": [
+    {
+      "arm": "main",
+      "binary_sha256": "8d0b2b25e1890123411918d424609480dcf94faec607efa1fac2e09fc19907b7",
+      "functions": [
+        {
+          "symbol": "_js_array_get_f64",
+          "command": [
+            "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+            "--disassemble-symbols=_js_array_get_f64",
+            "--no-show-raw-insn",
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/main-access-worker"
+          ],
+          "output": "main-array-get.s",
+          "sha256": "89adc74dac6ca85ff521ed59a387617f5d9a53e6105459135c4fe066aac5a182"
+        },
+        {
+          "symbol": "_js_packed_arraylike_index_get",
+          "command": [
+            "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+            "--disassemble-symbols=_js_packed_arraylike_index_get",
+            "--no-show-raw-insn",
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/main-access-worker"
+          ],
+          "output": "main-packed-index-get.s",
+          "sha256": "3b05cdad8a2a723df8b1b4f5076f90923025c8b72af02b10a4fa992d852db36d"
+        },
+        {
+          "symbol": "__RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get",
+          "command": [
+            "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+            "--disassemble-symbols=__RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get",
+            "--no-show-raw-insn",
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/main-access-worker"
+          ],
+          "output": "main-8lazy_get.s",
+          "sha256": "1c3c2890b43f1b8b8dc0a3cfee388f6ba9b874a18f990e53d6dc6addc9bfe2ba"
+        },
+        {
+          "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array",
+          "command": [
+            "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+            "--disassemble-symbols=__RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array",
+            "--no-show-raw-insn",
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/main-access-worker"
+          ],
+          "output": "main-8mutation26resolve_materialized_array.s",
+          "sha256": "970c7e58da7ca320a406b8d24cf7fd956927dcaf8e295714ad2916a6280b6f81"
+        }
+      ]
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "af4404992b9aebed880c3fd91c966a767d246b3d06bbf0553d4ef5816dc60d7e",
+      "functions": [
+        {
+          "symbol": "_js_array_get_f64",
+          "command": [
+            "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+            "--disassemble-symbols=_js_array_get_f64",
+            "--no-show-raw-insn",
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-access-worker"
+          ],
+          "output": "candidate-array-get.s",
+          "sha256": "e74d37fee6532e77c92290d3189080b4e37ea444655e16acaff8ea15cc7ab74e"
+        },
+        {
+          "symbol": "_js_packed_arraylike_index_get",
+          "command": [
+            "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+            "--disassemble-symbols=_js_packed_arraylike_index_get",
+            "--no-show-raw-insn",
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-access-worker"
+          ],
+          "output": "candidate-packed-index-get.s",
+          "sha256": "75fcbd46cb1153a9d5a7a509829c0f4f222059bca55a0766f02271803644fce3"
+        },
+        {
+          "symbol": "__RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape15lazy_get_rooted",
+          "command": [
+            "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+            "--disassemble-symbols=__RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape15lazy_get_rooted",
+            "--no-show-raw-insn",
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-access-worker"
+          ],
+          "output": "candidate-15lazy_get_rooted.s",
+          "sha256": "90e9f3006be47b9b2ad448e0f6c81d3bff6054f9f5291890301b0ee80a3cd7c0"
+        },
+        {
+          "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get",
+          "command": [
+            "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+            "--disassemble-symbols=__RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape11cached_read8lazy_get",
+            "--no-show-raw-insn",
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-access-worker"
+          ],
+          "output": "candidate-11cached_read8lazy_get.s",
+          "sha256": "6b368869adae87249400e1b96e351229ec427d610e8ddff1a111c53b63cbe040"
+        },
+        {
+          "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array",
+          "command": [
+            "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+            "--disassemble-symbols=__RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array",
+            "--no-show-raw-insn",
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-access-worker"
+          ],
+          "output": "candidate-8mutation26resolve_materialized_array.s",
+          "sha256": "b5ba769aaff1b007c5089085c697ffa3df580249607cdc3f4dc2715b6b0df2e7"
+        }
+      ]
+    }
+  ],
+  "all_four_worker_objects_identical": true
+}

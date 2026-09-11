@@ -1,0 +1,17 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/outlined-cached-read-r24/run-access.py",
+  "--worker",
+  ".work/outlined-cached-read-r24/candidate-access-worker",
+  "--baseline-worker",
+  ".work/outlined-cached-read-r24/main-access-worker",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--results-dir",
+  "results/quiet-outlined-cached-read-r24-access"
+]
