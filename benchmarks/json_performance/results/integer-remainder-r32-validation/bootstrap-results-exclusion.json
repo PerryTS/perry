@@ -1,0 +1,9 @@
+{
+  "paths": [
+    "/benchmarks/json_performance/results/quiet-stringify-token-proof-r31-options/",
+    "/benchmarks/json_performance/results/quiet-stringify-token-proof-r31-large-options/",
+    "/benchmarks/json_performance/results/quiet-stringify-token-proof-r31-small-options-recheck-options/",
+    "/benchmarks/json_performance/results/quiet-stringify-token-proof-r31-rotating/"
+  ],
+  "note": "Initial bootstrap refused untracked own R31 measurement archives before copying anything. Exact generated-result paths now ignored locally until SHA-indexed evidence force-add; no source exclusion or broader pattern."
+}

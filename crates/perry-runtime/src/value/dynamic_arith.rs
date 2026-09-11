@@ -686,6 +686,16 @@ pub unsafe extern "C" fn js_dynamic_div(a: f64, b: f64) -> f64 {
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_mod(a: f64, b: f64) -> f64 {
     if is_plain_double(a) && is_plain_double(b) {
+        // Index arithmetic commonly stays in the exact u32 domain. Reject
+        // negative zero so every signed, fractional or exceptional case keeps
+        // fmod semantics. Cast round trips also reject infinity and NaN.
+        if !a.is_sign_negative() {
+            let dividend = a as u32;
+            let divisor = b as u32;
+            if divisor != 0 && dividend as f64 == a && divisor as f64 == b {
+                return (dividend % divisor) as f64;
+            }
+        }
         return a % b;
     }
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -1107,6 +1117,62 @@ mod tests {
             assert_eq!(js_dynamic_shl(f64::INFINITY, 1.0), 0.0);
             // `%` keeps the sign of the dividend: -1 % -1 is -0.
             assert!(js_dynamic_mod(-1.0, -1.0).is_sign_negative());
+        }
+    }
+
+    #[test]
+    fn dynamic_mod_preserves_u32_edges_and_exceptional_values() {
+        let cases = [
+            -f64::INFINITY,
+            -4294967296.0,
+            -1.5,
+            -1.0,
+            -0.0,
+            0.0,
+            f64::MIN_POSITIVE,
+            0.5,
+            1.0,
+            2.0,
+            17.0,
+            65537.0,
+            2147483647.0,
+            2147483648.0,
+            4294967294.0,
+            4294967295.0,
+            4294967295.5,
+            4294967296.0,
+            9007199254740991.0,
+            f64::MAX,
+            f64::INFINITY,
+            f64::NAN,
+        ];
+        for a in cases {
+            for b in cases {
+                let expected = a % b;
+                let actual = unsafe { js_dynamic_mod(a, b) };
+                if expected.is_nan() {
+                    assert!(actual.is_nan(), "{a:?} % {b:?}");
+                } else {
+                    assert_eq!(actual.to_bits(), expected.to_bits(), "{a:?} % {b:?}");
+                }
+            }
+        }
+        for a in [-32768, -1, 0, 1, 32767, i32::MAX] {
+            for b in [-17, -1, 0, 1, 7, i32::MAX] {
+                let expected = a as f64 % b as f64;
+                for (x, y) in [
+                    (int32(a), b as f64),
+                    (a as f64, int32(b)),
+                    (int32(a), int32(b)),
+                ] {
+                    let actual = unsafe { js_dynamic_mod(x, y) };
+                    assert!(if expected.is_nan() {
+                        actual.is_nan()
+                    } else {
+                        actual.to_bits() == expected.to_bits()
+                    });
+                }
+            }
         }
     }
 }

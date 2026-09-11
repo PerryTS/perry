@@ -1,0 +1,2568 @@
+{
+  "source_commit": "3aac4d6335da54abeeed73df842decbbe6dd5d71",
+  "reference_evidence_commit": "a510f0fcb7c38670d82b10f3f074a4b66b1aef4d",
+  "copy_via_r31_source": "f0bc3aeb6a2597a941ad4afe1b70e79e2df11a17",
+  "note": "Exact frozen R26 reference copied from R31 main arm. All 81 original reference behavior receipts and 24 IR verdicts are reused. The changed emitter fixture is freshly executed and checked in both arms. Reference is not current main or R29 candidate.",
+  "files": [
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-retained-zero.o",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-retained-zero.o",
+      "sha256": "4aee07f3f1605fb9f81d2019dd2533306d7e39d3bfe6a858232f3ab70d63aae5"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-whitespace-plain.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-whitespace-plain.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-prior-entry-auto-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-prior-entry-auto-scheduled.stdout",
+      "sha256": "3a880cf6ead4abccaa782d50c9ec0daa3e759054231c6453e35bcd907ef5c2b1"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-prior-entry-tape-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-prior-entry-tape-scheduled.stderr",
+      "sha256": "2b51ce4fd134cd2d1f740d7b948c82720ad2495cbc43a4fac21ebb5ef2e560de"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-whitespace-true-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-whitespace-true-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_template_capture-tape-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_template_capture-tape-normal.stdout",
+      "sha256": "d2863b3aa78dc718c92666fde4a69bfaf6c07515d97911c780f980574c9176c9"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-fraction.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-fraction.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_template_capture-tape-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_template_capture-tape-fullgc.stdout",
+      "sha256": "d2863b3aa78dc718c92666fde4a69bfaf6c07515d97911c780f980574c9176c9"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-tape-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-tape-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-duplicate-plain-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-duplicate-plain-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-tape-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-tape-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-canonical-true-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-canonical-true-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_template_capture-auto-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_template_capture-auto-fullgc.stdout",
+      "sha256": "d2863b3aa78dc718c92666fde4a69bfaf6c07515d97911c780f980574c9176c9"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_template_capture-auto-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_template_capture-auto-normal.stdout",
+      "sha256": "d2863b3aa78dc718c92666fde4a69bfaf6c07515d97911c780f980574c9176c9"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-canonical-zero.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-canonical-zero.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-auto-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-auto-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-access-worker.o",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-access-worker.o",
+      "sha256": "f254101175a846f8d526ca85103adb6de981e0b41e0e484f3e0a60f948e35818"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-auto-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-auto-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_construction-direct-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_construction-direct-fullgc.stdout",
+      "sha256": "8f6dda79d2bd7419d80d8f01b9989a24b20f017c20fb31538fe58b0c5405397d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_construction-direct-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_construction-direct-normal.stdout",
+      "sha256": "8f6dda79d2bd7419d80d8f01b9989a24b20f017c20fb31538fe58b0c5405397d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_reads",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_reads",
+      "sha256": "5973f9b13897955376139ad209d7cf537ec76085095d5870ae11f6d46642cc84"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-prior-entry-direct-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-prior-entry-direct-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-prior-entry-direct-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-prior-entry-direct-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_construction-auto-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_construction-auto-scheduled.stderr",
+      "sha256": "383632c37bed32082a7cbbf602a63f53feb16af8e2f9610f0818f6896921bc71"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-whitespace-zero.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-whitespace-zero.stdout",
+      "sha256": "9160d4be34c8695bd172a76c7c7966587ea5a4d991ad22c87b2b91af54aa9ebb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-packed-index-get.s",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-packed-index-get.s",
+      "sha256": "6557ee6914a281e1fb6a2a11399b44da09d03af0540a66edfef9fc17487ee9b9"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_construction-tape-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_construction-tape-scheduled.stdout",
+      "sha256": "8f6dda79d2bd7419d80d8f01b9989a24b20f017c20fb31538fe58b0c5405397d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-whitespace-pretty.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-whitespace-pretty.stdout",
+      "sha256": "e73d70b55aa76fc4793d2312c488c9b3aecad351fc8e96d0a9e74e2e0aaa05ab"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-retained-zero-build-0.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-retained-zero-build-0.log",
+      "sha256": "493cdf4afdfc6992157828ec89c766eedf67e4706db09344843264ede0c63e96"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-prior-entry-auto-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-prior-entry-auto-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-retained-zero-build-1.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-retained-zero-build-1.log",
+      "sha256": "9306d9905e025756ca078765b26a121dda9c6ef46b54efa7f66d92fac86ce944"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-whitespace-zero.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-whitespace-zero.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-prior-entry-auto-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-prior-entry-auto-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-changing-options-validation.json",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-changing-options-validation.json",
+      "sha256": "3131a3f612e7e268b37b4f803e92c0e83d94e2ba5f6ecfe92b73f5962c7d45d0"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-prior-entry-tape-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-prior-entry-tape-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-duplicate-zero.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-duplicate-zero.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-prior-entry-tape-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-prior-entry-tape-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-canonical-pretty.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-canonical-pretty.stdout",
+      "sha256": "4d2b0a3537539624d14919e8032111b8ae252ea5e38b20cd394fe6d52d343b9d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-getter-probe-tape.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-getter-probe-tape.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-retained-zero-workers-provenance.json",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-retained-zero-workers-provenance.json",
+      "sha256": "889f0c390d1bf360ac4c334298d53b5301ee99a48cdfa50124c7238204df0a66"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-auto-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-auto-scheduled.stdout",
+      "sha256": "200cc6ad245928eb2a3ffd62ca776da40c5b0f20216bb6de7366dfb6d45be5d3"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-tape-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-tape-scheduled.stderr",
+      "sha256": "02b911f0d79d29eac815d70a66cbe95f276c8f92c9cb6262d4c9a4aee68a8e19"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-changing-roots.json",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-changing-roots.json",
+      "sha256": "66a1b18d7f31e692d0299a2dae5514dc8d5e1f036699a404ad4585bb0cb32a54"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-prior-entry-direct-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-prior-entry-direct-scheduled.stderr",
+      "sha256": "b920f10423a3906269e996f114f09eb4d90e7f9fed6d62508727f31e5ae5d584"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-canonical-plain.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-canonical-plain.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-whitespace-pretty.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-whitespace-pretty.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-canonical-plain.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-canonical-plain.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-canonical-zero.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-canonical-zero.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-worker",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-worker",
+      "sha256": "d0e07f6395a32201f3988d4c9435d02d223d84697e8bb6b4e6637e8aba02c9f8"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-canonical-pretty-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-canonical-pretty-node.stdout",
+      "sha256": "4d2b0a3537539624d14919e8032111b8ae252ea5e38b20cd394fe6d52d343b9d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-callback-only-auto-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-callback-only-auto-scheduled.stdout",
+      "sha256": "8908a39d4a7b4d19b28d6de2f756de4d8aa558f4199186794e3fbf7980e25edf"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_construction-auto-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_construction-auto-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_construction-auto-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_construction-auto-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-options-validation.json",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-options-validation.json",
+      "sha256": "46c28d747c91308e6178a3461ab4d32c9979487bc64e7c769c49ac741d8f1c7e"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_construction-tape-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_construction-tape-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_construction-tape-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_construction-tape-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-worker.o",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-worker.o",
+      "sha256": "b4b4f4082a942022854cd87d256ef356ed0ff2b6320486282ef5bec4a7d42bde"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-changing-options",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-changing-options",
+      "sha256": "f0464c1324cd0604f6f4f053f5fe02cf331b4f0d4d48ad49b15f0212f62e4f79"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-duplicate-true-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-duplicate-true-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-rotating-worker",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-rotating-worker",
+      "sha256": "3b598695750a197791464e08199b55ae16ffe34f9984146ac5669067189516e1"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-duplicate-pretty.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-duplicate-pretty.stdout",
+      "sha256": "e73d70b55aa76fc4793d2312c488c9b3aecad351fc8e96d0a9e74e2e0aaa05ab"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-duplicate-zero.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-duplicate-zero.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_construction-tape-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_construction-tape-fullgc.stdout",
+      "sha256": "8f6dda79d2bd7419d80d8f01b9989a24b20f017c20fb31538fe58b0c5405397d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-rotating-worker-build-1.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-rotating-worker-build-1.log",
+      "sha256": "9306d9905e025756ca078765b26a121dda9c6ef46b54efa7f66d92fac86ce944"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_construction-tape-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_construction-tape-normal.stdout",
+      "sha256": "8f6dda79d2bd7419d80d8f01b9989a24b20f017c20fb31538fe58b0c5405397d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-space-probe",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-space-probe",
+      "sha256": "08b3505bd2317cceb3d408b72e32afe6355e8790a6497776a32c2c02c16634f9"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_construction-auto-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_construction-auto-normal.stdout",
+      "sha256": "8f6dda79d2bd7419d80d8f01b9989a24b20f017c20fb31538fe58b0c5405397d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-retained-roots.json",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-retained-roots.json",
+      "sha256": "05da453954f9b83f0c1a990003bf86ef19786b6afacc0590f5b14864bf3dda4e"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-callback-only-auto-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-callback-only-auto-scheduled.stderr",
+      "sha256": "161c7e9233eed1c35b57d472c5dc04745210f69dcd2dc8b6682f71e379b01e0e"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_construction-auto-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_construction-auto-fullgc.stdout",
+      "sha256": "8f6dda79d2bd7419d80d8f01b9989a24b20f017c20fb31538fe58b0c5405397d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-changing-options.o",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-changing-options.o",
+      "sha256": "616fea662f8f9602b9a02ce8e25421fe4acc9b53d751ce7b20364136a073e767"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero",
+      "sha256": "77b94f460f2ba5428857bfe116901359e6e85c02f040f9f1bba4fc4b5a2153a5"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-duplicate-pretty.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-duplicate-pretty.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-canonical-pretty-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-canonical-pretty-node.stdout",
+      "sha256": "e73d70b55aa76fc4793d2312c488c9b3aecad351fc8e96d0a9e74e2e0aaa05ab"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-rotating-worker-build-0.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-rotating-worker-build-0.log",
+      "sha256": "50063833d8f03bd05dce0f6bd0cedc548cbc16a2a8620921f64452e0ee3f2e0a"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-duplicate-zero.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-duplicate-zero.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-prior-entry",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-prior-entry",
+      "sha256": "6cb01ee67655fb46cf3715887e84d6a5ef1122ef25075e04c2744cb905fd25d5"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-worker-build-1.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-worker-build-1.log",
+      "sha256": "9306d9905e025756ca078765b26a121dda9c6ef46b54efa7f66d92fac86ce944"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-canonical-plain.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-canonical-plain.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-prior-entry-direct-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-prior-entry-direct-scheduled.stdout",
+      "sha256": "3a880cf6ead4abccaa782d50c9ec0daa3e759054231c6453e35bcd907ef5c2b1"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-duplicate-true-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-duplicate-true-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-tape-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-tape-scheduled.stdout",
+      "sha256": "200cc6ad245928eb2a3ffd62ca776da40c5b0f20216bb6de7366dfb6d45be5d3"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-auto-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-auto-scheduled.stderr",
+      "sha256": "a5aa63b85a06a25252a26e66d07a5b1409724ed7bb7c4e09a142810149cdd33f"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-whitespace-pretty-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-whitespace-pretty-node.stdout",
+      "sha256": "4d2b0a3537539624d14919e8032111b8ae252ea5e38b20cd394fe6d52d343b9d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_reads-compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_reads-compile.log",
+      "sha256": "8e364807dcf1ed430ffe2b0289c82305eb52a9c53d00786ff450466b763a8688"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-whitespace-pretty.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-whitespace-pretty.stdout",
+      "sha256": "4d2b0a3537539624d14919e8032111b8ae252ea5e38b20cd394fe6d52d343b9d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-worker-build-0.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-worker-build-0.log",
+      "sha256": "70797896257502df7357e66a8bd0b8a8e6c735f2cb2212306ad479ae6216acd6"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-getter-probe",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-getter-probe",
+      "sha256": "e84fba85fc3c0be1a260648539996c63cc4c592011bdcda220e4860259aae47d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-canonical-zero.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-canonical-zero.stdout",
+      "sha256": "9160d4be34c8695bd172a76c7c7966587ea5a4d991ad22c87b2b91af54aa9ebb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-canonical-plain.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-canonical-plain.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_source_length",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_source_length",
+      "sha256": "9c9d79e992424df8e596da10e0ef2a6febe87d7fc08133452741af660427d950"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_construction-tape-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_construction-tape-scheduled.stderr",
+      "sha256": "2e800f53afa4483107a21e67e89868e343ec5f59ee687249edd76de6df62038b"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-11cached_read8lazy_get.s",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-11cached_read8lazy_get.s",
+      "sha256": "519114a1c63b6a046a9d3072753213e701e0483d532c4b734336d3df68a12c57"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_construction-auto-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_construction-auto-scheduled.stdout",
+      "sha256": "8f6dda79d2bd7419d80d8f01b9989a24b20f017c20fb31538fe58b0c5405397d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-whitespace-zero.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-whitespace-zero.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-duplicate-plain-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-duplicate-plain-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-retained-zero-validation.json",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-retained-zero-validation.json",
+      "sha256": "40a3f75e58ebe8c016a23be5aa5a01eae15d785e65d25db3587b02da3f066405"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-fraction.json",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-fraction.json",
+      "sha256": "014fa0a303e73dbc8fe169dbbda241eca5a4396fff739a56367b88ef5d2e89a1"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-whitespace-pretty.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-whitespace-pretty.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_construction-direct-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_construction-direct-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_construction-direct-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_construction-direct-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-canonical-true-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-canonical-true-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-prior-entry-direct-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-prior-entry-direct-normal.stdout",
+      "sha256": "3a880cf6ead4abccaa782d50c9ec0daa3e759054231c6453e35bcd907ef5c2b1"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_source_length-compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_source_length-compile.log",
+      "sha256": "488d34c395a8354f2f74b6f15bdc3e14138599b64bb74ba759cb9b8c1c0ce403"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-prior-entry-direct-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-prior-entry-direct-fullgc.stdout",
+      "sha256": "3a880cf6ead4abccaa782d50c9ec0daa3e759054231c6453e35bcd907ef5c2b1"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-prior-entry-tape-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-prior-entry-tape-fullgc.stdout",
+      "sha256": "3a880cf6ead4abccaa782d50c9ec0daa3e759054231c6453e35bcd907ef5c2b1"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-duplicate-zero.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-duplicate-zero.stdout",
+      "sha256": "9160d4be34c8695bd172a76c7c7966587ea5a4d991ad22c87b2b91af54aa9ebb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-getter-probe-compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-getter-probe-compile.log",
+      "sha256": "aec1c4c7e1f2aa7558475fd321d8bda6d0a61ee439924b176c3335d5fa420438"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-prior-entry-tape-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-prior-entry-tape-normal.stdout",
+      "sha256": "3a880cf6ead4abccaa782d50c9ec0daa3e759054231c6453e35bcd907ef5c2b1"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-canonical-pretty.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-canonical-pretty.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-getter-probe-tape.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-getter-probe-tape.stderr",
+      "sha256": "7ec74ab7f049caee2cc14c5c0950a86539460b5126c78eef092b4c58f33842cd"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-whitespace-true-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-whitespace-true-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-prior-entry-auto-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-prior-entry-auto-normal.stdout",
+      "sha256": "3a880cf6ead4abccaa782d50c9ec0daa3e759054231c6453e35bcd907ef5c2b1"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-whitespace-zero.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-whitespace-zero.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-prior-entry-auto-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-prior-entry-auto-fullgc.stdout",
+      "sha256": "3a880cf6ead4abccaa782d50c9ec0daa3e759054231c6453e35bcd907ef5c2b1"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-options.o",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-options.o",
+      "sha256": "f25e0184b7348b0c49297064430f7938d911663721e8ca5c7ccba7c9554f958f"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-array-get.s",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-array-get.s",
+      "sha256": "6465d927886e4b4d76bf10fb4e1c0e50478abf4f16213466329cd8cbfd9b9839"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-fraction-spacer",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-fraction-spacer",
+      "sha256": "8ecedfd6fb60d9e6b55a9d54473752d94a52933577b900ecd5ce63bebd779b03"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-prior-entry-tape-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-prior-entry-tape-scheduled.stdout",
+      "sha256": "3a880cf6ead4abccaa782d50c9ec0daa3e759054231c6453e35bcd907ef5c2b1"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-prior-entry-auto-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-prior-entry-auto-scheduled.stderr",
+      "sha256": "79d8de0b2f4eb4e4a2e0db471ccd69daa5cd150ac34253615b9b00f279ee892d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-validation.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-validation.log",
+      "sha256": "586840036a46f8d51fd5dfc17685ddcef9832bb77f26b7145e32528883b2b949"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_template_capture",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_template_capture",
+      "sha256": "2b84dc3f4cce9901cbef4725898a54c5d80f488f4f85eb22f34d362c291ba557"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-compile.log",
+      "sha256": "69420881432413b4153ceb5717a219b7494e726783ec49970c1a66eec97f91d4"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-whitespace-plain.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-whitespace-plain.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-canonical-zero.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-canonical-zero.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_template_capture-auto-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_template_capture-auto-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_template_capture-auto-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_template_capture-auto-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-auto-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-auto-normal.stdout",
+      "sha256": "200cc6ad245928eb2a3ffd62ca776da40c5b0f20216bb6de7366dfb6d45be5d3"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-auto-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-auto-fullgc.stdout",
+      "sha256": "200cc6ad245928eb2a3ffd62ca776da40c5b0f20216bb6de7366dfb6d45be5d3"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-fraction.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-fraction.stdout",
+      "sha256": "e4e7560cd912b241435c0e54018563e1c2d7d4350aa4b493a8bc30c8cff01086"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_template_capture-tape-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_template_capture-tape-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_template_capture-tape-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_template_capture-tape-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-tape-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-tape-fullgc.stdout",
+      "sha256": "200cc6ad245928eb2a3ffd62ca776da40c5b0f20216bb6de7366dfb6d45be5d3"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-tape-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-tape-normal.stdout",
+      "sha256": "200cc6ad245928eb2a3ffd62ca776da40c5b0f20216bb6de7366dfb6d45be5d3"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-options-build-0.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-options-build-0.log",
+      "sha256": "a6a1935fda7f3b0ac34ec3f518a707281dc3533416188a4fc67b661084637708"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_reads-auto-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_reads-auto-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_reads-auto-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_reads-auto-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_template_capture-auto-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_template_capture-auto-scheduled.stdout",
+      "sha256": "d2863b3aa78dc718c92666fde4a69bfaf6c07515d97911c780f980574c9176c9"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-canonical-zero-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-canonical-zero-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_template_capture-tape-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_template_capture-tape-scheduled.stderr",
+      "sha256": "d2c46f2c82ed1542ffe5f7f49f025c59dbcabe2565952470e53addee3e1a1436"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_source_length-tape-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_source_length-tape-scheduled.stdout",
+      "sha256": "e6ead4695cb4b911404a46ebc18b6143e79758b82a6996fac63a933e53c45400"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_reads-tape-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_reads-tape-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_construction-direct-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_construction-direct-scheduled.stderr",
+      "sha256": "ead5ae5b23fa2b3c9660c282bde30f7c5125cf90fc16142e3c4c713ee6691975"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_template_capture-direct-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_template_capture-direct-scheduled.stderr",
+      "sha256": "1cc74be9a3d0a5cd223054b6a56457ee911e4ba997d41c0ae15c01ad578b7311"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_source_length-auto-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_source_length-auto-scheduled.stderr",
+      "sha256": "c3b9f0ccbfd823ca92f325f06d68a54d604c33db9919ab1a94e8f64b49aada70"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_reads-tape-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_reads-tape-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-whitespace-zero-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-whitespace-zero-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-whitespace-pretty-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-whitespace-pretty-node.stdout",
+      "sha256": "e73d70b55aa76fc4793d2312c488c9b3aecad351fc8e96d0a9e74e2e0aaa05ab"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_reads-direct-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_reads-direct-fullgc.stdout",
+      "sha256": "2eab8d419be542416cfecba16dd446de52590acddd9f535f1ffa6b5860c542d6"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_reads-direct-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_reads-direct-normal.stdout",
+      "sha256": "2eab8d419be542416cfecba16dd446de52590acddd9f535f1ffa6b5860c542d6"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-whitespace-plain.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-whitespace-plain.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-options-build-1.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-options-build-1.log",
+      "sha256": "9306d9905e025756ca078765b26a121dda9c6ef46b54efa7f66d92fac86ce944"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-canonical-true.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-canonical-true.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-getter-probe-direct.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-getter-probe-direct.stdout",
+      "sha256": "5d1802bd030fe3379bb06a180e92fcf986296aef9107dadcc10a8f63bdbf6c7b"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-roots.json",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-roots.json",
+      "sha256": "557da9c46d3579b5006cd23bb188eb2f75f159e01a16e1cc476da7869607e11a"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-canonical-pretty.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-canonical-pretty.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-roots.json",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-roots.json",
+      "sha256": "7998eb376142aa769a05350d46c4a7ba72488e07c16728964e83aedf3a1ecf80"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_source_length-direct-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_source_length-direct-normal.stdout",
+      "sha256": "e6ead4695cb4b911404a46ebc18b6143e79758b82a6996fac63a933e53c45400"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_source_length-direct-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_source_length-direct-fullgc.stdout",
+      "sha256": "e6ead4695cb4b911404a46ebc18b6143e79758b82a6996fac63a933e53c45400"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_reads-tape-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_reads-tape-scheduled.stderr",
+      "sha256": "9bca0f2907017df276e2bd51b7f089315e1659e480804b147f3f950b1c6966a3"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-whitespace-true.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-whitespace-true.stdout",
+      "sha256": "9160d4be34c8695bd172a76c7c7966587ea5a4d991ad22c87b2b91af54aa9ebb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_reads-auto-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_reads-auto-scheduled.stdout",
+      "sha256": "2eab8d419be542416cfecba16dd446de52590acddd9f535f1ffa6b5860c542d6"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-access-worker",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-access-worker",
+      "sha256": "735bb49a44805c2f39027682258018c44558099a131c6e1dc170ce133fca489f"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-canonical-plain-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-canonical-plain-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-fraction-compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-fraction-compile.log",
+      "sha256": "fb35804cf97396ad759bdb8038d847de73ac1654254b76853ba708b07e6b426b"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-whitespace-true.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-whitespace-true.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-duplicate-true.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-duplicate-true.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-fixture-validation.json",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-fixture-validation.json",
+      "sha256": "7b33f4a2c9e711f3f473de623a9c5db32083049b3138a9885530f53e0a48f695"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_reads-direct-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_reads-direct-scheduled.stdout",
+      "sha256": "2eab8d419be542416cfecba16dd446de52590acddd9f535f1ffa6b5860c542d6"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-rotating-worker.o",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-rotating-worker.o",
+      "sha256": "85cf7332d6734195f0776b7c19d8b89d133bddd443032f1c87d91db8474186bc"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-duplicate-pretty-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-duplicate-pretty-node.stdout",
+      "sha256": "4d2b0a3537539624d14919e8032111b8ae252ea5e38b20cd394fe6d52d343b9d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-build-provenance.json",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-build-provenance.json",
+      "sha256": "c7cdea74ece097733885a1fb12d7be44caf00ae9ab96359d225764322eb609db"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-canonical-true.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-canonical-true.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-direct-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-direct-scheduled.stdout",
+      "sha256": "200cc6ad245928eb2a3ffd62ca776da40c5b0f20216bb6de7366dfb6d45be5d3"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-getter-probe-auto.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-getter-probe-auto.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_source_length-direct-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_source_length-direct-scheduled.stdout",
+      "sha256": "e6ead4695cb4b911404a46ebc18b6143e79758b82a6996fac63a933e53c45400"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-validation.json",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-validation.json",
+      "sha256": "339c23df18ade69d60e54595ee569c192f64d74cfa43c4061e8917cf074a2140"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-prior-entry-compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-prior-entry-compile.log",
+      "sha256": "587ac255788bbb361e685d6b9d4188d7428f30d473b92aa91f17b33c515071ce"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_source_length-tape-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_source_length-tape-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-whitespace-plain-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-whitespace-plain-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_source_length-tape-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_source_length-tape-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_template_capture-direct-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_template_capture-direct-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-duplicate-pretty.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-duplicate-pretty.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-direct-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-direct-fullgc.stdout",
+      "sha256": "200cc6ad245928eb2a3ffd62ca776da40c5b0f20216bb6de7366dfb6d45be5d3"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-direct-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-direct-normal.stdout",
+      "sha256": "200cc6ad245928eb2a3ffd62ca776da40c5b0f20216bb6de7366dfb6d45be5d3"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_template_capture-direct-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_template_capture-direct-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_source_length-auto-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_source_length-auto-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-duplicate-plain.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-duplicate-plain.stdout",
+      "sha256": "31b2d87e4f2fb4e517bcbbeb15065422f322378dcd6c984119890ee2cd781193"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-duplicate-zero-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-duplicate-zero-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_source_length-auto-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_source_length-auto-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-duplicate-true.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-duplicate-true.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-callback-only",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-callback-only",
+      "sha256": "a6fcbcdadeafcd1b9f0c1915cd14b76559142d39b0638744815f05a3ea35ae30"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-duplicate-plain.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-duplicate-plain.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_construction",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_construction",
+      "sha256": "39b06bc4a7ddd4b7e7e8de3e2d027f8373b57c00b8512e5d3f58eb01d2c7d3bd"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-changing-workers-provenance.json",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-changing-workers-provenance.json",
+      "sha256": "94e598609ba233cc056851572ae07e971534d77bcf262bbb4537322ec7f29c7e"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-direct-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-direct-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_template_capture-direct-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_template_capture-direct-fullgc.stdout",
+      "sha256": "d2863b3aa78dc718c92666fde4a69bfaf6c07515d97911c780f980574c9176c9"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_template_capture-direct-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_template_capture-direct-normal.stdout",
+      "sha256": "d2863b3aa78dc718c92666fde4a69bfaf6c07515d97911c780f980574c9176c9"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-direct-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-direct-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-duplicate-pretty.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-duplicate-pretty.stdout",
+      "sha256": "4d2b0a3537539624d14919e8032111b8ae252ea5e38b20cd394fe6d52d343b9d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-8mutation26resolve_materialized_array.s",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-8mutation26resolve_materialized_array.s",
+      "sha256": "732c6cffb5a14e9e68a9471c2289fb118afcfe2ca996429257e048b9f8b132f5"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_source_length-auto-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_source_length-auto-fullgc.stdout",
+      "sha256": "e6ead4695cb4b911404a46ebc18b6143e79758b82a6996fac63a933e53c45400"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_source_length-auto-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_source_length-auto-normal.stdout",
+      "sha256": "e6ead4695cb4b911404a46ebc18b6143e79758b82a6996fac63a933e53c45400"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-duplicate-plain.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-duplicate-plain.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-duplicate-pretty-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-duplicate-pretty-node.stdout",
+      "sha256": "e73d70b55aa76fc4793d2312c488c9b3aecad351fc8e96d0a9e74e2e0aaa05ab"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_source_length-tape-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_source_length-tape-normal.stdout",
+      "sha256": "e6ead4695cb4b911404a46ebc18b6143e79758b82a6996fac63a933e53c45400"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_source_length-tape-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_source_length-tape-fullgc.stdout",
+      "sha256": "e6ead4695cb4b911404a46ebc18b6143e79758b82a6996fac63a933e53c45400"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-duplicate-true.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-duplicate-true.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-duplicate-plain.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-duplicate-plain.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-whitespace-plain-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-whitespace-plain-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-access-worker-build-1.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-access-worker-build-1.log",
+      "sha256": "9306d9905e025756ca078765b26a121dda9c6ef46b54efa7f66d92fac86ce944"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_template_capture-compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_template_capture-compile.log",
+      "sha256": "dd0a6fc4f6a4ccc3deacc48b882b0c548b2b6d45e70415b998298c77660d4bf5"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_reads-direct-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_reads-direct-scheduled.stderr",
+      "sha256": "b5c9ec76972ca4917eaa99373c6f45aaf264b6a9a93035df8a97a2d42b24df0a"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-options",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-options",
+      "sha256": "b66745c51e4480f6c28cf425981a78f75f48f1027b0e46fb5b253566341cbb4e"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-getter-probe-auto.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-getter-probe-auto.stderr",
+      "sha256": "7ec74ab7f049caee2cc14c5c0950a86539460b5126c78eef092b4c58f33842cd"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-duplicate-zero-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-duplicate-zero-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_source_length-direct-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_source_length-direct-scheduled.stderr",
+      "sha256": "efd5f18505ea31f709cc36f6e83912556a90bdedf51c702e8512a6486b9f7f1b"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-canonical-true.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-canonical-true.stdout",
+      "sha256": "9160d4be34c8695bd172a76c7c7966587ea5a4d991ad22c87b2b91af54aa9ebb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-access-worker-build-0.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-access-worker-build-0.log",
+      "sha256": "426967caab99db4abab348f400291defb8e74fad5bd8b88a12863ec4eaa96a79"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-direct-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-direct-scheduled.stderr",
+      "sha256": "8d187b22528c2522c849f9726baa11d0a9d4d066ee72acb61b65c35ec3e60b19"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_source_length-direct-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_source_length-direct-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_source_length-direct-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_source_length-direct-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_reads-auto-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_reads-auto-scheduled.stderr",
+      "sha256": "64a3ccf611b88ad4eed4b038cb335aecc42b2f66a207044b450cd2df01f6f229"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-whitespace-true.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-whitespace-true.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-whitespace-zero-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-whitespace-zero-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_reads-tape-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_reads-tape-scheduled.stdout",
+      "sha256": "2eab8d419be542416cfecba16dd446de52590acddd9f535f1ffa6b5860c542d6"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-getter-probe-direct.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-getter-probe-direct.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-canonical-pretty.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-canonical-pretty.stdout",
+      "sha256": "e73d70b55aa76fc4793d2312c488c9b3aecad351fc8e96d0a9e74e2e0aaa05ab"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-workers-provenance.json",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-workers-provenance.json",
+      "sha256": "b3dccb4d52c9d2f365bfa9a215a98106e73c6fc76331d6542a45b3eb9ec08633"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-canonical-zero-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-canonical-zero-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-duplicate-true.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-duplicate-true.stdout",
+      "sha256": "9160d4be34c8695bd172a76c7c7966587ea5a4d991ad22c87b2b91af54aa9ebb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-whitespace-true.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-whitespace-true.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-retained-zero",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-retained-zero",
+      "sha256": "e0c27a1b2c49177485d7b3263634958269a67bbb5f13a639c8a9faa63d2ed6f3"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_template_capture-tape-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_template_capture-tape-scheduled.stdout",
+      "sha256": "d2863b3aa78dc718c92666fde4a69bfaf6c07515d97911c780f980574c9176c9"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_template_capture-auto-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_template_capture-auto-scheduled.stderr",
+      "sha256": "e95825c911ba3a62bf09e77c7d8539d7ff2bb974b5ae1457d9ffd5a25877aac3"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_source_length-auto-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_source_length-auto-scheduled.stdout",
+      "sha256": "e6ead4695cb4b911404a46ebc18b6143e79758b82a6996fac63a933e53c45400"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_reads-tape-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_reads-tape-fullgc.stdout",
+      "sha256": "2eab8d419be542416cfecba16dd446de52590acddd9f535f1ffa6b5860c542d6"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_construction-direct-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_construction-direct-scheduled.stdout",
+      "sha256": "8f6dda79d2bd7419d80d8f01b9989a24b20f017c20fb31538fe58b0c5405397d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_template_capture-direct-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_template_capture-direct-scheduled.stdout",
+      "sha256": "d2863b3aa78dc718c92666fde4a69bfaf6c07515d97911c780f980574c9176c9"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_source_length-tape-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_source_length-tape-scheduled.stderr",
+      "sha256": "42faeb1f1787946ce265cfa937ba5dbd568f6d5de84f085508629f6e9059638a"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_reads-tape-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_reads-tape-normal.stdout",
+      "sha256": "2eab8d419be542416cfecba16dd446de52590acddd9f535f1ffa6b5860c542d6"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_reads-auto-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_reads-auto-normal.stdout",
+      "sha256": "2eab8d419be542416cfecba16dd446de52590acddd9f535f1ffa6b5860c542d6"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-changing-options-build-0.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-changing-options-build-0.log",
+      "sha256": "cb4f7f32e2e44aacb39c460247c80f4d562d2036c3abab6dfc5faf54649092b9"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_reads-auto-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_reads-auto-fullgc.stdout",
+      "sha256": "2eab8d419be542416cfecba16dd446de52590acddd9f535f1ffa6b5860c542d6"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_reads-direct-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_reads-direct-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_reads-direct-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_reads-direct-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-changing-options-build-1.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-changing-options-build-1.log",
+      "sha256": "9306d9905e025756ca078765b26a121dda9c6ef46b54efa7f66d92fac86ce944"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-test_json_cached_construction-compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-test_json_cached_construction-compile.log",
+      "sha256": "48921e40a6e7361a577753c526191397c570a91cb8ca5d62ec5cd6c547a05035"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-callback-only-compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-callback-only-compile.log",
+      "sha256": "e3d4d91945f921c5130fa9a8f1bd3b3a9a160a9d685b7a1c224e78d6381132b1"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-canonical-true.stderr",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-canonical-true.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-180-whitespace-plain.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-180-whitespace-plain.stdout",
+      "sha256": "62f18db77ac9f5eca2e0c05b7f563f02ed8e171f06ec05f6424403aa2b72a87e"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-lazy-2-canonical-plain-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-lazy-2-canonical-plain-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-15lazy_get_rooted.s",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-15lazy_get_rooted.s",
+      "sha256": "1156a894d20a0e5ede99e851a9fa56b32eefabdcc2f544884f7cbd13cd50759e"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-retained-ir-native/zero.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-retained-ir-native/zero.ll",
+      "sha256": "c25fb3c51c9d05646ecdcafa9acff97801d50d10d823e5451b66d45777dc936b"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-retained-ir-native/compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-retained-ir-native/compile.log",
+      "sha256": "0a5837545b4bcf353a1d71ac2867a4b1e40efe23cd4a4ae87c6eaca9b0ac0649"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-retained-ir-native/worker.o",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-retained-ir-native/worker.o",
+      "sha256": "4aee07f3f1605fb9f81d2019dd2533306d7e39d3bfe6a858232f3ab70d63aae5"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-retained-ir-native/rewrite.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-retained-ir-native/rewrite.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-retained-ir-native/check-0.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-retained-ir-native/check-0.log",
+      "sha256": "f6698d16f45c156aba049cea597490fba9638f1ec78369502f9cf1764d6c926c"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/frozen-main/libperry_stdlib.a",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/frozen-main/libperry_stdlib.a",
+      "sha256": "1b343ca0329e233c477688597c452ac9750100b89675ec012336c96a9632917c"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/frozen-main/perry",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/frozen-main/perry",
+      "sha256": "794b7dfa67f5f3509f96ddbeeff3cf9e70c1bb4efc0383cd467f90bf2d662040"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/frozen-main/libperry_runtime.a",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/frozen-main/libperry_runtime.a",
+      "sha256": "48972667fc2bf53e57c2776eb8741e32e41d1da752017abbe2aa512325af23bb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-retained-ir-shadow/zero.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-retained-ir-shadow/zero.ll",
+      "sha256": "e004e8e3303d69850a581ef26185a89115d73b3e1926b7f9836562cdb29967ec"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-retained-ir-shadow/compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-retained-ir-shadow/compile.log",
+      "sha256": "dd6099c25c743ee817f6b855122f48c3a852813f3c3902a37f86744fd0747b22"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-retained-ir-shadow/worker.o",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-retained-ir-shadow/worker.o",
+      "sha256": "f284a1fd1866dea47fda49afd09a902687db4cd273d60e76b73373f0f716f8b5"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-retained-ir-shadow/check-1.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-retained-ir-shadow/check-1.log",
+      "sha256": "8196a1e23f481eba29acc2160175f2f3ccd76efc3e9a62b73078c4636b7026da"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-retained-ir-shadow/check-0.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-retained-ir-shadow/check-0.log",
+      "sha256": "fb3a04e2b1e934c16da2bbc675d86657bb9682bfcdbb84d6cefb7baf41ff00e7"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/test_json_template_capture-0.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/test_json_template_capture-0.ll",
+      "sha256": "5b41faf657864e49e32f8094172e06e4fe4fbb194c15a59d80b80aa9d840ecab"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/worker-0.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/worker-0.ll",
+      "sha256": "f7cd047428912e67b3b76dd96a1f7be14b4ee38925546c6b885a37467351ab0e"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/ordinary-workers-check.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/ordinary-workers-check.log",
+      "sha256": "a070a94176c6d41c9a84264e2c2a20584444f94cbe159d6a74ff8f2c6ce96349"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/callback-only-0.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/callback-only-0.ll",
+      "sha256": "1ff0255b1234c1a08f8c074aaa64a8dceeb7e9137bf0f4e8de7209de13ffb1c2"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/test_json_source_length-0.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/test_json_source_length-0.ll",
+      "sha256": "1cc7383dca37929fcd564fbb18d0e140be278bae543a556735b6ccb59b754213"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/test_json_cached_construction-0.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/test_json_cached_construction-0.ll",
+      "sha256": "06264825bf7cbff008313be119b1b82eb9becf85ad8c8f73d2fff66277abe63c"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/access-worker-0.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/access-worker-0.ll",
+      "sha256": "8b6ecd6a35e30d47d6b9f3e8a31c864c8b4c1671032ef023db633c1e7f2cf1cd"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/prior-entry-0.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/prior-entry-0.ll",
+      "sha256": "0fb76b33b0dd2739e44bf2ddcf5bc4311d693dd5a90a65df7ffee43599b76c2f"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/options-worker-0.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/options-worker-0.ll",
+      "sha256": "7191733bf871fe2b47bab95a56a17f4bbd3cea5d5c08903070b8f2608633be9c"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/test_json_cached_reads-0.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/test_json_cached_reads-0.ll",
+      "sha256": "5b3d1433a937bdbd3a0e3291c0bcd6eddd1105c54f996aacfde0ed350db72af1"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/callback-check.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/callback-check.log",
+      "sha256": "c687e0bda1d65d6a644547dd46495041a9602bff17d0af9578bdd89adf749ff8"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/check-0.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/check-0.log",
+      "sha256": "2e1e93ae99fdbf7ff3601b32f219b9d9a53926fb85a68158506729b4cf7436f8"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-ir-native/zero.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-ir-native/zero.ll",
+      "sha256": "f70a06fbc61fc48ccb393f130d72fc32c1843f7202e8be9018ff2212bc291feb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-ir-native/compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-ir-native/compile.log",
+      "sha256": "96b1a5a7c6ea938867bd4d9815131998d9ad7d49781247d6e21aca1b63ce302f"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-ir-native/worker.o",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-ir-native/worker.o",
+      "sha256": "2a9823592433f7eed446e49d191dcfbf8d8e27e57e8d3eb3eb3c58be8e6b36b4"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-ir-native/rewrite.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-ir-native/rewrite.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-ir-native/check-0.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-ir-native/check-0.log",
+      "sha256": "cde78b91411e68c230304de0fae7db0a5cc891d5f89abeab8a3f445b57417c85"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-changing-ir-native/zero.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-changing-ir-native/zero.ll",
+      "sha256": "7c090abe68ecbbc965229ca8bea09285345a9103b709d12ef2628c028decd78a"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-changing-ir-native/compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-changing-ir-native/compile.log",
+      "sha256": "4c0d1744b30cbae9b2b94614178aa9b76924e96e78e0727ce7619639bfce133a"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-changing-ir-native/worker.o",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-changing-ir-native/worker.o",
+      "sha256": "616fea662f8f9602b9a02ce8e25421fe4acc9b53d751ce7b20364136a073e767"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-changing-ir-native/rewrite.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-changing-ir-native/rewrite.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-changing-ir-native/check-0.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-changing-ir-native/check-0.log",
+      "sha256": "5bc08c71b75ca87cb23c5dea77186b06a48601e92be12bd7ad4da55bc627e38a"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-changing-ir-shadow/zero.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-changing-ir-shadow/zero.ll",
+      "sha256": "41c94f2eb4ebd9afd04754abdab3850611627688519a25d8768068737f6928ad"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-changing-ir-shadow/compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-changing-ir-shadow/compile.log",
+      "sha256": "901b7aee010382b9f9495f0cb849e3b8f29d5d9f4254dfe30a77a1376c54fc5f"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-changing-ir-shadow/worker.o",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-changing-ir-shadow/worker.o",
+      "sha256": "6958910c40f95da63c21d9527aef5f052de60d110c38de5b702126f9ebdcece1"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-changing-ir-shadow/check-1.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-changing-ir-shadow/check-1.log",
+      "sha256": "064c117b67243e7c927199ad1a1470831a56b2ee7728f032f0619ba99dd9edc4"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-changing-ir-shadow/check-0.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-changing-ir-shadow/check-0.log",
+      "sha256": "b2b11d103a7685b9c344918149dd3fdaa15213e4252c5a84723aaeda677299eb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/test_json_template_capture-0.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/test_json_template_capture-0.ll",
+      "sha256": "894cd8233574a09270fc273a75b5e22eacea2d7d0619a12cf868be81bfc57e0c"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/worker-0.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/worker-0.ll",
+      "sha256": "05b9daaba03ce5a95f0b067c8208399cb3b25c76553e23a0d148e900bfb1d416"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/callback-only-0.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/callback-only-0.ll",
+      "sha256": "77de5d9897ffd9136ff2c90528457fd1836cca8d5d45859ce1f7a15459aa3637"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/test_json_source_length-0.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/test_json_source_length-0.ll",
+      "sha256": "8c51b1ef829b7e32879bab36a5ff4ac80f7ce40c62f39c055f351a870a136928"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/test_json_cached_construction-0.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/test_json_cached_construction-0.ll",
+      "sha256": "263ed7d1ca2866a3b75792a3d079111fbf2e0314b740c7e31e33fb0ed0647a6e"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/access-worker-0.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/access-worker-0.ll",
+      "sha256": "07f6b6498e35f909fc85c3670539f1a582723158a81c2bdd210e3c868aec2add"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/prior-entry-0.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/prior-entry-0.ll",
+      "sha256": "d747eb847e8aaaf07fc8d9304232b10d18f7c491d95ae7ebd648ead2d5c35c57"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/options-worker-0.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/options-worker-0.ll",
+      "sha256": "304f354d77d6b33aa54352a75c4aca55c737082956d622fadce11daf6e0180a4"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/test_json_cached_reads-0.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/test_json_cached_reads-0.ll",
+      "sha256": "3a1d0a5e6c3226f9c0972c1eedd5fbcc329e17f97c94286e23fe3ee031a74266"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/check-1.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/check-1.log",
+      "sha256": "8dff47d11974370bd580487f44a5ec19789218771c1d1d3c42c9a2f67e03a763"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/check-0.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/check-0.log",
+      "sha256": "b4ad91c3eab41620a040675b7da92174960e8d9bba454e4cf709a10991272347"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-ir-shadow/zero.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-ir-shadow/zero.ll",
+      "sha256": "8c8a6fc9670c42ab6eb6f97a45ac8f10db326b9ba473d839d62ed33b8013e938"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-ir-shadow/compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-ir-shadow/compile.log",
+      "sha256": "f0a4aada93f0c645d0cb7315098fe67c0908fa55861abec136f7cd1ae9d75de9"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-ir-shadow/worker.o",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-ir-shadow/worker.o",
+      "sha256": "b7d0d1ce0724ae92f5d47ebcb945c9d02a42821790079d8cf300678eb327d1bb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-ir-shadow/check-1.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-ir-shadow/check-1.log",
+      "sha256": "ab66f20703b9c2e9fc7f3cd7f5c4548b7f54a770d90c04379eb0867944361a04"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-ir-shadow/check-0.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-ir-shadow/check-0.log",
+      "sha256": "4050d2a3c84c2d0606b532b2cf18db4b4532c38ddc407b74ee58b6e70a4aa96a"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-ir-shadow/.perry-trace/llvm/test_json_zero_spacing_ts.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-ir-shadow/.perry-trace/llvm/test_json_zero_spacing_ts.ll",
+      "sha256": "8c8a6fc9670c42ab6eb6f97a45ac8f10db326b9ba473d839d62ed33b8013e938"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/access-worker/compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/access-worker/compile.log",
+      "sha256": "5d2ba4b18a271c511b681cc72edf7d766cb850c12aba8f5f2a35ea206b75a7bd"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/access-worker/worker.o",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/access-worker/worker.o",
+      "sha256": "f0d633b01a767b183bb047f9df5edbb68eff904f899650d1c0c7616be336a405"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/callback-only/compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/callback-only/compile.log",
+      "sha256": "e851b3c6281f0969b0e39c9f281431ee7923b3f2c55fff112d898d36d11b186c"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/callback-only/worker.o",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/callback-only/worker.o",
+      "sha256": "28691e1e114f0bcc0302caf3b244d66b5f23d6e2eb60e9e00a4e24a6a513c2ef"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/test_json_cached_reads/compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/test_json_cached_reads/compile.log",
+      "sha256": "16af0916afed7b9a8162b0202e5bbcf675b72d196f818316d203297d4f84653b"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/test_json_cached_reads/worker.o",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/test_json_cached_reads/worker.o",
+      "sha256": "aa6922f3289ee3847936c92c33001a579735d25115b1b4229c1101ad4ac79903"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/test_json_source_length/compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/test_json_source_length/compile.log",
+      "sha256": "fa6fbedc29a0e2b442472a38976e2d18ed338d767c3ec454b018acb17936d203"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/test_json_source_length/worker.o",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/test_json_source_length/worker.o",
+      "sha256": "4aacc8839e6a96dda7cc2ddd08eafaa6207d69af602ec89be3d80a24d851d1ec"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/options-worker/compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/options-worker/compile.log",
+      "sha256": "1337aa684c1df22a214c6712ccd1221a8aba23fad57399943ccb6bb28d5592a3"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/options-worker/worker.o",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/options-worker/worker.o",
+      "sha256": "56656cc41877b23e12816bf121a1d5b2155908d846ccd31a7d772b545f05b45c"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/test_json_template_capture/compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/test_json_template_capture/compile.log",
+      "sha256": "69884f4b58c7bf4dc1bd0d54db1952368af5473a8485dd83f3f638a673108c0a"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/test_json_template_capture/worker.o",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/test_json_template_capture/worker.o",
+      "sha256": "efd01fbf9c3c1d7f7c6d089242bbf3a1cf595ffac1b9455feff11b663831e186"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/test_json_cached_construction/compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/test_json_cached_construction/compile.log",
+      "sha256": "a5df7e0f19bd8e5da3da5c4dd03eae99adda83eed13d2e08c2ead6c520a62809"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/test_json_cached_construction/worker.o",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/test_json_cached_construction/worker.o",
+      "sha256": "19808fe019ad81ad28405e395b69ca2116ed6e162584242e99bdbe3afbf144f0"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/prior-entry/compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/prior-entry/compile.log",
+      "sha256": "fc112e64a4a2272fa2d2c7437ced956c7af6d5880cb4d217ad7d455fc94ccd03"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/prior-entry/worker.o",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/prior-entry/worker.o",
+      "sha256": "9d4b685772750a0bf9ea3f8f7617563f3ff36278c5c21f175190b1eabc18f92c"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/worker/compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/worker/compile.log",
+      "sha256": "d2da77d2a41bc1914bb0db2de36ae6c6aef03b9e01479afddda5d409129912c6"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/worker/worker.o",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/worker/worker.o",
+      "sha256": "916b38f99cc1ff1f0f9374a8557577007a7046844c5a81364ac826f755e8a01a"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/worker/.perry-trace/llvm/worker_ts.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/worker/.perry-trace/llvm/worker_ts.ll",
+      "sha256": "05b9daaba03ce5a95f0b067c8208399cb3b25c76553e23a0d148e900bfb1d416"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/prior-entry/.perry-trace/llvm/prior_entry_ts.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/prior-entry/.perry-trace/llvm/prior_entry_ts.ll",
+      "sha256": "d747eb847e8aaaf07fc8d9304232b10d18f7c491d95ae7ebd648ead2d5c35c57"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/test_json_cached_construction/.perry-trace/llvm/test_json_cached_construction_ts.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/test_json_cached_construction/.perry-trace/llvm/test_json_cached_construction_ts.ll",
+      "sha256": "263ed7d1ca2866a3b75792a3d079111fbf2e0314b740c7e31e33fb0ed0647a6e"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/test_json_template_capture/.perry-trace/llvm/test_json_template_capture_ts.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/test_json_template_capture/.perry-trace/llvm/test_json_template_capture_ts.ll",
+      "sha256": "894cd8233574a09270fc273a75b5e22eacea2d7d0619a12cf868be81bfc57e0c"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/options-worker/.perry-trace/llvm/options_worker_ts.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/options-worker/.perry-trace/llvm/options_worker_ts.ll",
+      "sha256": "304f354d77d6b33aa54352a75c4aca55c737082956d622fadce11daf6e0180a4"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/test_json_source_length/.perry-trace/llvm/test_json_source_length_ts.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/test_json_source_length/.perry-trace/llvm/test_json_source_length_ts.ll",
+      "sha256": "8c51b1ef829b7e32879bab36a5ff4ac80f7ce40c62f39c055f351a870a136928"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/test_json_cached_reads/.perry-trace/llvm/test_json_cached_reads_ts.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/test_json_cached_reads/.perry-trace/llvm/test_json_cached_reads_ts.ll",
+      "sha256": "3a1d0a5e6c3226f9c0972c1eedd5fbcc329e17f97c94286e23fe3ee031a74266"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/callback-only/.perry-trace/llvm/callback_only_ts.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/callback-only/.perry-trace/llvm/callback_only_ts.ll",
+      "sha256": "77de5d9897ffd9136ff2c90528457fd1836cca8d5d45859ce1f7a15459aa3637"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-shadow/access-worker/.perry-trace/llvm/access_worker_ts.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-shadow/access-worker/.perry-trace/llvm/access_worker_ts.ll",
+      "sha256": "07f6b6498e35f909fc85c3670539f1a582723158a81c2bdd210e3c868aec2add"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-changing-ir-shadow/.perry-trace/llvm/changing_options_worker_ts.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-changing-ir-shadow/.perry-trace/llvm/changing_options_worker_ts.ll",
+      "sha256": "41c94f2eb4ebd9afd04754abdab3850611627688519a25d8768068737f6928ad"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-changing-ir-native/.perry-trace/llvm/changing_options_worker_ts.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-changing-ir-native/.perry-trace/llvm/changing_options_worker_ts.ll",
+      "sha256": "6dc46fa8a272f130ecf98116d39e85409396ddd0374c7536dddb6f811cf00757"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-zero-ir-native/.perry-trace/llvm/test_json_zero_spacing_ts.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-zero-ir-native/.perry-trace/llvm/test_json_zero_spacing_ts.ll",
+      "sha256": "427c9a83027574c4461a503fcaab0a2608fbb83bdf1699973a2bcfe8a0d096e0"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/access-worker/rewrite-0.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/access-worker/rewrite-0.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/access-worker/compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/access-worker/compile.log",
+      "sha256": "0e519da898b2f212957d52bd9e042b7bcad111bb5b6ebd00d47ac2282390f53f"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/access-worker/worker.o",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/access-worker/worker.o",
+      "sha256": "f254101175a846f8d526ca85103adb6de981e0b41e0e484f3e0a60f948e35818"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/callback-only/rewrite-0.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/callback-only/rewrite-0.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/callback-only/compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/callback-only/compile.log",
+      "sha256": "b3258ac91cbac971f81c1bb4cb72a1a31200aebe458b1bc6d05accf71d1a34c8"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/callback-only/worker.o",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/callback-only/worker.o",
+      "sha256": "462dbeb33d6f8851abf74488ded6a5a038c3e550926b2253faa53a1c683d8de1"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/test_json_cached_reads/rewrite-0.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/test_json_cached_reads/rewrite-0.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/test_json_cached_reads/compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/test_json_cached_reads/compile.log",
+      "sha256": "207b6a41c74376bcef8f400d576915e011f624cb615a9dfcc417a6c0a1a40979"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/test_json_cached_reads/worker.o",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/test_json_cached_reads/worker.o",
+      "sha256": "1012306eb033f8b43e1b25aee960f84307e98cce2ab9471676d7b4620625b896"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/test_json_source_length/rewrite-0.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/test_json_source_length/rewrite-0.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/test_json_source_length/compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/test_json_source_length/compile.log",
+      "sha256": "b561de9e3359b6ef5f672a1815c38021f97d3ce39a52925806d18cbbd6cfb4e1"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/test_json_source_length/worker.o",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/test_json_source_length/worker.o",
+      "sha256": "9acc2ae0d9786f1330efd820d9cdf5eaa6042d68a49da472145d2afa2bc2cad3"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/options-worker/rewrite-0.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/options-worker/rewrite-0.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/options-worker/compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/options-worker/compile.log",
+      "sha256": "a00c0ad60f313ffbe765f14a485b586384fc928b7b6bd8c403301404cc713ef5"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/options-worker/worker.o",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/options-worker/worker.o",
+      "sha256": "f25e0184b7348b0c49297064430f7938d911663721e8ca5c7ccba7c9554f958f"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/test_json_template_capture/rewrite-0.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/test_json_template_capture/rewrite-0.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/test_json_template_capture/compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/test_json_template_capture/compile.log",
+      "sha256": "39e0679bccf2dd834affd4ffa5ee10ce969c07c03635a02b6cec0a8819f51123"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/test_json_template_capture/worker.o",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/test_json_template_capture/worker.o",
+      "sha256": "6ca5eee3aa558315a20a2450b93587279fd85f3475e6e78ba1c3b4c492b2ffc4"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/test_json_cached_construction/rewrite-0.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/test_json_cached_construction/rewrite-0.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/test_json_cached_construction/compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/test_json_cached_construction/compile.log",
+      "sha256": "579f9d2cca7455b30c0e510f63b0631afbc0fac20657e75139e9ec3b13609ff6"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/test_json_cached_construction/worker.o",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/test_json_cached_construction/worker.o",
+      "sha256": "c1231c97608889b5790735858873bda932e3ee7ed9f8ec1c293b02c6a756d0f8"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/prior-entry/rewrite-0.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/prior-entry/rewrite-0.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/prior-entry/compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/prior-entry/compile.log",
+      "sha256": "d40ae13412a1cb7571ed50f46e5bdefbc5cb65f0fe2b37312f2a2f80ead70114"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/prior-entry/worker.o",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/prior-entry/worker.o",
+      "sha256": "578466e28aa1e9837406f037983a68cd58f4748b8a95ff5b31c98e56f4a8b02b"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/worker/rewrite-0.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/worker/rewrite-0.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/worker/compile.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/worker/compile.log",
+      "sha256": "ba60cdca15d166c637e70cdbf5b3dc056e2f3e247d69f11b0c5c58c69cd2a7db"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/worker/worker.o",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/worker/worker.o",
+      "sha256": "b4b4f4082a942022854cd87d256ef356ed0ff2b6320486282ef5bec4a7d42bde"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/worker/.perry-trace/llvm/worker_ts.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/worker/.perry-trace/llvm/worker_ts.ll",
+      "sha256": "6f04c8ac7a9408ad14932d498e57b6cbd8215997345da13f5d5c25932e7625cb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/prior-entry/.perry-trace/llvm/prior_entry_ts.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/prior-entry/.perry-trace/llvm/prior_entry_ts.ll",
+      "sha256": "8077eb6cee794e9c857500125018ff127f18b0f1d187caf79dc51f36cc24e43a"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/test_json_cached_construction/.perry-trace/llvm/test_json_cached_construction_ts.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/test_json_cached_construction/.perry-trace/llvm/test_json_cached_construction_ts.ll",
+      "sha256": "97cb6b183b9e4e8e1c8d87fabf2a0f009e5be97a52686633294ef083cee8072a"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/test_json_template_capture/.perry-trace/llvm/test_json_template_capture_ts.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/test_json_template_capture/.perry-trace/llvm/test_json_template_capture_ts.ll",
+      "sha256": "66327336cb51ae8a5b9dc2f013695d4c2a78f9473e3b34f4d8752b1b5731b25a"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/options-worker/.perry-trace/llvm/options_worker_ts.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/options-worker/.perry-trace/llvm/options_worker_ts.ll",
+      "sha256": "602e8a19f1d5b047e056d5fc85395daafc24aa8f9ab71011b4c17ae3b6234d7b"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/test_json_source_length/.perry-trace/llvm/test_json_source_length_ts.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/test_json_source_length/.perry-trace/llvm/test_json_source_length_ts.ll",
+      "sha256": "83b73c072cbbca1a31acbeeaf5a91bb2a305e303e05cd4466dd68794d4bdcb52"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/test_json_cached_reads/.perry-trace/llvm/test_json_cached_reads_ts.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/test_json_cached_reads/.perry-trace/llvm/test_json_cached_reads_ts.ll",
+      "sha256": "96bfa878a9e33d7beed072e8f57f3f259150a1b07bb6eb88fc6fdbdd4eb83cdf"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/callback-only/.perry-trace/llvm/callback_only_ts.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/callback-only/.perry-trace/llvm/callback_only_ts.ll",
+      "sha256": "2d985a40ef89350fbcebd0e3189ea06a271aae20305bc01a5378b70a767bf7f1"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-ir-native/access-worker/.perry-trace/llvm/access_worker_ts.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-ir-native/access-worker/.perry-trace/llvm/access_worker_ts.ll",
+      "sha256": "74027b84ff2fa008465587fc74b299427d4c62fcf347c17392713790845a1531"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-retained-ir-shadow/.perry-trace/llvm/retained_zero_worker_ts.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-retained-ir-shadow/.perry-trace/llvm/retained_zero_worker_ts.ll",
+      "sha256": "e004e8e3303d69850a581ef26185a89115d73b3e1926b7f9836562cdb29967ec"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-retained-ir-native/.perry-trace/llvm/retained_zero_worker_ts.ll",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/main-retained-ir-native/.perry-trace/llvm/retained_zero_worker_ts.ll",
+      "sha256": "52e307cfac9ab598f756c0182b1c45ed62a528d81a86739316c928818e1a89eb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/main-reuse-provenance.json",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/reference-parent-reuse-provenance.json",
+      "sha256": "c582152bf817426f852b70e083d0a88f80a44060406ab992f7f1fa93ef606f89"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/validate-and-build.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/validate-and-build.py",
+      "sha256": "d87f459f15299e420ab7fd1801bfbf84f819f3d5bc66eae67dcfaac0fbeaa585"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/bootstrap-unused-validate-and-build.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/bootstrap-unused-validate-and-build.py",
+      "sha256": "639a489044d315b7928ec3b90572766f630974323c6833e86825306a8f0907e8"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/measure-changing-options.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/measure-changing-options.py",
+      "sha256": "bf3c200ba08ee6d1f90c0be241b6af2045db6881a107ddae44188aa0540303d3"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/analyze-zero-retained.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/analyze-zero-retained.py",
+      "sha256": "695f483ec60c1792529ce01cced55760958e3265a7133a95a72cd8f8fc7330c2"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/analyze-regression-recheck.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/analyze-regression-recheck.py",
+      "sha256": "b05572ace82e8a616f0bd46d3bb1028253f7dc606fd03b8b0170ddfe2efcc689"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/run-options.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/run-options.py",
+      "sha256": "698166c0014b837ea1ac3edbe273fd7b9c2b406a53e970760f2bd36589b571a8"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/validate-zero.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/validate-zero.py",
+      "sha256": "e0e5d53197e063b9c664107eeedd318054c2b8900220b27482e550f506616260"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/analyze-large-options.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/analyze-large-options.py",
+      "sha256": "4f3d4e98d864b06fa00f922cd788f49c45ee81b34f738ce74f7afaccaedda10f"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/analyze-changing-options.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/analyze-changing-options.py",
+      "sha256": "dcad361f6e2ecd5c3b1933638b64314cc25d1986424ec3a1b20e7d81c62d1a29"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/analyze-rotating.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/analyze-rotating.py",
+      "sha256": "fd2e84685baf7e6525dd96e7187dc4595db523740aa69e7944a56b2c9f574423"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/analyze-stringify-recheck.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/analyze-stringify-recheck.py",
+      "sha256": "52d1f788e2a3cc91eae4bcd3bcc4d51837750479848ce256842f669f4f492e17"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/probe-lazy-baseline.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/probe-lazy-baseline.py",
+      "sha256": "da65ba2bcc65be99759037329865c9be288b1f8cd09130669f15562fa45b4ccb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/copy-frozen-build.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/copy-frozen-build.py",
+      "sha256": "d6dbe7cb0766acdf3069d118929a206ae445578e4f558c3141e0a53dfd72d6a3"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/measure-small-options-recheck.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/measure-small-options-recheck.py",
+      "sha256": "23611281efed36335a0b5431af5ab3770c07abbb2028fce756ce9be3ed3ce6c3"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/measure-full.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/measure-full.py",
+      "sha256": "f9ea6d91a552375018d9c9c36d0a55cc7c03af930bf546b279d50cdae92f15c4"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/run-candidate-validation.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/run-candidate-validation.py",
+      "sha256": "cadcba87c0282e393804a301fb871a31776bd65ed2fa0073e4e9e135613f9265"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/measure-stringify-recheck.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/measure-stringify-recheck.py",
+      "sha256": "e43f1dbfd33dec2c20805de7a9d4c05e37f74c0ac490a05957fe8a6cba49e1fc"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/measure-regression-recheck.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/measure-regression-recheck.py",
+      "sha256": "e0351b4132f6796e99606bebd31dc43c1648176d7117a78e4fd83c1069749199"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/check-roots.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/check-roots.py",
+      "sha256": "d6984fee9a9e0a71226fa456fe09763062763f21844b45f1381d99378237e99e"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/complete-candidate-validation.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/complete-candidate-validation.py",
+      "sha256": "39e6d24e94fc3abb3344093a69792f1e07bc4c2e9c17e678fa564c3063ca3849"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/run-after-build.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/run-after-build.py",
+      "sha256": "895a8c08de36a1815eed0cc505284c695fba312a780555f5e67c94420135c95d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/compare-emitters.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/compare-emitters.py",
+      "sha256": "427a9fd327e172656e00d32a9a769bb2773a8c80106fd73c124aadeefa7eebeb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/run-lint.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/run-lint.py",
+      "sha256": "b228808035eba5472e845e534d7799d2222ee142cef0a273cb941810fdfd53f8"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/build-release.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/build-release.py",
+      "sha256": "f104da4b90eda0c4f2f28ef311a6bdd8b8cb4afc27c65a6d6569285b2955d1fe"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/analyze-small-options-recheck.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/analyze-small-options-recheck.py",
+      "sha256": "0091b880041c1ed75f875ee8a2e0a060a73fad67c3b2625d3127e55ae7b2693c"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/analyze-small-rotating-recheck.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/analyze-small-rotating-recheck.py",
+      "sha256": "0fba6080126b2157d699559f9476299a23b866ffecf511d272d12a9a32a5af00"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/build-changing-worker.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/build-changing-worker.py",
+      "sha256": "9f1ff996614ff4c01a44b461487ab07ab40f2599d3e41791795285dd039c8c05"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/validate-fraction.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/validate-fraction.py",
+      "sha256": "50d439538133260244b63d569e3c2a72e85cabeb7d1e780920c14f2b33a7be5a"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/run-changing-options.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/run-changing-options.py",
+      "sha256": "4db8d68ed19d3d1b505d59b37bf0151d7fb2fda733146cca23e93228a99190c4"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/analyze-retained.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/analyze-retained.py",
+      "sha256": "77fb29d605b62a49c66e03b60d5c0bf15accb8932880cb3068805da937f60889"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/run-zero-retained.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/run-zero-retained.py",
+      "sha256": "2d4a5a83fb29e91d1364f54e8948da58c8cec54f08b3545c1b19a14e462d197d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/run-focus.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/run-focus.py",
+      "sha256": "052f3115e095de5308e230ac6332f9210484575514aa8049c1ade124975bf060"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/build-workers.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/build-workers.py",
+      "sha256": "8ec388464aebad1d9d3b3a94cc332880a40a1df82040369f25e423cbcd15189a"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/validate-getter-baseline.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/validate-getter-baseline.py",
+      "sha256": "e8a9aa55d90dba9c874b90f6cdb8219406e35fc6b8cb68f7a261927b15da30fc"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/archive-results.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/archive-results.py",
+      "sha256": "fccc176edcee8d4df388f31248cd68837418a438191a3b183f0c497a3fcd97ee"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/measure-zero-retained.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/measure-zero-retained.py",
+      "sha256": "de8de8302b063dd1c5a394ea8f0fbb5c339c70f00288fbc462f8acbfad4dc0f3"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/analyze-full.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/analyze-full.py",
+      "sha256": "3e1c44a315d5009ee31d5a1c5fa58f9384ccad261acb457d016a5b0a575926a3"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/inspect-disassembly.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/inspect-disassembly.py",
+      "sha256": "955bc47675072c38fc35370dd68b7fa39eeeefde1d94661e4546dc3eda1533e1"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/measure-large-options.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/measure-large-options.py",
+      "sha256": "56f414be35c07845d760bf3f4efabe7c3892a7e24f698acd10ac10bf408fe9ce"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/validate-changing-options.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/validate-changing-options.py",
+      "sha256": "2e65bdbd42801154589a417a920a461e6225ade84c6fd0c5cf4230155808a61c"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/check-changing-roots.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/check-changing-roots.py",
+      "sha256": "0d804863d6b7200d9367791084a16d930f86ab548fea1b43e7e3d9c32125350c"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/compare-json-entry-disassembly.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/compare-json-entry-disassembly.py",
+      "sha256": "91a0dea93b67f020ebf10168173976d4784c85666996faf9acddd27e79720ba0"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/analyze-large-recheck-options.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/analyze-large-recheck-options.py",
+      "sha256": "0c67c0e8abbc57c33e35ec92f57b24c4019a6518105b46300102bc799a4daab4"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/measure-supplement.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/measure-supplement.py",
+      "sha256": "b8a9283a8f493c05fefbdb8d8d781dc02f0a637864c7d6cda90e9e34e16a6c77"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/build-retained-zero-worker.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/build-retained-zero-worker.py",
+      "sha256": "3eaa34802d18e6933535ff8c225744a7dc24defbefa597567b17c392398da562"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/run-rotating.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/run-rotating.py",
+      "sha256": "ba31db533cc22a82ce8f9daa65a4a4134bd6aa9608ecc3f340cc2022098ad316"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/validate-fixtures.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/validate-fixtures.py",
+      "sha256": "a789fbdf1a23ab3f247235e0a909464b0f0869a042497867f5792dcf7ce41b80"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/check-emitter-roots.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/check-emitter-roots.py",
+      "sha256": "76634a0dd4128f6d8bba5bcfd711ad67b92aeb3914d23740e2d1ba3e0854df22"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/run-access.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/run-access.py",
+      "sha256": "66fe9672332f5aea8d00f06f35d378ab082f88b44afb2f16f51a4a32603afb8c"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/measure-access-recheck.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/measure-access-recheck.py",
+      "sha256": "443358a5d37d49b6ab504197f21e441f648572e84da2d1aa01a09e50a8de9761"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/validate-retained-zero.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/validate-retained-zero.py",
+      "sha256": "db7631a047e0b67c008a45a61c8ca08588a089512e35a8d84d62e97930f78fc0"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/validate-options.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/validate-options.py",
+      "sha256": "e870bfe1145fa558e47f0a9af1fde3efb18e30458f679a778f55f4b0c9d29cdc"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/measure-small-rotating-recheck.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/measure-small-rotating-recheck.py",
+      "sha256": "75c692fcb1a6e8cfc86935712ac34742919093364212a5702d7cd6759056f6c7"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/check-retained-roots.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/check-retained-roots.py",
+      "sha256": "5b6dc49229a667b21b5afe42806779ed44054d8eb8f013f941a8b9948a79f151"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/run-retained.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/run-retained.py",
+      "sha256": "6aca9bb16bca7d1ccd28baa95a41bae00d4b9ff875e58788a5570c46bf8493da"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/stage.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/stage.py",
+      "sha256": "a9adf0402058b7328fb8a8f37476e6ce45a7287e40650c6c3d58d1cc22c13683"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/bootstrap-unused-build-release.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/bootstrap-unused-build-release.py",
+      "sha256": "f104da4b90eda0c4f2f28ef311a6bdd8b8cb4afc27c65a6d6569285b2955d1fe"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/bootstrap-unused-run-lint.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/bootstrap-unused-run-lint.py",
+      "sha256": "b228808035eba5472e845e534d7799d2222ee142cef0a273cb941810fdfd53f8"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/analyze-access-recheck.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/analyze-access-recheck.py",
+      "sha256": "62cc0d5c42c4072b7e0297a7c5e0708a8127154974416a4b2237c843577b9a05"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/validate-emitters.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/validate-emitters.py",
+      "sha256": "7c8b94fa0aa93788d130c994a70af921d102aa2a2c08acb87c3e2015df5b636e"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/analyze-extras.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/analyze-extras.py",
+      "sha256": "b747bf477e1a0b4308ad6ab68884f151786da4ae6ec4069512ad1836d646728d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/check-zero-roots.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/check-zero-roots.py",
+      "sha256": "18e78fdcc00cd2bd6f8d6318ea5f68cd0a17a82228fbdc2bf252d49734f2e329"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/measure-large-recheck-options.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/measure-large-recheck-options.py",
+      "sha256": "682583119410a68efc5953086db2dbc66fe1ccf54e2def559ed802da5bbf1b35"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/compare-roots.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/compare-roots.py",
+      "sha256": "87500a5860178415e50257b5afdb93f3a3d3733c639ecbd92e3e764c68b9ebe7"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/retained-zero-worker.ts",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/retained-zero-worker.ts",
+      "sha256": "5ead488614d020e33d7711aeb2d9d805426ff46c9283101c1f659b1d93f8d03c"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/fraction-baseline.json",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/fraction-baseline.json",
+      "sha256": "41475efabdbe458358432bdba58a7015a523a7e37dc760dc631d8f183a18dd7f"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/options-worker.js",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/options-worker.js",
+      "sha256": "a8615b823b58b3f437bd3cb4c6418bc7279a767f93a082f1f206a49aee0cbaa9"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/changing-options-worker.ts",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/changing-options-worker.ts",
+      "sha256": "5d710b4446795b37edc6f2792fd7e6aeda63d99d17cceaff199d8d27f212a87e"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/changing-options-worker.js",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/changing-options-worker.js",
+      "sha256": "c093c22b6cf607d16dce76b3b2864bdd0dd62afdd9c2db100ed1b82a44fa0b00"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/retained-zero-worker.js",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/retained-zero-worker.js",
+      "sha256": "5787baa8171ceba117dfd41fb4c7b25a77fcb8471d6b18bd5aeec41d5f7388bf"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/options-worker.ts",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/options-worker.ts",
+      "sha256": "d08c6a916c18197b889a0de4a3777632ad307275752b85c5abd75daf4d6ad85d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/test_json_zero_spacing.ts",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/test_json_zero_spacing.ts",
+      "sha256": "9cca6718bfd28571f0e3ab9e677d1b11f9bf1aa250335bf3511ebf5e021e0797"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/full-cases.json",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/full-cases.json",
+      "sha256": "8728ac72d0fc35a0cf9b9131392b2ffbaa3fc47b38666e2bf0908d33efe6999c"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/harness/run_dispatch_focus.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/harness/run_dispatch_focus.py",
+      "sha256": "100ba3e1bd5c0cd451d1a3528f95b5f4b8d0ff2f4771796ab8598b36a46fbcc4"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/harness/rotating-worker.ts",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/harness/rotating-worker.ts",
+      "sha256": "7541897acb2c7c35c0f5e762f8b2f28b9783feb26a42db107c1c4eb3af644b24"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/harness/worker.js",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/harness/worker.js",
+      "sha256": "55c11d12296f896212d6abd76bcf8d551d0590b0ad24b262018b7a707369a2f4"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/harness/with_lock.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/harness/with_lock.py",
+      "sha256": "443df89997be22f22f16b475d76c45ea2b560ab9550e4e6c028777e1e3b74b49"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/harness/access-worker.ts",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/harness/access-worker.ts",
+      "sha256": "dba0240ef6441a07657e664354982a04045c036e53f65c1d06df62d55c73be67"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/harness/run_access.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/harness/run_access.py",
+      "sha256": "da1a80e558d57462574397776702ac47a1a623de6e73255cc04e46746f5b5b67"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/harness/access-worker.js",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/harness/access-worker.js",
+      "sha256": "bfe066c9d1065102d7b0ec9f7b2909d2faae8935b104709865308422d8489957"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/harness/run_regression_focus.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/harness/run_regression_focus.py",
+      "sha256": "0607798d0b675af6c99977f6a821e29af69d6fdbdf16e6144d50a40d096c7270"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/harness/rotating-worker.js",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/harness/rotating-worker.js",
+      "sha256": "f163f68f3d4c1d13720403ffb96d0afe4306ec0723f2015d3a66ab0c77fa56c8"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/harness/worker.ts",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/harness/worker.ts",
+      "sha256": "f3c42ec9f04fdb9ba84dc3cf50dc59f18685540033807f3db3a7f75c08a85d39"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-main-probes.json",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-main-probes.json",
+      "sha256": "892b3441165d372d29cdfd92b963a251f0ad80833d62f07ab393e110bab51f81"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-2-canonical-pretty-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-2-canonical-pretty-node.stdout",
+      "sha256": "e73d70b55aa76fc4793d2312c488c9b3aecad351fc8e96d0a9e74e2e0aaa05ab"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-180-canonical-zero.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-180-canonical-zero.stdout",
+      "sha256": "9160d4be34c8695bd172a76c7c7966587ea5a4d991ad22c87b2b91af54aa9ebb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-180-whitespace-true-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-180-whitespace-true-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-180-canonical-pretty-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-180-canonical-pretty-node.stdout",
+      "sha256": "4d2b0a3537539624d14919e8032111b8ae252ea5e38b20cd394fe6d52d343b9d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-180-duplicate-zero.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-180-duplicate-zero.stdout",
+      "sha256": "9160d4be34c8695bd172a76c7c7966587ea5a4d991ad22c87b2b91af54aa9ebb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-2-whitespace-zero-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-2-whitespace-zero-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-2-canonical-plain-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-2-canonical-plain-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-180-canonical-pretty.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-180-canonical-pretty.stdout",
+      "sha256": "4d2b0a3537539624d14919e8032111b8ae252ea5e38b20cd394fe6d52d343b9d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-180-whitespace-pretty.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-180-whitespace-pretty.stdout",
+      "sha256": "4d2b0a3537539624d14919e8032111b8ae252ea5e38b20cd394fe6d52d343b9d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-180-canonical-true-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-180-canonical-true-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-180-whitespace-true.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-180-whitespace-true.stdout",
+      "sha256": "9160d4be34c8695bd172a76c7c7966587ea5a4d991ad22c87b2b91af54aa9ebb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-180-duplicate-plain-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-180-duplicate-plain-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-2-whitespace-zero.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-2-whitespace-zero.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-2-duplicate-true.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-2-duplicate-true.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-2-whitespace-plain.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-2-whitespace-plain.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-2-duplicate-true-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-2-duplicate-true-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-180-duplicate-plain.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-180-duplicate-plain.stdout",
+      "sha256": "31b2d87e4f2fb4e517bcbbeb15065422f322378dcd6c984119890ee2cd781193"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-2-canonical-true.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-2-canonical-true.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-180-duplicate-true-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-180-duplicate-true-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-2-canonical-plain.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-2-canonical-plain.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-2-canonical-true-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-2-canonical-true-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-2-duplicate-pretty.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-2-duplicate-pretty.stdout",
+      "sha256": "e73d70b55aa76fc4793d2312c488c9b3aecad351fc8e96d0a9e74e2e0aaa05ab"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-2-duplicate-pretty-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-2-duplicate-pretty-node.stdout",
+      "sha256": "e73d70b55aa76fc4793d2312c488c9b3aecad351fc8e96d0a9e74e2e0aaa05ab"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-180-canonical-true.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-180-canonical-true.stdout",
+      "sha256": "9160d4be34c8695bd172a76c7c7966587ea5a4d991ad22c87b2b91af54aa9ebb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-2-whitespace-true-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-2-whitespace-true-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-2-canonical-pretty.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-2-canonical-pretty.stdout",
+      "sha256": "e73d70b55aa76fc4793d2312c488c9b3aecad351fc8e96d0a9e74e2e0aaa05ab"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-2-whitespace-pretty-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-2-whitespace-pretty-node.stdout",
+      "sha256": "e73d70b55aa76fc4793d2312c488c9b3aecad351fc8e96d0a9e74e2e0aaa05ab"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-180-whitespace-zero-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-180-whitespace-zero-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-180-duplicate-true.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-180-duplicate-true.stdout",
+      "sha256": "9160d4be34c8695bd172a76c7c7966587ea5a4d991ad22c87b2b91af54aa9ebb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-180-duplicate-pretty-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-180-duplicate-pretty-node.stdout",
+      "sha256": "4d2b0a3537539624d14919e8032111b8ae252ea5e38b20cd394fe6d52d343b9d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-180-canonical-plain-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-180-canonical-plain-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-180-whitespace-zero.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-180-whitespace-zero.stdout",
+      "sha256": "9160d4be34c8695bd172a76c7c7966587ea5a4d991ad22c87b2b91af54aa9ebb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-2-whitespace-pretty.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-2-whitespace-pretty.stdout",
+      "sha256": "e73d70b55aa76fc4793d2312c488c9b3aecad351fc8e96d0a9e74e2e0aaa05ab"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-2-duplicate-zero.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-2-duplicate-zero.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-2-duplicate-zero-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-2-duplicate-zero-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-2-duplicate-plain-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-2-duplicate-plain-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-2-whitespace-true.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-2-whitespace-true.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-180-whitespace-pretty-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-180-whitespace-pretty-node.stdout",
+      "sha256": "4d2b0a3537539624d14919e8032111b8ae252ea5e38b20cd394fe6d52d343b9d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-180-canonical-zero-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-180-canonical-zero-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-180-whitespace-plain-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-180-whitespace-plain-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-180-whitespace-plain.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-180-whitespace-plain.stdout",
+      "sha256": "62f18db77ac9f5eca2e0c05b7f563f02ed8e171f06ec05f6424403aa2b72a87e"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-180-duplicate-pretty.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-180-duplicate-pretty.stdout",
+      "sha256": "4d2b0a3537539624d14919e8032111b8ae252ea5e38b20cd394fe6d52d343b9d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-2-duplicate-plain.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-2-duplicate-plain.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-180-canonical-plain.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-180-canonical-plain.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-2-canonical-zero.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-2-canonical-zero.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-2-canonical-zero-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-2-canonical-zero-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-2-whitespace-plain-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-2-whitespace-plain-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/lazy-180-duplicate-zero-node.stdout",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lazy-180-duplicate-zero-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/stringify-token-proof-r31/getter-baseline-comparison.json",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/getter-baseline-parent-original.json",
+      "sha256": "98f361ae39db312ec395d74ee1f32ef5abb41b1bff4e439e749c6acf5b44b6b6"
+    }
+  ]
+}

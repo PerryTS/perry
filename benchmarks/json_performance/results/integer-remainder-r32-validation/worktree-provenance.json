@@ -1,0 +1,6 @@
+{
+  "source_commit": "c695f6509ed85999894a2f34418f057f32bcb363",
+  "actual_build_worktree": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29",
+  "shared_build_cache": "/Users/amlug/projects/perry/json-merged-pr10022/target",
+  "note": "R32 independent from R31: based on measured R26 a510 evidence. Changes only dynamic remainder and a focused TS fixture. R31 production and validation terminal before this build. No GC/JSON changes."
+}

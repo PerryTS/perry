@@ -1,0 +1,3 @@
+Speed up dynamic numeric remainder for exact nonnegative 32-bit dividends and positive 32-bit divisors. Array-index workloads avoid floating-point remainder while fractions, signed zero, non-finite numbers, tagged operands, coercion and BigInt keep their existing behavior.
+
+Controlled M1 comparisons against the prior JSON runtime show 33.6% faster random access and 23.9% faster sequential access on the 1 MB fixture, with 12.9% faster field walks. The full parse/stringify, option and rotating-input controls show no separated regression. Full CPU/RSS samples, test limitations and build provenance are recorded in `benchmarks/json_performance/INTEGER_REMAINDER_R32.md`.

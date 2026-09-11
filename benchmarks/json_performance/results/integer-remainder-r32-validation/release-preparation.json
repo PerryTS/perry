@@ -1,0 +1,17 @@
+{
+  "measured_source_commit": "c695f6509ed85999894a2f34418f057f32bcb363",
+  "release_base": "b70652ee439c90fb70642e3bd38e5ac33ce798ad",
+  "worktree": "/Users/amlug/projects/perry/json-integer-remainder-ready",
+  "branch": "codex/json-integer-remainder",
+  "files": [
+    {
+      "path": "crates/perry-runtime/src/value/dynamic_arith.rs",
+      "sha256": "3ed03b3869d7a99f621afb157e623d82abfab4315c6acdb16c2b974ca23e9c11"
+    },
+    {
+      "path": "test-files/test_json_index_remainder.ts",
+      "sha256": "1d4fb1da83e58ff1596bb6468f29852d4801a0197740dee2a574dce47769da1a"
+    }
+  ],
+  "note": "Prepared release metadata and two byte-identical implementation/test files. Uncommitted/unpushed pending full measurement; metadata production build not run. The parked unqualified R31 release tree also has1536 locally and must be advanced if eventually promoted."
+}

@@ -1,0 +1,1 @@
+The six archived verify.jsonl files total429records: access12, independentaccess12, full250, options35, rotating100, escapedrecheck20. Access timings independently checkeveryenginechecksum againstthose12Nodeoracles perwindow; they do not emitfiveverifyrecords percase. An initial unpublished prose estimate525was corrected fromthe actual indexed files beforecommit.

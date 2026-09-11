@@ -1,0 +1,5 @@
+{
+  "source_commit": "c695f6509ed85999894a2f34418f057f32bcb363",
+  "note": "The unit controller exited at its explicit hold file before any production build began. JSON295 and actual arithmetic5 passed. After terminal lint review, production starts directly with the same clean frozen source; no test rerun or artifact reuse.",
+  "controller_log": "validate-and-build.log"
+}

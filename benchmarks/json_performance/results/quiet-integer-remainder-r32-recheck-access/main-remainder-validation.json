@@ -1,0 +1,142 @@
+{
+  "arm": "main",
+  "source_commit": "3aac4d6335da54abeeed73df842decbbe6dd5d71",
+  "files": {
+    "test-files/test_json_index_remainder.ts": "1d4fb1da83e58ff1596bb6468f29852d4801a0197740dee2a574dce47769da1a",
+    "benchmarks/json_performance/.work/integer-remainder-r32/frozen-main/perry": "794b7dfa67f5f3509f96ddbeeff3cf9e70c1bb4efc0383cd467f90bf2d662040",
+    "benchmarks/json_performance/.work/integer-remainder-r32/frozen-main/libperry_runtime.a": "48972667fc2bf53e57c2776eb8741e32e41d1da752017abbe2aa512325af23bb",
+    "benchmarks/json_performance/.work/integer-remainder-r32/frozen-main/libperry_stdlib.a": "1b343ca0329e233c477688597c452ac9750100b89675ec012336c96a9632917c"
+  },
+  "compiles": [
+    {
+      "command": [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/integer-remainder-r32/frozen-main/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/test-files/test_json_index_remainder.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/integer-remainder-r32/main-remainder-native"
+      ],
+      "env_overrides": {
+        "PERRY_RUNTIME_DIR": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/integer-remainder-r32/frozen-main",
+        "PERRY_RS4GC": "1",
+        "PERRY_GC_MOVING_LOOP_POLLS": "1"
+      },
+      "binary_sha256": "9c761a86f8134bc23b9b16bb703f35c54e90c0dc41d6022e24c2b4b7b2b5e56a"
+    },
+    {
+      "command": [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/integer-remainder-r32/frozen-main/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/test-files/test_json_index_remainder.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/integer-remainder-r32/main-remainder-shadow"
+      ],
+      "env_overrides": {
+        "PERRY_RUNTIME_DIR": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/integer-remainder-r32/frozen-main",
+        "PERRY_RS4GC": "0",
+        "PERRY_GC_MOVING_LOOP_POLLS": "1"
+      },
+      "binary_sha256": "201fdedf39118cb909d37ff706a76d7bbe1f817aa41851609c8e2a448c729bec"
+    }
+  ],
+  "rows": [
+    {
+      "arm": "main",
+      "roots": "native",
+      "parser": "auto",
+      "mode": "normal",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0,
+      "env_overrides": {},
+      "stdout_sha256": "dae358e431c043a4cea9aa6ee7855122d49409decc95340b81c98da856be7327",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "arm": "main",
+      "roots": "native",
+      "parser": "auto",
+      "mode": "scheduled",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 72,
+      "moved_objects": 25,
+      "env_overrides": {
+        "PERRY_GC_SCHEDULE_SEED": "10022",
+        "PERRY_GC_SCHEDULE_RATE": "0.1",
+        "PERRY_GC_SCHEDULE_ALLOC_KB": "0",
+        "PERRY_GC_PROTECT_FROMSPACE": "1",
+        "PERRY_GC_DIAG": "1"
+      },
+      "stdout_sha256": "dae358e431c043a4cea9aa6ee7855122d49409decc95340b81c98da856be7327",
+      "stderr_sha256": "f2e6316a101caec09cbefa8a1a4e5400c6acbff9385f62b1449150525043b7e8"
+    },
+    {
+      "arm": "main",
+      "roots": "native",
+      "parser": "auto",
+      "mode": "fullgc",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0,
+      "env_overrides": {
+        "PERRY_GEN_GC": "0"
+      },
+      "stdout_sha256": "dae358e431c043a4cea9aa6ee7855122d49409decc95340b81c98da856be7327",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "arm": "main",
+      "roots": "shadow",
+      "parser": "auto",
+      "mode": "normal",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0,
+      "env_overrides": {},
+      "stdout_sha256": "dae358e431c043a4cea9aa6ee7855122d49409decc95340b81c98da856be7327",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "arm": "main",
+      "roots": "shadow",
+      "parser": "auto",
+      "mode": "scheduled",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 72,
+      "moved_objects": 25,
+      "env_overrides": {
+        "PERRY_GC_SCHEDULE_SEED": "10022",
+        "PERRY_GC_SCHEDULE_RATE": "0.1",
+        "PERRY_GC_SCHEDULE_ALLOC_KB": "0",
+        "PERRY_GC_PROTECT_FROMSPACE": "1",
+        "PERRY_GC_DIAG": "1"
+      },
+      "stdout_sha256": "dae358e431c043a4cea9aa6ee7855122d49409decc95340b81c98da856be7327",
+      "stderr_sha256": "1a084a1e26f3b749eaf61d8363309a9dcad7034762c37a28540943b3301aa2f8"
+    },
+    {
+      "arm": "main",
+      "roots": "shadow",
+      "parser": "auto",
+      "mode": "fullgc",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0,
+      "env_overrides": {
+        "PERRY_GEN_GC": "0"
+      },
+      "stdout_sha256": "dae358e431c043a4cea9aa6ee7855122d49409decc95340b81c98da856be7327",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}
