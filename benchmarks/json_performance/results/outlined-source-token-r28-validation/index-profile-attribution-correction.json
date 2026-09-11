@@ -1,0 +1,17 @@
+{
+  "evidence": {
+    "benchmarks/json_performance/.work/trusted-materialized-read-r26/candidate-packed-index-get.s": "6557ee6914a281e1fb6a2a11399b44da09d03af0540a66edfef9fc17487ee9b9",
+    "benchmarks/json_performance/results/quiet-outlined-cached-read-r24-access-profiles/records_array_1m-fields-candidate.sample.txt": "ed33d4cb4bd04cebe22916e24c249436e31bce7c2836b81a92a57b6633a68d6e"
+  },
+  "static_index_instructions": [
+    "frintz",
+    "fcmp",
+    "fcvtzu"
+  ],
+  "sampled_call_chain": [
+    "perry_fn_access_worker_ts__run$spec_b_b",
+    "js_dynamic_mod",
+    "fmod"
+  ],
+  "production_change": false
+}

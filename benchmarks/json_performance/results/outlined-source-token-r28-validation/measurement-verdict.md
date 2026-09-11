@@ -1,0 +1,5 @@
+Not promoted. The first R28 screen reproduces a separated small-record parse regression: +1.817% (494.702 to 503.691 ns), all 11 paired repetitions slower. Same-input parse (+0.024%) and selection (-0.042%) overlap. Peak process RSS medians change by -80 KiB, -64 KiB and -48 KiB respectively; these are footprint observations, not evidence of lower allocation volume.
+
+The helper reduced parse_string_value from R27's 307 static instructions to 255, still above R26's 239. This did not repair the regression; static instruction count does not establish the cause. R27's large-token gains cannot be assigned to this different build. The other 15-case rotating screen, full 50-case matrix, options, access and retained-output timing controls were not run because the targeted small-object repair failed.
+
+One quiet terminal window was archived first: 132 timed trials, 20 complete-output verification records and 12 calibration trials. This source remains an experimental branch with no PR. The next parser attempt must isolate large-token work from the small-object path.

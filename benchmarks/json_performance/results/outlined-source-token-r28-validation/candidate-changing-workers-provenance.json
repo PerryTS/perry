@@ -1,0 +1,35 @@
+[
+  {
+    "worker": "changing-options",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-source-token-r28/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/zero-spacing-r25/changing-options-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-source-token-r28/candidate-changing-options.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-source-token-r28/candidate-changing-options.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-source-token-r28/frozen-build/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-source-token-r28/candidate-changing-options"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/zero-spacing-r25/changing-options-worker.ts": "5d710b4446795b37edc6f2792fd7e6aeda63d99d17cceaff199d8d27f212a87e",
+      "benchmarks/json_performance/.work/outlined-source-token-r28/candidate-changing-options.o": "616fea662f8f9602b9a02ce8e25421fe4acc9b53d751ce7b20364136a073e767",
+      "benchmarks/json_performance/.work/outlined-source-token-r28/candidate-changing-options": "880095e402031e51bdeed7fe6c11eaee2b5ec2496f344ac331f2ae8b53cba0af",
+      "benchmarks/json_performance/.work/outlined-source-token-r28/frozen-build/perry": "0642e6dd0560283b5edee2abd8a570a30dbc42f5eaa487ba8bc9e8e5aa34490e",
+      "benchmarks/json_performance/.work/outlined-source-token-r28/frozen-build/libperry_runtime.a": "4c70301fe1ca78df73f8db793a2f868290a2865a3ca6eb37651ae6db5c82008a",
+      "benchmarks/json_performance/.work/outlined-source-token-r28/frozen-build/libperry_stdlib.a": "cac360e31577ee6c6625751693ed7c14f91a05928c1dfc360acbedba9d852084"
+    }
+  }
+]

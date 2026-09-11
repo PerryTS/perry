@@ -1,0 +1,22 @@
+[
+  {
+    "name": "script-lint",
+    "source_commit": "7d21ef6be54aabb11836fcfc58cfcd9030fa4ee0",
+    "command": [
+      "./scripts/run_lint_gates.sh"
+    ],
+    "env": {
+      "SKIP_COMPILE_GATES": "1"
+    },
+    "exit_code": 1
+  },
+  {
+    "name": "file-cap",
+    "source_commit": "7d21ef6be54aabb11836fcfc58cfcd9030fa4ee0",
+    "command": [
+      "./scripts/check_file_size.sh"
+    ],
+    "env": {},
+    "exit_code": 0
+  }
+]

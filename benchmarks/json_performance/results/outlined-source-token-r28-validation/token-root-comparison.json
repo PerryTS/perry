@@ -1,0 +1,19 @@
+{
+  "matches": true,
+  "files": [
+    {
+      "mode": "native",
+      "main_sha256": "6caa5502072370aceff93a6a458c849c64dab81beb9b35b591ce5c18e938cfab",
+      "candidate_sha256": "73d9a45555a0cb6767cb5bb5bab4250a4107c31aa4bfa53eb79ee6ff3204b59e",
+      "normalized_sha256": "bf226f2e7050b853bf379037e9d75955284490a21ae27a73142f8975bcb03c3d"
+    },
+    {
+      "mode": "shadow",
+      "main_sha256": "360ee7c24745ce4cb8d2fff4fb968a5450769fa968acc4446667898845f9fd69",
+      "candidate_sha256": "360ee7c24745ce4cb8d2fff4fb968a5450769fa968acc4446667898845f9fd69",
+      "normalized_sha256": "360ee7c24745ce4cb8d2fff4fb968a5450769fa968acc4446667898845f9fd69"
+    }
+  ],
+  "native_findings": [],
+  "note": "Both new token checker runs are fresh. Any native findings remain unsuppressed baseline findings, not a clean native pass."
+}

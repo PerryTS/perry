@@ -1,0 +1,23 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/outlined-source-token-r28/run-rotating.py",
+  "--worker",
+  ".work/outlined-source-token-r28/candidate-rotating-worker",
+  "--baseline-worker",
+  ".work/outlined-source-token-r28/main-rotating-worker",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--filter",
+  "small_record",
+  "--repeat",
+  "11",
+  "--source-commit",
+  "7d21ef6be54aabb11836fcfc58cfcd9030fa4ee0",
+  "--results-dir",
+  "results/quiet-outlined-source-token-r28-small-recheck-rotating"
+]

@@ -1,0 +1,7 @@
+# Possible follow-up for index-loop arithmetic — not applied
+
+The R24 fields sample places fmod beneath js_dynamic_mod, which currently returns a % b for two plain doubles. The loop computes i % rows.length before its three field reads. This cost belongs to the access workload's arithmetic, not JSON.parse or canonical_u32_index.
+
+A bounded unsigned-integer specialization inside the existing both-plain-double arm could admit exactly representable u32 operands, reject a negative sign on the dividend (including -0), and require a nonzero divisor. Use saturating Rust casts followed by f64 roundtrip equality to prove each integer, then compute u32 remainder and return its exact f64 representation. u32::MAX is a legitimate arithmetic operand here; the array-index predicate's special exclusion does not apply. Other operands retain the existing f64 remainder, so NaN/infinity, zero divisor, signed zero, negative/fractional values and all coercion/BigInt cases keep their existing path.
+
+This is only a source hypothesis. Required validation includes signed-zero bit checks, every boundary, varied positive divisors, random f64 bit patterns and unchanged observable ToNumeric/BigInt behavior. Measure integer-heavy access plus fractional/negative arithmetic controls; the extra checks could hurt the latter. Do not claim this removes the fmod share until a real post-change profile and uninstrumented controls support that attribution. Keep independent from JSON source-length and scalar-emitter changes.

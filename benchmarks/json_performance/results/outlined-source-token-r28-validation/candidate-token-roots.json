@@ -1,0 +1,52 @@
+{
+  "rows": [
+    {
+      "mode": "native",
+      "variant": 0,
+      "exit_code": 0,
+      "command": [
+        "python3",
+        "/Users/amlug/projects/perry/json-merged-pr10022/scripts/gc_root_dominance_check.py",
+        "--statepoints",
+        "--max-stale",
+        "0",
+        "--min-files",
+        "1",
+        "--min-statepoints",
+        "1",
+        "--min-live-bundles",
+        "1",
+        "--min-relocates",
+        "1",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-source-token-r28/candidate-token-ir-native/token.ll"
+      ],
+      "ir_sha256": "73d9a45555a0cb6767cb5bb5bab4250a4107c31aa4bfa53eb79ee6ff3204b59e"
+    },
+    {
+      "mode": "shadow",
+      "variant": 0,
+      "exit_code": 0,
+      "command": [
+        "python3",
+        "/Users/amlug/projects/perry/json-merged-pr10022/scripts/gc_root_dominance_check.py",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-source-token-r28/candidate-token-ir-shadow/token.ll"
+      ],
+      "ir_sha256": "360ee7c24745ce4cb8d2fff4fb968a5450769fa968acc4446667898845f9fd69"
+    },
+    {
+      "mode": "shadow",
+      "variant": 1,
+      "exit_code": 0,
+      "command": [
+        "python3",
+        "/Users/amlug/projects/perry/json-merged-pr10022/scripts/gc_root_dominance_check.py",
+        "--unrooted-allocas",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-source-token-r28/candidate-token-ir-shadow/token.ll"
+      ],
+      "ir_sha256": "360ee7c24745ce4cb8d2fff4fb968a5450769fa968acc4446667898845f9fd69"
+    }
+  ],
+  "source_sha256": "8b48706bb1e76800947b53ea21373d99ce12c2f458ba13995f4f5b149e813579",
+  "compiler_sha256": "0642e6dd0560283b5edee2abd8a570a30dbc42f5eaa487ba8bc9e8e5aa34490e",
+  "runtime_sha256": "4c70301fe1ca78df73f8db793a2f868290a2865a3ca6eb37651ae6db5c82008a"
+}

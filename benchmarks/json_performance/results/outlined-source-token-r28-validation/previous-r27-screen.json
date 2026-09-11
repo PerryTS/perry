@@ -1,0 +1,7 @@
+{
+  "source_commit": "decc2d9eed2de5713b800ddaf77ffc75c78fdd0c",
+  "evidence_commit": "0ea4c4833080af52a48a7c458a92b14aee0dedfc",
+  "report_sha256": "8a4edf3a659abe7b6b25119b937ef0b87d229bce9437dd5b05e80f31bb3c8bd4",
+  "url": "https://github.com/PerryTS/perry/blob/0ea4c4833080af52a48a7c458a92b14aee0dedfc/benchmarks/json_performance/SOURCE_TOKEN_LENGTH_R27.md",
+  "note": "R27 source was not promoted: rotating Unicode -47.45%, ASCII -12.22%, small-record regression +0.58% then +0.66% independently. Broad performance controls deferred."
+}

@@ -1,0 +1,159 @@
+{
+  "note": "Static linked function sizes and call targets only; not dynamic attribution or semantic proof.",
+  "records": [
+    {
+      "arm": "main",
+      "kind": "parse_string_value",
+      "symbol": "__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value",
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value",
+        "--no-show-raw-insn",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-source-token-r28/main-worker"
+      ],
+      "binary_sha256": "d0e07f6395a32201f3988d4c9435d02d223d84697e8bb6b4e6637e8aba02c9f8",
+      "output": "main-parse_string_value-91a40182.s",
+      "output_sha256": "dad64fa7101827a4eb1c1b3a6ec5f6ae180dbc1e035f51d3f0a745f0a9b8a811",
+      "instructions": 239,
+      "calls": [
+        "bl\t0x100245978 <__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_bytes>",
+        "bl\t0x10034b7f0 <__RNvNtCs3gRpqoBkMHm_13perry_runtime6string28js_string_from_builder_bytes>",
+        "bl\t0x1005eaf04 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction22string_from_json_bytes>",
+        "bl\t0x100b5ef40 <_mi_free>",
+        "bl\t0x100476730 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7barrier37incremental_mark_barrier_value_active>",
+        "bl\t0x100476730 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7barrier37incremental_mark_barrier_value_active>",
+        "bl\t0x100b3f37c <__RNvNtCs3gRpqoBkMHm_13perry_runtime7tls_hot12hot_uncached>",
+        "bl\t0x100b3cb9c <__RNvMs5_NtCs3gRpqoBkMHm_13perry_runtime7tls_hotINtB5_6HotKeyNtNtNtB7_7closure8registry14DispatchRecentE8get_slowB7_>",
+        "bl\t0x100b126ac <__RNvNtCsjgY6bXVaRmE_4core4cell22panic_already_borrowed>"
+      ]
+    },
+    {
+      "arm": "main",
+      "kind": "string_from_json_bytes",
+      "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction22string_from_json_bytes",
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction22string_from_json_bytes",
+        "--no-show-raw-insn",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-source-token-r28/main-worker"
+      ],
+      "binary_sha256": "d0e07f6395a32201f3988d4c9435d02d223d84697e8bb6b4e6637e8aba02c9f8",
+      "output": "main-string_from_json_bytes-06d92380.s",
+      "output_sha256": "0c8dfdf6d3249ab962de19706b1a7f909185a9adc8e0349bc6d83ad81fd7be87",
+      "instructions": 493,
+      "calls": [
+        "bl\t0x1005ea920 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string11utf16_count11count_bytes>",
+        "bl\t0x100458380 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6malloc9gc_malloc>",
+        "bl\t0x100b61dec <_writev+0x100b61dec>",
+        "bl\t0x10045f2b4 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy42gc_schedule_malloc_sweep_after_json_output>",
+        "bl\t0x10034b1ac <__RNvNtCs3gRpqoBkMHm_13perry_runtime6string20string_storage_alloc>",
+        "bl\t0x100b61dec <_writev+0x100b61dec>",
+        "bl\t0x10002dd18 <__RNvNtNtCsjgY6bXVaRmE_4core3str8converts9from_utf8>",
+        "bl\t0x100b3f37c <__RNvNtCs3gRpqoBkMHm_13perry_runtime7tls_hot12hot_uncached>",
+        "bl\t0x100b3cb9c <__RNvMs5_NtCs3gRpqoBkMHm_13perry_runtime7tls_hotINtB5_6HotKeyNtNtNtB7_7closure8registry14DispatchRecentE8get_slowB7_>",
+        "bl\t0x100b61924 <_writev+0x100b61924>"
+      ]
+    },
+    {
+      "arm": "candidate",
+      "kind": "parse_string_value",
+      "symbol": "__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value",
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value",
+        "--no-show-raw-insn",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-source-token-r28/candidate-worker"
+      ],
+      "binary_sha256": "cead22a041a9c2379c5f6c7c3bed8ea6aa7934bb1d609e34fab2a4fd81ccdf0a",
+      "output": "candidate-parse_string_value-91a40182.s",
+      "output_sha256": "09072bc901d15c4283237ab11218d9759daf8dd004808a0c00209656d7135e66",
+      "instructions": 255,
+      "calls": [
+        "bl\t0x100245978 <__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_bytes>",
+        "bl\t0x10034b830 <__RNvNtCs3gRpqoBkMHm_13perry_runtime6string28js_string_from_builder_bytes>",
+        "bl\t0x1006c65d0 <__RNvNtNtNtCs3gRpqoBkMHm_13perry_runtime4json6parser13source_length26string_from_dominant_token>",
+        "bl\t0x100b5f440 <_mi_free>",
+        "bl\t0x1005eaf44 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction22string_from_json_bytes>",
+        "bl\t0x100476770 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7barrier37incremental_mark_barrier_value_active>",
+        "bl\t0x100476770 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7barrier37incremental_mark_barrier_value_active>",
+        "bl\t0x100b3f87c <__RNvNtCs3gRpqoBkMHm_13perry_runtime7tls_hot12hot_uncached>",
+        "bl\t0x100b3d09c <__RNvMs5_NtCs3gRpqoBkMHm_13perry_runtime7tls_hotINtB5_6HotKeyNtNtNtB7_7closure8registry14DispatchRecentE8get_slowB7_>",
+        "bl\t0x100b12bac <__RNvNtCsjgY6bXVaRmE_4core4cell22panic_already_borrowed>"
+      ]
+    },
+    {
+      "arm": "candidate",
+      "kind": "string_from_json_bytes",
+      "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction22string_from_json_bytes",
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction22string_from_json_bytes",
+        "--no-show-raw-insn",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-source-token-r28/candidate-worker"
+      ],
+      "binary_sha256": "cead22a041a9c2379c5f6c7c3bed8ea6aa7934bb1d609e34fab2a4fd81ccdf0a",
+      "output": "candidate-string_from_json_bytes-06d92380.s",
+      "output_sha256": "52c9fd2e1a0bd6a389bbb991960466415b4f8460063ae0de06719c7e6fe08be0",
+      "instructions": 493,
+      "calls": [
+        "bl\t0x1005ea960 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string11utf16_count11count_bytes>",
+        "bl\t0x1004583c0 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6malloc9gc_malloc>",
+        "bl\t0x100b622ec <_writev+0x100b622ec>",
+        "bl\t0x10045f2f4 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy42gc_schedule_malloc_sweep_after_json_output>",
+        "bl\t0x10034b1ec <__RNvNtCs3gRpqoBkMHm_13perry_runtime6string20string_storage_alloc>",
+        "bl\t0x100b622ec <_writev+0x100b622ec>",
+        "bl\t0x10002dd18 <__RNvNtNtCsjgY6bXVaRmE_4core3str8converts9from_utf8>",
+        "bl\t0x100b3f87c <__RNvNtCs3gRpqoBkMHm_13perry_runtime7tls_hot12hot_uncached>",
+        "bl\t0x100b3d09c <__RNvMs5_NtCs3gRpqoBkMHm_13perry_runtime7tls_hotINtB5_6HotKeyNtNtNtB7_7closure8registry14DispatchRecentE8get_slowB7_>",
+        "bl\t0x100b61e24 <_writev+0x100b61e24>"
+      ]
+    },
+    {
+      "arm": "candidate",
+      "kind": "source_token_utf16_len",
+      "symbol": "__RNvNtNtNtCs3gRpqoBkMHm_13perry_runtime4json6parser13source_length22source_token_utf16_len",
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvNtNtNtCs3gRpqoBkMHm_13perry_runtime4json6parser13source_length22source_token_utf16_len",
+        "--no-show-raw-insn",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-source-token-r28/candidate-worker"
+      ],
+      "binary_sha256": "cead22a041a9c2379c5f6c7c3bed8ea6aa7934bb1d609e34fab2a4fd81ccdf0a",
+      "output": "candidate-source_token_utf16_len-514ac965.s",
+      "output_sha256": "4beee99f25533cee38382a6971bfd4e156258e4620a59224a4a38e3c74563577",
+      "instructions": 80,
+      "calls": [
+        "bl\t0x10077fd58 <__RNvNvNtNtCsjgY6bXVaRmE_4core5slice5ascii8is_ascii7runtime>",
+        "bl\t0x10077fd58 <__RNvNvNtNtCsjgY6bXVaRmE_4core5slice5ascii8is_ascii7runtime>",
+        "bl\t0x100b12d0c <__RNvNtCsjgY6bXVaRmE_4core9panicking18panic_bounds_check>",
+        "bl\t0x100b12d0c <__RNvNtCsjgY6bXVaRmE_4core9panicking18panic_bounds_check>"
+      ]
+    },
+    {
+      "arm": "candidate",
+      "kind": "string_from_dominant_token",
+      "symbol": "__RNvNtNtNtCs3gRpqoBkMHm_13perry_runtime4json6parser13source_length26string_from_dominant_token",
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvNtNtNtCs3gRpqoBkMHm_13perry_runtime4json6parser13source_length26string_from_dominant_token",
+        "--no-show-raw-insn",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-source-token-r28/candidate-worker"
+      ],
+      "binary_sha256": "cead22a041a9c2379c5f6c7c3bed8ea6aa7934bb1d609e34fab2a4fd81ccdf0a",
+      "output": "candidate-string_from_dominant_token-6a3ad2ef.s",
+      "output_sha256": "4f5c92aedea546812d0f6a91c5ff995f632df0590d7fa325fec8a499506de91a",
+      "instructions": 138,
+      "calls": [
+        "bl\t0x1006c6490 <__RNvNtNtNtCs3gRpqoBkMHm_13perry_runtime4json6parser13source_length22source_token_utf16_len>",
+        "bl\t0x1004583c0 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6malloc9gc_malloc>",
+        "bl\t0x100b622ec <_writev+0x100b622ec>",
+        "bl\t0x10045f2f4 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy42gc_schedule_malloc_sweep_after_json_output>",
+        "bl\t0x10034b1ec <__RNvNtCs3gRpqoBkMHm_13perry_runtime6string20string_storage_alloc>",
+        "bl\t0x100b622ec <_writev+0x100b622ec>",
+        "bl\t0x100b3f87c <__RNvNtCs3gRpqoBkMHm_13perry_runtime7tls_hot12hot_uncached>",
+        "bl\t0x100b3d09c <__RNvMs5_NtCs3gRpqoBkMHm_13perry_runtime7tls_hotINtB5_6HotKeyNtNtNtB7_7closure8registry14DispatchRecentE8get_slowB7_>",
+        "bl\t0x100b61e24 <_writev+0x100b61e24>"
+      ]
+    }
+  ]
+}
