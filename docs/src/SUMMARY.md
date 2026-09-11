@@ -10,6 +10,7 @@
 - [Hello World](getting-started/hello-world.md)
 - [First Native App](getting-started/first-app.md)
 - [Project Configuration](getting-started/project-config.md)
+- [Small-process memory profile](runtime/small-process-memory.md)
 
 # Language
 
