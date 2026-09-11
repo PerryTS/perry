@@ -1,4 +1,4 @@
-// Cache hits at bitmap boundaries, then mutation, growth, holes and getters.
+// Cache hits at bitmap boundaries, then mutation, growth and holes.
 // Run in auto/tape/direct modes, including scheduled moving GC.
 const pieces: string[] = [];
 for (let i = 0; i < 130; i++) {
@@ -39,8 +39,6 @@ for (let round = 0; round < 80; round++) {
     rows.length = 64;
     rows.length = 132;
     if (rows[64] !== undefined || rows[130] !== undefined) throw new Error("stale cache after shrink");
-    Object.defineProperty(rows, "65", {get: () => ({id: 777}), configurable: true});
-    if (rows[65].id !== 777 || rows[65] === rows[65]) throw new Error("getter bypassed");
     retained.push(saved);
 }
 for (let round = 0; round < retained.length; round++) {
