@@ -1477,7 +1477,7 @@ unsafe fn js_array_set_f64_extend_resolved(
     let blocks_extension =
         flags & (crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND) != 0;
     let scope = crate::gc::RuntimeHandleScope::new();
-    let _arr_handle = scope.root_raw_mut_ptr(arr);
+    let arr_handle = scope.root_raw_mut_ptr(arr);
     let value_handle = scope.root_nanbox_f64(value);
     unsafe {
         let length = (*arr).length;
@@ -1500,7 +1500,11 @@ unsafe fn js_array_set_f64_extend_resolved(
                         value_handle.get_nanbox_f64(),
                     );
                 }
-                return arr;
+                // The setter can move or grow its receiver. Returning the
+                // pre-callback address would overwrite the caller's current
+                // root with a retired address (sort's next indexed write
+                // exposed this). Resolve growth only after reloading the root.
+                return arr_handle.with_mut_ptr(clean_arr_ptr_mut);
             }
             if let Some(attrs) = crate::object::get_property_attrs(arr as usize, &key) {
                 if !attrs.writable() {

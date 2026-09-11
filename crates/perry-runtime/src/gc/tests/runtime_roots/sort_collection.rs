@@ -29,6 +29,74 @@ extern "C" fn accept_sorted_value(_closure: *const ClosureHeader, _value: f64) -
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
+extern "C" fn collecting_index_setter(_closure: *const ClosureHeader, _value: f64) -> f64 {
+    gc_collect_minor();
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+#[test]
+fn indexed_accessor_set_returns_the_relocated_receiver() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _evacuation = ForcedEvacuationTestGuard::on();
+    let _protection =
+        crate::arena::ProtectionModeGuard::set(crate::arena::FromSpaceProtection::PoisonOnly);
+    register_runtime_handle_root_scanner_for_tests();
+
+    for strict in [false, true] {
+        let scope = RuntimeHandleScope::new();
+        let receiver = scope.root_raw_mut_ptr(crate::array::js_array_alloc_with_length(3));
+        let setter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+            collecting_index_setter as *const u8,
+            0,
+        ));
+        let descriptor = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+        let set_key = crate::js_string_from_bytes(b"set".as_ptr(), 3);
+        descriptor.with_mut_ptr(|desc| {
+            setter.with_const_ptr(|function: *const ClosureHeader| {
+                crate::object::js_object_set_field_by_name(
+                    desc,
+                    set_key,
+                    f64::from_bits(ptr_bits(function as usize)),
+                );
+            });
+        });
+        let index_key = crate::js_string_from_bytes(b"0".as_ptr(), 1);
+        descriptor.with_const_ptr(|desc: *const u8| {
+            receiver.with_const_ptr(|arr: *const crate::array::ArrayHeader| {
+                crate::object::js_object_define_property(
+                    f64::from_bits(ptr_bits(arr as usize)),
+                    f64::from_bits(string_bits(index_key as usize)),
+                    f64::from_bits(ptr_bits(desc as usize)),
+                );
+            });
+        });
+        let before = receiver.with_const_ptr(|arr: *const crate::array::ArrayHeader| arr as usize);
+        assert!(matches!(
+            crate::arena::classify_heap_generation(before),
+            crate::arena::HeapGeneration::Nursery
+        ));
+        let (returned, current) = receiver.across_mut::<crate::array::ArrayHeader, _>(|| {
+            receiver.with_mut_ptr(|arr| {
+                if strict {
+                    crate::array::js_array_set_f64_extend_strict(arr, 0, 42.0)
+                } else {
+                    crate::array::js_array_set_f64_extend(arr, 0, 42.0)
+                }
+            })
+        });
+        assert_ne!(
+            current as usize, before,
+            "setter must actually relocate the receiver"
+        );
+        // Compare addresses only: even a bad return must never be dereferenced.
+        assert_eq!(
+            returned, current,
+            "strict={strict}: return must follow the root"
+        );
+    }
+}
+
 #[test]
 fn sort_collection_getters_relocate_comparator_and_receiver() {
     let _guard = CopyingNurseryTestGuard::new(0);

@@ -6,3 +6,7 @@ listener witness requiring the relocated receiver and argument, and keep the
 new packed property-get helper visible to moving-GC root-dominance checks with
 stale/reloaded negative controls. Include the JSON cached-read regression in
 the per-PR gap fixture selection.
+
+Return the current array receiver after an allocating indexed setter, preserving
+the caller's root across moving GC and growth. Cover both strict and legacy
+setter entry points with an actual-relocation return-value regression.
