@@ -1,1 +1,3 @@
 Automatically specialize standalone empty programs and direct constant-string console output after a strict proof over the original AST. Unknown syntax, effects, receiver provenance, and unsupported build modes retain normal compilation. No enabling flag is required. The minimal executable omits Perry's managed heap, GC, event loop, allocator, and runtime archives.
+
+Local AMD Linux and macOS verification, accepted-language limits, raw startup/RSS samples, allocator tradeoffs and build-provenance findings are recorded in the [startup campaign report](https://github.com/proggeramlug/js-compiled/blob/perf/startup-verification/diagnostics/startup/evidence/2026-09-11/REPORT.md).
