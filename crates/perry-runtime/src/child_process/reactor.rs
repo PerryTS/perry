@@ -1171,13 +1171,12 @@ pub extern "C" fn js_child_process_spawn_streams(
             cp_set_field(cp, b"__cpError", err);
             cp_set_field(cp, b"__cpSpawnErrno", super::cp_errno_number(code));
             cp_set_field(cp, b"exitCode", super::cp_errno_number(code));
-            let emit_closure =
-                crate::closure::js_closure_alloc(cp_emit_spawn_error as *const u8, 1);
+            let emit_closure = crate::closure::js_closure_alloc(
+                super::failed_spawn::emit_error_then_close as *const u8,
+                1,
+            );
             crate::closure::js_closure_set_capture_ptr(emit_closure, 0, cp.to_bits() as i64);
             crate::timer::js_set_immediate_callback(emit_closure as i64);
-            let close = crate::closure::js_closure_alloc(cp_emit_spawn_close as *const u8, 1);
-            crate::closure::js_closure_set_capture_ptr(close, 0, cp.to_bits() as i64);
-            crate::timer::js_set_timeout_callback(close as i64, 1.0);
         }
     }
 
@@ -1187,16 +1186,17 @@ pub extern "C" fn js_child_process_spawn_streams(
 /// Deferred single-`error` emit for the spawn/fork failure path. Slot 0
 /// captures the ChildProcess value.
 pub(super) extern "C" fn cp_emit_spawn_error(closure: *const ClosureHeader) -> f64 {
-    let cp = cp_this(closure);
-    let err = cp_get_field(cp, b"__cpError");
-    if !JSValue::from_bits(err.to_bits()).is_undefined() {
-        cp_emit(cp, "error", &[err]);
-        cp_set_field(cp, b"signalCode", TAG_NULL_F64);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let cp = scope.root_nanbox_f64(cp_this(closure));
+    let err = scope.root_nanbox_f64(cp_get_field(cp.get_nanbox_f64(), b"__cpError"));
+    if !JSValue::from_bits(err.get_nanbox_f64().to_bits()).is_undefined() {
+        cp_emit(cp.get_nanbox_f64(), "error", &[err.get_nanbox_f64()]);
+        cp_set_field(cp.get_nanbox_f64(), b"signalCode", TAG_NULL_F64);
     }
     cp_undefined()
 }
 
-extern "C" fn cp_emit_spawn_close(closure: *const ClosureHeader) -> f64 {
+pub(super) extern "C" fn cp_emit_spawn_close(closure: *const ClosureHeader) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let cp = scope.root_nanbox_f64(cp_this(closure));
     super::failed_spawn::finish_outputs(cp.get_nanbox_f64());
@@ -1206,6 +1206,10 @@ extern "C" fn cp_emit_spawn_close(closure: *const ClosureHeader) -> f64 {
 }
 
 pub(super) fn cp_register_reactor_arities() {
+    crate::closure::js_register_closure_arity(
+        super::failed_spawn::emit_error_then_close as *const u8,
+        0,
+    );
     crate::closure::js_register_closure_arity(cp_emit_spawn_error as *const u8, 0);
     crate::closure::js_register_closure_arity(cp_emit_spawn_close as *const u8, 0);
     crate::closure::js_register_closure_arity(cp_abort_listener as *const u8, 0);

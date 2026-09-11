@@ -20,10 +20,15 @@ async function main() {
   });
   const readers = streams.map(collect);
   const closed = new Promise(resolve => child.on('close', resolve));
-  const code = await new Promise(resolve => child.on('error', error => {
+  const failure = new Promise(resolve => child.on('error', error => {
     errorSeen = true;
     resolve(error.code);
   }));
+  // Make a prematurely armed close timer overdue before yielding. Error must
+  // still precede pipe EOF, irrespective of native optimization/startup speed.
+  const until = Date.now() + 20;
+  while (Date.now() < until) {}
+  const code = await failure;
   check(code === 'ENOENT', 'must exercise the real OS spawn failure');
   // Execa-shaped cleanup: yield, destroy output streams, then await collectors.
   await delay(0);
