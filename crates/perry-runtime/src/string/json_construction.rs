@@ -12,6 +12,18 @@ pub(crate) unsafe fn string_from_json_bytes(
     } else {
         compute_utf16_len(bytes.as_ptr(), len)
     };
+    string_from_json_bytes_known_utf16(batch, bytes, utf16_len)
+}
+
+/// The caller must prove the exact UTF-16 length of an unescaped JSON token.
+/// Bytes must remain live throughout the parser's existing suppression window.
+#[inline(always)]
+pub(crate) unsafe fn string_from_json_bytes_known_utf16(
+    batch: &mut Option<crate::arena::ConstructionBatch>,
+    bytes: &[u8],
+    utf16_len: u32,
+) -> *mut StringHeader {
+    let len = bytes.len() as u32;
     let size = std::mem::size_of::<StringHeader>() + bytes.len();
     let large_json_leaf = len >= JSON_MALLOC_OUTPUT_THRESHOLD;
     let raw = if large_json_leaf {

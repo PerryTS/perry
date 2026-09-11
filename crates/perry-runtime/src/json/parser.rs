@@ -10,6 +10,9 @@ use crate::{
     js_array_alloc, js_array_push, JSValue, StringHeader,
 };
 
+#[path = "parser_source_length.rs"]
+mod source_length;
+
 // ─── Direct JSON parser ────────────────────────────────────────────────────────
 
 /// Result of parsing a JSON string: either a zero-copy borrow from the
@@ -509,16 +512,30 @@ impl<'a> DirectParser<'a> {
                 let sso = JSValue::short_string_unchecked(b);
                 return sso;
             }
-            // ASCII fast path: skip `compute_utf16_len`'s byte scan
-            // (which `js_string_from_bytes` runs unconditionally) when
-            // every byte is < 0x80. Most real-world JSON payloads —
-            // user names, emails, ISO timestamps, slugs — are pure
-            // ASCII; the standalone `is_ascii()` check is vectorised
-            // (16 B/it on aarch64 NEON) so it costs ~1 ns/byte and
-            // saves the equivalent walk inside `compute_utf16_len`
-            // plus the conditional widening for non-ASCII counters.
+            // A large unescaped token can reuse its rooted source's UTF-16
+            // length when a bounded ASCII surround makes subtraction exact.
+            // Keep the proof call out of small and many-token object loops.
             let ptr = match s {
-                ParsedStr::Borrowed(b) => crate::string::string_from_json_bytes(&mut self.batch, b),
+                ParsedStr::Borrowed(b) => {
+                    let known_len = if b.len() >= 256 && self.input.len() - b.len() <= 256 {
+                        source_length::source_token_utf16_len(
+                            self.input,
+                            self.source,
+                            token_start,
+                            b.len(),
+                        )
+                    } else {
+                        None
+                    };
+                    match known_len {
+                        Some(len) => crate::string::string_from_json_bytes_known_utf16(
+                            &mut self.batch,
+                            b,
+                            len,
+                        ),
+                        None => crate::string::string_from_json_bytes(&mut self.batch, b),
+                    }
+                }
                 // Escaped strings live in a Rust Vec, so the builder can derive
                 // the WTF-8 lone-surrogate flag while allocating the result.
                 ParsedStr::Owned(ref b) => crate::string::js_string_from_builder_bytes(b),
