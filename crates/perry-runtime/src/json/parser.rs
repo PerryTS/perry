@@ -10,6 +10,9 @@ use crate::{
     js_array_alloc, js_array_push, JSValue, StringHeader,
 };
 
+#[path = "parser_source_length.rs"]
+mod source_length;
+
 // ─── Direct JSON parser ────────────────────────────────────────────────────────
 
 /// Result of parsing a JSON string: either a zero-copy borrow from the
@@ -255,7 +258,9 @@ pub(crate) fn nesting_depth_exceeds(bytes: &[u8], limit: usize) -> bool {
     false
 }
 
-pub(crate) struct DirectParser<'a> {
+pub(crate) type DirectParser<'a> = SpecializedDirectParser<'a, false>;
+
+pub(crate) struct SpecializedDirectParser<'a, const SOURCE_LENGTH: bool> {
     input: &'a [u8],
     pos: usize,
     valid: bool,
@@ -292,7 +297,7 @@ pub(crate) struct DirectParser<'a> {
     batch: Option<crate::arena::ConstructionBatch>,
 }
 
-impl<'a> DirectParser<'a> {
+impl<'a, const SOURCE_LENGTH: bool> SpecializedDirectParser<'a, SOURCE_LENGTH> {
     pub(crate) fn new(input: &'a [u8]) -> Self {
         Self {
             input,
@@ -519,7 +524,17 @@ impl<'a> DirectParser<'a> {
             // plus the conditional widening for non-ASCII counters.
             let ptr = match s {
                 ParsedStr::Borrowed(b) => {
-                    crate::string::string_from_scanned_json_bytes(&mut self.batch, b)
+                    if SOURCE_LENGTH && b.len() >= 256 && self.input.len() - b.len() <= 256 {
+                        source_length::string_from_dominant_token(
+                            &mut self.batch,
+                            self.input,
+                            self.source,
+                            token_start,
+                            b,
+                        )
+                    } else {
+                        crate::string::string_from_scanned_json_bytes(&mut self.batch, b)
+                    }
                 }
                 // Escaped strings live in a Rust Vec, so the builder can derive
                 // the WTF-8 lone-surrogate flag while allocating the result.
@@ -1475,3 +1490,29 @@ pub(crate) use depth_blocks::nesting_depth_exceeds;
 #[cfg(all(test, target_arch = "aarch64", target_endian = "little"))]
 #[path = "parser_depth_blocks_tests.rs"]
 mod depth_blocks_tests;
+
+/// The caller roots the source and suppresses GC before entering either arm.
+/// Small documents retain the parser specialization without length-proof code.
+#[inline(always)]
+pub(crate) unsafe fn parse_batched_from_source(
+    input: &[u8],
+    source: *const StringHeader,
+) -> (JSValue, bool) {
+    if input.len() > 256 {
+        parse_batched_specialized::<true>(input, source)
+    } else {
+        parse_batched_specialized::<false>(input, source)
+    }
+}
+
+#[inline(always)]
+unsafe fn parse_batched_specialized<const SOURCE_LENGTH: bool>(
+    input: &[u8],
+    source: *const StringHeader,
+) -> (JSValue, bool) {
+    let mut parser =
+        SpecializedDirectParser::<SOURCE_LENGTH>::new_batched_from_string(input, source);
+    let result = parser.parse_value();
+    let valid = parser.finish();
+    (result, valid)
+}

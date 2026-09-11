@@ -1,8 +1,8 @@
 //! Bounded escaped-string decoding; no managed allocation or GC entry.
 
-use super::{decode_hex_u16, DirectParser};
+use super::{decode_hex_u16, SpecializedDirectParser};
 
-impl DirectParser<'_> {
+impl<const SOURCE_LENGTH: bool> SpecializedDirectParser<'_, SOURCE_LENGTH> {
     /// Decode a bounded input window into existing spare Vec storage. A JSON escape
     /// consumes at most 12 bytes and emits at most four. Starting each operation
     /// before byte 52 of a complete 64-byte window bounds every input access and

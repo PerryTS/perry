@@ -2,6 +2,7 @@ use super::*;
 
 /// Unescaped JSON bytes remain valid throughout the parser's suppression
 /// window. Escaped/WTF-8 builder output keeps its existing canonicalizer.
+#[inline(never)]
 pub(crate) unsafe fn string_from_json_bytes(
     batch: &mut Option<crate::arena::ConstructionBatch>,
     bytes: &[u8],
@@ -66,6 +67,18 @@ pub(crate) unsafe fn string_from_scanned_json_bytes(
     } else {
         compute_utf16_len(bytes.as_ptr(), len)
     };
+    string_from_scanned_json_bytes_known_utf16(batch, bytes, utf16_len)
+}
+
+/// Allocate a scanned borrowed value token with an independently proved UTF-16
+/// length. The caller retains the scan's escape/surrogate proof and suppression.
+#[inline(always)]
+pub(crate) unsafe fn string_from_scanned_json_bytes_known_utf16(
+    batch: &mut Option<crate::arena::ConstructionBatch>,
+    bytes: &[u8],
+    utf16_len: u32,
+) -> *mut StringHeader {
+    let len = bytes.len() as u32;
     let size = std::mem::size_of::<StringHeader>() + bytes.len();
     let large_json_leaf = len >= JSON_MALLOC_OUTPUT_THRESHOLD;
     let raw = if large_json_leaf {

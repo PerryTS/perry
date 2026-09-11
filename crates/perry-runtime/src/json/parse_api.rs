@@ -55,9 +55,7 @@ pub(crate) unsafe fn test_json_parse_direct(text_ptr: *const StringHeader) -> JS
 
     crate::gc::gc_suppress();
     let text_root = parse_root_push(JSValue::string_ptr(text_ptr as *mut StringHeader));
-    let mut parser = DirectParser::new_batched_from_string(bytes, text_ptr);
-    let result = parser.parse_value();
-    let _ = parser.finish();
+    let (result, _) = super::parser::parse_batched_from_source(bytes, text_ptr);
     parse_root_push(result);
     crate::gc::gc_unsuppress();
     parse_root_restore(text_root);
@@ -277,9 +275,7 @@ unsafe fn parse_result_slow(text_ptr: *const StringHeader, len: usize) -> Result
         std::slice::from_raw_parts(crate::string::string_data(hdr), len)
     };
     let source = parse_root_get(text_root).as_string_ptr();
-    let mut parser = DirectParser::new_batched_from_string(bytes, source);
-    let result = parser.parse_value();
-    let parse_ok = parser.finish();
+    let (result, parse_ok) = super::parser::parse_batched_from_source(bytes, source);
     if parse_ok {
         validate_cached_parse_source(source, len);
         remember_parse_object_template(source, len, result);
@@ -522,9 +518,7 @@ unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
     };
 
     let source = parse_root_get(text_root).as_string_ptr();
-    let mut parser = DirectParser::new_batched_from_string(bytes, source);
-    let result = parser.parse_value();
-    let parse_ok = parser.finish();
+    let (result, parse_ok) = super::parser::parse_batched_from_source(bytes, source);
     if parse_ok {
         validate_cached_parse_source(source, len);
         remember_parse_object_template(source, len, result);
