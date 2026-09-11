@@ -104,3 +104,26 @@ fn json_surrogate_scan_routes_tokens_to_the_normalizing_builder() {
         }
     }
 }
+
+#[test]
+fn json_surrogate_scan_skips_multiple_valid_ed_bytes_before_the_first_stop() {
+    for repetitions in 1..=90 {
+        for prefix in 0..16 {
+            let mut bytes = vec![b'a'; prefix];
+            for _ in 0..repetitions {
+                bytes.extend_from_slice("한".as_bytes());
+            }
+            for suffix in [
+                &b"\"tail"[..],
+                &b"\\tail"[..],
+                &[0xed, 0xa0, 0x80][..],
+                &b"\ntail"[..],
+            ] {
+                let mut input = bytes.clone();
+                input.extend_from_slice(suffix);
+                assert_eq!(scan(&input), oracle(&input));
+                assert_eq!(scalar(&input), oracle(&input));
+            }
+        }
+    }
+}

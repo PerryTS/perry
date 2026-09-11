@@ -31,71 +31,42 @@ fn scalar(bytes: &[u8]) -> Option<usize> {
     None
 }
 
+// Each mask byte is either all zeroes or all ones. Extract one word at a
+// time so locating a short token's first special byte does not branch once
+// per preceding character. Surrogate lookahead is needed only on ED hits.
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
-unsafe fn mask(v: uint8x16_t, next: uint8x16_t) -> uint8x16_t {
-    let ordinary = vorrq_u8(
-        vorrq_u8(vceqq_u8(v, vdupq_n_u8(b'"')), vceqq_u8(v, vdupq_n_u8(0x5c))),
-        vcltq_u8(v, vdupq_n_u8(32)),
-    );
-    let mid = vextq_u8::<1>(v, next);
-    let surrogate = vandq_u8(
-        vceqq_u8(v, vdupq_n_u8(0xed)),
-        vceqq_u8(vandq_u8(mid, vdupq_n_u8(0xe0)), vdupq_n_u8(0xa0)),
-    );
-    vorrq_u8(ordinary, surrogate)
-}
-#[cfg(target_arch = "aarch64")]
-#[inline(always)]
-unsafe fn first(v: uint8x16_t) -> usize {
-    let mut lanes = [0u8; 16];
-    vst1q_u8(lanes.as_mut_ptr(), v);
-    lanes.iter().position(|&b| b != 0).unwrap()
-}
-#[cfg(target_arch = "aarch64")]
-#[inline(never)]
 fn scan_neon(bytes: &[u8]) -> Option<usize> {
-    if bytes.len() < 16 {
-        return scalar(bytes);
-    }
+    let mut i = 0;
     unsafe {
-        let v = vld1q_u8(bytes.as_ptr());
-        let m = mask(v, vdupq_n_u8(bytes.get(16).copied().unwrap_or(0)));
-        if vmaxvq_u8(m) != 0 {
-            return Some(first(m));
-        }
-        let mut i = 16;
-        while bytes.len() - i >= 64 {
-            let a = vld1q_u8(bytes.as_ptr().add(i));
-            let b = vld1q_u8(bytes.as_ptr().add(i + 16));
-            let c = vld1q_u8(bytes.as_ptr().add(i + 32));
-            let d = vld1q_u8(bytes.as_ptr().add(i + 48));
-            let masks = [
-                mask(a, b),
-                mask(b, c),
-                mask(c, d),
-                mask(d, vdupq_n_u8(bytes.get(i + 64).copied().unwrap_or(0))),
-            ];
-            let combined = vorrq_u8(vorrq_u8(masks[0], masks[1]), vorrq_u8(masks[2], masks[3]));
-            if vmaxvq_u8(combined) != 0 {
-                for (k, m) in masks.into_iter().enumerate() {
-                    if vmaxvq_u8(m) != 0 {
-                        return Some(i + k * 16 + first(m));
+        while bytes.len() - i >= 16 {
+            let v = vld1q_u8(bytes.as_ptr().add(i));
+            let special = vorrq_u8(
+                vorrq_u8(vceqq_u8(v, vdupq_n_u8(b'"')), vceqq_u8(v, vdupq_n_u8(0x5c))),
+                vorrq_u8(vcltq_u8(v, vdupq_n_u8(32)), vceqq_u8(v, vdupq_n_u8(0xed))),
+            );
+            if vmaxvq_u8(special) != 0 {
+                let words = vreinterpretq_u64_u8(special);
+                for (lane, word) in [
+                    (0, u64::from_le(vgetq_lane_u64::<0>(words))),
+                    (8, u64::from_le(vgetq_lane_u64::<1>(words))),
+                ] {
+                    let mut hits = word & 0x8080_8080_8080_8080;
+                    while hits != 0 {
+                        let hit = i + lane + hits.trailing_zeros() as usize / 8;
+                        if bytes[hit] != 0xed
+                            || bytes.get(hit + 1).is_some_and(|n| n & 0xe0 == 0xa0)
+                        {
+                            return Some(hit);
+                        }
+                        hits &= hits - 1;
                     }
                 }
             }
-            i += 64;
-        }
-        while bytes.len() - i >= 16 {
-            let v = vld1q_u8(bytes.as_ptr().add(i));
-            let m = mask(v, vdupq_n_u8(bytes.get(i + 16).copied().unwrap_or(0)));
-            if vmaxvq_u8(m) != 0 {
-                return Some(i + first(m));
-            }
             i += 16;
         }
-        scalar(&bytes[i..]).map(|n| i + n)
     }
+    scalar(&bytes[i..]).map(|n| i + n)
 }
 #[cfg(test)]
 #[path = "simd_json_string_tests.rs"]
