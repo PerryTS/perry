@@ -124,6 +124,7 @@ pub mod map;
 pub mod math;
 pub mod messaging;
 pub mod mimalloc_os_tag;
+mod startup_memory_profile;
 pub mod module_require;
 pub mod native_abi;
 pub mod native_arena;
