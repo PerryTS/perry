@@ -34,17 +34,19 @@ pub(crate) fn cp_register(target: f64, event: f64, cb: f64) {
 /// any fired. The listener array is re-read each iteration so a moving GC
 /// during a handler call can't strand us on a stale array pointer.
 pub(crate) fn cp_emit(target: f64, event: &str, args: &[f64]) -> bool {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target = scope.root_nanbox_f64(target);
+    let args = scope.root_nanbox_f64_slice(args);
     if event == "message"
-        && args
-            .first()
-            .copied()
-            .is_some_and(|msg| crate::cluster::consume_internal_message(target, msg))
+        && args.first().is_some_and(|msg| {
+            crate::cluster::consume_internal_message(target.get_nanbox_f64(), msg.get_nanbox_f64())
+        })
     {
         return true;
     }
 
-    let async_ids =
-        cp_handle_of(target).and_then(|handle| reactor::cp_async_scope_for_target(handle, target));
+    let async_ids = cp_handle_of(target.get_nanbox_f64())
+        .and_then(|handle| reactor::cp_async_scope_for_target(handle, target.get_nanbox_f64()));
     if let Some(ids) = async_ids {
         crate::async_hooks::enter_resource_scope(ids);
     }
@@ -56,7 +58,7 @@ pub(crate) fn cp_emit(target: f64, event: &str, args: &[f64]) -> bool {
     // #9445: the displaced receiver is rooted ONCE here, not once per callback.
     let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_get());
     loop {
-        let arr = match cp_array_ptr(cp_get_field(target, &key)) {
+        let arr = match cp_array_ptr(cp_get_field(target.get_nanbox_f64(), &key)) {
             Some(a) => a,
             None => break,
         };
@@ -64,9 +66,10 @@ pub(crate) fn cp_emit(target: f64, event: &str, args: &[f64]) -> bool {
             break;
         }
         let cb = crate::array::js_array_get_f64(arr, i);
-        js_implicit_this_set(target);
+        js_implicit_this_set(target.get_nanbox_f64());
+        let current_args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&args);
         unsafe {
-            let _ = js_native_call_value(cb, args.as_ptr(), args.len());
+            let _ = js_native_call_value(cb, current_args.as_ptr(), current_args.len());
         }
         js_implicit_this_set(prev.get_nanbox_f64());
         fired = true;
@@ -77,8 +80,15 @@ pub(crate) fn cp_emit(target: f64, event: &str, args: &[f64]) -> bool {
     // and that iterator registers its `data`/`end`/`error` listeners in node:stream's
     // registry rather than the one above. Forward there too, so a `for await` over a
     // child's output sees the chunks the reactor delivers.
-    if !JSValue::from_bits(cp_get_field(target, b"readable").to_bits()).is_undefined() {
-        crate::node_stream::emit_to_stream_listeners(target, event.as_bytes(), args);
+    if !JSValue::from_bits(cp_get_field(target.get_nanbox_f64(), b"readable").to_bits())
+        .is_undefined()
+    {
+        let current_args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&args);
+        crate::node_stream::emit_to_stream_listeners(
+            target.get_nanbox_f64(),
+            event.as_bytes(),
+            &current_args,
+        );
     }
 
     if let Some(ids) = async_ids {
@@ -86,6 +96,9 @@ pub(crate) fn cp_emit(target: f64, event: &str, args: &[f64]) -> bool {
     }
     fired
 }
+
+#[cfg(test)]
+mod relocation_tests;
 
 /// Deliver real pipe EOF and retain it for readers attaching after the event.
 /// Keep this separate from public `.emit("end")`, which is not a pipe EOF.
