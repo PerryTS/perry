@@ -12,6 +12,9 @@ use crate::native_value::{LoweredValue, MaterializationReason};
 use crate::types::DOUBLE;
 
 #[cfg(test)]
+mod boxed_continuation_tests;
+mod boxed_local_init;
+#[cfg(test)]
 mod boxed_slot_no_root_tests;
 mod cached_field_index_return;
 #[cfg(test)]
@@ -27,8 +30,6 @@ mod let_stmt;
 mod let_stmt_facts;
 mod loops;
 mod masked_window_region;
-#[cfg(test)]
-mod prealloc_continuation_tests;
 #[cfg(test)]
 mod prealloc_module_global_tests;
 pub(crate) mod stable_packed_accumulator;
@@ -673,11 +674,16 @@ fn emit_preallocate_boxes(ctx: &mut FnCtx<'_>, ids: &[u32], tdz: bool) -> Result
         if ctx.module_globals.contains_key(id) {
             continue;
         }
-        // #10048: `locals` describes emitted storage, not which initializers
-        // dominate this path. Generator lowering can clone a scope into
-        // mutually exclusive continuations. Each executed scope entry needs
-        // its own fresh cell, even when an earlier emitted copy owns the slot.
-        // Reuse only the alloca below, never omit this path's allocation.
+        if ctx.locals.contains_key(id) {
+            // A previous PreallocateBoxes (or an unusual nesting)
+            // already set this up -- skip to keep the existing slot.
+            ctx.prealloc_boxes.insert(*id);
+            ctx.boxed_vars.insert(*id);
+            if tdz {
+                ctx.tdz_boxes.insert(*id);
+            }
+            continue;
+        }
         let is_i32_control = crate::expr::is_compiler_private_async_i32_control_local(ctx, *id);
         let is_i1_control = crate::expr::is_compiler_private_async_i1_control_local(ctx, *id);
         let blk = ctx.block();
@@ -718,6 +724,7 @@ fn emit_preallocate_boxes(ctx: &mut FnCtx<'_>, ids: &[u32], tdz: bool) -> Result
                 "jsvalue_box_cell",
             )
         };
+        let slot = ctx.func.alloca_entry(crate::types::I64);
         // perry#4926: PreallocateBoxes can sit nested inside an If/Try/Labeled
         // body (e.g. the async state-machine wrapper), so this block's
         // box-pointer store doesn't necessarily dominate every load of the
@@ -727,15 +734,9 @@ fn emit_preallocate_boxes(ctx: &mut FnCtx<'_>, ids: &[u32], tdz: bool) -> Result
         // the value, so it is TAG_UNDEFINED-initialized in both the TDZ and
         // non-TDZ cases -- the TAG_TDZ sentinel lives in the box cell, not the
         // slot.
-        let slot = if let Some(slot) = ctx.locals.get(id) {
-            slot.clone()
-        } else {
-            let slot = ctx.func.alloca_entry(crate::types::I64);
-            let undef_bits = crate::nanbox::TAG_UNDEFINED_I64.to_string();
-            ctx.func
-                .entry_allocas_push_store(crate::types::I64, &undef_bits, &slot);
-            slot
-        };
+        let undef_bits = crate::nanbox::TAG_UNDEFINED_I64.to_string();
+        ctx.func
+            .entry_allocas_push_store(crate::types::I64, &undef_bits, &slot);
         ctx.block().store(crate::types::I64, &box_ptr, &slot);
         record_boxed_slot_js_value_bits(ctx, *id, &box_ptr, "preallocate_boxes.box_ptr_slot");
         if cell_note != "jsvalue_box_cell" {
