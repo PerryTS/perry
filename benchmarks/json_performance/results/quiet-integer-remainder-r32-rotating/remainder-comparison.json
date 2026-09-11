@@ -1,0 +1,19 @@
+{
+  "candidate_passes": 6,
+  "reference_passes": 6,
+  "ir_matches": [
+    {
+      "mode": "native",
+      "main_sha256": "9612595cfcbf5210688cc8eea5a9216e5b3cbe53807e2b5799ecb9aec978a27b",
+      "candidate_sha256": "9ff3abad1133a455f8d43d89feb5354ab9c6671163bf187d89d6b04d2c057617",
+      "normalized_sha256": "7ced8886bf20d3717ad66cf3a1a5471e5d3a16321430203fea9a54fc9a587ec3"
+    },
+    {
+      "mode": "shadow",
+      "main_sha256": "3ef78acf11b77ebd35fcd555cc0e7e82a2c37cb0645f1f966f59d46238de7b39",
+      "candidate_sha256": "3ef78acf11b77ebd35fcd555cc0e7e82a2c37cb0645f1f966f59d46238de7b39",
+      "normalized_sha256": "3ef78acf11b77ebd35fcd555cc0e7e82a2c37cb0645f1f966f59d46238de7b39"
+    }
+  ],
+  "note": "Fresh complete-output Node parity and positive moving/protected GC in native/shadow, both arms. Native and unrooted-alloca checks pass. Shadow checker retains one unsuppressed numeric-array initialization violation, identical fingerprint and IR in reference/candidate. Not a clean shadow verdict. Raw numeric-runtime optimization; no JSON/GC source change."
+}

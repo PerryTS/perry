@@ -1,0 +1,65 @@
+{
+  "started_utc": "2026-09-11T13:05:16Z",
+  "load_before": [
+    2.0703125,
+    1.9326171875,
+    1.84765625
+  ],
+  "host": "perry-macos.fritz.box",
+  "cpu": "Apple M1",
+  "memory": 8589934592,
+  "worker_sha256": "5138a6bf48fec32aed3c49382a2adb06d93dec2cbbca041e0c0cc6f398ca7e09",
+  "fixtures": [
+    {
+      "fixture": "escaped_1m",
+      "bytes": 990018,
+      "sha256": [
+        "52f2e30ddc036b9c0600a1ab088c7d00f6e40558540efa1f9315a0579bec8f56",
+        "30e96a5c906b1a88c204c517a8ee8674e084c7c7120714b69488817a2ff7b056",
+        "9781ff7fdc26d6c6fc54e79ac47e83114c6bc411c35440bae2b073883935598e",
+        "f794943a8d4f1d44c948c499305d07407ca38576adf9bcc4b1b0944cbd5106e3",
+        "b357998429b37d9cd0b5798704ea3af5b283f73a2598a79660f7315538eb03cf",
+        "b2d372309773165407fc14aacc34b7ac0315b8408e45e01b0504fba1c435f451",
+        "09ca6b6328fb1f9fd18a5b682095067311a2817280715cb38d29833275efe534",
+        "8c1ee888dfd237185f99fbd5d6973aee99aad1e29ba06e35969f3d6c36cbacb6"
+      ],
+      "distinct_contents": 8
+    }
+  ],
+  "baseline_worker_sha256": "3b598695750a197791464e08199b55ae16ffe34f9984146ac5669067189516e1",
+  "engines": [
+    "perry",
+    "node",
+    "bun",
+    "baseline"
+  ],
+  "verification_counts_by_mode": {
+    "rotating": [
+      2,
+      7,
+      9
+    ],
+    "same": [
+      9
+    ],
+    "select": [
+      9
+    ]
+  },
+  "source_sha256": {
+    "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/integer-remainder-r32/run-rotating.py": "ba31db533cc22a82ce8f9daa65a4a4134bd6aa9608ecc3f340cc2022098ad316",
+    "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/integer-remainder-r32/harness/rotating-worker.ts": "7541897acb2c7c35c0f5e762f8b2f28b9783feb26a42db107c1c4eb3af644b24",
+    "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/integer-remainder-r32/harness/rotating-worker.js": "f163f68f3d4c1d13720403ffb96d0afe4306ec0723f2015d3a66ab0c77fa56c8"
+  },
+  "commit": "c695f6509ed85999894a2f34418f057f32bcb363",
+  "versions": {
+    "node": "v26.5.1",
+    "bun": "1.3.14"
+  },
+  "load_after": [
+    1.9765625,
+    1.9208984375,
+    1.84423828125
+  ],
+  "finished_utc": "2026-09-11T13:05:44Z"
+}

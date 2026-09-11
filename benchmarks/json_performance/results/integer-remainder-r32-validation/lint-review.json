@@ -1,0 +1,8 @@
+{
+  "source_commit": "c695f6509ed85999894a2f34418f057f32bcb363",
+  "executed_passes": 73,
+  "executed_failures": 1,
+  "known_failure": "public benchmark freshness",
+  "file_cap_pass": true,
+  "production_hold_cleared": true
+}

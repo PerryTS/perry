@@ -1,0 +1,6 @@
+VERIFY escaped_1m rotating all engines passed
+VERIFY escaped_1m same all engines passed
+VERIFY escaped_1m select all engines passed
+TIMING escaped_1m rotating 158 calls per engine
+TIMING escaped_1m same 159 calls per engine
+TIMING escaped_1m select 2000000 calls per engine

@@ -1,0 +1,346 @@
+{
+  "parent": "benchmarks/json_performance/.work/stringify-token-proof-r31",
+  "files": [
+    {
+      "path": "validate-and-build.py",
+      "original_sha256": "d87f459f15299e420ab7fd1801bfbf84f819f3d5bc66eae67dcfaac0fbeaa585",
+      "derived_sha256": "d87f459f15299e420ab7fd1801bfbf84f819f3d5bc66eae67dcfaac0fbeaa585"
+    },
+    {
+      "path": "bootstrap-unused-validate-and-build.py",
+      "original_sha256": "639a489044d315b7928ec3b90572766f630974323c6833e86825306a8f0907e8",
+      "derived_sha256": "639a489044d315b7928ec3b90572766f630974323c6833e86825306a8f0907e8"
+    },
+    {
+      "path": "measure-changing-options.py",
+      "original_sha256": "bf3c200ba08ee6d1f90c0be241b6af2045db6881a107ddae44188aa0540303d3",
+      "derived_sha256": "bf3c200ba08ee6d1f90c0be241b6af2045db6881a107ddae44188aa0540303d3"
+    },
+    {
+      "path": "analyze-zero-retained.py",
+      "original_sha256": "695f483ec60c1792529ce01cced55760958e3265a7133a95a72cd8f8fc7330c2",
+      "derived_sha256": "695f483ec60c1792529ce01cced55760958e3265a7133a95a72cd8f8fc7330c2"
+    },
+    {
+      "path": "analyze-regression-recheck.py",
+      "original_sha256": "b05572ace82e8a616f0bd46d3bb1028253f7dc606fd03b8b0170ddfe2efcc689",
+      "derived_sha256": "b05572ace82e8a616f0bd46d3bb1028253f7dc606fd03b8b0170ddfe2efcc689"
+    },
+    {
+      "path": "run-options.py",
+      "original_sha256": "698166c0014b837ea1ac3edbe273fd7b9c2b406a53e970760f2bd36589b571a8",
+      "derived_sha256": "698166c0014b837ea1ac3edbe273fd7b9c2b406a53e970760f2bd36589b571a8"
+    },
+    {
+      "path": "validate-zero.py",
+      "original_sha256": "e0e5d53197e063b9c664107eeedd318054c2b8900220b27482e550f506616260",
+      "derived_sha256": "e0e5d53197e063b9c664107eeedd318054c2b8900220b27482e550f506616260"
+    },
+    {
+      "path": "analyze-large-options.py",
+      "original_sha256": "4f3d4e98d864b06fa00f922cd788f49c45ee81b34f738ce74f7afaccaedda10f",
+      "derived_sha256": "4f3d4e98d864b06fa00f922cd788f49c45ee81b34f738ce74f7afaccaedda10f"
+    },
+    {
+      "path": "analyze-changing-options.py",
+      "original_sha256": "dcad361f6e2ecd5c3b1933638b64314cc25d1986424ec3a1b20e7d81c62d1a29",
+      "derived_sha256": "dcad361f6e2ecd5c3b1933638b64314cc25d1986424ec3a1b20e7d81c62d1a29"
+    },
+    {
+      "path": "analyze-rotating.py",
+      "original_sha256": "fd2e84685baf7e6525dd96e7187dc4595db523740aa69e7944a56b2c9f574423",
+      "derived_sha256": "fd2e84685baf7e6525dd96e7187dc4595db523740aa69e7944a56b2c9f574423"
+    },
+    {
+      "path": "analyze-stringify-recheck.py",
+      "original_sha256": "52d1f788e2a3cc91eae4bcd3bcc4d51837750479848ce256842f669f4f492e17",
+      "derived_sha256": "52d1f788e2a3cc91eae4bcd3bcc4d51837750479848ce256842f669f4f492e17"
+    },
+    {
+      "path": "probe-lazy-baseline.py",
+      "original_sha256": "da65ba2bcc65be99759037329865c9be288b1f8cd09130669f15562fa45b4ccb",
+      "derived_sha256": "da65ba2bcc65be99759037329865c9be288b1f8cd09130669f15562fa45b4ccb"
+    },
+    {
+      "path": "copy-frozen-build.py",
+      "original_sha256": "d6dbe7cb0766acdf3069d118929a206ae445578e4f558c3141e0a53dfd72d6a3",
+      "derived_sha256": "c3206466ab061d227744b9392b14066eb6ad4a4c0476e9ec32f77a1156202727"
+    },
+    {
+      "path": "measure-small-options-recheck.py",
+      "original_sha256": "23611281efed36335a0b5431af5ab3770c07abbb2028fce756ce9be3ed3ce6c3",
+      "derived_sha256": "23611281efed36335a0b5431af5ab3770c07abbb2028fce756ce9be3ed3ce6c3"
+    },
+    {
+      "path": "measure-full.py",
+      "original_sha256": "f9ea6d91a552375018d9c9c36d0a55cc7c03af930bf546b279d50cdae92f15c4",
+      "derived_sha256": "f9ea6d91a552375018d9c9c36d0a55cc7c03af930bf546b279d50cdae92f15c4"
+    },
+    {
+      "path": "run-candidate-validation.py",
+      "original_sha256": "cadcba87c0282e393804a301fb871a31776bd65ed2fa0073e4e9e135613f9265",
+      "derived_sha256": "cadcba87c0282e393804a301fb871a31776bd65ed2fa0073e4e9e135613f9265"
+    },
+    {
+      "path": "measure-stringify-recheck.py",
+      "original_sha256": "e43f1dbfd33dec2c20805de7a9d4c05e37f74c0ac490a05957fe8a6cba49e1fc",
+      "derived_sha256": "e43f1dbfd33dec2c20805de7a9d4c05e37f74c0ac490a05957fe8a6cba49e1fc"
+    },
+    {
+      "path": "measure-regression-recheck.py",
+      "original_sha256": "e0351b4132f6796e99606bebd31dc43c1648176d7117a78e4fd83c1069749199",
+      "derived_sha256": "e0351b4132f6796e99606bebd31dc43c1648176d7117a78e4fd83c1069749199"
+    },
+    {
+      "path": "check-roots.py",
+      "original_sha256": "d6984fee9a9e0a71226fa456fe09763062763f21844b45f1381d99378237e99e",
+      "derived_sha256": "d6984fee9a9e0a71226fa456fe09763062763f21844b45f1381d99378237e99e"
+    },
+    {
+      "path": "complete-candidate-validation.py",
+      "original_sha256": "39e6d24e94fc3abb3344093a69792f1e07bc4c2e9c17e678fa564c3063ca3849",
+      "derived_sha256": "39e6d24e94fc3abb3344093a69792f1e07bc4c2e9c17e678fa564c3063ca3849"
+    },
+    {
+      "path": "run-after-build.py",
+      "original_sha256": "895a8c08de36a1815eed0cc505284c695fba312a780555f5e67c94420135c95d",
+      "derived_sha256": "49f6cf0cb56ff8f0a600f151ffa5d2d77018c977244ee99e828d64a84c706d68"
+    },
+    {
+      "path": "compare-emitters.py",
+      "original_sha256": "427a9fd327e172656e00d32a9a769bb2773a8c80106fd73c124aadeefa7eebeb",
+      "derived_sha256": "427a9fd327e172656e00d32a9a769bb2773a8c80106fd73c124aadeefa7eebeb"
+    },
+    {
+      "path": "run-lint.py",
+      "original_sha256": "b228808035eba5472e845e534d7799d2222ee142cef0a273cb941810fdfd53f8",
+      "derived_sha256": "b228808035eba5472e845e534d7799d2222ee142cef0a273cb941810fdfd53f8"
+    },
+    {
+      "path": "build-release.py",
+      "original_sha256": "f104da4b90eda0c4f2f28ef311a6bdd8b8cb4afc27c65a6d6569285b2955d1fe",
+      "derived_sha256": "f104da4b90eda0c4f2f28ef311a6bdd8b8cb4afc27c65a6d6569285b2955d1fe"
+    },
+    {
+      "path": "analyze-small-options-recheck.py",
+      "original_sha256": "0091b880041c1ed75f875ee8a2e0a060a73fad67c3b2625d3127e55ae7b2693c",
+      "derived_sha256": "0091b880041c1ed75f875ee8a2e0a060a73fad67c3b2625d3127e55ae7b2693c"
+    },
+    {
+      "path": "analyze-small-rotating-recheck.py",
+      "original_sha256": "0fba6080126b2157d699559f9476299a23b866ffecf511d272d12a9a32a5af00",
+      "derived_sha256": "0fba6080126b2157d699559f9476299a23b866ffecf511d272d12a9a32a5af00"
+    },
+    {
+      "path": "build-changing-worker.py",
+      "original_sha256": "9f1ff996614ff4c01a44b461487ab07ab40f2599d3e41791795285dd039c8c05",
+      "derived_sha256": "9f1ff996614ff4c01a44b461487ab07ab40f2599d3e41791795285dd039c8c05"
+    },
+    {
+      "path": "validate-fraction.py",
+      "original_sha256": "50d439538133260244b63d569e3c2a72e85cabeb7d1e780920c14f2b33a7be5a",
+      "derived_sha256": "50d439538133260244b63d569e3c2a72e85cabeb7d1e780920c14f2b33a7be5a"
+    },
+    {
+      "path": "run-changing-options.py",
+      "original_sha256": "4db8d68ed19d3d1b505d59b37bf0151d7fb2fda733146cca23e93228a99190c4",
+      "derived_sha256": "4db8d68ed19d3d1b505d59b37bf0151d7fb2fda733146cca23e93228a99190c4"
+    },
+    {
+      "path": "refresh-validation.py",
+      "original_sha256": "1a852adf608c591a7945e305c9c71091309cd7bf279a095bbe18effce4935a3c",
+      "derived_sha256": "1a852adf608c591a7945e305c9c71091309cd7bf279a095bbe18effce4935a3c"
+    },
+    {
+      "path": "analyze-retained.py",
+      "original_sha256": "77fb29d605b62a49c66e03b60d5c0bf15accb8932880cb3068805da937f60889",
+      "derived_sha256": "77fb29d605b62a49c66e03b60d5c0bf15accb8932880cb3068805da937f60889"
+    },
+    {
+      "path": "index-artifacts.py",
+      "original_sha256": "112d435460edd8bc4e438efffd06881fc6f761005131459d5c69f96f462a93e0",
+      "derived_sha256": "8eb86df9102438858424d4c7102bdc87ba096669a1bbbf7a39ed8b7c84ef99df"
+    },
+    {
+      "path": "run-zero-retained.py",
+      "original_sha256": "2d4a5a83fb29e91d1364f54e8948da58c8cec54f08b3545c1b19a14e462d197d",
+      "derived_sha256": "2d4a5a83fb29e91d1364f54e8948da58c8cec54f08b3545c1b19a14e462d197d"
+    },
+    {
+      "path": "archive-validation.py",
+      "original_sha256": "fa335d133c6726b7cc84b64b03f75597bff1c661be7108014f96f02a0b560a4a",
+      "derived_sha256": "fa335d133c6726b7cc84b64b03f75597bff1c661be7108014f96f02a0b560a4a"
+    },
+    {
+      "path": "run-focus.py",
+      "original_sha256": "052f3115e095de5308e230ac6332f9210484575514aa8049c1ade124975bf060",
+      "derived_sha256": "052f3115e095de5308e230ac6332f9210484575514aa8049c1ade124975bf060"
+    },
+    {
+      "path": "build-workers.py",
+      "original_sha256": "8ec388464aebad1d9d3b3a94cc332880a40a1df82040369f25e423cbcd15189a",
+      "derived_sha256": "8ec388464aebad1d9d3b3a94cc332880a40a1df82040369f25e423cbcd15189a"
+    },
+    {
+      "path": "validate-getter-baseline.py",
+      "original_sha256": "e8a9aa55d90dba9c874b90f6cdb8219406e35fc6b8cb68f7a261927b15da30fc",
+      "derived_sha256": "e8a9aa55d90dba9c874b90f6cdb8219406e35fc6b8cb68f7a261927b15da30fc"
+    },
+    {
+      "path": "archive-results.py",
+      "original_sha256": "fccc176edcee8d4df388f31248cd68837418a438191a3b183f0c497a3fcd97ee",
+      "derived_sha256": "d2c301d1370ea74b25e655c2923ff265d0af851443b1bdde9d8a3a13ea43d5ab"
+    },
+    {
+      "path": "measure-zero-retained.py",
+      "original_sha256": "de8de8302b063dd1c5a394ea8f0fbb5c339c70f00288fbc462f8acbfad4dc0f3",
+      "derived_sha256": "de8de8302b063dd1c5a394ea8f0fbb5c339c70f00288fbc462f8acbfad4dc0f3"
+    },
+    {
+      "path": "analyze-full.py",
+      "original_sha256": "3e1c44a315d5009ee31d5a1c5fa58f9384ccad261acb457d016a5b0a575926a3",
+      "derived_sha256": "3e1c44a315d5009ee31d5a1c5fa58f9384ccad261acb457d016a5b0a575926a3"
+    },
+    {
+      "path": "inspect-disassembly.py",
+      "original_sha256": "955bc47675072c38fc35370dd68b7fa39eeeefde1d94661e4546dc3eda1533e1",
+      "derived_sha256": "955bc47675072c38fc35370dd68b7fa39eeeefde1d94661e4546dc3eda1533e1"
+    },
+    {
+      "path": "measure-large-options.py",
+      "original_sha256": "56f414be35c07845d760bf3f4efabe7c3892a7e24f698acd10ac10bf408fe9ce",
+      "derived_sha256": "56f414be35c07845d760bf3f4efabe7c3892a7e24f698acd10ac10bf408fe9ce"
+    },
+    {
+      "path": "validate-changing-options.py",
+      "original_sha256": "2e65bdbd42801154589a417a920a461e6225ade84c6fd0c5cf4230155808a61c",
+      "derived_sha256": "2e65bdbd42801154589a417a920a461e6225ade84c6fd0c5cf4230155808a61c"
+    },
+    {
+      "path": "check-changing-roots.py",
+      "original_sha256": "0d804863d6b7200d9367791084a16d930f86ab548fea1b43e7e3d9c32125350c",
+      "derived_sha256": "0d804863d6b7200d9367791084a16d930f86ab548fea1b43e7e3d9c32125350c"
+    },
+    {
+      "path": "compare-json-entry-disassembly.py",
+      "original_sha256": "91a0dea93b67f020ebf10168173976d4784c85666996faf9acddd27e79720ba0",
+      "derived_sha256": "70ab1a1b013f315757443307044b7e4d6fb4bb8e5d77fae6857bdaac8adebb26"
+    },
+    {
+      "path": "analyze-large-recheck-options.py",
+      "original_sha256": "0c67c0e8abbc57c33e35ec92f57b24c4019a6518105b46300102bc799a4daab4",
+      "derived_sha256": "0c67c0e8abbc57c33e35ec92f57b24c4019a6518105b46300102bc799a4daab4"
+    },
+    {
+      "path": "measure-supplement.py",
+      "original_sha256": "b8a9283a8f493c05fefbdb8d8d781dc02f0a637864c7d6cda90e9e34e16a6c77",
+      "derived_sha256": "b8a9283a8f493c05fefbdb8d8d781dc02f0a637864c7d6cda90e9e34e16a6c77"
+    },
+    {
+      "path": "build-retained-zero-worker.py",
+      "original_sha256": "3eaa34802d18e6933535ff8c225744a7dc24defbefa597567b17c392398da562",
+      "derived_sha256": "3eaa34802d18e6933535ff8c225744a7dc24defbefa597567b17c392398da562"
+    },
+    {
+      "path": "run-rotating.py",
+      "original_sha256": "ba31db533cc22a82ce8f9daa65a4a4134bd6aa9608ecc3f340cc2022098ad316",
+      "derived_sha256": "ba31db533cc22a82ce8f9daa65a4a4134bd6aa9608ecc3f340cc2022098ad316"
+    },
+    {
+      "path": "validate-fixtures.py",
+      "original_sha256": "a789fbdf1a23ab3f247235e0a909464b0f0869a042497867f5792dcf7ce41b80",
+      "derived_sha256": "a789fbdf1a23ab3f247235e0a909464b0f0869a042497867f5792dcf7ce41b80"
+    },
+    {
+      "path": "check-emitter-roots.py",
+      "original_sha256": "76634a0dd4128f6d8bba5bcfd711ad67b92aeb3914d23740e2d1ba3e0854df22",
+      "derived_sha256": "76634a0dd4128f6d8bba5bcfd711ad67b92aeb3914d23740e2d1ba3e0854df22"
+    },
+    {
+      "path": "run-access.py",
+      "original_sha256": "66fe9672332f5aea8d00f06f35d378ab082f88b44afb2f16f51a4a32603afb8c",
+      "derived_sha256": "66fe9672332f5aea8d00f06f35d378ab082f88b44afb2f16f51a4a32603afb8c"
+    },
+    {
+      "path": "measure-access-recheck.py",
+      "original_sha256": "443358a5d37d49b6ab504197f21e441f648572e84da2d1aa01a09e50a8de9761",
+      "derived_sha256": "443358a5d37d49b6ab504197f21e441f648572e84da2d1aa01a09e50a8de9761"
+    },
+    {
+      "path": "validate-retained-zero.py",
+      "original_sha256": "db7631a047e0b67c008a45a61c8ca08588a089512e35a8d84d62e97930f78fc0",
+      "derived_sha256": "db7631a047e0b67c008a45a61c8ca08588a089512e35a8d84d62e97930f78fc0"
+    },
+    {
+      "path": "validate-options.py",
+      "original_sha256": "e870bfe1145fa558e47f0a9af1fde3efb18e30458f679a778f55f4b0c9d29cdc",
+      "derived_sha256": "e870bfe1145fa558e47f0a9af1fde3efb18e30458f679a778f55f4b0c9d29cdc"
+    },
+    {
+      "path": "measure-small-rotating-recheck.py",
+      "original_sha256": "75c692fcb1a6e8cfc86935712ac34742919093364212a5702d7cd6759056f6c7",
+      "derived_sha256": "75c692fcb1a6e8cfc86935712ac34742919093364212a5702d7cd6759056f6c7"
+    },
+    {
+      "path": "check-retained-roots.py",
+      "original_sha256": "5b6dc49229a667b21b5afe42806779ed44054d8eb8f013f941a8b9948a79f151",
+      "derived_sha256": "5b6dc49229a667b21b5afe42806779ed44054d8eb8f013f941a8b9948a79f151"
+    },
+    {
+      "path": "run-retained.py",
+      "original_sha256": "6aca9bb16bca7d1ccd28baa95a41bae00d4b9ff875e58788a5570c46bf8493da",
+      "derived_sha256": "6aca9bb16bca7d1ccd28baa95a41bae00d4b9ff875e58788a5570c46bf8493da"
+    },
+    {
+      "path": "stage.py",
+      "original_sha256": "a9adf0402058b7328fb8a8f37476e6ce45a7287e40650c6c3d58d1cc22c13683",
+      "derived_sha256": "e051d67fe6899361c47ad2f8e7784a94134d0c6ffca44c78523ed0d4f5f6e8e4"
+    },
+    {
+      "path": "bootstrap-unused-build-release.py",
+      "original_sha256": "f104da4b90eda0c4f2f28ef311a6bdd8b8cb4afc27c65a6d6569285b2955d1fe",
+      "derived_sha256": "f104da4b90eda0c4f2f28ef311a6bdd8b8cb4afc27c65a6d6569285b2955d1fe"
+    },
+    {
+      "path": "write-report.py",
+      "original_sha256": "63735eba86fcd825ff42266fd2950a1baf44cd9da1caa587a4e477b5da8eafbb",
+      "derived_sha256": "7e4e14d2b1ed332e5e4d9e5c46247635a02046ffd567e61ac0e7059b1cf83d59"
+    },
+    {
+      "path": "bootstrap-unused-run-lint.py",
+      "original_sha256": "b228808035eba5472e845e534d7799d2222ee142cef0a273cb941810fdfd53f8",
+      "derived_sha256": "b228808035eba5472e845e534d7799d2222ee142cef0a273cb941810fdfd53f8"
+    },
+    {
+      "path": "analyze-access-recheck.py",
+      "original_sha256": "62cc0d5c42c4072b7e0297a7c5e0708a8127154974416a4b2237c843577b9a05",
+      "derived_sha256": "62cc0d5c42c4072b7e0297a7c5e0708a8127154974416a4b2237c843577b9a05"
+    },
+    {
+      "path": "validate-emitters.py",
+      "original_sha256": "7c8b94fa0aa93788d130c994a70af921d102aa2a2c08acb87c3e2015df5b636e",
+      "derived_sha256": "7c8b94fa0aa93788d130c994a70af921d102aa2a2c08acb87c3e2015df5b636e"
+    },
+    {
+      "path": "analyze-extras.py",
+      "original_sha256": "b747bf477e1a0b4308ad6ab68884f151786da4ae6ec4069512ad1836d646728d",
+      "derived_sha256": "b747bf477e1a0b4308ad6ab68884f151786da4ae6ec4069512ad1836d646728d"
+    },
+    {
+      "path": "check-zero-roots.py",
+      "original_sha256": "18e78fdcc00cd2bd6f8d6318ea5f68cd0a17a82228fbdc2bf252d49734f2e329",
+      "derived_sha256": "18e78fdcc00cd2bd6f8d6318ea5f68cd0a17a82228fbdc2bf252d49734f2e329"
+    },
+    {
+      "path": "measure-large-recheck-options.py",
+      "original_sha256": "682583119410a68efc5953086db2dbc66fe1ccf54e2def559ed802da5bbf1b35",
+      "derived_sha256": "682583119410a68efc5953086db2dbc66fe1ccf54e2def559ed802da5bbf1b35"
+    },
+    {
+      "path": "compare-roots.py",
+      "original_sha256": "87500a5860178415e50257b5afdb93f3a3d3733c639ecbd92e3e764c68b9ebe7",
+      "derived_sha256": "87500a5860178415e50257b5afdb93f3a3d3733c639ecbd92e3e764c68b9ebe7"
+    }
+  ],
+  "note": "R32 replaces emitter/string-specific qualification with arithmetic/remainder validation, preserving full JSON controls and archive discipline."
+}

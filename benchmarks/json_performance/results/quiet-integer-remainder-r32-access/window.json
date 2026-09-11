@@ -1,0 +1,32 @@
+{
+  "owner": "json-perf-29348-1789130876",
+  "load_before": [
+    1.47705078125,
+    1.61328125,
+    1.6328125
+  ],
+  "started_utc": "2026-09-11T12:47:56Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/integer-remainder-r32/run-access.py",
+    "--worker",
+    ".work/integer-remainder-r32/candidate-access-worker",
+    "--baseline-worker",
+    ".work/integer-remainder-r32/main-access-worker",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--bun",
+    "/Users/perry/.bun/bin/bun",
+    "--results-dir",
+    "results/quiet-integer-remainder-r32-access"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.6875,
+    1.6533203125,
+    1.646484375
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-11T12:48:19Z"
+}

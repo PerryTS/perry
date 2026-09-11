@@ -1,0 +1,7 @@
+{
+  "original_path": "run-zero-retained.py",
+  "original_bytes": 6864,
+  "original_sha256": "2d4a5a83fb29e91d1364f54e8948da58c8cec54f08b3545c1b19a14e462d197d",
+  "gzip_sha256": "798cc4de0027522d61d1d75781347119de79b86e33335a22dfa78a3c82b60d8d",
+  "note": "Lossless archive encoding preserves the exact measured source, including trailing whitespace."
+}
