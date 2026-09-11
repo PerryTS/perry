@@ -107,7 +107,7 @@ mod tests {
             crate::array::js_array_set(arr, 1, JSValue::number(99.0));
             assert_eq!(lazy_get(hdr, 1).as_number(), 99.0);
             assert_eq!(ROOTED_READS.with(Cell::get), 2);
-            let grown = crate::array::js_array_set_jsvalue_extend(arr, 7, JSValue::number(77.0));
+            let grown = crate::array::js_array_set_jsvalue_extend(arr, 7, JSValue::number(77.0).bits());
             assert!(!grown.is_null());
             assert_eq!(lazy_get(hdr, 7).as_number(), 77.0);
             assert!(lazy_get(hdr, 6).is_undefined());
