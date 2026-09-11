@@ -1497,7 +1497,7 @@ jobs:
           # RFC-2945 abort guards that a JS throw trips — the opposite of the
           # shipped semantics. See the longer note in `cargo-test`.
           if printf '%s\n' "$SUITES" | grep -qE '^(perry|perry-stdlib) '; then
-            if printf '%s\n' "$SUITES" | grep -qE '^perry (bun_text_modules|import_meta_require_value|child_output_late_iterator|async_resource_own_bind) '; then
+            if printf '%s\n' "$SUITES" | grep -qE '^perry (bun_text_modules|bun_embedded_compression|import_meta_require_value|child_output_late_iterator|async_resource_own_bind) '; then
               # Prepare all require providers in one graph, outside the fixture's
               # timeout. A second perry-dev graph inside cargo test exceeded its
               # ten-minute bound on fresh runners (#9989/#9990).
