@@ -15,6 +15,8 @@
 use crate::value::JSValue;
 use std::cell::Cell;
 
+mod cached_read;
+pub use cached_read::lazy_get;
 mod iterative;
 pub(crate) use iterative::materialize_iterative;
 mod mutation;
@@ -1517,7 +1519,8 @@ pub fn count_array_length(tape: &[TapeEntry], root_idx: usize) -> u32 {
 /// live LazyArrayHeader pointer; the materialize step uses the
 /// arena allocator and may trigger GC (its `hdr` argument is
 /// walked-through by the tracer if so, so the header survives).
-pub unsafe fn lazy_get(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
+#[inline(never)]
+unsafe fn lazy_get_rooted(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
     if hdr.is_null() {
         return JSValue::from_bits(crate::value::TAG_UNDEFINED);
     }
