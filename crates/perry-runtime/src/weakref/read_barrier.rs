@@ -34,8 +34,9 @@
 //!   cycle in flight reads as "already live" to the NEXT cycle's trace. The
 //!   inertness is pinned by `weak_read_barrier_is_inert_outside_a_cycle`.
 //!
-//! Cost is one relaxed load of the process-wide barrier-active count on each
-//! successful WeakMap/WeakSet lookup or WeakRef target read.
+//! Each barrier performs one relaxed load of the process-wide barrier-active
+//! count. A successful WeakMap.get uses two barriers (key and value);
+//! WeakMap.has, WeakSet.has, and WeakRef target reads use one.
 //!
 //! # Scope
 //!
