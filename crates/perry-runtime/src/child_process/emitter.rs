@@ -87,6 +87,15 @@ pub(crate) fn cp_emit(target: f64, event: &str, args: &[f64]) -> bool {
     fired
 }
 
+/// Deliver real pipe EOF and retain it for readers attaching after the event.
+/// Keep this separate from public `.emit("end")`, which is not a pipe EOF.
+pub(crate) fn cp_readable_end(stream: f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
+    crate::node_stream::async_iterator::mark_foreign_readable_ended(stream.get_nanbox_f64());
+    cp_emit(stream.get_nanbox_f64(), "end", &[]);
+}
+
 // ----- method bodies (each receives the closure; slot 0 = host `this`) -----
 
 pub(crate) extern "C" fn cp_method_on(closure: *const ClosureHeader, event: f64, cb: f64) -> f64 {

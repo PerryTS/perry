@@ -1631,7 +1631,7 @@ fn cp_reactor_pump_inner() {
                     for fd in end_fds {
                         let stream = cp_stdio_stream(cp, fd);
                         if super::cp_object_ptr(stream).is_some() {
-                            cp_emit(stream, "end", &[]);
+                            super::cp_readable_end(stream);
                         }
                     }
                 }
