@@ -25,7 +25,6 @@ pub(super) fn count_bytes(bytes: &[u8]) -> u32 {
     }
 }
 
-#[cfg(any(test, not(target_arch = "aarch64")))]
 #[inline]
 pub(super) fn count(s: &str) -> usize {
     if s.len() < 64 {

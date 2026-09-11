@@ -10,7 +10,14 @@ pub(crate) unsafe fn string_from_json_bytes(
     let utf16_len = if bytes.is_ascii() {
         len
     } else {
-        compute_utf16_len(bytes.as_ptr(), len)
+        // No JSON backslash does not imply Unicode validity: a JS source
+        // string can contain raw WTF-8 lone surrogates. Only validated UTF-8
+        // may receive the escape-free proof. Keep surrogate normalization and
+        // flag derivation on the existing builder path under parse suppression.
+        match simdutf8::basic::from_utf8(bytes) {
+            Ok(text) => utf16_count::count(text) as u32,
+            Err(_) => return js_string_from_builder_bytes(bytes),
+        }
     };
     let size = std::mem::size_of::<StringHeader>() + bytes.len();
     let large_json_leaf = len >= JSON_MALLOC_OUTPUT_THRESHOLD;
@@ -34,8 +41,8 @@ pub(crate) unsafe fn string_from_json_bytes(
     };
     // `ParsedStr::Borrowed` reaches this constructor only when the JSON token
     // contained no backslash. JSON syntax itself excludes unescaped quote and
-    // control bytes, so the decoded payload can be quoted again without an
-    // escape scan.
+    // control bytes. The check above also excludes lone surrogates, so the
+    // decoded payload can be quoted again without an escape scan.
     init_string_header(header, utf16_len, len, len, 0, STRING_FLAG_JSON_ESCAPE_FREE);
     std::ptr::copy_nonoverlapping(bytes.as_ptr(), data, bytes.len());
     if large_json_leaf {

@@ -37,3 +37,13 @@ for (let i = 0; i < retained.length; i++) {
     checksum += parsed.text.length;
 }
 console.log('retained', retained.length, checksum);
+
+// Legal JSON input can contain raw JS surrogates without a JSON backslash.
+const rawValues: string[] = ['\ud800', '\udc00', 'ordinary prefix then \ud800', '한🙂', '\ud800\udc00'];
+for (let i = 0; i < rawValues.length; i++) {
+    const parsed: any = JSON.parse('{"text":"' + rawValues[i] + '"}');
+    console.log('raw-plain', i, JSON.stringify(parsed));
+    console.log('raw-pretty', i, JSON.stringify(parsed, null, 2));
+    console.log('raw-callback', i, JSON.stringify(parsed, identity));
+    console.log('raw-callback-pretty', i, JSON.stringify(parsed, identity, 2));
+}

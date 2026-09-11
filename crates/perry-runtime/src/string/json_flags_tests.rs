@@ -100,3 +100,31 @@ fn json_escape_flags_preserve_lone_surrogate_metadata() {
         assert_eq!(quoted(result), "\"plain heap\\ud800\"");
     }
 }
+
+#[test]
+fn json_token_proof_excludes_raw_lone_surrogates_at_scan_boundaries() {
+    unsafe {
+        let scope = RuntimeHandleScope::new();
+        for prefix in [0, 1, 13, 14, 15, 16, 61, 62, 63, 64, 127, 128, 255, 256] {
+            for (payload, quoted_tail, units, lone) in [
+                (&[0xed, 0xa0, 0x80][..], "\\ud800", 1, true),
+                (&[0xed, 0xbf, 0xbf][..], "\\udfff", 1, true),
+                ("한".as_bytes(), "한", 1, false),
+                ("🙂".as_bytes(), "🙂", 2, false),
+            ] {
+                let mut bytes = vec![b'a'; prefix];
+                bytes.extend_from_slice(payload);
+                let result = scope.root_string_ptr(string_from_json_bytes(&mut None, &bytes));
+                result.with_const_ptr::<StringHeader, _>(|p| {
+                    assert_eq!((*p).utf16_len, prefix as u32 + units);
+                    assert_eq!((*p).flags & STRING_FLAG_HAS_LONE_SURROGATES != 0, lone);
+                    assert_eq!((*p).flags & STRING_FLAG_JSON_ESCAPE_FREE != 0, !lone);
+                    assert_eq!(
+                        quoted(p as *mut StringHeader),
+                        format!("\"{}{}\"", "a".repeat(prefix), quoted_tail)
+                    );
+                });
+            }
+        }
+    }
+}
