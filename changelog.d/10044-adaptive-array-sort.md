@@ -6,7 +6,7 @@ bodies. Collection remains enabled, with regression coverage for actual
 relocation during comparison, collection getters, and allocating write-back.
 
 On the recorded M1 Max run, the original 100,000-element scriptc #289 sort
-measures 0.67 ms versus Node 2.06 ms (baseline Perry 104.37 ms).
+measures 0.61 ms versus Node 1.68 ms (baseline Perry 90.97 ms).
 Perry leads 24/25 measured cases. The PR includes raw samples, matching-build
 hashes, full-output verification, semantic regressions, and a reproducible
 harness in `benchmarks/array-sort/`. Results are local to this shared host.
