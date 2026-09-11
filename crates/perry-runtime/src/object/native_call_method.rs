@@ -1772,11 +1772,19 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                 // introduced `refreshed_args` and reached ten sites but not
                 // this one.
                 let call_args = refreshed_args();
-                let result = crate::closure::js_native_call_value(
-                    f64::from_bits(bound),
-                    call_args.as_ptr(),
-                    call_args.len(),
-                );
+                let result = if crate::proxy::js_proxy_is_proxy(f64::from_bits(bound)) == 1 {
+                    crate::proxy::call_proxy_value_with_this(
+                        f64::from_bits(bound),
+                        object(),
+                        &call_args,
+                    )
+                } else {
+                    crate::closure::js_native_call_value(
+                        f64::from_bits(bound),
+                        call_args.as_ptr(),
+                        call_args.len(),
+                    )
+                };
                 IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
                 return result;
             }
