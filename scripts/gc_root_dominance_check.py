@@ -485,6 +485,11 @@ NONCOLLECTING = {
     "js_gc_register_global_root",
     # pure value predicates / bit twiddling
     "js_is_truthy", "js_nanbox_get_pointer",
+    # string/compare.rs::js_string_compare -> utf16_cmp_bytes: pointer magnitude
+    # guards, immutable byte slices, bounded word scans and UTF-16 iterators.
+    # No allocations, locks, writes, coercions, or calls into the collector.
+    # The boxed js_string_compare_value does allocate and stays collecting.
+    "js_string_compare",
     # inline-cache guards: pure reads
     "js_typed_feedback_closure_direct_call_guard", "js_closure_exact_func_guard",
     "js_object_own_method_cache_miss",

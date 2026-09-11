@@ -356,6 +356,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_nm_install_zlib", VOID, &[]);
     module.declare_function("js_nm_install_all", VOID, &[]);
     module.declare_function("js_object_get_field_ic_miss", DOUBLE, &[I64, I64, PTR]);
+    module.declare_function(
+        "js_object_get_field_ic_miss_packed",
+        DOUBLE,
+        &[I64, I64, PTR, PTR],
+    );
     // #5391 path 3: full-outlined generic property GET. Collapses the inline
     // receiver-routing + monomorphic-IC + feedback + nullish-throw diamond to a
     // single call for oversized modules. Args: (obj_bits, key_handle, site_id,

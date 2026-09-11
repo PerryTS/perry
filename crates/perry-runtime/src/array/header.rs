@@ -1762,9 +1762,11 @@ pub(crate) unsafe fn refresh_array_numeric_layout(arr: *mut ArrayHeader) {
 /// [`refresh_array_numeric_layout`] for a head the caller already resolved.
 #[inline]
 pub(crate) unsafe fn refresh_array_numeric_layout_resolved(arr: *mut ArrayHeader) {
-    if array_slots_are_numeric(arr) {
-        rebuild_array_numeric_raw_f64(arr);
-    } else {
+    // Canonicalization already validates every slot. Avoid a separate full
+    // validation pass. A failing mixed payload may have had numeric boxes in
+    // its prefix canonicalized, which preserves their JS values; it must
+    // still lose both numeric-layout claims (including on a hole).
+    if !rebuild_array_numeric_raw_f64(arr) {
         clear_array_numeric_layout(arr);
     }
 }

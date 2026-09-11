@@ -7,6 +7,7 @@ mod scan_mode;
 mod scanner_shims;
 mod shadow_stack;
 mod stack_maps;
+mod stack_roots;
 pub(crate) use stack_maps::census_rows::stack_map_index_census;
 mod temp_roots;
 pub(super) use stack_maps::ensure_built as ensure_stack_maps_built;
@@ -36,6 +37,7 @@ pub use scanner_shims::{
     small_int_cache_mutable_root_scanner, small_int_cache_root_scanner, timer_mutable_root_scanner,
     timer_root_scanner, transition_cache_mutable_root_scanner, transition_cache_root_scanner,
 };
+pub(crate) use stack_roots::with_stack_roots;
 // The conservative-scan mode lives in `roots/scan_mode.rs` (split out in #7148
 // when this file crossed the 2,000-line gate) but every consumer names it
 // `gc::roots::…` or reaches it through `mod.rs`'s `pub use roots::*`, so the

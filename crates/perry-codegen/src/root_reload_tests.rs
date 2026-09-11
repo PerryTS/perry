@@ -722,10 +722,12 @@ fn the_masked_receiver_is_re_derived_not_just_the_load() {
 /// mask in the program into three extra instructions.
 #[test]
 fn a_masked_receiver_with_no_collection_point_is_left_alone() {
-    let mut f = masked_receiver("js_is_truthy");
-    let before = body(&f);
-    assert_eq!(apply_to_function(&mut f), 0);
-    assert_eq!(body(&f), before);
+    for helper in ["js_is_truthy", "js_string_compare"] {
+        let mut f = masked_receiver(helper);
+        let before = body(&f);
+        assert_eq!(apply_to_function(&mut f), 0);
+        assert_eq!(body(&f), before);
+    }
 }
 
 /// A derivation is only extended through PURE ops. A call in the middle of

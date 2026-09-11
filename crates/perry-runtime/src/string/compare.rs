@@ -41,7 +41,66 @@ use super::*;
 /// Mixed operands (one ASCII, one not) deliberately fall through unchanged
 /// rather than reasoning about lead-byte ranges: the general path already
 /// handles them, and this stays a decision about *both* operands.
+#[inline]
 pub(crate) fn utf16_cmp_bytes(a: &[u8], b: &[u8]) -> std::cmp::Ordering {
+    // For short common prefixes, find the first unequal byte a word at a
+    // time. An ASCII difference has the same order in UTF-8 and UTF-16 even
+    // if the equal prefix contains Unicode; no scan of the suffix is needed.
+    // A non-ASCII difference retains the full UTF-16/invalid-byte behavior.
+    let common = a.len().min(b.len());
+    if common <= 32 {
+        let mut offset = 0;
+        while offset + 8 <= common {
+            let left = u64::from_le_bytes(a[offset..offset + 8].try_into().unwrap());
+            let right = u64::from_le_bytes(b[offset..offset + 8].try_into().unwrap());
+            let unequal = left ^ right;
+            if unequal != 0 {
+                return compare_unequal_words(left, right, a, b);
+            }
+            offset += 8;
+        }
+        if offset < common && common >= 8 {
+            // Load the final word inside the payload, overlapping the equal
+            // prefix instead of comparing a short tail one byte at a time.
+            let tail = common - 8;
+            let left = u64::from_le_bytes(a[tail..common].try_into().unwrap());
+            let right = u64::from_le_bytes(b[tail..common].try_into().unwrap());
+            if left != right {
+                return compare_unequal_words(left, right, a, b);
+            }
+            return a.len().cmp(&b.len());
+        }
+        while offset < common {
+            let (x, y) = (a[offset], b[offset]);
+            if x != y {
+                return if (x | y) < 0x80 {
+                    x.cmp(&y)
+                } else {
+                    utf16_cmp_bytes_full(a, b)
+                };
+            }
+            offset += 1;
+        }
+        return a.len().cmp(&b.len());
+    }
+    utf16_cmp_bytes_full(a, b)
+}
+
+#[inline]
+fn compare_unequal_words(left: u64, right: u64, a: &[u8], b: &[u8]) -> std::cmp::Ordering {
+    if (left | right) & 0x8080_8080_8080_8080 == 0 {
+        return left.swap_bytes().cmp(&right.swap_bytes());
+    }
+    let shift = (left ^ right).trailing_zeros() & !7;
+    let (x, y) = ((left >> shift) as u8, (right >> shift) as u8);
+    if (x | y) < 0x80 {
+        x.cmp(&y)
+    } else {
+        utf16_cmp_bytes_full(a, b)
+    }
+}
+
+fn utf16_cmp_bytes_full(a: &[u8], b: &[u8]) -> std::cmp::Ordering {
     if a.is_ascii() && b.is_ascii() {
         return a.cmp(b);
     }
@@ -133,6 +192,9 @@ pub extern "C" fn js_string_equals(a: *const StringHeader, b: *const StringHeade
 /// Returns -1 / 0 / 1.
 #[no_mangle]
 pub extern "C" fn js_string_compare_value(a: f64, b: f64) -> i32 {
+    if let Some(order) = compare_primitive_strings(a, b) {
+        return order;
+    }
     // Phase 1 — ALLOCATING coercions only. `js_number_to_string` allocates,
     // and an allocation can run a GC cycle that MOVES the other operand's
     // heap string (evacuation); the decimal bytes are therefore copied into
@@ -186,6 +248,74 @@ pub extern "C" fn js_string_compare_value(a: f64, b: f64) -> i32 {
                 std::cmp::Ordering::Greater => 1,
             }
         },
+    }
+}
+
+/// Compare primitive strings without entering the allocating number-to-string
+/// adapter. Both heap and inline strings use the same UTF-16 ordering.
+#[inline(always)]
+pub(crate) fn compare_primitive_strings(a: f64, b: f64) -> Option<i32> {
+    let a_value = crate::JSValue::from_bits(a.to_bits());
+    let b_value = crate::JSValue::from_bits(b.to_bits());
+    if a_value.is_string() && b_value.is_string() {
+        if a.to_bits() == b.to_bits() {
+            return Some(0);
+        }
+        // Heap strings need no inline-string scratch storage. Keep that
+        // representation adapter out of the hot frame entirely. No allocation
+        // or callback can invalidate either borrowed byte view here.
+        unsafe {
+            let a_ptr = a_value.as_string_ptr();
+            let b_ptr = b_value.as_string_ptr();
+            let a_bytes = if a_ptr.is_null() {
+                &[]
+            } else {
+                std::slice::from_raw_parts(string_data(a_ptr), (*a_ptr).byte_len as usize)
+            };
+            let b_bytes = if b_ptr.is_null() {
+                &[]
+            } else {
+                std::slice::from_raw_parts(string_data(b_ptr), (*b_ptr).byte_len as usize)
+            };
+            return Some(match utf16_cmp_bytes(a_bytes, b_bytes) {
+                std::cmp::Ordering::Less => -1,
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => 1,
+            });
+        }
+    }
+    if !a_value.is_any_string() || !b_value.is_any_string() {
+        return None;
+    }
+    Some(compare_inline_or_mixed_strings(a, b))
+}
+
+#[inline(never)]
+fn compare_inline_or_mixed_strings(a: f64, b: f64) -> i32 {
+    if a.to_bits() == b.to_bits() {
+        return 0;
+    }
+    let mut a_scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
+    let mut b_scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
+    let (a_ptr, a_len) = crate::string::str_bytes_from_jsvalue(a, &mut a_scratch).unwrap();
+    let (b_ptr, b_len) = crate::string::str_bytes_from_jsvalue(b, &mut b_scratch).unwrap();
+    // There is no allocation or user-code window while these views are live.
+    // A null heap-string payload is the legacy empty view; from_raw_parts
+    // itself still requires a non-null pointer even for an empty slice.
+    let a_bytes = if a_len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(a_ptr, a_len as usize) }
+    };
+    let b_bytes = if b_len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(b_ptr, b_len as usize) }
+    };
+    match utf16_cmp_bytes(a_bytes, b_bytes) {
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => 1,
     }
 }
 
@@ -873,6 +1003,23 @@ mod utf16_cmp_ascii_fast_path_tests {
                 au.cmp(&bu)
             }
             _ => a.cmp(b),
+        }
+    }
+
+    #[test]
+    fn short_prefix_word_boundaries_match_full_utf16_order() {
+        let tails = corpus();
+        for len in [0, 1, 5, 7, 8, 9, 15, 16, 23, 24, 31, 32, 33, 64] {
+            for prefix in [b"a".as_slice(), "é".as_bytes(), &[0xff]] {
+                let prefix: Vec<u8> = prefix.iter().copied().cycle().take(len).collect();
+                for a in &tails {
+                    for b in &tails {
+                        let a = [prefix.as_slice(), a].concat();
+                        let b = [prefix.as_slice(), b].concat();
+                        assert_eq!(utf16_cmp_bytes(&a, &b), reference_cmp(&a, &b));
+                    }
+                }
+            }
         }
     }
 

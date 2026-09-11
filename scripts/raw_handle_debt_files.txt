@@ -53,7 +53,7 @@
 2 crates/perry-runtime/src/array/iter_methods.rs
 31 crates/perry-runtime/src/array/iterator.rs
 12 crates/perry-runtime/src/array/push_pop.rs
-14 crates/perry-runtime/src/array/sort.rs
+12 crates/perry-runtime/src/array/sort.rs
 12 crates/perry-runtime/src/async_hooks.rs
 5 crates/perry-runtime/src/atomics.rs
 7 crates/perry-runtime/src/builtins/console.rs

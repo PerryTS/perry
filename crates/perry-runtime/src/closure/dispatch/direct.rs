@@ -23,10 +23,10 @@
 //! Each input is invariant for a FIXED closure:
 //!
 //! * `closure->func_ptr` is written once by `js_closure_alloc` and never
-//!   mutated, and a `ClosureHeader` is non-movable, so `get_valid_func_ptr`
-//!   answers the same address every time. (A moving collection cannot change
-//!   it either — `direct` is a static CODE address; that is the same argument
-//!   `ComparatorCall::compare_at` documents.)
+//!   mutated. Collection can move the ClosureHeader, but its function field
+//!   still holds the same static code address. Callers must re-read the
+//!   closure argument from a current root before calling that code, as
+//!   `ComparatorCall::less_equal_at` documents.
 //! * `lookup_closure_rest` / `lookup_closure_arity` are keyed by that
 //!   func_ptr, and both registries are insert-only per key — the registration
 //!   happens at closure creation, before the closure can be passed anywhere.
@@ -157,13 +157,13 @@ macro_rules! define_direct_call_site {
     ) => {
         $(#[$meta])*
         #[derive(Clone, Copy)]
-        pub struct $site(Option<extern "C" fn(*const ClosureHeader, $(define_direct_call_site!(@f64 $arg)),+) -> f64>);
+        pub struct $site(extern "C" fn(*const ClosureHeader, $(define_direct_call_site!(@f64 $arg)),+) -> f64);
 
         impl $site {
             /// Resolve `closure` once, before the loop.
             #[inline]
             pub fn resolve(closure: *const ClosureHeader) -> Self {
-                $site(resolve_direct_func_ptr(closure, $arity).map(|func_ptr| unsafe {
+                $site(resolve_direct_func_ptr(closure, $arity).map_or($slow, |func_ptr| unsafe {
                     std::mem::transmute::<
                         *const u8,
                         extern "C" fn(*const ClosureHeader, $(define_direct_call_site!(@f64 $arg)),+) -> f64,
@@ -176,10 +176,7 @@ macro_rules! define_direct_call_site {
             /// did not resolve.
             #[inline]
             pub fn call(&self, closure: *const ClosureHeader, $($arg: f64),+) -> f64 {
-                match self.0 {
-                    Some(func) => func(closure, $($arg),+),
-                    None => $slow(closure, $($arg),+),
-                }
+                (self.0)(closure, $($arg),+)
             }
 
             /// Whether the direct target was resolved. Test-only: a "fast
@@ -187,7 +184,10 @@ macro_rules! define_direct_call_site {
             #[cfg(test)]
             #[allow(dead_code)]
             pub(crate) fn is_direct(&self) -> bool {
-                self.0.is_some()
+                !std::ptr::fn_addr_eq(
+                    self.0,
+                    $slow as extern "C" fn(*const ClosureHeader, $(define_direct_call_site!(@f64 $arg)),+) -> f64,
+                )
             }
         }
     };

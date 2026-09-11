@@ -459,6 +459,9 @@ fn rel_numeric_operand(v: f64) -> Option<f64> {
 /// both statically numeric. Returns a NaN-boxed boolean (`f64`).
 #[no_mangle]
 pub extern "C" fn js_rel_lt(x: f64, y: f64) -> f64 {
+    if let Some(order) = crate::string::compare_primitive_strings(x, y) {
+        return rel_bool_f64(order < 0);
+    }
     if let (Some(a), Some(b)) = (rel_numeric_operand(x), rel_numeric_operand(y)) {
         return rel_bool_f64(a < b);
     }
@@ -468,6 +471,9 @@ pub extern "C" fn js_rel_lt(x: f64, y: f64) -> f64 {
 /// `x > y` ⇔ `IsLessThan(y, x, false)` is true (right operand `ToPrimitive`'d first).
 #[no_mangle]
 pub extern "C" fn js_rel_gt(x: f64, y: f64) -> f64 {
+    if let Some(order) = crate::string::compare_primitive_strings(x, y) {
+        return rel_bool_f64(order > 0);
+    }
     if let (Some(a), Some(b)) = (rel_numeric_operand(x), rel_numeric_operand(y)) {
         return rel_bool_f64(a > b);
     }
@@ -477,6 +483,9 @@ pub extern "C" fn js_rel_gt(x: f64, y: f64) -> f64 {
 /// `x <= y` ⇔ `IsLessThan(y, x, false)` is `false` (not `true`, not `undefined`).
 #[no_mangle]
 pub extern "C" fn js_rel_le(x: f64, y: f64) -> f64 {
+    if let Some(order) = crate::string::compare_primitive_strings(x, y) {
+        return rel_bool_f64(order <= 0);
+    }
     if let (Some(a), Some(b)) = (rel_numeric_operand(x), rel_numeric_operand(y)) {
         return rel_bool_f64(a <= b);
     }
@@ -486,6 +495,9 @@ pub extern "C" fn js_rel_le(x: f64, y: f64) -> f64 {
 /// `x >= y` ⇔ `IsLessThan(x, y, true)` is `false` (not `true`, not `undefined`).
 #[no_mangle]
 pub extern "C" fn js_rel_ge(x: f64, y: f64) -> f64 {
+    if let Some(order) = crate::string::compare_primitive_strings(x, y) {
+        return rel_bool_f64(order >= 0);
+    }
     if let (Some(a), Some(b)) = (rel_numeric_operand(x), rel_numeric_operand(y)) {
         return rel_bool_f64(a >= b);
     }
@@ -863,6 +875,43 @@ mod rel_numeric_fastpath_tests {
     }
     fn is_true(v: f64) -> bool {
         v.to_bits() == TAG_TRUE_BITS
+    }
+
+    #[test]
+    fn primitive_string_relations_match_utf16_for_heap_and_inline_values() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let words = [
+            "",
+            "a",
+            "ab",
+            "abcde",
+            "abcdefghij",
+            "é",
+            "\u{10000}",
+            "\u{e000}",
+        ];
+        let mut values = Vec::new();
+        for word in words {
+            let heap = crate::string::js_string_from_bytes(word.as_ptr(), word.len() as u32);
+            values.push((
+                word,
+                scope.root_nanbox_f64(crate::value::js_nanbox_string(heap as i64)),
+            ));
+            if word.len() <= crate::value::SHORT_STRING_MAX_LEN {
+                let short = crate::value::JSValue::try_short_string(word.as_bytes()).unwrap();
+                values.push((word, scope.root_nanbox_f64(f64::from_bits(short.bits()))));
+            }
+        }
+        for (a, av) in &values {
+            for (b, bv) in &values {
+                let order = a.encode_utf16().cmp(b.encode_utf16());
+                let (x, y) = (av.get_nanbox_f64(), bv.get_nanbox_f64());
+                assert_eq!(is_true(js_rel_lt(x, y)), order.is_lt(), "{a:?} < {b:?}");
+                assert_eq!(is_true(js_rel_gt(x, y)), order.is_gt(), "{a:?} > {b:?}");
+                assert_eq!(is_true(js_rel_le(x, y)), !order.is_gt(), "{a:?} <= {b:?}");
+                assert_eq!(is_true(js_rel_ge(x, y)), !order.is_lt(), "{a:?} >= {b:?}");
+            }
+        }
     }
 
     #[test]

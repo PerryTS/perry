@@ -6681,22 +6681,16 @@ fn dynamic_bound_private_counter_is_safe(
 
 pub(crate) fn emit_js_value_is_number(ctx: &mut FnCtx<'_>, value: &str) -> String {
     let n_bits = ctx.block().bitcast_double_to_i64(value);
-    let tag = ctx.block().and(
+    // Every boxed tag occupies the positive suffix [0x7FF9_0000_0000_0000,
+    // 0x7FFF_FFFF_FFFF_FFFF]. A signed comparison rejects that whole suffix
+    // while admitting every negative IEEE value, including negative NaNs.
+    // INT32 boxes remain excluded: their payload still needs unboxing before
+    // floating-point arithmetic. This is exactly JSValue::is_number's range.
+    ctx.block().icmp_slt(
         I64,
         &n_bits,
-        &crate::nanbox::i64_literal(crate::nanbox::TAG_MASK),
-    );
-    let below = ctx.block().icmp_ult(
-        I64,
-        &tag,
         &crate::nanbox::i64_literal(crate::nanbox::SHORT_STRING_TAG),
-    );
-    let above = ctx.block().icmp_ugt(
-        I64,
-        &tag,
-        &crate::nanbox::i64_literal(crate::nanbox::STRING_TAG),
-    );
-    ctx.block().or(I1, &below, &above)
+    )
 }
 
 /// For-loop lowering: classic init / cond / body / update / exit CFG.

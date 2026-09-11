@@ -239,6 +239,32 @@ fn bound_slot_survives_and_is_rewritten_by_a_copying_minor() {
     assert_ne!(moved, child, "test did not actually evacuate the object");
 }
 
+#[test]
+fn native_stack_roots_survive_nested_frame_growth_and_real_evacuation() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let tagged_child = young_leaf();
+    let bare_child = young_leaf();
+    let before = shadow_stack_depth();
+    with_stack_roots([ptr_bits(tagged_child), bare_child as u64], |roots| {
+        // Grow the shadow buffer while the native cells remain bound.
+        let old_capacity = SHADOW.with(|cell| unsafe { (*cell.get()).cap });
+        let nested = js_shadow_frame_push(old_capacity as u32 + 1);
+        assert!(SHADOW.with(|cell| unsafe { (*cell.get()).cap }) > old_capacity);
+        let _ = gc_collect_minor();
+        for (index, old) in [(0, tagged_child), (1, bare_child)] {
+            let moved = (roots.get(index) & POINTER_MASK) as usize;
+            assert_ne!(moved, old, "the test must actually evacuate each object");
+            assert!(
+                crate::arena::pointer_in_nursery(moved) || crate::arena::pointer_in_old_gen(moved)
+            );
+        }
+        let current = roots.get(0);
+        js_shadow_frame_pop(nested);
+        assert_eq!(roots.get(0), current);
+    });
+    assert_eq!(shadow_stack_depth(), before);
+}
+
 /// The same property for an unbound slot: the mirror word itself is the root
 /// slot, so it must be rewritten in place.
 #[test]

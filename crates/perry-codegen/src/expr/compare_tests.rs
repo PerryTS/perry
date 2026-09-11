@@ -72,6 +72,39 @@ const JS_EQ_CALL: &str = "call i64 @js_eq(";
 const JS_LOOSE_EQ_CALL: &str = "call i64 @js_loose_eq(";
 
 #[test]
+fn dynamic_relations_admit_unboxed_numbers_with_one_signed_guard_per_operand() {
+    for (op, helper, pred) in [
+        (CompareOp::Lt, "js_rel_lt", "olt"),
+        (CompareOp::Le, "js_rel_le", "ole"),
+        (CompareOp::Gt, "js_rel_gt", "ogt"),
+        (CompareOp::Ge, "js_rel_ge", "oge"),
+    ] {
+        let ir = cmp_ir(
+            "dynamic_number_guard",
+            op,
+            Expr::LocalGet(X),
+            Expr::LocalGet(Y),
+        );
+        assert!(
+            ir.contains("icmp slt i64"),
+            "unboxed-number guard was not emitted:\n{ir}"
+        );
+        assert!(
+            ir.contains(&format!("fcmp {pred} double")),
+            "ordered NaN-aware comparison absent:\n{ir}"
+        );
+        assert!(
+            ir.contains(&format!("call double @{helper}(")),
+            "coercing fallback absent:\n{ir}"
+        );
+        assert!(
+            ir.contains("dyncmp.string") && ir.contains("call i32 @js_string_compare("),
+            "guarded heap-string comparison was not emitted:\n{ir}"
+        );
+    }
+}
+
+#[test]
 fn strict_eq_against_a_proven_symbol_is_raw_identity() {
     let ir = ir_for(
         "streq_proven_symbol",
@@ -736,4 +769,38 @@ fn local_typeof_number_literal_is_decided_inline_for_plain_doubles() {
         !ir.contains("call i64 @js_value_typeof(") && !ir.contains("call i32 @js_string_equals("),
         "no typeof string or string equality may be materialized:\n{ir}"
     );
+}
+
+#[test]
+fn dynamic_string_order_checks_bounds_and_ascii_before_word_ordering() {
+    for op in [CompareOp::Lt, CompareOp::Le, CompareOp::Gt, CompareOp::Ge] {
+        let ir = cmp_ir(
+            "short_string_order",
+            op,
+            Expr::LocalGet(X),
+            Expr::LocalGet(Y),
+        );
+        assert!(
+            ir.contains("strord.words") && ir.contains("strord.utf16"),
+            "{ir}"
+        );
+        assert!(
+            ir.contains("icmp ule i32") && ir.contains("-9187201950435737472"),
+            "{ir}"
+        );
+        assert!(ir.contains("call i64 @llvm.bswap.i64("), "{ir}");
+        assert!(
+            ir.contains("call i32 @js_string_compare("),
+            "non-ASCII/other lengths retain UTF-16: {ir}"
+        );
+        let words = super::class_field_barrier_tests::block_body(&ir, "strord.words.").unwrap();
+        assert_eq!(
+            words
+                .lines()
+                .filter(|l| l.contains("load i64") && l.contains("align 1"))
+                .count(),
+            4,
+            "{words}"
+        );
+    }
 }

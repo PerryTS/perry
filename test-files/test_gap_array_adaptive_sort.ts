@@ -61,6 +61,21 @@ check(coerced.join(",") === "1,3,5,7,9", "comparator ToNumber");
 const coercionObjects = [8, 2, 6, 4];
 coercionObjects.sort((a, b) => ({ valueOf() { return a - b; } }) as any);
 check(coercionObjects.join(",") === "2,4,6,8", "allocating result coercion");
+const infiniteResults = [3, 1, 2, 1];
+infiniteResults.sort((a, b) => a === b ? -0 : a < b ? -Infinity : Infinity);
+check(infiniteResults.join(",") === "1,1,2,3", "signed zero and infinite comparator results");
+for (const result of [undefined, false, -0, NaN]) {
+  const ties = [3, 1, 2];
+  ties.sort(() => result as any);
+  check(ties.join(",") === "3,1,2", "coerced equality preserves order");
+}
+for (const result of [1n, Object(1n), { valueOf() { return 1n; } },
+  { [Symbol.toPrimitive]() { return 1n; } }, Symbol("not-a-number")]) {
+  const input = [2, 1];
+  let threw = false;
+  try { input.sort(() => result as any); } catch (error) { threw = error instanceof TypeError; }
+  check(threw && input.join(",") === "2,1", "invalid numeric result throws before publication");
+}
 console.log("comparator coercion");
 
 const sparse = [3, , undefined, 1, , 2];
@@ -91,6 +106,95 @@ mutated.sort((a, b) => {
 });
 check(mutated.join(",") === "1,2,3,4,5,6", "snapshot across mutation");
 console.log("mutating and reentrant comparators");
+
+for (const action of ["shrink", "grow", "freeze", "getter"]) {
+  const receiver = [5, 4, 3, 2, 1];
+  let changed = false;
+  let threw = false;
+  try {
+    receiver.sort((a, b) => {
+      if (!changed) {
+        changed = true;
+        if (action === "shrink") receiver.length = 0;
+        if (action === "grow") receiver.push(8, 9);
+        if (action === "freeze") Object.freeze(receiver);
+        if (action === "getter") Object.defineProperty(receiver, "0", {
+          get() { return 7; }, configurable: true,
+        });
+      }
+      return a - b;
+    });
+  } catch (error) {
+    check(error instanceof TypeError, "write-back must throw TypeError");
+    threw = true;
+  }
+  check(threw === (action === "freeze" || action === "getter"), "write-back descriptor recheck");
+  const expected = action === "shrink" ? "1,2,3,4,5"
+    : action === "grow" ? "1,2,3,4,5,8,9"
+    : action === "freeze" ? "5,4,3,2,1" : "7,4,3,2,1";
+  check(receiver.join(",") === expected, "write-back after " + action);
+}
+console.log("receiver changes during sort");
+
+const sealedDuringSort = [3, , 1];
+let sealedOnce = false;
+let deletionThrew = false;
+try {
+  sealedDuringSort.sort((a, b) => {
+    if (!sealedOnce) {
+      sealedOnce = true;
+      sealedDuringSort[1] = 7;
+      Object.seal(sealedDuringSort);
+    }
+    return a - b;
+  });
+} catch (error) {
+  deletionThrew = error instanceof TypeError;
+}
+check(deletionThrew && sealedDuringSort.join(",") === "1,3,1", "strict deletion after callback sealing");
+console.log("strict sorted suffix deletion");
+
+// The final write-back can call setters after the comparator has finished.
+// Keep the private source and index workspace valid across those allocations.
+const setterRows: any[] = [];
+for (let i = 0; i < 128; i++) setterRows.push({key: 127 - i});
+const originalSetterRows = setterRows.slice();
+let setterSeen: any;
+let setterInstalled = false;
+setterRows.sort((a, b) => {
+  if (!setterInstalled) {
+    setterInstalled = true;
+    Object.defineProperty(setterRows, "0", {
+      configurable: true,
+      set(value) {
+        setterSeen = value;
+        const pressure: any[] = [];
+        for (let j = 0; j < 256; j++) pressure.push({j, text: "write-back-" + j});
+        check(pressure[255].j === 255, "setter allocations");
+      }
+    });
+  }
+  return a.key - b.key;
+});
+check(setterSeen === originalSetterRows[127], "setter receives sorted identity");
+for (let i = 1; i < 128; i++) {
+  check(setterRows[i] === originalSetterRows[127 - i], "sorted identities after allocating setter");
+}
+console.log("allocating setter write-back");
+
+for (const define of [false, true]) {
+  const proto: any = Object.prototype;
+  if (define) Object.defineProperty(proto, "1", {value: 2, writable: true, configurable: true});
+  else proto[1] = 2;
+  const inherited = [3, , 1];
+  try {
+    inherited.sort((a, b) => a - b);
+  } finally {
+    delete proto[1];
+  }
+  check(inherited.join(",") === "1,2,3", "indexed Object.prototype admission");
+}
+console.log("indexed prototype sorting");
 
 for (const throwAfter of [1, 17, 100]) {
   const throwing: number[] = [];

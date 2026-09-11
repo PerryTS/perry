@@ -217,6 +217,8 @@ const NON_COLLECTING: &[&str] = &[
     // made a REAL transposition indistinguishable from an aspirational entry.
     // `every_non_collecting_entry_is_a_real_runtime_export` now rejects both.
     "js_is_truthy",
+    // string/compare.rs: pointer guards, byte reads, bounded decoding only.
+    "js_string_compare",
     "js_nanbox_get_pointer",
     // inline-cache guards: pure reads
     "js_typed_feedback_closure_direct_call_guard",
