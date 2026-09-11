@@ -1,0 +1,26 @@
+{
+  "note": "Instrumented R25 rotating-parse diagnostics; not CPU benchmark results. Positive workload sampling coverage required.",
+  "cases": [
+    {
+      "fixture": "small_record",
+      "operation": "parse",
+      "mode": "r25",
+      "iterations": 20000000,
+      "warmup": 50000
+    },
+    {
+      "fixture": "long_string_1m",
+      "operation": "parse",
+      "mode": "r25",
+      "iterations": 20000,
+      "warmup": 8
+    },
+    {
+      "fixture": "unicode_1m",
+      "operation": "parse",
+      "mode": "r25",
+      "iterations": 20000,
+      "warmup": 8
+    }
+  ]
+}

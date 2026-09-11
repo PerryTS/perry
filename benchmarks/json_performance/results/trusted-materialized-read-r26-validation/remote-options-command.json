@@ -1,0 +1,17 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/trusted-materialized-read-r26/run-options.py",
+  "--worker",
+  ".work/trusted-materialized-read-r26/candidate-options",
+  "--baseline-worker",
+  ".work/trusted-materialized-read-r26/main-options",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--results-dir",
+  "results/quiet-trusted-materialized-read-r26-options"
+]

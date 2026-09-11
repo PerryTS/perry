@@ -1,0 +1,101 @@
+{
+  "command": [
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/zero-spacing-r25/frozen-build/perry",
+    "compile",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/zero-spacing-r25/test_json_zero_spacing.ts",
+    "--no-auto-optimize",
+    "--no-cache",
+    "-o",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/zero-spacing-r25/candidate-zero"
+  ],
+  "rows": [
+    {
+      "arm": "candidate",
+      "parser": "auto",
+      "mode": "normal",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0
+    },
+    {
+      "arm": "candidate",
+      "parser": "auto",
+      "mode": "scheduled",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 189,
+      "moved_objects": 17511
+    },
+    {
+      "arm": "candidate",
+      "parser": "auto",
+      "mode": "fullgc",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0
+    },
+    {
+      "arm": "candidate",
+      "parser": "tape",
+      "mode": "normal",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0
+    },
+    {
+      "arm": "candidate",
+      "parser": "tape",
+      "mode": "scheduled",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 189,
+      "moved_objects": 17499
+    },
+    {
+      "arm": "candidate",
+      "parser": "tape",
+      "mode": "fullgc",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0
+    },
+    {
+      "arm": "candidate",
+      "parser": "direct",
+      "mode": "normal",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0
+    },
+    {
+      "arm": "candidate",
+      "parser": "direct",
+      "mode": "scheduled",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 189,
+      "moved_objects": 17511
+    },
+    {
+      "arm": "candidate",
+      "parser": "direct",
+      "mode": "fullgc",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0
+    }
+  ],
+  "files": {
+    "benchmarks/json_performance/.work/zero-spacing-r25/test_json_zero_spacing.ts": "9cca6718bfd28571f0e3ab9e677d1b11f9bf1aa250335bf3511ebf5e021e0797",
+    "benchmarks/json_performance/.work/zero-spacing-r25/candidate-zero": "27ab9bf72645ea3850f3c009c8c623d29319526485fa586fdd38949be9ecad7c",
+    "benchmarks/json_performance/.work/zero-spacing-r25/frozen-build/perry": "fde1808df892dbba645ea4e66b85971c412940d515062abcc86ec07a1c70ac79",
+    "benchmarks/json_performance/.work/zero-spacing-r25/frozen-build/libperry_runtime.a": "2207fdcb4a53fa81e2a77722dfeac2650ddbeb76bd02f20ee47260b88c2427d4",
+    "benchmarks/json_performance/.work/zero-spacing-r25/frozen-build/libperry_stdlib.a": "a3d51fd8bab32984585d55149cda0d5a4212f5e03944c1241f3cafaee6bec80c"
+  }
+}

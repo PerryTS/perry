@@ -1,0 +1,20 @@
+{
+  "source": "crates/perry-runtime/src/string/mod.rs",
+  "source_sha256": "4baa5cb71410a293798160f94af1e42cc0ed326dc351ede219a3cb318e6d0282",
+  "extracted_function_sha256": "182109262aabdd63358753439454513b2d3b0f85f199acb6d5f9798c577b258b",
+  "note": "Standalone correctness model, not integrated code and not a performance measurement. Source-payload identity/header validity and JSON parse integration still require production proof and tests.",
+  "command": [
+    "rustc",
+    "--edition",
+    "2021",
+    "-O",
+    "benchmarks/json_performance/.work/parse-gaps-r25-profiles/utf16-hint-prototype.rs",
+    "-o",
+    "benchmarks/json_performance/.work/parse-gaps-r25-profiles/utf16-hint-prototype"
+  ],
+  "rustc_version": "rustc 1.100.0-nightly (f7d782a3b 2026-08-19)",
+  "prototype_source_sha256": "a4faa14bb0cc174308bf7daa0aa77b02b737888c5bec4282e3b2bc215752f4e3",
+  "prototype_binary_sha256": "1cfb076acb0abdd3567c60e02bf8eba909ea43d82ce4b4400c6ee6546e8708e7",
+  "observed_exit_code": 0,
+  "observed_stdout": "3065796 byte cases checked; 1473719 safely admitted, 1592077 conservatively rejected\n"
+}

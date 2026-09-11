@@ -1,0 +1,24 @@
+{
+  "owner": "json-perf-13519-1789117228",
+  "load_before": [
+    1.4521484375,
+    1.47900390625,
+    1.55712890625
+  ],
+  "started_utc": "2026-09-11T09:00:28Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/parse-gaps-r25-profiles/run-parse-profiles.py",
+    "--results-dir",
+    "results/quiet-parse-gaps-r25-profiles"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.65869140625,
+    1.5205078125,
+    1.5703125
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-11T09:00:43Z"
+}

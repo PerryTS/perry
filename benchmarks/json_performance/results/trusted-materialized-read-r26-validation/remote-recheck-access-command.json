@@ -1,0 +1,19 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/trusted-materialized-read-r26/run-access.py",
+  "--worker",
+  ".work/trusted-materialized-read-r26/candidate-access-worker",
+  "--baseline-worker",
+  ".work/trusted-materialized-read-r26/main-access-worker",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--repeat",
+  "11",
+  "--results-dir",
+  "results/quiet-trusted-materialized-read-r26-recheck-access"
+]

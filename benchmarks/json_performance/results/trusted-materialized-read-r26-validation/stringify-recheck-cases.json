@@ -1,0 +1,19 @@
+{
+  "note": "Independent R26 recheck of the two overlapping large-string stringify slowdowns in full50; original iterations/warmups, eleven repetitions.",
+  "cases": [
+    {
+      "fixture": "long_string_1m",
+      "operation": "stringify",
+      "iterations": 1922,
+      "warmup": 2,
+      "repetitions": 11
+    },
+    {
+      "fixture": "unicode_1m",
+      "operation": "stringify",
+      "iterations": 2475,
+      "warmup": 2,
+      "repetitions": 11
+    }
+  ]
+}

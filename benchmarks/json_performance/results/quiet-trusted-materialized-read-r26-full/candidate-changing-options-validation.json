@@ -1,0 +1,42 @@
+[
+  {
+    "arm": "candidate",
+    "fixture": "small_record",
+    "operation": "changing-plain",
+    "mode": "normal",
+    "matches_node": true,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "binary_sha256": "f0464c1324cd0604f6f4f053f5fe02cf331b4f0d4d48ad49b15f0212f62e4f79"
+  },
+  {
+    "arm": "candidate",
+    "fixture": "small_record",
+    "operation": "changing-plain",
+    "mode": "scheduled",
+    "matches_node": true,
+    "protected_retired_sets": 6,
+    "moved_objects": 12624,
+    "binary_sha256": "f0464c1324cd0604f6f4f053f5fe02cf331b4f0d4d48ad49b15f0212f62e4f79"
+  },
+  {
+    "arm": "candidate",
+    "fixture": "small_record",
+    "operation": "changing-zero",
+    "mode": "normal",
+    "matches_node": true,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "binary_sha256": "f0464c1324cd0604f6f4f053f5fe02cf331b4f0d4d48ad49b15f0212f62e4f79"
+  },
+  {
+    "arm": "candidate",
+    "fixture": "small_record",
+    "operation": "changing-zero",
+    "mode": "scheduled",
+    "matches_node": true,
+    "protected_retired_sets": 6,
+    "moved_objects": 12624,
+    "binary_sha256": "f0464c1324cd0604f6f4f053f5fe02cf331b4f0d4d48ad49b15f0212f62e4f79"
+  }
+]
