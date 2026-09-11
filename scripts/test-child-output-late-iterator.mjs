@@ -16,7 +16,10 @@ function run(name, executable, args, timeout, extraEnv = {}) {
   const result = spawnSync(executable, args, { cwd: work, env: { ...env, ...extraEnv },
     encoding: 'utf8', timeout, maxBuffer: 8 * 1024 * 1024 });
   fs.writeFileSync(path.join(work, `${name}.log`), `${result.stdout ?? ''}${result.stderr ?? ''}`);
-  if (result.error || result.status !== 0) throw new Error(`${name}: ${result.error ?? result.status}`);
+  if (result.error || result.status !== 0) {
+    throw new Error(`${name}: ${result.error ?? result.status} (signal ${result.signal ?? 'none'})\n` +
+      `${result.stdout ?? ''}${result.stderr ?? ''}`);
+  }
   return result.stdout;
 }
 try {
