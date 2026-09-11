@@ -149,33 +149,36 @@ mod tests {
         unsafe {
             let scope = crate::gc::RuntimeHandleScope::new();
             let hdr = scope.root_raw_mut_ptr(fixture(b"[10,20,30]"));
-            let arr = scope.root_raw_mut_ptr(force_materialize_lazy(hdr.get_raw_mut_ptr()));
-            let getter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-                descriptor_getter as *const u8,
-                0,
+            let arr = scope.root_raw_mut_ptr(hdr.with_mut_ptr(|hdr| force_materialize_lazy(hdr)));
+            let getter = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                crate::closure::js_closure_alloc(descriptor_getter as *const u8, 0) as i64,
             ));
             let desc = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
             let key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
-            crate::object::js_object_set_field_by_name(
-                desc.get_raw_mut_ptr(),
-                key,
-                crate::value::js_nanbox_pointer(getter.get_raw_mut_ptr::<u8>() as i64),
-            );
+            desc.with_mut_ptr(|desc| {
+                crate::object::js_object_set_field_by_name(desc, key, getter.get_nanbox_f64())
+            });
             let key = crate::string::js_string_from_bytes(b"1".as_ptr(), 1);
-            crate::object::js_object_define_property(
-                crate::value::js_nanbox_pointer(arr.get_raw_mut_ptr::<u8>() as i64),
-                f64::from_bits(JSValue::string_ptr(key).bits()),
-                crate::value::js_nanbox_pointer(desc.get_raw_mut_ptr::<u8>() as i64),
-            );
-            let resolved = resolve_materialized_array(hdr.get_raw_mut_ptr());
-            assert_ne!(
-                crate::array::array_object_flags_resolved(resolved)
-                    & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS,
-                0,
-                "the real defineProperty path must install a descriptor"
-            );
+            arr.with_mut_ptr::<crate::array::ArrayHeader, _>(|arr| {
+                desc.with_mut_ptr::<crate::ObjectHeader, _>(|desc| {
+                    crate::object::js_object_define_property(
+                        crate::value::js_nanbox_pointer(arr as i64),
+                        f64::from_bits(JSValue::string_ptr(key).bits()),
+                        crate::value::js_nanbox_pointer(desc as i64),
+                    )
+                })
+            });
+            hdr.with_mut_ptr(|hdr| {
+                let resolved = resolve_materialized_array(hdr);
+                assert_ne!(
+                    crate::array::array_object_flags_resolved(resolved)
+                        & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS,
+                    0,
+                    "the real defineProperty path must install a descriptor"
+                );
+            });
             assert_eq!(ROOTED_READS.load(Ordering::Relaxed), 0);
-            assert_eq!(lazy_get(hdr.get_raw_mut_ptr(), 1).as_number(), 61.0);
+            assert_eq!(hdr.with_mut_ptr(|hdr| lazy_get(hdr, 1)).as_number(), 61.0);
             assert_eq!(ROOTED_READS.load(Ordering::Relaxed), 1);
         }
     }
