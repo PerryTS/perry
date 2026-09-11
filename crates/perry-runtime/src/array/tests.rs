@@ -1202,6 +1202,44 @@ fn test_numeric_array_layout_bulk_rebuild_preserves_and_downgrades() {
 }
 
 #[test]
+fn concat_repeated_fixed_chunks_preserves_numeric_layout_and_order() {
+    let values: Vec<f64> = (0..32).map(|value| value as f64).collect();
+    let chunk = js_array_from_f64(values.as_ptr(), values.len() as u32);
+    let empty = js_array_alloc(0);
+    let mut result = js_array_concat(empty, js_array_alloc(0));
+    assert_eq!(result, empty, "an empty chunk must preserve array identity");
+
+    for _ in 0..1_024 {
+        result = js_array_concat(result, chunk);
+    }
+
+    assert_eq!(js_array_length(result), 32 * 1_024);
+    assert_eq!(js_array_is_numeric_f64_layout(result), 1);
+    for index in [0, 31, 32, 16_383, 32_767] {
+        assert_eq!(
+            js_array_numeric_get_f64_unboxed(result, index),
+            (index % 32) as f64
+        );
+    }
+}
+
+#[test]
+fn concat_source_destination_alias_uses_only_the_original_prefix() {
+    let values: Vec<f64> = (1..=20).map(|value| value as f64).collect();
+    let original = js_array_from_f64(values.as_ptr(), values.len() as u32);
+    let result = js_array_concat(original, original);
+
+    assert_eq!(clean_arr_ptr(original) as usize, result as usize);
+    assert_eq!(js_array_length(result), 40);
+    for index in 0..40 {
+        assert_eq!(
+            js_array_numeric_get_f64_unboxed(result, index),
+            values[index as usize % values.len()]
+        );
+    }
+}
+
+#[test]
 fn test_array_slice_value_index_coercion() {
     let values = [1.0, 2.0, 3.0, 4.0];
     let src = js_array_from_f64(values.as_ptr(), values.len() as u32);

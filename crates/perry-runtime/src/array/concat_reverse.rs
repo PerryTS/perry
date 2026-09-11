@@ -1,7 +1,6 @@
 //! concat / reverse / fill.
 use super::*;
 use crate::JSValue;
-use std::ptr;
 
 fn fill_to_number(value: f64) -> f64 {
     let jsval = JSValue::from_bits(value.to_bits());
@@ -122,42 +121,103 @@ pub extern "C" fn js_array_concat(
             return dest;
         }
 
-        let src_elements = (src as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
-
-        // Bulk-copy fast path: pre-grow once to fit dest_len+src_len,
-        // then memcpy the source elements into the dest tail and update
-        // length once. Replaces N individual `js_array_push_f64` calls
-        // (each doing a forwarding-chain follow + capacity check). The
-        // alias case (dest == src) is rare but possible — fall back to
-        // the per-element loop for that, since growing dest invalidates
-        // the src_elements pointer.
         let dest_resolved = clean_arr_ptr_mut(dest);
-        if !dest_resolved.is_null() && !std::ptr::eq(dest_resolved, src) {
-            let dest_len = (*dest_resolved).length;
-            let new_len = dest_len + src_len;
-            let result = if new_len > (*dest_resolved).capacity {
-                js_array_grow(dest_resolved, new_len)
-            } else {
-                dest_resolved
-            };
-            let dst_elements =
-                (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
-            // GC_STORE_AUDIT(BARRIERED): concat bulk copy is followed by exact layout/barrier rebuild.
-            ptr::copy_nonoverlapping(
-                src_elements,
-                dst_elements.add(dest_len as usize),
-                src_len as usize,
-            );
-            (*result).length = new_len;
-            rebuild_array_layout_exact(result);
+
+        // `a.push(...a)` reads the original prefix while growing the same
+        // array. Re-resolve the rooted source for every read because a push
+        // can replace the backing allocation and leave `src` as a forwarding
+        // stub. The captured `src_len` keeps the newly appended suffix out of
+        // the iteration, matching spread's pre-call argument materialization.
+        if !dest_resolved.is_null() && std::ptr::eq(dest_resolved, src) {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let source_handle = scope.root_raw_const_ptr(src);
+            let mut result = dest_resolved;
+            for i in 0..src_len as usize {
+                let source = clean_arr_ptr(source_handle.get_raw_const_ptr::<ArrayHeader>());
+                if source.is_null() {
+                    break;
+                }
+                let source_elements =
+                    (source as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+                let source_value = *source_elements.add(i);
+                let value = if source_value.to_bits() == crate::value::TAG_HOLE {
+                    f64::from_bits(crate::value::TAG_UNDEFINED)
+                } else {
+                    source_value
+                };
+                result = js_array_push_f64(result, value);
+            }
             return result;
         }
 
-        // Fallback: per-element push (handles aliasing + null dest).
-        let mut result = dest;
+        // A statically array-shaped receiver can still be a Proxy or an
+        // object-backed Array subclass. Preserve the public push dispatch for
+        // those receivers so setters/traps and subclass storage remain live.
+        if dest_resolved.is_null() {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let source_handle = scope.root_raw_const_ptr(src);
+            let mut result = if dest.is_null() {
+                js_array_alloc(src_len)
+            } else {
+                dest
+            };
+            for i in 0..src_len as usize {
+                let source = clean_arr_ptr(source_handle.get_raw_const_ptr::<ArrayHeader>());
+                if source.is_null() {
+                    break;
+                }
+                let source_elements =
+                    (source as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+                let source_value = *source_elements.add(i);
+                let value = if source_value.to_bits() == crate::value::TAG_HOLE {
+                    f64::from_bits(crate::value::TAG_UNDEFINED)
+                } else {
+                    source_value
+                };
+                result = js_array_push_f64(result, value);
+            }
+            return result;
+        }
+
+        // Grow once, then publish only the newly appended slots through the
+        // ordinary array store protocol. The destination's existing layout
+        // and remembered-set coverage survive `js_array_grow`; rebuilding the
+        // layout from slot zero after every fixed-size append made repeated
+        // `push(...chunk)` scan the complete accumulated prefix and therefore
+        // grow quadratically. Advancing `length` one slot at a time keeps the
+        // all-pointer and homogeneous-element append proofs exact, while each
+        // new edge receives its layout note and write barrier.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let source_handle = scope.root_raw_const_ptr(src);
+        let dest_handle = scope.root_raw_mut_ptr(dest_resolved);
+        let dest_len = (*dest_resolved).length;
+        let new_len = dest_len + src_len;
+        let result = if new_len > (*dest_resolved).capacity {
+            js_array_grow(dest_handle.get_raw_mut_ptr::<ArrayHeader>(), new_len)
+        } else {
+            dest_handle.get_raw_mut_ptr::<ArrayHeader>()
+        };
+        let source = clean_arr_ptr(source_handle.get_raw_const_ptr::<ArrayHeader>());
+        if source.is_null() || result.is_null() {
+            return result;
+        }
+        let source_elements =
+            (source as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
         for i in 0..src_len as usize {
-            let element = *src_elements.add(i);
-            result = js_array_push_f64(result, element);
+            let source_value = *source_elements.add(i);
+            // Array iteration observes a hole as `undefined`; the internal
+            // TAG_HOLE sentinel must not escape into the destination.
+            let value = if source_value.to_bits() == crate::value::TAG_HOLE {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            } else {
+                source_value
+            };
+            crate::string::js_string_addref_if_heap_string(value);
+            let index = (*result).length as usize;
+            // GC_STORE_AUDIT(BARRIERED): note_array_slot records layout and
+            // emits the write barrier before the slot becomes reachable.
+            note_array_slot(result, index, value.to_bits());
+            (*result).length += 1;
         }
         result
     }
