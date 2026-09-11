@@ -1,27 +1,43 @@
-//! #10048: emitting an earlier branch does not initialize a sibling branch.
+//! #10048: a boxed Let's earlier emitted copy may never execute on this path.
 use perry_hir::types::Type;
 use perry_hir::{Expr, Function, Module, Param, Stmt};
 
-fn branch(tdz: bool) -> Vec<Stmt> {
+fn branch(initialized: bool) -> Vec<Stmt> {
     vec![
-        if tdz {
-            Stmt::PreallocateTdzBoxes(vec![101])
-        } else {
-            Stmt::PreallocateBoxes(vec![101])
-        },
         Stmt::Let {
             id: 101,
             name: "callback".into(),
             ty: Type::Any,
             mutable: true,
-            init: Some(Expr::Integer(40)),
+            init: initialized.then_some(Expr::Integer(40)),
+        },
+        Stmt::Let {
+            id: 102,
+            name: "writer".into(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(Expr::Closure {
+                func_id: 2,
+                params: Vec::new(),
+                return_type: Type::Any,
+                body: vec![Stmt::Expr(Expr::LocalSet(101, Box::new(Expr::Integer(42))))],
+                captures: vec![101],
+                mutable_captures: vec![101],
+                captures_this: false,
+                captures_new_target: false,
+                enclosing_class: None,
+                is_arrow: true,
+                is_async: false,
+                is_generator: false,
+                is_strict: true,
+            }),
         },
         Stmt::Return(Some(Expr::LocalGet(101))),
     ]
 }
 
-fn assert_each_continuation_allocates(tdz: bool) {
-    let mut module = Module::new("prealloc_continuation.ts");
+fn assert_each_continuation_allocates(initialized: bool) {
+    let mut module = Module::new("boxed_continuation.ts");
     module.functions.push(Function {
         id: 1,
         name: "resume".into(),
@@ -38,8 +54,8 @@ fn assert_each_continuation_allocates(tdz: bool) {
         return_type: Type::Any,
         body: vec![Stmt::If {
             condition: Expr::LocalGet(100),
-            then_branch: branch(tdz),
-            else_branch: Some(branch(tdz)),
+            then_branch: branch(initialized),
+            else_branch: Some(branch(initialized)),
         }],
         is_async: false,
         is_generator: false,
@@ -65,11 +81,11 @@ fn assert_each_continuation_allocates(tdz: bool) {
         2,
         "each continuation must allocate:\n{ir}"
     );
-    let seed = if tdz {
-        crate::nanbox::TAG_TDZ_I64
-    } else {
-        crate::nanbox::TAG_UNDEFINED_I64
-    };
+    let seed = crate::nanbox::TAG_UNDEFINED_I64;
+    assert!(
+        ir.contains("boxed.reuse.allocate"),
+        "missing-cell allocation must be conditional"
+    );
     let mut slots = Vec::new();
     for allocation in allocations {
         assert!(
@@ -101,11 +117,11 @@ fn assert_each_continuation_allocates(tdz: bool) {
 }
 
 #[test]
-fn each_plain_continuation_allocates_its_cell() {
-    assert_each_continuation_allocates(false);
+fn initialized_boxed_let_materializes_a_missing_cell() {
+    assert_each_continuation_allocates(true);
 }
 
 #[test]
-fn each_tdz_continuation_allocates_its_cell() {
-    assert_each_continuation_allocates(true);
+fn uninitialized_boxed_let_materializes_a_missing_cell() {
+    assert_each_continuation_allocates(false);
 }
