@@ -1588,7 +1588,12 @@ pub unsafe extern "C" fn js_json_stringify_full(
     let no_replacer = replacer_bits == TAG_NULL || replacer_bits == TAG_UNDEFINED;
     let no_spacer =
         spacer_bits == TAG_NULL || spacer_bits == TAG_UNDEFINED || spacer_bits == TAG_FALSE;
-    if no_replacer && no_spacer {
+    // Numeric zero needs no indentation or observable coercion. Admit it to
+    // the canonical emitters only; leave lazy source-copy eligibility below
+    // unchanged so zero spacing still reaches the general lazy-array walk.
+    let compact_emitter_spacer =
+        no_spacer || spacer_f64 == 0.0 || spacer_bits == crate::value::INT32_TAG;
+    if no_replacer && compact_emitter_spacer {
         // These primitives cannot invoke toJSON. Restrict the other arguments
         // to inert values so replacers and spacer coercions remain observable.
         if let Some(result) = super::stringify_small::try_primitive(value_bits) {
