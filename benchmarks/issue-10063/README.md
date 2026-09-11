@@ -120,4 +120,4 @@ Runtime formatting, test registration, file-size, GC store, address-class,
 root-holder, rekey, and raw-handle audits pass. `pre-tag-check.sh --quick` reports
 two remaining checkout/host limitations: workspace formatting exceeds Windows'
 command-length limit, and the public benchmark evidence is stale (also observed
-on the baseline). No workspace version or release metadata was changed.
+on the baseline). The workspace version, CLAUDE.md, and CHANGELOG.md are unchanged.
