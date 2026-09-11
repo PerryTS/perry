@@ -17,9 +17,9 @@
   2. **Let the install be the gate.** `apt-get update`'s exit status aggregates
      sources we depend on with sources we do not, so it cannot answer the
      question we care about. The update is advisory; the `apt-get install` that
-     follows decides. That is why `setup-llvm22` stayed green through all three
-     outages while its neighbours failed — it already verified by reaching for
-     what it came for.
+     follows decides. `setup-llvm22` previously depended on
+     `sudo apt-get update -qq`; this change introduces its package-resolution
+     fallback when the update fails.
 
   The removal is written as an `if` rather than `... || true`, because
   `scripts/gc_gate_wiring_check.py` rightly rejects `|| true` inside the

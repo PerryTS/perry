@@ -107,6 +107,7 @@ sleep() { echo 'unexpected wait' >&2; exit 99; }
     def test_tarball_set_matches_names_not_just_count(self):
         source = step('npm-publish', 'Bundle exact npm')
         for names, expected in [(['perryts-perry-a-1.tgz', 'perryts-perry-1.tgz'], 0),
+                                ([], 1),
                                 (['perryts-perry-a-1.tgz'], 1),
                                 (['perryts-perry-a-1.tgz', 'wrong-1.tgz'], 1),
                                 (['perryts-perry-a-1.tgz', 'perryts-perry-1.tgz', 'extra.tgz'], 1)]:
@@ -121,6 +122,11 @@ sleep() { echo 'unexpected wait' >&2; exit 99; }
                 (root / 'socket-scan-receipt.json').write_text('{}')
                 result = shell(source, cwd=root)
                 self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+                if expected:
+                    self.assertIn('  on disk:', result.stderr)
+                    self.assertNotIn('unbound variable', result.stderr)
+                    for name in names:
+                        self.assertIn('npm/fixture/' + name, result.stderr)
 
     def test_wrapper_is_withheld_when_visibility_fails(self):
         source = step('npm-publish', 'npm publish exact')

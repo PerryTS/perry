@@ -10,3 +10,5 @@
   both publication time and the expected immutable hash before releasing the
   wrapper. Failure-path tests run in lint, including an actually stalled local
   HTTP response and proof that failed visibility withholds wrapper publication.
+- Preserve missing-tarball diagnostics with an empty array on Bash 3.2, and
+  correct the historical description of the LLVM apt action's update handling.

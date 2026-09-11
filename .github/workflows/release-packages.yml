@@ -2428,12 +2428,12 @@ jobs:
           done
           if [ -n "$missing" ]; then
             echo "::error::manifest package(s) have no packed tarball:$missing" >&2
-            printf '  on disk: %s\n' "${proofs[@]}" >&2
+            printf '  on disk: %s\n' ${proofs[@]+"${proofs[@]}"} >&2
             exit 1
           fi
           if [ "${#proofs[@]}" -ne "${#want[@]}" ]; then
             echo "::error::found ${#proofs[@]} tarball(s) but the manifest lists ${#want[@]}; an unexpected tarball is present." >&2
-            printf '  on disk: %s\n' "${proofs[@]}" >&2
+            printf '  on disk: %s\n' ${proofs[@]+"${proofs[@]}"} >&2
             exit 1
           fi
           echo "${#want[@]} exact tarballs match the manifest by name."
