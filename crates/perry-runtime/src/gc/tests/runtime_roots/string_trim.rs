@@ -67,12 +67,13 @@ fn trim_roots_source_across_destination_allocation() {
     let scope = RuntimeHandleScope::new();
     let result_root = scope.root_string_ptr(result);
     drain_scheduled_minor_gc(before, "trim destination allocation");
-    let result_now = result_root.get_raw_const_ptr::<crate::StringHeader>();
-    assert_payload(result_now, &bytes.as_bytes()[2..bytes.len() - 2]);
-    assert_eq!(unsafe { (*result_now).utf16_len }, 1500);
-    let (source_now, cached_result) = trim_cache::test_trim_cache_pair();
-    assert_payload(source_now, bytes.as_bytes());
-    assert_eq!(cached_result.cast_const(), result_now);
+    result_root.with_const_ptr(|result_now: *const crate::StringHeader| {
+        assert_payload(result_now, &bytes.as_bytes()[2..bytes.len() - 2]);
+        assert_eq!(unsafe { (*result_now).utf16_len }, 1500);
+        let (source_now, cached_result) = trim_cache::test_trim_cache_pair();
+        assert_payload(source_now, bytes.as_bytes());
+        assert_eq!(cached_result.cast_const(), result_now);
+    });
 }
 
 #[test]

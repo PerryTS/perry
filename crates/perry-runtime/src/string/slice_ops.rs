@@ -350,7 +350,9 @@ fn trim_impl(s: *const StringHeader, trim_start: bool, trim_end: bool) -> *mut S
     // string_copy_range re-reads its rooted source AFTER allocating. Never
     // hand the allocator a borrowed pointer into the moving source payload.
     let result = string_copy_range(s, start, (end - start) as u32, utf16_len, flags);
-    trim_cache::remember(source.get_raw_const_ptr::<StringHeader>(), result, mode);
+    source.with_const_ptr(|source_now: *const StringHeader| {
+        trim_cache::remember(source_now, result, mode)
+    });
     result
 }
 

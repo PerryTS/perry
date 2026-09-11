@@ -37,31 +37,32 @@ fn utf16_index_follows_a_moved_string_without_retaining_dead_strings() {
 
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
-    let moved = live.get_raw_const_ptr::<crate::StringHeader>();
-    assert_ne!(
-        moved as usize, original as usize,
-        "fixture must actually move"
-    );
-    let entries = test_utf16_index_entries();
-    let count = before
-        .iter()
-        .find(|&&(owner, _)| owner == original as usize)
-        .unwrap()
-        .1;
-    assert!(
-        entries.contains(&(moved as usize, count)),
-        "relocation must preserve checkpoints"
-    );
-    assert!(
-        !entries.iter().any(|&(owner, _)| owner == dead as usize),
-        "cache must be weak"
-    );
-    for i in [1279, 0, 1277, 1278, 513, 1] {
-        assert_eq!(
-            js_string_char_code_at(moved, i),
-            text.encode_utf16().nth(i as usize).unwrap() as f64
+    live.with_const_ptr(|moved: *const crate::StringHeader| {
+        assert_ne!(
+            moved as usize, original as usize,
+            "fixture must actually move"
         );
-    }
+        let entries = test_utf16_index_entries();
+        let count = before
+            .iter()
+            .find(|&&(owner, _)| owner == original as usize)
+            .unwrap()
+            .1;
+        assert!(
+            entries.contains(&(moved as usize, count)),
+            "relocation must preserve checkpoints"
+        );
+        assert!(
+            !entries.iter().any(|&(owner, _)| owner == dead as usize),
+            "cache must be weak"
+        );
+        for i in [1279, 0, 1277, 1278, 513, 1] {
+            assert_eq!(
+                js_string_char_code_at(moved, i),
+                text.encode_utf16().nth(i as usize).unwrap() as f64
+            );
+        }
+    });
 }
 
 #[test]

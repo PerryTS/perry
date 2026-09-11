@@ -17,25 +17,22 @@ fn sequential_decode_work_is_linear() {
         let s = scope.root_string_ptr(js_string_from_str(&text));
         prune_dead_utf16_indexes(&|_| true);
         reset_steps();
-        for (i, &unit) in expected.iter().enumerate() {
-            assert_eq!(
-                js_string_char_code_at(s.get_raw_const_ptr(), i as i32),
-                unit as f64
+        s.with_const_ptr(|s_ptr: *const StringHeader| {
+            for (i, &unit) in expected.iter().enumerate() {
+                assert_eq!(js_string_char_code_at(s_ptr, i as i32), unit as f64);
+            }
+            assert!(
+                steps() >= expected.len(),
+                "the public API must exercise the indexed decoder"
             );
-        }
-        assert!(
-            steps() >= expected.len(),
-            "the public API must exercise the indexed decoder"
-        );
-        assert!(
-            steps() <= expected.len() * 2,
-            "prefix decoding must not restart per index"
-        );
-        assert!(test_utf16_index_entries().iter().any(|&(owner, count)| {
-            owner == s.get_raw_const_ptr::<StringHeader>() as usize
-                && count > 0
-                && count <= text.len() / CHECKPOINT_BYTES
-        }));
+            assert!(
+                steps() <= expected.len() * 2,
+                "prefix decoding must not restart per index"
+            );
+            assert!(test_utf16_index_entries().iter().any(|&(owner, count)| {
+                owner == s_ptr as usize && count > 0 && count <= text.len() / CHECKPOINT_BYTES
+            }));
+        });
     }
     prune_dead_utf16_indexes(&|_| true);
 }
@@ -95,7 +92,7 @@ fn at_preserves_surrogate_halves_at_positive_and_negative_indexes() {
         ));
         for (i, &unit) in expected.iter().enumerate() {
             for index in [i as i32, i as i32 - expected.len() as i32] {
-                let ch = js_string_at(s.get_raw_const_ptr(), index);
+                let ch = s.with_const_ptr(|s_ptr| js_string_at(s_ptr, index));
                 let ptr = crate::value::js_get_string_pointer_unified(ch) as *const StringHeader;
                 assert_eq!(js_string_char_code_at(ptr, 0), unit as f64);
                 assert_eq!(unsafe { (*ptr).utf16_len }, 1);
@@ -103,7 +100,8 @@ fn at_preserves_surrogate_halves_at_positive_and_negative_indexes() {
         }
         for index in [expected.len() as i32, -(expected.len() as i32) - 1] {
             assert_eq!(
-                js_string_at(s.get_raw_const_ptr(), index).to_bits(),
+                s.with_const_ptr(|s_ptr| js_string_at(s_ptr, index))
+                    .to_bits(),
                 crate::value::TAG_UNDEFINED
             );
         }
@@ -119,15 +117,15 @@ fn cache_distinguishes_strings_and_invalidates_in_place_appends() {
     let b = scope.root_string_ptr(js_string_from_str(&"ä🦀".repeat(100)));
     for _ in 0..3 {
         assert_eq!(
-            js_string_char_code_at(a.get_raw_const_ptr(), 299),
+            a.with_const_ptr(|a_ptr| js_string_char_code_at(a_ptr, 299)),
             0xde00 as f64
         );
         assert_eq!(
-            js_string_char_code_at(b.get_raw_const_ptr(), 299),
+            b.with_const_ptr(|b_ptr| js_string_char_code_at(b_ptr, 299)),
             0xdd80 as f64
         );
         assert_eq!(
-            js_string_char_code_at(a.get_raw_const_ptr(), 1),
+            a.with_const_ptr(|a_ptr| js_string_char_code_at(a_ptr, 1)),
             0xd83d as f64
         );
     }
