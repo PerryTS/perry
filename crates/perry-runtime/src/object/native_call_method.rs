@@ -19,6 +19,8 @@ mod proto_dispatch;
 mod string_methods;
 
 #[cfg(test)]
+mod closure_override_tests;
+#[cfg(test)]
 mod code_point_at_dispatch_tests;
 #[cfg(test)]
 mod dispatch_arg_coercion_tests;
@@ -1716,15 +1718,22 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
         if crate::value::addr_class::is_above_handle_band(raw_addr)
             && crate::closure::is_closure_ptr(raw_addr)
             && !crate::closure::closure_is_key_deleted(raw_addr, method_name)
-            // apply/call/bind/toString on a closure receiver have dedicated
-            // spec-accurate arms below; the dynamic-prop read would resolve
-            // them through the Function.prototype expando fallback to the
-            // GENERIC thunks, which lose arguments-object argArrays
-            // (`G.apply(this, arguments)`).
-            && !matches!(method_name, "apply" | "call" | "bind" | "toString")
         {
-            let dyn_val = crate::closure::closure_get_dynamic_prop(raw_addr, method_name);
-            if dyn_val.to_bits() != crate::value::TAG_UNDEFINED {
+            // #10045: own overrides (including AsyncResource.bind) beat the
+            // Function.prototype fast paths. Keep those fast paths on a miss:
+            // the generic prototype thunks lose arguments-object argArrays
+            // (`G.apply(this, arguments)`). An own undefined/non-callable slot
+            // is not a miss: invoking it must throw instead of using a builtin.
+            let intrinsic_name = matches!(method_name, "apply" | "call" | "bind" | "toString");
+            let own_override = intrinsic_name
+                && (crate::closure::closure_has_own_dynamic_prop(raw_addr, method_name)
+                    || crate::object::get_accessor_descriptor(raw_addr, method_name).is_some());
+            let dyn_val = if !intrinsic_name || own_override {
+                crate::closure::closure_get_dynamic_prop(raw_addr, method_name)
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            if dyn_val.to_bits() != crate::value::TAG_UNDEFINED || own_override {
                 // #6438: same rebind as the GC_TYPE_CLOSURE arm below —
                 // `closure_get_dynamic_prop` may return a method read off the
                 // closure's `Object.setPrototypeOf` proto, whose bound `this`
