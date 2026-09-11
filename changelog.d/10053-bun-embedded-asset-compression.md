@@ -8,3 +8,5 @@ lengths, empty/binary bytes and explicit text-loader metadata. Corrupt data or
 length/loader mismatches fail before publishing an asset. Existing raw APIs and
 non-Bun embedding remain unchanged. Independent decoder, packaging, and native
 filesystem/Bun/text-loader tests cover the compressed path and raw controls.
+Install and verify the pinned Node oracle in scoped native CI before any
+expensive build, instead of inheriting the runner's ambient Node version.
