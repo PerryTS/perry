@@ -55,6 +55,7 @@ use crate::value::JSValue;
 mod builder;
 mod emitter;
 mod exec;
+mod failed_spawn;
 mod options;
 mod output;
 mod registry;

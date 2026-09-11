@@ -18,3 +18,10 @@ fresh iterators. All must finish without waiting for a second end event.
 Before the fix, the native program fails the visible EOF-state assertion; without
 that assertion, it waits forever on the first late pull. Runtime unit tests also
 cover pending empty pulls and preserving chunks buffered before EOF.
+
+`failed-spawn.js` checks a definitely absent executable supplied by the runner.
+It starts collectors on stdout, stderr, and an extra output pipe before ENOENT,
+then yields, destroys the streams, and awaits the collectors (Execa-style error
+cleanup). All must finish empty, with end/closed state retained for late readers.
+The failed child has no reactor entry, so normal OS-pipe EOF delivery cannot
+finish these streams. Child error must precede their end events.
