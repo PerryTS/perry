@@ -1625,7 +1625,21 @@ jobs:
           # and the old unconditional abort made the job permanently
           # unrerunnable. That is exactly what happened in run 34451289395.
           # Abort only if the tag points somewhere else.
-          existing=$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq '.object.sha' 2>/dev/null || true)
+          # Gate on gh's EXIT STATUS, not its stdout: on a 404 `gh api` prints
+          # the error JSON to STDOUT and exits non-zero, so capturing stdout
+          # with `|| true` yields `{"message":"Not Found",...}` rather than an
+          # empty string. That made the "tag exists at a different SHA" branch
+          # fire on the NORMAL path (tag absent) and aborted v0.5.1520's
+          # create-release with `already exists at {"message":"Not Found"...}`.
+          existing=""
+          if gh api "repos/$REPO/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            existing=$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq '.object.sha' 2>/dev/null || true)
+          fi
+          # Belt and braces: only a 40-char hex string is a SHA.
+          case "$existing" in
+            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
+            *) existing="" ;;
+          esac
           reuse_tag=0
           if [ -n "$existing" ]; then
             if [ "$existing" != "$SHA" ]; then
