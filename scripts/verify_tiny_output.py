@@ -53,7 +53,19 @@ int perry_test_poll(struct pollfd *fds, nfds_t count, int timeout) {
 }
 int perry_test_verdict(void) { return mask == 15 ? 0 : 91; }
 ''')
+# Include system headers before renaming the calls. glibc's fortified poll
+# declaration can otherwise retain an asm("poll") alias and bypass injection.
+injected_helper = work / 'injected.c'
+injected_helper.write_text('''#define _POSIX_C_SOURCE 200809L
+#include <poll.h>
+#include <unistd.h>
+ssize_t perry_test_write(int, const void *, size_t);
+int perry_test_poll(struct pollfd *, nfds_t, int);
+#define write perry_test_write
+#define poll perry_test_poll
+#include ''' + json.dumps(str(helper)) + '\n')
 receipt = {'source': str(helper), 'sourceSha256': hashlib.sha256(helper.read_bytes()).hexdigest(),
+           'verifierSha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
            'work': str(work), 'commands': [], 'cases': {}, 'complete': False, 'passed': False}
 
 def run(argv):
@@ -66,9 +78,8 @@ def run(argv):
 try:
     for label, injected in [('normal', False), ('partial-eintr-eagain-poll-eintr', True)]:
         obj = work / (label + '.o')
-        argv = ['cc', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror', '-c', helper, '-o', obj]
-        if injected:
-            argv += ['-Dwrite=perry_test_write', '-Dpoll=perry_test_poll']
+        argv = ['cc', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror', '-c',
+                injected_helper if injected else helper, '-o', obj]
         run(argv)
         binary = work / label
         argv = ['cc', '-std=c11', '-O2', main, obj, '-o', binary]
