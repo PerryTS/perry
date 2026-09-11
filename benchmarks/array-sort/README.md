@@ -40,8 +40,6 @@ Baseline: `1a9c0de6cb790d2467b0ca22a660870025179b37` (Perry 0.5.1531). Candidate
 | organ_pipe | object | 98.79 | 7.16 | 13.80× | 2.38 |
 | organ_pipe | string | 203.79 | 19.66 | 10.37× | 3.83 |
 
-The negative-number input from [scriptc #289](https://github.com/vercel-labs/scriptc/issues/289), separately instrumented and checked element by element, measured **110.42 → 7.94 ms** for the sort (13.91× faster; Node 2.22 ms; 15 samples after three warmups). A separate counter probe fell from 2,115,024 comparisons to 99,999. This input differs from the positive descending fixture in the table, and the measurements were taken separately.
-
 All 24 matrix rows improve, by 1.89–36.07×. Node still leads all rows in this run; the remaining gap depends strongly on the comparator and input. See [measured-m1-max.json](measured-m1-max.json) for raw samples, executable/archive hashes, and candidate source hashes. Local build directory paths have been replaced with arm names.
 
 ## What changed
