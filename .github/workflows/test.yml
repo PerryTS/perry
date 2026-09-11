@@ -1458,6 +1458,12 @@ jobs:
       - uses: ./.github/actions/setup-llvm22
         if: steps.scope.outputs.rust_work == 'true'
 
+      - name: Install pinned Node for native regression oracles
+        if: steps.scope.outputs.rust_work == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version-file: .node-version
+
       - name: Install sccache
         if: steps.scope.outputs.rust_work == 'true'
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
