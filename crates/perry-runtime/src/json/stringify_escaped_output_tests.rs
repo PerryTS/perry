@@ -140,7 +140,7 @@ fn json_native_buffer_uses_bounded_plans_and_retains_suffix_capacity() {
             let capacity = output.capacity();
             output.push_str("\n}");
             assert_eq!(output.capacity(), capacity, "closing punctuation must fit");
-            assert_eq!(output, "p".repeat(prefix) + &quoted + "\n}");
+            assert_eq!(output, "p".repeat(prefix) + quoted.as_str() + "\n}");
         }
     }
     for input in [b"\xed\xa0\x80".as_slice(), b"\xff", b"\n\xc2"] {
