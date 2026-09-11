@@ -1,0 +1,21 @@
+{
+  "observation": {
+    "owner": "json-perf-54060-1789145254",
+    "load_before": [
+      1.29638671875,
+      1.74609375,
+      1.7587890625
+    ],
+    "started_utc": "2026-09-11T16:47:34Z",
+    "quiet_gate_passed": false,
+    "finished_utc": "2026-09-11T16:47:36Z",
+    "competing_workloads_before": [],
+    "command": [
+      "python3",
+      ".work/wide-regression-r39-profiles/run-parse-regression-profile.py",
+      "--results-dir",
+      "results/quiet-wide-regression-r39-profiles"
+    ]
+  },
+  "provenance": "Recovered from the tool read of the original window before the accidental repeated invocation. Original window/controller envelopes were overwritten by that invocation; byte-preservation of those envelopes is not claimed. Original profile, worker output and profiles.json remain intact. Both failed diagnostics are excluded."
+}

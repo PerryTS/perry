@@ -1,0 +1,47 @@
+{
+  "cases": [
+    {
+      "fixture": "wide_1m",
+      "operation": "parse",
+      "iterations": 1039,
+      "warmup": 8,
+      "arm": "r26"
+    },
+    {
+      "fixture": "wide_1m",
+      "operation": "parse",
+      "iterations": 1039,
+      "warmup": 8,
+      "arm": "r39"
+    },
+    {
+      "fixture": "wide_1m",
+      "operation": "stringify",
+      "iterations": 4736,
+      "warmup": 8,
+      "arm": "r26"
+    },
+    {
+      "fixture": "wide_1m",
+      "operation": "stringify",
+      "iterations": 4736,
+      "warmup": 8,
+      "arm": "r39"
+    },
+    {
+      "fixture": "records_object_8m",
+      "operation": "parse",
+      "iterations": 189,
+      "warmup": 8,
+      "arm": "r26"
+    },
+    {
+      "fixture": "records_object_8m",
+      "operation": "parse",
+      "iterations": 189,
+      "warmup": 8,
+      "arm": "r39"
+    }
+  ],
+  "note": "Bounded diagnostics: about3seconds of measured CPU per frozen Perry worker, separate from uninstrumented benchmarks."
+}

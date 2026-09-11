@@ -1,0 +1,24 @@
+{
+  "owner": "json-perf-54173-1789145496",
+  "load_before": [
+    1.8681640625,
+    1.71728515625,
+    1.73388671875
+  ],
+  "started_utc": "2026-09-11T16:51:36Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/wide-regression-r39-profiles/run-parse-regression-profile.py",
+    "--results-dir",
+    "results/quiet-wide-regression-r39-profiles-retry1"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.81640625,
+    1.7138671875,
+    1.732421875
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-11T16:51:50Z"
+}

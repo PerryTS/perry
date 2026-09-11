@@ -1,0 +1,206 @@
+[
+  {
+    "case": {
+      "fixture": "wide_1m",
+      "operation": "parse",
+      "iterations": 384,
+      "warmup": 2,
+      "arm": "r26"
+    },
+    "worker_command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/wide-regression-r39-profiles/r26-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/fixtures/wide_1m.json",
+      "parse",
+      "384",
+      "2",
+      "verify"
+    ],
+    "worker_sha256": "d0e07f6395a32201f3988d4c9435d02d223d84697e8bb6b4e6637e8aba02c9f8",
+    "env_overrides": {},
+    "sample_command": [
+      "/usr/bin/sample",
+      "54176",
+      "1",
+      "1",
+      "-mayDie",
+      "-file",
+      "results/quiet-wide-regression-r39-profiles-retry1/wide_1m-parse-r26.sample.txt"
+    ],
+    "worker_exit": 0,
+    "sampler_exit": 0,
+    "observed_peak_rss_bytes": 1261961216,
+    "elapsed_seconds": 1.9976180000000001,
+    "stop_reason": null,
+    "diagnostic_only": true
+  },
+  {
+    "case": {
+      "fixture": "wide_1m",
+      "operation": "parse",
+      "iterations": 384,
+      "warmup": 2,
+      "arm": "r39"
+    },
+    "worker_command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/wide-regression-r39-profiles/r39-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/fixtures/wide_1m.json",
+      "parse",
+      "384",
+      "2",
+      "verify"
+    ],
+    "worker_sha256": "5318e733b9de8ad0d839fa4a9438bbf5240752a7536fa76c7bdd5ed5439d181a",
+    "env_overrides": {},
+    "sample_command": [
+      "/usr/bin/sample",
+      "54195",
+      "1",
+      "1",
+      "-mayDie",
+      "-file",
+      "results/quiet-wide-regression-r39-profiles-retry1/wide_1m-parse-r39.sample.txt"
+    ],
+    "worker_exit": 0,
+    "sampler_exit": 0,
+    "observed_peak_rss_bytes": 1296924672,
+    "elapsed_seconds": 1.8843746250000004,
+    "stop_reason": null,
+    "diagnostic_only": true
+  },
+  {
+    "case": {
+      "fixture": "wide_1m",
+      "operation": "stringify",
+      "iterations": 4736,
+      "warmup": 2,
+      "arm": "r26"
+    },
+    "worker_command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/wide-regression-r39-profiles/r26-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/fixtures/wide_1m.json",
+      "stringify",
+      "4736",
+      "2",
+      "verify"
+    ],
+    "worker_sha256": "d0e07f6395a32201f3988d4c9435d02d223d84697e8bb6b4e6637e8aba02c9f8",
+    "env_overrides": {},
+    "sample_command": [
+      "/usr/bin/sample",
+      "54213",
+      "1",
+      "1",
+      "-mayDie",
+      "-file",
+      "results/quiet-wide-regression-r39-profiles-retry1/wide_1m-stringify-r26.sample.txt"
+    ],
+    "worker_exit": 0,
+    "sampler_exit": 0,
+    "observed_peak_rss_bytes": 74366976,
+    "elapsed_seconds": 3.00374475,
+    "stop_reason": null,
+    "diagnostic_only": true
+  },
+  {
+    "case": {
+      "fixture": "wide_1m",
+      "operation": "stringify",
+      "iterations": 4736,
+      "warmup": 2,
+      "arm": "r39"
+    },
+    "worker_command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/wide-regression-r39-profiles/r39-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/fixtures/wide_1m.json",
+      "stringify",
+      "4736",
+      "2",
+      "verify"
+    ],
+    "worker_sha256": "5318e733b9de8ad0d839fa4a9438bbf5240752a7536fa76c7bdd5ed5439d181a",
+    "env_overrides": {},
+    "sample_command": [
+      "/usr/bin/sample",
+      "54241",
+      "1",
+      "1",
+      "-mayDie",
+      "-file",
+      "results/quiet-wide-regression-r39-profiles-retry1/wide_1m-stringify-r39.sample.txt"
+    ],
+    "worker_exit": 0,
+    "sampler_exit": 0,
+    "observed_peak_rss_bytes": 74366976,
+    "elapsed_seconds": 3.0062208749999995,
+    "stop_reason": null,
+    "diagnostic_only": true
+  },
+  {
+    "case": {
+      "fixture": "records_object_8m",
+      "operation": "parse",
+      "iterations": 96,
+      "warmup": 2,
+      "arm": "r26"
+    },
+    "worker_command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/wide-regression-r39-profiles/r26-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/fixtures/records_object_8m.json",
+      "parse",
+      "96",
+      "2",
+      "verify"
+    ],
+    "worker_sha256": "d0e07f6395a32201f3988d4c9435d02d223d84697e8bb6b4e6637e8aba02c9f8",
+    "env_overrides": {},
+    "sample_command": [
+      "/usr/bin/sample",
+      "54269",
+      "1",
+      "1",
+      "-mayDie",
+      "-file",
+      "results/quiet-wide-regression-r39-profiles-retry1/records_object_8m-parse-r26.sample.txt"
+    ],
+    "worker_exit": 0,
+    "sampler_exit": 0,
+    "observed_peak_rss_bytes": 1406009344,
+    "elapsed_seconds": 1.9936657919999998,
+    "stop_reason": null,
+    "diagnostic_only": true
+  },
+  {
+    "case": {
+      "fixture": "records_object_8m",
+      "operation": "parse",
+      "iterations": 96,
+      "warmup": 2,
+      "arm": "r39"
+    },
+    "worker_command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/wide-regression-r39-profiles/r39-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/fixtures/records_object_8m.json",
+      "parse",
+      "96",
+      "2",
+      "verify"
+    ],
+    "worker_sha256": "5318e733b9de8ad0d839fa4a9438bbf5240752a7536fa76c7bdd5ed5439d181a",
+    "env_overrides": {},
+    "sample_command": [
+      "/usr/bin/sample",
+      "54288",
+      "1",
+      "1",
+      "-mayDie",
+      "-file",
+      "results/quiet-wide-regression-r39-profiles-retry1/records_object_8m-parse-r39.sample.txt"
+    ],
+    "worker_exit": 0,
+    "sampler_exit": 0,
+    "observed_peak_rss_bytes": 1477558272,
+    "elapsed_seconds": 2.1152235410000007,
+    "stop_reason": null,
+    "diagnostic_only": true
+  }
+]

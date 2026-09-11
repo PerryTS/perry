@@ -1,0 +1,15 @@
+{
+  "source_commit": "e69d1292110cf9abee24f8690c584652805a4167",
+  "command": [
+    "/Users/amlug/projects/perry/json-merged-pr10022/target/release/build/perry-runtime/b8ed6322d803238c/out/perry_runtime-b8ed6322d803238c",
+    "string::",
+    "--test-threads=1"
+  ],
+  "env": {
+    "RUST_TEST_THREADS": "1"
+  },
+  "exit_code": 0,
+  "binary_sha256": "10f03629beca088fe158c8bd873a344cb5fadf1e5d970b4af3f4418c9ccef326",
+  "unit_log_sha256": "2216545940be630741ca0f90c797e854f2e8f32bbbee7f83bcb06b76955d2715",
+  "note": "Exact final-source release unit binary; filtered suites overlap."
+}

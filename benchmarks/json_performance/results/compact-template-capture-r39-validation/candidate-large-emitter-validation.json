@@ -1,0 +1,386 @@
+{
+  "arm": "candidate",
+  "source_commit": "e69d1292110cf9abee24f8690c584652805a4167",
+  "files": {
+    "test-files/test_json_large_string_emitters.ts": "a4316c0cae70b19a8ef0c5ffa0f1b5462981f29ab3e1819c5c6ceb8d9718bab8",
+    "benchmarks/json_performance/.work/compact-template-capture-r39/frozen-build/perry": "284121540807cecb846fb664ab79b1a3e7af7ffac4a3854074741b890961fd72",
+    "benchmarks/json_performance/.work/compact-template-capture-r39/frozen-build/libperry_runtime.a": "31feb0087ff8e5b134ffa77f7fcc4db82489c7841f9eeb94ec9901662793fbdd",
+    "benchmarks/json_performance/.work/compact-template-capture-r39/frozen-build/libperry_stdlib.a": "b6c88a3060e5ccdaa1fef4443e1c16c69e69ee2e7ab57cdcd9a5f5aa2900683a"
+  },
+  "compiles": [
+    {
+      "command": [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/compact-template-capture-r39/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/test-files/test_json_large_string_emitters.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/compact-template-capture-r39/candidate-large-emitter-native"
+      ],
+      "env_overrides": {
+        "PERRY_RUNTIME_DIR": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/compact-template-capture-r39/frozen-build",
+        "PERRY_RS4GC": "1",
+        "PERRY_GC_MOVING_LOOP_POLLS": "1"
+      },
+      "binary_sha256": "c79297fd7073643c54fb8a290f43811d11fcac1de6102ad9c3c2064e53816685"
+    },
+    {
+      "command": [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/compact-template-capture-r39/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/test-files/test_json_large_string_emitters.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/compact-template-capture-r39/candidate-large-emitter-shadow"
+      ],
+      "env_overrides": {
+        "PERRY_RUNTIME_DIR": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/compact-template-capture-r39/frozen-build",
+        "PERRY_RS4GC": "0",
+        "PERRY_GC_MOVING_LOOP_POLLS": "1"
+      },
+      "binary_sha256": "f0ec4b6a4bda8de832546848788de66c91bd380bf56a4d56935db79d9beb60e2"
+    }
+  ],
+  "rows": [
+    {
+      "arm": "candidate",
+      "roots": "native",
+      "parser": "auto",
+      "mode": "normal",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0,
+      "env_overrides": {},
+      "stdout_sha256": "3a8334ee2bd902133c724fb79e277029b5a780ca9854af1db5827aadb286ad89",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "arm": "candidate",
+      "roots": "native",
+      "parser": "auto",
+      "mode": "scheduled",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 189,
+      "moved_objects": 20972,
+      "env_overrides": {
+        "PERRY_GC_SCHEDULE_SEED": "10022",
+        "PERRY_GC_SCHEDULE_RATE": "0.1",
+        "PERRY_GC_SCHEDULE_ALLOC_KB": "0",
+        "PERRY_GC_PROTECT_FROMSPACE": "1",
+        "PERRY_GC_DIAG": "1"
+      },
+      "stdout_sha256": "3a8334ee2bd902133c724fb79e277029b5a780ca9854af1db5827aadb286ad89",
+      "stderr_sha256": "2bc451816208ae153fc23c221fb68ad9be54ba30843ab13fc189e1999f79a533"
+    },
+    {
+      "arm": "candidate",
+      "roots": "native",
+      "parser": "auto",
+      "mode": "fullgc",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0,
+      "env_overrides": {
+        "PERRY_GEN_GC": "0"
+      },
+      "stdout_sha256": "3a8334ee2bd902133c724fb79e277029b5a780ca9854af1db5827aadb286ad89",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "arm": "candidate",
+      "roots": "native",
+      "parser": "tape",
+      "mode": "normal",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0,
+      "env_overrides": {
+        "PERRY_JSON_TAPE": "1"
+      },
+      "stdout_sha256": "3a8334ee2bd902133c724fb79e277029b5a780ca9854af1db5827aadb286ad89",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "arm": "candidate",
+      "roots": "native",
+      "parser": "tape",
+      "mode": "scheduled",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 189,
+      "moved_objects": 20967,
+      "env_overrides": {
+        "PERRY_JSON_TAPE": "1",
+        "PERRY_GC_SCHEDULE_SEED": "10022",
+        "PERRY_GC_SCHEDULE_RATE": "0.1",
+        "PERRY_GC_SCHEDULE_ALLOC_KB": "0",
+        "PERRY_GC_PROTECT_FROMSPACE": "1",
+        "PERRY_GC_DIAG": "1"
+      },
+      "stdout_sha256": "3a8334ee2bd902133c724fb79e277029b5a780ca9854af1db5827aadb286ad89",
+      "stderr_sha256": "194502018df94e2cc951407542a8e403722336af3e4b00ccbd404fefaee537c9"
+    },
+    {
+      "arm": "candidate",
+      "roots": "native",
+      "parser": "tape",
+      "mode": "fullgc",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0,
+      "env_overrides": {
+        "PERRY_JSON_TAPE": "1",
+        "PERRY_GEN_GC": "0"
+      },
+      "stdout_sha256": "3a8334ee2bd902133c724fb79e277029b5a780ca9854af1db5827aadb286ad89",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "arm": "candidate",
+      "roots": "native",
+      "parser": "direct",
+      "mode": "normal",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0,
+      "env_overrides": {
+        "PERRY_JSON_TAPE": "0"
+      },
+      "stdout_sha256": "3a8334ee2bd902133c724fb79e277029b5a780ca9854af1db5827aadb286ad89",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "arm": "candidate",
+      "roots": "native",
+      "parser": "direct",
+      "mode": "scheduled",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 189,
+      "moved_objects": 20972,
+      "env_overrides": {
+        "PERRY_JSON_TAPE": "0",
+        "PERRY_GC_SCHEDULE_SEED": "10022",
+        "PERRY_GC_SCHEDULE_RATE": "0.1",
+        "PERRY_GC_SCHEDULE_ALLOC_KB": "0",
+        "PERRY_GC_PROTECT_FROMSPACE": "1",
+        "PERRY_GC_DIAG": "1"
+      },
+      "stdout_sha256": "3a8334ee2bd902133c724fb79e277029b5a780ca9854af1db5827aadb286ad89",
+      "stderr_sha256": "d1086d7a768bcb652c12a2428c3825efebeb27c613a2f367c75744fce2563795"
+    },
+    {
+      "arm": "candidate",
+      "roots": "native",
+      "parser": "direct",
+      "mode": "fullgc",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0,
+      "env_overrides": {
+        "PERRY_JSON_TAPE": "0",
+        "PERRY_GEN_GC": "0"
+      },
+      "stdout_sha256": "3a8334ee2bd902133c724fb79e277029b5a780ca9854af1db5827aadb286ad89",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "arm": "candidate",
+      "roots": "native",
+      "parser": "auto",
+      "mode": "scheduled-depth64",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 189,
+      "moved_objects": 20972,
+      "env_overrides": {
+        "PERRY_GC_SCHEDULE_SEED": "10022",
+        "PERRY_GC_SCHEDULE_RATE": "0.1",
+        "PERRY_GC_SCHEDULE_ALLOC_KB": "0",
+        "PERRY_GC_PROTECT_FROMSPACE": "1",
+        "PERRY_GC_DIAG": "1",
+        "PERRY_GC_PROTECT_FROMSPACE_DEPTH": "64"
+      },
+      "stdout_sha256": "3a8334ee2bd902133c724fb79e277029b5a780ca9854af1db5827aadb286ad89",
+      "stderr_sha256": "d206faf6046f391462efb834cf1e47e63c265063eed18d3abcb20403c66f9a2d"
+    },
+    {
+      "arm": "candidate",
+      "roots": "shadow",
+      "parser": "auto",
+      "mode": "normal",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0,
+      "env_overrides": {},
+      "stdout_sha256": "3a8334ee2bd902133c724fb79e277029b5a780ca9854af1db5827aadb286ad89",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "arm": "candidate",
+      "roots": "shadow",
+      "parser": "auto",
+      "mode": "scheduled",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 189,
+      "moved_objects": 20972,
+      "env_overrides": {
+        "PERRY_GC_SCHEDULE_SEED": "10022",
+        "PERRY_GC_SCHEDULE_RATE": "0.1",
+        "PERRY_GC_SCHEDULE_ALLOC_KB": "0",
+        "PERRY_GC_PROTECT_FROMSPACE": "1",
+        "PERRY_GC_DIAG": "1"
+      },
+      "stdout_sha256": "3a8334ee2bd902133c724fb79e277029b5a780ca9854af1db5827aadb286ad89",
+      "stderr_sha256": "2c7726fafbafc9057c521fcb8219076a94b6239fee2f5abd8d8812f69b7fc682"
+    },
+    {
+      "arm": "candidate",
+      "roots": "shadow",
+      "parser": "auto",
+      "mode": "fullgc",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0,
+      "env_overrides": {
+        "PERRY_GEN_GC": "0"
+      },
+      "stdout_sha256": "3a8334ee2bd902133c724fb79e277029b5a780ca9854af1db5827aadb286ad89",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "arm": "candidate",
+      "roots": "shadow",
+      "parser": "tape",
+      "mode": "normal",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0,
+      "env_overrides": {
+        "PERRY_JSON_TAPE": "1"
+      },
+      "stdout_sha256": "3a8334ee2bd902133c724fb79e277029b5a780ca9854af1db5827aadb286ad89",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "arm": "candidate",
+      "roots": "shadow",
+      "parser": "tape",
+      "mode": "scheduled",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 189,
+      "moved_objects": 20967,
+      "env_overrides": {
+        "PERRY_JSON_TAPE": "1",
+        "PERRY_GC_SCHEDULE_SEED": "10022",
+        "PERRY_GC_SCHEDULE_RATE": "0.1",
+        "PERRY_GC_SCHEDULE_ALLOC_KB": "0",
+        "PERRY_GC_PROTECT_FROMSPACE": "1",
+        "PERRY_GC_DIAG": "1"
+      },
+      "stdout_sha256": "3a8334ee2bd902133c724fb79e277029b5a780ca9854af1db5827aadb286ad89",
+      "stderr_sha256": "3dee5430c9e475a9651dc32be65fc61272a0d6df20546562b33df094de5002d9"
+    },
+    {
+      "arm": "candidate",
+      "roots": "shadow",
+      "parser": "tape",
+      "mode": "fullgc",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0,
+      "env_overrides": {
+        "PERRY_JSON_TAPE": "1",
+        "PERRY_GEN_GC": "0"
+      },
+      "stdout_sha256": "3a8334ee2bd902133c724fb79e277029b5a780ca9854af1db5827aadb286ad89",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "arm": "candidate",
+      "roots": "shadow",
+      "parser": "direct",
+      "mode": "normal",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0,
+      "env_overrides": {
+        "PERRY_JSON_TAPE": "0"
+      },
+      "stdout_sha256": "3a8334ee2bd902133c724fb79e277029b5a780ca9854af1db5827aadb286ad89",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "arm": "candidate",
+      "roots": "shadow",
+      "parser": "direct",
+      "mode": "scheduled",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 189,
+      "moved_objects": 20972,
+      "env_overrides": {
+        "PERRY_JSON_TAPE": "0",
+        "PERRY_GC_SCHEDULE_SEED": "10022",
+        "PERRY_GC_SCHEDULE_RATE": "0.1",
+        "PERRY_GC_SCHEDULE_ALLOC_KB": "0",
+        "PERRY_GC_PROTECT_FROMSPACE": "1",
+        "PERRY_GC_DIAG": "1"
+      },
+      "stdout_sha256": "3a8334ee2bd902133c724fb79e277029b5a780ca9854af1db5827aadb286ad89",
+      "stderr_sha256": "5b2d470e245d8f11bebfb4f75a201d21c9a4c1fe36faec1f95774367dd0d0aef"
+    },
+    {
+      "arm": "candidate",
+      "roots": "shadow",
+      "parser": "direct",
+      "mode": "fullgc",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 0,
+      "moved_objects": 0,
+      "env_overrides": {
+        "PERRY_JSON_TAPE": "0",
+        "PERRY_GEN_GC": "0"
+      },
+      "stdout_sha256": "3a8334ee2bd902133c724fb79e277029b5a780ca9854af1db5827aadb286ad89",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "arm": "candidate",
+      "roots": "shadow",
+      "parser": "auto",
+      "mode": "scheduled-depth64",
+      "exit_code": 0,
+      "matches_node": true,
+      "protected_retired_sets": 189,
+      "moved_objects": 20972,
+      "env_overrides": {
+        "PERRY_GC_SCHEDULE_SEED": "10022",
+        "PERRY_GC_SCHEDULE_RATE": "0.1",
+        "PERRY_GC_SCHEDULE_ALLOC_KB": "0",
+        "PERRY_GC_PROTECT_FROMSPACE": "1",
+        "PERRY_GC_DIAG": "1",
+        "PERRY_GC_PROTECT_FROMSPACE_DEPTH": "64"
+      },
+      "stdout_sha256": "3a8334ee2bd902133c724fb79e277029b5a780ca9854af1db5827aadb286ad89",
+      "stderr_sha256": "f7f934b8082980cf66523854182d7ec078883a85a3a275afec1a593bc4b091a3"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "candidate_all_pass": true,
+  "main_passes": 6,
+  "main_existing_failures": 14,
+  "candidate_passes": 20,
+  "ir_matches": [
+    {
+      "mode": "native",
+      "main_sha256": "aa33818b7f6d986c9ca366bbd9957fc62af6154a9a5e1c37bb3eff54a59e9920",
+      "candidate_sha256": "220f9b310ffa29557ad525a3abe91d67ac1c9fac3a30cddab8edbdeb58dc22ce",
+      "normalized_sha256": "cc86db4bd10c5172af1e408c202d5e39b7bb013e140452b1f1c80cf0934f55d0"
+    },
+    {
+      "mode": "shadow",
+      "main_sha256": "d3c776156927c48b0237a1b344043bf72d968a5e00dd6dbbfcc48ab042a1c785",
+      "candidate_sha256": "d3c776156927c48b0237a1b344043bf72d968a5e00dd6dbbfcc48ab042a1c785",
+      "normalized_sha256": "d3c776156927c48b0237a1b344043bf72d968a5e00dd6dbbfcc48ab042a1c785"
+    }
+  ],
+  "note": "Candidate executions are fresh at the same real test-files path; exact frozen R26 reference receipts are reused with source/artifact hash checks. Fourteen reference output/callback failures are fixed, with positive copying/protected sets; candidate normal/full-GC/tape controls match complete Node output. Candidate native/shadow checks pass and match the verified frozen-reference IR/checker results."
+}

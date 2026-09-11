@@ -1,0 +1,36 @@
+[
+  {
+    "case": {
+      "fixture": "wide_1m",
+      "operation": "parse",
+      "iterations": 1039,
+      "warmup": 8,
+      "arm": "r26"
+    },
+    "worker_command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/wide-regression-r39-profiles/r26-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/fixtures/wide_1m.json",
+      "parse",
+      "1039",
+      "8",
+      "verify"
+    ],
+    "worker_sha256": "d0e07f6395a32201f3988d4c9435d02d223d84697e8bb6b4e6637e8aba02c9f8",
+    "env_overrides": {},
+    "sample_command": [
+      "/usr/bin/sample",
+      "54063",
+      "1",
+      "1",
+      "-mayDie",
+      "-file",
+      "results/quiet-wide-regression-r39-profiles/wide_1m-parse-r26.sample.txt"
+    ],
+    "worker_exit": -15,
+    "sampler_exit": 0,
+    "observed_peak_rss_bytes": 2157477888,
+    "elapsed_seconds": 2.689505583,
+    "stop_reason": "RSS limit 2 GiB",
+    "diagnostic_only": true
+  }
+]

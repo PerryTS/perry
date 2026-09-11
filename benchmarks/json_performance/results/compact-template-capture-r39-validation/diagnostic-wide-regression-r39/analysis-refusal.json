@@ -1,0 +1,13 @@
+{
+  "exit_code": 1,
+  "failed_case": {
+    "fixture": "wide_1m",
+    "operation": "parse",
+    "iterations": 384,
+    "warmup": 2,
+    "arm": "r26"
+  },
+  "observed_workload_samples": 293,
+  "required_workload_samples": 500,
+  "note": "All six bounded workers and samplers completed; analyzer refused the first profile for insufficient samples. Only that first complete Node oracle ran. No profile attribution is accepted."
+}

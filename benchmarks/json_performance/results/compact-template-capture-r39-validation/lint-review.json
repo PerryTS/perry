@@ -1,0 +1,13 @@
+{
+  "source_commit": "e69d1292110cf9abee24f8690c584652805a4167",
+  "executed": 74,
+  "passed": 72,
+  "failed_gates": [
+    "  FAIL  [Public benchmark evidence freshness] python3 benchmarks/ci_public_baseline_check.py",
+    "  FAIL  [Raw-handle debt ratchet vs. merge base] python3 scripts/raw_handle_debt.py --no-raise-vs \"$BASE_SHA\""
+  ],
+  "file_cap_passed": true,
+  "log_sha256": "ccb406c6d6d719f271354be640417b56dd943d520aaa01eccf675dcab7f69df0",
+  "comparison_ref": "f6c6879613c0b00b5e3ae873b8d102710d2d0585",
+  "note": "Formatting, stack-store inventory and exact shape census pass. Public freshness remains unresolved; inherited array/sort ratchet rejection is independently reproduced on unchanged R38 against the same pinned newer main. No checker, allowlist or raw-handle ceiling change."
+}

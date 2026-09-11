@@ -1,0 +1,3 @@
+{
+  "reason": "The local retry preparation had a Python syntax error (else96). The following separate shell line nevertheless invoked the unchanged profile controller. Existing remote result directory forces an immediate refusal. The original snapshot and accidental invocation are retained separately; no profile success is claimed."
+}

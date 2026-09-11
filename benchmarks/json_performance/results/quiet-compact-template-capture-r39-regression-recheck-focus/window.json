@@ -1,0 +1,50 @@
+{
+  "owner": "json-perf-53110-1789144999",
+  "load_before": [
+    1.71630859375,
+    2.00537109375,
+    1.8203125
+  ],
+  "started_utc": "2026-09-11T16:43:19Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/compact-template-capture-r39/run-focus.py",
+    "--worker",
+    ".work/compact-template-capture-r39/candidate-worker",
+    "--baseline-worker",
+    ".work/compact-template-capture-r39/main-worker",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--bun",
+    "/Users/perry/.bun/bin/bun",
+    "--case",
+    "records_array_16k:sparse:7868:2:11",
+    "--case",
+    "records_object_1m:parse:81:2:11",
+    "--case",
+    "records_object_8m:parse:10:2:11",
+    "--case",
+    "records_array_20m:stringify:12:2:11",
+    "--case",
+    "long_string_1m:stringify:1922:2:11",
+    "--case",
+    "unicode_1m:stringify:2475:2:11",
+    "--case",
+    "wide_1m:parse:64:2:11",
+    "--case",
+    "wide_1m:stringify:232:2:11",
+    "--case",
+    "heterogeneous_1m:parse:142:2:11",
+    "--results-dir",
+    "results/quiet-compact-template-capture-r39-regression-recheck-focus"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.93310546875,
+    2.00830078125,
+    1.84521484375
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-11T16:45:34Z"
+}

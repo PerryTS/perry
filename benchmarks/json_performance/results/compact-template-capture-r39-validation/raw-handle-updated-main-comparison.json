@@ -1,0 +1,45 @@
+{
+  "records": [
+    {
+      "source_commit": "5f6448ce7b38754481ab020f2f6d059c40dac0d2",
+      "worktree": "/Users/amlug/projects/perry/json-merged-pr10022",
+      "comparison_ref": "f6c6879613c0b00b5e3ae873b8d102710d2d0585",
+      "merge_base": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+      "command": [
+        "python3",
+        "scripts/raw_handle_debt.py",
+        "--no-raise-vs",
+        "f6c6879613c0b00b5e3ae873b8d102710d2d0585"
+      ],
+      "exit_code": 1,
+      "files": {
+        "scripts/raw_handle_debt.py": "d7f59e95ab259c390d4a6372135e6585fca5105bf5d499baaa49dafc207d7924",
+        "scripts/raw_handle_debt_baseline.txt": "ca1144ed9f3aa0bf799043d185aa306dfc74e468d61ae6e12465a48c966bb4bf",
+        "scripts/raw_handle_debt_files.txt": "1011591a7333a74de39eaf82d26313f41858ad08ec77abae76dc6beaa1bda897",
+        "crates/perry-runtime/src/array/sort.rs": "8b7f7b63b58651ad132557c3f502ace4c055d6a49b8daa02edba1e6d8c6e7c90"
+      },
+      "output_sha256": "ff5f008970ff99cef3fbf5741e48f7161493b778d71e7fd7d5aeee4a88350534"
+    },
+    {
+      "source_commit": "e69d1292110cf9abee24f8690c584652805a4167",
+      "worktree": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29",
+      "comparison_ref": "f6c6879613c0b00b5e3ae873b8d102710d2d0585",
+      "merge_base": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+      "command": [
+        "python3",
+        "scripts/raw_handle_debt.py",
+        "--no-raise-vs",
+        "f6c6879613c0b00b5e3ae873b8d102710d2d0585"
+      ],
+      "exit_code": 1,
+      "files": {
+        "scripts/raw_handle_debt.py": "d7f59e95ab259c390d4a6372135e6585fca5105bf5d499baaa49dafc207d7924",
+        "scripts/raw_handle_debt_baseline.txt": "ca1144ed9f3aa0bf799043d185aa306dfc74e468d61ae6e12465a48c966bb4bf",
+        "scripts/raw_handle_debt_files.txt": "1011591a7333a74de39eaf82d26313f41858ad08ec77abae76dc6beaa1bda897",
+        "crates/perry-runtime/src/array/sort.rs": "8b7f7b63b58651ad132557c3f502ace4c055d6a49b8daa02edba1e6d8c6e7c90"
+      },
+      "output_sha256": "ff5f008970ff99cef3fbf5741e48f7161493b778d71e7fd7d5aeee4a88350534"
+    }
+  ],
+  "note": "Shared origin/main advanced after the R38 final lint. The unchanged R38 source and R39 template source both reject the identical inherited array/sort baseline ceiling against this pinned newer main. No raw-handle ceiling is raised and no new template site is implicated; integration with current main remains required."
+}

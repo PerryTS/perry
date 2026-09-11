@@ -1,0 +1,93 @@
+{
+  "rows": [
+    {
+      "arm": "main",
+      "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json11parse_reuse30remember_parse_object_template",
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json11parse_reuse30remember_parse_object_template",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/compact-template-capture-r39/main-rotating-worker"
+      ],
+      "binary_sha256": "3b598695750a197791464e08199b55ae16ffe34f9984146ac5669067189516e1",
+      "disassembly_sha256": "c67301ae2fdad7a29ecb75f983c1fc9bf8d1cd0cd582822618276c2d04837914",
+      "instructions": 388,
+      "calls": [
+        "bl\t0x1005e3264 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6object6shapes34shape_live_inline_slot_count_by_id>",
+        "bl\t0x100b5fc50 <_writev+0x100b5fc50>",
+        "bl\t0x1007bba50 <_js_array_get_f64>",
+        "bl\t0x1007bba50 <_js_array_get_f64>",
+        "bl\t0x1007bba50 <_js_array_get_f64>",
+        "bl\t0x1007bba50 <_js_array_get_f64>",
+        "bl\t0x1007bba50 <_js_array_get_f64>",
+        "bl\t0x1007bba50 <_js_array_get_f64>",
+        "bl\t0x1007bba50 <_js_array_get_f64>",
+        "bl\t0x1007bba50 <_js_array_get_f64>",
+        "bl\t0x100b3d1bc <__RNvNtCs3gRpqoBkMHm_13perry_runtime7tls_hot12hot_uncached>",
+        "bl\t0x100b3a9dc <__RNvMs5_NtCs3gRpqoBkMHm_13perry_runtime7tls_hotINtB5_6HotKeyNtNtNtB7_7closure8registry14DispatchRecentE8get_slowB7_>",
+        "bl\t0x100b3c660 <__RNvNtCs3gRpqoBkMHm_13perry_runtime5state10init_state>",
+        "bl\t0x100b5fc2c <_writev+0x100b5fc2c>",
+        "bl\t0x1004742b0 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7barrier37incremental_mark_barrier_value_active>",
+        "bl\t0x1004742b0 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7barrier37incremental_mark_barrier_value_active>",
+        "bl\t0x1004742b0 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7barrier37incremental_mark_barrier_value_active>",
+        "bl\t0x1004742b0 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7barrier37incremental_mark_barrier_value_active>",
+        "bl\t0x1004742b0 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7barrier37incremental_mark_barrier_value_active>",
+        "bl\t0x1004742b0 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7barrier37incremental_mark_barrier_value_active>",
+        "bl\t0x1004742b0 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7barrier37incremental_mark_barrier_value_active>",
+        "bl\t0x1004742b0 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7barrier37incremental_mark_barrier_value_active>",
+        "bl\t0x1004742b0 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7barrier37incremental_mark_barrier_value_active>",
+        "bl\t0x1004742b0 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7barrier37incremental_mark_barrier_value_active>",
+        "bl\t0x100b5fc2c <_writev+0x100b5fc2c>",
+        "bl\t0x100b3d1bc <__RNvNtCs3gRpqoBkMHm_13perry_runtime7tls_hot12hot_uncached>",
+        "bl\t0x100b3a9dc <__RNvMs5_NtCs3gRpqoBkMHm_13perry_runtime7tls_hotINtB5_6HotKeyNtNtNtB7_7closure8registry14DispatchRecentE8get_slowB7_>",
+        "bl\t0x100b104ec <__RNvNtCsjgY6bXVaRmE_4core4cell22panic_already_borrowed>",
+        "bl\t0x100b1080c <__RNvNtNtCsjgY6bXVaRmE_4core5slice5index16slice_index_fail>"
+      ]
+    },
+    {
+      "arm": "candidate",
+      "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json11parse_reuse30remember_parse_object_template",
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json11parse_reuse30remember_parse_object_template",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/compact-template-capture-r39/candidate-rotating-worker"
+      ],
+      "binary_sha256": "be3048ea470f31165f9ca71ba9f2cd5a4ae47476506b9387398aa3a30d76dd09",
+      "disassembly_sha256": "750190d8bbfa15505a37206fc59abdf45301ccca9cc0d867b498dff67a2b38c0",
+      "instructions": 402,
+      "calls": [
+        "bl\t0x1005e6224 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6object6shapes34shape_live_inline_slot_count_by_id>",
+        "bl\t0x100b648d0 <_writev+0x100b648d0>",
+        "bl\t0x1007c00d0 <_js_array_get_f64>",
+        "bl\t0x1007c00d0 <_js_array_get_f64>",
+        "bl\t0x1007c00d0 <_js_array_get_f64>",
+        "bl\t0x1007c00d0 <_js_array_get_f64>",
+        "bl\t0x1007c00d0 <_js_array_get_f64>",
+        "bl\t0x1007c00d0 <_js_array_get_f64>",
+        "bl\t0x1007c00d0 <_js_array_get_f64>",
+        "bl\t0x1007c00d0 <_js_array_get_f64>",
+        "bl\t0x100b41dfc <__RNvNtCs3gRpqoBkMHm_13perry_runtime7tls_hot12hot_uncached>",
+        "bl\t0x100b3f61c <__RNvMs5_NtCs3gRpqoBkMHm_13perry_runtime7tls_hotINtB5_6HotKeyNtNtNtB7_7closure8registry14DispatchRecentE8get_slowB7_>",
+        "bl\t0x100b412a0 <__RNvNtCs3gRpqoBkMHm_13perry_runtime5state10init_state>",
+        "bl\t0x100476d70 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7barrier37incremental_mark_barrier_value_active>",
+        "bl\t0x100476d70 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7barrier37incremental_mark_barrier_value_active>",
+        "bl\t0x100476d70 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7barrier37incremental_mark_barrier_value_active>",
+        "bl\t0x100476d70 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7barrier37incremental_mark_barrier_value_active>",
+        "bl\t0x100476d70 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7barrier37incremental_mark_barrier_value_active>",
+        "bl\t0x100476d70 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7barrier37incremental_mark_barrier_value_active>",
+        "bl\t0x100476d70 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7barrier37incremental_mark_barrier_value_active>",
+        "bl\t0x100476d70 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7barrier37incremental_mark_barrier_value_active>",
+        "bl\t0x100476d70 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7barrier37incremental_mark_barrier_value_active>",
+        "bl\t0x100476d70 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7barrier37incremental_mark_barrier_value_active>",
+        "bl\t0x100b648ac <_writev+0x100b648ac>",
+        "bl\t0x100b648ac <_writev+0x100b648ac>",
+        "bl\t0x100b41dfc <__RNvNtCs3gRpqoBkMHm_13perry_runtime7tls_hot12hot_uncached>",
+        "bl\t0x100b3f61c <__RNvMs5_NtCs3gRpqoBkMHm_13perry_runtime7tls_hotINtB5_6HotKeyNtNtNtB7_7closure8registry14DispatchRecentE8get_slowB7_>",
+        "bl\t0x100b1512c <__RNvNtCsjgY6bXVaRmE_4core4cell22panic_already_borrowed>",
+        "bl\t0x100b1544c <__RNvNtNtCsjgY6bXVaRmE_4core5slice5index16slice_index_fail>"
+      ]
+    }
+  ],
+  "note": "Linked-code diagnostic only; instruction/frame changes do not establish measured speedup."
+}

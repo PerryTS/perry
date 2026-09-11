@@ -1,0 +1,23 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/compact-template-capture-r39/run-rotating.py",
+  "--worker",
+  ".work/compact-template-capture-r39/candidate-rotating-worker",
+  "--baseline-worker",
+  ".work/compact-template-capture-r39/main-rotating-worker",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--filter",
+  "unicode_1m,long_string_1m,escaped_1m,small_record,records_array_1m",
+  "--repeat",
+  "7",
+  "--source-commit",
+  "e69d1292110cf9abee24f8690c584652805a4167",
+  "--results-dir",
+  "results/quiet-compact-template-capture-r39-rotating"
+]
