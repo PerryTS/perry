@@ -976,6 +976,9 @@ impl<'a, const SOURCE_LENGTH: bool> SpecializedDirectParser<'a, SOURCE_LENGTH> {
         self.parse_object_untyped()
     }
 
+    // Keep the large object-construction loop out of the recursive value
+    // dispatcher in both source-length specializations.
+    #[inline(never)]
     pub(crate) unsafe fn parse_object_untyped(&mut self) -> JSValue {
         self.advance();
         self.skip_whitespace();
