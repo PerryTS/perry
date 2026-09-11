@@ -1,4 +1,6 @@
 //! A reused stack slot is not proof its boxed declaration executed (#10048).
+//! Generator continuations can emit the declaration on mutually exclusive paths.
+//! Preserve live var cells, but create a missing cell before a self-capturing init.
 use crate::expr::FnCtx;
 use crate::types::{I32, I64};
 
