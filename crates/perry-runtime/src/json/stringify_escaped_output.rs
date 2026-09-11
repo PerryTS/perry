@@ -130,6 +130,38 @@ fn count_expansion(bytes: &[u8]) -> u64 {
     extra
 }
 
+/// Append into the general serializer's native buffer using the same checked
+/// plan and bounded writer as direct JSON output. UTF-16 metadata is unused in
+/// this buffer; the eventual managed string constructor counts the final text.
+/// This routine performs no managed allocation, callback or GC entry.
+#[inline(never)]
+pub(super) unsafe fn append_to_native_buffer(buf: &mut String, source: &[u8]) -> bool {
+    let Some(plan) = Plan::new(source, 0) else {
+        return false;
+    };
+    let used = buf.len();
+    let Some(required) = used.checked_add(plan.bytes as usize) else {
+        return false;
+    };
+    let bytes = buf.as_mut_vec();
+    if bytes.capacity() < required {
+        // Preserve the buffer's ordinary geometric growth, including spare
+        // space for the containing object's closing punctuation. Reserving
+        // exactly the string length could immediately double it on that suffix.
+        let mut capacity = bytes.capacity().max(8);
+        while capacity < required {
+            let Some(next) = capacity.checked_mul(2) else {
+                return false;
+            };
+            capacity = next;
+        }
+        bytes.reserve(capacity - used);
+    }
+    let written = plan.write(source.as_ptr(), bytes.as_mut_ptr().add(used));
+    bytes.set_len(used + written);
+    true
+}
+
 #[inline(never)]
 pub(super) unsafe fn quote(source: *const StringHeader) -> Option<*mut StringHeader> {
     let bytes = std::slice::from_raw_parts(string_data(source), (*source).byte_len as usize);

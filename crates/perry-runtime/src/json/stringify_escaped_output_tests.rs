@@ -124,3 +124,30 @@ fn json_escaped_output_handles_every_ascii_byte_in_keys_values_and_arrays() {
         }
     }
 }
+
+#[test]
+fn json_native_buffer_uses_bounded_plans_and_retains_suffix_capacity() {
+    for prefix in [0, 15, 255, 1023] {
+        for text in [
+            "line\n\"quote\"\\tab\t".repeat(4096),
+            "東京🙂한\n\u{1}".repeat(1024),
+            "plain".repeat(1000),
+        ] {
+            let quoted = serde_json::to_string(&text).unwrap();
+            let mut output = String::with_capacity(257);
+            output.extend(std::iter::repeat_n('p', prefix));
+            assert!(unsafe { append_to_native_buffer(&mut output, text.as_bytes()) });
+            let capacity = output.capacity();
+            output.push_str("\n}");
+            assert_eq!(output.capacity(), capacity, "closing punctuation must fit");
+            assert_eq!(output, "p".repeat(prefix) + &quoted + "\n}");
+        }
+    }
+    for input in [b"\xed\xa0\x80".as_slice(), b"\xff", b"\n\xc2"] {
+        let mut output = String::from("kept prefix");
+        let capacity = output.capacity();
+        assert!(!unsafe { append_to_native_buffer(&mut output, input) });
+        assert_eq!(output, "kept prefix");
+        assert_eq!(output.capacity(), capacity);
+    }
+}

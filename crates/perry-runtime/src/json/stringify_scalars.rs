@@ -154,6 +154,9 @@ fn json_wtf8_key_fallback_validates_before_writing() {
 
 #[inline]
 unsafe fn write_escaped_bytes_from(buf: &mut String, bytes: &[u8], first_escape: usize) {
+    if bytes.len() >= 256 && super::stringify_escaped_output::append_to_native_buffer(buf, bytes) {
+        return;
+    }
     buf.push('"');
     let mut start = 0;
     // Issue #548: `s` reaches us via `str_from_header`, which uses
