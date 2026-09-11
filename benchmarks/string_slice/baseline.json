@@ -1,0 +1,176 @@
+{
+  "revision": "603b074ace01464bc66fc07cc8d532f26ccf5a0f",
+  "node": "v26.5.1",
+  "workloads": {
+    "ascii": {
+      "sha256": "3895cd80f04d760f98c3447607347ff5ea0c8d900129a187ddfd6f55be100bfb",
+      "engines": {
+        "node": [
+          {
+            "name": "string-slice-parse-loop-ascii",
+            "category": "strings",
+            "n": 100,
+            "ms_per_run": 0.006702244556114048,
+            "runs": 19849,
+            "checksum": 464151292
+          },
+          {
+            "name": "string-slice-parse-loop-ascii",
+            "category": "strings",
+            "n": 1000,
+            "ms_per_run": 0.08602875536480824,
+            "runs": 1647,
+            "checksum": 710929850
+          },
+          {
+            "name": "string-slice-parse-loop-ascii",
+            "category": "strings",
+            "n": 10000,
+            "ms_per_run": 0.8166440000000057,
+            "runs": 174,
+            "checksum": 535454277
+          },
+          {
+            "name": "string-slice-parse-loop-ascii",
+            "category": "strings",
+            "n": 100000,
+            "ms_per_run": 7.339999999999994,
+            "runs": 21,
+            "checksum": 35382078
+          },
+          {
+            "name": "string-slice-parse-loop-ascii",
+            "category": "strings",
+            "n": 1000000,
+            "ms_per_run": 73.84990000000005,
+            "runs": 7,
+            "checksum": 153135489
+          }
+        ],
+        "perry": [
+          {
+            "name": "string-slice-parse-loop-ascii",
+            "category": "strings",
+            "n": 100,
+            "ms_per_run": 0.015718067556952185,
+            "runs": 8805,
+            "checksum": 464151292,
+            "checksum_match": true
+          },
+          {
+            "name": "string-slice-parse-loop-ascii",
+            "category": "strings",
+            "n": 1000,
+            "ms_per_run": 1.3900666666666666,
+            "runs": 105,
+            "checksum": 710929850,
+            "checksum_match": true
+          },
+          {
+            "name": "string-slice-parse-loop-ascii",
+            "category": "strings",
+            "n": 10000,
+            "ms_per_run": 166.93410000000017,
+            "runs": 7,
+            "checksum": 535454277,
+            "checksum_match": true
+          },
+          {
+            "n": 100000,
+            "status": "TIMEOUT"
+          }
+        ]
+      },
+      "slopes": {
+        "node": 1.0015311702090146,
+        "perry": 2.0130729544915633
+      }
+    },
+    "unicode": {
+      "sha256": "ca1ea8b7ce414346c145e60062c2dbe2be6209f78e203df1567f9f86da9efedb",
+      "engines": {
+        "node": [
+          {
+            "name": "string-slice-parse-loop-unicode",
+            "category": "strings",
+            "n": 100,
+            "ms_per_run": 0.010193883792049139,
+            "runs": 13930,
+            "checksum": 319467163
+          },
+          {
+            "name": "string-slice-parse-loop-unicode",
+            "category": "strings",
+            "n": 1000,
+            "ms_per_run": 0.10086180904522792,
+            "runs": 1374,
+            "checksum": 431622199
+          },
+          {
+            "name": "string-slice-parse-loop-unicode",
+            "category": "strings",
+            "n": 10000,
+            "ms_per_run": 1.028454999999991,
+            "runs": 140,
+            "checksum": 36132863
+          },
+          {
+            "name": "string-slice-parse-loop-unicode",
+            "category": "strings",
+            "n": 100000,
+            "ms_per_run": 8.99769999999999,
+            "runs": 21,
+            "checksum": 49951631
+          },
+          {
+            "name": "string-slice-parse-loop-unicode",
+            "category": "strings",
+            "n": 1000000,
+            "ms_per_run": 91.22919999999999,
+            "runs": 7,
+            "checksum": 481167302
+          }
+        ],
+        "perry": [
+          {
+            "n": 100,
+            "status": "ERROR",
+            "exit": 1,
+            "stdout": "",
+            "stderr": "Error: CORRECTNESS: unstable checksum during warmup\n    at <anonymous>\n"
+          },
+          {
+            "name": "string-slice-parse-loop-unicode",
+            "category": "strings",
+            "n": 1000,
+            "ms_per_run": 14.891149999999982,
+            "runs": 14,
+            "checksum": 399614474,
+            "checksum_match": false,
+            "status": "CHECKSUM_MISMATCH"
+          },
+          {
+            "name": "string-slice-parse-loop-unicode",
+            "category": "strings",
+            "n": 10000,
+            "ms_per_run": 1736.2381999999998,
+            "runs": 7,
+            "checksum": 455826758,
+            "checksum_match": false,
+            "status": "CHECKSUM_MISMATCH"
+          },
+          {
+            "n": 100000,
+            "status": "TIMEOUT"
+          }
+        ]
+      },
+      "slopes": {
+        "node": 0.9853993131693931,
+        "perry": null
+      }
+    }
+  },
+  "platform": "Windows-11-10.0.26200-SP0",
+  "processor": "AMD64 Family 25 Model 116 Stepping 1, AuthenticAMD"
+}

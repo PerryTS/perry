@@ -399,7 +399,13 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             ty,
             mutable,
             ..
-        } => lower_let(ctx, *id, name, init.as_ref(), ty, *mutable),
+        } => {
+            lower_let(ctx, *id, name, init.as_ref(), ty, *mutable)?;
+            if ctx.suffix_cursor_locals.contains(id) {
+                crate::expr::suffix_cursor::initialize(ctx, *id);
+            }
+            Ok(())
+        }
 
         Stmt::If {
             condition,

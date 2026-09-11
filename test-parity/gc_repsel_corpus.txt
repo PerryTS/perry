@@ -859,3 +859,5 @@ test_gap_gc_coalesce_local_root
 
 # for-in output/receiver custody across Proxy callbacks (#4644)
 test_gap_gc_for_in_proxy_callback_roots
+
+test_gap_gc_string_suffix_cursor

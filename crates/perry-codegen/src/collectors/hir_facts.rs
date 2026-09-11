@@ -165,6 +165,7 @@ pub(crate) struct EscapeFacts {
     pub non_escaping_array_used_indices: HashMap<u32, HashSet<u32>>,
     pub non_escaping_array_length_only_indices: HashMap<u32, HashSet<u32>>,
     pub fusible_uppercase_locals: HashSet<u32>,
+    pub suffix_cursor_locals: HashSet<u32>,
     pub non_escaping_object_literals: HashMap<u32, Vec<String>>,
     pub non_escaping_object_literal_used_fields: HashMap<u32, HashSet<String>>,
     /// #9843, the fourth member of this family: `for (let {segment: O} of
@@ -386,6 +387,10 @@ impl TypeFacts {
 
     pub(crate) fn non_escaping_array_length_only_indices(&self) -> &HashMap<u32, HashSet<u32>> {
         &self.escape.non_escaping_array_length_only_indices
+    }
+
+    pub(crate) fn suffix_cursor_locals(&self) -> &HashSet<u32> {
+        &self.escape.suffix_cursor_locals
     }
 
     pub(crate) fn fusible_uppercase_locals(&self) -> &HashSet<u32> {
@@ -672,6 +677,7 @@ pub(crate) fn collect_type_facts(
             stmts,
             &non_escaping_arrays,
         );
+    let suffix_cursor_locals = super::suffix_strings::collect(stmts, boxed_vars, module_globals);
     let fusible_uppercase_locals = super::uppercase_strings::collect_fusible_uppercase_locals(
         stmts,
         &non_escaping_arrays,
@@ -786,6 +792,7 @@ pub(crate) fn collect_type_facts(
             non_escaping_array_used_indices,
             non_escaping_array_length_only_indices,
             fusible_uppercase_locals,
+            suffix_cursor_locals,
             non_escaping_object_literals,
             non_escaping_object_literal_used_fields,
             segment_for_of_sites,

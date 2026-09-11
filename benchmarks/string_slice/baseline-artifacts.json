@@ -1,0 +1,5 @@
+{
+  "target/release/perry.exe": "bd112c9c1394946cab99671d9494bdbd723092ed8d2594ba6b6bc78e354a79ce",
+  "target/release/perry_runtime.lib": "50a570b026314a0b60271749ef1328166d211f8aecf5f263e4029e52b8c39286",
+  "target/release/perry_stdlib.lib": "2e6dc08e44d008a6e49947faa14873e6dec67ba1557238a0566913e823f88de3"
+}

@@ -1,0 +1,4 @@
+*.exe
+string-slice-parse-loop-ascii
+string-slice-parse-loop-unicode
+__pycache__/

@@ -118,12 +118,16 @@ mod locale;
 mod pad;
 mod raw;
 mod slice_ops;
+mod slice_range;
 mod split;
+pub(crate) mod suffix_cursor;
 pub(crate) mod trim_cache;
 mod utf16_count;
 #[cfg(feature = "regex-engine")]
 pub(crate) use split::{spec_fancy_regex_split, spec_regex_split};
 
+#[cfg(test)]
+mod slice_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

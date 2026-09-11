@@ -10,6 +10,13 @@ use super::*;
 /// and `and` with `POINTER_MASK` (0x0000_FFFF_FFFF_FFFF), then re-boxes the
 /// result with `js_nanbox_string`.
 pub fn declare_phase_b_strings(module: &mut LlModule) {
+    module.declare_function("js_string_suffix_length", DOUBLE, &[DOUBLE, I64]);
+    module.declare_function(
+        "js_string_suffix_advance",
+        crate::types::VOID,
+        &[DOUBLE, I64, I32],
+    );
+    module.declare_function("js_string_suffix_char_code_at", DOUBLE, &[DOUBLE, I64, I32]);
     module.declare_function("js_string_concat", I64, &[I64, I64]);
     // SSO-aware concat: NaN-boxed f64 in, NaN-boxed f64 out. Avoids
     // the `js_get_string_pointer_unified`-driven SSO materialization
