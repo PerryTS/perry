@@ -224,6 +224,7 @@ pub(crate) unsafe fn remember_parse_object_template(
         let Some(value) = parse_template_value(*fields.add(index)) else {
             return;
         };
+        // GC_STORE_AUDIT(STACK): Native snapshot prefix; parsing suppresses GC.
         slot.write(value);
     }
     let keys_array = crate::object::object_keys_array(object);
