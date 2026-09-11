@@ -71,6 +71,39 @@ fn cached_empty_object_reuses_only_an_unchanged_receiver() {
     }
 }
 
+#[test]
+fn full_entry_zero_spacing_reuses_canonical_record_output() {
+    unsafe {
+        clear_key_prefix_cache();
+        let text = r#"{"id":42,"name":"user_42","email":"user_42@example.com","active":false,"score":63,"tags":["tag_2","tag_0"]}"#;
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let input = scope.root_nanbox_u64(parse(text).bits());
+        let null = f64::from_bits(TAG_NULL);
+        for spacer in [0.0, -0.0, f64::from_bits(crate::value::INT32_TAG)] {
+            REPEATED_OUTPUT_HITS.with(|count| count.set(0));
+            for _ in 0..8 {
+                let result =
+                    super::super::js_json_stringify_full(input.get_nanbox_f64(), null, spacer);
+                let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
+                let (bytes, len) = crate::string::str_bytes_from_jsvalue(
+                    f64::from_bits(result as u64),
+                    &mut scratch,
+                )
+                .unwrap();
+                assert_eq!(
+                    std::slice::from_raw_parts(bytes, len as usize),
+                    text.as_bytes()
+                );
+            }
+            assert!(
+                REPEATED_OUTPUT_HITS.with(std::cell::Cell::get) > 0,
+                "zero bits {:#x} must reach the canonical record emitter after warming its prefix and output plans",
+                spacer.to_bits()
+            );
+        }
+    }
+}
+
 struct ArrayPrototypeLatchGuard {
     _guard_tests: std::sync::MutexGuard<'static, ()>,
     recorded: bool,

@@ -1,0 +1,12 @@
+{
+  "command": [
+    "rustfmt",
+    "--edition",
+    "2021",
+    "--emit",
+    "stdout"
+  ],
+  "input_sha256": "24a3c1fe51285944ffcac009af9b892ecd5940cd3030340b24d49ea513b19c6d",
+  "output_sha256": "ef299650075cd058f1640eee2b6bdd0e745c34a7567c6cac3410eca06e7e1d1c",
+  "note": "Initial file-argument invocation included a filename header and was rejected before any source mutation. Reinvoked rustfmt over stdin; both outputs retained."
+}

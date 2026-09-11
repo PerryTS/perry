@@ -1,0 +1,211 @@
+{
+  "trials": 44,
+  "phases": {
+    "options": {
+      "window": {
+        "owner": "json-perf-5993-1789115595",
+        "load_before": [
+          1.6708984375,
+          1.76220703125,
+          1.6220703125
+        ],
+        "started_utc": "2026-09-11T08:33:15Z",
+        "quiet_gate_passed": true,
+        "command": [
+          "python3",
+          ".work/zero-spacing-r25/run-options.py",
+          "--worker",
+          ".work/zero-spacing-r25/candidate-options",
+          "--baseline-worker",
+          ".work/zero-spacing-r25/main-options",
+          "--node",
+          "/opt/homebrew/bin/node",
+          "--bun",
+          "/Users/perry/.bun/bin/bun",
+          "--case",
+          "long_string_1m:plain:1024:4:11",
+          "--results-dir",
+          "results/quiet-zero-spacing-r25-large-recheck-options"
+        ],
+        "competing_workloads_before": [],
+        "load_after": [
+          1.6708984375,
+          1.76220703125,
+          1.6220703125
+        ],
+        "competing_workloads_after": [],
+        "finished_utc": "2026-09-11T08:33:20Z"
+      },
+      "timed_trials": 44,
+      "cases": [
+        {
+          "fixture": "long_string_1m",
+          "operation": "plain",
+          "engines": {
+            "perry": {
+              "fixture": "long_string_1m",
+              "operation": "plain",
+              "iterations": 1024,
+              "engine": "perry",
+              "repetitions": 11,
+              "cpu_us": 38.607421875,
+              "cpu_samples_us": [
+                36.0087890625,
+                38.607421875,
+                41.9140625,
+                36.873046875,
+                34.451171875,
+                34.236328125,
+                42.703125,
+                39.814453125,
+                36.83984375,
+                39.5810546875,
+                40.1142578125
+              ],
+              "peak_rss_mib": 54.578125,
+              "peak_rss_samples_mib": [
+                54.609375,
+                54.578125,
+                54.578125,
+                54.578125,
+                54.578125,
+                54.609375,
+                54.609375,
+                54.578125,
+                54.578125,
+                54.578125,
+                54.578125
+              ]
+            },
+            "baseline": {
+              "fixture": "long_string_1m",
+              "operation": "plain",
+              "iterations": 1024,
+              "engine": "baseline",
+              "repetitions": 11,
+              "cpu_us": 38.1201171875,
+              "cpu_samples_us": [
+                44.12109375,
+                39.9482421875,
+                40.3896484375,
+                39.255859375,
+                36.90625,
+                38.0126953125,
+                37.5078125,
+                37.353515625,
+                34.8271484375,
+                38.1201171875,
+                38.318359375
+              ],
+              "peak_rss_mib": 54.609375,
+              "peak_rss_samples_mib": [
+                54.609375,
+                54.578125,
+                54.609375,
+                54.609375,
+                54.5625,
+                54.5625,
+                54.609375,
+                54.578125,
+                54.609375,
+                54.578125,
+                54.609375
+              ]
+            },
+            "node": {
+              "fixture": "long_string_1m",
+              "operation": "plain",
+              "iterations": 1024,
+              "engine": "node",
+              "repetitions": 11,
+              "cpu_us": 107.2763671875,
+              "cpu_samples_us": [
+                116.66015625,
+                107.4814453125,
+                108.408203125,
+                107.2080078125,
+                107.017578125,
+                106.9228515625,
+                107.2763671875,
+                107.4052734375,
+                108.236328125,
+                106.7880859375,
+                105.8251953125
+              ],
+              "peak_rss_mib": 154.0,
+              "peak_rss_samples_mib": [
+                154.078125,
+                154.0,
+                154.015625,
+                153.984375,
+                154.0625,
+                153.828125,
+                153.953125,
+                153.90625,
+                153.96875,
+                154.125,
+                154.09375
+              ]
+            },
+            "bun": {
+              "fixture": "long_string_1m",
+              "operation": "plain",
+              "iterations": 1024,
+              "engine": "bun",
+              "repetitions": 11,
+              "cpu_us": 99.1123046875,
+              "cpu_samples_us": [
+                99.880859375,
+                99.7900390625,
+                97.3232421875,
+                99.013671875,
+                98.9599609375,
+                99.474609375,
+                99.2080078125,
+                98.6767578125,
+                98.5712890625,
+                99.1123046875,
+                99.361328125
+              ],
+              "peak_rss_mib": 155.515625,
+              "peak_rss_samples_mib": [
+                161.609375,
+                161.578125,
+                122.5625,
+                152.578125,
+                149.59375,
+                161.625,
+                158.5625,
+                149.59375,
+                149.546875,
+                155.515625,
+                158.53125
+              ]
+            }
+          },
+          "delta_pct": 1.2783399513257354,
+          "paired_delta_pct": [
+            -18.38645418326693,
+            -3.3563937712371983,
+            3.774269203800862,
+            -6.069953729041244,
+            -6.652201524132096,
+            -9.9344894026975,
+            13.851280983128511,
+            6.58823529411765,
+            5.779098785856496,
+            3.8324580504675243,
+            4.686783220347612
+          ],
+          "slower_pairs": 6,
+          "rss_delta_mib": -0.03125,
+          "separated_regression": false,
+          "separated_improvement": false,
+          "beats_both_peers": true,
+          "rss_beats_both_peers": true,
+          "all_samples_beat_both_peers": true
+        }
+      ]
+    }
+  }
+}

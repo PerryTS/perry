@@ -1,0 +1,21 @@
+{
+  "source_commit": "3240e34b2860e315892ffca88a5deaf4853ef6ac",
+  "command": [
+    "cargo",
+    "test",
+    "--release",
+    "-p",
+    "perry-runtime",
+    "--lib",
+    "json"
+  ],
+  "env": {
+    "RUST_TEST_THREADS": "1"
+  },
+  "hashes": {
+    "crates/perry-runtime/src/json/replacer.rs": "c762be408303f10bc2ec9dfa2d9687892fad7760a105fc33ab53ad2f6c06da23",
+    "crates/perry-runtime/src/json/stringify_record_output_tests.rs": "24a3c1fe51285944ffcac009af9b892ecd5940cd3030340b24d49ea513b19c6d",
+    "test-files/test_json_zero_spacing.ts": "9cca6718bfd28571f0e3ab9e677d1b11f9bf1aa250335bf3511ebf5e021e0797"
+  },
+  "exit_code": 101
+}

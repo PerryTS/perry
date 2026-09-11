@@ -1,0 +1,65 @@
+{
+  "started_utc": "2026-09-11T08:50:13Z",
+  "load_before": [
+    1.51708984375,
+    1.7626953125,
+    1.7421875
+  ],
+  "host": "perry-macos.fritz.box",
+  "cpu": "Apple M1",
+  "memory": 8589934592,
+  "worker_sha256": "4b87bd9273b21d2b283097dbef68d9479d7c14b7c88f30f7fecd2a583207cf59",
+  "fixtures": [
+    {
+      "fixture": "small_record",
+      "bytes": 109,
+      "sha256": [
+        "e8d7bd409aeaba5d0aa3ce4046609ff7abdd3b88fc422903982ed7e58bc8f340",
+        "9f123a480f74f4f1e7194b06c35d9456f8134a3b9dffe60be716982b9e57558e",
+        "7462fcc52ae94b41cb36d68ea5c776a61ba8d955c7d4b58002ba0a4bf1fdcbf0",
+        "52152547808237640f1708820d40fafd89b596f846114b2afd3fd2dea2782ac5",
+        "a4ff1a8041b948192852776b4acd9db210338c269018ec7ef1ab83cd8deb4266",
+        "0f73c2f9b20ea603844075c815c5e39447dc054da14d153ac8dbf68c1d468a98",
+        "05e04604275b613987a5eb2a9347b2c6693887b0499fb58f000aee58d2236e35",
+        "3fa279e153cad47e821f24ea1c6740727ecfbd2d00bde660c75572a87c420c0d"
+      ],
+      "distinct_contents": 8
+    }
+  ],
+  "baseline_worker_sha256": "f784fa9fa18bc3d4bba8b7546a02b554692932ae9939d1e35f50d9da2a3de9e9",
+  "engines": [
+    "perry",
+    "node",
+    "bun",
+    "baseline"
+  ],
+  "verification_counts_by_mode": {
+    "rotating": [
+      2,
+      7,
+      9
+    ],
+    "same": [
+      9
+    ],
+    "select": [
+      9
+    ]
+  },
+  "source_sha256": {
+    "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/zero-spacing-r25/run-rotating.py": "ba31db533cc22a82ce8f9daa65a4a4134bd6aa9608ecc3f340cc2022098ad316",
+    "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/zero-spacing-r25/harness/rotating-worker.ts": "7541897acb2c7c35c0f5e762f8b2f28b9783feb26a42db107c1c4eb3af644b24",
+    "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/zero-spacing-r25/harness/rotating-worker.js": "f163f68f3d4c1d13720403ffb96d0afe4306ec0723f2015d3a66ab0c77fa56c8"
+  },
+  "commit": "01f2878dad8efc92e394c49b88fe0800b871f593",
+  "versions": {
+    "node": "v26.5.1",
+    "bun": "1.3.14"
+  },
+  "load_after": [
+    1.8125,
+    1.8017578125,
+    1.7568359375
+  ],
+  "finished_utc": "2026-09-11T08:50:41Z"
+}

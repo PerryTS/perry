@@ -1,0 +1,10 @@
+{
+  "controller_exit_code": 1,
+  "stage": "local case declaration preflight",
+  "exception": "FileNotFoundError",
+  "missing_path": "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/zero-spacing-r25/full-cases.json",
+  "remote_command_started": false,
+  "measurement_window_started": false,
+  "repair_receipt": "full-cases-reuse.json",
+  "note": "Structured receipt of the tool-observed initial failure, not a raw subprocess log. Case file restored byte-for-byte from the prior R24 declaration before retry."
+}

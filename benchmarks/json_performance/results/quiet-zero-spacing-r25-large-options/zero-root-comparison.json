@@ -1,0 +1,17 @@
+{
+  "matches": true,
+  "files": [
+    {
+      "mode": "native",
+      "normalized_sha256": "a452c11cd5682ca7099a90032eb786db6a0d779d6102a8e506bfe8c0276c79f5",
+      "main_sha256": "26e1fc8515572f88d97031d233e90524f597c6891a10d6df8f472f522ec4166c",
+      "candidate_sha256": "95358f604170bd3dcb6dbd982618e8e8dd3abc6fe306cdd9ec0d109bcdfd0ebd"
+    },
+    {
+      "mode": "shadow",
+      "normalized_sha256": "8c8a6fc9670c42ab6eb6f97a45ac8f10db326b9ba473d839d62ed33b8013e938",
+      "main_sha256": "8c8a6fc9670c42ab6eb6f97a45ac8f10db326b9ba473d839d62ed33b8013e938",
+      "candidate_sha256": "8c8a6fc9670c42ab6eb6f97a45ac8f10db326b9ba473d839d62ed33b8013e938"
+    }
+  ]
+}

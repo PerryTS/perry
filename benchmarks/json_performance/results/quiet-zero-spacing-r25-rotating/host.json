@@ -1,0 +1,125 @@
+{
+  "started_utc": "2026-09-11T08:47:33Z",
+  "load_before": [
+    1.646484375,
+    1.83740234375,
+    1.76171875
+  ],
+  "host": "perry-macos.fritz.box",
+  "cpu": "Apple M1",
+  "memory": 8589934592,
+  "worker_sha256": "4b87bd9273b21d2b283097dbef68d9479d7c14b7c88f30f7fecd2a583207cf59",
+  "fixtures": [
+    {
+      "fixture": "small_record",
+      "bytes": 109,
+      "sha256": [
+        "e8d7bd409aeaba5d0aa3ce4046609ff7abdd3b88fc422903982ed7e58bc8f340",
+        "9f123a480f74f4f1e7194b06c35d9456f8134a3b9dffe60be716982b9e57558e",
+        "7462fcc52ae94b41cb36d68ea5c776a61ba8d955c7d4b58002ba0a4bf1fdcbf0",
+        "52152547808237640f1708820d40fafd89b596f846114b2afd3fd2dea2782ac5",
+        "a4ff1a8041b948192852776b4acd9db210338c269018ec7ef1ab83cd8deb4266",
+        "0f73c2f9b20ea603844075c815c5e39447dc054da14d153ac8dbf68c1d468a98",
+        "05e04604275b613987a5eb2a9347b2c6693887b0499fb58f000aee58d2236e35",
+        "3fa279e153cad47e821f24ea1c6740727ecfbd2d00bde660c75572a87c420c0d"
+      ],
+      "distinct_contents": 8
+    },
+    {
+      "fixture": "records_array_1m",
+      "bytes": 888597,
+      "sha256": [
+        "b827b3f0f5ee2a0eed75ace761a1bdd6424d6a0b524654516503a3265a5685de",
+        "87d08f88a52970a79814f0712a2dd1adb7b0e91fc60b27a88acac2f89982eaec",
+        "a5fb310d90ee6df38002124dbf4f4f7051cb8208abaa1c36a10d560c564de6ee",
+        "d44d093618fa54035f3962e602ce5eae8fc999616a8ba873f0dd98b8720e6f1d",
+        "1e1b415d819c50495d624ca3625ab7a53616287cc9150160f2712ac307a1afd4",
+        "024a68cbbb6b9d43403f16d23924aa96d58008229039f58db8686042985a4f89",
+        "311025b49f17e3c659d62276cb8141b676a586694804b2ec2d33aed2301edf3e",
+        "f2facbc0359f8f24fa86f309a93cdbb6255acaa62c2fbdd0ec1a2533c872527a"
+      ],
+      "distinct_contents": 8
+    },
+    {
+      "fixture": "long_string_1m",
+      "bytes": 1048594,
+      "sha256": [
+        "ea77e5d1ebb84c30a920d4de6aee5c5c92c2aba6cf060c30f1933e1e000e9081",
+        "6c561580cc851c5e12cb6cd1a85577a638715378ae9abea874cec403fbdca611",
+        "e2353dc042003d25b4e337fbd19aa504a070fae11e0da3cd453148ccc237ff70",
+        "cf99d0384a016baf730ef38ae1f3c0b2aaabbe5e0330ef914ea07fc70bdcfea4",
+        "e7abc264a4091a266b9ce48cfc8735b7a5ca5b24c5c834697e388b5dc3594fd3",
+        "41f99201531383bc592f73982edb39ac9c58c669d6aa317a8610ff6a7dfe5637",
+        "59ae0a11c12c973cc1f4fc17aea67168b596a0c60a5776b0a3fea6bf42d74600",
+        "0267aec1d303709011753890f0cf2d310df90be7a1faa0af1070cedcde9d3b03"
+      ],
+      "distinct_contents": 8
+    },
+    {
+      "fixture": "escaped_1m",
+      "bytes": 990018,
+      "sha256": [
+        "52f2e30ddc036b9c0600a1ab088c7d00f6e40558540efa1f9315a0579bec8f56",
+        "30e96a5c906b1a88c204c517a8ee8674e084c7c7120714b69488817a2ff7b056",
+        "9781ff7fdc26d6c6fc54e79ac47e83114c6bc411c35440bae2b073883935598e",
+        "f794943a8d4f1d44c948c499305d07407ca38576adf9bcc4b1b0944cbd5106e3",
+        "b357998429b37d9cd0b5798704ea3af5b283f73a2598a79660f7315538eb03cf",
+        "b2d372309773165407fc14aacc34b7ac0315b8408e45e01b0504fba1c435f451",
+        "09ca6b6328fb1f9fd18a5b682095067311a2817280715cb38d29833275efe534",
+        "8c1ee888dfd237185f99fbd5d6973aee99aad1e29ba06e35969f3d6c36cbacb6"
+      ],
+      "distinct_contents": 8
+    },
+    {
+      "fixture": "unicode_1m",
+      "bytes": 884018,
+      "sha256": [
+        "b58eea42a50190b7675886030ef6875b25bb0a6d50632d9cbc5a918ea4ad9bd9",
+        "d1144d3b04932f867e65e69a0b1c34594965d29bd8095c2a829c028b6376b149",
+        "602402be6e6fbff81196dbabcdb40b274429a82047481c5b7f34dfdf9ec77008",
+        "75925699fe7c331bfe715a0468cc65b62f2578cbbe73736368ef71a6597da133",
+        "e9c533e0e39f4618d4c70f90ea2789be70e6c8d60b04cf8e2837aff1591afaad",
+        "a76ab72ac01e98e154a81d8805a35b9555dcf6d0f02fe4ee33aeebe8eced641f",
+        "a7d3beeda4ff34f74d8ffd65c7b25887759e328153be8cd3a933f618ca3ae8c9",
+        "9fbc9e4928504cebae6eb3774b07ec941f7eebb66154548765fc5a7323070263"
+      ],
+      "distinct_contents": 8
+    }
+  ],
+  "baseline_worker_sha256": "f784fa9fa18bc3d4bba8b7546a02b554692932ae9939d1e35f50d9da2a3de9e9",
+  "engines": [
+    "perry",
+    "node",
+    "bun",
+    "baseline"
+  ],
+  "verification_counts_by_mode": {
+    "rotating": [
+      2,
+      7,
+      9
+    ],
+    "same": [
+      9
+    ],
+    "select": [
+      9
+    ]
+  },
+  "source_sha256": {
+    "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/zero-spacing-r25/run-rotating.py": "ba31db533cc22a82ce8f9daa65a4a4134bd6aa9608ecc3f340cc2022098ad316",
+    "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/zero-spacing-r25/harness/rotating-worker.ts": "7541897acb2c7c35c0f5e762f8b2f28b9783feb26a42db107c1c4eb3af644b24",
+    "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/zero-spacing-r25/harness/rotating-worker.js": "f163f68f3d4c1d13720403ffb96d0afe4306ec0723f2015d3a66ab0c77fa56c8"
+  },
+  "commit": "01f2878dad8efc92e394c49b88fe0800b871f593",
+  "versions": {
+    "node": "v26.5.1",
+    "bun": "1.3.14"
+  },
+  "load_after": [
+    1.83642578125,
+    1.86328125,
+    1.7763671875
+  ],
+  "finished_utc": "2026-09-11T08:49:16Z"
+}
