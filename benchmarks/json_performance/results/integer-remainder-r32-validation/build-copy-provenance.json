@@ -1,0 +1,124 @@
+{
+  "source_commit": "c695f6509ed85999894a2f34418f057f32bcb363",
+  "actual_build_worktree": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29",
+  "validation_worktree": "/Users/amlug/projects/perry/json-merged-pr10022",
+  "copied_unix": 1789130315.979009,
+  "note": "Normal all-three-package production build from a clean committed separate worktree; both source trees match. Candidate timing/validation uses these immutable artifacts. Shared mutable target directory is not used for worker linking.",
+  "files": [
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/integer-remainder-r32/frozen-build/perry",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/frozen-build/perry",
+      "sha256": "311b39a2b03507f57902f287353844df99f4a4215a522d9d46d4c63076ade460"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/integer-remainder-r32/frozen-build/libperry_runtime.a",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/frozen-build/libperry_runtime.a",
+      "sha256": "33bd0b7a70d391c023061bdcbf0a0aaa399f3c944ee6773cbc35549e88fca220"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/integer-remainder-r32/frozen-build/libperry_stdlib.a",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/frozen-build/libperry_stdlib.a",
+      "sha256": "f1ffef2c6ab18bb6e78ecf58c3df6b2bd31fd590dbc3627b9f10a2b382d7f4ca"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/integer-remainder-r32/build-provenance.json",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/build-provenance.json",
+      "sha256": "ed8024d8e5b353b76ba9a5e5a9f71409975adc678c99b7c01ec6714e6153e887"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/integer-remainder-r32/build-start.json",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/build-start.json",
+      "sha256": "4542b9a2b8a1188911f27466fed4c655379384b729df820eb08595a5f329dcff"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/integer-remainder-r32/build-command-result.json",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/build-command-result.json",
+      "sha256": "7eb59a8324be1ac0768214ddbb281572017ccdd860cb5f97b269de8736437ebe"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/integer-remainder-r32/unit-source.json",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/unit-source.json",
+      "sha256": "4c6b0a877fbdfdbf58f1edfd3b2d887a4c6f6315596a7bf2167fef8992d032ca"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/integer-remainder-r32/unit.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/unit.log",
+      "sha256": "012a50b45edc9d791676b28d978aee2614af512073df336333b7a4536fb116ec"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/integer-remainder-r32/build.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/build.log",
+      "sha256": "b38a36b7bc5fc1289142a4fee68709c7bd780d53094161a08831163e4c31e50c"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/integer-remainder-r32/validate-and-build.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/validate-and-build.log",
+      "sha256": "a1f04e403543e5c4e494590e7961d520fd31edde05af7e771683ac8e959291ad"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/integer-remainder-r32/lint-results.json",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lint-results.json",
+      "sha256": "ed815700dd66f05158e604dfa7e674fbe132c9c73707cc0ed6967089bbf4fa5b"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/integer-remainder-r32/script-lint.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/script-lint.log",
+      "sha256": "ff4d5b61ba498dd6d0bd511838c92bba1ae8767773e9c06711e76d2529b44964"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/integer-remainder-r32/file-cap.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/file-cap.log",
+      "sha256": "b0f283074d97912a169a14da638801e20dedc4981a521e2ef90e4028bdcdf8cd"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/integer-remainder-r32/worktree-provenance.json",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/worktree-provenance.json",
+      "sha256": "3335a1c23a5fdd6db307300b0761c807b6b32b54d65680e388d129b5d1847f10"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/integer-remainder-r32/lint-review.json",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/lint-review.json",
+      "sha256": "1020f0c2ade580d03c08032ea70553c2836b697af371a60a9055bc7f0f315631"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/integer-remainder-r32/arithmetic-suite.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/arithmetic-suite.log",
+      "sha256": "925f9cf2f9bdf1fa395e475a3d018b98bcac10df81e92945f54b2fad428108a1"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/integer-remainder-r32/arithmetic-suite-provenance.json",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/arithmetic-suite-provenance.json",
+      "sha256": "1a64baace0e2f05e74b77e44ae23ced866663383851955fb07003856b8789c16"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/integer-remainder-r32/build-resume.json",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/build-resume.json",
+      "sha256": "d249943b1a27590804d015bae58465165516c2e8c6a7dd6adfe2960c3cc76b36"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/integer-remainder-r32/build-controller.log",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/build-controller.log",
+      "sha256": "ed8024d8e5b353b76ba9a5e5a9f71409975adc678c99b7c01ec6714e6153e887"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/integer-remainder-r32/hold-production-reviewed.txt",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/hold-production-reviewed.txt",
+      "sha256": "abe7fb64a80bc97c5ed7711ab2f76378c27b522f9ce2bd1ce1f7e686636aeab8"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/integer-remainder-r32/build-release.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/build-release.py",
+      "sha256": "f104da4b90eda0c4f2f28ef311a6bdd8b8cb4afc27c65a6d6569285b2955d1fe"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/integer-remainder-r32/validate-and-build.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/validate-and-build.py",
+      "sha256": "16c805e18bc1e9897f442218eb4ee9e93618adb7d1fb9b63c82437fa36f1f6aa"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/integer-remainder-r32/run-lint.py",
+      "copy": "benchmarks/json_performance/.work/integer-remainder-r32/run-lint.py",
+      "sha256": "b228808035eba5472e845e534d7799d2222ee142cef0a273cb941810fdfd53f8"
+    }
+  ]
+}

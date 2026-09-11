@@ -1,0 +1,20 @@
+{
+  "source_commit": "c695f6509ed85999894a2f34418f057f32bcb363",
+  "command": [
+    "cargo",
+    "test",
+    "--release",
+    "-p",
+    "perry-runtime",
+    "--lib",
+    "json"
+  ],
+  "env": {
+    "RUST_TEST_THREADS": "1"
+  },
+  "hashes": {
+    "crates/perry-runtime/src/value/dynamic_arith.rs": "3ed03b3869d7a99f621afb157e623d82abfab4315c6acdb16c2b974ca23e9c11",
+    "test-files/test_json_index_remainder.ts": "1d4fb1da83e58ff1596bb6468f29852d4801a0197740dee2a574dce47769da1a"
+  },
+  "exit_code": 0
+}

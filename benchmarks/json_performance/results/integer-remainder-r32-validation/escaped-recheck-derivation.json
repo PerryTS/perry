@@ -1,0 +1,17 @@
+{
+  "reason": "Fresh escaped parsing+0.20%(six/seven slower) and selective access+1.55%(five/seven slower), both overlapping, merit an independent eleven-repetition control before promotion.",
+  "files": [
+    {
+      "original": "measure-small-rotating-recheck.py",
+      "original_sha256": "75c692fcb1a6e8cfc86935712ac34742919093364212a5702d7cd6759056f6c7",
+      "derived": "measure-escaped-rotating-recheck.py",
+      "derived_sha256": "092eecee19b712efb4439d44bb738145730e240d8f8d4e04315969d6ce6b867d"
+    },
+    {
+      "original": "analyze-small-rotating-recheck.py",
+      "original_sha256": "0fba6080126b2157d699559f9476299a23b866ffecf511d272d12a9a32a5af00",
+      "derived": "analyze-escaped-rotating-recheck.py",
+      "derived_sha256": "79df0a1aacbd828d7a9c13ff4791f0e6f933946082aa8fe48cd8a5ade6c7fc74"
+    }
+  ]
+}

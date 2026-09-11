@@ -1,0 +1,23 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/integer-remainder-r32/run-rotating.py",
+  "--worker",
+  ".work/integer-remainder-r32/candidate-rotating-worker",
+  "--baseline-worker",
+  ".work/integer-remainder-r32/main-rotating-worker",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--filter",
+  "unicode_1m,long_string_1m,escaped_1m,small_record,records_array_1m",
+  "--repeat",
+  "7",
+  "--source-commit",
+  "c695f6509ed85999894a2f34418f057f32bcb363",
+  "--results-dir",
+  "results/quiet-integer-remainder-r32-rotating"
+]

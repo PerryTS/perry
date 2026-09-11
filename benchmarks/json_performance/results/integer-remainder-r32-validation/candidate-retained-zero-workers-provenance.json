@@ -1,0 +1,35 @@
+[
+  {
+    "worker": "retained-zero",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/integer-remainder-r32/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/zero-spacing-r25/retained-zero-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/integer-remainder-r32/candidate-retained-zero.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/integer-remainder-r32/candidate-retained-zero.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/integer-remainder-r32/frozen-build/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/integer-remainder-r32/candidate-retained-zero"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/zero-spacing-r25/retained-zero-worker.ts": "5ead488614d020e33d7711aeb2d9d805426ff46c9283101c1f659b1d93f8d03c",
+      "benchmarks/json_performance/.work/integer-remainder-r32/candidate-retained-zero.o": "4aee07f3f1605fb9f81d2019dd2533306d7e39d3bfe6a858232f3ab70d63aae5",
+      "benchmarks/json_performance/.work/integer-remainder-r32/candidate-retained-zero": "6227ee230f2d07d8fabf4610ac235ecba1031a635915b4b8808fd7719db342eb",
+      "benchmarks/json_performance/.work/integer-remainder-r32/frozen-build/perry": "311b39a2b03507f57902f287353844df99f4a4215a522d9d46d4c63076ade460",
+      "benchmarks/json_performance/.work/integer-remainder-r32/frozen-build/libperry_runtime.a": "33bd0b7a70d391c023061bdcbf0a0aaa399f3c944ee6773cbc35549e88fca220",
+      "benchmarks/json_performance/.work/integer-remainder-r32/frozen-build/libperry_stdlib.a": "f1ffef2c6ab18bb6e78ecf58c3df6b2bd31fd590dbc3627b9f10a2b382d7f4ca"
+    }
+  }
+]

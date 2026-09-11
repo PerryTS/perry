@@ -1,0 +1,17 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/integer-remainder-r32/run-access.py",
+  "--worker",
+  ".work/integer-remainder-r32/candidate-access-worker",
+  "--baseline-worker",
+  ".work/integer-remainder-r32/main-access-worker",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--results-dir",
+  "results/quiet-integer-remainder-r32-access"
+]

@@ -1,0 +1,38 @@
+{
+  "owner": "json-perf-35027-1789131621",
+  "load_before": [
+    1.94140625,
+    1.9609375,
+    1.83544921875
+  ],
+  "started_utc": "2026-09-11T13:00:21Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/integer-remainder-r32/run-rotating.py",
+    "--worker",
+    ".work/integer-remainder-r32/candidate-rotating-worker",
+    "--baseline-worker",
+    ".work/integer-remainder-r32/main-rotating-worker",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--bun",
+    "/Users/perry/.bun/bin/bun",
+    "--filter",
+    "unicode_1m,long_string_1m,escaped_1m,small_record,records_array_1m",
+    "--repeat",
+    "7",
+    "--source-commit",
+    "c695f6509ed85999894a2f34418f057f32bcb363",
+    "--results-dir",
+    "results/quiet-integer-remainder-r32-rotating"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.97705078125,
+    1.9697265625,
+    1.85009765625
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-11T13:02:03Z"
+}

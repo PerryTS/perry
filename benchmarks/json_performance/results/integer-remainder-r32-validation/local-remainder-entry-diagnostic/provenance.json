@@ -1,0 +1,90 @@
+{
+  "source_commit": "c695f6509ed85999894a2f34418f057f32bcb363",
+  "binary_sha256": "a219cc3a7c20640c7bf2e3274eca54443ec0ad4912b3a17186e8c6e6e807cbe2",
+  "rows": [
+    {
+      "fixture": "records_array_16k",
+      "exit_code": 0,
+      "command": [
+        "lldb",
+        "--batch",
+        "-o",
+        "settings set auto-confirm true",
+        "-o",
+        "breakpoint set --name js_dynamic_mod",
+        "-o",
+        "run",
+        "-o",
+        "register read --format hex d0 d1",
+        "-o",
+        "disassemble --start-address $pc --count 4",
+        "-o",
+        "process kill",
+        "--",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/integer-remainder-r32/candidate-access-worker",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/fixtures/records_array_16k.json",
+        "random",
+        "1",
+        "0"
+      ]
+    },
+    {
+      "fixture": "records_array_1m",
+      "exit_code": 0,
+      "command": [
+        "lldb",
+        "--batch",
+        "-o",
+        "settings set auto-confirm true",
+        "-o",
+        "breakpoint set --name js_dynamic_mod",
+        "-o",
+        "run",
+        "-o",
+        "register read --format hex d0 d1",
+        "-o",
+        "disassemble --start-address $pc --count 4",
+        "-o",
+        "process kill",
+        "--",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/integer-remainder-r32/candidate-access-worker",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/fixtures/records_array_1m.json",
+        "random",
+        "1",
+        "0"
+      ]
+    },
+    {
+      "fixture": "records_array_20m",
+      "exit_code": 0,
+      "command": [
+        "lldb",
+        "--batch",
+        "-o",
+        "settings set auto-confirm true",
+        "-o",
+        "breakpoint set --name js_dynamic_mod",
+        "-o",
+        "run",
+        "-o",
+        "register read --format hex d0 d1",
+        "-o",
+        "disassemble --start-address $pc --count 4",
+        "-o",
+        "process kill",
+        "--",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/integer-remainder-r32/candidate-access-worker",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/fixtures/records_array_20m.json",
+        "random",
+        "1",
+        "0"
+      ]
+    }
+  ],
+  "files": {
+    "records_array_1m-random.log": "adb22c9924b70d21fdb3d20421424f91a103016d371c2f3ad6c4be15092a4a8d",
+    "records_array_16k-random.log": "4a65e359902b877afb8bde068fc5c6c9676c84863a8285bf351264fc2cbafaaf",
+    "records_array_20m-random.log": "3c1cb6cedf2c71c4f8e78131b33bed29a78d602524a7e91d0deea5f13c46b4fa"
+  },
+  "note": "Local debugger snapshots of numeric arguments at the existing runtime remainder entry, synthetic JSON fixture only. Not performance evidence; each owned inferior explicitly killed at its breakpoint."
+}

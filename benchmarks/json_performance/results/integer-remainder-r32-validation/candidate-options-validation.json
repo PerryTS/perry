@@ -1,0 +1,142 @@
+[
+  {
+    "arm": "candidate",
+    "fixture": "small_record",
+    "operation": "plain",
+    "mode": "normal",
+    "matches_node": true,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "binary_sha256": "61ed64c4cc7a2adaa05eab3b3528f5d8ace16dedd36af74a15ef62f011a5b1c1"
+  },
+  {
+    "arm": "candidate",
+    "fixture": "small_record",
+    "operation": "plain",
+    "mode": "scheduled",
+    "matches_node": true,
+    "protected_retired_sets": 6,
+    "moved_objects": 12640,
+    "binary_sha256": "61ed64c4cc7a2adaa05eab3b3528f5d8ace16dedd36af74a15ef62f011a5b1c1"
+  },
+  {
+    "arm": "candidate",
+    "fixture": "small_record",
+    "operation": "zero",
+    "mode": "normal",
+    "matches_node": true,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "binary_sha256": "61ed64c4cc7a2adaa05eab3b3528f5d8ace16dedd36af74a15ef62f011a5b1c1"
+  },
+  {
+    "arm": "candidate",
+    "fixture": "small_record",
+    "operation": "zero",
+    "mode": "scheduled",
+    "matches_node": true,
+    "protected_retired_sets": 6,
+    "moved_objects": 12640,
+    "binary_sha256": "61ed64c4cc7a2adaa05eab3b3528f5d8ace16dedd36af74a15ef62f011a5b1c1"
+  },
+  {
+    "arm": "candidate",
+    "fixture": "small_record",
+    "operation": "dynamic-zero",
+    "mode": "normal",
+    "matches_node": true,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "binary_sha256": "61ed64c4cc7a2adaa05eab3b3528f5d8ace16dedd36af74a15ef62f011a5b1c1"
+  },
+  {
+    "arm": "candidate",
+    "fixture": "small_record",
+    "operation": "dynamic-zero",
+    "mode": "scheduled",
+    "matches_node": true,
+    "protected_retired_sets": 6,
+    "moved_objects": 12640,
+    "binary_sha256": "61ed64c4cc7a2adaa05eab3b3528f5d8ace16dedd36af74a15ef62f011a5b1c1"
+  },
+  {
+    "arm": "candidate",
+    "fixture": "small_record",
+    "operation": "pretty",
+    "mode": "normal",
+    "matches_node": true,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "binary_sha256": "61ed64c4cc7a2adaa05eab3b3528f5d8ace16dedd36af74a15ef62f011a5b1c1"
+  },
+  {
+    "arm": "candidate",
+    "fixture": "small_record",
+    "operation": "pretty",
+    "mode": "scheduled",
+    "matches_node": true,
+    "protected_retired_sets": 6,
+    "moved_objects": 12640,
+    "binary_sha256": "61ed64c4cc7a2adaa05eab3b3528f5d8ace16dedd36af74a15ef62f011a5b1c1"
+  },
+  {
+    "arm": "candidate",
+    "fixture": "small_record",
+    "operation": "keys",
+    "mode": "normal",
+    "matches_node": true,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "binary_sha256": "61ed64c4cc7a2adaa05eab3b3528f5d8ace16dedd36af74a15ef62f011a5b1c1"
+  },
+  {
+    "arm": "candidate",
+    "fixture": "small_record",
+    "operation": "keys",
+    "mode": "scheduled",
+    "matches_node": true,
+    "protected_retired_sets": 6,
+    "moved_objects": 12640,
+    "binary_sha256": "61ed64c4cc7a2adaa05eab3b3528f5d8ace16dedd36af74a15ef62f011a5b1c1"
+  },
+  {
+    "arm": "candidate",
+    "fixture": "small_record",
+    "operation": "callback",
+    "mode": "normal",
+    "matches_node": true,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "binary_sha256": "61ed64c4cc7a2adaa05eab3b3528f5d8ace16dedd36af74a15ef62f011a5b1c1"
+  },
+  {
+    "arm": "candidate",
+    "fixture": "small_record",
+    "operation": "callback",
+    "mode": "scheduled",
+    "matches_node": true,
+    "protected_retired_sets": 6,
+    "moved_objects": 12652,
+    "binary_sha256": "61ed64c4cc7a2adaa05eab3b3528f5d8ace16dedd36af74a15ef62f011a5b1c1"
+  },
+  {
+    "arm": "candidate",
+    "fixture": "records_array_16k",
+    "operation": "pretty",
+    "mode": "normal",
+    "matches_node": true,
+    "protected_retired_sets": 0,
+    "moved_objects": 0,
+    "binary_sha256": "61ed64c4cc7a2adaa05eab3b3528f5d8ace16dedd36af74a15ef62f011a5b1c1"
+  },
+  {
+    "arm": "candidate",
+    "fixture": "records_array_16k",
+    "operation": "pretty",
+    "mode": "scheduled",
+    "matches_node": true,
+    "protected_retired_sets": 6,
+    "moved_objects": 13588,
+    "binary_sha256": "61ed64c4cc7a2adaa05eab3b3528f5d8ace16dedd36af74a15ef62f011a5b1c1"
+  }
+]
