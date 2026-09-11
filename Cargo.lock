@@ -5778,6 +5778,7 @@ dependencies = [
 name = "perry-codegen"
 version = "0.5.1534"
 dependencies = [
+ "aho-corasick",
  "anyhow",
  "inkwell",
  "llvm-sys",

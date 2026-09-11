@@ -492,3 +492,121 @@ fn registration_spelling_follows_output_kind() {
         );
     }
 }
+
+/// Exercise the real string-pool emitter, including class/method source,
+/// nonzero UTF-8 byte offsets, explicit lengths, registration order and both
+/// lifetime contracts. The padding crosses the production matcher's threshold.
+#[test]
+fn retained_source_ranges_preserve_registrations_and_ownership() {
+    let inner = "function inner() { return 1; }";
+    let method = "m() { return 1; }";
+    let class = format!("class C {{ {method} }}");
+    let outer = format!(
+        "function outer() {{ /*__retained_source_parent__{}\0*/ {inner} {class} }}",
+        "世界".repeat(700)
+    );
+    let make_module = || {
+        let mut module = empty_module("retained_source_ranges.ts");
+        module.functions.push(method_fn(100, "outer"));
+        module.functions.push(method_fn(101, "inner"));
+        module
+            .classes
+            .push(plain_class(3, "C", method_fn(200, "m")));
+        for (id, source, flag) in [
+            (100, outer.as_str(), true),
+            (101, inner, false),
+            (200, method, false),
+        ] {
+            module.closure_source_text.insert(
+                id,
+                perry_hir::FunctionSourceMetadata {
+                    text: source.to_owned(),
+                    is_non_strict_ordinary: flag,
+                },
+            );
+        }
+        module.class_source_text.insert(3, class.clone());
+        module
+    };
+    for output_type in ["executable", "dylib", "staticlib"] {
+        let emitted = ir_for_output_type(&make_module(), output_type);
+        assert_eq!(
+            emitted,
+            ir_for_output_type(&make_module(), output_type),
+            "deterministic source globals and registrations"
+        );
+        let source_globals: Vec<_> = emitted
+            .lines()
+            .filter(|line| {
+                line.starts_with('@') && line.contains("constant") && line.contains(inner)
+            })
+            .collect();
+        assert_eq!(
+            source_globals.len(),
+            1,
+            "nested sources must share one physical parent constant"
+        );
+        let base = source_globals[0].split_whitespace().next().unwrap();
+        let pointer = |source: &str| {
+            let offset = outer.find(source).unwrap();
+            if offset == 0 {
+                return base.to_owned();
+            }
+            let gep = emitted
+                .lines()
+                .find(|line| {
+                    line.contains("getelementptr")
+                        && line.contains(&format!("ptr {base}, i64 {offset}"))
+                })
+                .expect("nonzero source offset must actually be emitted");
+            gep.trim().split(" = ").next().unwrap().to_owned()
+        };
+        let register = if output_type == "executable" {
+            "js_register_function_source_static"
+        } else {
+            "js_register_function_source"
+        };
+        let calls: Vec<_> = emitted
+            .lines()
+            .filter(|line| line.contains("call void @js_register_function_source"))
+            .collect();
+        assert_eq!(
+            calls.len(),
+            3,
+            "two functions and one materialized method must be registered"
+        );
+        for (call, (symbol, source, flag)) in calls.iter().zip([
+            ("__outer", outer.as_str(), 1),
+            ("__inner", inner, 0),
+            ("__C__m", method, 0),
+        ]) {
+            assert!(call.contains(&format!("@{register}(")), "{call}");
+            assert!(
+                call.contains(&format!("{symbol},")),
+                "registration order/symbol changed: {call}"
+            );
+            assert!(
+                call.contains(&format!(
+                    "ptr {}, i32 {}, i32 {flag})",
+                    pointer(source),
+                    source.len()
+                )),
+                "source range/length/strictness changed: {call}"
+            );
+        }
+        let class_calls: Vec<_> = emitted
+            .lines()
+            .filter(|line| line.contains("call void @js_register_class_source("))
+            .collect();
+        assert_eq!(class_calls.len(), 1);
+        assert!(
+            class_calls[0].contains(&format!(
+                "(i32 3, ptr {}, i32 {})",
+                pointer(&class),
+                class.len()
+            )),
+            "class source must retain its copying API: {}",
+            class_calls[0]
+        );
+    }
+}

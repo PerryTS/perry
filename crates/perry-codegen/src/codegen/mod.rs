@@ -220,6 +220,7 @@ mod opts;
 #[cfg(test)]
 mod ordinary_param_guard_tests;
 mod param_guard;
+mod retained_source_pool;
 mod spec_abi;
 #[cfg(test)]
 mod spec_preserve_none_tests;
