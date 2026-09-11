@@ -1,0 +1,80 @@
+{
+  "started_utc": "2026-09-11T14:28:47Z",
+  "load_before": [
+    1.3818359375,
+    1.68408203125,
+    1.6416015625
+  ],
+  "host": "perry-macos.fritz.box",
+  "cpu": "Apple M1",
+  "memory": 8589934592,
+  "worker_sha256": "56a3de593b23288d034f959e75c2ff7969154551045e1c4377033103bf655400",
+  "fixtures": [
+    {
+      "fixture": "korean_small",
+      "bytes": 978,
+      "sha256": [
+        "654d652b2f25d1ba0bef2a274a28e2de1bca84ad5c156f5c33c558d23964205b",
+        "e8450f226b4c8b864950a509960aadf6ba905beecde5bcb01555a6aea241ebd1",
+        "116d2c09533728d2a1830bc7aad1fe7b48c94ceaf3e339f8f01008721d93f82c",
+        "fa1ac4462dd8c23e3bafa43951ea35e537060e835f7349c2de181cac9ac261cf",
+        "79434154b8dd7bd259fd0117303b72eaa6c3b5c466340f13780f80edf66ef10d",
+        "14dfac81792a8d461d0deae2f9be798d1c018445654eefc260c83421d85590df",
+        "fe79c78f08112151015a5fc1fed520b9b36754d804bf1b398b046151393dd243",
+        "8e07b24c6d595b6b5c5c99d389e7bf46f160aa19108420b2be9b31d472f3bfbf"
+      ],
+      "purpose": "Bounded repeated Korean ED95 prefixes exercise scanner false-positive cost without invalid UTF-8; eight equal-size distinct id values."
+    },
+    {
+      "fixture": "korean_1m",
+      "bytes": 1048593,
+      "sha256": [
+        "57a54008bef4ae522a5c775741e0b314e2220f73f5707777a69271097ad1befb",
+        "d2295bfc8233a9c661a05450e262585258dd852332d1553ca7e04b112ef2045b",
+        "2611f388c859fc832c14b1fe456da9524d2288752561d9cf673ec10788dd8e91",
+        "0554454442b3fc74169abfb21e3606f860d1d351a8c88efff0e8937f1e541934",
+        "45612177522b345a89c558cc12e0967db2f58541afd06de78da0de962602e03f",
+        "088cc6d32db306a474cadd5b17047e3d1d258777ffc4004614390bece732c7af",
+        "4dcf6359cdfee379819f3071fb7a6e0fd1782aa8a5be07c7774778fc8f92d341",
+        "b3fedc3af35a9de746601f5d13f69dde00c8a83000885489e67a4205d6ca3cd8"
+      ],
+      "purpose": "Bounded repeated Korean ED95 prefixes exercise scanner false-positive cost without invalid UTF-8; eight equal-size distinct id values."
+    }
+  ],
+  "baseline_worker_sha256": "3b598695750a197791464e08199b55ae16ffe34f9984146ac5669067189516e1",
+  "engines": [
+    "perry",
+    "node",
+    "bun",
+    "baseline"
+  ],
+  "verification_counts_by_mode": {
+    "rotating": [
+      2,
+      7,
+      9
+    ],
+    "same": [
+      9
+    ],
+    "select": [
+      9
+    ]
+  },
+  "source_sha256": {
+    "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/run-korean-rotating.py": "82b337605d8c97ec6748600dd086af4b2f529660457fd92afa6d9cef81d0e980",
+    "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/harness/rotating-worker.ts": "7541897acb2c7c35c0f5e762f8b2f28b9783feb26a42db107c1c4eb3af644b24",
+    "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/harness/rotating-worker.js": "f163f68f3d4c1d13720403ffb96d0afe4306ec0723f2015d3a66ab0c77fa56c8"
+  },
+  "commit": "2f7c36be28acc9e090d4aef1c2337335d83ee6b0",
+  "versions": {
+    "node": "v26.5.1",
+    "bun": "1.3.14"
+  },
+  "load_after": [
+    1.76123046875,
+    1.73291015625,
+    1.6611328125
+  ],
+  "finished_utc": "2026-09-11T14:29:38Z"
+}

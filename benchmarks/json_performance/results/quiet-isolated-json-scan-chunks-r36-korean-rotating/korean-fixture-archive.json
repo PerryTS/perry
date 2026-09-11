@@ -1,0 +1,98 @@
+[
+  {
+    "path": "korean-fixtures/korean_1m.0.json.gz",
+    "original_bytes": 1048593,
+    "original_sha256": "57a54008bef4ae522a5c775741e0b314e2220f73f5707777a69271097ad1befb",
+    "sha256": "d2b4e56b82b243ac9aad6b3e15c2e3a64abd20e97ea5c168f3d33ae472d3d6d3"
+  },
+  {
+    "path": "korean-fixtures/korean_1m.1.json.gz",
+    "original_bytes": 1048593,
+    "original_sha256": "d2295bfc8233a9c661a05450e262585258dd852332d1553ca7e04b112ef2045b",
+    "sha256": "0ecc2bdd6b0c8436802d99ab1bb47d0977f0eb58122718cef626292d95fd01bf"
+  },
+  {
+    "path": "korean-fixtures/korean_1m.2.json.gz",
+    "original_bytes": 1048593,
+    "original_sha256": "2611f388c859fc832c14b1fe456da9524d2288752561d9cf673ec10788dd8e91",
+    "sha256": "e63d03b66edf5e07163d6506fdd44e297b7f8bc01b2168011aa5db9833f77fac"
+  },
+  {
+    "path": "korean-fixtures/korean_1m.3.json.gz",
+    "original_bytes": 1048593,
+    "original_sha256": "0554454442b3fc74169abfb21e3606f860d1d351a8c88efff0e8937f1e541934",
+    "sha256": "6867c25b57665b2c638f857589dc3e0e02da0824665c51241c794a7f090fd5a1"
+  },
+  {
+    "path": "korean-fixtures/korean_1m.4.json.gz",
+    "original_bytes": 1048593,
+    "original_sha256": "45612177522b345a89c558cc12e0967db2f58541afd06de78da0de962602e03f",
+    "sha256": "aa598b96195f9d67f0bd835b5be3bf43097f44edb22cbf03b564be9769aba8f9"
+  },
+  {
+    "path": "korean-fixtures/korean_1m.5.json.gz",
+    "original_bytes": 1048593,
+    "original_sha256": "088cc6d32db306a474cadd5b17047e3d1d258777ffc4004614390bece732c7af",
+    "sha256": "aa356638659708da8ecfdb7132a6a4eccf78265199bfdcf6724b66a28108e721"
+  },
+  {
+    "path": "korean-fixtures/korean_1m.6.json.gz",
+    "original_bytes": 1048593,
+    "original_sha256": "4dcf6359cdfee379819f3071fb7a6e0fd1782aa8a5be07c7774778fc8f92d341",
+    "sha256": "54a9e2edc942f8e10fb93fca3a63e9bdef0e4a7b0b0dcdd3bac19d4dfc3b6af9"
+  },
+  {
+    "path": "korean-fixtures/korean_1m.7.json.gz",
+    "original_bytes": 1048593,
+    "original_sha256": "b3fedc3af35a9de746601f5d13f69dde00c8a83000885489e67a4205d6ca3cd8",
+    "sha256": "28aacc8b7625990ca1b6e12a021a7189248e629d522e22fd50d44905e682a341"
+  },
+  {
+    "path": "korean-fixtures/korean_small.0.json.gz",
+    "original_bytes": 978,
+    "original_sha256": "654d652b2f25d1ba0bef2a274a28e2de1bca84ad5c156f5c33c558d23964205b",
+    "sha256": "f7c7c15b8e75c799daa6ce55dce6d4bcd204eb5e73108f3691abf202d687b08c"
+  },
+  {
+    "path": "korean-fixtures/korean_small.1.json.gz",
+    "original_bytes": 978,
+    "original_sha256": "e8450f226b4c8b864950a509960aadf6ba905beecde5bcb01555a6aea241ebd1",
+    "sha256": "a9c3445ee22f5ef29f5fb7caab5f2c5c0b9fb4dbe5aa1b1835aa32731499c524"
+  },
+  {
+    "path": "korean-fixtures/korean_small.2.json.gz",
+    "original_bytes": 978,
+    "original_sha256": "116d2c09533728d2a1830bc7aad1fe7b48c94ceaf3e339f8f01008721d93f82c",
+    "sha256": "45687075f66fcbd00dc2a1bd322d88b5d136cf29bc97d533e5e6737359e71ff3"
+  },
+  {
+    "path": "korean-fixtures/korean_small.3.json.gz",
+    "original_bytes": 978,
+    "original_sha256": "fa1ac4462dd8c23e3bafa43951ea35e537060e835f7349c2de181cac9ac261cf",
+    "sha256": "28aaa506d57f278b368e1314ddba30016c6df8d3a18c1f4ddb8f0124cfbc49b3"
+  },
+  {
+    "path": "korean-fixtures/korean_small.4.json.gz",
+    "original_bytes": 978,
+    "original_sha256": "79434154b8dd7bd259fd0117303b72eaa6c3b5c466340f13780f80edf66ef10d",
+    "sha256": "3a77f487d9872eb8a1787505c327e6a6c15a2bcd31dda1a41da59790c8e0ad2a"
+  },
+  {
+    "path": "korean-fixtures/korean_small.5.json.gz",
+    "original_bytes": 978,
+    "original_sha256": "14dfac81792a8d461d0deae2f9be798d1c018445654eefc260c83421d85590df",
+    "sha256": "1d67c0169654b046b266cf9466cf4a9589a349d188a8db0fe6bef7b46774bb6e"
+  },
+  {
+    "path": "korean-fixtures/korean_small.6.json.gz",
+    "original_bytes": 978,
+    "original_sha256": "fe79c78f08112151015a5fc1fed520b9b36754d804bf1b398b046151393dd243",
+    "sha256": "41162d021380a07e58a0c8116f25445faa3138a20fa042492d0c2ae172b3856a"
+  },
+  {
+    "path": "korean-fixtures/korean_small.7.json.gz",
+    "original_bytes": 978,
+    "original_sha256": "8e07b24c6d595b6b5c5c99d389e7bf46f160aa19108420b2be9b31d472f3bfbf",
+    "sha256": "8dbe990350596cfe2323d123d6d7796d248fb5142eb604a92ea57ba25f174edd"
+  }
+]

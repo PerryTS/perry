@@ -1,0 +1,38 @@
+{
+  "owner": "json-perf-40270-1789136731",
+  "load_before": [
+    1.98486328125,
+    1.72265625,
+    1.630859375
+  ],
+  "started_utc": "2026-09-11T14:25:31Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/isolated-json-scan-chunks-r36/run-rotating.py",
+    "--worker",
+    ".work/isolated-json-scan-chunks-r36/candidate-rotating-worker",
+    "--baseline-worker",
+    ".work/isolated-json-scan-chunks-r36/main-rotating-worker",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--bun",
+    "/Users/perry/.bun/bin/bun",
+    "--filter",
+    "unicode_1m,long_string_1m,escaped_1m,small_record,records_array_1m",
+    "--repeat",
+    "7",
+    "--source-commit",
+    "2f7c36be28acc9e090d4aef1c2337335d83ee6b0",
+    "--results-dir",
+    "results/quiet-isolated-json-scan-chunks-r36-rotating"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    2.1435546875,
+    1.8984375,
+    1.708984375
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-11T14:27:13Z"
+}

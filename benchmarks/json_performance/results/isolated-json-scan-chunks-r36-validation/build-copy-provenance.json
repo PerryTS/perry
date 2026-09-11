@@ -1,0 +1,124 @@
+{
+  "source_commit": "2f7c36be28acc9e090d4aef1c2337335d83ee6b0",
+  "actual_build_worktree": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29",
+  "validation_worktree": "/Users/amlug/projects/perry/json-merged-pr10022",
+  "copied_unix": 1789136504.9582841,
+  "note": "Normal all-three-package production build from a clean committed separate worktree; both source trees match. Candidate timing/validation uses these immutable artifacts. Shared mutable target directory is not used for worker linking.",
+  "files": [
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/frozen-build/perry",
+      "copy": "benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/frozen-build/perry",
+      "sha256": "a6c90cd38c1f9e391c4efe72e3c79af3a4d97610144d7bd7d828085f1030ffbb"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/frozen-build/libperry_runtime.a",
+      "copy": "benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/frozen-build/libperry_runtime.a",
+      "sha256": "12b0e21f9daa9b5ff8952bfb95e37cc4ee9ae224c46f5d75ff5b2b7bcbcac7ff"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/frozen-build/libperry_stdlib.a",
+      "copy": "benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/frozen-build/libperry_stdlib.a",
+      "sha256": "b97f5552212c26fd8acb3eca02395410c1a2a9c4f7850e2c6e6007e4ad68a845"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/build-provenance.json",
+      "copy": "benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/build-provenance.json",
+      "sha256": "5359659ed19912c7a4355e1b8334b3d27e63464cd7633d1639d3326fea931e9c"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/build-start.json",
+      "copy": "benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/build-start.json",
+      "sha256": "69f09ec3695e4dc520ca72bce281b3860e05b1b9994e55418620085427832f69"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/build-command-result.json",
+      "copy": "benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/build-command-result.json",
+      "sha256": "1914a6b5ec050b26aceac24c01090160511b45505ff5da182f473fbcd320ecf5"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/unit-source.json",
+      "copy": "benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/unit-source.json",
+      "sha256": "cd3c6fc2d3232c91903623e9e7bcdddc2caa2205a020c9c80a2ea6cba759d33b"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/unit.log",
+      "copy": "benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/unit.log",
+      "sha256": "c606f1963f2e25b70aea18bdb17850b1926312dc30fabf33589a6ca4320df090"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/build.log",
+      "copy": "benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/build.log",
+      "sha256": "b020dfcfd3383c60eb8f88f08445e0b42899ea8e64d766fc37c3c6b372afdefc"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/validate-and-build.log",
+      "copy": "benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/validate-and-build.log",
+      "sha256": "5d71dcf5615e35269be48b33628d4fe62826a3a4e4b83c737782bea32b0b5445"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/lint-results.json",
+      "copy": "benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/lint-results.json",
+      "sha256": "6868db798dae5daca7e833bf79358383efd9601102b20f5702c8b039c73bbc5e"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/script-lint.log",
+      "copy": "benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/script-lint.log",
+      "sha256": "ff4d5b61ba498dd6d0bd511838c92bba1ae8767773e9c06711e76d2529b44964"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/file-cap.log",
+      "copy": "benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/file-cap.log",
+      "sha256": "b0f283074d97912a169a14da638801e20dedc4981a521e2ef90e4028bdcdf8cd"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/worktree-provenance.json",
+      "copy": "benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/worktree-provenance.json",
+      "sha256": "84b0b8f002f4ad2d72918d7d6a140419bea2f329b657a75ed8afcb71a513b9c6"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/lint-review.json",
+      "copy": "benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/lint-review.json",
+      "sha256": "6da01c310f1ed7a425ef2ab86edfc9ac5f0bf07a0b24f9ab1a5dc6741ae1892f"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/string-suite.log",
+      "copy": "benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/string-suite.log",
+      "sha256": "ba7cb50bfdec1a909deffe59ceca88a1556792616838c201bcecff07b2a02779"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/string-suite-provenance.json",
+      "copy": "benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/string-suite-provenance.json",
+      "sha256": "a19d3fb0c4e87331a4f7b8431dc6e5a538f98eea0eee5085c9ee4b63190058f0"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/build-resume.json",
+      "copy": "benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/build-resume.json",
+      "sha256": "9421114b44168052135152595d2ea369505df7835284df1e68bda624f0e9a93d"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/build-controller.log",
+      "copy": "benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/build-controller.log",
+      "sha256": "5359659ed19912c7a4355e1b8334b3d27e63464cd7633d1639d3326fea931e9c"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/hold-production-reviewed.txt",
+      "copy": "benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/hold-production-reviewed.txt",
+      "sha256": "06dd7a66931c4a5a58c7dc06092ed3f9095ada24f3f077dd1d5a6d1861d447c4"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/build-release.py",
+      "copy": "benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/build-release.py",
+      "sha256": "f104da4b90eda0c4f2f28ef311a6bdd8b8cb4afc27c65a6d6569285b2955d1fe"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/validate-and-build.py",
+      "copy": "benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/validate-and-build.py",
+      "sha256": "7c9058becbb9548f5a029f1f87c03190c79b74a8d3b2a480f478597ee0217b34"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/run-lint.py",
+      "copy": "benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/run-lint.py",
+      "sha256": "b228808035eba5472e845e534d7799d2222ee142cef0a273cb941810fdfd53f8"
+    }
+  ]
+}

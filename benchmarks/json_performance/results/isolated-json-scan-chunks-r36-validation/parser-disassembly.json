@@ -1,0 +1,191 @@
+{
+  "rows": [
+    {
+      "arm": "main",
+      "function": "18parse_string_value",
+      "instructions": 239,
+      "prologue": [
+        "100243948:     \tsub\tsp, sp, #0x60",
+        "10024394c:     \tstp\tx24, x23, [sp, #0x20]",
+        "100243950:     \tstp\tx22, x21, [sp, #0x30]",
+        "100243954:     \tstp\tx20, x19, [sp, #0x40]",
+        "100243958:     \tstp\tx29, x30, [sp, #0x50]",
+        "10024395c:     \tadd\tx29, sp, #0x50",
+        "100243960:     \tmov\tx21, x0",
+        "100243964:     \tldr\tx23, [x0, #0x70]",
+        "100243968:     \tldp\tx8, x9, [x0]",
+        "10024396c:     \tcmp\tx8, #0x0",
+        "100243970:     \tccmp\tx9, x23, #0x0, ne",
+        "100243974:     \tb.eq\t0x1002439a0 <__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value+0x58>",
+        "100243978:     \tadd\tx0, sp, #0x8",
+        "10024397c:     \tmov\tx1, x21",
+        "100243980:     \tbl\t0x1002434f8 <__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_bytes>",
+        "100243984:     \tldr\tx22, [sp, #0x8]"
+      ],
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value",
+        "--no-show-raw-insn",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/main-rotating-worker"
+      ],
+      "sha256": "dad6da87aa0efedfd6918e89838ef3c25a759a844aff7af23ad8d2dbf77745c0",
+      "binary_sha256": "3b598695750a197791464e08199b55ae16ffe34f9984146ac5669067189516e1"
+    },
+    {
+      "arm": "main",
+      "function": "20parse_object_untyped",
+      "instructions": 1405,
+      "prologue": [
+        "100243d18:     \tstp\tx28, x27, [sp, #-0x60]!",
+        "100243d1c:     \tstp\tx26, x25, [sp, #0x10]",
+        "100243d20:     \tstp\tx24, x23, [sp, #0x20]",
+        "100243d24:     \tstp\tx22, x21, [sp, #0x30]",
+        "100243d28:     \tstp\tx20, x19, [sp, #0x40]",
+        "100243d2c:     \tstp\tx29, x30, [sp, #0x50]",
+        "100243d30:     \tadd\tx29, sp, #0x50",
+        "100243d34:     \tsub\tsp, sp, #0x2e0",
+        "100243d38:     \tmov\tx19, x0",
+        "100243d3c:     \tldp\tx8, x9, [x0, #0x68]",
+        "100243d40:     \tadd\tx9, x9, #0x1",
+        "100243d44:     \tstr\tx9, [x0, #0x70]",
+        "100243d48:     \tcmp\tx9, x8",
+        "100243d4c:     \tb.hs\t0x100243d80 <__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser20parse_object_untyped+0x68>",
+        "100243d50:     \tldr\tx10, [x19, #0x60]",
+        "100243d54:     \tmov\tx11, #0x2600            ; =9728"
+      ],
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser20parse_object_untyped",
+        "--no-show-raw-insn",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/main-rotating-worker"
+      ],
+      "sha256": "9e909c70e1b86bf771a99984878f5cd0fce962264e9e2120256b4c74397b3e22",
+      "binary_sha256": "3b598695750a197791464e08199b55ae16ffe34f9984146ac5669067189516e1"
+    },
+    {
+      "arm": "main",
+      "function": "23parse_string_bytes_slow",
+      "instructions": 846,
+      "prologue": [
+        "10024541c:     \tsub\tsp, sp, #0x90",
+        "100245420:     \tstp\tx28, x27, [sp, #0x30]",
+        "100245424:     \tstp\tx26, x25, [sp, #0x40]",
+        "100245428:     \tstp\tx24, x23, [sp, #0x50]",
+        "10024542c:     \tstp\tx22, x21, [sp, #0x60]",
+        "100245430:     \tstp\tx20, x19, [sp, #0x70]",
+        "100245434:     \tstp\tx29, x30, [sp, #0x80]",
+        "100245438:     \tadd\tx29, sp, #0x80",
+        "10024543c:     \tldp\tx20, x22, [x1, #0x68]",
+        "100245440:     \tsubs\tx23, x22, x2",
+        "100245444:     \tb.lo\t0x100246080 <__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser23parse_string_bytes_slow+0xc64>",
+        "100245448:     \tcmp\tx22, x20",
+        "10024544c:     \tb.hi\t0x100246080 <__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser23parse_string_bytes_slow+0xc64>",
+        "100245450:     \ttbz\tx23, #0x3f, 0x100245464 <__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser23parse_string_bytes_slow+0x48>",
+        "100245454:     \tmov\tx24, #0x0               ; =0",
+        "100245458:     \tmov\tx0, x24"
+      ],
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser23parse_string_bytes_slow",
+        "--no-show-raw-insn",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/main-rotating-worker"
+      ],
+      "sha256": "c23fbf5a3da2501ec8b59758519d80f0417dc194e6a0254f4004ac0369d0f628",
+      "binary_sha256": "3b598695750a197791464e08199b55ae16ffe34f9984146ac5669067189516e1"
+    },
+    {
+      "arm": "candidate",
+      "function": "18parse_string_value",
+      "instructions": 239,
+      "prologue": [
+        "100243a68:     \tsub\tsp, sp, #0x60",
+        "100243a6c:     \tstp\tx24, x23, [sp, #0x20]",
+        "100243a70:     \tstp\tx22, x21, [sp, #0x30]",
+        "100243a74:     \tstp\tx20, x19, [sp, #0x40]",
+        "100243a78:     \tstp\tx29, x30, [sp, #0x50]",
+        "100243a7c:     \tadd\tx29, sp, #0x50",
+        "100243a80:     \tmov\tx21, x0",
+        "100243a84:     \tldr\tx23, [x0, #0x70]",
+        "100243a88:     \tldp\tx8, x9, [x0]",
+        "100243a8c:     \tcmp\tx8, #0x0",
+        "100243a90:     \tccmp\tx9, x23, #0x0, ne",
+        "100243a94:     \tb.eq\t0x100243ac0 <__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value+0x58>",
+        "100243a98:     \tadd\tx0, sp, #0x8",
+        "100243a9c:     \tmov\tx1, x21",
+        "100243aa0:     \tbl\t0x1002434f8 <__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_bytes>",
+        "100243aa4:     \tldr\tx22, [sp, #0x8]"
+      ],
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value",
+        "--no-show-raw-insn",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/candidate-rotating-worker"
+      ],
+      "sha256": "dfc30d170ceae673a845729fee1d1be96290e303d6623f23431b6305c914ef8b",
+      "binary_sha256": "56a3de593b23288d034f959e75c2ff7969154551045e1c4377033103bf655400"
+    },
+    {
+      "arm": "candidate",
+      "function": "20parse_object_untyped",
+      "instructions": 2089,
+      "prologue": [
+        "100243e38:     \tstp\td15, d14, [sp, #-0xa0]!",
+        "100243e3c:     \tstp\td13, d12, [sp, #0x10]",
+        "100243e40:     \tstp\td11, d10, [sp, #0x20]",
+        "100243e44:     \tstp\td9, d8, [sp, #0x30]",
+        "100243e48:     \tstp\tx28, x27, [sp, #0x40]",
+        "100243e4c:     \tstp\tx26, x25, [sp, #0x50]",
+        "100243e50:     \tstp\tx24, x23, [sp, #0x60]",
+        "100243e54:     \tstp\tx22, x21, [sp, #0x70]",
+        "100243e58:     \tstp\tx20, x19, [sp, #0x80]",
+        "100243e5c:     \tstp\tx29, x30, [sp, #0x90]",
+        "100243e60:     \tadd\tx29, sp, #0x90",
+        "100243e64:     \tsub\tsp, sp, #0x2e0",
+        "100243e68:     \tmov\tx19, x0",
+        "100243e6c:     \tldp\tx8, x9, [x0, #0x68]",
+        "100243e70:     \tadd\tx9, x9, #0x1",
+        "100243e74:     \tstr\tx9, [x0, #0x70]"
+      ],
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser20parse_object_untyped",
+        "--no-show-raw-insn",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/candidate-rotating-worker"
+      ],
+      "sha256": "0fe5001f707844715b95de02f7482c7948dd54f987fa638a40fcd0bc809a2bbd",
+      "binary_sha256": "56a3de593b23288d034f959e75c2ff7969154551045e1c4377033103bf655400"
+    },
+    {
+      "arm": "candidate",
+      "function": "23parse_string_bytes_slow",
+      "instructions": 908,
+      "prologue": [
+        "100245fec:     \tsub\tsp, sp, #0xa0",
+        "100245ff0:     \tstp\tx28, x27, [sp, #0x40]",
+        "100245ff4:     \tstp\tx26, x25, [sp, #0x50]",
+        "100245ff8:     \tstp\tx24, x23, [sp, #0x60]",
+        "100245ffc:     \tstp\tx22, x21, [sp, #0x70]",
+        "100246000:     \tstp\tx20, x19, [sp, #0x80]",
+        "100246004:     \tstp\tx29, x30, [sp, #0x90]",
+        "100246008:     \tadd\tx29, sp, #0x90",
+        "10024600c:     \tldp\tx20, x22, [x1, #0x68]",
+        "100246010:     \tsubs\tx23, x22, x2",
+        "100246014:     \tb.lo\t0x100246d48 <__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser23parse_string_bytes_slow+0xd5c>",
+        "100246018:     \tcmp\tx22, x20",
+        "10024601c:     \tb.hi\t0x100246d48 <__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser23parse_string_bytes_slow+0xd5c>",
+        "100246020:     \ttbz\tx23, #0x3f, 0x100246034 <__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser23parse_string_bytes_slow+0x48>",
+        "100246024:     \tmov\tx24, #0x0               ; =0",
+        "100246028:     \tmov\tx0, x24"
+      ],
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser23parse_string_bytes_slow",
+        "--no-show-raw-insn",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/candidate-rotating-worker"
+      ],
+      "sha256": "dd7c1d6d23ff4f049d975b9bb1f03a4e5c35dcc440553ce65b6f410ba8be8cd3",
+      "binary_sha256": "56a3de593b23288d034f959e75c2ff7969154551045e1c4377033103bf655400"
+    }
+  ],
+  "note": "Linked production instruction counts and prologues; diagnostic, not timing or causal proof."
+}

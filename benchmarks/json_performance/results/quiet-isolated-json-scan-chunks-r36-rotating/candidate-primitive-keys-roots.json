@@ -1,0 +1,52 @@
+{
+  "rows": [
+    {
+      "mode": "native",
+      "variant": 0,
+      "exit_code": 1,
+      "command": [
+        "python3",
+        "/Users/amlug/projects/perry/json-merged-pr10022/scripts/gc_root_dominance_check.py",
+        "--statepoints",
+        "--max-stale",
+        "0",
+        "--min-files",
+        "1",
+        "--min-statepoints",
+        "1",
+        "--min-live-bundles",
+        "1",
+        "--min-relocates",
+        "1",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/candidate-primitive-keys-ir-native/primitive-keys.ll"
+      ],
+      "ir_sha256": "59b7664d36e4f0423f15edd0e5f122c7a07db4960e059fc8b861bb49ccda9e57"
+    },
+    {
+      "mode": "shadow",
+      "variant": 0,
+      "exit_code": 0,
+      "command": [
+        "python3",
+        "/Users/amlug/projects/perry/json-merged-pr10022/scripts/gc_root_dominance_check.py",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/candidate-primitive-keys-ir-shadow/primitive-keys.ll"
+      ],
+      "ir_sha256": "9438e6ad11f499a113d561ffcb6798859382f4f88836ba0c34762eb7070dec23"
+    },
+    {
+      "mode": "shadow",
+      "variant": 1,
+      "exit_code": 0,
+      "command": [
+        "python3",
+        "/Users/amlug/projects/perry/json-merged-pr10022/scripts/gc_root_dominance_check.py",
+        "--unrooted-allocas",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/isolated-json-scan-chunks-r36/candidate-primitive-keys-ir-shadow/primitive-keys.ll"
+      ],
+      "ir_sha256": "9438e6ad11f499a113d561ffcb6798859382f4f88836ba0c34762eb7070dec23"
+    }
+  ],
+  "source_sha256": "cc137a45ef6784735db43654dcb912dff75246e3f37fc4d4721fb0519321ea17",
+  "compiler_sha256": "a6c90cd38c1f9e391c4efe72e3c79af3a4d97610144d7bd7d828085f1030ffbb",
+  "runtime_sha256": "12b0e21f9daa9b5ff8952bfb95e37cc4ee9ae224c46f5d75ff5b2b7bcbcac7ff"
+}

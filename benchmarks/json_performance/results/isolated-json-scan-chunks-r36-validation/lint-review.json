@@ -1,0 +1,10 @@
+{
+  "source_commit": "2f7c36be28acc9e090d4aef1c2337335d83ee6b0",
+  "executed": 74,
+  "passed": 73,
+  "failed_gate": "Public benchmark evidence freshness",
+  "failure_detail": "  FAIL  [Public benchmark evidence freshness] python3 benchmarks/ci_public_baseline_check.py",
+  "file_cap_passed": true,
+  "log_sha256": "ff4d5b61ba498dd6d0bd511838c92bba1ae8767773e9c06711e76d2529b44964",
+  "note": "Source-consistent fresh local lint; the public benchmark artifact requires the separate full refresh. No gate skipped beyond recorded compile/CI-only tiers."
+}

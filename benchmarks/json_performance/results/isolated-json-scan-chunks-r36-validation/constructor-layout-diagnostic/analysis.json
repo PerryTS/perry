@@ -1,0 +1,116 @@
+[
+  {
+    "arm": "r26",
+    "function": "20parse_object_untyped",
+    "instructions": 1405,
+    "prologue": [
+      "100243d18:     \tstp\tx28, x27, [sp, #-0x60]!",
+      "100243d1c:     \tstp\tx26, x25, [sp, #0x10]",
+      "100243d20:     \tstp\tx24, x23, [sp, #0x20]",
+      "100243d24:     \tstp\tx22, x21, [sp, #0x30]",
+      "100243d28:     \tstp\tx20, x19, [sp, #0x40]",
+      "100243d2c:     \tstp\tx29, x30, [sp, #0x50]",
+      "100243d30:     \tadd\tx29, sp, #0x50",
+      "100243d34:     \tsub\tsp, sp, #0x2e0",
+      "100243d38:     \tmov\tx19, x0",
+      "100243d3c:     \tldp\tx8, x9, [x0, #0x68]",
+      "100243d40:     \tadd\tx9, x9, #0x1",
+      "100243d44:     \tstr\tx9, [x0, #0x70]",
+      "100243d48:     \tcmp\tx9, x8",
+      "100243d4c:     \tb.hs\t0x100243d80 <__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser20parse_object_untyped+0x68>",
+      "100243d50:     \tldr\tx10, [x19, #0x60]",
+      "100243d54:     \tmov\tx11, #0x2600            ; =9728"
+    ],
+    "allocation_calls": [
+      "100244660:     \tbl\t0x1005e8a84 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction22string_from_json_bytes>"
+    ],
+    "sha256": "5aae5b3e47dd781de3f8b2206a1729f7c3930e91d6c6a25895beb74af1d7dc6a"
+  },
+  {
+    "arm": "r26",
+    "function": "18parse_string_value",
+    "instructions": 239,
+    "prologue": [
+      "100243948:     \tsub\tsp, sp, #0x60",
+      "10024394c:     \tstp\tx24, x23, [sp, #0x20]",
+      "100243950:     \tstp\tx22, x21, [sp, #0x30]",
+      "100243954:     \tstp\tx20, x19, [sp, #0x40]",
+      "100243958:     \tstp\tx29, x30, [sp, #0x50]",
+      "10024395c:     \tadd\tx29, sp, #0x50",
+      "100243960:     \tmov\tx21, x0",
+      "100243964:     \tldr\tx23, [x0, #0x70]",
+      "100243968:     \tldp\tx8, x9, [x0]",
+      "10024396c:     \tcmp\tx8, #0x0",
+      "100243970:     \tccmp\tx9, x23, #0x0, ne",
+      "100243974:     \tb.eq\t0x1002439a0 <__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value+0x58>",
+      "100243978:     \tadd\tx0, sp, #0x8",
+      "10024397c:     \tmov\tx1, x21",
+      "100243980:     \tbl\t0x1002434f8 <__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_bytes>",
+      "100243984:     \tldr\tx22, [sp, #0x8]"
+    ],
+    "allocation_calls": [
+      "100243a70:     \tbl\t0x100349370 <__RNvNtCs3gRpqoBkMHm_13perry_runtime6string28js_string_from_builder_bytes>",
+      "100243ab4:     \tbl\t0x1005e8a84 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction22string_from_json_bytes>"
+    ],
+    "sha256": "326535725e0e87a9e35d74d98ee8ed2c2e38bf0c064562c540748e9eec7dd111"
+  },
+  {
+    "arm": "r35",
+    "function": "20parse_object_untyped",
+    "instructions": 2089,
+    "prologue": [
+      "100243d34:     \tstp\td15, d14, [sp, #-0xa0]!",
+      "100243d38:     \tstp\td13, d12, [sp, #0x10]",
+      "100243d3c:     \tstp\td11, d10, [sp, #0x20]",
+      "100243d40:     \tstp\td9, d8, [sp, #0x30]",
+      "100243d44:     \tstp\tx28, x27, [sp, #0x40]",
+      "100243d48:     \tstp\tx26, x25, [sp, #0x50]",
+      "100243d4c:     \tstp\tx24, x23, [sp, #0x60]",
+      "100243d50:     \tstp\tx22, x21, [sp, #0x70]",
+      "100243d54:     \tstp\tx20, x19, [sp, #0x80]",
+      "100243d58:     \tstp\tx29, x30, [sp, #0x90]",
+      "100243d5c:     \tadd\tx29, sp, #0x90",
+      "100243d60:     \tsub\tsp, sp, #0x2e0",
+      "100243d64:     \tmov\tx19, x0",
+      "100243d68:     \tldp\tx8, x9, [x0, #0x68]",
+      "100243d6c:     \tadd\tx9, x9, #0x1",
+      "100243d70:     \tstr\tx9, [x0, #0x70]"
+    ],
+    "allocation_calls": [
+      "1002446d8:     \tbl\t0x100349e30 <__RNvNtCs3gRpqoBkMHm_13perry_runtime6string28js_string_from_builder_bytes>",
+      "1002448ac:     \tbl\t0x100349e30 <__RNvNtCs3gRpqoBkMHm_13perry_runtime6string28js_string_from_builder_bytes>",
+      "1002454cc:     \tbl\t0x1004569c0 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6malloc9gc_malloc>",
+      "100245598:     \tbl\t0x1003497ec <__RNvNtCs3gRpqoBkMHm_13perry_runtime6string20string_storage_alloc>"
+    ],
+    "sha256": "70fbc3446976419d45a7cee50bc33dcd0ee6f321c456d66285bc1d49f1632e1f"
+  },
+  {
+    "arm": "r35",
+    "function": "18parse_string_value",
+    "instructions": 702,
+    "prologue": [
+      "100243228:     \tsub\tsp, sp, #0x80",
+      "10024322c:     \tstp\tx26, x25, [sp, #0x30]",
+      "100243230:     \tstp\tx24, x23, [sp, #0x40]",
+      "100243234:     \tstp\tx22, x21, [sp, #0x50]",
+      "100243238:     \tstp\tx20, x19, [sp, #0x60]",
+      "10024323c:     \tstp\tx29, x30, [sp, #0x70]",
+      "100243240:     \tadd\tx29, sp, #0x70",
+      "100243244:     \tmov\tx21, x0",
+      "100243248:     \tldr\tx25, [x0, #0x70]",
+      "10024324c:     \tldp\tx8, x9, [x0]",
+      "100243250:     \tcmp\tx8, #0x0",
+      "100243254:     \tccmp\tx9, x25, #0x0, ne",
+      "100243258:     \tb.eq\t0x100243284 <__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value+0x5c>",
+      "10024325c:     \tmov\tx0, sp",
+      "100243260:     \tmov\tx1, x21",
+      "100243264:     \tbl\t0x100242cb8 <__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_bytes>"
+    ],
+    "allocation_calls": [
+      "100243340:     \tbl\t0x100349e30 <__RNvNtCs3gRpqoBkMHm_13perry_runtime6string28js_string_from_builder_bytes>",
+      "100243670:     \tbl\t0x1004569c0 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6malloc9gc_malloc>",
+      "100243754:     \tbl\t0x1003497ec <__RNvNtCs3gRpqoBkMHm_13perry_runtime6string20string_storage_alloc>"
+    ],
+    "sha256": "ae3c47290b47f66dda5df407ee345f30515bd07fcfb6a4ba18d73cfdaa0c4ac9"
+  }
+]

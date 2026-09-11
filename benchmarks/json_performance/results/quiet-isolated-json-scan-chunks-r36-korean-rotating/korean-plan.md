@@ -1,0 +1,1 @@
+Unrun R36 controls: eight independently identified equal-length Korean strings, 978 B and 1,048,593 B. Raw ED80..9F is valid non-surrogate text. This is a performance control for the borrowed-value scanner, with the original R26 compiler and immutable R36 candidate. Keep the historical rotating fixture manifest unchanged. Expected 168 timed, 40 oracle and 24 calibration records.

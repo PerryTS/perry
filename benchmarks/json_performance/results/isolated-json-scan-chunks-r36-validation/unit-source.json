@@ -1,0 +1,36 @@
+{
+  "source_commit": "2f7c36be28acc9e090d4aef1c2337335d83ee6b0",
+  "command": [
+    "cargo",
+    "test",
+    "--release",
+    "-p",
+    "perry-runtime",
+    "--lib",
+    "json"
+  ],
+  "env": {
+    "RUST_TEST_THREADS": "1"
+  },
+  "hashes": {
+    "crates/perry-runtime/src/json/replacer.rs": "b3bec30b2d07ce91745ff99bec7a11de9bf45d563efc22847bed7c315eb0975b",
+    "crates/perry-runtime/src/json/replacer_tojson.rs": "0e5c6aa098ca6fd59fb9ed2ed2526432480c079c7d539e8405f7ef0a9d049898",
+    "crates/perry-runtime/src/string/concat.rs": "47377d33276483dfc8a5b5262393579cbd01c1749fce278d91f4842a591ace9c",
+    "crates/perry-runtime/src/string/append.rs": "e56c2d74cec98ae554f2b9dd29bccf4a7cfbf17e158f5e35d4944d0aa6108667",
+    "crates/perry-runtime/src/string/mod.rs": "1b7c51956a3260beffdae6bb2a92be620faea10021b901e435f5ccdc19cf0d34",
+    "crates/perry-runtime/src/string/json_flags_tests.rs": "287ae89472e96cf0d23b0c496b58862499731c416a308e62f09ee551370483ff",
+    "crates/perry-runtime/src/string/json_construction.rs": "4456e26ba78a6b88c45abc4a575762cc5544da6542adbb9b2e727e63352a3aa6",
+    "crates/perry-runtime/src/string/utf16_count.rs": "d8704dcda207d6c669c5e5b21f53592f131c79f41d5d21752474ce572544cc86",
+    "test-files/test_json_string_emitters.ts": "637762005ff59da90fab65d5ab0707de55d805efd72fb2ac00ec3c76f3125005",
+    "test-files/test_json_primitive_tojson_keys.ts": "cc137a45ef6784735db43654dcb912dff75246e3f37fc4d4721fb0519321ea17",
+    "crates/perry-runtime/src/json/parser.rs": "2f7d44b287da9e4cdb1c19c8ff7955a2775228338c2c3b37f8e8b6c4e71bf5e4",
+    "crates/perry-runtime/src/json/simd.rs": "b72034a428122d0a8cd3889f3572239782bad9fca43f9b50aac0329a95a0b4c9",
+    "crates/perry-runtime/src/json/simd_tests.rs": "de7cbb36b821808b4dc17079db91a8c7598890d68c1c591a30f5350bb861ac9e",
+    "crates/perry-runtime/src/json/simd_json_string.rs": "422e4d49e7d5dc77eb5d947a3c5ed4fd34f9646dec84ffb8762ca55d43d24daf",
+    "crates/perry-runtime/src/json/simd_json_string_tests.rs": "38106a499f4c20e0c8f933d102f679e529e6a68a0f5d870500ab245ca8ca3df3",
+    "crates/perry-runtime/src/json/mod.rs": "4911018e0fe55ddbcaf32d686a43f7246913e76ec653f057fb595da3bdd10559",
+    "crates/perry-runtime/src/json/parser_escape_chunk.rs": "29479b83d7fbb3a39173bc930201dedda536d05baba9e334fd4ec2b6eadb3ed7",
+    "crates/perry-runtime/src/json/parser_escape_chunk_tests.rs": "d2f587153558980a5248b29d6ab184544ba2c46e5189d047a989414cde42da5f"
+  },
+  "exit_code": 0
+}

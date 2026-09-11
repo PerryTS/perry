@@ -1,0 +1,13 @@
+{
+  "command": [
+    "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+    "--macho",
+    "--indirect-symbols",
+    "benchmarks/json_performance/.work/small-parse-r32-profiles/r32-rotating-worker"
+  ],
+  "rows": [
+    "0x0000000100b5fc6c 24325 _memcpy",
+    "0x0000000100b5fc90 24328 _memset_pattern16"
+  ],
+  "sha256": "52c7005b7c443661255e67ab505a5b3e9a81eeee1cb30b7d7e9433a0244583d8"
+}

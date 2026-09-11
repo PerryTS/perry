@@ -1,0 +1,171 @@
+{
+  "command": [
+    "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+    "--disassemble-symbols=__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json11parse_reuse30remember_parse_object_template",
+    "--no-show-raw-insn",
+    "benchmarks/json_performance/.work/small-parse-r32-profiles/r32-rotating-worker"
+  ],
+  "source_commit": "c695f6509ed85999894a2f34418f057f32bcb363",
+  "binary_sha256": "5138a6bf48fec32aed3c49382a2adb06d93dec2cbbca041e0c0cc6f398ca7e09",
+  "assembly_sha256": "12836d018319a48fe764cad176ccdb89995e3e9e22913bf073bfb71465a22e29",
+  "instructions": 388,
+  "sampled_offsets_context": [
+    {
+      "offset": 76,
+      "instruction": "cmp\tw8, #0x2"
+    },
+    {
+      "offset": 80,
+      "instruction": "b.ne\t0x1004eb168 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json11parse_reuse30remember_parse_object_template+0x5a8>"
+    },
+    {
+      "offset": 84,
+      "instruction": "mov\tx20, x1"
+    },
+    {
+      "offset": 88,
+      "instruction": "mov\tx19, x0"
+    },
+    {
+      "offset": 92,
+      "instruction": "ldr\tw8, [x21, #0x4]"
+    },
+    {
+      "offset": 104,
+      "instruction": "csel\tw0, w8, wzr, lt"
+    },
+    {
+      "offset": 108,
+      "instruction": "bl\t0x1005e3264 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6object6shapes34shape_live_inline_slot_count_by_id>"
+    },
+    {
+      "offset": 112,
+      "instruction": "tst\tw0, #0x1"
+    },
+    {
+      "offset": 116,
+      "instruction": "csel\tw11, w1, wzr, ne"
+    },
+    {
+      "offset": 120,
+      "instruction": "cmp\tw11, #0x8"
+    },
+    {
+      "offset": 368,
+      "instruction": "str\tx11, [x21, #0x40]"
+    },
+    {
+      "offset": 372,
+      "instruction": "add\tx21, x21, #0x48"
+    },
+    {
+      "offset": 376,
+      "instruction": "str\tx11, [sp, #0x280]"
+    },
+    {
+      "offset": 380,
+      "instruction": "cmp\tx21, x27"
+    },
+    {
+      "offset": 384,
+      "instruction": "b.eq\t0x1004eaed0 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json11parse_reuse30remember_parse_object_template+0x310>"
+    },
+    {
+      "offset": 440,
+      "instruction": "mov\tw2, #0x40               ; =64"
+    },
+    {
+      "offset": 444,
+      "instruction": "bl\t0x100b5fc90 <_writev+0x100b5fc90>"
+    },
+    {
+      "offset": 448,
+      "instruction": "cbz\tw25, 0x1004eaea4 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json11parse_reuse30remember_parse_object_template+0x2e4>"
+    },
+    {
+      "offset": 452,
+      "instruction": "mov\tx0, x22"
+    },
+    {
+      "offset": 456,
+      "instruction": "mov\tw1, #0x0                ; =0"
+    },
+    {
+      "offset": 460,
+      "instruction": "bl\t0x1007bba50 <_js_array_get_f64>"
+    },
+    {
+      "offset": 464,
+      "instruction": "fmov\tx8, d0"
+    },
+    {
+      "offset": 468,
+      "instruction": "cmp\tx24, x8, lsr #48"
+    },
+    {
+      "offset": 472,
+      "instruction": "b.eq\t0x1004eb168 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json11parse_reuse30remember_parse_object_template+0x5a8>"
+    },
+    {
+      "offset": 492,
+      "instruction": "mov\tw1, #0x1                ; =1"
+    },
+    {
+      "offset": 496,
+      "instruction": "bl\t0x1007bba50 <_js_array_get_f64>"
+    },
+    {
+      "offset": 500,
+      "instruction": "fmov\tx8, d0"
+    },
+    {
+      "offset": 504,
+      "instruction": "cmp\tx24, x8, lsr #48"
+    },
+    {
+      "offset": 508,
+      "instruction": "b.eq\t0x1004eb168 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json11parse_reuse30remember_parse_object_template+0x5a8>"
+    },
+    {
+      "offset": 1032,
+      "instruction": "mov\tw2, #0x240              ; =576"
+    },
+    {
+      "offset": 1036,
+      "instruction": "bl\t0x100b5fc6c <_writev+0x100b5fc6c>"
+    },
+    {
+      "offset": 1040,
+      "instruction": "str\tx19, [sp, #0x490]"
+    },
+    {
+      "offset": 1044,
+      "instruction": "strh\tw20, [sp, #0x4a4]"
+    },
+    {
+      "offset": 1048,
+      "instruction": "str\tx21, [sp, #0x498]"
+    },
+    {
+      "offset": 1440,
+      "instruction": "mov\tw2, #0x258              ; =600"
+    },
+    {
+      "offset": 1444,
+      "instruction": "bl\t0x100b5fc6c <_writev+0x100b5fc6c>"
+    },
+    {
+      "offset": 1448,
+      "instruction": "add\tsp, sp, #0x500"
+    },
+    {
+      "offset": 1452,
+      "instruction": "ldp\tx29, x30, [sp, #0x50]"
+    },
+    {
+      "offset": 1456,
+      "instruction": "ldp\tx20, x19, [sp, #0x40]"
+    }
+  ],
+  "note": "Instruction mapping for sampled offsets; not a measurement or exact per-instruction sample count."
+}

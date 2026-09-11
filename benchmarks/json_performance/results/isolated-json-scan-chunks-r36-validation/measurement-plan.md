@@ -1,0 +1,1 @@
+R36: restore tape delimiter scanning; outline scanned allocation; copy plain escaped spans eight bytes at a time with no reserve. First require all 105 candidate outputs, 28 normalized IR files and six worker objects. Measure rotating 15, then Korean controls and stringify options, full/large/changing/retained/access if qualified. No gains are presumed from prior candidates.

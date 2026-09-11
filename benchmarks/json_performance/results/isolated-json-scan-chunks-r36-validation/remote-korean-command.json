@@ -1,0 +1,21 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/isolated-json-scan-chunks-r36/run-korean-rotating.py",
+  "--worker",
+  ".work/isolated-json-scan-chunks-r36/candidate-rotating-worker",
+  "--baseline-worker",
+  ".work/isolated-json-scan-chunks-r36/main-rotating-worker",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--repeat",
+  "7",
+  "--source-commit",
+  "2f7c36be28acc9e090d4aef1c2337335d83ee6b0",
+  "--results-dir",
+  "results/quiet-isolated-json-scan-chunks-r36-korean-rotating"
+]
