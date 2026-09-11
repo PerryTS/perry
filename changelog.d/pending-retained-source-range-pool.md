@@ -1,0 +1,2 @@
+- Share exact nested function, closure, class and method source bytes within each compiled module. Reflection retains the original byte lengths, strictness metadata, registration order and copying/static ownership APIs; bounded matching falls back to independent constants.
+- Add deterministic range/budget tests, emitted-IR ownership/registration coverage and an application-independent reflection/GC gap fixture with a bounded default/compact native driver. Uses the already-locked aho-corasick dependency; no runtime ABI change or application-specific source rewriting.

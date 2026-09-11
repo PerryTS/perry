@@ -46,6 +46,7 @@ perry-dispatch.workspace = true
 perry-api-manifest.workspace = true
 
 anyhow.workspace = true
+aho-corasick.workspace = true
 thiserror.workspace = true
 log.workspace = true
 serde.workspace = true

@@ -8,6 +8,7 @@ use crate::strings::StringPool;
 use crate::types::{DOUBLE, I32, I64, PTR, VOID};
 
 use super::helpers::{sanitize, sanitize_member, scoped_static_method_name};
+use super::retained_source_pool::{SourcePool, SourceRange};
 use super::spec_function_length;
 
 /// Emits a long sequence of INDEPENDENT init operations (string allocation,
@@ -287,19 +288,43 @@ pub(super) fn emit_string_pool(
         user_fn_name_constants.push((wrapper_sym.clone(), const_name, byte_len));
     }
 
-    // #4101: pre-allocate string constants for function-source registration,
-    // mirroring the name constants above (same borrow ordering: mint the
-    // rodata globals BEFORE `init_fn` claims `&mut llmod`).
-    let mut user_fn_source_constants: Vec<(String, String, usize, bool)> = Vec::new();
+    // Collect class sources in registration order before preparing the shared
+    // source pool: a class can contain the exact bytes of a method/closure.
+    let mut class_sources: Vec<(u32, &String)> = Vec::new();
+    for (class_name, class) in classes.iter() {
+        if *class_name != class.name || class_name.starts_with("__AnonShape_") {
+            continue;
+        }
+        let cid = match class_ids.get(class_name).copied() {
+            Some(c) if c != 0 => c,
+            _ => continue,
+        };
+        if let Some(src) = class_source_text.get(&cid) {
+            class_sources.push((cid, src));
+        }
+    }
+    class_sources.sort_by_key(|entry| entry.0);
+    class_sources.dedup_by_key(|(cid, _)| *cid);
+
+    // #4101/#9413: mint source globals BEFORE `init_fn` borrows `llmod`.
+    // Sharing changes only the backing bytes, never registration order, source
+    // lengths, strictness flags, or the copying/static ownership contract.
+    let source_pool = SourcePool::emit(
+        llmod,
+        user_fn_source
+            .iter()
+            .filter(|(symbol, source, _)| !symbol.is_empty() && !source.is_empty())
+            .map(|(_, source, _)| source.as_str())
+            .chain(class_sources.iter().map(|(_, source)| source.as_str())),
+    );
+    let mut user_fn_source_constants: Vec<(String, SourceRange, bool)> = Vec::new();
     for (wrapper_sym, source_text, is_non_strict_ordinary) in user_fn_source {
         if wrapper_sym.is_empty() || source_text.is_empty() {
             continue;
         }
-        let (const_name, byte_len) = llmod.add_string_constant(source_text);
         user_fn_source_constants.push((
             wrapper_sym.clone(),
-            const_name,
-            byte_len,
+            source_pool.get(source_text),
             *is_non_strict_ordinary,
         ));
     }
@@ -338,28 +363,11 @@ pub(super) fn emit_string_pool(
 
     // #9413: the same pre-allocation for retained class source text — also
     // before `init_fn` borrows `llmod`.
-    let mut class_source_constants: Vec<(u32, String, usize)> = Vec::new();
-    {
-        let mut sources: Vec<(u32, &String)> = Vec::new();
-        for (class_name, class) in classes.iter() {
-            if *class_name != class.name || class_name.starts_with("__AnonShape_") {
-                continue;
-            }
-            let cid = match class_ids.get(class_name).copied() {
-                Some(c) if c != 0 => c,
-                _ => continue,
-            };
-            if let Some(src) = class_source_text.get(&cid) {
-                sources.push((cid, src));
-            }
-        }
-        sources.sort_by_key(|entry| entry.0);
-        sources.dedup_by_key(|(cid, _)| *cid);
-        for (cid, src) in sources {
-            let (const_name, byte_len) = llmod.add_string_constant(src);
-            class_source_constants.push((cid, const_name, byte_len));
-        }
-    }
+    let class_source_constants: Vec<(u32, SourceRange)> = class_sources
+        .into_iter()
+        .map(|(cid, source)| (cid, source_pool.get(source)))
+        .collect();
+    drop(source_pool);
 
     // Emit per-class typed-shape raw-f64 and pointer-mask globals. Empty masks
     // emit no storage. Must run BEFORE
@@ -494,13 +502,12 @@ pub(super) fn emit_string_pool(
     // #4101: register each function's retained source text against the same
     // wrapper/closure address `js_closure_alloc_singleton` stamps into the
     // ClosureHeader, so `fn.toString()` resolves the source by func_ptr.
-    for (wrapper_sym, source_const, source_len, is_non_strict_ordinary) in &user_fn_source_constants
-    {
+    for (wrapper_sym, source, is_non_strict_ordinary) in &user_fn_source_constants {
         chunker.roll_if_full();
         let blk = chunker.current_block();
         let wrapper_ref = format!("@{}", wrapper_sym);
-        let source_ref = format!("@{}", source_const);
-        let len_str = source_len.to_string();
+        let source_ref = source.pointer(blk);
+        let len_str = source.byte_len.to_string();
         // Same spelling choice as the names above (#9188), and the bigger half
         // of the win: source text is registered for every function the bundle
         // CONTAINS, to serve a `Function.prototype.toString()` that most
@@ -1199,16 +1206,16 @@ pub(super) fn emit_string_pool(
     // `Function.prototype.toString` on a class REF (an INT32 immediate, not a
     // ClosureHeader) answers with the class source. Same shape as the
     // `js_register_function_source_static` loop above.
-    for (cid, const_name, byte_len) in &class_source_constants {
+    for (cid, source) in &class_source_constants {
         chunker.roll_if_full();
         let blk = chunker.current_block();
-        let const_ref = format!("@{}", const_name);
+        let const_ref = source.pointer(blk);
         blk.call_void(
             "js_register_class_source",
             &[
                 (crate::types::I32, &cid.to_string()),
                 (crate::types::PTR, &const_ref),
-                (crate::types::I32, &byte_len.to_string()),
+                (crate::types::I32, &source.byte_len.to_string()),
             ],
         );
     }
