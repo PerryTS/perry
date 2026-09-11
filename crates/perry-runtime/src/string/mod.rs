@@ -981,7 +981,7 @@ pub(crate) fn compute_utf16_len_wtf8(bytes: &[u8]) -> u32 {
 /// valid across the destination allocation.
 pub(crate) fn js_string_from_builder_bytes(bytes: &[u8]) -> *mut StringHeader {
     let len = u32::try_from(bytes.len()).unwrap_or_else(|_| throw_invalid_string_length());
-    if bytes.iter().all(|&byte| byte < 0x80) {
+    if bytes.is_ascii() {
         if bytes.len() > MAX_STRING_LENGTH {
             throw_invalid_string_length();
         }
