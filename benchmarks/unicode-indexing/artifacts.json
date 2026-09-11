@@ -1,0 +1,24 @@
+{
+  "base_revision": "603b074ace01464bc66fc07cc8d532f26ccf5a0f",
+  "build": "release, codegen-units=16; perry + perry-runtime-static + perry-stdlib-static",
+  "node": "26.5.1",
+  "sources": {
+    "string-char-code-at-ascii.ts": "d2643e67b40c829143879ff779902a2b7f927a7cda78f762acc81d6212dca088",
+    "string-char-code-at-unicode.ts": "9c4c4f2e5b6e0f363555b41a52c851f036f086a98394548347f363e9696607d8",
+    "string-index-bracket-ascii.ts": "d2c5f8f1e5e7ae79cb20f49b14fcabcea520b5d2f104d9518f1c431ab50e5f72",
+    "string-index-bracket-unicode.ts": "835cfa2ad5bede4f07bff1a3cd1c3dedaa5005a9132ba3e55c1704b90ee5855c",
+    "string-pad-start-unicode.ts": "cdf17af89cf3ba922aec0f75df7926faa4df4da3005954d0adc6b5b2f129b767",
+    "string-repeat-unicode.ts": "3b74f3aaf40dc8eb459fce6267eb111219f3030927483b58fc0f641846ced346",
+    "string-trim-unicode.ts": "1affa3053211a1eb0e73c6242f6cf192356d60269729f88dcee32abecea76b2b"
+  },
+  "before": {
+    "perry": "10656f6bbc1b3f18dcb00846f757bdabed3cedeae88c2b474965ce9ad53c51e5",
+    "libperry_runtime.a": "34babe60b347d47d3090093715e1945a80018b5bab9768225abc26b6f581b239",
+    "libperry_stdlib.a": "5bf9bb0021d3684ea7b7d75ba3440dd03b0b26aee6f0648226e3f4b42270400e"
+  },
+  "after": {
+    "perry": "df6fd2f64644b9c6817b9f46a9f98674c49cc630f62996d5e05cc52a4617badb",
+    "libperry_runtime.a": "78e68ec9e211966829ecf9b5a96b7ef9c180a4ef1d222ce85aef39b04ca085ab",
+    "libperry_stdlib.a": "0b0ce731299a8c83f2f31ccf654187f936e67684c062bdfa6ff90e2dfd016421"
+  }
+}

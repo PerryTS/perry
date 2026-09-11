@@ -432,6 +432,7 @@ pub(super) fn reset_copying_nursery_runtime_test_state() {
     crate::object::test_clear_arguments_object_roots();
     crate::symbol::test_clear_symbol_side_table_roots();
     crate::json::test_clear_parse_roots();
+    crate::string::prune_dead_utf16_indexes(&|_| true);
     crate::set::test_clear_set_roots();
     crate::os::test_clear_process_event_listeners();
     crate::promise::test_clear_promise_scanner_roots();

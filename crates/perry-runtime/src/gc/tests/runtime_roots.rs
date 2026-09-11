@@ -26,6 +26,7 @@ mod string_slice;
 mod symbol_description;
 mod thenable_assimilation;
 mod transient_handles;
+mod utf16_index;
 
 fn assert_panics_with(expected: &str, f: impl FnOnce()) {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));

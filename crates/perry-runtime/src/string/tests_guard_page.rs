@@ -130,6 +130,26 @@ fn char_code_at_does_not_read_past_payload() {
 }
 
 #[test]
+fn cached_char_code_at_does_not_read_past_payload() {
+    let mut bytes = vec![b'a'; 128];
+    bytes.extend_from_slice(&TRUNCATED_TAIL);
+    let g = GuardedString::new(&bytes);
+    let s = g.ptr();
+    // Populate a checkpoint at the boundary immediately before the malformed
+    // tail, then seek in both directions through it.
+    for (i, unit) in [(130, 192), (128, 233), (129, 65), (0, 97), (130, 192)] {
+        assert_eq!(js_string_char_code_at(s, i), unit as f64);
+    }
+    assert!(super::test_utf16_index_entries()
+        .iter()
+        .any(|&(owner, count)| owner == s as usize && count > 0));
+    assert!(js_string_char_code_at(s, 131).is_nan());
+    // This fixture owns an mmap outside the GC; mirror death pruning before
+    // its Drop unmaps the header and makes the address reusable.
+    super::prune_dead_utf16_indexes(&|owner| owner == s as usize);
+}
+
+#[test]
 fn code_point_at_does_not_read_past_payload() {
     let g = GuardedString::new(&TRUNCATED_TAIL);
     let s = g.ptr();

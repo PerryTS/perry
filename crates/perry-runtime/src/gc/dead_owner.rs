@@ -466,6 +466,12 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         young_prune: None,
     },
     DeadKeyPrune {
+        table: "UTF16_INDEX_CACHE",
+        owner: DeadKeyOwner::Any,
+        prune: crate::string::prune_dead_utf16_indexes,
+        young_prune: None,
+    },
+    DeadKeyPrune {
         table: "FILEHANDLE_OBJECT_FDS",
         owner: DeadKeyOwner::Any,
         prune: crate::fs::prune_dead_filehandle_fd_entries,

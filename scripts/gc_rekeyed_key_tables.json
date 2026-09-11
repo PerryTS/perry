@@ -258,6 +258,12 @@
       "table": "WASM_MEMORY_BINDINGS",
       "death": "dead_owner:prune_dead_wasm_memory_bindings",
       "why": "The key is a native wasmi instance pointer, so the GC address at risk is the VALUE (MemoryBinding.buffer). Registered prune retains on !is_dead_owner over that buffer address (webassembly.rs), so a Memory swept after its JS owner became unreachable takes its entry with it instead of leaving an address for visit_metadata_usize_slot to re-point once it is recycled and forwarded."
+    },
+    {
+      "site": "crates/perry-runtime/src/string/char_ops/utf16_index.rs::scan_utf16_index_roots_mut",
+      "table": "UTF16_INDEX_CACHE",
+      "death": "dead_owner:prune_dead_utf16_indexes",
+      "why": "Four weak string identities are rewritten after relocation and pruned by the registered dead-owner fan-out before copying or mark/sweep can reuse their addresses; pruning also drops the Rust-owned offset vectors."
     }
   ]
 }
