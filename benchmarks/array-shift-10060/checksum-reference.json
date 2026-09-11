@@ -1,0 +1,7 @@
+{
+  "node": "v26.5.1",
+  "n": 1000000,
+  "checksum": 755413900,
+  "method": "Untimed direct traversal of the same xorshift32 sequence, h starts at zero. This is an independent correctness reference, not a completed Node shift benchmark.",
+  "javascript": "let seed=0x12345678,h=0; for(let i=0;i<1000000;i++){seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5;const v=Math.floor((seed >>> 0)/4294967296*1000000); h=(h*31+v)%1000000007;}console.log(h);"
+}
