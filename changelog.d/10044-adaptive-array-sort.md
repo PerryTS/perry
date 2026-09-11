@@ -1,13 +1,12 @@
-Speed up generic `Array.prototype.sort` and `toSorted` comparator sorts by
-sorting an index permutation over rooted values. Natural run detection, stable
-binary insertion, balanced merges, and block searches reduce comparisons, while
-applying the final permutation in one callback-free phase removes repeated GC
-layout and write-barrier work. The same engine handles numbers, strings,
-objects, and arbitrary comparators; collections remain enabled during callbacks.
-GC-owned workspaces also remain reclaimable when a comparator throws.
+Speed up generic comparator sorting and shared dynamic operations. Adaptive
+sorting over rooted indices reduces comparisons and repeated GC bookkeeping;
+compact property caches, numeric guards, primitive-string comparisons, and
+closure dispatch reduce comparator overhead without recognizing comparator
+bodies. Collection remains enabled, with regression coverage for actual
+relocation during comparison, collection getters, and allocating write-back.
 
-The M1 Max comparison against the same main build improves all 24 tested
-distribution/value-type combinations by 1.89–36.07×. Node remains faster
-in these measurements. The change includes stability and inconsistent-comparator
-tests, forced moving-GC coverage, a compiled semantic regression, and a
-reproducible benchmark with full results in `benchmarks/array-sort/`.
+On the recorded M1 Max run, the original 100,000-element scriptc #289 sort
+measures 0.67 ms versus Node 2.06 ms (baseline Perry 104.37 ms).
+Perry leads 24/25 measured cases. The PR includes raw samples, matching-build
+hashes, full-output verification, semantic regressions, and a reproducible
+harness in `benchmarks/array-sort/`. Results are local to this shared host.
