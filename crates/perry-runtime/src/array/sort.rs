@@ -3,6 +3,9 @@
 use super::*;
 use crate::closure::ClosureHeader;
 
+#[path = "sort_indices.rs"]
+mod indices;
+
 // ---------------------------------------------------------------------------
 // SortCompare helpers shared by the dense fast paths, the exotic spec path,
 // and the generic array-like engine (`object_sort`).
@@ -76,11 +79,6 @@ fn is_undefined_bits(bits: u64) -> bool {
     bits == crate::value::TAG_UNDEFINED
 }
 
-/// TimSort-style hybrid threshold shared by the sorting engines below:
-/// insertion sort for runs of at most this many elements, bottom-up merges
-/// above it.
-const INSERTION_THRESHOLD: usize = 32;
-
 /// GC-rooted view of an array's inline element storage. The header pointer
 /// lives in a `RuntimeHandleScope` slot (marked AND rewritten by a moving
 /// collection), and the element base is re-derived from the CURRENT header
@@ -122,121 +120,97 @@ impl<'s> RootedArrayElems<'s> {
     }
 }
 
-/// In-place insertion sort of `vals[start..end]` under `le(a, b)` ("a sorts
-/// at-or-before b"). Swap-based: the moving key is never parked in a Rust
-/// local across a comparator call, so the authoritative element bits always
-/// live in the rooted array and get rewritten in place by a moving GC.
-unsafe fn insertion_sort_rooted(
-    vals: &RootedArrayElems<'_>,
-    start: usize,
-    end: usize,
-    le: &mut impl FnMut(f64, f64) -> bool,
-) {
-    for i in (start + 1)..end {
-        let mut j = i;
-        while j > start {
-            // `le` is user code — both operands are re-read AFTER it returns
-            // (their slots were rewritten in place if the array moved).
-            if le(vals.get(j - 1), vals.get(j)) {
-                break;
-            }
-            let prev = vals.get(j - 1);
-            let cur = vals.get(j);
-            vals.set(j - 1, cur);
-            vals.set(j, prev);
-            j -= 1;
-        }
-    }
-}
-
-/// Stable bottom-up merge sort over TWO rooted element buffers: `data` holds
-/// the values, `scratch` is the ping-pong buffer, and runs of `start_width`
-/// are assumed already sorted. Tolerant of an inconsistent user comparator
-/// (never panics, unlike `slice::sort_by`). Every element access re-derives
-/// the buffer base from its rooted handle and re-reads the winning element
-/// AFTER each comparator call — the authoritative bits always live in one of
-/// the two GC-visible arrays, never in an unrooted Rust buffer. (The #6076
-/// merge engine ping-ponged through a bare `Vec<f64>`: after the first src/dst
-/// swap the authoritative bits lived in that Vec, and a moving minor during a
-/// comparator call left pre-move addresses in the published result.)
-unsafe fn stable_merge_sort_rooted(
-    data: &RootedArrayElems<'_>,
-    scratch: &RootedArrayElems<'_>,
-    n: usize,
-    start_width: usize,
-    mut le: impl FnMut(f64, f64) -> bool,
-) {
-    if n <= 1 {
-        return;
-    }
-    let mut in_data = true; // which buffer currently holds the runs
-    let mut width = start_width.max(1);
-    while width < n {
-        let (src, dst) = if in_data {
-            (data, scratch)
-        } else {
-            (scratch, data)
-        };
-        let mut i = 0usize;
-        while i < n {
-            let left = i;
-            let mid = (i + width).min(n);
-            let right = (i + 2 * width).min(n);
-            let (mut l, mut r, mut k) = (left, mid, left);
-            while l < mid && r < right {
-                if le(src.get(l), src.get(r)) {
-                    dst.set(k, src.get(l));
-                    l += 1;
-                } else {
-                    dst.set(k, src.get(r));
-                    r += 1;
-                }
-                k += 1;
-            }
-            while l < mid {
-                dst.set(k, src.get(l));
-                l += 1;
-                k += 1;
-            }
-            while r < right {
-                dst.set(k, src.get(r));
-                r += 1;
-                k += 1;
-            }
-            i += 2 * width;
-        }
-        in_data = !in_data;
-        width *= 2;
-    }
-    if !in_data {
-        // Final runs landed in scratch — copy back (no user code here).
-        for i in 0..n {
-            data.set(i, scratch.get(i));
-        }
-    }
-}
-
-/// Comparator sort of `data[0..n]` (hybrid insertion + merge) with the
-/// comparator header re-derived from `cmp_handle` before every call.
+/// Sort indices into the rooted source instead of moving GC values during
+/// comparisons. The source is private to this sort, so callbacks can move its
+/// objects but cannot mutate its slots. No copied heap value survives a call.
 unsafe fn sort_comparator_rooted(
     data: &RootedArrayElems<'_>,
-    scratch: &RootedArrayElems<'_>,
     n: usize,
     c: &ComparatorCall,
     cmp_handle: &crate::gc::RuntimeHandle<'_>,
 ) {
-    let mut le = |a: f64, b: f64| -> bool {
-        c.compare_at(cmp_handle.get_raw_const_ptr::<ClosureHeader>(), a, b) <= 0.0
-    };
-    // Phase 1: insertion-sort each small run in place.
-    let mut run_start = 0usize;
-    while run_start < n {
-        let run_end = (run_start + INSERTION_THRESHOLD).min(n);
-        insertion_sort_rooted(data, run_start, run_end, &mut le);
-        run_start = run_end;
+    const STACK_INDICES: usize = 64;
+    if n <= STACK_INDICES {
+        let mut order = [0u32; STACK_INDICES];
+        let mut scratch = [0u32; STACK_INDICES];
+        sort_permutation(data, &mut order[..n], &mut scratch[..n], c, cmp_handle);
+        return;
     }
-    // Phase 2: bottom-up merges, ping-ponging between the two rooted buffers.
-    stable_merge_sort_rooted(data, scratch, n, INSERTION_THRESHOLD, le);
+
+    // JS throws bypass Rust destructors. GC-owned workspaces are reclaimed
+    // even on that path; a Vec allocated before the callback would leak.
+    // TypedArray payloads are pointer-free and NON-MOVABLE, so these private
+    // slices remain valid across arbitrary callbacks and copying collections.
+    // Keep both allocations rooted, including across allocation of the second.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let order_handle = scope.root_raw_mut_ptr(crate::typedarray::typed_array_alloc(
+        crate::typedarray::KIND_UINT32,
+        n as u32,
+    ));
+    let scratch_handle = scope.root_raw_mut_ptr(crate::typedarray::typed_array_alloc(
+        crate::typedarray::KIND_UINT32,
+        n as u32,
+    ));
+    let order = std::slice::from_raw_parts_mut(
+        order_handle.with_mut_ptr(crate::typedarray::data_ptr_mut) as *mut u32,
+        n,
+    );
+    let scratch = std::slice::from_raw_parts_mut(
+        scratch_handle.with_mut_ptr(crate::typedarray::data_ptr_mut) as *mut u32,
+        n,
+    );
+    sort_permutation(data, order, scratch, c, cmp_handle);
+}
+
+unsafe fn sort_permutation(
+    data: &RootedArrayElems<'_>,
+    order: &mut [u32],
+    scratch: &mut [u32],
+    c: &ComparatorCall,
+    cmp_handle: &crate::gc::RuntimeHandle<'_>,
+) {
+    for (i, index) in order.iter_mut().enumerate() {
+        *index = i as u32;
+    }
+    indices::sort_indices(order, scratch, |a, b| {
+        // One fresh root lookup for both operands. The comparator closure
+        // is re-derived too; none of these pointers is used after the call.
+        let arr = data.arr();
+        let elements = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        c.compare_at(
+            cmp_handle.get_raw_const_ptr::<ClosureHeader>(),
+            *elements.add(a as usize),
+            *elements.add(b as usize),
+        ) <= 0.0
+    });
+
+    // No user code or GC allocation below. Apply the permutation by cycles,
+    // then rebuild the layout and remembered edges once, as in sort's dense
+    // receiver write-back. This replaces O(n log n) barriered element writes
+    // with O(n) writes, without suppressing any collection in the comparator.
+    let arr = data.arr();
+    let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+    mark_array_layout_unknown(arr);
+    for start in 0..order.len() {
+        if order[start] as usize == start {
+            continue;
+        }
+        let saved = *elements.add(start);
+        let mut dest = start;
+        loop {
+            let source = order[dest] as usize;
+            order[dest] = dest as u32;
+            if source == start {
+                // GC_STORE_AUDIT(BARRIERED): permutation stores are followed by the rebuild below, with no intervening safepoint.
+                *elements.add(dest) = saved;
+                break;
+            }
+            // GC_STORE_AUDIT(BARRIERED): same callback-free permutation region.
+            *elements.add(dest) = *elements.add(source);
+            dest = source;
+        }
+    }
+    rebuild_array_layout(arr);
 }
 
 /// Default (no-comparator) SortCompare over a rooted buffer: ToString each
@@ -284,8 +258,7 @@ pub(crate) unsafe fn sort_rooted_values(
     match cmp {
         Some(c) => {
             let cmp_handle = scope.root_raw_const_ptr(c.comparator);
-            let scratch = RootedArrayElems::new(&scope, js_array_alloc_with_length(count as u32));
-            sort_comparator_rooted(&data, &scratch, count, &c, &cmp_handle);
+            sort_comparator_rooted(&data, count, &c, &cmp_handle);
         }
         None => sort_default_rooted(&data, count),
     }
@@ -805,24 +778,22 @@ unsafe fn sort_array_receiver(
     // #6076: sort a GC-rooted COPY of the elements and publish it back only
     // after the comparator sort SUCCEEDS. A throwing comparator therefore
     // leaves the receiver's elements intact (an in-place sort corrupts them).
-    // Both the copy AND the merge scratch are rooted arrays: the merge engine
-    // ping-pongs between two GC-visible buffers, so a moving minor during a
-    // comparator call rewrites whichever buffer holds the authoritative bits
-    // (the previous engine's bare `Vec<f64>` kept pre-move addresses and
-    // published them back into the receiver).
+    // The copy stays rooted and unchanged throughout the comparator phase.
+    // The merge engine moves only indices; every comparison reads the source
+    // through its current handle after any prior callback moved its values.
     let cmp_handle = scope.root_raw_const_ptr(c.comparator);
     let temp = RootedArrayElems::new(&scope, js_array_alloc_with_length(length as u32));
     {
         // Re-derive after the temp allocation above (which can GC).
         let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
         let recv_elems = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
-        for i in 0..length {
-            temp.set(i, *recv_elems.add(i));
-        }
+        let dest = (temp.arr() as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        // GC_STORE_AUDIT(BARRIERED): initializing the private snapshot has no
+        // safepoint before the layout/remembered-edge rebuild immediately below.
+        std::ptr::copy_nonoverlapping(recv_elems, dest, length);
     }
     rebuild_array_layout(temp.arr());
-    let scratch = RootedArrayElems::new(&scope, js_array_alloc_with_length(length as u32));
-    sort_comparator_rooted(&temp, &scratch, length, &c, &cmp_handle);
+    sort_comparator_rooted(&temp, length, &c, &cmp_handle);
 
     // The comparator sort completed without a throw — publish the sorted temp
     // back into the receiver (no user code below; both sides re-derived).
