@@ -41,7 +41,7 @@ pub(crate) unsafe fn stringify_buffer(ptr: *const u8, buf: &mut String) {
         return;
     }
     let len = (*buf_ptr).length as usize;
-    let data = (buf_ptr as *const u8).add(std::mem::size_of::<crate::buffer::BufferHeader>());
+    let data = crate::buffer::buffer_data(buf_ptr as *const crate::buffer::BufferHeader);
     let bytes = std::slice::from_raw_parts(data, len);
 
     if crate::buffer::is_uint8array_buffer(ptr as usize) {
@@ -160,7 +160,7 @@ pub(crate) unsafe fn stringify_buffer_pretty(
         return;
     }
     let len = (*buf_ptr).length as usize;
-    let data = (buf_ptr as *const u8).add(std::mem::size_of::<crate::buffer::BufferHeader>());
+    let data = crate::buffer::buffer_data(buf_ptr as *const crate::buffer::BufferHeader);
     let bytes = std::slice::from_raw_parts(data, len);
 
     let push_indent = |buf: &mut String, levels: usize| {

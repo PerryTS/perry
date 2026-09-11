@@ -282,7 +282,7 @@ pub unsafe extern "C" fn js_keccak256_native(buf_ptr: i64) -> *mut StringHeader 
 
     let len = (*buf_ptr).length as usize;
     let data =
-        (buf_ptr as *const u8).add(std::mem::size_of::<perry_runtime::buffer::BufferHeader>());
+        perry_runtime::buffer::buffer_data(buf_ptr as *const perry_runtime::buffer::BufferHeader);
     let bytes = std::slice::from_raw_parts(data, len);
 
     let hash = keccak256(bytes);
@@ -312,8 +312,9 @@ pub unsafe extern "C" fn js_keccak256_native_bytes(
         (&[] as &[u8], 0)
     } else {
         let len = (*buf_ptr).length as usize;
-        let data =
-            (buf_ptr as *const u8).add(std::mem::size_of::<perry_runtime::buffer::BufferHeader>());
+        let data = perry_runtime::buffer::buffer_data(
+            buf_ptr as *const perry_runtime::buffer::BufferHeader,
+        );
         (std::slice::from_raw_parts(data, len), len)
     };
 

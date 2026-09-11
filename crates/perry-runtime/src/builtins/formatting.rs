@@ -815,7 +815,7 @@ unsafe fn format_buffer_value(buf_ptr: *const crate::buffer::BufferHeader) -> St
         return "<Buffer >".to_string();
     }
     let len = (*buf_ptr).length as usize;
-    let data = (buf_ptr as *const u8).add(std::mem::size_of::<crate::buffer::BufferHeader>());
+    let data = crate::buffer::buffer_data(buf_ptr as *const crate::buffer::BufferHeader);
     let bytes = std::slice::from_raw_parts(data, len);
 
     // If this buffer was created via `new Uint8Array(...)`, format it Node-style

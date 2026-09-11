@@ -368,6 +368,14 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
                 visit(fixed_slot(slot as *mut u64));
             }
         }
+        GcRewriteDescriptorKind::Buffer => {
+            crate::buffer::view::visit_backing_slot(user_ptr as usize, |slot| {
+                visit(fixed_slot(slot));
+            });
+            crate::buffer::visit_ab_alias_slot(user_ptr as usize, |slot| {
+                visit(fixed_slot(slot));
+            });
+        }
         GcRewriteDescriptorKind::Leaf => {}
     }
 }

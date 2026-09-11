@@ -206,7 +206,7 @@ pub extern "C" fn js_net_socket_write(handle: f64, data_ptr: *const BufferHeader
         if let Some(wrapper) = sockets.get_mut(&handle) {
             unsafe {
                 let len = (*data_ptr).length as usize;
-                let data = (data_ptr as *const u8).add(std::mem::size_of::<BufferHeader>());
+                let data = crate::buffer::buffer_data(data_ptr as *const crate::buffer::BufferHeader);
                 let bytes = std::slice::from_raw_parts(data, len);
 
                 match wrapper.stream.write(bytes) {

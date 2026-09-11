@@ -78,15 +78,9 @@ pub fn read_buffer_bytes(ptr: *const BufferHeader) -> Option<&'static [u8]> {
     if ptr.is_null() {
         return None;
     }
-    // SAFETY: caller's contract — `ptr` is a valid runtime
-    // BufferHeader. The bytes immediately follow the header and
-    // are bounded by `length`.
-    unsafe {
-        let header = &*ptr;
-        let len = header.length as usize;
-        let data = (ptr as *const u8).add(std::mem::size_of::<BufferHeader>());
-        Some(std::slice::from_raw_parts(data, len))
-    }
+    // Resolve through the runtime: a view stores its bytes in its backing,
+    // and a foreign ArrayBuffer can also have out-of-line storage.
+    crate::value_byte_slice(crate::JsValue::from_object_ptr(ptr as *mut BufferHeader))
 }
 
 #[cfg(all(test, feature = "runtime-link"))]
@@ -123,5 +117,18 @@ mod tests {
         let buf = alloc_buffer(input);
         let read = read_buffer_bytes(buf).expect("non-null");
         assert_eq!(read, input);
+    }
+
+    #[test]
+    fn subarray_reads_live_backing_window() {
+        let source = alloc_buffer(&[10, 20, 30, 40]);
+        let view = perry_runtime::buffer::js_buffer_slice(source.cast(), 1, 3);
+        assert_eq!(read_buffer_bytes(view.cast()).unwrap(), &[20, 30]);
+        perry_runtime::buffer::js_buffer_set(source.cast(), 1, 99);
+        assert_eq!(read_buffer_bytes(view.cast()).unwrap(), &[99, 30]);
+        perry_runtime::buffer::mark_as_uint8array(view as usize);
+        assert_eq!(read_buffer_bytes(view.cast()).unwrap(), &[99, 30]);
+        let empty = perry_runtime::buffer::js_buffer_slice(view, 2, 2);
+        assert_eq!(read_buffer_bytes(empty.cast()).unwrap(), &[] as &[u8]);
     }
 }

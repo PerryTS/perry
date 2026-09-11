@@ -146,9 +146,7 @@ pub unsafe extern "C" fn js_keccak256_native(buf_ptr: i64) -> *mut StringHeader 
         let s = "0x0000000000000000000000000000000000000000000000000000000000000000";
         return alloc_string(s).as_raw();
     }
-    let len = (*buf).length as usize;
-    let data = (buf as *const u8).add(std::mem::size_of::<BufferHeader>());
-    let bytes = std::slice::from_raw_parts(data, len);
+    let bytes = perry_ffi::read_buffer_bytes(buf).unwrap_or(&[]);
     let hash = keccak256(bytes);
 
     let hex_chars = b"0123456789abcdef";
@@ -179,9 +177,7 @@ pub unsafe extern "C" fn js_keccak256_native_bytes(buf_ptr: i64) -> *mut BufferH
     let bytes: &[u8] = if buf.is_null() {
         &[]
     } else {
-        let len = (*buf).length as usize;
-        let data = (buf as *const u8).add(std::mem::size_of::<BufferHeader>());
-        std::slice::from_raw_parts(data, len)
+        perry_ffi::read_buffer_bytes(buf).unwrap_or(&[])
     };
     let hash = keccak256(bytes);
     alloc_buffer(&hash)

@@ -274,12 +274,7 @@ pub fn jsvalue_to_body_bytes(value: f64) -> Option<Vec<u8>> {
         if is_buffer {
             let buf = raw as *const BufferHeader;
             if !buf.is_null() {
-                unsafe {
-                    let len = (*buf).length as usize;
-                    let data = (buf as *const u8).add(std::mem::size_of::<BufferHeader>());
-                    let slice = std::slice::from_raw_parts(data, len);
-                    return Some(slice.to_vec());
-                }
+                return perry_ffi::read_buffer_bytes(buf).map(<[u8]>::to_vec);
             }
         }
         // Non-buffer pointer — try the string-shaped header (shared

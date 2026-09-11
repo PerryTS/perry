@@ -153,7 +153,7 @@ crate::perry_thread_local! {
     /// Limitation: the bytes are not actually inside the aliased buffer, so
     /// reads/writes through `.buffer` won't observe the view's data — only
     /// the `===` identity check matches Node.
-    static BUFFER_AB_ALIAS: RefCell<PtrHashMap<usize, usize>> =
+    static BUFFER_AB_ALIAS: RefCell<PtrHashMap<usize, Box<usize>>> =
         RefCell::new(new_ptr_hash_map());
     /// Buffers returned by `crypto.createSecretKey`. They intentionally keep
     /// Buffer storage so crypto/HMAC call paths can still read raw key bytes,
@@ -796,12 +796,9 @@ pub fn asymmetric_key_meta(addr: usize) -> Option<(u8, u8)> {
 /// contract the emitted reader may do
 /// `len = *(u32*)addr; addr + 8 + idx` directly:
 ///
-///  * view copies (`js_buffer_slice` / `new Uint8Array(arrayBuffer)`) are
-///    excluded — their inline bytes are only a snapshot. Runtime reads resolve
-///    through `buffer/view.rs` to the authoritative backing, which can change
-///    without refreshing that snapshot (for example through a sibling typed
-///    array), so admitting a view would make the first read correct and later
-///    cache-hit reads stale;
+///  * shared views (`js_buffer_slice` / `new Uint8Array(arrayBuffer)`) are
+///    excluded — their allocation is only a header. Runtime reads resolve
+///    through `buffer_data` to the ultimate backing plus the view offset;
 ///  * foreign-backed wrappers (`buffer_alloc_foreign`, bun:ffi externals) are
 ///    excluded at prime time — their header is a lone `BufferHeader` with no
 ///    inline payload, so `header + 8` is past the allocation;
@@ -913,7 +910,14 @@ fn is_uint8array_buffer_slow(addr: usize) -> bool {
 pub fn set_buffer_ab_alias(buf: usize, alias: usize) {
     BUFFER_AB_ALIAS_EVER_SET.arm();
     BUFFER_AB_ALIAS.with(|m| {
-        m.borrow_mut().insert(buf, alias);
+        let mut m = m.borrow_mut();
+        let slot = m.entry(buf).or_insert_with(|| Box::new(0));
+        **slot = alias;
+        crate::gc::runtime_write_barrier_external_slot(
+            buf,
+            &mut **slot as *mut usize as usize,
+            alias as u64,
+        );
     });
 }
 
@@ -925,7 +929,7 @@ pub fn buffer_ab_alias(buf: usize) -> Option<usize> {
     if BUFFER_AB_ALIAS_EVER_SET.is_idle() {
         return None;
     }
-    BUFFER_AB_ALIAS.with(|m| m.borrow().get(&buf).copied())
+    BUFFER_AB_ALIAS.with(|m| m.borrow().get(&buf).map(|alias| **alias))
 }
 
 /// Collapse an alias chain to its root: if `buf` already aliases something,
@@ -961,13 +965,8 @@ pub fn ensure_buffer_ab_alias(buf: usize) -> usize {
     unsafe {
         let src = buf as *const BufferHeader;
         let len = (*src).length;
-        let alias = buffer_alloc(len);
-        (*alias).length = len;
-        if len > 0 {
-            std::ptr::copy_nonoverlapping(buffer_data(src), buffer_data_mut(alias), len as usize);
-        }
+        let alias = super::view::alloc(src, 0, len);
         mark_as_array_buffer(alias as usize);
-        super::view::register(alias as usize, buf, 0, len);
         set_buffer_ab_alias(buf, alias as usize);
         alias as usize
     }
@@ -1275,8 +1274,25 @@ pub(crate) fn finalize_collected_dead_buffer(addr: usize) {
     u8_inline_cache_invalidate(addr);
 }
 
-/// Get the data pointer for a buffer
+/// Trace the cached ArrayBuffer identity only while its owning buffer lives.
+/// The boxed slot remains stable if other buffers populate the map mid-cycle.
+pub(crate) fn visit_ab_alias_slot(addr: usize, mut visit: impl FnMut(*mut u64)) {
+    BUFFER_AB_ALIAS.with(|m| {
+        if let Some(alias) = m.borrow_mut().get_mut(&addr) {
+            visit(&mut **alias as *mut usize as *mut u64);
+        }
+    });
+}
+
+/// Get the canonical data pointer for a buffer or shared view.
 pub fn buffer_data(buf: *const BufferHeader) -> *const u8 {
+    if let Some(info) = super::view::lookup(buf as usize) {
+        // Registration flattens nested views; the owner is retained by the GC
+        // descriptor. Detach zeroes view lengths before releasing any pages.
+        return unsafe {
+            buffer_data(info.backing as *const BufferHeader).add(info.offset as usize)
+        };
+    }
     foreign_backing(buf as usize)
         .map(|addr| addr as *const u8)
         .unwrap_or_else(|| unsafe { (buf as *const u8).add(std::mem::size_of::<BufferHeader>()) })
@@ -1284,7 +1300,5 @@ pub fn buffer_data(buf: *const BufferHeader) -> *const u8 {
 
 /// Get the mutable data pointer for a buffer
 pub fn buffer_data_mut(buf: *mut BufferHeader) -> *mut u8 {
-    foreign_backing(buf as usize)
-        .map(|addr| addr as *mut u8)
-        .unwrap_or_else(|| unsafe { (buf as *mut u8).add(std::mem::size_of::<BufferHeader>()) })
+    buffer_data(buf) as *mut u8
 }

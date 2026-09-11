@@ -6,7 +6,7 @@ pub(super) unsafe fn format_array_buffer_value(
         return format!("{label} {{ [Uint8Contents]: <>, [byteLength]: 0 }}");
     }
     let len = (*buf_ptr).length as usize;
-    let data = (buf_ptr as *const u8).add(std::mem::size_of::<crate::buffer::BufferHeader>());
+    let data = crate::buffer::buffer_data(buf_ptr as *const crate::buffer::BufferHeader);
     let bytes = std::slice::from_raw_parts(data, len);
     let display_len = len.min(50);
     let mut contents = String::new();

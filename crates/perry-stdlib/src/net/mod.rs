@@ -253,7 +253,9 @@ unsafe fn jsvalue_to_socket_bytes(value: f64) -> Option<Vec<u8>> {
             let buf = raw as *const BufferHeader;
             if !buf.is_null() {
                 let len = (*buf).length as usize;
-                let data = (buf as *const u8).add(std::mem::size_of::<BufferHeader>());
+                let data = perry_runtime::buffer::buffer_data(
+                    buf as *const perry_runtime::buffer::BufferHeader,
+                );
                 return Some(std::slice::from_raw_parts(data, len).to_vec());
             }
         }

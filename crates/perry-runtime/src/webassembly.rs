@@ -99,9 +99,8 @@ fn extract_bytes(jsval: f64) -> Option<(*const u8, usize)> {
     {
         let header = addr as *const crate::buffer::BufferHeader;
         let len = unsafe { (*header).length as usize };
-        let data = unsafe {
-            (header as *const u8).add(std::mem::size_of::<crate::buffer::BufferHeader>())
-        };
+        let data =
+            unsafe { crate::buffer::buffer_data(header as *const crate::buffer::BufferHeader) };
         return Some((data, len));
     }
 

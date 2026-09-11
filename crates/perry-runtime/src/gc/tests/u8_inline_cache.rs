@@ -73,10 +73,9 @@ fn test_prime_rejects_foreign_backed_wrapper() {
     crate::buffer::finalize_collected_dead_buffer(addr);
 }
 
-/// A registered Uint8Array view keeps only a snapshot in its inline payload;
-/// runtime reads resolve to the authoritative backing. Admitting the view
-/// would make a backing-side write visible on the first cache-miss read and
-/// disappear again on the next cache-hit read (#9360/#7219).
+/// A registered Uint8Array view has no inline payload. Runtime reads resolve
+/// to shared backing bytes; admitting it would read past its header on a
+/// cache hit (#9360/#7219/#10056).
 #[test]
 fn test_prime_rejects_registered_view() {
     let _guard = GcTestIsolationGuard::new();
@@ -96,9 +95,12 @@ fn test_prime_rejects_registered_view() {
     );
     assert_eq!(
         unsafe { *crate::buffer::buffer_data(view).add(1) },
-        0,
-        "test premise: the view's inline snapshot is stale"
+        0xAB,
+        "runtime and native accessors must expose the same shared bytes"
     );
+    assert_ne!(crate::buffer::buffer_data(view), unsafe {
+        (view as *const u8).add(std::mem::size_of::<crate::buffer::BufferHeader>())
+    });
 
     crate::buffer::u8_inline_cache_try_prime(addr);
     assert!(

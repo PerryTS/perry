@@ -181,19 +181,6 @@ unsafe fn read_buffer_byte(buf_ptr: *const BufferHeader, index: i32) -> Option<u
     if buf_ptr.is_null() || index < 0 || index as u32 >= (*buf_ptr).length {
         return None;
     }
-    // Issue #1205: if the receiver is a registered view, read from
-    // the ultimate backing buffer — otherwise the view's local
-    // snapshot can lag any direct-fast-path write made to the
-    // backing through codegen.
-    let buf_addr = buf_ptr as usize;
-    if let Some(info) = super::view::lookup(buf_addr) {
-        let back_off = info.offset + index as u32;
-        let backing_ptr = info.backing as *const BufferHeader;
-        if !backing_ptr.is_null() && back_off < (*backing_ptr).length {
-            let back_data = buffer_data(backing_ptr);
-            return Some(*back_data.add(back_off as usize));
-        }
-    }
     let data = buffer_data(buf_ptr);
     Some(*data.add(index as usize))
 }
@@ -244,27 +231,8 @@ pub extern "C" fn js_buffer_set(buf_ptr: *mut BufferHeader, index: i32, value: i
             return;
         }
         let byte = (value & 0xFF) as u8;
-        // Write the byte to the receiver's own data area first so a
-        // direct codegen fast-path read of this buffer still sees the
-        // update.
         let data = buffer_data_mut(buf_ptr);
         *data.add(index as usize) = byte;
-        // Issue #1205: propagate through the view registry.  If the
-        // receiver is itself a slice, mirror the write into the
-        // ultimate backing buffer; in either direction, sister views
-        // covering the same backing byte must observe the new value.
-        let buf_addr = buf_ptr as usize;
-        if let Some(info) = super::view::lookup(buf_addr) {
-            let back_off = info.offset + index as u32;
-            let backing_ptr = info.backing as *mut BufferHeader;
-            if !backing_ptr.is_null() && back_off < (*backing_ptr).length {
-                let back_data = buffer_data_mut(backing_ptr);
-                *back_data.add(back_off as usize) = byte;
-                super::view::propagate_byte_to_views(info.backing, back_off, byte, buf_addr);
-            }
-        } else {
-            super::view::propagate_byte_to_views(buf_addr, index as u32, byte, buf_addr);
-        }
     }
 }
 
@@ -349,22 +317,13 @@ pub extern "C" fn js_buffer_set_from_value(
         if !bytes.is_empty() {
             let target_data = buffer_data_mut(target).add(offset);
             ptr::copy_nonoverlapping(bytes.as_ptr(), target_data, bytes.len());
-            super::view::propagate_written_range_from_receiver(
-                target as usize,
-                offset as u32,
-                target_data,
-                bytes.len() as u32,
-            );
         }
     }
 
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-/// Create a slice of a buffer.  Issue #1205: the returned buffer is
-/// a *view* over the source — registered in the view registry so that
-/// subsequent reads/writes via the runtime helpers propagate between
-/// the slice and the original.
+/// Create a shared Buffer slice / Uint8Array subarray in constant space.
 #[no_mangle]
 pub extern "C" fn js_buffer_slice(
     buf_ptr: *const BufferHeader,
@@ -374,38 +333,47 @@ pub extern "C" fn js_buffer_slice(
     if buf_ptr.is_null() {
         return buffer_alloc(0);
     }
-
-    unsafe {
-        let len = (*buf_ptr).length as i32;
-
-        // Handle negative indices
-        let start = if start < 0 {
-            (len + start).max(0)
-        } else {
-            start.min(len)
-        };
-        let end = if end < 0 {
-            (len + end).max(0)
-        } else {
-            end.min(len)
-        };
-
-        if start >= end {
-            return buffer_alloc(0);
-        }
-
-        let slice_len = (end - start) as u32;
-        let result = buffer_alloc(slice_len);
-        (*result).length = slice_len;
-
-        let src_data = buffer_data(buf_ptr).add(start as usize);
-        let dst_data = buffer_data_mut(result);
-        ptr::copy_nonoverlapping(src_data, dst_data, slice_len as usize);
-
-        // Register the alias.  `register` flattens slices-of-slices
-        // so the recorded backing is always the original allocation.
-        super::view::register(result as usize, buf_ptr as usize, start as u32, slice_len);
-
-        result
+    let (start, length) = slice_bounds(buf_ptr, start, end);
+    let result = super::view::alloc(buf_ptr, start, length);
+    if is_uint8array_buffer(buf_ptr as usize) {
+        mark_as_uint8array(result as usize);
     }
+    result
+}
+
+fn slice_bounds(buf: *const BufferHeader, start: i32, end: i32) -> (u32, u32) {
+    let len = unsafe { (*buf).length as i64 };
+    let bound = |index: i32| {
+        if index < 0 {
+            (len + index as i64).max(0)
+        } else {
+            (index as i64).min(len)
+        }
+    };
+    let start = bound(start);
+    (start as u32, (bound(end) - start).max(0) as u32)
+}
+
+/// ArrayBuffer/SharedArrayBuffer and Uint8Array `.slice()` copy their bytes.
+/// Buffer `.slice()` alone has the shared semantics of `.subarray()`.
+pub(crate) fn buffer_slice_copy(
+    buf: *const BufferHeader,
+    start: i32,
+    end: i32,
+) -> *mut BufferHeader {
+    let (start, length) = slice_bounds(buf, start, end);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let source = scope.root_raw_const_ptr(buf);
+    let result = buffer_alloc(length);
+    unsafe {
+        (*result).length = length;
+        source.with_const_ptr::<BufferHeader, _>(|buf| {
+            ptr::copy_nonoverlapping(
+                buffer_data(buf).add(start as usize),
+                buffer_data_mut(result),
+                length as usize,
+            );
+        });
+    }
+    result
 }

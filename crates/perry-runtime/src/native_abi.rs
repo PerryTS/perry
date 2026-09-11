@@ -647,20 +647,22 @@ mod tests {
     }
 
     // #6515: a `Uint8Array` view over an `ArrayBuffer` is a registered view
-    // whose own storage is a copy; the backing ArrayBuffer is what JS reads
-    // and writes go through. The `buffer+len` data pointer must resolve to the
-    // backing window, otherwise a native write lands in the view's stale copy
-    // and the script never observes it (silent corruption).
+    // with a distinct header; the backing ArrayBuffer owns the shared bytes.
+    // The `buffer+len` data pointer must resolve to the same backing window
+    // as every runtime accessor.
     #[test]
     fn buffer_data_ptr_resolves_view_over_arraybuffer_to_backing() {
         let ab = crate::buffer::js_array_buffer_new(64);
         let view = crate::buffer::js_uint8array_new(boxed_ptr(ab));
         assert_ne!(view as usize, ab as usize, "view must be a distinct header");
 
-        // Resolves to the backing's storage — NOT the view's own local copy.
+        // Both access paths resolve to the same shared storage.
         let resolved = js_native_abi_check_buffer_data_ptr(boxed_ptr(view));
         assert_eq!(resolved, crate::buffer::buffer_data(ab));
-        assert_ne!(resolved, crate::buffer::buffer_data(view));
+        assert_eq!(resolved, crate::buffer::buffer_data(view));
+        assert_ne!(resolved, unsafe {
+            (view as *const u8).add(std::mem::size_of::<crate::buffer::BufferHeader>())
+        });
         assert_eq!(js_native_abi_check_buffer_byte_len(boxed_ptr(view)), 64);
 
         // End-to-end: a native write through the resolved pointer is observed
@@ -706,13 +708,14 @@ mod tests {
             crate::buffer::buffer_data(standalone)
         );
 
-        // Hardening: if the backing shrinks after the view is registered so the
-        // recorded window no longer fits, resolution falls back to the view's
-        // own (correctly-sized) storage rather than hand back a backing pointer
-        // that a `len`-byte native write would overrun.
-        unsafe {
-            (*ab).length = 8;
-        }
+        // Detach invalidates every view's span before releasing backing pages;
+        // there is no private snapshot to fall back to in a header-only view.
+        crate::buffer::detach_array_buffer(ab as usize);
+        assert_eq!(js_native_abi_check_buffer_byte_len(boxed_ptr(view)), 0);
+        assert_eq!(
+            js_native_abi_check_buffer_byte_len(boxed_ptr(with_offset)),
+            0
+        );
         assert_eq!(
             js_native_abi_check_buffer_data_ptr(boxed_ptr(view)),
             crate::buffer::buffer_data(view)

@@ -407,3 +407,50 @@ fn test_buffer_headers_are_never_relocated() {
         "GC_TYPE_TYPED_ARRAY must stay non-movable for the same reason"
     );
 }
+
+/// A moving nursery collection must preserve a view reachable through a
+/// relocated holder. A subsequent full trace must retain the original backing
+/// and stable .buffer identity with no direct roots to either. Once the holder
+/// dies, the view/backing/identity cycle must be reclaimed.
+#[test]
+fn test_buffer_subarray_owner_edges_survive_moving_gc_and_die_together() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let source = crate::buffer::js_uint8array_alloc(64);
+    crate::buffer::js_buffer_set(source, 18, 42);
+    let intermediate = crate::buffer::js_buffer_slice(source, 8, 48);
+    let view = crate::buffer::js_buffer_slice(intermediate, 10, 20);
+    let identity = crate::buffer::buffer_backing_array_buffer(view as usize);
+    let holder = crate::array::js_array_alloc(1);
+    crate::array::js_array_push_f64(holder, f64::from_bits(ptr_bits(view as usize)));
+    assert!(crate::arena::pointer_in_nursery(holder as usize));
+    js_shadow_slot_set(0, ptr_bits(holder as usize));
+
+    let _ = gc_collect_minor();
+    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(moved, holder as usize, "the holder must actually move");
+    full_gc();
+    assert!(crate::buffer::is_registered_buffer(source as usize));
+    assert!(crate::buffer::is_registered_buffer(identity));
+    assert!(crate::buffer::is_registered_buffer(view as usize));
+    assert!(
+        !crate::buffer::is_registered_buffer(intermediate as usize),
+        "nested views retain the ultimate backing, not the intermediate receiver"
+    );
+    assert_eq!(crate::buffer::js_buffer_get(view, 0), 42);
+    assert_eq!(
+        crate::buffer::buffer_backing_array_buffer(view as usize),
+        identity
+    );
+    crate::buffer::js_buffer_set(view, 0, 91);
+    assert_eq!(crate::buffer::js_buffer_get(source, 18), 91);
+
+    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+    full_gc();
+    for addr in [source as usize, view as usize, identity] {
+        assert!(
+            !crate::buffer::is_registered_buffer(addr),
+            "dead backing cycle retained {addr:#x}"
+        );
+        assert!(crate::buffer::view::lookup(addr).is_none());
+    }
+}

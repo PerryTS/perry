@@ -1,0 +1,30 @@
+{
+  "date": "2026-09-11",
+  "base_revision": "603b074ace01464bc66fc07cc8d532f26ccf5a0f",
+  "host": "Windows 11 Pro 10.0.26200, AMD Ryzen 5 7640HS, 12 logical CPUs, x86_64",
+  "rust": "nightly-2026-08-20 (rustc 1.100.0-nightly f7d782a3b)",
+  "node": "v26.5.1",
+  "llvm": "22.1.8",
+  "profile": "release; codegen-units=16; default thin LTO",
+  "packages": [
+    "perry",
+    "perry-runtime-static",
+    "perry-stdlib-static"
+  ],
+  "compile_flags": [
+    "--no-auto-optimize"
+  ],
+  "artifacts": {
+    "before": {
+      "perry.exe": "05a7a6547f14741120da035e3eea50a820b0e4e3ec8c32f6f9b6658a918adf66",
+      "perry_runtime.lib": "dc86998a1b46f066b7c5212659ceaf63cfa5d2ef137e637a733a2fd4c69be88d",
+      "perry_stdlib.lib": "f17020c93abc8b29d716608b008976dd32cfc76408c757f0810de33a6280f05d"
+    },
+    "after": {
+      "perry.exe": "2b7de043fd0305e9d82623e9274e3e987d36f674d772a49840d06459f3e4f1af",
+      "perry_runtime.lib": "9b26372f50ad70c0eecf39bfefc988eb0846b5eacb07b6636f065e2e957ebf9d",
+      "perry_stdlib.lib": "66ecfe18a64db9a84f51731be3a249119e3eb79140661e9a9592a83abc5d14b3"
+    }
+  },
+  "subarray_ts_sha256": "a34bda8c2cf740382b8e0583bfdf9533a5fe9ada481f9c6080f40d5a13ad43e9"
+}

@@ -273,7 +273,7 @@ unsafe fn buffer_secret_export_format(bits: f64) -> Option<String> {
 
 unsafe fn secret_key_jwk_object(buf_ptr: *mut crate::buffer::BufferHeader) -> f64 {
     let bytes = std::slice::from_raw_parts(
-        (buf_ptr as *const u8).add(std::mem::size_of::<crate::buffer::BufferHeader>()),
+        crate::buffer::buffer_data(buf_ptr as *const crate::buffer::BufferHeader),
         (*buf_ptr).length as usize,
     );
     let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
@@ -581,11 +581,21 @@ pub unsafe fn dispatch_buffer_method(
                 (s, e)
             } else {
                 let s = arg_i32(0);
-                let e = if args.len() >= 2 { arg_i32(1) } else { len };
+                let e = if args.len() >= 2 && !JSValue::from_bits(args[1].to_bits()).is_undefined()
+                {
+                    arg_i32(1)
+                } else {
+                    len
+                };
                 (s, e)
             };
+            let source_is_uint8array = crate::buffer::is_uint8array_buffer(addr);
             let result = buffer.with_mut_ptr::<crate::buffer::BufferHeader, _>(|buf| {
-                crate::buffer::js_buffer_slice(buf, start, end)
+                if method_name == "slice" && (source_is_any_array_buffer || source_is_uint8array) {
+                    crate::buffer::buffer_slice_copy(buf, start, end)
+                } else {
+                    crate::buffer::js_buffer_slice(buf, start, end)
+                }
             });
             // #2877: `ArrayBuffer.prototype.slice` returns a NEW ArrayBuffer
             // (a copy), so mark the result so `ArrayBuffer.isView(slice)` is
@@ -594,6 +604,8 @@ pub unsafe fn dispatch_buffer_method(
                 crate::buffer::mark_as_array_buffer(result as usize);
             } else if source_is_shared_array_buffer {
                 crate::buffer::mark_as_shared_array_buffer(result as usize);
+            } else if source_is_uint8array {
+                crate::buffer::mark_as_uint8array(result as usize);
             }
             f64::from_bits(JSValue::pointer(result as *mut u8).bits())
         }
@@ -734,7 +746,7 @@ pub unsafe fn dispatch_buffer_method(
                 return secret_key_jwk_object(buf_ptr);
             }
             let bytes = std::slice::from_raw_parts(
-                (buf_ptr as *const u8).add(std::mem::size_of::<crate::buffer::BufferHeader>()),
+                crate::buffer::buffer_data(buf_ptr as *const crate::buffer::BufferHeader),
                 (*buf_ptr).length as usize,
             );
             let out = crate::buffer::buffer_alloc(bytes.len() as u32);

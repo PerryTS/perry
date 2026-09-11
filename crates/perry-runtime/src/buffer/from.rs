@@ -429,8 +429,7 @@ pub extern "C" fn js_buffer_from_array(arr_ptr: *const ArrayHeader) -> *mut Buff
 ///
 /// Perry models ArrayBuffer and SharedArrayBuffer storage as BufferHeader
 /// allocations. Node returns a Buffer view over that storage, not a detached
-/// copy, so this mirrors the selected byte window into a fresh BufferHeader
-/// and registers it with the shared view registry used by slice/subarray.
+/// copy, so this allocates a header-only view over the selected byte window.
 #[no_mangle]
 pub extern "C" fn js_buffer_from_arraybuffer_slice(
     value_bits: i64,
@@ -458,16 +457,7 @@ pub extern "C" fn js_buffer_from_arraybuffer_slice(
         };
         let take = take as u32;
         let start = start as u32;
-        let dst = buffer_alloc(take);
-        (*dst).length = take;
-        if take > 0 {
-            ptr::copy_nonoverlapping(
-                buffer_data(src).add(start as usize),
-                buffer_data_mut(dst),
-                take as usize,
-            );
-        }
-        super::view::register(dst as usize, raw, start, take);
+        let dst = super::view::alloc(src, start, take);
         set_buffer_ab_alias(dst as usize, resolve_buffer_ab_alias(raw));
         dst
     }
@@ -943,23 +933,13 @@ pub extern "C" fn js_data_view_new(value: f64, offset_value: f64, length_value: 
 
     // Build a registered view so the numeric accessors index
     // relative to the view start and `.byteOffset`/`.byteLength`/`.buffer`
-    // report the right values — including the zero-length edge cases
-    // (`offset == total_len`) that `js_buffer_slice` would otherwise collapse
-    // to an unregistered empty buffer, losing offset and backing.
-    unsafe {
-        let start = offset as u32;
-        let len = view_len as u32;
-        let view = buffer_alloc(len);
-        (*view).length = len;
-        if len > 0 {
-            let src_data = buffer_data(src).add(start as usize);
-            ptr::copy_nonoverlapping(src_data, buffer_data_mut(view), len as usize);
-        }
-        super::view::register(view as usize, src as usize, start, len);
-        mark_as_data_view(view as usize);
-        set_buffer_ab_alias(view as usize, resolve_buffer_ab_alias(addr));
-        f64::from_bits(crate::value::JSValue::pointer(view as *mut u8).bits())
-    }
+    // report the right values, including zero-length views at the end.
+    let start = offset as u32;
+    let len = view_len as u32;
+    let view = super::view::alloc(src, start, len);
+    mark_as_data_view(view as usize);
+    set_buffer_ab_alias(view as usize, resolve_buffer_ab_alias(addr));
+    f64::from_bits(crate::value::JSValue::pointer(view as *mut u8).bits())
 }
 
 fn throw_buffer_alloc_size_out_of_range() -> ! {
@@ -1112,12 +1092,6 @@ pub extern "C" fn js_buffer_fill_range(
         }
         let data = buffer_data_mut(buf);
         ptr::write_bytes(data.add(start), value as u8, end - start);
-        super::view::propagate_written_range_from_receiver(
-            buf as usize,
-            start as u32,
-            data.add(start),
-            (end - start) as u32,
-        );
     }
     buf
 }
@@ -1167,12 +1141,6 @@ pub extern "C" fn js_buffer_fill_value_range(
 
         let write_byte = |byte: u8| {
             ptr::write_bytes(dst, byte, count);
-            super::view::propagate_written_range_from_receiver(
-                buf as usize,
-                start as u32,
-                dst,
-                count as u32,
-            );
         };
 
         if jsval.is_number() {
@@ -1203,12 +1171,6 @@ pub extern "C" fn js_buffer_fill_value_range(
         for i in 0..count {
             *dst.add(i) = *src_data.add(i % src_len);
         }
-        super::view::propagate_written_range_from_receiver(
-            buf as usize,
-            start as u32,
-            dst,
-            count as u32,
-        );
     }
     buf
 }
