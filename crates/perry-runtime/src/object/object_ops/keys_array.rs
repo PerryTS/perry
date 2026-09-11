@@ -356,15 +356,24 @@ pub(crate) unsafe fn own_key_present_via_index(
         Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => {}
         _ => return None,
     }
-    let key_count = crate::array::js_array_length(keys) as usize;
-    if key_count < super::super::KEYS_INDEX_THRESHOLD as usize || key_count > 65536 {
+    let key_count = crate::array::js_array_length(keys);
+    if key_count < super::super::KEYS_INDEX_THRESHOLD {
         return None;
     }
     let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
     let name_len = (*key).byte_len as usize;
     let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
     let key_hash = super::super::key_bytes_hash(name_ptr, name_len);
-    Some(super::super::keys_index_lookup(obj, keys, name_bytes, key_hash).is_some())
+    match super::super::shapes::shape_slot_lookup_verdict(
+        keys, name_bytes, key_hash, key_count, true,
+    ) {
+        super::super::shapes::KeysIndexVerdict::Found(_) => Some(true),
+        super::super::shapes::KeysIndexVerdict::Absent => Some(false),
+        // A shortened or otherwise incomplete index cannot prove absence.
+        // Preserve the caller's exact fallback instead of turning a stale miss
+        // into a false negative.
+        super::super::shapes::KeysIndexVerdict::Unindexed => None,
+    }
 }
 
 /// Helper: does `key` appear in `obj.keys_array`?
@@ -420,44 +429,11 @@ pub(crate) unsafe fn own_key_present(
     if (*keys_gc).obj_type != crate::gc::GC_TYPE_ARRAY {
         return false;
     }
-    let key_count = crate::array::js_array_length(keys) as usize;
-    if key_count > 65536 {
-        return false;
-    }
-    // #5736: a wide object — e.g. a barrel `export *` namespace with thousands
-    // of re-exported bindings — made this an O(n) keys_array scan, so callers
-    // that re-check every own key in a loop (`Object.values` / `Object.entries`,
-    // which call `own_key_present` per key) ran O(n²). Probe the shared
-    // wide-object key→slot index first: a hit is O(1). A miss falls through to
-    // the linear scan below, so an absent key — or a present key whose index
-    // entry was dropped as stale — is still answered correctly. The index is an
-    // accelerator, never authoritative (it revalidates every hit against the
-    // live slot via `js_string_key_matches`), and is the same map the read-path
-    // getter maintains for these objects.
-    if key_count >= super::super::field_get_set::WIDE_KEY_INDEX_MIN_KEYS {
-        let key_bytes_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-        let key_len = (*key).byte_len as usize;
-        let key_bytes = std::slice::from_raw_parts(key_bytes_ptr, key_len);
-        if super::super::field_get_set::wide_key_index_lookup(
-            keys as usize,
-            key_bytes,
-            key,
-            keys,
-            key_count,
-        )
-        .is_some()
-        {
-            return true;
-        }
-    }
-    let (slots, slot_len) = super::super::keys_array_dense_slots(keys);
-    for i in 0..key_count.min(slot_len) {
-        let stored = JSValue::from_bits((*slots.add(i)).to_bits());
-        // #1781: SSO-aware match — `hasOwnProperty("id")` previously
-        // returned false when "id" lived as an inline SSO key.
-        if crate::string::js_string_key_matches(stored, key) {
-            return true;
-        }
-    }
-    false
+    let key_count = crate::array::js_array_length(keys);
+    // The shared helper distinguishes a complete index miss from an index that
+    // cannot answer. Complete misses are authoritative, so Object.assign's
+    // growing destination does not scan every preceding key before appending;
+    // stale/incomplete indexes retain the dense-slot correctness fallback.
+    // Slots and counts are u32 throughout, so there is no 65,536-key ceiling.
+    super::super::keys_find_slot_by_key_ptr(keys, key_count, key).is_some()
 }

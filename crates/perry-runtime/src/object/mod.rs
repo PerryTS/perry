@@ -1825,6 +1825,8 @@ mod tests;
 mod tombstone_tests;
 #[cfg(test)]
 mod transition_ic_tests;
+#[cfg(test)]
+mod wide_object_membership_tests;
 
 /// The named-property bag for a cell that has no inline slot layout of its own,
 /// creating it on first write.
