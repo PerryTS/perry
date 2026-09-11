@@ -20,7 +20,7 @@ struct TrimCache {
     mode: u8,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     static TRIM_CACHE: UnsafeCell<TrimCache> = const { UnsafeCell::new(TrimCache {
         source: ptr::null_mut(),
         result: ptr::null_mut(),
