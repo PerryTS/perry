@@ -29,14 +29,34 @@ pub unsafe fn lazy_get(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
             return *cache.add(i as usize);
         }
     } else {
-        // This edge always names an ordinary array. Resolving its growth
-        // forwarding cannot allocate or invoke user code; the fresh pointer
-        // also satisfies array_object_flags_resolved's no-safepoint contract.
-        let arr = super::resolve_materialized_array(hdr);
+        // install_materialized stores a live ordinary array here, and the
+        // lazy owner's exact GC slot is rewritten when that array moves.
+        // No allocation or user code occurs before this header/element read.
+        // Growth stubs keep their GC header and use the existing resolver.
+        let cached = (*hdr).materialized;
+        let header = &*cached
+            .cast::<u8>()
+            .sub(crate::gc::GC_HEADER_SIZE)
+            .cast::<crate::gc::GcHeader>();
+        let (arr, flags) = if header.obj_type == crate::gc::GC_TYPE_ARRAY
+            && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+            && (*cached).length <= (*cached).capacity
+            && (*cached).length <= 100_000_000
+        {
+            // Keep the length mirror observed by lazy-array length dispatch.
+            (*hdr).cached_length = (*cached).length;
+            (cached, header._reserved)
+        } else {
+            let arr = super::resolve_materialized_array(hdr);
+            let flags = if arr.is_null() {
+                0
+            } else {
+                crate::array::array_object_flags_resolved(arr)
+            };
+            (arr, flags)
+        };
         if !arr.is_null()
-            && crate::array::array_object_flags_resolved(arr)
-                & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS
-                == 0
+            && flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS == 0
             && i < (*arr).length
             && i < (*arr).capacity
         {
@@ -131,10 +151,35 @@ mod tests {
             crate::array::js_array_set(arr, 1, JSValue::number(99.0));
             assert_eq!(lazy_get(hdr, 1).as_number(), 99.0);
             assert_eq!(ROOTED_READS.load(Ordering::Relaxed), 1);
-            let grown =
-                crate::array::js_array_set_jsvalue_extend(arr, 7, JSValue::number(77.0).bits());
+            assert_eq!((*hdr).cached_length, 3);
+            crate::array::js_array_set_length(arr, 2.0);
+            assert_eq!(
+                (*hdr).materialized,
+                arr,
+                "shrink must leave the edge unforwarded"
+            );
+            assert_eq!(lazy_get(hdr, 1).as_number(), 99.0);
+            assert_eq!(
+                (*hdr).cached_length,
+                2,
+                "a cached read refreshes the length mirror"
+            );
+            assert_eq!(ROOTED_READS.load(Ordering::Relaxed), 1);
+            let growth_index = (*arr).capacity + 4;
+            let grown = crate::array::js_array_set_jsvalue_extend(
+                arr,
+                growth_index,
+                JSValue::number(77.0).bits(),
+            );
             assert!(!grown.is_null());
-            assert_eq!(lazy_get(hdr, 7).as_number(), 77.0);
+            assert_ne!(grown, arr, "exercise an actual growth forwarding stub");
+            assert_eq!((*hdr).materialized, arr, "the owner still carries the stub");
+            assert_eq!(lazy_get(hdr, growth_index).as_number(), 77.0);
+            assert_eq!(
+                (*hdr).cached_length,
+                growth_index + 1,
+                "growth resolution refreshes the length mirror"
+            );
             assert_eq!(ROOTED_READS.load(Ordering::Relaxed), 1);
             assert!(lazy_get(hdr, 6).is_undefined());
             assert_eq!(ROOTED_READS.load(Ordering::Relaxed), 2);
