@@ -3,6 +3,10 @@
 
 use crate::string::{init_string_header, string_data, string_storage_alloc, StringHeader};
 
+#[cfg(target_arch = "aarch64")]
+#[path = "stringify_native_escape.rs"]
+mod native_escape;
+
 #[derive(Clone, Copy)]
 pub(super) struct Plan {
     source_bytes: u32,
@@ -157,7 +161,11 @@ pub(super) unsafe fn append_to_native_buffer(buf: &mut String, source: &[u8]) ->
         }
         bytes.reserve(capacity - used);
     }
+    #[cfg(target_arch = "aarch64")]
+    let written = native_escape::write(source, bytes.as_mut_ptr().add(used));
+    #[cfg(not(target_arch = "aarch64"))]
     let written = plan.write(source.as_ptr(), bytes.as_mut_ptr().add(used));
+    debug_assert_eq!(written, plan.bytes as usize);
     bytes.set_len(used + written);
     true
 }

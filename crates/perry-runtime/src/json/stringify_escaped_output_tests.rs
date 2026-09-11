@@ -151,3 +151,95 @@ fn json_native_buffer_uses_bounded_plans_and_retains_suffix_capacity() {
         assert_eq!(output.capacity(), capacity);
     }
 }
+
+#[cfg(all(target_arch = "aarch64", unix))]
+#[test]
+fn json_native_vector_escape_respects_exact_source_and_output_guard_pages() {
+    struct GuardedPage {
+        base: *mut u8,
+        page: usize,
+    }
+    impl GuardedPage {
+        unsafe fn new() -> Self {
+            let size = libc::sysconf(libc::_SC_PAGESIZE);
+            assert!(size > 0);
+            let page = size as usize;
+            let allocation = libc::mmap(
+                std::ptr::null_mut(),
+                page * 2,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_ANON | libc::MAP_PRIVATE,
+                -1,
+                0,
+            );
+            assert_ne!(allocation, libc::MAP_FAILED);
+            let base = allocation.cast::<u8>();
+            let result = Self { base, page };
+            assert_eq!(
+                libc::mprotect(base.add(page).cast(), page, libc::PROT_NONE),
+                0
+            );
+            result
+        }
+    }
+    impl Drop for GuardedPage {
+        fn drop(&mut self) {
+            assert_eq!(unsafe { libc::munmap(self.base.cast(), self.page * 2) }, 0);
+        }
+    }
+    unsafe {
+        let source = GuardedPage::new();
+        let output = GuardedPage::new();
+        let check = |text: &str| {
+            let expected = serde_json::to_string(text).unwrap();
+            let plan = Plan::new(text.as_bytes(), text.encode_utf16().count() as u32).unwrap();
+            assert_eq!(plan.bytes as usize, expected.len());
+            assert!(text.len() < source.page && expected.len() < output.page);
+            assert_eq!(
+                libc::mprotect(
+                    source.base.cast(),
+                    source.page,
+                    libc::PROT_READ | libc::PROT_WRITE
+                ),
+                0
+            );
+            let input = source.base.add(source.page - text.len());
+            std::slice::from_raw_parts_mut(input, text.len()).copy_from_slice(text.as_bytes());
+            assert_eq!(
+                libc::mprotect(source.base.cast(), source.page, libc::PROT_READ),
+                0
+            );
+            let destination = output.base.add(output.page - expected.len());
+            std::slice::from_raw_parts_mut(output.base, output.page).fill(0xa5);
+            let written =
+                native_escape::write(std::slice::from_raw_parts(input, text.len()), destination);
+            assert_eq!(written, expected.len());
+            assert_eq!(
+                std::slice::from_raw_parts(destination, written),
+                expected.as_bytes()
+            );
+            assert!(
+                std::slice::from_raw_parts(output.base, output.page - written)
+                    .iter()
+                    .all(|&byte| byte == 0xa5)
+            );
+        };
+        for length in 0..=257 {
+            check(&"a".repeat(length));
+        }
+        for byte in 0..=127u8 {
+            for offset in 0..32 {
+                check(&format!(
+                    "{}{}東京🙂한\\\n\u{1}{}",
+                    "a".repeat(offset),
+                    char::from(byte),
+                    "z".repeat(31 - offset)
+                ));
+            }
+            check(&char::from(byte).to_string().repeat(257));
+        }
+        for repetitions in [1, 7, 15, 16, 17, 31, 32, 33, 95] {
+            check(&"\"\\\n\r\t\u{8}\u{c}\u{1}東京🙂한".repeat(repetitions));
+        }
+    }
+}
