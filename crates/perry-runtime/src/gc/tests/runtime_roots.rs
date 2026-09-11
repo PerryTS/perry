@@ -22,6 +22,7 @@ mod segment_record_keys;
 mod side_table_scanners;
 mod string_normalize_form;
 mod string_slice;
+mod string_trim;
 mod symbol_description;
 mod thenable_assimilation;
 mod transient_handles;

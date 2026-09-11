@@ -119,12 +119,15 @@ mod pad;
 mod raw;
 mod slice_ops;
 mod split;
+pub(crate) mod trim_cache;
 mod utf16_count;
 #[cfg(feature = "regex-engine")]
 pub(crate) use split::{spec_fancy_regex_split, spec_regex_split};
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod trim_tests;
 
 /// #6085 guard-page regression tests: prove no string scanner reads past the
 /// end of an exact-sized payload. Unix-only (needs `mmap` + `mprotect`).

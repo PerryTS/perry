@@ -1,0 +1,110 @@
+{
+  "label": "baseline-cold",
+  "sha": "603b074ace01464bc66fc07cc8d532f26ccf5a0f",
+  "node": "v26.5.1",
+  "host": "macOS-26.5-arm64-arm-64bit-Mach-O",
+  "load_start": [
+    23.7412109375,
+    47.94580078125,
+    52.9814453125
+  ],
+  "benchmarks": {
+    "string-trim-alternating-ascii": {
+      "source_sha256": "f2694b0826e66fca3e9f96c070fb6bbe067b5df86c42cf1e12be352e6f19e50f",
+      "binary_sha256": "f124c2b81994cbd52848a6c2e26820f20b452c3f5c10560a8b96f56046fdb056",
+      "node": [
+        {
+          "name": "string-trim-alternating-ascii",
+          "category": "strings",
+          "n": 100,
+          "ms_per_run": 0.04167295218295361,
+          "runs": 3589,
+          "checksum": 7377983936
+        },
+        {
+          "name": "string-trim-alternating-ascii",
+          "category": "strings",
+          "n": 1000,
+          "ms_per_run": 0.10898668932038805,
+          "runs": 3665,
+          "checksum": 4795209384
+        },
+        {
+          "name": "string-trim-alternating-ascii",
+          "category": "strings",
+          "n": 10000,
+          "ms_per_run": 0.04012868006430803,
+          "runs": 3467,
+          "checksum": 15015235456
+        },
+        {
+          "name": "string-trim-alternating-ascii",
+          "category": "strings",
+          "n": 100000,
+          "ms_per_run": 0.03564822864651799,
+          "runs": 5720,
+          "checksum": 12234515976
+        },
+        {
+          "name": "string-trim-alternating-ascii",
+          "category": "strings",
+          "n": 1000000,
+          "ms_per_run": 0.049176405405405514,
+          "runs": 3475,
+          "checksum": 6321236336
+        }
+      ],
+      "perry": [
+        {
+          "name": "string-trim-alternating-ascii",
+          "category": "strings",
+          "n": 100,
+          "ms_per_run": 0.06673537931034441,
+          "runs": 2227,
+          "checksum": 7377983936
+        },
+        {
+          "name": "string-trim-alternating-ascii",
+          "category": "strings",
+          "n": 1000,
+          "ms_per_run": 1.0606426315789577,
+          "runs": 270,
+          "checksum": 4795209384
+        },
+        {
+          "name": "string-trim-alternating-ascii",
+          "category": "strings",
+          "n": 10000,
+          "ms_per_run": 4.153041399999995,
+          "runs": 53,
+          "checksum": 15015235456
+        },
+        {
+          "name": "string-trim-alternating-ascii",
+          "category": "strings",
+          "n": 100000,
+          "ms_per_run": 44.76383299999998,
+          "runs": 8,
+          "checksum": 12234515976
+        },
+        {
+          "name": "string-trim-alternating-ascii",
+          "category": "strings",
+          "n": 1000000,
+          "ms_per_run": 328.1389170000007,
+          "runs": 7,
+          "checksum": 6321236336
+        }
+      ],
+      "slopes": {
+        "node": -0.03415304801391869,
+        "perry": 0.900876140194046
+      }
+    }
+  },
+  "load_end": [
+    27.30078125,
+    47.900390625,
+    52.90576171875
+  ]
+}
