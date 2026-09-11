@@ -1,0 +1,46 @@
+{
+  "note": "Static call-site census including alternate cold branches, not dynamic samples or phase timings",
+  "functions": [
+    {
+      "function": "internal double @\"perry_fn_access_worker_ts__run$spec_b_b\"(double %arg12, double %arg13) #6 gc \"statepoint-example\" {",
+      "static_call_sites_including_cold_branches": {
+        "js_string_equals": 3,
+        "js_gc_loop_safepoint": 8,
+        "js_write_barrier_root_nanbox": 12,
+        "js_packed_arraylike_index_get": 6,
+        "js_object_get_field_by_name_f64": 12,
+        "js_typed_feedback_object_get_field_by_name_f64": 6,
+        "js_object_get_field_ic_miss": 6,
+        "js_object_get_field_ic_overflow_load": 6,
+        "js_throw_type_error_property_access": 6,
+        "js_dynamic_string_or_number_add": 6,
+        "js_dynamic_mul": 1,
+        "js_dynamic_mod": 3,
+        "js_string_addref_if_heap_string": 1,
+        "js_value_length_property_f64": 1,
+        "js_is_truthy": 1
+      }
+    },
+    {
+      "function": "internal double @\"perry_fn_access_worker_ts__run$generic\"(double %arg12, double %arg13) #6 gc \"statepoint-example\" {",
+      "static_call_sites_including_cold_branches": {
+        "js_string_equals": 3,
+        "js_rel_lt": 4,
+        "js_gc_loop_safepoint": 8,
+        "js_write_barrier_root_nanbox": 12,
+        "js_packed_arraylike_index_get": 6,
+        "js_object_get_field_by_name_f64": 12,
+        "js_typed_feedback_object_get_field_by_name_f64": 6,
+        "js_object_get_field_ic_miss": 6,
+        "js_object_get_field_ic_overflow_load": 6,
+        "js_throw_type_error_property_access": 6,
+        "js_dynamic_string_or_number_add": 6,
+        "js_dynamic_mul": 1,
+        "js_dynamic_mod": 3,
+        "js_string_addref_if_heap_string": 1,
+        "js_value_length_property_f64": 1,
+        "js_is_truthy": 1
+      }
+    }
+  ]
+}

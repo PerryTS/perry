@@ -1,0 +1,17 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/materialized-read-r23/run-access.py",
+  "--worker",
+  ".work/materialized-read-r23/candidate-access-worker",
+  "--baseline-worker",
+  ".work/materialized-read-r23/main-access-worker",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--results-dir",
+  "results/quiet-materialized-read-r23-access"
+]

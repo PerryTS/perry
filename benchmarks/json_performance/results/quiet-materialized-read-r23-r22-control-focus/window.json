@@ -1,0 +1,42 @@
+{
+  "owner": "json-perf-93444-1789106752",
+  "load_before": [
+    1.296875,
+    1.423828125,
+    1.53369140625
+  ],
+  "started_utc": "2026-09-11T06:05:52Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/materialized-read-r23/run-focus.py",
+    "--worker",
+    ".work/materialized-read-r23/r22-shared-worker",
+    "--baseline-worker",
+    ".work/materialized-read-r23/main-worker",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--bun",
+    "/Users/perry/.bun/bin/bun",
+    "--case",
+    "tiny_object:parse:2000000:5000:11",
+    "--case",
+    "records_array_16k:roundtrip:7659:2:11",
+    "--case",
+    "records_array_1m:roundtrip:115:2:11",
+    "--case",
+    "records_object_1m:parse:81:2:11",
+    "--case",
+    "heterogeneous_1m:stringify:218:2:11",
+    "--results-dir",
+    "results/quiet-materialized-read-r23-r22-control-focus"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.708984375,
+    1.5234375,
+    1.56396484375
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-11T06:06:45Z"
+}

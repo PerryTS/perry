@@ -1,0 +1,31 @@
+from pathlib import Path
+import hashlib,json,os,shlex,shutil,subprocess
+w=Path(__file__).resolve().parent;bench=w.parents[1];remote='/Users/perry/json-codex-yHdsko/benchmarks/json_performance';host='perry@perry-macos.local';prefix='.work/'+w.name+'/'
+names=['with_lock.py','run_dispatch_focus.py']+[prefix+n for n in ['run-access-profiles-recheck.py','profile-recheck-cases.json','main-access-worker','main-workers-provenance.json','main-build-provenance.json','reference-artifacts.json']]+['.work/fixtures/'+f+'.json' for f in ['records_array_16k','records_array_1m']]
+expected={p:hashlib.sha256((bench/p).read_bytes()).hexdigest() for p in names};token='json-r23-main-profiles-recheck-'+str(os.getpid())
+def ssh(code):subprocess.run(['ssh',host,'python3 -c '+shlex.quote(code)],check=True)
+ssh('from pathlib import Path;p=Path.home()/"bench.lock";p.mkdir();(p/"owner").write_text('+repr(token)+')')
+try:
+ subprocess.run(['rsync','-aR',*names,host+':'+remote+'/'],cwd=bench,check=True)
+ ssh('from pathlib import Path;import hashlib;root=Path('+repr(remote)+');expected='+repr(expected)+';assert all(hashlib.sha256((root/p).read_bytes()).hexdigest()==h for p,h in expected.items())')
+finally:ssh('from pathlib import Path;p=Path.home()/"bench.lock";assert(p/"owner").read_text()=='+repr(token)+';(p/"owner").unlink();p.rmdir()')
+(w/'main-profile-recheck-stage-hashes.json').write_text(json.dumps(expected,indent=2)+'\n')
+slug='quiet-'+w.name+'-main-profiles-recheck';cmd=['python3','with_lock.py','--','python3',prefix+'run-access-profiles-recheck.py','--results-dir','results/'+slug]
+(w/'main-profile-recheck-command.json').write_text(json.dumps(cmd,indent=2)+'\n')
+with (w/'main-profile-recheck-remote.log').open('wb') as log:r=subprocess.run(['ssh',host,'cd '+shlex.quote(remote)+' && '+shlex.join(cmd)],stdout=log,stderr=subprocess.STDOUT)
+# FIRST remote operation after terminal window: preserve its window files.
+code='''from pathlib import Path
+import json,shutil
+root=Path(REMOTE);d=root/'results'/SLUG
+window=json.loads((root/'results/window-custom.json').read_text());assert window.get('finished_utc') and 'results/'+SLUG in window['command']
+d.mkdir(parents=True,exist_ok=True)
+for p,n in [('results/window-custom.json','window.json'),('custom.log','controller.log'),('results/processes-before.txt','processes-before.txt'),('results/processes-after.txt','processes-after.txt'),('with_lock.py','with_lock.py'),('run_dispatch_focus.py','run_dispatch_focus.py')]:shutil.copy2(root/p,d/n)
+for n in ['run-access-profiles-recheck.py','profile-recheck-cases.json','main-workers-provenance.json','main-build-provenance.json','reference-artifacts.json']:shutil.copy2(root/PREFIX/n,d/n)
+'''.replace('REMOTE',repr(remote)).replace('SLUG',repr(slug)).replace('PREFIX',repr(prefix))
+ssh(code)
+subprocess.run(['rsync','-a',host+':'+remote+'/results/'+slug+'/',str(bench/'results'/slug)+'/'],check=True)
+d=bench/'results'/slug
+for p in [Path(__file__),w/'main-profile-recheck-command.json',w/'main-profile-recheck-stage-hashes.json',w/'main-profile-recheck-remote.log']:shutil.copy2(p,d/p.name)
+(d/'controller-exit.json').write_text(json.dumps({'exit_code':r.returncode},indent=2)+'\n')
+print('ARCHIVED',slug,flush=True);print((w/'main-profile-recheck-remote.log').read_text(),flush=True)
+raise SystemExit(r.returncode)

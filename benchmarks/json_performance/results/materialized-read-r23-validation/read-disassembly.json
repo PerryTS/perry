@@ -1,0 +1,145 @@
+{
+  "arms": [
+    {
+      "arm": "main",
+      "binary_sha256": "8d0b2b25e1890123411918d424609480dcf94faec607efa1fac2e09fc19907b7",
+      "functions": [
+        {
+          "symbol": "_js_array_get_f64",
+          "command": [
+            "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+            "--disassemble-symbols=_js_array_get_f64",
+            "--no-show-raw-insn",
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/main-access-worker"
+          ],
+          "output": "main-array-get.s",
+          "sha256": "894161f7b029a73f8a7b9bfa407bf9cecf7260cd7924087f6121fad1ea379b0e"
+        },
+        {
+          "symbol": "_js_packed_arraylike_index_get",
+          "command": [
+            "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+            "--disassemble-symbols=_js_packed_arraylike_index_get",
+            "--no-show-raw-insn",
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/main-access-worker"
+          ],
+          "output": "main-packed-index-get.s",
+          "sha256": "7741de62bd4601145a02fb67a2ee0a97e973ce9fc1bcd4513aed5863cfc3ea75"
+        },
+        {
+          "symbol": "__RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get",
+          "command": [
+            "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+            "--disassemble-symbols=__RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape8lazy_get",
+            "--no-show-raw-insn",
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/main-access-worker"
+          ],
+          "output": "main-8lazy_get.s",
+          "sha256": "bbc9b3f2826caf489dc5b4a1102b69625353009bf863113b23f8b1758257984c"
+        },
+        {
+          "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array",
+          "command": [
+            "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+            "--disassemble-symbols=__RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array",
+            "--no-show-raw-insn",
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/main-access-worker"
+          ],
+          "output": "main-8mutation26resolve_materialized_array.s",
+          "sha256": "5f2cb53c3951d86d43c3d302d6c3e177e39713072abc3bd04a1fc7071fef4a6e"
+        }
+      ]
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "5dd97171611d3e32d921cb7d0470d54207dd1b08a2a91e7fa45bb1694b15a58a",
+      "functions": [
+        {
+          "symbol": "_js_array_get_f64",
+          "command": [
+            "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+            "--disassemble-symbols=_js_array_get_f64",
+            "--no-show-raw-insn",
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/candidate-access-worker"
+          ],
+          "output": "candidate-array-get.s",
+          "sha256": "df7cbdbb1a72ca1624c2e5fa0c392b43f43d458fb9fd2685d5c90c71b416431c"
+        },
+        {
+          "symbol": "_js_packed_arraylike_index_get",
+          "command": [
+            "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+            "--disassemble-symbols=_js_packed_arraylike_index_get",
+            "--no-show-raw-insn",
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/candidate-access-worker"
+          ],
+          "output": "candidate-packed-index-get.s",
+          "sha256": "aba758e90dea3124b2b80a0cb8c82aa2da1a05d1194b1dfe24b4d2c9f4dac848"
+        },
+        {
+          "symbol": "__RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape15lazy_get_rooted",
+          "command": [
+            "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+            "--disassemble-symbols=__RNvNtCs3gRpqoBkMHm_13perry_runtime9json_tape15lazy_get_rooted",
+            "--no-show-raw-insn",
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/candidate-access-worker"
+          ],
+          "output": "candidate-15lazy_get_rooted.s",
+          "sha256": "ead64b7541b601289d3e8b7336bcb182ad9942baddf4b131740c5b0d9b495cf1"
+        },
+        {
+          "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array",
+          "command": [
+            "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+            "--disassemble-symbols=__RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array",
+            "--no-show-raw-insn",
+            "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/candidate-access-worker"
+          ],
+          "output": "candidate-8mutation26resolve_materialized_array.s",
+          "sha256": "d39d0eae518e4a6111b6c431ae7792d3f7c07933daccc526357829287abbec99"
+        }
+      ]
+    }
+  ],
+  "all_four_worker_objects_identical": true,
+  "inspection": {
+    "materialized_fast_branch": [
+      "1007bcd10:     \tmov\tx0, x20",
+      "1007bcd14:     \tbl\t0x10068711c <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime9json_tape8mutation26resolve_materialized_array>",
+      "1007bcd18:     \tcbz\tx0, 0x1007bcfe8 <_js_array_get_f64+0x358>",
+      "1007bcd1c:     \tldurh\tw8, [x0, #-0x6]",
+      "1007bcd20:     \ttbnz\tw8, #0xa, 0x1007bcfe8 <_js_array_get_f64+0x358>",
+      "1007bcd24:     \tldr\tw8, [x0]",
+      "1007bcd28:     \tcmp\tw19, w8",
+      "1007bcd2c:     \tb.hs\t0x1007bcfe8 <_js_array_get_f64+0x358>",
+      "1007bcd30:     \tldr\tw8, [x0, #0x4]",
+      "1007bcd34:     \tcmp\tw19, w8",
+      "1007bcd38:     \tb.hs\t0x1007bcfe8 <_js_array_get_f64+0x358>",
+      "1007bcd3c:     \tadd\tx8, x0, w19, uxtw #3",
+      "1007bcd40:     \tldr\tx22, [x8, #0x8]",
+      "1007bcd44:     \tmov\tx8, #0x1                ; =1",
+      "1007bcd48:     \tmovk\tx8, #0x7ffc, lsl #48",
+      "1007bcd4c:     \tadd\tx8, x8, #0xf",
+      "1007bcd50:     \tcmp\tx22, x8",
+      "1007bcd54:     \tb.ne\t0x1007bd420 <_js_array_get_f64+0x790>"
+    ],
+    "sparse_fast_branch": [
+      "1007bcfb0:     \tldr\tw8, [x20]",
+      "1007bcfb4:     \tcmp\tw19, w8",
+      "1007bcfb8:     \tb.hs\t0x1007bd08c <_js_array_get_f64+0x3fc>",
+      "1007bcfbc:     \tldr\tx9, [x20, #0x30]",
+      "1007bcfc0:     \tcbz\tx9, 0x1007bcfe8 <_js_array_get_f64+0x358>",
+      "1007bcfc4:     \tldr\tx8, [x20, #0x28]",
+      "1007bcfc8:     \tcbz\tx8, 0x1007bcfe8 <_js_array_get_f64+0x358>",
+      "1007bcfcc:     \tmov\tw10, w19",
+      "1007bcfd0:     \tlsr\tx11, x10, #6",
+      "1007bcfd4:     \tldr\tx9, [x9, x11, lsl #3]",
+      "1007bcfd8:     \tlsr\tx9, x9, x19",
+      "1007bcfdc:     \ttbz\tw9, #0x0, 0x1007bcfe8 <_js_array_get_f64+0x358>",
+      "1007bcfe0:     \tldr\tx22, [x8, x10, lsl #3]",
+      "1007bcfe4:     \tb\t0x1007bd420 <_js_array_get_f64+0x790>"
+    ],
+    "outer_array_frame_bytes": 112,
+    "note": "Both hit branches reach the ordinary array epilogue without entering lazy_get_rooted. Materialized branch makes only the nonallocating ordinary-array resolver call; sparse branch makes no calls. Instruction counts exclude common receiver classification and epilogue; no timing inferred."
+  }
+}

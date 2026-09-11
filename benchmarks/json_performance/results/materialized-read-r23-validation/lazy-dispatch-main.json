@@ -1,0 +1,129 @@
+{
+  "diagnostic_only": true,
+  "source_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+  "command": [
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/frozen-main/perry",
+    "compile",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/lazy-dispatch-probe.ts",
+    "--no-auto-optimize",
+    "--no-cache",
+    "-o",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/main-lazy-dispatch-probe"
+  ],
+  "files": {
+    "benchmarks/json_performance/.work/materialized-read-r23/lazy-dispatch-probe.ts": "9a85ecacfbb61e2ca73eb3663c5aac1dad8c3d9ac1e7296be021441d95d47a06",
+    "benchmarks/json_performance/.work/materialized-read-r23/main-lazy-dispatch-probe": "f3922f7285d8293e01405325ca8c78e1589a97b8c0feee85362b605271a1f62b",
+    "benchmarks/json_performance/.work/materialized-read-r23/frozen-main/perry": "ade63eddfdeca03926039d10e3310f9255d52c5b2721ccd2b0882f042a689156",
+    "benchmarks/json_performance/.work/materialized-read-r23/frozen-main/libperry_runtime.a": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458"
+  },
+  "rows": [
+    {
+      "shape": "root",
+      "mode": "plain",
+      "exit_code": 0,
+      "matches_node": true
+    },
+    {
+      "shape": "root",
+      "mode": "zero",
+      "exit_code": -11,
+      "matches_node": false
+    },
+    {
+      "shape": "root",
+      "mode": "true",
+      "exit_code": -11,
+      "matches_node": false
+    },
+    {
+      "shape": "root",
+      "mode": "pretty",
+      "exit_code": 0,
+      "matches_node": true
+    },
+    {
+      "shape": "root",
+      "mode": "callback",
+      "exit_code": -11,
+      "matches_node": false
+    },
+    {
+      "shape": "root",
+      "mode": "keys",
+      "exit_code": -11,
+      "matches_node": false
+    },
+    {
+      "shape": "object",
+      "mode": "plain",
+      "exit_code": -11,
+      "matches_node": false
+    },
+    {
+      "shape": "object",
+      "mode": "zero",
+      "exit_code": -11,
+      "matches_node": false
+    },
+    {
+      "shape": "object",
+      "mode": "true",
+      "exit_code": -11,
+      "matches_node": false
+    },
+    {
+      "shape": "object",
+      "mode": "pretty",
+      "exit_code": 0,
+      "matches_node": true
+    },
+    {
+      "shape": "object",
+      "mode": "callback",
+      "exit_code": -11,
+      "matches_node": false
+    },
+    {
+      "shape": "object",
+      "mode": "keys",
+      "exit_code": -11,
+      "matches_node": false
+    },
+    {
+      "shape": "array",
+      "mode": "plain",
+      "exit_code": -11,
+      "matches_node": false
+    },
+    {
+      "shape": "array",
+      "mode": "zero",
+      "exit_code": -11,
+      "matches_node": false
+    },
+    {
+      "shape": "array",
+      "mode": "true",
+      "exit_code": -11,
+      "matches_node": false
+    },
+    {
+      "shape": "array",
+      "mode": "pretty",
+      "exit_code": 0,
+      "matches_node": true
+    },
+    {
+      "shape": "array",
+      "mode": "callback",
+      "exit_code": -11,
+      "matches_node": false
+    },
+    {
+      "shape": "array",
+      "mode": "keys",
+      "exit_code": -11,
+      "matches_node": false
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "purpose": "Standalone scalar equivalence and assembly diagnostic only; production runtime unchanged, no performance result",
+  "source_commit": "fc877118c1914d27fd271852e5c7271a965693bd",
+  "files": {
+    "crates/perry-runtime/src/value/jsvalue.rs": "264d6b74c5c9036add57ef4eac8c4aea7de5dc9faf4f8d21f1fd04d372f9f8ac",
+    "crates/perry-runtime/src/array/subclass.rs": "0506830c23fea6f8297ad53612dbf874e9f88215c6149ca1d6caf15e8997bed1",
+    "crates/perry-runtime/src/value/tags.rs": "303415bdf90d8be4f1fd3b9f13001558f01906cc424ffc5c57ae3995c6abc465"
+  },
+  "extracted_methods": [
+    "pub fn is_number(&self) -> bool {\n        // Perry-owned tags occupy the positive qNaN band 0x7FF9..=0x7FFF.\n        // Keep IEEE f64 values, including canonical qNaN 0x7FF8 and negative\n        // NaN payloads, classified as numbers.\n        let tag = self.bits & TAG_MASK;\n        !(SHORT_STRING_TAG..=STRING_TAG).contains(&tag)\n    }",
+    "pub fn is_int32(&self) -> bool {\n        (self.bits & !INT32_MASK) == INT32_TAG\n    }",
+    "pub fn as_int32(&self) -> i32 {\n        debug_assert!(self.is_int32(), \"Value is not an int32\");\n        (self.bits & INT32_MASK) as i32\n    }"
+  ],
+  "extracted_reference_function": "#[no_mangle]\n#[inline(never)]\npub fn original_index(value: f64) -> Option<u32> {\n    let js = JSValue::from_bits(value.to_bits());\n    if js.is_int32() {\n        return (js.as_int32() >= 0).then_some(js.as_int32() as u32);\n    }\n    (js.is_number()\n        && value.is_finite()\n        && value >= 0.0\n        && value.fract() == 0.0\n        && value <= (u32::MAX - 1) as f64)\n        .then_some(value as u32)\n}",
+  "rustc_version": "rustc 1.100.0-nightly (f7d782a3b 2026-08-19)",
+  "diagnostic_flags": [
+    "--edition",
+    "2021",
+    "-C",
+    "opt-level=3"
+  ],
+  "result": "verified 15525263 bit patterns: 2000477 accepted, 13524786 rejected\n",
+  "artifacts": {
+    "index-roundtrip-probe.rs": "5bb2ac64390b95b6970c9a26ee5434e363af6dc0b950e21c4d5595e5b623201d",
+    "index-roundtrip-probe": "460de0100c62e2b20e001e7928ae4b37ce7093571e69e1bbd9aef1d9fcac170b",
+    "index-roundtrip-probe.s": "4ba544b7b11fff8358ccd2b4f5b62250e242f6f15747e050100946e1934ea3da",
+    "index-roundtrip-result.log": "c69f8d7b250f97001feaee8f426656fdad0d18fd07cd3fcb2f0e14c99537b303"
+  }
+}

@@ -1,0 +1,72 @@
+{
+  "purpose": "R22 sparse-only runtime control using byte-identical benchmark object code to R23 and pinned main",
+  "build": {
+    "source_commit": "8b7ffae96e733c96b31aa41d064902bc4f9a50ce",
+    "command": [
+      "cargo",
+      "build",
+      "--release",
+      "-p",
+      "perry",
+      "-p",
+      "perry-runtime-static",
+      "-p",
+      "perry-stdlib-static"
+    ],
+    "started_utc": "2026-09-11T04:46:36.775003+00:00",
+    "elapsed_seconds": 507.0692639350891,
+    "files": {
+      "perry": {
+        "sha256": "067bbfa68dce9a351476081a66efe9ac2076389bb96b948c046f21debe8215b9",
+        "bytes": 117699680,
+        "mtime": 1789102502.4574094
+      },
+      "libperry_runtime.a": {
+        "sha256": "089dca2e0e09b8ecf6909fdd68a024036d51e28e5e4a1e39ac77d6409626d727",
+        "bytes": 36882520,
+        "mtime": 1789102364.4566753
+      },
+      "libperry_stdlib.a": {
+        "sha256": "093ea8ff15f2025b281adda4ce9ac488c8add2c0533fb4ab5cf2191e4beba2ad",
+        "bytes": 86372784,
+        "mtime": 1789102482.653404
+      }
+    },
+    "mtime_only_refresh": [
+      "crates/perry/src/main.rs",
+      "crates/perry-runtime-static/src/lib.rs",
+      "crates/perry-stdlib-static/src/lib.rs"
+    ]
+  },
+  "commands": [
+    [
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/frozen-build/perry",
+      "compile",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/harness/worker.ts",
+      "--no-auto-optimize",
+      "--no-cache",
+      "--no-link",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/r22-shared-worker.o"
+    ],
+    [
+      "cc",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/r22-shared-worker.o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/lazy-cached-read-r22/frozen-build/libperry_runtime.a",
+      "-lc",
+      "-Wl,-dead_strip",
+      "-Wl,-no_exported_symbols",
+      "-o",
+      "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/r22-shared-worker"
+    ]
+  ],
+  "object_identical_to_main_and_r23": true,
+  "files": {
+    "benchmarks/json_performance/.work/materialized-read-r23/harness/worker.ts": "f3c42ec9f04fdb9ba84dc3cf50dc59f18685540033807f3db3a7f75c08a85d39",
+    "benchmarks/json_performance/.work/materialized-read-r23/r22-shared-worker.o": "b4b4f4082a942022854cd87d256ef356ed0ff2b6320486282ef5bec4a7d42bde",
+    "benchmarks/json_performance/.work/materialized-read-r23/r22-shared-worker": "93b2305cc30fbb1a6378310d5de10413bd9d455db72d33c20587740b7e354ba1",
+    "benchmarks/json_performance/.work/lazy-cached-read-r22/frozen-build/perry": "067bbfa68dce9a351476081a66efe9ac2076389bb96b948c046f21debe8215b9",
+    "benchmarks/json_performance/.work/lazy-cached-read-r22/frozen-build/libperry_runtime.a": "089dca2e0e09b8ecf6909fdd68a024036d51e28e5e4a1e39ac77d6409626d727",
+    "benchmarks/json_performance/.work/lazy-cached-read-r22/frozen-build/libperry_stdlib.a": "093ea8ff15f2025b281adda4ce9ac488c8add2c0533fb4ab5cf2191e4beba2ad"
+  }
+}

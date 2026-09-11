@@ -1,0 +1,5 @@
+FINISHED tiny_object parse 2000000
+FINISHED records_array_16k roundtrip 7659
+FINISHED records_array_1m roundtrip 115
+FINISHED records_object_1m parse 81
+FINISHED heterogeneous_1m stringify 218

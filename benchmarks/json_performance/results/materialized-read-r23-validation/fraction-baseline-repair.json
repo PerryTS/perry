@@ -1,0 +1,7 @@
+{
+  "original_controller_exit": 1,
+  "reason": "Missing copied baseline JSON; all prior behavior/options/lazy outcome steps passed",
+  "copied_from": "benchmarks/json_performance/.work/lazy-cached-read-r22/fraction-baseline.json",
+  "all_recorded_baseline_inputs_hash_verified": true,
+  "same_source_compiler_and_runtime_as_current_main": true
+}

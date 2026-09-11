@@ -1,0 +1,119 @@
+{
+  "rows": [
+    {
+      "arm": "main",
+      "parser": "auto",
+      "exit_code": 1,
+      "matches_node": false,
+      "source_sha256": "0d5d909e4486ff06c5bea0bceb7e194b9a9f174fe65c4a6efc099b672741d79b",
+      "binary_sha256": "2d99ff7c3b17ddf1847dd7e75cdaf13e18f84b1f6966242e029f2754b1aea304",
+      "compiler_sha256": "ade63eddfdeca03926039d10e3310f9255d52c5b2721ccd2b0882f042a689156",
+      "runtime_sha256": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458",
+      "command": [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/frozen-main/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/initial-validation/test_json_cached_reads.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/main-getter-probe"
+      ]
+    },
+    {
+      "arm": "main",
+      "parser": "tape",
+      "exit_code": 1,
+      "matches_node": false,
+      "source_sha256": "0d5d909e4486ff06c5bea0bceb7e194b9a9f174fe65c4a6efc099b672741d79b",
+      "binary_sha256": "2d99ff7c3b17ddf1847dd7e75cdaf13e18f84b1f6966242e029f2754b1aea304",
+      "compiler_sha256": "ade63eddfdeca03926039d10e3310f9255d52c5b2721ccd2b0882f042a689156",
+      "runtime_sha256": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458",
+      "command": [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/frozen-main/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/initial-validation/test_json_cached_reads.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/main-getter-probe"
+      ]
+    },
+    {
+      "arm": "main",
+      "parser": "direct",
+      "exit_code": 0,
+      "matches_node": true,
+      "source_sha256": "0d5d909e4486ff06c5bea0bceb7e194b9a9f174fe65c4a6efc099b672741d79b",
+      "binary_sha256": "2d99ff7c3b17ddf1847dd7e75cdaf13e18f84b1f6966242e029f2754b1aea304",
+      "compiler_sha256": "ade63eddfdeca03926039d10e3310f9255d52c5b2721ccd2b0882f042a689156",
+      "runtime_sha256": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458",
+      "command": [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/frozen-main/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/initial-validation/test_json_cached_reads.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/main-getter-probe"
+      ]
+    },
+    {
+      "arm": "candidate",
+      "parser": "auto",
+      "exit_code": 1,
+      "matches_node": false,
+      "source_sha256": "0d5d909e4486ff06c5bea0bceb7e194b9a9f174fe65c4a6efc099b672741d79b",
+      "binary_sha256": "21b1e50c864c6c79a3af9954fa7d471fe28574b4f91224c1356901ca754a3e20",
+      "compiler_sha256": "d65b94cfa8e00628fec37eaa4bb23f34cf3cfe41555bd54df96a75abf403a021",
+      "runtime_sha256": "ccf7bf35f00058bd2c59e5c45006ce2364678102fb8727e37365412929487cf6",
+      "command": [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/initial-validation/test_json_cached_reads.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/candidate-getter-probe"
+      ]
+    },
+    {
+      "arm": "candidate",
+      "parser": "tape",
+      "exit_code": 1,
+      "matches_node": false,
+      "source_sha256": "0d5d909e4486ff06c5bea0bceb7e194b9a9f174fe65c4a6efc099b672741d79b",
+      "binary_sha256": "21b1e50c864c6c79a3af9954fa7d471fe28574b4f91224c1356901ca754a3e20",
+      "compiler_sha256": "d65b94cfa8e00628fec37eaa4bb23f34cf3cfe41555bd54df96a75abf403a021",
+      "runtime_sha256": "ccf7bf35f00058bd2c59e5c45006ce2364678102fb8727e37365412929487cf6",
+      "command": [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/initial-validation/test_json_cached_reads.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/candidate-getter-probe"
+      ]
+    },
+    {
+      "arm": "candidate",
+      "parser": "direct",
+      "exit_code": 0,
+      "matches_node": true,
+      "source_sha256": "0d5d909e4486ff06c5bea0bceb7e194b9a9f174fe65c4a6efc099b672741d79b",
+      "binary_sha256": "21b1e50c864c6c79a3af9954fa7d471fe28574b4f91224c1356901ca754a3e20",
+      "compiler_sha256": "d65b94cfa8e00628fec37eaa4bb23f34cf3cfe41555bd54df96a75abf403a021",
+      "runtime_sha256": "ccf7bf35f00058bd2c59e5c45006ce2364678102fb8727e37365412929487cf6",
+      "command": [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/initial-validation/test_json_cached_reads.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/candidate-getter-probe"
+      ]
+    }
+  ],
+  "note": "Existing lazy descriptor failures preserved unsuppressed; not a conformance pass."
+}
