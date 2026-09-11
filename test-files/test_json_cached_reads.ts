@@ -34,6 +34,22 @@ for (let round = 0; round < 80; round++) {
     if (rows[64] === saved[2] || rows[64].id !== -round) {
         throw new Error("array replacement lost");
     }
+    const replacement: any = rows[64];
+    for (let repeat = 0; repeat < 8; repeat++) {
+        for (let p = 0; p < probes.length; p++) {
+            const expected: any = p === 2 ? replacement : saved[p];
+            const value: any = rows[probes[p]];
+            if (value !== expected || value.name !== expected.name ||
+                value.id !== (p === 2 ? -round : probes[p])) {
+                throw new Error("materialized identity/value changed");
+            }
+            sum += value.id;
+        }
+        // Allocate between passes so scheduled moving GC also covers reads
+        // after the sparse cache has been replaced by an ordinary array.
+        const churn: any = JSON.parse('{"name":"materialized pass ' + repeat + '"}');
+        if (churn.name !== "materialized pass " + repeat) throw new Error("churn changed");
+    }
     rows.push({id: 130, name: "grown heap string"});
     if (rows[130].id !== 130 || rows.length !== 131) throw new Error("growth lost");
     rows.length = 64;
