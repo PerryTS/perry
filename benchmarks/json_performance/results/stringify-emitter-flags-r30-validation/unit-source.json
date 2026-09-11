@@ -1,0 +1,24 @@
+{
+  "source_commit": "3c14d729947343431cc98e18fd78a3f06cd5f538",
+  "command": [
+    "cargo",
+    "test",
+    "--release",
+    "-p",
+    "perry-runtime",
+    "--lib",
+    "json"
+  ],
+  "env": {
+    "RUST_TEST_THREADS": "1"
+  },
+  "hashes": {
+    "crates/perry-runtime/src/json/replacer.rs": "03b297427c50e8973358acaaf336023dcb97b05cb926f596270c6998c2f45df4",
+    "crates/perry-runtime/src/string/concat.rs": "47377d33276483dfc8a5b5262393579cbd01c1749fce278d91f4842a591ace9c",
+    "crates/perry-runtime/src/string/append.rs": "e56c2d74cec98ae554f2b9dd29bccf4a7cfbf17e158f5e35d4944d0aa6108667",
+    "crates/perry-runtime/src/string/mod.rs": "26bbfc81e8bbfd90a979bc4d53310c0836bf691d029ab241473bf3223f3137a0",
+    "crates/perry-runtime/src/string/json_flags_tests.rs": "b6d13f240afd3cc750a8bc8caa40963590ce2a3d5182a419cc7152a35bdf0ab7",
+    "test-files/test_json_string_emitters.ts": "6e9d3f95085fbe35fad3a91b0776a0d4646f374f13c27ecc53fb57bd7ed8e3fc"
+  },
+  "exit_code": 0
+}

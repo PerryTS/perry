@@ -1,0 +1,15 @@
+{
+  "source_commit": "3c14d729947343431cc98e18fd78a3f06cd5f538",
+  "command": [
+    "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/target/release/build/perry-runtime/b8ed6322d803238c/out/perry_runtime-b8ed6322d803238c",
+    "string::",
+    "--test-threads=1"
+  ],
+  "env": {
+    "RUST_TEST_THREADS": "1"
+  },
+  "exit_code": 0,
+  "binary_sha256": "aee5c1c79f43f9ef26ec46aedcfb3b1caa783a76e6c23dc128dd6a16df173cc8",
+  "unit_log_sha256": "3a672cd7fc18f34ec0b489fec6952ccb31f27df23a03c9f5863c695f5fe5c28c",
+  "note": "Runs the exact release unit binary just produced by the successful298JSON-test build. --list positively confirms the new in-place provenance test. Extra string coverage is necessary for shared concat/append changes; no performance claim."
+}

@@ -1,0 +1,21 @@
+{
+  "source_commit": "3c14d729947343431cc98e18fd78a3f06cd5f538",
+  "command": [
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-emitter-flags-r30/frozen-build/perry",
+    "compile",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/raw-surrogate-next/test_json_raw_surrogate.ts",
+    "--no-auto-optimize",
+    "--no-cache",
+    "-o",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/raw-surrogate-next/candidate"
+  ],
+  "exit_code": 0,
+  "matches_node": false,
+  "files": {
+    "test_json_raw_surrogate.ts": "d2d427651da7d011a38b4fe576edaefa28a2f903338112f69bb945b00db396a8",
+    "candidate": "d10f990b48cac11486cdf78f3de3c9d78846a89f86fcd8b2d0e5ea269e9cc884",
+    "perry": "b5f8496ed5211537d20d408982dd93c20f6ecbce74e14e87f0f4708bfb1be910",
+    "libperry_runtime.a": "a2c70005b8136485623531660aeed2cf300c894530b94c845465ec1d14fd732a",
+    "libperry_stdlib.a": "ef556d27b9bd9b0e70e3172f32240813a8dccd84cb181f8dd47e32bf64ebe0b0"
+  }
+}

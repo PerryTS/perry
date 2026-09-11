@@ -1,0 +1,1 @@
+The generic success report/measurement controllers were not run. This is a correctness investigation archive, not performance or promotion evidence. The added raw-surrogate diagnostic is separate from the frozen 20-execution emitter fixture.

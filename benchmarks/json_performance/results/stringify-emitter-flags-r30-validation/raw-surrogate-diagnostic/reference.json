@@ -1,0 +1,22 @@
+{
+  "source_commit": "3aac4d6335da54abeeed73df842decbbe6dd5d71",
+  "command": [
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/trusted-materialized-read-r26/frozen-build/perry",
+    "compile",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/raw-surrogate-next/test_json_raw_surrogate.ts",
+    "--no-auto-optimize",
+    "--no-cache",
+    "-o",
+    "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/raw-surrogate-next/reference"
+  ],
+  "exit_code": 0,
+  "matches_node": false,
+  "files": {
+    "test_json_raw_surrogate.ts": "d2d427651da7d011a38b4fe576edaefa28a2f903338112f69bb945b00db396a8",
+    "reference": "6f0c945f9280d55a641ba88d1aaf1b23a3175d613a35b4181fe0b50d22ade0ca",
+    "perry": "794b7dfa67f5f3509f96ddbeeff3cf9e70c1bb4efc0383cd467f90bf2d662040",
+    "libperry_runtime.a": "48972667fc2bf53e57c2776eb8741e32e41d1da752017abbe2aa512325af23bb",
+    "libperry_stdlib.a": "1b343ca0329e233c477688597c452ac9750100b89675ec012336c96a9632917c"
+  },
+  "note": "New unescaped lone-surrogate diagnostic; independent of the frozen R30 build. Exact byte output retained."
+}

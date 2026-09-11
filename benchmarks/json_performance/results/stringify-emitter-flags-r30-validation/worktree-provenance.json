@@ -1,0 +1,6 @@
+{
+  "source_commit": "3c14d729947343431cc98e18fd78a3f06cd5f538",
+  "actual_build_worktree": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29",
+  "shared_build_cache": "/Users/amlug/projects/perry/json-merged-pr10022/target",
+  "note": "R30 extends frozen R29 with string-flag invalidation and three targeted runtime tests; no GC-policy changes. Prior R29 build and validation are terminal."
+}
