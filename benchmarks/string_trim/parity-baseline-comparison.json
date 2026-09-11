@@ -1,0 +1,49 @@
+{
+  "baseline_revision": "603b074ace01464bc66fc07cc8d532f26ccf5a0f",
+  "fixed_runtime_commit": "ef305daa7811c5fbbb9d5f782d95078205675f2e",
+  "node": "v26.5.1",
+  "baseline_artifacts": {
+    "perry": "63cb83cf87044443184687ac5eee3376a21dd46c7a1cbf3074789926f99d7b36",
+    "libperry_runtime.a": "3c0467d1d7ebcd8bd53e98c43e027ff7e93b306024f68b9ba453f383fb8a6fb4",
+    "libperry_stdlib.a": "a13fd68f3b01f814c7fcd031f57b34e978bc00612317f3c20bef68928f7067af"
+  },
+  "fixed_string_suite": {
+    "parity_pass": 63,
+    "parity_fail": 3,
+    "compile_fail": 0,
+    "crash_fail": 0,
+    "node_fail": 0,
+    "skipped": 1,
+    "total_run": 66,
+    "parity_percentage": 95.4
+  },
+  "tests": [
+    {
+      "name": "test_edge_strings",
+      "source_sha256": "6414eb2430e5683d0fb78d59cc8720d410d8e85ed3a4b73681804211e8f7def3",
+      "baseline_output_sha256": "a04be48026a774dde491bb16593957ea5c501d74e48749335f5bcb4cb15fc8a0",
+      "fixed_output_sha256": "a04be48026a774dde491bb16593957ea5c501d74e48749335f5bcb4cb15fc8a0",
+      "node_output_sha256": "0fb664b1f2be494abd8473aaef0a9d0b68df6afb6bd4d5a03f0610ac8556197c",
+      "baseline_matches_fixed": true,
+      "baseline_matches_node": false
+    },
+    {
+      "name": "test_gap_5591_method_string_coercion",
+      "source_sha256": "6290ebf789bf31a1e3c71885a00790a0b3d3b3d4a70e4e9665e3981edcbb046e",
+      "baseline_output_sha256": "9eb504c7de357acb391b762883d28cc3a2f5171032b8c72e165792778d562dcf",
+      "fixed_output_sha256": "9eb504c7de357acb391b762883d28cc3a2f5171032b8c72e165792778d562dcf",
+      "node_output_sha256": "5bcc8e21f944e602c2917091fd132333ce247c1d5c3ee4ac8012873cb9e6b244",
+      "baseline_matches_fixed": true,
+      "baseline_matches_node": false
+    },
+    {
+      "name": "test_gap_declared_string_local_holds_number_7837",
+      "source_sha256": "b59b495c64ec103231497d8db6b77034d42fd8bbaad01112fd33e2b6315839c7",
+      "baseline_output_sha256": "635e193efbea251189f925b1012ce787b3bea2ac3de19625c90f6b7c11e88508",
+      "fixed_output_sha256": "635e193efbea251189f925b1012ce787b3bea2ac3de19625c90f6b7c11e88508",
+      "node_output_sha256": "b20a7ece02b01832965baa3ac52400e16d73502c790ade18bd19809675419ba5",
+      "baseline_matches_fixed": true,
+      "baseline_matches_node": false
+    }
+  ]
+}
