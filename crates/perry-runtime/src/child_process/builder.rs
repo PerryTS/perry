@@ -138,6 +138,7 @@ pub(crate) fn cp_build_readable() -> f64 {
     let obj = cp_build_object(&methods, CP_READABLE_SHAPE_ID + methods.len() as u32);
     let val = cp_box_ptr(obj as *const u8);
     cp_set_field(val, b"readable", TAG_TRUE_F64);
+    cp_set_field(val, b"readableEnded", TAG_FALSE_F64);
     cp_set_field(val, b"destroyed", TAG_FALSE_F64);
     // A child's `stdout`/`stderr` must be async-iterable, like Node's: both
     // `for await (const chunk of child.stdout)` and the `isAsyncIterable` probe

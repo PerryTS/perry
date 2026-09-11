@@ -838,6 +838,24 @@ pub(crate) fn install_foreign_readable_async_iterator_symbol(stream: f64) {
     install_readable_async_iterator_symbol(stream);
 }
 
+/// Record a foreign source's real EOF before invoking its end listeners. An
+/// iterator first pulled after that event cannot rely on seeing it again.
+pub(crate) fn mark_foreign_readable_ended(stream: f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
+    for (key, bits) in [
+        (STREAM_END_EMITTED_KEY, TAG_TRUE),
+        (STREAM_ENDED_KEY, TAG_TRUE),
+        (b"readable".as_slice(), TAG_FALSE),
+        (b"readableEnded".as_slice(), TAG_TRUE),
+    ] {
+        let key = scope.root_string_ptr(hidden_key(key));
+        key.with_mut_ptr(|key| {
+            set_hidden_value(stream.get_nanbox_f64(), key, f64::from_bits(bits))
+        });
+    }
+}
+
 pub(crate) fn install_readable_async_iterator_symbol(stream: f64) {
     install_async_iterator_symbol(stream, ns_async_iterator);
 }
@@ -877,6 +895,9 @@ pub(super) fn register_arities() {
     crate::closure::js_register_closure_arity(ns_readable_iter_on_end as *const u8, 0);
     crate::closure::js_register_closure_arity(ns_readable_iter_on_error as *const u8, 1);
 }
+
+#[cfg(test)]
+mod foreign_eof_tests;
 
 #[cfg(test)]
 mod fifo_pending_tests {

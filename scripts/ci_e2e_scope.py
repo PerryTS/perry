@@ -129,6 +129,7 @@ _CODEGEN_SUITES = [
     "macos_bundle_chdir_gate",
     "manifest_consistency",
     "namespace_getter_binding_identity",
+    "child_output_late_iterator",
     "native_proof_buffer_views",
     "padding_single_evaluation",
     "shadow_slot_hygiene",
