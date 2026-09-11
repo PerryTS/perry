@@ -1436,6 +1436,22 @@ jobs:
             } >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Setup pinned Node.js for scoped native oracles
+        if: steps.scope.outputs.rust_work == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version-file: .node-version
+
+      - name: Verify scoped Node oracle before native builds
+        if: steps.scope.outputs.rust_work == 'true'
+        run: |
+          node --input-type=module -e '
+            import assert from "node:assert/strict";
+            import fs from "node:fs";
+            const expected = fs.readFileSync(".node-version", "utf8").trim().replace(/^v/, "");
+            assert.equal(process.versions.node, expected, "Scoped native tests require the pinned Node oracle");
+          '
+
       - name: Install Rust toolchain
         if: steps.scope.outputs.rust_work == 'true'
         run: rustup toolchain install nightly-2026-08-20 --profile minimal
