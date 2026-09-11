@@ -234,6 +234,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         "crates/perry-runtime/src/object/exotic_expando.rs",
         "crates/perry-runtime/src/object/field_get_set/get_field_by_name_tail.rs",
         "crates/perry-runtime/src/object/field_get_set/ic_miss.rs",
+        "crates/perry-runtime/src/object/field_get_set/ic_miss/packed_get.rs",
         "crates/perry-runtime/src/proxy/put_value.rs",
         "crates/perry-runtime/src/gc/types.rs",
         "crates/perry-runtime/src/regex.rs",
@@ -601,7 +602,23 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     ):
         raise CensusError("RegExp dispatch reintroduced the former object-kind probe")
 
-    read_miss = function_body(ic_miss, "js_object_get_field_ic_miss")
+    # Both exported read entries tail-call the shared implementation. Follow
+    # that implementation, and prove the wrappers cannot bypass its authority.
+    packed_get = clean[
+        "crates/perry-runtime/src/object/field_get_set/ic_miss/packed_get.rs"
+    ]
+    for name, final_arg in (
+        ("js_object_get_field_ic_miss", r"std::ptr::null\s*\(\s*\)"),
+        ("js_object_get_field_ic_miss_packed", r"packed"),
+    ):
+        wrapper = function_body(packed_get, name)
+        if not re.fullmatch(
+            r"\s*super::get_field_ic_miss_impl\s*\(\s*obj\s*,\s*key\s*,"
+            r"\s*cache_slot\s*,\s*" + final_arg + r"\s*\)\s*",
+            wrapper,
+        ):
+            raise CensusError(f"{name} does not delegate to the shared read authority")
+    read_miss = function_body(ic_miss, "get_field_ic_miss_impl")
     for body, label in (
         (read_miss, "read PIC miss"),
         (function_body(put_value, "js_put_value_set_ic_miss"), "static write PIC miss"),
@@ -654,9 +671,42 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     )
     require_code(
         generic_body,
-        r"icmp_ne\s*\(\s*I32\s*,\s*&pcid\s*,\s*\"0\"\s*\)",
-        "generic read PIC invalid-id fail-closed token",
+        r"icmp_ne\s*\(\s*I64\s*,\s*&packed_word\s*,\s*\"0\"\s*\)",
+        "generic read PIC empty compact-cache rejection",
     )
+    # Invalid ShapeIds now fail closed at publication and exact cache matching.
+    # Keep both halves of that proof: the emitted guard consumes a nonempty
+    # packed word's exact stamp, and neither cache writer admits a zero stamp.
+    compact_guard = re.sub(r"\s+", "", generic_body)
+    for fragment in (
+        'letpacked_present=ctx.block().icmp_ne(I64,&packed_word,"0");',
+        'letis_plain_object=ctx.block().and(I1,&is_plain_kind,&packed_present);',
+        'cond_br(&is_plain_object,&tok_label,&desc_classify_label)',
+        'letpacked_stamp=ctx.block().trunc(I64,&packed_word,I32);',
+        'lettoken_eq=ctx.block().icmp_eq(I32,&pcid,&packed_stamp);',
+        'cond_br(&token_eq,&hit_label,&token_miss_label)',
+    ):
+        if fragment not in compact_guard:
+            raise CensusError("generic read PIC compact identity guard disconnected: " + fragment)
+    prime = function_body(ic_miss, "pic_prime_get")
+    if not re.match(
+        r"\s*if\s+token\s*==\s*crate::object::shapes::PIC_ID_TOKEN_BIT\s+as\s+i64"
+        r"\s*\{\s*return;\s*\}",
+        prime,
+    ):
+        raise CensusError("read PIC publication must reject the zero-ShapeId token first")
+    require_code(
+        shapes, r"const\s+SHAPE_ID_BASE\s*:\s*u32\s*=\s*0x8000_0000\s*;",
+        "compact PIC ShapeId range excludes zero",
+    )
+    packed_prime = re.sub(r"\s+", "", function_body(packed_get, "prime_get"))
+    range_guard = (
+        "if!(crate::object::shapes::SHAPE_ID_BASE..crate::object::shapes::SHAPE_ID_END)"
+        ".contains(&stamp)||tokenasu64!=(stampasu64|crate::object::shapes::PIC_ID_TOKEN_BIT)"
+        "||!(0..=0x7fff_ffff).contains(&slot){return;}"
+    )
+    if range_guard not in packed_prime or packed_prime.find("(*packed).store") < packed_prime.index(range_guard):
+        raise CensusError("compact read PIC publication lost its valid ShapeId/slot proof")
     for name in ("lower_put_value_static_write_ic", "lower_put_value_dyn_ic_inline"):
         body = function_body(raw_write_pics, name)
         if re.search(r"add\s*\(\s*I64\s*,\s*&(safe_target|t_handle)\s*,\s*\"(?:8|16)\"", body):
@@ -757,6 +807,53 @@ def expect_rejected(label: str, check: Callable[[], None]) -> None:
 
 
 def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object]) -> None:
+    packed_path = "crates/perry-runtime/src/object/field_get_set/ic_miss/packed_get.rs"
+    for entry in ("js_object_get_field_ic_miss", "js_object_get_field_ic_miss_packed"):
+        bypassed = dict(sources)
+        body = function_body(bypassed[packed_path], entry)
+        bypassed[packed_path] = bypassed[packed_path].replace(
+            body, "if false { " + body + "; } 0.0", 1
+        )
+        expect_rejected(
+            f"{entry} bypasses its shared implementation behind a dead call",
+            lambda: assert_authority_surfaces(bypassed),
+        )
+    legacy_read = dict(sources)
+    path = "crates/perry-runtime/src/object/field_get_set/ic_miss.rs"
+    body = function_body(legacy_read[path], "get_field_ic_miss_impl")
+    legacy_read[path] = legacy_read[path].replace(
+        body, "let token = if use_shape { 0 } else { keys as u64 };\n" + body, 1
+    )
+    expect_rejected(
+        "shared read implementation reintroduces a keys-pointer token",
+        lambda: assert_authority_surfaces(legacy_read),
+    )
+    for path, before, after, label in (
+        (
+            "crates/perry-runtime/src/object/field_get_set/ic_miss.rs",
+            "if token == crate::object::shapes::PIC_ID_TOKEN_BIT as i64",
+            "if token != crate::object::shapes::PIC_ID_TOKEN_BIT as i64",
+            "full-cache writer admits a zero ShapeId",
+        ),
+        (
+            packed_path,
+            "if !(crate::object::shapes::SHAPE_ID_BASE..crate::object::shapes::SHAPE_ID_END)",
+            "if (crate::object::shapes::SHAPE_ID_BASE..crate::object::shapes::SHAPE_ID_END)",
+            "compact-cache writer inverts its valid ShapeId range",
+        ),
+        (
+            "crates/perry-codegen/src/expr/property_get/generic_dispatch.rs",
+            "icmp_eq(I32, &pcid, &packed_stamp)",
+            "icmp_eq(I32, &pcid, &pcid)",
+            "compact-cache hit ignores the cached identity",
+        ),
+    ):
+        broken = dict(sources)
+        if broken[path].count(before) != 1:
+            raise CensusError("compact read PIC sabotage fixture missing: " + label)
+        broken[path] = broken[path].replace(before, after, 1)
+        expect_rejected(label, lambda: assert_authority_surfaces(broken))
+
     missing_authority = dict(sources)
     missing_authority.pop("crates/perry-runtime/src/object/shapes.rs")
     expect_rejected(
@@ -913,17 +1010,17 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
         lambda: assert_authority_surfaces(legacy_ir),
     )
 
-    # #8665: the generic read PIC's invalid-id fail-closed token (pcid != 0)
-    # must not go quietly missing. Plant a regression that emits an
-    # always-nonzero comparand instead of the real ShapeId register, and
+    # #8665: the generic read PIC's invalid-id proof must not go missing.
+    # Its nonzero check now applies to the packed cache word. Plant a
+    # regression that changes the rejected sentinel, and
     # prove the census still catches it -- this is what stands between the
     # check above and a vacuous pass, per #6942/#6946/#7024's precedent that
     # an unexercised assertion is a decision nobody actually made.
     dropped_fail_closed = dict(sources)
     path = "crates/perry-codegen/src/expr/property_get/generic_dispatch.rs"
     sabotaged_body, substitutions = re.subn(
-        r'icmp_ne\(I32, &pcid, "0"\)',
-        'icmp_ne(I32, &pcid, "-1")',
+        r'icmp_ne\(I64, &packed_word, "0"\)',
+        'icmp_ne(I64, &packed_word, "-1")',
         dropped_fail_closed[path],
         count=1,
     )

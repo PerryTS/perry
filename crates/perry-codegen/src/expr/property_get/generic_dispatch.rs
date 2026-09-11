@@ -487,13 +487,10 @@ pub(crate) fn lower_generic_property_get(
         let no_desc = ctx.block().icmp_eq(crate::types::I16, &has_desc, "0");
         ctx.block().and(I1, &is_object_kind, &no_desc)
     };
-    // The full cache remains null until a priming miss. Every prefix/way
-    // dereference is dominated by cache_present; the compact MRU can hit
-    // without loading this pointer. Runtime miss entries take the slot itself.
-    let ic_slot = crate::expr::emit_inline_cache_slot(ctx, &cache_name);
-    let cache_ref = ic_slot.cache.clone();
-    let cache_slot_ref = ic_slot.slot_ref.clone();
-    let cache_present = ic_slot.present.clone();
+    // Resolve the full cache only after the compact MRU declines a read.
+    // Loading it here keeps an unused global load on every successful hit.
+    // Each cold entry retains its own non-null proof before dereferencing.
+    let cache_slot_ref = format!("@{cache_name}");
     let is_plain_object = ctx.block().and(I1, &is_plain_kind, &packed_present);
 
     // Validate kind, descriptor policy, and initialized MRU before reading
@@ -510,7 +507,8 @@ pub(crate) fn lower_generic_property_get(
     // #9708: the descriptor prefix path reads cache word 2, so it needs the
     // full-cache non-null proof as the shape-miss path; without a cache it is
     // simply a cold miss.
-    let desc_object_with_cache = ctx.block().and(I1, &is_object_kind, &cache_present);
+    let desc_cache = crate::expr::emit_inline_cache_slot(ctx, &cache_name);
+    let desc_object_with_cache = ctx.block().and(I1, &is_object_kind, &desc_cache.present);
     ctx.block().cond_br(
         &desc_object_with_cache,
         &desc_prefix_guard_label,
@@ -543,8 +541,9 @@ pub(crate) fn lower_generic_property_get(
         .cond_br(&token_eq, &hit_label, &token_miss_label);
     ctx.current_block = token_miss_idx;
     // Every subsequent prefix/way load still requires a resolved full cache.
+    let token_cache = crate::expr::emit_inline_cache_slot(ctx, &cache_name);
     ctx.block()
-        .cond_br(&cache_present, &prefix_guard_label, &cold_label);
+        .cond_br(&token_cache.present, &prefix_guard_label, &cold_label);
 
     // `js_object_get_field_ic_miss` primes only slots below the descriptor's
     // exact `live_inline_slot_count`. ShapeIds are never reused, so an exact
@@ -601,8 +600,14 @@ pub(crate) fn lower_generic_property_get(
     let hit_deleted = ctx
         .block()
         .icmp_eq(I64, &val_hit_bits, crate::nanbox::TAG_HOLE_I64);
+    let deleted_idx = ctx.new_block("pic.hit.deleted");
+    let deleted_label = ctx.block_label(deleted_idx);
     ctx.block()
-        .cond_br(&hit_deleted, &miss_label, &hit_live_label);
+        .cond_br(&hit_deleted, &deleted_label, &hit_live_label);
+    ctx.current_block = deleted_idx;
+    let deleted_cache = crate::expr::emit_inline_cache_slot(ctx, &cache_name);
+    ctx.block()
+        .cond_br(&deleted_cache.present, &miss_label, &cold_label);
 
     ctx.current_block = hit_live_idx;
     crate::expr::emit_typed_feedback_record_call(
@@ -627,7 +632,7 @@ pub(crate) fn lower_generic_property_get(
     ctx.current_block = prefix_guard_idx;
     let cached_prefix_ptr = ctx.block().gep(
         I64,
-        &cache_ref,
+        &token_cache.cache,
         &[(I64, &PIC_NAMED_PREFIX_TOKEN.to_string())],
     );
     let cached_prefix = ctx.block().load(I64, &cached_prefix_ptr);
@@ -684,7 +689,7 @@ pub(crate) fn lower_generic_property_get(
         "js_typed_feedback_record_fallback_call",
         &[(I64, &feedback_site_id)],
     );
-    let prefix_slot_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "1")]);
+    let prefix_slot_ptr = ctx.block().gep(I64, &token_cache.cache, &[(I64, "1")]);
     let prefix_slot = ctx.block().load(I64, &prefix_slot_ptr);
     let prefix_offset = ctx.block().shl(I64, &prefix_slot, "3");
     let prefix_base = ctx.block().add(I64, &obj_handle, &obj_header_size);
@@ -702,7 +707,7 @@ pub(crate) fn lower_generic_property_get(
     ctx.current_block = desc_prefix_guard_idx;
     let desc_cached_prefix_ptr = ctx.block().gep(
         I64,
-        &cache_ref,
+        &desc_cache.cache,
         &[(I64, &PIC_NAMED_PREFIX_TOKEN.to_string())],
     );
     let desc_cached_prefix = ctx.block().load(I64, &desc_cached_prefix_ptr);
@@ -744,7 +749,7 @@ pub(crate) fn lower_generic_property_get(
         "js_typed_feedback_record_fallback_call",
         &[(I64, &feedback_site_id)],
     );
-    let desc_prefix_slot_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "1")]);
+    let desc_prefix_slot_ptr = ctx.block().gep(I64, &desc_cache.cache, &[(I64, "1")]);
     let desc_prefix_slot = ctx.block().load(I64, &desc_prefix_slot_ptr);
     let desc_prefix_offset = ctx.block().shl(I64, &desc_prefix_slot, "3");
     let desc_prefix_base = ctx.block().add(I64, &obj_handle, &obj_header_size);
@@ -797,6 +802,17 @@ pub(crate) fn lower_generic_property_get(
     // `is_object` in), so it could never have resolved a way — the compares
     // were dead work for it.
     ctx.current_block = miss_idx;
+    // All incoming cache values have passed their own presence guard. The
+    // merge preserves that proof without resolving the full cache on a hit.
+    let cache_ref = ctx.block().phi(
+        PTR,
+        &[
+            (&token_cache.cache, &prefix_guard_label),
+            (&token_cache.cache, &prefix_meta_label),
+            (&token_cache.cache, &prefix_token_label),
+            (&deleted_cache.cache, &deleted_label),
+        ],
+    );
     crate::expr::emit_typed_feedback_record_call(
         ctx.block(),
         "js_typed_feedback_record_guard_fail",
