@@ -1,0 +1,21 @@
+{
+  "status": "PROPOSAL ONLY: production source unchanged, not built or measured",
+  "base_source": "f4d4ee8735f53700ac03320e8a33c273ca3c97e2",
+  "file": "crates/perry-runtime/src/value/dynamic_arith.rs",
+  "sha256": "1936fea6d84ccf465424b4d246ccc1f6d94d988e8c90d2929a0b9fa90208d8a5",
+  "model_result": {
+    "cases": 8150393,
+    "admitted": 4065390,
+    "declined": 4085003,
+    "result": "PASS",
+    "signed_zero_bitwise": true,
+    "nan_comparison": "both NaN",
+    "production_test": false
+  },
+  "next_requirements": [
+    "Actual runtime tests through js_dynamic_mod, including original signed zero, fractions, infinities, NaN, uint32 limits and tagged/coercing/BigInt fallbacks.",
+    "Pinned Node/Bun behavior and loop checksum checks with both GC modes, preserving all existing failures.",
+    "Normal all-three-package production build with fresh fingerprints, not model timings.",
+    "Compare fields/random access plus parse/stringify controls; float remainder outside JSON is a separate workload cost."
+  ]
+}

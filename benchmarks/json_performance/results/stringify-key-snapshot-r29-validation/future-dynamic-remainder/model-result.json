@@ -1,0 +1,26 @@
+{
+  "command": [
+    "rustc",
+    "--edition",
+    "2021",
+    "-O",
+    "benchmarks/json_performance/.work/dynamic-remainder-next/model.rs",
+    "-o",
+    "benchmarks/json_performance/.work/dynamic-remainder-next/model"
+  ],
+  "rustc": "rustc 1.100.0-nightly (f7d782a3b 2026-08-19)",
+  "files": {
+    "model.rs": "1605869400df20ae70c4880dd9fdc251fe76377945ae528aeea38d56a7aef022",
+    "model": "5f780aa5c30c6cbad347db7d0ab168b15a116727988612d134871dd0d0c47e6f"
+  },
+  "result": {
+    "cases": 8150393,
+    "admitted": 4065390,
+    "declined": 4085003,
+    "result": "PASS",
+    "signed_zero_bitwise": true,
+    "nan_comparison": "both NaN",
+    "production_test": false
+  },
+  "note": "Standalone numeric proof only, no production runtime integration or performance claim. Proposed gate is inside the existing both-plain-double arm; coercion and BigInt paths remain unchanged."
+}

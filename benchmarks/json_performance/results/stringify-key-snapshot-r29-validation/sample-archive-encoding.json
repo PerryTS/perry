@@ -1,0 +1,15 @@
+{
+  "note": "Lossless gzip preserves captured sample reports including terminal blank lines; original report bytes were not edited.",
+  "files": [
+    {
+      "original_path": "independent-r26-access-profiles/archive/records_array_1m-fields-default.sample.txt",
+      "original_sha256": "3a7b3937ac0ab568e204aaf839355c509d75908c31763a1efa88a0bcac242ac3",
+      "gzip_sha256": "61cca6df67289be09da9ace31b61c304e622adef055c9130a50c938064c9939f"
+    },
+    {
+      "original_path": "independent-r26-access-profiles/archive/records_array_1m-random-default.sample.txt",
+      "original_sha256": "825c78523eefaf658fac670e1e7eb7745431715008c66e7c7f7517673921d4eb",
+      "gzip_sha256": "20daa7f9dd9262f5619139ab8871f3715347c0186e3b049d5affe18dcfab6325"
+    }
+  ]
+}

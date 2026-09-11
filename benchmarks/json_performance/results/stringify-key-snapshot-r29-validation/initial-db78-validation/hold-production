@@ -1,0 +1,1 @@
+Hold after unit tests: lint found raw-handle debt 12 > 11. Replace callback argument pointer extraction with scoped with_const_ptr operations before a new clean source build. Do not build this revision as production.

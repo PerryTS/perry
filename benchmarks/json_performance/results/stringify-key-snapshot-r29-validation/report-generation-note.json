@@ -1,0 +1,3 @@
+{
+  "note": "Generic success report controller intentionally not executed after acceptance failure. This investigation report describes only executed validations, repaired callback checksum, remaining full-output mismatches and independent profiling."
+}

@@ -1,0 +1,7 @@
+{
+  "base": "a510f0fcb7c38670d82b10f3f074a4b66b1aef4d",
+  "branch": "codex/json-stringify-key-snapshot-r29",
+  "worktree": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29",
+  "shared_build_cache": "/Users/amlug/projects/perry/json-merged-pr10022/target",
+  "note": "Primary R28 Cargo production build terminal. Primary measurements and validation use immutable frozen artifacts. No GC-policy or parser changes in R29."
+}

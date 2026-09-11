@@ -1,0 +1,34 @@
+{
+  "source_commit": "db78b06ec522f8a6a62a4e773ab4e42d0525bdee",
+  "note": "295 release unit tests passed; production deliberately not started because raw-handle lint failed12>11. Preserve these receipts; rerun from the scoped-pointer source.",
+  "files": [
+    {
+      "path": "unit.log",
+      "sha256": "581945e185e290cae4c2ac525cabe40fe2e5127a278b3e4c087662149adcca2d"
+    },
+    {
+      "path": "unit-source.json",
+      "sha256": "298819f8d72dbf1c2170ad8fb4ffb9352dcb7fbea3119073bfecd04c75614001"
+    },
+    {
+      "path": "validate-and-build.log",
+      "sha256": "c71cf4b3026f9d38f95431e392c1bee2774cc5c68ffea8323d7d762692dd35eb"
+    },
+    {
+      "path": "script-lint.log",
+      "sha256": "396afaa692aac4dc02d9c982d0227ed2ee18b64d336aea179ae26977454f4d30"
+    },
+    {
+      "path": "lint-results.json",
+      "sha256": "db9f5c5127f15005b491725cbac44b091a97c6479919e253f9c2ae48f265e198"
+    },
+    {
+      "path": "file-cap.log",
+      "sha256": "b0f283074d97912a169a14da638801e20dedc4981a521e2ef90e4028bdcdf8cd"
+    },
+    {
+      "path": "hold-production",
+      "sha256": "6df6e0c72e7229c1bf5c42d9f79524abdb8252b26c77fd74d32495bcca7d0ce4"
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "source_commit": "3aac4d6335da54abeeed73df842decbbe6dd5d71",
+  "note": "Existing exact frozen R26 access worker; independent of R29 stringify source/build.",
+  "files": [
+    {
+      "source": "benchmarks/json_performance/.work/trusted-materialized-read-r26/candidate-access-worker",
+      "copy": "benchmarks/json_performance/.work/access-gaps-r26-profiles/r26-access-worker",
+      "sha256": "735bb49a44805c2f39027682258018c44558099a131c6e1dc170ce133fca489f"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/trusted-materialized-read-r26/candidate-workers-provenance.json",
+      "copy": "benchmarks/json_performance/.work/access-gaps-r26-profiles/workers-provenance.json",
+      "sha256": "b3dccb4d52c9d2f365bfa9a215a98106e73c6fc76331d6542a45b3eb9ec08633"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/trusted-materialized-read-r26/build-provenance.json",
+      "copy": "benchmarks/json_performance/.work/access-gaps-r26-profiles/build-provenance.json",
+      "sha256": "c7cdea74ece097733885a1fb12d7be44caf00ae9ab96359d225764322eb609db"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/trusted-materialized-read-r26/source.patch",
+      "copy": "benchmarks/json_performance/.work/access-gaps-r26-profiles/source.patch",
+      "sha256": "c8b150616d066b6c37c6245225281fdf54f2bac5cab6753c4496e5d3e2cb9285"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/materialized-read-r23/harness/access-worker.ts",
+      "copy": "benchmarks/json_performance/.work/access-gaps-r26-profiles/access-worker.ts",
+      "sha256": "dba0240ef6441a07657e664354982a04045c036e53f65c1d06df62d55c73be67"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/materialized-read-r23/harness/access-worker.js",
+      "copy": "benchmarks/json_performance/.work/access-gaps-r26-profiles/access-worker.js",
+      "sha256": "bfe066c9d1065102d7b0ec9f7b2909d2faae8935b104709865308422d8489957"
+    }
+  ]
+}
