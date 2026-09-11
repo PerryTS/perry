@@ -518,7 +518,9 @@ impl<'a> DirectParser<'a> {
             // saves the equivalent walk inside `compute_utf16_len`
             // plus the conditional widening for non-ASCII counters.
             let ptr = match s {
-                ParsedStr::Borrowed(b) => crate::string::string_from_json_bytes(&mut self.batch, b),
+                ParsedStr::Borrowed(b) => {
+                    crate::string::string_from_scanned_json_bytes(&mut self.batch, b)
+                }
                 // Escaped strings live in a Rust Vec, so the builder can derive
                 // the WTF-8 lone-surrogate flag while allocating the result.
                 ParsedStr::Owned(ref b) => crate::string::js_string_from_builder_bytes(b),
@@ -574,7 +576,7 @@ impl<'a> DirectParser<'a> {
                 self.valid = false;
                 return None;
             }
-            // ch == b'\\' — slow path from here.
+            // Backslash or a WTF-8 surrogate prefix: preserve builder normalization.
             return self.parse_string_bytes_slow(start);
         }
         self.valid = false;

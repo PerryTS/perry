@@ -28,7 +28,7 @@ pub(crate) fn count_ascii_digits(bytes: &[u8]) -> usize {
 /// Find a string terminator or an illegal unescaped control byte.
 #[inline(always)]
 pub(crate) fn find_string_terminator(bytes: &[u8]) -> Option<usize> {
-    find_special::<true, false>(bytes)
+    json_string::scan(bytes)
 }
 
 /// Also stop at a potential WTF-8 surrogate so the escaper can inspect it.
@@ -227,3 +227,6 @@ fn find_sse2<const CONTROL: bool, const SURROGATE: bool>(bytes: &[u8]) -> Option
 #[cfg(test)]
 #[path = "simd_tests.rs"]
 mod tests;
+
+#[path = "simd_json_string.rs"]
+mod json_string;
