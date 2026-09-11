@@ -14,6 +14,28 @@ const SHORT_ESCAPE: [u8; 256] = {
     codes
 };
 
+// Each low input lane contributes its payload byte and, when escaped,
+// its escape code. The lookup removes unused second bytes from eight pairs.
+const PACK: [[u8; 16]; 256] = {
+    let mut rows = [[255; 16]; 256];
+    let mut mask = 0;
+    while mask < 256 {
+        let mut lane = 0;
+        let mut at = 0;
+        while lane < 8 {
+            rows[mask][at] = (lane * 2) as u8;
+            at += 1;
+            if mask & (1 << lane) != 0 {
+                rows[mask][at] = (lane * 2 + 1) as u8;
+                at += 1;
+            }
+            lane += 1;
+        }
+        mask += 1;
+    }
+    rows
+};
+
 #[inline(always)]
 unsafe fn escape(byte: u8, output: *mut u8) -> usize {
     debug_assert!(byte < 32 || byte == b'"' || byte == b'\\');
@@ -60,16 +82,45 @@ pub(super) unsafe fn write(source: &[u8], output: *mut u8) -> usize {
             ),
             vcltq_u8(block, vdupq_n_u8(32)),
         );
-        // Sixteen remaining input bytes imply at least sixteen remaining
-        // output bytes. Any bytes after the first escape stay uncommitted and
-        // are overwritten before the containing Vec's length is published.
-        // GC_STORE_AUDIT(POINTER_FREE): Bounded native JSON payload copy.
-        vst1q_u8(output.add(at), block);
         if vmaxvq_u8(mask) == 0 {
+            // GC_STORE_AUDIT(POINTER_FREE): Bounded native JSON payload copy.
+            vst1q_u8(output.add(at), block);
             pos += 16;
             at += 16;
             continue;
         }
+        let controls = vqtbl2q_u8(
+            uint8x16x2_t(
+                vld1q_u8(SHORT_ESCAPE.as_ptr()),
+                vld1q_u8(SHORT_ESCAPE.as_ptr().add(16)),
+            ),
+            block,
+        );
+        let rare = vandq_u8(
+            vcltq_u8(block, vdupq_n_u8(32)),
+            vceqq_u8(controls, vdupq_n_u8(0)),
+        );
+        if vmaxv_u8(vget_low_u8(rare)) == 0 {
+            let punctuation = vorrq_u8(
+                vceqq_u8(block, vdupq_n_u8(b'"')),
+                vceqq_u8(block, vdupq_n_u8(b'\\')),
+            );
+            let codes = vorrq_u8(controls, vandq_u8(punctuation, block));
+            let leading = vbslq_u8(mask, vdupq_n_u8(b'\\'), block);
+            let pairs = vzip1q_u8(leading, codes);
+            let weights = vld1_u8([1, 2, 4, 8, 16, 32, 64, 128].as_ptr());
+            let bits = vaddv_u8(vand_u8(vget_low_u8(mask), weights));
+            let packed = vqtbl1q_u8(pairs, vld1q_u8(PACK[bits as usize].as_ptr()));
+            // Sixteen remaining source bytes prove this full speculative
+            // store fits. Only the first eight lanes' output is committed.
+            // GC_STORE_AUDIT(POINTER_FREE): Bounded packed JSON payload copy.
+            vst1q_u8(output.add(at), packed);
+            at += 8 + bits.count_ones() as usize;
+            pos += 8;
+            continue;
+        }
+        // GC_STORE_AUDIT(POINTER_FREE): Bounded prefix before a rare control.
+        vst1q_u8(output.add(at), block);
         let words = vreinterpretq_u64_u8(mask);
         let low = u64::from_le(vgetq_lane_u64::<0>(words));
         let prefix = if low != 0 {

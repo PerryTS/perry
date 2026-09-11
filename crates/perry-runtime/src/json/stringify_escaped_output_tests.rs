@@ -227,6 +227,23 @@ fn json_native_vector_escape_respects_exact_source_and_output_guard_pages() {
         for length in 0..=257 {
             check(&"a".repeat(length));
         }
+        // Exercise every placement of common escapes in eight adjacent bytes,
+        // including pairs that straddle a vector boundary.
+        for placement in 0..256 {
+            for offset in 0..16 {
+                let mut text = "a".repeat(offset);
+                let escapes = ['"', '\\', '\n', '\r', '\t', '\u{8}', '\u{c}'];
+                for lane in 0..8 {
+                    text.push(if placement & (1 << lane) == 0 {
+                        'z'
+                    } else {
+                        escapes[(placement + lane) % escapes.len()]
+                    });
+                }
+                text.push_str(&"b".repeat(16 - offset));
+                check(&text);
+            }
+        }
         for byte in 0..=127u8 {
             for offset in 0..32 {
                 check(&format!(
