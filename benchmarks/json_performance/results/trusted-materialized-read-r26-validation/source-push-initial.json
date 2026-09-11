@@ -1,0 +1,1 @@
+{"exit_code":1,"message":"remote rejected codex/json-trusted-materialized-read-r26 (failed)","remote_ref_after_failure":"absent","action":"Retry the same non-force branch creation; no CI dependency."}

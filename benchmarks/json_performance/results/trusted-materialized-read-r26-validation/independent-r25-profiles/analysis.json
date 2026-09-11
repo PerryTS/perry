@@ -1,0 +1,1372 @@
+{
+  "source_commit": "01f2878dad8efc92e394c49b88fe0800b871f593",
+  "diagnostic_only": true,
+  "note": "Three R25 frozen-worker sampling diagnostics, with complete Node output verification for all eight rotating inputs and the last result. CPU/RSS of sampled processes is not benchmark evidence. Inclusive attribution overlaps and cannot be added.",
+  "cases": [
+    {
+      "case": {
+        "fixture": "small_record",
+        "operation": "parse",
+        "mode": "r25",
+        "iterations": 20000000,
+        "warmup": 50000
+      },
+      "workload_samples": 644,
+      "phases": {
+        "workload": {
+          "samples": 644,
+          "frames": [
+            {
+              "depth": 10,
+              "count": 600,
+              "name": "perry_fn_rotating_worker_ts__run$spec_b  (in r25-rotating-worker) + 5860  [0x10201dfa4]",
+              "parent": 44
+            },
+            {
+              "depth": 10,
+              "count": 12,
+              "name": "perry_fn_rotating_worker_ts__run$spec_b  (in r25-rotating-worker) + 6136  [0x10201e0b8]",
+              "parent": 44
+            },
+            {
+              "depth": 10,
+              "count": 6,
+              "name": "perry_fn_rotating_worker_ts__run$spec_b  (in r25-rotating-worker) + 6016  [0x10201e040]",
+              "parent": 44
+            },
+            {
+              "depth": 10,
+              "count": 2,
+              "name": "perry_fn_rotating_worker_ts__run$spec_b  (in r25-rotating-worker) + 5940  [0x10201dff4]",
+              "parent": 44
+            },
+            {
+              "depth": 10,
+              "count": 1,
+              "name": "perry_fn_rotating_worker_ts__run$spec_b  (in r25-rotating-worker) + 5856  [0x10201dfa0]",
+              "parent": 44
+            },
+            {
+              "depth": 10,
+              "count": 1,
+              "name": "perry_fn_rotating_worker_ts__run$spec_b  (in r25-rotating-worker) + 5972  [0x10201e014]",
+              "parent": 44
+            },
+            {
+              "depth": 10,
+              "count": 22,
+              "name": "perry_fn_rotating_worker_ts__run$spec_b  (in r25-rotating-worker) + 5860  [0x10201dfa4]",
+              "parent": 312
+            }
+          ],
+          "pct_of_workload_samples": 100.0
+        },
+        "json_parse": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "root_scope": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "utf8_validation": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "memory_copy": {
+          "samples": 32,
+          "frames": [
+            {
+              "depth": 20,
+              "count": 6,
+              "name": "_platform_memmove  (in libsystem_platform.dylib) + 452,428,...  [0x18171f524,0x18171f50c,...]",
+              "parent": 50,
+              "self_samples": 6
+            },
+            {
+              "depth": 20,
+              "count": 1,
+              "name": "DYLD-STUB$$memcpy  (in r25-rotating-worker) + 4  [0x102b7bc30]",
+              "parent": 50,
+              "self_samples": 1
+            },
+            {
+              "depth": 16,
+              "count": 11,
+              "name": "_platform_memmove  (in libsystem_platform.dylib) + 180,168,...  [0x18171f414,0x18171f408,...]",
+              "parent": 195,
+              "self_samples": 11
+            },
+            {
+              "depth": 16,
+              "count": 8,
+              "name": "_platform_memmove  (in libsystem_platform.dylib) + 180,188  [0x18171f414,0x18171f41c]",
+              "parent": 200,
+              "self_samples": 8
+            },
+            {
+              "depth": 18,
+              "count": 3,
+              "name": "_platform_memmove  (in libsystem_platform.dylib) + 428,12  [0x18171f50c,0x18171f36c]",
+              "parent": 233,
+              "self_samples": 3
+            },
+            {
+              "depth": 20,
+              "count": 2,
+              "name": "_platform_memmove  (in libsystem_platform.dylib) + 452  [0x18171f524]",
+              "parent": 317,
+              "self_samples": 2
+            },
+            {
+              "depth": 16,
+              "count": 1,
+              "name": "_platform_memmove  (in libsystem_platform.dylib) + 180  [0x18171f414]",
+              "parent": 348,
+              "self_samples": 1
+            }
+          ],
+          "pct_of_workload_samples": 4.968944099378882
+        },
+        "allocation": {
+          "samples": 49,
+          "frames": [
+            {
+              "depth": 14,
+              "count": 19,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy28gc_bump_malloc_trigger_inner  (in r25-rotating-worker) + 1052,424,...  [0x10247749c,0x102477228,...]",
+              "parent": 208,
+              "self_samples": 19
+            },
+            {
+              "depth": 14,
+              "count": 15,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy28gc_bump_malloc_trigger_inner  (in r25-rotating-worker) + 1120  [0x1024774e0]",
+              "parent": 208,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 5,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy28gc_bump_malloc_trigger_inner  (in r25-rotating-worker) + 1444  [0x102477624]",
+              "parent": 208,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 3,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy28gc_bump_malloc_trigger_inner  (in r25-rotating-worker) + 628  [0x1024772f4]",
+              "parent": 208,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 2,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy28gc_bump_malloc_trigger_inner  (in r25-rotating-worker) + 584  [0x1024772c8]",
+              "parent": 208,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 1,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy28gc_bump_malloc_trigger_inner  (in r25-rotating-worker) + 128  [0x102477100]",
+              "parent": 208,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 1,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy28gc_bump_malloc_trigger_inner  (in r25-rotating-worker) + 620  [0x1024772ec]",
+              "parent": 208,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 2,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy28gc_bump_malloc_trigger_inner  (in r25-rotating-worker) + 1444  [0x102477624]",
+              "parent": 350,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 1,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy28gc_bump_malloc_trigger_inner  (in r25-rotating-worker) + 424  [0x102477228]",
+              "parent": 350,
+              "self_samples": 1
+            }
+          ],
+          "pct_of_workload_samples": 7.608695652173914
+        },
+        "collection": {
+          "samples": 152,
+          "frames": [
+            {
+              "depth": 16,
+              "count": 18,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in r25-rotating-worker) + 324  [0x10247452c]",
+              "parent": 125,
+              "self_samples": 0
+            },
+            {
+              "depth": 16,
+              "count": 15,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in r25-rotating-worker) + 2204,484,...  [0x102474c84,0x1024745cc,...]",
+              "parent": 125,
+              "self_samples": 15
+            },
+            {
+              "depth": 16,
+              "count": 5,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in r25-rotating-worker) + 228  [0x1024744cc]",
+              "parent": 125,
+              "self_samples": 0
+            },
+            {
+              "depth": 16,
+              "count": 3,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in r25-rotating-worker) + 276  [0x1024744fc]",
+              "parent": 125,
+              "self_samples": 0
+            },
+            {
+              "depth": 16,
+              "count": 3,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in r25-rotating-worker) + 284  [0x102474504]",
+              "parent": 125,
+              "self_samples": 0
+            },
+            {
+              "depth": 16,
+              "count": 3,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in r25-rotating-worker) + 2080  [0x102474c08]",
+              "parent": 125,
+              "self_samples": 0
+            },
+            {
+              "depth": 16,
+              "count": 2,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in r25-rotating-worker) + 92  [0x102474444]",
+              "parent": 125,
+              "self_samples": 0
+            },
+            {
+              "depth": 16,
+              "count": 2,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in r25-rotating-worker) + 2072  [0x102474c00]",
+              "parent": 125,
+              "self_samples": 0
+            },
+            {
+              "depth": 16,
+              "count": 15,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in r25-rotating-worker) + 324  [0x10247452c]",
+              "parent": 148,
+              "self_samples": 0
+            },
+            {
+              "depth": 16,
+              "count": 12,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in r25-rotating-worker) + 2128,180,...  [0x102474c38,0x10247449c,...]",
+              "parent": 148,
+              "self_samples": 12
+            },
+            {
+              "depth": 16,
+              "count": 4,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in r25-rotating-worker) + 276  [0x1024744fc]",
+              "parent": 148,
+              "self_samples": 0
+            },
+            {
+              "depth": 16,
+              "count": 4,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in r25-rotating-worker) + 284  [0x102474504]",
+              "parent": 148,
+              "self_samples": 0
+            },
+            {
+              "depth": 16,
+              "count": 3,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in r25-rotating-worker) + 2080  [0x102474c08]",
+              "parent": 148,
+              "self_samples": 0
+            },
+            {
+              "depth": 16,
+              "count": 2,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in r25-rotating-worker) + 92  [0x102474444]",
+              "parent": 148,
+              "self_samples": 0
+            },
+            {
+              "depth": 16,
+              "count": 2,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in r25-rotating-worker) + 228  [0x1024744cc]",
+              "parent": 148,
+              "self_samples": 0
+            },
+            {
+              "depth": 16,
+              "count": 2,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in r25-rotating-worker) + 2072  [0x102474c00]",
+              "parent": 148,
+              "self_samples": 0
+            },
+            {
+              "depth": 16,
+              "count": 11,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in r25-rotating-worker) + 324  [0x10247452c]",
+              "parent": 171,
+              "self_samples": 0
+            },
+            {
+              "depth": 16,
+              "count": 9,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in r25-rotating-worker) + 2072  [0x102474c00]",
+              "parent": 171,
+              "self_samples": 0
+            },
+            {
+              "depth": 16,
+              "count": 9,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in r25-rotating-worker) + 56,420,...  [0x102474420,0x10247458c,...]",
+              "parent": 171,
+              "self_samples": 9
+            },
+            {
+              "depth": 16,
+              "count": 5,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in r25-rotating-worker) + 228  [0x1024744cc]",
+              "parent": 171,
+              "self_samples": 0
+            },
+            {
+              "depth": 16,
+              "count": 2,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in r25-rotating-worker) + 92  [0x102474444]",
+              "parent": 171,
+              "self_samples": 0
+            },
+            {
+              "depth": 16,
+              "count": 2,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in r25-rotating-worker) + 284  [0x102474504]",
+              "parent": 171,
+              "self_samples": 0
+            },
+            {
+              "depth": 16,
+              "count": 2,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in r25-rotating-worker) + 2080  [0x102474c08]",
+              "parent": 171,
+              "self_samples": 0
+            },
+            {
+              "depth": 16,
+              "count": 1,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in r25-rotating-worker) + 276  [0x1024744fc]",
+              "parent": 171,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 2,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in r25-rotating-worker) + 248  [0x1024744e0]",
+              "parent": 124,
+              "self_samples": 2
+            },
+            {
+              "depth": 12,
+              "count": 12,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy25gc_safepoint_moving_minor  (in r25-rotating-worker) + 2808  [0x1024768a4]",
+              "parent": 262,
+              "self_samples": 0
+            },
+            {
+              "depth": 16,
+              "count": 1,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in r25-rotating-worker) + 720  [0x1024746b8]",
+              "parent": 331,
+              "self_samples": 1
+            },
+            {
+              "depth": 16,
+              "count": 1,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in r25-rotating-worker) + 324  [0x10247452c]",
+              "parent": 333,
+              "self_samples": 0
+            }
+          ],
+          "pct_of_workload_samples": 23.60248447204969
+        }
+      },
+      "top_self_sample_nodes": [
+        {
+          "depth": 14,
+          "count": 73,
+          "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser20parse_object_untyped  (in r25-rotating-worker) + 668,648,...  [0x10225ffb4,0x10225ffa0,...]",
+          "parent": 46,
+          "self_samples": 73
+        },
+        {
+          "depth": 14,
+          "count": 43,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json11parse_reuse30remember_parse_object_template  (in r25-rotating-worker) + 376,836,...  [0x102506d38,0x102506f04,...]",
+          "parent": 193,
+          "self_samples": 43
+        },
+        {
+          "depth": 12,
+          "count": 25,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json9parse_api10parse_slow  (in r25-rotating-worker) + 3364,3556,...  [0x10252061c,0x1025206dc,...]",
+          "parent": 45,
+          "self_samples": 25
+        },
+        {
+          "depth": 14,
+          "count": 19,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy28gc_bump_malloc_trigger_inner  (in r25-rotating-worker) + 1052,424,...  [0x10247749c,0x102477228,...]",
+          "parent": 208,
+          "self_samples": 19
+        },
+        {
+          "depth": 14,
+          "count": 17,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy16gc_check_trigger  (in r25-rotating-worker) + 124,60,...  [0x1024739bc,0x10247397c,...]",
+          "parent": 124,
+          "self_samples": 17
+        },
+        {
+          "depth": 16,
+          "count": 15,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in r25-rotating-worker) + 2204,484,...  [0x102474c84,0x1024745cc,...]",
+          "parent": 125,
+          "self_samples": 15
+        },
+        {
+          "depth": 18,
+          "count": 12,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction22string_from_json_bytes  (in r25-rotating-worker) + 16,140,...  [0x102604a94,0x102604b10,...]",
+          "parent": 48,
+          "self_samples": 12
+        },
+        {
+          "depth": 18,
+          "count": 12,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime5arena5reset31copying_from_space_in_use_bytes  (in r25-rotating-worker) + 136,244,...  [0x1025333ec,0x102533458,...]",
+          "parent": 126,
+          "self_samples": 12
+        },
+        {
+          "depth": 16,
+          "count": 12,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in r25-rotating-worker) + 2128,180,...  [0x102474c38,0x10247449c,...]",
+          "parent": 148,
+          "self_samples": 12
+        },
+        {
+          "depth": 16,
+          "count": 11,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6object17json_construction36object_from_json_fields_preinstalled  (in r25-rotating-worker) + 288,1408,...  [0x1025d6468,0x1025d68c8,...]",
+          "parent": 85,
+          "self_samples": 11
+        },
+        {
+          "depth": 18,
+          "count": 11,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime5arena5reset31copying_from_space_in_use_bytes  (in r25-rotating-worker) + 136,244,...  [0x1025333ec,0x102533458,...]",
+          "parent": 149,
+          "self_samples": 11
+        },
+        {
+          "depth": 16,
+          "count": 11,
+          "name": "_platform_memmove  (in libsystem_platform.dylib) + 180,168,...  [0x18171f414,0x18171f408,...]",
+          "parent": 195,
+          "self_samples": 11
+        },
+        {
+          "depth": 16,
+          "count": 11,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime5arena4walk18arena_in_use_bytes  (in r25-rotating-worker) + 276,512,...  [0x102531830,0x10253191c,...]",
+          "parent": 210,
+          "self_samples": 11
+        },
+        {
+          "depth": 18,
+          "count": 10,
+          "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value  (in r25-rotating-worker) + 60,732,...  [0x10225f984,0x10225fc24,...]",
+          "parent": 64,
+          "self_samples": 10
+        },
+        {
+          "depth": 18,
+          "count": 9,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc8tenuring31influx_driven_nursery_cap_bytes  (in r25-rotating-worker) + 72,152,...  [0x1024ac294,0x1024ac2e4,...]",
+          "parent": 178,
+          "self_samples": 9
+        },
+        {
+          "depth": 16,
+          "count": 9,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in r25-rotating-worker) + 56,420,...  [0x102474420,0x10247458c,...]",
+          "parent": 171,
+          "self_samples": 9
+        },
+        {
+          "depth": 16,
+          "count": 9,
+          "name": "js_array_get_f64  (in r25-rotating-worker) + 412,148,...  [0x1027d7bec,0x1027d7ae4,...]",
+          "parent": 197,
+          "self_samples": 9
+        },
+        {
+          "depth": 16,
+          "count": 8,
+          "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser11parse_value  (in r25-rotating-worker) + 72,84,...  [0x10225e490,0x10225e49c,...]",
+          "parent": 47,
+          "self_samples": 8
+        },
+        {
+          "depth": 16,
+          "count": 8,
+          "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser12parse_number  (in r25-rotating-worker) + 16,172,...  [0x10225e62c,0x10225e6c8,...]",
+          "parent": 47,
+          "self_samples": 8
+        },
+        {
+          "depth": 16,
+          "count": 8,
+          "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value  (in r25-rotating-worker) + 116,380,...  [0x10225f9bc,0x10225fac4,...]",
+          "parent": 47,
+          "self_samples": 8
+        },
+        {
+          "depth": 16,
+          "count": 8,
+          "name": "_platform_memmove  (in libsystem_platform.dylib) + 180,188  [0x18171f414,0x18171f41c]",
+          "parent": 200,
+          "self_samples": 8
+        },
+        {
+          "depth": 18,
+          "count": 7,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6object6shapes34try_birth_stamp_preinstalled_shape  (in r25-rotating-worker) + 68,56,...  [0x1025ff3b8,0x1025ff3ac,...]",
+          "parent": 100,
+          "self_samples": 7
+        },
+        {
+          "depth": 18,
+          "count": 7,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime5arena5reset31copying_from_space_in_use_bytes  (in r25-rotating-worker) + 120,124,...  [0x1025333dc,0x1025333e0,...]",
+          "parent": 172,
+          "self_samples": 7
+        },
+        {
+          "depth": 16,
+          "count": 7,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime5arena4walk18arena_in_use_bytes  (in r25-rotating-worker) + 512,156,...  [0x10253191c,0x1025317b8,...]",
+          "parent": 238,
+          "self_samples": 7
+        },
+        {
+          "depth": 20,
+          "count": 6,
+          "name": "_platform_memmove  (in libsystem_platform.dylib) + 452,428,...  [0x18171f524,0x18171f50c,...]",
+          "parent": 50,
+          "self_samples": 6
+        },
+        {
+          "depth": 20,
+          "count": 6,
+          "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueINtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots19GcRootRegistryGuardINtNtB4_6option6OptionINtNtNtNtCs8BpVhDwHqJW_3std11collections4hash3map7HashMapNtNtCsctvjasLqLe9_5alloc6string6StringINtNtB30_3vec3VecNtNtBI_16ui_text_registry14ForEachBindingEEEEEBI_  (in r25-rotating-worker) + 100  [0x10217409c]",
+          "parent": 87,
+          "self_samples": 6
+        },
+        {
+          "depth": 22,
+          "count": 6,
+          "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime14typed_feedback12object_shape  (in r25-rotating-worker) + 104,92,...  [0x1022f04a8,0x1022f049c,...]",
+          "parent": 93,
+          "self_samples": 6
+        },
+        {
+          "depth": 12,
+          "count": 6,
+          "name": "perry_fn_rotating_worker_ts__run$spec_b  (in r25-rotating-worker) + 4060,4124,...  [0x10201d89c,0x10201d8dc,...]",
+          "parent": 303,
+          "self_samples": 6
+        },
+        {
+          "depth": 18,
+          "count": 5,
+          "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18finish_short_array  (in r25-rotating-worker) + 52,20,...  [0x10225ec88,0x10225ec68,...]",
+          "parent": 53,
+          "self_samples": 5
+        },
+        {
+          "depth": 16,
+          "count": 5,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction22string_from_json_bytes  (in r25-rotating-worker) + 836  [0x102604dc8]",
+          "parent": 47,
+          "self_samples": 5
+        },
+        {
+          "depth": 18,
+          "count": 5,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy24old_reclaim_pressure_due  (in r25-rotating-worker) + 192,148,...  [0x102475588,0x10247555c,...]",
+          "parent": 135,
+          "self_samples": 5
+        },
+        {
+          "depth": 18,
+          "count": 5,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy24old_reclaim_pressure_due  (in r25-rotating-worker) + 192,144  [0x102475588,0x102475558]",
+          "parent": 181,
+          "self_samples": 5
+        },
+        {
+          "depth": 16,
+          "count": 5,
+          "name": "js_array_get_f64  (in r25-rotating-worker) + 140,180,...  [0x1027d7adc,0x1027d7b04,...]",
+          "parent": 202,
+          "self_samples": 5
+        },
+        {
+          "depth": 16,
+          "count": 5,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy23tiny_parse_pressure_due  (in r25-rotating-worker) + 48  [0x102474f54]",
+          "parent": 216,
+          "self_samples": 5
+        },
+        {
+          "depth": 16,
+          "count": 5,
+          "name": "_tlv_get_addr  (in libdyld.dylib) + 4  [0x18132038c]",
+          "parent": 249,
+          "self_samples": 5
+        }
+      ],
+      "profile_sha256": "146e69527f8ff1f532f63dc2790f90128ac3d90ff32fbe80aa7304a5411618a6",
+      "oracle_command": [
+        "/opt/homebrew/bin/node",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/parse-gaps-r25-profiles/rotating-worker.js",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/rotating/small_record",
+        "parse",
+        "8",
+        "0",
+        "verify",
+        "rotating"
+      ],
+      "oracle_output_sha256": "fd7e0cfb6aaae0874238ac1fab4a2949c3ed128ec135a936b1f96e60461b7e6a",
+      "all_eight_outputs_and_last_match_node": true,
+      "diagnostic_only": true
+    },
+    {
+      "case": {
+        "fixture": "long_string_1m",
+        "operation": "parse",
+        "mode": "r25",
+        "iterations": 20000,
+        "warmup": 8
+      },
+      "workload_samples": 759,
+      "phases": {
+        "workload": {
+          "samples": 759,
+          "frames": [
+            {
+              "depth": 10,
+              "count": 704,
+              "name": "perry_fn_rotating_worker_ts__run$spec_b  (in r25-rotating-worker) + 5860  [0x1005a1fa4]",
+              "parent": 2
+            },
+            {
+              "depth": 10,
+              "count": 55,
+              "name": "perry_fn_rotating_worker_ts__run$spec_b  (in r25-rotating-worker) + 6136  [0x1005a20b8]",
+              "parent": 2
+            }
+          ],
+          "pct_of_workload_samples": 100.0
+        },
+        "json_parse": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "root_scope": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "utf8_validation": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "memory_copy": {
+          "samples": 137,
+          "frames": [
+            {
+              "depth": 20,
+              "count": 137,
+              "name": "_platform_memmove  (in libsystem_platform.dylib) + 88,108  [0x18171f3b8,0x18171f3cc]",
+              "parent": 9,
+              "self_samples": 137
+            }
+          ],
+          "pct_of_workload_samples": 18.050065876152832
+        },
+        "allocation": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "collection": {
+          "samples": 55,
+          "frames": [
+            {
+              "depth": 12,
+              "count": 55,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy25gc_safepoint_moving_minor  (in r25-rotating-worker) + 2808  [0x1009fa8a4]",
+              "parent": 48,
+              "self_samples": 0
+            }
+          ],
+          "pct_of_workload_samples": 7.246376811594203
+        }
+      },
+      "top_self_sample_nodes": [
+        {
+          "depth": 18,
+          "count": 269,
+          "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_bytes  (in r25-rotating-worker) + 112,72,...  [0x1007e3568,0x1007e3540,...]",
+          "parent": 6,
+          "self_samples": 269
+        },
+        {
+          "depth": 16,
+          "count": 200,
+          "name": "_RNvNtNtNtCs3gRpqoBkMHm_13perry_runtime4json6parser12depth_blocks28contains_open_container_tail  (in r25-rotating-worker) + 84,52,...  [0x100c637c4,0x100c637a4,...]",
+          "parent": 35,
+          "self_samples": 200
+        },
+        {
+          "depth": 20,
+          "count": 137,
+          "name": "_platform_memmove  (in libsystem_platform.dylib) + 88,108  [0x18171f3b8,0x18171f3cc]",
+          "parent": 9,
+          "self_samples": 137
+        },
+        {
+          "depth": 18,
+          "count": 86,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction22string_from_json_bytes  (in r25-rotating-worker) + 376,384,...  [0x100b88bfc,0x100b88c04,...]",
+          "parent": 8,
+          "self_samples": 86
+        },
+        {
+          "depth": 40,
+          "count": 7,
+          "name": "madvise  (in libsystem_kernel.dylib) + 8  [0x1816d49b0]",
+          "parent": 22,
+          "self_samples": 7
+        },
+        {
+          "depth": 22,
+          "count": 6,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime7closure13dynamic_props18scan_closure_owner  (in r25-rotating-worker) + 560,176,...  [0x100b9e8d0,0x100b9e750,...]",
+          "parent": 79,
+          "self_samples": 6
+        },
+        {
+          "depth": 22,
+          "count": 4,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime7closure13dynamic_props18scan_closure_owner  (in r25-rotating-worker) + 160,560,...  [0x100b9e740,0x100b9e8d0,...]",
+          "parent": 53,
+          "self_samples": 4
+        },
+        {
+          "depth": 20,
+          "count": 4,
+          "name": "_RNvMs1_NtNtCs3gRpqoBkMHm_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor21visit_tagged_raw_addr  (in r25-rotating-worker) + 412,420  [0x1007f8750,0x1007f8758]",
+          "parent": 52,
+          "self_samples": 4
+        },
+        {
+          "depth": 24,
+          "count": 3,
+          "name": "pthread_mutex_lock  (in libsystem_pthread.dylib) + 52,112  [0x181710430,0x18171046c]",
+          "parent": 54,
+          "self_samples": 3
+        },
+        {
+          "depth": 22,
+          "count": 3,
+          "name": "_RNvMs1_NtNtCs3gRpqoBkMHm_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor21visit_tagged_raw_addr  (in r25-rotating-worker) + 12,24  [0x1007f85c0,0x1007f85cc]",
+          "parent": 67,
+          "self_samples": 3
+        },
+        {
+          "depth": 22,
+          "count": 3,
+          "name": "_RNvMs1_NtNtCs3gRpqoBkMHm_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor21visit_tagged_raw_addr  (in r25-rotating-worker) + 24,12  [0x1007f85cc,0x1007f85c0]",
+          "parent": 94,
+          "self_samples": 3
+        },
+        {
+          "depth": 24,
+          "count": 2,
+          "name": "pthread_mutex_lock  (in libsystem_pthread.dylib) + 48,52  [0x18171042c,0x181710430]",
+          "parent": 58,
+          "self_samples": 2
+        },
+        {
+          "depth": 24,
+          "count": 2,
+          "name": "pthread_mutex_unlock  (in libsystem_pthread.dylib) + 12,48  [0x181710950,0x181710974]",
+          "parent": 60,
+          "self_samples": 2
+        },
+        {
+          "depth": 24,
+          "count": 2,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc9young_log25addr_is_minor_collectible  (in r25-rotating-worker) + 28  [0x100a31dcc]",
+          "parent": 62,
+          "self_samples": 2
+        },
+        {
+          "depth": 24,
+          "count": 2,
+          "name": "pthread_mutex_lock  (in libsystem_pthread.dylib) + 52  [0x181710430]",
+          "parent": 81,
+          "self_samples": 2
+        },
+        {
+          "depth": 20,
+          "count": 2,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6object21array_tail_transition21prune_invalid_entries  (in r25-rotating-worker) + 260  [0x1010e84b4]",
+          "parent": 104,
+          "self_samples": 2
+        },
+        {
+          "depth": 38,
+          "count": 1,
+          "name": "madvise  (in libsystem_kernel.dylib) + 8  [0x1816d49b0]",
+          "parent": 30,
+          "self_samples": 1
+        },
+        {
+          "depth": 16,
+          "count": 1,
+          "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_bytes  (in r25-rotating-worker) + 12  [0x1007e3504]",
+          "parent": 32,
+          "self_samples": 1
+        },
+        {
+          "depth": 16,
+          "count": 1,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime5arena5stats26arena_live_allocated_bytes  (in r25-rotating-worker) + 316  [0x100ab803c]",
+          "parent": 38,
+          "self_samples": 1
+        },
+        {
+          "depth": 20,
+          "count": 1,
+          "name": "_tlv_get_addr  (in libdyld.dylib) + 4  [0x18132038c]",
+          "parent": 43,
+          "self_samples": 1
+        },
+        {
+          "depth": 16,
+          "count": 1,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime5arena4walk18arena_in_use_bytes  (in r25-rotating-worker) + 512  [0x100ab591c]",
+          "parent": 46,
+          "self_samples": 1
+        },
+        {
+          "depth": 24,
+          "count": 1,
+          "name": "DYLD-STUB$$pthread_mutex_lock  (in r25-rotating-worker) + 4  [0x1010ffe40]",
+          "parent": 54,
+          "self_samples": 1
+        },
+        {
+          "depth": 24,
+          "count": 1,
+          "name": "pthread_mutex_lock  (in libsystem_pthread.dylib) + 112  [0x18171046c]",
+          "parent": 64,
+          "self_samples": 1
+        },
+        {
+          "depth": 22,
+          "count": 1,
+          "name": "pthread_mutex_lock  (in libsystem_pthread.dylib) + 52  [0x181710430]",
+          "parent": 69,
+          "self_samples": 1
+        },
+        {
+          "depth": 20,
+          "count": 1,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2os15process_streams39scan_process_stream_singleton_roots_mut  (in r25-rotating-worker) + 0  [0x100a37bd4]",
+          "parent": 52,
+          "self_samples": 1
+        },
+        {
+          "depth": 24,
+          "count": 1,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6object21array_tail_transition10scan_table  (in r25-rotating-worker) + 256  [0x100b696fc]",
+          "parent": 73,
+          "self_samples": 1
+        },
+        {
+          "depth": 20,
+          "count": 1,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string6intern27scan_intern_table_roots_mut  (in r25-rotating-worker) + 288  [0x100b8c4ac]",
+          "parent": 52,
+          "self_samples": 1
+        },
+        {
+          "depth": 20,
+          "count": 1,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in r25-rotating-worker) + 932  [0x100ba3e00]",
+          "parent": 52,
+          "self_samples": 1
+        },
+        {
+          "depth": 24,
+          "count": 1,
+          "name": "DYLD-STUB$$pthread_mutex_lock  (in r25-rotating-worker) + 4  [0x1010ffe40]",
+          "parent": 83,
+          "self_samples": 1
+        },
+        {
+          "depth": 24,
+          "count": 1,
+          "name": "pthread_mutex_lock  (in libsystem_pthread.dylib) + 52  [0x181710430]",
+          "parent": 83,
+          "self_samples": 1
+        },
+        {
+          "depth": 24,
+          "count": 1,
+          "name": "pthread_mutex_unlock  (in libsystem_pthread.dylib) + 104  [0x1817109ac]",
+          "parent": 86,
+          "self_samples": 1
+        },
+        {
+          "depth": 24,
+          "count": 1,
+          "name": "DYLD-STUB$$pthread_mutex_unlock  (in r25-rotating-worker) + 4  [0x1010ffe58]",
+          "parent": 88,
+          "self_samples": 1
+        },
+        {
+          "depth": 24,
+          "count": 1,
+          "name": "pthread_mutex_lock  (in libsystem_pthread.dylib) + 52  [0x181710430]",
+          "parent": 90,
+          "self_samples": 1
+        },
+        {
+          "depth": 24,
+          "count": 1,
+          "name": "DYLD-STUB$$pthread_mutex_unlock  (in r25-rotating-worker) + 4  [0x1010ffe58]",
+          "parent": 92,
+          "self_samples": 1
+        },
+        {
+          "depth": 22,
+          "count": 1,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6object21array_tail_transition10scan_table  (in r25-rotating-worker) + 256  [0x100b696fc]",
+          "parent": 96,
+          "self_samples": 1
+        }
+      ],
+      "profile_sha256": "dcbc8f0813fa8c0585e45422f36678c593b252a679bd60d13ea4f5ef65bc3dec",
+      "oracle_command": [
+        "/opt/homebrew/bin/node",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/parse-gaps-r25-profiles/rotating-worker.js",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/rotating/long_string_1m",
+        "parse",
+        "8",
+        "0",
+        "verify",
+        "rotating"
+      ],
+      "oracle_output_sha256": "8d27fa5ab9a7b426ee392519461fc2b1e345cca2d983b8f4e4e27ce745d9154f",
+      "all_eight_outputs_and_last_match_node": true,
+      "diagnostic_only": true
+    },
+    {
+      "case": {
+        "fixture": "unicode_1m",
+        "operation": "parse",
+        "mode": "r25",
+        "iterations": 20000,
+        "warmup": 8
+      },
+      "workload_samples": 758,
+      "phases": {
+        "workload": {
+          "samples": 758,
+          "frames": [
+            {
+              "depth": 10,
+              "count": 727,
+              "name": "perry_fn_rotating_worker_ts__run$spec_b  (in r25-rotating-worker) + 5860  [0x10223dfa4]",
+              "parent": 2
+            },
+            {
+              "depth": 10,
+              "count": 31,
+              "name": "perry_fn_rotating_worker_ts__run$spec_b  (in r25-rotating-worker) + 6136  [0x10223e0b8]",
+              "parent": 2
+            }
+          ],
+          "pct_of_workload_samples": 100.0
+        },
+        "json_parse": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "root_scope": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "utf8_validation": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "memory_copy": {
+          "samples": 64,
+          "frames": [
+            {
+              "depth": 20,
+              "count": 63,
+              "name": "_platform_memmove  (in libsystem_platform.dylib) + 88,108  [0x18171f3b8,0x18171f3cc]",
+              "parent": 9,
+              "self_samples": 63
+            },
+            {
+              "depth": 18,
+              "count": 1,
+              "name": "_platform_memmove  (in libsystem_platform.dylib) + 180  [0x18171f414]",
+              "parent": 89,
+              "self_samples": 1
+            }
+          ],
+          "pct_of_workload_samples": 8.443271767810026
+        },
+        "allocation": {
+          "samples": 2,
+          "frames": [
+            {
+              "depth": 14,
+              "count": 1,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy28gc_bump_malloc_trigger_inner  (in r25-rotating-worker) + 1120  [0x1026974e0]",
+              "parent": 35,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 1,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy28gc_bump_malloc_trigger_inner  (in r25-rotating-worker) + 220  [0x10269715c]",
+              "parent": 35,
+              "self_samples": 1
+            }
+          ],
+          "pct_of_workload_samples": 0.2638522427440633
+        },
+        "collection": {
+          "samples": 31,
+          "frames": [
+            {
+              "depth": 12,
+              "count": 30,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy25gc_safepoint_moving_minor  (in r25-rotating-worker) + 2808  [0x1026968a4]",
+              "parent": 39,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 1,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy25gc_safepoint_moving_minor  (in r25-rotating-worker) + 412  [0x102695f48]",
+              "parent": 39,
+              "self_samples": 0
+            }
+          ],
+          "pct_of_workload_samples": 4.089709762532982
+        }
+      },
+      "top_self_sample_nodes": [
+        {
+          "depth": 20,
+          "count": 373,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string11utf16_count11count_bytes  (in r25-rotating-worker) + 400,448,...  [0x102824630,0x102824660,...]",
+          "parent": 7,
+          "self_samples": 373
+        },
+        {
+          "depth": 18,
+          "count": 163,
+          "name": "_RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_bytes  (in r25-rotating-worker) + 112,72,...  [0x10247f568,0x10247f540,...]",
+          "parent": 30,
+          "self_samples": 163
+        },
+        {
+          "depth": 16,
+          "count": 116,
+          "name": "_RNvNtNtNtCs3gRpqoBkMHm_13perry_runtime4json6parser12depth_blocks28contains_open_container_tail  (in r25-rotating-worker) + 84,80,...  [0x1028ff7c4,0x1028ff7c0,...]",
+          "parent": 33,
+          "self_samples": 116
+        },
+        {
+          "depth": 20,
+          "count": 63,
+          "name": "_platform_memmove  (in libsystem_platform.dylib) + 88,108  [0x18171f3b8,0x18171f3cc]",
+          "parent": 9,
+          "self_samples": 63
+        },
+        {
+          "depth": 40,
+          "count": 8,
+          "name": "madvise  (in libsystem_kernel.dylib) + 8  [0x1816d49b0]",
+          "parent": 21,
+          "self_samples": 8
+        },
+        {
+          "depth": 36,
+          "count": 2,
+          "name": "mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x1816d210c]",
+          "parent": 28,
+          "self_samples": 2
+        },
+        {
+          "depth": 22,
+          "count": 2,
+          "name": "_RNvMs1_NtNtCs3gRpqoBkMHm_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor21visit_tagged_raw_addr  (in r25-rotating-worker) + 12,24  [0x1024945c0,0x1024945cc]",
+          "parent": 55,
+          "self_samples": 2
+        },
+        {
+          "depth": 20,
+          "count": 2,
+          "name": "_RNvMs1_NtNtCs3gRpqoBkMHm_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor21visit_tagged_raw_addr  (in r25-rotating-worker) + 412,420  [0x102494750,0x102494758]",
+          "parent": 43,
+          "self_samples": 2
+        },
+        {
+          "depth": 24,
+          "count": 2,
+          "name": "pthread_mutex_lock  (in libsystem_pthread.dylib) + 52,112  [0x181710430,0x18171046c]",
+          "parent": 67,
+          "self_samples": 2
+        },
+        {
+          "depth": 16,
+          "count": 1,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime5arena4walk18arena_in_use_bytes  (in r25-rotating-worker) + 1148  [0x102751b98]",
+          "parent": 36,
+          "self_samples": 1
+        },
+        {
+          "depth": 14,
+          "count": 1,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy28gc_bump_malloc_trigger_inner  (in r25-rotating-worker) + 220  [0x10269715c]",
+          "parent": 35,
+          "self_samples": 1
+        },
+        {
+          "depth": 22,
+          "count": 1,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc9young_log25addr_is_minor_collectible  (in r25-rotating-worker) + 544  [0x1026cdfd0]",
+          "parent": 44,
+          "self_samples": 1
+        },
+        {
+          "depth": 24,
+          "count": 1,
+          "name": "pthread_mutex_lock  (in libsystem_pthread.dylib) + 52  [0x181710430]",
+          "parent": 46,
+          "self_samples": 1
+        },
+        {
+          "depth": 24,
+          "count": 1,
+          "name": "pthread_mutex_lock  (in libsystem_pthread.dylib) + 112  [0x18171046c]",
+          "parent": 48,
+          "self_samples": 1
+        },
+        {
+          "depth": 24,
+          "count": 1,
+          "name": "pthread_mutex_unlock  (in libsystem_pthread.dylib) + 32  [0x181710964]",
+          "parent": 50,
+          "self_samples": 1
+        },
+        {
+          "depth": 24,
+          "count": 1,
+          "name": "pthread_mutex_lock  (in libsystem_pthread.dylib) + 52  [0x181710430]",
+          "parent": 52,
+          "self_samples": 1
+        },
+        {
+          "depth": 22,
+          "count": 1,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime7closure13dynamic_props18scan_closure_owner  (in r25-rotating-worker) + 1848  [0x10283add8]",
+          "parent": 44,
+          "self_samples": 1
+        },
+        {
+          "depth": 24,
+          "count": 1,
+          "name": "_RNvMs_NtNtCs3gRpqoBkMHm_13perry_runtime2gc7copyingNtB4_23CopyingNurseryCollector9mark_addr  (in r25-rotating-worker) + 68  [0x1024c1904]",
+          "parent": 57,
+          "self_samples": 1
+        },
+        {
+          "depth": 22,
+          "count": 1,
+          "name": "_RNvMs_NtNtCs3gRpqoBkMHm_13perry_runtime2gc7copyingNtB4_23CopyingNurseryCollector9mark_addr  (in r25-rotating-worker) + 3612  [0x1024c26dc]",
+          "parent": 55,
+          "self_samples": 1
+        },
+        {
+          "depth": 24,
+          "count": 1,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6object21array_tail_transition10scan_table  (in r25-rotating-worker) + 272  [0x10280570c]",
+          "parent": 62,
+          "self_samples": 1
+        },
+        {
+          "depth": 24,
+          "count": 1,
+          "name": "DYLD-STUB$$pthread_mutex_lock  (in r25-rotating-worker) + 4  [0x102d9be40]",
+          "parent": 69,
+          "self_samples": 1
+        },
+        {
+          "depth": 24,
+          "count": 1,
+          "name": "pthread_mutex_lock  (in libsystem_pthread.dylib) + 52  [0x181710430]",
+          "parent": 69,
+          "self_samples": 1
+        },
+        {
+          "depth": 24,
+          "count": 1,
+          "name": "DYLD-STUB$$pthread_mutex_unlock  (in r25-rotating-worker) + 4  [0x102d9be58]",
+          "parent": 72,
+          "self_samples": 1
+        },
+        {
+          "depth": 24,
+          "count": 1,
+          "name": "pthread_mutex_unlock  (in libsystem_pthread.dylib) + 120  [0x1817109bc]",
+          "parent": 72,
+          "self_samples": 1
+        },
+        {
+          "depth": 24,
+          "count": 1,
+          "name": "pthread_mutex_lock  (in libsystem_pthread.dylib) + 52  [0x181710430]",
+          "parent": 75,
+          "self_samples": 1
+        },
+        {
+          "depth": 24,
+          "count": 1,
+          "name": "pthread_mutex_unlock  (in libsystem_pthread.dylib) + 32  [0x181710964]",
+          "parent": 77,
+          "self_samples": 1
+        },
+        {
+          "depth": 22,
+          "count": 1,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime7closure13dynamic_props18scan_closure_owner  (in r25-rotating-worker) + 560  [0x10283a8d0]",
+          "parent": 66,
+          "self_samples": 1
+        },
+        {
+          "depth": 20,
+          "count": 1,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string6intern27scan_intern_table_roots_mut  (in r25-rotating-worker) + 316  [0x1028284c8]",
+          "parent": 65,
+          "self_samples": 1
+        },
+        {
+          "depth": 18,
+          "count": 1,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7copying24run_copied_minor_attempt  (in r25-rotating-worker) + 44424  [0x1026bbd24]",
+          "parent": 64,
+          "self_samples": 1
+        },
+        {
+          "depth": 20,
+          "count": 1,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc10dead_owner37owner_is_dead_copied_minor_from_space  (in r25-rotating-worker) + 544  [0x1026656a0]",
+          "parent": 83,
+          "self_samples": 1
+        },
+        {
+          "depth": 20,
+          "count": 1,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc10dead_owner37owner_is_dead_copied_minor_from_space  (in r25-rotating-worker) + 544  [0x1026656a0]",
+          "parent": 85,
+          "self_samples": 1
+        },
+        {
+          "depth": 18,
+          "count": 1,
+          "name": "_RNvNtNtNtNtCs3gRpqoBkMHm_13perry_runtime6object13native_module16callable_exports24builtin_closure_metadata42prune_dead_builtin_closure_metadata_owners  (in r25-rotating-worker) + 196  [0x1029b1538]",
+          "parent": 82,
+          "self_samples": 1
+        },
+        {
+          "depth": 16,
+          "count": 1,
+          "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime3map42finalize_dead_copied_minor_from_space_maps  (in r25-rotating-worker) + 440  [0x10254483c]",
+          "parent": 41,
+          "self_samples": 1
+        },
+        {
+          "depth": 18,
+          "count": 1,
+          "name": "_platform_memmove  (in libsystem_platform.dylib) + 180  [0x18171f414]",
+          "parent": 89,
+          "self_samples": 1
+        },
+        {
+          "depth": 20,
+          "count": 1,
+          "name": "_RNCNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6verify32restore_surviving_dirty_coverage0B7_  (in r25-rotating-worker) + 4968  [0x102453a98]",
+          "parent": 92,
+          "self_samples": 1
+        }
+      ],
+      "profile_sha256": "edbb5719088b3df09105386f0486dd857f11cb9d13cd82e5ac31ecf52bcd3794",
+      "oracle_command": [
+        "/opt/homebrew/bin/node",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/parse-gaps-r25-profiles/rotating-worker.js",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/rotating/unicode_1m",
+        "parse",
+        "8",
+        "0",
+        "verify",
+        "rotating"
+      ],
+      "oracle_output_sha256": "b4bdd831c22e1056e735328d65a8f41754689750c3f83848c5fdee7a260bc5fd",
+      "all_eight_outputs_and_last_match_node": true,
+      "diagnostic_only": true
+    }
+  ]
+}

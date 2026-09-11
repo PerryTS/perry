@@ -1,0 +1,48 @@
+{
+  "note": "main-reuse-provenance.json is the immutable bootstrap/copy-event receipt staged for all windows. Frozen reference, fixture, output, worker object and IR payloads remain exact. Subsequent controller edits and reference disassembly path-only regeneration are explicit below; final payloads and original disassembly are archived. The initial audit correctly rejected the changed .s path header before this exact normalization check was added.",
+  "unchanged_payloads": 489,
+  "derivations": [
+    {
+      "path": "benchmarks/json_performance/.work/trusted-materialized-read-r26/main-15lazy_get_rooted.s",
+      "copied_sha256": "85fd2d85f57331f82d0600e64d2692a17c70c75d4a64e4c5d14e132216d4c612",
+      "initial_adapted_sha256": null,
+      "final_sha256": "832cdb07e60ed7e112129f883e0fc09e3e6473678b9f292924b0ee1acbf8a32a",
+      "reason": "Disassembly regenerated from identical frozen reference worker; only the file-format input-path line differs. Initial bytes preserved separately."
+    },
+    {
+      "path": "benchmarks/json_performance/.work/trusted-materialized-read-r26/main-array-get.s",
+      "copied_sha256": "3494f1c3dbd4dfe53fae786fd080b6b97b25995c49a72bb33e6f2d4de8bd65dc",
+      "initial_adapted_sha256": null,
+      "final_sha256": "c16a0488a4e0dcbeab060ef634eee016beafb3f45e601a1309ad0006d8cd2ccc",
+      "reason": "Disassembly regenerated from identical frozen reference worker; only the file-format input-path line differs. Initial bytes preserved separately."
+    },
+    {
+      "path": "benchmarks/json_performance/.work/trusted-materialized-read-r26/main-packed-index-get.s",
+      "copied_sha256": "8cb7e01608a2c618c36309a0cc93ebe5831e75fd749ae424a0f91921f84532c7",
+      "initial_adapted_sha256": null,
+      "final_sha256": "c454ddd4fe9630ed8d469daff325dbce9c7d919ed149bbac11aec1798e739459",
+      "reason": "Disassembly regenerated from identical frozen reference worker; only the file-format input-path line differs. Initial bytes preserved separately."
+    },
+    {
+      "path": "benchmarks/json_performance/.work/trusted-materialized-read-r26/main-11cached_read8lazy_get.s",
+      "copied_sha256": "417a12ab6b195d609d26afe28235f88fb3e319d3e67272bd3d948fb9b76f5c4d",
+      "initial_adapted_sha256": null,
+      "final_sha256": "e2f9af41c55fab7041f8c4ffdc49f93e408f712b33f1c078091b6fdf3d466fd0",
+      "reason": "Disassembly regenerated from identical frozen reference worker; only the file-format input-path line differs. Initial bytes preserved separately."
+    },
+    {
+      "path": "benchmarks/json_performance/.work/trusted-materialized-read-r26/main-8mutation26resolve_materialized_array.s",
+      "copied_sha256": "1828cd33102577e253988ec30fa59522e13304955e2d41d7c70ed62aa6a790db",
+      "initial_adapted_sha256": null,
+      "final_sha256": "c5d091ce716336ac61dd9e8612375e3fe972287106230a8ab3b58a270f70b38c",
+      "reason": "Disassembly regenerated from identical frozen reference worker; only the file-format input-path line differs. Initial bytes preserved separately."
+    },
+    {
+      "path": "benchmarks/json_performance/.work/trusted-materialized-read-r26/compare-json-entry-disassembly.py",
+      "copied_sha256": "83f2ec9478d222d8adc027e38819b5cdc919d575dbee471925171f02f903cd01",
+      "initial_adapted_sha256": null,
+      "final_sha256": "e16f0b9afb7f53ecafbea18de70684a9e478c74375b48194280b623bde4aa3ae",
+      "reason": "Controller adapted for the R26 experiment after initial bootstrap."
+    }
+  ]
+}

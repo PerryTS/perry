@@ -1,0 +1,6 @@
+{
+  "note": "Instruction comparison after symbolic call/branch address normalization. ADRP/global-data placement remains; not a dynamic or semantic proof.",
+  "main_count": 648,
+  "candidate_count": 648,
+  "differences": []
+}

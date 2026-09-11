@@ -1,0 +1,21 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/trusted-materialized-read-r26/run-focus.py",
+  "--worker",
+  ".work/trusted-materialized-read-r26/candidate-worker",
+  "--baseline-worker",
+  ".work/trusted-materialized-read-r26/main-worker",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--case",
+  "long_string_1m:stringify:1922:2:11",
+  "--case",
+  "unicode_1m:stringify:2475:2:11",
+  "--results-dir",
+  "results/quiet-trusted-materialized-read-r26-stringify-recheck-focus"
+]
