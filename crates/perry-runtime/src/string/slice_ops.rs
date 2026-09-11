@@ -2,7 +2,7 @@
 
 use super::*;
 
-/// Get a slice of a string (byte-based for now)
+/// Get a slice of a string in UTF-16 code units
 /// Returns a new string from start to end (exclusive).
 /// start/end are in UTF-16 code unit indices (JS semantics).
 #[no_mangle]
@@ -33,24 +33,7 @@ pub extern "C" fn js_string_slice(
         return js_string_from_bytes(ptr::null(), 0);
     }
 
-    // ASCII fast path: byte offsets == UTF-16 offsets, skip utf16_len scan.
-    // Copy GC-safely: the destination allocation can move/sweep `s` (#5062).
-    if is_ascii_string(s) {
-        let slice_len = (end - start) as u32;
-        return string_copy_range(s, start as usize, slice_len, slice_len, 0);
-    }
-
-    // Convert UTF-16 offsets to byte offsets
-    let str_data = string_as_str(s);
-    let byte_start = utf16_offset_to_byte_offset(str_data, start as usize);
-    let byte_end = utf16_offset_to_byte_offset(str_data, end as usize);
-    string_copy_range(
-        s,
-        byte_start,
-        (byte_end - byte_start) as u32,
-        (end - start) as u32,
-        0,
-    )
+    super::slice_range::copy_utf16_range(s, start as u32, end as u32)
 }
 
 /// Get a substring (similar to slice but different behavior)
@@ -82,23 +65,7 @@ pub extern "C" fn js_string_substring(
         return js_string_from_bytes(ptr::null(), 0);
     }
 
-    // ASCII fast path: skip utf16_len scan in allocator.
-    // Copy GC-safely: the destination allocation can move/sweep `s` (#5062).
-    if is_ascii_string(s) {
-        let slice_len = (end - start) as u32;
-        return string_copy_range(s, start as usize, slice_len, slice_len, 0);
-    }
-
-    let str_data = string_as_str(s);
-    let byte_start = utf16_offset_to_byte_offset(str_data, start as usize);
-    let byte_end = utf16_offset_to_byte_offset(str_data, end as usize);
-    string_copy_range(
-        s,
-        byte_start,
-        (byte_end - byte_start) as u32,
-        (end - start) as u32,
-        0,
-    )
+    super::slice_range::copy_utf16_range(s, start as u32, end as u32)
 }
 
 /// Legacy `String.prototype.substr(start, length)` (ECMA-262 Annex B.2.3.1).
@@ -159,23 +126,7 @@ pub extern "C" fn js_string_substr(
     let start = start as i32;
     let end = end as i32;
 
-    // ASCII fast path: byte offsets == UTF-16 offsets.
-    // Copy GC-safely: the destination allocation can move/sweep `s` (#5062).
-    if is_ascii_string(s) {
-        let slice_len = (end - start) as u32;
-        return string_copy_range(s, start as usize, slice_len, slice_len, 0);
-    }
-
-    let str_data = string_as_str(s);
-    let byte_start = utf16_offset_to_byte_offset(str_data, start as usize);
-    let byte_end = utf16_offset_to_byte_offset(str_data, end as usize);
-    string_copy_range(
-        s,
-        byte_start,
-        (byte_end - byte_start) as u32,
-        (end - start) as u32,
-        0,
-    )
+    super::slice_range::copy_utf16_range(s, start as u32, end as u32)
 }
 
 // `#[used]` keepalive: `js_string_substr` is reached only from generated `.o`,

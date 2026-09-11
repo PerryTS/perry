@@ -28,6 +28,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     // one. Handlers that care receive it as an argument, because they consult
     // it after lowering their operands — by which point the field is gone.
     let value_discarded = std::mem::take(&mut ctx.discard_this_expr);
+    if let Some(value) = super::suffix_cursor::try_lower(ctx, expr)? {
+        return Ok(value);
+    }
     if let Some(lowered) = lower_expr_value(ctx, expr)? {
         if ctx.discard_expr_value {
             return Ok(materialize_js_value_without_record(ctx, lowered));

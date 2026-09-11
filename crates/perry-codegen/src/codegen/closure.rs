@@ -1266,6 +1266,8 @@ pub(super) fn compile_closure(
             .non_escaping_array_length_only_indices()
             .clone(),
         fusible_uppercase_locals: native_facts.fusible_uppercase_locals().clone(),
+        suffix_cursor_locals: native_facts.suffix_cursor_locals().clone(),
+        suffix_cursors: std::collections::HashMap::new(),
         non_escaping_object_literals: native_facts.non_escaping_object_literals().clone(),
         non_escaping_object_literal_used_fields: native_facts
             .non_escaping_object_literal_used_fields()

@@ -1,5 +1,49 @@
 use super::*;
 
+#[test]
+fn suffix_cursor_offsets_survive_source_evacuation_and_split_slice_owns_its_bytes() {
+    use crate::string::suffix_cursor::*;
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _mode =
+        crate::arena::ProtectionModeGuard::set(crate::arena::FromSpaceProtection::PoisonOnly);
+    register_runtime_handle_root_scanner_for_tests();
+    let scope = RuntimeHandleScope::new();
+    let bytes = "ä中😀Ö".repeat(100);
+    let source = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+    assert!(crate::arena::pointer_in_nursery(source as usize));
+    let root = scope.root_string_ptr(source);
+    let before = source as usize;
+    let boxed = |s| f64::from_bits(crate::value::JSValue::string_ptr(s).bits());
+    let mut cursor = SuffixCursor::default();
+    unsafe {
+        js_string_suffix_advance(boxed(source), &mut cursor, 3);
+    }
+    let kept = crate::string::js_string_slice(source, 3, 5);
+    let kept_root = scope.root_string_ptr(kept);
+    gc_collect_minor();
+    let source = root.get_raw_mut_ptr::<crate::StringHeader>();
+    assert_ne!(
+        source as usize, before,
+        "the test must actually move the source"
+    );
+    unsafe {
+        assert_eq!(js_string_suffix_length(boxed(source), &cursor), 497.0);
+        assert_eq!(
+            js_string_suffix_char_code_at(boxed(source), &cursor, 0),
+            56832.0
+        );
+        js_string_suffix_advance(boxed(source), &mut cursor, 1);
+        assert_eq!(
+            js_string_suffix_char_code_at(boxed(source), &cursor, 0),
+            214.0
+        );
+    }
+    let kept = kept_root.get_raw_const_ptr::<crate::StringHeader>();
+    assert_eq!(crate::string::js_string_char_code_at(kept, 0), 56832.0);
+    assert_eq!(crate::string::js_string_char_code_at(kept, 1), 214.0);
+}
+
 /// #5062: `String.prototype.slice` copies the selected range out of the source
 /// string AFTER allocating the destination, via a raw pointer derived from the
 /// source (`string_data(s) + offset`). If that destination allocation trips a

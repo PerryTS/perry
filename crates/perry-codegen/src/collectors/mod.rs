@@ -56,6 +56,7 @@ pub mod segview;
 mod segview_tests;
 mod shadow_slots;
 pub(crate) mod spec_abi_sites;
+pub(crate) mod suffix_strings;
 mod this_as_value;
 mod uppercase_strings;
 

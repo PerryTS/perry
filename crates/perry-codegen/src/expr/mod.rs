@@ -1458,6 +1458,10 @@ pub(crate) struct FnCtx<'a> {
     pub non_escaping_array_length_only_indices:
         std::collections::HashMap<u32, std::collections::HashSet<u32>>,
     pub fusible_uppercase_locals: std::collections::HashSet<u32>,
+    /// Locals proven to have only scalar suffix consumers.
+    pub suffix_cursor_locals: std::collections::HashSet<u32>,
+    /// Stack storage holds byte/UTF-16 offsets only, never a GC pointer.
+    pub suffix_cursors: std::collections::HashMap<u32, String>,
 
     /// Non-escaping object literals identified by escape analysis. Maps
     /// local_id → field names (declaration order, deduplicated). Used by
@@ -2785,6 +2789,7 @@ pub(crate) mod masked_window;
 mod null_default_numeric_add_tests;
 mod string_length;
 pub(crate) mod string_window;
+pub(crate) mod suffix_cursor;
 
 mod ptr_numarray_access;
 mod ta_param_f64_read;
