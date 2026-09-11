@@ -4,8 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { prepareRequireRuntime } from './test-require-runtime.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+prepareRequireRuntime(root);
 const compiler = process.env.PERRY_BIN ?? path.join(root, 'target/perry-dev/perry');
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'perry-async-own-bind-'));
 const env = { ...process.env };
@@ -15,7 +17,10 @@ function run(name, executable, args, timeout, extraEnv = {}) {
   const result = spawnSync(executable, args, { cwd: work, env: { ...env, ...extraEnv },
     encoding: 'utf8', timeout, maxBuffer: 8 * 1024 * 1024 });
   fs.writeFileSync(path.join(work, `${name}.log`), `${result.stdout ?? ''}${result.stderr ?? ''}`);
-  if (result.error || result.status !== 0) throw new Error(`${name}: ${result.error ?? result.status}`);
+  if (result.error || result.status !== 0) {
+    throw new Error(`${name}: ${result.error ?? result.status} (signal ${result.signal ?? 'none'})\n` +
+      `${result.stdout ?? ''}${result.stderr ?? ''}`);
+  }
   return result.stdout;
 }
 try {
