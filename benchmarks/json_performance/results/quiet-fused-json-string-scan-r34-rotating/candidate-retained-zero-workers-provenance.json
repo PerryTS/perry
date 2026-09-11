@@ -1,0 +1,35 @@
+[
+  {
+    "worker": "retained-zero",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/fused-json-string-scan-r34/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/zero-spacing-r25/retained-zero-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/fused-json-string-scan-r34/candidate-retained-zero.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/fused-json-string-scan-r34/candidate-retained-zero.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/fused-json-string-scan-r34/frozen-build/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/fused-json-string-scan-r34/candidate-retained-zero"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/zero-spacing-r25/retained-zero-worker.ts": "5ead488614d020e33d7711aeb2d9d805426ff46c9283101c1f659b1d93f8d03c",
+      "benchmarks/json_performance/.work/fused-json-string-scan-r34/candidate-retained-zero.o": "4aee07f3f1605fb9f81d2019dd2533306d7e39d3bfe6a858232f3ab70d63aae5",
+      "benchmarks/json_performance/.work/fused-json-string-scan-r34/candidate-retained-zero": "1481bc3650af38ddfed3a16c1d6ba0068a9c52292a221853c9c29e08ca8c33ad",
+      "benchmarks/json_performance/.work/fused-json-string-scan-r34/frozen-build/perry": "4240fae9b885c292170c388dd65099c0b7ed5706d7960cb6f73cc72b1a32ce5f",
+      "benchmarks/json_performance/.work/fused-json-string-scan-r34/frozen-build/libperry_runtime.a": "9bfe0ff0be8650b3aca5451c8d97d02feb9e5b9dac86849a7af1c8e9db38ed17",
+      "benchmarks/json_performance/.work/fused-json-string-scan-r34/frozen-build/libperry_stdlib.a": "718c7b660e04f23aa63ea2507d20176f47eeb6c7eb8af9d77290dc22ea4d368a"
+    }
+  }
+]

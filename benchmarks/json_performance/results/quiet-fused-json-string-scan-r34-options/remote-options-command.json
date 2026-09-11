@@ -1,0 +1,17 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/fused-json-string-scan-r34/run-options.py",
+  "--worker",
+  ".work/fused-json-string-scan-r34/candidate-options",
+  "--baseline-worker",
+  ".work/fused-json-string-scan-r34/main-options",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--results-dir",
+  "results/quiet-fused-json-string-scan-r34-options"
+]

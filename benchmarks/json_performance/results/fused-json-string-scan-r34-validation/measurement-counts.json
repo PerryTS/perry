@@ -1,0 +1,10 @@
+{
+  "timed_trials": 616,
+  "oracle_records": 135,
+  "calibration_trials": 60,
+  "windows": [
+    "rotating",
+    "options"
+  ],
+  "note": "Counts derived from terminal raw archives; independent R32 sampled processes and local functional checks are excluded."
+}

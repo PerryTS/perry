@@ -1,0 +1,23 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/fused-json-string-scan-r34/run-rotating.py",
+  "--worker",
+  ".work/fused-json-string-scan-r34/candidate-rotating-worker",
+  "--baseline-worker",
+  ".work/fused-json-string-scan-r34/main-rotating-worker",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--filter",
+  "unicode_1m,long_string_1m,escaped_1m,small_record,records_array_1m",
+  "--repeat",
+  "7",
+  "--source-commit",
+  "9b1bf09c92f7f1bc9f918d1b8c3adb554c3b6792",
+  "--results-dir",
+  "results/quiet-fused-json-string-scan-r34-rotating"
+]

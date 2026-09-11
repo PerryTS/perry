@@ -1,0 +1,1 @@
+The prior lint process began during the parent-guard source-edit shell, before that shell committed9b1. It recorded9f7asHEAD while observingthefinalfilesystem. The source-commit consistency check rejected it and never cleared productionhold. Discard it as final-source qualification; rerunalllocal lint gates afterconfirmedclean9b1. No productionbuildentered.

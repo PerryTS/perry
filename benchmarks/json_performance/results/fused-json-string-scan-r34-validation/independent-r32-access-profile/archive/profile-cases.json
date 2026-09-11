@@ -1,0 +1,18 @@
+{
+  "cases": [
+    {
+      "fixture": "records_array_1m",
+      "operation": "fields",
+      "mode": "default",
+      "iterations": 60000000,
+      "warmup": 100000
+    },
+    {
+      "fixture": "records_array_1m",
+      "operation": "random",
+      "mode": "default",
+      "iterations": 150000000,
+      "warmup": 100000
+    }
+  ]
+}

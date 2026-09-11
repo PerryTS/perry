@@ -1,0 +1,6 @@
+{
+  "source_commit": "9b1bf09c92f7f1bc9f918d1b8c3adb554c3b6792",
+  "actual_build_worktree": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29",
+  "shared_build_cache": "/Users/amlug/projects/perry/json-merged-pr10022/target",
+  "note": "R34 combines callback primitive-key bypass, fused token scan and decoded wide-key construction fix over R31. Initial3f5 and9f7 unit/lint attempts preserved; none entered production due explicit hold. Finalsource resolves filecap by topical split and restores sharedguard at auditedparent. Fresh finalpostcommitlint9b1verified. NoGCpolicy/source edits."
+}

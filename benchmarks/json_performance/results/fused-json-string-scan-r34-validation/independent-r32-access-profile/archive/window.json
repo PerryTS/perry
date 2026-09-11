@@ -1,0 +1,24 @@
+{
+  "owner": "json-perf-36698-1789133176",
+  "load_before": [
+    1.564453125,
+    1.509765625,
+    1.529296875
+  ],
+  "started_utc": "2026-09-11T13:26:16Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/access-gaps-r32-profiles/run-access-profiles.py",
+    "--results-dir",
+    "results/quiet-access-gaps-r32-profiles"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.55712890625,
+    1.5087890625,
+    1.5283203125
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-11T13:26:23Z"
+}

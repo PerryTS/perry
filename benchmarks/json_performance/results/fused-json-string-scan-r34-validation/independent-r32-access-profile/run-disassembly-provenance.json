@@ -1,0 +1,13 @@
+{
+  "source_commit": "c695f6509ed85999894a2f34418f057f32bcb363",
+  "command": [
+    "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+    "--disassemble-symbols=_perry_fn_access_worker_ts__run$spec_b_b",
+    "--no-show-raw-insn",
+    "benchmarks/json_performance/.work/access-gaps-r32-profiles/r32-access-worker"
+  ],
+  "binary_sha256": "a219cc3a7c20640c7bf2e3274eca54443ec0ad4912b3a17186e8c6e6e807cbe2",
+  "output_sha256": "081595cfbb8fff4eccc64d034c922917eefb525b2b05494f6bf0d97ca67aba70",
+  "symbol_start": "0x1000008c0",
+  "note": "Linked R32 generated workload assembly. Sample frame offsets map to these instructions; source-level attribution requires reviewing the surrounding guarded control flow."
+}

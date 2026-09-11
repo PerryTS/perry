@@ -1,0 +1,33 @@
+{
+  "source_commit": "9b1bf09c92f7f1bc9f918d1b8c3adb554c3b6792",
+  "command": [
+    "cargo",
+    "test",
+    "--release",
+    "-p",
+    "perry-runtime",
+    "--lib",
+    "json"
+  ],
+  "env": {
+    "RUST_TEST_THREADS": "1"
+  },
+  "hashes": {
+    "crates/perry-runtime/src/json/replacer.rs": "b3bec30b2d07ce91745ff99bec7a11de9bf45d563efc22847bed7c315eb0975b",
+    "crates/perry-runtime/src/json/replacer_tojson.rs": "0e5c6aa098ca6fd59fb9ed2ed2526432480c079c7d539e8405f7ef0a9d049898",
+    "crates/perry-runtime/src/string/concat.rs": "47377d33276483dfc8a5b5262393579cbd01c1749fce278d91f4842a591ace9c",
+    "crates/perry-runtime/src/string/append.rs": "e56c2d74cec98ae554f2b9dd29bccf4a7cfbf17e158f5e35d4944d0aa6108667",
+    "crates/perry-runtime/src/string/mod.rs": "1b7c51956a3260beffdae6bb2a92be620faea10021b901e435f5ccdc19cf0d34",
+    "crates/perry-runtime/src/string/json_flags_tests.rs": "287ae89472e96cf0d23b0c496b58862499731c416a308e62f09ee551370483ff",
+    "crates/perry-runtime/src/string/json_construction.rs": "879304f7c7b4425e1f58343fea7c2073085915ac79543d0577f92c23ec8622d1",
+    "crates/perry-runtime/src/string/utf16_count.rs": "d8704dcda207d6c669c5e5b21f53592f131c79f41d5d21752474ce572544cc86",
+    "test-files/test_json_string_emitters.ts": "637762005ff59da90fab65d5ab0707de55d805efd72fb2ac00ec3c76f3125005",
+    "test-files/test_json_primitive_tojson_keys.ts": "cc137a45ef6784735db43654dcb912dff75246e3f37fc4d4721fb0519321ea17",
+    "crates/perry-runtime/src/json/parser.rs": "ed3380c4ffdf705deea5a417b421a99846fb431728073e8461be59579c90d416",
+    "crates/perry-runtime/src/json/simd.rs": "d500e3dc674a06ccd8729dfd64450ffb735e0a33220fa6d3c9f57a71817d9073",
+    "crates/perry-runtime/src/json/simd_tests.rs": "e1ba0278dbe240e34712af67351c013e3af5ca8983e3cbb6dd14464486b7eb1a",
+    "crates/perry-runtime/src/json/simd_json_string.rs": "6b74df7bea9ab58051017e7a49a0e5bcd44c6a589829ce1b1c4b4d0fe5c34dee",
+    "crates/perry-runtime/src/json/simd_json_string_tests.rs": "808adaf75b883ee6fefef0448f31a3fe360d6c5e61f4f5ed61fb37e74bb7fa8c"
+  },
+  "exit_code": 0
+}

@@ -1,0 +1,1 @@
+Await local lint review and serial JSON unit tests. No CI wait.

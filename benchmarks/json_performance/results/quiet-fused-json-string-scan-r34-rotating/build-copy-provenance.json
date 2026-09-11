@@ -1,0 +1,259 @@
+{
+  "source_commit": "9b1bf09c92f7f1bc9f918d1b8c3adb554c3b6792",
+  "actual_build_worktree": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29",
+  "validation_worktree": "/Users/amlug/projects/perry/json-merged-pr10022",
+  "copied_unix": 1789133144.250527,
+  "note": "Normal all-three-package production build from a clean committed separate worktree; both source trees match. Candidate timing/validation uses these immutable artifacts. Shared mutable target directory is not used for worker linking.",
+  "files": [
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/frozen-build/perry",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/frozen-build/perry",
+      "sha256": "4240fae9b885c292170c388dd65099c0b7ed5706d7960cb6f73cc72b1a32ce5f"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/frozen-build/libperry_runtime.a",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/frozen-build/libperry_runtime.a",
+      "sha256": "9bfe0ff0be8650b3aca5451c8d97d02feb9e5b9dac86849a7af1c8e9db38ed17"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/frozen-build/libperry_stdlib.a",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/frozen-build/libperry_stdlib.a",
+      "sha256": "718c7b660e04f23aa63ea2507d20176f47eeb6c7eb8af9d77290dc22ea4d368a"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/build-provenance.json",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/build-provenance.json",
+      "sha256": "fd561e0affbc85cf0a89ad87fa5cb1c1d58552a31e6b069c46bcff0ad525d38c"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/build-start.json",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/build-start.json",
+      "sha256": "6dc7ea19f827ca1cadaae26e302f2d3d780e24b7bab9c190eb8b3c33ba8e40e2"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/build-command-result.json",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/build-command-result.json",
+      "sha256": "8e453cefaf8a5af2d3967cdf079b223a39794227b0809ca40b6fc9d91608d143"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/unit-source.json",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/unit-source.json",
+      "sha256": "c63314c3979818a712380d25a0e8dee5fd39d125e36842da182ddfb193db1cc8"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/unit.log",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/unit.log",
+      "sha256": "b1f9aeed20e626883cfecaf492eafbf47cb4172491f9bdbf7ecac551e4374f5a"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/build.log",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/build.log",
+      "sha256": "d3df1b01cf3fee20e6c2b5423e477537b70b58744801ed0ba3cf6ac8352b68d0"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/validate-and-build.log",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/validate-and-build.log",
+      "sha256": "4e0ff656d28baedae41f8c6bb8052281c007a251cab39b5aba9b9a57eada6348"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/lint-results.json",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/lint-results.json",
+      "sha256": "96fbc36111e8f04a70d3b7e82bbf1598dc6543ec19cd1398773a59608610a4b3"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/script-lint.log",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/script-lint.log",
+      "sha256": "ff4d5b61ba498dd6d0bd511838c92bba1ae8767773e9c06711e76d2529b44964"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/file-cap.log",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/file-cap.log",
+      "sha256": "b0f283074d97912a169a14da638801e20dedc4981a521e2ef90e4028bdcdf8cd"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/worktree-provenance.json",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/worktree-provenance.json",
+      "sha256": "d0127d288d30337c14af8916f37c0924d6b3adb2310ecc165b7889728f51b090"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/lint-review.json",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/lint-review.json",
+      "sha256": "dd5811284a97e6262d2535316c8b5f7a177c3e3c166773f2243ca7be8501746f"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/string-suite.log",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/string-suite.log",
+      "sha256": "372b0784fec61fb6c3eefef1177eac08eeb5f68d9afc5c35b7c5eba9ca1cfce6"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/string-suite-provenance.json",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/string-suite-provenance.json",
+      "sha256": "ea3cb70502f66552035a017ab3fc4036bc27d0ff5f70da5c854de71f775cf818"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/build-resume.json",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/build-resume.json",
+      "sha256": "0508f2ddd5d03f58bfc72dd2b53169acad6316659d31422d7196fea1c161e3bf"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/build-controller.log",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/build-controller.log",
+      "sha256": "fd561e0affbc85cf0a89ad87fa5cb1c1d58552a31e6b069c46bcff0ad525d38c"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/hold-production-reviewed.txt",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/hold-production-reviewed.txt",
+      "sha256": "760ed3cac1f9248af4f1568e431aa66095ad8f79ef5f78f07ba714e452b812ca"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/build-release.py",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/build-release.py",
+      "sha256": "f104da4b90eda0c4f2f28ef311a6bdd8b8cb4afc27c65a6d6569285b2955d1fe"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/validate-and-build.py",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/validate-and-build.py",
+      "sha256": "f86e9a55cf9d9c57c7b5b9f4361b39d8868bc7402d6a21556170ec3fc35f541a"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/run-lint.py",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/run-lint.py",
+      "sha256": "b228808035eba5472e845e534d7799d2222ee142cef0a273cb941810fdfd53f8"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-3f5-validation/validate-and-build.py",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-3f5-validation/validate-and-build.py",
+      "sha256": "a3c8a03a41c612f8c6b08c7760afa1d0dc59d7e5b413816b1f304517d067cd58"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-3f5-validation/lint-results.json",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-3f5-validation/lint-results.json",
+      "sha256": "6b876b46456c3754667c0421378e7fce75524d28cb422511988eaaa70d8f66bf"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-3f5-validation/file-cap.log",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-3f5-validation/file-cap.log",
+      "sha256": "0bf00ed2fee95854cecde516aff4ddc09437a1be278542905b4fe6f46a6c59cd"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-3f5-validation/validate-and-build.log",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-3f5-validation/validate-and-build.log",
+      "sha256": "6a84028440fa940278155c4e32f4c7b705e553a34e4f83ddef5d068bbfcd58e5"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-3f5-validation/script-lint.log",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-3f5-validation/script-lint.log",
+      "sha256": "929ea2685dde895d9e250e5248e7b9e1496b0369a4449e5e7410fba85a54b9da"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-3f5-validation/hold-production",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-3f5-validation/hold-production",
+      "sha256": "760ed3cac1f9248af4f1568e431aa66095ad8f79ef5f78f07ba714e452b812ca"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-3f5-validation/verdict.md",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-3f5-validation/verdict.md",
+      "sha256": "b6da3a20c00ef222d7337f2a26e890c7019555ab61c231323f8e6715caf48188"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-3f5-validation/run-lint.py",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-3f5-validation/run-lint.py",
+      "sha256": "b228808035eba5472e845e534d7799d2222ee142cef0a273cb941810fdfd53f8"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-3f5-validation/build-release.py",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-3f5-validation/build-release.py",
+      "sha256": "f104da4b90eda0c4f2f28ef311a6bdd8b8cb4afc27c65a6d6569285b2955d1fe"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-3f5-validation/unit.log",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-3f5-validation/unit.log",
+      "sha256": "945a033c46a283a12322cc78551b408e22c794b343ab7d30f8666225fa0ac142"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-3f5-validation/unit-source.json",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-3f5-validation/unit-source.json",
+      "sha256": "ace262e28c3f1601f9cb4134985ad3cd5819005a76974334ed8555270efdaa17"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-9f7-validation/validate-and-build.py",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-9f7-validation/validate-and-build.py",
+      "sha256": "f86e9a55cf9d9c57c7b5b9f4361b39d8868bc7402d6a21556170ec3fc35f541a"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-9f7-validation/lint-results.json",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-9f7-validation/lint-results.json",
+      "sha256": "01674af3f6f90386b088ce88ad6dd513e4069f2ac98c84bfd22ef0583f2b578c"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-9f7-validation/file-cap.log",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-9f7-validation/file-cap.log",
+      "sha256": "b0f283074d97912a169a14da638801e20dedc4981a521e2ef90e4028bdcdf8cd"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-9f7-validation/precommit-file-cap.log",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-9f7-validation/precommit-file-cap.log",
+      "sha256": "b0f283074d97912a169a14da638801e20dedc4981a521e2ef90e4028bdcdf8cd"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-9f7-validation/validate-and-build.log",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-9f7-validation/validate-and-build.log",
+      "sha256": "7696b5e407586157a904a939ce4a5110addb79a9d9df412a4477d824795a392f"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-9f7-validation/script-lint.log",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-9f7-validation/script-lint.log",
+      "sha256": "d3ed5f9c752315254264f1a41ab7890c63ef9fe8b97e6a2df00fde9ebf11f8f2"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-9f7-validation/hold-production",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-9f7-validation/hold-production",
+      "sha256": "760ed3cac1f9248af4f1568e431aa66095ad8f79ef5f78f07ba714e452b812ca"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-9f7-validation/verdict.md",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-9f7-validation/verdict.md",
+      "sha256": "36b3657f8d6bcdea8591edad58fc0d79fe376f2c94b750e9b4579a8cee636d90"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-9f7-validation/run-lint.py",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-9f7-validation/run-lint.py",
+      "sha256": "b228808035eba5472e845e534d7799d2222ee142cef0a273cb941810fdfd53f8"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-9f7-validation/build-release.py",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-9f7-validation/build-release.py",
+      "sha256": "f104da4b90eda0c4f2f28ef311a6bdd8b8cb4afc27c65a6d6569285b2955d1fe"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-9f7-validation/unit.log",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-9f7-validation/unit.log",
+      "sha256": "2dbeea9873174b80594ea22ccc68063f44798051b741aa51e9486d62d858c04f"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-9f7-validation/unit-source.json",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/initial-9f7-validation/unit-source.json",
+      "sha256": "c64930031966c9869de6920747774ac738984481aa1f2059c7f27d5aea18cb3d"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/lint-before-final-source-commit/correction.md",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/lint-before-final-source-commit/correction.md",
+      "sha256": "a85615985007555efd31795e02849bd40bda49449bfb14b6d8c929a83c141a3d"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/lint-before-final-source-commit/lint-results.json",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/lint-before-final-source-commit/lint-results.json",
+      "sha256": "cf67d88046999ebbdb199457392266aacdfb455ef3ae0807182957462b6bed09"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/lint-before-final-source-commit/file-cap.log",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/lint-before-final-source-commit/file-cap.log",
+      "sha256": "b0f283074d97912a169a14da638801e20dedc4981a521e2ef90e4028bdcdf8cd"
+    },
+    {
+      "source": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29/benchmarks/json_performance/.work/fused-json-string-scan-r34/lint-before-final-source-commit/script-lint.log",
+      "copy": "benchmarks/json_performance/.work/fused-json-string-scan-r34/lint-before-final-source-commit/script-lint.log",
+      "sha256": "ff4d5b61ba498dd6d0bd511838c92bba1ae8767773e9c06711e76d2529b44964"
+    }
+  ]
+}
