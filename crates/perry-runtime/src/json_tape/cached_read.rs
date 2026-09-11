@@ -47,7 +47,7 @@ mod tests {
     struct HookGuard(Option<JsonTapeSafepointHook>);
 
     impl HookGuard {
-        fn new() -> Self {
+        fn install_counting_hook() -> Self {
             ROOTED_READS.with(|n| n.set(0));
             Self(test_set_safepoint_hook(Some(count_rooted_reads)))
         }
@@ -69,7 +69,7 @@ mod tests {
 
     #[test]
     fn cached_reads_preserve_identity_without_entering_rooted_construction() {
-        let _hook = HookGuard::new();
+        let _hook = HookGuard::install_counting_hook();
         let input = format!(
             "[{}]",
             vec![r#"{"text":"heap string value"}"#; 130].join(",")
@@ -97,7 +97,7 @@ mod tests {
 
     #[test]
     fn materialized_mutations_override_sparse_cache_and_original_length() {
-        let _hook = HookGuard::new();
+        let _hook = HookGuard::install_counting_hook();
         unsafe {
             let hdr = fixture(b"[10,20,30]");
             assert_eq!(lazy_get(hdr, 1).as_number(), 20.0);
@@ -107,7 +107,8 @@ mod tests {
             crate::array::js_array_set(arr, 1, JSValue::number(99.0));
             assert_eq!(lazy_get(hdr, 1).as_number(), 99.0);
             assert_eq!(ROOTED_READS.with(Cell::get), 2);
-            let grown = crate::array::js_array_set_jsvalue_extend(arr, 7, JSValue::number(77.0).bits());
+            let grown =
+                crate::array::js_array_set_jsvalue_extend(arr, 7, JSValue::number(77.0).bits());
             assert!(!grown.is_null());
             assert_eq!(lazy_get(hdr, 7).as_number(), 77.0);
             assert!(lazy_get(hdr, 6).is_undefined());
