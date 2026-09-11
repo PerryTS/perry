@@ -28,6 +28,14 @@ pub(super) fn eligible(ctx: &CompilationContext, cli_features: &[String]) -> boo
         || !ctx.native_module_imports.is_empty()
         || !ctx.extra_stdlib_features.is_empty()
         || !cli_features.is_empty()
+        // Runtime-owned native modules such as bun:ffi do not enter the
+        // stdlib feature/import set above. Retain their original HIR import
+        // provenance so they cannot accidentally select the first subset.
+        || ctx.native_modules.values().any(|module| {
+            module.imports.iter().any(|import| {
+                import.is_native && !import.type_only && !import.runtime_erased
+            })
+        })
     {
         return false;
     }
@@ -122,5 +130,35 @@ mod tests {
             assert!(!eligible(&ctx, &[]));
         }
         assert!(!eligible(&context(), &["ios-game-loop".into()]));
+    }
+
+    #[test]
+    fn runtime_owned_native_imports_keep_full_without_a_stdlib_marker() {
+        let mut ctx = context();
+        let mut module = perry_hir::Module::new("ffi-consumer");
+        module.imports.push(perry_hir::Import {
+            source: "bun:ffi".into(),
+            specifiers: Vec::new(),
+            is_native: true,
+            module_kind: perry_hir::ModuleKind::NativeRust,
+            resolved_path: None,
+            type_only: false,
+            runtime_erased: false,
+            is_dynamic: false,
+            is_dynamic_target: false,
+            is_deferred_require: false,
+            is_adopted_require: false,
+        });
+        let key = std::path::PathBuf::from("ffi-consumer.ts");
+        ctx.native_modules.insert(key.clone(), module);
+        assert!(ctx.native_module_imports.is_empty());
+        assert!(!ctx.needs_stdlib);
+        assert!(!eligible(&ctx, &[]));
+        ctx.native_modules.get_mut(&key).unwrap().imports[0].type_only = true;
+        assert!(eligible(&ctx, &[]));
+        let import = &mut ctx.native_modules.get_mut(&key).unwrap().imports[0];
+        import.type_only = false;
+        import.runtime_erased = true;
+        assert!(eligible(&ctx, &[]));
     }
 }
