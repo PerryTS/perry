@@ -7,7 +7,8 @@ use super::{JSValue, LazyArrayHeader};
 /// The caller must supply a live lazy header. This fast path cannot allocate,
 /// invoke user code or collect: it resolves growth and loads an existing slot.
 /// Cold reads, holes and descriptors keep the rooted general accessor.
-#[inline]
+// Keep the lazy hit/miss machinery outside the shared array dispatcher.
+#[inline(never)]
 pub unsafe fn lazy_get(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
     if hdr.is_null() {
         return JSValue::undefined();
