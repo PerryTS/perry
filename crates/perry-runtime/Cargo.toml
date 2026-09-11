@@ -50,6 +50,11 @@ keepalive-anchors = []
 # retag rides the same gate (it only exists to label mimalloc's mappings).
 alloc-mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys"]
 
+# Prebuilt native runtime for programs whose existing feature analysis requires
+# only this subset. Keep in sync with optimized_libs/prebuilt_core.rs (tested).
+# Unwind behavior stays unchanged; this is a feature/size profile only.
+prebuilt-core = ["full", "alloc-mimalloc", "keepalive-anchors"]
+
 # `PERRY_ALLOC_CENSUS` — a sampling profiler for the Rust heap
 # (`alloc_census`). OFF by default and compiled out entirely: the census wraps
 # the `#[global_allocator]`, and `gc_malloc` runs ~1M times/sec, so even the

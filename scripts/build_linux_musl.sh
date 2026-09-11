@@ -108,6 +108,8 @@ CARGO_TARGET_DIR="$abort_target_dir" CARGO_PROFILE_DIST_PANIC=abort \
 cp "$abort_target_dir/$target/dist/libperry_runtime.a" \
    "$target_dir/$target/dist/libperry_runtime_abort.a"
 
+bash scripts/build_core_runtime.sh "$target"
+
 # A dynamically linked binary can run on the glibc build host and still fail
 # immediately for users on Alpine. Gate the artifact itself, not just the
 # Cargo exit status.
