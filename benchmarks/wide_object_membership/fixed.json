@@ -1,0 +1,323 @@
+{
+  "label": "fixed",
+  "artifact_source": "603b074ace01464bc66fc07cc8d532f26ccf5a0f + crates-diff-sha256:4b9140796c743681751312f7f212dcf6b065cc9085f96e7ffecac7dc9fbde91e",
+  "generated_at": "2026-09-11T11:29:13Z",
+  "worktree_head": "603b074ace01464bc66fc07cc8d532f26ccf5a0f",
+  "node": "v26.5.1",
+  "host": {
+    "platform": "macOS-26.5-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "cpu_count": 10
+  },
+  "load_start": [
+    23.4267578125,
+    25.67822265625,
+    29.88037109375
+  ],
+  "artifacts": {
+    "perry": "c91fb68f492cc37f16ef2ed58abd94445b1d14608b52d4eb1f46c2fa19e4b39b",
+    "libperry_runtime.a": "9161c75117de53b743fe9ddf814ebcef22af42ffe0bffae858a6718cbe3b610a",
+    "libperry_stdlib.a": "5dd1d0d36c914822552c48c94a508998138f71cbc7b975bf7696d145c52494c3"
+  },
+  "workloads": {
+    "object-in": {
+      "source_sha256": "15975126dc0469dcf3db0e9ff9f9eee48c93a302a5bc728af27153bb153a9f01",
+      "rows": [
+        {
+          "n": 100,
+          "node": {
+            "name": "object-in",
+            "category": "objects",
+            "n": 100,
+            "ms_per_run": 0.013442297043010944,
+            "runs": 14749,
+            "checksum": 90862968
+          },
+          "perry": {
+            "name": "object-in",
+            "category": "objects",
+            "n": 100,
+            "ms_per_run": 0.06802321621621792,
+            "runs": 2382,
+            "checksum": 90862968
+          },
+          "checksum_match": true,
+          "ratio": 5.060386331187737
+        },
+        {
+          "n": 1000,
+          "node": {
+            "name": "object-in",
+            "category": "objects",
+            "n": 1000,
+            "ms_per_run": 0.09372053333333288,
+            "runs": 1805,
+            "checksum": 235809596
+          },
+          "perry": {
+            "name": "object-in",
+            "category": "objects",
+            "n": 1000,
+            "ms_per_run": 0.5921323529411746,
+            "runs": 259,
+            "checksum": 235809596
+          },
+          "checksum_match": true,
+          "ratio": 6.318064269173075
+        },
+        {
+          "n": 10000,
+          "node": {
+            "name": "object-in",
+            "category": "objects",
+            "n": 10000,
+            "ms_per_run": 1.6149036875000071,
+            "runs": 109,
+            "checksum": 321931775
+          },
+          "perry": {
+            "name": "object-in",
+            "category": "objects",
+            "n": 10000,
+            "ms_per_run": 8.127096999999972,
+            "runs": 23,
+            "checksum": 321931775
+          },
+          "checksum_match": true,
+          "ratio": 5.03255832710453
+        },
+        {
+          "n": 100000,
+          "node": {
+            "name": "object-in",
+            "category": "objects",
+            "n": 100000,
+            "ms_per_run": 22.629083500000007,
+            "runs": 12,
+            "checksum": 385753825
+          },
+          "perry": {
+            "name": "object-in",
+            "category": "objects",
+            "n": 100000,
+            "ms_per_run": 127.25950000000012,
+            "runs": 7,
+            "checksum": 385753825
+          },
+          "checksum_match": true,
+          "ratio": 5.623714279016208
+        },
+        {
+          "n": 1000000,
+          "node": {
+            "name": "object-in",
+            "category": "objects",
+            "n": 1000000,
+            "ms_per_run": 254.78708400000005,
+            "runs": 7,
+            "checksum": 605963915
+          },
+          "perry": {
+            "name": "object-in",
+            "category": "objects",
+            "n": 1000000,
+            "ms_per_run": 2756.4531659999993,
+            "runs": 7,
+            "checksum": 605963915
+          },
+          "checksum_match": true,
+          "ratio": 10.818653452621636
+        }
+      ],
+      "node_slope": 1.0938240054287405,
+      "perry_slope": 1.1547658333636655
+    },
+    "object-has-own-property": {
+      "source_sha256": "25576272e339be30f08fe8f6ae5bd4ceedfe211f9e1584fcaf5bced2bfd61c0a",
+      "rows": [
+        {
+          "n": 100,
+          "node": {
+            "name": "object-has-own-property",
+            "category": "objects",
+            "n": 100,
+            "ms_per_run": 0.0142698116975747,
+            "runs": 8366,
+            "checksum": 90862968
+          },
+          "perry": {
+            "name": "object-has-own-property",
+            "category": "objects",
+            "n": 100,
+            "ms_per_run": 0.12586871875000033,
+            "runs": 1270,
+            "checksum": 90862968
+          },
+          "checksum_match": true,
+          "ratio": 8.820629270909931
+        },
+        {
+          "n": 1000,
+          "node": {
+            "name": "object-has-own-property",
+            "category": "objects",
+            "n": 1000,
+            "ms_per_run": 0.21232860919540295,
+            "runs": 825,
+            "checksum": 235809596
+          },
+          "perry": {
+            "name": "object-has-own-property",
+            "category": "objects",
+            "n": 1000,
+            "ms_per_run": 1.5101685238095115,
+            "runs": 136,
+            "checksum": 235809596
+          },
+          "checksum_match": true,
+          "ratio": 7.112411886142603
+        },
+        {
+          "n": 10000,
+          "node": {
+            "name": "object-has-own-property",
+            "category": "objects",
+            "n": 10000,
+            "ms_per_run": 4.223365666666666,
+            "runs": 54,
+            "checksum": 321931775
+          },
+          "perry": {
+            "name": "object-has-own-property",
+            "category": "objects",
+            "n": 10000,
+            "ms_per_run": 15.413979499999982,
+            "runs": 16,
+            "checksum": 321931775
+          },
+          "checksum_match": true,
+          "ratio": 3.649690961324128
+        },
+        {
+          "n": 100000,
+          "node": {
+            "name": "object-has-own-property",
+            "category": "objects",
+            "n": 100000,
+            "ms_per_run": 39.22624999999999,
+            "runs": 10,
+            "checksum": 385753825
+          },
+          "perry": {
+            "name": "object-has-own-property",
+            "category": "objects",
+            "n": 100000,
+            "ms_per_run": 184.344333,
+            "runs": 7,
+            "checksum": 385753825
+          },
+          "checksum_match": true,
+          "ratio": 4.699514559765464
+        },
+        {
+          "n": 1000000,
+          "node": {
+            "name": "object-has-own-property",
+            "category": "objects",
+            "n": 1000000,
+            "ms_per_run": 546.1050829999995,
+            "runs": 7,
+            "checksum": 605963915
+          },
+          "perry": {
+            "name": "object-has-own-property",
+            "category": "objects",
+            "n": 1000000,
+            "ms_per_run": 3357.008167,
+            "runs": 7,
+            "checksum": 605963915
+          },
+          "checksum_match": true,
+          "ratio": 6.147183521088016
+        }
+      ],
+      "node_slope": 1.1432284230037122,
+      "perry_slope": 1.0938673550006066
+    },
+    "object-assign": {
+      "source_sha256": "23fcd0f39d287f29065a88813d4fa45bb55739bb1fa0079f2763122598619f36",
+      "rows": [
+        {
+          "n": 100,
+          "node": {
+            "name": "object-assign",
+            "category": "objects",
+            "n": 100,
+            "ms_per_run": 0.16917911805555777,
+            "runs": 2321,
+            "checksum": 534569475
+          },
+          "perry": {
+            "name": "object-assign",
+            "category": "objects",
+            "n": 100,
+            "ms_per_run": 0.17902900892856927,
+            "runs": 838,
+            "checksum": 534569475
+          },
+          "checksum_match": true,
+          "ratio": 1.0582216705360576
+        },
+        {
+          "n": 1000,
+          "node": {
+            "name": "object-assign",
+            "category": "objects",
+            "n": 1000,
+            "ms_per_run": 0.8589218749999953,
+            "runs": 242,
+            "checksum": 965032923
+          },
+          "perry": {
+            "name": "object-assign",
+            "category": "objects",
+            "n": 1000,
+            "ms_per_run": 2.9133103333333312,
+            "runs": 68,
+            "checksum": 965032923
+          },
+          "checksum_match": true,
+          "ratio": 3.391822257796551
+        },
+        {
+          "n": 10000,
+          "node": {
+            "name": "object-assign",
+            "category": "objects",
+            "n": 10000,
+            "ms_per_run": 16.340208333333333,
+            "runs": 24,
+            "checksum": 663245961
+          },
+          "perry": {
+            "name": "object-assign",
+            "category": "objects",
+            "n": 10000,
+            "ms_per_run": 30.127583500000014,
+            "runs": 9,
+            "checksum": 663245961
+          },
+          "checksum_match": true,
+          "ratio": 1.8437698519755725
+        }
+      ],
+      "node_slope": 0.992455416377104,
+      "perry_slope": 1.1130204456468804
+    }
+  },
+  "load_end": [
+    43.51611328125,
+    32.25537109375,
+    31.9189453125
+  ]
+}
