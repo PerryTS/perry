@@ -11,6 +11,7 @@
 - [First Native App](getting-started/first-app.md)
 - [Project Configuration](getting-started/project-config.md)
 - [Small-process memory profile](runtime/small-process-memory.md)
+- [Automatic tiny programs](runtime/tiny-programs.md)
 
 # Language
 

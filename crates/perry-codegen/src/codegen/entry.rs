@@ -1382,7 +1382,8 @@ pub(super) fn compile_module_entry(
                     .call(I32, "js_promise_run_before_exit_checkpoint", &[]);
                 let resumed = emit_event_loop_liveness(&mut ctx, cross_module.needs_stdlib);
                 let resumed_cmp = ctx.block().icmp_ne(I32, &resumed, &zero);
-                ctx.block().cond_br(&resumed_cmp, &header_label, &finalize_label);
+                ctx.block()
+                    .cond_br(&resumed_cmp, &header_label, &finalize_label);
 
                 ctx.current_block = finalize_idx;
                 ctx.block().call_void("js_process_run_exit_sequence", &[]);

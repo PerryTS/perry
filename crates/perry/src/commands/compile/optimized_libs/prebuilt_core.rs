@@ -7,12 +7,7 @@ use std::collections::BTreeSet;
 // The existing conservative member-name analysis also sees `console.log` as
 // a possible `Math.log` value read. Keep Math's namespace in the small profile
 // rather than weakening that analysis and risking a missing extracted method.
-const CORE_FEATURES: &[&str] = &[
-    "full",
-    "alloc-mimalloc",
-    "keepalive-anchors",
-    "global-math",
-];
+const CORE_FEATURES: &[&str] = &["full", "alloc-mimalloc", "keepalive-anchors", "global-math"];
 
 pub(super) fn eligible(ctx: &CompilationContext, cli_features: &[String]) -> bool {
     // The first packaged subset supports runtime-only native programs. Keep
@@ -189,17 +184,21 @@ mod tests {
         for global in ["globalThis", "global", "self"] {
             let mut ctx = context();
             let mut module = perry_hir::Module::new("global-consumer");
-            module.init.push(perry_hir::Stmt::Expr(perry_hir::Expr::PropertyGet {
-                object: Box::new(perry_hir::Expr::GlobalGet(0)),
-                property: global.into(),
-                byte_offset: 0,
-            }));
+            module
+                .init
+                .push(perry_hir::Stmt::Expr(perry_hir::Expr::PropertyGet {
+                    object: Box::new(perry_hir::Expr::GlobalGet(0)),
+                    property: global.into(),
+                    byte_offset: 0,
+                }));
             ctx.native_modules.insert(key.clone(), module);
             assert!(!eligible(&ctx, &[]), "{global} can expose optional engines");
         }
         let mut ctx = context();
         let mut module = perry_hir::Module::new("global-consumer");
-        module.init.push(perry_hir::Stmt::Expr(perry_hir::Expr::GlobalThisExpr));
+        module
+            .init
+            .push(perry_hir::Stmt::Expr(perry_hir::Expr::GlobalThisExpr));
         ctx.native_modules.insert(key.clone(), module);
         assert!(!eligible(&ctx, &[]));
         let module = ctx.native_modules.get_mut(&key).unwrap();
