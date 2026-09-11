@@ -20,6 +20,11 @@
 //! The global never frees (matching Perry's "embedded data lives for the life of
 //! the process" model), mirroring the `crate::shared_sab` registry pattern.
 
+#[cfg(feature = "bun-cli-utils")]
+mod compressed;
+#[cfg(feature = "bun-cli-utils")]
+pub use compressed::js_register_embedded_zstd_asset;
+
 use std::collections::BTreeMap;
 use std::sync::{Mutex, OnceLock};
 

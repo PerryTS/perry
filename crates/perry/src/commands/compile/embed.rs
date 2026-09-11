@@ -32,6 +32,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
+mod compression;
+
 /// Read loader metadata preserved by unbun. Extensions are not authoritative:
 /// Bun can embed `notes.md` using its text loader or its file/Markdown loaders.
 /// Validate before graph compilation, so a malformed sidecar fails promptly.
@@ -363,6 +365,7 @@ pub(super) fn generate_embedded_asset_object(
     assets: &[(String, PathBuf)],
     output_dir: &Path,
     text_modules: &std::collections::HashSet<String>,
+    bun_platform: bool,
 ) -> Result<Option<PathBuf>> {
     if assets.is_empty() {
         return Ok(None);
@@ -376,6 +379,10 @@ pub(super) fn generate_embedded_asset_object(
     } else {
         "__perry_embedded_assets.o"
     });
+    let payloads = compression::prepare(assets, output_dir, bun_platform)?;
+    let compressed = payloads
+        .iter()
+        .any(|payload| payload.original_len.is_some());
 
     // Mach-O prefixes C symbols with `_` and names its read-only-const section
     // `__TEXT,__const`; ELF uses the bare symbol and `.rodata`. Perry runs on
@@ -401,6 +408,10 @@ pub(super) fn generate_embedded_asset_object(
     if !text_modules.is_empty() {
         c.push_str("extern void js_register_embedded_text_asset(const char *name, size_t name_len, const char *bytes, size_t bytes_len);\n\n");
     }
+    if compressed {
+        c.push_str("#include <stdint.h>\n#include <stdio.h>\n#include <stdlib.h>\n");
+        c.push_str("extern int32_t js_register_embedded_zstd_asset(const char *, size_t, const char *, size_t, size_t, uint32_t);\n");
+    }
 
     for (idx, (name, path)) in assets.iter().enumerate() {
         // Names are tiny — keep them as ASCII-clean C string literals.
@@ -421,11 +432,18 @@ pub(super) fn generate_embedded_asset_object(
         // and end label so the C side recovers the length as a link-time
         // constant (end − start). `.incbin` needs an unambiguous path, so feed
         // it the canonical absolute path.
-        let abs = path
+        let abs = payloads[idx]
+            .path
             .canonicalize()
             .map_err(|e| anyhow!("failed to resolve embed asset {}: {}", path.display(), e))?;
-        let start = format!("{sym_prefix}PERRY_ASSET_DATA_{idx}");
-        let end = format!("{sym_prefix}PERRY_ASSET_END_{idx}");
+        // Keep compressed bytes out of the old raw-data symbol namespace.
+        let kind = if payloads[idx].original_len.is_some() {
+            "ZSTD_"
+        } else {
+            ""
+        };
+        let start = format!("{sym_prefix}PERRY_ASSET_{kind}DATA_{idx}");
+        let end = format!("{sym_prefix}PERRY_ASSET_{kind}END_{idx}");
         // Assembler-level escape for the path inside `.incbin "..."`; `asm_line`
         // adds the C-string-literal escaping on top.
         let asm_path = abs
@@ -440,8 +458,8 @@ pub(super) fn generate_embedded_asset_object(
         c.push_str(&asm_line(&format!(".globl {end}")));
         c.push_str(&asm_line(&format!("{end}:")));
         c.push_str(");\n");
-        writeln!(c, "extern const char PERRY_ASSET_DATA_{idx}[];").ok();
-        writeln!(c, "extern const char PERRY_ASSET_END_{idx}[];").ok();
+        writeln!(c, "extern const char PERRY_ASSET_{kind}DATA_{idx}[];").ok();
+        writeln!(c, "extern const char PERRY_ASSET_{kind}END_{idx}[];").ok();
     }
 
     // Register before `main`'s `js_runtime_init`. Unix hosts use a priority
@@ -458,6 +476,11 @@ pub(super) fn generate_embedded_asset_object(
         c.push_str("static void perry_register_embedded_assets(void) {\n");
     }
     for idx in 0..assets.len() {
+        if let Some(original_len) = payloads[idx].original_len {
+            let text = u32::from(text_modules.contains(&assets[idx].0));
+            writeln!(c, "    if (!js_register_embedded_zstd_asset(PERRY_ASSET_NAME_{idx}, PERRY_ASSET_NAME_LEN_{idx}, PERRY_ASSET_ZSTD_DATA_{idx}, (size_t)(PERRY_ASSET_ZSTD_END_{idx} - PERRY_ASSET_ZSTD_DATA_{idx}), {original_len}, {text})) {{ fputs(\"Corrupt compressed embedded asset\\n\", stderr); _Exit(74); }}").ok();
+            continue;
+        }
         let register = if text_modules.contains(&assets[idx].0) {
             "js_register_embedded_text_asset"
         } else {
