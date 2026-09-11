@@ -206,7 +206,8 @@ fn json_source_length_large_dispatch_preserves_complete_outputs_and_rejects_suff
         ),
         (format!("\"{payload}\""), true),
         (format!(r#"{{"prefix":"a\"b","text":"{payload}"}}"#), true),
-        (format!(r#""\n{payload}""#), false),
+        (format!(r#""\n{payload}""#), true),
+        (format!("\"short\"{}", " ".repeat(4096)), true),
         (
             format!("{}{{\"crossing\":1}}{}", " ".repeat(248), " ".repeat(4096)),
             false,

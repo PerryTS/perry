@@ -8,7 +8,9 @@ use crate::StringHeader;
 pub(super) fn use_source_length_parser(input: &[u8]) -> bool {
     if input.len() <= 256 {
         false
-    } else if input.len() <= 4096 {
+    } else if input.len() <= 4096 || input[0] == b'"' {
+        // A root string can use this specialization without a prefix scan.
+        // Its ordinary parser still validates escapes and trailing syntax.
         true
     } else {
         large_source_may_have_dominant_token(input)
