@@ -127,7 +127,7 @@ pub extern "C" fn js_string_append(
             );
             (*dest).byte_len = new_blen;
             (*dest).utf16_len += (*src).utf16_len;
-            (*dest).flags |= flag_bits;
+            (*dest).flags = ((*dest).flags | flag_bits) & !STRING_FLAG_JSON_ESCAPE_FREE;
             return if boundary_pair {
                 // Merge the straddling pair (usually returns a new, smaller
                 // string; rare, so the in-place win still holds in general).

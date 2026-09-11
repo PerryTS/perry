@@ -9,6 +9,7 @@ for (let i = 0; i < values.length; i++) {
     console.log('callback-pretty', i, JSON.stringify(parsed, identity, 2));
     parsed.text = parsed.text + '\n"';
     parsed.short = parsed.short + '\\';
+    console.log('mutated-plain', i, JSON.stringify(parsed));
     console.log('mutated-pretty', i, JSON.stringify(parsed, null, 2));
     console.log('mutated-callback', i, JSON.stringify(parsed, identity));
 }

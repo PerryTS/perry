@@ -685,7 +685,9 @@ pub extern "C" fn js_string_concat(
             total_blen,
             total_blen,
             0,
-            flags_a | flags_b,
+            // Escape absence is a whole-string proof: one proven operand
+            // cannot certify bytes added by another operand.
+            (flags_a | flags_b) & !STRING_FLAG_JSON_ESCAPE_FREE,
         );
 
         if a_valid && blen_a > 0 {
@@ -1053,7 +1055,7 @@ fn append_chain_all_heap_strings<const MAX_PARTS: usize>(
         piece_lens[i] = blen;
         total_blen = total_blen.saturating_add(blen);
         total_u16 = total_u16.saturating_add(unsafe { (*piece).utf16_len });
-        piece_flags |= unsafe { (*piece).flags };
+        piece_flags |= unsafe { (*piece).flags } & !STRING_FLAG_JSON_ESCAPE_FREE;
     }
 
     let dest = piece_ptrs[0] as *mut StringHeader;
@@ -1073,7 +1075,7 @@ fn append_chain_all_heap_strings<const MAX_PARTS: usize>(
             }
             (*dest).byte_len = total_blen;
             (*dest).utf16_len = total_u16;
-            (*dest).flags |= piece_flags;
+            (*dest).flags = piece_flags;
             return if piece_flags & STRING_FLAG_HAS_LONE_SURROGATES != 0 {
                 canonicalize_surrogate_pairs(dest)
             } else {
@@ -1234,7 +1236,7 @@ fn concat_chain_all_heap_strings_no_collect<const MAX_PARTS: usize>(
         let blen = unsafe { (*ptr).byte_len };
         if blen > 0 {
             piece_lens[i] = blen;
-            piece_flags |= unsafe { (*ptr).flags };
+            piece_flags |= unsafe { (*ptr).flags } & !STRING_FLAG_JSON_ESCAPE_FREE;
             total_blen = total_blen.saturating_add(blen);
             total_u16 = total_u16.saturating_add(unsafe { (*ptr).utf16_len });
         }
@@ -1309,7 +1311,7 @@ fn concat_chain_sized<const MAX_PARTS: usize>(parts: *const f64, n: usize) -> *m
                     piece_string_handles[i] = Some(scope.root_string_ptr(ptr));
                     piece_lens[i] = blen;
                     piece_u16[i] = u16len;
-                    piece_flags |= flags;
+                    piece_flags |= flags & !STRING_FLAG_JSON_ESCAPE_FREE;
                     total_blen = total_blen.saturating_add(blen);
                     total_u16 = total_u16.saturating_add(u16len);
                 }
@@ -1329,7 +1331,7 @@ fn concat_chain_sized<const MAX_PARTS: usize>(parts: *const f64, n: usize) -> *m
                     piece_string_handles[i] = Some(scope.root_string_ptr(s));
                     piece_lens[i] = blen;
                     piece_u16[i] = u16len;
-                    piece_flags |= flags;
+                    piece_flags |= flags & !STRING_FLAG_JSON_ESCAPE_FREE;
                     total_blen = total_blen.saturating_add(blen);
                     total_u16 = total_u16.saturating_add(u16len);
                 }
@@ -1383,7 +1385,7 @@ fn concat_chain_sized<const MAX_PARTS: usize>(parts: *const f64, n: usize) -> *m
                 piece_string_handles[i] = Some(scope.root_string_ptr(s));
                 piece_lens[i] = blen;
                 piece_u16[i] = u16len;
-                piece_flags |= flags;
+                piece_flags |= flags & !STRING_FLAG_JSON_ESCAPE_FREE;
                 total_blen = total_blen.saturating_add(blen);
                 total_u16 = total_u16.saturating_add(u16len);
             }

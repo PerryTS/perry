@@ -1119,3 +1119,6 @@ pub(crate) fn intern_table_census() -> (usize, usize) {
         intern::INTERN_TABLE_SIZE * std::mem::size_of::<intern::InternEntry>(),
     )
 }
+
+#[cfg(test)]
+mod json_flags_tests;
