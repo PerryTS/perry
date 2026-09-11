@@ -37,19 +37,18 @@ async function* retained(callbacks: Array<() => number>) {
     yield wrapper();
   }
 }
-function tdzAndRecursion() {
+// Separate invocations: repeated-block TDZ reset already fails on main (#10051).
+function tdzAndRecursion(index: number) {
   const results: string[] = [];
-  for (let index = 0; index < 2; index++) {
-    let read = () => value;
-    try { read(); results.push('missing-tdz'); }
-    catch (error) { results.push(error instanceof ReferenceError ? 'tdz' : 'wrong-error'); }
-    let value: number;
-    results.push(String(read()));
-    value = index;
-    results.push(String(read()));
-    let recurse = (n: number): number => n === 0 ? value : recurse(n - 1);
-    results.push(String(recurse(2)));
-  }
+  let read = () => value;
+  try { read(); results.push('missing-tdz'); }
+  catch (error) { results.push(error instanceof ReferenceError ? 'tdz' : 'wrong-error'); }
+  let value: number;
+  results.push(String(read()));
+  value = index;
+  results.push(String(read()));
+  let recurse = (n: number): number => n === 0 ? value : recurse(n - 1);
+  results.push(String(recurse(2)));
   return results.join(',');
 }
 function hoistedVar() {
@@ -73,7 +72,7 @@ async function main() {
   const callbacks: Array<() => number> = [];
   check('retained yields', await collect(retained(callbacks)), '0,110,1,111,2,112');
   check('retained callbacks', callbacks.map(callback => callback()).join(','), '110,111,112');
-  check('TDZ and recursion', tdzAndRecursion(), 'tdz,undefined,0,0,tdz,undefined,1,1');
+  check('TDZ and recursion', tdzAndRecursion(0) + ',' + tdzAndRecursion(1), 'tdz,undefined,0,0,tdz,undefined,1,1');
   check('hoisted var', hoistedVar(), '2,2,2');
   console.log('PASS: preallocated capture controls');
 }

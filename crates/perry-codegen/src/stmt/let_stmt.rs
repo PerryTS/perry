@@ -386,11 +386,7 @@ pub(crate) fn lower_let(
     // reuse guard must consider the rep map too, or a redeclaration would
     // re-run the allocation path and leave the local with two slots.
     if ctx.locals.contains_key(&id) || ctx.local_slot_reps.contains_key(&id) {
-        // #10048: a previous *emitted* boxed Let may belong to another
-        // generator continuation. Its entry-initialized pointer slot exists,
-        // but the allocation did not execute on this resumed path. Preserve
-        // live var cells while lazily materializing a missing declaration cell
-        // BEFORE evaluating the initializer (which may capture itself).
+        // #10048: materialize a missing continuation cell before its initializer.
         super::boxed_local_init::ensure_reused_box_is_initialized(ctx, id);
         if let Some(init_expr) = init {
             // The binding's OWN declaration ends its Temporal Dead Zone: the
