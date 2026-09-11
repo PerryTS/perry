@@ -4,7 +4,15 @@
 use super::{auto_optimized_cross_features, CompilationContext};
 use std::collections::BTreeSet;
 
-const CORE_FEATURES: &[&str] = &["full", "alloc-mimalloc", "keepalive-anchors"];
+// The existing conservative member-name analysis also sees `console.log` as
+// a possible `Math.log` value read. Keep Math's namespace in the small profile
+// rather than weakening that analysis and risking a missing extracted method.
+const CORE_FEATURES: &[&str] = &[
+    "full",
+    "alloc-mimalloc",
+    "keepalive-anchors",
+    "global-math",
+];
 
 pub(super) fn eligible(ctx: &CompilationContext, cli_features: &[String]) -> bool {
     // The first packaged subset supports runtime-only native programs. Keep
@@ -55,6 +63,9 @@ mod tests {
             .collect();
         assert_eq!(packaged, CORE_FEATURES.iter().copied().collect());
         assert!(eligible(&context(), &[]));
+        let mut console_or_math = context();
+        console_or_math.uses_global_math = true;
+        assert!(eligible(&console_or_math, &[]));
     }
 
     #[test]
@@ -70,7 +81,6 @@ mod tests {
             |c: &mut CompilationContext| c.uses_intl_datetime = true,
             |c: &mut CompilationContext| c.uses_data_url_dynamic_import = true,
             |c: &mut CompilationContext| c.uses_diagnostics = true,
-            |c: &mut CompilationContext| c.uses_global_math = true,
             |c: &mut CompilationContext| c.uses_global_json = true,
             |c: &mut CompilationContext| c.uses_global_reflect = true,
             |c: &mut CompilationContext| c.uses_global_atomics = true,
