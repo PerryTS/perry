@@ -1,0 +1,12 @@
+FINISHED records_array_16k repeat
+FINISHED records_array_16k random
+FINISHED records_array_16k fields
+FINISHED records_array_16k sequential
+FINISHED records_array_1m repeat
+FINISHED records_array_1m random
+FINISHED records_array_1m fields
+FINISHED records_array_1m sequential
+FINISHED records_array_20m repeat
+FINISHED records_array_20m random
+FINISHED records_array_20m fields
+FINISHED records_array_20m sequential

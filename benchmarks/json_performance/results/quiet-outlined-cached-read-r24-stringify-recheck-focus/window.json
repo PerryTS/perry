@@ -1,0 +1,38 @@
+{
+  "owner": "json-perf-98794-1789109942",
+  "load_before": [
+    1.705078125,
+    1.8408203125,
+    1.7353515625
+  ],
+  "started_utc": "2026-09-11T06:59:02Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/outlined-cached-read-r24/run-focus.py",
+    "--worker",
+    ".work/outlined-cached-read-r24/candidate-worker",
+    "--baseline-worker",
+    ".work/outlined-cached-read-r24/main-worker",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--bun",
+    "/Users/perry/.bun/bin/bun",
+    "--case",
+    "small_record:stringify:2000000:5000:11",
+    "--case",
+    "long_string_1m:stringify:1922:2:11",
+    "--case",
+    "unicode_1m:stringify:2475:2:11",
+    "--results-dir",
+    "results/quiet-outlined-cached-read-r24-stringify-recheck-focus"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.75830078125,
+    1.8291015625,
+    1.7353515625
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-11T06:59:43Z"
+}

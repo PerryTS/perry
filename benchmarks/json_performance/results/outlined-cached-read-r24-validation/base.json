@@ -1,0 +1,7 @@
+{
+  "base_commit": "1a9c0de6cb790d2467b0ca22a660870025179b37",
+  "candidate": "Allocation-free sparse cache and materialized dense reads; holes/sparse/descriptors retain rooted fallback",
+  "full_scope": "original38+12consumption+12access+rotating15+retained36+short+options",
+  "remote_main_observed": "603b074ace01464bc66fc07cc8d532f26ccf5a0f",
+  "remote_main_delta": "release/CI plumbing and workspace patch version only; controlled baseline stays 1a9c0de6"
+}

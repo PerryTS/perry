@@ -1,0 +1,33 @@
+{
+  "note": "Instrumented steady access diagnostics, separate from CPU benchmark comparisons. A 0.5-second settling delay precedes a one-second sample; coverage must exceed 500 workload samples.",
+  "cases": [
+    {
+      "fixture": "records_array_16k",
+      "operation": "fields",
+      "mode": "main",
+      "iterations": 100000000,
+      "warmup": 100000
+    },
+    {
+      "fixture": "records_array_16k",
+      "operation": "fields",
+      "mode": "candidate",
+      "iterations": 100000000,
+      "warmup": 100000
+    },
+    {
+      "fixture": "records_array_1m",
+      "operation": "fields",
+      "mode": "main",
+      "iterations": 100000000,
+      "warmup": 100000
+    },
+    {
+      "fixture": "records_array_1m",
+      "operation": "fields",
+      "mode": "candidate",
+      "iterations": 100000000,
+      "warmup": 100000
+    }
+  ]
+}

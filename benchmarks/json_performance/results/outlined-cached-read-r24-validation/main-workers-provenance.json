@@ -1,0 +1,134 @@
+[
+  {
+    "worker": "worker",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/frozen-main/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/harness/worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/main-worker.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/main-worker.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/frozen-main/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/main-worker"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/materialized-read-r23/harness/worker.ts": "f3c42ec9f04fdb9ba84dc3cf50dc59f18685540033807f3db3a7f75c08a85d39",
+      "benchmarks/json_performance/.work/materialized-read-r23/main-worker.o": "b4b4f4082a942022854cd87d256ef356ed0ff2b6320486282ef5bec4a7d42bde",
+      "benchmarks/json_performance/.work/materialized-read-r23/main-worker": "2ba5bf03b32f5aeccb9b9c04b8005a7ca7f67f0555c14994d0f2c4561b940f49",
+      "benchmarks/json_performance/.work/materialized-read-r23/frozen-main/perry": "ade63eddfdeca03926039d10e3310f9255d52c5b2721ccd2b0882f042a689156",
+      "benchmarks/json_performance/.work/materialized-read-r23/frozen-main/libperry_runtime.a": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458",
+      "benchmarks/json_performance/.work/materialized-read-r23/frozen-main/libperry_stdlib.a": "61fac03f0405a48b8d390958e3002246061db6e009fcd078fe61a98d1a1068b0"
+    }
+  },
+  {
+    "worker": "access-worker",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/frozen-main/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/harness/access-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/main-access-worker.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/main-access-worker.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/frozen-main/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/main-access-worker"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/materialized-read-r23/harness/access-worker.ts": "dba0240ef6441a07657e664354982a04045c036e53f65c1d06df62d55c73be67",
+      "benchmarks/json_performance/.work/materialized-read-r23/main-access-worker.o": "f254101175a846f8d526ca85103adb6de981e0b41e0e484f3e0a60f948e35818",
+      "benchmarks/json_performance/.work/materialized-read-r23/main-access-worker": "8d0b2b25e1890123411918d424609480dcf94faec607efa1fac2e09fc19907b7",
+      "benchmarks/json_performance/.work/materialized-read-r23/frozen-main/perry": "ade63eddfdeca03926039d10e3310f9255d52c5b2721ccd2b0882f042a689156",
+      "benchmarks/json_performance/.work/materialized-read-r23/frozen-main/libperry_runtime.a": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458",
+      "benchmarks/json_performance/.work/materialized-read-r23/frozen-main/libperry_stdlib.a": "61fac03f0405a48b8d390958e3002246061db6e009fcd078fe61a98d1a1068b0"
+    }
+  },
+  {
+    "worker": "rotating-worker",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/frozen-main/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/harness/rotating-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/main-rotating-worker.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/main-rotating-worker.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/frozen-main/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/main-rotating-worker"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/materialized-read-r23/harness/rotating-worker.ts": "7541897acb2c7c35c0f5e762f8b2f28b9783feb26a42db107c1c4eb3af644b24",
+      "benchmarks/json_performance/.work/materialized-read-r23/main-rotating-worker.o": "85cf7332d6734195f0776b7c19d8b89d133bddd443032f1c87d91db8474186bc",
+      "benchmarks/json_performance/.work/materialized-read-r23/main-rotating-worker": "2d62d93ffb50ee39cbcf710c58bd7cf8df64ee91d1293eff02b47101d1b9dfba",
+      "benchmarks/json_performance/.work/materialized-read-r23/frozen-main/perry": "ade63eddfdeca03926039d10e3310f9255d52c5b2721ccd2b0882f042a689156",
+      "benchmarks/json_performance/.work/materialized-read-r23/frozen-main/libperry_runtime.a": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458",
+      "benchmarks/json_performance/.work/materialized-read-r23/frozen-main/libperry_stdlib.a": "61fac03f0405a48b8d390958e3002246061db6e009fcd078fe61a98d1a1068b0"
+    }
+  },
+  {
+    "worker": "options",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/frozen-main/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/options-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/main-options.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/main-options.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/frozen-main/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/materialized-read-r23/main-options"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/materialized-read-r23/options-worker.ts": "d08c6a916c18197b889a0de4a3777632ad307275752b85c5abd75daf4d6ad85d",
+      "benchmarks/json_performance/.work/materialized-read-r23/main-options.o": "f25e0184b7348b0c49297064430f7938d911663721e8ca5c7ccba7c9554f958f",
+      "benchmarks/json_performance/.work/materialized-read-r23/main-options": "ff86e730996d0fdb9539767d146f7ba7832e93b16de21c7c253c664bb1e79da9",
+      "benchmarks/json_performance/.work/materialized-read-r23/frozen-main/perry": "ade63eddfdeca03926039d10e3310f9255d52c5b2721ccd2b0882f042a689156",
+      "benchmarks/json_performance/.work/materialized-read-r23/frozen-main/libperry_runtime.a": "b2be9b8596982f5a1d475d666ada79ab2a78b9c8500b2c0d71d941a9f8d96458",
+      "benchmarks/json_performance/.work/materialized-read-r23/frozen-main/libperry_stdlib.a": "61fac03f0405a48b8d390958e3002246061db6e009fcd078fe61a98d1a1068b0"
+    }
+  }
+]

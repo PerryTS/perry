@@ -1,0 +1,7 @@
+{
+  "note": "The initial staged whitespace check rejected blank context markers inside the raw archived source.patch. Store a lossless gzip and original/compressed hashes, matching other windows. Production source, binaries, samples and original patch bytes unchanged. The measured profile controller remains the original recorded script in the window archive; the WORK controller is updated for future compression.",
+  "original_patch_sha256": "853ba6e66e64e0d12e922c9d43dd08aa81ba20fd744df101427429a70ad65105",
+  "initial_staged_whitespace_check_exit": 2,
+  "file_cap_exit": 0,
+  "profile_controller_rerun": false
+}

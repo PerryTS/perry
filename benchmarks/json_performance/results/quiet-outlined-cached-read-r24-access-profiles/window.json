@@ -1,0 +1,24 @@
+{
+  "owner": "json-perf-3775-1789110711",
+  "load_before": [
+    1.5869140625,
+    1.7080078125,
+    1.6953125
+  ],
+  "started_utc": "2026-09-11T07:11:51Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/outlined-cached-read-r24/run-access-profiles.py",
+    "--results-dir",
+    "results/quiet-outlined-cached-read-r24-access-profiles"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    2.48974609375,
+    1.92626953125,
+    1.77392578125
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-11T07:12:26Z"
+}

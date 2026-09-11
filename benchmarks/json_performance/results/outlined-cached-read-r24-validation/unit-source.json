@@ -1,0 +1,22 @@
+{
+  "source_commit": "9495bfc95e2afcfb5a7cb535e440e61ec0722cb1",
+  "command": [
+    "cargo",
+    "test",
+    "--release",
+    "-p",
+    "perry-runtime",
+    "--lib",
+    "json"
+  ],
+  "env": {
+    "RUST_TEST_THREADS": "1"
+  },
+  "hashes": {
+    "crates/perry-runtime/src/json_tape.rs": "dbb8699b7bb3ed2b1a57574d7b12a237e58c05308c81c55ed98558971bf6246a",
+    "crates/perry-runtime/src/json_tape/cached_read.rs": "07a9b4b18608184c48941a420ae3e485f737b901592ce9a0c8d15e92d22f27b4",
+    "test-files/test_json_cached_reads.ts": "c145732db64c711c572e8a5a7beeb797e1e06b695335f8140ca62f41654616ba",
+    "crates/perry-runtime/src/gc/tests/runtime_roots/callback_scanners.rs": "459864915308c85634e448abf3aa81a1ea1c34b73e548f04fdcc599d937dd069"
+  },
+  "exit_code": 0
+}

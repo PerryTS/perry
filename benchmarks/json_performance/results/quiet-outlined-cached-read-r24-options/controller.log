@@ -1,0 +1,7 @@
+FINISHED small_record plain 2000000
+FINISHED small_record dynamic-zero 2000000
+FINISHED small_record zero 2000000
+FINISHED small_record pretty 1000000
+FINISHED small_record keys 1000000
+FINISHED small_record callback 200000
+FINISHED records_array_16k pretty 1000

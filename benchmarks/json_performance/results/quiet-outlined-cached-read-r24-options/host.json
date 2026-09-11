@@ -1,0 +1,79 @@
+{
+  "started_utc": "2026-09-11T07:01:05Z",
+  "load_before": [
+    1.51953125,
+    1.75830078125,
+    1.7177734375
+  ],
+  "cases": [
+    [
+      "small_record",
+      "plain",
+      2000000,
+      5000,
+      7
+    ],
+    [
+      "small_record",
+      "dynamic-zero",
+      2000000,
+      5000,
+      7
+    ],
+    [
+      "small_record",
+      "zero",
+      2000000,
+      5000,
+      7
+    ],
+    [
+      "small_record",
+      "pretty",
+      1000000,
+      5000,
+      7
+    ],
+    [
+      "small_record",
+      "keys",
+      1000000,
+      5000,
+      7
+    ],
+    [
+      "small_record",
+      "callback",
+      200000,
+      5000,
+      7
+    ],
+    [
+      "records_array_16k",
+      "pretty",
+      1000,
+      8,
+      7
+    ]
+  ],
+  "workers": {
+    "perry": "b47b5bd06fbe2ee12f7dcb800940d36e62f37d1e1ad4366180c9c2908d7e1d85",
+    "baseline": "ff86e730996d0fdb9539767d146f7ba7832e93b16de21c7c253c664bb1e79da9",
+    "node": "87e9b1fed820a2683ea90f5871596edf605b7162519156856dacbfbad36d1d29",
+    "bun": "e0c90ec15d33363e6b70713d56bc3b2c7585c17f40a0fe0f8fd9305901d4e233"
+  },
+  "sources": {
+    "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/outlined-cached-read-r24/run-options.py": "698166c0014b837ea1ac3edbe273fd7b9c2b406a53e970760f2bd36589b571a8",
+    "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/run_dispatch_focus.py": "100ba3e1bd5c0cd451d1a3528f95b5f4b8d0ff2f4771796ab8598b36a46fbcc4",
+    "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/outlined-cached-read-r24/options-worker.ts": "d08c6a916c18197b889a0de4a3777632ad307275752b85c5abd75daf4d6ad85d",
+    "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/outlined-cached-read-r24/options-worker.js": "a8615b823b58b3f437bd3cb4c6418bc7279a767f93a082f1f206a49aee0cbaa9"
+  },
+  "node_version": "v26.5.1",
+  "bun_version": "1.3.14",
+  "finished_utc": "2026-09-11T07:02:31Z",
+  "load_after": [
+    1.75048828125,
+    1.7822265625,
+    1.73095703125
+  ]
+}
