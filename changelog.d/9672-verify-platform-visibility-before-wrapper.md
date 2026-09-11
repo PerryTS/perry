@@ -13,7 +13,7 @@
   to 0.5.1520.
 
   Before the wrapper is published, each platform package is now confirmed present
-  in the registry (up to 5 minutes each, polling). The check reads the
+  in the registry (one shared 45-minute budget, polling). The check reads the
   packument's **`time` map**, which was the only signal that told the truth here:
   `npm view` returned nothing and the publish exit status returned success for a
   version npm had no record of. A package that never appears blocks the wrapper

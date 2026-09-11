@@ -244,17 +244,26 @@ jobs:
               return 1
             }
             plumbing_only() {
-              local files="$1" f bad=""
-              [ -z "$files" ] && return 1
-              while IFS= read -r f; do
-                [ -z "$f" ] && continue
-                case "$f" in
-                  changelog.d/*|scripts/linux-*.Dockerfile|.github/workflows/release-packages.yml) ;;
-                  *) bad="$bad $f" ;;
-                esac
-              done <<< "$files"
-              [ -n "$bad" ] && { echo "    rejected — not release-plumbing:$bad"; return 1; }
-              return 0
+              # The compare API caps files at 300, even with pagination. At
+              # that boundary completeness is unknown: require the exact SHA.
+              # A rename must also allow its OLD path, or moving code into
+              # changelog.d/ would hide its removal from the tested tree.
+              jq -e --arg base "$2" '
+                def allowed:
+                  type == "string" and
+                  (test("(^/|[\\\\\\r\\n]|(^|/)\\.\\.?(/|$)|//)") | not) and
+                  (test("^changelog[.]d/[^/]+.*$") or
+                   test("^scripts/linux-[^/]+[.]Dockerfile$") or
+                   . == ".github/workflows/release-packages.yml");
+                .status == "ahead" and .behind_by == 0 and
+                .base_commit.sha == $base and .merge_base_commit.sha == $base and
+                (.files | type == "array" and length > 0 and length < 300) and
+                all(.files[];
+                  (.filename | allowed) and
+                  (.status == "added" or .status == "modified" or
+                   .status == "removed" or
+                   (.status == "renamed" and (.previous_filename | allowed))))
+              ' <<< "$1" >/dev/null
             }
             if gate_green "$SHA"; then
               echo "gate: exact SHA $SHA already has a green full-suite-gate."
@@ -263,10 +272,10 @@ jobs:
               for cand in $(gh api "/repos/$REPO/commits?sha=$SHA&per_page=15" --jq '.[].sha' 2>/dev/null | tail -n +2); do
                 gate_green "$cand" || continue
                 echo "  ancestor $cand has a green full-suite-gate; comparing trees"
-                files=$(gh api "/repos/$REPO/compare/$cand...$SHA" --jq '.files[]?.filename' 2>/dev/null)
-                if plumbing_only "$files"; then
+                comparison=$(gh api "/repos/$REPO/compare/$cand...$SHA" 2>/dev/null) || continue
+                if plumbing_only "$comparison" "$cand"; then
                   echo "    accepted — diff is release-plumbing only:"
-                  echo "$files" | sed 's/^/      /'
+                  jq -r '.files[].filename | "      " + .' <<< "$comparison"
                   GATE_SHA="$cand"
                   break
                 fi
@@ -286,17 +295,24 @@ jobs:
             # nightly. The /release skill dispatches cut_release runs on a
             # pinned release/vX.Y.Z branch for exactly that reason.
             for wf_file in "test.yml" "simctl-tests.yml"; do
+              # Only test.yml may reuse the ancestor. Simulator tests still
+              # run on the candidate, which is where dispatch below runs them.
+              WF_SHA="$SHA"
+              if [ "$wf_file" = "test.yml" ]; then
+                WF_SHA="$GATE_SHA"
+                [ "$GATE_SHA" != "$SHA" ] && continue
+              fi
               # test.yml: only a FULL-tier run counts (see the poll below), so
               # look for one of those rather than any run on the SHA -- a
               # push-to-main sweep on the same commit must not suppress the
               # dispatch.
               if [ "$wf_file" = "test.yml" ]; then
                 count=$(gh api \
-                  "/repos/$REPO/actions/workflows/$wf_file/runs?head_sha=$GATE_SHA&per_page=20" \
+                  "/repos/$REPO/actions/workflows/$wf_file/runs?head_sha=$WF_SHA&per_page=20" \
                   --jq '[.workflow_runs[] | select(.event == "workflow_dispatch" or .event == "schedule" or .event == "push" and (.head_branch | startswith("v")))] | length')
               else
                 count=$(gh api \
-                  "/repos/$REPO/actions/workflows/$wf_file/runs?head_sha=$GATE_SHA&per_page=1" \
+                  "/repos/$REPO/actions/workflows/$wf_file/runs?head_sha=$WF_SHA&per_page=1" \
                   --jq '.total_count')
               fi
               if [ "$count" = "0" ]; then
@@ -308,7 +324,7 @@ jobs:
                   echo "::error::$REF_NAME moved to $tip (this run is on $SHA) — re-dispatch on a branch pinned at the release candidate."
                   exit 1
                 fi
-                echo "No $wf_file run on $GATE_SHA yet — dispatching on $REF_NAME."
+                echo "No $wf_file run on $WF_SHA yet — dispatching on $REF_NAME."
                 if [ "$wf_file" = "test.yml" ]; then
                   # The tiered CI workflow: `tier=full` is its dispatch default,
                   # but say so explicitly -- this is the release gate.
@@ -331,6 +347,8 @@ jobs:
           # API error now gets one retry then fails the gate loudly instead
           # of burning the 45-min budget.
           for wf_file in "test.yml" "simctl-tests.yml"; do
+            WF_SHA="$SHA"
+            [ "$wf_file" = "test.yml" ] && WF_SHA="$GATE_SHA"
             echo "::group::Waiting for $wf_file"
             # 120-min budget per workflow.
             # - v0.5.876: 60 → 90 (Tests wall-time grew past 60).
@@ -353,7 +371,7 @@ jobs:
               # Tests run was green, but a tag-triggered Tests run on the
               # same SHA was newer + still running, locking the gate).
               api_out=$(gh api \
-                "/repos/$REPO/actions/workflows/$wf_file/runs?head_sha=$GATE_SHA&per_page=20" \
+                "/repos/$REPO/actions/workflows/$wf_file/runs?head_sha=$WF_SHA&per_page=20" \
                 2>&1)
               rc=$?
               set -e
@@ -1586,7 +1604,7 @@ jobs:
             perry-cross-${{ matrix.target }}.tar.gz.sha256
 
   # ---------------------------------------------------------------------------
-  # Tag-last core (cut-release mode only): every build leg is green and all
+  # Tag-last core (cut-release mode only): every build leg is green and
   # every exact npm tarball is public + registry-verified, so NOW create the
   # tag + GitHub Release. Release notes are cut from changelog.d/
   # fragments — same contract as scripts/cut_release_notes.sh, whose
@@ -1632,14 +1650,24 @@ jobs:
           # fire on the NORMAL path (tag absent) and aborted v0.5.1520's
           # create-release with `already exists at {"message":"Not Found"...}`.
           existing=""
-          if gh api "repos/$REPO/git/ref/tags/$TAG" >/dev/null 2>&1; then
-            existing=$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq '.object.sha' 2>/dev/null || true)
+          # One request, including status headers: only an actual 404 means
+          # absent. Authentication/server failures and malformed data must
+          # not fall through to a release write. Annotated tags fail closed.
+          if tag_response=$(gh api --include "repos/$REPO/git/ref/tags/$TAG" \
+               --jq '.object | select(.type == "commit") | .sha' 2>&1); then
+            existing="${tag_response##*$'\n'}"
+            existing="${existing%$'\r'}"
+            if [[ ! "$existing" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::tag $TAG returned no valid commit SHA — aborting." >&2
+              exit 1
+            fi
+          else
+            http_status="${tag_response%%$'\n'*}"
+            if [[ ! "$http_status" =~ ^HTTP/[0-9.]+\ 404([[:space:]]|$) ]]; then
+              echo "::error::could not determine whether tag $TAG exists — aborting." >&2
+              exit 1
+            fi
           fi
-          # Belt and braces: only a 40-char hex string is a SHA.
-          case "$existing" in
-            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
-            *) existing="" ;;
-          esac
           reuse_tag=0
           if [ -n "$existing" ]; then
             if [ "$existing" != "$SHA" ]; then
@@ -2467,44 +2495,9 @@ jobs:
               # waits again. What must never happen is the wrapper going out
               # over a platform that is not really there.
               echo "=== verifying every platform package is visible before publishing the wrapper ==="
-              deadline=$(( $(date +%s) + VISIBILITY_WAIT_MIN * 60 ))
-              unseen=""
-              while IFS=$'\t' read -r pname pversion; do
-                [ "$pname" = "@perryts/perry" ] && continue
-                seen=0
-                while :; do
-                  if node -e '
-                    const https = require("https")
-                    const [pkg, ver] = process.argv.slice(1)
-                    https.get("https://registry.npmjs.org/" + encodeURIComponent(pkg), res => {
-                      let b = ""
-                      res.on("data", c => b += c)
-                      res.on("end", () => {
-                        try {
-                          const t = JSON.parse(b).time || {}
-                          process.exit(t[ver] ? 0 : 1)
-                        } catch { process.exit(1) }
-                      })
-                    }).on("error", () => process.exit(1))
-                  ' "$pname" "$pversion"; then seen=1; break; fi
-                  if [ "$(date +%s)" -ge "$deadline" ]; then break; fi
-                  sleep 20
-                done
-                if [ "$seen" -eq 1 ]; then
-                  echo "  visible: $pname@$pversion"
-                else
-                  echo "::error::$pname@$pversion still not visible after the ${VISIBILITY_WAIT_MIN}-minute budget — npm scanning may still be running, or the version is staged. Rerun this job to resume." >&2
-                  unseen="$unseen $pname@$pversion"
-                fi
-              done < <(node -e '
-                const manifest = require("./npm-publish-manifest.json")
-                for (const pkg of manifest.packages) {
-                  console.log([pkg.name, pkg.version].join("\t"))
-                }
-              ')
-              if [ -n "$unseen" ]; then
-                echo "::error::Refusing to publish the wrapper: platform package(s) not visible:$unseen" >&2
-                failed="$failed$unseen (published but not visible)"
+              if ! node scripts/publish/platform-visibility.mjs npm-publish-manifest.json; then
+                echo "::error::Refusing to publish the wrapper: platform visibility verification failed. Rerun this job to resume." >&2
+                failed="$failed $name@$version (platform visibility failed)"
                 continue
               fi
             fi
