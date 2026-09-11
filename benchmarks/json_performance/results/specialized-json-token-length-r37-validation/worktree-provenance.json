@@ -1,0 +1,6 @@
+{
+  "source_commit": "3d59ed5219ace6bf001df3de9108c52434dc4232",
+  "worktree": "/Users/amlug/projects/perry/json-stringify-key-snapshot-r29",
+  "created_utc": "2026-09-11T14:48:09.903143+00:00",
+  "note": "Owned experimental worktree, shared owned target, one Cargo build at a time. Initial77ea and599b attempts never reached production; final-source build uses clean3d59."
+}

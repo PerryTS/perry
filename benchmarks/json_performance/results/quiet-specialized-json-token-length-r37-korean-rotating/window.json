@@ -1,0 +1,36 @@
+{
+  "owner": "json-perf-43476-1789139251",
+  "load_before": [
+    1.5732421875,
+    1.60986328125,
+    1.50048828125
+  ],
+  "started_utc": "2026-09-11T15:07:31Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/specialized-json-token-length-r37/run-korean-rotating.py",
+    "--worker",
+    ".work/specialized-json-token-length-r37/candidate-rotating-worker",
+    "--baseline-worker",
+    ".work/specialized-json-token-length-r37/main-rotating-worker",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--bun",
+    "/Users/perry/.bun/bin/bun",
+    "--repeat",
+    "7",
+    "--source-commit",
+    "3d59ed5219ace6bf001df3de9108c52434dc4232",
+    "--results-dir",
+    "results/quiet-specialized-json-token-length-r37-korean-rotating"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    2.26953125,
+    1.77490234375,
+    1.5634765625
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-11T15:08:13Z"
+}

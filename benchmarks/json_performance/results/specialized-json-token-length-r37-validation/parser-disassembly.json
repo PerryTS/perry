@@ -1,0 +1,57 @@
+{
+  "rows": [
+    {
+      "function": "Kb0_E18parse_string_value",
+      "symbol": "__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserINtB5_23SpecializedDirectParserKb0_E18parse_string_valueB9_",
+      "instructions": 158,
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserINtB5_23SpecializedDirectParserKb0_E18parse_string_valueB9_",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/specialized-json-token-length-r37/candidate-rotating-worker"
+      ],
+      "sha256": "5b18b8672da3e7e2e4a94679603d78a56d8249bc90c26c3ea65ba5e8be742b18",
+      "binary_sha256": "103330fc5d936ca3792b19c43eb9226c3eb824fc57b5546d22cf758d0f745590"
+    },
+    {
+      "function": "Kb0_E20parse_object_untyped",
+      "symbol": "__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserINtB5_23SpecializedDirectParserKb0_E20parse_object_untypedB9_",
+      "instructions": 1186,
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserINtB5_23SpecializedDirectParserKb0_E20parse_object_untypedB9_",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/specialized-json-token-length-r37/candidate-rotating-worker"
+      ],
+      "sha256": "2850bd7a2ae092e2cc258d06934492fd36cc70f3c1301e7b99af6e9c7a55fb89",
+      "binary_sha256": "103330fc5d936ca3792b19c43eb9226c3eb824fc57b5546d22cf758d0f745590"
+    },
+    {
+      "function": "Kb0_E23parse_string_bytes_slow",
+      "symbol": "__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserINtB5_23SpecializedDirectParserKb0_E23parse_string_bytes_slowB9_",
+      "instructions": 828,
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserINtB5_23SpecializedDirectParserKb0_E23parse_string_bytes_slowB9_",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/specialized-json-token-length-r37/candidate-rotating-worker"
+      ],
+      "sha256": "7483516fbd2664a338a045ca58bde64347d0e8517158ef57a49481df362902b4",
+      "binary_sha256": "103330fc5d936ca3792b19c43eb9226c3eb824fc57b5546d22cf758d0f745590"
+    },
+    {
+      "function": "Kb1_E11parse_value",
+      "symbol": "__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserINtB5_23SpecializedDirectParserKb1_E11parse_valueB9_",
+      "instructions": 1760,
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserINtB5_23SpecializedDirectParserKb1_E11parse_valueB9_",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/specialized-json-token-length-r37/candidate-rotating-worker"
+      ],
+      "sha256": "acd4d53e63371ae8807fb559d1aaa29335fbded63d703b293d5239f9c086dd43",
+      "binary_sha256": "103330fc5d936ca3792b19c43eb9226c3eb824fc57b5546d22cf758d0f745590"
+    }
+  ],
+  "note": "Small specialization has no dominant-token proof call. The large parse_value inlines object/string paths and contains the proof call; several generic methods are merged/shared or inlined, so missing standalone true symbols do not imply an unused specialization. Diagnostic counts only."
+}

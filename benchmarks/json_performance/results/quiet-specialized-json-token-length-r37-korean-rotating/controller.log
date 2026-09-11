@@ -1,0 +1,12 @@
+VERIFY korean_small rotating all engines passed
+VERIFY korean_small same all engines passed
+VERIFY korean_small select all engines passed
+TIMING korean_small rotating 653594 calls per engine
+TIMING korean_small same 1898734 calls per engine
+TIMING korean_small select 2000000 calls per engine
+VERIFY korean_1m rotating all engines passed
+VERIFY korean_1m same all engines passed
+VERIFY korean_1m select all engines passed
+TIMING korean_1m rotating 1963 calls per engine
+TIMING korean_1m same 4397 calls per engine
+TIMING korean_1m select 2000000 calls per engine

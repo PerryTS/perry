@@ -1,0 +1,5 @@
+{
+  "bootstrap_source_commit": "599b1914de1772a8f8b35ab44df7c9e7b28a8274",
+  "final_source_commit": "3d59ed5219ace6bf001df3de9108c52434dc4232",
+  "note": "Final formatting fix changes only the pointer-chain line wrapping in parser_escape_chunk.rs. Reference fixture sources unchanged; preserve bootstrap metadata and both preproduction attempts. Fresh final-source unit/lint receipts required."
+}

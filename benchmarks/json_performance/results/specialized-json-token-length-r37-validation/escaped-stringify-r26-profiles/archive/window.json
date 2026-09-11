@@ -1,0 +1,24 @@
+{
+  "owner": "json-perf-42068-1789137893",
+  "load_before": [
+    1.154296875,
+    1.3359375,
+    1.4560546875
+  ],
+  "started_utc": "2026-09-11T14:44:53Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/escaped-stringify-r26-profiles/run-stringify-profiles.py",
+    "--results-dir",
+    "results/quiet-escaped-stringify-r26-profiles"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.1416015625,
+    1.330078125,
+    1.453125
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-11T14:45:01Z"
+}

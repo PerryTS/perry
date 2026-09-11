@@ -1,0 +1,1 @@
+Source599b1914de1772a8f8b35ab44df7c9e7b28a8274 passed308serialreleaseJSONtests2.87s. Lint72/74: Rust formatting and public benchmark freshness failed; file cap passed. Production remained held. No production build, staging or measurement. Format-only followup retained separately and all final-source checks rerun.

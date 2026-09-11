@@ -1,0 +1,9 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/escaped-stringify-r26-profiles/run-stringify-profiles.py",
+  "--results-dir",
+  "results/quiet-escaped-stringify-r26-profiles"
+]

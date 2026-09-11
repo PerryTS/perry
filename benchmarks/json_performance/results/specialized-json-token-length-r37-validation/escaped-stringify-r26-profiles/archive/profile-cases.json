@@ -1,0 +1,18 @@
+{
+  "cases": [
+    {
+      "fixture": "escaped_1m",
+      "operation": "pretty",
+      "mode": "options",
+      "iterations": 2000,
+      "warmup": 8
+    },
+    {
+      "fixture": "escaped_1m",
+      "operation": "callback",
+      "mode": "options",
+      "iterations": 2000,
+      "warmup": 8
+    }
+  ]
+}

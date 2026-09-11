@@ -1,0 +1,49 @@
+{
+  "status": "Prepared only: not applied, compiled, measured or promoted.",
+  "base_source": "2f7c36be28acc9e090d4aef1c2337335d83ee6b0",
+  "files": [
+    {
+      "path": "crates/perry-runtime/src/json/parser.rs",
+      "proposal_file": "parser.rs",
+      "sha256": "f68ab3f33c7e80896cd4a3052027b84e730f988111c298c1a5543ea0d8b79532"
+    },
+    {
+      "path": "crates/perry-runtime/src/json/parser_escape_chunk.rs",
+      "proposal_file": "parser_escape_chunk.rs",
+      "sha256": "650c48b63abdce3221177af3290bae7068bca82ad28ed0c9d814d94beb3f2fd0"
+    },
+    {
+      "path": "crates/perry-runtime/src/json/parse_api.rs",
+      "proposal_file": "parse_api.rs",
+      "sha256": "66cf39b8a63088f24b3b051f7b9162f738f5e64fe611701582dee73ab39fafe6"
+    },
+    {
+      "path": "crates/perry-runtime/src/json/parser_source_length.rs",
+      "proposal_file": "parser_source_length.rs",
+      "sha256": "653db5eb147e9b1f0e00aaafdb0a1290122896d16a1d3aeb258bf825f51d05c0"
+    },
+    {
+      "path": "crates/perry-runtime/src/json/parser_source_length_tests.rs",
+      "proposal_file": "parser_source_length_tests.rs",
+      "sha256": "4dd1ef064caadde012a405ea823c982e327e9a0bbc260bdd1bb04b79555d8b42"
+    },
+    {
+      "path": "crates/perry-runtime/src/string/json_construction.rs",
+      "proposal_file": "json_construction.rs",
+      "sha256": "5dcc00f040e97e59ac4034b6f8da73c8f435ec8ef4d57c96b55ceaa8be90f555"
+    },
+    {
+      "path": "crates/perry-runtime/src/string/mod.rs",
+      "proposal_file": "mod.rs",
+      "sha256": "346549dc6b9871d061bb17472f7e29ddd16e4f97392ccc62f992675660ac1004"
+    }
+  ],
+  "proof_obligations": [
+    "No change to GC suppression/root ordering or admission policy.",
+    "Known-length constructor accepts only already-scanned borrowed value tokens; escaped/wide-key builder routes remain intact.",
+    "Compare both monomorphs at255/256/257/258/259 and raw-surrogate/Unicode/escape boundaries; all existing tests must pass.",
+    "Inspect small linked parser monomorph for absence of dominant-token proof; new dispatch/layout still requires quiet small-input timing.",
+    "Measure fresh ASCII/Unicode, Korean, all38repeat+12consumption and stringify options without claiming R27 gains transfer."
+  ],
+  "note": "Three-way combined old proposal with R36 source, preserving isolated borrowed/tape scanners and bounded word-copy decoding. Explicitly outline both ordinary and scanned constructors; inline the known-length allocation body into its already-outlined callers. Await R36 results before choosing the next source."
+}

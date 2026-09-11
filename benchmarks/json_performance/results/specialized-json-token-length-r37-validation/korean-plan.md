@@ -1,0 +1,1 @@
+R37 controls: eight independently identified equal-length Korean strings at 978 B and 1,048,593 B. Raw ED80..9F must stay on a vector path; source-length proof must retain correct UTF16 lengths. Original historical rotating manifest remains unchanged. Expected 168 timed, 40 oracle, 24 calibration trials.
