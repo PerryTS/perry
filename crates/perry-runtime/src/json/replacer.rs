@@ -189,18 +189,14 @@ unsafe fn write_replaced_scalar(buf: &mut String, replaced: f64) -> bool {
     let replaced_tag = replaced_bits & 0xFFFF_0000_0000_0000;
     if replaced_tag == STRING_TAG {
         let str_ptr = (replaced_bits & POINTER_MASK) as *const StringHeader;
-        if let Some(s) = str_from_header(str_ptr) {
-            write_escaped_string(buf, s);
-        } else {
+        if !write_heap_string(buf, str_ptr) {
             buf.push_str("null");
         }
     } else if replaced_tag == crate::value::SHORT_STRING_TAG {
         let jsval = JSValue::from_bits(replaced_bits);
         let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         let n = jsval.short_string_to_buf(&mut scratch);
-        if let Ok(s) = std::str::from_utf8(&scratch[..n]) {
-            write_escaped_string(buf, s);
-        } else {
+        if !write_short_string(buf, &scratch[..n]) {
             buf.push_str("null");
         }
     } else if replaced_bits == TAG_NULL {
@@ -422,6 +418,9 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
         return;
     };
     let keys_root = gc_scope.root_raw_const_ptr(keys_arr);
+    // Snapshot one key across getters/toJSON/replacer, even if they delete it.
+    // Reuse the slot; never keep its borrowed bytes across a callback.
+    let key_root = gc_scope.root_nanbox_f64(f64::from_bits(TAG_UNDEFINED));
     let keys_len = (*keys_arr).length;
 
     // #5989 (mirrors the plain-stringify #307 fix): iterate up to keys_len, not
@@ -444,9 +443,6 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
         let keys_elements = (keys_root.get_raw_const_ptr::<u8>())
             .add(std::mem::size_of::<crate::ArrayHeader>())
             as *const f64;
-        let fields_ptr = (obj_root.get_raw_const_ptr::<u8>())
-            .add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
-        let replacer = replacer_root.get_raw_const_ptr::<crate::ClosureHeader>();
         // #9398: tombstoned slot from an O(1) delete — not a key, not
         // serialized. See `tombstoned_key_slot`.
         if tombstoned_key_slot(*keys_elements.add(f as usize)) {
@@ -460,7 +456,7 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
             continue;
         }
         // Get the key as a string
-        let (key_str_ptr, key_str_opt) = if f < keys_len {
+        let key_str_ptr = if f < keys_len {
             let key_f64 = *keys_elements.add(f as usize);
             let key_bits = key_f64.to_bits();
             let key_tag = key_bits & 0xFFFF_0000_0000_0000;
@@ -469,9 +465,9 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
             } else {
                 key_bits as *const StringHeader
             };
-            (kp, str_from_header(kp))
+            kp
         } else {
-            (std::ptr::null(), None)
+            std::ptr::null()
         };
 
         // Create NaN-boxed key for replacer / toJSON
@@ -482,6 +478,12 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
             let fallback_ptr = js_string_from_bytes(fallback.as_ptr(), fallback.len() as u32);
             nanbox_string_f64(fallback_ptr)
         };
+
+        key_root.set_nanbox_f64(key_f64_for_replacer);
+        let obj = obj_root.get_raw_const_ptr::<crate::ObjectHeader>();
+        let fields_ptr = obj
+            .cast::<u8>()
+            .add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
 
         // Get the field value (invoking an own getter, as spec [[Get]] does),
         // resolve toJSON, then apply the replacer. Overflow slots (f >=
@@ -494,15 +496,15 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
         };
         if filter_non_enum && f < keys_len {
             if let Some(gv) =
-                crate::object::json_object_getter_value(obj, *keys_elements.add(f as usize))
+                crate::object::json_object_getter_value(obj, key_root.get_nanbox_f64())
             {
                 field_val = gv;
             }
         }
-        let field_after_to_json = apply_to_json_keyed(field_val, key_f64_for_replacer);
+        let field_after_to_json = apply_to_json_keyed(field_val, key_root.get_nanbox_f64());
         let replaced = call_replacer(
-            replacer,
-            key_f64_for_replacer,
+            replacer_root.get_raw_const_ptr::<crate::ClosureHeader>(),
+            key_root.get_nanbox_f64(),
             field_after_to_json,
             holder_value(obj_root.get_raw_const_ptr::<u8>()),
         );
@@ -528,7 +530,8 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
         // Write the key. Must go through the escaper, not a raw `push_str` —
         // a key can contain `"`/`\`/control characters (test262
         // JSON/stringify/value-string-escape-ascii pattern).
-        if let Some(key_str) = key_str_opt {
+        let key_ptr = JSValue::from_bits(key_root.get_nanbox_u64()).as_string_ptr();
+        if let Some(key_str) = str_from_header(key_ptr) {
             write_escaped_string(buf, key_str);
             buf.push_str(if use_pretty { ": " } else { ":" });
         } else {
@@ -538,7 +541,14 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
         // Write scalar inline, or recurse into the pointer with the replacer.
         if !write_replaced_scalar(buf, replaced) {
             let inner_ptr = extract_pointer(replaced_bits).unwrap();
-            dispatch_pointer_with_replacer(inner_ptr, replaced, replacer, buf, indent, inner_depth);
+            dispatch_pointer_with_replacer(
+                inner_ptr,
+                replaced,
+                replacer_root.get_raw_const_ptr::<crate::ClosureHeader>(),
+                buf,
+                indent,
+                inner_depth,
+            );
         }
     }
     if use_pretty && !first {
@@ -791,9 +801,7 @@ pub(crate) unsafe fn stringify_value_pretty(
     let tag = bits & 0xFFFF_0000_0000_0000;
     if tag == STRING_TAG {
         let str_ptr = (bits & POINTER_MASK) as *const StringHeader;
-        if let Some(s) = str_from_header(str_ptr) {
-            write_escaped_string(buf, s);
-        } else {
+        if !write_heap_string(buf, str_ptr) {
             buf.push_str("null");
         }
         return;
@@ -803,9 +811,7 @@ pub(crate) unsafe fn stringify_value_pretty(
         let jsval = JSValue::from_bits(bits);
         let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         let n = jsval.short_string_to_buf(&mut scratch);
-        if let Ok(s) = std::str::from_utf8(&scratch[..n]) {
-            write_escaped_string(buf, s);
-        } else {
+        if !write_short_string(buf, &scratch[..n]) {
             buf.push_str("null");
         }
         return;
