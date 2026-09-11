@@ -424,6 +424,57 @@ fn warm_shape_fallback_keeps_duplicate_semantics_after_key_cache_eviction() {
 }
 
 #[test]
+fn json_warm_unique_prefix_preserves_duplicates_at_every_fallback_position() {
+    let warm = r#"{"a":0,"b":1,"c":2,"d":3,"e":4,"f":5,"g":6,"h":7}"#;
+    let names = ["a", "b", "c", "d", "e", "f", "g", "h"];
+    for prefix in 0..=names.len() {
+        for tail in [r#""a":99"#, r#""\u0061":99"#, r#""extra":9,"a":99"#] {
+            let mut fields = names[..prefix]
+                .iter()
+                .enumerate()
+                .map(|(i, name)| format!(r#""{name}":{i}"#))
+                .collect::<Vec<_>>();
+            fields.push(tail.to_owned());
+            let source = format!("[{warm},{{{}}}]", fields.join(","));
+            unsafe {
+                let _suppress = crate::gc::GcSuppressScope::new();
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let mut parser = super::DirectParser::new_batched(source.as_bytes());
+                let value = parser.parse_value();
+                assert!(parser.finish());
+                let value = scope.root_nanbox_u64(value.bits());
+                let output =
+                    crate::json::js_json_stringify(f64::from_bits(value.get_nanbox_u64()), 0);
+                assert_eq!(
+                    serde_json::from_str::<serde_json::Value>(crate::string::string_as_str(output))
+                        .unwrap(),
+                    serde_json::from_str::<serde_json::Value>(&source).unwrap(),
+                    "prefix={prefix}, tail={tail}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn json_warm_unique_prefix_survives_nested_shape_changes() {
+    let source = r#"[{"a":0,"b":{"x":1,"y":2},"c":3},{"\u0061":4,"b":{"other":8,"other":9},"c":5,"a":6},{"a":7,"b":8,"c":9},{"a":10,"b":11,"a":12}]"#;
+    unsafe {
+        let _suppress = crate::gc::GcSuppressScope::new();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let mut parser = super::DirectParser::new_batched(source.as_bytes());
+        let value = parser.parse_value();
+        assert!(parser.finish());
+        let value = scope.root_nanbox_u64(value.bits());
+        let output = crate::json::js_json_stringify(f64::from_bits(value.get_nanbox_u64()), 0);
+        assert_eq!(
+            crate::string::string_as_str(output),
+            r#"[{"a":0,"b":{"x":1,"y":2},"c":3},{"a":6,"b":{"other":9},"c":5},{"a":7,"b":8,"c":9},{"a":12,"b":11}]"#
+        );
+    }
+}
+
+#[test]
 fn depth_preflight_byte_bound_keeps_the_first_excess_opening() {
     use super::nesting_depth_exceeds;
     for limit in [0, 1, 31, super::MAX_RECURSIVE_NESTING_DEPTH] {

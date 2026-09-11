@@ -1113,11 +1113,20 @@ impl<'a> DirectParser<'a> {
                     cached_parse_key_ptr(key_bytes)
                 };
                 let warm_prefix_uses_old_key_identity = warm_shape_slot != 0 && !warm_shape_matches;
-                if let Some(existing) = inline_keys[..inline_len].iter().position(|&ptr| {
-                    ptr == key_ptr
-                        || (warm_prefix_uses_old_key_identity
-                            && json_key_bytes_equal(ptr, key_bytes))
-                }) {
+                // A matching prefix follows the ordered, already-deduplicated
+                // keys of a completed parse shape. This next key cannot repeat
+                // an earlier prefix key. Once a key differs or the shape ends,
+                // retain the full duplicate/old-key-identity search.
+                let existing = if warm_shape_matches {
+                    None
+                } else {
+                    inline_keys[..inline_len].iter().position(|&ptr| {
+                        ptr == key_ptr
+                            || (warm_prefix_uses_old_key_identity
+                                && json_key_bytes_equal(ptr, key_bytes))
+                    })
+                };
+                if let Some(existing) = existing {
                     inline_values[existing] = value;
                 } else if inline_len < inline_keys.len() {
                     inline_keys[inline_len] = key_ptr;
