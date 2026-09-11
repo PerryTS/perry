@@ -22,6 +22,8 @@ fn json_surrogate_scan_matches_scalar_at_all_boundaries() {
                     let b = &storage[align..align + len];
                     assert_eq!(scan(b), oracle(b));
                     assert_eq!(scalar(b), oracle(b));
+                    #[cfg(target_arch = "aarch64")]
+                    assert_eq!(scan_after_valid_ed(b), oracle(b));
                 }
                 storage[align + i] = b'a';
             }
@@ -32,6 +34,8 @@ fn json_surrogate_scan_matches_scalar_at_all_boundaries() {
                     let b = &storage[align..align + len];
                     assert_eq!(scan(b), oracle(b));
                     assert_eq!(scalar(b), oracle(b));
+                    #[cfg(target_arch = "aarch64")]
+                    assert_eq!(scan_after_valid_ed(b), oracle(b));
                 }
                 storage[align + i] = b'a';
                 storage[align + i + 1] = b'a';
@@ -125,5 +129,61 @@ fn json_surrogate_scan_skips_multiple_valid_ed_bytes_before_the_first_stop() {
                 assert_eq!(scalar(&input), oracle(&input));
             }
         }
+    }
+}
+
+// Repeated valid ED prefixes force the outlined continuation to scan through
+// vector seams before a syntax byte, surrogate prefix, or truncated ED suffix.
+#[cfg(all(unix, target_arch = "aarch64"))]
+#[test]
+fn json_korean_continuation_stops_at_guard_page() {
+    unsafe {
+        let page = libc::sysconf(libc::_SC_PAGESIZE) as usize;
+        let allocation = libc::mmap(
+            std::ptr::null_mut(),
+            page * 2,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_ANON | libc::MAP_PRIVATE,
+            -1,
+            0,
+        );
+        assert_ne!(allocation, libc::MAP_FAILED);
+        let base = allocation.cast::<u8>();
+        assert_eq!(
+            libc::mprotect(base.add(page).cast(), page, libc::PROT_NONE),
+            0
+        );
+        let mut checks = 0;
+        for len in 0..=257 {
+            let bytes = std::slice::from_raw_parts_mut(base.add(page - len), len);
+            for (i, byte) in bytes.iter_mut().enumerate() {
+                *byte = "한글🙂".as_bytes()[i % "한글🙂".len()];
+            }
+            assert_eq!(scan(bytes), oracle(bytes));
+            assert_eq!(scan_after_valid_ed(bytes), oracle(bytes));
+            checks += 1;
+            for pos in 0..len {
+                let original = bytes[pos];
+                for byte in [b'"', b'\\', 0, b'\n', 0xed] {
+                    bytes[pos] = byte;
+                    assert_eq!(scan(bytes), oracle(bytes));
+                    assert_eq!(scan_after_valid_ed(bytes), oracle(bytes));
+                    checks += 1;
+                }
+                if pos + 1 < len {
+                    let next = bytes[pos + 1];
+                    for byte in [0x80, 0x9f, 0xa0, 0xbf] {
+                        bytes[pos + 1] = byte;
+                        assert_eq!(scan(bytes), oracle(bytes));
+                        assert_eq!(scan_after_valid_ed(bytes), oracle(bytes));
+                        checks += 1;
+                    }
+                    bytes[pos + 1] = next;
+                }
+                bytes[pos] = original;
+            }
+        }
+        assert_eq!(libc::munmap(allocation, page * 2), 0);
+        assert_eq!(checks, 297607);
     }
 }

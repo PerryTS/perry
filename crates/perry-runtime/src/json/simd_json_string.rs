@@ -80,32 +80,31 @@ fn scan_neon(bytes: &[u8]) -> Option<usize> {
 fn scan_after_valid_ed(bytes: &[u8]) -> Option<usize> {
     let mut i = 0;
     unsafe {
-        while bytes.len() - i >= 16 {
+        // The overlapping load includes every lane's successor. Requiring
+        // 17 bytes keeps both vector loads within the input slice.
+        while bytes.len() - i >= 17 {
             let v = vld1q_u8(bytes.as_ptr().add(i));
+            let following = vld1q_u8(bytes.as_ptr().add(i + 1));
             let syntax = vorrq_u8(
-                vorrq_u8(vceqq_u8(v, vdupq_n_u8(b'"')), vceqq_u8(v, vdupq_n_u8(0x5c))),
+                vorrq_u8(
+                    vceqq_u8(v, vdupq_n_u8(b'"')),
+                    vceqq_u8(v, vdupq_n_u8(b'\\')),
+                ),
                 vcltq_u8(v, vdupq_n_u8(32)),
             );
-            let ed = vceqq_u8(v, vdupq_n_u8(0xed));
-            if vmaxvq_u8(vorrq_u8(syntax, ed)) != 0 {
-                // vext supplies bytes 1..15 and a separately bounded byte 16.
-                // A missing following byte cannot complete a surrogate prefix.
-                let last = bytes.get(i + 16).copied().unwrap_or(0);
-                let following = vextq_u8::<1>(v, vdupq_n_u8(last));
-                let surrogate = vandq_u8(
-                    ed,
-                    vceqq_u8(vandq_u8(following, vdupq_n_u8(0xe0)), vdupq_n_u8(0xa0)),
-                );
-                let words = vreinterpretq_u64_u8(vorrq_u8(syntax, surrogate));
-                for (lane, word) in [
-                    (0, u64::from_le(vgetq_lane_u64::<0>(words))),
-                    (8, u64::from_le(vgetq_lane_u64::<1>(words))),
-                ] {
-                    let hits = word & 0x8080_8080_8080_8080;
-                    if hits != 0 {
-                        return Some(i + lane + hits.trailing_zeros() as usize / 8);
-                    }
+            let surrogate = vandq_u8(
+                vceqq_u8(v, vdupq_n_u8(0xed)),
+                vceqq_u8(vandq_u8(following, vdupq_n_u8(0xe0)), vdupq_n_u8(0xa0)),
+            );
+            let special = vorrq_u8(syntax, surrogate);
+            if vmaxvq_u8(special) != 0 {
+                let words = vreinterpretq_u64_u8(special);
+                let first = u64::from_le(vgetq_lane_u64::<0>(words));
+                if first != 0 {
+                    return Some(i + first.trailing_zeros() as usize / 8);
                 }
+                let second = u64::from_le(vgetq_lane_u64::<1>(words));
+                return Some(i + 8 + second.trailing_zeros() as usize / 8);
             }
             i += 16;
         }
