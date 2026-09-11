@@ -1646,12 +1646,17 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 arr_expr
             } else if use_lazy_iter {
                 Expr::GetIterator(Box::new(arr_expr))
+            } else if is_string_iter {
+                // #10062: index an array of code points, not the string's
+                // UTF-16 code units. Shares the runtime string iterator's
+                // WTF-8 conversion, including lone-surrogate preservation.
+                Expr::ForOfToArray(Box::new(arr_expr))
             } else {
                 arr_expr
             };
 
-            // For string iteration the __arr holder is typed as String (so codegen
-            // uses string.length + js_string_char_at via the existing str[i] path).
+            // Materialized strings use an Array<String> holder so codegen
+            // indexes whole code points rather than UTF-16 code units.
             // For an identifier iterable like `for (const word of words)` where
             // `words: string[]`, extract the element type from the local's
             // declared Array<T> so the loop variable gets the right type.
@@ -1678,8 +1683,8 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 });
             // For the Map fast path the holder must be typed Map so
             // `__m.size` resolves through `is_map_expr` to `js_map_size`.
-            let holder_type = if is_string_iter {
-                Type::String
+            let holder_type = if is_string_iter && !use_lazy_iter {
+                Type::Array(Box::new(Type::String))
             } else if map_kv_fastpath {
                 Type::Generic {
                     base: "Map".to_string(),

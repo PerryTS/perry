@@ -1387,8 +1387,8 @@ pub(super) fn lower_stmt_for_of_inner(
     // routes through the runtime default-iterator (`js_for_of_to_array`).
     //
     // We deliberately DON'T wrap the statically-resolved kinds handled
-    // above (Map/Set/typed-array via their own materializers, strings via
-    // the string index-loop, Headers/URLSearchParams via their entries
+    // above (Map/Set/typed-array via their own paths, strings via
+    // code-point materialization, Headers/URLSearchParams via their entries
     // rewrite) nor proven arrays — those keep their existing fast paths.
     let proven_array = match &iterable_type {
         Some(Type::Array(_)) => true,
@@ -1472,6 +1472,11 @@ pub(super) fn lower_stmt_for_of_inner(
     } else if use_lazy_iter {
         // GetIterator(obj): obj[Symbol.iterator](). Drives the lazy loop below.
         Expr::GetIterator(Box::new(arr_expr))
+    } else if is_string_iter {
+        // #10062: string indexing yields UTF-16 code units, while for-of
+        // yields code points. Materialize with the same WTF-8 conversion as
+        // the runtime string iterator, then index the resulting array.
+        Expr::ForOfToArray(Box::new(arr_expr))
     } else {
         arr_expr
     };
@@ -1503,11 +1508,11 @@ pub(super) fn lower_stmt_for_of_inner(
             _ => Type::Any,
         }
     };
-    // The __arr holder's type: String for string iteration, Map for
+    // The __arr holder's type: Array<String> for materialized strings, Map for
     // the Map-fast-path so `__m.size` resolves through `is_map_expr`,
     // Array otherwise.
-    let arr_type = if is_string_iter {
-        Type::String
+    let arr_type = if is_string_iter && !use_lazy_iter {
+        Type::Array(Box::new(Type::String))
     } else if map_kv_fastpath {
         Type::Generic {
             base: "Map".to_string(),
