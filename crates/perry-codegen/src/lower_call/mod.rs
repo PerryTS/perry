@@ -71,6 +71,8 @@ pub(crate) use func_ref::{
 mod jsx;
 pub(crate) mod method_override;
 pub(crate) use method_override::emit_inline_direct_method_shape_guard;
+#[cfg(test)]
+mod named_import_install_tests;
 mod namespace_call;
 mod native;
 mod native_module_dispatch;
@@ -390,6 +392,20 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
     // dispatcher) before lowering the call, so the throw carries `at file:line`.
     // No-op in the default build; offset 0 (synthesized refs) resolves to none.
     if let Expr::ExternFuncRef { name, .. } = callee {
+        // Named builtin imports preload an ESM export cell before user code.
+        // Unlike NativeModuleRef property reads, that synthesized call never
+        // constructed a namespace or installed its prototype/static handlers.
+        // Install only the named module before caching an undecorated callable
+        // (e.g. AsyncResource without its own bind). Preserve module stripping.
+        if name == "js_native_module_named_esm_export_value"
+            && !ctx.import_function_prefixes.contains_key(name)
+        {
+            if let Some(Expr::String(module)) = args.first() {
+                if let Some(install) = crate::nm_install::nm_install_symbol(module) {
+                    ctx.block().call_void(install, &[]);
+                }
+            }
+        }
         if name == "js_global_get_or_throw_unresolved" {
             let off = ctx.strings.pending_call_offset();
             crate::expr::calls::emit_call_location_at(ctx, off);
