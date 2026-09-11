@@ -56,10 +56,9 @@ pub extern "C" fn js_weakmap_set(map: f64, key: f64, value: f64) -> f64 {
         let slot = free.unwrap_or_else(|| js_array_length(entries));
         let entry = weak_entry_new(key.get_nanbox_f64(), value.get_nanbox_f64());
         let entry = scope.root_raw_mut_ptr(entry);
-        let entries = entries_array(map_pointer(map));
-        let entry_value = f64::from_bits(
-            JSValue::pointer(entry.get_raw_mut_ptr::<ObjectHeader>() as *const u8).bits(),
-        );
+        let (entries, entry) =
+            entry.across_mut::<ObjectHeader, _>(|| entries_array(map_pointer(map)));
+        let entry_value = f64::from_bits(JSValue::pointer(entry as *const u8).bits());
         if free.is_some() {
             js_array_set_f64(entries, slot, entry_value);
         } else {

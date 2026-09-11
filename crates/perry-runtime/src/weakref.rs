@@ -1317,18 +1317,18 @@ fn weak_entry_new(key: f64, value: f64) -> *mut ObjectHeader {
     let packed = b"__perry_we_key\0__perry_we_value\0";
     let entry =
         js_object_alloc_with_shape(WEAK_ENTRY_SHAPE_ID, 2, packed.as_ptr(), packed.len() as u32);
-    let entry = scope.root_raw_mut_ptr(entry);
+    // The by-index field stores and holder registration cannot collect.
+    // Reload key/value after allocation, then initialize the fresh entry.
     js_object_set_field(
-        entry.get_raw_mut_ptr::<ObjectHeader>(),
+        entry,
         WEAK_ENTRY_KEY_FIELD as u32,
         JSValue::from_bits(key.get_nanbox_f64().to_bits()),
     );
     js_object_set_field(
-        entry.get_raw_mut_ptr::<ObjectHeader>(),
+        entry,
         WEAK_ENTRY_VALUE_FIELD as u32,
         JSValue::from_bits(value.get_nanbox_f64().to_bits()),
     );
-    let entry = entry.get_raw_mut_ptr::<ObjectHeader>();
     unsafe {
         (*entry).class_id = CLASS_ID_WEAK_ENTRY;
     }
@@ -1383,8 +1383,9 @@ unsafe fn entries_array(reg: *mut ObjectHeader) -> *mut ArrayHeader {
     // Root it across the allocation and re-derive before dereferencing.
     let scope = crate::gc::RuntimeHandleScope::new();
     let reg_handle = scope.root_raw_mut_ptr(reg);
-    let entries_key = crate::string::js_string_from_bytes(b"__perry_wk_entries".as_ptr(), 18);
-    let reg = reg_handle.get_raw_mut_ptr::<ObjectHeader>();
+    let (entries_key, reg) = reg_handle.across_mut::<ObjectHeader, _>(|| {
+        crate::string::js_string_from_bytes(b"__perry_wk_entries".as_ptr(), 18)
+    });
     let entries_val = js_object_get_field_by_name(reg, entries_key);
     (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader
 }
@@ -1394,13 +1395,8 @@ fn weak_collection_new(shape: u32, class: u32) -> *mut ObjectHeader {
     let obj = js_object_alloc_with_shape(shape, 1, packed.as_ptr(), packed.len() as u32);
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_raw_mut_ptr(obj);
-    let entries = js_array_alloc(0);
-    js_object_set_field(
-        obj.get_raw_mut_ptr::<ObjectHeader>(),
-        0,
-        JSValue::array_ptr(entries),
-    );
-    let obj = obj.get_raw_mut_ptr::<ObjectHeader>();
+    let (entries, obj) = obj.across_mut::<ObjectHeader, _>(|| js_array_alloc(0));
+    js_object_set_field(obj, 0, JSValue::array_ptr(entries));
     unsafe {
         (*obj).class_id = class;
     }
