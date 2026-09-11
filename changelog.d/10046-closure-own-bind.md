@@ -15,3 +15,5 @@ native modules remain eligible for dead stripping.
 Adds a runtime regression and a bounded, application-independent native matrix
 covering builtin/import/require/alias forms, async context and receiver capture,
 custom own methods/accessors, non-callable overrides, and intrinsic fallbacks.
+The standalone CI suite prepares coherent native providers outside its fixture
+timeouts, uses the pinned Node oracle, and publishes failed compiler output.
