@@ -1197,8 +1197,11 @@ pub(super) extern "C" fn cp_emit_spawn_error(closure: *const ClosureHeader) -> f
 }
 
 extern "C" fn cp_emit_spawn_close(closure: *const ClosureHeader) -> f64 {
-    let cp = cp_this(closure);
-    cp_emit(cp, "close", &[cp_get_field(cp, b"exitCode"), TAG_NULL_F64]);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let cp = scope.root_nanbox_f64(cp_this(closure));
+    super::failed_spawn::finish_outputs(cp.get_nanbox_f64());
+    let code = cp_get_field(cp.get_nanbox_f64(), b"exitCode");
+    cp_emit(cp.get_nanbox_f64(), "close", &[code, TAG_NULL_F64]);
     cp_undefined()
 }
 
