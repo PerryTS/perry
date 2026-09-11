@@ -28,6 +28,7 @@ pub(super) fn eligible(ctx: &CompilationContext, cli_features: &[String]) -> boo
         || !ctx.native_module_imports.is_empty()
         || !ctx.extra_stdlib_features.is_empty()
         || !cli_features.is_empty()
+        || ctx.native_modules.values().any(needs_global_object_fallback)
         // Runtime-owned native modules such as bun:ffi do not enter the
         // stdlib feature/import set above. Retain their original HIR import
         // provenance so they cannot accidentally select the first subset.
@@ -46,6 +47,26 @@ pub(super) fn eligible(ctx: &CompilationContext, cli_features: &[String]) -> boo
                 .strip_prefix("perry-runtime/")
                 .is_some_and(|name| CORE_FEATURES.contains(&name))
         })
+}
+
+fn needs_global_object_fallback(module: &perry_hir::Module) -> bool {
+    if module.references_global_this {
+        return true;
+    }
+    // Runtime keys can select any optional constructor/namespace without its
+    // name appearing in the source: globalThis[process.argv[2]]. Include HIR
+    // spellings as well as the source flag to cover global/self aliases,
+    // escaped identifier spellings and folded `Function("return this")()`.
+    // As in the existing feature detector, over-inclusion only costs size.
+    let hir = format!("{module:?}");
+    [
+        "GlobalThisExpr",
+        "property: \"globalThis\"",
+        "property: \"global\"",
+        "property: \"self\"",
+    ]
+    .iter()
+    .any(|token| hir.contains(token))
 }
 
 #[cfg(test)]
@@ -160,5 +181,30 @@ mod tests {
         import.type_only = false;
         import.runtime_erased = true;
         assert!(eligible(&ctx, &[]));
+    }
+
+    #[test]
+    fn global_object_values_keep_optional_engines_available() {
+        let key = std::path::PathBuf::from("global-consumer.ts");
+        for global in ["globalThis", "global", "self"] {
+            let mut ctx = context();
+            let mut module = perry_hir::Module::new("global-consumer");
+            module.init.push(perry_hir::Stmt::Expr(perry_hir::Expr::PropertyGet {
+                object: Box::new(perry_hir::Expr::GlobalGet(0)),
+                property: global.into(),
+                byte_offset: 0,
+            }));
+            ctx.native_modules.insert(key.clone(), module);
+            assert!(!eligible(&ctx, &[]), "{global} can expose optional engines");
+        }
+        let mut ctx = context();
+        let mut module = perry_hir::Module::new("global-consumer");
+        module.init.push(perry_hir::Stmt::Expr(perry_hir::Expr::GlobalThisExpr));
+        ctx.native_modules.insert(key.clone(), module);
+        assert!(!eligible(&ctx, &[]));
+        let module = ctx.native_modules.get_mut(&key).unwrap();
+        module.init.clear();
+        module.references_global_this = true;
+        assert!(!eligible(&ctx, &[]));
     }
 }
