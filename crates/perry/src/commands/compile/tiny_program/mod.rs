@@ -155,12 +155,28 @@ pub(super) fn try_compile(
         false,
         false,
     );
+    if matches!(format, OutputFormat::Text) {
+        println!("Wrote executable: {}", output.display());
+    }
     super::post_link::print_binary_size(format, &output);
     super::size_report::emit_size_report(format, &output, args.report_size);
     if matches!(format, OutputFormat::Json) {
         println!(
             "{}",
-            serde_json::json!({"status":"success", "output":output, "runtimeProfile":"tiny", "outputCalls":proof.outputs().len()})
+            serde_json::json!({
+                "success": true,
+                "output": output,
+                "native_modules": ctx.native_modules.len(),
+                "js_modules": ctx.js_modules.len(),
+                "build_cache": {"hit": false, "miss_reason": "tiny program specialization"},
+                "codegen_cache": null,
+                "link_cache": {
+                    "linked": 1, "skipped": 0, "object_fingerprints_used": 0,
+                    "object_files_hashed": 0, "external_inputs_hashed": 0,
+                },
+                "runtimeProfile": "tiny",
+                "outputCalls": proof.outputs().len(),
+            })
         );
     }
     Ok(Some(CompileResult {
