@@ -136,6 +136,7 @@ pub mod net_validate;
 #[cfg(feature = "node-api-host")]
 pub mod node_api_host;
 mod param_type_guard;
+mod startup_memory_profile;
 // #6468: the `node:http2` constant tables are only reachable through the
 // `http2` native-module namespace, so a program that never imports `node:http2`
 // links none of them. The auto-optimizer enables `mod-http2-constants` on an

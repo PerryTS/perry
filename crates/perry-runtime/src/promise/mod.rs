@@ -53,7 +53,10 @@ pub use combinators::{
     js_promise_all_settled, js_promise_any, js_promise_new_with_executor, js_promise_race,
     js_promise_rejected, js_promise_schedule_resolve, js_promise_try, js_value_is_promise,
 };
-pub use microtasks::{js_promise_run_microtasks, js_promise_run_microtasks_event_loop};
+pub use microtasks::{
+    js_promise_run_before_exit_checkpoint, js_promise_run_microtasks,
+    js_promise_run_microtasks_event_loop,
+};
 pub use native_async::{
     js_native_async_completion_attach_handle, js_native_async_completion_cancel,
     js_native_async_completion_new, js_native_async_completion_promise,
@@ -150,6 +153,7 @@ pub(crate) fn is_definitely_primitive(value: f64) -> bool {
 // Instrumentation counters (set PERRY_MT_PROFILE=1 to print at exit).
 pub static MT_RUN_COUNT: AtomicU64 = AtomicU64::new(0);
 pub static MT_DRAIN_COUNT: AtomicU64 = AtomicU64::new(0);
+pub static MT_EMPTY_DRAIN_COUNT: AtomicU64 = AtomicU64::new(0);
 pub static MT_THENABLE_PROBE_COUNT: AtomicU64 = AtomicU64::new(0);
 pub static MT_PROMISE_NEW_COUNT: AtomicU64 = AtomicU64::new(0);
 pub static MT_PROMISE_THEN_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -207,6 +211,10 @@ extern "C" fn mt_profile_atexit() {
     if std::env::var_os("PERRY_MT_PROFILE").is_none() {
         return;
     }
+    eprintln!(
+        "[mt-profile] empty_drains={}",
+        MT_EMPTY_DRAIN_COUNT.load(Ordering::Relaxed)
+    );
     eprintln!(
         "[mt-profile] runs={} resolved={} then={} new={} unwrap={} thenable_probe={} thenable_fast={}",
         MT_RUN_COUNT.load(Ordering::Relaxed),

@@ -157,8 +157,7 @@ per_test_global! {
     static HOOKS: LazyLock<Mutex<Vec<HookRecord>>> = LazyLock::new(|| Mutex::new(Vec::new()));
     static RESOURCES: LazyLock<Mutex<HashMap<u64, ResourceMeta>>> =
         LazyLock::new(|| Mutex::new(HashMap::new()));
-    static GC_DESTROY_QUEUE: LazyLock<Mutex<VecDeque<u64>>> =
-        LazyLock::new(|| Mutex::new(VecDeque::new()));
+    static GC_DESTROY_QUEUE: Mutex<VecDeque<u64>> = Mutex::new(VecDeque::new());
     static NEXT_CONTEXT_SNAPSHOT_ID: AtomicUsize = AtomicUsize::new(1);
     static CONTEXT_SNAPSHOTS: LazyLock<
         Mutex<HashMap<usize, crate::async_context::AsyncContextSnapshot>>,
@@ -936,6 +935,10 @@ pub fn enqueue_gc_destroy(async_id: u64) {
     if async_id != 0 {
         GC_DESTROY_QUEUE.lock().unwrap().push_back(async_id);
     }
+}
+
+pub(crate) fn gc_destroy_work_pending() -> bool {
+    !GC_DESTROY_QUEUE.lock().unwrap().is_empty()
 }
 
 pub fn drain_gc_destroy_queue() -> i32 {

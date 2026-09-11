@@ -50,3 +50,51 @@ pub(crate) fn register_weak_holder_address(addr: usize) {
         holders.borrow_mut().insert(addr);
     });
 }
+
+#[test]
+fn empty_checkpoint_delivers_recorded_finalization_job() {
+    std::thread::spawn(|| {
+        use super::*;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static DELIVERED: AtomicU64 = AtomicU64::new(0);
+        extern "C" fn cleanup(_: *const crate::closure::ClosureHeader, held: f64) -> f64 {
+            DELIVERED.store(held.to_bits(), Ordering::Relaxed);
+            0.0
+        }
+        crate::gc::js_gc_init();
+        crate::closure::js_register_closure_arity(cleanup as *const u8, 1);
+        let closure = crate::closure::js_closure_alloc(cleanup as *const u8, 0);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let callback = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(closure as i64));
+        let registry = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_finreg_new(
+            callback.get_nanbox_f64(),
+        ) as i64));
+        let target = crate::object::js_object_alloc(0, 0);
+        js_finreg_register(
+            registry.get_nanbox_f64(),
+            crate::value::js_nanbox_pointer(target as i64),
+            41.0,
+            f64::from_bits(TAG_UNDEFINED),
+        );
+        // Seed the post-collection delivery boundary with a real registry
+        // record. Collection/weak liveness itself is covered by the weak-GC
+        // tests; here no Promise or nextTick has been queued yet.
+        let registry_ptr = js_nanbox_get_pointer(registry.get_nanbox_f64()) as *mut ObjectHeader;
+        let entries = unsafe { object_field_bits(registry_ptr, FINREG_ENTRIES_FIELD) };
+        let record = js_array_get_f64((entries & POINTER_MASK) as *mut ArrayHeader, 0);
+        PENDING_FINALIZATION_JOBS.with(|jobs| {
+            jobs.borrow_mut().push(PendingFinalizationJob {
+                registry: registry.get_nanbox_f64(),
+                record,
+                callback: callback.get_nanbox_f64(),
+                held: 41.0,
+            })
+        });
+        assert!(!crate::promise::microtasks::empty_checkpoint_eligible_for_test());
+        assert!(crate::promise::js_promise_run_microtasks_event_loop() > 0);
+        assert_eq!(DELIVERED.load(Ordering::Relaxed), 41.0f64.to_bits());
+        assert_eq!(pending_finalization_jobs_count(), 0);
+    })
+    .join()
+    .unwrap();
+}

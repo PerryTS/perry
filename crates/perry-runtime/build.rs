@@ -534,6 +534,19 @@ fn generate_single_byte_encodings(out_dir: &str) {
 }
 
 fn main() {
+    println!("cargo:rerun-if-changed=src/ffi/perry_memory_profile.c");
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux")
+        && std::env::var("CARGO_CFG_TARGET_POINTER_WIDTH").as_deref() == Ok("64")
+        && std::env::var_os("CARGO_FEATURE_ALLOC_MIMALLOC").is_some()
+    {
+        let include = std::env::var_os("DEP_MIMALLOC_INCLUDE_DIR")
+            .expect("alloc-mimalloc must expose its matching C headers");
+        cc::Build::new()
+            .file("src/ffi/perry_memory_profile.c")
+            .include(include)
+            .flag_if_supported("-std=c11")
+            .compile("perry_memory_profile");
+    }
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/node_api_host/symbols.txt");
     println!("cargo:rerun-if-changed=../perry-dispatch/src/lib.rs");

@@ -1877,6 +1877,27 @@ pub(crate) fn test_perf_entry_keys_array() -> usize {
 }
 
 #[cfg(test)]
+mod empty_checkpoint_tests {
+    use super::*;
+
+    #[test]
+    fn empty_checkpoint_sets_loop_start_once() {
+        std::thread::spawn(|| {
+            crate::gc::js_gc_init();
+            assert_eq!(LOOP_START_MS.with(|slot| slot.get()), -1.0);
+            assert!(crate::promise::microtasks::empty_checkpoint_eligible_for_test());
+            crate::promise::js_promise_run_microtasks_event_loop();
+            let started = LOOP_START_MS.with(|slot| slot.get());
+            assert!(started >= 0.0);
+            crate::promise::js_promise_run_microtasks_event_loop();
+            assert_eq!(LOOP_START_MS.with(|slot| slot.get()), started);
+        })
+        .join()
+        .unwrap();
+    }
+}
+
+#[cfg(test)]
 mod sso_tests_1781 {
     use super::*;
 

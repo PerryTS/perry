@@ -1304,6 +1304,7 @@ pub extern "C" fn js_gc_init() {
     // constructor; this call keeps that constructor in the link and re-applies
     // the option idempotently. See `crate::mimalloc_os_tag`.
     crate::mimalloc_os_tag::ensure_mimalloc_os_tag_applied();
+    crate::startup_memory_profile::retain_constructor();
     crate::node_submodules::diagnostics_channel_init_main_thread();
     crate::node_submodules::init_trace_events_runtime();
     // #5093: force every class-field access back through the full guard call —

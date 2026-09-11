@@ -68,6 +68,9 @@ CARGO_TARGET_DIR="$abort_target_dir" CARGO_PROFILE_DIST_PANIC=abort \
 cp "$abort_target_dir/$target/dist/libperry_runtime.a" \
    "$target_dir/$target/dist/libperry_runtime_abort.a"
 
+# Build the optional feature subset inside the same glibc 2.31 sysroot.
+bash scripts/build_core_runtime.sh "$target"
+
 # Match the ordinary release leg's best-effort extension-library build. #5716:
 # enumerate the explicit governance inventory rather than every matching
 # directory. Keep perry and both wrappers in each invocation so Cargo resolves

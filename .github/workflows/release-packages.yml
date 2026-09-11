@@ -704,6 +704,10 @@ jobs:
           cp "target-abort/${{ matrix.target }}/dist/libperry_runtime.a" \
              "target/${{ matrix.target }}/dist/libperry_runtime_abort.a"
 
+      - name: Build core runtime profile (Unix)
+        if: runner.os != 'Windows' && matrix.old_glibc_image == '' && matrix.musl_image == ''
+        run: bash scripts/build_core_runtime.sh '${{ matrix.target }}'
+
       - name: Build native ext libraries (Unix)
         # #2532 — the perry-ext-* wrapper crates ship the host functions for
         # node:http (server), ws, net, zlib, fastify, the db drivers, etc.
@@ -772,7 +776,7 @@ jobs:
           src="target-glibc231/$TARGET/dist"
           dst="target/$TARGET/dist"
           mkdir -p "$dst"
-          for artifact in perry libperry_runtime.a libperry_runtime_abort.a libperry_stdlib.a; do
+          for artifact in perry libperry_runtime.a libperry_runtime_abort.a libperry_runtime_core.a libperry_stdlib.a; do
             test -s "$src/$artifact"
             cp "$src/$artifact" "$dst/$artifact"
           done
@@ -818,7 +822,7 @@ jobs:
           src="target-musl/$TARGET/dist"
           dst="target/$TARGET/dist"
           mkdir -p "$dst"
-          for artifact in perry libperry_runtime.a libperry_runtime_abort.a libperry_stdlib.a; do
+          for artifact in perry libperry_runtime.a libperry_runtime_abort.a libperry_runtime_core.a libperry_stdlib.a; do
             test -s "$src/$artifact"
             cp "$src/$artifact" "$dst/$artifact"
           done
@@ -955,7 +959,7 @@ jobs:
           mkdir -p staging
           cp target/${{ matrix.target }}/dist/perry staging/
           # Include static libraries for linking (runtime, stdlib, UI)
-          for lib in libperry_runtime.a libperry_runtime_abort.a libperry_stdlib.a libperry_ui_macos.a libperry_ui_gtk4.a; do
+          for lib in libperry_runtime.a libperry_runtime_abort.a libperry_runtime_core.a libperry_stdlib.a libperry_ui_macos.a libperry_ui_gtk4.a; do
             if [ -f "target/${{ matrix.target }}/dist/$lib" ]; then
               cp "target/${{ matrix.target }}/dist/$lib" staging/
             fi

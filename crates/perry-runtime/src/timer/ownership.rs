@@ -10,6 +10,19 @@
 
 use super::{timer_has_ref_state, CALLBACK_TIMERS, INTERVAL_TIMERS, TIMER_QUEUE};
 
+/// Any entry needs the ordinary timer phase, including unref timers and
+/// cleared entries whose cleanup has not run. Foreign entries conservatively
+/// select the full pump; this predicate never changes agent liveness.
+pub(crate) fn timer_phase_work_pending() -> bool {
+    if !TIMER_QUEUE.lock().unwrap().is_empty() {
+        return true;
+    }
+    if !CALLBACK_TIMERS.lock().unwrap().is_empty() {
+        return true;
+    }
+    !INTERVAL_TIMERS.lock().unwrap().is_empty()
+}
+
 // ── Per-agent event-loop liveness ────────────────────────────────────────────
 //
 // #6185: a timer owned by another agent can never be fired by this one, so it

@@ -77,6 +77,13 @@ struct RejectionTracker {
 /// `'rejectionHandled'` if a handler shows up thousands of rejections later.
 const MAX_REPORTED_REJECTIONS: usize = 1024;
 
+pub(super) fn checkpoint_work_pending() -> bool {
+    REJECTIONS.with(|tracker| {
+        let tracker = tracker.borrow();
+        !tracker.unhandled.is_empty() || !tracker.pending_handled.is_empty()
+    })
+}
+
 /// Mark a promise as internally handled (Node's `markPromiseAsHandled`): a
 /// later rejection of it is never reported as unhandled. Used by the WHATWG
 /// stream implementation for the internal `closed` / `closeRequest` promises it
