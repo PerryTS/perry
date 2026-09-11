@@ -1,0 +1,89 @@
+{
+  "source_revision": "0c5348ce5694654d8aa6e4477900ebc9fffe67de",
+  "fixtures": [
+    {
+      "source": "benchmarks/string_slice/string-slice-astral.ts",
+      "node_exit": 0,
+      "perry_exit": 0,
+      "stdout_match": true,
+      "stdout_sha256": "f03c3c3ddab4baed9e5c2b65edbce7bda6779c5bd63f027379320f4c2a427b04"
+    },
+    {
+      "source": "test-files/test_gap_string_slice_utf16_suffix.ts",
+      "node_exit": 0,
+      "perry_exit": 0,
+      "stdout_match": true,
+      "stdout_sha256": "45fda4b878798c05d5fb83427a820a5a13c79de2d9c09df5b9779f83dc7900e4"
+    },
+    {
+      "source": "test-files/test_gap_gc_string_suffix_cursor.ts",
+      "node_exit": 0,
+      "perry_exit": 0,
+      "stdout_match": true,
+      "stdout_sha256": "af4e08e8b27149114752421a04c6b1e5fe4df47e9bfb76098bd2457084cede50",
+      "gc_schedule": {
+        "forced_collections": 1061,
+        "copying_minors": 1061,
+        "moved_objects": 168,
+        "loop_polls": 1055
+      }
+    }
+  ],
+  "runtime_suite": {
+    "passed": 3439,
+    "failed": 1,
+    "ignored": 4,
+    "failure": "gc::tests::telemetry_verifier::emergency_full_trace_is_excluded_from_ordinary_pause_stats"
+  },
+  "codegen_suite": {
+    "passed": 1460,
+    "failed": 3,
+    "ignored": 1,
+    "failures": [
+      "codegen::spec_preserve_none_tests::the_clone_entry_is_shrink_wrapped_frameless",
+      "native_emit::tests::split_native_construction_propagates_shadow_backend_to_workers",
+      "native_emit::tests::split_native_construction_lowers_precise_roots_before_rs4gc"
+    ],
+    "build": "candidate build; final native fixtures rechecked on the final build"
+  },
+  "broader_string_parity": {
+    "build": "initial candidate build; the final build reran all three focused fixtures above",
+    "summary": {
+      "parity_pass": 47,
+      "parity_fail": 1,
+      "compile_fail": 19,
+      "crash_fail": 0,
+      "node_fail": 0,
+      "skipped": 1,
+      "total_run": 48,
+      "parity_percentage": 97.9
+    },
+    "failures": {
+      "parity": [
+        "test_gap_tolocalestring_locale_options_9414"
+      ],
+      "compile": [
+        "test_gap_2786_2880_2782_2789_string_semantics",
+        "test_gap_5591_method_string_coercion",
+        "test_gap_6370_tostring_coercion_own_override",
+        "test_gap_9713_dynamic_number_tostring",
+        "test_gap_bigint_tolocalestring_intl_gate",
+        "test_gap_dynamic_string_length_generic_tower",
+        "test_gap_gc_string_repeat_reentrant_count",
+        "test_gap_json_direct_strings",
+        "test_gap_number_string_2864_2948_2855",
+        "test_gap_object_string_wrappers",
+        "test_gap_object_tolocalestring_primitive_receiver",
+        "test_gap_response_boxed_string_body_5453",
+        "test_gap_sso_concat_string_index",
+        "test_gap_string_locale_2781_2845_2897",
+        "test_issue_317_string_matchall",
+        "test_issue_8432_string_accumulators",
+        "test_issue_9810_virtual_string_indices",
+        "test_parity_querystring",
+        "test_parity_string_decoder"
+      ],
+      "crash": []
+    }
+  }
+}

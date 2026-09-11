@@ -77,3 +77,76 @@ Node:  5:228,4:20013,3:55357,2:56832,1:214,
 The baseline ASCII exponent is 2.013 over completed sizes 100–10,000; 100,000
 times out. Unicode fails checksum stability at 100 and mismatches at 1,000 and
 10,000, so its baseline speed is not classified.
+
+## Final measurements
+
+CPU: AMD Ryzen 5 7640HS, 12 logical processors. LLVM 22.1.8.
+Compiler/archive source revision: `0c5348ce5694654d8aa6e4477900ebc9fffe67de`.
+`fixed-artifacts.json` records the matching compiler and archive SHA-256 hashes.
+All ten original workload/size pairs complete with stable checksums matching Node.
+
+### ASCII
+
+| n | Base Perry ms / status | Fixed Perry ms | Fixed Node ms | Perry / Node | Checksum |
+|---:|---:|---:|---:|---:|---:|
+| 100 | 0.015718 | 0.005188 | 0.006745 | 0.77x | 464151292 |
+| 1,000 | 1.390067 | 0.052812 | 0.080744 | 0.65x | 710929850 |
+| 10,000 | 166.934100 | 0.526479 | 0.804260 | 0.65x | 535454277 |
+| 100,000 | TIMEOUT | 5.251350 | 7.428233 | 0.71x | 35382078 |
+| 1,000,000 | NOT RUN | 52.088600 | 71.593200 | 0.73x | 153135489 |
+
+Fixed log-log slopes over all five sizes: Perry **1.000**, Node **1.002**.
+
+### UNICODE
+
+| n | Base Perry ms / status | Fixed Perry ms | Fixed Node ms | Perry / Node | Checksum |
+|---:|---:|---:|---:|---:|---:|
+| 100 | ERROR | 0.006948 | 0.010043 | 0.69x | 319467163 |
+| 1,000 | 14.891150 (wrong checksum) | 0.070113 | 0.100875 | 0.70x | 431622199 |
+| 10,000 | 1736.238200 (wrong checksum) | 0.699286 | 1.004910 | 0.70x | 36132863 |
+| 100,000 | TIMEOUT | 7.232333 | 8.955500 | 0.81x | 49951631 |
+| 1,000,000 | NOT RUN | 69.962600 | 89.631600 | 0.78x | 481167302 |
+
+Fixed log-log slopes over all five sizes: Perry **1.002**, Node **0.985**.
+
+## Validation and host limitations
+
+- Final native reduction exactly matches Node: `5:228,4:20013,3:55357,2:56832,1:214,`.
+- Final compiled boundary/aliasing fixture matches Node, including empty and
+  negative bounds, both surrogate halves, lone surrogates, retained aliases,
+  captured locals, stride-two reads, and a non-string runtime receiver.
+- Final forced-GC fixture matches Node with 1,061 copying minors,
+  168 moved objects and 1,055 loop polls; evacuation verification
+  and from-space protection are enabled. Two runtime slice GC tests pass,
+  including an assertion that the source address actually changes.
+- Runtime suite: 3,439 passed, one failed, four ignored (`--test-threads=1`).
+  All three new slice/cursor unit tests pass. The failing unchanged
+  `emergency_full_trace_is_excluded_from_ordinary_pause_stats` assertion expects
+  allocator trimming to be unsupported on this Windows host; it fails in
+  isolation too.
+- Compiler unit suite (candidate build): 1,460 passed, three failed, one ignored. All three new
+  eligibility-analysis tests pass. The unchanged failures are a frameless-entry
+  assembly assertion and two native-emission byte-equality assertions; each
+  also fails in isolation on Windows. See `validation.json` for exact names.
+- The broader 68-case string sweep on the initial candidate build has 47 passes,
+  one parity mismatch, 19 compile failures, and one skip. Every compile failure
+  reports the existing Windows RS4GC/WinEH restriction (#7354). The mismatch is
+  `test_gap_tolocalestring_locale_options_9414`: Node's default locale is German
+  on this host, while Perry formats default-locale rows as English. All three
+  focused native fixtures were recompiled and rechecked on the final build.
+- Test registration, Node-version consistency, GC root-holder/store/address
+  inventories, local-binding proof audit, architecture checks, and public
+  baseline harness tests pass. The Rust file-size gate passes. Recursive
+  `rustfmt --check --edition 2021` on both changed crate roots passes; the
+  workspace-wide `cargo fmt` invocation exceeds Windows' command-line limit.
+- The quick pre-tag gate's published-benchmark freshness check remains red.
+  Its fingerprinted inputs are identical to pristine base (recorded in
+  `public-baseline-check.json`); this PR does not regenerate that unrelated
+  published artifact. These host/gate limitations are reported, not counted
+  as passing checks. Linux/macOS and full workspace checks were not run locally.
+
+Re-run the affected suites with `cargo test --release --locked --lib -p
+perry-runtime -- --test-threads=1` and `cargo test --release --locked --lib -p
+perry-codegen`. Use the same build environment as above. The corpus sweep was
+`bash run_parity_tests.sh --filter string` with `PERRY_SKIP_BUILD=1`, `PERRY_BIN`
+and `PERRY_RUNTIME_DIR` pointing to the matching build. No version files change.

@@ -1,0 +1,8 @@
+{
+  "source_revision": "0c5348ce5694654d8aa6e4477900ebc9fffe67de",
+  "sha256": {
+    "target/release/perry.exe": "75c6318c1938254cd0466d03116069e47432e5ba69d90788e59d95b2682bc7ca",
+    "target/release/perry_runtime.lib": "20ae523b5c57eeb25960c09719d4147c6fc53084e0f6fb290708472a6866f219",
+    "target/release/perry_stdlib.lib": "675573b11328430592a8859dc4842832be55cb3d119c3bf85c1cfaa13795bff0"
+  }
+}
