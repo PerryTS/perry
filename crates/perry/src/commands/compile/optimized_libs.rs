@@ -20,6 +20,7 @@ mod driver;
 mod freshness;
 mod no_auto;
 mod paths;
+mod prebuilt_core;
 
 pub(crate) use driver::build_optimized_libs;
 pub(crate) use freshness::{

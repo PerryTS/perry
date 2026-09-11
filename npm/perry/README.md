@@ -60,3 +60,15 @@ perry --help                      # full CLI reference
 - Repository: https://github.com/PerryTS/perry
 - Issues: https://github.com/PerryTS/perry/issues
 - Changelog: https://github.com/PerryTS/perry/blob/main/CHANGELOG.md
+# Prebuilt runtime profiles
+
+Native Unix packages include a core runtime alongside the full runtime. When
+the source checkout is unavailable, the compiler can select the core archive
+for runtime-only programs whose existing feature analysis needs no optional
+engines. Programs using regex, Intl/Temporal, dynamic evaluation, native modules,
+workers, or FFI retain the existing fallback. A missing core archive also falls
+back, so older and partial installations remain usable.
+
+The core profile preserves the allocator and unwind policy. It reduces the code
+linked into eligible programs; smaller binaries do not by themselves establish
+lower startup time or RSS. `--no-auto-optimize` keeps the full-archive path.

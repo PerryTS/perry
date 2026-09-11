@@ -573,6 +573,22 @@ pub(crate) fn build_optimized_libs(
     let workspace_root = match find_perry_workspace_root() {
         Some(p) => p,
         None => {
+            if super::prebuilt_core::eligible(ctx, cli_features) {
+                if let Some(runtime) =
+                    super::super::library_search::find_runtime_core_library(target)
+                {
+                    if matches!(format, OutputFormat::Text) && verbose > 0 {
+                        eprintln!(
+                            "  auto-optimize: using prebuilt core runtime: {}",
+                            runtime.display()
+                        );
+                    }
+                    return OptimizedLibs {
+                        runtime: Some(runtime),
+                        ..OptimizedLibs::empty()
+                    };
+                }
+            }
             // Not verbose-gated: the fallback links the full-feature
             // prebuilt stdlib (sqlite/crypto/tokio/…), which typically
             // adds 5MB+ of code the linker cannot dead-strip (the
