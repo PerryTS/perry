@@ -1,4 +1,5 @@
-Compress worthwhile embedded payloads in Bun-platform executables with checksummed zstd,
+Compress worthwhile embedded payloads in Bun-platform executables with
+checksummed zstd,
 using the existing Bun CLI runtime feature. Keep small/incompressible payloads
 raw and require at least 256 KiB of aggregate payload savings before enabling
 compressed registration. Generated constructors validate and decode one exact
