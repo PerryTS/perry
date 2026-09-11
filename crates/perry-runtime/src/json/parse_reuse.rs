@@ -216,25 +216,23 @@ pub(crate) unsafe fn remember_parse_object_template(
         .cast::<u8>()
         .add(std::mem::size_of::<crate::object::ObjectHeader>())
         .cast::<JSValue>();
-    let mut values = [EMPTY_PARSE_TEMPLATE_VALUE; PARSE_OBJECT_TEMPLATE_MAX_FIELDS];
+    // Only the validated prefix is read. A rejected field leaves the previous
+    // cache entry intact without clearing or copying eight array-sized slots.
+    let mut values: [std::mem::MaybeUninit<ParseTemplateValue>; PARSE_OBJECT_TEMPLATE_MAX_FIELDS] =
+        [std::mem::MaybeUninit::uninit(); PARSE_OBJECT_TEMPLATE_MAX_FIELDS];
     for (index, slot) in values[..len].iter_mut().enumerate() {
         let Some(value) = parse_template_value(*fields.add(index)) else {
             return;
         };
-        *slot = value;
+        slot.write(value);
     }
-    let entry = ParseObjectTemplate {
-        source,
-        source_len: source_len as u16,
-        keys_array: crate::object::object_keys_array(object),
-        shape_id: crate::object::shapes::object_shape_stamp(object),
-        values,
-        len: len as u8,
-    };
+    let keys_array = crate::object::object_keys_array(object);
+    let shape_id = crate::object::shapes::object_shape_stamp(object);
     crate::gc::runtime_write_barrier_root_nanbox(JSValue::string_ptr(source.cast_mut()).bits());
-    crate::gc::runtime_write_barrier_root_raw_ptr(entry.keys_array);
-    for value in &entry.values[..len] {
-        match *value {
+    crate::gc::runtime_write_barrier_root_raw_ptr(keys_array);
+    for value in &values[..len] {
+        // Every slot in this prefix was initialized before reaching barriers.
+        match *value.assume_init_ref() {
             ParseTemplateValue::Inline(value) => {
                 crate::gc::runtime_write_barrier_root_nanbox(value.bits());
             }
@@ -245,7 +243,26 @@ pub(crate) unsafe fn remember_parse_object_template(
             }
         }
     }
-    PARSE_OBJECT_TEMPLATE.with(|cache| *cache.borrow_mut() = Some(entry));
+    PARSE_OBJECT_TEMPLATE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let entry = cache.get_or_insert_with(|| ParseObjectTemplate {
+            source,
+            source_len: source_len as u16,
+            keys_array,
+            shape_id,
+            values: [EMPTY_PARSE_TEMPLATE_VALUE; PARSE_OBJECT_TEMPLATE_MAX_FIELDS],
+            len: 0,
+        });
+        entry.source = source;
+        entry.source_len = source_len as u16;
+        entry.keys_array = keys_array;
+        entry.shape_id = shape_id;
+        for (target, value) in entry.values[..len].iter_mut().zip(&values[..len]) {
+            *target = *value.assume_init_ref();
+        }
+        // Unused slots stay valid but are neither visited nor reconstructed.
+        entry.len = len as u8;
+    });
 }
 
 /// Rebuild only the mutable cells from a cached small-object plan. One pending
@@ -439,3 +456,7 @@ pub(super) fn clear_caches() {
     PARSE_STRING_CACHE.with(|cache| *cache.borrow_mut() = None);
     PARSE_OBJECT_TEMPLATE.with(|cache| *cache.borrow_mut() = None);
 }
+
+#[cfg(test)]
+#[path = "parse_reuse_capture_tests.rs"]
+mod capture_tests;
