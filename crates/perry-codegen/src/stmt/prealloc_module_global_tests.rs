@@ -39,7 +39,7 @@ use crate::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::Type;
 use perry_hir::{Expr, Module, ModuleInitKind, Param, Stmt};
 
-fn ir_opts() -> CompileOptions {
+pub(super) fn ir_opts() -> CompileOptions {
     CompileOptions {
         target: None,
         is_entry_module: true,
