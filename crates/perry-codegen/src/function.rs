@@ -862,6 +862,13 @@ impl LlFunction {
     /// internal/private definitions so cross-unit calls bind (mirror of
     /// `render_fn_external`).
     pub fn define_header(&self, force_external: bool) -> String {
+        self.define_header_with_size_attrs(
+            force_external,
+            crate::linker::application_size_function_attrs(),
+        )
+    }
+
+    fn define_header_with_size_attrs(&self, force_external: bool, size_attrs: &str) -> String {
         let param_str = self
             .params
             .iter()
@@ -895,16 +902,23 @@ impl LlFunction {
         // small helpers eligible; let LLVM decide for larger generated bodies.
         // The separate pre-statepoint admission already has its own budget.
         let force_inline = self.force_inline && self.estimated_ir_bytes() <= 8 * 1024;
-        let attrs = if self.pre_statepoint_inline || (force_inline && !rs4gc) {
+        // Even a bounded small body can grow many cold callers when forced
+        // into them. Under -Oz, let LLVM's minsize cost model choose ordinary
+        // shadow-root inlines. This is not `noinline`: profitable inlines are
+        // still allowed. Keep explicitly admitted pre-statepoint inlines and
+        // native-root hints unchanged; their early-pass contract is separate.
+        let minsize = size_attrs
+            .split_ascii_whitespace()
+            .any(|attr| attr == "minsize");
+        let attrs = if self.pre_statepoint_inline || (force_inline && !rs4gc && !minsize) {
             " alwaysinline"
         } else if self.no_inline {
             " noinline"
-        } else if self.inline_hint || force_inline {
+        } else if self.inline_hint || (force_inline && rs4gc) {
             " inlinehint"
         } else {
             ""
         };
-        let size_attrs = crate::linker::application_size_function_attrs();
         // The native-stack walker recovers frames through the x29 chain, so
         // every generated function must link one; without the attribute,
         // textual-IR input gets no frame-pointer default from the clang
@@ -1304,6 +1318,70 @@ mod define_header_tests {
             function.no_inline = true;
             assert!(function.define_header(false).contains("noinline"));
         }
+    }
+
+    #[test]
+    fn minsize_defers_ordinary_shadow_inlining_to_llvm_for_both_renderers() {
+        let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
+        let mut function = probe();
+        function.force_inline = true;
+        function.linkage = "internal".to_string();
+        assert!(function.estimated_ir_bytes() <= 8 * 1024);
+
+        for external in [false, true] {
+            for size_attrs in ["", " optsize", " optsize minsize"] {
+                let header = function.define_header_with_size_attrs(external, size_attrs);
+                assert_eq!(header.contains("internal"), !external, "{header}");
+                assert_eq!(
+                    header.contains(" alwaysinline"),
+                    !size_attrs.contains("minsize"),
+                    "only minsize should defer forced shadow inlining: {header}"
+                );
+                assert!(!header.contains(" inlinehint"), "{header}");
+                assert!(!header.contains(" noinline"), "{header}");
+                assert!(header.contains(size_attrs), "size attributes must survive");
+            }
+        }
+    }
+
+    #[test]
+    fn minsize_preserves_native_root_hints_and_pre_statepoint_admission() {
+        use crate::codegen::helpers::NativeRootsPin;
+        for native in [false, true] {
+            let _pin = if native {
+                NativeRootsPin::native()
+            } else {
+                NativeRootsPin::shadow()
+            };
+            for external in [false, true] {
+                let mut function = probe();
+                function.force_inline = true;
+                let header = function.define_header_with_size_attrs(external, " optsize minsize");
+                assert_eq!(header.contains(" inlinehint"), native, "{header}");
+                assert!(!header.contains(" alwaysinline"), "{header}");
+
+                function.pre_statepoint_inline = true;
+                let admitted = function.define_header_with_size_attrs(external, " optsize minsize");
+                assert!(admitted.contains(" alwaysinline"), "{admitted}");
+                assert!(!admitted.contains(" inlinehint"), "{admitted}");
+            }
+        }
+    }
+
+    #[test]
+    fn minsize_preserves_explicit_noinline_and_hot_hint_requests() {
+        let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
+        let mut function = probe();
+        function.force_inline = true;
+        function.no_inline = true;
+        assert!(function
+            .define_header_with_size_attrs(false, " optsize minsize")
+            .contains(" noinline"));
+        function.no_inline = false;
+        function.inline_hint = true;
+        assert!(function
+            .define_header_with_size_attrs(false, " optsize minsize")
+            .contains(" inlinehint"));
     }
 
     /// The property that was actually lost, asserted directly (#7982) — in
