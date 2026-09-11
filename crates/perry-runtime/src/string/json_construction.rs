@@ -55,6 +55,7 @@ pub(crate) unsafe fn string_from_json_bytes(
 /// quotes, controls and WTF-8 surrogate prefixes. The caller must keep parse
 /// suppression active and pass only such scanned bytes. Length counting keeps
 /// the existing bounded WTF-8 interpretation; no separate Unicode proof pass.
+#[inline(never)]
 pub(crate) unsafe fn string_from_scanned_json_bytes(
     batch: &mut Option<crate::arena::ConstructionBatch>,
     bytes: &[u8],

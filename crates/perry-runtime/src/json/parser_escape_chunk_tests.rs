@@ -111,6 +111,32 @@ fn escaped_chunks_do_not_grow_scratch_before_the_string_needs_it() {
 }
 
 #[test]
+fn escaped_chunk_word_copy_keeps_complete_escape_and_spare_storage_bounds() {
+    for offset in 0..72 {
+        for escape in [br"\uD800\uDC00".as_slice(), br"\u007f", br"\n", br"\\"] {
+            let mut source = vec![b'a'; offset];
+            source.extend_from_slice(escape);
+            source.extend_from_slice(&[b'b'; 64]);
+            let mut parser = DirectParser::new(&source);
+            // Exactly the required spare capacity, after an existing prefix.
+            let mut result = Vec::with_capacity(75);
+            result.extend_from_slice(b"kept-prefix");
+            let capacity = result.capacity();
+            assert_eq!(parser.decode_chunk(&mut result), Some(false));
+            assert_eq!(result.capacity(), capacity);
+            assert!(parser.pos <= 64);
+            assert!(parser.pos <= offset || parser.pos >= offset + escape.len());
+            let mut quoted = vec![b'"'];
+            quoted.extend_from_slice(&source[..parser.pos]);
+            quoted.push(b'"');
+            let expected: String = serde_json::from_slice(&quoted).unwrap();
+            assert_eq!(&result[..11], b"kept-prefix");
+            assert_eq!(&result[11..], expected.as_bytes(), "offset={offset}");
+        }
+    }
+}
+
+#[test]
 #[cfg(unix)]
 fn escaped_chunk_never_reads_past_guarded_input() {
     unsafe {

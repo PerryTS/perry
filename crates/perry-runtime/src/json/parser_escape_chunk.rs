@@ -32,6 +32,37 @@ impl DirectParser<'_> {
             }};
         }
         while pos < limit {
+            // Before the first marked byte, these little-endian lane tests
+            // cannot borrow from an earlier special byte. Later false hits do
+            // not affect the first index. A complete load/store fits within
+            // the caller's 64-byte input/output bounds, even at offset 51.
+            const LOW: u64 = 0x0101_0101_0101_0101;
+            const HIGH: u64 = 0x8080_8080_8080_8080;
+            let raw = unsafe { self.input.as_ptr().add(pos).cast::<u64>().read_unaligned() };
+            let word = u64::from_le(raw);
+            let quotes = word ^ 0x2222_2222_2222_2222;
+            let slashes = word ^ 0x5c5c_5c5c_5c5c_5c5c;
+            let mask = ((quotes.wrapping_sub(LOW) & !quotes)
+                | (slashes.wrapping_sub(LOW) & !slashes)
+                | (word.wrapping_sub(0x2020_2020_2020_2020) & !word))
+                & HIGH;
+            let plain = mask.trailing_zeros() as usize / 8;
+            if plain != 0 {
+                unsafe {
+                    // GC_STORE_AUDIT(POINTER_FREE): decoded JSON bytes in spare Vec storage.
+                    output.add(written).cast::<u64>().write_unaligned(raw);
+                }
+                pos += plain;
+                written += plain;
+                // Only the plain prefix is committed. An escape must still
+                // start before offset 52 to leave its complete 12-byte input.
+                if pos >= limit {
+                    break;
+                }
+                if plain == 8 {
+                    continue;
+                }
+            }
             let ch = unsafe { *self.input.get_unchecked(pos) };
             pos += 1;
             match ch {

@@ -100,7 +100,7 @@ pub(crate) use parser::{DirectParser, ObjectShapeHint, ParsedStr, MAX_ITERATIVE_
 pub(crate) use raw_json::{ptr_is_raw_json_wrapper, raw_json_text_bytes};
 #[cfg(test)]
 pub(crate) use reviver::test_apply_reviver_for_value;
-pub(crate) use simd::find_string_terminator;
+pub(crate) use simd::find_borrowed_string_terminator;
 pub(crate) use stringify::{
     arm_to_json_result_guard, check_stringify_nesting_depth, estimate_json_size, is_closure_value,
     is_object_pointer, is_symbol_value, object_get_to_json, stringify_value, write_escaped_string,

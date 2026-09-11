@@ -28,6 +28,13 @@ pub(crate) fn count_ascii_digits(bytes: &[u8]) -> usize {
 /// Find a string terminator or an illegal unescaped control byte.
 #[inline(always)]
 pub(crate) fn find_string_terminator(bytes: &[u8]) -> Option<usize> {
+    find_special::<true, false>(bytes)
+}
+
+/// Borrowed values also need to exclude surrogate prefixes before the string
+/// constructor can attach an escape-free proof. Tape building does not.
+#[inline(always)]
+pub(crate) fn find_borrowed_string_terminator(bytes: &[u8]) -> Option<usize> {
     json_string::scan(bytes)
 }
 

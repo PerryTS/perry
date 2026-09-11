@@ -561,7 +561,7 @@ impl<'a> DirectParser<'a> {
 
         // SIMD-accelerated scan for `"` or `\`. On match, fall through
         // to the scalar loop which positions `self.pos` exactly.
-        if let Some(hit) = find_string_terminator(&self.input[self.pos..]) {
+        if let Some(hit) = find_borrowed_string_terminator(&self.input[self.pos..]) {
             // `hit` is the offset within the remaining slice of the
             // first `"` or `\`. If it's `"`, we're done; if `\`, slow
             // path picks up from the current position.

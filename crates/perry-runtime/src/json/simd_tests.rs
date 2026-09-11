@@ -87,7 +87,12 @@ fn check(bytes: &[u8]) {
             || b < 32
             || (b == 0xed && bytes.get(i + 1).is_some_and(|n| n & 0xe0 == 0xa0))
     });
-    assert_eq!(find_string_terminator(bytes), json_parse, "parse {bytes:?}");
+    assert_eq!(find_string_terminator(bytes), parse, "parse {bytes:?}");
+    assert_eq!(
+        find_borrowed_string_terminator(bytes),
+        json_parse,
+        "borrowed parse {bytes:?}"
+    );
     assert_eq!(find_string_escape(bytes), escape, "escape {bytes:?}");
     assert_eq!(
         short_string_needs_escape(bytes),
