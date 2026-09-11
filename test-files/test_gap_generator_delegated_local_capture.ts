@@ -1,5 +1,5 @@
 // #10048: a delegated loop emits multiple copies of the resumed scope.
-// The callback's preallocated cell must be initialized in every copy.
+// The callback's reused boxed slot must contain a cell in every copy.
 async function* delegate(value: number) { yield value; }
 async function* outer() {
   let base = 40;

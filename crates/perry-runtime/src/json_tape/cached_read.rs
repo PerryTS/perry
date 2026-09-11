@@ -1,11 +1,12 @@
-//! Allocation-free reads of existing lazy JSON array elements.
+//! Reads of existing lazy JSON array elements without managed allocations.
 
 use super::{JSValue, LazyArrayHeader};
 
 /// Return a cached element, or materialize its subtree on first access.
 ///
-/// The caller must supply a live lazy header. This fast path cannot allocate,
-/// invoke user code or collect: it resolves growth and loads an existing slot.
+/// The caller must supply a live lazy header. This fast path cannot allocate
+/// managed values, invoke user code or collect: it resolves growth and loads
+/// an existing slot. Forwarding barriers may grow Rust-side metadata.
 /// Cold reads, holes and descriptors keep the rooted general accessor.
 // Keep the lazy hit/miss machinery outside the shared array dispatcher.
 #[inline(never)]
