@@ -1006,42 +1006,38 @@ pub extern "C" fn js_array_push_spread_f64(
     if source.is_null() {
         return target;
     }
-    // #7542: call-spread (`f(...arr)`) is `GetIterator(arr)` + drain, so a
-    // patched `Array.prototype[Symbol.iterator]` decides how many arguments the
-    // callee receives. The element copy below never consults the protocol, so
-    // `f(...[1,2,3])` passed 3 arguments where node passes whatever the patched
-    // iterator yields (1).
-    //
-    // Materialize through the protocol and copy THAT, rather than concatenating:
-    // this helper appends into `target` in place and returns it, and callers
-    // rely on that identity. `js_array_clone_for_spread` is the same entry point
-    // `[...arr]` uses, so the two spread forms cannot disagree.
-    let source = if crate::array::array_proto_iterator_modified() {
-        let boxed = crate::value::js_nanbox_pointer(source as i64);
-        let materialized = crate::array::js_array_clone_for_spread(boxed);
-        if materialized.is_null() {
-            return target;
-        }
-        materialized as *const ArrayHeader
-    } else {
-        source
-    };
+    // Use the shared dense-source proof and iterator materializer so
+    // own/prototype overrides, accessors, holes and abrupt completion cannot
+    // diverge from the typed-local path. Keep pushing through the public
+    // helper because a generic receiver may be a Proxy or object-backed Array
+    // subclass rather than a plain dense Array.
     let scope = crate::gc::RuntimeHandleScope::new();
+    let target_handle = scope.root_raw_mut_ptr(target);
+    let boxed = crate::value::js_nanbox_pointer(source as i64);
+    let source = match crate::array::dense_spread_source(boxed) {
+        Some(source) => source,
+        None => crate::array::js_array_clone_for_spread(boxed) as *const ArrayHeader,
+    };
+    if source.is_null() {
+        return target_handle.get_raw_mut_ptr::<ArrayHeader>();
+    }
     let source_handle = scope.root_raw_const_ptr(source);
     unsafe {
         let src_len = (*source).length;
-        if src_len == 0 {
-            return target;
-        }
-        let mut current = target;
-        for i in 0..src_len {
+        let mut current = target_handle.get_raw_mut_ptr::<ArrayHeader>();
+        for i in 0..src_len as usize {
             let source = clean_arr_ptr(source_handle.get_raw_const_ptr::<ArrayHeader>());
             if source.is_null() {
                 break;
             }
-            let src_elements_ptr =
+            let elements =
                 (source as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
-            let value = *src_elements_ptr.add(i as usize);
+            let source_value = *elements.add(i);
+            let value = if source_value.to_bits() == crate::value::TAG_HOLE {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            } else {
+                source_value
+            };
             current = js_array_push_f64(current, value);
         }
         current

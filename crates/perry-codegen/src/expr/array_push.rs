@@ -663,11 +663,10 @@ fn lower_array_push_spread_spec_order(
         let cur_bits = blk.bitcast_double_to_i64(&cur_box);
         let still_bound = blk.icmp_eq(I64, &cur_bits, &recv_bits);
         let dst_handle = unbox_to_i64(blk, &recv_box);
-        let src_handle = unbox_to_i64(blk, &src_box);
         let new_handle = blk.call(
             I64,
-            "js_array_concat",
-            &[(I64, &dst_handle), (I64, &src_handle)],
+            "js_array_spread_append",
+            &[(I64, &dst_handle), (DOUBLE, &src_box)],
         );
         let new_box = nanbox_pointer_inline(blk, &new_handle);
 
@@ -1491,12 +1490,9 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
         // `arr.push(...src)` — HIR variant carrying the destination
         // array's LocalId and the source expression (any iterable, in
         // practice an array or Set). Mirrors `Expr::ArrayPush` above:
-        // load the destination from its slot, unbox both pointers, call
-        // the runtime's `js_array_concat` (which walks the source and
-        // calls `js_array_push_f64` per element + already handles
-        // Set sources via SET_REGISTRY), NaN-box the realloc-aware
-        // return pointer, and write back to whichever storage backs
-        // `array_id`. Issue #248.
+        // load the destination from its slot, call the runtime's iterator-aware
+        // `js_array_spread_append`, NaN-box the realloc-aware return pointer,
+        // and write back to whichever storage backs `array_id`. Issue #248.
         Expr::ArrayPushSpread { array_id, source } => {
             let array_expr = Expr::LocalGet(*array_id);
             // #7634, same as `Expr::ArrayPush`: spec order is only observable
@@ -1520,11 +1516,10 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
             rooting::with_operands_rooted(ctx, &[source.as_ref(), &array_expr], |ctx, vals| {
                 let blk = ctx.block();
                 let dst_handle = unbox_to_i64(blk, &vals[1]);
-                let src_handle = unbox_to_i64(blk, &vals[0]);
                 let new_handle = blk.call(
                     I64,
-                    "js_array_concat",
-                    &[(I64, &dst_handle), (I64, &src_handle)],
+                    "js_array_spread_append",
+                    &[(I64, &dst_handle), (DOUBLE, &vals[0])],
                 );
                 let new_box = nanbox_pointer_inline(blk, &new_handle);
                 emit_push_writeback(ctx, *array_id, &new_box, "ArrayPushSpread")?;
