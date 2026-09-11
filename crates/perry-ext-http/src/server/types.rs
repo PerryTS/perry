@@ -166,10 +166,8 @@ pub unsafe fn parse_listen_args(args_array: i64) -> ListenArgs {
         return out;
     }
     let len = (*arr_ptr).length as usize;
-    let elements =
-        perry_runtime::array::array_elements_ptr(arr_ptr as *const ArrayHeader) as *const u64;
     for i in 0..len {
-        let bits = *elements.add(i);
+        let bits = perry_ffi::js_array_get(arr_ptr, i as u32).bits();
         let v = JsValue::from_bits(bits);
         // The completion callback is the (single) function argument — match it
         // by value type, not position, so it's picked up wherever it floats.

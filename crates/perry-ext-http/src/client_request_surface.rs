@@ -144,7 +144,9 @@ extern "C" fn client_once_wrapper(closure: *const RawClosureHeader, rest: f64) -
         if array.is_null() {
             return js_closure_call_array(callback, std::ptr::null(), 0);
         }
-        let args = perry_runtime::array::array_elements_ptr(array) as *const f64;
+        // The rest ABI creates this fresh, unshifted argument array for this
+        // invocation; no JS callback has run since it was packed.
+        let args = (array as *const u8).add(8) as *const f64;
         js_closure_call_array(callback, args, (*array).length as i64)
     }
 }
