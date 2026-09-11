@@ -306,7 +306,7 @@ pub(crate) fn emit_element_shape_loop_preheader_check(
         }
     };
 
-    // Elements base: `arr + size_of::<ArrayHeader>()`.
+    // Logical elements base, including a consumed queue prefix.
     let base_addr = blk.array_elements_addr(&handle1);
     let elements_base = blk.inttoptr(I64, &base_addr);
 

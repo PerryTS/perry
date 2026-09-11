@@ -86,12 +86,10 @@ unsafe fn params_from_array(arr_ptr: *const ArrayHeader) -> Vec<Box<dyn rusqlite
         return vec![];
     }
     let len = (*arr_ptr).length as usize;
-    let elements =
-        perry_runtime::array::array_elements_ptr(arr_ptr as *const ArrayHeader) as *const u64;
     let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(len);
 
     for i in 0..len {
-        let bits = *elements.add(i);
+        let bits = perry_ffi::js_array_get(arr_ptr, i as u32).bits();
         let val = JsValue::from_bits(bits);
 
         if val.is_null() || val.is_undefined() {
