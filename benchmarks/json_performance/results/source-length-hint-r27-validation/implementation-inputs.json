@@ -1,0 +1,9 @@
+{
+  "source_commit": "decc2d9eed2de5713b800ddaf77ffc75c78fdd0c",
+  "files": {
+    "crates/perry-runtime/src/json/parser.rs": "e8350615fb091cd8998d54f929c8f2f4ffb7fdd35b80f057a0d4236d43bd0e66",
+    "crates/perry-runtime/src/json/parser_source_length.rs": "6920b4202f66948ff15816e819fbcada791791e41734181de4e3c841c09d218c",
+    "crates/perry-runtime/src/string/json_construction.rs": "402546b11bb3c305a6313dea6192a8236a44dcbe4f2e5af1a52bc4a3a0229b51"
+  },
+  "proposal_only_before_commit": true
+}

@@ -1,0 +1,19 @@
+{
+  "unchanged_payloads": 499,
+  "derived_controllers": [
+    {
+      "path": "benchmarks/json_performance/.work/source-length-hint-r27/compare-json-entry-disassembly.py",
+      "copy_event_sha256": "e16f0b9afb7f53ecafbea18de70684a9e478c74375b48194280b623bde4aa3ae",
+      "final_sha256": "e543160304b99c635f0cda3662dd7e8d9f535587199012a3b098436b5488a85b",
+      "note": "Derived local controller; original reference compiler/runtime/worker/IR/behavior data unchanged."
+    },
+    {
+      "path": "benchmarks/json_performance/.work/source-length-hint-r27/stage.py",
+      "copy_event_sha256": "0f696478deeb2a4222fd459a8103514ad4c6c0070a114961a2585b536acc7600",
+      "final_sha256": "a4658fa68ec3f06e6582bdef27f638e4f3597f8779df6d5d1f12a07e7e1120df",
+      "note": "Derived local controller; original reference compiler/runtime/worker/IR/behavior data unchanged."
+    }
+  ],
+  "bootstrap_receipt_sha256": "52ffa0ed633637fa665b5e440c42f6f49145625144108b1d411e0a7e76c33979",
+  "note": "Bootstrap receipt records copy-time hashes. Controller adaptations below are explicit; all copied non-controller reference payloads remain byte-identical."
+}

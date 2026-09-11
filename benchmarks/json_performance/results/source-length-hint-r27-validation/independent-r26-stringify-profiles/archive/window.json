@@ -1,0 +1,24 @@
+{
+  "owner": "json-perf-23936-1789121056",
+  "load_before": [
+    1.46875,
+    1.4287109375,
+    1.4775390625
+  ],
+  "started_utc": "2026-09-11T10:04:16Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/stringify-gaps-r26-profiles/run-stringify-profiles.py",
+    "--results-dir",
+    "results/quiet-stringify-gaps-r26-profiles"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.43212890625,
+    1.42333984375,
+    1.474609375
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-11T10:04:29Z"
+}

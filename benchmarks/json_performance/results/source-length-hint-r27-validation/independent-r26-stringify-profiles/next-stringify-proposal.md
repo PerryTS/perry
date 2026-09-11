@@ -1,0 +1,7 @@
+# Next stringify candidate — existing proven string emitters
+
+The callback and pretty walkers still call write_escaped_string directly for heap and inline strings. The compact walker already has write_heap_string (which observes the parser-owned JSON_ESCAPE_FREE flag) and write_short_string (which fuses short ASCII/escape checks). Using these same helpers in the explicit STRING_TAG and SHORT_STRING_TAG arms of stringify_value_pretty and the replacer walk could remove repeated scans without changing callbacks, toJSON dispatch, spacer coercion, GC rooting or lazy array admission. Preserve each arm's null fallback exactly and do not alter ambiguous pointer fallbacks as part of this optimization.
+
+The new R26 profiles show escaping among the largest self costs in small and 16 KB pretty output and callback output. This is a hypothesis for benefit, not a performance result. The pretty object walker also allocates an entries vector and copies every key to a Rust String; removing those copies would require a separate review of property evaluation order, descriptors and GC custody. Do not combine that broader rewrite with the narrow emitter substitution.
+
+Acceptance should cover parsed versus constructed strings, ordinary/escaped/control/Unicode/WTF-8 outputs, mutations after provenance marking, callbacks returning freshly allocated strings, callback changes to later properties and toJSON, positive copying/protection and unchanged existing lazy failure outcomes. R25 zero-spacing and R26 generic stringify controls remain necessary.

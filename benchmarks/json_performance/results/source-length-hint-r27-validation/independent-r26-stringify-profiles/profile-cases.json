@@ -1,0 +1,25 @@
+{
+  "cases": [
+    {
+      "fixture": "small_record",
+      "operation": "pretty",
+      "mode": "options",
+      "iterations": 8000000,
+      "warmup": 5000
+    },
+    {
+      "fixture": "small_record",
+      "operation": "callback",
+      "mode": "options",
+      "iterations": 4000000,
+      "warmup": 5000
+    },
+    {
+      "fixture": "records_array_16k",
+      "operation": "pretty",
+      "mode": "options",
+      "iterations": 100000,
+      "warmup": 8
+    }
+  ]
+}

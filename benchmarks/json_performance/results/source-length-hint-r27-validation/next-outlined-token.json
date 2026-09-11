@@ -1,0 +1,8 @@
+{
+  "status": "PROPOSAL ONLY, NOT APPLIED OR TESTED",
+  "reason": "R27 first changing-small-record control is +0.58%, about 3 ns; parse_string_value grew from 239 to 307 instructions. Move the proof/allocation arm to an outlined helper to test whether parser footprint/register pressure contributes. Static instruction growth is not causal proof.",
+  "source_sha256": {
+    "crates/perry-runtime/src/json/parser.rs": "e8350615fb091cd8998d54f929c8f2f4ffb7fdd35b80f057a0d4236d43bd0e66",
+    "crates/perry-runtime/src/json/parser_source_length.rs": "6920b4202f66948ff15816e819fbcada791791e41734181de4e3c841c09d218c"
+  }
+}

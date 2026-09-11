@@ -1,0 +1,104 @@
+[
+  {
+    "case": {
+      "fixture": "small_record",
+      "operation": "pretty",
+      "mode": "options",
+      "iterations": 8000000,
+      "warmup": 5000
+    },
+    "worker_command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/stringify-gaps-r26-profiles/r26-options-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/fixtures/small_record.json",
+      "pretty",
+      "8000000",
+      "5000",
+      "verify"
+    ],
+    "worker_sha256": "b66745c51e4480f6c28cf425981a78f75f48f1027b0e46fb5b253566341cbb4e",
+    "env_overrides": {},
+    "sample_command": [
+      "/usr/bin/sample",
+      "23939",
+      "1",
+      "1",
+      "-mayDie",
+      "-file",
+      "results/quiet-stringify-gaps-r26-profiles/small_record-pretty-options.sample.txt"
+    ],
+    "worker_exit": 0,
+    "sampler_exit": 0,
+    "observed_peak_rss_bytes": 34897920,
+    "elapsed_seconds": 4.594521416,
+    "stop_reason": null,
+    "diagnostic_only": true
+  },
+  {
+    "case": {
+      "fixture": "small_record",
+      "operation": "callback",
+      "mode": "options",
+      "iterations": 4000000,
+      "warmup": 5000
+    },
+    "worker_command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/stringify-gaps-r26-profiles/r26-options-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/fixtures/small_record.json",
+      "callback",
+      "4000000",
+      "5000",
+      "verify"
+    ],
+    "worker_sha256": "b66745c51e4480f6c28cf425981a78f75f48f1027b0e46fb5b253566341cbb4e",
+    "env_overrides": {},
+    "sample_command": [
+      "/usr/bin/sample",
+      "23977",
+      "1",
+      "1",
+      "-mayDie",
+      "-file",
+      "results/quiet-stringify-gaps-r26-profiles/small_record-callback-options.sample.txt"
+    ],
+    "worker_exit": 0,
+    "sampler_exit": 0,
+    "observed_peak_rss_bytes": 34619392,
+    "elapsed_seconds": 3.6845641249999996,
+    "stop_reason": null,
+    "diagnostic_only": true
+  },
+  {
+    "case": {
+      "fixture": "records_array_16k",
+      "operation": "pretty",
+      "mode": "options",
+      "iterations": 100000,
+      "warmup": 8
+    },
+    "worker_command": [
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/stringify-gaps-r26-profiles/r26-options-worker",
+      "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/fixtures/records_array_16k.json",
+      "pretty",
+      "100000",
+      "8",
+      "verify"
+    ],
+    "worker_sha256": "b66745c51e4480f6c28cf425981a78f75f48f1027b0e46fb5b253566341cbb4e",
+    "env_overrides": {},
+    "sample_command": [
+      "/usr/bin/sample",
+      "24007",
+      "1",
+      "1",
+      "-mayDie",
+      "-file",
+      "results/quiet-stringify-gaps-r26-profiles/records_array_16k-pretty-options.sample.txt"
+    ],
+    "worker_exit": 0,
+    "sampler_exit": 0,
+    "observed_peak_rss_bytes": 58785792,
+    "elapsed_seconds": 4.904404207999999,
+    "stop_reason": null,
+    "diagnostic_only": true
+  }
+]

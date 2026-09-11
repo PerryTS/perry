@@ -1,0 +1,41 @@
+{
+  "reason": "Two distinct symbols matched the string_from_json_bytes substring and initially shared an output filename. Regenerated every exact command, verified every original recorded digest and assigned unique symbol-hash names. No source or binary changed.",
+  "files": [
+    {
+      "symbol": "__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value",
+      "original_filename": "main-worker-parse_string_value.s",
+      "unique_filename": "main-worker-parse_string_value-91a40182.s",
+      "sha256": "5d59fd566777a12625c2c4200cebac1ce02ec3da0a2a9b147c991f6978223dac"
+    },
+    {
+      "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction22string_from_json_bytes",
+      "original_filename": "main-worker-string_from_json_bytes.s",
+      "unique_filename": "main-worker-string_from_json_bytes-06d92380.s",
+      "sha256": "9e5e48645a6a230c4c86ebdf824d3f1bb6ba73d42b260da0069d77be609ce437"
+    },
+    {
+      "symbol": "__RINvMNtCsjgY6bXVaRmE_4core6optionINtB3_6OptionQNtNtNtCs3gRpqoBkMHm_13perry_runtime5arena12construction17ConstructionBatchE6map_orOhNCNvNtNtBP_6string17json_construction34string_from_json_bytes_known_utf160EBP_",
+      "original_filename": "candidate-worker-string_from_json_bytes.s",
+      "unique_filename": "candidate-worker-string_from_json_bytes-102a1cb9.s",
+      "sha256": "baa13b2fea5054a646830b1ca50ae97a364ad71c76b2cdf2342e2b2a7d69cb7b"
+    },
+    {
+      "symbol": "__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value",
+      "original_filename": "candidate-worker-parse_string_value.s",
+      "unique_filename": "candidate-worker-parse_string_value-91a40182.s",
+      "sha256": "8827da4c529de96e76fbbe33ea9bb573f66bc00724b1e2dff122e4585e565e03"
+    },
+    {
+      "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction22string_from_json_bytes",
+      "original_filename": "candidate-worker-string_from_json_bytes.s",
+      "unique_filename": "candidate-worker-string_from_json_bytes-06d92380.s",
+      "sha256": "968c850978fbb4e7dd27b1a0e79de3a45e79714dd9ce2d496cb2491c93747d76"
+    },
+    {
+      "symbol": "__RNvNtNtNtCs3gRpqoBkMHm_13perry_runtime4json6parser13source_length22source_token_utf16_len",
+      "original_filename": "candidate-worker-source_token_utf16_len.s",
+      "unique_filename": "candidate-worker-source_token_utf16_len-514ac965.s",
+      "sha256": "aa12e3d9dd0ad3c68b4d4187efd25826be2cd32eb6a4307aa0cb1baf86d7e3f5"
+    }
+  ]
+}

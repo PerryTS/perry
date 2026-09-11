@@ -1,0 +1,6 @@
+{
+  "status": "PROPOSAL ONLY, NOT APPLIED OR TESTED",
+  "source_sha256": "c762be408303f10bc2ec9dfa2d9687892fad7760a105fc33ab53ad2f6c06da23",
+  "candidate_sha256": "a90bb5ed0157a3b4013f98fcb26500f5674322c18bcd47d615521aca6b36f0dd",
+  "scope": "Only the explicit heap-string and short-string scalar arms in write_replaced_scalar and stringify_value_pretty. All pointer fallbacks, BigInt branches, callbacks and GC operations unchanged."
+}

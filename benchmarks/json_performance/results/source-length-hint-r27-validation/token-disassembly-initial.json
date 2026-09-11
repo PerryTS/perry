@@ -1,0 +1,17 @@
+{
+  "status": "Initial symbol-presence assertion failed: the normal CLI-linked token executables do not expose these private Rust symbol names. No implementation or behavioral verdict inferred; inspect the normal recorded benchmark link instead.",
+  "records": [
+    {
+      "arm": "main",
+      "binary_sha256": "0b531cf67d329fe83352c502c3b5ec0c56ca6bfdebfca3cae5980be6bc0bc8a8",
+      "symbol_output": "main-token-nm.txt",
+      "expected_helper_names_present": false
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "8ed166ebbc3b5ab88b339a2a4d2bbf65379cba23a9f60c2c81797b2ee316d811",
+      "symbol_output": "candidate-token-nm.txt",
+      "expected_helper_names_present": false
+    }
+  ]
+}

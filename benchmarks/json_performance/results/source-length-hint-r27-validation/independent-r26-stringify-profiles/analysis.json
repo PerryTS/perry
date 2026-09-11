@@ -1,0 +1,1840 @@
+{
+  "source_commit": "3aac4d6335da54abeeed73df842decbbe6dd5d71",
+  "diagnostic_only": true,
+  "note": "Three R26 frozen-worker stringify sampling diagnostics, with complete Node output and checksum verification. CPU/RSS of sampled processes is not benchmark evidence. Inclusive attribution overlaps and cannot be added.",
+  "cases": [
+    {
+      "case": {
+        "fixture": "small_record",
+        "operation": "pretty",
+        "mode": "options",
+        "iterations": 8000000,
+        "warmup": 5000
+      },
+      "workload_samples": 684,
+      "phases": {
+        "workload": {
+          "samples": 684,
+          "frames": [
+            {
+              "depth": 10,
+              "count": 663,
+              "name": "perry_fn_options_worker_ts__run$spec_b  (in r26-options-worker) + 4044  [0x100aed88c]",
+              "parent": 74
+            },
+            {
+              "depth": 10,
+              "count": 13,
+              "name": "perry_fn_options_worker_ts__run$spec_b  (in r26-options-worker) + 4776  [0x100aedb68]",
+              "parent": 74
+            },
+            {
+              "depth": 10,
+              "count": 5,
+              "name": "perry_fn_options_worker_ts__run$spec_b  (in r26-options-worker) + 4764  [0x100aedb5c]",
+              "parent": 74
+            },
+            {
+              "depth": 10,
+              "count": 1,
+              "name": "perry_fn_options_worker_ts__run$spec_b  (in r26-options-worker) + 4748  [0x100aedb4c]",
+              "parent": 74
+            },
+            {
+              "depth": 10,
+              "count": 2,
+              "name": "perry_fn_options_worker_ts__run$spec_b  (in r26-options-worker) + 4044  [0x100aed88c]",
+              "parent": 391
+            }
+          ],
+          "pct_of_workload_samples": 100.0
+        },
+        "json_stringify": {
+          "samples": 654,
+          "frames": [
+            {
+              "depth": 12,
+              "count": 481,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 4836  [0x101330224]",
+              "parent": 75,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 65,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 4060  [0x10132ff1c]",
+              "parent": 75,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 26,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 3996  [0x10132fedc]",
+              "parent": 75,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 19,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 3472,4008,...  [0x10132fcd0,0x10132fee8,...]",
+              "parent": 75,
+              "self_samples": 19
+            },
+            {
+              "depth": 12,
+              "count": 14,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 4032  [0x10132ff00]",
+              "parent": 75,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 11,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 2336  [0x10132f860]",
+              "parent": 75,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 9,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 1868  [0x10132f68c]",
+              "parent": 75,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 6,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 5112  [0x101330338]",
+              "parent": 75,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 5,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 3272  [0x10132fc08]",
+              "parent": 75,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 5,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 3416  [0x10132fc98]",
+              "parent": 75,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 4,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 3436  [0x10132fcac]",
+              "parent": 75,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 3,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 3840  [0x10132fe40]",
+              "parent": 75,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 2,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 4652  [0x10133016c]",
+              "parent": 75,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 2,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 5448  [0x101330488]",
+              "parent": 75,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 2,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 4836  [0x101330224]",
+              "parent": 392,
+              "self_samples": 0
+            }
+          ],
+          "pct_of_workload_samples": 95.6140350877193
+        },
+        "root_scope": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "utf8_validation": {
+          "samples": 2,
+          "frames": [
+            {
+              "depth": 22,
+              "count": 1,
+              "name": "_RNvNtNtCsjgY6bXVaRmE_4core3str8converts9from_utf8  (in r26-options-worker) + 52  [0x100b173cc]",
+              "parent": 81,
+              "self_samples": 1
+            },
+            {
+              "depth": 14,
+              "count": 1,
+              "name": "_RNvMNtCsctvjasLqLe9_5alloc6stringNtB2_6String15from_utf8_lossy  (in r26-options-worker) + 428  [0x100b0b8f4]",
+              "parent": 215,
+              "self_samples": 1
+            }
+          ],
+          "pct_of_workload_samples": 0.29239766081871343
+        },
+        "memory_copy": {
+          "samples": 43,
+          "frames": [
+            {
+              "depth": 18,
+              "count": 7,
+              "name": "_platform_memmove  (in libsystem_platform.dylib) + 436,460,...  [0x18171f514,0x18171f52c,...]",
+              "parent": 91,
+              "self_samples": 7
+            },
+            {
+              "depth": 18,
+              "count": 3,
+              "name": "_platform_memmove  (in libsystem_platform.dylib) + 452,0  [0x18171f524,0x18171f360]",
+              "parent": 100,
+              "self_samples": 3
+            },
+            {
+              "depth": 22,
+              "count": 2,
+              "name": "DYLD-STUB$$memcpy  (in r26-options-worker) + 4,8  [0x10164af70,0x10164af74]",
+              "parent": 141,
+              "self_samples": 2
+            },
+            {
+              "depth": 22,
+              "count": 1,
+              "name": "_platform_memmove  (in libsystem_platform.dylib) + 12  [0x18171f36c]",
+              "parent": 141,
+              "self_samples": 1
+            },
+            {
+              "depth": 16,
+              "count": 13,
+              "name": "_platform_memmove  (in libsystem_platform.dylib) + 452,12,...  [0x18171f524,0x18171f36c,...]",
+              "parent": 170,
+              "self_samples": 13
+            },
+            {
+              "depth": 16,
+              "count": 1,
+              "name": "DYLD-STUB$$memcpy  (in r26-options-worker) + 4  [0x10164af70]",
+              "parent": 170,
+              "self_samples": 1
+            },
+            {
+              "depth": 16,
+              "count": 3,
+              "name": "DYLD-STUB$$memcpy  (in r26-options-worker) + 4  [0x10164af70]",
+              "parent": 184,
+              "self_samples": 3
+            },
+            {
+              "depth": 16,
+              "count": 3,
+              "name": "_platform_memmove  (in libsystem_platform.dylib) + 12,452,...  [0x18171f36c,0x18171f524,...]",
+              "parent": 184,
+              "self_samples": 3
+            },
+            {
+              "depth": 18,
+              "count": 8,
+              "name": "_platform_memmove  (in libsystem_platform.dylib) + 204,36,...  [0x18171f42c,0x18171f384,...]",
+              "parent": 254,
+              "self_samples": 8
+            },
+            {
+              "depth": 16,
+              "count": 1,
+              "name": "_platform_memmove  (in libsystem_platform.dylib) + 452  [0x18171f524]",
+              "parent": 271,
+              "self_samples": 1
+            },
+            {
+              "depth": 18,
+              "count": 1,
+              "name": "_platform_memmove  (in libsystem_platform.dylib) + 452  [0x18171f524]",
+              "parent": 399,
+              "self_samples": 1
+            }
+          ],
+          "pct_of_workload_samples": 6.286549707602338
+        },
+        "allocation": {
+          "samples": 27,
+          "frames": [
+            {
+              "depth": 16,
+              "count": 7,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime6string20string_storage_alloc  (in r26-options-worker) + 152,312,...  [0x100e348c4,0x100e34964,...]",
+              "parent": 253,
+              "self_samples": 7
+            },
+            {
+              "depth": 16,
+              "count": 6,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime6string20string_storage_alloc  (in r26-options-worker) + 292  [0x100e34950]",
+              "parent": 253,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 11,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime6string20string_storage_alloc  (in r26-options-worker) + 152,312,...  [0x100e348c4,0x100e34964,...]",
+              "parent": 262,
+              "self_samples": 11
+            },
+            {
+              "depth": 14,
+              "count": 3,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime6string20string_storage_alloc  (in r26-options-worker) + 292  [0x100e34950]",
+              "parent": 262,
+              "self_samples": 0
+            }
+          ],
+          "pct_of_workload_samples": 3.9473684210526314
+        },
+        "collection": {
+          "samples": 13,
+          "frames": [
+            {
+              "depth": 12,
+              "count": 13,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy25gc_safepoint_moving_minor  (in r26-options-worker) + 2808  [0x100f463a4]",
+              "parent": 300,
+              "self_samples": 0
+            }
+          ],
+          "pct_of_workload_samples": 1.9005847953216373
+        }
+      },
+      "top_self_sample_nodes": [
+        {
+          "depth": 16,
+          "count": 62,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json17stringify_scalars20write_escaped_string  (in r26-options-worker) + 432,420,...  [0x100fddff4,0x100fddfe8,...]",
+          "parent": 108,
+          "self_samples": 62
+        },
+        {
+          "depth": 14,
+          "count": 55,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json8replacer23stringify_object_pretty  (in r26-options-worker) + 848,1856,...  [0x100feb490,0x100feb880,...]",
+          "parent": 76,
+          "self_samples": 55
+        },
+        {
+          "depth": 16,
+          "count": 35,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json8replacer22stringify_value_pretty  (in r26-options-worker) + 100,1744,...  [0x100fea644,0x100feacb0,...]",
+          "parent": 77,
+          "self_samples": 35
+        },
+        {
+          "depth": 16,
+          "count": 23,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json17stringify_scalars20write_escaped_string  (in r26-options-worker) + 420,1384,...  [0x100fddfe8,0x100fde3ac,...]",
+          "parent": 77,
+          "self_samples": 23
+        },
+        {
+          "depth": 20,
+          "count": 22,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json17stringify_scalars20write_escaped_string  (in r26-options-worker) + 40,448,...  [0x100fdde6c,0x100fde004,...]",
+          "parent": 79,
+          "self_samples": 22
+        },
+        {
+          "depth": 12,
+          "count": 19,
+          "name": "js_json_stringify_full  (in r26-options-worker) + 3472,4008,...  [0x10132fcd0,0x10132fee8,...]",
+          "parent": 75,
+          "self_samples": 19
+        },
+        {
+          "depth": 18,
+          "count": 17,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json8replacer22stringify_value_pretty  (in r26-options-worker) + 1064,24,...  [0x100feaa08,0x100fea5f8,...]",
+          "parent": 78,
+          "self_samples": 17
+        },
+        {
+          "depth": 14,
+          "count": 17,
+          "name": "mi_free  (in r26-options-worker) + 32  [0x1016480e0]",
+          "parent": 76,
+          "self_samples": 17
+        },
+        {
+          "depth": 16,
+          "count": 16,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json8replacer22stringify_array_pretty  (in r26-options-worker) + 140,124,...  [0x100fe9e4c,0x100fe9e3c,...]",
+          "parent": 77,
+          "self_samples": 16
+        },
+        {
+          "depth": 16,
+          "count": 13,
+          "name": "mi_malloc_aligned  (in r26-options-worker) + 4  [0x10164834c]",
+          "parent": 167,
+          "self_samples": 13
+        },
+        {
+          "depth": 16,
+          "count": 13,
+          "name": "_platform_memmove  (in libsystem_platform.dylib) + 452,12,...  [0x18171f524,0x18171f36c,...]",
+          "parent": 170,
+          "self_samples": 13
+        },
+        {
+          "depth": 16,
+          "count": 12,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json9stringify17is_object_pointer  (in r26-options-worker) + 80,256,...  [0x100ff3d10,0x100ff3dc0,...]",
+          "parent": 158,
+          "self_samples": 12
+        },
+        {
+          "depth": 18,
+          "count": 11,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json22stringify_tojson_probe25to_json_definitely_absent  (in r26-options-worker) + 392,64,...  [0x100fe0e08,0x100fe0cc0,...]",
+          "parent": 112,
+          "self_samples": 11
+        },
+        {
+          "depth": 14,
+          "count": 11,
+          "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime6string20string_storage_alloc  (in r26-options-worker) + 152,312,...  [0x100e348c4,0x100e34964,...]",
+          "parent": 262,
+          "self_samples": 11
+        },
+        {
+          "depth": 22,
+          "count": 9,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json22stringify_tojson_probe29object_proto_tojson_signature  (in r26-options-worker) + 132,48,...  [0x100fe1204,0x100fe11b0,...]",
+          "parent": 219,
+          "self_samples": 9
+        },
+        {
+          "depth": 14,
+          "count": 9,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json9stringify26ptr_is_tracked_heap_object  (in r26-options-worker) + 4,48,...  [0x100ff87bc,0x100ff87e8,...]",
+          "parent": 273,
+          "self_samples": 9
+        },
+        {
+          "depth": 14,
+          "count": 8,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json8replacer22stringify_value_pretty  (in r26-options-worker) + 356,132,...  [0x100fea744,0x100fea664,...]",
+          "parent": 76,
+          "self_samples": 8
+        },
+        {
+          "depth": 18,
+          "count": 8,
+          "name": "_platform_memmove  (in libsystem_platform.dylib) + 204,36,...  [0x18171f42c,0x18171f384,...]",
+          "parent": 254,
+          "self_samples": 8
+        },
+        {
+          "depth": 18,
+          "count": 7,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json9stringify17is_object_pointer  (in r26-options-worker) + 80  [0x100ff3d10]",
+          "parent": 87,
+          "self_samples": 7
+        },
+        {
+          "depth": 18,
+          "count": 7,
+          "name": "_platform_memmove  (in libsystem_platform.dylib) + 436,460,...  [0x18171f514,0x18171f52c,...]",
+          "parent": 91,
+          "self_samples": 7
+        },
+        {
+          "depth": 16,
+          "count": 7,
+          "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime6string20string_storage_alloc  (in r26-options-worker) + 152,312,...  [0x100e348c4,0x100e34964,...]",
+          "parent": 253,
+          "self_samples": 7
+        },
+        {
+          "depth": 16,
+          "count": 6,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json17stringify_scalars12write_number  (in r26-options-worker) + 24,144,...  [0x100fdc784,0x100fdc7fc,...]",
+          "parent": 77,
+          "self_samples": 6
+        },
+        {
+          "depth": 20,
+          "count": 6,
+          "name": "_mi_theap_realloc_zero  (in r26-options-worker) + 368,260,...  [0x1016482e0,0x101648274,...]",
+          "parent": 138,
+          "self_samples": 6
+        },
+        {
+          "depth": 16,
+          "count": 6,
+          "name": "<deduplicated_symbol>  (in r26-options-worker) + 48,44,...  [0x101625074,0x101625070,...]",
+          "parent": 136,
+          "self_samples": 6
+        },
+        {
+          "depth": 18,
+          "count": 6,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6object6shapes34shape_live_inline_slot_count_by_id  (in r26-options-worker) + 44  [0x1010ce9d0]",
+          "parent": 160,
+          "self_samples": 6
+        },
+        {
+          "depth": 18,
+          "count": 6,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json9stringify26ptr_is_tracked_heap_object  (in r26-options-worker) + 48,396  [0x100ff87e8,0x100ff8944]",
+          "parent": 174,
+          "self_samples": 6
+        },
+        {
+          "depth": 24,
+          "count": 6,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime5value10addr_class26try_read_tracked_gc_header  (in r26-options-worker) + 16,52,...  [0x101064050,0x101064074,...]",
+          "parent": 221,
+          "self_samples": 6
+        },
+        {
+          "depth": 22,
+          "count": 6,
+          "name": "_tlv_get_addr  (in libdyld.dylib) + 4  [0x18132038c]",
+          "parent": 239,
+          "self_samples": 6
+        },
+        {
+          "depth": 18,
+          "count": 6,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime5arena10allocators11arena_alloc  (in r26-options-worker) + 52,84,...  [0x100ff89d0,0x100ff89f0,...]",
+          "parent": 257,
+          "self_samples": 6
+        },
+        {
+          "depth": 14,
+          "count": 6,
+          "name": "_RNvMNtCsctvjasLqLe9_5alloc5sliceSh6repeatCs3gRpqoBkMHm_13perry_runtime  (in r26-options-worker) + 104,204,...  [0x100d19cdc,0x100d19d40,...]",
+          "parent": 266,
+          "self_samples": 6
+        },
+        {
+          "depth": 20,
+          "count": 5,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json9stringify26ptr_is_tracked_heap_object  (in r26-options-worker) + 48,36  [0x100ff87e8,0x100ff87dc]",
+          "parent": 95,
+          "self_samples": 5
+        },
+        {
+          "depth": 22,
+          "count": 5,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json22stringify_tojson_probe29object_proto_tojson_signature  (in r26-options-worker) + 8,104,...  [0x100fe1188,0x100fe11e8,...]",
+          "parent": 114,
+          "self_samples": 5
+        },
+        {
+          "depth": 20,
+          "count": 5,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6object15prototype_chain23object_static_prototype  (in r26-options-worker) + 48,100,...  [0x1010962a4,0x1010962d8,...]",
+          "parent": 127,
+          "self_samples": 5
+        },
+        {
+          "depth": 20,
+          "count": 5,
+          "name": "mi_free  (in r26-options-worker) + 32  [0x1016480e0]",
+          "parent": 138,
+          "self_samples": 5
+        },
+        {
+          "depth": 16,
+          "count": 5,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json9stringify26ptr_is_tracked_heap_object  (in r26-options-worker) + 48,36,...  [0x100ff87e8,0x100ff87dc,...]",
+          "parent": 187,
+          "self_samples": 5
+        }
+      ],
+      "profile_sha256": "09413c0c990d6a847c5d2770b4a60d4f2112768b0aef4747da8009af6f79ead8",
+      "oracle_command": [
+        "/opt/homebrew/bin/node",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-gaps-r26-profiles/options-worker.js",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/fixtures/small_record.json",
+        "pretty",
+        "8",
+        "0",
+        "verify"
+      ],
+      "oracle_output_sha256": "12e9dbb0895cffb5d05cbcb7024ef94b5cc021c8be12f2eb9ace7643053e79b2",
+      "complete_output_matches_node": true,
+      "diagnostic_only": true
+    },
+    {
+      "case": {
+        "fixture": "small_record",
+        "operation": "callback",
+        "mode": "options",
+        "iterations": 4000000,
+        "warmup": 5000
+      },
+      "workload_samples": 742,
+      "phases": {
+        "workload": {
+          "samples": 742,
+          "frames": [
+            {
+              "depth": 10,
+              "count": 737,
+              "name": "perry_fn_options_worker_ts__run$spec_b  (in r26-options-worker) + 6116  [0x1042d60a4]",
+              "parent": 2
+            },
+            {
+              "depth": 10,
+              "count": 3,
+              "name": "perry_fn_options_worker_ts__run$spec_b  (in r26-options-worker) + 6848  [0x1042d6380]",
+              "parent": 2
+            },
+            {
+              "depth": 10,
+              "count": 1,
+              "name": "perry_fn_options_worker_ts__run$spec_b  (in r26-options-worker) + 6096  [0x1042d6090]",
+              "parent": 2
+            },
+            {
+              "depth": 10,
+              "count": 1,
+              "name": "perry_fn_options_worker_ts__run$spec_b  (in r26-options-worker) + 6836  [0x1042d6374]",
+              "parent": 2
+            }
+          ],
+          "pct_of_workload_samples": 100.0
+        },
+        "json_stringify": {
+          "samples": 730,
+          "frames": [
+            {
+              "depth": 12,
+              "count": 468,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 4596  [0x104b18134]",
+              "parent": 3,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 134,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 4392  [0x104b18068]",
+              "parent": 3,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 42,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 4144  [0x104b17f70]",
+              "parent": 3,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 18,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 4412  [0x104b1807c]",
+              "parent": 3,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 14,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 3996  [0x104b17edc]",
+              "parent": 3,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 11,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 3636  [0x104b17d74]",
+              "parent": 3,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 11,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 3472,8,...  [0x104b17cd0,0x104b16f48,...]",
+              "parent": 3,
+              "self_samples": 11
+            },
+            {
+              "depth": 12,
+              "count": 6,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 1868  [0x104b1768c]",
+              "parent": 3,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 6,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 2832  [0x104b17a50]",
+              "parent": 3,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 5,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 5112  [0x104b18338]",
+              "parent": 3,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 4,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 3620  [0x104b17d64]",
+              "parent": 3,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 4,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 3660  [0x104b17d8c]",
+              "parent": 3,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 2,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 3416  [0x104b17c98]",
+              "parent": 3,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 2,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 3840  [0x104b17e40]",
+              "parent": 3,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 1,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 3592  [0x104b17d48]",
+              "parent": 3,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 1,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 4604  [0x104b1813c]",
+              "parent": 3,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 1,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 6300  [0x104b187dc]",
+              "parent": 3,
+              "self_samples": 0
+            }
+          ],
+          "pct_of_workload_samples": 98.38274932614556
+        },
+        "root_scope": {
+          "samples": 69,
+          "frames": [
+            {
+              "depth": 20,
+              "count": 2,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new  (in r26-options-worker) + 32  [0x10455cab8]",
+              "parent": 13,
+              "self_samples": 2
+            },
+            {
+              "depth": 20,
+              "count": 1,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in r26-options-worker) + 32  [0x10443851c]",
+              "parent": 15,
+              "self_samples": 1
+            },
+            {
+              "depth": 18,
+              "count": 2,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new  (in r26-options-worker) + 32  [0x10455cab8]",
+              "parent": 52,
+              "self_samples": 2
+            },
+            {
+              "depth": 18,
+              "count": 3,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in r26-options-worker) + 100  [0x10455cc04]",
+              "parent": 55,
+              "self_samples": 3
+            },
+            {
+              "depth": 18,
+              "count": 2,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in r26-options-worker) + 20,32  [0x104438510,0x10443851c]",
+              "parent": 62,
+              "self_samples": 2
+            },
+            {
+              "depth": 18,
+              "count": 7,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new  (in r26-options-worker) + 32,8,...  [0x10455cab8,0x10455caa0,...]",
+              "parent": 113,
+              "self_samples": 7
+            },
+            {
+              "depth": 18,
+              "count": 7,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in r26-options-worker) + 32,20  [0x10443851c,0x104438510]",
+              "parent": 117,
+              "self_samples": 7
+            },
+            {
+              "depth": 16,
+              "count": 2,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in r26-options-worker) + 144  [0x10443858c]",
+              "parent": 108,
+              "self_samples": 2
+            },
+            {
+              "depth": 16,
+              "count": 5,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in r26-options-worker) + 100,48,...  [0x10455cc04,0x10455cbd0,...]",
+              "parent": 142,
+              "self_samples": 5
+            },
+            {
+              "depth": 16,
+              "count": 4,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in r26-options-worker) + 100,28,...  [0x10455cc04,0x10455cbbc,...]",
+              "parent": 144,
+              "self_samples": 4
+            },
+            {
+              "depth": 16,
+              "count": 4,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in r26-options-worker) + 100  [0x10455cc04]",
+              "parent": 148,
+              "self_samples": 4
+            },
+            {
+              "depth": 16,
+              "count": 1,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in r26-options-worker) + 32  [0x10443851c]",
+              "parent": 167,
+              "self_samples": 1
+            },
+            {
+              "depth": 18,
+              "count": 9,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope15root_string_ptr  (in r26-options-worker) + 64,8,...  [0x10455c688,0x10455c650,...]",
+              "parent": 176,
+              "self_samples": 9
+            },
+            {
+              "depth": 18,
+              "count": 3,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new  (in r26-options-worker) + 32,24  [0x10455cab8,0x10455cab0]",
+              "parent": 217,
+              "self_samples": 3
+            },
+            {
+              "depth": 18,
+              "count": 2,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in r26-options-worker) + 100,232  [0x10455cc04,0x10455cc88]",
+              "parent": 232,
+              "self_samples": 2
+            },
+            {
+              "depth": 16,
+              "count": 4,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in r26-options-worker) + 100,36,...  [0x10455cc04,0x10455cbc4,...]",
+              "parent": 264,
+              "self_samples": 4
+            },
+            {
+              "depth": 16,
+              "count": 2,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope15root_string_ptr  (in r26-options-worker) + 64  [0x10455c688]",
+              "parent": 267,
+              "self_samples": 2
+            },
+            {
+              "depth": 16,
+              "count": 1,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new  (in r26-options-worker) + 32  [0x10455cab8]",
+              "parent": 269,
+              "self_samples": 1
+            },
+            {
+              "depth": 16,
+              "count": 1,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new  (in r26-options-worker) + 32  [0x10455cab8]",
+              "parent": 316,
+              "self_samples": 1
+            },
+            {
+              "depth": 14,
+              "count": 4,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in r26-options-worker) + 100,20  [0x10455cc04,0x10455cbb4]",
+              "parent": 343,
+              "self_samples": 4
+            },
+            {
+              "depth": 12,
+              "count": 1,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in r26-options-worker) + 144  [0x10443858c]",
+              "parent": 3,
+              "self_samples": 1
+            },
+            {
+              "depth": 14,
+              "count": 1,
+              "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new  (in r26-options-worker) + 32  [0x10455cab8]",
+              "parent": 356,
+              "self_samples": 1
+            },
+            {
+              "depth": 14,
+              "count": 1,
+              "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in r26-options-worker) + 32  [0x10443851c]",
+              "parent": 358,
+              "self_samples": 1
+            }
+          ],
+          "pct_of_workload_samples": 9.299191374663073
+        },
+        "utf8_validation": {
+          "samples": 19,
+          "frames": [
+            {
+              "depth": 20,
+              "count": 6,
+              "name": "_RNvNtNtCsjgY6bXVaRmE_4core3str8converts9from_utf8  (in r26-options-worker) + 120,52  [0x1042ff410,0x1042ff3cc]",
+              "parent": 21,
+              "self_samples": 6
+            },
+            {
+              "depth": 18,
+              "count": 9,
+              "name": "_RNvMNtCsctvjasLqLe9_5alloc6stringNtB2_6String15from_utf8_lossy  (in r26-options-worker) + 52  [0x1042f377c]",
+              "parent": 100,
+              "self_samples": 0
+            },
+            {
+              "depth": 18,
+              "count": 3,
+              "name": "_RNvMNtCsctvjasLqLe9_5alloc6stringNtB2_6String15from_utf8_lossy  (in r26-options-worker) + 64,36  [0x1042f3788,0x1042f376c]",
+              "parent": 100,
+              "self_samples": 3
+            },
+            {
+              "depth": 16,
+              "count": 1,
+              "name": "_RNvMNtCsctvjasLqLe9_5alloc6stringNtB2_6String15from_utf8_lossy  (in r26-options-worker) + 428  [0x1042f38f4]",
+              "parent": 72,
+              "self_samples": 1
+            }
+          ],
+          "pct_of_workload_samples": 2.560646900269542
+        },
+        "memory_copy": {
+          "samples": 30,
+          "frames": [
+            {
+              "depth": 20,
+              "count": 3,
+              "name": "_platform_memmove  (in libsystem_platform.dylib) + 12,436,...  [0x18171f36c,0x18171f514,...]",
+              "parent": 28,
+              "self_samples": 3
+            },
+            {
+              "depth": 20,
+              "count": 1,
+              "name": "DYLD-STUB$$memcpy  (in r26-options-worker) + 4  [0x104e32f70]",
+              "parent": 28,
+              "self_samples": 1
+            },
+            {
+              "depth": 20,
+              "count": 1,
+              "name": "DYLD-STUB$$memcpy  (in r26-options-worker) + 0  [0x104e32f6c]",
+              "parent": 39,
+              "self_samples": 1
+            },
+            {
+              "depth": 20,
+              "count": 1,
+              "name": "_platform_memmove  (in libsystem_platform.dylib) + 452  [0x18171f524]",
+              "parent": 39,
+              "self_samples": 1
+            },
+            {
+              "depth": 18,
+              "count": 1,
+              "name": "DYLD-STUB$$memcpy  (in r26-options-worker) + 4  [0x104e32f70]",
+              "parent": 59,
+              "self_samples": 1
+            },
+            {
+              "depth": 18,
+              "count": 1,
+              "name": "_platform_memmove  (in libsystem_platform.dylib) + 436  [0x18171f514]",
+              "parent": 59,
+              "self_samples": 1
+            },
+            {
+              "depth": 18,
+              "count": 12,
+              "name": "_platform_memmove  (in libsystem_platform.dylib) + 452,0,...  [0x18171f524,0x18171f360,...]",
+              "parent": 95,
+              "self_samples": 12
+            },
+            {
+              "depth": 18,
+              "count": 2,
+              "name": "DYLD-STUB$$memcpy  (in r26-options-worker) + 4  [0x104e32f70]",
+              "parent": 95,
+              "self_samples": 2
+            },
+            {
+              "depth": 16,
+              "count": 2,
+              "name": "DYLD-STUB$$memcpy  (in r26-options-worker) + 4  [0x104e32f70]",
+              "parent": 150,
+              "self_samples": 2
+            },
+            {
+              "depth": 16,
+              "count": 2,
+              "name": "_platform_memmove  (in libsystem_platform.dylib) + 428,436  [0x18171f50c,0x18171f514]",
+              "parent": 150,
+              "self_samples": 2
+            },
+            {
+              "depth": 18,
+              "count": 4,
+              "name": "_platform_memmove  (in libsystem_platform.dylib) + 180  [0x18171f414]",
+              "parent": 322,
+              "self_samples": 4
+            }
+          ],
+          "pct_of_workload_samples": 4.0431266846361185
+        },
+        "allocation": {
+          "samples": 60,
+          "frames": [
+            {
+              "depth": 20,
+              "count": 7,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime6string20string_storage_alloc  (in r26-options-worker) + 312,36,...  [0x10461c964,0x10461c850,...]",
+              "parent": 34,
+              "self_samples": 7
+            },
+            {
+              "depth": 20,
+              "count": 5,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime6string20string_storage_alloc  (in r26-options-worker) + 292  [0x10461c950]",
+              "parent": 34,
+              "self_samples": 0
+            },
+            {
+              "depth": 16,
+              "count": 9,
+              "name": "js_object_alloc_with_parent  (in r26-options-worker) + 696  [0x104b44af8]",
+              "parent": 250,
+              "self_samples": 0
+            },
+            {
+              "depth": 16,
+              "count": 8,
+              "name": "js_object_alloc_with_parent  (in r26-options-worker) + 340,180,...  [0x104b44994,0x104b448f4,...]",
+              "parent": 250,
+              "self_samples": 8
+            },
+            {
+              "depth": 16,
+              "count": 7,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime6string20string_storage_alloc  (in r26-options-worker) + 356,300,...  [0x10461c990,0x10461c958,...]",
+              "parent": 260,
+              "self_samples": 7
+            },
+            {
+              "depth": 16,
+              "count": 6,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime6string20string_storage_alloc  (in r26-options-worker) + 292  [0x10461c950]",
+              "parent": 260,
+              "self_samples": 0
+            },
+            {
+              "depth": 16,
+              "count": 5,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime6string20string_storage_alloc  (in r26-options-worker) + 312,36,...  [0x10461c964,0x10461c850,...]",
+              "parent": 320,
+              "self_samples": 5
+            },
+            {
+              "depth": 16,
+              "count": 2,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime6string20string_storage_alloc  (in r26-options-worker) + 292  [0x10461c950]",
+              "parent": 320,
+              "self_samples": 0
+            },
+            {
+              "depth": 14,
+              "count": 9,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime6string20string_storage_alloc  (in r26-options-worker) + 312,300,...  [0x10461c964,0x10461c958,...]",
+              "parent": 327,
+              "self_samples": 9
+            },
+            {
+              "depth": 14,
+              "count": 1,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime6string20string_storage_alloc  (in r26-options-worker) + 292  [0x10461c950]",
+              "parent": 327,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 1,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime6string20string_storage_alloc  (in r26-options-worker) + 596  [0x10461ca80]",
+              "parent": 3,
+              "self_samples": 1
+            }
+          ],
+          "pct_of_workload_samples": 8.086253369272237
+        },
+        "collection": {
+          "samples": 3,
+          "frames": [
+            {
+              "depth": 12,
+              "count": 3,
+              "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy25gc_safepoint_moving_minor  (in r26-options-worker) + 2808  [0x10472e3a4]",
+              "parent": 362,
+              "self_samples": 0
+            }
+          ],
+          "pct_of_workload_samples": 0.40431266846361186
+        }
+      },
+      "top_self_sample_nodes": [
+        {
+          "depth": 14,
+          "count": 58,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json8replacer37stringify_object_with_replacer_pretty  (in r26-options-worker) + 712,1688,...  [0x1047d6988,0x1047d6d58,...]",
+          "parent": 4,
+          "self_samples": 58
+        },
+        {
+          "depth": 16,
+          "count": 34,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json8replacer13call_replacer  (in r26-options-worker) + 68,132,...  [0x1047d0dd8,0x1047d0e18,...]",
+          "parent": 108,
+          "self_samples": 34
+        },
+        {
+          "depth": 16,
+          "count": 30,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json17stringify_scalars20write_escaped_string  (in r26-options-worker) + 448,432,...  [0x1047c6004,0x1047c5ff4,...]",
+          "parent": 125,
+          "self_samples": 30
+        },
+        {
+          "depth": 16,
+          "count": 22,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json8replacer19apply_to_json_keyed  (in r26-options-worker) + 452,40,...  [0x1047d1140,0x1047d0fa4,...]",
+          "parent": 72,
+          "self_samples": 22
+        },
+        {
+          "depth": 18,
+          "count": 22,
+          "name": "js_closure_call2  (in r26-options-worker) + 160,132,...  [0x104ad7f20,0x104ad7f04,...]",
+          "parent": 110,
+          "self_samples": 22
+        },
+        {
+          "depth": 20,
+          "count": 15,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json17stringify_scalars20write_escaped_string  (in r26-options-worker) + 432,440,...  [0x1047c5ff4,0x1047c5ffc,...]",
+          "parent": 19,
+          "self_samples": 15
+        },
+        {
+          "depth": 18,
+          "count": 12,
+          "name": "_platform_memmove  (in libsystem_platform.dylib) + 452,0,...  [0x18171f524,0x18171f360,...]",
+          "parent": 95,
+          "self_samples": 12
+        },
+        {
+          "depth": 18,
+          "count": 12,
+          "name": "_tlv_get_addr  (in libdyld.dylib) + 4  [0x18132038c]",
+          "parent": 98,
+          "self_samples": 12
+        },
+        {
+          "depth": 18,
+          "count": 11,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json17stringify_scalars20write_escaped_string  (in r26-options-worker) + 432,448,...  [0x1047c5ff4,0x1047c6004,...]",
+          "parent": 128,
+          "self_samples": 11
+        },
+        {
+          "depth": 12,
+          "count": 11,
+          "name": "js_json_stringify_full  (in r26-options-worker) + 3472,8,...  [0x104b17cd0,0x104b16f48,...]",
+          "parent": 3,
+          "self_samples": 11
+        },
+        {
+          "depth": 18,
+          "count": 10,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json8replacer36stringify_array_with_replacer_pretty  (in r26-options-worker) + 2984,1616,...  [0x1047d6344,0x1047d5dec,...]",
+          "parent": 42,
+          "self_samples": 10
+        },
+        {
+          "depth": 20,
+          "count": 9,
+          "name": "js_closure_call2  (in r26-options-worker) + 160,116,...  [0x104ad7f20,0x104ad7ef4,...]",
+          "parent": 7,
+          "self_samples": 9
+        },
+        {
+          "depth": 18,
+          "count": 9,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json8replacer13call_replacer  (in r26-options-worker) + 132,48,...  [0x1047d0e18,0x1047d0dc4,...]",
+          "parent": 6,
+          "self_samples": 9
+        },
+        {
+          "depth": 20,
+          "count": 9,
+          "name": "_RNvXs2_NtNtCsjgY6bXVaRmE_4core3str5lossyNtB5_10Utf8ChunksNtNtNtNtB9_4iter6traits8iterator8Iterator4next  (in r26-options-worker) + 52,0,...  [0x1043050e4,0x1043050b0,...]",
+          "parent": 101,
+          "self_samples": 9
+        },
+        {
+          "depth": 18,
+          "count": 9,
+          "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope15root_string_ptr  (in r26-options-worker) + 64,8,...  [0x10455c688,0x10455c650,...]",
+          "parent": 176,
+          "self_samples": 9
+        },
+        {
+          "depth": 14,
+          "count": 9,
+          "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime6string20string_storage_alloc  (in r26-options-worker) + 312,300,...  [0x10461c964,0x10461c958,...]",
+          "parent": 327,
+          "self_samples": 9
+        },
+        {
+          "depth": 20,
+          "count": 8,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6layout16layout_note_slot  (in r26-options-worker) + 3332,3100,...  [0x104727604,0x10472751c,...]",
+          "parent": 172,
+          "self_samples": 8
+        },
+        {
+          "depth": 16,
+          "count": 8,
+          "name": "js_object_alloc_with_parent  (in r26-options-worker) + 340,180,...  [0x104b44994,0x104b448f4,...]",
+          "parent": 250,
+          "self_samples": 8
+        },
+        {
+          "depth": 22,
+          "count": 8,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json22stringify_tojson_probe29object_proto_tojson_signature  (in r26-options-worker) + 132,72,...  [0x1047c9204,0x1047c91c8,...]",
+          "parent": 275,
+          "self_samples": 8
+        },
+        {
+          "depth": 20,
+          "count": 7,
+          "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime6string20string_storage_alloc  (in r26-options-worker) + 312,36,...  [0x10461c964,0x10461c850,...]",
+          "parent": 34,
+          "self_samples": 7
+        },
+        {
+          "depth": 18,
+          "count": 7,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json8replacer36stringify_array_with_replacer_pretty  (in r26-options-worker) + 1956,1808,...  [0x1047d5f40,0x1047d5eac,...]",
+          "parent": 44,
+          "self_samples": 7
+        },
+        {
+          "depth": 20,
+          "count": 7,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime5array6header32array_named_property_get_by_name  (in r26-options-worker) + 464,976,...  [0x1048051b8,0x1048053b8,...]",
+          "parent": 92,
+          "self_samples": 7
+        },
+        {
+          "depth": 18,
+          "count": 7,
+          "name": "_RNvMs_NtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new  (in r26-options-worker) + 32,8,...  [0x10455cab8,0x10455caa0,...]",
+          "parent": 113,
+          "self_samples": 7
+        },
+        {
+          "depth": 18,
+          "count": 7,
+          "name": "_RNCINvNtNtCs3gRpqoBkMHm_13perry_runtime11async_hooks6scopes23run_provider_completionNCNvNtNtB8_15node_submodules4blob25blob_reader_promise_value0Es0_0B8_  (in r26-options-worker) + 56,12,...  [0x1044dc7dc,0x1044dc7b0,...]",
+          "parent": 115,
+          "self_samples": 7
+        },
+        {
+          "depth": 18,
+          "count": 7,
+          "name": "_RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs3gRpqoBkMHm_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in r26-options-worker) + 32,20  [0x10443851c,0x104438510]",
+          "parent": 117,
+          "self_samples": 7
+        },
+        {
+          "depth": 16,
+          "count": 7,
+          "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime6string20string_storage_alloc  (in r26-options-worker) + 356,300,...  [0x10461c990,0x10461c958,...]",
+          "parent": 260,
+          "self_samples": 7
+        },
+        {
+          "depth": 14,
+          "count": 7,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json8replacer13call_replacer  (in r26-options-worker) + 324,68,...  [0x1047d0ed8,0x1047d0dd8,...]",
+          "parent": 308,
+          "self_samples": 7
+        },
+        {
+          "depth": 20,
+          "count": 6,
+          "name": "_RNvNtNtCsjgY6bXVaRmE_4core3str8converts9from_utf8  (in r26-options-worker) + 120,52  [0x1042ff410,0x1042ff3cc]",
+          "parent": 21,
+          "self_samples": 6
+        },
+        {
+          "depth": 22,
+          "count": 6,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json22stringify_tojson_probe29object_proto_tojson_signature  (in r26-options-worker) + 132,72,...  [0x1047c9204,0x1047c91c8,...]",
+          "parent": 75,
+          "self_samples": 6
+        },
+        {
+          "depth": 16,
+          "count": 6,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json8replacer21write_replaced_scalar  (in r26-options-worker) + 468,20,...  [0x1047d1cc4,0x1047d1b04,...]",
+          "parent": 127,
+          "self_samples": 6
+        },
+        {
+          "depth": 14,
+          "count": 6,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json8replacer19apply_to_json_keyed  (in r26-options-worker) + 696,692  [0x1047d1234,0x1047d1230]",
+          "parent": 4,
+          "self_samples": 6
+        },
+        {
+          "depth": 18,
+          "count": 6,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime5arena10allocators11arena_alloc  (in r26-options-worker) + 52,148,...  [0x1047e09d0,0x1047e0a30,...]",
+          "parent": 262,
+          "self_samples": 6
+        },
+        {
+          "depth": 14,
+          "count": 6,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json9stringify26ptr_is_tracked_heap_object  (in r26-options-worker) + 48,36  [0x1047e07e8,0x1047e07dc]",
+          "parent": 333,
+          "self_samples": 6
+        },
+        {
+          "depth": 16,
+          "count": 6,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json9stringify26ptr_is_tracked_heap_object  (in r26-options-worker) + 48  [0x1047e07e8]",
+          "parent": 336,
+          "self_samples": 6
+        },
+        {
+          "depth": 18,
+          "count": 5,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json8replacer19apply_to_json_keyed  (in r26-options-worker) + 484,20,...  [0x1047d1160,0x1047d0f90,...]",
+          "parent": 25,
+          "self_samples": 5
+        }
+      ],
+      "profile_sha256": "8f4d1190f191d0d26c1da85ecd1a4388070b0de3ec009affb243755fa90165eb",
+      "oracle_command": [
+        "/opt/homebrew/bin/node",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-gaps-r26-profiles/options-worker.js",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/fixtures/small_record.json",
+        "callback",
+        "8",
+        "0",
+        "verify"
+      ],
+      "oracle_output_sha256": "b3160caa15255dd973a35d7c36b488f57a69139d710b52fda6c367b20eed5ad9",
+      "complete_output_matches_node": true,
+      "diagnostic_only": true
+    },
+    {
+      "case": {
+        "fixture": "records_array_16k",
+        "operation": "pretty",
+        "mode": "options",
+        "iterations": 100000,
+        "warmup": 8
+      },
+      "workload_samples": 730,
+      "phases": {
+        "workload": {
+          "samples": 730,
+          "frames": [
+            {
+              "depth": 10,
+              "count": 730,
+              "name": "perry_fn_options_worker_ts__run$spec_b  (in r26-options-worker) + 4044  [0x1029e188c]",
+              "parent": 2
+            }
+          ],
+          "pct_of_workload_samples": 100.0
+        },
+        "json_stringify": {
+          "samples": 730,
+          "frames": [
+            {
+              "depth": 12,
+              "count": 681,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 4836  [0x103224224]",
+              "parent": 3,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 48,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 3996  [0x103223edc]",
+              "parent": 3,
+              "self_samples": 0
+            },
+            {
+              "depth": 12,
+              "count": 1,
+              "name": "js_json_stringify_full  (in r26-options-worker) + 4060  [0x103223f1c]",
+              "parent": 3,
+              "self_samples": 0
+            }
+          ],
+          "pct_of_workload_samples": 100.0
+        },
+        "root_scope": {
+          "samples": 0,
+          "frames": [],
+          "pct_of_workload_samples": 0.0
+        },
+        "utf8_validation": {
+          "samples": 6,
+          "frames": [
+            {
+              "depth": 24,
+              "count": 6,
+              "name": "_RNvNtNtCsjgY6bXVaRmE_4core3str8converts9from_utf8  (in r26-options-worker) + 120  [0x102a0b410]",
+              "parent": 10,
+              "self_samples": 6
+            }
+          ],
+          "pct_of_workload_samples": 0.821917808219178
+        },
+        "memory_copy": {
+          "samples": 92,
+          "frames": [
+            {
+              "depth": 20,
+              "count": 12,
+              "name": "_platform_memmove  (in libsystem_platform.dylib) + 12,436,...  [0x18171f36c,0x18171f514,...]",
+              "parent": 17,
+              "self_samples": 12
+            },
+            {
+              "depth": 20,
+              "count": 1,
+              "name": "DYLD-STUB$$memcpy  (in r26-options-worker) + 4  [0x10353ef70]",
+              "parent": 17,
+              "self_samples": 1
+            },
+            {
+              "depth": 20,
+              "count": 4,
+              "name": "_platform_memmove  (in libsystem_platform.dylib) + 460,12,...  [0x18171f52c,0x18171f36c,...]",
+              "parent": 25,
+              "self_samples": 4
+            },
+            {
+              "depth": 20,
+              "count": 1,
+              "name": "DYLD-STUB$$memcpy  (in r26-options-worker) + 4  [0x10353ef70]",
+              "parent": 25,
+              "self_samples": 1
+            },
+            {
+              "depth": 18,
+              "count": 24,
+              "name": "_platform_memmove  (in libsystem_platform.dylib) + 12,460,...  [0x18171f36c,0x18171f52c,...]",
+              "parent": 65,
+              "self_samples": 24
+            },
+            {
+              "depth": 18,
+              "count": 11,
+              "name": "DYLD-STUB$$memcpy  (in r26-options-worker) + 4  [0x10353ef70]",
+              "parent": 65,
+              "self_samples": 11
+            },
+            {
+              "depth": 18,
+              "count": 27,
+              "name": "_platform_memmove  (in libsystem_platform.dylib) + 452,12,...  [0x18171f524,0x18171f36c,...]",
+              "parent": 68,
+              "self_samples": 27
+            },
+            {
+              "depth": 18,
+              "count": 4,
+              "name": "DYLD-STUB$$memcpy  (in r26-options-worker) + 4  [0x10353ef70]",
+              "parent": 68,
+              "self_samples": 4
+            },
+            {
+              "depth": 18,
+              "count": 1,
+              "name": "_platform_memmove  (in libsystem_platform.dylib) + 428  [0x18171f50c]",
+              "parent": 136,
+              "self_samples": 1
+            },
+            {
+              "depth": 16,
+              "count": 2,
+              "name": "_platform_memmove  (in libsystem_platform.dylib) + 12,452  [0x18171f36c,0x18171f524]",
+              "parent": 140,
+              "self_samples": 2
+            },
+            {
+              "depth": 18,
+              "count": 5,
+              "name": "_platform_memmove  (in libsystem_platform.dylib) + 88  [0x18171f3b8]",
+              "parent": 221,
+              "self_samples": 5
+            }
+          ],
+          "pct_of_workload_samples": 12.602739726027398
+        },
+        "allocation": {
+          "samples": 41,
+          "frames": [
+            {
+              "depth": 16,
+              "count": 29,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime6string20string_storage_alloc  (in r26-options-worker) + 72  [0x102d28874]",
+              "parent": 143,
+              "self_samples": 0
+            },
+            {
+              "depth": 16,
+              "count": 12,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime6string20string_storage_alloc  (in r26-options-worker) + 556  [0x102d28a58]",
+              "parent": 143,
+              "self_samples": 12
+            }
+          ],
+          "pct_of_workload_samples": 5.616438356164384
+        },
+        "collection": {
+          "samples": 28,
+          "frames": [
+            {
+              "depth": 24,
+              "count": 25,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime2gc39gc_collect_full_mark_sweep_with_trigger  (in r26-options-worker) + 1080  [0x102cd9cb4]",
+              "parent": 147,
+              "self_samples": 0
+            },
+            {
+              "depth": 24,
+              "count": 3,
+              "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime2gc39gc_collect_full_mark_sweep_with_trigger  (in r26-options-worker) + 1052  [0x102cd9c98]",
+              "parent": 147,
+              "self_samples": 0
+            }
+          ],
+          "pct_of_workload_samples": 3.8356164383561646
+        }
+      },
+      "top_self_sample_nodes": [
+        {
+          "depth": 16,
+          "count": 81,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json8replacer23stringify_object_pretty  (in r26-options-worker) + 1316,884,...  [0x102edf664,0x102edf4b4,...]",
+          "parent": 5,
+          "self_samples": 81
+        },
+        {
+          "depth": 18,
+          "count": 67,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json17stringify_scalars20write_escaped_string  (in r26-options-worker) + 432,172,...  [0x102ed1ff4,0x102ed1ef0,...]",
+          "parent": 63,
+          "self_samples": 67
+        },
+        {
+          "depth": 18,
+          "count": 42,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json8replacer22stringify_value_pretty  (in r26-options-worker) + 100,132,...  [0x102ede644,0x102ede664,...]",
+          "parent": 6,
+          "self_samples": 42
+        },
+        {
+          "depth": 22,
+          "count": 31,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json17stringify_scalars20write_escaped_string  (in r26-options-worker) + 1388,448,...  [0x102ed23b0,0x102ed2004,...]",
+          "parent": 8,
+          "self_samples": 31
+        },
+        {
+          "depth": 18,
+          "count": 29,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json8replacer22stringify_array_pretty  (in r26-options-worker) + 1364,1268,...  [0x102ede314,0x102ede2b4,...]",
+          "parent": 6,
+          "self_samples": 29
+        },
+        {
+          "depth": 18,
+          "count": 27,
+          "name": "_platform_memmove  (in libsystem_platform.dylib) + 452,12,...  [0x18171f524,0x18171f36c,...]",
+          "parent": 68,
+          "self_samples": 27
+        },
+        {
+          "depth": 18,
+          "count": 24,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json17stringify_scalars20write_escaped_string  (in r26-options-worker) + 432,456,...  [0x102ed1ff4,0x102ed200c,...]",
+          "parent": 6,
+          "self_samples": 24
+        },
+        {
+          "depth": 18,
+          "count": 24,
+          "name": "_platform_memmove  (in libsystem_platform.dylib) + 12,460,...  [0x18171f36c,0x18171f52c,...]",
+          "parent": 65,
+          "self_samples": 24
+        },
+        {
+          "depth": 18,
+          "count": 21,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json17stringify_scalars12write_number  (in r26-options-worker) + 232,516,...  [0x102ed0854,0x102ed0970,...]",
+          "parent": 6,
+          "self_samples": 21
+        },
+        {
+          "depth": 16,
+          "count": 19,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json8replacer22stringify_value_pretty  (in r26-options-worker) + 100,128,...  [0x102ede644,0x102ede660,...]",
+          "parent": 5,
+          "self_samples": 19
+        },
+        {
+          "depth": 18,
+          "count": 18,
+          "name": "mi_malloc_aligned  (in r26-options-worker) + 4  [0x10353c34c]",
+          "parent": 93,
+          "self_samples": 18
+        },
+        {
+          "depth": 16,
+          "count": 17,
+          "name": "mi_free  (in r26-options-worker) + 32,88,...  [0x10353c0e0,0x10353c118,...]",
+          "parent": 5,
+          "self_samples": 17
+        },
+        {
+          "depth": 20,
+          "count": 12,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json8replacer22stringify_value_pretty  (in r26-options-worker) + 112,1064,...  [0x102ede650,0x102edea08,...]",
+          "parent": 7,
+          "self_samples": 12
+        },
+        {
+          "depth": 20,
+          "count": 12,
+          "name": "_platform_memmove  (in libsystem_platform.dylib) + 12,436,...  [0x18171f36c,0x18171f514,...]",
+          "parent": 17,
+          "self_samples": 12
+        },
+        {
+          "depth": 16,
+          "count": 12,
+          "name": "_RNvNtCs3gRpqoBkMHm_13perry_runtime6string20string_storage_alloc  (in r26-options-worker) + 556  [0x102d28a58]",
+          "parent": 143,
+          "self_samples": 12
+        },
+        {
+          "depth": 20,
+          "count": 11,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json22stringify_tojson_probe25to_json_definitely_absent  (in r26-options-worker) + 64,392,...  [0x102ed4cc0,0x102ed4e08,...]",
+          "parent": 42,
+          "self_samples": 11
+        },
+        {
+          "depth": 18,
+          "count": 11,
+          "name": "DYLD-STUB$$memcpy  (in r26-options-worker) + 4  [0x10353ef70]",
+          "parent": 65,
+          "self_samples": 11
+        },
+        {
+          "depth": 22,
+          "count": 11,
+          "name": "mi_malloc_aligned  (in r26-options-worker) + 4,96  [0x10353c34c,0x10353c3a8]",
+          "parent": 79,
+          "self_samples": 11
+        },
+        {
+          "depth": 26,
+          "count": 10,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime5value10addr_class26try_read_tracked_gc_header  (in r26-options-worker) + 52,548,...  [0x102f58074,0x102f58264,...]",
+          "parent": 45,
+          "self_samples": 10
+        },
+        {
+          "depth": 24,
+          "count": 10,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json22stringify_tojson_probe29object_proto_tojson_signature  (in r26-options-worker) + 132,120,...  [0x102ed5204,0x102ed51f8,...]",
+          "parent": 44,
+          "self_samples": 10
+        },
+        {
+          "depth": 22,
+          "count": 10,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json22stringify_tojson_probe29object_proto_may_have_to_json  (in r26-options-worker) + 100,76,...  [0x102ed4f98,0x102ed4f80,...]",
+          "parent": 43,
+          "self_samples": 10
+        },
+        {
+          "depth": 26,
+          "count": 8,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime5value10addr_class26try_read_tracked_gc_header  (in r26-options-worker) + 52,20  [0x102f58074,0x102f58054]",
+          "parent": 48,
+          "self_samples": 8
+        },
+        {
+          "depth": 22,
+          "count": 7,
+          "name": "_mi_theap_realloc_zero  (in r26-options-worker) + 332,44,...  [0x10353c2bc,0x10353c19c,...]",
+          "parent": 73,
+          "self_samples": 7
+        },
+        {
+          "depth": 18,
+          "count": 7,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json9stringify17is_object_pointer  (in r26-options-worker) + 80,380  [0x102ee7d10,0x102ee7e3c]",
+          "parent": 85,
+          "self_samples": 7
+        },
+        {
+          "depth": 20,
+          "count": 7,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime6object6shapes34shape_live_inline_slot_count_by_id  (in r26-options-worker) + 44,32  [0x102fc29d0,0x102fc29c4]",
+          "parent": 105,
+          "self_samples": 7
+        },
+        {
+          "depth": 14,
+          "count": 7,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json8replacer22stringify_array_pretty  (in r26-options-worker) + 1100,1388,...  [0x102ede20c,0x102ede32c,...]",
+          "parent": 4,
+          "self_samples": 7
+        },
+        {
+          "depth": 24,
+          "count": 6,
+          "name": "_RNvNtNtCsjgY6bXVaRmE_4core3str8converts9from_utf8  (in r26-options-worker) + 120  [0x102a0b410]",
+          "parent": 10,
+          "self_samples": 6
+        },
+        {
+          "depth": 20,
+          "count": 6,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json9stringify17is_object_pointer  (in r26-options-worker) + 80  [0x102ee7d10]",
+          "parent": 20,
+          "self_samples": 6
+        },
+        {
+          "depth": 18,
+          "count": 6,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json9stringify22object_has_no_own_keys  (in r26-options-worker) + 76,144  [0x102eea4cc,0x102eea510]",
+          "parent": 98,
+          "self_samples": 6
+        },
+        {
+          "depth": 18,
+          "count": 5,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime3url9url_class19is_url_object_shape  (in r26-options-worker) + 180  [0x102e8edf4]",
+          "parent": 6,
+          "self_samples": 5
+        },
+        {
+          "depth": 24,
+          "count": 5,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime5value10addr_class26try_read_tracked_gc_header  (in r26-options-worker) + 624  [0x102f582b0]",
+          "parent": 44,
+          "self_samples": 5
+        },
+        {
+          "depth": 24,
+          "count": 5,
+          "name": "_tlv_get_addr  (in libdyld.dylib) + 4  [0x18132038c]",
+          "parent": 54,
+          "self_samples": 5
+        },
+        {
+          "depth": 20,
+          "count": 5,
+          "name": "_tlv_get_addr  (in libdyld.dylib) + 4,0  [0x18132038c,0x181320388]",
+          "parent": 60,
+          "self_samples": 5
+        },
+        {
+          "depth": 20,
+          "count": 5,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json9stringify26ptr_is_tracked_heap_object  (in r26-options-worker) + 48,36,...  [0x102eec7e8,0x102eec7dc,...]",
+          "parent": 87,
+          "self_samples": 5
+        },
+        {
+          "depth": 20,
+          "count": 5,
+          "name": "_RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json9stringify26ptr_is_tracked_heap_object  (in r26-options-worker) + 48  [0x102eec7e8]",
+          "parent": 89,
+          "self_samples": 5
+        }
+      ],
+      "profile_sha256": "ec4c163a427e7f053330d5542156dac8d67a9598f1528a2bcbe44e5bdd181c59",
+      "oracle_command": [
+        "/opt/homebrew/bin/node",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/stringify-gaps-r26-profiles/options-worker.js",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/fixtures/records_array_16k.json",
+        "pretty",
+        "8",
+        "0",
+        "verify"
+      ],
+      "oracle_output_sha256": "9f7fb15d2810fc0c3b3c0d77fd848e7d15055b892f827badcdcc153a8a09388b",
+      "complete_output_matches_node": true,
+      "diagnostic_only": true
+    }
+  ]
+}

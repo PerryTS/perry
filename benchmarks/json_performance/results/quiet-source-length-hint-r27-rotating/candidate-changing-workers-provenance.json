@@ -1,0 +1,35 @@
+[
+  {
+    "worker": "changing-options",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/source-length-hint-r27/frozen-build/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/zero-spacing-r25/changing-options-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/source-length-hint-r27/candidate-changing-options.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/source-length-hint-r27/candidate-changing-options.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/source-length-hint-r27/frozen-build/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/source-length-hint-r27/candidate-changing-options"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/zero-spacing-r25/changing-options-worker.ts": "5d710b4446795b37edc6f2792fd7e6aeda63d99d17cceaff199d8d27f212a87e",
+      "benchmarks/json_performance/.work/source-length-hint-r27/candidate-changing-options.o": "616fea662f8f9602b9a02ce8e25421fe4acc9b53d751ce7b20364136a073e767",
+      "benchmarks/json_performance/.work/source-length-hint-r27/candidate-changing-options": "669dc952aae6762c958d8f5bee6ef1529a2ef0e6632a3f6559991e1e111c1d89",
+      "benchmarks/json_performance/.work/source-length-hint-r27/frozen-build/perry": "458a93852da9d3528c0aa12fd51a494430157ba3ff0d054f05d4219ca35ebe44",
+      "benchmarks/json_performance/.work/source-length-hint-r27/frozen-build/libperry_runtime.a": "566a2d127f8c48c77eb93a97b4b2abb3f85c43fca88722dceff4bea753c6a9c6",
+      "benchmarks/json_performance/.work/source-length-hint-r27/frozen-build/libperry_stdlib.a": "45112e80d77f874c3bbcfbd14f055a75e27927111e40c7ad902c4612017489d2"
+    }
+  }
+]

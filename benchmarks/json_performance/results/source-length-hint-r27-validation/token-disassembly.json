@@ -1,0 +1,150 @@
+{
+  "note": "Static linked symbol/call evidence only. No timing attribution or semantic proof.",
+  "records": [
+    {
+      "arm": "main",
+      "symbol": "__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value",
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/source-length-hint-r27/main-worker"
+      ],
+      "binary_sha256": "d0e07f6395a32201f3988d4c9435d02d223d84697e8bb6b4e6637e8aba02c9f8",
+      "disassembly_sha256": "5d59fd566777a12625c2c4200cebac1ce02ec3da0a2a9b147c991f6978223dac",
+      "output": "main-worker-parse_string_value-91a40182.s",
+      "instructions": 239,
+      "calls": [
+        "bl\t0x100245978 <__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_bytes>",
+        "bl\t0x10034b7f0 <__RNvNtCs3gRpqoBkMHm_13perry_runtime6string28js_string_from_builder_bytes>",
+        "bl\t0x1005eaf04 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction22string_from_json_bytes>",
+        "bl\t0x100b5ef40 <_mi_free>",
+        "bl\t0x100476730 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7barrier37incremental_mark_barrier_value_active>",
+        "bl\t0x100476730 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7barrier37incremental_mark_barrier_value_active>",
+        "bl\t0x100b3f37c <__RNvNtCs3gRpqoBkMHm_13perry_runtime7tls_hot12hot_uncached>",
+        "bl\t0x100b3cb9c <__RNvMs5_NtCs3gRpqoBkMHm_13perry_runtime7tls_hotINtB5_6HotKeyNtNtNtB7_7closure8registry14DispatchRecentE8get_slowB7_>",
+        "bl\t0x100b126ac <__RNvNtCsjgY6bXVaRmE_4core4cell22panic_already_borrowed>"
+      ]
+    },
+    {
+      "arm": "main",
+      "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction22string_from_json_bytes",
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction22string_from_json_bytes",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/source-length-hint-r27/main-worker"
+      ],
+      "binary_sha256": "d0e07f6395a32201f3988d4c9435d02d223d84697e8bb6b4e6637e8aba02c9f8",
+      "disassembly_sha256": "9e5e48645a6a230c4c86ebdf824d3f1bb6ba73d42b260da0069d77be609ce437",
+      "output": "main-worker-string_from_json_bytes-06d92380.s",
+      "instructions": 493,
+      "calls": [
+        "bl\t0x1005ea920 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string11utf16_count11count_bytes>",
+        "bl\t0x100458380 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6malloc9gc_malloc>",
+        "bl\t0x100b61dec <_writev+0x100b61dec>",
+        "bl\t0x10045f2b4 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy42gc_schedule_malloc_sweep_after_json_output>",
+        "bl\t0x10034b1ac <__RNvNtCs3gRpqoBkMHm_13perry_runtime6string20string_storage_alloc>",
+        "bl\t0x100b61dec <_writev+0x100b61dec>",
+        "bl\t0x10002dd18 <__RNvNtNtCsjgY6bXVaRmE_4core3str8converts9from_utf8>",
+        "bl\t0x100b3f37c <__RNvNtCs3gRpqoBkMHm_13perry_runtime7tls_hot12hot_uncached>",
+        "bl\t0x100b3cb9c <__RNvMs5_NtCs3gRpqoBkMHm_13perry_runtime7tls_hotINtB5_6HotKeyNtNtNtB7_7closure8registry14DispatchRecentE8get_slowB7_>",
+        "bl\t0x100b61924 <_writev+0x100b61924>"
+      ]
+    },
+    {
+      "arm": "candidate",
+      "symbol": "__RINvMNtCsjgY6bXVaRmE_4core6optionINtB3_6OptionQNtNtNtCs3gRpqoBkMHm_13perry_runtime5arena12construction17ConstructionBatchE6map_orOhNCNvNtNtBP_6string17json_construction34string_from_json_bytes_known_utf160EBP_",
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RINvMNtCsjgY6bXVaRmE_4core6optionINtB3_6OptionQNtNtNtCs3gRpqoBkMHm_13perry_runtime5arena12construction17ConstructionBatchE6map_orOhNCNvNtNtBP_6string17json_construction34string_from_json_bytes_known_utf160EBP_",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/source-length-hint-r27/candidate-worker"
+      ],
+      "binary_sha256": "48615793c0a5b654de3ecf3a42a19832f4f9ae44eefe0b8aee6d3117fdfde358",
+      "disassembly_sha256": "baa13b2fea5054a646830b1ca50ae97a364ad71c76b2cdf2342e2b2a7d69cb7b",
+      "output": "candidate-worker-string_from_json_bytes-102a1cb9.s",
+      "instructions": 28,
+      "calls": []
+    },
+    {
+      "arm": "candidate",
+      "symbol": "__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value",
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_value",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/source-length-hint-r27/candidate-worker"
+      ],
+      "binary_sha256": "48615793c0a5b654de3ecf3a42a19832f4f9ae44eefe0b8aee6d3117fdfde358",
+      "disassembly_sha256": "8827da4c529de96e76fbbe33ea9bb573f66bc00724b1e2dff122e4585e565e03",
+      "output": "candidate-worker-parse_string_value-91a40182.s",
+      "instructions": 307,
+      "calls": [
+        "bl\t0x1002459f8 <__RNvMs0_NtNtCs3gRpqoBkMHm_13perry_runtime4json6parserNtB5_12DirectParser18parse_string_bytes>",
+        "bl\t0x10034b970 <__RNvNtCs3gRpqoBkMHm_13perry_runtime6string28js_string_from_builder_bytes>",
+        "bl\t0x1006c66d0 <__RNvNtNtNtCs3gRpqoBkMHm_13perry_runtime4json6parser13source_length22source_token_utf16_len>",
+        "bl\t0x100458500 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6malloc9gc_malloc>",
+        "bl\t0x100b622ec <_writev+0x100b622ec>",
+        "bl\t0x1004f0080 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime4json14stringify_flat33note_completed_malloc_json_output>",
+        "bl\t0x100b5f440 <_mi_free>",
+        "bl\t0x1005eb184 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction22string_from_json_bytes>",
+        "bl\t0x1004768b0 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7barrier37incremental_mark_barrier_value_active>",
+        "bl\t0x1004768b0 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc7barrier37incremental_mark_barrier_value_active>",
+        "bl\t0x100136500 <__RINvMNtCsjgY6bXVaRmE_4core6optionINtB3_6OptionQNtNtNtCs3gRpqoBkMHm_13perry_runtime5arena12construction17ConstructionBatchE6map_orOhNCNvNtNtBP_6string17json_construction34string_from_json_bytes_known_utf160EBP_>",
+        "bl\t0x10034b32c <__RNvNtCs3gRpqoBkMHm_13perry_runtime6string20string_storage_alloc>",
+        "bl\t0x100b61e24 <_writev+0x100b61e24>",
+        "bl\t0x100b622ec <_writev+0x100b622ec>",
+        "bl\t0x100b3f87c <__RNvNtCs3gRpqoBkMHm_13perry_runtime7tls_hot12hot_uncached>",
+        "bl\t0x100b3d09c <__RNvMs5_NtCs3gRpqoBkMHm_13perry_runtime7tls_hotINtB5_6HotKeyNtNtNtB7_7closure8registry14DispatchRecentE8get_slowB7_>",
+        "bl\t0x100b12bac <__RNvNtCsjgY6bXVaRmE_4core4cell22panic_already_borrowed>"
+      ]
+    },
+    {
+      "arm": "candidate",
+      "symbol": "__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction22string_from_json_bytes",
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string17json_construction22string_from_json_bytes",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/source-length-hint-r27/candidate-worker"
+      ],
+      "binary_sha256": "48615793c0a5b654de3ecf3a42a19832f4f9ae44eefe0b8aee6d3117fdfde358",
+      "disassembly_sha256": "968c850978fbb4e7dd27b1a0e79de3a45e79714dd9ce2d496cb2491c93747d76",
+      "output": "candidate-worker-string_from_json_bytes-06d92380.s",
+      "instructions": 493,
+      "calls": [
+        "bl\t0x1005eaba0 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime6string11utf16_count11count_bytes>",
+        "bl\t0x100458500 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6malloc9gc_malloc>",
+        "bl\t0x100b622ec <_writev+0x100b622ec>",
+        "bl\t0x10045f434 <__RNvNtNtCs3gRpqoBkMHm_13perry_runtime2gc6policy42gc_schedule_malloc_sweep_after_json_output>",
+        "bl\t0x10034b32c <__RNvNtCs3gRpqoBkMHm_13perry_runtime6string20string_storage_alloc>",
+        "bl\t0x100b622ec <_writev+0x100b622ec>",
+        "bl\t0x10002dd18 <__RNvNtNtCsjgY6bXVaRmE_4core3str8converts9from_utf8>",
+        "bl\t0x100b3f87c <__RNvNtCs3gRpqoBkMHm_13perry_runtime7tls_hot12hot_uncached>",
+        "bl\t0x100b3d09c <__RNvMs5_NtCs3gRpqoBkMHm_13perry_runtime7tls_hotINtB5_6HotKeyNtNtNtB7_7closure8registry14DispatchRecentE8get_slowB7_>",
+        "bl\t0x100b61e24 <_writev+0x100b61e24>"
+      ]
+    },
+    {
+      "arm": "candidate",
+      "symbol": "__RNvNtNtNtCs3gRpqoBkMHm_13perry_runtime4json6parser13source_length22source_token_utf16_len",
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
+        "--disassemble-symbols=__RNvNtNtNtCs3gRpqoBkMHm_13perry_runtime4json6parser13source_length22source_token_utf16_len",
+        "--no-show-raw-insn",
+        "benchmarks/json_performance/.work/source-length-hint-r27/candidate-worker"
+      ],
+      "binary_sha256": "48615793c0a5b654de3ecf3a42a19832f4f9ae44eefe0b8aee6d3117fdfde358",
+      "disassembly_sha256": "aa12e3d9dd0ad3c68b4d4187efd25826be2cd32eb6a4307aa0cb1baf86d7e3f5",
+      "output": "candidate-worker-source_token_utf16_len-514ac965.s",
+      "instructions": 80,
+      "calls": [
+        "bl\t0x10077fd58 <__RNvNvNtNtCsjgY6bXVaRmE_4core5slice5ascii8is_ascii7runtime>",
+        "bl\t0x10077fd58 <__RNvNvNtNtCsjgY6bXVaRmE_4core5slice5ascii8is_ascii7runtime>",
+        "bl\t0x100b12d0c <__RNvNtCsjgY6bXVaRmE_4core9panicking18panic_bounds_check>",
+        "bl\t0x100b12d0c <__RNvNtCsjgY6bXVaRmE_4core9panicking18panic_bounds_check>"
+      ]
+    }
+  ]
+}

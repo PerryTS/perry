@@ -1,0 +1,9 @@
+# R27 source length proof
+
+The parser borrows bytes only after the existing API roots/reloads its source and suppresses collection. The helper does not allocate or collect. The input slice must match both the source payload pointer and byte length. Only an already validated Borrowed token can use the result. Escaped tokens stay in the builder path.
+
+The token contains at least 256 bytes and at most 256 surrounding input bytes. Therefore the whole source and token use the same large-byte UTF-16 counter semantics. All surrounding bytes must be ASCII, so their UTF-16 contribution is exactly their byte count. A conservative check of the final three token bytes rejects any lead that could step into the closing quote/suffix under the existing bounded WTF-8 counter. The prefix cannot carry a multibyte sequence into the token because it is ASCII. Checked subtraction then gives the exact token count. Malformed byte sequences are not declared valid Unicode; existing parser/counter behavior is retained.
+
+The known-length constructor shares the old allocation body, header flags, payload copy, alignment padding and malloc output accounting. The whole-input string remains rooted; no additional GC root/cache, collection point or intermediate allocation is introduced. The large-byte gate stays before the outlined proof call to avoid calls on small and many-token record workloads.
+
+The prior R25 standalone model in the R26 archive is supporting evidence only. R27 adds three runtime tests covering actual source identity, bounded/malformed fallback and allocator/header/output agreement with the standalone parser. A new TypeScript fixture checks the entire output against Node for ASCII, BMP/astral Unicode, escaped tokens, non-ASCII surrounding keys, over-budget surrounds and retained source/output lifetimes. Both new native/shadow checker arms run freshly. Candidate production and performance qualification are pending.

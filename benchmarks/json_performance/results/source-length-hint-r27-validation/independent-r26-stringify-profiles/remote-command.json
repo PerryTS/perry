@@ -1,0 +1,9 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/stringify-gaps-r26-profiles/run-stringify-profiles.py",
+  "--results-dir",
+  "results/quiet-stringify-gaps-r26-profiles"
+]

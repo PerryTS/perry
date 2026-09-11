@@ -1,0 +1,9 @@
+{
+  "initial_receipt": {
+    "status": "PROPOSAL ONLY, not compiled into Perry or timed",
+    "source_reference": "3aac4d6335da54abeeed73df842decbbe6dd5d71",
+    "module_sha256": "19abc2276bba0dd1802a9b20731014ce8aa4d74fbb730d1ca2764b897d7a5624",
+    "integration": "Call only for borrowed values >=256 bytes and within 256 bytes of full input length; otherwise keep the old constructor. Root source and suppress GC as existing parse API already requires. Add known-length allocation helper preserving the old allocation/flags/accounting, plus source identity, malformed-boundary and moving-GC tests."
+  },
+  "current_status": "Implemented in decc2d9eed2de5713b800ddaf77ffc75c78fdd0c; 298 serial release units and exact all-three production build pass. New candidate source-token behavior and native/shadow roots pass; broader candidate suite finishing; no performance measurement yet."
+}
