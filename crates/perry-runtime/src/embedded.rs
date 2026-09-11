@@ -4,9 +4,9 @@
 //! `[compile] embed` in perry.toml) bakes the matched files' bytes into the
 //! binary. The compiler emits a generated C object whose `constructor` calls
 //! [`js_register_embedded_asset`] once per file before `main` runs, populating
-//! a process-global registry. The bytes themselves live in the binary's
-//! read-only data (static C literals), so the registry only stores
-//! `&'static [u8]` slices into them — no copy, no per-asset heap allocation.
+//! a process-global registry. Raw payloads live in the binary's read-only data
+//! without copying. Compressed Bun payloads are decoded at startup into immortal
+//! native storage. Both are exposed as the same byte-exact `&'static [u8]`.
 //!
 //! Three consumers read the registry at runtime:
 //!   * `fs.readFileSync` / `fs.readFile` — a `$perryfs/...` virtual path (or a
@@ -41,8 +41,8 @@ pub const VIRTUAL_PREFIX: &str = "$perryfs/";
 /// code can keep passing the original string to `node:fs` and `Bun.file()`.
 pub const BUNFS_ROOT_PREFIX: &str = "/$bunfs/root/";
 
-/// One embedded file. `bytes` points into the binary's read-only data and is
-/// valid for the life of the process.
+/// One embedded file. `bytes` points into read-only data or decoded native
+/// storage and is valid for the life of the process.
 struct EmbeddedAsset {
     /// Registry key — the embed-relative path, e.g. `dist/index.html`.
     name: String,
@@ -153,7 +153,7 @@ unsafe fn register_asset(
 }
 
 /// Look up an embedded asset's bytes by virtual path (`$perryfs/...`) or by its
-/// embed-relative key. Returns the `'static` slice into the binary. This is the
+/// embed-relative key. Returns the immortal decoded/raw byte slice. This is the
 /// authoritative presence test — a path is "embedded" iff this returns `Some`.
 pub fn lookup(path: &str) -> Option<&'static [u8]> {
     let key = normalize_key(path);
