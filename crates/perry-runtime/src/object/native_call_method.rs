@@ -1734,13 +1734,29 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                 f64::from_bits(crate::value::TAG_UNDEFINED)
             };
             if dyn_val.to_bits() != crate::value::TAG_UNDEFINED || own_override {
+                let dyn_val = root_scope.root_nanbox_f64(dyn_val);
+                // The permissive value-call bridge returns undefined for
+                // nullish callees. A member invocation must instead reject a
+                // non-callable own value. The prototype-object probe may
+                // allocate, so keep the resolved method in a mutable root.
+                if own_override
+                    && !crate::proxy::proxy_wraps_callable(dyn_val.get_nanbox_f64())
+                    && !crate::object::is_function_prototype_object_value(dyn_val.get_nanbox_f64())
+                {
+                    crate::error::js_throw_type_error_not_a_function(
+                        std::ptr::null(),
+                        0,
+                        method_name.as_ptr(),
+                        method_name.len(),
+                    );
+                }
                 // #6438: same rebind as the GC_TYPE_CLOSURE arm below —
                 // `closure_get_dynamic_prop` may return a method read off the
                 // closure's `Object.setPrototypeOf` proto, whose bound `this`
                 // (an object-literal method binds the literal) would otherwise
                 // win over IMPLICIT_THIS and leave `this` as the PROTO.
                 let bound = crate::closure::clone_closure_rebind_this(
-                    dyn_val.to_bits(),
+                    dyn_val.get_nanbox_u64(),
                     f64::from_bits(object().to_bits()),
                 );
                 // #8495: root the displaced receiver across the call below — the
