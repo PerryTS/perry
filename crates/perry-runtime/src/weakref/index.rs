@@ -25,7 +25,7 @@ struct WeakEntryIndex {
     len: u32,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     static WEAK_COLLECTION_INDEXES: RefCell<PtrHashMap<usize, WeakEntryIndex>> =
         RefCell::new(new_ptr_hash_map());
 }
