@@ -1,0 +1,86 @@
+{
+  "started_utc": "2026-09-11T08:32:27Z",
+  "load_before": [
+    1.73193359375,
+    1.7939453125,
+    1.6259765625
+  ],
+  "cases": [
+    [
+      "tiny_object",
+      "retain-stringify",
+      1,
+      0,
+      7
+    ],
+    [
+      "tiny_object",
+      "retain-stringify",
+      200000,
+      0,
+      7
+    ],
+    [
+      "small_record",
+      "retain-stringify",
+      1,
+      0,
+      7
+    ],
+    [
+      "small_record",
+      "retain-stringify",
+      100000,
+      0,
+      7
+    ],
+    [
+      "long_string_1m",
+      "retain-stringify",
+      1,
+      0,
+      7
+    ],
+    [
+      "long_string_1m",
+      "retain-stringify",
+      32,
+      0,
+      7
+    ],
+    [
+      "unicode_1m",
+      "retain-stringify",
+      1,
+      0,
+      7
+    ],
+    [
+      "unicode_1m",
+      "retain-stringify",
+      32,
+      0,
+      7
+    ]
+  ],
+  "workers": {
+    "perry": "29f104e33cc5f62c8357e64b21784f9997fbd9c914816543b36bc1ad7f911035",
+    "baseline": "2691705bdd98bcfce70bd273dda7f4380b88b31c640c605f4befe1b79e8986ca",
+    "node": "87e9b1fed820a2683ea90f5871596edf605b7162519156856dacbfbad36d1d29",
+    "bun": "e0c90ec15d33363e6b70713d56bc3b2c7585c17f40a0fe0f8fd9305901d4e233"
+  },
+  "sources": {
+    "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/zero-spacing-r25/run-zero-retained.py": "2d4a5a83fb29e91d1364f54e8948da58c8cec54f08b3545c1b19a14e462d197d",
+    "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/run_dispatch_focus.py": "100ba3e1bd5c0cd451d1a3528f95b5f4b8d0ff2f4771796ab8598b36a46fbcc4",
+    "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/zero-spacing-r25/retained-zero-worker.ts": "5ead488614d020e33d7711aeb2d9d805426ff46c9283101c1f659b1d93f8d03c",
+    "/Users/perry/json-codex-yHdsko/benchmarks/json_performance/.work/zero-spacing-r25/retained-zero-worker.js": "5787baa8171ceba117dfd41fb4c7b25a77fcb8471d6b18bd5aeec41d5f7388bf"
+  },
+  "node_version": "v26.5.1",
+  "bun_version": "1.3.14",
+  "finished_utc": "2026-09-11T08:32:37Z",
+  "load_after": [
+    1.76611328125,
+    1.80029296875,
+    1.6298828125
+  ]
+}

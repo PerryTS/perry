@@ -1,0 +1,21 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/zero-spacing-r25/run-changing-options.py",
+  "--worker",
+  ".work/zero-spacing-r25/candidate-changing-options",
+  "--baseline-worker",
+  ".work/zero-spacing-r25/main-changing-options",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--case",
+  "small_record:changing-plain:2000000:5000:7",
+  "--case",
+  "small_record:changing-zero:2000000:5000:7",
+  "--results-dir",
+  "results/quiet-zero-spacing-r25-changing-options"
+]

@@ -1,0 +1,32 @@
+{
+  "owner": "json-perf-4486-1789115153",
+  "load_before": [
+    1.9365234375,
+    1.6083984375,
+    1.49072265625
+  ],
+  "started_utc": "2026-09-11T08:25:53Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    ".work/zero-spacing-r25/run-options.py",
+    "--worker",
+    ".work/zero-spacing-r25/candidate-options",
+    "--baseline-worker",
+    ".work/zero-spacing-r25/main-options",
+    "--node",
+    "/opt/homebrew/bin/node",
+    "--bun",
+    "/Users/perry/.bun/bin/bun",
+    "--results-dir",
+    "results/quiet-zero-spacing-r25-options"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    2.02197265625,
+    1.69580078125,
+    1.53125
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-11T08:27:08Z"
+}

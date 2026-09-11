@@ -1,0 +1,58 @@
+{
+  "initial_controller_exit": 2,
+  "stage": "git diff --cached --check",
+  "file_cap_executed": false,
+  "note": "Measured retained-zero runner contains one trailing space. Preserve exact source by losslessly gzipping archived copies; no source/harness behavior or timing changed.",
+  "files": [
+    {
+      "path": "benchmarks/json_performance/results/quiet-zero-spacing-r25-changing-options/run-zero-retained.py",
+      "original_sha256": "2d4a5a83fb29e91d1364f54e8948da58c8cec54f08b3545c1b19a14e462d197d",
+      "gzip_sha256": "798cc4de0027522d61d1d75781347119de79b86e33335a22dfa78a3c82b60d8d"
+    },
+    {
+      "path": "benchmarks/json_performance/results/quiet-zero-spacing-r25-full/run-zero-retained.py",
+      "original_sha256": "2d4a5a83fb29e91d1364f54e8948da58c8cec54f08b3545c1b19a14e462d197d",
+      "gzip_sha256": "798cc4de0027522d61d1d75781347119de79b86e33335a22dfa78a3c82b60d8d"
+    },
+    {
+      "path": "benchmarks/json_performance/results/quiet-zero-spacing-r25-large-options/run-zero-retained.py",
+      "original_sha256": "2d4a5a83fb29e91d1364f54e8948da58c8cec54f08b3545c1b19a14e462d197d",
+      "gzip_sha256": "798cc4de0027522d61d1d75781347119de79b86e33335a22dfa78a3c82b60d8d"
+    },
+    {
+      "path": "benchmarks/json_performance/results/quiet-zero-spacing-r25-large-recheck-options/run-zero-retained.py",
+      "original_sha256": "2d4a5a83fb29e91d1364f54e8948da58c8cec54f08b3545c1b19a14e462d197d",
+      "gzip_sha256": "798cc4de0027522d61d1d75781347119de79b86e33335a22dfa78a3c82b60d8d"
+    },
+    {
+      "path": "benchmarks/json_performance/results/quiet-zero-spacing-r25-options/run-zero-retained.py",
+      "original_sha256": "2d4a5a83fb29e91d1364f54e8948da58c8cec54f08b3545c1b19a14e462d197d",
+      "gzip_sha256": "798cc4de0027522d61d1d75781347119de79b86e33335a22dfa78a3c82b60d8d"
+    },
+    {
+      "path": "benchmarks/json_performance/results/quiet-zero-spacing-r25-retained/run-zero-retained.py",
+      "original_sha256": "2d4a5a83fb29e91d1364f54e8948da58c8cec54f08b3545c1b19a14e462d197d",
+      "gzip_sha256": "798cc4de0027522d61d1d75781347119de79b86e33335a22dfa78a3c82b60d8d"
+    },
+    {
+      "path": "benchmarks/json_performance/results/quiet-zero-spacing-r25-rotating/run-zero-retained.py",
+      "original_sha256": "2d4a5a83fb29e91d1364f54e8948da58c8cec54f08b3545c1b19a14e462d197d",
+      "gzip_sha256": "798cc4de0027522d61d1d75781347119de79b86e33335a22dfa78a3c82b60d8d"
+    },
+    {
+      "path": "benchmarks/json_performance/results/quiet-zero-spacing-r25-small-recheck-rotating/run-zero-retained.py",
+      "original_sha256": "2d4a5a83fb29e91d1364f54e8948da58c8cec54f08b3545c1b19a14e462d197d",
+      "gzip_sha256": "798cc4de0027522d61d1d75781347119de79b86e33335a22dfa78a3c82b60d8d"
+    },
+    {
+      "path": "benchmarks/json_performance/results/quiet-zero-spacing-r25-zero-retained/run-zero-retained.py",
+      "original_sha256": "2d4a5a83fb29e91d1364f54e8948da58c8cec54f08b3545c1b19a14e462d197d",
+      "gzip_sha256": "798cc4de0027522d61d1d75781347119de79b86e33335a22dfa78a3c82b60d8d"
+    },
+    {
+      "path": "benchmarks/json_performance/results/zero-spacing-r25-validation/run-zero-retained.py",
+      "original_sha256": "2d4a5a83fb29e91d1364f54e8948da58c8cec54f08b3545c1b19a14e462d197d",
+      "gzip_sha256": "798cc4de0027522d61d1d75781347119de79b86e33335a22dfa78a3c82b60d8d"
+    }
+  ]
+}

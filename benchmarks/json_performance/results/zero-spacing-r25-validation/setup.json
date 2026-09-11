@@ -1,0 +1,7 @@
+{
+  "base_commit": "64ad28045e3ac04700f7683e8b4941f734cf66c1",
+  "measured_source_commit": "9495bfc95e2afcfb5a7cb535e440e61ec0722cb1",
+  "pr_10050_head": "45a29217c9035a1f219d05f0437579a5facb5b56",
+  "note": "Continue on exact measured R24 source/evidence at 0.5.1531 to isolate the new runtime delta and reuse its frozen comparison binaries. PR10050 remains untouched at0.5.1533; its implementation and tests are byte-identical. No new merged-main claim.",
+  "r24_build_provenance_sha256": "d945f4af026d5310d75fc2521b8af43f896b1b891937a4a8f72356ab5db59efc"
+}

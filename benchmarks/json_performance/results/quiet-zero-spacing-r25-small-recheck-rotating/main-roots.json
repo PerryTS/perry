@@ -1,0 +1,130 @@
+{
+  "checks": [
+    {
+      "mode": "native",
+      "scope": "all",
+      "variant": 0,
+      "exit_code": 1,
+      "command": [
+        "python3",
+        "/Users/amlug/projects/perry/json-merged-pr10022/scripts/gc_root_dominance_check.py",
+        "--statepoints",
+        "--max-stale",
+        "0",
+        "--min-files",
+        "9",
+        "--min-statepoints",
+        "1",
+        "--min-live-bundles",
+        "1",
+        "--min-relocates",
+        "1",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/test_json_template_capture-0.ll",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/worker-0.ll",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/callback-only-0.ll",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/test_json_source_length-0.ll",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/test_json_cached_construction-0.ll",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/access-worker-0.ll",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/prior-entry-0.ll",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/options-worker-0.ll",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/test_json_cached_reads-0.ll"
+      ]
+    },
+    {
+      "mode": "native",
+      "scope": "ordinary-workers",
+      "exit_code": 0,
+      "command": [
+        "python3",
+        "/Users/amlug/projects/perry/json-merged-pr10022/scripts/gc_root_dominance_check.py",
+        "--statepoints",
+        "--max-stale",
+        "0",
+        "--min-files",
+        "2",
+        "--min-statepoints",
+        "1",
+        "--min-live-bundles",
+        "1",
+        "--min-relocates",
+        "1",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/worker-0.ll",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/access-worker-0.ll"
+      ]
+    },
+    {
+      "mode": "native",
+      "scope": "callback",
+      "exit_code": 0,
+      "command": [
+        "python3",
+        "/Users/amlug/projects/perry/json-merged-pr10022/scripts/gc_root_dominance_check.py",
+        "--statepoints",
+        "--max-stale",
+        "0",
+        "--min-files",
+        "1",
+        "--min-statepoints",
+        "1",
+        "--min-live-bundles",
+        "1",
+        "--min-relocates",
+        "1",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/callback-only-0.ll"
+      ]
+    },
+    {
+      "mode": "shadow",
+      "scope": "all",
+      "variant": 0,
+      "exit_code": 0,
+      "command": [
+        "python3",
+        "/Users/amlug/projects/perry/json-merged-pr10022/scripts/gc_root_dominance_check.py",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/test_json_template_capture-0.ll",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/worker-0.ll",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/callback-only-0.ll",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/test_json_source_length-0.ll",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/test_json_cached_construction-0.ll",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/access-worker-0.ll",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/prior-entry-0.ll",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/options-worker-0.ll",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/test_json_cached_reads-0.ll"
+      ]
+    },
+    {
+      "mode": "shadow",
+      "scope": "all",
+      "variant": 1,
+      "exit_code": 0,
+      "command": [
+        "python3",
+        "/Users/amlug/projects/perry/json-merged-pr10022/scripts/gc_root_dominance_check.py",
+        "--unrooted-allocas",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/test_json_template_capture-0.ll",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/worker-0.ll",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/callback-only-0.ll",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/test_json_source_length-0.ll",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/test_json_cached_construction-0.ll",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/access-worker-0.ll",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/prior-entry-0.ll",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/options-worker-0.ll",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/test_json_cached_reads-0.ll"
+      ]
+    }
+  ],
+  "source_hashes": {
+    "benchmarks/json_performance/.work/materialized-read-r23/test_json_source_length.ts": "a031482a2a904280027dc90e581efcc78d2ff206dd62a382bce6128812981c3e",
+    "benchmarks/json_performance/.work/materialized-read-r23/test_json_template_capture.ts": "7aaf623d651915ab2eca0fd37b3b89d544f3bef81f0fb79629e3ab12e47ad521",
+    "benchmarks/json_performance/.work/materialized-read-r23/test_json_cached_construction.ts": "574ed0efb44c04e0a206d8cdc20aa5d6f7585787c4f3880a7acd153e45d3eaf6",
+    "benchmarks/json_performance/.work/materialized-read-r23/test_json_cached_reads.ts": "c145732db64c711c572e8a5a7beeb797e1e06b695335f8140ca62f41654616ba",
+    "benchmarks/json_performance/.work/materialized-read-r23/prior-entry.ts": "825b2d78cf40d341d7fdae3fde69a28ba905cd6faa0ba9cc8ebfc78e7f6738fa",
+    "benchmarks/json_performance/.work/materialized-read-r23/callback-only.ts": "bda27230cb7c71c98990924cc5a6699273d1eaa50e288ffd88c90f6ca56072d2",
+    "benchmarks/json_performance/.work/materialized-read-r23/options-worker.ts": "d08c6a916c18197b889a0de4a3777632ad307275752b85c5abd75daf4d6ad85d",
+    "benchmarks/json_performance/.work/materialized-read-r23/harness/worker.ts": "f3c42ec9f04fdb9ba84dc3cf50dc59f18685540033807f3db3a7f75c08a85d39",
+    "benchmarks/json_performance/.work/materialized-read-r23/harness/access-worker.ts": "dba0240ef6441a07657e664354982a04045c036e53f65c1d06df62d55c73be67"
+  },
+  "compiler_sha256": "c8e83e7dc6680c54044b09c6493522bb0375a93d61730c3c68ebd9cc851b7b79",
+  "runtime_sha256": "3e925cb1a91bf474203c69b33ae2189481e46e0bccebd4b2cdcf35c1a963bbbc",
+  "passes": "always-inline,function(mem2reg,sccp),rewrite-statepoints-for-gc"
+}

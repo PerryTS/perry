@@ -1,0 +1,5 @@
+{
+  "source_commit": "3240e34b2860e315892ffca88a5deaf4853ef6ac",
+  "unit_exit": 101,
+  "note": "294 existing tests passed; the new cache-hit witness allowed only four full-entry calls from a cold prototype/key/output plan. Use the established six-field cache fixture and eight output-verified calls to cover cold admission plus a subsequent hit, and format the test. Production guard unchanged; no production build ran for this source."
+}

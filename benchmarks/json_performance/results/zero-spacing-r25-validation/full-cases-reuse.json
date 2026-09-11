@@ -1,0 +1,5 @@
+{
+  "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/full-cases.json",
+  "sha256": "8728ac72d0fc35a0cf9b9131392b2ffbaa3fc47b38666e2bf0908d33efe6999c",
+  "repair": "Initial full controller exited before any SSH or measurement window because full-cases.json had not been copied. Exact prior 50-case declaration restored without changing counts."
+}

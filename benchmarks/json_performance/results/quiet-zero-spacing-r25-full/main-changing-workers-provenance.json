@@ -1,0 +1,35 @@
+[
+  {
+    "worker": "changing-options",
+    "commands": [
+      [
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/zero-spacing-r25/frozen-main/perry",
+        "compile",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/zero-spacing-r25/changing-options-worker.ts",
+        "--no-auto-optimize",
+        "--no-cache",
+        "--no-link",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/zero-spacing-r25/main-changing-options.o"
+      ],
+      [
+        "cc",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/zero-spacing-r25/main-changing-options.o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/zero-spacing-r25/frozen-main/libperry_runtime.a",
+        "-lc",
+        "-Wl,-dead_strip",
+        "-Wl,-no_exported_symbols",
+        "-o",
+        "/Users/amlug/projects/perry/json-merged-pr10022/benchmarks/json_performance/.work/zero-spacing-r25/main-changing-options"
+      ]
+    ],
+    "files": {
+      "benchmarks/json_performance/.work/zero-spacing-r25/changing-options-worker.ts": "5d710b4446795b37edc6f2792fd7e6aeda63d99d17cceaff199d8d27f212a87e",
+      "benchmarks/json_performance/.work/zero-spacing-r25/main-changing-options.o": "616fea662f8f9602b9a02ce8e25421fe4acc9b53d751ce7b20364136a073e767",
+      "benchmarks/json_performance/.work/zero-spacing-r25/main-changing-options": "c9ffa440da236dd0c3088a2613ab2ebb079fe4dabe12e56abda542b1d8a91e0f",
+      "benchmarks/json_performance/.work/zero-spacing-r25/frozen-main/perry": "c8e83e7dc6680c54044b09c6493522bb0375a93d61730c3c68ebd9cc851b7b79",
+      "benchmarks/json_performance/.work/zero-spacing-r25/frozen-main/libperry_runtime.a": "3e925cb1a91bf474203c69b33ae2189481e46e0bccebd4b2cdcf35c1a963bbbc",
+      "benchmarks/json_performance/.work/zero-spacing-r25/frozen-main/libperry_stdlib.a": "143309e7959802db73b86be87702d83fcf3e917b16f377f8c256c7c72d1398e8"
+    }
+  }
+]

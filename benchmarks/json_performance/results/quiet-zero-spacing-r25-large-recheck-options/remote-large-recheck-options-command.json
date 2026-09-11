@@ -1,0 +1,19 @@
+[
+  "python3",
+  "with_lock.py",
+  "--",
+  "python3",
+  ".work/zero-spacing-r25/run-options.py",
+  "--worker",
+  ".work/zero-spacing-r25/candidate-options",
+  "--baseline-worker",
+  ".work/zero-spacing-r25/main-options",
+  "--node",
+  "/opt/homebrew/bin/node",
+  "--bun",
+  "/Users/perry/.bun/bin/bun",
+  "--case",
+  "long_string_1m:plain:1024:4:11",
+  "--results-dir",
+  "results/quiet-zero-spacing-r25-large-recheck-options"
+]

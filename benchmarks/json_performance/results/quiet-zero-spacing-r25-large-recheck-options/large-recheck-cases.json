@@ -1,0 +1,11 @@
+{
+  "cases": [
+    {
+      "fixture": "long_string_1m",
+      "operation": "plain",
+      "iterations": 1024,
+      "warmup": 4,
+      "repetitions": 11
+    }
+  ]
+}

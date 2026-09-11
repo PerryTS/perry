@@ -1,0 +1,2152 @@
+{
+  "source_commit": "9495bfc95e2afcfb5a7cb535e440e61ec0722cb1",
+  "evidence_commit": "64ad28045e3ac04700f7683e8b4941f734cf66c1",
+  "note": "The reference arm called main by the reused harness is measured R24, NOT current main. Original R24 candidate receipts are copied verbatim; those checks are reused, not rerun. New zero-spacing coverage runs both frozen arms separately.",
+  "files": [
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_reads-compile.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_reads-compile.log",
+      "sha256": "a40967297daed7f871544a2aae7a0619f5bf1b010e3e5ab872c716de54213db8"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-access-worker-build-1.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-access-worker-build-1.log",
+      "sha256": "57261391f79c2e4c99f9cac329e8e7a5c59d1e6d1cbacd68cf1ea7677d2caca6"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-callback-only-auto-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-callback-only-auto-scheduled.stdout",
+      "sha256": "8908a39d4a7b4d19b28d6de2f756de4d8aa558f4199186794e3fbf7980e25edf"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-options",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-options",
+      "sha256": "b47b5bd06fbe2ee12f7dcb800940d36e62f37d1e1ad4366180c9c2908d7e1d85"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_template_capture-direct-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_template_capture-direct-scheduled.stderr",
+      "sha256": "60716c3d37533939b4f41f15e4101f6ad59bdecdd6f39ead15c2ccf3f8b075c1"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_construction-direct-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_construction-direct-scheduled.stderr",
+      "sha256": "434af3f29a4a8f60e0016be9f9d3e7a0d80fd875b36ee62dfea87a7b74232af8"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-canonical-zero.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-canonical-zero.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-duplicate-true-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-duplicate-true-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_template_capture-auto-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_template_capture-auto-scheduled.stdout",
+      "sha256": "d2863b3aa78dc718c92666fde4a69bfaf6c07515d97911c780f980574c9176c9"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-prior-entry-tape-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-prior-entry-tape-scheduled.stdout",
+      "sha256": "3a880cf6ead4abccaa782d50c9ec0daa3e759054231c6453e35bcd907ef5c2b1"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_template_capture-tape-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_template_capture-tape-scheduled.stderr",
+      "sha256": "f3ad08b501699a04eab4f7cddae2cf2ac3fd308b83c30dcf78f4b515e87fdeee"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-prior-entry-auto-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-prior-entry-auto-scheduled.stderr",
+      "sha256": "830559c07cf873327479f8cf35ad64c422901aaeb46f668cfb987abee6344203"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-access-worker-build-0.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-access-worker-build-0.log",
+      "sha256": "5c0bceda01136fda2d3e39cd984afa3f39b3e1f8d3146ac4042f919dce6da950"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-canonical-pretty.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-canonical-pretty.stdout",
+      "sha256": "e73d70b55aa76fc4793d2312c488c9b3aecad351fc8e96d0a9e74e2e0aaa05ab"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/options-candidate-small_record-callback-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/options-main-small_record-callback-normal.stderr",
+      "sha256": "a27c1bc902885cbd9efdc6dfcddf59c5df3de76e6e4ffa20f5b235b09e7bc004"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-whitespace-zero.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-whitespace-zero.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-prior-entry-direct-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-prior-entry-direct-scheduled.stderr",
+      "sha256": "be863d34f88c4e04c210e913e43de5a8983536476cd7bf39913f2aa1da1db68f"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-workers-provenance.json",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-workers-provenance.json",
+      "sha256": "2df08c6400b98a8aa3f98bad31ae276fad1c4734a38de3d79ca651ec79dc14dc"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/options-candidate-small_record-zero-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/options-main-small_record-zero-scheduled.stderr",
+      "sha256": "50d2e99c5c401a054f87bf2c2f07540b922d42773d5e4c0d0e282e9be743718b"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-getter-probe-auto.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-getter-probe-auto.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-access-worker",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-access-worker",
+      "sha256": "af4404992b9aebed880c3fd91c966a767d246b3d06bbf0553d4ef5816dc60d7e"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/options-candidate-small_record-plain-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/options-main-small_record-plain-normal.stderr",
+      "sha256": "07554305fa8d22cca1136ef6710f3262a0fe80bc6521c04c0556f43b95bfbafb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/options-candidate-small_record-keys-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/options-main-small_record-keys-scheduled.stdout",
+      "sha256": "08c66ba8f64b50fbac889e7eb4f6098ea9ba528c65a4603f417e0efa43e3f56e"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-canonical-true-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-canonical-true-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-duplicate-plain.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-duplicate-plain.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_reads-direct-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_reads-direct-scheduled.stderr",
+      "sha256": "6aaf7741b04d33808e8c475483429496343b0a733ddd40813dab073450e4b24b"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-duplicate-true.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-duplicate-true.stdout",
+      "sha256": "9160d4be34c8695bd172a76c7c7966587ea5a4d991ad22c87b2b91af54aa9ebb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/options-candidate-small_record-dynamic-zero-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/options-main-small_record-dynamic-zero-scheduled.stdout",
+      "sha256": "bf1ce9896785b1d319bd23767aab100d1b6fb24f04440cf0011e8610dc8023e0"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-canonical-plain.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-canonical-plain.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-whitespace-pretty.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-whitespace-pretty.stdout",
+      "sha256": "4d2b0a3537539624d14919e8032111b8ae252ea5e38b20cd394fe6d52d343b9d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_template_capture-direct-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_template_capture-direct-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-canonical-pretty.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-canonical-pretty.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_template_capture-direct-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_template_capture-direct-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-callback-only-compile.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-callback-only-compile.log",
+      "sha256": "85c27a0804fc3a8240be9150df62dee98755af0733b8f5fa70ca590696fbb922"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-duplicate-true-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-duplicate-true-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-canonical-true.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-canonical-true.stdout",
+      "sha256": "9160d4be34c8695bd172a76c7c7966587ea5a4d991ad22c87b2b91af54aa9ebb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/test_json_template_capture-0.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/test_json_template_capture-0.ll",
+      "sha256": "3c9ec5e02a3760518ac92abca38c35e4e756c689b9b3588d188f9f3e4483ff43"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/worker-0.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/worker-0.ll",
+      "sha256": "2d27e0312e5176dc2b4640a37e7e852d6cfe294e576ddaca4e28937214d8a765"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/ordinary-workers-check.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/ordinary-workers-check.log",
+      "sha256": "a070a94176c6d41c9a84264e2c2a20584444f94cbe159d6a74ff8f2c6ce96349"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/callback-only-0.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/callback-only-0.ll",
+      "sha256": "5dfa150c5e8e50595e75932b3170bd767ccd6aaa986329b1e3ee005e3a778d47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/test_json_source_length-0.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/test_json_source_length-0.ll",
+      "sha256": "03c3f11ffa6e070ccd4cd51ad43eea4174a1299b5226dc75d885bf1499b4ff66"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/test_json_cached_construction-0.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/test_json_cached_construction-0.ll",
+      "sha256": "400521a3084f9ffb66408f377e0a7345eccf61b98497ec93c83710cc64d0ee3c"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/access-worker-0.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/access-worker-0.ll",
+      "sha256": "5c2040f5358793091bee09789d402a31576db5510e433cd81f7de7d113c94498"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/prior-entry-0.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/prior-entry-0.ll",
+      "sha256": "a3f4f3a32e6caeaf04c2eae86b95dd9b22c692a9957921ceb0ab86ce01bcec12"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/options-worker-0.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/options-worker-0.ll",
+      "sha256": "35425b3e1787ec3feb02fb58dfa0492c068fb01eaa4c41efeb1a3faf5a51e179"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/test_json_cached_reads-0.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/test_json_cached_reads-0.ll",
+      "sha256": "6c8e0e30a9d2ec856e3422d953e0e8496f3a5eaba30cfb14b2309a971ed561cd"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/callback-check.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/callback-check.log",
+      "sha256": "c687e0bda1d65d6a644547dd46495041a9602bff17d0af9578bdd89adf749ff8"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/check-0.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/check-0.log",
+      "sha256": "2e1e93ae99fdbf7ff3601b32f219b9d9a53926fb85a68158506729b4cf7436f8"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/access-worker/rewrite-0.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/access-worker/rewrite-0.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/access-worker/compile.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/access-worker/compile.log",
+      "sha256": "5dc9cdb9ee04ed67afbeb5507fc79c66cf933fdcfa3cde7da4adb31d1492174f"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/access-worker/worker.o",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/access-worker/worker.o",
+      "sha256": "f254101175a846f8d526ca85103adb6de981e0b41e0e484f3e0a60f948e35818"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/callback-only/rewrite-0.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/callback-only/rewrite-0.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/callback-only/compile.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/callback-only/compile.log",
+      "sha256": "db03df3925f549967fd60a68eca56290ca40dcf331b2eca6ef615f29fb940f42"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/callback-only/worker.o",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/callback-only/worker.o",
+      "sha256": "462dbeb33d6f8851abf74488ded6a5a038c3e550926b2253faa53a1c683d8de1"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/test_json_cached_reads/rewrite-0.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/test_json_cached_reads/rewrite-0.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/test_json_cached_reads/compile.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/test_json_cached_reads/compile.log",
+      "sha256": "afb37d7d494c641ca2bd15d6104527b6dd7a967330b5570a9831e33eeb6d88f9"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/test_json_cached_reads/worker.o",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/test_json_cached_reads/worker.o",
+      "sha256": "1012306eb033f8b43e1b25aee960f84307e98cce2ab9471676d7b4620625b896"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/test_json_source_length/rewrite-0.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/test_json_source_length/rewrite-0.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/test_json_source_length/compile.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/test_json_source_length/compile.log",
+      "sha256": "4f126b9f235b5b69009edb7807f6b63e4bc10f735115bdb53539c6b8e1495f18"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/test_json_source_length/worker.o",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/test_json_source_length/worker.o",
+      "sha256": "9acc2ae0d9786f1330efd820d9cdf5eaa6042d68a49da472145d2afa2bc2cad3"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/options-worker/rewrite-0.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/options-worker/rewrite-0.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/options-worker/compile.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/options-worker/compile.log",
+      "sha256": "b7de4ac8250730188a25d084eddb30de80704ab5f56919d577fc282fa44afb38"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/options-worker/worker.o",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/options-worker/worker.o",
+      "sha256": "f25e0184b7348b0c49297064430f7938d911663721e8ca5c7ccba7c9554f958f"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/test_json_template_capture/rewrite-0.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/test_json_template_capture/rewrite-0.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/test_json_template_capture/compile.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/test_json_template_capture/compile.log",
+      "sha256": "6889408116d0ed33d17f714442c4f74faa1e0f5f9fd3caf6df19a9154e2a23ec"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/test_json_template_capture/worker.o",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/test_json_template_capture/worker.o",
+      "sha256": "6ca5eee3aa558315a20a2450b93587279fd85f3475e6e78ba1c3b4c492b2ffc4"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/test_json_cached_construction/rewrite-0.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/test_json_cached_construction/rewrite-0.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/test_json_cached_construction/compile.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/test_json_cached_construction/compile.log",
+      "sha256": "46be3661f280e36d4d5760913d1e89bd1c062040db8f6e50e6eeb92f1299d3e4"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/test_json_cached_construction/worker.o",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/test_json_cached_construction/worker.o",
+      "sha256": "c1231c97608889b5790735858873bda932e3ee7ed9f8ec1c293b02c6a756d0f8"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/prior-entry/rewrite-0.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/prior-entry/rewrite-0.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/prior-entry/compile.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/prior-entry/compile.log",
+      "sha256": "7a69ebbc14281ffc0f07ae86c184a5b760cd69be4c6e573c724b5f8de40b7a4b"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/prior-entry/worker.o",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/prior-entry/worker.o",
+      "sha256": "578466e28aa1e9837406f037983a68cd58f4748b8a95ff5b31c98e56f4a8b02b"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/worker/rewrite-0.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/worker/rewrite-0.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/worker/compile.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/worker/compile.log",
+      "sha256": "bc2fa27f62a01fb29fc17726d3977d95ffd0510d7affb51cb2c5021c37100740"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/worker/worker.o",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/worker/worker.o",
+      "sha256": "b4b4f4082a942022854cd87d256ef356ed0ff2b6320486282ef5bec4a7d42bde"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/worker/.perry-trace/llvm/worker_ts.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/worker/.perry-trace/llvm/worker_ts.ll",
+      "sha256": "6f04c8ac7a9408ad14932d498e57b6cbd8215997345da13f5d5c25932e7625cb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/prior-entry/.perry-trace/llvm/prior_entry_ts.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/prior-entry/.perry-trace/llvm/prior_entry_ts.ll",
+      "sha256": "8077eb6cee794e9c857500125018ff127f18b0f1d187caf79dc51f36cc24e43a"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/test_json_cached_construction/.perry-trace/llvm/test_json_cached_construction_ts.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/test_json_cached_construction/.perry-trace/llvm/test_json_cached_construction_ts.ll",
+      "sha256": "97cb6b183b9e4e8e1c8d87fabf2a0f009e5be97a52686633294ef083cee8072a"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/test_json_template_capture/.perry-trace/llvm/test_json_template_capture_ts.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/test_json_template_capture/.perry-trace/llvm/test_json_template_capture_ts.ll",
+      "sha256": "66327336cb51ae8a5b9dc2f013695d4c2a78f9473e3b34f4d8752b1b5731b25a"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/options-worker/.perry-trace/llvm/options_worker_ts.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/options-worker/.perry-trace/llvm/options_worker_ts.ll",
+      "sha256": "602e8a19f1d5b047e056d5fc85395daafc24aa8f9ab71011b4c17ae3b6234d7b"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/test_json_source_length/.perry-trace/llvm/test_json_source_length_ts.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/test_json_source_length/.perry-trace/llvm/test_json_source_length_ts.ll",
+      "sha256": "83b73c072cbbca1a31acbeeaf5a91bb2a305e303e05cd4466dd68794d4bdcb52"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/test_json_cached_reads/.perry-trace/llvm/test_json_cached_reads_ts.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/test_json_cached_reads/.perry-trace/llvm/test_json_cached_reads_ts.ll",
+      "sha256": "96bfa878a9e33d7beed072e8f57f3f259150a1b07bb6eb88fc6fdbdd4eb83cdf"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/callback-only/.perry-trace/llvm/callback_only_ts.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/callback-only/.perry-trace/llvm/callback_only_ts.ll",
+      "sha256": "2d985a40ef89350fbcebd0e3189ea06a271aae20305bc01a5378b70a767bf7f1"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-native/access-worker/.perry-trace/llvm/access_worker_ts.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-native/access-worker/.perry-trace/llvm/access_worker_ts.ll",
+      "sha256": "74027b84ff2fa008465587fc74b299427d4c62fcf347c17392713790845a1531"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-prior-entry-direct-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-prior-entry-direct-normal.stdout",
+      "sha256": "3a880cf6ead4abccaa782d50c9ec0daa3e759054231c6453e35bcd907ef5c2b1"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-duplicate-plain-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-duplicate-plain-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-prior-entry-direct-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-prior-entry-direct-fullgc.stdout",
+      "sha256": "3a880cf6ead4abccaa782d50c9ec0daa3e759054231c6453e35bcd907ef5c2b1"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/options-candidate-small_record-zero-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/options-main-small_record-zero-normal.stderr",
+      "sha256": "bbe50d08987f693c6c7f344da0193923e8736d996acbef650d3ea554c682447c"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-duplicate-zero.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-duplicate-zero.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-options-build-0.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-options-build-0.log",
+      "sha256": "f44899cd5e0537555847e651cde5e8bbc0a17049032118fa5fa1ee8380b6e84c"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/options-candidate-small_record-plain-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/options-main-small_record-plain-scheduled.stdout",
+      "sha256": "8014a0e0b5fc3836e7bd2b9e0384f4b2ae6760529769fc8b8e298f639259a9d1"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-whitespace-true-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-whitespace-true-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_template_capture-auto-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_template_capture-auto-fullgc.stdout",
+      "sha256": "d2863b3aa78dc718c92666fde4a69bfaf6c07515d97911c780f980574c9176c9"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_template_capture-auto-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_template_capture-auto-normal.stdout",
+      "sha256": "d2863b3aa78dc718c92666fde4a69bfaf6c07515d97911c780f980574c9176c9"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-fraction-spacer",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-fraction-spacer",
+      "sha256": "f67a37f22e3cee27710b7553c696c2a45c2fef7f20f913c4a53e1f310092735c"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_template_capture-tape-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_template_capture-tape-normal.stdout",
+      "sha256": "d2863b3aa78dc718c92666fde4a69bfaf6c07515d97911c780f980574c9176c9"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_template_capture-tape-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_template_capture-tape-fullgc.stdout",
+      "sha256": "d2863b3aa78dc718c92666fde4a69bfaf6c07515d97911c780f980574c9176c9"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-callback-only",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-callback-only",
+      "sha256": "11675474d5d350e80e7e8d4651aab61855d1f367528ae3bb3388035629795cc9"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/options-candidate-small_record-keys-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/options-main-small_record-keys-normal.stdout",
+      "sha256": "79d5294895778cd97fabe8e5f22d4e33a58c242287acb25f9d65b94d3945cc16"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/options-candidate-small_record-callback-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/options-main-small_record-callback-scheduled.stderr",
+      "sha256": "1f2a0f0ed4f2b35e7349da31805a73ab9612905994fbf25e696044f4ce6e519d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_source_length-direct-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_source_length-direct-scheduled.stdout",
+      "sha256": "e6ead4695cb4b911404a46ebc18b6143e79758b82a6996fac63a933e53c45400"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-canonical-true-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-canonical-true-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_template_capture-compile.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_template_capture-compile.log",
+      "sha256": "c64713a10a4f2a4926bbf8a4600a79e7f0ef386d226dee38db644725ffd087a1"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-whitespace-true.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-whitespace-true.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-fraction.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-fraction.stdout",
+      "sha256": "e4e7560cd912b241435c0e54018563e1c2d7d4350aa4b493a8bc30c8cff01086"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-options-build-1.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-options-build-1.log",
+      "sha256": "57261391f79c2e4c99f9cac329e8e7a5c59d1e6d1cbacd68cf1ea7677d2caca6"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_template_capture-tape-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_template_capture-tape-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_template_capture-tape-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_template_capture-tape-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_template_capture-auto-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_template_capture-auto-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/options-candidate-small_record-plain-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/options-main-small_record-plain-scheduled.stderr",
+      "sha256": "ecaa4d3deb559113865808f07600904364f1b655614493e0894225aa315cc7bb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_template_capture-auto-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_template_capture-auto-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-duplicate-zero.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-duplicate-zero.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-whitespace-true-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-whitespace-true-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-fraction.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-fraction.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_source_length-direct-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_source_length-direct-scheduled.stderr",
+      "sha256": "e1a0b9c74c9a0153ad00e701cae36479c0278a187832f76d4d4faa2fd1ed4a00"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/options-candidate-small_record-callback-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/options-main-small_record-callback-scheduled.stdout",
+      "sha256": "8bb2421a2e01422979dbe01ee52d1bb27663ed2de4b1fb51c64349b622a89660"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-access-worker.o",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-access-worker.o",
+      "sha256": "f254101175a846f8d526ca85103adb6de981e0b41e0e484f3e0a60f948e35818"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/options-candidate-small_record-keys-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/options-main-small_record-keys-normal.stderr",
+      "sha256": "25d0adf0a17ded35b210360980e8ade7acde503a90681d1acfcb51efa34e1154"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-prior-entry-compile.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-prior-entry-compile.log",
+      "sha256": "cf052121709230ed7c666545fd7c01af55f67ebb037e935da619615595bbaad0"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-whitespace-true.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-whitespace-true.stdout",
+      "sha256": "9160d4be34c8695bd172a76c7c7966587ea5a4d991ad22c87b2b91af54aa9ebb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/test_json_template_capture-0.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/test_json_template_capture-0.ll",
+      "sha256": "894cd8233574a09270fc273a75b5e22eacea2d7d0619a12cf868be81bfc57e0c"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/worker-0.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/worker-0.ll",
+      "sha256": "05b9daaba03ce5a95f0b067c8208399cb3b25c76553e23a0d148e900bfb1d416"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/callback-only-0.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/callback-only-0.ll",
+      "sha256": "77de5d9897ffd9136ff2c90528457fd1836cca8d5d45859ce1f7a15459aa3637"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/test_json_source_length-0.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/test_json_source_length-0.ll",
+      "sha256": "8c51b1ef829b7e32879bab36a5ff4ac80f7ce40c62f39c055f351a870a136928"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/test_json_cached_construction-0.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/test_json_cached_construction-0.ll",
+      "sha256": "263ed7d1ca2866a3b75792a3d079111fbf2e0314b740c7e31e33fb0ed0647a6e"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/access-worker-0.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/access-worker-0.ll",
+      "sha256": "07f6b6498e35f909fc85c3670539f1a582723158a81c2bdd210e3c868aec2add"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/prior-entry-0.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/prior-entry-0.ll",
+      "sha256": "d747eb847e8aaaf07fc8d9304232b10d18f7c491d95ae7ebd648ead2d5c35c57"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/options-worker-0.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/options-worker-0.ll",
+      "sha256": "304f354d77d6b33aa54352a75c4aca55c737082956d622fadce11daf6e0180a4"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/test_json_cached_reads-0.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/test_json_cached_reads-0.ll",
+      "sha256": "3a1d0a5e6c3226f9c0972c1eedd5fbcc329e17f97c94286e23fe3ee031a74266"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/check-1.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/check-1.log",
+      "sha256": "8dff47d11974370bd580487f44a5ec19789218771c1d1d3c42c9a2f67e03a763"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/check-0.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/check-0.log",
+      "sha256": "b4ad91c3eab41620a040675b7da92174960e8d9bba454e4cf709a10991272347"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/access-worker/compile.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/access-worker/compile.log",
+      "sha256": "dc1d873fa0466197517f8a315bad99d17c2198002cdcc8818a50ba7148d0e853"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/access-worker/worker.o",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/access-worker/worker.o",
+      "sha256": "f0d633b01a767b183bb047f9df5edbb68eff904f899650d1c0c7616be336a405"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/callback-only/compile.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/callback-only/compile.log",
+      "sha256": "3b19af66966c87c54d037ee55ea509365e7a69a0135a1793716edd3fe1db1f0b"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/callback-only/worker.o",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/callback-only/worker.o",
+      "sha256": "28691e1e114f0bcc0302caf3b244d66b5f23d6e2eb60e9e00a4e24a6a513c2ef"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/test_json_cached_reads/compile.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/test_json_cached_reads/compile.log",
+      "sha256": "56e05bf15852569ff906fdbd019f957fdee3e6e63d25943e9a23e0db76af321d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/test_json_cached_reads/worker.o",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/test_json_cached_reads/worker.o",
+      "sha256": "aa6922f3289ee3847936c92c33001a579735d25115b1b4229c1101ad4ac79903"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/test_json_source_length/compile.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/test_json_source_length/compile.log",
+      "sha256": "7f2eeb9197b61c2e002b883926691dd600c47e9d893a942972058c0f0c61fe23"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/test_json_source_length/worker.o",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/test_json_source_length/worker.o",
+      "sha256": "4aacc8839e6a96dda7cc2ddd08eafaa6207d69af602ec89be3d80a24d851d1ec"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/options-worker/compile.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/options-worker/compile.log",
+      "sha256": "f5d4f4fd14293a39401b17eedd5f68f902c300d944d522f5b4388f1779c1d9c6"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/options-worker/worker.o",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/options-worker/worker.o",
+      "sha256": "56656cc41877b23e12816bf121a1d5b2155908d846ccd31a7d772b545f05b45c"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/test_json_template_capture/compile.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/test_json_template_capture/compile.log",
+      "sha256": "51727c34ea792f30031274186907c8781cda9551c185b5cec48fec1fd3d2341c"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/test_json_template_capture/worker.o",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/test_json_template_capture/worker.o",
+      "sha256": "efd01fbf9c3c1d7f7c6d089242bbf3a1cf595ffac1b9455feff11b663831e186"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/test_json_cached_construction/compile.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/test_json_cached_construction/compile.log",
+      "sha256": "573a2eebedff059696e5f7e3391ef5f7d9ca1a7ec43fcd5d9ad328bb68c5aa07"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/test_json_cached_construction/worker.o",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/test_json_cached_construction/worker.o",
+      "sha256": "19808fe019ad81ad28405e395b69ca2116ed6e162584242e99bdbe3afbf144f0"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/prior-entry/compile.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/prior-entry/compile.log",
+      "sha256": "7f69d618a1d3006cbd2bd85edf77d45f45841a90d6488cf8ce53dc8f4fb911b2"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/prior-entry/worker.o",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/prior-entry/worker.o",
+      "sha256": "9d4b685772750a0bf9ea3f8f7617563f3ff36278c5c21f175190b1eabc18f92c"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/worker/compile.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/worker/compile.log",
+      "sha256": "900c5234f14fc7c4023a282e4bbf73b498f12b418b64de238ffd3bb24ad2beb2"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/worker/worker.o",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/worker/worker.o",
+      "sha256": "916b38f99cc1ff1f0f9374a8557577007a7046844c5a81364ac826f755e8a01a"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/worker/.perry-trace/llvm/worker_ts.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/worker/.perry-trace/llvm/worker_ts.ll",
+      "sha256": "05b9daaba03ce5a95f0b067c8208399cb3b25c76553e23a0d148e900bfb1d416"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/prior-entry/.perry-trace/llvm/prior_entry_ts.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/prior-entry/.perry-trace/llvm/prior_entry_ts.ll",
+      "sha256": "d747eb847e8aaaf07fc8d9304232b10d18f7c491d95ae7ebd648ead2d5c35c57"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/test_json_cached_construction/.perry-trace/llvm/test_json_cached_construction_ts.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/test_json_cached_construction/.perry-trace/llvm/test_json_cached_construction_ts.ll",
+      "sha256": "263ed7d1ca2866a3b75792a3d079111fbf2e0314b740c7e31e33fb0ed0647a6e"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/test_json_template_capture/.perry-trace/llvm/test_json_template_capture_ts.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/test_json_template_capture/.perry-trace/llvm/test_json_template_capture_ts.ll",
+      "sha256": "894cd8233574a09270fc273a75b5e22eacea2d7d0619a12cf868be81bfc57e0c"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/options-worker/.perry-trace/llvm/options_worker_ts.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/options-worker/.perry-trace/llvm/options_worker_ts.ll",
+      "sha256": "304f354d77d6b33aa54352a75c4aca55c737082956d622fadce11daf6e0180a4"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/test_json_source_length/.perry-trace/llvm/test_json_source_length_ts.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/test_json_source_length/.perry-trace/llvm/test_json_source_length_ts.ll",
+      "sha256": "8c51b1ef829b7e32879bab36a5ff4ac80f7ce40c62f39c055f351a870a136928"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/test_json_cached_reads/.perry-trace/llvm/test_json_cached_reads_ts.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/test_json_cached_reads/.perry-trace/llvm/test_json_cached_reads_ts.ll",
+      "sha256": "3a1d0a5e6c3226f9c0972c1eedd5fbcc329e17f97c94286e23fe3ee031a74266"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/callback-only/.perry-trace/llvm/callback_only_ts.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/callback-only/.perry-trace/llvm/callback_only_ts.ll",
+      "sha256": "77de5d9897ffd9136ff2c90528457fd1836cca8d5d45859ce1f7a15459aa3637"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-ir-shadow/access-worker/.perry-trace/llvm/access_worker_ts.ll",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-ir-shadow/access-worker/.perry-trace/llvm/access_worker_ts.ll",
+      "sha256": "07f6b6498e35f909fc85c3670539f1a582723158a81c2bdd210e3c868aec2add"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-15lazy_get_rooted.s",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-15lazy_get_rooted.s",
+      "sha256": "90e9f3006be47b9b2ad448e0f6c81d3bff6054f9f5291890301b0ee80a3cd7c0"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-validation.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-validation.log",
+      "sha256": "6c2075f08b93575f934785b5d57032b51c1f0d4c792b6596500859142337ea98"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-prior-entry",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-prior-entry",
+      "sha256": "d313b95bf764cb1be2759bf3a325e8672fd919c832c071acc978d9b5a27b1643"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_reads",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_reads",
+      "sha256": "5f454b7d3280561f418544da2eca1a2bd19e6f2907739fd3622328c94311a50a"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-whitespace-pretty.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-whitespace-pretty.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_source_length-compile.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_source_length-compile.log",
+      "sha256": "ac5d856620c66a4ba582bd338fc853ca85de642ff737c509e31f05aadfbc4196"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-canonical-plain.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-canonical-plain.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_template_capture-direct-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_template_capture-direct-normal.stdout",
+      "sha256": "d2863b3aa78dc718c92666fde4a69bfaf6c07515d97911c780f980574c9176c9"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-worker",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-worker",
+      "sha256": "13949b3ba4108cdd9bcd1de14423c8ca28a25e397c4d2d2a552d8c9eb98d5039"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-canonical-pretty.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-canonical-pretty.stdout",
+      "sha256": "4d2b0a3537539624d14919e8032111b8ae252ea5e38b20cd394fe6d52d343b9d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_template_capture-direct-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_template_capture-direct-fullgc.stdout",
+      "sha256": "d2863b3aa78dc718c92666fde4a69bfaf6c07515d97911c780f980574c9176c9"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-duplicate-plain-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-duplicate-plain-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/options-candidate-small_record-zero-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/options-main-small_record-zero-normal.stdout",
+      "sha256": "a105668b7e420eae1dab2cef2d328c6157987811dc7a6de232620d8794514fb8"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-prior-entry-direct-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-prior-entry-direct-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-prior-entry-direct-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-prior-entry-direct-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-canonical-true.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-canonical-true.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-prior-entry-direct-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-prior-entry-direct-scheduled.stdout",
+      "sha256": "3a880cf6ead4abccaa782d50c9ec0daa3e759054231c6453e35bcd907ef5c2b1"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-fixture-validation.json",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-fixture-validation.json",
+      "sha256": "15d27202eab45ef35adc05a6c0554d979b98250bced674d326e5e0f152708ad2"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-getter-probe-auto.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-getter-probe-auto.stderr",
+      "sha256": "7ec74ab7f049caee2cc14c5c0950a86539460b5126c78eef092b4c58f33842cd"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/options-candidate-small_record-zero-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/options-main-small_record-zero-scheduled.stdout",
+      "sha256": "1cb00f86a185c7ad1ee2268edc090547042dd51f8c2e96cb01e523726974e119"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-canonical-pretty.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-canonical-pretty.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-whitespace-zero.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-whitespace-zero.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/options-candidate-small_record-callback-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/options-main-small_record-callback-normal.stdout",
+      "sha256": "cb1a6a3e365cd38417046cc41afe52b8873b09a04c6138790df7bc494be21bee"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/options-candidate-small_record-dynamic-zero-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/options-main-small_record-dynamic-zero-scheduled.stderr",
+      "sha256": "9e9d0ed4582a1ed8d2b22cf9bf2d2b60d8e1761bac1c8588db06c2f6c0003a08"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-duplicate-true.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-duplicate-true.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_reads-direct-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_reads-direct-scheduled.stdout",
+      "sha256": "2eab8d419be542416cfecba16dd446de52590acddd9f535f1ffa6b5860c542d6"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-worker.o",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-worker.o",
+      "sha256": "b4b4f4082a942022854cd87d256ef356ed0ff2b6320486282ef5bec4a7d42bde"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/options-candidate-small_record-keys-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/options-main-small_record-keys-scheduled.stderr",
+      "sha256": "24f3fd21324a35d5e3ac2f8aa2e90076416c9f3a8feb52e4d633e57880883b9d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/options-candidate-small_record-plain-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/options-main-small_record-plain-normal.stdout",
+      "sha256": "0ddb7acb537c3a37e2beb421264e555228c20a3c90379c27df37c93170b9d01d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-array-get.s",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-array-get.s",
+      "sha256": "e74d37fee6532e77c92290d3189080b4e37ea444655e16acaff8ea15cc7ab74e"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-duplicate-plain.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-duplicate-plain.stdout",
+      "sha256": "31b2d87e4f2fb4e517bcbbeb15065422f322378dcd6c984119890ee2cd781193"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-space-probe",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-space-probe",
+      "sha256": "a74434ef14c29b5fd387eab38a7ef160175c5e3030eda61b8689055bc86cf4c2"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-canonical-zero.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-canonical-zero.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_construction-direct-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_construction-direct-scheduled.stdout",
+      "sha256": "8f6dda79d2bd7419d80d8f01b9989a24b20f017c20fb31538fe58b0c5405397d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-canonical-pretty-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-canonical-pretty-node.stdout",
+      "sha256": "4d2b0a3537539624d14919e8032111b8ae252ea5e38b20cd394fe6d52d343b9d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_template_capture-direct-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_template_capture-direct-scheduled.stdout",
+      "sha256": "d2863b3aa78dc718c92666fde4a69bfaf6c07515d97911c780f980574c9176c9"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-callback-only-auto-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-callback-only-auto-scheduled.stderr",
+      "sha256": "56c5d750f0d9283781aaec7de2baa1bf2f4bada65f5ddd887f9aa243cc3a6e9c"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-prior-entry-auto-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-prior-entry-auto-scheduled.stdout",
+      "sha256": "3a880cf6ead4abccaa782d50c9ec0daa3e759054231c6453e35bcd907ef5c2b1"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_template_capture-tape-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_template_capture-tape-scheduled.stdout",
+      "sha256": "d2863b3aa78dc718c92666fde4a69bfaf6c07515d97911c780f980574c9176c9"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-prior-entry-tape-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-prior-entry-tape-scheduled.stderr",
+      "sha256": "ad98e50b30a679c94fe5a405a3b446a2e815e5794b509fc3fb5b3134c2c2e183"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_template_capture-auto-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_template_capture-auto-scheduled.stderr",
+      "sha256": "2db253b27118c54449b9f97c56724fb0cddb7b18064a2443cfc5a5a8703185ed"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_template_capture",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_template_capture",
+      "sha256": "cfd34ca43da0b72a4514914689169d9b38ae5e7e34d6fee43d592e5348202183"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-rotating-worker",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-rotating-worker",
+      "sha256": "f784fa9fa18bc3d4bba8b7546a02b554692932ae9939d1e35f50d9da2a3de9e9"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-canonical-pretty-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-canonical-pretty-node.stdout",
+      "sha256": "e73d70b55aa76fc4793d2312c488c9b3aecad351fc8e96d0a9e74e2e0aaa05ab"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-whitespace-plain.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-whitespace-plain.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-whitespace-plain-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-whitespace-plain-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-canonical-true.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-canonical-true.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-duplicate-zero-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-duplicate-zero-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-rotating-worker.o",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-rotating-worker.o",
+      "sha256": "85cf7332d6734195f0776b7c19d8b89d133bddd443032f1c87d91db8474186bc"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-fraction-compile.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-fraction-compile.log",
+      "sha256": "7e91c5130b2caaff90dde0a14d6821c12e376472d6fa2b8cf714adda30c7c3dc"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-duplicate-pretty.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-duplicate-pretty.stdout",
+      "sha256": "4d2b0a3537539624d14919e8032111b8ae252ea5e38b20cd394fe6d52d343b9d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-canonical-plain.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-canonical-plain.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-whitespace-plain-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-whitespace-plain-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_construction-direct-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_construction-direct-normal.stdout",
+      "sha256": "8f6dda79d2bd7419d80d8f01b9989a24b20f017c20fb31538fe58b0c5405397d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_construction-direct-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_construction-direct-fullgc.stdout",
+      "sha256": "8f6dda79d2bd7419d80d8f01b9989a24b20f017c20fb31538fe58b0c5405397d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-whitespace-true.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-whitespace-true.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/options-candidate-records_array_16k-pretty-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/options-main-records_array_16k-pretty-normal.stdout",
+      "sha256": "6010cba96d2bb5b5b6b86d00f924c57f4fb7d5dc5f2470cdb70a208f9450b451"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_source_length-direct-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_source_length-direct-normal.stdout",
+      "sha256": "e6ead4695cb4b911404a46ebc18b6143e79758b82a6996fac63a933e53c45400"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_source_length-direct-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_source_length-direct-fullgc.stdout",
+      "sha256": "e6ead4695cb4b911404a46ebc18b6143e79758b82a6996fac63a933e53c45400"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-canonical-zero-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-canonical-zero-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_reads-tape-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_reads-tape-scheduled.stderr",
+      "sha256": "612bdb6cb6505b04f1ea0f18aac3d37883b6899edae247e2c15b2cebc6ce7385"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_reads-auto-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_reads-auto-scheduled.stdout",
+      "sha256": "2eab8d419be542416cfecba16dd446de52590acddd9f535f1ffa6b5860c542d6"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-prior-entry-auto-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-prior-entry-auto-normal.stdout",
+      "sha256": "3a880cf6ead4abccaa782d50c9ec0daa3e759054231c6453e35bcd907ef5c2b1"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/options-candidate-records_array_16k-pretty-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/options-main-records_array_16k-pretty-scheduled.stdout",
+      "sha256": "5cd6be4b86f690b33436983588dd6c91e0be60b3533c683f37f500947fc0603c"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_construction-tape-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_construction-tape-scheduled.stdout",
+      "sha256": "8f6dda79d2bd7419d80d8f01b9989a24b20f017c20fb31538fe58b0c5405397d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-prior-entry-auto-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-prior-entry-auto-fullgc.stdout",
+      "sha256": "3a880cf6ead4abccaa782d50c9ec0daa3e759054231c6453e35bcd907ef5c2b1"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_construction-auto-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_construction-auto-scheduled.stderr",
+      "sha256": "785a53a869c79b9d4e0dc12e1d81466cc9c2e64557cedf8f20e12446b1502b64"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-packed-index-get.s",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-packed-index-get.s",
+      "sha256": "75fcbd46cb1153a9d5a7a509829c0f4f222059bca55a0766f02271803644fce3"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-prior-entry-tape-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-prior-entry-tape-fullgc.stdout",
+      "sha256": "3a880cf6ead4abccaa782d50c9ec0daa3e759054231c6453e35bcd907ef5c2b1"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-roots.json",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-roots.json",
+      "sha256": "51a9b9df42632025d3275c84b2636654bdd39003bbc32ede0d2f4fedd699be2b"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-getter-probe-direct.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-getter-probe-direct.stdout",
+      "sha256": "5d1802bd030fe3379bb06a180e92fcf986296aef9107dadcc10a8f63bdbf6c7b"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-prior-entry-tape-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-prior-entry-tape-normal.stdout",
+      "sha256": "3a880cf6ead4abccaa782d50c9ec0daa3e759054231c6453e35bcd907ef5c2b1"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-duplicate-zero.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-duplicate-zero.stdout",
+      "sha256": "9160d4be34c8695bd172a76c7c7966587ea5a4d991ad22c87b2b91af54aa9ebb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-canonical-plain-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-canonical-plain-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_source_length",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_source_length",
+      "sha256": "bd685ab58ff9746a8336150275d5b14dd34404011f28ab7fe8fa66c1bcc554c7"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-rotating-worker-build-1.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-rotating-worker-build-1.log",
+      "sha256": "57261391f79c2e4c99f9cac329e8e7a5c59d1e6d1cbacd68cf1ea7677d2caca6"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-duplicate-zero-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-duplicate-zero-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-getter-probe-tape.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-getter-probe-tape.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-canonical-zero.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-canonical-zero.stdout",
+      "sha256": "9160d4be34c8695bd172a76c7c7966587ea5a4d991ad22c87b2b91af54aa9ebb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_reads-direct-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_reads-direct-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/options-candidate-small_record-pretty-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/options-main-small_record-pretty-scheduled.stdout",
+      "sha256": "3f961053022da3791d7a0a2880fcc129008d5b4d555390c9bcf80d100a2ebc34"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-rotating-worker-build-0.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-rotating-worker-build-0.log",
+      "sha256": "b0b69109087e1f54d39574a6a3325bc762c44952cce7b0424fecf1f43ff4bf73"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_reads-direct-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_reads-direct-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/options-candidate-small_record-dynamic-zero-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/options-main-small_record-dynamic-zero-normal.stderr",
+      "sha256": "b222c929fc35ce03db8b87ded59c80c88df1df0caa59d750a18991448788384a"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-duplicate-plain.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-duplicate-plain.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_reads-auto-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_reads-auto-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-duplicate-true.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-duplicate-true.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-whitespace-plain.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-whitespace-plain.stdout",
+      "sha256": "62f18db77ac9f5eca2e0c05b7f563f02ed8e171f06ec05f6424403aa2b72a87e"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_reads-auto-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_reads-auto-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-whitespace-pretty-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-whitespace-pretty-node.stdout",
+      "sha256": "4d2b0a3537539624d14919e8032111b8ae252ea5e38b20cd394fe6d52d343b9d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_reads-tape-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_reads-tape-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-canonical-zero-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-canonical-zero-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_reads-tape-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_reads-tape-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_construction-auto-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_construction-auto-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-whitespace-zero.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-whitespace-zero.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_construction-auto-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_construction-auto-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_source_length-tape-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_source_length-tape-fullgc.stdout",
+      "sha256": "e6ead4695cb4b911404a46ebc18b6143e79758b82a6996fac63a933e53c45400"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/options-candidate-small_record-pretty-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/options-main-small_record-pretty-normal.stderr",
+      "sha256": "8e26904e9c262591ad424f01da3cd0bff6108d31c53396c7e365dc7f339c7fe9"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_source_length-tape-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_source_length-tape-scheduled.stdout",
+      "sha256": "e6ead4695cb4b911404a46ebc18b6143e79758b82a6996fac63a933e53c45400"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-duplicate-pretty.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-duplicate-pretty.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_source_length-tape-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_source_length-tape-normal.stdout",
+      "sha256": "e6ead4695cb4b911404a46ebc18b6143e79758b82a6996fac63a933e53c45400"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_source_length-auto-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_source_length-auto-scheduled.stderr",
+      "sha256": "453e42279ecfbc61bf2d9f8d8e7e71738a6475747fa9f3a302bb2c75c91c252f"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-whitespace-pretty.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-whitespace-pretty.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_construction-tape-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_construction-tape-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_construction-tape-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_construction-tape-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_source_length-auto-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_source_length-auto-normal.stdout",
+      "sha256": "e6ead4695cb4b911404a46ebc18b6143e79758b82a6996fac63a933e53c45400"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-getter-probe",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-getter-probe",
+      "sha256": "7f119a302c936a148b6868b089bc7eae5d0e39ac30398803e255a9c47337c30d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-whitespace-zero-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-whitespace-zero-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_source_length-auto-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_source_length-auto-fullgc.stdout",
+      "sha256": "e6ead4695cb4b911404a46ebc18b6143e79758b82a6996fac63a933e53c45400"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_construction",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_construction",
+      "sha256": "30374fbf051ab13325913ddc1fbf27915f43ead5ecef3e480c64e12e9906d3f4"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_reads-tape-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_reads-tape-normal.stdout",
+      "sha256": "2eab8d419be542416cfecba16dd446de52590acddd9f535f1ffa6b5860c542d6"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_reads-tape-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_reads-tape-fullgc.stdout",
+      "sha256": "2eab8d419be542416cfecba16dd446de52590acddd9f535f1ffa6b5860c542d6"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-duplicate-plain.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-duplicate-plain.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-whitespace-pretty-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-whitespace-pretty-node.stdout",
+      "sha256": "e73d70b55aa76fc4793d2312c488c9b3aecad351fc8e96d0a9e74e2e0aaa05ab"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/options-candidate-small_record-dynamic-zero-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/options-main-small_record-dynamic-zero-normal.stdout",
+      "sha256": "efaff1c7debd857900bdadaca335b622d234562b891d288a8270babac87e4b74"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-whitespace-zero-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-whitespace-zero-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_reads-auto-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_reads-auto-fullgc.stdout",
+      "sha256": "2eab8d419be542416cfecba16dd446de52590acddd9f535f1ffa6b5860c542d6"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-whitespace-plain.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-whitespace-plain.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-duplicate-true.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-duplicate-true.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_reads-auto-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_reads-auto-normal.stdout",
+      "sha256": "2eab8d419be542416cfecba16dd446de52590acddd9f535f1ffa6b5860c542d6"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_construction-compile.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_construction-compile.log",
+      "sha256": "8e84e65a2902b4867f7b67c5440a8d1b53dc253086c3c05ead538d2cc8d51910"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_construction-tape-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_construction-tape-fullgc.stdout",
+      "sha256": "8f6dda79d2bd7419d80d8f01b9989a24b20f017c20fb31538fe58b0c5405397d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_construction-tape-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_construction-tape-normal.stdout",
+      "sha256": "8f6dda79d2bd7419d80d8f01b9989a24b20f017c20fb31538fe58b0c5405397d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_source_length-auto-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_source_length-auto-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_source_length-auto-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_source_length-auto-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_construction-auto-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_construction-auto-normal.stdout",
+      "sha256": "8f6dda79d2bd7419d80d8f01b9989a24b20f017c20fb31538fe58b0c5405397d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-whitespace-zero.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-whitespace-zero.stdout",
+      "sha256": "9160d4be34c8695bd172a76c7c7966587ea5a4d991ad22c87b2b91af54aa9ebb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-options-validation.json",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-options-validation.json",
+      "sha256": "b84cc5accdf78251a8489f037cdd86fd7b59df98629b7e99f84067b3da7da94e"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_construction-auto-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_construction-auto-fullgc.stdout",
+      "sha256": "8f6dda79d2bd7419d80d8f01b9989a24b20f017c20fb31538fe58b0c5405397d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-whitespace-pretty.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-whitespace-pretty.stdout",
+      "sha256": "e73d70b55aa76fc4793d2312c488c9b3aecad351fc8e96d0a9e74e2e0aaa05ab"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_source_length-auto-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_source_length-auto-scheduled.stdout",
+      "sha256": "e6ead4695cb4b911404a46ebc18b6143e79758b82a6996fac63a933e53c45400"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_source_length-tape-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_source_length-tape-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-duplicate-pretty.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-duplicate-pretty.stdout",
+      "sha256": "e73d70b55aa76fc4793d2312c488c9b3aecad351fc8e96d0a9e74e2e0aaa05ab"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/options-candidate-small_record-pretty-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/options-main-small_record-pretty-normal.stdout",
+      "sha256": "1eb2c7510d5a978ade3701f830529608bfb68074f0e8e1f694af443bd7eb6830"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_source_length-tape-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_source_length-tape-scheduled.stderr",
+      "sha256": "df96dde13bc67c330cfa037cff0b409f2b538fec8b0ca0cc3b78e6594b39a66d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_source_length-tape-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_source_length-tape-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-getter-probe-tape.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-getter-probe-tape.stderr",
+      "sha256": "7ec74ab7f049caee2cc14c5c0950a86539460b5126c78eef092b4c58f33842cd"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-options.o",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-options.o",
+      "sha256": "f25e0184b7348b0c49297064430f7938d911663721e8ca5c7ccba7c9554f958f"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-getter-probe-compile.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-getter-probe-compile.log",
+      "sha256": "9e8f51720cc197faf08851a73aeeaf484a47014b4e0d9abbb2cc84b3c479f9a5"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-worker-build-0.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-worker-build-0.log",
+      "sha256": "b960e1f24fc3783b0e71d16c61f53a81f1c00f3e088fd18fca2cf9832f335a77"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-canonical-plain-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-canonical-plain-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-worker-build-1.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-worker-build-1.log",
+      "sha256": "57261391f79c2e4c99f9cac329e8e7a5c59d1e6d1cbacd68cf1ea7677d2caca6"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-11cached_read8lazy_get.s",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-11cached_read8lazy_get.s",
+      "sha256": "6b368869adae87249400e1b96e351229ec427d610e8ddff1a111c53b63cbe040"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-canonical-zero.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-canonical-zero.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_reads-direct-fullgc.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_reads-direct-fullgc.stdout",
+      "sha256": "2eab8d419be542416cfecba16dd446de52590acddd9f535f1ffa6b5860c542d6"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/options-candidate-small_record-pretty-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/options-main-small_record-pretty-scheduled.stderr",
+      "sha256": "32b3bea9378c504a9214b6129c5e50aeeac2ac16714705598d979d599bf105b8"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_reads-direct-normal.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_reads-direct-normal.stdout",
+      "sha256": "2eab8d419be542416cfecba16dd446de52590acddd9f535f1ffa6b5860c542d6"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_source_length-direct-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_source_length-direct-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/options-candidate-records_array_16k-pretty-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/options-main-records_array_16k-pretty-normal.stderr",
+      "sha256": "6b67d8b4fb1cf33853efd820e4e522e5792daa99cfa93ef79b519fd4b46d8318"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_source_length-direct-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_source_length-direct-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_reads-auto-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_reads-auto-scheduled.stderr",
+      "sha256": "e7dc64378d3534a1edf377130f4d7587071c732bbefdf9db1df2ee7abef86923"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_reads-tape-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_reads-tape-scheduled.stdout",
+      "sha256": "2eab8d419be542416cfecba16dd446de52590acddd9f535f1ffa6b5860c542d6"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-8mutation26resolve_materialized_array.s",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-8mutation26resolve_materialized_array.s",
+      "sha256": "b5ba769aaff1b007c5089085c697ffa3df580249607cdc3f4dc2715b6b0df2e7"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_construction-direct-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_construction-direct-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-whitespace-true.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-whitespace-true.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_construction-direct-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_construction-direct-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-duplicate-zero.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-duplicate-zero.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-getter-probe-direct.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-getter-probe-direct.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-prior-entry-tape-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-prior-entry-tape-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-prior-entry-tape-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-prior-entry-tape-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-fraction.json",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-fraction.json",
+      "sha256": "5d5e90e12de8ab0e61319d486f465961a1e9391d4068aa069ab816be670c9b5b"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_construction-auto-scheduled.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_construction-auto-scheduled.stdout",
+      "sha256": "8f6dda79d2bd7419d80d8f01b9989a24b20f017c20fb31538fe58b0c5405397d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-prior-entry-auto-fullgc.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-prior-entry-auto-fullgc.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/options-candidate-records_array_16k-pretty-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/options-main-records_array_16k-pretty-scheduled.stderr",
+      "sha256": "1f073392b9177150bd27eaa259f787648770c6b00dd700aa1fea49151483a9e4"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-test_json_cached_construction-tape-scheduled.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-test_json_cached_construction-tape-scheduled.stderr",
+      "sha256": "8248d568d166e0a212426e5de0cc79a3dc5b342c87afac4aa694027131164e3d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-prior-entry-auto-normal.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-prior-entry-auto-normal.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-canonical-true.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-canonical-true.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-duplicate-pretty-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-duplicate-pretty-node.stdout",
+      "sha256": "e73d70b55aa76fc4793d2312c488c9b3aecad351fc8e96d0a9e74e2e0aaa05ab"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-whitespace-plain.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-2-whitespace-plain.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-duplicate-pretty-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-duplicate-pretty-node.stdout",
+      "sha256": "4d2b0a3537539624d14919e8032111b8ae252ea5e38b20cd394fe6d52d343b9d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-duplicate-pretty.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-duplicate-pretty.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-canonical-plain.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-lazy-180-canonical-plain.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/build-provenance.json",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-build-provenance.json",
+      "sha256": "d945f4af026d5310d75fc2521b8af43f896b1b891937a4a8f72356ab5db59efc"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/frozen-build/libperry_stdlib.a",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/frozen-main/libperry_stdlib.a",
+      "sha256": "143309e7959802db73b86be87702d83fcf3e917b16f377f8c256c7c72d1398e8"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/frozen-build/perry",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/frozen-main/perry",
+      "sha256": "c8e83e7dc6680c54044b09c6493522bb0375a93d61730c3c68ebd9cc851b7b79"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/frozen-build/libperry_runtime.a",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/frozen-main/libperry_runtime.a",
+      "sha256": "3e925cb1a91bf474203c69b33ae2189481e46e0bccebd4b2cdcf35c1a963bbbc"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/lazy-candidate-probes.json",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-main-probes.json",
+      "sha256": "ad494b525837ab7ba2032d88aa4f53b24d36cd6cf1cec2eb9fd394c42c843cfc"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-canonical-zero.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-canonical-zero.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-duplicate-true-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-duplicate-true-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-canonical-pretty.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-canonical-pretty.stdout",
+      "sha256": "e73d70b55aa76fc4793d2312c488c9b3aecad351fc8e96d0a9e74e2e0aaa05ab"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-whitespace-zero.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-whitespace-zero.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-canonical-true-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-canonical-true-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-duplicate-plain.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-duplicate-plain.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-duplicate-true.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-duplicate-true.stdout",
+      "sha256": "9160d4be34c8695bd172a76c7c7966587ea5a4d991ad22c87b2b91af54aa9ebb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-canonical-plain.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-canonical-plain.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-whitespace-pretty.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-whitespace-pretty.stdout",
+      "sha256": "4d2b0a3537539624d14919e8032111b8ae252ea5e38b20cd394fe6d52d343b9d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-canonical-pretty.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-canonical-pretty.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-duplicate-true-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-duplicate-true-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-canonical-true.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-canonical-true.stdout",
+      "sha256": "9160d4be34c8695bd172a76c7c7966587ea5a4d991ad22c87b2b91af54aa9ebb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-duplicate-plain-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-duplicate-plain-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-duplicate-zero.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-duplicate-zero.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-whitespace-true-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-whitespace-true-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-canonical-true-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-canonical-true-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-whitespace-true.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-whitespace-true.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-duplicate-zero.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-duplicate-zero.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-whitespace-true-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-whitespace-true-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-whitespace-true.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-whitespace-true.stdout",
+      "sha256": "9160d4be34c8695bd172a76c7c7966587ea5a4d991ad22c87b2b91af54aa9ebb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-whitespace-pretty.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-whitespace-pretty.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-canonical-plain.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-canonical-plain.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-canonical-pretty.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-canonical-pretty.stdout",
+      "sha256": "4d2b0a3537539624d14919e8032111b8ae252ea5e38b20cd394fe6d52d343b9d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-duplicate-plain-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-duplicate-plain-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-canonical-true.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-canonical-true.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-canonical-pretty.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-canonical-pretty.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-whitespace-zero.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-whitespace-zero.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-duplicate-true.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-duplicate-true.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-duplicate-plain.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-duplicate-plain.stdout",
+      "sha256": "31b2d87e4f2fb4e517bcbbeb15065422f322378dcd6c984119890ee2cd781193"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-space-probe",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-space-probe",
+      "sha256": "a74434ef14c29b5fd387eab38a7ef160175c5e3030eda61b8689055bc86cf4c2"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-canonical-zero.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-canonical-zero.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-canonical-pretty-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-canonical-pretty-node.stdout",
+      "sha256": "4d2b0a3537539624d14919e8032111b8ae252ea5e38b20cd394fe6d52d343b9d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-canonical-pretty-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-canonical-pretty-node.stdout",
+      "sha256": "e73d70b55aa76fc4793d2312c488c9b3aecad351fc8e96d0a9e74e2e0aaa05ab"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-whitespace-plain.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-whitespace-plain.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-whitespace-plain-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-whitespace-plain-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-canonical-true.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-canonical-true.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-duplicate-zero-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-duplicate-zero-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-duplicate-pretty.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-duplicate-pretty.stdout",
+      "sha256": "4d2b0a3537539624d14919e8032111b8ae252ea5e38b20cd394fe6d52d343b9d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-canonical-plain.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-canonical-plain.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-whitespace-plain-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-whitespace-plain-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-whitespace-true.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-whitespace-true.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-canonical-zero-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-canonical-zero-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-duplicate-zero.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-duplicate-zero.stdout",
+      "sha256": "9160d4be34c8695bd172a76c7c7966587ea5a4d991ad22c87b2b91af54aa9ebb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-canonical-plain-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-canonical-plain-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-duplicate-zero-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-duplicate-zero-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-canonical-zero.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-canonical-zero.stdout",
+      "sha256": "9160d4be34c8695bd172a76c7c7966587ea5a4d991ad22c87b2b91af54aa9ebb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-duplicate-plain.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-duplicate-plain.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-duplicate-true.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-duplicate-true.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-whitespace-plain.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-whitespace-plain.stdout",
+      "sha256": "62f18db77ac9f5eca2e0c05b7f563f02ed8e171f06ec05f6424403aa2b72a87e"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-whitespace-pretty-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-whitespace-pretty-node.stdout",
+      "sha256": "4d2b0a3537539624d14919e8032111b8ae252ea5e38b20cd394fe6d52d343b9d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-canonical-zero-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-canonical-zero-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-whitespace-zero.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-whitespace-zero.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-duplicate-pretty.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-duplicate-pretty.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-whitespace-pretty.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-whitespace-pretty.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-whitespace-zero-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-whitespace-zero-node.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-duplicate-plain.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-duplicate-plain.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-whitespace-pretty-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-whitespace-pretty-node.stdout",
+      "sha256": "e73d70b55aa76fc4793d2312c488c9b3aecad351fc8e96d0a9e74e2e0aaa05ab"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-whitespace-zero-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-whitespace-zero-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-whitespace-plain.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-whitespace-plain.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-duplicate-true.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-duplicate-true.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-whitespace-zero.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-whitespace-zero.stdout",
+      "sha256": "9160d4be34c8695bd172a76c7c7966587ea5a4d991ad22c87b2b91af54aa9ebb"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-whitespace-pretty.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-whitespace-pretty.stdout",
+      "sha256": "e73d70b55aa76fc4793d2312c488c9b3aecad351fc8e96d0a9e74e2e0aaa05ab"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-duplicate-pretty.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-duplicate-pretty.stdout",
+      "sha256": "e73d70b55aa76fc4793d2312c488c9b3aecad351fc8e96d0a9e74e2e0aaa05ab"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-canonical-plain-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-canonical-plain-node.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-canonical-zero.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-canonical-zero.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-whitespace-true.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-whitespace-true.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-duplicate-zero.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-duplicate-zero.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-canonical-true.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-canonical-true.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-duplicate-pretty-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-duplicate-pretty-node.stdout",
+      "sha256": "e73d70b55aa76fc4793d2312c488c9b3aecad351fc8e96d0a9e74e2e0aaa05ab"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-2-whitespace-plain.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-2-whitespace-plain.stdout",
+      "sha256": "d9f207d92a71d013fc5747bb99cf059234096cd8395af278f46edca88dc6be55"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-duplicate-pretty-node.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-duplicate-pretty-node.stdout",
+      "sha256": "4d2b0a3537539624d14919e8032111b8ae252ea5e38b20cd394fe6d52d343b9d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-duplicate-pretty.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-duplicate-pretty.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-lazy-180-canonical-plain.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/lazy-180-canonical-plain.stdout",
+      "sha256": "11f57e9d521d0fe97bd1aea6839fa3a020d9e08090826f22dec8c19e7bc99b47"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-getter-probe-auto.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-getter-probe-auto.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-getter-probe-auto.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-getter-probe-auto.stderr",
+      "sha256": "7ec74ab7f049caee2cc14c5c0950a86539460b5126c78eef092b4c58f33842cd"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-getter-probe-direct.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-getter-probe-direct.stdout",
+      "sha256": "5d1802bd030fe3379bb06a180e92fcf986296aef9107dadcc10a8f63bdbf6c7b"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-getter-probe-tape.stdout",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-getter-probe-tape.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-getter-probe-tape.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-getter-probe-tape.stderr",
+      "sha256": "7ec74ab7f049caee2cc14c5c0950a86539460b5126c78eef092b4c58f33842cd"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-getter-probe-compile.log",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-getter-probe-compile.log",
+      "sha256": "9e8f51720cc197faf08851a73aeeaf484a47014b4e0d9abbb2cc84b3c479f9a5"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/candidate-getter-probe-direct.stderr",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/main-getter-probe-direct.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/fraction-baseline.json",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/fraction-baseline.json",
+      "sha256": "41475efabdbe458358432bdba58a7015a523a7e37dc760dc631d8f183a18dd7f"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/getter-baseline-comparison.json",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/getter-baseline-comparison.json",
+      "sha256": "6139e4c41d81b12991d8b77a4a02d7684f8645189072efb15fa62697871d443a"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/options-worker.ts",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/options-worker.ts",
+      "sha256": "d08c6a916c18197b889a0de4a3777632ad307275752b85c5abd75daf4d6ad85d"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/options-worker.js",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/options-worker.js",
+      "sha256": "a8615b823b58b3f437bd3cb4c6418bc7279a767f93a082f1f206a49aee0cbaa9"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/harness/run_dispatch_focus.py",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/harness/run_dispatch_focus.py",
+      "sha256": "100ba3e1bd5c0cd451d1a3528f95b5f4b8d0ff2f4771796ab8598b36a46fbcc4"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/harness/rotating-worker.ts",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/harness/rotating-worker.ts",
+      "sha256": "7541897acb2c7c35c0f5e762f8b2f28b9783feb26a42db107c1c4eb3af644b24"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/harness/worker.js",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/harness/worker.js",
+      "sha256": "55c11d12296f896212d6abd76bcf8d551d0590b0ad24b262018b7a707369a2f4"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/harness/with_lock.py",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/harness/with_lock.py",
+      "sha256": "443df89997be22f22f16b475d76c45ea2b560ab9550e4e6c028777e1e3b74b49"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/harness/access-worker.ts",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/harness/access-worker.ts",
+      "sha256": "dba0240ef6441a07657e664354982a04045c036e53f65c1d06df62d55c73be67"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/harness/run_access.py",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/harness/run_access.py",
+      "sha256": "da1a80e558d57462574397776702ac47a1a623de6e73255cc04e46746f5b5b67"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/harness/access-worker.js",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/harness/access-worker.js",
+      "sha256": "bfe066c9d1065102d7b0ec9f7b2909d2faae8935b104709865308422d8489957"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/harness/run_regression_focus.py",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/harness/run_regression_focus.py",
+      "sha256": "0607798d0b675af6c99977f6a821e29af69d6fdbdf16e6144d50a40d096c7270"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/harness/rotating-worker.js",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/harness/rotating-worker.js",
+      "sha256": "f163f68f3d4c1d13720403ffb96d0afe4306ec0723f2015d3a66ab0c77fa56c8"
+    },
+    {
+      "source": "benchmarks/json_performance/.work/outlined-cached-read-r24/harness/worker.ts",
+      "copy": "benchmarks/json_performance/.work/zero-spacing-r25/harness/worker.ts",
+      "sha256": "f3c42ec9f04fdb9ba84dc3cf50dc59f18685540033807f3db3a7f75c08a85d39"
+    }
+  ]
+}

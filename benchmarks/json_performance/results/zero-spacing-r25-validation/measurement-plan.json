@@ -1,0 +1,8 @@
+{
+  "reference": "R24 source 9495bfc95e2afcfb5a7cb535e440e61ec0722cb1, not current main",
+  "candidate": "01f2878dad8efc92e394c49b88fe0800b871f593",
+  "screen": "seven original stringify-option cases before broad measurement",
+  "incremental_controls": ["changing record, plain and dynamic zero", "1 MB strings and Unicode, plain and dynamic zero", "live retained zero-spacing outputs, one and high counts"],
+  "broader_controls_if_screen_passes": ["original 38 plus 12 consumption rows", "retained plain outputs", "rotating parse inputs"],
+  "policy": "Fixed original workloads and pinned Node26.5.1/Bun1.3.14. Every terminal quiet-host window archived first, including failures. Preserve all CPU/RSS vectors and baseline GC findings; no threshold change or blanket laziness disable."
+}
