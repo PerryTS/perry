@@ -183,6 +183,79 @@ mod tests {
         }
     }
 
+    const MISS: u64 = crate::value::TAG_HOLE;
+
+    fn probe(hdr: *mut LazyArrayHeader, i: i64) -> u64 {
+        unsafe { super::js_lazy_array_index_probe(hdr as i64, i).to_bits() }
+    }
+
+    /// The probe is the cache's entire lazy fast path, so what it DECLINES is
+    /// as load-bearing as what it serves: every decline is a read the emitted
+    /// code must hand to its rooted miss helper.
+    #[test]
+    fn lazy_index_probe_serves_cached_reads_and_declines_everything_else() {
+        let _guard = crate::gc::GcSuppressScope::new();
+        let input = format!(
+            "[{}]",
+            (0..8).map(|i| i.to_string()).collect::<Vec<_>>().join(",")
+        );
+        unsafe {
+            let hdr = fixture(input.as_bytes());
+            // Nothing is cached yet, so every index declines rather than
+            // inventing a value.
+            for i in 0..8 {
+                assert_eq!(probe(hdr, i), MISS, "uncached index {i} must decline");
+            }
+            // A rooted read populates the sparse cache; the probe then serves
+            // that index and still declines its neighbours.
+            let warmed = lazy_get(hdr, 3);
+            assert!((*hdr).materialized.is_null(), "must still be tape-backed");
+            assert_eq!(probe(hdr, 3), warmed.bits(), "cached index must be served");
+            assert_eq!(probe(hdr, 4), MISS, "a neighbour is still uncached");
+            // Zero is a legal cached value whose NaN-boxed bits are all zero,
+            // so the bitmap rather than the element word has to prove liveness.
+            let zero = lazy_get(hdr, 0);
+            assert_eq!(zero.bits(), JSValue::number(0.0).bits());
+            assert_eq!(probe(hdr, 0), zero.bits(), "cached zero must be served");
+            // Out of bounds consults the prototype chain, so it is the caller's
+            // job -- the probe must not shortcut it to undefined.
+            for i in [8, 9, 4_294_967_295] {
+                assert_eq!(probe(hdr, i), MISS, "out-of-bounds {i} must decline");
+            }
+            // Indices outside the u32 domain, and a null receiver, decline too.
+            for i in [-1, -4096, 4_294_967_296, i64::MAX] {
+                assert_eq!(probe(hdr, i), MISS, "index {i} must decline");
+            }
+            assert_eq!(probe(std::ptr::null_mut(), 0), MISS, "null must decline");
+        }
+    }
+
+    #[test]
+    fn lazy_index_probe_declines_a_stale_length_mirror_after_growth() {
+        let _guard = crate::gc::GcSuppressScope::new();
+        let input = format!("[{}]", vec![r#"{"id":1}"#; 12].join(","));
+        unsafe {
+            let hdr = fixture(input.as_bytes());
+            let arr = force_materialize_lazy(hdr);
+            assert!(!(*hdr).materialized.is_null(), "must be materialized");
+            let served = lazy_get(hdr, 5);
+            assert_eq!(
+                probe(hdr, 5),
+                served.bits(),
+                "materialized read must be served"
+            );
+            // `lazy_get` refreshes the header's length mirror when it serves a
+            // read; the probe cannot write, so a mirror that has gone stale
+            // must send the read back to the rooted accessor rather than let a
+            // later `.length` report the old value.
+            let real = (*arr).length;
+            (*hdr).cached_length = real + 1;
+            assert_eq!(probe(hdr, 5), MISS, "a stale mirror must decline");
+            (*hdr).cached_length = real;
+            assert_eq!(probe(hdr, 5), served.bits(), "a fresh mirror serves again");
+        }
+    }
+
     unsafe fn fixture(input: &[u8]) -> *mut LazyArrayHeader {
         let text = crate::string::js_string_from_bytes(input.as_ptr(), input.len() as u32);
         with_built_tape(input, |tape| {
