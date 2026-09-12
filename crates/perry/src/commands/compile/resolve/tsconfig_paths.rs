@@ -39,7 +39,7 @@
 //! functions (the higher-level `cached_resolve_import` memoizes the final
 //! result on the `CompilationContext`).
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
@@ -65,11 +65,13 @@ struct TsConfig {
     paths: Option<PathsConfig>,
     /// `baseUrl` resolved to an absolute directory, if set.
     base_url: Option<PathBuf>,
+    jsx_import_source: Option<String>,
+    inputs: BTreeSet<PathBuf>,
 }
 
 impl TsConfig {
     fn is_empty(&self) -> bool {
-        self.paths.is_none() && self.base_url.is_none()
+        self.paths.is_none() && self.base_url.is_none() && self.jsx_import_source.is_none()
     }
 }
 
@@ -99,6 +101,22 @@ pub(crate) fn resolve_tsconfig_paths(import_source: &str, importer_path: &Path) 
     let tsconfig_path = nearest_tsconfig(importer_dir)?;
     let config = load_merged_config(&tsconfig_path)?;
     resolve_with_config(import_source, &config)
+}
+
+/// Read JSX configuration afresh for each compilation (including watch builds).
+/// A dependency without its own tsconfig must not inherit the application's JSX
+/// dialect across a node_modules boundary. Reuse JSONC and extends resolution.
+pub(crate) fn jsx_config(importer_path: &Path) -> (Option<String>, BTreeSet<PathBuf>) {
+    let config = importer_path.parent().and_then(|dir| {
+        dir.ancestors()
+            .take_while(|dir| dir.file_name().is_none_or(|name| name != "node_modules"))
+            .map(|dir| dir.join("tsconfig.json"))
+            .find(|path| path.is_file())
+            .and_then(|path| build_merged_config(&path, &mut Vec::new()))
+    });
+    config
+        .map(|c| (c.jsx_import_source, c.inputs))
+        .unwrap_or_default()
 }
 
 /// Resolve a specifier against an already-merged config (split out for unit
@@ -249,6 +267,10 @@ fn build_merged_config(tsconfig_path: &Path, seen: &mut Vec<PathBuf>) -> Option<
     };
 
     let compiler_options = json.get("compilerOptions");
+    merged.inputs.insert(tsconfig_path.to_path_buf());
+    if let Some(source) = compiler_options.and_then(|c| c.get("jsxImportSource")) {
+        merged.jsx_import_source = source.as_str().map(str::to_owned);
+    }
 
     // baseUrl declared here resolves relative to THIS config's dir.
     if let Some(base_url) = compiler_options
@@ -305,7 +327,10 @@ fn resolve_extends(extends_ref: &str, config_dir: &Path) -> Option<PathBuf> {
             return Some(direct);
         }
         // Append `.json` if missing.
-        if direct.extension().is_none() {
+        if direct
+            .extension()
+            .is_none_or(|extension| extension != "json")
+        {
             let with_json = config_dir.join(format!("{}.json", extends_ref));
             if with_json.is_file() {
                 return Some(with_json);
@@ -338,7 +363,10 @@ fn resolve_extends_package(extends_ref: &str, config_dir: &Path) -> Option<PathB
                 return Some(pkg_path);
             }
             // `pkg/foo` without extension -> `.json`.
-            if pkg_path.extension().is_none() {
+            if pkg_path
+                .extension()
+                .is_none_or(|extension| extension != "json")
+            {
                 let with_json = node_modules.join(format!("{}.json", extends_ref));
                 if with_json.is_file() {
                     return Some(with_json);
@@ -506,6 +534,7 @@ mod tests {
                 paths,
             }),
             base_url: None,
+            ..Default::default()
         }
     }
 
@@ -615,6 +644,7 @@ mod tests {
         let cfg = TsConfig {
             paths: None,
             base_url: Some(tmp.join("src")),
+            ..Default::default()
         };
         let resolved = resolve_with_config("lib/x", &cfg).expect("baseUrl resolution");
         assert!(resolved.ends_with("x.ts"));

@@ -21,9 +21,13 @@ perry-parser.workspace = true
 swc_ecma_ast.workspace = true
 swc_common.workspace = true
 swc_ecma_visit.workspace = true
+swc_ecma_transforms_base.workspace = true
 
 thiserror.workspace = true
 anyhow.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 stacker.workspace = true
+
+[dev-dependencies]
+swc_ecma_codegen.workspace = true

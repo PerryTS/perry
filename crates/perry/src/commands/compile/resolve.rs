@@ -39,6 +39,8 @@ use super::CompilationContext;
 use super::{NativeBackend, NativeLibraryManifest};
 
 mod native_library;
+mod solid;
+pub(super) use solid::resolve_import_with_context;
 // pub(crate): the `check --check-deps` dependency checker (commands/deps.rs)
 // consults both resolvers so `#` subpath imports and tsconfig-aliased
 // specifiers stop reporting false R003 "not found in node_modules" errors.
@@ -1796,14 +1798,7 @@ pub(super) fn cached_resolve_import(
     if let Some(cached) = ctx.resolve_cache.get(&cache_key) {
         return cached.clone();
     }
-    let result = resolve_import_with_bunfs(
-        import_source,
-        importer_path,
-        &ctx.project_root,
-        &ctx.compile_packages,
-        &ctx.compile_package_dirs,
-        ctx.bunfs_root.as_deref(),
-    );
+    let result = resolve_import_with_context(import_source, importer_path, ctx);
     ctx.resolve_cache.insert(cache_key, result.clone());
     result
 }

@@ -1,0 +1,1 @@
+PASS universal JSX: effects, children, components, refs, directives, spreads, fragments, control flow, client core/store
