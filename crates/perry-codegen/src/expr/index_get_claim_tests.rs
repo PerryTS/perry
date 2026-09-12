@@ -424,11 +424,30 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
     let kind = super::class_field_barrier_tests::block_body(&ir, "arrlike.elem.kind.")
         .expect("the elements-store object-kind guard exists");
     assert!(
-        kind.contains("icmp eq i8")
-            && kind.contains(", 2")
-            && kind.contains("arrlike.elem.meta")
-            && kind.contains("arrlike.ic.miss"),
+        kind.contains("icmp eq i8") && kind.contains(", 2") && kind.contains("arrlike.elem.meta"),
         "only GC_TYPE_OBJECT may reach the ObjectMeta.elements load:\n{kind}"
+    );
+    // #10114 put the lazy-JSON-array tier on this guard's miss edge, so the
+    // exit is one block further out than it used to be. Pin BOTH hops rather
+    // than the old block adjacency: a non-object must fall to the lazy kind
+    // test, and anything that is not GC_TYPE_LAZY_ARRAY (9) must still leave
+    // through the complete dispatcher at `arrlike.ic.miss`. Native Buffers and
+    // other exotic managed cells reach that exit unchanged; what must never
+    // happen is either tier reading their header word at offset 8 as
+    // ObjectMeta.
+    assert!(
+        kind.contains("arrlike.lazy.kind"),
+        "a non-object must fall through to the lazy tier's own kind test:\n{kind}"
+    );
+    let lazy_kind = super::class_field_barrier_tests::block_body(&ir, "arrlike.lazy.kind.")
+        .expect("the lazy-array kind guard exists");
+    assert!(
+        lazy_kind.contains("icmp eq i8")
+            && lazy_kind.contains(", 9")
+            && lazy_kind.contains("arrlike.lazy.call")
+            && lazy_kind.contains("arrlike.ic.miss"),
+        "only GC_TYPE_LAZY_ARRAY may reach the lazy probe; everything else must \
+         still exit through the complete dispatcher:\n{lazy_kind}"
     );
     // The elements-backed subclass probe sits ahead of the shape IC: meta
     // word → `ObjectMeta.elements` (word 12) → inner-array bounds → slot.
