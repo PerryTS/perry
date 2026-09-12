@@ -1492,16 +1492,22 @@ mod locale_collation_tests {
         }
     }
 
-    /// A WTF-8 lone surrogate, which `string_as_str` hands the comparator as a
-    /// `&str` exactly like this. Not representable as a Rust string literal.
-    fn wtf8(bytes: &'static [u8]) -> &'static str {
-        unsafe { std::str::from_utf8_unchecked(bytes) }
-    }
-
-    /// Spans every class the issue names: ASCII (incl. case-only and
-    /// long-common-prefix pairs), Latin-1 accented letters in both precomposed
-    /// and decomposed spellings, CJK, emoji, bare combining marks, the two
-    /// special case mappings (U+0130, U+03A3), and lone surrogates.
+    /// Spans every class the issue names *except* WTF-8 lone surrogates:
+    /// ASCII (incl. case-only and long-common-prefix pairs), Latin-1 accented
+    /// letters in both precomposed and decomposed spellings, CJK, emoji, bare
+    /// combining marks, and the two special case mappings (U+0130, U+03A3).
+    ///
+    /// Lone surrogates are deliberately absent. This comparator takes `&str`,
+    /// and a lone surrogate is not representable as one: forging it with
+    /// `from_utf8_unchecked` makes `chars()` yield a value that is not a valid
+    /// `char`, which std's UB precondition check catches in a debug build —
+    /// the test aborts with SIGABRT rather than reporting an ordering. That is
+    /// a property of the runtime's WTF-8-as-`&str` view (`string_as_str`),
+    /// unchanged by this rewrite and identical on both sides of the
+    /// differential, so a corpus entry could only prove the checker works. The
+    /// byte-level lone-surrogate coverage that *is* sound lives in
+    /// `utf16_cmp_ascii_fast_path_tests::lone_surrogates_fall_back_to_byte_order`,
+    /// where the helper takes `&[u8]`.
     fn corpus() -> Vec<&'static str> {
         vec![
             "",
@@ -1572,9 +1578,6 @@ mod locale_collation_tests {
             "ä:123",
             "Ö:123",
             "😀:9",
-            wtf8(&[0xED, 0xA0, 0x80]),
-            wtf8(&[0xED, 0xB0, 0x80]),
-            wtf8(&[b'a', 0xED, 0xA0, 0x80]),
         ]
     }
 
