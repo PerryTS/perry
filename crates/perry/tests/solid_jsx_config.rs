@@ -13,7 +13,9 @@ fn fixture() -> tempfile::TempDir {
     std::fs::write(
         directory.path().join("host.ts"),
         "export function createElement(name: string) { return { name }; }\n\
-         export function spread(node: any, props: any) { node.props = props; }\n",
+         export function spread(node: any, props: any) { node.props = props; }\n\
+         export function createTextNode(text: string) { return { text }; }\n\
+         export function insertNode(node: any, child: any) { node.child = child; }\n",
     )
     .expect("universal host");
     directory
@@ -24,7 +26,9 @@ fn package(directory: &Path, mode: serde_json::Value) {
         directory.join("package.json"),
         serde_json::json!({
             "type": "module",
-            "perry": { "jsx": mode, "packageAliases": { "perry-solid": "./host.ts" } }
+            "perry": { "jsx": mode, "packageAliases": {
+                "perry-solid": "./host.ts", "@opentui/solid": "./host.ts"
+            } }
         })
         .to_string(),
     )
@@ -176,4 +180,131 @@ fn a_fragment_of_literals_does_not_import_an_unused_renderer() {
         String::from_utf8_lossy(&result.stderr)
     );
     assert!(String::from_utf8_lossy(&result.stdout).contains("1 native, 0 JavaScript"));
+}
+
+#[test]
+fn runtime_object_selects_the_named_universal_host() {
+    let directory = fixture();
+    package(
+        directory.path(),
+        serde_json::json!({"runtime":"@opentui/solid"}),
+    );
+    assert_mode(directory.path(), "explicit-runtime", true);
+    std::fs::write(
+        directory.path().join("perry.toml"),
+        "[perry]\njsx = { runtime = '@opentui/solid' }\n",
+    )
+    .unwrap();
+    package(directory.path(), "default".into());
+    assert_mode(directory.path(), "toml-runtime", true);
+}
+
+#[test]
+fn jsx_import_source_and_inherited_config_changes_reach_codegen() {
+    let directory = fixture();
+    std::fs::write(
+        directory.path().join("package.json"),
+        serde_json::json!({
+            "perry": { "packageAliases": {"@opentui/solid":"./host.ts"} }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        directory.path().join("tsconfig.json"),
+        "{ // JSONC\n\"extends\": \"./base.json\", }",
+    )
+    .unwrap();
+    std::fs::write(
+        directory.path().join("base.json"),
+        r#"{"compilerOptions":{"jsxImportSource":"@opentui/solid"}}"#,
+    )
+    .unwrap();
+    assert_mode(directory.path(), "auto-solid", true);
+    std::fs::write(
+        directory.path().join("base.json"),
+        r#"{"compilerOptions":{"jsxImportSource":"react"}}"#,
+    )
+    .unwrap();
+    assert_mode(directory.path(), "auto-react.o", false);
+    std::fs::write(
+        directory.path().join("base.json"),
+        r#"{"compilerOptions":{"jsxImportSource":"@opentui/solid"}}"#,
+    )
+    .unwrap();
+    assert_mode(directory.path(), "auto-solid-again", true);
+    package(directory.path(), "default".into());
+    assert_mode(directory.path(), "explicit-default.o", false);
+}
+
+#[test]
+fn nested_jsx_package_recollects_earlier_solid_imports_with_the_client_build() {
+    let directory = fixture();
+    let root = directory.path();
+    std::fs::write(root.join("package.json"), r#"{"private":true}"#).unwrap();
+    let runtime = root.join("node_modules/@opentui/solid");
+    std::fs::create_dir_all(&runtime).unwrap();
+    std::fs::write(
+        runtime.join("package.json"),
+        r#"{"name":"@opentui/solid","main":"index.ts"}"#,
+    )
+    .unwrap();
+    std::fs::copy(root.join("host.ts"), runtime.join("index.ts")).unwrap();
+    std::fs::create_dir_all(root.join("ui")).unwrap();
+    std::fs::write(
+        root.join("ui/tsconfig.json"),
+        r#"{"compilerOptions":{"jsxImportSource":"@opentui/solid"}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("ui/view.tsx"),
+        "export const view = <text>Hello</text>;",
+    )
+    .unwrap();
+    std::fs::write(root.join("main.tsx"), "import { signal } from 'solid-js'; import { view } from './ui/view'; console.log(signal(), view);").unwrap();
+    let solid = root.join("node_modules/solid-js");
+    std::fs::create_dir_all(solid.join("dist")).unwrap();
+    std::fs::write(
+        solid.join("package.json"),
+        r#"{"name":"solid-js","exports":{"node":"./dist/server.js","default":"./dist/solid.js"}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        solid.join("dist/server.js"),
+        "export function signal() { return 'server'; }",
+    )
+    .unwrap();
+    std::fs::write(
+        solid.join("dist/solid.js"),
+        "export function signal() { return 'client'; }",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_perry"))
+        .current_dir(root)
+        .args([
+            "compile",
+            "main.tsx",
+            "--no-link",
+            "--print-hir",
+            "-o",
+            "nested/output.o",
+        ])
+        .env("PERRY_NO_AUTO_OPTIMIZE", "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let hir = String::from_utf8_lossy(&output.stdout).replace('\\', "/");
+    assert!(
+        hir.contains("dist/solid.js"),
+        "client build must reach HIR: {hir}"
+    );
+    assert!(
+        !hir.contains("dist/server.js"),
+        "earlier SSR module must be removed: {hir}"
+    );
+    assert!(!hir.contains("jsx-runtime"), "no React fallback: {hir}");
 }

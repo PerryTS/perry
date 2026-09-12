@@ -68,11 +68,13 @@ perry examples/counter.ts -o counter
 
 ### JSX
 
-Set `"jsx": "solid"` inside your application's `perry` configuration alongside
-the Solid client aliases above. The equivalent TOML setting is `[perry]` with
-`jsx = "solid"`. An omitted setting, or `"default"`, keeps Perry's existing JSX
-behavior. Perry performs the transform in the compiler; Babel is only used as
-an independent test oracle for this package.
+Set `"jsx": "solid"` inside your application's `perry` configuration, or set
+`"jsxImportSource": "perry-solid"` in the nearest `tsconfig.json` for automatic
+detection. The equivalent TOML setting is `[perry]` with `jsx = "solid"`.
+Perry selects Solid's client builds for this graph; the explicit client aliases
+above remain supported. `"jsx": "default"` disables automatic Solid detection.
+Perry performs the transform in the compiler; Babel is only used as an
+independent test oracle for this package.
 
 ```tsx
 import { createSignal } from "solid-js";

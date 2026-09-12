@@ -201,8 +201,12 @@ pub(super) fn rerun_collect_with_class_field_types(
             changed |= entry.extend_from(&parent_accessors);
         }
     }
-    if field_map.is_empty() && accessor_map.is_empty() {
+    if field_map.is_empty() && accessor_map.is_empty() && !ctx.solid_client_recollect {
         return Ok(());
+    }
+    if ctx.solid_client_recollect {
+        ctx.resolve_cache.clear();
+        ctx.solid_client_recollect = false;
     }
     ctx.cross_module_class_field_types = field_map;
     ctx.cross_module_class_accessors = accessor_map;

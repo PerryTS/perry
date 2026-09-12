@@ -1,0 +1,10 @@
+import { readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
+const require = createRequire(import.meta.url);
+const plugin = require.resolve("@opentui/solid/bun-plugin");
+const { transformSolidSource } = await import(pathToFileURL(join(dirname(plugin), "solid-transform.js")));
+const filename = process.argv[2] || "main.tsx";
+const moduleName = filename === "main.tsx" ? "./host.ts" : "@opentui/solid";
+writeFileSync(filename.replace(".tsx", ".oracle.ts"), await transformSolidSource(readFileSync(filename, "utf8"), { filename, moduleName }));

@@ -89,14 +89,6 @@ fn parse_boolean_switch(value: &str) -> Option<bool> {
     }
 }
 
-fn solid_jsx_mode(value: Option<&str>) -> Result<bool> {
-    match value {
-        Some("solid") => Ok(true),
-        Some("default") => Ok(false),
-        _ => anyhow::bail!("perry.jsx must be \"solid\" or \"default\""),
-    }
-}
-
 fn should_auto_grant_compile_allow(
     has_universal_route: bool,
     allow_was_explicit: bool,
@@ -175,7 +167,7 @@ pub(super) fn apply_pkg_and_toml_config(
         if let Ok(content) = fs::read_to_string(&pkg_json_path) {
             if let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&content) {
                 if let Some(mode) = pkg.get("perry").and_then(|perry| perry.get("jsx")) {
-                    ctx.solid_jsx = solid_jsx_mode(mode.as_str())?;
+                    ctx.solid_jsx = super::solid_config::JsxMode::parse(mode)?;
                 }
                 if let Some(aliases) = pkg
                     .get("perry")
@@ -790,7 +782,8 @@ pub(super) fn apply_pkg_and_toml_config(
         {
             if let Some(perry_tbl) = table.get("perry").and_then(|v| v.as_table()) {
                 if let Some(mode) = perry_tbl.get("jsx") {
-                    ctx.solid_jsx = solid_jsx_mode(mode.as_str())?;
+                    ctx.solid_jsx =
+                        super::solid_config::JsxMode::parse(&serde_json::to_value(mode)?)?;
                 }
                 if let Some(strict) = perry_tbl.get("strict").and_then(|v| v.as_bool()) {
                     ctx.strict_eval = strict;

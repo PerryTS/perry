@@ -5,9 +5,13 @@
 
 use std::collections::BTreeSet;
 
-use swc_common::{Spanned, DUMMY_SP};
+use swc_common::{Globals, Mark, Spanned, DUMMY_SP, GLOBALS};
 use swc_ecma_ast as ast;
 use swc_ecma_visit::{Visit, VisitMut, VisitMutWith, VisitWith};
+
+mod native;
+#[cfg(test)]
+mod tests;
 
 /// Expand JSX for an explicitly selected universal renderer. Returns `None`
 /// without cloning when the module contains no JSX.
@@ -39,13 +43,59 @@ pub fn lower_solid_jsx(module: &ast::Module, runtime: &str) -> Option<ast::Modul
         .map(|n| format!("__perry_solid_{n}_"))
         .find(|prefix| !names.names.iter().any(|name| name.starts_with(prefix)))
         .expect("finite source identifiers leave a free helper prefix");
+    let mut result = module.clone();
+    // Resolve lexical identities before classifying refs. A const/imported
+    // callback must never acquire an assignment fallback, and a mutable ref in
+    // a nested scope may shadow a callback with the same spelling.
+    let immutable = GLOBALS.set(&Globals::new(), || {
+        result.visit_mut_with(&mut swc_ecma_transforms_base::resolver(
+            Mark::new(),
+            Mark::new(),
+            true,
+        ));
+        struct Immutable(BTreeSet<ast::Id>);
+        impl Visit for Immutable {
+            fn visit_var_decl(&mut self, decl: &ast::VarDecl) {
+                if decl.kind == ast::VarDeclKind::Const {
+                    struct Bindings<'a>(&'a mut BTreeSet<ast::Id>);
+                    impl Visit for Bindings<'_> {
+                        fn visit_binding_ident(&mut self, ident: &ast::BindingIdent) {
+                            self.0.insert(ident.id.to_id());
+                        }
+                        fn visit_expr(&mut self, _: &ast::Expr) {}
+                    }
+                    for decl in &decl.decls {
+                        decl.name.visit_with(&mut Bindings(&mut self.0));
+                    }
+                }
+                decl.visit_children_with(self);
+            }
+            fn visit_import_decl(&mut self, import: &ast::ImportDecl) {
+                for specifier in &import.specifiers {
+                    self.0.insert(specifier.local().to_id());
+                }
+            }
+        }
+        let mut immutable = Immutable(BTreeSet::new());
+        result.visit_with(&mut immutable);
+        immutable.0
+    });
     let mut lowering = SolidJsx {
         prefix,
         next: 0,
         helpers: BTreeSet::new(),
+        immutable,
     };
-    let mut result = module.clone();
     result.visit_mut_with(&mut lowering);
+    // These resolver contexts belong to the temporary SWC Globals above. HIR
+    // resolves lexical names itself, so do not leak temporary hygiene IDs.
+    struct ClearContexts;
+    impl VisitMut for ClearContexts {
+        fn visit_mut_syntax_context(&mut self, context: &mut swc_common::SyntaxContext) {
+            *context = Default::default();
+        }
+    }
+    result.visit_mut_with(&mut ClearContexts);
     if lowering.helpers.is_empty() {
         return Some(result);
     }
@@ -83,6 +133,7 @@ struct SolidJsx {
     prefix: String,
     next: usize,
     helpers: BTreeSet<String>,
+    immutable: BTreeSet<ast::Id>,
 }
 
 fn ident(name: &str) -> ast::Ident {
@@ -98,6 +149,14 @@ fn string(value: &str) -> ast::Expr {
 }
 
 fn call(callee: ast::Expr, args: Vec<ast::Expr>) -> ast::Expr {
+    let callee = if matches!(callee, ast::Expr::Arrow(_) | ast::Expr::Fn(_)) {
+        ast::Expr::Paren(ast::ParenExpr {
+            span: DUMMY_SP,
+            expr: Box::new(callee),
+        })
+    } else {
+        callee
+    };
     ast::Expr::Call(ast::CallExpr {
         callee: ast::Callee::Expr(Box::new(callee)),
         args: args.into_iter().map(|expr| expr.into()).collect(),
@@ -191,11 +250,31 @@ fn array(elements: Vec<ast::Expr>) -> ast::Expr {
     })
 }
 
-fn is_static_value(expr: &ast::Expr) -> bool {
-    matches!(
-        expr,
-        ast::Expr::Lit(_) | ast::Expr::Arrow(_) | ast::Expr::Fn(_)
-    )
+fn is_dynamic(expr: &ast::Expr) -> bool {
+    struct Dynamic(bool);
+    impl Visit for Dynamic {
+        fn visit_expr(&mut self, expr: &ast::Expr) {
+            match expr {
+                // A render prop or handler is a value; its body runs later.
+                ast::Expr::Arrow(_) | ast::Expr::Fn(_) => {}
+                ast::Expr::Call(_)
+                | ast::Expr::Member(_)
+                | ast::Expr::OptChain(_)
+                | ast::Expr::TaggedTpl(_)
+                | ast::Expr::JSXElement(_)
+                | ast::Expr::JSXFragment(_) => self.0 = true,
+                ast::Expr::Bin(binary) if binary.op == ast::BinaryOp::In => self.0 = true,
+                _ => expr.visit_children_with(self),
+            }
+        }
+        fn visit_spread_element(&mut self, _: &ast::SpreadElement) {
+            self.0 = true;
+        }
+        fn visit_function(&mut self, _: &ast::Function) {}
+    }
+    let mut dynamic = Dynamic(false);
+    expr.visit_with(&mut dynamic);
+    dynamic.0
 }
 
 fn contains_jsx(expr: &ast::Expr) -> bool {
@@ -333,38 +412,55 @@ impl SolidJsx {
     }
 
     fn ref_value(&mut self, value: ast::Expr) -> ast::Expr {
-        let target = ast::AssignTarget::try_from(Box::new(value.clone())).ok();
+        let mut value = value;
+        loop {
+            value = match value {
+                ast::Expr::TsAs(expr) => *expr.expr,
+                ast::Expr::TsNonNull(expr) => *expr.expr,
+                ast::Expr::TsTypeAssertion(expr) => *expr.expr,
+                ast::Expr::Paren(expr) => *expr.expr,
+                _ => break,
+            };
+        }
+        let immutable =
+            matches!(&value, ast::Expr::Ident(id) if self.immutable.contains(&id.to_id()));
+        let target = if immutable {
+            None
+        } else {
+            ast::AssignTarget::try_from(Box::new(value.clone())).ok()
+        };
         let node = self.temporary();
         let current = self.temporary();
         let invoke = call(
             ast::Expr::Ident(current.clone()),
             vec![ast::Expr::Ident(node.clone())],
         );
-        let action = if let Some(target) = target {
+        let fallback = if let Some(target) = target {
             let assign = ast::Expr::Assign(ast::AssignExpr {
                 span: DUMMY_SP,
                 op: ast::AssignOp::Assign,
                 left: target,
                 right: Box::new(ast::Expr::Ident(node.clone())),
             });
-            ast::Expr::Cond(ast::CondExpr {
-                span: DUMMY_SP,
-                test: Box::new(ast::Expr::Bin(ast::BinExpr {
-                    span: DUMMY_SP,
-                    op: ast::BinaryOp::EqEqEq,
-                    left: Box::new(ast::Expr::Unary(ast::UnaryExpr {
-                        span: DUMMY_SP,
-                        op: ast::UnaryOp::TypeOf,
-                        arg: Box::new(ast::Expr::Ident(current.clone())),
-                    })),
-                    right: Box::new(string("function")),
-                })),
-                cons: Box::new(invoke),
-                alt: Box::new(assign),
-            })
+            assign
         } else {
-            invoke
+            ast::Expr::Ident(ident("undefined"))
         };
+        let action = ast::Expr::Cond(ast::CondExpr {
+            span: DUMMY_SP,
+            test: Box::new(ast::Expr::Bin(ast::BinExpr {
+                span: DUMMY_SP,
+                op: ast::BinaryOp::EqEqEq,
+                left: Box::new(ast::Expr::Unary(ast::UnaryExpr {
+                    span: DUMMY_SP,
+                    op: ast::UnaryOp::TypeOf,
+                    arg: Box::new(ast::Expr::Ident(current.clone())),
+                })),
+                right: Box::new(string("function")),
+            })),
+            cons: Box::new(invoke),
+            alt: Box::new(fallback),
+        });
         let callback = ast::Expr::Arrow(ast::ArrowExpr {
             body: Box::new(ast::BlockStmtOrExpr::BlockStmt(ast::BlockStmt {
                 stmts: vec![binding(current, value), statement(action)],
@@ -397,7 +493,7 @@ impl SolidJsx {
                     let value = *expr.clone();
                     Some(
                         if native
-                            && !is_static_value(&value)
+                            && is_dynamic(&value)
                             && !matches!(
                                 value,
                                 ast::Expr::JSXElement(_) | ast::Expr::JSXFragment(_)
@@ -423,6 +519,9 @@ impl SolidJsx {
 
     fn element(&mut self, element: &ast::JSXElement) -> ast::Expr {
         let (name, native) = self.element_name(&element.opening.name);
+        if native {
+            return self.native_element(element);
+        }
         let mut chunks = Vec::new();
         let mut props = Vec::new();
         let mut has_spread = false;
@@ -433,8 +532,9 @@ impl SolidJsx {
                     if !props.is_empty() {
                         chunks.push(object(std::mem::take(&mut props)));
                     }
+                    let dynamic = is_dynamic(&spread.expr);
                     let source = self.expression(*spread.expr.clone());
-                    chunks.push(arrow(source));
+                    chunks.push(if dynamic { arrow(source) } else { source });
                 }
                 ast::JSXAttrOrSpread::JSXAttr(attribute) => {
                     let key = match &attribute.name {
@@ -456,7 +556,7 @@ impl SolidJsx {
                     if key == "ref" {
                         value = self.ref_value(value);
                     }
-                    let getter = !is_static_value(&value);
+                    let getter = is_dynamic(&value);
                     props.push(property(&key, value, getter));
                 }
             }
@@ -472,7 +572,7 @@ impl SolidJsx {
             } else {
                 array(children)
             };
-            let getter = !native && !is_static_value(&children);
+            let getter = is_dynamic(&children) || matches!(children, ast::Expr::Array(_));
             props.push(property("children", children, getter));
         }
         if !props.is_empty() || chunks.is_empty() {
@@ -483,17 +583,7 @@ impl SolidJsx {
         } else {
             self.helper("mergeProps", chunks)
         };
-        if native {
-            let node = self.temporary();
-            let create = self.helper("createElement", vec![name]);
-            let spread = self.helper("spread", vec![ast::Expr::Ident(node.clone()), props]);
-            block_expr(
-                vec![binding(node.clone(), create), statement(spread)],
-                ast::Expr::Ident(node),
-            )
-        } else {
-            self.helper("createComponent", vec![name, props])
-        }
+        self.helper("createComponent", vec![name, props])
     }
 
     fn fragment(&mut self, fragment: &ast::JSXFragment) -> ast::Expr {
@@ -501,7 +591,17 @@ impl SolidJsx {
             fragment
                 .children
                 .iter()
-                .filter_map(|child| self.child(child, true))
+                .filter_map(|child| {
+                    let value = self.child(child, true)?;
+                    // Dynamic fragment entries are memo accessors, while literal
+                    // function children remain values (e.g. a render prop).
+                    let dynamic = match child {
+                        ast::JSXElementChild::JSXExprContainer(c) => matches!(&c.expr, ast::JSXExpr::Expr(e) if is_dynamic(e) && !matches!(**e, ast::Expr::JSXElement(_) | ast::Expr::JSXFragment(_))),
+                        ast::JSXElementChild::JSXSpreadChild(_) => true,
+                        _ => false,
+                    };
+                    Some(if dynamic { self.helper("memo", vec![value]) } else { value })
+                })
                 .collect(),
         )
     }

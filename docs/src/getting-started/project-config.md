@@ -37,6 +37,30 @@ The generated `package.json` carries the npm-interop layer. The `perry.compilePa
 
 The `perry` field in `package.json` controls compiler behavior:
 
+#### `jsx`
+
+Perry compiles Solid universal JSX ahead of time when the source file's nearest
+`tsconfig.json` sets `compilerOptions.jsxImportSource` to `@opentui/solid` or
+`perry-solid`. JSONC comments and inherited settings through `extends` are
+supported. Each package can have its own JSX configuration.
+
+To explicitly select another Solid universal renderer, set its module name:
+
+```json
+{ "perry": { "jsx": { "runtime": "@opentui/solid" } } }
+```
+
+The existing `"jsx": "solid"` selects `perry-solid`; `"jsx": "default"`
+disables automatic Solid detection. A host setting overrides per-file
+detection. The equivalent TOML setting is `[perry]` with
+`jsx = { runtime = "@opentui/solid" }`; TOML overrides the host's package setting.
+React/Preact import sources keep their existing JSX behavior.
+
+In a Solid universal graph, `solid-js` and `solid-js/store` use their reactive
+client builds, including imports from dependencies. With `--platform bun`,
+`@opentui/solid` selects `index.bun.js`; otherwise it selects `index.js`.
+JSX compilation itself does not require Babel or a runtime loader plugin.
+
 #### `compilePackages`
 
 List npm packages to compile natively instead of routing through the JavaScript runtime:

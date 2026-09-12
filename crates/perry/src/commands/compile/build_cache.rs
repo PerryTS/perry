@@ -1078,10 +1078,13 @@ fn config_inputs_for(
         }
     }
     for source in sources {
+        out.extend(super::resolve::tsconfig_paths::jsx_config(Path::new(&source.path)).1);
         let mut dir = PathBuf::from(&source.path);
         dir.pop();
         loop {
-            for name in ["package.json", "perry.json", "perry.toml"] {
+            // Union of both sides: each change here is a cache KEY, so
+            // dropping either entry leaves a stale build when that file moves.
+            for name in ["package.json", "perry.json", "perry.toml", "tsconfig.json"] {
                 let candidate = dir.join(name);
                 if candidate.exists() {
                     out.insert(candidate);

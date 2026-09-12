@@ -1,0 +1,12 @@
+{
+  "name": "perry-release-fixture-opentui-solid",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@opentui/solid": "0.4.5",
+    "solid-js": "1.9.12"
+  },
+  "perry": {
+    "packageAliases": { "@opentui/solid": "./host.ts" }
+  }
+}

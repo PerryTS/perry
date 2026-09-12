@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use crate::OutputFormat;
 
-use super::resolve::resolve_import_with_bunfs;
+use super::resolve::resolve_import_with_context;
 use super::CompilationContext;
 
 /// Issue #753: reachability classification for eager vs deferred init.
@@ -79,14 +79,7 @@ pub(super) fn classify_eager_modules(ctx: &mut CompilationContext, entry_path: &
                 }
             }
             for src in reexport_sources {
-                if let Some((resolved_path, _)) = resolve_import_with_bunfs(
-                    &src,
-                    path,
-                    &ctx.project_root,
-                    &ctx.compile_packages,
-                    &ctx.compile_package_dirs,
-                    ctx.bunfs_root.as_deref(),
-                ) {
+                if let Some((resolved_path, _)) = resolve_import_with_context(&src, path, ctx) {
                     if ctx.native_modules.contains_key(&resolved_path)
                         && !eager.contains(&resolved_path)
                     {
@@ -183,14 +176,7 @@ pub(super) fn topo_sort_non_entry_modules(
                 perry_hir::Export::Named { .. } => None,
             };
             if let Some(src) = source {
-                if let Some((resolved_path, _)) = resolve_import_with_bunfs(
-                    src,
-                    path,
-                    &ctx.project_root,
-                    &ctx.compile_packages,
-                    &ctx.compile_package_dirs,
-                    ctx.bunfs_root.as_deref(),
-                ) {
+                if let Some((resolved_path, _)) = resolve_import_with_context(src, path, ctx) {
                     if resolved_path != *entry_path
                         && ctx.native_modules.contains_key(&resolved_path)
                     {
