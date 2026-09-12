@@ -1483,6 +1483,7 @@ mod tests {
             vec![Stmt::Return(Some(Expr::DynamicImport {
                 paths: vec!["./alpha".to_string()],
                 arg: Box::new(Expr::String("./alpha".to_string())),
+                options: None,
                 byte_offset: 0,
                 deferred_error: None,
                 synchronous: true,

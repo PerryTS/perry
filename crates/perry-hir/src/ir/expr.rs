@@ -2722,6 +2722,8 @@ pub enum Expr {
     DynamicImport {
         paths: Vec<String>,
         arg: Box<Expr>,
+        /// Runtime import options (`{ with: { type: "toml" } }`, etc.).
+        options: Option<Box<Expr>>,
         /// Byte offset (`span.lo.0`) of the `import(...)` call in its module's
         /// source, captured at lowering time. Used by the driver to resolve a
         /// `file:line` for the #5230 deferred-site notice (HIR `Expr` carries no

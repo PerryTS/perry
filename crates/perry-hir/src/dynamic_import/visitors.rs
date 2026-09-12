@@ -422,8 +422,11 @@ fn visit_expr_for_dyn_imports<F: FnMut(&mut Expr)>(expr: &mut Expr, f: &mut F) {
         f(expr);
         // After f mutates the node, still descend into the (possibly
         // unchanged) `arg` so nested dynamic imports are visited.
-        if let Expr::DynamicImport { arg, .. } = expr {
+        if let Expr::DynamicImport { arg, options, .. } = expr {
             visit_expr_for_dyn_imports(arg, f);
+            if let Some(options) = options {
+                visit_expr_for_dyn_imports(options, f);
+            }
         }
         return;
     }
@@ -438,11 +441,14 @@ fn visit_expr_for_dyn_imports<F: FnMut(&mut Expr)>(expr: &mut Expr, f: &mut F) {
 }
 
 fn visit_expr_for_dyn_imports_ref<F: FnMut(&Expr)>(expr: &Expr, f: &mut F) {
-    if let Expr::DynamicImport { arg, .. } = expr {
+    if let Expr::DynamicImport { arg, options, .. } = expr {
         f(expr);
         // Mirror the `_mut` sibling: after reporting the node, still descend
         // into the `arg` so nested dynamic imports are visited.
         visit_expr_for_dyn_imports_ref(arg, f);
+        if let Some(options) = options {
+            visit_expr_for_dyn_imports_ref(options, f);
+        }
         return;
     }
     // Closure bodies — descend manually (the walker intentionally doesn't).

@@ -1203,6 +1203,22 @@ fn bun_usage_enables_cli_utility_runtime_pack() {
 }
 
 #[test]
+fn dynamic_import_options_retain_toml_and_change_cache_key() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let without = CompilationContext::new(dir.path().to_path_buf());
+    let mut with = CompilationContext::new(dir.path().to_path_buf());
+    with.uses_dynamic_import_options = true;
+    let cross = auto_optimized_cross_features(&with, &std::collections::BTreeSet::new(), &[]);
+    assert!(cross
+        .iter()
+        .any(|feature| feature == "perry-runtime/bun-cli-utils"));
+    assert_ne!(
+        auto_optimized_cache_key("", true, false, None, &with, &[]),
+        auto_optimized_cache_key("", true, false, None, &without, &[]),
+    );
+}
+
+#[test]
 fn data_url_dynamic_import_enables_dyn_eval_and_changes_cache_key() {
     let dir = tempfile::tempdir().expect("tempdir");
     let empty_features = std::collections::BTreeSet::new();

@@ -131,7 +131,7 @@ pub(crate) fn auto_optimized_cache_key(
     tokio_bindings.sort_unstable();
     tokio_bindings.dedup();
     format!(
-        "{}|{}|{}|wasm={}|napi={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|intlns={}|gns={}{}{}{}{}{}{}{}{}{}|diag={}|dgram={}|http2={}|nodetest={}|dyneval={}|tokio={}|sizeopt={}|anchors={}|v={}",
+        "{}|{}|{}|wasm={}|napi={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|intlns={}|gns={}{}{}{}{}{}{}{}{}{}|diag={}|dgram={}|http2={}|nodetest={}|dyneval={}|importopts={}|tokio={}|sizeopt={}|anchors={}|v={}",
         feature_arg,
         panic_abort_safe,
         target_str,
@@ -169,6 +169,7 @@ pub(crate) fn auto_optimized_cache_key(
         perry_hir::has_deferred_dynamic_code_sites()
             || ctx.native_module_imports.contains("vm")
             || ctx.uses_data_url_dynamic_import,
+        ctx.uses_dynamic_import_options,
         tokio_bindings.join(","),
         format!(
             "{}{}{}",
@@ -221,7 +222,10 @@ pub(crate) fn auto_optimized_cross_features(
     if !ctx.native_addons.is_empty() {
         cross_features.push("perry-runtime/node-api-host".to_string());
     }
-    if ctx.bun_platform || ctx.native_module_imports.contains("bun") {
+    if ctx.bun_platform
+        || ctx.native_module_imports.contains("bun")
+        || ctx.uses_dynamic_import_options
+    {
         cross_features.push("perry-runtime/bun-cli-utils".to_string());
     }
     // Binary-size feature gating (kept in sync with the inline list on `main`):
