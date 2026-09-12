@@ -53,7 +53,7 @@ pub use registry::{
 };
 
 pub(crate) use dispatch::{
-    bound_method_source_func_ptr, coerce_call_this, rebind_explicit_this,
+    bound_function_lazy_name, bound_method_source_func_ptr, coerce_call_this, rebind_explicit_this,
     reify_function_method_value, reset_throw_not_callable_counter,
 };
 pub use dispatch::{

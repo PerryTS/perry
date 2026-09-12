@@ -435,20 +435,79 @@ pub(crate) fn rebind_explicit_this(target: f64, this_arg: f64) -> f64 {
     f64::from_bits(crate::closure::clone_closure_rebind_this(bits, this_arg))
 }
 
-/// Read a callable's own `name` *property* as a Rust `String`, if present and a
-/// String value. Covers names installed by `Object.defineProperty(fn, "name",
-/// …)` and the `"bound …"` name a prior `.bind()` stores, neither of which is
-/// visible through the declared-name func-ptr registry. Returns `None` when no
-/// such property exists or it isn't a String.
-unsafe fn read_function_name_property(closure_ptr: usize) -> Option<String> {
+/// Fallback target name for [`bound_function_lazy_name`]: the target-name
+/// snapshot captured at bind time (capture slot 3) was not a String (no
+/// override, or an explicit non-String `Object.defineProperty` value — both
+/// collapse to the same declared-name fallback, matching the prior eager
+/// behavior), so fall back to the target's *declared* name — the func-ptr
+/// registry for a closure, or the class registry for a class ref. Both
+/// registries are immutable for the life of the program, so resolving them
+/// lazily here instead of at bind time is observationally identical.
+unsafe fn bound_target_declared_name(target_value: f64) -> String {
     use crate::value::JSValue;
-    let name_val = crate::closure::closure_get_dynamic_prop(closure_ptr, "name");
-    let name_jv = JSValue::from_bits(name_val.to_bits());
-    if !name_jv.is_any_string() {
-        return None;
+    let target_jv = JSValue::from_bits(target_value.to_bits());
+    if target_jv.is_pointer() {
+        let target_closure = target_jv.as_pointer::<ClosureHeader>();
+        if !target_closure.is_null() && (*target_closure).type_tag == CLOSURE_MAGIC {
+            return crate::builtins::function_name_for_ptr((*target_closure).func_ptr as usize)
+                .unwrap_or_default();
+        }
+        return String::new();
     }
-    let hdr = crate::builtins::js_string_coerce(name_val);
-    crate::object::has_own_helpers::str_from_string_header(hdr).map(str::to_owned)
+    let target_class_id = crate::object::class_ref_id(target_value).or_else(|| {
+        ((target_value.to_bits() >> 48) == 0x7FFE
+            && crate::object::class_prototype_ref_id(target_value).is_none())
+        .then_some((target_value.to_bits() & 0xFFFF_FFFF) as u32)
+    });
+    target_class_id
+        .and_then(crate::object::class_name_for_id)
+        .unwrap_or_default()
+}
+
+/// Lazily synthesize and cache a bound function's `.name`. `ptr` must be a
+/// live `BOUND_FUNCTION_FUNC_PTR` closure with no `"name"` entry in its own
+/// dynamic-prop table yet (the caller — [`closure_get_dynamic_prop`],
+/// `Object.getOwnPropertyDescriptor`, and the console-formatting path — all
+/// check that first). Refs #10084: `js_function_bind` no longer builds
+/// `"bound " + targetName` or writes it to the dynamic-prop table on every
+/// call; that work happens here, once, on first actual `.name` read, and the
+/// result is cached via `closure_set_dynamic_prop` so repeat reads are O(1).
+///
+/// Capture slot 3 holds the raw `Get(Target, "name")` value snapshotted at
+/// bind time (a String value, or a non-String sentinel — see
+/// `bound_target_declared_name`); capture slot 0 holds the original bind
+/// target, used for the declared-name fallback and, transitively, for a
+/// chained `f.bind().bind()` (reading slot 3 of an inner bound closure
+/// recurses into this same function through `closure_get_dynamic_prop`).
+///
+/// GC safety: `ptr`'s address must not be trusted across the allocating
+/// `js_string_coerce`/`js_string_from_bytes` calls below, so it is rooted and
+/// re-derived afterward before the final cache write (mirrors
+/// `js_object_get_own_property_descriptor`'s closure arm, #6943).
+pub(crate) unsafe fn bound_function_lazy_name(ptr: usize) -> f64 {
+    use crate::value::JSValue;
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let ptr_handle = scope.root_raw_mut_ptr(ptr as *mut u8);
+    let (name_value, ptr_raw) = ptr_handle.across_mut::<u8, _>(|| {
+        let closure = ptr as *const ClosureHeader;
+        let name_hint = js_closure_get_capture_f64(closure, 3);
+        let target_name = if JSValue::from_bits(name_hint.to_bits()).is_any_string() {
+            let hdr = crate::builtins::js_string_coerce(name_hint);
+            crate::object::has_own_helpers::str_from_string_header(hdr)
+                .map(str::to_owned)
+                .unwrap_or_default()
+        } else {
+            bound_target_declared_name(js_closure_get_capture_f64(closure, 0))
+        };
+        let bound_name = format!("bound {target_name}");
+        let name_ptr =
+            crate::string::js_string_from_bytes(bound_name.as_ptr(), bound_name.len() as u32);
+        f64::from_bits(JSValue::string_ptr(name_ptr).bits())
+    });
+    let ptr = ptr_raw as usize;
+    crate::closure::closure_set_dynamic_prop(ptr, "name", name_value);
+    name_value
 }
 
 /// `Function.prototype.bind(thisArg, ...boundArgs)` — create a distinct bound
@@ -457,8 +516,18 @@ unsafe fn read_function_name_property(closure_ptr: usize) -> Option<String> {
 /// the BOUND_FUNCTION_FUNC_PTR sentinel; `js_closure_callN` /
 /// `js_native_call_value` route it through `dispatch_bound_function`.
 ///
-/// `.name` is set to `"bound " + target.name` and `.length` to
-/// `max(0, target.length - boundArgs.length)`, matching Node. Refs #2840.
+/// `.name` reads as `"bound " + target.name` and `.length` as
+/// `max(0, target.length - boundArgs.length)`, matching Node — but neither is
+/// built eagerly (#10084). `.length`'s numeric value is cheap to compute
+/// (no string work) and is stored eagerly as before; `.name`'s `"bound "`
+/// string and the `set_builtin_property_attrs` calls a prior version made
+/// unconditionally for both are gone from this function entirely — absent a
+/// dynamic-prop table entry, a closure's `name`/`length` already default to
+/// `{writable:false, enumerable:false, configurable:true}` everywhere they're
+/// observed (`closure_dynamic_enumerable_props`,
+/// `js_object_get_own_property_descriptor`, `closure_set_field_by_name`), so
+/// those calls were redundant. `.name`'s string is built lazily by
+/// `bound_function_lazy_name`, on first actual read. Refs #2840.
 #[no_mangle]
 pub unsafe extern "C" fn js_function_bind(
     target_value: f64,
@@ -485,28 +554,67 @@ pub unsafe extern "C" fn js_function_bind(
             && crate::object::class_prototype_ref_id(target_value).is_none())
         .then_some((target_value.to_bits() & 0xFFFF_FFFF) as u32)
     });
-    let target_closure = if target_jv.is_pointer() {
+    let target_is_closure = if target_jv.is_pointer() {
         let ptr = target_jv.as_pointer::<ClosureHeader>();
         if ptr.is_null() || (*ptr).type_tag != CLOSURE_MAGIC {
             // Preserve the existing conservative pass-through for callable
             // native handles that do not use the closure representation.
             return target_value;
         }
-        Some(ptr)
+        true
     } else if target_class_id.is_some() {
         // ClassRefs are callable/constructable INT32-tagged values rather
         // than heap closures. They still need a real BoundFunction wrapper
         // so `new C.bind(_, ...args)()` prepends its captured arguments.
-        None
+        false
     } else {
         return target_value;
     };
 
+    // Root the bind target across every allocating call below (`this`
+    // boxing, `Get(Target, "name")` — which may run a user getter — the
+    // partial-args array, and the bound closure itself) so none of them can
+    // leave a stale address in the bound closure's own capture slots after a
+    // copying minor.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target_h = scope.root_nanbox_f64(target_value);
+
     let bound_this = if args_len >= 1 && !args_ptr.is_null() {
-        coerce_call_this(target_value, *args_ptr)
+        let arg0 = *args_ptr;
+        target_h
+            .across_nanbox(|| coerce_call_this(target_h.get_nanbox_f64(), arg0))
+            .0
     } else {
         f64::from_bits(crate::value::TAG_UNDEFINED)
     };
+    let this_h = scope.root_nanbox_f64(bound_this);
+
+    // Spec step 12-13: `Get(Target, "name")` must run now, synchronously — a
+    // target whose `name` getter throws must fail `bind()` itself (Test262
+    // bind/instance-name-error.js), not a later `.name` read on the bound
+    // function. A class target has no analogous accessor path, so
+    // TAG_UNDEFINED (the "no override" sentinel `bound_function_lazy_name`
+    // recognizes via `bound_target_declared_name`) is captured directly. This
+    // is the ONLY work `.name` does at bind time now — see
+    // `bound_function_lazy_name` for the deferred "bound " + name build.
+    let name_hint = if target_is_closure {
+        target_h
+            .across_nanbox(|| {
+                let tclosure =
+                    JSValue::from_bits(target_h.get_nanbox_f64().to_bits()).as_pointer::<u8>();
+                crate::closure::closure_get_dynamic_prop(tclosure as usize, "name")
+            })
+            .0
+    } else {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    };
+    // `name_hint` may itself be a heap string pointer (a real `Get(Target,
+    // "name")` result) — root it too, or it would go stale across the
+    // partial-args array / bound-closure allocations below, and we'd write a
+    // dangling capture slot 3 (exactly the "lazily-derived name retains a
+    // stale address" failure mode this fix must avoid).
+    let name_h = scope.root_nanbox_f64(name_hint);
+
     let bound_arg_count = args_len.saturating_sub(1);
 
     // Build the partial-args array (NaN-boxed values copied as-is).
@@ -520,17 +628,38 @@ pub unsafe extern "C" fn js_function_bind(
     } else {
         std::ptr::null_mut()
     };
+    let args_h = (!bound_args_arr.is_null()).then(|| scope.root_raw_mut_ptr(bound_args_arr));
 
-    // Allocate the bound closure with 3 capture slots.
-    let bound = crate::closure::js_closure_alloc(BOUND_FUNCTION_FUNC_PTR, 3);
+    // Allocate the bound closure with 4 capture slots: target, bound this,
+    // partial-args array, and the `.name` snapshot above.
+    let bound = crate::closure::js_closure_alloc(BOUND_FUNCTION_FUNC_PTR, 4);
+    let bound_h = scope.root_raw_mut_ptr(bound as *mut u8);
+    let bound = bound_h.get_raw_mut_ptr::<ClosureHeader>();
+    let target_value = target_h.get_nanbox_f64();
+    let bound_this = this_h.get_nanbox_f64();
+    let name_hint = name_h.get_nanbox_f64();
+    let bound_args_arr = args_h
+        .as_ref()
+        .map(|h| h.get_raw_mut_ptr::<crate::array::ArrayHeader>())
+        .unwrap_or(std::ptr::null_mut());
     js_closure_set_capture_f64(bound, 0, target_value);
     js_closure_set_capture_f64(bound, 1, bound_this);
     js_closure_set_capture_ptr(bound, 2, bound_args_arr as i64);
+    js_closure_set_capture_f64(bound, 3, name_hint);
+
+    // Re-derive the target closure pointer from the (possibly refreshed)
+    // `target_value` for the `.length` read below — `target_is_closure`'s
+    // classification doesn't change, but the address might have.
+    let target_closure = target_is_closure
+        .then(|| JSValue::from_bits(target_value.to_bits()).as_pointer::<ClosureHeader>());
 
     // Spec `.length` = max(0, ToIntegerOrInfinity(Get(target, "length")) -
     // boundArgs.length). An `Object.defineProperty(fn, "length", {value})`
     // override (own dynamic prop) wins over the registered declared length,
-    // and the value may be NaN (→ 0), ±Infinity, or beyond int32.
+    // and the value may be NaN (→ 0), ±Infinity, or beyond int32. This read
+    // is an own-data-property lookup only (no accessor/getter support), so
+    // unlike `.name` above it cannot run arbitrary code and needs no
+    // rooting of its own.
     let target_len_f = if let Some(target_closure) = target_closure {
         match crate::closure::closure_get_own_dynamic_prop(target_closure as usize, "length") {
             Some(v) => {
@@ -568,42 +697,6 @@ pub unsafe extern "C" fn js_function_bind(
             f64::from_bits(JSValue::number(bound_len).bits()),
         );
     }
-
-    // Spec `.name` = "bound " + targetName, where targetName is `Get(Target,
-    // "name")` (the empty string when that is not a String). Read the target's
-    // `name` *property* first — it reflects an `Object.defineProperty(fn,
-    // "name", …)` override and a previous `.bind()`'s `"bound …"` name (so
-    // `f.bind().bind().name` chains to `"bound bound …"`). Fall back to the
-    // declared name from the func-ptr registry for plain named functions, which
-    // don't materialize a `name` data property.
-    let target_name = if let Some(target_closure) = target_closure {
-        read_function_name_property(target_closure as usize)
-            .or_else(|| crate::builtins::function_name_for_ptr((*target_closure).func_ptr as usize))
-            .unwrap_or_default()
-    } else {
-        target_class_id
-            .and_then(crate::object::class_name_for_id)
-            .unwrap_or_default()
-    };
-    let bound_name = format!("bound {target_name}");
-    let name_ptr =
-        crate::string::js_string_from_bytes(bound_name.as_ptr(), bound_name.len() as u32);
-    let name_value = f64::from_bits(JSValue::string_ptr(name_ptr).bits());
-    crate::closure::closure_set_dynamic_prop(bound as usize, "name", name_value);
-    // Spec attributes for a function's own `name`/`length`:
-    // { writable: false, enumerable: false, configurable: true }. Without
-    // these the dynamic-prop `name` slot defaults to enumerable and shows
-    // up in for-in / Object.keys (Test262 bind/instance-name*).
-    crate::object::set_builtin_property_attrs(
-        bound as usize,
-        "name".to_string(),
-        crate::object::PropertyAttrs::new(false, false, true),
-    );
-    crate::object::set_builtin_property_attrs(
-        bound as usize,
-        "length".to_string(),
-        crate::object::PropertyAttrs::new(false, false, true),
-    );
 
     crate::gc::runtime_write_barrier_root_heap_word(bound as u64);
     f64::from_bits(JSValue::pointer(bound as *mut u8).bits())
