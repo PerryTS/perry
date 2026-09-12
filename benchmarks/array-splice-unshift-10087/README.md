@@ -11,20 +11,20 @@ behind every reported median.
 
 Perry milliseconds per workload invocation:
 
-| workload | n | main `50e08e91dd` | candidate `51143d8dd8` |
+| workload | n | main `50e08e91dd` | candidate `ae51103810` |
 | --- | ---: | ---: | ---: |
 | middle remove | 100 | 0.011 | 0.009 |
-| | 1,000 | 0.568 | 0.110 |
-| | 10,000 | 50.089 | 2.477 |
-| | 100,000 | 4,943.798 | 177.435 |
+| | 1,000 | 0.568 | 0.111 |
+| | 10,000 | 50.089 | 2.513 |
+| | 100,000 | 4,943.798 | 173.967 |
 | middle insert | 100 | 0.012 | 0.010 |
-| | 1,000 | 0.559 | 0.109 |
-| | 10,000 | 50.121 | 2.387 |
-| | 100,000 | 4,924.992 | 167.874 |
+| | 1,000 | 0.559 | 0.107 |
+| | 10,000 | 50.121 | 2.365 |
+| | 100,000 | 4,924.992 | 165.801 |
 | unshift build | 100 | 0.010 | 0.005 |
 | | 1,000 | 0.552 | 0.072 |
-| | 10,000 | 50.885 | 3.522 |
-| | 100,000 | TIMEOUT | 314.457 |
+| | 10,000 | 50.885 | 3.568 |
+| | 100,000 | TIMEOUT | 316.252 |
 
 Every completed Perry checksum matches Node. All candidate processes complete
 100,000 operations. Over the shared 1,000-100,000 range, the log/log slopes
@@ -32,9 +32,9 @@ and Perry-minus-Node deltas are:
 
 | workload | Node slope | Perry slope | delta |
 | --- | ---: | ---: | ---: |
-| middle remove | 1.900 | 1.604 | -0.296 |
-| middle insert | 1.835 | 1.593 | -0.242 |
-| unshift build | 1.877 | 1.821 | -0.056 |
+| middle remove | 1.929 | 1.597 | -0.332 |
+| middle insert | 1.836 | 1.595 | -0.240 |
+| unshift build | 1.878 | 1.821 | -0.057 |
 
 ## Mechanism and bounded work
 
@@ -45,7 +45,8 @@ no longer reclassify every live slot afterward. The finisher instead:
 - retains exact pointer-free or all-pointer metadata when the insert permits;
 - drops position-specific mixed metadata to conservative UNKNOWN in constant
   time;
-- translates old-generation dirty-page coverage to the moved destination; and
+- translates old-generation dirty-page coverage to the moved destination;
+- keeps same-parent survivor translation page-only during incremental marking; and
 - always revokes the conservative element-shape proof.
 
 Runtime unit counters cover repeated unshift, middle insertion, and middle
