@@ -1525,51 +1525,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // -------- string.match(regex) --------
         Expr::StringMatch { string, regex } => {
-            let result = rooting::with_operands_rooted(ctx, &[string, regex], |ctx, vals| {
-                let (s_box, r_box) = (vals[0].clone(), vals[1].clone());
-                let blk = ctx.block();
-                // SSO-safe string-receiver unbox: `js_string_match` reads
-                // `byte_len` and the UTF-8 bytes from the StringHeader, which
-                // segfaults on SSO inline bits. SIGSEGV repro:
-                // `JSON.parse('"abc"').match(/b/)`. #214 SSO bug class.
-                let s_handle = unbox_str_handle(blk, &s_box);
-                let r_handle = unbox_to_i64(blk, &r_box);
-                Ok(blk.call(
-                    I64,
-                    "js_string_match",
-                    &[(I64, &s_handle), (I64, &r_handle)],
+            rooting::with_operands_rooted(ctx, &[string, regex], |ctx, vals| {
+                Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_string_match_js",
+                    &[(DOUBLE, &vals[0]), (DOUBLE, &vals[1])],
                 ))
-            })?;
-            // #4858: js_string_match returns null (0) on no-match. NaN-boxing
-            // 0 with POINTER_TAG yields a value that is neither `null` nor a
-            // valid heap pointer — `s.match(/x/g) === null` was false and
-            // consumers that deref the result (JSON.stringify, .map) crashed.
-            // Branchless null → TAG_NULL select, same as RegExpExec above.
-            let blk = ctx.block();
-            let is_null = blk.icmp_eq(I64, &result, "0");
-            let ptr_boxed = nanbox_pointer_inline(ctx.block(), &result);
-            let ptr_bits = ctx.block().bitcast_double_to_i64(&ptr_boxed);
-            let selected =
-                ctx.block()
-                    .select(I1, &is_null, I64, crate::nanbox::TAG_NULL_I64, &ptr_bits);
-            Ok(ctx.block().bitcast_i64_to_double(&selected))
+            })
         }
 
         // -------- string.matchAll(pattern) --------
-        // Returns a RegExp String Iterator object. SSO-safe receiver unbox via
-        // `unbox_str_handle` for the same reason as `StringMatch`; pass the raw
-        // pattern value so runtime can validate RegExp globals or create a
-        // global RegExp for string/non-RegExp patterns.
+        // A custom Symbol.matchAll may return any JavaScript value.
         Expr::StringMatchAll { string, regex } => {
             rooting::with_operands_rooted(ctx, &[string, regex], |ctx, vals| {
-                let blk = ctx.block();
-                let s_handle = unbox_str_handle(blk, &vals[0]);
-                let result = blk.call(
-                    I64,
-                    "js_string_match_all_value",
-                    &[(I64, &s_handle), (DOUBLE, &vals[1])],
-                );
-                Ok(nanbox_pointer_inline(blk, &result))
+                Ok(ctx.block().call(
+                    DOUBLE, "js_string_match_all_js", &[(DOUBLE, &vals[0]), (DOUBLE, &vals[1])],
+                ))
             })
         }
 

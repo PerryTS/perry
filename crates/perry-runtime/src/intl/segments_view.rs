@@ -387,19 +387,43 @@ pub extern "C" fn js_segments_view_segment(cursor: f64) -> f64 {
     let start = unsafe { fields.number(F_BYTE_START) };
     let end = unsafe { fields.number(F_BYTE_END) };
     bump(&MATERIALISE_SEGMENT);
-    // The allocation happens INSIDE the borrow, so the borrow must not outlive
-    // it: take the bytes out first, then allocate from a copy on the stack path
-    // `js_string_from_bytes` performs. Nothing derived from the input survives
-    // this call.
-    let made = with_input(fields, |text| {
-        let seg = &text[start..end];
-        crate::string::js_string_from_bytes(seg.as_ptr(), seg.len() as u32)
-    });
-    match made {
-        Some(ptr) if !ptr.is_null() => {
-            f64::from_bits(JSValue::string_ptr(ptr as *mut StringHeader).bits())
+    #[cfg(feature = "regex-engine")]
+    {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let cursor = scope.root_nanbox_f64(cursor);
+        let c = cursor_ptr(cursor.get_nanbox_f64()).unwrap();
+        let units = num_field(c, F_UTF16_LEN);
+        let input = scope.root_nanbox_f64(f64::from_bits(
+            crate::object::js_object_get_field(c, F_INPUT).bits(),
+        ));
+        let input = JSValue::from_bits(input.get_nanbox_f64().to_bits());
+        if !input.is_string() {
+            return undef;
         }
-        _ => undef,
+        let result = crate::regex::perex_api::finish(crate::regex::perex_api::copy_window(
+            input.as_string_ptr(),
+            start,
+            end,
+            units,
+        ));
+        crate::value::js_nanbox_string(result as i64)
+    }
+    #[cfg(not(feature = "regex-engine"))]
+    {
+        // The allocation happens INSIDE the borrow, so the borrow must not outlive
+        // it: take the bytes out first, then allocate from a copy on the stack path
+        // `js_string_from_bytes` performs. Nothing derived from the input survives
+        // this call.
+        let made = with_input(fields, |text| {
+            let seg = &text[start..end];
+            crate::string::js_string_from_bytes(seg.as_ptr(), seg.len() as u32)
+        });
+        match made {
+            Some(ptr) if !ptr.is_null() => {
+                f64::from_bits(JSValue::string_ptr(ptr as *mut StringHeader).bits())
+            }
+            _ => undef,
+        }
     }
 }
 
@@ -419,48 +443,37 @@ pub extern "C" fn js_segments_view_segment(cursor: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_segments_view_regexp_test(cursor: f64, regex: f64) -> f64 {
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
-    let Some(c) = cursor_ptr(cursor) else {
+    let Some(_c) = cursor_ptr(cursor) else {
         return undef;
     };
-    let jv = JSValue::from_bits(regex.to_bits());
-    if !jv.is_pointer() {
-        bump(&REGEXP_TEST_DECLINED);
-        return undef;
-    }
-    let re = jv.as_pointer::<crate::regex::RegExpHeader>();
-    if !crate::regex::is_valid_regex_ptr(re) {
-        bump(&REGEXP_TEST_DECLINED);
-        return undef;
-    }
-    // `is RegExp` at the call site does not rule out a patched
-    // `RegExp.prototype.test`, so the runtime re-checks and declines.
-    //
-    // Both helpers below are `#[cfg(feature = "regex-engine")]`. This entry
-    // point is NOT gated with them: it is `#[no_mangle]`, so the symbol has to
-    // exist in every configuration or a binary that emits a call to it fails to
-    // link. Without the engine the fast path simply declines, which is the same
-    // contract every other decline here has — the caller materialises and calls
-    // `RegExp.prototype.test` itself.
     #[cfg(not(feature = "regex-engine"))]
     {
-        let _ = (c, re);
+        let _ = (_c, regex);
         bump(&REGEXP_TEST_DECLINED);
-        return undef;
+        undef
     }
     #[cfg(feature = "regex-engine")]
     {
-        if !crate::object::regex_proto_thunks::regexp_prototype_test_is_canonical(regex) {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let cursor = scope.root_nanbox_f64(cursor);
+        let regex = scope.root_nanbox_f64(regex);
+        let c = cursor_ptr(cursor.get_nanbox_f64()).unwrap();
+        let start = num_field(c, F_BYTE_START);
+        let end = num_field(c, F_BYTE_END);
+        let input = scope.root_nanbox_f64(f64::from_bits(
+            crate::object::js_object_get_field(c, F_INPUT).bits(),
+        ));
+        let input_value = JSValue::from_bits(input.get_nanbox_f64().to_bits());
+        if !input_value.is_string() {
             bump(&REGEXP_TEST_DECLINED);
             return undef;
         }
-        // SAFETY: `cursor_ptr` proved the fixed cursor layout.
-        let fields = unsafe { CursorFields::from_cursor(c) };
-        let start = unsafe { fields.number(F_BYTE_START) };
-        let end = unsafe { fields.number(F_BYTE_END) };
-        let verdict = with_input(fields, |text| {
-            crate::regex::regexp_test_str_bounded(re, &text[start..end])
-        })
-        .flatten();
+        let verdict = crate::regex::perex_api::finish(crate::regex::perex_api::test_window(
+            regex.get_nanbox_f64(),
+            input_value.as_string_ptr(),
+            start,
+            end,
+        ));
         match verdict {
             Some(v) => {
                 bump(&REGEXP_TEST_ACCEPTED);
@@ -1035,5 +1048,92 @@ mod view_mode_tests {
             "^b$ MUST match the segment \"b\" — the haystack's bounds are the \
              segment's ends, so the anchors are segment-local"
         );
+    }
+
+    #[cfg(feature = "regex-engine")]
+    #[test]
+    fn regexp_view_lookbehind_and_output_are_segment_local() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let cursor =
+            scope.root_nanbox_f64(js_segments_view_open(grapheme_segmenter(), js_string("ab")));
+        assert_eq!(js_segments_view_next(cursor.get_nanbox_f64()), 1.0);
+        assert_eq!(js_segments_view_next(cursor.get_nanbox_f64()), 1.0);
+        for (pattern, expected) in [("(?<=a)b", false), ("(?<!a)b", true), ("^b$", true)] {
+            let local = crate::gc::RuntimeHandleScope::new();
+            let re = local.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                crate::regex::js_regexp_construct(js_string(pattern), js_string("")) as i64,
+            ));
+            let value = js_segments_view_regexp_test(cursor.get_nanbox_f64(), re.get_nanbox_f64());
+            assert!(!is_undefined(value));
+            assert_eq!(
+                crate::value::js_is_truthy(value) != 0,
+                expected,
+                "{pattern}"
+            );
+        }
+        let segment = scope.root_nanbox_f64(js_segments_view_segment(cursor.get_nanbox_f64()));
+        let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
+        assert_eq!(
+            unsafe {
+                crate::string::js_string_key_bytes(
+                    JSValue::from_bits(segment.get_nanbox_f64().to_bits()),
+                    &mut scratch,
+                )
+            }
+            .unwrap(),
+            b"b"
+        );
+    }
+
+    #[cfg(feature = "regex-engine")]
+    #[test]
+    fn regexp_view_declines_own_exec_and_observable_last_index() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let cursor =
+            scope.root_nanbox_f64(js_segments_view_open(grapheme_segmenter(), js_string("ab")));
+        js_segments_view_next(cursor.get_nanbox_f64());
+        let re = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::regex::js_regexp_construct(js_string("a"), js_string("")) as i64,
+        ));
+        assert!(!is_undefined(js_segments_view_regexp_test(
+            cursor.get_nanbox_f64(),
+            re.get_nanbox_f64()
+        )));
+        let state = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::object::js_object_alloc(0, 0) as i64,
+        ));
+        crate::regex::js_regexp_set_last_index(
+            crate::value::js_nanbox_get_pointer(re.get_nanbox_f64()) as *mut _,
+            state.get_nanbox_f64(),
+        );
+        assert!(is_undefined(js_segments_view_regexp_test(
+            cursor.get_nanbox_f64(),
+            re.get_nanbox_f64()
+        )));
+        crate::regex::js_regexp_set_last_index(
+            crate::value::js_nanbox_get_pointer(re.get_nanbox_f64()) as *mut _,
+            0.0,
+        );
+        let method = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::closure::js_closure_alloc(patched_test_thunk as *const u8, 0) as i64,
+        ));
+        crate::closure::js_register_closure_arity(patched_test_thunk as *const u8, 0);
+        for name in ["exec", "test"] {
+            let key = scope.root_nanbox_f64(js_string(name));
+            assert!(crate::proxy::create_data_property(
+                re.get_nanbox_f64(),
+                key.get_nanbox_f64(),
+                method.get_nanbox_f64()
+            ));
+            assert!(is_undefined(js_segments_view_regexp_test(
+                cursor.get_nanbox_f64(),
+                re.get_nanbox_f64()
+            )));
+            assert_eq!(
+                crate::proxy::js_reflect_delete(re.get_nanbox_f64(), key.get_nanbox_f64())
+                    .to_bits(),
+                crate::value::TAG_TRUE
+            );
+        }
     }
 }

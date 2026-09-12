@@ -55,12 +55,24 @@ pub extern "C" fn js_reflect_get(target: f64, key: f64, receiver: f64) -> f64 {
                 // Accessor with no getter -> undefined.
                 return f64::from_bits(TAG_UNDEFINED);
             }
-            let rebound = crate::closure::clone_closure_rebind_this(getter_bits, recv);
+            let getter = scope.root_nanbox_f64(f64::from_bits(getter_bits));
+            let recv = if receiver_handle.get_nanbox_f64().to_bits() == TAG_UNDEFINED {
+                target_handle.get_nanbox_f64()
+            } else {
+                receiver_handle.get_nanbox_f64()
+            };
+            let rebound =
+                crate::closure::clone_closure_rebind_this(getter.get_nanbox_f64().to_bits(), recv);
             let closure = closure_from(f64::from_bits(rebound));
             if !closure.is_null() {
                 // Also set IMPLICIT_THIS for free-function getters that read
                 // `this` from the implicit-this fallback rather than a slot.
                 let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+                let recv = if receiver_handle.get_nanbox_f64().to_bits() == TAG_UNDEFINED {
+                    target_handle.get_nanbox_f64()
+                } else {
+                    receiver_handle.get_nanbox_f64()
+                };
                 let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(recv));
                 let result = js_closure_call0(closure);
                 crate::object::js_implicit_this_set(prev.get_nanbox_f64());
@@ -69,8 +81,16 @@ pub extern "C" fn js_reflect_get(target: f64, key: f64, receiver: f64) -> f64 {
         }
     }
     let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let recv = if receiver_handle.get_nanbox_f64().to_bits() == TAG_UNDEFINED {
+        target_handle.get_nanbox_f64()
+    } else {
+        receiver_handle.get_nanbox_f64()
+    };
     let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(recv));
-    let result = target_get_property_key(target, property_key);
+    let result = target_get_property_key(
+        target_handle.get_nanbox_f64(),
+        property_key_handle.get_nanbox_f64(),
+    );
     crate::object::js_implicit_this_set(prev.get_nanbox_f64());
     result
 }

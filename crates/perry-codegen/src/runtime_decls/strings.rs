@@ -110,7 +110,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_string_to_upper_case_index_of", I32, &[I64, I64]);
     // Boxed separator + boxed limit; full ToUint32(limit)/ToString(separator)
     // coercion + undefined/RegExp handling (ECMA-262 §22.1.3.21).
-    module.declare_function("js_string_split_value", I64, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function("js_string_split_js", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_math_trunc", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_round", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_sign", DOUBLE, &[DOUBLE]);
@@ -766,6 +766,12 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     );
     module.declare_function("js_string_to_char_array", I64, &[I64]);
     module.declare_function("js_string_repeat", I64, &[I64, DOUBLE]);
+    module.declare_function("js_string_replace_js", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_string_replace_all_js",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_string_replace_string", I64, &[I64, I64, I64]);
     module.declare_function("js_string_replace_all_string", I64, &[I64, I64, I64]);
     module.declare_function("js_string_equals", I32, &[I64, I64]);
@@ -1731,9 +1737,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_path_matches_glob_value", I32, &[DOUBLE, DOUBLE]);
     module.declare_function("js_path_win32_matches_glob_value", I32, &[DOUBLE, DOUBLE]);
     module.declare_function("js_object_from_entries", DOUBLE, &[DOUBLE]);
-    module.declare_function("js_string_match", I64, &[I64, I64]);
-    module.declare_function("js_string_match_all", I64, &[I64, I64]);
-    module.declare_function("js_string_match_all_value", I64, &[I64, DOUBLE]);
+    module.declare_function("js_string_match_all_js", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_string_match_all_value", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("llvm.log.f64", DOUBLE, &[DOUBLE]);
     module.declare_function("llvm.log2.f64", DOUBLE, &[DOUBLE]);
     module.declare_function("llvm.log10.f64", DOUBLE, &[DOUBLE]);

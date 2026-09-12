@@ -85,39 +85,53 @@ mod posix_parse_tests {
 
 #[cfg(feature = "regex-engine")]
 mod glob_tests {
-    use super::super::glob_to_regex;
+    fn glob_to_regex(pattern: &str) -> String {
+        super::super::glob_to_regex(pattern, false)
+    }
 
     #[test]
     fn brace_alternation_expands_to_group() {
-        assert_eq!(glob_to_regex("*.{md,txt}"), "^[^/]*\\.(?:md|txt)$");
+        assert_eq!(
+            glob_to_regex("*.{md,txt}"),
+            "^[^/]*\\.(?:md|txt)(?![\\s\\S])"
+        );
         assert_eq!(
             glob_to_regex("src/{app,test}.ts"),
-            "^src/(?:app|test)\\.ts$"
+            "^src/(?:app|test)\\.ts(?![\\s\\S])"
         );
     }
 
     #[test]
     fn braces_without_alternation_stay_literal() {
-        assert_eq!(glob_to_regex("file.{md}"), "^file\\.\\{md\\}$");
+        assert_eq!(glob_to_regex("file.{md}"), "^file\\.\\{md\\}(?![\\s\\S])");
     }
 
     #[test]
     fn extglob_positive_groups_expand() {
-        assert_eq!(glob_to_regex("*.@(js|ts)"), "^[^/]*\\.(?:js|ts)$");
-        assert_eq!(glob_to_regex("*.+(js|ts)"), "^[^/]*\\.(?:js|ts)+$");
-        assert_eq!(glob_to_regex("*.?(js|ts)"), "^[^/]*\\.(?:js|ts)?$");
+        assert_eq!(
+            glob_to_regex("*.@(js|ts)"),
+            "^[^/]*\\.(?:js|ts)(?![\\s\\S])"
+        );
+        assert_eq!(
+            glob_to_regex("*.+(js|ts)"),
+            "^[^/]*\\.(?:js|ts)+(?![\\s\\S])"
+        );
+        assert_eq!(
+            glob_to_regex("*.?(js|ts)"),
+            "^[^/]*\\.(?:js|ts)?(?![\\s\\S])"
+        );
     }
 
     #[test]
     fn globstar_is_segment_aware() {
-        assert_eq!(glob_to_regex("a/**/c"), "^a/(?:[^/]+/)*c$");
-        assert_eq!(glob_to_regex("a/**"), "^a/.*$");
-        assert_eq!(glob_to_regex("a**b"), "^a[^/]*b$");
+        assert_eq!(glob_to_regex("a/**/c"), "^a/(?:[^/]+/)*c(?![\\s\\S])");
+        assert_eq!(glob_to_regex("a/**"), "^a/.*(?![\\s\\S])");
+        assert_eq!(glob_to_regex("a**b"), "^a[^/]*b(?![\\s\\S])");
     }
 
     #[test]
     fn pattern_backslashes_are_separators() {
-        assert_eq!(glob_to_regex("foo\\*"), "^foo/[^/]*$");
+        assert_eq!(glob_to_regex("foo\\*"), "^foo/[^/]*(?![\\s\\S])");
     }
 }
 

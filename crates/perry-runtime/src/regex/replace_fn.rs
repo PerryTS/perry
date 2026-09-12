@@ -673,33 +673,45 @@ pub extern "C" fn js_string_replace_all_regex_dyn(
     )
 }
 
-#[cfg(all(test, feature = "regex-engine"))]
-mod tests {
-    use super::*;
-
-    /// #4871: a RegExp arriving as an opaque NaN-boxed value (object-property
-    /// read) must dispatch to the regex path, not be ToString-coerced into a
-    /// literal "/foo/g" search.
-    #[test]
-    fn search_dyn_dispatches_runtime_regex_and_coerces_non_regex() {
-        let s = js_string_from_str("foofoo");
-        let pat = js_string_from_str("foo");
-        let flags = js_string_from_str("g");
-        let re = crate::regex::js_regexp_new(pat, flags);
-        let re_boxed = f64::from_bits(0x7FFD_0000_0000_0000u64 | (re as u64 & 0xFFFF_FFFF_FFFF));
-        let repl = js_nanbox_string(js_string_from_str("X") as i64);
-
-        // /foo/g: the g flag makes .replace substitute every match.
-        let out = js_string_replace_search_dyn(s, re_boxed, repl);
-        assert_eq!(string_as_str(out), "XX");
-
-        let out_all = js_string_replace_all_search_dyn(s, re_boxed, repl);
-        assert_eq!(string_as_str(out_all), "XX");
-
-        // Non-regex needle: ToString-coerce and search literally.
-        let needle_num = 12.0_f64;
-        let s2 = js_string_from_str("a12b");
-        let out2 = js_string_replace_search_dyn(s2, needle_num, repl);
-        assert_eq!(string_as_str(out2), "aXb");
+// Engine-disabled builds retain their literal-string implementation. The full
+// runtime exports these boxed entry points from the Perex operation module.
+#[no_mangle]
+pub extern "C" fn js_string_replace_js(receiver: f64, search: f64, replacement: f64) -> f64 {
+    boxed_without_engine(false, receiver, search, replacement)
+}
+#[no_mangle]
+pub extern "C" fn js_string_replace_all_js(receiver: f64, search: f64, replacement: f64) -> f64 {
+    boxed_without_engine(true, receiver, search, replacement)
+}
+fn boxed_without_engine(all: bool, receiver: f64, search: f64, replacement: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
+    let search = scope.root_nanbox_f64(search);
+    let replacement = scope.root_nanbox_f64(replacement);
+    if matches!(
+        receiver.get_nanbox_f64().to_bits(),
+        crate::value::TAG_NULL | crate::value::TAG_UNDEFINED
+    ) {
+        let message = b"String replacement requires a non-null receiver";
+        let message = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+        let error = crate::error::js_typeerror_new(message);
+        crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64));
     }
+    let input = scope.root_string_ptr(crate::value::js_jsvalue_to_string_coerce(
+        receiver.get_nanbox_f64(),
+    ));
+    let result = if all {
+        js_string_replace_all_search_dyn(
+            input.get_raw_const_ptr(),
+            search.get_nanbox_f64(),
+            replacement.get_nanbox_f64(),
+        )
+    } else {
+        js_string_replace_search_dyn(
+            input.get_raw_const_ptr(),
+            search.get_nanbox_f64(),
+            replacement.get_nanbox_f64(),
+        )
+    };
+    js_nanbox_string(result as i64)
 }

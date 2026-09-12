@@ -1082,106 +1082,10 @@ pub(crate) fn get_field_by_name_object_tail(
                 gc_type == crate::gc::GC_TYPE_MAP,
             );
         }
-        // RegExp has a dedicated GC kind. Route `.source`, `.flags`,
-        // `.lastIndex`, `.global`, `.ignoreCase`, `.multiline`, `.sticky`,
-        // `.unicode`, `.dotAll` to the regex header fields. The kind check keeps
-        // its native payload out of the generic ObjectHeader field path.
+        // Only lastIndex is an own header property. Other properties follow
+        // expandos and the actual prototype, including observable accessors.
         if gc_type == crate::gc::GC_TYPE_REGEXP {
-            if !key.is_null() {
-                let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                let key_len = (*key).byte_len as usize;
-                let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-                let re = obj as *const crate::regex::RegExpHeader;
-                // User expando / defineProperty'd own properties shadow the
-                // prototype fallthrough but NOT the spec header props above
-                // (source/flags/lastIndex/... are non-configurable).
-                if !matches!(
-                    key_bytes,
-                    b"source"
-                        | b"flags"
-                        | b"lastIndex"
-                        | b"global"
-                        | b"ignoreCase"
-                        | b"multiline"
-                        | b"sticky"
-                        | b"unicode"
-                        | b"dotAll"
-                        | b"hasIndices"
-                ) {
-                    if let Ok(name) = std::str::from_utf8(key_bytes) {
-                        let receiver =
-                            f64::from_bits(crate::value::JSValue::pointer(obj as *const u8).bits());
-                        if let Some(v) = super::super::exotic_expando::exotic_get_own_property(
-                            obj as usize,
-                            super::super::exotic_expando::ExoticKind::RegExp,
-                            name,
-                            receiver,
-                        ) {
-                            return JSValue::from_bits(v.to_bits());
-                        }
-                    }
-                }
-                match key_bytes {
-                    b"source" => {
-                        let s = crate::regex::js_regexp_get_source(re);
-                        return JSValue::from_bits(crate::js_nanbox_string(s as i64).to_bits());
-                    }
-                    b"flags" => {
-                        let s = crate::regex::js_regexp_get_flags(re);
-                        return JSValue::from_bits(crate::js_nanbox_string(s as i64).to_bits());
-                    }
-                    b"lastIndex" => {
-                        // lastIndex stores the raw NaN-boxed value (usually a
-                        // number, but any value is assignable).
-                        return JSValue::from_bits((*re).last_index);
-                    }
-                    b"global" => {
-                        return JSValue::bool((*re).global);
-                    }
-                    b"ignoreCase" => {
-                        return JSValue::bool((*re).case_insensitive);
-                    }
-                    b"multiline" => {
-                        return JSValue::bool((*re).multiline);
-                    }
-                    // #2828: route the remaining observable flags to the
-                    // header fields populated by `js_regexp_new` instead of
-                    // unconditionally returning `false`.
-                    b"sticky" => {
-                        return JSValue::bool((*re).sticky);
-                    }
-                    b"unicode" => {
-                        return JSValue::bool((*re).unicode);
-                    }
-                    b"dotAll" => {
-                        return JSValue::bool((*re).dot_all);
-                    }
-                    b"hasIndices" => {
-                        return JSValue::bool((*re).has_indices);
-                    }
-                    // Inherited `RegExp.prototype` members read off an instance
-                    // (`re.constructor`, `re.exec`, `re.toString`, a user-added
-                    // `RegExp.prototype.x`) resolve through the prototype chain.
-                    // The RegExpHeader isn't a plain object, so walk to
-                    // %RegExp.prototype% and return its own data field — this is
-                    // what makes `re.constructor === RegExp` and reflective
-                    // method reads work. `source`/`flags`/the flag accessors are
-                    // handled by the arms above and never reach here, so we never
-                    // return an un-invoked getter closure.
-                    _ => {
-                        let proto = crate::object::builtin_prototype_value("RegExp");
-                        let proto_ptr =
-                            crate::value::js_nanbox_get_pointer(proto) as *const ObjectHeader;
-                        if !proto_ptr.is_null() {
-                            if let Some(v) = own_data_field_by_name(proto_ptr, key) {
-                                return v;
-                            }
-                        }
-                        return JSValue::undefined();
-                    }
-                }
-            }
-            return JSValue::undefined();
+            return super::super::regex_proto_thunks::regexp_get_property(obj, key);
         }
         if gc_type != crate::gc::GC_TYPE_OBJECT {
             return JSValue::undefined();
@@ -1336,6 +1240,9 @@ pub(crate) fn get_field_by_name_object_tail(
             }
             if key_bytes == b"constructor"
                 && super::super::prototype_chain::object_static_prototype(obj as usize).is_none()
+                // An own accessor replaces the stored constructor data slot.
+                // Let the ordinary getter path below run before synthesis.
+                && get_accessor_descriptor(obj as usize, "constructor").is_none()
             {
                 if let Some(v) = super::class_object_props::instance_constructor_value(obj, key) {
                     return v;

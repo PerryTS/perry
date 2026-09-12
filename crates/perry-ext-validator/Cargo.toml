@@ -13,8 +13,7 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 perry-ffi.workspace = true
-validator = "0.21"
-regex.workspace = true
+perry-validation.workspace = true
 serde_json = { workspace = true }
 
 [dev-dependencies]

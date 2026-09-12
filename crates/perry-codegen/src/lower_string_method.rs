@@ -358,71 +358,37 @@ fn lower_string_method_dispatch(
             Ok(nanbox_string_inline(blk, &result_handle))
         }
         "split" => {
-            // Issue #567: accept the optional 2nd `limit: number` arg.
-            // `str.split()` with no args is valid: an `undefined` separator
-            // yields `[str]` (handled by `js_string_split_value`).
-            // A literal separator with no `limit` cannot invoke user code,
-            // cannot be a RegExp, and has the unbounded limit directly
-            // expressible by `js_string_split_n`. Avoid the boxed dispatch and
-            // its coercion/undefined/RegExp checks for this common hot path.
-            if args.len() == 1 && matches!(&args[0], Expr::String(_) | Expr::WtfString(_)) {
-                let delim_box = lower_expr(ctx, &args[0])?;
-                let recv_box = reread_recv(ctx, group, recv);
-                let blk = ctx.block();
-                let recv_handle = unbox_str_handle(blk, &recv_box);
-                let delim_handle = unbox_str_handle(blk, &delim_box);
-                let result_arr = blk.call(
-                    I64,
-                    "js_string_split_n",
-                    &[(I64, &recv_handle), (I64, &delim_handle), (I32, "-1")],
-                );
-                return Ok(crate::expr::nanbox_pointer_inline(blk, &result_arr));
-            }
-            // Route through `js_string_split_value`, which takes the BOXED
-            // separator and limit and performs the full spec coercion:
-            // `ToUint32(limit)` before `ToString(separator)`, an `undefined`
-            // separator → `[S]`, `limit === 0` → `[]`, and RegExp-separator
-            // delegation (detected via the regex-pointer registry). A raw
-            // `unbox_str_handle` of an object/undefined separator would
-            // bit-cast garbage; a raw `fptosi` of a boxed limit skips its
-            // `valueOf`.
-            let delim_box = if args.is_empty() {
-                None
-            } else {
-                Some(lower_expr(ctx, &args[0])?)
-            };
-            let limit_box = if args.len() >= 2 {
-                Some(lower_expr(ctx, &args[1])?)
-            } else {
-                None
-            };
+            let mut arguments = open_rooted_group(2);
+            let separator = args
+                .first()
+                .map(|arg| arguments.lower(ctx, arg, true))
+                .transpose()?;
+            let limit = args
+                .get(1)
+                .map(|arg| arguments.lower(ctx, arg, true))
+                .transpose()?;
             for extra in args.iter().skip(2) {
                 let _ = lower_expr(ctx, extra)?;
             }
-            let recv_box = reread_recv(ctx, group, recv);
-            let blk = ctx.block();
-            let recv_handle = unbox_str_handle(blk, &recv_box);
-            // No separator → pass `undefined`, which `js_string_split_value`
-            // resolves to `[S]`.
-            let delim_box = match delim_box {
-                Some(v) => v,
-                None => blk.bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64),
+            let undefined =
+                || crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let separator = match separator {
+                Some(i) => arguments.reread(ctx, i)?,
+                None => undefined(),
             };
-            let limit_box = match limit_box {
-                Some(v) => v,
-                None => blk.bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64),
+            let limit = match limit {
+                Some(i) => arguments.reread(ctx, i)?,
+                None => undefined(),
             };
-            let result_arr = blk.call(
-                I64,
-                "js_string_split_value",
-                &[
-                    (I64, &recv_handle),
-                    (DOUBLE, &delim_box),
-                    (DOUBLE, &limit_box),
-                ],
+            let receiver = reread_recv(ctx, group, recv);
+            let name = "js_string_split_js";
+            let result = ctx.block().call(
+                DOUBLE,
+                name,
+                &[(DOUBLE, &receiver), (DOUBLE, &separator), (DOUBLE, &limit)],
             );
-            // Returns an array pointer (ArrayHeader*) — NaN-box with POINTER_TAG.
-            Ok(crate::expr::nanbox_pointer_inline(blk, &result_arr))
+            arguments.release(ctx);
+            Ok(result)
         }
         // toLocaleLowerCase / toLocaleUpperCase — honor the `locales` arg:
         // validate BCP 47 tags (throwing RangeError on a bad tag) and apply
@@ -582,161 +548,45 @@ fn lower_string_method_dispatch(
             Ok(nanbox_string_inline(blk, &result))
         }
         "replace" | "replaceAll" => {
-            // First arg is either a string or a regex literal. The
-            // second arg can be a string OR a function (replacer
-            // callback). Pick the right runtime function based on
-            // both shapes.
-            let needle_is_regex = args.first().is_some_and(|needle| {
-                matches!(needle, Expr::RegExp { .. })
-                    || matches!(needle, Expr::LocalGet(id) if matches!(
-                        ctx.stable_local_type_proof(id),
-                        Some(HirType::Named(n)) if n == "RegExp"
-                    ))
-            });
-            // Detect a function replacer: a Closure literal, a FuncRef,
-            // or a LocalGet of a function-typed local.
-            let repl_is_function = args.get(1).is_some_and(|replacement| {
-                matches!(replacement, Expr::Closure { .. } | Expr::FuncRef(_))
-                    || matches!(replacement, Expr::LocalGet(id) if ctx.local_closure_func_ids.contains_key(id))
-            });
-            // Detect a string literal that includes $<name> back-refs
-            // so we route to the named-group-aware runtime variant.
-            let repl_has_named = matches!(args.get(1), Some(Expr::String(s)) if s.contains("$<"));
-            // A non-RegExp, non-static-string `searchValue` is `ToString`-coerced
-            // (running user `toString`/`valueOf`, may throw) BEFORE the
-            // replacement is coerced, per ECMA-262 §22.1.3.19. Likewise a
-            // non-function, non-static-string `replaceValue`.
-            let needle_is_str = args
+            let mut arguments = open_rooted_group(2);
+            let search = args
                 .first()
-                .is_some_and(|needle| is_string_expr(ctx, needle));
-            let repl_is_str = args
+                .map(|arg| arguments.lower(ctx, arg, true))
+                .transpose()?;
+            let replacement = args
                 .get(1)
-                .is_some_and(|replacement| is_string_expr(ctx, replacement));
-            let undefined =
-                || crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            let needle_box = if let Some(needle) = args.first() {
-                lower_expr(ctx, needle)?
-            } else {
-                undefined()
-            };
-            let repl_box = if let Some(replacement) = args.get(1) {
-                lower_expr(ctx, replacement)?
-            } else {
-                undefined()
-            };
+                .map(|arg| arguments.lower(ctx, arg, true))
+                .transpose()?;
             for extra in args.iter().skip(2) {
                 let _ = lower_expr(ctx, extra)?;
             }
-            let recv_box = reread_recv(ctx, group, recv);
-            let blk = ctx.block();
-            let recv_handle = unbox_str_handle(blk, &recv_box);
-            // #4871: a `searchValue` codegen can't type (an object-property
-            // read, a destructured loop binding, a call result) may still be
-            // a RegExp at runtime. ToString-coercing it here turned
-            // `str.replace(obj.regex, …)` into a literal search for "/foo/g"
-            // — a silent no-op. Route through the runtime search dispatcher,
-            // which checks the registered-RegExp set before coercing (and
-            // handles every replacement shape via the `_dyn` family).
-            if !needle_is_regex && !needle_is_str {
-                let runtime_fn = if property == "replaceAll" {
-                    "js_string_replace_all_search_dyn"
-                } else {
-                    "js_string_replace_search_dyn"
-                };
-                let result = blk.call(
-                    I64,
-                    runtime_fn,
-                    &[
-                        (I64, &recv_handle),
-                        (DOUBLE, &needle_box),
-                        (DOUBLE, &repl_box),
-                    ],
-                );
-                return Ok(nanbox_string_inline(blk, &result));
-            }
-            let needle_handle = if needle_is_regex || needle_is_str {
-                unbox_str_handle(blk, &needle_box)
-            } else {
-                blk.call(I64, "js_string_coerce", &[(DOUBLE, &needle_box)])
+            let undefined =
+                || crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let search = match search {
+                Some(i) => arguments.reread(ctx, i)?,
+                None => undefined(),
             };
-            if repl_is_function {
-                // repl_box is a NaN-boxed closure pointer (double).
-                // The callback helpers take the callback as f64.
-                let runtime_fn = match (needle_is_regex, property) {
-                    (true, "replaceAll") => "js_string_replace_all_regex_fn",
-                    (true, _) => "js_string_replace_regex_fn",
-                    (false, "replaceAll") => "js_string_replace_all_string_fn",
-                    (false, _) => "js_string_replace_string_fn",
-                };
-                let result = blk.call(
-                    I64,
-                    runtime_fn,
-                    &[
-                        (I64, &recv_handle),
-                        (I64, &needle_handle),
-                        (DOUBLE, &repl_box),
-                    ],
-                );
-                return Ok(nanbox_string_inline(blk, &result));
-            }
-            // A replacement whose shape codegen can't prove (not a Closure
-            // literal/FuncRef/function-typed local AND not a static string)
-            // may still be a FUNCTION at runtime — an IIFE-returned closure,
-            // a call result, a property read (test262 10.4.3-1-102-s). Route
-            // those through the `_dyn` runtime dispatchers, which check
-            // callability before ToString-coercing.
-            if !repl_is_str {
-                let runtime_fn = match (needle_is_regex, property) {
-                    (true, "replaceAll") => "js_string_replace_all_regex_dyn",
-                    (true, _) => "js_string_replace_regex_dyn",
-                    (false, "replaceAll") => "js_string_replace_all_string_dyn",
-                    (false, _) => "js_string_replace_string_dyn",
-                };
-                let result = blk.call(
-                    I64,
-                    runtime_fn,
-                    &[
-                        (I64, &recv_handle),
-                        (I64, &needle_handle),
-                        (DOUBLE, &repl_box),
-                    ],
-                );
-                return Ok(nanbox_string_inline(blk, &result));
-            }
-            // Issue #214: SSO-safe unbox of replacement string; a non-static-
-            // string replacement is `ToString`-coerced (after `searchValue`).
-            let repl_handle = if repl_is_str {
-                unbox_str_handle(blk, &repl_box)
-            } else {
-                blk.call(I64, "js_string_coerce", &[(DOUBLE, &repl_box)])
+            let replacement = match replacement {
+                Some(i) => arguments.reread(ctx, i)?,
+                None => undefined(),
             };
-            let runtime_fn = if needle_is_regex {
-                if property == "replaceAll" {
-                    if repl_has_named {
-                        "js_string_replace_all_regex_named"
-                    } else {
-                        "js_string_replace_all_regex"
-                    }
-                } else if repl_has_named {
-                    "js_string_replace_regex_named"
-                } else {
-                    "js_string_replace_regex"
-                }
-            } else if property == "replaceAll" {
-                "js_string_replace_all_string"
+            let receiver = reread_recv(ctx, group, recv);
+            let name = if property == "replaceAll" {
+                "js_string_replace_all_js"
             } else {
-                "js_string_replace_string"
+                "js_string_replace_js"
             };
-            let result = blk.call(
-                I64,
-                runtime_fn,
+            let result = ctx.block().call(
+                DOUBLE,
+                name,
                 &[
-                    (I64, &recv_handle),
-                    (I64, &needle_handle),
-                    (I64, &repl_handle),
+                    (DOUBLE, &receiver),
+                    (DOUBLE, &search),
+                    (DOUBLE, &replacement),
                 ],
             );
-            Ok(nanbox_string_inline(blk, &result))
+            arguments.release(ctx);
+            Ok(result)
         }
         // str.at(i) / str.charCodeAt(i) / str.codePointAt(i)
         "at" => {
@@ -1025,82 +875,33 @@ fn lower_string_method_dispatch(
                 ))
             }
         }
-        "search" => {
-            // The arg may be a RegExp OR any value that `RegExpCreate` coerces
-            // via `ToString` (a string pattern, `undefined`, a `{ toString }`
-            // object). Pass it BOXED to `js_string_search_value`, which detects
-            // a RegExp pointer and otherwise builds `RegExpCreate(ToString(arg))`
-            // — a raw `unbox_str_handle` would bit-cast a non-regex arg as a
-            // regex header and always return -1. A missing arg is `undefined`.
-            let re_box = if let Some(arg) = args.first() {
-                lower_expr(ctx, arg)?
+        "search" | "match" | "matchAll" => {
+            let mut argument_group = open_rooted_group(1);
+            let pattern = if let Some(arg) = args.first() {
+                Some(argument_group.lower(ctx, arg, true)?)
             } else {
-                crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                None
             };
             for extra in args.iter().skip(1) {
                 let _ = lower_expr(ctx, extra)?;
             }
-            let recv_box = reread_recv(ctx, group, recv);
-            let blk = ctx.block();
-            let recv_handle = unbox_str_handle(blk, &recv_box);
-            let i32_v = blk.call(
-                I32,
-                "js_string_search_value",
-                &[(I64, &recv_handle), (DOUBLE, &re_box)],
-            );
-            Ok(blk.sitofp(I32, &i32_v, DOUBLE))
-        }
-        "match" => {
-            // Like `search`, coerce a non-RegExp arg via `RegExpCreate(ToString
-            // (arg))` by passing it BOXED to `js_string_match_value`. A missing
-            // arg is `undefined` → the empty `/(?:)/` regex.
-            let re_box = if let Some(arg) = args.first() {
-                lower_expr(ctx, arg)?
-            } else {
-                crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            let pattern = match pattern {
+                Some(index) => argument_group.reread(ctx, index)?,
+                None => crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
             };
-            for extra in args.iter().skip(1) {
-                let _ = lower_expr(ctx, extra)?;
-            }
             let recv_box = reread_recv(ctx, group, recv);
-            let blk = ctx.block();
-            let recv_handle = unbox_str_handle(blk, &recv_box);
-            let result = blk.call(
-                I64,
-                "js_string_match_value",
-                &[(I64, &recv_handle), (DOUBLE, &re_box)],
-            );
-            // Runtime may return null (0) on no-match. Convert that to
-            // TAG_NULL so `s.match(re) !== null` behaves correctly.
-            let is_null = blk.icmp_eq(I64, &result, "0");
-            let ptr_boxed = nanbox_pointer_inline(ctx.block(), &result);
-            let ptr_bits = ctx.block().bitcast_double_to_i64(&ptr_boxed);
-            let selected =
+            let callee = if property == "match" {
+                "js_string_match_js"
+            } else if property == "matchAll" {
+                "js_string_match_all_js"
+            } else {
+                "js_string_search_js"
+            };
+            let result =
                 ctx.block()
-                    .select(I1, &is_null, I64, crate::nanbox::TAG_NULL_I64, &ptr_bits);
-            Ok(ctx.block().bitcast_i64_to_double(&selected))
-        }
-        "matchAll" => {
-            let pattern_box = if let Some(arg) = args.first() {
-                lower_expr(ctx, arg)?
-            } else {
-                crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            // Like every JavaScript call, extra arguments are evaluated for
-            // side effects even though String.prototype.matchAll ignores them.
-            for extra in args.iter().skip(1) {
-                let _ = lower_expr(ctx, extra)?;
-            }
-            let recv_box = reread_recv(ctx, group, recv);
-            let blk = ctx.block();
-            let recv_handle = unbox_str_handle(blk, &recv_box);
-            let result = blk.call(
-                I64,
-                "js_string_match_all_value",
-                &[(I64, &recv_handle), (DOUBLE, &pattern_box)],
-            );
-            // matchAll returns a RegExp String Iterator object.
-            Ok(nanbox_pointer_inline(blk, &result))
+                    .call(DOUBLE, callee, &[(DOUBLE, &recv_box), (DOUBLE, &pattern)]);
+            argument_group.release(ctx);
+            Ok(result)
         }
         "isWellFormed" => {
             // No-arg method; extras are evaluated for side effects then ignored.

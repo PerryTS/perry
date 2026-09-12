@@ -294,7 +294,7 @@ bundled-ratelimit = ["dep:governor", "async-runtime"]
 # Validation — `validation` umbrella stays for backwards-compat;
 # v0.5.538's well-known flip toggles `bundled-validator` instead.
 validation = ["bundled-validator"]
-bundled-validator = ["dep:validator", "dep:regex"]
+bundled-validator = ["dep:perry-validation"]
 
 # UUID/nanoid — `ids` stays as the umbrella for backwards compat;
 # from v0.5.534 onwards the per-binding split (`bundled-uuid` /
@@ -450,8 +450,7 @@ tokio-cron-scheduler = { version = "0.15", optional = true }
 governor = { version = "0.10", optional = true }
 
 # Validation
-validator = { version = "0.21", features = ["derive"], optional = true }
-regex = { workspace = true, optional = true }
+perry-validation = { workspace = true, optional = true }
 
 # IDs
 uuid = { version = "1.23", features = ["v4", "v1", "v3", "v5", "v7"], optional = true }

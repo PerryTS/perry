@@ -520,6 +520,21 @@ unsafe fn web_stream_symbol_property(obj_f64: f64, sym_f64: f64) -> Option<f64> 
 
 #[no_mangle]
 pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f64) -> f64 {
+    #[cfg(feature = "regex-engine")]
+    if crate::regex::is_registered_regex(crate::value::js_nanbox_get_pointer(obj_f64) as usize) {
+        // RegExpHeader is not an ObjectHeader. Resolve its own symbols and
+        // actual prototype without entering the ordinary class-field walk.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let receiver = scope.root_nanbox_f64(obj_f64);
+        let symbol = scope.root_nanbox_f64(sym_f64);
+        if let Some(acc) = accessors::symbol_accessor_property(receiver.get_nanbox_f64(), symbol.get_nanbox_f64()) {
+            return accessors::invoke_symbol_accessor_getter(acc.get, receiver.get_nanbox_f64());
+        }
+        if let Some(value) = own_symbol_property(receiver.get_nanbox_f64(), symbol.get_nanbox_f64()) { return value; }
+        let proto = scope.root_nanbox_f64(crate::object::js_object_get_prototype_of(receiver.get_nanbox_f64()));
+        if !crate::proxy::reflect_value_is_object(proto.get_nanbox_f64()) { return f64::from_bits(TAG_UNDEFINED); }
+        return crate::proxy::js_reflect_get(proto.get_nanbox_f64(), symbol.get_nanbox_f64(), receiver.get_nanbox_f64());
+    }
     // A Proxy is a small registered id (its band overlaps the small-handle
     // band); dereferencing it as a heap object to read a symbol-keyed property
     // is an EXC_BAD_ACCESS. Route a SYMBOL-keyed read through the proxy `get`

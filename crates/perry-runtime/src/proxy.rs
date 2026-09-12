@@ -86,6 +86,8 @@ pub struct ProxyEntry {
     /// so callability must be snapshotted, not recomputed from `target`
     /// (which revocation nulls).
     pub callable: bool,
+    /// Creation-time presence of [[Construct]], independent of [[Call]].
+    pub constructable: bool,
 }
 
 thread_local! {
@@ -454,6 +456,7 @@ pub extern "C" fn js_proxy_new(target: f64, handler: f64) -> f64 {
         throw_proxy_non_object();
     }
     let callable = target_callable_at_creation(target);
+    let constructable = is_constructor_function(target);
     // Reserve BEFORE taking the mutable borrow: `throw_proxy_band_exhausted`
     // allocates a JS error, which can collect, and `scan_proxy_roots_mut`
     // borrows `PROXIES` mutably — throwing under an open borrow would panic
@@ -471,6 +474,7 @@ pub extern "C" fn js_proxy_new(target: f64, handler: f64) -> f64 {
             handler,
             revoked: false,
             callable,
+            constructable,
         })));
         // A proxy born during a sliced full trace was absent from the begin
         // snapshot. Arm observation before its handle can be published into a
@@ -636,8 +640,10 @@ pub extern "C" fn js_proxy_handler(proxy_boxed: f64) -> f64 {
 /// Helper: fetch the trap closure from the handler object by name. Returns
 /// TAG_UNDEFINED if the handler has no such trap.
 fn handler_trap(handler: f64, trap_name: &str) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let handler = scope.root_nanbox_f64(handler);
     let key = crate::string::js_string_from_bytes(trap_name.as_ptr(), trap_name.len() as u32);
-    let obj_ptr = extract_pointer(handler.to_bits()) as *const crate::ObjectHeader;
+    let obj_ptr = extract_pointer(handler.get_nanbox_f64().to_bits()) as *const crate::ObjectHeader;
     if obj_ptr.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -763,7 +769,7 @@ fn reflect_value_is_symbol(value: f64) -> bool {
 
 /// Is `value` a Reflect-acceptable object? Heap objects, class refs (callable
 /// constructors), and proxies all count. Primitives / null / undefined do not.
-fn reflect_value_is_object(value: f64) -> bool {
+pub(crate) fn reflect_value_is_object(value: f64) -> bool {
     if lookup(value).is_some() {
         return true;
     }

@@ -47,35 +47,7 @@ pub(crate) extern "C" fn regexp_constructor_call_thunk(
     pattern: f64,
     flags: f64,
 ) -> f64 {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let pattern = scope.root_nanbox_f64(pattern);
-    let flags = scope.root_nanbox_f64(flags);
-    let flags_undefined = flags.get_nanbox_f64().to_bits() == crate::value::TAG_UNDEFINED;
-    let pattern_value = crate::value::JSValue::from_bits(pattern.get_nanbox_f64().to_bits());
-    if flags_undefined && pattern_value.is_pointer() {
-        let addr = (pattern.get_nanbox_f64().to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
-        if crate::regex::is_regex_pointer(addr as *const u8) {
-            return pattern.get_nanbox_f64();
-        }
-    }
-    let pattern_string = if pattern_value.is_undefined() {
-        None
-    } else {
-        Some(scope.root_string_ptr(crate::builtins::js_string_coerce(pattern.get_nanbox_f64())))
-    };
-    let flags_string = if flags_undefined {
-        None
-    } else {
-        Some(scope.root_string_ptr(crate::builtins::js_string_coerce(flags.get_nanbox_f64())))
-    };
-    let pattern_ptr = pattern_string
-        .as_ref()
-        .map_or(std::ptr::null(), |value| value.get_raw_const_ptr());
-    let flags_ptr = flags_string
-        .as_ref()
-        .map_or(std::ptr::null(), |value| value.get_raw_const_ptr());
-    let re = crate::regex::js_regexp_new(pattern_ptr, flags_ptr);
-    crate::value::js_nanbox_pointer(re as i64)
+    crate::value::js_nanbox_pointer(crate::regex::js_regexp_construct_call(pattern, flags) as i64)
 }
 
 /// Without the regex engine there is no RegExp to construct — keep the

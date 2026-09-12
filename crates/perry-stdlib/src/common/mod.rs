@@ -56,7 +56,9 @@ pub(crate) unsafe fn bytes_from_header(ptr: *const StringHeader) -> Option<Vec<u
     map_string_header_bytes(ptr, <[u8]>::to_vec)
 }
 
-unsafe fn map_string_header_bytes<T>(
+/// Run a synchronous operation on the unified string bytes. The callback must
+/// not allocate through Perry, invoke JavaScript, or retain the borrowed bytes.
+pub(crate) unsafe fn map_string_header_bytes<T>(
     ptr: *const StringHeader,
     map: impl FnOnce(&[u8]) -> T,
 ) -> Option<T> {

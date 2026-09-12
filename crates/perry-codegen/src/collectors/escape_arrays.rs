@@ -360,26 +360,9 @@ pub fn find_array_candidates(
                     candidates.insert(*id, n as u32);
                 }
             }
-            // A non-escaping `text.split("literal")` can use the same scalar
-            // replacement machinery as an array literal. Its distinct marker
-            // still admits only small constant indices; the lowering materializes
-            // precisely those slots instead of allocating the result array.
-            Stmt::Let {
-                id,
-                init: Some(Expr::Call { callee, args, .. }),
-                ..
-            } if !boxed_vars.contains(id)
-                && !module_globals.contains_key(id)
-                && matches!(
-                    callee.as_ref(),
-                    Expr::PropertyGet { object, property, .. }
-                        if matches!(object.as_ref(), Expr::LocalGet(_))
-                            && property == "split"
-                )
-                && matches!(args.as_slice(), [Expr::String(s)] if !s.is_empty()) =>
-            {
-                candidates.insert(*id, SPLIT_CANDIDATE_MARKER);
-            }
+            // Split can invoke Symbol.split and return an arbitrary value.
+            // Literal syntax alone does not prove the primitive prototype has
+            // no hook; retain the operation until a runtime guard proves that.
             Stmt::If {
                 then_branch,
                 else_branch,

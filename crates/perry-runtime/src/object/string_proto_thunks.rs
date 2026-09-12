@@ -113,6 +113,23 @@ const GENERIC_STRING_PROTO_METHODS: &[(&str, u32)] = &[
 
 fn install_generic_string_proto_methods(proto_obj: *mut ObjectHeader) {
     for (name, spec_length) in GENERIC_STRING_PROTO_METHODS.iter().copied() {
+        #[cfg(feature = "regex-engine")]
+        if matches!(
+            name,
+            "match" | "search" | "matchAll" | "replace" | "replaceAll" | "split"
+        ) {
+            let fp = match name {
+                "match" => string_proto_match_thunk as *const u8,
+                "matchAll" => string_proto_match_all_thunk as *const u8,
+                "replace" => string_proto_replace_thunk as *const u8,
+                "replaceAll" => string_proto_replace_all_thunk as *const u8,
+                "split" => string_proto_split_thunk as *const u8,
+                _ => string_proto_search_thunk as *const u8,
+            };
+            super::global_this::install_proto_method(proto_obj, name, fp, spec_length);
+            continue;
+        }
+
         // `call_fixed_arity = 0` → the thunk receives all args as a rest array.
         super::global_this::install_proto_method_rest_with_length(
             proto_obj,
@@ -293,4 +310,51 @@ pub(super) extern "C" fn string_proto_symbol_iterator_thunk(
 ) -> f64 {
     let s = string_this_or_throw("[Symbol.iterator]");
     crate::string::string_values_iter(s)
+}
+
+#[cfg(feature = "regex-engine")]
+extern "C" fn string_proto_match_thunk(_: *const crate::closure::ClosureHeader, arg: f64) -> f64 {
+    crate::regex::js_string_match_js(crate::object::js_implicit_this_get(), arg)
+}
+#[cfg(feature = "regex-engine")]
+extern "C" fn string_proto_search_thunk(_: *const crate::closure::ClosureHeader, arg: f64) -> f64 {
+    crate::regex::js_string_search_js(crate::object::js_implicit_this_get(), arg)
+}
+
+#[cfg(feature = "regex-engine")]
+extern "C" fn string_proto_match_all_thunk(
+    _: *const crate::closure::ClosureHeader,
+    arg: f64,
+) -> f64 {
+    crate::regex::js_string_match_all_js(crate::object::js_implicit_this_get(), arg)
+}
+
+#[cfg(feature = "regex-engine")]
+extern "C" fn string_proto_replace_thunk(
+    _: *const crate::closure::ClosureHeader,
+    search: f64,
+    replacement: f64,
+) -> f64 {
+    crate::regex::js_string_replace_js(crate::object::js_implicit_this_get(), search, replacement)
+}
+#[cfg(feature = "regex-engine")]
+extern "C" fn string_proto_replace_all_thunk(
+    _: *const crate::closure::ClosureHeader,
+    search: f64,
+    replacement: f64,
+) -> f64 {
+    crate::regex::js_string_replace_all_js(
+        crate::object::js_implicit_this_get(),
+        search,
+        replacement,
+    )
+}
+
+#[cfg(feature = "regex-engine")]
+extern "C" fn string_proto_split_thunk(
+    _: *const crate::closure::ClosureHeader,
+    separator: f64,
+    limit: f64,
+) -> f64 {
+    crate::regex::js_string_split_js(crate::object::js_implicit_this_get(), separator, limit)
 }

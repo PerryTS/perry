@@ -9,6 +9,7 @@ use crate::array::ArrayHeader;
 /// a per-element layout-map update. The write barrier remains necessary if a
 /// collection has promoted the rooted result array while it is being built.
 #[inline]
+#[cfg(not(feature = "regex-engine"))]
 unsafe fn store_split_string(arr: *mut ArrayHeader, index: usize, string: *mut StringHeader) {
     const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
     const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
@@ -26,153 +27,6 @@ unsafe fn store_split_string(arr: *mut ArrayHeader, index: usize, string: *mut S
     // element after the write and barrier, before the next allocation can run
     // a collection.
     (*arr).length = (index + 1) as u32;
-}
-
-/// Advance to the next UTF-8 character boundary strictly after `i`.
-#[cfg(feature = "regex-engine")]
-fn next_char_boundary(s: &str, i: usize) -> usize {
-    let mut j = i + 1;
-    while j < s.len() && !s.is_char_boundary(j) {
-        j += 1;
-    }
-    j
-}
-
-/// JS-spec `RegExp.prototype[Symbol.split]` (21.2.5.11) for the standard
-/// `regex` engine. Walks the subject with a *sticky* match at each position,
-/// applies the `e == p` empty-match skip (so a zero-width match at the current
-/// segment start does not emit an empty string), and splices captured groups
-/// (unmatched groups → `undefined`/`None`) after each segment. Honors `limit`
-/// (`< 0` ⇒ unbounded) by stopping once `limit` elements have been produced.
-/// Each element is `Some(substring)` or `None` for a spliced unmatched group.
-#[cfg(feature = "regex-engine")]
-pub(crate) fn spec_regex_split(regex: &regex::Regex, s: &str, limit: i32) -> Vec<Option<String>> {
-    let mut out: Vec<Option<String>> = Vec::new();
-    let unbounded = limit < 0;
-    // Returns true once the limit is reached (caller must stop).
-    let push = |out: &mut Vec<Option<String>>, v: Option<String>| -> bool {
-        out.push(v);
-        !unbounded && out.len() as i32 >= limit
-    };
-    let size = s.len();
-    if size == 0 {
-        // Empty subject: `[""]` unless the pattern matches the empty string.
-        if regex.find(s).is_none() {
-            out.push(Some(String::new()));
-        }
-        return out;
-    }
-    let mut p = 0usize; // start of the pending segment
-    let mut q = 0usize; // scan cursor
-    while q < size {
-        match regex.find_at(s, q) {
-            // Sticky: a match must begin exactly at `q`.
-            Some(m) if m.start() == q => {
-                let e = m.end().min(size);
-                if e == p {
-                    // Zero-width match at the segment start: skip it.
-                    q = next_char_boundary(s, q);
-                } else {
-                    if push(&mut out, Some(s[p..q].to_string())) {
-                        return out;
-                    }
-                    if let Some(caps) = regex.captures_at(s, q) {
-                        for i in 1..caps.len() {
-                            let g = caps.get(i).map(|gm| gm.as_str().to_string());
-                            if push(&mut out, g) {
-                                return out;
-                            }
-                        }
-                    }
-                    p = e;
-                    q = p;
-                }
-            }
-            // Leftmost match lies to the right of `q`; no match (and thus no
-            // zero-width match) exists in between, so jump straight to it.
-            Some(m) => q = m.start(),
-            None => break,
-        }
-    }
-    if unbounded || (out.len() as i32) < limit {
-        out.push(Some(s[p..size].to_string()));
-    }
-    out
-}
-
-/// Fancy-regex implementation of the same `RegExp.prototype[Symbol.split]`
-/// cursor algorithm as [`spec_regex_split`]. A plain `find_iter` is not enough:
-/// the spec performs a sticky probe at each `q`, never probes `q == size`, and
-/// splices every separator capture into the result. `captures_from_pos` keeps
-/// the complete haystack visible to lookbehind while starting the search at
-/// the spec cursor (#9429/#9438).
-#[cfg(feature = "regex-engine")]
-pub(crate) fn spec_fancy_regex_split(
-    regex: &fancy_regex::Regex,
-    s: &str,
-    limit: i32,
-) -> Vec<Option<String>> {
-    let mut out: Vec<Option<String>> = Vec::new();
-    let unbounded = limit < 0;
-    let push = |out: &mut Vec<Option<String>>, value: Option<String>| -> bool {
-        out.push(value);
-        !unbounded && out.len() as i32 >= limit
-    };
-    if limit == 0 {
-        return out;
-    }
-
-    let size = s.len();
-    if size == 0 {
-        // Empty subject: `[""]` unless the pattern itself matches empty.
-        if !matches!(regex.captures_from_pos(s, 0), Ok(Some(_))) {
-            out.push(Some(String::new()));
-        }
-        return out;
-    }
-
-    let mut p = 0usize;
-    let mut q = 0usize;
-    while q < size {
-        let captures = match regex.captures_from_pos(s, q) {
-            Ok(Some(captures)) => captures,
-            Ok(None) | Err(_) => break,
-        };
-        let Some(full) = captures.get(0) else {
-            break;
-        };
-        if full.start() != q {
-            // Sticky probing found the next possible match to the right. No
-            // match exists between q and that position, so jump to it.
-            q = full.start();
-            continue;
-        }
-
-        let e = full.end().min(size);
-        if e == p {
-            // A zero-width match at the pending segment's start is skipped.
-            q = next_char_boundary(s, q);
-            continue;
-        }
-        if push(&mut out, Some(s[p..q].to_string())) {
-            return out;
-        }
-        for index in 1..captures.len() {
-            let group = captures
-                .get(index)
-                .map(|matched| matched.as_str().to_string());
-            if push(&mut out, group) {
-                return out;
-            }
-        }
-        p = e;
-        q = p;
-    }
-
-    if unbounded || (out.len() as i32) < limit {
-        out.push(Some(s[p..size].to_string()));
-    }
-    out
 }
 
 /// Split a string by a delimiter
@@ -444,6 +298,7 @@ pub extern "C" fn js_string_to_upper_case_split_part_utf16_length(
 /// `limit < 0` → no limit (matches `js_string_split`).
 /// `limit == 0` → empty array.
 /// `limit > 0` → at most `limit` substrings.
+#[cfg(not(feature = "regex-engine"))]
 #[no_mangle]
 pub extern "C" fn js_string_split_n(
     s: *const StringHeader,
@@ -684,6 +539,7 @@ pub extern "C" fn js_string_split_n(
 /// `ToUint32(ToNumber(value))` (ECMA-262 §7.1.7). Runs the full `ToNumber`
 /// (so a boxed `{ valueOf }` / `{ toString }` argument is coerced and may
 /// throw), then reduces mod 2^32. `NaN`/`±Infinity`/`0` → 0.
+#[cfg(not(feature = "regex-engine"))]
 fn split_limit_to_uint32(boxed: f64) -> u32 {
     let n = crate::builtins::js_number_coerce(boxed);
     if !n.is_finite() || n == 0.0 {
@@ -694,6 +550,7 @@ fn split_limit_to_uint32(boxed: f64) -> u32 {
 
 /// Build the single-element array `[S]` (the `separator === undefined` result
 /// of `String.prototype.split`).
+#[cfg(not(feature = "regex-engine"))]
 fn split_single_element(s: *const StringHeader) -> *mut ArrayHeader {
     const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
     const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
@@ -722,6 +579,7 @@ fn split_single_element(s: *const StringHeader) -> *mut ArrayHeader {
 ///   - `limit === 0` ⇒ empty array;
 ///   - `separator === undefined` ⇒ single-element `[S]`;
 ///   - otherwise split by `ToString(separator)`, capped at `lim`.
+#[cfg(not(feature = "regex-engine"))]
 #[no_mangle]
 pub extern "C" fn js_string_split_value(
     s: *const StringHeader,
@@ -801,4 +659,27 @@ pub extern "C" fn js_string_split_value(
         lim as i32
     };
     js_string_split_n(s, r_str, limit_i32)
+}
+
+#[cfg(not(feature = "regex-engine"))]
+#[no_mangle]
+pub extern "C" fn js_string_split_js(receiver: f64, separator: f64, limit: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
+    let separator = scope.root_nanbox_f64(separator);
+    let limit = scope.root_nanbox_f64(limit);
+    if matches!(
+        receiver.get_nanbox_f64().to_bits(),
+        crate::value::TAG_NULL | crate::value::TAG_UNDEFINED
+    ) {
+        crate::collection_iter::throw_type_error("String.split requires a non-null receiver");
+    }
+    let input = scope.root_string_ptr(crate::value::js_jsvalue_to_string_coerce(
+        receiver.get_nanbox_f64(),
+    ));
+    crate::value::js_nanbox_pointer(js_string_split_value(
+        input.get_raw_const_ptr(),
+        separator.get_nanbox_f64(),
+        limit.get_nanbox_f64(),
+    ) as i64)
 }
