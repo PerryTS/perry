@@ -105,6 +105,70 @@ fn forward_start_index(length: i64, from_index: f64, has_from: i32) -> Option<i6
     }
 }
 
+/// Specialized scan for `indexOf`/`includes` over a proven-numeric dense
+/// array (#10092). The generic per-element loop routes every candidate
+/// through `js_jsvalue_equals`/`js_jsvalue_same_value_zero` — both
+/// `#[no_mangle] extern "C"` functions the optimizer cannot inline, each
+/// re-deriving the element's type (raw-pointer normalization, NaN checks,
+/// string/BigInt dispatch a numeric array never needs) on every slot. When
+/// every slot is proven `RawF64` (dense: no holes, no NaN-boxed pointers —
+/// see [`super::header::ensure_array_numeric_raw_f64`]) the whole search
+/// collapses to a bounded `f64` compare loop.
+///
+/// `same_value_zero` selects `includes`'s NaN-equals-NaN rule; `indexOf`'s
+/// strict equality needs no extra branch because plain IEEE `==` already
+/// treats NaN as unequal to everything (including itself) and treats `+0`/
+/// `-0` as equal, which is also SameValueZero's zero rule — the two only
+/// diverge on NaN, hoisted here into a single check of the search value.
+///
+/// Returns `None` when the fast path cannot answer (exotic iteration, e.g.
+/// index accessors/sparse storage/prototype indices, or a mixed-kind array
+/// that fails the numeric proof) so the caller must fall back to the generic
+/// per-element walk. Otherwise returns the matching index, or `-1`.
+///
+/// Must run only AFTER the caller has excluded the empty-array / TypedArray
+/// receiver cases, and `start`/`length` must already reflect the resolved
+/// `fromIndex` (this performs no ECMA-262 coercion itself).
+#[inline]
+unsafe fn numeric_raw_f64_search(
+    arr: *const ArrayHeader,
+    value: f64,
+    start: i64,
+    length: i64,
+    same_value_zero: bool,
+) -> Option<i64> {
+    if crate::array::array_iteration_is_exotic(arr) {
+        return None;
+    }
+    // Proves (or disproves) that every slot in `[0, length)` is a raw f64
+    // number with no holes. Establishing this once lets every subsequent
+    // search/index op on the same array skip straight to an O(1) flag test —
+    // the same amortization `array_numeric_raw_f64_get` relies on.
+    if !super::header::ensure_array_numeric_raw_f64(arr as *mut ArrayHeader) {
+        return None;
+    }
+    // The array is now proven dense raw-f64: a non-numeric search value
+    // (string/object/bool/undefined/BigInt) can never equal any element.
+    let Some(search) = super::header::value_bits_to_number(value.to_bits()) else {
+        return Some(-1);
+    };
+    let elements = array_elements_ptr(arr);
+    if same_value_zero && search.is_nan() {
+        for i in start..length {
+            if (*elements.add(i as usize)).is_nan() {
+                return Some(i);
+            }
+        }
+    } else {
+        for i in start..length {
+            if *elements.add(i as usize) == search {
+                return Some(i);
+            }
+        }
+    }
+    Some(-1)
+}
+
 /// indexOf for arrays, using jsvalue comparison (handles NaN-boxed strings
 /// correctly). `from_index` / `has_from` implement the optional ECMA-262
 /// `fromIndex` argument (#2804); `has_from == 0` searches from index 0.
@@ -154,6 +218,9 @@ pub extern "C" fn js_array_indexOf_jsvalue(
             Some(s) => s,
             None => return -1,
         };
+        if let Some(result) = numeric_raw_f64_search(arr, value, start, length, false) {
+            return result;
+        }
         let elements_ptr = array_elements_ptr(arr);
         let exotic = crate::array::array_iteration_is_exotic(arr);
         for i in start..length {
@@ -335,6 +402,9 @@ pub extern "C" fn js_array_includes_jsvalue(
             Some(s) => s,
             None => return 0,
         };
+        if let Some(result) = numeric_raw_f64_search(arr, value, start, length, true) {
+            return if result >= 0 { 1 } else { 0 };
+        }
         let elements_ptr = array_elements_ptr(arr);
 
         // `Array.prototype.includes` uses SameValueZero (ECMA-262 §23.1.3.16),
@@ -418,5 +488,107 @@ mod typed_search_tests {
         assert_eq!(js_array_last_index_of_jsvalue(arr, 2.0, 2.0, 1), 1);
         // strict equality → NaN never matches.
         assert_eq!(js_array_last_index_of_jsvalue(arr, f64::NAN, 0.0, 0), -1);
+    }
+}
+
+/// #10092: the specialized `numeric_raw_f64_search` scan used by
+/// `indexOf`/`includes` on a proven-numeric dense array must match the
+/// generic per-element semantics exactly.
+#[cfg(test)]
+mod numeric_fast_path_tests {
+    use super::*;
+    use crate::array::{js_array_alloc, js_array_push_f64};
+
+    fn numbers(values: &[f64]) -> *mut ArrayHeader {
+        let mut arr = js_array_alloc(values.len() as u32);
+        for &v in values {
+            arr = js_array_push_f64(arr, v);
+        }
+        arr
+    }
+
+    /// Strict equality (`indexOf`) never matches NaN, while SameValueZero
+    /// (`includes`) treats NaN as equal to NaN.
+    #[test]
+    fn nan_split_between_indexof_and_includes() {
+        let arr = numbers(&[1.0, f64::NAN, 3.0]);
+        assert_eq!(js_array_indexOf_jsvalue(arr, f64::NAN, 0.0, 0), -1);
+        assert_eq!(js_array_includes_jsvalue(arr, f64::NAN, 0.0, 0), 1);
+    }
+
+    /// `+0`/`-0` are interchangeable for both algorithms — only NaN diverges.
+    #[test]
+    fn zero_and_negative_zero_are_interchangeable() {
+        let zero = numbers(&[0.0]);
+        assert_eq!(js_array_includes_jsvalue(zero, -0.0, 0.0, 0), 1);
+        let neg_zero = numbers(&[-0.0]);
+        assert_eq!(js_array_indexOf_jsvalue(neg_zero, 0.0, 0.0, 0), 0);
+    }
+
+    /// A hole reads as `undefined` for `includes` but is skipped (never
+    /// `undefined`-equal) for `indexOf`. An array with a hole must NOT take
+    /// the raw-f64 fast path — `ensure_array_numeric_raw_f64` must reject it.
+    #[test]
+    fn holes_keep_the_generic_undefined_semantics() {
+        let mut arr = js_array_alloc(2);
+        arr = js_array_push_f64(arr, f64::from_bits(crate::value::TAG_HOLE));
+        arr = js_array_push_f64(arr, 1.0);
+        let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+        assert_eq!(js_array_includes_jsvalue(arr, undefined, 0.0, 0), 1);
+        assert_eq!(js_array_indexOf_jsvalue(arr, undefined, 0.0, 0), -1);
+    }
+
+    /// A mixed-kind array (numbers plus a string) must fail the numeric proof
+    /// and fall back to the generic per-element walk rather than reporting a
+    /// false miss.
+    #[test]
+    fn mixed_kind_array_falls_back_to_generic_search() {
+        let needle_bytes = b"needle";
+        let mut arr = js_array_alloc(3);
+        arr = js_array_push_f64(arr, 1.0);
+        let s1 =
+            crate::string::js_string_from_bytes(needle_bytes.as_ptr(), needle_bytes.len() as u32);
+        arr = js_array_push_f64(arr, crate::value::js_nanbox_string(s1 as i64));
+        arr = js_array_push_f64(arr, 3.0);
+
+        let s2 =
+            crate::string::js_string_from_bytes(needle_bytes.as_ptr(), needle_bytes.len() as u32);
+        let needle = crate::value::js_nanbox_string(s2 as i64);
+        assert_eq!(js_array_indexOf_jsvalue(arr, needle, 0.0, 0), 1);
+        assert_eq!(js_array_includes_jsvalue(arr, needle, 0.0, 0), 1);
+        assert_eq!(js_array_indexOf_jsvalue(arr, 3.0, 0.0, 0), 2);
+        assert_eq!(js_array_includes_jsvalue(arr, 9.0, 0.0, 0), 0);
+    }
+
+    /// `fromIndex` (including negative and out-of-range) must still be
+    /// honored once the fast path takes over.
+    #[test]
+    fn from_index_is_honored_by_the_fast_path() {
+        let arr = numbers(&[1.0, 2.0, 3.0, 2.0, 1.0]);
+        assert_eq!(js_array_indexOf_jsvalue(arr, 2.0, 2.0, 1), 3);
+        assert_eq!(js_array_indexOf_jsvalue(arr, 2.0, -2.0, 1), 3);
+        assert_eq!(js_array_includes_jsvalue(arr, 1.0, 2.0, 1), 1);
+        assert_eq!(js_array_includes_jsvalue(arr, 1.0, f64::INFINITY, 1), 0);
+    }
+
+    /// A guaranteed-absent search value must scan the full length and report
+    /// a miss; a value present at the first index must early-exit correctly.
+    #[test]
+    fn full_scan_miss_and_first_index_hit() {
+        let arr = numbers(&[10.0, 20.0, 30.0]);
+        assert_eq!(js_array_indexOf_jsvalue(arr, 999.0, 0.0, 0), -1);
+        assert_eq!(js_array_includes_jsvalue(arr, 999.0, 0.0, 0), 0);
+        assert_eq!(js_array_indexOf_jsvalue(arr, 10.0, 0.0, 0), 0);
+    }
+
+    /// A non-numeric search value against a proven-numeric array can never
+    /// match — exercises the fast path's own early-return branch (distinct
+    /// from the hole/undefined case above, which must NOT take this path).
+    #[test]
+    fn non_numeric_search_value_against_numeric_array_never_matches() {
+        let arr = numbers(&[1.0, 2.0, 3.0]);
+        let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+        assert_eq!(js_array_indexOf_jsvalue(arr, undefined, 0.0, 0), -1);
+        assert_eq!(js_array_includes_jsvalue(arr, undefined, 0.0, 0), 0);
     }
 }
