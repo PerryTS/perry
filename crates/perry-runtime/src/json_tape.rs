@@ -1229,12 +1229,44 @@ impl LazyArrayHeader {
 /// `blob_str` reads and stringify emitted NUL bytes. Preserve its generation;
 /// ownership transfer changes only the pointer-free tape backing allocation.
 #[inline]
-fn alloc_lazy_header_bytes() -> *mut u8 {
-    crate::arena::arena_alloc_gc_old_born_tenured(
-        std::mem::size_of::<LazyArrayHeader>(),
-        8,
-        crate::gc::GC_TYPE_LAZY_ARRAY,
-    )
+/// Does this lazy array's cluster belong in the old generation?
+///
+/// #7539 put the header there because its tape was inline and multi-megabyte;
+/// moving the tape out shrank it to ~88 bytes and the old-gen request was kept
+/// only because `json_tape_store` keyed a tape by its owner's address and the
+/// copying minor's flip ran no finalize hook, so a young header would have
+/// orphaned or leaked its tape. `GcMoveHookKind::LazyArrayTape` and
+/// `finalize_dead_copied_minor_from_space_lazy_tapes` remove both reasons.
+///
+/// Pinning was expensive: a minor never sweeps old-gen, so a DEAD cluster held
+/// its whole element graph live through the remembered set until a full
+/// collection, which on a parse-and-scan loop never arrives.
+///
+/// Decide by size instead, and decide ONCE for the cluster: #7546's invariant
+/// is that header, cache and bitmap share a generation, because a nursery cache
+/// under an old-gen header is a mixed shape no walker covers. A cache large
+/// enough to be born old takes the header with it; anything smaller is
+/// nursery-resident and a minor can reclaim the lot.
+fn lazy_cluster_is_old(cached_length: u32) -> bool {
+    let cache_bytes = (cached_length as usize) * std::mem::size_of::<crate::value::JSValue>();
+    // The POINTER-BEARING line, not the flat one. `arena_alloc_gc` keeps the two
+    // apart for precisely the reason that bites here: tenuring a pointer-bearing
+    // object does not cost its own bytes, it costs "every object it can reach,
+    // held live through the remembered set by a container nothing refers to any
+    // more". The sparse cache is a block of JSValues, so it is that container,
+    // and a lazy array is the case the distinction was drawn for. 128 KB is
+    // V8's kMaxRegularHeapObjectSize and sits inside the copier's own ceilings,
+    // so a cluster admitted by it is always movable.
+    cache_bytes + crate::gc::GC_HEADER_SIZE
+        >= crate::gc::LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES
+}
+
+unsafe fn alloc_lazy_cluster_bytes(size: usize, obj_type: u8, old: bool) -> *mut u8 {
+    if old {
+        crate::arena::arena_alloc_gc_old_born_tenured(size, 8, obj_type)
+    } else {
+        crate::arena::arena_alloc_gc(size, 8, obj_type)
+    }
 }
 
 pub unsafe fn alloc_lazy_array(
@@ -1282,8 +1314,14 @@ unsafe fn alloc_lazy_array_backing(
     // which can trigger, but the only live thing we hold across it is
     // `blob_handle`, which is rooted.
     let (tape_ptr, tape_allocation) = backing.allocate();
-    let (raw, blob_str) =
-        blob_handle.across_const::<crate::StringHeader, _>(alloc_lazy_header_bytes);
+    let cluster_old = lazy_cluster_is_old(cached_length);
+    let (raw, blob_str) = blob_handle.across_const::<crate::StringHeader, _>(|| unsafe {
+        alloc_lazy_cluster_bytes(
+            std::mem::size_of::<LazyArrayHeader>(),
+            crate::gc::GC_TYPE_LAZY_ARRAY,
+            cluster_old,
+        )
+    });
     let hdr = raw as *mut LazyArrayHeader;
     (*hdr).cached_length = cached_length;
     (*hdr).magic = LAZY_ARRAY_MAGIC;
@@ -1336,11 +1374,8 @@ unsafe fn alloc_lazy_array_backing(
         // (`parsed[i] === parsed[i]`) across a copying minor. It could not
         // occur before: a big array's cache was already born old, and a small
         // array's header was born young along with its cache.
-        let cache_raw = crate::arena::arena_alloc_gc_old_born_tenured(
-            cache_bytes,
-            8,
-            crate::gc::GC_TYPE_STRING,
-        );
+        let cache_raw =
+            alloc_lazy_cluster_bytes(cache_bytes, crate::gc::GC_TYPE_STRING, cluster_old);
         // arena_alloc_gc can reuse slots from the free list whose
         // bytes still hold whatever the previous occupant wrote.
         // Zero explicitly — the cache invariant relies on the
@@ -1361,11 +1396,8 @@ unsafe fn alloc_lazy_array_backing(
         // Same generation as the header and cache — see above. The bitmap
         // holds no heap edges, but keeping it with its cluster keeps the
         // page-liveness bookkeeping uniform.
-        let bitmap_raw = crate::arena::arena_alloc_gc_old_born_tenured(
-            bitmap_bytes,
-            8,
-            crate::gc::GC_TYPE_STRING,
-        );
+        let bitmap_raw =
+            alloc_lazy_cluster_bytes(bitmap_bytes, crate::gc::GC_TYPE_STRING, cluster_old);
         std::ptr::write_bytes(bitmap_raw, 0, bitmap_bytes);
         let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
         (*hdr).materialized_bitmap = bitmap_raw as *mut u64;

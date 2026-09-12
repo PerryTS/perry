@@ -234,6 +234,10 @@ pub(crate) enum GcMoveHookKind {
     /// `GC_TYPE_REGEXP` is movable, and both tables use the payload address as
     /// their key.
     RegExpSideTables,
+    /// Rekey a lazy JSON array's tape registration. `json_tape_store` keys a
+    /// tape by its owner's address, which is precisely what kept
+    /// `GC_TYPE_LAZY_ARRAY` immovable and old-gen until this existed.
+    LazyArrayTape,
 }
 
 #[allow(dead_code)]
@@ -465,14 +469,22 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         true,
         GcRewriteDescriptorKind::LazyArray,
         GcLayoutSlotKind::None,
-        // NOT movable. `json_tape_store` keys a lazy array's tape by its
-        // header address, and every caller outside `json_tape` holds raw
-        // header pointers across allocations. The header is allocated old-gen
-        // and born tenured (`json_tape::alloc_lazy_header_bytes`), so nothing
-        // relocates it today; saying so here is what keeps old-page defrag
-        // from ever doing so. `true` was vacuous before #7539 anyway — the
-        // header was multi-megabyte and never left the old generation.
-        false,
+        // Movable since the tape registration learned to follow its owner
+        // (`GcMoveHookKind::LazyArrayTape`) and a header dying in a copying
+        // minor's from-space learned to give its tape back
+        // (`json_tape_store::finalize_dead_copied_minor_from_space_lazy_tapes`).
+        // Those two were the whole reason this was `false`: the registry keys
+        // a tape by its owner's address, and the flip runs no finalize hooks.
+        //
+        // Pinning was not free. A lazy cluster born old is never swept by a
+        // minor, so a DEAD one still holds its entire element graph live
+        // through the remembered set until a full collection — which on a
+        // parse-and-scan loop never arrives. Measured on
+        // `records_array_16k:scan`: every minor promoted essentially the whole
+        // nursery (`survival_permille=996`, `copied_objects=0`,
+        // `freed_bytes=0`) while `old_in_use` climbed past 48 MB, for 205 MiB
+        // peak RSS against Node's 62 MiB.
+        true,
         // #7539: the tape is a `json_tape_store` side allocation now, not
         // inline payload. Keeping it inline made the header ~2.4 MB on a
         // 10 k-record blob, which `arena_alloc_gc` routed into the old
@@ -482,7 +494,7 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         GcExternalBytePolicy::SideAllocation,
         GcLargeObjectPolicy::OldArenaWhenOverThreshold,
         false,
-        GcMoveHookKind::None,
+        GcMoveHookKind::LazyArrayTape,
         GcRewriteHookKind::None,
         GcFinalizeHookKind::LazyArrayTape,
     )),
@@ -803,6 +815,9 @@ pub(crate) fn gc_type_after_payload_move(obj_type: u8, old_user: usize, new_user
         GcMoveHookKind::RegExpSideTables => {
             crate::regex::regex_header_moved_for_gc(old_user, new_user);
         }
+        GcMoveHookKind::LazyArrayTape => {
+            crate::json_tape_store::owner_moved(old_user, new_user);
+        }
     }
 }
 
@@ -825,6 +840,13 @@ pub(crate) fn gc_type_clear_dead_payload_side_tables(obj_type: u8, user_ptr: usi
         }
         GcMoveHookKind::ErrorSideTables => {
             crate::node_submodules::diagnostics_gc::error_side_tables_clear_dead(user_ptr);
+        }
+        GcMoveHookKind::LazyArrayTape => {
+            // The tape is released by `GcFinalizeHookKind::LazyArrayTape` and,
+            // for a header that dies in a copying minor's from-space, by
+            // `finalize_dead_copied_minor_from_space_lazy_tapes`. Releasing it
+            // a third time here would be sound (the release is idempotent) but
+            // would hide which pass actually owns the reclaim.
         }
         GcMoveHookKind::RegExpSideTables => {
             crate::regex::regex_header_clear_dead_for_gc(user_ptr);

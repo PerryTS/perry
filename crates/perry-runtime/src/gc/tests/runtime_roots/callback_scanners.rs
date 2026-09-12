@@ -270,19 +270,25 @@ fn test_json_tape_lazy_get_header_handle_survives_copied_minor_gc() {
             JsonTapeSafepointHookGuard::new(crate::json_tape::JsonTapeSafepoint::LazyArrayRooted);
         let hdr = unsafe { test_alloc_lazy_json_array(input) };
         let original_hdr = hook.fired_ptr();
-        // #7539: the header is old-gen and immovable by construction, so a
-        // copied minor at the safepoint CANNOT relocate it — that is the
-        // property `try_stringify_lazy_array` and the array accessors rely on
-        // when they hold a raw header across an allocation. What must still be
-        // true is that `alloc_lazy_array` hands back the address the collector
-        // sees, i.e. the one its own rooted handle resolves to.
-        assert_eq!(
-            hdr as usize, original_hdr,
-            "the lazy header must not move across a copied-minor GC"
-        );
+        // A small lazy cluster is nursery-resident and movable now: pinning it
+        // meant a minor could never reclaim a dead one, and it held its whole
+        // element graph live through the remembered set. So the header DOES
+        // relocate here — the hook observed the address before the collection
+        // it triggered — and what `alloc_lazy_array` owes its caller is the
+        // REFRESHED address, read back through its own rooted handle.
         assert!(
-            crate::arena::pointer_in_old_gen(hdr as usize),
-            "…because it is old-gen, which is what makes that guaranteed"
+            !crate::arena::pointer_in_old_gen(hdr as usize),
+            "a two-element cluster is small, so it must be nursery-resident"
+        );
+        assert_ne!(
+            hdr as usize, original_hdr,
+            "a nursery header must relocate across the safepoint, or this test \
+             proves nothing about the refresh"
+        );
+        assert_eq!(
+            unsafe { (*hdr).magic },
+            crate::json_tape::LAZY_ARRAY_MAGIC,
+            "the returned address must be the live header, not the stale one"
         );
         hdr
     };
@@ -293,11 +299,18 @@ fn test_json_tape_lazy_get_header_handle_survives_copied_minor_gc() {
     let value = unsafe { crate::json_tape::lazy_get(hdr_handle.get_raw_mut_ptr(), 0) };
     let original_hdr = hook.fired_ptr();
     let hdr_after = hdr_handle.get_raw_mut_ptr::<crate::json_tape::LazyArrayHeader>();
-    assert_eq!(
+    assert_ne!(
         hdr_after as usize, original_hdr,
-        "the lazy header must not move across a copied-minor GC (#7539)"
+        "a nursery header must relocate across lazy_get's safepoint too"
     );
     unsafe {
+        assert_eq!(
+            (*hdr_after).magic,
+            crate::json_tape::LAZY_ARRAY_MAGIC,
+            "the handle must resolve to the live header after the move"
+        );
+        // The cache the relocated header points at must be the one lazy_get
+        // wrote through: a stale cache edge would read back as an empty bitmap.
         let bitmap = (*hdr_after).materialized_bitmap;
         assert!(!bitmap.is_null());
         assert_ne!(*bitmap & 1, 0, "cold lazy_get should cache element 0");
@@ -375,10 +388,16 @@ fn test_json_tape_lazy_get_records_its_cache_store_as_an_external_edge() {
     // Born-old header. That is the shape the #7538 workload had and the only
     // one where the in-object/external distinction bites — a nursery header is
     // traced directly and its descriptor reaches the cache without any
-    // remembered-set entry at all. #7539 moved the tape into a side allocation
-    // but deliberately kept the header in the old generation, so this premise
-    // still holds by construction rather than by the header being large.
-    let elements = 4096;
+    // remembered-set entry at all.
+    //
+    // The cluster's generation is decided by its cache size now, against the
+    // POINTER-BEARING threshold (128 KB), so the premise has to be bought with
+    // element count rather than assumed: 20 000 JSValues is ~156 KB, safely
+    // over the line. 4096 elements used to suffice only because every lazy
+    // header was born old unconditionally, and at 32 KB it would now be a
+    // NURSERY cluster — this test would still pass its later assertions while
+    // exercising none of the containment branch it exists for.
+    let elements = 20_000;
     let mut input = String::with_capacity(elements * 8 + 2);
     input.push('[');
     for i in 0..elements {
@@ -492,13 +511,19 @@ fn test_json_tape_force_materialize_sparse_cache_handles_survive_copied_minor_gc
     );
     let original_arr = hook.fired_ptr();
     let hdr_after = hdr_handle.get_raw_mut_ptr::<crate::json_tape::LazyArrayHeader>();
-    assert_eq!(
+    // A four-element cluster is nursery-resident, so the header relocates here
+    // as well: the rooted handle, not the address, is what keeps a caller right.
+    assert_ne!(
         hdr_after as usize, before_force_hdr,
-        "the lazy header must not move across a copied-minor GC (#7539)"
+        "a small lazy header is young, so force materialization must relocate it"
     );
-    // The MATERIALIZED ARRAY is young and does move — which is the handle
-    // refresh this test is really about, and the reason the header being
-    // stable does not make it vacuous.
+    assert_eq!(
+        unsafe { (*hdr_after).magic },
+        crate::json_tape::LAZY_ARRAY_MAGIC,
+        "…and the handle must still resolve to the live header"
+    );
+    // The MATERIALIZED ARRAY moves too, and its handle must refresh for the
+    // same reason.
     assert_ne!(
         arr as usize, original_arr,
         "force materialization should refresh the rooted array handle"
