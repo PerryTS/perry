@@ -60,8 +60,9 @@ pub unsafe fn lazy_get(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
             && i < (*arr).length
             && i < (*arr).capacity
         {
-            let elements = (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>())
-                as *const u64;
+            // #10077: a dense queue keeps its live elements in a suffix of the
+            // allocation, so logical element zero is not the header's end.
+            let elements = crate::array::array_elements_ptr(arr) as *const u64;
             let bits = *elements.add(i as usize);
             // Holes must still consult prototypes; sparse and out-of-bounds
             // reads can do the same. Those paths may invoke a getter.

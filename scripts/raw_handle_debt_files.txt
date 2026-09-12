@@ -71,7 +71,6 @@
 47 crates/perry-runtime/src/gc/tests/runtime_roots/callback_scanners.rs
 4 crates/perry-runtime/src/gc/tests/runtime_roots/fs_options_object.rs
 3 crates/perry-runtime/src/gc/tests/runtime_roots/hook_dispatch_handles.rs
-1 crates/perry-runtime/src/gc/tests/runtime_roots/string_slice.rs
 10 crates/perry-runtime/src/gc/tests/runtime_roots/transient_handles.rs
 11 crates/perry-runtime/src/json/replacer.rs
 26 crates/perry-runtime/src/json/reviver.rs

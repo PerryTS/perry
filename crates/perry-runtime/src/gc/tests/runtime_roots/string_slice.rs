@@ -21,8 +21,9 @@ fn suffix_cursor_offsets_survive_source_evacuation_and_split_slice_owns_its_byte
     }
     let kept = crate::string::js_string_slice(source, 3, 5);
     let kept_root = scope.root_string_ptr(kept);
-    gc_collect_minor();
-    let source = root.get_raw_mut_ptr::<crate::StringHeader>();
+    // The collection is what the source must survive, so take its address from
+    // the rooted slot after the call rather than before it.
+    let (_, source) = root.across_mut::<crate::StringHeader, _>(|| gc_collect_minor());
     assert_ne!(
         source as usize, before,
         "the test must actually move the source"
@@ -39,9 +40,10 @@ fn suffix_cursor_offsets_survive_source_evacuation_and_split_slice_owns_its_byte
             214.0
         );
     }
-    let kept = kept_root.get_raw_const_ptr::<crate::StringHeader>();
-    assert_eq!(crate::string::js_string_char_code_at(kept, 0), 56832.0);
-    assert_eq!(crate::string::js_string_char_code_at(kept, 1), 214.0);
+    kept_root.with_const_ptr(|kept: *const crate::StringHeader| {
+        assert_eq!(crate::string::js_string_char_code_at(kept, 0), 56832.0);
+        assert_eq!(crate::string::js_string_char_code_at(kept, 1), 214.0);
+    });
 }
 
 /// #5062: `String.prototype.slice` copies the selected range out of the source
@@ -85,8 +87,9 @@ fn test_transient_runtime_handle_string_slice_gc() {
 
     let result_scope = RuntimeHandleScope::new();
     let result_root = result_scope.root_string_ptr(result);
-    drain_scheduled_minor_gc(before, "slice destination allocation");
-    let result = result_root.get_raw_const_ptr::<crate::StringHeader>();
+    let (_, result) = result_root.across_const::<crate::StringHeader, _>(|| {
+        drain_scheduled_minor_gc(before, "slice destination allocation")
+    });
 
     unsafe {
         assert_eq!((*result).byte_len, SLICE_LEN as u32);

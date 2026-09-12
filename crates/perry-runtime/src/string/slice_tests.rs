@@ -28,7 +28,7 @@ fn slice_utf16_bounds_and_lone_surrogates() {
                 let normalize = |n: i32| if n < 0 { (len + n).max(0) } else { n.min(len) };
                 let a = normalize(start) as usize;
                 let b = normalize(end) as usize;
-                let result = js_string_slice(root.get_raw_const_ptr(), start, end);
+                let result = root.with_const_ptr(|s| js_string_slice(s, start, end));
                 assert_eq!(
                     units(result),
                     expected[a..b.max(a)],
@@ -47,17 +47,11 @@ fn slice_utf16_bounds_and_lone_surrogates() {
                 );
                 let a = start.clamp(0, len) as usize;
                 let b = end.clamp(0, len) as usize;
-                let result = js_string_substring(root.get_raw_const_ptr(), start, end);
+                let result = root.with_const_ptr(|s| js_string_substring(s, start, end));
                 assert_eq!(units(result), expected[a.min(b)..a.max(b)]);
             }
         }
-        assert!(
-            units(js_string_slice(
-                root.get_raw_const_ptr(),
-                i32::MIN,
-                i32::MAX
-            )) == expected
-        );
+        assert!(units(root.with_const_ptr(|s| js_string_slice(s, i32::MIN, i32::MAX))) == expected);
     }
 }
 

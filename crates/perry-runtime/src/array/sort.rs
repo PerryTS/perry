@@ -191,8 +191,7 @@ unsafe fn sort_permutation(
                     // no interior pointer or copied value survives a callback.
                     let arr = roots.get(0) as *const ArrayHeader;
                     let comparator = roots.get(1) as *const ClosureHeader;
-                    let elements =
-                        crate::array::array_elements_ptr(arr) as *const f64;
+                    let elements = crate::array::array_elements_ptr(arr) as *const f64;
                     c.less_equal_at(
                         comparator,
                         *elements.add(a as usize),
