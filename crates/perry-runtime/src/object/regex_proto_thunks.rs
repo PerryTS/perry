@@ -507,7 +507,10 @@ pub(crate) fn regexp_view_uses_builtin(value: f64) -> bool {
             return false;
         }
     }
-    let proto = REGEXP_PROTOTYPE_PTR.load(std::sync::atomic::Ordering::Acquire);
+    // The realm prototype now lives in the canonical test site rather than in a
+    // standalone static; reading it through the same cell keeps one TLS lookup.
+    let proto = REGEXP_PROTOTYPE_TEST_SITE
+        .with(|site| site.prototype.load(std::sync::atomic::Ordering::Acquire));
     if super::descriptor_state::may_have_descriptor_entry(proto as usize, "exec", true) {
         return false;
     }

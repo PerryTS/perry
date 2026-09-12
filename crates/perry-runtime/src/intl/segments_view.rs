@@ -392,7 +392,7 @@ pub extern "C" fn js_segments_view_segment(cursor: f64) -> f64 {
         let scope = crate::gc::RuntimeHandleScope::new();
         let cursor = scope.root_nanbox_f64(cursor);
         let c = cursor_ptr(cursor.get_nanbox_f64()).unwrap();
-        let units = num_field(c, F_UTF16_LEN);
+        let units = unsafe { CursorFields::from_cursor(c).number(F_UTF16_LEN) };
         let input = scope.root_nanbox_f64(f64::from_bits(
             crate::object::js_object_get_field(c, F_INPUT).bits(),
         ));
@@ -458,8 +458,8 @@ pub extern "C" fn js_segments_view_regexp_test(cursor: f64, regex: f64) -> f64 {
         let cursor = scope.root_nanbox_f64(cursor);
         let regex = scope.root_nanbox_f64(regex);
         let c = cursor_ptr(cursor.get_nanbox_f64()).unwrap();
-        let start = num_field(c, F_BYTE_START);
-        let end = num_field(c, F_BYTE_END);
+        let start = unsafe { CursorFields::from_cursor(c).number(F_BYTE_START) };
+        let end = unsafe { CursorFields::from_cursor(c).number(F_BYTE_END) };
         let input = scope.root_nanbox_f64(f64::from_bits(
             crate::object::js_object_get_field(c, F_INPUT).bits(),
         ));

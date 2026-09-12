@@ -15,16 +15,12 @@ pub(super) fn string_payload(s: *const StringHeader) -> Vec<u8> {
     }
 }
 
+/// A header carries its compiled program as a GC allocation. There is one
+/// engine now, so there is no second or third program to ask about: the
+/// `fancy` and `repeat` variants these helpers reported are gone with the
+/// matchers that needed them.
 pub(super) fn regex_is_built(re: *const RegExpHeader) -> bool {
-    !unsafe { (*re).programs_ptr.is_null() }
-}
-
-pub(super) fn regex_has_fancy_program(re: *const RegExpHeader) -> bool {
-    regex_is_built(re) && unsafe { (*(*re).programs_ptr).fancy.is_some() }
-}
-
-pub(super) fn regex_has_repeat_program(re: *const RegExpHeader) -> bool {
-    regex_is_built(re) && unsafe { (*(*re).programs_ptr).repeat.is_some() }
+    !unsafe { (*re).perex_program.is_null() }
 }
 
 #[test]
