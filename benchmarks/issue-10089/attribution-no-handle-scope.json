@@ -1,0 +1,202 @@
+[
+  {
+    "workload": "binary-dataview-set",
+    "engine": "node",
+    "name": "binary-dataview-set",
+    "category": "binary-node",
+    "n": 100,
+    "ms_per_run": 0.000267853672255898,
+    "runs": 522604,
+    "checksum": 53205556
+  },
+  {
+    "workload": "binary-dataview-set",
+    "engine": "perry",
+    "name": "binary-dataview-set",
+    "category": "binary-node",
+    "n": 100,
+    "ms_per_run": 0.006033606636494265,
+    "runs": 22284,
+    "checksum": 53205556
+  },
+  {
+    "workload": "binary-dataview-set",
+    "engine": "node",
+    "name": "binary-dataview-set",
+    "category": "binary-node",
+    "n": 1000,
+    "ms_per_run": 0.0024940461346632994,
+    "runs": 55995,
+    "checksum": 509007827
+  },
+  {
+    "workload": "binary-dataview-set",
+    "engine": "perry",
+    "name": "binary-dataview-set",
+    "category": "binary-node",
+    "n": 1000,
+    "ms_per_run": 0.05965330654762267,
+    "runs": 2340,
+    "checksum": 509007827
+  },
+  {
+    "workload": "binary-dataview-set",
+    "engine": "node",
+    "name": "binary-dataview-set",
+    "category": "binary-node",
+    "n": 10000,
+    "ms_per_run": 0.024723711990112383,
+    "runs": 5664,
+    "checksum": 6182819
+  },
+  {
+    "workload": "binary-dataview-set",
+    "engine": "perry",
+    "name": "binary-dataview-set",
+    "category": "binary-node",
+    "n": 10000,
+    "ms_per_run": 0.5926102352941364,
+    "runs": 239,
+    "checksum": 6182819
+  },
+  {
+    "workload": "binary-dataview-set",
+    "engine": "node",
+    "name": "binary-dataview-set",
+    "category": "binary-node",
+    "n": 100000,
+    "ms_per_run": 0.24635226829268253,
+    "runs": 574,
+    "checksum": 64481668
+  },
+  {
+    "workload": "binary-dataview-set",
+    "engine": "perry",
+    "name": "binary-dataview-set",
+    "category": "binary-node",
+    "n": 100000,
+    "ms_per_run": 5.909851500000002,
+    "runs": 28,
+    "checksum": 64481668
+  },
+  {
+    "workload": "binary-dataview-set",
+    "engine": "node",
+    "name": "binary-dataview-set",
+    "category": "binary-node",
+    "n": 1000000,
+    "ms_per_run": 2.465058111111072,
+    "runs": 63,
+    "checksum": 455838306
+  },
+  {
+    "workload": "binary-dataview-set",
+    "engine": "perry",
+    "name": "binary-dataview-set",
+    "category": "binary-node",
+    "n": 1000000,
+    "ms_per_run": 48.430062000000135,
+    "runs": 7,
+    "checksum": 455838306
+  },
+  {
+    "workload": "binary-dataview-get",
+    "engine": "node",
+    "name": "binary-dataview-get",
+    "category": "binary-node",
+    "n": 100,
+    "ms_per_run": 0.00026624930109959716,
+    "runs": 507112,
+    "checksum": 53205456
+  },
+  {
+    "workload": "binary-dataview-get",
+    "engine": "perry",
+    "name": "binary-dataview-get",
+    "category": "binary-node",
+    "n": 100,
+    "ms_per_run": 0.002917865061998543,
+    "runs": 47994,
+    "checksum": 53205456
+  },
+  {
+    "workload": "binary-dataview-get",
+    "engine": "node",
+    "name": "binary-dataview-get",
+    "category": "binary-node",
+    "n": 1000,
+    "ms_per_run": 0.0024790539167077515,
+    "runs": 51710,
+    "checksum": 509006827
+  },
+  {
+    "workload": "binary-dataview-get",
+    "engine": "perry",
+    "name": "binary-dataview-get",
+    "category": "binary-node",
+    "n": 1000,
+    "ms_per_run": 0.02878656690647388,
+    "runs": 4865,
+    "checksum": 509006827
+  },
+  {
+    "workload": "binary-dataview-get",
+    "engine": "node",
+    "name": "binary-dataview-get",
+    "category": "binary-node",
+    "n": 10000,
+    "ms_per_run": 0.024621353013529843,
+    "runs": 5613,
+    "checksum": 6172819
+  },
+  {
+    "workload": "binary-dataview-get",
+    "engine": "perry",
+    "name": "binary-dataview-get",
+    "category": "binary-node",
+    "n": 10000,
+    "ms_per_run": 0.28797942857143094,
+    "runs": 490,
+    "checksum": 6172819
+  },
+  {
+    "workload": "binary-dataview-get",
+    "engine": "node",
+    "name": "binary-dataview-get",
+    "category": "binary-node",
+    "n": 100000,
+    "ms_per_run": 0.24566884146341156,
+    "runs": 574,
+    "checksum": 64381668
+  },
+  {
+    "workload": "binary-dataview-get",
+    "engine": "perry",
+    "name": "binary-dataview-get",
+    "category": "binary-node",
+    "n": 100000,
+    "ms_per_run": 2.8957324285714288,
+    "runs": 49,
+    "checksum": 64381668
+  },
+  {
+    "workload": "binary-dataview-get",
+    "engine": "node",
+    "name": "binary-dataview-get",
+    "category": "binary-node",
+    "n": 1000000,
+    "ms_per_run": 2.4592393333333415,
+    "runs": 63,
+    "checksum": 454838306
+  },
+  {
+    "workload": "binary-dataview-get",
+    "engine": "perry",
+    "name": "binary-dataview-get",
+    "category": "binary-node",
+    "n": 1000000,
+    "ms_per_run": 28.78403000000003,
+    "runs": 7,
+    "checksum": 454838306
+  }
+]

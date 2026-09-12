@@ -1,0 +1,20 @@
+diff --git a/crates/perry-runtime/src/buffer/dataview.rs b/crates/perry-runtime/src/buffer/dataview.rs
+index 71727b2d24..0000000000 100644
+--- a/crates/perry-runtime/src/buffer/dataview.rs
++++ b/crates/perry-runtime/src/buffer/dataview.rs
+@@ -182,14 +182,8 @@ unsafe fn write_bytes(buf: *mut BufferHeader, offset: i64, bytes: &[u8]) {
+     if offset + (bytes.len() as i64) > len {
+         throw_dataview_oob();
+     }
+-    let base = buffer_data_mut(buf).add(offset as usize);
++    let base = super::view::resolve_data_ptr(buf).add(offset as usize) as *mut u8;
+     ptr::copy_nonoverlapping(bytes.as_ptr(), base, bytes.len());
+-    super::view::propagate_written_range_from_receiver(
+-        buf as usize,
+-        offset as u32,
+-        base,
+-        bytes.len() as u32,
+-    );
+ }
+
+ /// `DataView.prototype.get<Kind>(byteOffset, littleEndian?)`.
