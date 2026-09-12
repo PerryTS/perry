@@ -132,6 +132,7 @@ pub extern "C" fn js_array_splice(
         } else {
             arr
         };
+        let flags = array_object_flags_resolved(arr);
         let elements_ptr = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
 
         // Shift elements after the splice point
@@ -142,7 +143,8 @@ pub extern "C" fn js_array_splice(
             // Need to shift the tail
             let src = elements_ptr.add(tail_start as usize);
             let dst = elements_ptr.add((start_idx + items_count) as usize);
-            // GC_STORE_AUDIT(BARRIERED): splice tail memmove is followed by layout/barrier rebuild.
+            // GC_STORE_AUDIT(BARRIERED): the dense-move finisher translates
+            // survivor dirty pages below.
             ptr::copy(src, dst, tail_len as usize);
         }
 
@@ -155,7 +157,9 @@ pub extern "C" fn js_array_splice(
                 // place. No-op for SSO / non-string. (This insert path doesn't
                 // funnel through `note_array_slot`.)
                 crate::string::js_string_addref_if_heap_string(item);
-                // GC_STORE_AUDIT(BARRIERED): splice inserted item writes are followed by layout/barrier rebuild.
+                let item = canonicalize_array_numeric_store_value_from_flags(flags, item);
+                // GC_STORE_AUDIT(BARRIERED): inserted items are covered by the
+                // dense-move finisher below.
                 ptr::write(elements_ptr.add(start_idx as usize + i), item);
             }
         }
@@ -164,7 +168,19 @@ pub extern "C" fn js_array_splice(
         // non-writable `length` (test262 splice/S15.4.4.12_A6.1_T2/T3).
         super::push_pop::guard_writable_length(arr);
         (*arr).length = new_len;
-        rebuild_array_layout(arr);
+        let moved_count = if items_count != actual_delete {
+            tail_len as usize
+        } else {
+            0
+        };
+        finish_array_dense_move_layout(
+            arr,
+            elements_ptr.add(tail_start as usize).cast(),
+            elements_ptr.add((start_idx + items_count) as usize).cast(),
+            moved_count,
+            elements_ptr.add(start_idx as usize).cast(),
+            items_count as usize,
+        );
 
         // Return modified array via out param
         *out_arr = arr;
