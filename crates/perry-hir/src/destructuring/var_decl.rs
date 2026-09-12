@@ -429,20 +429,47 @@ pub(crate) fn lower_var_decl_with_destructuring(
             // [value, setter_closure] 2-element array. Without this, the
             // regular destructure path indexes a scalar return as if it were
             // an array — both elements come out undefined.
-            let init_expr =
+            let use_state_tuple =
                 if let (ast::Pat::Array(_), Some(init)) = (&decl.name, decl.init.as_ref()) {
-                    if let Some(rewritten) = rewrite_use_state_tuple(ctx, init) {
-                        rewritten
-                    } else {
-                        lower_expr(ctx, init)?
-                    }
+                    rewrite_use_state_tuple(ctx, init)
                 } else {
-                    decl.init
-                        .as_ref()
-                        .map(|e| lower_expr(ctx, e))
-                        .transpose()?
-                        .ok_or_else(|| anyhow!("Destructuring requires an initializer"))?
+                    None
                 };
+
+            // #10086: `const [a, b] = [x, y]` / `= <statically-proven array>`
+            // binds through the guarded non-iterator arm — no iterator object,
+            // no `{ value, done }` result object per element, and for a literal
+            // source no array allocation at all. Decided BEFORE the initializer
+            // is lowered, because the literal shape spills each element into
+            // its own temp instead of materializing the array.
+            if use_state_tuple.is_none() {
+                if let (ast::Pat::Array(arr_pat), Some(init)) = (pattern, decl.init.as_ref()) {
+                    if let Some((mut stmts, plan)) =
+                        super::array_fast::plan_for_source(ctx, &arr_pat.elems, init)?
+                    {
+                        lower_array_pattern_binding_guarded(
+                            ctx,
+                            arr_pat,
+                            plan,
+                            mutable,
+                            is_var_decl,
+                            &mut stmts,
+                        )?;
+                        result.extend(stmts);
+                        return Ok(result);
+                    }
+                }
+            }
+
+            let init_expr = match use_state_tuple {
+                Some(rewritten) => rewritten,
+                None => decl
+                    .init
+                    .as_ref()
+                    .map(|e| lower_expr(ctx, e))
+                    .transpose()?
+                    .ok_or_else(|| anyhow!("Destructuring requires an initializer"))?,
+            };
             let stmts = lower_pattern_binding(ctx, pattern, init_expr, mutable, is_var_decl)?;
             result.extend(stmts);
         }

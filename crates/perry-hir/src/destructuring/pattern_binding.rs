@@ -1,5 +1,6 @@
 //! Recursive lowering of binding patterns (`let { a, b } = expr`).
 
+use super::array_fast::{self, ArraySource};
 use super::*;
 
 fn is_global_this_value(ctx: &LoweringContext, expr: &Expr) -> bool {
@@ -163,7 +164,7 @@ fn iterator_next_value_stmts(
 fn lower_array_pattern_binding(
     ctx: &mut LoweringContext,
     arr_pat: &ast::ArrayPat,
-    source: Expr,
+    source: ArraySource,
     mutable: bool,
     is_var_decl: bool,
     result: &mut Vec<Stmt>,
@@ -174,7 +175,7 @@ fn lower_array_pattern_binding(
         name: iter_name,
         ty: Type::Any,
         mutable: false,
-        init: Some(Expr::GetIterator(Box::new(source))),
+        init: Some(source.iter_init()),
     });
     let (done_id, done_name) = fresh_destruct_local(ctx, Type::Boolean);
     result.push(Stmt::Let {
@@ -186,7 +187,7 @@ fn lower_array_pattern_binding(
     });
 
     let mut body: Vec<Stmt> = Vec::new();
-    for elem in &arr_pat.elems {
+    for (idx, elem) in arr_pat.elems.iter().enumerate() {
         match elem {
             // Elision (`[, x]`) — advance the iterator and discard the value.
             None => {
@@ -198,7 +199,8 @@ fn lower_array_pattern_binding(
                     mutable: true,
                     init: Some(Expr::Undefined),
                 });
-                body.extend(iterator_next_value_stmts(ctx, iter_id, done_id, value_id));
+                let pull = iterator_next_value_stmts(ctx, iter_id, done_id, value_id);
+                body.extend(source.pull(idx, value_id, pull));
             }
             // Rest element (`[...rest]`) — drain the remainder into an array.
             Some(ast::Pat::Rest(rest_pat)) => {
@@ -237,7 +239,8 @@ fn lower_array_pattern_binding(
                     mutable: true,
                     init: Some(Expr::Undefined),
                 });
-                body.extend(iterator_next_value_stmts(ctx, iter_id, done_id, value_id));
+                let pull = iterator_next_value_stmts(ctx, iter_id, done_id, value_id);
+                body.extend(source.pull(idx, value_id, pull));
 
                 // A `Pat::Assign` element carries a default initializer that is
                 // evaluated lazily, only when the pulled value is `undefined`.
@@ -277,10 +280,10 @@ fn lower_array_pattern_binding(
     // Close the iterator: on any abrupt completion from the body (default
     // initializer / nested pattern throwing), and again on normal completion
     // when the iterator was not exhausted.
-    let close_stmt = Stmt::Expr(runtime_iterator_call(
+    let close_stmt = source.close(Stmt::Expr(runtime_iterator_call(
         "iteratorCloseIfNotDone",
         vec![Expr::LocalGet(iter_id), Expr::LocalGet(done_id)],
-    ));
+    )));
     let (exc_id, exc_name) = fresh_destruct_local(ctx, Type::Any);
     result.push(Stmt::Try {
         body,
@@ -329,6 +332,33 @@ pub(crate) fn lower_pattern_binding(
     let mut result = Vec::new();
     lower_pattern_binding_into(ctx, pat, source, mutable, is_var_decl, &mut result)?;
     Ok(result)
+}
+
+/// #10086: `const [a, b] = <spread-free array literal / statically-proven
+/// array>` — bind the pattern through the guarded non-iterator arm.
+///
+/// A declaration entry point of its own rather than a flag on
+/// [`lower_pattern_binding`], because the proof is a property of the TOP-level
+/// pattern and its initializer: a nested pattern's source is an element of
+/// unknown type, and every recursive call keeps the plain iterator lowering.
+/// `setup` holds the statements the plan already emitted (the literal's element
+/// spills, or the source spill, plus the guard read) and is extended in place.
+pub(crate) fn lower_array_pattern_binding_guarded(
+    ctx: &mut LoweringContext,
+    arr_pat: &ast::ArrayPat,
+    plan: array_fast::FastPlan,
+    mutable: bool,
+    is_var_decl: bool,
+    setup: &mut Vec<Stmt>,
+) -> Result<()> {
+    lower_array_pattern_binding(
+        ctx,
+        arr_pat,
+        ArraySource::Guarded(plan),
+        mutable,
+        is_var_decl,
+        setup,
+    )
 }
 
 pub(crate) fn lower_pattern_binding_into(
@@ -485,7 +515,14 @@ pub(crate) fn lower_pattern_binding_into(
             // Array binding patterns use the iterator protocol (GetIterator /
             // IteratorStep / IteratorValue / IteratorClose), per spec — not raw
             // index reads. See `lower_array_pattern_binding`.
-            lower_array_pattern_binding(ctx, arr_pat, source, mutable, is_var_decl, result)
+            lower_array_pattern_binding(
+                ctx,
+                arr_pat,
+                ArraySource::Iterator(source),
+                mutable,
+                is_var_decl,
+                result,
+            )
         }
         ast::Pat::Object(obj_pat) => {
             // Materialize source into a temp

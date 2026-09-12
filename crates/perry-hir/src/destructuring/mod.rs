@@ -4,6 +4,8 @@
 //! declarations with destructuring patterns.
 //!
 //! Organized into topical sub-modules:
+//! - [`array_fast`] — #10086: the guarded non-iterator arm shared by the
+//!   assignment and declaration array-pattern lowerings.
 //! - [`helpers`] — small utility predicates / pattern recognizers shared
 //!   across the other sub-modules (e.g. `useState` tuple rewrite,
 //!   recursive AST scans).
@@ -23,6 +25,7 @@ use crate::lower::{lower_expr, LoweringContext};
 use crate::lower_patterns::*;
 use crate::lower_types::*;
 
+mod array_fast;
 mod assignment_expr;
 mod assignment_stmt;
 mod helpers;
@@ -35,7 +38,7 @@ pub(crate) use assignment_stmt::{
     lower_destructuring_assignment_stmt, lower_destructuring_assignment_stmt_from_local,
 };
 pub(crate) use helpers::{ast_expr_contains_function_expr, rewrite_use_state_tuple};
-pub(crate) use pattern_binding::lower_pattern_binding;
+pub(crate) use pattern_binding::{lower_array_pattern_binding_guarded, lower_pattern_binding};
 pub(crate) use var_decl::for_init_decl_type;
 pub(crate) use var_decl::lower_var_decl_with_destructuring;
 pub(crate) use var_decl_sources::resolvable_native_module_for_spec;
