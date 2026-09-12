@@ -476,7 +476,11 @@ unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
             }
         }
     }
-    let use_tape = tape_route_eligible(len, bytes);
+    // Eligible top-level arrays stay lazy unless this thread's lazy arrays have
+    // been getting fully traversed; see `traversal_feedback`.
+    let use_tape = tape_route_eligible(len, bytes)
+        && !(matches!(tape_mode_from_env(), TapeMode::Auto)
+            && super::traversal_feedback::prefer_eager());
     // The tape's explicit stack proves shallow/deep admission in its syntax
     // pass, and the direct parser bounds its own descent. Only a forced tape
     // above the lazy size ceiling still needs the whole-document scan: a huge
@@ -747,6 +751,7 @@ unsafe fn try_parse_via_tape(text_root: usize, len: usize) -> Option<JSValue> {
                 let len = crate::json_tape::count_array_length(tape_entries, 0);
                 let hdr =
                     crate::json_tape::alloc_lazy_array_from_scratch(tape_entries, 0, len, text_ptr);
+                super::traversal_feedback::note_lazy_array_created();
                 Some(JSValue::object_ptr(hdr as *mut u8))
             } else {
                 Some(crate::json_tape::materialize_from_idx(

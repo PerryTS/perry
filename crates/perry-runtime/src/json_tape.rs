@@ -1670,9 +1670,8 @@ unsafe fn lazy_get_rooted(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
     let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
     let scan_flip = streak >= scan_flip_threshold(cached_length)
         && lazy_cached_count(hdr) * 2 < cached_length as u64;
-    if (*hdr).cumulative_walk_steps > (cached_length as u64) * 2 || scan_flip {
-        force_materialize_lazy(hdr);
-    }
+    let flip = (*hdr).cumulative_walk_steps > (cached_length as u64) * 2 || scan_flip;
+    crate::json::traversal_feedback::after_cold_read(hdr, flip, streak == cached_length);
 
     JSValue::from_bits(value_handle.get_nanbox_u64())
 }
