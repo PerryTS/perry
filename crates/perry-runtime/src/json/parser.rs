@@ -1180,9 +1180,9 @@ impl<'a> DirectParser<'a> {
         }
         // Same `[{...}]` pre-size heuristic as the typed path.
         // Preserve the object-leading estimate on large record arrays.
-        let array = super::construction_array::ConstructionArray::new(
+        let array = super::construction_array::ConstructionArray::presized_records(
             &mut self.batch,
-            ((self.input.len() - self.pos) / 96).clamp(16, 16_384) as u32,
+            (self.input.len() - self.pos) / 96,
         );
         self.parse_array_tail(array, saved_roots)
     }

@@ -116,13 +116,17 @@ pub const LARGE_OBJECT_THRESHOLD_BYTES: usize = 16 * 1024;
 /// block.
 pub const LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES: usize = 128 * 1024;
 
-/// Birth-generation ceiling for an ordinary object's property storage (#10123).
+/// Birth-generation ceiling for JSON-constructed storage (#10123).
 ///
-/// Half a nursery block: it clears a 65,536-field object, and the worst-case
-/// block fragmentation it can cause is 1/2 of one block against the flat
-/// threshold's 1/8. Past it the storage is born old as before, which is also
-/// where the copier would stop being able to move it.
-pub const LARGE_OBJECT_STORAGE_YOUNG_BIRTH_CEILING_BYTES: usize = 512 * 1024;
+/// Three quarters of a nursery block. Wide-object storage needs only half
+/// (a 50,000-field document is 400 KB), but a record array sized once from the
+/// parser's `remaining / 96` estimate does not: a 7.1 MB document of 59,000 rows
+/// estimates 74,145 slots, 593 KB. Admitting that single allocation young is
+/// what lets a minor reclaim the array and its records together after the
+/// document dies. Still inside the 1 MiB `arena::BLOCK_SIZE` and
+/// `copying::MAX_YOUNG_MOVE_BYTES`, so anything admitted here stays movable.
+/// Past it storage is born old as before.
+pub const LARGE_OBJECT_STORAGE_YOUNG_BIRTH_CEILING_BYTES: usize = 768 * 1024;
 
 /// Object types a [`JsonWideBirthScope`] may keep young past the threshold.
 pub mod json_wide_birth {
@@ -171,6 +175,12 @@ impl JsonWideBirthScope {
 
     /// Admit a parse shape-keys array around its single allocation site.
     pub fn keys_array() -> Self {
+        Self(JSON_WIDE_BIRTH_MASK.with(|c| c.replace(json_wide_birth::KEYS_ARRAY)))
+    }
+
+    /// Admit a JSON-constructed array allocation: a record array sized once
+    /// from the parser's estimate (see `ConstructionArray::presized_records`).
+    pub fn arrays() -> Self {
         Self(JSON_WIDE_BIRTH_MASK.with(|c| c.replace(json_wide_birth::KEYS_ARRAY)))
     }
 }
