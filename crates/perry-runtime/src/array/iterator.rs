@@ -1223,11 +1223,13 @@ pub extern "C" fn js_array_spread_append(dest: *mut ArrayHeader, source: f64) ->
     // guard used by `[...array]` proves their iterator is unobservable.
     let scope = crate::gc::RuntimeHandleScope::new();
     let dest_handle = scope.root_raw_mut_ptr(dest);
-    let arr = match crate::array::dense_spread_source(source) {
-        Some(arr) => arr as *mut ArrayHeader,
-        None => array_from_spread_value(source),
-    };
-    js_array_concat(dest_handle.get_raw_mut_ptr::<ArrayHeader>(), arr)
+    let (arr, dest) = dest_handle.across_mut::<ArrayHeader, _>(|| {
+        match crate::array::dense_spread_source(source) {
+            Some(arr) => arr as *mut ArrayHeader,
+            None => array_from_spread_value(source),
+        }
+    });
+    js_array_concat(dest, arr)
 }
 
 /// `true` when `raw_ptr` is a heap `GC_TYPE_OBJECT` whose class id is one of the

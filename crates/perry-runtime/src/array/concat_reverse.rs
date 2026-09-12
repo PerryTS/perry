@@ -133,13 +133,22 @@ pub extern "C" fn js_array_concat(
             let source_handle = scope.root_raw_const_ptr(src);
             let mut result = dest_resolved;
             for i in 0..src_len as usize {
-                let source = clean_arr_ptr(source_handle.get_raw_const_ptr::<ArrayHeader>());
-                if source.is_null() {
+                // Scope the source address to the non-allocating element read;
+                // the push below can move it, so nothing outside holds it.
+                let Some(source_value) =
+                    source_handle.with_const_ptr(|source: *const ArrayHeader| {
+                        let source = clean_arr_ptr(source);
+                        if source.is_null() {
+                            return None;
+                        }
+                        let source_elements = (source as *const u8)
+                            .add(std::mem::size_of::<ArrayHeader>())
+                            as *const f64;
+                        Some(*source_elements.add(i))
+                    })
+                else {
                     break;
-                }
-                let source_elements =
-                    (source as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
-                let source_value = *source_elements.add(i);
+                };
                 let value = if source_value.to_bits() == crate::value::TAG_HOLE {
                     f64::from_bits(crate::value::TAG_UNDEFINED)
                 } else {
@@ -162,13 +171,22 @@ pub extern "C" fn js_array_concat(
                 dest
             };
             for i in 0..src_len as usize {
-                let source = clean_arr_ptr(source_handle.get_raw_const_ptr::<ArrayHeader>());
-                if source.is_null() {
+                // Scope the source address to the non-allocating element read;
+                // the push below can move it, so nothing outside holds it.
+                let Some(source_value) =
+                    source_handle.with_const_ptr(|source: *const ArrayHeader| {
+                        let source = clean_arr_ptr(source);
+                        if source.is_null() {
+                            return None;
+                        }
+                        let source_elements = (source as *const u8)
+                            .add(std::mem::size_of::<ArrayHeader>())
+                            as *const f64;
+                        Some(*source_elements.add(i))
+                    })
+                else {
                     break;
-                }
-                let source_elements =
-                    (source as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
-                let source_value = *source_elements.add(i);
+                };
                 let value = if source_value.to_bits() == crate::value::TAG_HOLE {
                     f64::from_bits(crate::value::TAG_UNDEFINED)
                 } else {
@@ -191,13 +209,21 @@ pub extern "C" fn js_array_concat(
         let source_handle = scope.root_raw_const_ptr(src);
         let dest_handle = scope.root_raw_mut_ptr(dest_resolved);
         let dest_len = (*dest_resolved).length;
+        let dest_capacity = (*dest_resolved).capacity;
         let new_len = dest_len + src_len;
-        let result = if new_len > (*dest_resolved).capacity {
-            js_array_grow(dest_handle.get_raw_mut_ptr::<ArrayHeader>(), new_len)
-        } else {
-            dest_handle.get_raw_mut_ptr::<ArrayHeader>()
-        };
-        let source = clean_arr_ptr(source_handle.get_raw_const_ptr::<ArrayHeader>());
+        // The grow allocates, so the source address is taken from its rooted
+        // slot afterwards; the destination address is `js_array_grow`'s own
+        // return, which is already the post-grow location.
+        let (result, source) = source_handle.across_const::<ArrayHeader, _>(|| {
+            dest_handle.with_mut_ptr(|dest: *mut ArrayHeader| {
+                if new_len > dest_capacity {
+                    js_array_grow(dest, new_len)
+                } else {
+                    dest
+                }
+            })
+        });
+        let source = clean_arr_ptr(source);
         if source.is_null() || result.is_null() {
             return result;
         }

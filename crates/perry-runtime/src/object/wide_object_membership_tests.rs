@@ -33,7 +33,7 @@ fn own_key_membership_crosses_65536_without_a_cutoff() {
 
         for (name, value) in [("s", 1.0), ("κey", 2.0)] {
             let property = key(name);
-            js_object_set_field_by_name(object.get_raw_mut_ptr(), property, value);
+            object.with_mut_ptr(|obj| js_object_set_field_by_name(obj, property, value));
         }
 
         for i in 0..65_535u32 {
@@ -44,28 +44,33 @@ fn own_key_membership_crosses_65536_without_a_cutoff() {
             } else {
                 f64::from(i)
             };
-            js_object_set_field_by_name(object.get_raw_mut_ptr(), property, value);
+            object.with_mut_ptr(|obj| js_object_set_field_by_name(obj, property, value));
 
             let count = i + 3; // two leading keys plus this insertion
             if matches!(count, 65_535 | 65_536 | 65_537) {
-                assert_membership(object.get_raw_mut_ptr(), &name, true);
+                object.with_mut_ptr(|obj| assert_membership(obj, &name, true));
             }
         }
 
-        let obj = object.get_raw_mut_ptr();
+        // Re-read the rooted receiver for every probe: `key()` allocates a
+        // string, so a pointer read once and held across the loop would name
+        // a stale address after a collection moved the object.
         for present in ["s", "κey", "field_0", "field_42", "field_65534"] {
-            assert_membership(obj, present, true);
+            object.with_mut_ptr(|obj| assert_membership(obj, present, true));
         }
-        assert_membership(obj, "missing_field", false);
+        object.with_mut_ptr(|obj| assert_membership(obj, "missing_field", false));
 
         let victim = key("field_32768");
-        assert_eq!(js_object_delete_field(obj, victim), 1);
-        assert_membership(object.get_raw_mut_ptr(), "field_32768", false);
-        assert_membership(object.get_raw_mut_ptr(), "field_32769", true);
+        assert_eq!(
+            object.with_mut_ptr(|obj| js_object_delete_field(obj, victim)),
+            1
+        );
+        object.with_mut_ptr(|obj| assert_membership(obj, "field_32768", false));
+        object.with_mut_ptr(|obj| assert_membership(obj, "field_32769", true));
 
         let victim = key("field_32768");
-        js_object_set_field_by_name(object.get_raw_mut_ptr(), victim, 32768.0);
-        assert_membership(object.get_raw_mut_ptr(), "field_32768", true);
-        assert_membership(object.get_raw_mut_ptr(), "missing_field", false);
+        object.with_mut_ptr(|obj| js_object_set_field_by_name(obj, victim, 32768.0));
+        object.with_mut_ptr(|obj| assert_membership(obj, "field_32768", true));
+        object.with_mut_ptr(|obj| assert_membership(obj, "missing_field", false));
     }
 }

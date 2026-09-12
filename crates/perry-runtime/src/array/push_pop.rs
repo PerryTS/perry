@@ -1014,17 +1014,21 @@ pub extern "C" fn js_array_push_spread_f64(
     let scope = crate::gc::RuntimeHandleScope::new();
     let target_handle = scope.root_raw_mut_ptr(target);
     let boxed = crate::value::js_nanbox_pointer(source as i64);
-    let source = match crate::array::dense_spread_source(boxed) {
-        Some(source) => source,
-        None => crate::array::js_array_clone_for_spread(boxed) as *const ArrayHeader,
-    };
+    // Materializing the spread source allocates, so take the destination's
+    // address from the rooted slot AFTER that call rather than before it.
+    let (source, target) = target_handle.across_mut::<ArrayHeader, _>(|| {
+        match crate::array::dense_spread_source(boxed) {
+            Some(source) => source,
+            None => crate::array::js_array_clone_for_spread(boxed) as *const ArrayHeader,
+        }
+    });
     if source.is_null() {
-        return target_handle.get_raw_mut_ptr::<ArrayHeader>();
+        return target;
     }
     let source_handle = scope.root_raw_const_ptr(source);
     unsafe {
         let src_len = (*source).length;
-        let mut current = target_handle.get_raw_mut_ptr::<ArrayHeader>();
+        let mut current = target;
         for i in 0..src_len as usize {
             let source = clean_arr_ptr(source_handle.get_raw_const_ptr::<ArrayHeader>());
             if source.is_null() {
