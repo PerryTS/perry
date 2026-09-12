@@ -673,6 +673,9 @@ RUNTIME_DISCHARGE_HELPERS = {
     "replay_array_growth_write_barriers": (
         "array/header.rs: replays the copied prefix's barriers after js_array_grow"
     ),
+    "finish_array_dense_move_layout": (
+        "array/header_gc_slots.rs: translates moved dirty pages and barriers inserted slots"
+    ),
     "store_object_field_slot": "object/mod.rs: object field store via runtime_store",
     "store_object_field_slot_layout_deferred": (
         "object/mod.rs: JSON-parser field store; layout settled at finalize (#7630)"

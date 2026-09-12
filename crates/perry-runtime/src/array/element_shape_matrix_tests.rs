@@ -291,8 +291,8 @@ fn matrix_fill_range_revokes_leaving_a_genuinely_mixed_array() {
 
 /// The soundness-critical case: `splice` can replace elements **without
 /// changing `length`**, so the structural `verified_len` check cannot catch it.
-/// Only splice's own `rebuild_array_layout` can. If that call is ever dropped,
-/// this is the test that goes red — and nothing else would.
+/// Only splice's own dense-move layout finisher can. If that call ever stops
+/// revoking the proof, this is the test that goes red — and nothing else would.
 #[test]
 fn matrix_splice_equal_length_replacement_revokes() {
     let _serialized = test_serialize();

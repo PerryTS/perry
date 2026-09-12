@@ -345,8 +345,8 @@ fn a_length_change_behind_the_runtimes_back_fails_the_proof_closed() {
 #[test]
 fn a_bulk_mutator_rebuild_clears_the_invariant() {
     let _serialized = test_serialize();
-    // `shift`/`unshift`/`splice`/`fill`/`copyWithin`/`reverse`/`sort` all
-    // mutate slots with bare writes and then land in `rebuild_array_layout`.
+    // Bulk mutators that land in `rebuild_array_layout` must revoke the proof;
+    // splice/unshift have the same obligation through their dense-move helper.
     let arr = built_from_pushes(CLASS_A, 4);
     assert!(proof(arr).is_some());
     unsafe { crate::array::header::rebuild_array_layout(arr) };

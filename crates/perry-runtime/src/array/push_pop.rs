@@ -1676,17 +1676,27 @@ pub extern "C" fn js_array_unshift_f64(arr: *mut ArrayHeader, value: f64) -> *mu
         } else {
             arr
         };
-        let value = value_handle.get_nanbox_f64();
+        let flags = array_object_flags_resolved(arr);
+        let value =
+            canonicalize_array_numeric_store_value_from_flags(flags, value_handle.get_nanbox_f64());
 
         let elements_ptr = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
 
         // Shift all elements up
-        // GC_STORE_AUDIT(BARRIERED): unshift memmove and new slot are followed by layout/barrier rebuild.
+        // GC_STORE_AUDIT(BARRIERED): the dense-move finisher translates
+        // survivor dirty pages and barriers the inserted slot below.
         ptr::copy(elements_ptr, elements_ptr.add(1), length as usize);
         // Write new element at beginning
         ptr::write(elements_ptr, value);
         (*arr).length = length + 1;
-        rebuild_array_layout(arr);
+        finish_array_dense_move_layout(
+            arr,
+            elements_ptr.cast(),
+            elements_ptr.add(1).cast(),
+            length as usize,
+            elements_ptr.cast(),
+            1,
+        );
         arr
     }
 }
@@ -1758,20 +1768,31 @@ pub extern "C" fn js_array_unshift_variadic(
         } else {
             arr
         };
+        let flags = array_object_flags_resolved(arr);
         let elements_ptr = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
         // Shift existing elements up by `n`.
-        // GC_STORE_AUDIT(BARRIERED): memmove + new slots followed by layout/barrier rebuild.
+        // GC_STORE_AUDIT(BARRIERED): the dense-move finisher translates
+        // survivor dirty pages and barriers the inserted slots below.
         ptr::copy(elements_ptr, elements_ptr.add(n), length as usize);
         // Write items in source order at the front. #5552: demote each
         // uniquely-owned string before it aliases its slot (no-op for SSO /
         // non-string).
         for (i, v) in item_vec.into_iter().enumerate() {
             crate::string::js_string_addref_if_heap_string(v);
-            // GC_STORE_AUDIT(BARRIERED): inserted slots are followed by the layout/barrier rebuild below.
+            let v = canonicalize_array_numeric_store_value_from_flags(flags, v);
+            // GC_STORE_AUDIT(BARRIERED): inserted slots are covered by the
+            // dense-move finisher below.
             ptr::write(elements_ptr.add(i), v);
         }
         (*arr).length = length + n as u32;
-        rebuild_array_layout(arr);
+        finish_array_dense_move_layout(
+            arr,
+            elements_ptr.cast(),
+            elements_ptr.add(n).cast(),
+            length as usize,
+            elements_ptr.cast(),
+            n,
+        );
         arr
     }
 }

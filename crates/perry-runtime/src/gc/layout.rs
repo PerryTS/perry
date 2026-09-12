@@ -445,7 +445,7 @@ pub(super) fn strip_nanbox_user_ptr(bits: u64) -> usize {
 }
 
 #[inline]
-pub(in crate::gc) fn layout_pointer_bearing_bits(bits: u64) -> bool {
+pub(crate) fn layout_pointer_bearing_bits(bits: u64) -> bool {
     let tag = bits & TAG_MASK;
     if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
         return bits & POINTER_MASK != 0;
