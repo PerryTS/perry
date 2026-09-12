@@ -63,9 +63,10 @@ fn json_construction_wide_old_record_remembers_sparse_pointer_pages() {
     gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
     let source = format!(
         "{{{}}}",
-        (0..20_000)
+        (0..super::json_key_lifetime::fields_born_old())
             .map(|i| {
-                let value = if i % 509 == 0 || i == 19_999 {
+                let value = if i % 509 == 0 || i == super::json_key_lifetime::fields_born_old() - 1
+                {
                     format!(r#"{{"child":{i}}}"#)
                 } else {
                     i.to_string()
@@ -87,13 +88,13 @@ fn json_construction_wide_old_record_remembers_sparse_pointer_pages() {
         let last_child = |value: crate::JSValue| {
             assert_eq!(
                 crate::object::object_live_slot_count(value.as_pointer()),
-                20_000
+                super::json_key_lifetime::fields_born_old() as u32
             );
             let slots = value
                 .as_pointer::<u8>()
                 .add(std::mem::size_of::<crate::ObjectHeader>())
                 .cast::<crate::JSValue>();
-            (*slots.add(19_999)).bits()
+            (*slots.add(super::json_key_lifetime::fields_born_old() - 1)).bits()
         };
         let last_before = last_child(value);
         assert!(crate::JSValue::from_bits(last_before).is_pointer());

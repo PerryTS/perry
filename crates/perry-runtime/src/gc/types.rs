@@ -116,6 +116,87 @@ pub const LARGE_OBJECT_THRESHOLD_BYTES: usize = 16 * 1024;
 /// block.
 pub const LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES: usize = 128 * 1024;
 
+/// Birth-generation ceiling for an ordinary object's property storage (#10123).
+///
+/// Half a nursery block: it clears a 65,536-field object, and the worst-case
+/// block fragmentation it can cause is 1/2 of one block against the flat
+/// threshold's 1/8. Past it the storage is born old as before, which is also
+/// where the copier would stop being able to move it.
+pub const LARGE_OBJECT_STORAGE_YOUNG_BIRTH_CEILING_BYTES: usize = 512 * 1024;
+
+/// Object types a [`JsonWideBirthScope`] may keep young past the threshold.
+pub mod json_wide_birth {
+    /// Nothing (the scope is closed).
+    pub const NONE: u8 = 0;
+    /// A wide object's own property storage.
+    pub const OBJECTS: u8 = 1;
+    /// A parse shape-keys array.
+    pub const KEYS_ARRAY: u8 = 2;
+}
+
+crate::perry_thread_local! {
+    /// Read ONLY from the cold large-object branch of `arena_alloc_gc` (and its
+    /// `ConstructionBatch` twin), never from an allocation hot path.
+    static JSON_WIDE_BIRTH_MASK: std::cell::Cell<u8> =
+        const { std::cell::Cell::new(json_wide_birth::NONE) };
+}
+
+/// Keep a wide JSON document's own storage young past the birth threshold
+/// (#10123), for as long as the copier can still move it.
+///
+/// The threshold's rationale is that a large pointer-bearing object is stamped
+/// `GC_FLAG_TENURED` and a minor never sweeps old-gen, so its cost "is not its
+/// own bytes, it is every object it can reach, held live through the remembered
+/// set by a container nothing refers to any more". A wide document's property
+/// storage and its shape-keys array are exactly that container: above 16,384
+/// fields each crosses 128 KB, is born tenured, and then holds its whole field
+/// or key set live after the document itself is dead. Measured at 64 parses,
+/// retained shape-keys arrays / peak RSS: 16,300 fields -> 0 / 29 MiB,
+/// 16,500 -> 30 / 98 MiB, 50,000 -> 15 / 177 MiB -- the step landing exactly on
+/// the constant.
+///
+/// **Scoped, and type-masked, on purpose.** Raising the constant globally also
+/// moved ordinary ARRAY element storage into the nursery, which those rows do
+/// not need and which cost them RSS they could not afford (records_array_8m:scan
+/// 442 -> 643 MiB against Node 156 / Bun 166). Only a document's own object
+/// storage and its keys array are admitted here; array element storage keeps the
+/// flat threshold.
+pub struct JsonWideBirthScope(u8);
+
+impl JsonWideBirthScope {
+    /// Admit wide-object property storage for the duration of a parse.
+    pub fn objects() -> Self {
+        Self(JSON_WIDE_BIRTH_MASK.with(|c| c.replace(json_wide_birth::OBJECTS)))
+    }
+
+    /// Admit a parse shape-keys array around its single allocation site.
+    pub fn keys_array() -> Self {
+        Self(JSON_WIDE_BIRTH_MASK.with(|c| c.replace(json_wide_birth::KEYS_ARRAY)))
+    }
+}
+
+impl Drop for JsonWideBirthScope {
+    fn drop(&mut self) {
+        JSON_WIDE_BIRTH_MASK.with(|c| c.set(self.0));
+    }
+}
+
+/// May an already-oversized allocation still be born young?
+///
+/// Called ONLY once the size test has already said "large", so the thread-local
+/// read never touches the allocation hot path. The ceiling is the copier's own
+/// refusal point: past it a young object could not be moved, which is the one
+/// thing birth-young must not promise falsely.
+#[inline]
+pub fn json_wide_birth_permits(total_size: usize, obj_type: u8) -> bool {
+    if total_size > LARGE_OBJECT_STORAGE_YOUNG_BIRTH_CEILING_BYTES {
+        return false;
+    }
+    let mask = JSON_WIDE_BIRTH_MASK.with(|c| c.get());
+    (mask == json_wide_birth::OBJECTS && obj_type == GC_TYPE_OBJECT)
+        || (mask == json_wide_birth::KEYS_ARRAY && obj_type == GC_TYPE_ARRAY)
+}
+
 #[inline]
 pub fn is_large_object_total_size(total_size: usize) -> bool {
     total_size > LARGE_OBJECT_THRESHOLD_BYTES
@@ -134,6 +215,26 @@ pub fn large_object_threshold_for_type(obj_type: u8) -> usize {
     if obj_type == GC_TYPE_BUFFER {
         return LARGE_OBJECT_THRESHOLD_BYTES;
     }
+    // #10123 NOTE: the widening is SCOPED (see `JsonWideBirthScope`), not a
+    // blanket change to this constant. A WIDE OBJECT's property storage is the
+    // threshold's own rationale warns about -- "every object it can reach, held
+    // live through the remembered set by a container nothing refers to any
+    // more". Above 16,384 fields it crosses 128 KB, is born tenured, and then
+    // holds its whole field set live after the object itself is dead. Measured
+    // at 64 parses of one document, retained shape-keys arrays / peak RSS:
+    // 16,300 fields -> 0 / 29 MiB, 16,500 -> 30 / 98 MiB, 50,000 -> 15 / 177 MiB;
+    // the step lands exactly on the constant.
+    //
+    // Widened for OBJECT storage ONLY, not for arrays. That is not a guess: on
+    // this benchmark matrix `wide_1m` is the only row with a large
+    // GC_TYPE_OBJECT birth (400,024 B, once per parse), while every large birth
+    // on records_array_8m/20m is GC_TYPE_ARRAY element storage (131 KB - 2 MB).
+    // Widening those too bought RSS those rows did not need and cost it
+    // elsewhere: records_array_8m:scan 444 -> 710 MiB, 20m:parse 267 -> 314 MiB.
+    //
+    // Still inside the copier's structural ceilings (1 MB nursery block,
+    // `copying::MAX_YOUNG_MOVE_BYTES`), so an object admitted here is movable --
+    // the one thing birth-young must not promise falsely.
     match gc_type_info(obj_type) {
         Some(info) if !info.pointer_free => LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES,
         _ => LARGE_OBJECT_THRESHOLD_BYTES,
