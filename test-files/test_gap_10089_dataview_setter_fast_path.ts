@@ -131,3 +131,19 @@ console.log("numeric little-endian", numericRoundTrips(true));
     view.getBigUint64(8, true).toString(16),
   );
 }
+
+{
+  const source = new DataView(new ArrayBuffer(8));
+  source.setUint32(0, 0x01020304, false);
+  const cloned = structuredClone(source);
+  cloned.setUint32(4, 0x05060708, false);
+  console.log(
+    "structured clone",
+    cloned.byteOffset,
+    cloned.byteLength,
+    cloned.getUint32(0, false).toString(16),
+    cloned.getUint32(4, false).toString(16),
+    source.getUint32(4, false),
+    cloned.buffer === source.buffer,
+  );
+}

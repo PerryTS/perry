@@ -22,23 +22,21 @@ Perry checksum matched Node at every size.
 
 | n | Before Perry setter | After Perry setter | After Node setter | Before ratio | After ratio | After getter ratio |
 |---:|---:|---:|---:|---:|---:|---:|
-| 100 | 0.006030 | 0.005485 | 0.000273 | 22.50x | 20.10x | 11.50x |
-| 1,000 | 0.058436 | 0.052530 | 0.002515 | 23.36x | 20.88x | 12.25x |
-| 10,000 | 0.581095 | 0.522024 | 0.025047 | 23.51x | 20.84x | 12.27x |
-| 100,000 | 5.730139 | 5.185880 | 0.250468 | 23.26x | 20.70x | 12.24x |
-| 1,000,000 | 58.591890 | 58.148333 | 2.509861 | 23.70x | 23.17x | 12.25x |
+| 100 | 0.006030 | 0.005387 | 0.000269 | 22.50x | 20.03x | 11.52x |
+| 1,000 | 0.058436 | 0.052222 | 0.002510 | 23.36x | 20.80x | 12.46x |
+| 10,000 | 0.581095 | 0.518971 | 0.024820 | 23.51x | 20.91x | 12.35x |
+| 100,000 | 5.730139 | 5.192406 | 0.247603 | 23.26x | 20.97x | 12.33x |
+| 1,000,000 | 58.591890 | 51.767301 | 2.471560 | 23.70x | 20.95x | 12.31x |
 
-Across the stable 100–100k range, the Perry setter workload improves by
-9.0–10.2% and is 1.70–1.77 times the getter control. The 1M row still improves
-by 0.8% but hits the threshold anomaly described in the issue, at 1.90 times
-the getter rather than the issue's original 6.68 times. The remaining
-difference includes a second accessor per iteration and numeric
+The Perry setter workload improves by 9.4–11.6% and is 1.72–1.76 times the
+getter control, rather than the issue's original 6.68 times at 1M. The
+remaining difference includes a second accessor per iteration and numeric
 wrapping/storage; the getter baseline itself remains out of scope. Raw results
 are `before.json` and `after.json`.
 
-Least-squares log(time)/log(n) slopes remain near-linear: before setter Perry
-0.997, Node 0.992; after setter Perry 1.005, Node 0.993. After getter slopes are
-Perry 0.999 and Node 0.993.
+Least-squares log(time)/log(n) slopes remain linear: before setter Perry 0.997,
+Node 0.992; after setter Perry 0.996, Node 0.992. After getter slopes are Perry
+0.999 and Node 0.994.
 
 ## Pre-change attribution
 
