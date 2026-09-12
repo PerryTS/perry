@@ -24,6 +24,13 @@
       "category": "bug-open",
       "reason": "process SIGINT trace hook gap; standing per #5917 diff."
     },
+    "test_gap_json_lazy_defineproperty_index": {
+      "status": "parity_fail",
+      "issue": "10097",
+      "added": "2026-09-12",
+      "category": "bug-open",
+      "reason": "Object.defineProperty index accessor on a JSON.parse lazy array is installed but bypassed by indexed reads; passes with PERRY_JSON_TAPE=0"
+    },
     "test_gap_perfhooks_3088_3008_3010_3011": {
       "status": "parity_fail",
       "issue": "3088",
