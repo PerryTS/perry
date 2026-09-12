@@ -99,7 +99,7 @@ impl CopyingMinorPhaseDiag {
         let mut out = String::new();
         write!(
             out,
-            "root_scan={}/{} copy_evacuation={}/{}/{} remembered_set_young_logs={}/{}/{} promotion={}/{}/{} dead_owner_side_table_pruning={}{} from_space_finalization={}/map:{}/{}+set:{}/{}+errors:{}/{}+regex:{}/{} forwarding_fixups={} block_reset_flip={} other={} phase_sum_us={}",
+            "root_scan={}/{} copy_evacuation={}/{}/{} remembered_set_young_logs={}/{}/{} promotion={}/{}/{} dead_owner_side_table_pruning={}{} from_space_finalization={}/map:{}/{}+set:{}/{}+errors:{}/{}+regex:{}/{}+lazytape:{}/{} forwarding_fixups={} block_reset_flip={} other={} phase_sum_us={}",
             self.root_scan_ns / 1000,
             scan_us,
             self.copy_evacuation_ns / 1000,
@@ -122,6 +122,8 @@ impl CopyingMinorPhaseDiag {
             finalization.errors,
             finalization.regex_ns / 1000,
             finalization.regexps,
+            finalization.lazy_tape_ns / 1000,
+            finalization.lazy_tapes,
             self.forwarding_fixups_ns / 1000,
             self.block_reset_flip_ns / 1000,
             other_ns / 1000,
@@ -145,6 +147,8 @@ pub(super) struct CopiedMinorFinalizationDiag {
     pub(super) regexps: usize,
     pub(super) dead_owner_ns: u64,
     pub(super) dead_owner_detail: String,
+    pub(super) lazy_tapes: usize,
+    pub(super) lazy_tape_ns: u64,
 }
 
 /// Finalize the side allocations whose from-space owners just died.  The
@@ -174,6 +178,10 @@ pub(super) fn finalize_dead_copied_minor_from_space_side_allocations() -> Copied
     let start = diag.then(Instant::now);
     out.regexps = crate::regex::finalize_dead_copied_minor_from_space_regexps();
     out.regex_ns = start.map_or(0, |start| start.elapsed().as_nanos() as u64);
+
+    let start = diag.then(Instant::now);
+    out.lazy_tapes = crate::json_tape_store::finalize_dead_copied_minor_from_space_lazy_tapes();
+    out.lazy_tape_ns = start.map_or(0, |start| start.elapsed().as_nanos() as u64);
 
     let start = diag.then(Instant::now);
     out.dead_owner_detail = super::dead_owner::prune_dead_owner_side_tables_copied_minor();

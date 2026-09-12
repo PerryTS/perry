@@ -481,10 +481,14 @@ fn test_gc_type_metadata_covers_all_declared_types() {
             arena_walkable: true,
             rewrite_descriptor_kind: GcRewriteDescriptorKind::LazyArray,
             layout_slot_kind: GcLayoutSlotKind::None,
-            // #7539: NOT movable. The tape registry is keyed by the header
-            // address, and callers outside `json_tape` hold raw header
-            // pointers across allocations.
-            movable: false,
+            // Movable since the tape registration follows its owner
+            // (`GcMoveHookKind::LazyArrayTape`) and a header dying in a
+            // copying minor's from-space gives its tape back
+            // (`finalize_dead_copied_minor_from_space_lazy_tapes`). Those two
+            // were the whole reason for `false`; pinning cost a dead cluster's
+            // entire element graph, held live through the remembered set until
+            // a full collection.
+            movable: true,
             // #7539: the tape is a `json_tape_store` side allocation, not
             // inline payload. Inline, it made the header as large as the tape
             // (~2.4 MB on a 10k-record blob), which `arena_alloc_gc` routed
@@ -493,7 +497,7 @@ fn test_gc_type_metadata_covers_all_declared_types() {
             external_byte_policy: GcExternalBytePolicy::SideAllocation,
             large_object_policy: GcLargeObjectPolicy::OldArenaWhenOverThreshold,
             pointer_free: false,
-            move_hook_kind: GcMoveHookKind::None,
+            move_hook_kind: GcMoveHookKind::LazyArrayTape,
             rewrite_hook_kind: GcRewriteHookKind::None,
             finalize_hook_kind: GcFinalizeHookKind::LazyArrayTape,
         },
