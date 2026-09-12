@@ -134,9 +134,16 @@ fn runtime_data_import_loaders_and_rejections() {
         note.get_nanbox_f64(),
     );
     let error = scope.root_nanbox_f64(settled(promise, 2));
-    assert_eq!(
-        string_bytes(property(error.get_nanbox_f64(), b"message").unwrap()).as_deref(),
-        Some("deferred test site")
+    // No supported data attribute, so this falls through to the ordinary
+    // JavaScript-module deferral — which #10131 now prefixes with the
+    // actionable native-build explanation. What this test is actually
+    // asserting is that the deferral keeps its call-site note, so check the
+    // note is carried rather than pinning the whole message text.
+    let deferred_message =
+        string_bytes(property(error.get_nanbox_f64(), b"message").unwrap()).unwrap();
+    assert!(
+        deferred_message.ends_with("deferred test site"),
+        "the deferred site note must survive: {deferred_message}"
     );
 
     std::fs::remove_file(path).unwrap();
