@@ -414,3 +414,42 @@ fn astral_and_truncated_astral_lead() {
     let _ = js_string_char_code_at(ts, 2);
     let _ = js_string_to_char_array(crate::value::js_nanbox_string(ts as i64).to_bits() as i64);
 }
+
+/// The ASCII fast path added for #10090 MUST gate on `bytes.is_ascii()` (a
+/// real per-byte scan), not on `is_ascii_string(s)` (the `byte_len ==
+/// utf16_len` AGGREGATE proxy already known to lie — see
+/// `split_parts_get_metadata_from_their_own_bytes`).
+///
+/// `[0xC3, 0xA9, b'a', 0xF0]` is "é" + "a" + a truncated 4-byte lead. Its
+/// UTF-16 unit total happens to equal its byte length (1 + 1 + 2 == 4), so
+/// `is_ascii_string` wrongly reports true, even though the payload is not
+/// ASCII. A gate on the aggregate would route this through
+/// `to_ascii_uppercase()`, which touches only `a`-`z`/`A`-`Z` bytes and
+/// leaves 0xC3/0xA9 untouched — silently skipping the real Unicode mapping
+/// `é` → `É` (`C3 A9` → `C3 89`). The correct byte-level gate falls back to
+/// the scalar `wtf8_step` loop, which maps `é`/`a` and copies the truncated
+/// lead byte through verbatim, flush against the guard page so any
+/// out-of-bounds read on that fallback also faults.
+#[test]
+fn case_convert_rejects_the_aggregate_ascii_lie() {
+    let g = GuardedString::new(&[0xC3, 0xA9, b'a', 0xF0]);
+    let s = g.ptr();
+    assert!(
+        is_ascii_string(s),
+        "precondition: the aggregate byte_len == utf16_len check misfires"
+    );
+    let bytes = unsafe { slice::from_raw_parts(string_data(s), (*s).byte_len as usize) };
+    assert!(
+        !bytes.is_ascii(),
+        "precondition: the payload is NOT actually pure ASCII"
+    );
+
+    let upper = js_string_to_upper_case(s);
+    let upper_bytes =
+        unsafe { slice::from_raw_parts(string_data(upper), (*upper).byte_len as usize) };
+    assert_eq!(
+        upper_bytes,
+        &[0xC3, 0x89, b'A', 0xF0],
+        "É (C3 89) + A + the raw truncated lead byte — NOT the input echoed back unmapped"
+    );
+}

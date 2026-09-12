@@ -340,6 +340,31 @@ fn case_convert(s: *const StringHeader, upper: bool) -> *mut StringHeader {
         return js_string_from_bytes(ptr::null(), 0);
     }
     let bytes = unsafe { slice::from_raw_parts(string_data(s), (*s).byte_len as usize) };
+
+    // ASCII fast path (#10090): default-locale ASCII case mapping is
+    // context-free and strictly 1-byte-in/1-byte-out, so skip the scalar
+    // wtf8_step decode / per-char to_lowercase()/to_uppercase() iterator
+    // construction / re-encode loop entirely and let `to_ascii_lowercase`/
+    // `to_ascii_uppercase` do a vectorizable byte-table transform instead.
+    //
+    // Must gate on `bytes.is_ascii()` (a real per-byte scan), NOT the
+    // `is_ascii_string(s)` `byte_len == utf16_len` AGGREGATE proxy used
+    // elsewhere for O(1) checks: that aggregate can lie for malformed WTF-8,
+    // where a stray continuation byte (0 UTF-16 units) and a truncated
+    // multi-byte lead (2 units) cancel out to look ASCII while containing
+    // non-ASCII bytes (see `split_parts_get_metadata_from_their_own_bytes`).
+    // A genuinely all-ASCII input can never carry a lone surrogate, so the
+    // result's flags are trivially 0 and its utf16_len == its byte_len.
+    if bytes.is_ascii() {
+        let out = if upper {
+            bytes.to_ascii_uppercase()
+        } else {
+            bytes.to_ascii_lowercase()
+        };
+        let len = out.len() as u32;
+        return js_string_from_bytes_known_utf16(out.as_ptr(), len, len, 0);
+    }
+
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
     let mut has_lone_surrogate = false;
     let mut buf = [0u8; 4];
