@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::io::BufRead;
 use std::time::Instant;
 
+#[cfg(test)]
 thread_local! {
     static EVENTS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     static OUTPUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
