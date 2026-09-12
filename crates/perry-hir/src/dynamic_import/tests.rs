@@ -758,6 +758,7 @@ fn dynamic_import_visitors_keep_closure_and_toplevel_order_in_lockstep() {
         Expr::DynamicImport {
             paths: vec![],
             arg: Box::new(Expr::String(path.to_string())),
+            options: None,
             byte_offset: 0,
             deferred_error: None,
             synchronous: false,
@@ -790,7 +791,20 @@ fn dynamic_import_visitors_keep_closure_and_toplevel_order_in_lockstep() {
         is_generator: false,
         is_strict: false,
     }));
-    module.init.push(Stmt::Expr(dynamic_import("toplevel")));
+    let mut outer = dynamic_import("toplevel");
+    if let Expr::DynamicImport { options, .. } = &mut outer {
+        *options = Some(Box::new(dynamic_import("options")));
+    }
+    module.init.push(Stmt::Expr(outer));
+    let with_options_hash = crate::stable_hash::hash_module(&module);
+    let mut without_options = module.clone();
+    if let Some(Stmt::Expr(Expr::DynamicImport { options, .. })) = without_options.init.last_mut() {
+        *options = None;
+    }
+    assert_ne!(
+        with_options_hash,
+        crate::stable_hash::hash_module(&without_options)
+    );
 
     let mut immutable = Vec::new();
     for_each_dynamic_import(&module, &mut |expr| immutable.push(path(expr)));
@@ -798,7 +812,7 @@ fn dynamic_import_visitors_keep_closure_and_toplevel_order_in_lockstep() {
     let mut mutable = Vec::new();
     for_each_dynamic_import_mut(&mut module, &mut |expr| mutable.push(path(expr)));
 
-    assert_eq!(immutable, ["closure", "toplevel"]);
+    assert_eq!(immutable, ["closure", "toplevel", "options"]);
     assert_eq!(mutable, immutable);
 }
 

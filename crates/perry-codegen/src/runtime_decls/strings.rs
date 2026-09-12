@@ -1620,11 +1620,15 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // `ERR_MODULE_NOT_FOUND` Error (never literal `undefined`). The deferred
     // variant carries the #5230 compile-time deferral message for unknown
     // modules.
-    module.declare_function("js_module_dynamic_import_fallback", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_module_dynamic_import_fallback",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
     module.declare_function(
         "js_module_dynamic_import_deferred",
         DOUBLE,
-        &[DOUBLE, DOUBLE],
+        &[DOUBLE, DOUBLE, DOUBLE],
     );
     // #6644: `module.createRequire(...)` devirt entry — arms the nm/submod
     // install-all hooks before delegating (see js_process_get_builtin_module_devirt).

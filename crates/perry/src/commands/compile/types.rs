@@ -795,6 +795,8 @@ pub struct CompilationContext {
     /// The runtime evaluates these modules through the dyn-eval interpreter,
     /// so auto-optimized archives must retain that otherwise optional feature.
     pub uses_data_url_dynamic_import: bool,
+    /// Import options can select a runtime TOML loader without a Bun import.
+    pub uses_dynamic_import_options: bool,
     /// Whether any TS module calls global `fetch()` (which routes to
     /// reqwest in perry-stdlib's http-client feature).
     pub uses_fetch: bool,
@@ -1246,6 +1248,7 @@ impl CompilationContext {
             geisterhand_port: 7676,
             native_module_imports: BTreeSet::new(),
             uses_data_url_dynamic_import: false,
+            uses_dynamic_import_options: false,
             uses_fetch: false,
             uses_crypto_builtins: false,
             uses_zlib_brotli: false,

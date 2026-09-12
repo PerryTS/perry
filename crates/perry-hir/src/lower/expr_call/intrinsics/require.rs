@@ -150,6 +150,7 @@ pub(crate) fn try_dynamic_require(
     Ok(Some(Expr::DynamicImport {
         paths: Vec::new(),
         arg: Box::new(arg),
+        options: None,
         byte_offset: call.span.lo.0,
         deferred_error: None,
         synchronous: true,
@@ -214,6 +215,7 @@ pub(crate) fn try_import_meta_require(
     Ok(Some(Expr::DynamicImport {
         paths: Vec::new(),
         arg: Box::new(lower_expr(ctx, arg)?),
+        options: None,
         byte_offset: call.span.lo.0,
         deferred_error: None,
         synchronous: true,

@@ -790,12 +790,36 @@ fn collect_module_one(
         if let perry_hir::Expr::DynamicImport {
             paths,
             arg,
+            options,
             byte_offset,
             synchronous,
             ..
         } = expr
         {
             let synchronous = *synchronous;
+            ctx.uses_dynamic_import_options |= options.is_some();
+            let may_load_data = match options.as_deref() {
+                None | Some(perry_hir::Expr::Undefined) => false,
+                Some(perry_hir::Expr::Object(fields)) => fields.iter().any(|(key, value)| {
+                    key == "with"
+                        && match value {
+                            perry_hir::Expr::Object(attributes) => {
+                                attributes.iter().any(|(key, value)| {
+                                    key == "type"
+                                        && match value {
+                                            perry_hir::Expr::String(loader) => matches!(
+                                                loader.as_str(),
+                                                "toml" | "json" | "text" | "file"
+                                            ),
+                                            _ => true,
+                                        }
+                                })
+                            }
+                            _ => true,
+                        }
+                }),
+                _ => true,
+            };
             if !paths.is_empty() {
                 // Already resolved (e.g. a second pass on the same module).
                 return;
@@ -822,6 +846,14 @@ fn collect_module_one(
                         return;
                     }
                     for p in &set {
+                        // Data files selected by import attributes are read at
+                        // runtime, including literal absolute paths. Do not
+                        // feed their contents to the TypeScript compiler.
+                        if may_load_data
+                            && (p.starts_with("file://") || std::path::Path::new(p).is_absolute())
+                        {
+                            continue;
+                        }
                         if p.starts_with("data:text/javascript,") {
                             ctx.uses_data_url_dynamic_import = true;
                         }
