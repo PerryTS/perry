@@ -4,26 +4,27 @@ This directory preserves the three standalone issue reproducers and the raw
 before/after results. Both sweeps used the unchanged TypeScript sources,
 Node v26.5.1, matching release-built Perry artifacts, a 60-second timeout per
 process, and a quiet Linux x86_64 host. The JSON artifacts record the exact
-source, compiler, runtime, stdlib, and Node hashes.
+source, compiler, runtime, stdlib, and Node hashes, plus all seven raw samples
+behind every reported median.
 
 ## Result
 
 Perry milliseconds per workload invocation:
 
-| workload | n | main `50e08e91dd` | candidate `ccf2e64dd8` |
+| workload | n | main `50e08e91dd` | candidate `b13e494127` |
 | --- | ---: | ---: | ---: |
-| middle remove | 100 | 0.012 | 0.006 |
-| | 1,000 | 0.579 | 0.082 |
-| | 10,000 | 51.293 | 2.203 |
-| | 100,000 | TIMEOUT | 173.495 |
-| middle insert | 100 | 0.013 | 0.007 |
-| | 1,000 | 0.581 | 0.080 |
-| | 10,000 | 51.822 | 2.075 |
-| | 100,000 | TIMEOUT | 162.663 |
+| middle remove | 100 | 0.011 | 0.009 |
+| | 1,000 | 0.568 | 0.110 |
+| | 10,000 | 50.089 | 2.487 |
+| | 100,000 | 4,943.798 | 173.040 |
+| middle insert | 100 | 0.012 | 0.010 |
+| | 1,000 | 0.559 | 0.110 |
+| | 10,000 | 50.121 | 2.403 |
+| | 100,000 | 4,924.992 | 166.133 |
 | unshift build | 100 | 0.010 | 0.005 |
-| | 1,000 | 0.560 | 0.076 |
-| | 10,000 | 51.206 | 3.578 |
-| | 100,000 | TIMEOUT | 314.602 |
+| | 1,000 | 0.552 | 0.078 |
+| | 10,000 | 50.885 | 3.540 |
+| | 100,000 | TIMEOUT | 315.464 |
 
 Every completed Perry checksum matches Node. All candidate processes complete
 100,000 operations. Over the shared 1,000-100,000 range, the log/log slopes
@@ -31,9 +32,9 @@ and Perry-minus-Node deltas are:
 
 | workload | Node slope | Perry slope | delta |
 | --- | ---: | ---: | ---: |
-| middle remove | 1.930 | 1.662 | -0.268 |
-| middle insert | 1.841 | 1.653 | -0.187 |
-| unshift build | 1.880 | 1.808 | -0.073 |
+| middle remove | 1.923 | 1.598 | -0.324 |
+| middle insert | 1.836 | 1.590 | -0.246 |
+| unshift build | 1.886 | 1.803 | -0.082 |
 
 ## Mechanism and bounded work
 
@@ -54,10 +55,11 @@ than the previous sum of all live receiver lengths.
 
 Moving-GC tests promote an array, insert young pointers with both operations,
 run a copying minor and then a full collection, and validate the rewritten
-children. A separate old-array witness moves an old-to-young edge across a
-remembered-set page boundary. Existing splice/unshift element-shape sabotage
-tests continue to prove that mixed-kind replacement cannot retain a stale
-proof.
+children. Old-array witnesses move old-to-young edges across remembered-set
+page boundaries in both directions. A forced-evacuation splice test also proves
+that its receiver and caller-provided pointer items are rooted before species
+allocation. Existing splice/unshift element-shape sabotage tests continue to
+prove that mixed-kind replacement cannot retain a stale proof.
 
 ## Reproduce
 
