@@ -3625,10 +3625,6 @@
       "name": "TEST_ARGUMENTS_REGISTRY_PROBES"
     },
     {
-      "file": "crates/perry-runtime/src/object/class_registry/parent_static.rs",
-      "name": "TEST_CLASS_PROTOTYPE_SCANS"
-    },
-    {
       "file": "crates/perry-runtime/src/object/delete_rest.rs",
       "name": "TOMBSTONE_TEST_OVERRIDE"
     },

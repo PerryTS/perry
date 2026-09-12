@@ -57,6 +57,12 @@ fn test_copying_minor_rewrites_class_side_table_values_and_function_keys() {
     assert!(crate::arena::pointer_in_nursery(value_after));
     assert_ne!(prototype_object_after, prototype_object);
     assert!(crate::arena::pointer_in_nursery(prototype_object_after));
+    assert!(crate::object::is_registered_class_prototype_object(
+        prototype_object_after
+    ));
+    assert!(!crate::object::is_registered_class_prototype_object(
+        prototype_object
+    ));
     assert_ne!(decl_prototype_object_after, decl_prototype_object);
     assert!(crate::arena::pointer_in_nursery(
         decl_prototype_object_after

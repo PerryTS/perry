@@ -75,13 +75,14 @@ pub(crate) use state::{
     class_own_static_field_value, class_own_string_member_names, class_parent_closure,
     class_parent_closure_root_store, class_prototype_method_is_enumerable,
     class_prototype_method_set_enumerable, class_prototype_method_value_cache_root_store,
+    class_prototype_object_addr_index_contains, class_prototype_object_addr_index_rekey,
     class_prototype_object_root_store, class_ref_dynamic_prop_root_store,
     class_register_declared_static_global_slot, class_static_defined_attrs, class_static_prototype,
     class_static_prototype_is_nulled, class_static_prototype_root_clear,
     class_static_prototype_root_store, class_static_set_defined_attrs, class_unmark_key_deleted,
     global_object_prototype_bits, is_bound_native_constructor_closure_value,
-    is_non_constructable_builtin_function_value, note_class_prototype_object_registered,
-    parent_closure_in_chain, throw_non_constructable_builtin_function, CLASS_PROTOTYPE_ADDR_FILTER,
+    is_non_constructable_builtin_function_value, parent_closure_in_chain,
+    throw_non_constructable_builtin_function,
 };
 pub use state::{
     ClassVTable, VTableMethodEntry, CLASS_DECL_PROTOTYPE_OBJECTS, CLASS_DYNAMIC_PARENT_VALUE,
@@ -196,8 +197,6 @@ pub(crate) use dispatch::{
 };
 
 // ── parent_static.rs ────────────────────────────────────────────────────────
-#[cfg(test)]
-pub(crate) use parent_static::test_class_prototype_scan_count;
 pub(crate) use parent_static::{
     call_private_static_method_for_owner, call_registered_static_method, call_static_method,
     class_chain_has_instance_accessor, class_dynamic_static_accessor_descriptor,
