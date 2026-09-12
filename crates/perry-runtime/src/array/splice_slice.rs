@@ -102,13 +102,9 @@ pub extern "C" fn js_array_splice(
         // §23.1.3.31 step 11): reads `O.constructor` / `@@species` and throws
         // on a poisoned getter or non-constructor species before the receiver
         // is mutated.
-        let recv_value =
-            f64::from_bits(
-                crate::value::JSValue::pointer(
-                    arr_handle.get_raw_mut_ptr::<ArrayHeader>() as *const u8
-                )
-                .bits(),
-            );
+        let recv_value = arr_handle.with_mut_ptr::<ArrayHeader, _>(|arr| {
+            f64::from_bits(crate::value::JSValue::pointer(arr as *const u8).bits())
+        });
         let deleted_box =
             crate::array::species::array_species_create(recv_value, actual_delete as usize);
         let deleted_handle = scope.root_nanbox_f64(deleted_box);
@@ -123,14 +119,19 @@ pub extern "C" fn js_array_splice(
         // property of the deleted array (test262 splice/S15.4.4.12_A4_T3);
         // a genuinely absent index stays a hole.
         let spec_read = |i: usize| -> f64 {
-            let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-            let elements_ptr =
-                crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
-            let v = *elements_ptr.add(start_idx as usize + i);
+            let v = arr_handle.with_mut_ptr::<ArrayHeader, _>(|arr| {
+                let elements_ptr =
+                    crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
+                *elements_ptr.add(start_idx as usize + i)
+            });
             if v.to_bits() == crate::value::TAG_HOLE {
                 let idx = start_idx + i as u32;
-                if crate::array::array_spec_has_index(arr, idx) {
-                    return crate::array::array_spec_get(arr, idx);
+                if arr_handle.with_mut_ptr::<ArrayHeader, _>(|arr| {
+                    crate::array::array_spec_has_index(arr, idx)
+                }) {
+                    return arr_handle.with_mut_ptr::<ArrayHeader, _>(|arr| {
+                        crate::array::array_spec_get(arr, idx)
+                    });
                 }
             }
             v
@@ -141,9 +142,9 @@ pub extern "C" fn js_array_splice(
             (*deleted).length = actual_delete;
             // Hole reads also consult recorded custom prototypes, which are
             // not covered by array_iteration_is_exotic's canonical-proto flags.
-            let src_exotic = crate::array::array_iteration_is_exotic(
-                arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
-            ) || crate::object::prototype_chain::array_static_proto_recorded();
+            let src_exotic = arr_handle
+                .with_mut_ptr::<ArrayHeader, _>(|arr| crate::array::array_iteration_is_exotic(arr))
+                || crate::object::prototype_chain::array_static_proto_recorded();
             for i in 0..actual_delete as usize {
                 let value = spec_read(i);
                 if src_exotic {
@@ -181,66 +182,68 @@ pub extern "C" fn js_array_splice(
         let new_len = len as u32 - actual_delete + items_count;
 
         // Grow array if needed
-        let current = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-        let arr = if new_len > (*current).capacity {
-            js_array_grow(current, new_len)
-        } else {
-            current
-        };
-        arr_handle.set_raw_mut_ptr(arr);
-        let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-        let flags = array_object_flags_resolved(arr);
-        let elements_ptr = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
-
-        // Shift elements after the splice point
-        let tail_start = start_idx + actual_delete;
-        let tail_len = len as u32 - tail_start;
-
-        if items_count != actual_delete && tail_len > 0 {
-            // Need to shift the tail
-            let src = elements_ptr.add(tail_start as usize);
-            let dst = elements_ptr.add((start_idx + items_count) as usize);
-            // GC_STORE_AUDIT(BARRIERED): the dense-move finisher translates
-            // survivor dirty pages below.
-            ptr::copy(src, dst, tail_len as usize);
+        let should_grow =
+            arr_handle.with_mut_ptr::<ArrayHeader, _>(|current| new_len > (*current).capacity);
+        if should_grow {
+            let grown = arr_handle
+                .with_mut_ptr::<ArrayHeader, _>(|current| js_array_grow(current, new_len));
+            arr_handle.set_raw_mut_ptr(grown);
         }
+        arr_handle.with_mut_ptr::<ArrayHeader, _>(|arr| {
+            let flags = array_object_flags_resolved(arr);
+            let elements_ptr =
+                crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
 
-        // Insert new items
-        if items_count > 0 && !item_handles.is_empty() {
-            for (i, item_handle) in item_handles.iter().enumerate() {
-                let item = item_handle.get_nanbox_f64();
-                // A uniquely-owned string spliced in now aliases the array slot —
-                // demote it to shared so a later `s += x` doesn't mutate it in
-                // place. No-op for SSO / non-string. (This insert path doesn't
-                // funnel through `note_array_slot`.)
-                crate::string::js_string_addref_if_heap_string(item);
-                let item = canonicalize_array_numeric_store_value_from_flags(flags, item);
-                // GC_STORE_AUDIT(BARRIERED): inserted items are covered by the
-                // dense-move finisher below.
-                ptr::write(elements_ptr.add(start_idx as usize + i), item);
+            // Shift elements after the splice point
+            let tail_start = start_idx + actual_delete;
+            let tail_len = len as u32 - tail_start;
+
+            if items_count != actual_delete && tail_len > 0 {
+                // Need to shift the tail
+                let src = elements_ptr.add(tail_start as usize);
+                let dst = elements_ptr.add((start_idx + items_count) as usize);
+                // GC_STORE_AUDIT(BARRIERED): the dense-move finisher translates
+                // survivor dirty pages below.
+                ptr::copy(src, dst, tail_len as usize);
             }
-        }
 
-        // ECMA-262 §23.1.3.31 step 24: Set(O, "length", …, true) — throws on a
-        // non-writable `length` (test262 splice/S15.4.4.12_A6.1_T2/T3).
-        super::push_pop::guard_writable_length(arr);
-        (*arr).length = new_len;
-        let moved_count = if items_count != actual_delete {
-            tail_len as usize
-        } else {
-            0
-        };
-        finish_array_dense_move_layout(
-            arr,
-            elements_ptr.add(tail_start as usize).cast(),
-            elements_ptr.add((start_idx + items_count) as usize).cast(),
-            moved_count,
-            elements_ptr.add(start_idx as usize).cast(),
-            items_count as usize,
-        );
+            // Insert new items
+            if items_count > 0 && !item_handles.is_empty() {
+                for (i, item_handle) in item_handles.iter().enumerate() {
+                    let item = item_handle.get_nanbox_f64();
+                    // A uniquely-owned string spliced in now aliases the array slot —
+                    // demote it to shared so a later `s += x` doesn't mutate it in
+                    // place. No-op for SSO / non-string. (This insert path doesn't
+                    // funnel through `note_array_slot`.)
+                    crate::string::js_string_addref_if_heap_string(item);
+                    let item = canonicalize_array_numeric_store_value_from_flags(flags, item);
+                    // GC_STORE_AUDIT(BARRIERED): inserted items are covered by the
+                    // dense-move finisher below.
+                    ptr::write(elements_ptr.add(start_idx as usize + i), item);
+                }
+            }
 
-        // Return modified array via out param
-        *out_arr = arr;
+            // ECMA-262 §23.1.3.31 step 24: Set(O, "length", …, true) — throws on a
+            // non-writable `length` (test262 splice/S15.4.4.12_A6.1_T2/T3).
+            super::push_pop::guard_writable_length(arr);
+            (*arr).length = new_len;
+            let moved_count = if items_count != actual_delete {
+                tail_len as usize
+            } else {
+                0
+            };
+            finish_array_dense_move_layout(
+                arr,
+                elements_ptr.add(tail_start as usize).cast(),
+                elements_ptr.add((start_idx + items_count) as usize).cast(),
+                moved_count,
+                elements_ptr.add(start_idx as usize).cast(),
+                items_count as usize,
+            );
+
+            // Return modified array via out param
+            *out_arr = arr;
+        });
 
         crate::value::js_nanbox_get_pointer(deleted_handle.get_nanbox_f64()) as *mut ArrayHeader
     }
