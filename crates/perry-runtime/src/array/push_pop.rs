@@ -1760,17 +1760,15 @@ pub extern "C" fn js_array_unshift_variadic(
         }
     };
     let n = item_handles.len();
-    unsafe {
-        let current = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-        let length = (*current).length;
-        let capacity = (*current).capacity;
-        let arr = if length + n as u32 > capacity {
-            js_array_grow(current, length + n as u32)
-        } else {
-            current
-        };
-        arr_handle.set_raw_mut_ptr(arr);
-        let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+    let (length, capacity) = arr_handle.with_mut_ptr::<ArrayHeader, _>(|current| unsafe {
+        ((*current).length, (*current).capacity)
+    });
+    if length + n as u32 > capacity {
+        let grown = arr_handle
+            .with_mut_ptr::<ArrayHeader, _>(|current| js_array_grow(current, length + n as u32));
+        arr_handle.set_raw_mut_ptr(grown);
+    }
+    arr_handle.with_mut_ptr::<ArrayHeader, _>(|arr| unsafe {
         let flags = array_object_flags_resolved(arr);
         let elements_ptr = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
         // Shift existing elements up by `n`.
@@ -1798,7 +1796,7 @@ pub extern "C" fn js_array_unshift_variadic(
             n,
         );
         arr
-    }
+    })
 }
 
 fn unshift_array_spec_path(arr: *mut ArrayHeader, items: &[f64]) -> *mut ArrayHeader {
