@@ -18,17 +18,12 @@ extern "C" fn js_wasm_instance_result_then(
         )
     });
     let promise = scope.root_raw_mut_ptr(crate::promise::js_promise_new());
-    match outcome {
-        Ok(result) => crate::promise::js_promise_resolve(
-            promise.get_raw_mut_ptr::<crate::promise::Promise>(),
-            result,
-        ),
-        Err(reason) => crate::promise::js_promise_reject(
-            promise.get_raw_mut_ptr::<crate::promise::Promise>(),
-            reason,
-        ),
-    }
-    crate::value::js_nanbox_pointer(promise.get_raw_mut_ptr::<crate::promise::Promise>() as i64)
+    promise.with_mut_ptr(|p: *mut crate::promise::Promise| match outcome {
+        Ok(result) => crate::promise::js_promise_resolve(p, result),
+        Err(reason) => crate::promise::js_promise_reject(p, reason),
+    });
+    promise
+        .with_mut_ptr(|p: *mut crate::promise::Promise| crate::value::js_nanbox_pointer(p as i64))
 }
 
 fn instance_result_object(module: f64, instance: f64) -> f64 {
@@ -241,20 +236,18 @@ pub(super) fn make_instance_result(module: *mut c_void, inst: *mut c_void, impor
     let function = js_wasm_instance_result_then as *const u8;
     crate::closure::js_register_closure_arity(function, 2);
     let then = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(function, 1));
-    crate::closure::js_closure_set_capture_f64(
-        then.get_raw_mut_ptr::<crate::closure::ClosureHeader>(),
-        0,
-        settlement.get_nanbox_f64(),
-    );
+    then.with_mut_ptr(|t: *mut crate::closure::ClosureHeader| {
+        crate::closure::js_closure_set_capture_f64(t, 0, settlement.get_nanbox_f64())
+    });
     let direct_ptr = JSValue::from_bits(direct.get_nanbox_f64().to_bits())
         .as_pointer::<crate::object::ObjectHeader>()
         as *mut crate::object::ObjectHeader;
     let direct_ptr = object_set(
         direct_ptr,
         b"then",
-        crate::value::js_nanbox_pointer(
-            then.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64
-        ),
+        then.with_mut_ptr(|t: *mut crate::closure::ClosureHeader| {
+            crate::value::js_nanbox_pointer(t as i64)
+        }),
     );
     object_value(direct_ptr)
 }

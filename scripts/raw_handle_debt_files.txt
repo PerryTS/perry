@@ -155,4 +155,4 @@
 1 crates/perry-runtime/src/value/to_string.rs
 19 crates/perry-runtime/src/wasi.rs
 4 crates/perry-runtime/src/weakref.rs
-20 crates/perry-runtime/src/webassembly.rs
+19 crates/perry-runtime/src/webassembly.rs
