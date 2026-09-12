@@ -1,10 +1,26 @@
 //! Cache eviction must release ownership, including the backing key storage.
 use super::*;
 
+/// Field count whose storage exceeds the birth-generation ceiling that governs
+/// a JSON-constructed object, so this fixture is born OLD whatever that
+/// constant is.
+///
+/// #10123: hardcoding a width silently pinned these tests to
+/// `LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES == 128 KB`. When the JSON
+/// construction path gained a higher young-birth ceiling the fixture turned
+/// young and the tests failed on their PREMISE (`pointer_in_old_gen`) rather
+/// than on anything they were written to check. Derived, the old-gen path stays
+/// covered at any ceiling.
+pub(super) fn fields_born_old() -> usize {
+    (crate::gc::LARGE_OBJECT_STORAGE_YOUNG_BIRTH_CEILING_BYTES
+        / std::mem::size_of::<crate::value::JSValue>())
+        + 1024
+}
+
 fn wide_source() -> String {
     format!(
         "{{{}}}",
-        (0..50_000)
+        (0..fields_born_old())
             .map(|i| format!("\"field_{i}\":{i}"))
             .collect::<Vec<_>>()
             .join(",")
@@ -44,7 +60,7 @@ fn json_discarded_wide_keys_release_storage_after_cache_eviction() {
             let value = parse(&source);
             assert_eq!(
                 crate::object::object_live_slot_count(value.as_pointer()),
-                50_000
+                fields_born_old() as u32
             );
         }
         assert_eq!(
@@ -129,11 +145,15 @@ fn json_retained_wide_object_keeps_evicted_keys_through_minor_and_full_gc() {
         let root = scope.root_nanbox_u64(value.bits());
         let keys = crate::object::object_keys_array(value.as_pointer());
         assert!(crate::arena::pointer_in_old_gen(keys as usize));
-        let last_before = crate::array::js_array_get(keys, 49_999).bits();
+        let last_idx = (fields_born_old() - 1) as u32;
+        let last_before = crate::array::js_array_get(keys, last_idx).bits();
         gc_collect_minor();
         let live = crate::JSValue::from_bits(root.get_nanbox_u64());
         let keys = crate::object::object_keys_array(live.as_pointer());
-        assert_ne!(last_before, crate::array::js_array_get(keys, 49_999).bits());
+        assert_ne!(
+            last_before,
+            crate::array::js_array_get(keys, last_idx).bits()
+        );
         assert_output(live, &source);
         collect_full();
         assert_output(crate::JSValue::from_bits(root.get_nanbox_u64()), &source);

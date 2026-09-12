@@ -6,8 +6,14 @@ use std::fmt::Write as _;
 /// born-tenured threshold — see `copying.rs`'s `OLD_BORN_ELEMENTS`. These two
 /// fixtures assert that a materialized JSON object / regex result array is an
 /// OLD-generation birth holding young children, so they must actually be one.
+///
+/// #10123: a JSON-constructed object's storage is admitted young up to
+/// `LARGE_OBJECT_STORAGE_YOUNG_BIRTH_CEILING_BYTES`, which is HIGHER than the
+/// flat pointer-bearing threshold. Derive from the ceiling that actually
+/// governs this fixture, or the "is an old-generation birth" premise silently
+/// stops holding and the test fails on its premise rather than its subject.
 const OLD_BORN_FIELDS: u32 =
-    (crate::gc::LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES / 8) as u32 + 64;
+    (crate::gc::LARGE_OBJECT_STORAGE_YOUNG_BIRTH_CEILING_BYTES / 8) as u32 + 64;
 
 unsafe fn alloc_old_test_map(
     capacity: u32,

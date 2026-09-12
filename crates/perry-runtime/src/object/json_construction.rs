@@ -190,6 +190,14 @@ pub(crate) unsafe fn object_from_json_fields_preinstalled(
         b.try_alloc(size, crate::gc::GC_TYPE_OBJECT)
     });
     let obj = if raw.is_null() {
+        // #10123: a wide document's property storage crosses the birth
+        // threshold and is then born tenured, where no minor will ever sweep
+        // it -- so it holds its whole field set live after the document is
+        // dead. Keep it young while the copier can still move it. This is the
+        // site the scope has to cover: the storage is minted HERE, not inside
+        // `js_json_parse_result`, which is why scoping the parse entry alone
+        // changed nothing (the allocation saw mask=0).
+        let _wide = crate::gc::JsonWideBirthScope::objects();
         js_object_alloc_class_inline_keys_stamped(0, 0, count as u32, keys, shape_id)
     } else {
         let obj = raw.cast::<ObjectHeader>();
