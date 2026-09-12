@@ -65,7 +65,10 @@ pub extern "C" fn perry_wasm_host_instance_table_get(
             *out_bits = value.bits;
             *out_is_null = value.is_null as i32;
             if !out_external.is_null() {
-                *out_external = value.external;
+                *out_external = match extern_from_handle(value.external) {
+                    Some(Extern::Func(function)) => extern_handle(function.into()),
+                    _ => std::ptr::null_mut(),
+                };
             }
         }
         return 1;
@@ -115,18 +118,7 @@ pub(crate) fn table_value(
     is_null: i32,
     external: *mut c_void,
 ) -> Option<Val> {
-    let element = table.ty(inst.store()).element();
-    if is_null != 0 {
-        return Some(Val::default(element));
-    }
-    match element {
-        ValType::ExternRef => Some(Val::from(ExternRef::new(inst.store_mut(), bits))),
-        ValType::FuncRef => match extern_from_handle(external) {
-            Some(Extern::Func(function)) => Some(Val::FuncRef(Ref::Val(function))),
-            _ => None,
-        },
-        _ => None,
-    }
+    crate::externals::table_value_for_store(inst.store_mut(), table, bits, is_null, external)
 }
 
 #[no_mangle]

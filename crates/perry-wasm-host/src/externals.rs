@@ -46,6 +46,7 @@ pub extern "C" fn perry_wasm_host_global_new(kind: u8, mutable: i32, bits: u64) 
         );
         extern_handle(global.into())
     })
+    .unwrap_or(std::ptr::null_mut())
 }
 
 #[no_mangle]
@@ -70,6 +71,7 @@ pub extern "C" fn perry_wasm_host_global_get(
         }
         1
     })
+    .unwrap_or(0)
 }
 
 #[no_mangle]
@@ -78,7 +80,7 @@ pub extern "C" fn perry_wasm_host_global_set(handle: *mut c_void, kind: u8, bits
         return 0;
     };
     let value = val_from_kind_bits(kind, bits);
-    with_host_runtime(|runtime| global.set(&mut runtime.store, value).is_ok() as i32)
+    with_host_runtime(|runtime| global.set(&mut runtime.store, value).is_ok() as i32).unwrap_or(0)
 }
 
 #[no_mangle]
@@ -90,6 +92,7 @@ pub extern "C" fn perry_wasm_host_memory_new(initial: u32, maximum: u32) -> *mut
             .map(|memory| extern_handle(memory.into()))
             .unwrap_or(std::ptr::null_mut())
     })
+    .unwrap_or(std::ptr::null_mut())
 }
 
 #[no_mangle]
@@ -106,6 +109,7 @@ pub extern "C" fn perry_wasm_host_memory_span(handle: *mut c_void, out_len: *mut
         }
         memory.data_ptr(&runtime.store)
     })
+    .unwrap_or(std::ptr::null_mut())
 }
 
 #[no_mangle]
@@ -119,6 +123,7 @@ pub extern "C" fn perry_wasm_host_memory_grow(handle: *mut c_void, delta: u32) -
             .map(|pages| pages as i64)
             .unwrap_or(-1)
     })
+    .unwrap_or(-1)
 }
 
 #[no_mangle]
@@ -139,6 +144,7 @@ pub extern "C" fn perry_wasm_host_table_new(
             .map(|table| extern_handle(table.into()))
             .unwrap_or(std::ptr::null_mut())
     })
+    .unwrap_or(std::ptr::null_mut())
 }
 
 fn table_from_handle(handle: *mut c_void) -> Option<Table> {
@@ -148,7 +154,7 @@ fn table_from_handle(handle: *mut c_void) -> Option<Table> {
     }
 }
 
-fn table_value_for_store(
+pub(crate) fn table_value_for_store(
     store: &mut Store<()>,
     table: Table,
     bits: u64,
@@ -175,6 +181,7 @@ pub extern "C" fn perry_wasm_host_table_len(handle: *mut c_void) -> usize {
         return usize::MAX;
     };
     with_host_runtime(|runtime| usize::try_from(table.size(&runtime.store)).unwrap_or(usize::MAX))
+        .unwrap_or(usize::MAX)
 }
 
 #[no_mangle]
@@ -215,6 +222,7 @@ pub extern "C" fn perry_wasm_host_table_get(
         }
         1
     })
+    .unwrap_or(0)
 }
 
 #[no_mangle]
@@ -235,6 +243,7 @@ pub extern "C" fn perry_wasm_host_table_set(
         };
         table.set(&mut runtime.store, index as u64, value).is_ok() as i32
     })
+    .unwrap_or(0)
 }
 
 #[no_mangle]
@@ -266,6 +275,7 @@ pub extern "C" fn perry_wasm_host_table_grow(
         unsafe { *out_old_len = old_len };
         1
     })
+    .unwrap_or(0)
 }
 
 #[no_mangle]
@@ -273,7 +283,7 @@ pub extern "C" fn perry_wasm_host_func_arity(handle: *mut c_void) -> usize {
     let Some(Extern::Func(function)) = extern_from_handle(handle) else {
         return usize::MAX;
     };
-    with_host_runtime(|runtime| function.ty(&runtime.store).params().len())
+    with_host_runtime(|runtime| function.ty(&runtime.store).params().len()).unwrap_or(usize::MAX)
 }
 
 /// Invoke a function obtained from a funcref table. This is the generic
@@ -361,6 +371,11 @@ pub extern "C" fn perry_wasm_host_func_call(
                 })
             })
             .collect()
+    })
+    .unwrap_or_else(|| {
+        Err(WasmHostError::Runtime(
+            "host runtime is already in use".into(),
+        ))
     });
     let values = match call_result {
         Ok(values) => values,

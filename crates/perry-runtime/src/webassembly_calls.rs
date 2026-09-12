@@ -17,10 +17,18 @@ extern "C" fn js_wasm_instance_result_then(
             1,
         )
     });
+    let (fulfilled, value) = match outcome {
+        Ok(result) => (true, result),
+        Err(reason) => (false, reason),
+    };
+    let value = scope.root_nanbox_f64(value);
     let promise = scope.root_raw_mut_ptr(crate::promise::js_promise_new());
-    promise.with_mut_ptr(|p: *mut crate::promise::Promise| match outcome {
-        Ok(result) => crate::promise::js_promise_resolve(p, result),
-        Err(reason) => crate::promise::js_promise_reject(p, reason),
+    promise.with_mut_ptr(|p: *mut crate::promise::Promise| {
+        if fulfilled {
+            crate::promise::js_promise_resolve(p, value.get_nanbox_f64());
+        } else {
+            crate::promise::js_promise_reject(p, value.get_nanbox_f64());
+        }
     });
     promise
         .with_mut_ptr(|p: *mut crate::promise::Promise| crate::value::js_nanbox_pointer(p as i64))

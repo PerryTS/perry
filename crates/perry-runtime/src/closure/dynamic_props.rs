@@ -95,9 +95,42 @@ fn get_closure_props() -> &'static Mutex<PtrHashMap<usize, ClosureProps>> {
     CLOSURE_PROPS.get_or_init(|| Mutex::new(new_ptr_hash_map()))
 }
 
+#[cfg(feature = "wasm-host")]
+per_test_global! {
+    /// Host-owned funcref handles whose JavaScript wrappers are closures.
+    /// The closure address is a weak owner key; move/death hooks rekey or
+    /// release the handle without keeping the wrapper alive.
+    static WASM_FUNCREF_EXTERNALS: OnceLock<Mutex<PtrHashMap<usize, usize>>> = OnceLock::new();
+}
+
+#[cfg(feature = "wasm-host")]
+fn get_wasm_funcref_externals() -> &'static Mutex<PtrHashMap<usize, usize>> {
+    WASM_FUNCREF_EXTERNALS.get_or_init(|| Mutex::new(new_ptr_hash_map()))
+}
+
+#[cfg(feature = "wasm-host")]
+fn drop_wasm_funcref_external(handle: usize) {
+    crate::webassembly::drop_host_extern_handle(handle);
+}
+
+#[cfg(feature = "wasm-host")]
+pub(crate) fn register_wasm_funcref_external(owner: usize, handle: usize) {
+    if owner == 0 || handle == 0 {
+        drop_wasm_funcref_external(handle);
+        return;
+    }
+    note_young_closure_owner(owner, 0);
+    let replaced = match get_wasm_funcref_externals().lock() {
+        Ok(mut externals) => externals.insert(owner, handle),
+        Err(_) => Some(handle),
+    };
+    if let Some(replaced) = replaced {
+        drop_wasm_funcref_external(replaced);
+    }
+}
+
 crate::perry_thread_local! {
-    /// #9754: this thread's young-entry log for the three closure side tables
-    /// (`CLOSURE_PROPS`, `CLOSURE_STATIC_PROTOTYPES`, `CLOSURE_DELETED_KEYS`) —
+    /// #9754: this thread's young-entry log for the closure side tables —
     /// the owners whose entry may hold a pointer a minor can act on, as key
     /// or as value. Thread-local although the tables are process-global: an
     /// entry's addresses belong to the inserting thread's heap, and only that
@@ -322,25 +355,41 @@ pub(crate) fn clear_closure_side_tables_for_dead_ptr(ptr: usize) {
     if let Ok(mut deleted) = get_closure_deleted_keys().lock() {
         deleted.remove(&ptr);
     }
+    #[cfg(feature = "wasm-host")]
+    let external = get_wasm_funcref_externals()
+        .lock()
+        .ok()
+        .and_then(|mut externals| externals.remove(&ptr));
+    #[cfg(feature = "wasm-host")]
+    if let Some(external) = external {
+        drop_wasm_funcref_external(external);
+    }
 }
 
-/// Cheap sweep gate: true when any of the three closure side tables has
+/// Cheap sweep gate: true when any closure side table has
 /// entries, so the per-dead-object `clear_dead_payload` dispatch can be
 /// skipped entirely on the (overwhelmingly common) runs that never attach
 /// props to closures. Mirrors `object::overflow_fields_is_empty`.
 pub(crate) fn closure_dynamic_side_tables_nonempty() -> bool {
-    get_closure_props().lock().is_ok_and(|m| !m.is_empty())
+    let dynamic = get_closure_props().lock().is_ok_and(|m| !m.is_empty())
         || get_closure_prototypes().lock().is_ok_and(|m| !m.is_empty())
         || get_closure_deleted_keys()
             .lock()
-            .is_ok_and(|m| !m.is_empty())
+            .is_ok_and(|m| !m.is_empty());
+    #[cfg(feature = "wasm-host")]
+    return dynamic
+        || get_wasm_funcref_externals()
+            .lock()
+            .is_ok_and(|m| !m.is_empty());
+    #[cfg(not(feature = "wasm-host"))]
+    dynamic
 }
 
 /// Death pruning for tenured/uncollected-by-sweep closures (2026-07-09 GC
 /// audit wave 2): the sweep's dead-payload arm above only fires for headers
 /// the ordinary sweep reclaims; closures dying in the ACTIVE nursery block,
 /// in bulk block resets, or in copied-minor from-space never reach it. This
-/// registry-style pass walks the three tables with one of the GC's deadness
+/// registry-style pass walks the tables with one of the GC's deadness
 /// predicates (`gc::dead_owner`, narrowed to `GC_TYPE_CLOSURE`). The tables
 /// are process-global: foreign threads' closure addresses don't attribute
 /// and are skipped (documented residual).
@@ -360,6 +409,24 @@ pub(crate) fn prune_dead_closure_side_table_owners(is_dead_closure: &dyn Fn(usiz
     }
     if let Ok(mut deleted) = get_closure_deleted_keys().lock() {
         deleted.retain(|owner, _| !is_dead(*owner));
+    }
+    #[cfg(feature = "wasm-host")]
+    let removed = if let Ok(mut externals) = get_wasm_funcref_externals().lock() {
+        let mut removed = Vec::new();
+        externals.retain(|owner, handle| {
+            let keep = !is_dead(*owner);
+            if !keep {
+                removed.push(*handle);
+            }
+            keep
+        });
+        removed
+    } else {
+        Vec::new()
+    };
+    #[cfg(feature = "wasm-host")]
+    for external in removed {
+        drop_wasm_funcref_external(external);
     }
 }
 
@@ -400,6 +467,18 @@ pub(crate) fn closure_dynamic_props_owner_moved(old_owner: usize, new_owner: usi
         if let Some(keys) = deleted.remove(&old_owner) {
             deleted.entry(new_owner).or_default().extend(keys);
         }
+    }
+    #[cfg(feature = "wasm-host")]
+    let replaced = get_wasm_funcref_externals()
+        .lock()
+        .ok()
+        .and_then(|mut externals| {
+            let handle = externals.remove(&old_owner)?;
+            externals.insert(new_owner, handle)
+        });
+    #[cfg(feature = "wasm-host")]
+    if let Some(replaced) = replaced {
+        drop_wasm_funcref_external(replaced);
     }
 }
 
@@ -497,6 +576,10 @@ pub fn scan_closure_dynamic_props_roots_mut(visitor: &mut crate::gc::RuntimeRoot
     if let Ok(deleted) = get_closure_deleted_keys().lock() {
         owners.extend(deleted.keys().copied());
     }
+    #[cfg(feature = "wasm-host")]
+    if let Ok(externals) = get_wasm_funcref_externals().lock() {
+        owners.extend(externals.keys().copied());
+    }
     owners.sort_unstable();
     owners.dedup();
     let table_len = owners.len() as u64;
@@ -541,7 +624,14 @@ fn scan_closure_side_tables_young(visitor: &mut crate::gc::RuntimeRootVisitor<'_
             .lock()
             .map(|m| m.len())
             .unwrap_or(0);
-        (props + prototypes + deleted) as u64
+        #[cfg(feature = "wasm-host")]
+        let externals = get_wasm_funcref_externals()
+            .lock()
+            .map(|m| m.len())
+            .unwrap_or(0);
+        #[cfg(not(feature = "wasm-host"))]
+        let externals = 0;
+        (props + prototypes + deleted + externals) as u64
     };
     #[cfg(any(debug_assertions, test))]
     debug_assert_closure_young_log_complete();
@@ -603,6 +693,14 @@ fn debug_assert_closure_young_log_complete() {
     }
     if let Ok(deleted) = get_closure_deleted_keys().lock() {
         for &owner in deleted.keys() {
+            if addr_is_minor_collectible(owner) {
+                relevant.push(owner);
+            }
+        }
+    }
+    #[cfg(feature = "wasm-host")]
+    if let Ok(externals) = get_wasm_funcref_externals().lock() {
+        for &owner in externals.keys() {
             if addr_is_minor_collectible(owner) {
                 relevant.push(owner);
             }
@@ -679,6 +777,21 @@ fn scan_closure_owner(
             if visitor.visit_metadata_usize_slot(&mut new_owner) && new_owner != owner {
                 if let Some(keys) = deleted.remove(&owner) {
                     deleted.entry(new_owner).or_default().extend(keys);
+                }
+                current_owner = new_owner;
+            }
+        }
+    }
+
+    #[cfg(feature = "wasm-host")]
+    if let Ok(mut externals) = get_wasm_funcref_externals().lock() {
+        if externals.contains_key(&owner) {
+            let mut new_owner = owner;
+            if visitor.visit_metadata_usize_slot(&mut new_owner) && new_owner != owner {
+                if let Some(handle) = externals.remove(&owner) {
+                    if let Some(replaced) = externals.insert(new_owner, handle) {
+                        drop_wasm_funcref_external(replaced);
+                    }
                 }
                 current_owner = new_owner;
             }
@@ -1128,6 +1241,20 @@ pub(crate) fn test_clear_closure_side_tables() {
     }
     if let Ok(mut deleted) = get_closure_deleted_keys().lock() {
         deleted.clear();
+    }
+    #[cfg(feature = "wasm-host")]
+    let externals = get_wasm_funcref_externals()
+        .lock()
+        .map(|mut externals| {
+            externals
+                .drain()
+                .map(|(_, handle)| handle)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    #[cfg(feature = "wasm-host")]
+    for external in externals {
+        drop_wasm_funcref_external(external);
     }
 }
 

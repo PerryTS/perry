@@ -250,6 +250,9 @@ console.log("tableCycle=" + runTableCycle());
 const fileModule = new WebAssembly.Module(readFileSync(addWasmPath));
 const fileInstance = new WebAssembly.Instance(fileModule);
 console.log("fileInstance=" + fileInstance.exports.add(9, 12));
+WebAssembly.instantiate(fileModule).then((instance) => {
+    console.log("moduleThen=" + instance.exports.add(10, 11));
+});
 
 const importedModule = new WebAssembly.Module(readFileSync(importedWasmPath));
 const importedInstance = new WebAssembly.Instance(importedModule, {
@@ -472,6 +475,7 @@ fn wasm_esm_import_instantiates_and_exposes_exports() {
     assert!(stdout.contains("table=2:5:true"), "stdout:\n{stdout}");
     assert!(stdout.contains("tableCycle=4:true"), "stdout:\n{stdout}");
     assert!(stdout.contains("fileInstance=21"), "stdout:\n{stdout}");
+    assert!(stdout.contains("moduleThen=21"), "stdout:\n{stdout}");
     assert!(stdout.contains("fileImported=21"), "stdout:\n{stdout}");
     assert!(stdout.contains("instanceLength=1"), "stdout:\n{stdout}");
     assert!(stdout.contains("sharedGlobal=7"), "stdout:\n{stdout}");

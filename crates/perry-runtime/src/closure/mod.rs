@@ -73,6 +73,8 @@ pub(crate) use box_captures::{
     box_capture_count, clone_closure_box_captures, closure_box_captures_owner_moved,
     prune_dead_closure_box_capture_owners, visit_closure_box_payload_slots_mut,
 };
+#[cfg(feature = "wasm-host")]
+pub(crate) use dynamic_props::register_wasm_funcref_external;
 #[cfg(test)]
 pub(crate) use dynamic_props::test_clear_closure_side_tables;
 pub(crate) use dynamic_props::{
