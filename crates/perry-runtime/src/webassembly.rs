@@ -215,12 +215,12 @@ fn object_set(
     let obj = scope.root_raw_mut_ptr(obj);
     let value = scope.root_nanbox_f64(value);
     let key = scope.root_string_ptr(named_key(key));
-    crate::object::js_object_set_field_by_name(
-        obj.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
-        key.get_raw_const_ptr::<crate::string::StringHeader>(),
-        value.get_nanbox_f64(),
-    );
-    obj.get_raw_mut_ptr::<crate::object::ObjectHeader>()
+    obj.with_mut_ptr(|o: *mut crate::object::ObjectHeader| {
+        key.with_const_ptr(|k: *const crate::string::StringHeader| {
+            crate::object::js_object_set_field_by_name(o, k, value.get_nanbox_f64())
+        })
+    });
+    obj.with_mut_ptr(|o: *mut crate::object::ObjectHeader| o)
 }
 
 fn object_set_string(
@@ -824,9 +824,13 @@ fn wasm_import_value(
     }
     let module_bytes = unsafe { std::slice::from_raw_parts(module, module_len) };
     let module_key = scope.root_string_ptr(named_key(module_bytes));
-    let module_value = scope.root_nanbox_f64(crate::object::js_object_get_field_by_name_f64(
-        imports_value.as_pointer::<crate::object::ObjectHeader>(),
-        module_key.get_raw_const_ptr::<crate::string::StringHeader>(),
+    let module_value = scope.root_nanbox_f64(module_key.with_const_ptr(
+        |k: *const crate::string::StringHeader| {
+            crate::object::js_object_get_field_by_name_f64(
+                imports_value.as_pointer::<crate::object::ObjectHeader>(),
+                k,
+            )
+        },
     ));
     let module_object = JSValue::from_bits(module_value.get_nanbox_f64().to_bits());
     if !module_object.is_pointer() {
@@ -834,10 +838,12 @@ fn wasm_import_value(
     }
     let name_bytes = unsafe { std::slice::from_raw_parts(name, name_len) };
     let name_key = scope.root_string_ptr(named_key(name_bytes));
-    crate::object::js_object_get_field_by_name_f64(
-        module_object.as_pointer::<crate::object::ObjectHeader>(),
-        name_key.get_raw_const_ptr::<crate::string::StringHeader>(),
-    )
+    name_key.with_const_ptr(|k: *const crate::string::StringHeader| {
+        crate::object::js_object_get_field_by_name_f64(
+            module_object.as_pointer::<crate::object::ObjectHeader>(),
+            k,
+        )
+    })
 }
 
 unsafe extern "C" fn resolve_wasm_import(
