@@ -11,7 +11,7 @@
 //! scan transitive bundled assets), while still hitting the surface
 //! that's actually exposed to importers.
 
-use regex::Regex;
+use perry_perex::tooling::Regex;
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};

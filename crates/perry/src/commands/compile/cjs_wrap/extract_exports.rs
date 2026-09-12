@@ -14,11 +14,11 @@ pub fn extract_single_module_exports_assignment(source: &str) -> Option<String> 
     // `module['exports'] = X` / `module["exports"] = X`, equivalent to the
     // dot form. A genuinely dynamic `module[k] = X` (non-string-literal key)
     // is NOT matched and stays on the runtime `_cjs` path.
-    let re = regex::Regex::new(
+    let re = perry_perex::tooling::Regex::new(
         r#"(?m)^\s*module(?:\.exports|\[\s*'exports'\s*\]|\[\s*"exports"\s*\])\s*=\s*([^;\n]+?)\s*;?\s*$"#,
     )
     .ok()?;
-    let ident_re = regex::Regex::new(r#"^[A-Za-z_$][A-Za-z0-9_$]*$"#).ok()?;
+    let ident_re = perry_perex::tooling::Regex::new(r#"^[A-Za-z_$][A-Za-z0-9_$]*$"#).ok()?;
     let mut found: Option<String> = None;
     for cap in re.captures_iter(source) {
         let rhs = cap.get(1)?.as_str().trim();
@@ -67,7 +67,7 @@ pub fn module_reexport_specs(source: &str) -> Vec<String> {
     // `module.exports = { ...require('x') }` are rejected (a `.` / `}` from a
     // surrounding object would follow without an intervening boundary). The
     // `regex` crate has no lookahead, hence the post-match boundary probe.
-    let re = regex::Regex::new(
+    let re = perry_perex::tooling::Regex::new(
         r#"(?m)(?:^|[;{}]|\belse\b|\)\s*)\s*(?:module\.)?exports\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)\s*;?"#,
     )
     .unwrap();
@@ -103,14 +103,14 @@ pub fn module_reexport_specs(source: &str) -> Vec<String> {
 /// Matches both `exports.X = require('Y')` and `module.exports.X = require('Y')`.
 /// Skips `__esModule` (the Babel/tsc interop marker; never user-meaningful).
 pub fn extract_named_exports_from_require(source: &str) -> Vec<(String, String)> {
-    let require_re = regex::Regex::new(
+    let require_re = perry_perex::tooling::Regex::new(
         r#"(?m)^\s*(?:module\.)?exports\.([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)\s*;?\s*$"#,
     )
     .unwrap();
     // Any non-require assignment to the same `exports.X` should disqualify
     // the direct-reexport: the file is doing something more interesting and
     // we'd be skipping that runtime value if we routed through the import.
-    let other_re = regex::Regex::new(
+    let other_re = perry_perex::tooling::Regex::new(
         r#"(?m)^\s*(?:module\.)?exports\.([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(.+?)\s*;?\s*$"#,
     )
     .unwrap();
@@ -186,7 +186,9 @@ pub fn extract_object_literal_exports_from_require(source: &str) -> Vec<(String,
     // Locate the LAST `module.exports = {` or `exports = {` (case where the file
     // reassigns the whole exports object). Anchored at start-of-line. We use
     // `rfind`-style behavior because later assignments win at runtime.
-    let header_re = regex::Regex::new(r#"(?m)^\s*(?:module\.exports|exports)\s*=\s*\{"#).unwrap();
+    let header_re =
+        perry_perex::tooling::Regex::new(r#"(?m)^\s*(?:module\.exports|exports)\s*=\s*\{"#)
+            .unwrap();
     let last_match = header_re.find_iter(source).last();
     let m = match last_match {
         Some(m) => m,
@@ -258,7 +260,7 @@ pub fn extract_object_literal_exports_from_require(source: &str) -> Vec<(String,
     };
 
     // Build alias -> spec map from `const|let|var X = require('Y')` bindings.
-    let alias_re = regex::Regex::new(
+    let alias_re = perry_perex::tooling::Regex::new(
         r#"(?m)^\s*(?:var|const|let)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)\s*;?"#,
     )
     .unwrap();
@@ -342,10 +344,11 @@ pub fn extract_object_literal_exports_from_require(source: &str) -> Vec<(String,
     }
 
     // Parse each entry as shorthand `X` or longhand `X: Y` (Y must be a bare ident).
-    let shorthand_re = regex::Regex::new(r#"^[A-Za-z_$][A-Za-z0-9_$]*$"#).unwrap();
-    let longhand_re =
-        regex::Regex::new(r#"^([A-Za-z_$][A-Za-z0-9_$]*)\s*:\s*([A-Za-z_$][A-Za-z0-9_$]*)$"#)
-            .unwrap();
+    let shorthand_re = perry_perex::tooling::Regex::new(r#"^[A-Za-z_$][A-Za-z0-9_$]*$"#).unwrap();
+    let longhand_re = perry_perex::tooling::Regex::new(
+        r#"^([A-Za-z_$][A-Za-z0-9_$]*)\s*:\s*([A-Za-z_$][A-Za-z0-9_$]*)$"#,
+    )
+    .unwrap();
     let mut out: Vec<(String, String)> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for entry in entries {
@@ -432,7 +435,7 @@ pub fn extract_exports_from_source(source: &str) -> Vec<String> {
     // here makes the wrap emit `export const X = _cjs.X;` at module scope,
     // which shadows the inner binding of the same name during lowering and
     // turns every inner reference to it into `undefined`.
-    let dot_re = regex::Regex::new(
+    let dot_re = perry_perex::tooling::Regex::new(
         r"(?:^|[^A-Za-z0-9_$.])(?:module\.)?exports\.([A-Za-z_$][A-Za-z0-9_$]*)\s*=",
     )
     .unwrap();
@@ -450,7 +453,7 @@ pub fn extract_exports_from_source(source: &str) -> Vec<String> {
     // named export of the outer bundle — mirroring the dot matcher above. A
     // genuinely dynamic `exports[k] = …` (non-string-literal key) does not
     // match and stays on the `_cjs` runtime path.
-    let bracket_re = regex::Regex::new(
+    let bracket_re = perry_perex::tooling::Regex::new(
         r#"(?:^|[^A-Za-z0-9_$.])(?:module\.)?exports\[\s*['"]([A-Za-z_$][A-Za-z0-9_$]*)['"]\s*\]\s*="#,
     )
     .unwrap();
@@ -572,7 +575,7 @@ pub fn extract_exports_from_source(source: &str) -> Vec<String> {
     // The helper definition itself has a non-object second parameter and is
     // therefore not matched. Accept numeric suffixes (`__export2`) used when
     // a bundle has to avoid colliding with an existing binding.
-    let esbuild_export_re = regex::Regex::new(
+    let esbuild_export_re = perry_perex::tooling::Regex::new(
         r"(?:^|[^A-Za-z0-9_$])__export[0-9]*\s*\(\s*[A-Za-z_$][A-Za-z0-9_$]*\s*,\s*\{",
     )
     .unwrap();

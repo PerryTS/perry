@@ -5722,12 +5722,12 @@ dependencies = [
  "perry-diagnostics",
  "perry-hir",
  "perry-parser",
+ "perry-perex",
  "perry-runtime",
  "perry-transform",
  "perry-updater",
  "rand 0.10.2",
  "rayon",
- "regex",
  "reqwest",
  "rustc-demangle",
  "semver",
@@ -6392,6 +6392,7 @@ name = "perry-perex"
 version = "0.5.1541"
 dependencies = [
  "perex",
+ "regex",
 ]
 
 [[package]]

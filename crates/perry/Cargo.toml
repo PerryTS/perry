@@ -76,7 +76,9 @@ rayon = "1.10"
 # via `object`, demangled via `rustc-demangle`) to attribute size by crate.
 object = { version = "0.37", default-features = false, features = ["read", "std"] }
 rustc-demangle = "0.1"
-regex.workspace = true
+# Every pattern the CLI compiles runs on Perex, in the `regex` dialect it was
+# written in; `perry_perex::tooling` translates and refuses what it cannot.
+perry-perex.workspace = true
 
 # Cross-platform file locking (Unix flock + Windows LockFileEx) — used by
 # the auto-optimize driver in commands/compile/optimized_libs.rs to

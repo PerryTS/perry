@@ -28,7 +28,7 @@ pub fn rewrite_module_exports_class_expression(source: &str) -> Option<String> {
     // Find every `module.exports = ...` assignment at column 0. Multiple
     // (possibly conflicting) targets disqualify the rewrite — the IIFE's
     // last-assignment-wins semantics must keep running through `_cjs`.
-    let any_assign_re = regex::Regex::new(r#"(?m)^module\.exports[\t ]*="#).ok()?;
+    let any_assign_re = perry_perex::tooling::Regex::new(r#"(?m)^module\.exports[\t ]*="#).ok()?;
     let assigns: Vec<_> = any_assign_re.find_iter(source).collect();
     if assigns.len() != 1 {
         return None;
@@ -176,8 +176,11 @@ pub fn rewrite_module_exports_class_expression(source: &str) -> Option<String> {
     let chosen_name = parsed_name
         .clone()
         .unwrap_or_else(|| "__perry_cjs_default__".to_string());
-    let collision_pattern = format!(r#"(?m)^class[\t ]+{}\b"#, regex::escape(&chosen_name));
-    let collision_re = regex::Regex::new(&collision_pattern).ok()?;
+    let collision_pattern = format!(
+        r#"(?m)^class[\t ]+{}\b"#,
+        perry_perex::tooling::escape(&chosen_name)
+    );
+    let collision_re = perry_perex::tooling::Regex::new(&collision_pattern).ok()?;
     if collision_re.is_match(source) {
         return None;
     }
