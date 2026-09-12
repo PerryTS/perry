@@ -34,12 +34,6 @@
   ],
   "holders": [
     {
-      "file": "crates/perry-runtime/src/weakref/test_support.rs",
-      "name": "WEAK_ENTRY_VISITS",
-      "verdict": "test_only",
-      "why": "Entry-array visit counter for the WeakMap operation-scaling regression; contains only a usize count and the parent module is cfg(test)."
-    },
-    {
       "file": "crates/perry-ext-exponential-backoff/src/lib.rs",
       "name": "NEXT_ID",
       "verdict": "not_a_gc_pointer",
@@ -257,6 +251,12 @@
     },
     {
       "file": "crates/perry-runtime/src/closure/registry.rs",
+      "name": "BODY_RECORD_LOOKUPS",
+      "verdict": "test_only",
+      "why": "#10127's call/apply rest-dispatch cache counts how often a dispatch resolves through the body-record lookup instead of the cache, so the tests can assert the cache is actually taken rather than that nothing threw. It is a `Cell<u32>` count inside a `#[cfg(test)]` `std::thread_local!` block — absent from production builds, and it never stores an address. Its sibling RESOLVE_STRATEGY_SLOW_CALLS in the same block is pinned on the frontier as debt; this one takes a researched verdict instead, which is the stronger record."
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/registry.rs",
       "name": "CLOSURE_BODY_REGISTRY",
       "verdict": "not_a_gc_pointer",
       "why": "#9707: the unified per-body record table. Keyed by a closure body `func_ptr` (a CODE address the collector neither moves nor traces); the value is `ClosureBodyRecord` = three plain integers (arity, rest arity, `.length`), a flags word, and a 1-based index into TRUSTED_TARGETS. No field can hold a heap pointer, so the table cannot hold a GC root. It replaced the ten `CLOSURE_*_REGISTRY` / `DISPATCH_CACHE` maps that carried the same verdict."
@@ -398,6 +398,12 @@
     },
     {
       "file": "crates/perry-runtime/src/gc/policy.rs",
+      "name": "GC_TINY_PARSE_BOUNDARY_POLL_REMAINING",
+      "verdict": "not_a_gc_pointer",
+      "why": "Tiny-JSON completion countdown in a Cell<u8>. It stores only the number of bounded parse completions before the next arena-pressure poll (0..63), never an address or a NaN-boxed value."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/policy.rs",
       "name": "GC_TINY_PARSE_PRESSURE_BASE_BYTES",
       "verdict": "not_a_gc_pointer",
       "why": "#9831: `arena_in_use_bytes()` (a sum of block bump offsets) recorded as each collection ends, read back by the tiny-parse pressure guard to price growth since then. A byte COUNT, never an address or a NaN-boxed value: written only from `note_collection_finished_arena_occupancy` and the test seam, read only by `tiny_parse_pressure_due`/`diag_tiny_parse_forced_collection`. Same shape as its frontier siblings `GC_LAST_COLLECTION_POST_IN_USE_BYTES`/`GC_STEP_BYTES`, with the verdict those still owe."
@@ -485,6 +491,24 @@
       "name": "MATERIALISE_SEGMENT",
       "verdict": "not_a_gc_pointer",
       "why": "#9870: `PERRY_SEGVIEW_DIAG` tally for the Intl.Segmenter view mode — how often the fast path opened, and which check declined it. A plain `AtomicU64` written only through `bump()`'s `fetch_add(1, Relaxed)` and read only by the diagnostic dump: it holds a COUNT, never an address or a NaN-boxed value, so there is no slot for the collector to mark or rewrite."
+    },
+    {
+      "file": "crates/perry-runtime/src/json/mod.rs",
+      "name": "PARSE_KEY_CACHE_OVERSIZED",
+      "verdict": "not_a_gc_pointer",
+      "why": "Boolean latch recording whether this thread's JSON.parse key cache exceeded its bounded entry count. It stores only true/false; the process-wide companion is an AtomicUsize count, and neither value can contain a GC address or NaN-boxed value."
+    },
+    {
+      "file": "crates/perry-runtime/src/json/parse_empty.rs",
+      "name": "EMPTY_JSON_SHAPE_ID",
+      "verdict": "not_a_gc_pointer",
+      "why": "Per-agent runtime ShapeId for the immutable keyless ordinary-object descriptor. A u32 slab identifier copied into ObjectHeader.parent_class_id; it is never interpreted or dereferenced as a heap address, and keyless descriptors contain no movable keys edge."
+    },
+    {
+      "file": "crates/perry-runtime/src/json/stringify_flat.rs",
+      "name": "JSON_OUTPUT_BYTES_SINCE_SWEEP",
+      "verdict": "not_a_gc_pointer",
+      "why": "Cell<JsonOutputDebt> holds two usize byte counts: completed output bytes and a deferred boundary cutoff. They are added, compared with a byte budget, and subtracted on acknowledgement. Neither is derived from an address or dereferenced; the state contains no managed value or pointer."
     },
     {
       "file": "crates/perry-runtime/src/json/stringify_record_output.rs",
@@ -681,16 +705,16 @@
       "why": "#[cfg(test)] diagnostic trace for the bound-method moving-GC regression: records the (before, after) addresses a test-forced minor produced so the test can assert the relocation happened. The addresses are compared as integers, never dereferenced, and the cell is dead in a shipped binary."
     },
     {
-      "file": "crates/perry-runtime/src/object/regex_proto_thunks.rs",
-      "name": "REGEXP_PROTOTYPE_TEST_WALKS",
-      "verdict": "not_a_gc_pointer",
-      "why": "View-mode diagnostic tally of install-time RegExp.prototype.test walks. A plain AtomicU64 incremented once by record_canonical_test_site and read as a count by tests; it never stores an address or NaN-boxed value. The actual prototype and closure roots live together in REGEXP_PROTOTYPE_TEST_SITE and are visited by scan_canonical_test_site_roots_mut."
-    },
-    {
       "file": "crates/perry-runtime/src/object/read_stub.rs",
       "name": "READ_STUB",
       "verdict": "not_a_gc_pointer",
       "why": "Megamorphic property-read stub cache, the read twin of WRITE_STUB: 2-way ways of (shape_token, key_bits, slot) plain u64s. The token is a shape id and the slot an index; key_bits are content-derived by construction, because read_stub_key_bits returns short_ascii_sso_bits(key) — the key's characters packed inline — and yields None for any key that would otherwise be stored under a pointer. No way holds a heap address, so nothing here keeps an object alive, and a stale entry cannot hit: receiver_shape_token returns None for a receiver with no live shape, and the token identifies the exact key set and order, so a shape change yields a different token."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/regex_proto_thunks.rs",
+      "name": "REGEXP_PROTOTYPE_TEST_WALKS",
+      "verdict": "not_a_gc_pointer",
+      "why": "View-mode diagnostic tally of install-time RegExp.prototype.test walks. A plain AtomicU64 incremented once by record_canonical_test_site and read as a count by tests; it never stores an address or NaN-boxed value. The actual prototype and closure roots live together in REGEXP_PROTOTYPE_TEST_SITE and are visited by scan_canonical_test_site_roots_mut."
     },
     {
       "file": "crates/perry-runtime/src/object/shapes.rs",
@@ -868,6 +892,12 @@
       "why": "Derived cache of the Set's own elements array, which is the canonical scanned storage (GcRewriteDescriptorKind::Set element-slot walk). Not root-scanner-shaped: the outer address key is rekeyed on relocation by GcMoveHookKind::SetSideTables -> set_header_moved_for_gc (set.rs:352), the JSValueKey inner keys are rebuilt post-rewrite by GcRewriteHookKind::SetIndex -> rebuild_set_index_for_gc (set.rs:315, fired from gc/copying.rs:669/798, gc/barrier/mod.rs:195, gc/verify.rs:114), and finalize_set_side_allocation_for_gc (set.rs:374) prunes dead owners — the same three-hook design as MAP_INDEX."
     },
     {
+      "file": "crates/perry-runtime/src/string/char_ops/utf16_index.rs",
+      "name": "DECODE_STEPS",
+      "verdict": "test_only",
+      "why": "A cfg(test) per-thread integer count of bounded decoder calls, used to assert linear work through the public character-access API. It never stores a heap address."
+    },
+    {
       "file": "crates/perry-runtime/src/string/concat.rs",
       "name": "CONCAT_MEMO_TAGS",
       "verdict": "not_a_gc_pointer",
@@ -908,6 +938,12 @@
       "name": "TIMER_HANDLE_KINDS",
       "verdict": "not_a_gc_pointer",
       "why": "Maps scalar timer handle IDs to the CallbackTimerKind enum so clearTimeout/clearInterval can destroy the matching async_hooks resource. Neither the i64 keys nor the enum values contain a JS heap address."
+    },
+    {
+      "file": "crates/perry-runtime/src/weakref/test_support.rs",
+      "name": "WEAK_ENTRY_VISITS",
+      "verdict": "test_only",
+      "why": "Entry-array visit counter for the WeakMap operation-scaling regression; contains only a usize count and the parent module is cfg(test)."
     },
     {
       "file": "crates/perry-runtime/src/webassembly.rs",
@@ -2309,36 +2345,6 @@
       "name": "WINDOW_ROOTS",
       "verdict": "not_a_gc_pointer",
       "why": "Window-root registry maps numeric window handles to numeric root-widget handles; neither value is a JavaScript heap pointer."
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/policy.rs",
-      "name": "GC_TINY_PARSE_BOUNDARY_POLL_REMAINING",
-      "verdict": "not_a_gc_pointer",
-      "why": "Tiny-JSON completion countdown in a Cell<u8>. It stores only the number of bounded parse completions before the next arena-pressure poll (0..63), never an address or a NaN-boxed value."
-    },
-    {
-      "file": "crates/perry-runtime/src/json/mod.rs",
-      "name": "PARSE_KEY_CACHE_OVERSIZED",
-      "verdict": "not_a_gc_pointer",
-      "why": "Boolean latch recording whether this thread's JSON.parse key cache exceeded its bounded entry count. It stores only true/false; the process-wide companion is an AtomicUsize count, and neither value can contain a GC address or NaN-boxed value."
-    },
-    {
-      "file": "crates/perry-runtime/src/json/parse_empty.rs",
-      "name": "EMPTY_JSON_SHAPE_ID",
-      "verdict": "not_a_gc_pointer",
-      "why": "Per-agent runtime ShapeId for the immutable keyless ordinary-object descriptor. A u32 slab identifier copied into ObjectHeader.parent_class_id; it is never interpreted or dereferenced as a heap address, and keyless descriptors contain no movable keys edge."
-    },
-    {
-      "file": "crates/perry-runtime/src/json/stringify_flat.rs",
-      "name": "JSON_OUTPUT_BYTES_SINCE_SWEEP",
-      "verdict": "not_a_gc_pointer",
-      "why": "Cell<JsonOutputDebt> holds two usize byte counts: completed output bytes and a deferred boundary cutoff. They are added, compared with a byte budget, and subtracted on acknowledgement. Neither is derived from an address or dereferenced; the state contains no managed value or pointer."
-    },
-    {
-      "file": "crates/perry-runtime/src/string/char_ops/utf16_index.rs",
-      "name": "DECODE_STEPS",
-      "verdict": "test_only",
-      "why": "A cfg(test) per-thread integer count of bounded decoder calls, used to assert linear work through the public character-access API. It never stores a heap address."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core raw/Perry TLS declarations (see the census docstring, “The identity-pinned frontier”). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",
