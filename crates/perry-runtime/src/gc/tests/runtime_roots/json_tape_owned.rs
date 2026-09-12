@@ -221,7 +221,19 @@ fn json_owned_tape_roots_its_blob_through_copied_minor_during_construction() {
         JsonTapeSafepointHookGuard::new(crate::json_tape::JsonTapeSafepoint::LazyArrayRooted);
     let lazy = unsafe { crate::json_tape::alloc_lazy_array_from_scratch(&mut entries, 0, 2, text) };
     assert_eq!(entries.capacity(), 0);
-    assert_eq!(hook.fired_ptr(), lazy as usize);
+    // The header is movable now, so the collection this hook fires inside
+    // relocates it: the hook saw the pre-move address and `alloc_lazy_array`
+    // returns the refreshed one, read back through its own rooted handle.
+    assert_ne!(
+        hook.fired_ptr(),
+        lazy as usize,
+        "a nursery header must relocate across its construction safepoint"
+    );
+    assert_eq!(
+        unsafe { (*lazy).magic },
+        crate::json_tape::LAZY_ARRAY_MAGIC,
+        "…and the returned address must be the live header"
+    );
     assert!(gc_collection_count() > before_gc);
     assert_ne!(
         unsafe { (*lazy).blob_str },
@@ -246,32 +258,48 @@ fn json_owned_tapes_remain_independent_and_release_only_dead_owners() {
     let _guard = CopyingNurseryTestGuard::new(2);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let before = crate::json_tape_store::registered_bytes();
+    // Both owners are movable and nursery-resident now, so a raw header read
+    // after any collection has to come back through a root. This test's roots
+    // are the shadow slots, which the collector rewrites — so re-read them
+    // rather than keeping the addresses `owned_small` returned.
+    let slot = |i: u32| -> *mut crate::json_tape::LazyArrayHeader {
+        (js_shadow_slot_get(i) & 0x0000_FFFF_FFFF_FFFF) as *mut crate::json_tape::LazyArrayHeader
+    };
     let first = unsafe { owned_small(b"[1,2,3]") };
     js_shadow_slot_set(0, ptr_bits(first as usize));
     let first_bytes = crate::json_tape_store::registered_bytes() - before;
     let second = unsafe { owned_small(b"[4,5,6,7]") };
     js_shadow_slot_set(1, ptr_bits(second as usize));
     let both = crate::json_tape_store::registered_bytes();
+    let (first, second) = (slot(0), slot(1));
     assert_ne!(unsafe { (*first).tape }, unsafe { (*second).tape });
     let _ =
         gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
     assert_eq!(crate::json_tape_store::registered_bytes(), both);
     assert_eq!(
-        unsafe { crate::json_tape::LazyArrayHeader::blob_bytes(first) },
+        unsafe { crate::json_tape::LazyArrayHeader::blob_bytes(slot(0)) },
         b"[1,2,3]"
     );
     assert_eq!(
-        unsafe { crate::json_tape::LazyArrayHeader::blob_bytes(second) },
+        unsafe { crate::json_tape::LazyArrayHeader::blob_bytes(slot(1)) },
         b"[4,5,6,7]"
     );
     js_shadow_slot_set(0, crate::JSValue::undefined().bits());
+    // These owners are nursery-resident now, and nursery reclamation belongs to
+    // a minor: `finalize_dead_copied_minor_from_space_lazy_tapes` is what gives
+    // a dead owner's tape back, the way Map/Set/Error/RegExp give theirs back.
+    // A full mark-sweep alone leaves the mark bits of a nursery object to the
+    // minor, so it neither clears them nor reclaims here — asserting on a full
+    // sweep would be asserting against the wrong pass.
     let _ =
         gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+    let _ = gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
     assert_eq!(
         crate::json_tape_store::registered_bytes(),
-        both - first_bytes
+        both - first_bytes,
+        "a dead nursery owner must give its tape back on a minor"
     );
-    let array = unsafe { crate::json_tape::force_materialize_lazy(second) };
+    let array = unsafe { crate::json_tape::force_materialize_lazy(slot(1)) };
     assert_eq!(unsafe { (*array).length }, 4);
     assert_eq!(crate::json_tape_store::registered_bytes(), before);
 }
