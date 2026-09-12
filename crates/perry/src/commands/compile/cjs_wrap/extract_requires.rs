@@ -7,7 +7,8 @@
 pub fn extract_require_specifiers(source: &str) -> Vec<String> {
     // A trailing comma is valid in calls and is emitted by formatters for
     // multiline require expressions (including OpenCode's watcher selector).
-    let re = regex::Regex::new(r#"require\s*\(\s*['"]([^'"]+)['"]\s*,?\s*\)"#).unwrap();
+    let re =
+        perry_perex::tooling::Regex::new(r#"require\s*\(\s*['"]([^'"]+)['"]\s*,?\s*\)"#).unwrap();
     let masked = super::detect::strip_comments_and_strings(source);
     let mut specs = Vec::new();
     for cap in re.captures_iter(source) {
@@ -41,7 +42,7 @@ pub fn extract_require_specifiers(source: &str) -> Vec<String> {
 /// never matches because the pattern requires a `require('...')` literal as
 /// the first argument. Order preserved, deduped.
 pub fn extract_export_star_specs(source: &str) -> Vec<String> {
-    let re = regex::Regex::new(
+    let re = perry_perex::tooling::Regex::new(
         r#"(?:[A-Za-z_$][A-Za-z0-9_$]*\s*\.\s*)?__exportStar\s*\)?\s*\(\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)\s*,\s*exports\s*\)"#,
     )
     .unwrap();
@@ -85,7 +86,7 @@ pub fn extract_export_star_specs(source: &str) -> Vec<String> {
 /// match because the `;` form ends the alias matched region before
 /// the follow-on.
 pub fn extract_require_aliases_with_ranges(source: &str) -> Vec<(String, String, (usize, usize))> {
-    let re = regex::Regex::new(
+    let re = perry_perex::tooling::Regex::new(
         r#"(?m)^\s*(?:var|const|let)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)\s*(?:;|$)"#,
     )
     .unwrap();
@@ -313,7 +314,7 @@ pub fn function_local_specs(source: &str) -> std::collections::HashSet<String> {
     use std::collections::{HashMap, HashSet};
 
     // (offset, spec) for every static `require('<spec>')` call, in source order.
-    let re = regex::Regex::new(r#"require\s*\(\s*['"]([^'"]+)['"]\s*\)"#).unwrap();
+    let re = perry_perex::tooling::Regex::new(r#"require\s*\(\s*['"]([^'"]+)['"]\s*\)"#).unwrap();
     let masked = super::detect::strip_comments_and_strings(source);
     let sbytes = source.as_bytes();
     let mut sites: Vec<(usize, &str)> = Vec::new();

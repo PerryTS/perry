@@ -116,14 +116,15 @@ pub(super) fn resolve_bunfs_literal_assets(
     source: &str,
     bunfs_root: &Path,
 ) -> Vec<(String, PathBuf)> {
-    static LITERAL_RES: OnceLock<Vec<regex::Regex>> = OnceLock::new();
+    static LITERAL_RES: OnceLock<Vec<perry_perex::tooling::Regex>> = OnceLock::new();
     let literal_res = LITERAL_RES.get_or_init(|| {
         vec![
-            regex::Regex::new(r#"\"(/\$bunfs/root/[^\"\\\r\n]+)\""#)
+            perry_perex::tooling::Regex::new(r#"\"(/\$bunfs/root/[^\"\\\r\n]+)\""#)
                 .expect("double-quoted bunfs path"),
-            regex::Regex::new(r#"'(/\$bunfs/root/[^'\\\r\n]+)'"#)
+            perry_perex::tooling::Regex::new(r#"'(/\$bunfs/root/[^'\\\r\n]+)'"#)
                 .expect("single-quoted bunfs path"),
-            regex::Regex::new(r#"`(/\$bunfs/root/[^`\\$\r\n]+)`"#).expect("template bunfs path"),
+            perry_perex::tooling::Regex::new(r#"`(/\$bunfs/root/[^`\\$\r\n]+)`"#)
+                .expect("template bunfs path"),
         ]
     });
     let canonical_root = match bunfs_root.canonicalize() {

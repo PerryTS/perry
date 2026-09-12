@@ -10,7 +10,7 @@
 //! time this rule runs. We scan them statically and refuse to permit
 //! the script to run later (Phase 9) if any of these signals fire.
 
-use regex::Regex;
+use perry_perex::tooling::Regex;
 use std::sync::OnceLock;
 
 use super::report::{Finding, Severity};

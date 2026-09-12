@@ -29,6 +29,9 @@ use std::fmt;
 mod memory;
 use memory::{Buffer, Memory};
 
+/// Allocating convenience API for build tooling. Not used by the runtime.
+pub mod tooling;
+
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
     pub program_bytes: usize,
@@ -54,6 +57,9 @@ pub enum Error {
     Binding(PairError<Infallible, Infallible>),
     MemoryLimit,
     InputLimit,
+    /// Pattern text in the `regex` crate's dialect that [`tooling`] cannot
+    /// translate into ECMAScript with its meaning intact.
+    Dialect(tooling::DialectError),
     WorkLimit,
     Allocation,
 }
@@ -163,6 +169,27 @@ impl Regex {
     }
     pub fn capture_count(&self) -> usize {
         self.captures
+    }
+    /// Each named group's name and the capture indices declared under it, in
+    /// first-declaration order. A name declared in disjoint alternatives lists
+    /// every group that carries it.
+    pub fn named_groups(&self) -> Vec<(String, Vec<usize>)> {
+        self.program
+            .with_view(|program| {
+                program
+                    .named_groups()
+                    .map(|group| {
+                        let units: Vec<u16> = group.name_units().collect();
+                        let indices = group
+                            .capture_indices()
+                            .iter()
+                            .map(|&i| i as usize)
+                            .collect();
+                        (String::from_utf16_lossy(&units), indices)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     pub fn is_match(

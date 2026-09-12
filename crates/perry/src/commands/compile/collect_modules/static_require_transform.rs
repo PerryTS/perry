@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::OnceLock;
 
-use regex::Regex;
+use perry_perex::tooling::Regex;
 use serde::de::{MapAccess, SeqAccess, Visitor};
 use serde::Deserialize;
 
@@ -470,7 +470,7 @@ fn collect_create_require_aliases_from_decls(
 fn create_require_decl_re(create_alias: &str) -> Regex {
     Regex::new(&format!(
         r#"(?m)^\s*(?:const|let|var)\s+(?P<alias>[A-Za-z_$][A-Za-z0-9_$]*)(?:\s*:\s*[^=;]+)?\s*=\s*{}\s*\(\s*import\.meta\.url\s*\)\s*;?"#,
-        regex::escape(create_alias)
+        perry_perex::tooling::escape(create_alias)
     ))
     .expect("createRequire declaration regex")
 }
@@ -478,7 +478,7 @@ fn create_require_decl_re(create_alias: &str) -> Regex {
 fn literal_require_call_re(require_alias: &str) -> Regex {
     Regex::new(&format!(
         r#"(?m)(?:^|[^A-Za-z0-9_$\.])(?P<call>{}\s*\(\s*['"](?P<spec>[^'"]+)['"]\s*\))"#,
-        regex::escape(require_alias)
+        perry_perex::tooling::escape(require_alias)
     ))
     .expect("static require literal call regex")
 }
@@ -486,7 +486,7 @@ fn literal_require_call_re(require_alias: &str) -> Regex {
 fn literal_require_resolve_call_re(require_alias: &str) -> Regex {
     Regex::new(&format!(
         r#"(?m)(?:^|[^A-Za-z0-9_$\.])(?P<call>{}\.resolve\s*\(\s*['\"](?P<spec>[^'\"]+)['\"]\s*\))"#,
-        regex::escape(require_alias)
+        perry_perex::tooling::escape(require_alias)
     ))
     .expect("static require.resolve literal call regex")
 }
