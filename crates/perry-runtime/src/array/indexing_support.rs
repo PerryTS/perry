@@ -135,24 +135,53 @@ pub(crate) fn object_prototype_has_index_flag() -> bool {
 /// hot-path shape as `ARRAY_PROTO_HAS_INDEX` above.
 pub(super) static ARRAY_PROTO_ITERATOR_MODIFIED: AtomicBool = AtomicBool::new(false);
 
-/// The same fact as [`ARRAY_PROTO_ITERATOR_MODIFIED`], exported so GENERATED
-/// code can read it (#7760 item 1).
+/// Sticky, exported so GENERATED code can read it: array iteration can no
+/// longer be PROVEN to be the pristine builtin protocol.
 ///
-/// `for…of` over a statically-proven array desugars to an index loop
-/// (`__i < __arr.length` / `__arr[__i]`) in HIR lowering, which never consults
-/// the iteration protocol — so a patched `Array.prototype[Symbol.iterator]` was
-/// ignored there even after the spread paths were fixed (#7542). The loop now
-/// branches on this flag ONCE at entry, which is also what the spec wants:
-/// `for…of` performs GetIterator exactly once, so a patch landing mid-loop must
-/// not change the iterator already in hand.
+/// Two independent facts set it, and generated code must decline its
+/// non-iterator fast arm for either:
+///
+///   * [`ARRAY_PROTO_ITERATOR_MODIFIED`] — `Array.prototype[Symbol.iterator]`
+///     was replaced or deleted (#7760 item 1). `for…of` over a statically-proven
+///     array desugars to an index loop (`__i < __arr.length` / `__arr[__i]`) in
+///     HIR lowering, which never consults the iteration protocol, so such a
+///     patch was ignored there even after the spread paths were fixed (#7542).
+///   * The array-iterator PROTOTYPE object was handed to user code (#10086; see
+///     `object::iterator_prototypes::note_array_iterator_prototype_exposed`).
+///     A replaced `%ArrayIteratorPrototype%.next` is detected per `.next()` call
+///     (`prototype_next_is_canonical`), which a fast arm that never calls
+///     `.next()` cannot observe — and the only way to reach that object in order
+///     to patch it is `Object.getPrototypeOf` / `Reflect.getPrototypeOf`. So the
+///     flag is set the moment the object escapes, whether or not it is then
+///     patched: over-approximating costs the fast arm only in programs that
+///     introspect array iterators, while under-approximating would silently
+///     return unpatched elements.
+///
+/// Both consumers — the `for…of` index loop and #10086's array-destructuring
+/// arm — branch on it ONCE, which is also what the spec wants: iteration
+/// performs GetIterator exactly once, so a patch landing mid-loop must not
+/// change the iterator already in hand.
 ///
 /// A separate `u8` global rather than exposing the `AtomicBool`: codegen emits
 /// a plain volatile `i8` load, the same shape as
 /// `PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED`, so the fast arm pays one load and
 /// a predictable branch per LOOP — not per iteration — and the index loop
 /// itself is emitted byte-identically to before.
+///
+/// NOTE the asymmetry with [`ARRAY_PROTO_ITERATOR_MODIFIED`]: that bool keeps
+/// its exact original meaning (the `Symbol.iterator` slot was written) and still
+/// gates the Rust-side spread / `js_get_iterator` delegation. Only this byte
+/// carries the broader "not provably pristine" fact.
 #[no_mangle]
-pub static PERRY_ARRAY_PROTO_ITERATOR_PATCHED: AtomicU8 = AtomicU8::new(0);
+pub static PERRY_ARRAY_ITERATION_NOT_PRISTINE: AtomicU8 = AtomicU8::new(0);
+
+/// Publish "array iteration is no longer provably pristine" to generated code.
+/// Release-ordered so a reader that observes the `1` also observes the
+/// prototype exposure / write that preceded it.
+#[inline]
+pub(crate) fn note_array_iteration_not_pristine() {
+    PERRY_ARRAY_ITERATION_NOT_PRISTINE.store(1, Ordering::Release);
+}
 
 /// Record (if `obj` is `Array.prototype` and `sym_key` is the well-known
 /// `Symbol.iterator`) that the array iteration protocol has been tampered
@@ -165,9 +194,7 @@ pub(crate) fn note_array_proto_iterator_write(obj: usize, sym_key: usize) {
         && sym_key == crate::symbol::well_known_symbol("iterator") as usize
     {
         ARRAY_PROTO_ITERATOR_MODIFIED.store(true, Ordering::Relaxed);
-        // Publish to generated code. Release so a loop that observes the `1`
-        // also observes the prototype write that preceded it.
-        PERRY_ARRAY_PROTO_ITERATOR_PATCHED.store(1, Ordering::Release);
+        note_array_iteration_not_pristine();
     }
 }
 

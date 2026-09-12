@@ -1,5 +1,6 @@
 //! Lowering of destructuring assignment statements (e.g. `[a, b] = expr` as a statement).
 
+use super::array_fast::{self, ArraySource};
 use super::*;
 
 #[derive(Clone)]
@@ -47,6 +48,18 @@ pub(crate) fn lower_destructuring_assignment_stmt(
     pat: &ast::AssignTargetPat,
     rhs: &ast::Expr,
 ) -> Result<Vec<Stmt>> {
+    // #10086: `[x, y] = [y, x]` and `[a, b] = <proven array>` do not need the
+    // iterator protocol unless `Array.prototype[Symbol.iterator]` is patched.
+    if let ast::AssignTargetPat::Array(arr_pat) = pat {
+        if let Some((mut result, plan)) = array_fast::plan_for_source(ctx, &arr_pat.elems, rhs)? {
+            result.extend(lower_array_assignment_from_expr(
+                ctx,
+                arr_pat,
+                ArraySource::Guarded(plan),
+            )?);
+            return Ok(result);
+        }
+    }
     let rhs_expr = lower_expr(ctx, rhs)?;
     let (tmp_id, tmp_name) = fresh_destruct_local(ctx, "destruct", Type::Any);
 
@@ -71,9 +84,11 @@ pub(crate) fn lower_destructuring_assignment_stmt_from_local(
     source_id: LocalId,
 ) -> Result<Vec<Stmt>> {
     match pat {
-        ast::AssignTargetPat::Array(arr_pat) => {
-            lower_array_assignment_from_expr(ctx, arr_pat, Expr::LocalGet(source_id))
-        }
+        ast::AssignTargetPat::Array(arr_pat) => lower_array_assignment_from_expr(
+            ctx,
+            arr_pat,
+            ArraySource::Iterator(Expr::LocalGet(source_id)),
+        ),
         ast::AssignTargetPat::Object(obj_pat) => {
             lower_object_assignment_from_expr(ctx, obj_pat, Expr::LocalGet(source_id))
         }
@@ -84,7 +99,7 @@ pub(crate) fn lower_destructuring_assignment_stmt_from_local(
 fn lower_array_assignment_from_expr(
     ctx: &mut LoweringContext,
     arr_pat: &ast::ArrayPat,
-    source: Expr,
+    source: ArraySource,
 ) -> Result<Vec<Stmt>> {
     let (iter_id, iter_name) = fresh_destruct_local(ctx, "destruct_iter", Type::Any);
     let (done_id, done_name) = fresh_destruct_local(ctx, "destruct_done", Type::Boolean);
@@ -95,7 +110,7 @@ fn lower_array_assignment_from_expr(
             name: iter_name,
             ty: Type::Any,
             mutable: false,
-            init: Some(Expr::GetIterator(Box::new(source))),
+            init: Some(source.iter_init()),
         },
         Stmt::Let {
             id: done_id,
@@ -107,7 +122,7 @@ fn lower_array_assignment_from_expr(
     ];
 
     let mut body = Vec::new();
-    for elem in &arr_pat.elems {
+    for (idx, elem) in arr_pat.elems.iter().enumerate() {
         if let Some(ast::Pat::Rest(rest_pat)) = elem {
             // AssignmentRestElement evaluates its target and drains every
             // remaining iterator value into a fresh Array, then performs the
@@ -152,18 +167,20 @@ fn lower_array_assignment_from_expr(
         if let Some(elem_pat) = elem {
             let (prepare, target, default_value) = prepare_target_with_default(ctx, elem_pat)?;
             body.extend(prepare);
-            body.extend(iterator_next_value_stmts(ctx, iter_id, done_id, value_id));
+            let pull = iterator_next_value_stmts(ctx, iter_id, done_id, value_id);
+            body.extend(source.pull(idx, value_id, pull));
             let assigned = value_with_default(ctx, Expr::LocalGet(value_id), default_value)?;
             body.extend(assign_prepared_target(ctx, target, assigned)?);
         } else {
-            body.extend(iterator_next_value_stmts(ctx, iter_id, done_id, value_id));
+            let pull = iterator_next_value_stmts(ctx, iter_id, done_id, value_id);
+            body.extend(source.pull(idx, value_id, pull));
         }
     }
 
-    let close_stmt = Stmt::Expr(runtime_iterator_call(
+    let close_stmt = source.close(Stmt::Expr(runtime_iterator_call(
         "iteratorCloseIfNotDone",
         vec![Expr::LocalGet(iter_id), Expr::LocalGet(done_id)],
-    ));
+    )));
     let (exc_id, exc_name) = fresh_destruct_local(ctx, "destruct_error", Type::Any);
     result.push(Stmt::Try {
         body,
@@ -552,7 +569,9 @@ fn assign_prepared_target(
             receiver: Box::new(object),
             strict: ctx.current_strict,
         })]),
-        PreparedTarget::Array(arr) => lower_array_assignment_from_expr(ctx, &arr, value),
+        PreparedTarget::Array(arr) => {
+            lower_array_assignment_from_expr(ctx, &arr, ArraySource::Iterator(value))
+        }
         PreparedTarget::Object(obj) => lower_object_assignment_from_expr(ctx, &obj, value),
         PreparedTarget::Skip => Ok(Vec::new()),
     }

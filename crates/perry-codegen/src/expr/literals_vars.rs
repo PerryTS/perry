@@ -1208,7 +1208,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // predictable branch PER LOOP, never per iteration.
         Expr::ArrayIterationPatched => {
             let blk = ctx.block();
-            let flag = blk.load_volatile(crate::types::I8, "@PERRY_ARRAY_PROTO_ITERATOR_PATCHED");
+            let flag = blk.load_volatile(crate::types::I8, "@PERRY_ARRAY_ITERATION_NOT_PRISTINE");
             let widened = blk.zext(crate::types::I8, &flag, crate::types::I32);
             Ok(super::i32_bool_to_nanbox(blk, &widened))
         }

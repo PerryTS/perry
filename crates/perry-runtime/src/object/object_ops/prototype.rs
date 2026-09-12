@@ -186,6 +186,18 @@ pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
 /// Refs #420 / #618 followup.
 #[no_mangle]
 pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
+    let proto = get_prototype_of_resolved(obj_value);
+    // #10086: this is the ONE place a prototype object reaches user code, so
+    // it is also the only place the array-iterator prototype can escape to be
+    // patched. Publishing here is what lets the `for…of` index loop and the
+    // array-destructuring fast arm decline a possibly-patched
+    // `%ArrayIteratorPrototype%.next`, which neither can observe otherwise.
+    crate::object::iterator_prototypes::note_array_iterator_prototype_exposed(proto);
+    proto
+}
+
+/// The resolution itself; see [`js_object_get_prototype_of`].
+fn get_prototype_of_resolved(obj_value: f64) -> f64 {
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
     // #2820: `Object.getPrototypeOf(null | undefined)` throws TypeError
     // (`Cannot convert undefined or null to object`). Class refs and heap

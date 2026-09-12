@@ -2374,14 +2374,19 @@ pub enum Expr {
     /// `operand[Symbol.iterator]()` when iterable, else the operand itself (a
     /// generator object already *is* its iterator). Lowers to `js_get_iterator`.
     GetIterator(Box<Expr>),
-    /// #7760: is `Array.prototype[Symbol.iterator]` currently replaced?
+    /// #7760 / #10086: can array iteration still be PROVEN to be the pristine
+    /// builtin protocol?
     ///
-    /// Reads the runtime's `PERRY_ARRAY_PROTO_ITERATOR_PATCHED` flag. Emitted
-    /// once at the ENTRY of a `for…of` over a statically-proven array, to pick
-    /// between the index loop (`__i < __arr.length`) and the lazy
-    /// iterator-protocol loop. Checking once is what the spec wants — `for…of`
-    /// performs GetIterator exactly once — and it keeps the cost off the
-    /// per-iteration path.
+    /// Reads the runtime's `PERRY_ARRAY_ITERATION_NOT_PRISTINE` flag, which is
+    /// set when `Array.prototype[Symbol.iterator]` is replaced or deleted
+    /// (#7760) and when the array-iterator prototype object escapes to user
+    /// code, after which `%ArrayIteratorPrototype%.next` may be patched
+    /// (#10086). Emitted once at the ENTRY of a `for…of` over a
+    /// statically-proven array, to pick between the index loop
+    /// (`__i < __arr.length`) and the lazy iterator-protocol loop, and once per
+    /// array destructuring that takes the non-iterator arm. Checking once is
+    /// what the spec wants — iteration performs GetIterator exactly once — and
+    /// it keeps the cost off the per-iteration path.
     ///
     /// A dedicated node rather than a call so codegen emits a single volatile
     /// `i8` load (the `PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED` shape) instead

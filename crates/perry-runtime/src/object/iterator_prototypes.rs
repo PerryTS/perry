@@ -66,6 +66,40 @@ pub(crate) static REGEXP_STRING_ITERATOR_PROTOTYPE_PTR: super::RealmAtomicI64 =
 pub(crate) static ITERATOR_HELPER_PROTOTYPE_PTR: super::RealmAtomicI64 =
     super::RealmAtomicI64::new(&ITERATOR_HELPER_PROTOTYPE_PTR_SLOT);
 
+/// #10086: the array-iterator prototype object is about to be handed to user
+/// code, so `%ArrayIteratorPrototype%.next` may be replaced at any point after
+/// this. Publish that to generated code.
+///
+/// A replaced `next` is detected per `.next()` call by
+/// [`prototype_next_is_canonical`] — which a non-iterator fast arm (the
+/// `for…of` index loop, #10086's array-destructuring arm) never reaches,
+/// because it never calls `.next()`. There is no cheap sticky signal for the
+/// write itself: the object is an ordinary `ObjectHeader`, so a precise hook
+/// would have to cover every mutation funnel (assignment, computed assignment,
+/// `defineProperty`, `delete`, `Object.assign`) and MISSING one fails silently,
+/// in the direction of a wrong answer.
+///
+/// Escape is the choke point instead. User code cannot patch an object it
+/// cannot name, and in Perry the only way to name this one is
+/// `Object.getPrototypeOf` / `Reflect.getPrototypeOf` (both
+/// `js_object_get_prototype_of`; `iter.__proto__` answers `undefined` here).
+/// So the flag is set when the object escapes, patched or not. The cost lands
+/// only on programs that introspect an array iterator — and those are exactly
+/// the programs about to patch one.
+pub(crate) fn note_array_iterator_prototype_exposed(value: f64) {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return;
+    }
+    let addr = jv.as_pointer::<ObjectHeader>() as i64;
+    if addr == 0 {
+        return;
+    }
+    if ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) == addr {
+        crate::array::note_array_iteration_not_pristine();
+    }
+}
+
 /// Resolve and validate the implicit-`this` object shared by the family
 /// prototype thunks. Keeping the raw-address probe here gives both the generic
 /// family dispatcher and the helper-specific brand check one audited path.
