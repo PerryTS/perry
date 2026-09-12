@@ -1948,3 +1948,29 @@ fn dirty_page_translation_only_inherits_from_an_old_gen_source() {
          the invariant for; refusing it would make the whole translation dead"
     );
 }
+
+#[test]
+fn in_place_dirty_page_translation_stays_bounded_during_incremental_marking() {
+    let _guard = GcTestIsolationGuard::new();
+    reset_remembered_set();
+    let parent = crate::arena::arena_alloc_gc_old(24 * 1024, 8, GC_TYPE_ARRAY) as usize;
+    let source = parent + 1024;
+    let destination = source + 8192;
+    let source_page = crate::arena::generation_page_for_addr(source);
+    let destination_page = crate::arena::generation_page_for_addr(destination);
+    assert_ne!(source_page, destination_page);
+    assert!(super::super::barrier::mark_dirty_old_page(source_page));
+    assert!(!old_page_dirty_for(destination_page));
+
+    let valid_ptrs = build_valid_pointer_set();
+    let _active = IncrementalMarkBarrierTestGuard::new(&valid_ptrs);
+    assert!(!incremental_mark_barrier_globally_idle());
+    assert!(relocate_moved_old_object_dirty_pages(
+        parent,
+        source,
+        destination,
+        std::mem::size_of::<u64>(),
+    ));
+    assert!(old_page_dirty_for(destination_page));
+    reset_remembered_set();
+}

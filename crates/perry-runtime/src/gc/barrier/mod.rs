@@ -1472,10 +1472,33 @@ pub(super) fn replay_old_parent_slot_range(parent_addr: usize, slots: *mut u64, 
 /// a `u64` slot run — and it is the SAME invariant the minor collector already
 /// trusts every cycle, not a new assumption.
 ///
-/// Returns `false` when it declines (an incremental cycle is live, so the
-/// values also owe SATB shading), and the caller must fall back to the full
-/// value-derived replay.
+/// Returns `false` when an incremental cycle requires the copied values to be
+/// shaded or the source has no old-parent coverage to donate.
 pub(crate) fn relocate_copied_old_object_dirty_pages(
+    new_parent_addr: usize,
+    old_base: usize,
+    new_base: usize,
+    copied_bytes: usize,
+) -> bool {
+    if !incremental_mark_barrier_globally_idle() {
+        return false;
+    }
+    relocate_old_object_dirty_pages(new_parent_addr, old_base, new_base, copied_bytes)
+}
+
+/// Translate dirty pages for a no-safepoint slot move within one parent. The
+/// parent-child edge set survives unchanged, so incremental marking owes no
+/// survivor shading; callers separately barrier genuinely inserted values.
+pub(crate) fn relocate_moved_old_object_dirty_pages(
+    parent_addr: usize,
+    old_base: usize,
+    new_base: usize,
+    copied_bytes: usize,
+) -> bool {
+    relocate_old_object_dirty_pages(parent_addr, old_base, new_base, copied_bytes)
+}
+
+fn relocate_old_object_dirty_pages(
     new_parent_addr: usize,
     old_base: usize,
     new_base: usize,
@@ -1483,11 +1506,6 @@ pub(crate) fn relocate_copied_old_object_dirty_pages(
 ) -> bool {
     if copied_bytes == 0 {
         return true;
-    }
-    // Shading is about values an in-progress mark may not have seen; a page is
-    // not an answer to it. Hand those cycles back to the full replay.
-    if !incremental_mark_barrier_globally_idle() {
-        return false;
     }
     if !write_barriers_enabled() || !barrier_remembering_active() {
         return true;

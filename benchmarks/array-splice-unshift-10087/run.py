@@ -14,6 +14,7 @@ WORKLOADS = (
     "array-splice-middle-insert",
     "array-unshift-build",
 )
+ACCEPTANCE_SIZES = (1000, 10000, 100000)
 
 
 def artifact_hashes(perry, node, sources):
@@ -34,6 +35,21 @@ def slope(rows):
     return sum((a - mx) * (b - my) for a, b in zip(x, y)) / sum(
         (a - mx) ** 2 for a in x
     )
+
+
+def acceptance_summary(common):
+    acceptance = [row for row in common if row["n"] in ACCEPTANCE_SIZES]
+    acceptance_complete = [row["n"] for row in acceptance] == list(ACCEPTANCE_SIZES)
+    slopes = {
+        engine: (
+            slope([(row["n"], row[engine]["ms_per_run"]) for row in acceptance])
+            if acceptance_complete
+            else None
+        )
+        for engine in ("node", "perry")
+    }
+    delta = slopes["perry"] - slopes["node"] if acceptance_complete else None
+    return [row["n"] for row in acceptance], slopes, delta
 
 
 def main():
@@ -118,18 +134,9 @@ def main():
                 for engine in ("node", "perry")
             },
         )
-        acceptance = [row for row in common if 1000 <= row["n"] <= 100000]
-        acceptance_slopes = {
-            engine: slope([(row["n"], row[engine]["ms_per_run"]) for row in acceptance])
-            for engine in ("node", "perry")
-        }
-        acceptance_slope_delta = (
-            acceptance_slopes["perry"] - acceptance_slopes["node"]
-            if all(value is not None for value in acceptance_slopes.values())
-            else None
-        )
+        acceptance_sizes, acceptance_slopes, acceptance_slope_delta = acceptance_summary(common)
         result["workloads"][name].update(
-            acceptance_sizes=[row["n"] for row in acceptance],
+            acceptance_sizes=acceptance_sizes,
             acceptance_slopes=acceptance_slopes,
             acceptance_slope_delta=acceptance_slope_delta,
         )
