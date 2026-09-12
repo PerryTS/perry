@@ -76,6 +76,16 @@
     "category": "bug-stale",
     "reason": "RE-TRIAGE: tracking issue #2514 is CLOSED but this still fails (audited 2026-08-07, #7582) — needs a new issue. process SIGINT trace hook gap; standing per the #5917 diff."
   },
+  "test_gap_json_lazy_defineproperty_index": {
+    "issue": "10097",
+    "added": "2026-09-12",
+    "category": "bug-open",
+    "reason": "Object.defineProperty on an index of a JSON.parse lazy array is installed and then ignored by indexed reads, in both the sparse and materialized states; PERRY_JSON_TAPE=0 (direct parse) matches Node. Found while adding the indexed-cache lazy tier: the assertion failed identically on the candidate and on main, so it is main's gap, not the change's. Filed as #10097.",
+    "platforms": [
+      "linux",
+      "macos"
+    ]
+  },
   "test_gap_perfhooks_3088_3008_3010_3011": {
     "issue": "3088",
     "added": "2026-07-04",
