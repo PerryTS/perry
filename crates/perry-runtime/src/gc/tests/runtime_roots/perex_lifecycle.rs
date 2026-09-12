@@ -12,16 +12,16 @@ fn text<'s>(scope: &'s RuntimeHandleScope, value: &str) -> RuntimeHandle<'s> {
 fn regex<'s>(scope: &'s RuntimeHandleScope, pattern: &str, flags: &str) -> RuntimeHandle<'s> {
     let source = text(scope, pattern);
     let flags = text(scope, flags);
-    scope.root_raw_mut_ptr(crate::regex::js_regexp_new(
-        source.get_raw_const_ptr(),
-        flags.get_raw_const_ptr(),
-    ))
+    scope.root_raw_mut_ptr(source.with_const_ptr(|source| {
+        flags.with_const_ptr(|flags| crate::regex::js_regexp_new(source, flags))
+    }))
 }
 
 fn matches(re: &RuntimeHandle<'_>, input: &str) -> bool {
     let scope = RuntimeHandleScope::new();
     let input = text(&scope, input);
-    crate::regex::js_regexp_test(re.get_raw_const_ptr(), input.get_raw_const_ptr()) != 0
+    re.with_const_ptr(|re| input.with_const_ptr(|input| crate::regex::js_regexp_test(re, input)))
+        != 0
 }
 
 fn programs() -> usize {
@@ -55,15 +55,15 @@ fn perex_lifecycle_reclaims_programs_when_their_only_receivers_die() {
         assert!(matches(&quantified, "ab"));
         assert_eq!(programs(), before + 3);
         let dead = [ordinary, quantified].map(|re| {
-            (
-                re.get_raw_const_ptr::<RegExpHeader>() as usize,
-                crate::regex::test_regexp_program_address(re.get_raw_const_ptr()),
-            )
+            re.with_const_ptr(|re: *const RegExpHeader| {
+                (re as usize, crate::regex::test_regexp_program_address(re))
+            })
         });
-        (lookbehind.get_raw_mut_ptr::<RegExpHeader>(), dead)
+        // Handed to `survivor_scope` below with nothing allocating in between.
+        (lookbehind.with_mut_ptr(|re: *mut RegExpHeader| re), dead)
     };
     let survivor = survivor_scope.root_raw_mut_ptr(survivor);
-    let old = crate::regex::test_regexp_program_address(survivor.get_raw_const_ptr());
+    let old = survivor.with_const_ptr(|p| crate::regex::test_regexp_program_address(p));
     gc_collect_minor();
     assert_eq!(
         programs(),
@@ -71,7 +71,7 @@ fn perex_lifecycle_reclaims_programs_when_their_only_receivers_die() {
         "dead programs must not remain in a cache"
     );
     assert_ne!(
-        crate::regex::test_regexp_program_address(survivor.get_raw_const_ptr()),
+        survivor.with_const_ptr(|p| crate::regex::test_regexp_program_address(p)),
         old
     );
     for (header, program) in dead_addresses {
@@ -114,7 +114,10 @@ fn perex_lifecycle_unrelated_compilation_cannot_retain_programs_or_disarm_receiv
                 _ => format!("(repeat{i})*"),
             };
             let re = regex(&temporary, &pattern, "");
-            assert!(crate::regex::test_original_strings_and_program(re.get_raw_const_ptr()).2);
+            assert!(
+                re.with_const_ptr(|p| crate::regex::test_original_strings_and_program(p))
+                    .2
+            );
         }
         if i % 64 == 63 || i == 2077 {
             assert!(
@@ -146,30 +149,34 @@ fn perex_lifecycle_literal_and_dynamic_construction_have_independent_state() {
     static SITE: u64 = 0x5045524558;
     let mut owners = Vec::new();
     for _ in 0..2 {
-        owners.push(scope.root_raw_mut_ptr(crate::regex::js_regexp_new_site(
-            source.get_raw_const_ptr(),
-            flags.get_raw_const_ptr(),
-            &SITE as *const u64 as i64,
-        )));
+        owners.push(scope.root_raw_mut_ptr(source.with_const_ptr(|source| {
+            flags.with_const_ptr(|flags| {
+                crate::regex::js_regexp_new_site(source, flags, &SITE as *const u64 as i64)
+            })
+        })));
     }
     owners.push(regex(&scope, "born[0-9]+built", "g"));
     for (i, owner) in owners.iter().enumerate() {
-        assert!(crate::regex::test_original_strings_and_program(owner.get_raw_const_ptr()).2);
+        assert!(
+            owner
+                .with_const_ptr(|p| crate::regex::test_original_strings_and_program(p))
+                .2
+        );
         for other in &owners[..i] {
             assert_ne!(
-                owner.get_raw_const_ptr::<RegExpHeader>(),
-                other.get_raw_const_ptr()
+                handle_address::<RegExpHeader>(owner),
+                handle_address::<RegExpHeader>(other)
             );
         }
     }
     assert!(matches(&owners[0], "xx born42built"));
     assert_eq!(
-        crate::regex::regex_last_index_offset(owners[0].get_raw_const_ptr()),
+        owners[0].with_const_ptr(|p| crate::regex::regex_last_index_offset(p)),
         14
     );
     for owner in &owners[1..] {
         assert_eq!(
-            crate::regex::regex_last_index_offset(owner.get_raw_const_ptr()),
+            owner.with_const_ptr(|p| crate::regex::regex_last_index_offset(p)),
             0
         );
     }

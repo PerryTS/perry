@@ -1338,12 +1338,14 @@ fn perex_path_matches_glob(
     let scope = crate::gc::RuntimeHandleScope::new();
     let path = scope.root_string_ptr(path);
     let pattern = scope.root_string_ptr(pattern);
-    if !crate::string::is_valid_string_ptr(path.get_raw_const_ptr()) {
+    if !path.with_const_ptr(|p| crate::string::is_valid_string_ptr(p)) {
         path.set_raw_const_ptr(api::caught(|| {
             crate::string::js_string_from_bytes(b"".as_ptr(), 0)
         })?);
     }
-    let pattern = unsafe { string_from_header(pattern.get_raw_const_ptr()).unwrap_or_default() };
+    let pattern = pattern
+        .with_const_ptr(|pattern| unsafe { string_from_header(pattern) })
+        .unwrap_or_default();
     let source = glob_to_regex(&pattern, win32);
     let program = match GlobProgram::new(&scope, &source) {
         Ok(program) => program,

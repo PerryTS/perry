@@ -140,7 +140,7 @@ fn regexp_exec_survives_a_moving_minor_inside_the_lastindex_coercion() {
         );
     }
     let last_index =
-        re_handle.with_const_ptr::<RegExpHeader, _>(crate::regex::regex_last_index_offset);
+        re_handle.with_const_ptr::<RegExpHeader, _>(|p| crate::regex::regex_last_index_offset(p));
     assert_eq!(
         last_index, 15,
         "lastIndex must advance past the relocated match"
@@ -172,15 +172,16 @@ fn regexp_exec_materializes_an_owned_snapshot_after_an_alloc_point_minor() {
     // Finish lazy program compilation before planting the allocation trigger.
     // This call produces no result array and automatic triggers are suppressed.
     assert_eq!(
-        crate::regex::js_regexp_test(
-            re_handle.get_raw_const_ptr::<RegExpHeader>(),
-            subject_handle.get_raw_const_ptr::<StringHeader>(),
-        ),
+        re_handle.with_const_ptr::<RegExpHeader, _>(|re| {
+            subject_handle.with_const_ptr::<StringHeader, _>(|subject| {
+                crate::regex::js_regexp_test(re, subject)
+            })
+        }),
         1
     );
-    unsafe {
-        (*re_handle.get_raw_mut_ptr::<RegExpHeader>()).last_index = 0.0f64.to_bits();
-    }
+    re_handle.with_mut_ptr::<RegExpHeader, _>(|re| unsafe {
+        (*re).last_index = 0.0f64.to_bits();
+    });
 
     // The next general-arena block allocation is the result array created only
     // after the engine has matched and copied the scalar capture spans.

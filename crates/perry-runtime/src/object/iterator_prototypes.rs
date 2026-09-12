@@ -189,7 +189,9 @@ extern "C" fn regexp_string_iterator_next_thunk(
     _arg: f64,
 ) -> f64 {
     unsafe {
-        let Some(obj) = implicit_this_iterator_object() else { return brand_type_error("next"); };
+        let Some(obj) = implicit_this_iterator_object() else {
+            return brand_type_error("next");
+        };
         if (*obj).class_id != crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID {
             return brand_type_error("next");
         }

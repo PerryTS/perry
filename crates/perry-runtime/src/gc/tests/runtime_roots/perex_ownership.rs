@@ -39,7 +39,7 @@ fn perex_program_survives_only_through_a_moving_regexp_edge() {
     let scope = RuntimeHandleScope::new();
     let receiver =
         scope.root_raw_mut_ptr(crate::regex::test_alloc_nursery_regexp_for_move("a+", ""));
-    let receiver_before = receiver.get_raw_mut_ptr::<crate::regex::RegExpHeader>() as usize;
+    let receiver_before = handle_address::<crate::regex::RegExpHeader>(&receiver);
     let program_before;
     let expected;
     {
@@ -66,7 +66,7 @@ fn perex_program_survives_only_through_a_moving_regexp_edge() {
     assert!(copying_minor_cycles() > cycles);
     assert_ne!(
         receiver_before,
-        receiver.get_raw_mut_ptr::<crate::regex::RegExpHeader>() as usize
+        handle_address::<crate::regex::RegExpHeader>(&receiver)
     );
     let program_after = receiver.with_const_ptr::<crate::regex::RegExpHeader, _>(|r| unsafe {
         (*r).perex_program as usize
@@ -190,7 +190,7 @@ fn perex_search_reborrows_relocated_original_wtf8_during_every_pause() {
             };
             assert_ne!(
                 view.as_ptr() as usize,
-                subject_ptr as usize + std::mem::size_of::<crate::string::StringHeader>()
+                crate::string::string_data(subject_ptr) as usize
             );
             assert_eq!(view, bytes);
         })
@@ -303,15 +303,17 @@ fn perex_window_reads_original_allocation_after_collection_during_search() {
         text.as_ptr(),
         text.len() as u32,
     ));
-    let original = input.get_raw_const_ptr::<crate::StringHeader>() as usize;
+    let original = handle_address::<crate::StringHeader>(&input);
     let owner = unsafe { HeapSubject::window(input, 1, 5).unwrap() };
     owner
         .with_subject(|view| {
             let Subject::Wtf8(bytes) = view else {
                 panic!("window must retain original byte storage")
             };
-            assert_eq!(bytes.as_ptr(), unsafe {
-                crate::string::string_data(input.get_raw_const_ptr()).add(1)
+            input.with_const_ptr(|input| {
+                assert_eq!(bytes.as_ptr(), unsafe {
+                    crate::string::string_data(input).add(1)
+                })
             });
         })
         .unwrap();
@@ -337,10 +339,7 @@ fn perex_window_reads_original_allocation_after_collection_during_search() {
     .unwrap()
     .unwrap();
     assert!(polls > 1);
-    assert_ne!(
-        original,
-        input.get_raw_const_ptr::<crate::StringHeader>() as usize
-    );
+    assert_ne!(original, handle_address::<crate::StringHeader>(&input));
     assert_eq!(found.full, Span::new(0, 2).unwrap());
     drop(found);
     assert_eq!(memory.live_bytes(), 0);
@@ -351,8 +350,10 @@ fn perex_window_reads_original_allocation_after_collection_during_search() {
                 panic!("window changed representation")
             };
             assert_eq!(bytes, "😀".as_bytes());
-            assert_eq!(bytes.as_ptr(), unsafe {
-                crate::string::string_data(input.get_raw_const_ptr()).add(1)
+            input.with_const_ptr(|input| {
+                assert_eq!(bytes.as_ptr(), unsafe {
+                    crate::string::string_data(input).add(1)
+                })
             });
         })
         .unwrap();

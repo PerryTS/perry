@@ -207,7 +207,9 @@ fn matches(
             return Ok(if count == 0 {
                 f64::from_bits(TAG_NULL)
             } else {
-                js_nanbox_pointer(array.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64)
+                array.with_mut_ptr::<crate::array::ArrayHeader, _>(|array| {
+                    js_nanbox_pointer(array as i64)
+                })
             });
         };
         let string = match result {
@@ -232,10 +234,9 @@ fn matches(
             super::perex_memory::StorageError::Limit,
         ))?;
         let grown = api::caught(|| {
-            crate::array::js_array_push_f64(
-                array.get_raw_mut_ptr(),
-                js_nanbox_string(string.get_raw_const_ptr::<StringHeader>() as i64),
-            )
+            // Push roots the array and the value before it grows.
+            let value = string.with_const_ptr::<StringHeader, _>(|s| js_nanbox_string(s as i64));
+            array.with_mut_ptr(|array| crate::array::js_array_push_f64(array, value))
         })?;
         array.set_raw_mut_ptr(grown);
         if string.with_const_ptr::<StringHeader, _>(|s| unsafe { (*s).utf16_len == 0 }) {
@@ -284,16 +285,18 @@ pub(crate) fn string(
         crate::string::js_string_from_bytes(b"".as_ptr(), 0)
     })?);
     let re = api::caught(|| {
-        super::perex_construct::new(source.get_raw_const_ptr(), flags.get_raw_const_ptr())
+        source.with_const_ptr(|source| {
+            flags.with_const_ptr(|flags| super::perex_construct::new(source, flags))
+        })
     })??;
     let re = scope.root_nanbox_f64(js_nanbox_pointer(re as i64));
     let method = scope.root_nanbox_f64(dispatch::get_symbol(&re, operation.symbol())?);
     if !crate::proxy::proxy_wraps_callable(method.get_nanbox_f64()) {
         return Err(EngineError::Type("RegExp symbol method is not callable"));
     }
-    let argument = scope.root_nanbox_f64(js_nanbox_string(
-        input.get_raw_const_ptr::<StringHeader>() as i64,
-    ));
+    let argument = scope.root_nanbox_f64(
+        input.with_const_ptr::<StringHeader, _>(|input| js_nanbox_string(input as i64)),
+    );
     dispatch::call_one(&method, &re, &argument)
 }
 

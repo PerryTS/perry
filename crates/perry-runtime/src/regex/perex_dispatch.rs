@@ -75,14 +75,14 @@ pub(crate) fn call_one(
             // The generic value-call bridge drops this for proxies. Supply
             // the actual receiver and an exact one-element GC argument array.
             let args = scope.root_raw_mut_ptr(crate::array::js_array_alloc(1));
-            let grown =
-                crate::array::js_array_push_f64(args.get_raw_mut_ptr(), argument.get_nanbox_f64());
+            let grown = args.with_mut_ptr(|args| {
+                crate::array::js_array_push_f64(args, argument.get_nanbox_f64())
+            });
             args.set_raw_mut_ptr(grown);
-            crate::proxy::js_proxy_apply(
-                method.get_nanbox_f64(),
-                receiver.get_nanbox_f64(),
-                js_nanbox_pointer(args.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64),
-            )
+            let args = args.with_mut_ptr::<crate::array::ArrayHeader, _>(|args| {
+                js_nanbox_pointer(args as i64)
+            });
+            crate::proxy::js_proxy_apply(method.get_nanbox_f64(), receiver.get_nanbox_f64(), args)
         } else {
             let args = [argument.get_nanbox_f64()];
             unsafe {
@@ -107,16 +107,16 @@ pub(crate) fn execute(
 ) -> Result<Option<ExecResult>, EngineError> {
     host::charge(budget, 1)?;
     require_object(receiver.get_nanbox_f64())?;
-    crate::string::js_string_addref(input.get_raw_mut_ptr::<StringHeader>());
+    input.with_mut_ptr::<StringHeader, _>(|input| crate::string::js_string_addref(input));
     let scope = RuntimeHandleScope::new();
     let method = scope.root_nanbox_f64(get(receiver, b"exec")?);
     let callable = crate::proxy::proxy_wraps_callable(method.get_nanbox_f64());
     let builtin =
         crate::object::regex_proto_thunks::is_builtin_regexp_exec(method.get_nanbox_f64());
     if callable && !builtin {
-        let argument = scope.root_nanbox_f64(js_nanbox_string(
-            input.get_raw_const_ptr::<StringHeader>() as i64,
-        ));
+        let argument = scope.root_nanbox_f64(
+            input.with_const_ptr::<StringHeader, _>(|input| js_nanbox_string(input as i64)),
+        );
         let value = call_one(&method, receiver, &argument)?;
         if value.to_bits() == TAG_NULL {
             return Ok(None);
@@ -134,15 +134,12 @@ pub(crate) fn execute(
             "RegExp builtin exec requires a RegExp receiver",
         ));
     }
-    api::execute_with_resources(
-        re,
-        input.get_raw_const_ptr(),
-        materialize,
-        budget,
-        memory,
-        poll,
-    )
-    .map(|result| result.map(ExecResult::Builtin))
+    // `execute_with_resources` roots both before it allocates.
+    input
+        .with_const_ptr::<StringHeader, _>(|input| {
+            api::execute_with_resources(re, input, materialize, budget, memory, poll)
+        })
+        .map(|result| result.map(ExecResult::Builtin))
 }
 
 pub(crate) fn to_string(value: &RuntimeHandle<'_>) -> Result<*mut StringHeader, EngineError> {
@@ -300,9 +297,9 @@ pub(crate) fn same_value(
         let scope = RuntimeHandleScope::new();
         let a = scope.root_string_ptr(to_string(a)?);
         let b = scope.root_string_ptr(to_string(b)?);
-        return Ok(
-            crate::string::js_string_equals(a.get_raw_const_ptr(), b.get_raw_const_ptr()) != 0,
-        );
+        return Ok(a
+            .with_const_ptr(|a| b.with_const_ptr(|b| crate::string::js_string_equals(a, b)))
+            != 0);
     }
     Ok(
         crate::object::js_object_is(a.get_nanbox_f64(), b.get_nanbox_f64()).to_bits()

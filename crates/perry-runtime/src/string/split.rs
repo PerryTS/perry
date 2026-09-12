@@ -677,9 +677,8 @@ pub extern "C" fn js_string_split_js(receiver: f64, separator: f64, limit: f64) 
     let input = scope.root_string_ptr(crate::value::js_jsvalue_to_string_coerce(
         receiver.get_nanbox_f64(),
     ));
-    crate::value::js_nanbox_pointer(js_string_split_value(
-        input.get_raw_const_ptr(),
-        separator.get_nanbox_f64(),
-        limit.get_nanbox_f64(),
-    ) as i64)
+    let parts = input.with_const_ptr(|input| {
+        js_string_split_value(input, separator.get_nanbox_f64(), limit.get_nanbox_f64())
+    });
+    crate::value::js_nanbox_pointer(parts as i64)
 }

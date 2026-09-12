@@ -701,17 +701,21 @@ fn boxed_without_engine(all: bool, receiver: f64, search: f64, replacement: f64)
         receiver.get_nanbox_f64(),
     ));
     let result = if all {
-        js_string_replace_all_search_dyn(
-            input.get_raw_const_ptr(),
-            search.get_nanbox_f64(),
-            replacement.get_nanbox_f64(),
-        )
+        input.with_const_ptr(|input| {
+            js_string_replace_all_search_dyn(
+                input,
+                search.get_nanbox_f64(),
+                replacement.get_nanbox_f64(),
+            )
+        })
     } else {
-        js_string_replace_search_dyn(
-            input.get_raw_const_ptr(),
-            search.get_nanbox_f64(),
-            replacement.get_nanbox_f64(),
-        )
+        input.with_const_ptr(|input| {
+            js_string_replace_search_dyn(
+                input,
+                search.get_nanbox_f64(),
+                replacement.get_nanbox_f64(),
+            )
+        })
     };
     js_nanbox_string(result as i64)
 }

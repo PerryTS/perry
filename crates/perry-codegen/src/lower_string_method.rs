@@ -4,13 +4,9 @@
 //! `lower_string_coerce_concat`, and `lower_string_concat`.
 
 use anyhow::{bail, Result};
-use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
 
-use crate::expr::{
-    i32_bool_to_nanbox, lower_expr, nanbox_pointer_inline, nanbox_string_inline, unbox_str_handle,
-    FnCtx,
-};
+use crate::expr::{i32_bool_to_nanbox, lower_expr, nanbox_string_inline, unbox_str_handle, FnCtx};
 use crate::lower_string_concat::{
     emit_string_concat_chain, str_operand_handle_tag_dispatched, CONCAT_CHAIN_MAX_PARTS,
 };

@@ -25,7 +25,7 @@
     ]
   },
   "baseline": {
-    "workspace_members": 81,
+    "workspace_members": 83,
     "default_dependency_closure": [
       "perry",
       "perry-api-manifest",
@@ -41,6 +41,7 @@
       "perry-dispatch",
       "perry-hir",
       "perry-parser",
+      "perry-perex",
       "perry-runtime",
       "perry-transform",
       "perry-ui-model",
@@ -60,6 +61,7 @@
       "perry-dispatch",
       "perry-hir",
       "perry-parser",
+      "perry-perex",
       "perry-runtime",
       "perry-transform",
       "perry-ui-model",
@@ -67,7 +69,7 @@
     ],
     "decision_counts": {
       "externalize": 33,
-      "keep": 43,
+      "keep": 45,
       "merge": 1,
       "remove": 1,
       "review": 3
@@ -354,6 +356,10 @@
       "category": "compiler-core",
       "decision": "keep"
     },
+    "perry-perex": {
+      "category": "runtime-core",
+      "decision": "keep"
+    },
     "perry-runtime": {
       "category": "runtime-core",
       "decision": "keep"
@@ -431,6 +437,10 @@
       "decision": "merge"
     },
     "perry-updater": {
+      "category": "runtime-core",
+      "decision": "keep"
+    },
+    "perry-validation": {
       "category": "runtime-core",
       "decision": "keep"
     },

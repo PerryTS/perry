@@ -824,7 +824,7 @@ fn perex_split_raw_copy_reacquires_moved_storage_and_cleans_up_partial_output() 
         source.as_ptr(),
         source.len() as u32,
     ));
-    let before = input.get_raw_const_ptr::<crate::StringHeader>() as usize;
+    let before = handle_address::<crate::StringHeader>(&input);
     let roots = RuntimeHandleScope::active_len_for_tests();
     let live = external_side_live_bytes();
     let mut polls = 0;
@@ -844,12 +844,7 @@ fn perex_split_raw_copy_reacquires_moved_storage_and_cleans_up_partial_output() 
         )
         .unwrap();
         let result = local.root_string_ptr(result);
-        assert_eq!(
-            bytes(js_nanbox_string(
-                result.get_raw_const_ptr::<crate::StringHeader>() as i64
-            )),
-            source
-        );
+        assert_eq!(bytes(handle_string_value(&result)), source);
         result.with_const_ptr::<crate::StringHeader, _>(|p| unsafe {
             assert_eq!((*p).utf16_len, 4094);
             assert_ne!(
@@ -859,10 +854,7 @@ fn perex_split_raw_copy_reacquires_moved_storage_and_cleans_up_partial_output() 
         });
     }
     assert!(polls > 20);
-    assert_ne!(
-        input.get_raw_const_ptr::<crate::StringHeader>() as usize,
-        before
-    );
+    assert_ne!(handle_address::<crate::StringHeader>(&input), before);
     assert_eq!(RuntimeHandleScope::active_len_for_tests(), roots);
     assert_eq!(external_side_live_bytes(), live);
     // 242 polls finish measurement; this cancellation occurs while a rooted,
@@ -973,12 +965,7 @@ fn perex_abstract_string_conversion_rejects_symbols_after_collecting_object_hook
                 );
             } else {
                 let result = local.root_string_ptr(result.unwrap());
-                assert_eq!(
-                    bytes(js_nanbox_string(
-                        result.get_raw_const_ptr::<crate::StringHeader>() as i64
-                    )),
-                    b"23"
-                );
+                assert_eq!(bytes(handle_string_value(&result)), b"23");
             }
             assert_eq!(
                 crate::object::js_implicit_this_get().to_bits(),

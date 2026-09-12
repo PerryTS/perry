@@ -349,7 +349,15 @@ mod tests {
             bytes.len() as u32,
         ));
         let ptr = input.get_raw_const_ptr::<StringHeader>();
-        let original = unsafe { (ptr as *const u8).add(std::mem::size_of::<StringHeader>()) };
+        let mut scratch = [0; perry_runtime::value::SHORT_STRING_MAX_LEN];
+        let value = f64::from_bits(
+            perry_runtime::value::JSValue::string_ptr(ptr as *mut StringHeader).bits(),
+        );
+        let (original, _) = perry_runtime::string::str_bytes_from_jsvalue(value, &mut scratch)
+            .expect("a heap string has a payload");
+        // The canonical reader answers a heap string with its payload in place;
+        // only a short immediate string is decoded into `scratch`.
+        assert_ne!(original, scratch.as_ptr());
         assert_eq!(
             unsafe {
                 validate_borrowed(ptr, |s| {

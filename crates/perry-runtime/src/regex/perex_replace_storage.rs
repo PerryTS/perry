@@ -17,8 +17,10 @@ use perex::Budget;
 pub(super) fn length(s: &RuntimeHandle<'_>) -> usize {
     s.with_const_ptr::<StringHeader, _>(|s| unsafe { (*s).utf16_len as usize })
 }
+/// The string a handle currently holds, NaN-boxed for an entry point that roots
+/// its arguments.
 pub(super) fn boxed(s: &RuntimeHandle<'_>) -> f64 {
-    js_nanbox_string(s.get_raw_const_ptr::<StringHeader>() as i64)
+    s.with_const_ptr::<StringHeader, _>(|s| js_nanbox_string(s as i64))
 }
 pub(super) fn text<'a>(
     scope: &'a RuntimeHandleScope,
@@ -41,12 +43,14 @@ impl<'a> List<'a> {
         self.count
     }
     pub(super) fn value(&self) -> f64 {
-        crate::value::js_nanbox_pointer(
-            self.root.get_raw_const_ptr::<crate::array::ArrayHeader>() as i64
-        )
+        self.root
+            .with_const_ptr::<crate::array::ArrayHeader, _>(|array| {
+                crate::value::js_nanbox_pointer(array as i64)
+            })
     }
     pub(super) fn get(&self, index: usize) -> f64 {
-        crate::array::js_array_get_f64(self.root.get_raw_const_ptr(), index as u32)
+        self.root
+            .with_const_ptr(|array| crate::array::js_array_get_f64(array, index as u32))
     }
     pub(super) fn push(&mut self, value: f64, budget: &mut Budget) -> Result<(), EngineError> {
         host::charge(budget, 1)?;
@@ -56,7 +60,9 @@ impl<'a> List<'a> {
         let scope = RuntimeHandleScope::new();
         let value = scope.root_nanbox_f64(value);
         let array = api::caught(|| {
-            crate::array::js_array_push_f64(self.root.get_raw_mut_ptr(), value.get_nanbox_f64())
+            self.root.with_mut_ptr(|array| {
+                crate::array::js_array_push_f64(array, value.get_nanbox_f64())
+            })
         })?;
         self.root.set_raw_mut_ptr(array);
         self.count += 1;
@@ -234,14 +240,15 @@ impl<'a> Pieces<'a> {
                 self.list.get(index + 2) as usize,
             )
             .ok_or(EngineError::InvalidSpan)?;
-            if source.get_raw_const_ptr::<StringHeader>() == original.get_raw_const_ptr() {
+            let same = |a: &RuntimeHandle<'_>, b: &RuntimeHandle<'_>| {
+                a.with_const_ptr::<StringHeader, _>(|a| b.with_const_ptr(|b| a == b))
+            };
+            if same(&source, original) {
                 original_reader
                     .retarget(span)
                     .map_err(|e| read_error(e, |n| match n {}))?;
                 step(&mut original_reader, budget)?;
-            } else if template.is_some_and(|t| {
-                t.get_raw_const_ptr::<StringHeader>() == source.get_raw_const_ptr()
-            }) {
+            } else if template.is_some_and(|t| same(t, &source)) {
                 let reader = template_reader.as_mut().unwrap();
                 reader
                     .retarget(span)
@@ -367,6 +374,6 @@ impl<'a> Pieces<'a> {
         {
             return Err(EngineError::InvalidSpan);
         }
-        Ok(output.get_raw_mut_ptr())
+        Ok(output.with_mut_ptr(|output| output))
     }
 }

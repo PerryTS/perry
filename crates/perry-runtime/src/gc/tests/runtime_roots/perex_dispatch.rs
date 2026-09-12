@@ -25,10 +25,10 @@ fn object<'s>(scope: &'s RuntimeHandleScope) -> RuntimeHandle<'s> {
 fn regex<'s>(scope: &'s RuntimeHandleScope) -> RuntimeHandle<'s> {
     let source = text(scope, b"NEVER");
     let flags = text(scope, b"");
-    scope.root_nanbox_f64(js_nanbox_pointer(crate::regex::js_regexp_new(
-        source.get_raw_const_ptr(),
-        flags.get_raw_const_ptr(),
-    ) as i64))
+    let re = source.with_const_ptr(|source| {
+        flags.with_const_ptr(|flags| crate::regex::js_regexp_new(source, flags))
+    });
+    scope.root_nanbox_f64(js_nanbox_pointer(re as i64))
 }
 fn function<'s>(scope: &'s RuntimeHandleScope, fp: *const u8, arity: u32) -> RuntimeHandle<'s> {
     crate::closure::js_register_closure_arity(fp, arity);
@@ -64,7 +64,7 @@ fn getter_named(owner: &RuntimeHandle<'_>, name: &[u8], method: &RuntimeHandle<'
 }
 fn test(receiver: &RuntimeHandle<'_>, input: &RuntimeHandle<'_>) -> bool {
     let raw = crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as *const RegExpHeader;
-    crate::regex::js_regexp_test(raw, input.get_raw_const_ptr()) != 0
+    input.with_const_ptr(|input| crate::regex::js_regexp_test(raw, input)) != 0
 }
 
 extern "C" fn return_this(_: *const crate::closure::ClosureHeader, _: f64) -> f64 {
@@ -223,7 +223,7 @@ fn perex_dispatch_getter_and_callback_reacquire_original_input_after_gc() {
     let scope = RuntimeHandleScope::new();
     let receiver = object(&scope);
     let input = text(&scope, b"\xed\xa0\x80-original");
-    let before = input.get_raw_const_ptr::<StringHeader>() as usize;
+    let before = handle_address::<StringHeader>(&input);
     let method = function(&scope, collecting_getter as *const u8, 0);
     getter(&receiver, &method);
     let displaced = object(&scope);
@@ -243,10 +243,10 @@ fn perex_dispatch_getter_and_callback_reacquire_original_input_after_gc() {
     .object();
     assert_eq!(result.to_bits(), receiver.get_nanbox_f64().to_bits());
     assert_eq!(RuntimeHandleScope::active_len_for_tests(), roots);
-    assert_ne!(input.get_raw_const_ptr::<StringHeader>() as usize, before);
+    assert_ne!(handle_address::<StringHeader>(&input), before);
     assert_eq!(
         api::finish(dispatch::get(&receiver, b"seen")).to_bits(),
-        js_nanbox_string(input.get_raw_const_ptr::<StringHeader>() as i64).to_bits()
+        handle_string_value(&input).to_bits()
     );
     assert_eq!(
         crate::object::js_implicit_this_get().to_bits(),
@@ -267,7 +267,7 @@ fn perex_dispatch_actual_throws_restore_this_roots_and_accounting() {
         let scope = RuntimeHandleScope::new();
         let receiver = object(&scope);
         let input = text(&scope, b"young-input");
-        let before = input.get_raw_const_ptr::<StringHeader>() as usize;
+        let before = handle_address::<StringHeader>(&input);
         let is_getter = mode == 1;
         let fp = if is_getter {
             throw_getter as *const u8
@@ -293,14 +293,14 @@ fn perex_dispatch_actual_throws_restore_this_roots_and_accounting() {
         ));
         let roots = RuntimeHandleScope::active_len_for_tests();
         let live = external_side_live_bytes();
-        let result = crate::exception::catch_js_throw(|| {
-            api::finish(dispatch::test_string(
-                receiver.get_nanbox_f64(),
-                input.get_raw_const_ptr(),
-            ))
-        });
+        let result =
+            crate::exception::catch_js_throw(|| {
+                api::finish(input.with_const_ptr(|input| {
+                    dispatch::test_string(receiver.get_nanbox_f64(), input)
+                }))
+            });
         assert_eq!(result.unwrap_err(), expected);
-        assert_ne!(input.get_raw_const_ptr::<StringHeader>() as usize, before);
+        assert_ne!(handle_address::<StringHeader>(&input), before);
         assert_eq!(RuntimeHandleScope::active_len_for_tests(), roots);
         assert_eq!(external_side_live_bytes(), live);
         assert_eq!(
@@ -325,21 +325,20 @@ fn perex_dispatch_validates_override_results_and_keeps_one_work_allowance() {
         1.0,
         f64::from_bits(TAG_UNDEFINED),
         f64::from_bits(crate::value::TAG_TRUE),
-        js_nanbox_string(input.get_raw_const_ptr::<StringHeader>() as i64),
+        handle_string_value(&input),
     ] {
         let value = scope.root_nanbox_f64(value);
         put(&receiver, b"answer", &value);
         assert!(matches!(
-            dispatch::test_string(receiver.get_nanbox_f64(), input.get_raw_const_ptr()),
+            input.with_const_ptr(|input| dispatch::test_string(receiver.get_nanbox_f64(), input)),
             Err(EngineError::Type(_))
         ));
     }
     let null = scope.root_nanbox_f64(f64::from_bits(TAG_NULL));
     put(&receiver, b"answer", &null);
-    assert!(!api::finish(dispatch::test_string(
-        receiver.get_nanbox_f64(),
-        input.get_raw_const_ptr()
-    )));
+    assert!(!api::finish(input.with_const_ptr(|input| {
+        dispatch::test_string(receiver.get_nanbox_f64(), input)
+    })));
     put(&receiver, b"answer", &method); // functions are valid objects too
     let memory = MemoryBudget::new(api::SCRATCH_BYTES);
     let mut budget = Budget::new(3);
@@ -381,7 +380,7 @@ fn perex_dispatch_callable_proxy_keeps_receiver_and_noncallable_proxy_falls_back
     let scope = RuntimeHandleScope::new();
     let receiver = object(&scope);
     let input = text(&scope, b"original-proxy-input");
-    let before = input.get_raw_const_ptr::<StringHeader>() as usize;
+    let before = handle_address::<StringHeader>(&input);
     let function = function(&scope, collect_and_echo as *const u8, 1);
     let handler = object(&scope);
     let proxy = scope.root_nanbox_f64(crate::proxy::js_proxy_new(
@@ -389,14 +388,13 @@ fn perex_dispatch_callable_proxy_keeps_receiver_and_noncallable_proxy_falls_back
         handler.get_nanbox_f64(),
     ));
     put(&receiver, b"exec", &proxy);
-    assert!(api::finish(dispatch::test_string(
-        receiver.get_nanbox_f64(),
-        input.get_raw_const_ptr()
-    )));
-    assert_ne!(input.get_raw_const_ptr::<StringHeader>() as usize, before);
+    assert!(api::finish(input.with_const_ptr(|input| {
+        dispatch::test_string(receiver.get_nanbox_f64(), input)
+    })));
+    assert_ne!(handle_address::<StringHeader>(&input), before);
     assert_eq!(
         api::finish(dispatch::get(&receiver, b"seen")).to_bits(),
-        js_nanbox_string(input.get_raw_const_ptr::<StringHeader>() as i64).to_bits()
+        handle_string_value(&input).to_bits()
     );
     let re = regex(&scope);
     let target = object(&scope);
@@ -409,10 +407,9 @@ fn perex_dispatch_callable_proxy_keeps_receiver_and_noncallable_proxy_falls_back
     assert!(test(&re, &input));
     crate::proxy::js_proxy_revoke(proxy.get_nanbox_f64());
     assert!(
-        crate::exception::catch_js_throw(|| api::finish(dispatch::test_string(
-            receiver.get_nanbox_f64(),
-            input.get_raw_const_ptr(),
-        )))
+        crate::exception::catch_js_throw(|| api::finish(
+            input.with_const_ptr(|input| dispatch::test_string(receiver.get_nanbox_f64(), input))
+        ))
         .is_err(),
         "revoked callable proxies must throw, not fall back"
     );
@@ -430,7 +427,7 @@ fn perex_dispatch_proxy_apply_getter_and_nested_trap_survive_movement() {
         let scope = RuntimeHandleScope::new();
         let receiver = object(&scope);
         let input = text(&scope, b"original-apply-input");
-        let before = input.get_raw_const_ptr::<StringHeader>() as usize;
+        let before = handle_address::<StringHeader>(&input);
         let target = function(&scope, collect_and_echo as *const u8, 1);
         let handler = object(&scope);
         if nested_trap {
@@ -450,14 +447,13 @@ fn perex_dispatch_proxy_apply_getter_and_nested_trap_survive_movement() {
             handler.get_nanbox_f64(),
         ));
         put(&receiver, b"exec", &proxy);
-        assert!(api::finish(dispatch::test_string(
-            receiver.get_nanbox_f64(),
-            input.get_raw_const_ptr()
-        )));
-        assert_ne!(input.get_raw_const_ptr::<StringHeader>() as usize, before);
+        assert!(api::finish(input.with_const_ptr(|input| {
+            dispatch::test_string(receiver.get_nanbox_f64(), input)
+        })));
+        assert_ne!(handle_address::<StringHeader>(&input), before);
         assert_eq!(
             api::finish(dispatch::get(&receiver, b"seen")).to_bits(),
-            js_nanbox_string(input.get_raw_const_ptr::<StringHeader>() as i64).to_bits()
+            handle_string_value(&input).to_bits()
         );
     }
 }

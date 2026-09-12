@@ -238,6 +238,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         "crates/perry-runtime/src/proxy/put_value.rs",
         "crates/perry-runtime/src/gc/types.rs",
         "crates/perry-runtime/src/regex.rs",
+        "crates/perry-runtime/src/regex/perex_construct.rs",
         "crates/perry-codegen/src/expr/class_field_inline_guard.rs",
         "crates/perry-codegen/src/expr/element_shape_guard.rs",
         "crates/perry-codegen/src/expr/property_get/generic_dispatch.rs",
@@ -282,6 +283,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     put_value = clean["crates/perry-runtime/src/proxy/put_value.rs"]
     gc_types = clean["crates/perry-runtime/src/gc/types.rs"]
     regex_runtime = clean["crates/perry-runtime/src/regex.rs"]
+    regex_construct = clean["crates/perry-runtime/src/regex/perex_construct.rs"]
     class_guard = clean[
         "crates/perry-codegen/src/expr/class_field_inline_guard.rs"
     ]
@@ -576,9 +578,16 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     # with its OWN GcHeader kind, never as a generic object that something later
     # has to re-identify by payload magic.
     # #9892 split construction into a thin `js_regexp_new` / `js_regexp_new_site`
-    # pair over a shared `js_regexp_new_impl`, which is where the allocation now
-    # lives. Follow the birth site rather than the entry point's name.
-    regexp_alloc = function_body(regex_runtime, "js_regexp_new_impl")
+    # pair over a shared `js_regexp_new_impl`. Under the single engine that impl
+    # delegates to `perex_construct::new`, which is where the allocation now
+    # lives. Follow the birth site rather than the entry point's name, and pin
+    # the delegation too, so a second construction path cannot pass unseen.
+    require_code(
+        function_body(regex_runtime, "js_regexp_new_impl"),
+        r"perex_construct::new\s*\(",
+        "RegExp construction delegates to its single birth site",
+    )
+    regexp_alloc = function_body(regex_construct, "new")
     require_code(
         regexp_alloc,
         r"(?:gc_malloc|arena_alloc_gc)\s*\([^;]*crate::gc::GC_TYPE_REGEXP",
