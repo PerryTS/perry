@@ -113,9 +113,9 @@ pub fn scan_class_side_table_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
         if let Ok(mut guard) = table.write() {
             if let Some(map) = guard.as_mut() {
                 for proto_addr in map.values_mut() {
+                    let old_addr = *proto_addr;
                     visitor.visit_usize_slot(proto_addr);
-                    // See the twin in `class_gc_roots::scan_class_inheritance_roots_mut`.
-                    super::note_class_prototype_object_registered(*proto_addr);
+                    super::class_prototype_object_addr_index_rekey(old_addr, *proto_addr);
                 }
             }
         }
@@ -420,10 +420,9 @@ fn scan_class_side_table_root_slot(
             CLASS_PROTOTYPE_OBJECTS.with(|table| {
                 if let Ok(mut guard) = table.write() {
                     if let Some(proto_addr) = guard.as_mut().and_then(|map| map.get_mut(class_id)) {
+                        let old_addr = *proto_addr;
                         visitor.visit_usize_slot(proto_addr);
-                        // The per-slot GC step moves one prototype at a time;
-                        // it carries the same obligation as the bulk scanner.
-                        super::note_class_prototype_object_registered(*proto_addr);
+                        super::class_prototype_object_addr_index_rekey(old_addr, *proto_addr);
                     }
                 }
             });
@@ -683,6 +682,7 @@ pub(crate) fn test_clear_class_side_table_roots() {
             *guard = None;
         }
     });
+    super::state::CLASS_PROTOTYPE_ADDR_COUNTS.with(|index| index.borrow_mut().clear());
     CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
         if let Ok(mut guard) = table.write() {
             *guard = None;
