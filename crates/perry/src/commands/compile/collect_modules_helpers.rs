@@ -81,7 +81,8 @@ pub(super) fn file_loader_import_sources(module: &swc_ecma_ast::Module) -> HashS
             };
             let attributes = import.with.as_deref()?;
             requests_asset_path(attributes)
-                .then(|| import.src.value.as_str().unwrap_or("").to_string())
+                .then(|| import.src.value.as_str().map(str::to_owned))
+                .flatten()
         })
         .collect();
 

@@ -45,6 +45,7 @@ extern "C" {
         out_err: *mut *mut c_char,
     ) -> *mut c_void;
     pub(super) fn perry_wasm_host_module_drop(module: *mut c_void);
+    pub(super) fn perry_wasm_host_extern_drop(handle: *mut c_void);
     pub(super) fn perry_wasm_host_module_exports_len(module: *mut c_void) -> usize;
     pub(super) fn perry_wasm_host_module_export_at(
         module: *mut c_void,

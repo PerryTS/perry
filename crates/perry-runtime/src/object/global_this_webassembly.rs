@@ -1010,7 +1010,6 @@ pub(super) fn create_webassembly_namespace() -> f64 {
         1,
         true,
     );
-    crate::closure::js_register_closure_arity(webassembly_instantiate_thunk as *const u8, 2);
     install_webassembly_static_fn(
         ns_obj,
         "validate",
@@ -1025,6 +1024,9 @@ pub(super) fn create_webassembly_namespace() -> f64 {
         1,
         true,
     );
+    // The optional imports object is a real second call argument, while
+    // `WebAssembly.instantiate.length` stays 1.
+    crate::closure::js_register_closure_arity(webassembly_instantiate_thunk as *const u8, 2);
     install_webassembly_static_fn(
         ns_obj,
         "compileStreaming",
@@ -1401,6 +1403,11 @@ mod tests {
         let grow = js_object_get_field_by_name_f64(memory_proto, named_key(b"grow"));
         let grow_jv = crate::value::JSValue::from_bits(grow.to_bits());
         assert!(grow_jv.is_pointer(), "Memory.prototype.grow must exist");
+        assert_eq!(
+            crate::closure::lookup_closure_arity(webassembly_instantiate_thunk as *const u8),
+            Some(2),
+            "the install helper must not overwrite instantiate's two-argument dispatch"
+        );
     }
 
     #[cfg(not(feature = "wasm-host"))]
