@@ -12,6 +12,9 @@ use crate::object::{js_object_alloc, js_object_get_field_by_name, js_object_set_
 use crate::string::js_string_from_bytes;
 use crate::value::{js_nanbox_pointer, JSValue, TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED};
 
+#[cfg(test)]
+mod dynamic_import_tests;
+
 fn undefined() -> f64 {
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -1244,7 +1247,21 @@ fn dynamic_import_fallback_promise(spec: f64, deferred_note: Option<String>) -> 
         let promise = crate::promise::js_promise_resolved(namespace);
         return js_nanbox_pointer(promise as i64);
     }
-    let message = deferred_note.unwrap_or_else(|| format!("Cannot find module '{spec_str}'"));
+    // #10105: this is an AOT boundary, even when the package exists on disk.
+    // Keep the conventional error code for optional-dependency handlers, but
+    // give callers that surface error.message an actionable explanation. Do
+    // not also log here: plugin loaders own reporting and startup recovery.
+    let mut message = format!(
+        "Cannot find module '{spec_str}': loading JavaScript modules at runtime is \
+         not available in this native build (including runtime plugins, custom \
+         tools, and non-bundled providers). Use the application's Bun/Node \
+         distribution, or compile the module into the binary through a \
+         statically resolvable import()."
+    );
+    if let Some(note) = deferred_note {
+        message.push(' ');
+        message.push_str(&note);
+    }
     let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg_ptr, "ERR_MODULE_NOT_FOUND");
     let err = crate::error::js_error_new_with_message(msg_ptr);
@@ -1318,9 +1335,9 @@ static KEEP_JS_MODULE_DYNAMIC_IMPORT_FALLBACK: extern "C" fn(f64) -> f64 =
 
 /// Codegen entry for #5230 *deferred* dynamic-import sites (runtime-computed
 /// specifier under the default non-strict policy). Same builtin-or-reject
-/// fallback, but a genuinely unknown module rejects with the compile-time
-/// deferral message (which names the site's `file:line`) instead of the
-/// generic `Cannot find module` text. `msg` is the NaN-boxed deferral string.
+/// fallback, adding the compile-time deferral message (which names the site's
+/// `file:line`) to the requested module and native-build guidance. `msg` is the
+/// NaN-boxed deferral string.
 #[no_mangle]
 pub extern "C" fn js_module_dynamic_import_deferred(spec: f64, msg: f64) -> f64 {
     let note = {
