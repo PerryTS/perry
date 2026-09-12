@@ -213,6 +213,27 @@ onmessage = (event) => {
 ```
 
 
+## Bun runtime plugin registration
+
+`import { plugin } from "bun"` and `Bun.plugin` accept a plugin object with
+`name` and `setup`, or a setup function. Perry calls setup synchronously with
+a builder containing inert `onLoad`, `onResolve`, `onStart`, `onEnd`, and
+`module` methods and an empty, mutable `config` object. Registered hooks are
+ignored. Synchronous setup returns `undefined`; asynchronous setup returns a
+promise that settles when setup completes. Setup errors propagate to the caller.
+`plugin.clearAll()` and `Bun.plugin.clearAll()` return `undefined`.
+
+This lets libraries such as OpenTUI finish their runtime plugin installation
+bookkeeping. It does not add runtime source transforms or load user JavaScript
+plugins into a native binary. An unresolved dynamic import of a `.tsx` or `.jsx`
+file reports that its file type needs a runtime transform the native build does
+not include. Statically compiled imports use the normal compiler pipeline.
+The registrar is marked as partial support in the API manifest and follows
+`PERRY_STUB_DIAG` and `PERRY_STRICT_STUBS`.
+
+As with other Bun shims, only member access is lowered: bare `typeof Bun`
+remains `"undefined"`, and a local binding named `Bun` takes precedence.
+
 ## bun:jsc
 
 `heapStats()` and `heapStats(true)` return memory diagnostics for the calling

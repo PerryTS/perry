@@ -135,6 +135,10 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
         crate::process::module_source_map_attach_constructor(crate::value::js_nanbox_get_pointer(
             value.get_nanbox_f64(),
         ) as usize);
+    } else if export_module_name == "bun" && property_name == "plugin" {
+        // Decorate once at creation so named imports, namespaces, and saved
+        // Bun.plugin values share the same callable and clearAll property.
+        crate::bun_compat::decorate_bun_plugin(value.get_nanbox_f64());
     } else if let Some(attach) =
         super::super::native_module_registry::nm_attach_lookup(export_module_name)
     {

@@ -1277,6 +1277,16 @@ fn dynamic_import_fallback_promise(spec: f64, options: f64, deferred_note: Optio
          distribution, or compile the module into the binary through a \
          statically resolvable import()."
     );
+    // #10100: a TSX/JSX specifier additionally fails for a more specific
+    // reason — the native build ships no runtime transform and Bun.plugin
+    // loader hooks are inert — so name that on top of the AOT explanation
+    // rather than instead of it.
+    let path = spec_str.split(['?', '#']).next().unwrap_or(&spec_str);
+    if path.ends_with(".tsx") || path.ends_with(".jsx") {
+        message.push_str(&format!(
+            "; '{spec_str}' needs a runtime transform for this file type that the native build does not include (Bun.plugin loader hooks are inert)"
+        ));
+    }
     if let Some(note) = deferred_note {
         message.push(' ');
         message.push_str(&note);

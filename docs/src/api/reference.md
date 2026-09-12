@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 3051 entries across 139 modules.
+Total: 3052 entries across 139 modules.
 
 ## Modules
 
@@ -439,6 +439,7 @@ Total: 3051 entries across 139 modules.
 - `hash` — module
 - `listen` — module
 - `pathToFileURL` — module
+- `plugin` — module ⚠ **stub** — setup runs synchronously; runtime loader hooks and clearAll are inert (#10100)
 - `scan` — instance *(class: `Transpiler`)*
 - `scanImports` — instance *(class: `Transpiler`)*
 - `serve` — module

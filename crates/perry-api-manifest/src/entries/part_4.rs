@@ -1103,6 +1103,15 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     class("bun", "Transpiler"),
     method("bun", "Transpiler", false, None),
     method("bun", "build", false, None),
+    method_sig(
+        "bun",
+        "plugin",
+        false,
+        None,
+        &[p_any("plugin")],
+        TypeSpec::Any,
+    )
+    .stub_note("setup runs synchronously; runtime loader hooks and clearAll are inert (#10100)"),
     method("bun", "transformSync", true, Some("Transpiler")),
     method("bun", "transform", true, Some("Transpiler")),
     method("bun", "scanImports", true, Some("Transpiler")),

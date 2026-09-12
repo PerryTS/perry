@@ -334,6 +334,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         | "stdout"
                         | "stderr"
                         | "stringWidth"
+                        | "plugin"
                         | "hash"
                         | "YAML"
                         | "TOML"
