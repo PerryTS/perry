@@ -6,6 +6,7 @@ use crate::closure::ClosureHeader;
 use std::cell::{Cell, RefCell};
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
 thread_local! {
     static OUTPUT: RefCell<String> = const { RefCell::new(String::new()) };
     static EXITS: RefCell<Vec<f64>> = const { RefCell::new(Vec::new()) };
