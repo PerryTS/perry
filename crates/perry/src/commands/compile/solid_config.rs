@@ -5,7 +5,7 @@ use std::path::Path;
 use anyhow::{bail, Result};
 
 #[derive(Clone, Debug, Default)]
-pub(super) enum JsxMode {
+pub(crate) enum JsxMode {
     #[default]
     Auto,
     Default,
