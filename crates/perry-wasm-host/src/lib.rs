@@ -11,7 +11,7 @@
 //! That keeps the wasmi version surface small and lets us swap engines
 //! (wasmtime, etc.) behind the same shape later.
 
-use std::cell::{RefCell, UnsafeCell};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicI32, AtomicU64, Ordering},
@@ -22,6 +22,9 @@ use wasmi::{
     Engine, Extern, ExternRef, ExternType, Func, Global, Linker, Memory, MemoryType, Module,
     Mutability, Ref, Store, Table, TableType, Val, ValType,
 };
+
+mod host_runtime;
+use host_runtime::with_host_runtime;
 
 /// Numeric WebAssembly value used by the public Rust call API. JavaScript
 /// import callbacks additionally marshal `externref`, while `funcref` values
@@ -84,31 +87,6 @@ fn trace_module(module: &ModuleInner, event: &str) {
         "[perry-wasm] module#{} {event} bytes={} imports=[{imports}] exports=[{exports}]",
         module.diagnostic_id, module.byte_len
     );
-}
-
-/// All WebAssembly objects in one JavaScript agent share an engine and store.
-///
-/// Emscripten side modules import the main module's memory, table, functions,
-/// and mutable globals. wasmi external handles can only be linked into the
-/// store that owns them, so the former one-store-per-instance layout could
-/// never represent that graph. JavaScript execution in Perry is thread-local;
-/// mirroring that here gives each Worker an independent WebAssembly agent
-/// while allowing every instance on a worker to exchange externals.
-struct HostRuntime {
-    engine: Engine,
-    store: Store<()>,
-}
-
-thread_local! {
-    static HOST_RUNTIME: UnsafeCell<HostRuntime> = UnsafeCell::new({
-        let engine = Engine::default();
-        let store = Store::new(&engine, ());
-        HostRuntime { engine, store }
-    });
-}
-
-fn with_host_runtime<R>(f: impl FnOnce(&mut HostRuntime) -> R) -> R {
-    HOST_RUNTIME.with(|runtime| unsafe { f(&mut *runtime.get()) })
 }
 
 /// Opaque instance backed by its JavaScript agent's shared store. Wasm
@@ -200,20 +178,17 @@ thread_local! {
     static ACTIVE_INSTANCE_TABLES: RefCell<Vec<ActiveInstanceTables>> = const { RefCell::new(Vec::new()) };
 }
 
-fn begin_instance_call(inst: &mut WasmInstanceHandle) {
+fn begin_instance_call(inst: &mut WasmInstanceHandle, store: &Store<()>) {
     let instance_id = inst as *mut WasmInstanceHandle as usize;
     let mut lengths = HashMap::new();
     for export in inst.inner._module.0.module.exports() {
-        let ExternType::Table(table_type) = export.ty() else {
+        let ExternType::Table(_) = export.ty() else {
             continue;
         };
-        if table_type.element() != ValType::ExternRef {
-            continue;
-        }
-        let Some(table) = inst.inner.instance.get_table(inst.store(), export.name()) else {
+        let Some(table) = inst.inner.instance.get_table(store, export.name()) else {
             continue;
         };
-        if let Ok(len) = usize::try_from(table.size(inst.store())) {
+        if let Ok(len) = usize::try_from(table.size(store)) {
             lengths.insert(export.name().to_string(), len);
         }
     }
@@ -353,7 +328,7 @@ impl std::error::Error for WasmHostError {}
 /// Cheap byte-level magic check (`\0asm\01\0\0\0`). Mirrors `WebAssembly.validate`
 /// — for the MVP we delegate to wasmi's full module decode.
 pub fn validate(bytes: &[u8]) -> bool {
-    with_host_runtime(|runtime| Module::new(&runtime.engine, bytes).is_ok())
+    with_host_runtime(|runtime| Module::new(&runtime.engine, bytes).is_ok()).unwrap_or(false)
 }
 
 /// Compile bytes to a module. No imports resolved at this stage.
@@ -370,6 +345,11 @@ pub fn compile(bytes: &[u8]) -> Result<WasmModuleHandle, WasmHostError> {
         });
         trace_module(&inner, "compiled");
         Ok(WasmModuleHandle(inner))
+    })
+    .unwrap_or_else(|| {
+        Err(WasmHostError::Compile(
+            "host runtime is already in use".into(),
+        ))
     })
 }
 
@@ -397,7 +377,6 @@ fn instantiate_with_import_callbacks(
     import_context_value: u64,
 ) -> Result<WasmInstanceHandle, WasmHostError> {
     trace_module(&module.0, "instantiating");
-    let store = with_host_runtime(|runtime| &mut runtime.store as *mut Store<()>);
     let import_context = Arc::new(AtomicU64::new(import_context_value));
     // i32::MIN is not a valid WASI process status and acts as "not exited".
     let exit_code = Arc::new(AtomicI32::new(i32::MIN));
@@ -542,10 +521,15 @@ fn instantiate_with_import_callbacks(
             )
             .map_err(|e| WasmHostError::Link(e.to_string()))?;
     }
-    let instance = linker
-        .instantiate_and_start(unsafe { &mut *store }, &module.0.module)
-        .map_err(|e| WasmHostError::Link(e.to_string()))?;
-    let memory = instance.get_memory(unsafe { &*store }, "memory");
+    let (store, instance, memory) = with_host_runtime(|runtime| {
+        let store = &mut runtime.store;
+        let instance = linker
+            .instantiate_and_start(&mut *store, &module.0.module)
+            .map_err(|e| WasmHostError::Link(e.to_string()))?;
+        let memory = instance.get_memory(&*store, "memory");
+        Ok((store as *mut Store<()>, instance, memory))
+    })
+    .unwrap_or_else(|| Err(WasmHostError::Link("host runtime is already in use".into())))?;
     trace_module(&module.0, "instantiated");
     Ok(WasmInstanceHandle {
         inner: Box::new(InstanceInner {
@@ -586,22 +570,26 @@ fn coerce_numeric_value(value: WasmVal, expected: ValType) -> Option<Val> {
 /// once per instance. `None` when the instance has no function export by that
 /// name.
 fn resolve_export(inst: &mut WasmInstanceHandle, name: &str) -> Option<usize> {
-    if let Some(&index) = inst.inner.export_handles.get(name) {
-        return Some(index);
-    }
-    let func = inst.inner.instance.get_func(inst.store(), name)?;
-    let ty = func.ty(inst.store());
-    let index = inst.inner.exports.len();
-    inst.inner.exports.push(CachedExport {
-        name: name.to_string(),
-        func,
-        params: ty.params().to_vec().into_boxed_slice(),
-        results: ty.results().to_vec().into_boxed_slice(),
-        args: Vec::new(),
-        outs: Vec::new(),
-    });
-    inst.inner.export_handles.insert(name.to_string(), index);
-    Some(index)
+    with_host_runtime(|runtime| {
+        debug_assert_eq!(inst.inner.store, &mut runtime.store as *mut Store<()>);
+        if let Some(&index) = inst.inner.export_handles.get(name) {
+            return Some(index);
+        }
+        let func = inst.inner.instance.get_func(&runtime.store, name)?;
+        let ty = func.ty(&runtime.store);
+        let index = inst.inner.exports.len();
+        inst.inner.exports.push(CachedExport {
+            name: name.to_string(),
+            func,
+            params: ty.params().to_vec().into_boxed_slice(),
+            results: ty.results().to_vec().into_boxed_slice(),
+            args: Vec::new(),
+            outs: Vec::new(),
+        });
+        inst.inner.export_handles.insert(name.to_string(), index);
+        Some(index)
+    })
+    .flatten()
 }
 
 /// Call a previously resolved export. Results are left in the cached entry's
@@ -641,20 +629,28 @@ fn call_resolved_export(
             .extend(entry.results.iter().copied().map(Val::default));
     }
 
-    begin_instance_call(inst);
-    let call_result = {
+    let call_result = with_host_runtime(|runtime| {
+        begin_instance_call(inst, &runtime.store);
         // Split the borrow: the call needs the store mutably while reading the
         // cached argument buffer and filling the cached result buffer, and all
         // three are disjoint fields of the same `InstanceInner`.
-        let store = inst.inner.store;
+        debug_assert_eq!(inst.inner.store, &mut runtime.store as *mut Store<()>);
         let inner = &mut *inst.inner;
         let CachedExport {
             func, args, outs, ..
         } = &mut inner.exports[index];
-        func.call(unsafe { &mut *store }, args, outs)
-    };
+        func.call(&mut runtime.store, args, outs)
+    })
+    .map_or_else(
+        || {
+            Err(WasmHostError::Runtime(
+                "host runtime is already in use".into(),
+            ))
+        },
+        |result| result.map_err(|e| WasmHostError::Runtime(e.to_string())),
+    );
     let table_result = finish_instance_call(inst);
-    call_result.map_err(|e| WasmHostError::Runtime(e.to_string()))?;
+    call_result?;
     table_result?;
     Ok(())
 }
@@ -1032,6 +1028,14 @@ pub(crate) fn extern_from_handle(handle: *mut c_void) -> Option<Extern> {
     (!handle.is_null()).then(|| unsafe { (*(handle as *const WasmExternHandle)).item })
 }
 
+/// Release an opaque external handle after its JavaScript wrapper dies.
+#[no_mangle]
+pub extern "C" fn perry_wasm_host_extern_drop(handle: *mut c_void) {
+    if !handle.is_null() {
+        unsafe { drop(Box::from_raw(handle as *mut WasmExternHandle)) };
+    }
+}
+
 mod externals;
 
 /// Return the byte length of the exported `memory`, or zero when absent.
@@ -1342,7 +1346,7 @@ mod tests {
     ];
     /// `(module (import "env" "f" (func $f (result f64)))
     ///          (func (export "call") (result f64) call $f))`.
-    const IMPORT_F64_RESULT_WASM: &[u8] = &[
+    pub(super) const IMPORT_F64_RESULT_WASM: &[u8] = &[
         0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7c,
         0x02, 0x09, 0x01, 0x03, 0x65, 0x6e, 0x76, 0x01, 0x66, 0x00, 0x00, 0x03, 0x02, 0x01, 0x00,
         0x07, 0x08, 0x01, 0x04, 0x63, 0x61, 0x6c, 0x6c, 0x00, 0x01, 0x0a, 0x06, 0x01, 0x04, 0x00,
@@ -1973,5 +1977,7 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod reentrancy_tests;
 #[cfg(test)]
 mod shared_import_tests;

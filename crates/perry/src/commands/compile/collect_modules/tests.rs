@@ -3,7 +3,7 @@
 
 use super::{
     collect_js_module_imports, collect_modules, env_defines_for_lowering,
-    expand_dynamic_import_glob, package_has_unsupported_node_addon,
+    expand_dynamic_import_glob, file_loader_import_sources, package_has_unsupported_node_addon,
     refuse_compile_package_native_addon,
 };
 use crate::commands::compile::{CompilationContext, DefineValue};
@@ -786,6 +786,16 @@ fn assert_dynamic_asset_import(source: &str, filename: &str, bytes: &[u8]) {
         .iter()
         .any(|(name, path)| path == &canonical_asset && name.ends_with(filename)));
     assert!(ctx.native_modules.contains_key(&canonical_asset));
+}
+
+#[test]
+fn invalid_wtf8_static_asset_specifier_is_not_collected_as_empty() {
+    let module = perry_parser::parse_typescript(
+        r#"import asset from "\uD800" with { type: "file" };"#,
+        "entry.ts",
+    )
+    .expect("lone surrogate import source is valid JavaScript syntax");
+    assert!(file_loader_import_sources(&module).is_empty());
 }
 
 #[test]
