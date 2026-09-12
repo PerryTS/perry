@@ -1249,7 +1249,16 @@ impl LazyArrayHeader {
 /// nursery-resident and a minor can reclaim the lot.
 fn lazy_cluster_is_old(cached_length: u32) -> bool {
     let cache_bytes = (cached_length as usize) * std::mem::size_of::<crate::value::JSValue>();
-    cache_bytes + crate::gc::GC_HEADER_SIZE >= crate::gc::LARGE_OBJECT_THRESHOLD_BYTES
+    // The POINTER-BEARING line, not the flat one. `arena_alloc_gc` keeps the two
+    // apart for precisely the reason that bites here: tenuring a pointer-bearing
+    // object does not cost its own bytes, it costs "every object it can reach,
+    // held live through the remembered set by a container nothing refers to any
+    // more". The sparse cache is a block of JSValues, so it is that container,
+    // and a lazy array is the case the distinction was drawn for. 128 KB is
+    // V8's kMaxRegularHeapObjectSize and sits inside the copier's own ceilings,
+    // so a cluster admitted by it is always movable.
+    cache_bytes + crate::gc::GC_HEADER_SIZE
+        >= crate::gc::LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES
 }
 
 unsafe fn alloc_lazy_cluster_bytes(size: usize, obj_type: u8, old: bool) -> *mut u8 {
