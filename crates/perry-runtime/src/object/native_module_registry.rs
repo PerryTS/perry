@@ -104,7 +104,7 @@ fn nm_module_index(name: &str) -> Option<NmBucket> {
         "module" => Some(NmBucket::Module),
         "net" => Some(NmBucket::Net),
         // #6563: node-pty + the API-identical @lydell fork, one bucket.
-        "node-pty" | "@lydell/node-pty" => Some(NmBucket::NodePty),
+        "node-pty" | "@lydell/node-pty" | "bun-pty" => Some(NmBucket::NodePty),
         "os" => Some(NmBucket::Os),
         "path" | "path.posix" | "path.win32" => Some(NmBucket::Path),
         "perf_histogram" | "perf_hooks" | "perf_observer" | "perf_observer_list" => {

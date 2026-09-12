@@ -7,12 +7,9 @@
 //! Model:
 //! * [`open_pty_pair`] — `openpty(3)` with node-pty's sane default termios
 //!   (echo on, canonical mode, ISIG, 38400 baud) and the requested winsize.
-//! * [`spawn_in_pty`] — fork; the child becomes a session leader, takes the
-//!   slave as its controlling terminal (`TIOCSCTTY`), dups it onto
-//!   stdin/stdout/stderr and execs. Everything the child touches (argv, envp,
-//!   cwd, resolved exec candidates) is pre-marshalled in the parent because
-//!   only async-signal-safe calls are allowed between `fork` and `execve` in
-//!   a multithreaded process.
+//! * [`spawn_in_pty`] uses std process creation with a pre-exec hook that takes
+//!   the slave as the controlling terminal. Rust's exec error pipe reports
+//!   invalid programs, arguments, and working directories to the parent.
 //! * [`wait_child`] — blocking `waitpid` reap (run on a dedicated thread by
 //!   the reactor), decoded to node's `(exitCode, signal)` split.
 //! * [`resize_pty`] / [`signal_pid`] — `TIOCSWINSZ` and `kill(2)`.
@@ -22,7 +19,6 @@
 
 #![allow(clippy::manual_c_str_literals)]
 
-use std::ffi::CString;
 use std::io;
 use std::os::unix::io::RawFd;
 
@@ -116,118 +112,49 @@ pub(crate) fn open_pty_pair(cols: u16, rows: u16) -> io::Result<(RawFd, RawFd)> 
     }
     unsafe {
         libc::fcntl(master, libc::F_SETFD, libc::FD_CLOEXEC);
+        libc::fcntl(slave, libc::F_SETFD, libc::FD_CLOEXEC);
     }
     Ok((master, slave))
 }
 
-/// Resolve `file` to the execve candidate list — an absolute/relative path is
-/// taken as-is; a bare name is expanded against the child env's `PATH` (the
-/// same order `execvp` would try). Resolution happens in the PARENT so the
-/// post-fork child only calls the async-signal-safe `execve`.
-fn resolve_exec_candidates(file: &str, env: &[(String, String)]) -> Vec<CString> {
-    if file.contains('/') {
-        return CString::new(file).ok().into_iter().collect();
-    }
-    let path = env
-        .iter()
-        .find(|(k, _)| k == "PATH")
-        .map(|(_, v)| v.clone())
-        .or_else(|| std::env::var("PATH").ok())
-        .unwrap_or_else(|| "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin".to_string());
-    path.split(':')
-        .filter(|d| !d.is_empty())
-        .filter_map(|d| CString::new(format!("{d}/{file}")).ok())
-        .collect()
-}
-
-/// Fork + exec `req.file` with the slave side of a fresh pty as its
-/// controlling terminal and stdio. Returns the child pid + master fd.
-///
-/// The child half runs only async-signal-safe calls (`setsid`, `ioctl`,
-/// `dup2`, `chdir`, `execve`, `_exit`); all heap work happens before `fork`.
+/// Spawn with the slave as stdio and the controlling terminal. Rust's exec
+/// error pipe reports cwd/exec failures synchronously and reaps failed children.
+/// The pre_exec hook performs only async-signal-safe OS calls.
 pub(crate) fn spawn_in_pty(req: &PtySpawnRequest) -> io::Result<PtyChild> {
-    let candidates = resolve_exec_candidates(&req.file, &req.env);
-    if candidates.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("spawn {} ENOENT", req.file),
-        ));
-    }
-
-    // argv = [file, ...args]; entries with interior NULs are dropped rather
-    // than failing the whole spawn (they could never be exec'd anyway).
-    let argv_c: Vec<CString> = std::iter::once(req.file.as_str())
-        .chain(req.args.iter().map(|s| s.as_str()))
-        .filter_map(|s| CString::new(s).ok())
-        .collect();
-    let mut argv_ptrs: Vec<*const libc::c_char> = argv_c.iter().map(|c| c.as_ptr()).collect();
-    argv_ptrs.push(std::ptr::null());
-
-    let envp_c: Vec<CString> = req
-        .env
-        .iter()
-        .filter_map(|(k, v)| CString::new(format!("{k}={v}")).ok())
-        .collect();
-    let mut envp_ptrs: Vec<*const libc::c_char> = envp_c.iter().map(|c| c.as_ptr()).collect();
-    envp_ptrs.push(std::ptr::null());
-
-    let cwd_c = match &req.cwd {
-        Some(d) => match CString::new(d.as_str()) {
-            Ok(c) => Some(c),
-            Err(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "cwd contains a NUL byte",
-                ))
-            }
-        },
-        None => None,
-    };
+    use std::os::unix::io::{FromRawFd, IntoRawFd};
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
 
     let (master, slave) = open_pty_pair(req.cols, req.rows)?;
-
-    match unsafe { libc::fork() } {
-        -1 => {
-            let err = io::Error::last_os_error();
-            unsafe {
-                libc::close(master);
-                libc::close(slave);
-            }
-            Err(err)
-        }
-        0 => {
-            // Child. Async-signal-safe calls ONLY from here to execve.
-            unsafe {
-                libc::setsid();
-                // Infer libc's platform-specific `Ioctl` type. Android x86_64
-                // uses `c_int` while BSD/macOS uses `c_ulong`; forcing either
-                // concrete type makes the other platform fail to compile.
-                libc::ioctl(slave, libc::TIOCSCTTY as _, 0);
-                libc::dup2(slave, 0);
-                libc::dup2(slave, 1);
-                libc::dup2(slave, 2);
-                if slave > 2 {
-                    libc::close(slave);
-                }
-                libc::close(master);
-                if let Some(cwd) = &cwd_c {
-                    if libc::chdir(cwd.as_ptr()) != 0 {
-                        libc::_exit(127);
-                    }
-                }
-                for p in &candidates {
-                    libc::execve(p.as_ptr(), argv_ptrs.as_ptr(), envp_ptrs.as_ptr());
-                }
-                libc::_exit(127);
-            }
-        }
-        pid => {
-            unsafe {
-                libc::close(slave);
-            }
-            Ok(PtyChild { pid, master })
-        }
+    let master = unsafe { std::fs::File::from_raw_fd(master) };
+    let slave = unsafe { std::fs::File::from_raw_fd(slave) };
+    let mut command = Command::new(&req.file);
+    command
+        .args(&req.args)
+        .env_clear()
+        .envs(req.env.iter().cloned());
+    if let Some(cwd) = &req.cwd {
+        command.current_dir(cwd);
     }
+    command.stdin(Stdio::from(slave.try_clone()?));
+    command.stdout(Stdio::from(slave.try_clone()?));
+    command.stderr(Stdio::from(slave));
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY as _, 0) < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let child = command.spawn()?;
+    let pid = child.id() as i32;
+    // Child::drop does not reap: the reactor's waiter owns waitpid.
+    drop(child);
+    Ok(PtyChild {
+        pid,
+        master: master.into_raw_fd(),
+    })
 }
 
 /// Blocking reap of `pid`. Returns node-pty's `(exitCode, signal)` split:
@@ -411,20 +338,9 @@ mod tests {
             cols: 80,
             rows: 24,
         });
-        // Bare name + dead PATH: candidates exist but every execve fails →
-        // the child _exit(127)s. An empty candidate list errors in the
-        // parent. Both shapes are acceptable; this test pins the parent-side
-        // error for the no-candidate case.
-        match err {
-            Ok(child) => {
-                let (code, signal) = wait_child(child.pid);
-                assert_eq!(code, Some(127), "exec failure must exit 127");
-                assert_eq!(signal, None);
-                unsafe {
-                    libc::close(child.master);
-                }
-            }
-            Err(e) => assert_eq!(e.kind(), std::io::ErrorKind::NotFound),
-        }
+        let error = err
+            .err()
+            .expect("exec failure must reach the spawning thread");
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
     }
 }

@@ -9,7 +9,7 @@ pub mod fork;
 #[cfg(windows)]
 pub(crate) mod ipc_transport;
 #[cfg(windows)]
-mod windows_fork;
+pub(crate) mod windows_fork;
 // #2130: V8 structured-clone codec for `serialization: 'advanced'` IPC.
 pub(crate) mod v8_serde;
 // #2555: sync buffered `input`, `timeout`, and `maxBuffer` execution options.

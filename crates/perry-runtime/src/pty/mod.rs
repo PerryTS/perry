@@ -21,23 +21,30 @@
 //! `onExit` fires `{ exitCode, signal }` — `signal` is the numeric signo for
 //! a signal death, `undefined` otherwise — matching node-pty's unix binding.
 //!
-//! Windows/ConPTY is out of scope for this stage: on non-unix hosts
-//! `js_pty_spawn` throws a descriptive `Error` (the same failure mode the
-//! real node-pty has when its prebuilt addon is missing), so a consumer's
-//! dynamic-import fallback path still engages.
+//! Windows uses ConPTY with independent input/output workers. All three
+//! import names (`node-pty`, `@lydell/node-pty`, `bun-pty`) share this facade.
 
 #[cfg(unix)]
 mod native;
-#[cfg(unix)]
+#[cfg(windows)]
+#[path = "windows.rs"]
+mod native;
+#[cfg(any(unix, windows))]
 pub(crate) mod reactor;
+#[cfg(all(test, any(unix, windows)))]
+mod tests;
 
+#[cfg(any(unix, windows))]
+pub use platform_impl::js_pty_spawn;
+#[cfg(any(unix, windows))]
+pub(crate) use platform_impl::pty_emit;
+#[cfg(any(unix, all(test, windows)))]
+pub(crate) use platform_impl::pty_handle_of;
 #[cfg(unix)]
-pub use unix_impl::js_pty_spawn;
-#[cfg(unix)]
-pub(crate) use unix_impl::{pty_emit, pty_handle_of, pty_register};
+pub(crate) use platform_impl::pty_register;
 
-#[cfg(unix)]
-mod unix_impl {
+#[cfg(any(unix, windows))]
+mod platform_impl {
     use super::{native, reactor};
     use crate::child_process::{
         cp_array_ptr, cp_box_ptr, cp_box_string, cp_build_object, cp_cast0, cp_cast1, cp_cast2,
@@ -71,30 +78,33 @@ mod unix_impl {
         cp_set_field(target, &key, cp_box_ptr(arr as *const u8));
     }
 
-    /// Invoke every listener registered on `target` for `event`. The listener
-    /// array is re-read each iteration so a moving GC during a handler call
-    /// can't strand us on a stale array pointer.
+    /// Emit a rooted snapshot so listener disposal and moving GC are safe.
     pub(crate) fn pty_emit(target: f64, event: &str, args: &[f64]) {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let target = scope.root_nanbox_f64(target);
+        let args = scope.root_nanbox_f64_slice(args);
+        let prev = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
         let key = pty_listener_key(event);
-        let mut i: u32 = 0;
-        let this_scope = crate::gc::RuntimeHandleScope::new();
-        // #9445: the displaced receiver is rooted ONCE here, not once per callback.
-        let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_get());
-        loop {
-            let arr = match cp_array_ptr(cp_get_field(target, &key)) {
-                Some(a) => a,
-                None => break,
-            };
-            if i >= crate::array::js_array_length(arr) {
-                break;
-            }
-            let cb = crate::array::js_array_get_f64(arr, i);
-            js_implicit_this_set(target);
+        let Some(arr) = cp_array_ptr(cp_get_field(target.get_nanbox_f64(), &key)) else {
+            return;
+        };
+        // Snapshot the listeners: disposing a subscription inside a callback
+        // must not skip the next callback or invalidate a moving GC reference.
+        let callbacks: Vec<f64> = (0..crate::array::js_array_length(arr))
+            .map(|i| crate::array::js_array_get_f64(arr, i))
+            .collect();
+        let callbacks = scope.root_nanbox_f64_slice(&callbacks);
+        for cb in callbacks {
+            js_implicit_this_set(target.get_nanbox_f64());
+            let current_args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&args);
             unsafe {
-                let _ = js_native_call_value(cb, args.as_ptr(), args.len());
+                let _ = js_native_call_value(
+                    cb.get_nanbox_f64(),
+                    current_args.as_ptr(),
+                    current_args.len(),
+                );
             }
             js_implicit_this_set(prev.get_nanbox_f64());
-            i += 1;
         }
     }
 
@@ -206,8 +216,17 @@ mod unix_impl {
         cp_undefined()
     }
 
-    extern "C" fn pty_method_noop0(closure: *const ClosureHeader) -> f64 {
-        let _ = closure;
+    extern "C" fn pty_method_pause(closure: *const ClosureHeader) -> f64 {
+        if let Some(handle) = pty_handle_of(cp_this(closure)) {
+            reactor::pty_live_set_paused(handle, true);
+        }
+        cp_undefined()
+    }
+
+    extern "C" fn pty_method_resume(closure: *const ClosureHeader) -> f64 {
+        if let Some(handle) = pty_handle_of(cp_this(closure)) {
+            reactor::pty_live_set_paused(handle, false);
+        }
         cp_undefined()
     }
 
@@ -215,6 +234,7 @@ mod unix_impl {
     /// exposes the equivalent `destroy()`. Both are "hang up the terminal":
     /// kill with the default SIGHUP.
     extern "C" fn pty_method_dispose(closure: *const ClosureHeader) -> f64 {
+        pty_method_resume(closure);
         pty_method_kill(closure, cp_undefined())
     }
 
@@ -224,7 +244,7 @@ mod unix_impl {
     fn pty_parse_kill_signal(signal: f64) -> i32 {
         let bits = signal.to_bits();
         if JSValue::from_bits(bits).is_undefined() || bits == 0 {
-            return libc::SIGHUP;
+            return 1; // SIGHUP; ConPTY terminates the session on Windows.
         }
         crate::child_process::cp_signal_from_value(signal)
     }
@@ -307,7 +327,8 @@ mod unix_impl {
         js_register_closure_arity(pty_method_write as *const u8, 1);
         js_register_closure_arity(pty_method_resize as *const u8, 2);
         js_register_closure_arity(pty_method_kill as *const u8, 1);
-        js_register_closure_arity(pty_method_noop0 as *const u8, 0);
+        js_register_closure_arity(pty_method_pause as *const u8, 0);
+        js_register_closure_arity(pty_method_resume as *const u8, 0);
         js_register_closure_arity(pty_method_dispose as *const u8, 0);
         js_register_closure_arity(pty_disposable_dispose as *const u8, 0);
     }
@@ -321,8 +342,8 @@ mod unix_impl {
             ("write", cp_cast1(pty_method_write)),
             ("resize", cp_cast2(pty_method_resize)),
             ("kill", cp_cast1(pty_method_kill)),
-            ("pause", cp_cast0(pty_method_noop0)),
-            ("resume", cp_cast0(pty_method_noop0)),
+            ("pause", cp_cast0(pty_method_pause)),
+            ("resume", cp_cast0(pty_method_resume)),
             ("dispose", cp_cast0(pty_method_dispose)),
         ];
         let obj = cp_build_object(&methods, PTY_SHAPE_ID + methods.len() as u32);
@@ -382,7 +403,7 @@ mod unix_impl {
         cp_set_field(ipty, b"rows", rows as f64);
         // node-pty's `process` is the terminal's foreground process name;
         // the spawned file's basename is the faithful static answer.
-        let proc_name = file.rsplit('/').next().unwrap_or(&file);
+        let proc_name = file.rsplit(['/', '\\']).next().unwrap_or(&file);
         cp_set_field(ipty, b"process", cp_box_string(proc_name));
         cp_set_field(
             ipty,
@@ -396,7 +417,7 @@ mod unix_impl {
         ipty
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(super) mod tests {
         use super::*;
         use crate::string::js_string_from_bytes;
@@ -528,14 +549,12 @@ mod unix_impl {
     }
 }
 
-/// Windows/ConPTY stub (#6563 stage 2): throw a descriptive error so
-/// consumers' import-failure fallbacks (kimi's non-pty terminal backend)
-/// engage instead of crashing.
-#[cfg(not(unix))]
+/// PTYs require Unix or Windows ConPTY.
+#[cfg(not(any(unix, windows)))]
 #[no_mangle]
 pub extern "C" fn js_pty_spawn(_file_bits: i64, _args_bits: i64, _opts_bits: i64) -> f64 {
     crate::exception::js_throw(crate::child_process::cp_make_error(
-        "node-pty: this platform is not supported yet by the perry runtime (POSIX only; ConPTY tracked in #6563)",
+        "node-pty: this platform does not support native PTYs",
         &[],
     ));
 }

@@ -769,7 +769,7 @@ pub(crate) mod stdlib_pump {
         }
         // #6563: a live pty keeps the event loop alive (its onData/onExit
         // handlers are still pending), like a live spawn-reactor child.
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         if crate::pty::reactor::pty_reactor_has_live() {
             return 1;
         }
