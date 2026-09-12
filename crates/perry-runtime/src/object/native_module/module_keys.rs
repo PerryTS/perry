@@ -1664,6 +1664,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"isStandaloneExecutable",
             b"listen",
             b"pathToFileURL",
+            b"plugin",
             b"semver",
             b"serve",
             b"spawn",

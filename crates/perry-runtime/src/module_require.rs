@@ -1244,7 +1244,13 @@ fn dynamic_import_fallback_promise(spec: f64, deferred_note: Option<String>) -> 
         let promise = crate::promise::js_promise_resolved(namespace);
         return js_nanbox_pointer(promise as i64);
     }
-    let message = deferred_note.unwrap_or_else(|| format!("Cannot find module '{spec_str}'"));
+    let mut message = deferred_note.unwrap_or_else(|| format!("Cannot find module '{spec_str}'"));
+    let path = spec_str.split(['?', '#']).next().unwrap_or(&spec_str);
+    if path.ends_with(".tsx") || path.ends_with(".jsx") {
+        message.push_str(&format!(
+            "; '{spec_str}' needs a runtime transform for this file type that the native build does not include (Bun.plugin loader hooks are inert)"
+        ));
+    }
     let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg_ptr, "ERR_MODULE_NOT_FOUND");
     let err = crate::error::js_error_new_with_message(msg_ptr);

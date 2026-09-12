@@ -6,8 +6,8 @@ fn native_callable_export_arity_reference(module: &str, prop: &str) -> Option<u3
         (
             "bun",
             "Glob" | "Terminal" | "Transpiler" | "build" | "connect" | "file" | "fileURLToPath"
-            | "gc" | "hash" | "listen" | "pathToFileURL" | "serve" | "stringWidth" | "stripANSI"
-            | "which" | "zstdDecompress" | "zstdDecompressSync",
+            | "gc" | "hash" | "listen" | "pathToFileURL" | "plugin" | "serve" | "stringWidth"
+            | "stripANSI" | "which" | "zstdDecompress" | "zstdDecompressSync",
         ) => Some(1),
         ("bun", "deepEquals" | "generateHeapSnapshot" | "spawn" | "write") => Some(2),
         ("bun", "wrapAnsi") => Some(3),
@@ -306,6 +306,7 @@ static CALLABLE_EXPORT_ARITY_TABLE: &[(&str, &[(&str, u32)])] = &[
             ("hash", 1),
             ("listen", 1),
             ("pathToFileURL", 1),
+            ("plugin", 1),
             ("serve", 1),
             ("spawn", 2),
             ("stringWidth", 1),
