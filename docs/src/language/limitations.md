@@ -63,6 +63,15 @@ listed in the shared notice above under the `import(...)` kind, and does **not**
 abort the build. This lets an app with a plugin-loader path compile and run its
 core, with only the plugin-load path throwing if exercised.
 
+If the runtime specifier names a supported Node builtin, Perry resolves its
+native namespace. Otherwise, when it has no compiled target, the rejected
+`Error` retains `code: "ERR_MODULE_NOT_FOUND"` for existing optional-dependency
+handlers. Its message names the requested module, explains that runtime-loaded
+JavaScript is unavailable in the native build, and suggests the application's
+Bun/Node distribution or a statically resolvable import followed by recompilation.
+Deferred sites also retain their source location. Perry does not print a second
+runtime warning: the application's catch/report path owns the diagnostic.
+
 Resolvable specifiers are unaffected and still compile + load: string literals
 (`import("./mod.js")`), ternaries of resolvable arms, template literals over
 `const` locals (`` import(`./${KIND}.js`) ``), finite string-literal-union
@@ -77,6 +86,31 @@ async function loadPlugin(name: string) {
   return await import(name + ".js");
 }
 ```
+
+#### Native OpenCode plugins (#10105)
+
+The first native OpenCode deliverable follows **option A** from
+[#10105](https://github.com/PerryTS/perry/issues/10105), tracked in
+[#10107](https://github.com/PerryTS/perry/issues/10107): runtime-installed npm
+plugins, local JS/TS/TSX plugins (including TUI plugins), custom tools, and provider
+SDKs absent from the compiled graph are unavailable. Installing a package after
+compilation does not add its code to the executable. Bundled providers reached
+through static imports remain supported.
+
+Use the Bun distribution when those extensions are required. Including extensions
+in a statically reachable import graph and recompiling is a build-time option;
+there is currently no automatic plugin-pack install/recompile command. A whole
+ESM/CJS module interpreter (option B) and plugin-pack compilation/loading (option C)
+are deferred decisions, not capabilities enabled by the existing dynamic-eval
+interpreter. Runtime data imports such as TOML are a separate feature (#10104).
+
+OpenCode v1.18.30's `PluginLoader.load` catches import rejections, and its caller
+reports a load failure without retrying that stage. The TUI plugin reporter
+includes `error.message`, so it can explain the native limitation and continue
+startup. Perry's regression test covers that minimized loader/report/startup
+contract with `plugin: ["some-npm-plugin"]`, one report, and successful builtin and
+bundled imports afterward. Full OpenTUI rendering remains part of the integration
+acceptance in #10107.
 
 ### Strict mode: refuse at compile time
 
