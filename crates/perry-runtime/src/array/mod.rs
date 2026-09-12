@@ -254,6 +254,8 @@ pub use self::search::{
 pub use self::sort::{
     js_array_sort_default, js_array_sort_with_comparator, js_validate_array_comparator,
 };
+#[cfg(test)]
+pub(crate) use self::splice_slice::test_collect_after_splice_roots_once;
 pub use self::splice_slice::{
     js_array_slice, js_array_slice_values, js_array_splice, js_array_splice_delete_count,
 };

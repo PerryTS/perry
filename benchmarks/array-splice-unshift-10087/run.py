@@ -123,10 +123,15 @@ def main():
             engine: slope([(row["n"], row[engine]["ms_per_run"]) for row in acceptance])
             for engine in ("node", "perry")
         }
+        acceptance_slope_delta = (
+            acceptance_slopes["perry"] - acceptance_slopes["node"]
+            if all(value is not None for value in acceptance_slopes.values())
+            else None
+        )
         result["workloads"][name].update(
             acceptance_sizes=[row["n"] for row in acceptance],
             acceptance_slopes=acceptance_slopes,
-            acceptance_slope_delta=acceptance_slopes["perry"] - acceptance_slopes["node"],
+            acceptance_slope_delta=acceptance_slope_delta,
         )
     args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
 

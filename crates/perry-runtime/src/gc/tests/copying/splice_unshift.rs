@@ -95,3 +95,101 @@ fn old_array_unshift_translates_a_young_edge_across_a_page_boundary() {
     assert!(crate::arena::pointer_in_nursery(child_after));
     js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
 }
+
+#[test]
+fn splice_roots_receiver_and_inserted_pointer_values_across_species_allocation() {
+    let _guard = CopyingNurseryTestGuard::new(3);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    register_runtime_handle_root_scanner_for_tests();
+    let mut arr = array::js_array_alloc(4);
+    arr = array::js_array_push_f64(arr, 17.0);
+    let first = young_leaf();
+    let second = young_leaf();
+    assert!(crate::arena::pointer_in_nursery(arr as usize));
+    assert!(crate::arena::pointer_in_nursery(first));
+    assert!(crate::arena::pointer_in_nursery(second));
+    js_shadow_slot_set(0, ptr_bits(arr as usize));
+    js_shadow_slot_set(1, ptr_bits(first));
+    js_shadow_slot_set(2, ptr_bits(second));
+
+    // The raw `items` alloca below is deliberately not a root. Force a moving
+    // minor at the exact point where splice has promised to establish its own
+    // mutable handles and before species creation performs an allocation.
+    crate::array::test_collect_after_splice_roots_once();
+    let collections_before = gc_collection_count();
+    let items = [
+        f64::from_bits(ptr_bits(first)),
+        f64::from_bits(ptr_bits(second)),
+    ];
+    let mut out = arr;
+    let deleted = array::js_array_splice(arr, 1, 0, items.as_ptr(), 2, &mut out);
+
+    assert!(gc_collection_count() > collections_before);
+    let rooted_arr = (js_shadow_slot_get(0) & POINTER_MASK) as *mut ArrayHeader;
+    let first_after = (js_shadow_slot_get(1) & POINTER_MASK) as usize;
+    let second_after = (js_shadow_slot_get(2) & POINTER_MASK) as usize;
+    assert_ne!(rooted_arr, arr, "the receiver fixture must move");
+    assert_eq!(out, rooted_arr, "splice must return the rewritten receiver");
+    assert_ne!(first_after, first, "the first inserted fixture must move");
+    assert_ne!(
+        second_after, second,
+        "the second inserted fixture must move"
+    );
+    assert_eq!(
+        array::js_array_get_f64(out, 1).to_bits() & POINTER_MASK,
+        first_after as u64
+    );
+    assert_eq!(
+        array::js_array_get_f64(out, 2).to_bits() & POINTER_MASK,
+        second_after as u64
+    );
+    assert_eq!(array::js_array_length(deleted), 0);
+    for slot in 0..3 {
+        js_shadow_slot_set(slot, crate::value::TAG_UNDEFINED);
+    }
+}
+
+#[test]
+fn old_array_splice_translates_a_young_edge_left_across_a_page_boundary() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let arr = array::js_array_alloc(OLD_BORN_ELEMENTS);
+    assert!(crate::arena::pointer_in_old_gen(arr as usize));
+    js_shadow_slot_set(0, ptr_bits(arr as usize));
+
+    let slots = unsafe { array::array_elements_ptr(arr) };
+    let source_index = (1..OLD_BORN_ELEMENTS as usize)
+        .find(|&index| {
+            crate::arena::generation_page_for_addr(unsafe { slots.add(index - 1) } as usize)
+                != crate::arena::generation_page_for_addr(unsafe { slots.add(index) } as usize)
+        })
+        .expect("old-born array must span an element page boundary");
+    for index in 0..source_index {
+        assert_eq!(array::js_array_push_f64(arr, index as f64), arr);
+    }
+    let child = young_leaf();
+    assert_eq!(
+        array::js_array_push_f64(arr, f64::from_bits(ptr_bits(child))),
+        arr
+    );
+    assert_eq!(array::js_array_length(arr) as usize, source_index + 1);
+
+    let mut out = arr;
+    let deleted = array::js_array_splice(arr, 0, 1, std::ptr::null(), 0, &mut out);
+    assert_eq!(out, arr);
+    assert_eq!(array::js_array_length(deleted), 1);
+    let destination = unsafe { slots.add(source_index - 1) };
+    assert_ne!(
+        crate::arena::generation_page_for_addr(destination as usize),
+        crate::arena::generation_page_for_addr(unsafe { destination.add(1) } as usize),
+        "the moved child must cross into a different remembered-set page"
+    );
+
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+    let child_after =
+        (array::js_array_get_f64(arr, (source_index - 1) as u32).to_bits() & POINTER_MASK) as usize;
+    assert_ne!(child_after, child);
+    assert!(crate::arena::pointer_in_nursery(child_after));
+    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+}
