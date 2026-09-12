@@ -668,10 +668,15 @@ fn collect_module_one(
     });
     // Expand only in the selected mode. Ordinary accessor/closure lowering then
     // owns captures, source-order semantics and the generated renderer imports.
-    let solid_module = ctx
-        .solid_jsx
-        .then(|| perry_hir::solid_jsx::lower_solid_jsx(ast_module, "perry-solid"))
-        .flatten();
+    let solid_runtime = ctx.solid_jsx.runtime_for(entry_path)?;
+    if solid_runtime.is_some() && !ctx.solid_client {
+        ctx.solid_client = true;
+        ctx.solid_client_recollect = true;
+        ctx.resolve_cache.clear();
+    }
+    let solid_module = solid_runtime
+        .as_deref()
+        .and_then(|runtime| perry_hir::solid_jsx::lower_solid_jsx(ast_module, runtime));
     let lower_result = perry_hir::lower_module_full_with_platform_globals(
         solid_module.as_ref().unwrap_or(ast_module),
         &module_name,

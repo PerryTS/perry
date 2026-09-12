@@ -694,8 +694,12 @@ pub struct CompilationContext {
     pub native_addon_paths: BTreeMap<PathBuf, String>,
     /// Package aliases: maps npm package name → replacement package name (from perry.packageAliases)
     pub package_aliases: HashMap<String, String>,
-    /// Opt-in Solid universal JSX expansion; ordinary JSX remains the default.
-    pub solid_jsx: bool,
+    /// Host override or per-module tsconfig/package selection of universal JSX.
+    pub solid_jsx: super::solid_config::JsxMode,
+    /// The whole graph shares Solid's client instance, including dependency code.
+    pub solid_client: bool,
+    /// A nested JSX package discovered after resolution started needs a new walk.
+    pub solid_client_recollect: bool,
     /// Packages to compile natively instead of routing to V8 (from perry.compilePackages)
     pub compile_packages: HashSet<String>,
     /// Node native-addon packages omitted from wildcard/automatic whole-package
@@ -1230,7 +1234,9 @@ impl CompilationContext {
             native_addons: BTreeMap::new(),
             native_addon_paths: BTreeMap::new(),
             package_aliases: HashMap::new(),
-            solid_jsx: false,
+            solid_jsx: Default::default(),
+            solid_client: false,
+            solid_client_recollect: false,
             compile_packages: HashSet::new(),
             auto_skipped_node_addon_packages: HashSet::new(),
             aot_discovered_modules: HashSet::new(),
