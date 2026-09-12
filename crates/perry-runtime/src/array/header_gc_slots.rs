@@ -295,11 +295,11 @@ pub(crate) unsafe fn rebuild_array_layout(arr: *mut ArrayHeader) {
 /// revoked: inserted values can change KIND even when the array length does
 /// not change (#7480).
 ///
-/// Survivor references are not new edges, but an old array's dirty-page
-/// coverage follows their byte move. Translate that coverage instead of
-/// replaying a write barrier for every survivor. A live incremental mark is
-/// the rare case where the translation helper declines; the value-derived
-/// replay then preserves its insertion-shading contract.
+/// Survivor references are not new parent-child edges, but an old array's
+/// dirty-page coverage follows their byte move. Translate that coverage
+/// instead of replaying a write barrier for every survivor. This remains
+/// page-only during incremental marking: the inserted-slot barriers below
+/// perform all shading owed by the operation's genuinely new edges.
 ///
 /// # Safety
 ///
@@ -328,7 +328,7 @@ pub(crate) unsafe fn finish_array_dense_move_layout(
 
     if moved_count != 0 && moved_src != moved_dst.cast_const() && !pointer_free {
         let copied_bytes = moved_count * std::mem::size_of::<u64>();
-        if !crate::gc::relocate_copied_old_object_dirty_pages(
+        if !crate::gc::relocate_moved_old_object_dirty_pages(
             arr as usize,
             moved_src as usize,
             moved_dst as usize,
