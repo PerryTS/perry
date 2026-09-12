@@ -634,18 +634,23 @@ pub unsafe extern "C" fn js_function_bind(
     // partial-args array, and the `.name` snapshot above.
     let bound = crate::closure::js_closure_alloc(BOUND_FUNCTION_FUNC_PTR, 4);
     let bound_h = scope.root_raw_mut_ptr(bound as *mut u8);
-    let bound = bound_h.get_raw_mut_ptr::<ClosureHeader>();
     let target_value = target_h.get_nanbox_f64();
     let bound_this = this_h.get_nanbox_f64();
     let name_hint = name_h.get_nanbox_f64();
-    let bound_args_arr = args_h
-        .as_ref()
-        .map(|h| h.get_raw_mut_ptr::<crate::array::ArrayHeader>())
-        .unwrap_or(std::ptr::null_mut());
-    js_closure_set_capture_f64(bound, 0, target_value);
-    js_closure_set_capture_f64(bound, 1, bound_this);
-    js_closure_set_capture_ptr(bound, 2, bound_args_arr as i64);
-    js_closure_set_capture_f64(bound, 3, name_hint);
+    // None of the four capture stores allocates, so both raw addresses are
+    // scoped to this block rather than bound for the rest of the function —
+    // the `.length` reads below can allocate and move either object.
+    bound_h.with_mut_ptr(|bound: *mut ClosureHeader| {
+        js_closure_set_capture_f64(bound, 0, target_value);
+        js_closure_set_capture_f64(bound, 1, bound_this);
+        match args_h.as_ref() {
+            Some(h) => h.with_mut_ptr(|arr: *mut crate::array::ArrayHeader| {
+                js_closure_set_capture_ptr(bound, 2, arr as i64)
+            }),
+            None => js_closure_set_capture_ptr(bound, 2, 0),
+        }
+        js_closure_set_capture_f64(bound, 3, name_hint);
+    });
 
     // Re-derive the target closure pointer from the (possibly refreshed)
     // `target_value` for the `.length` read below — `target_is_closure`'s
@@ -687,19 +692,25 @@ pub unsafe extern "C" fn js_function_bind(
     };
     let bound_len = (target_len_f - bound_arg_count as f64).max(0.0);
     if bound_len.is_finite() && bound_len <= u32::MAX as f64 {
-        crate::object::set_builtin_closure_length(bound as usize, bound_len as u32);
+        bound_h.with_mut_ptr(|bound: *mut ClosureHeader| {
+            crate::object::set_builtin_closure_length(bound as usize, bound_len as u32)
+        });
     } else {
         // +Infinity (or beyond u32): store as an own dynamic prop, which the
         // `.length` read path prefers over the registered builtin length.
-        crate::closure::closure_set_dynamic_prop(
-            bound as usize,
-            "length",
-            f64::from_bits(JSValue::number(bound_len).bits()),
-        );
+        bound_h.with_mut_ptr(|bound: *mut ClosureHeader| {
+            crate::closure::closure_set_dynamic_prop(
+                bound as usize,
+                "length",
+                f64::from_bits(JSValue::number(bound_len).bits()),
+            )
+        });
     }
 
-    crate::gc::runtime_write_barrier_root_heap_word(bound as u64);
-    f64::from_bits(JSValue::pointer(bound as *mut u8).bits())
+    bound_h.with_mut_ptr(|bound: *mut ClosureHeader| {
+        crate::gc::runtime_write_barrier_root_heap_word(bound as u64);
+        f64::from_bits(JSValue::pointer(bound as *mut u8).bits())
+    })
 }
 
 /// Keepalive anchor for the `js_function_bind` symbol. The auto-optimize
