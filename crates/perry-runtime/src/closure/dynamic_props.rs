@@ -838,6 +838,21 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
         }
         return crate::closure::closure_length(ptr as *const ClosureHeader).unwrap_or(0) as f64;
     }
+    // #10084: a `Function.prototype.bind` result's `.name` is built lazily —
+    // `js_function_bind` skips the "bound " + target-name string allocation
+    // on every call and only snapshots the raw target-name value (capture
+    // slot 3). Synthesize and cache the real string here, on first read, so
+    // every other reader of a closure's `.name` (ordinary property-get below,
+    // `Object.getOwnPropertyDescriptor`, a chained `.bind()`'s own read of an
+    // already-bound target) gets it for free through this one seam. Once
+    // cached, the `closure_props` lookup above intercepts before this runs
+    // again.
+    if prop == "name" && !closure_is_key_deleted(ptr, "name") {
+        let func_ptr = unsafe { (*(ptr as *const ClosureHeader)).func_ptr };
+        if func_ptr == crate::closure::BOUND_FUNCTION_FUNC_PTR {
+            return unsafe { crate::closure::bound_function_lazy_name(ptr) };
+        }
+    }
     // #36 / #321: own prop miss — walk the closure's static prototype chain
     // (`Object.setPrototypeOf(closure, protoObj)`). Reads a string-keyed field
     // off the proto object. Lets effect's `TagClass._op` resolve to "Tag" on

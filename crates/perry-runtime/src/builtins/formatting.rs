@@ -290,13 +290,31 @@ fn format_function_for_console(closure_ptr: *const crate::closure::ClosureHeader
             registered_name_string(func_ptr as usize).filter(|n| !n.is_empty())
         }
     };
-    let label = match registry_name.or_else(|| {
-        props
-            .iter()
-            .find(|(k, _)| k == "name")
-            .and_then(|(_, v)| jsvalue_string_content(*v))
-            .filter(|n| !n.is_empty())
-    }) {
+    let label = match registry_name
+        .or_else(|| {
+            props
+                .iter()
+                .find(|(k, _)| k == "name")
+                .and_then(|(_, v)| jsvalue_string_content(*v))
+                .filter(|n| !n.is_empty())
+        })
+        .or_else(|| {
+            // #10084: a `Function.prototype.bind` result's `.name` is built
+            // lazily and so may be absent from both the func-ptr registry
+            // (bound closures share the `BOUND_FUNCTION_FUNC_PTR` sentinel,
+            // never registered with a per-instance name) and the `props`
+            // snapshot above (taken before any read materialized it).
+            // Synthesize (and cache) it the same way any other reader of
+            // `.name` would.
+            unsafe {
+                ((*closure_ptr).func_ptr == crate::closure::BOUND_FUNCTION_FUNC_PTR).then(|| {
+                    jsvalue_string_content(crate::closure::bound_function_lazy_name(
+                        closure_ptr as usize,
+                    ))
+                })
+            }
+            .flatten()
+        }) {
         Some(name) => format!("[Function: {name}]"),
         None => "[Function (anonymous)]".to_string(),
     };
