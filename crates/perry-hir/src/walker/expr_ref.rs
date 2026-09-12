@@ -1876,9 +1876,12 @@ where
                 }
             }
         }
-        // Issue #100: dynamic import() — descend into the path arg.
-        Expr::DynamicImport { arg, .. } => {
+        // Import options can contain local references, calls, and nested imports.
+        Expr::DynamicImport { arg, options, .. } => {
             f(arg);
+            if let Some(options) = options {
+                f(options);
+            }
         }
         Expr::WorkerNew {
             filename, options, ..

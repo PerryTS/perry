@@ -55,7 +55,7 @@ build, while still failing loudly (and catchably) if that path runs.
 
 ### Dynamic `import()` with a runtime-computed specifier (#5230)
 
-A dynamic `import(spec)` whose `spec` is only known at runtime (a plugin loader
+For code modules, a dynamic `import(spec)` whose `spec` is only known at runtime (a plugin loader
 building a path from a variable) is subject to the **same defer/notice/strict
 policy** as `eval`. By default it compiles to a rejected `Promise` carrying a
 descriptive `Error` (so `await import(spec)` throws *only if reached*), is
@@ -77,6 +77,29 @@ async function loadPlugin(name: string) {
   return await import(name + ".js");
 }
 ```
+
+Data files can be loaded at runtime using import attributes (#10104). The
+specifier must be an absolute filesystem path or a `file://` URL, and the
+result has a `default` export:
+
+| Import attribute `type` | Default export |
+|---|---|
+| `"toml"` | Parsed TOML table, using the same parser as `Bun.TOML.parse` |
+| `"json"` | Parsed JSON value |
+| `"text"` | File contents as a string |
+| `"file"` | Filesystem path as a string |
+
+```typescript,no-test
+import { pathToFileURL } from "node:url";
+const { default: config } = await import(pathToFileURL(configPath).href, {
+  with: { type: "toml" },
+});
+```
+
+TOML and JSON parse failures reject with `SyntaxError`. Missing files reject
+with an I/O error. These loaders do not load runtime code modules or resolve
+relative paths, package names, or network URLs. Strict mode still rejects
+runtime-computed specifiers at compile time as described below.
 
 ### Strict mode: refuse at compile time
 

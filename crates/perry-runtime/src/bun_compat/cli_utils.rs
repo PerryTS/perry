@@ -143,24 +143,37 @@ pub fn js_bun_yaml() -> f64 {
 
 extern "C" fn toml_parse_closure(_closure: *const ClosureHeader, input: f64) -> f64 {
     let source = value_to_string(input);
+    match toml_parse_result(&source) {
+        Ok(value) => value,
+        Err(error) => crate::exception::js_throw(error),
+    }
+}
+
+/// Shared by Bun.TOML.parse and the runtime import loader. Returning errors
+/// lets import() reject its promise without throwing through Rust I/O frames.
+pub(crate) fn toml_parse_result(source: &str) -> Result<f64, f64> {
     // `Value::from_str` in toml 1.x parses a single TOML value expression;
     // Bun.TOML.parse consumes a complete document, whose root is a table.
-    let parsed = match toml::from_str::<toml::Table>(&source) {
+    let parsed = match toml::from_str::<toml::Table>(source) {
         Ok(parsed) => parsed,
-        Err(error) => crate::exception::js_throw(syntax_error_value(&format!(
-            "Failed to parse TOML: {error}"
-        ))),
+        Err(error) => {
+            return Err(syntax_error_value(&format!(
+                "Failed to parse TOML: {error}"
+            )))
+        }
     };
     let json = match serde_json::to_string(&parsed) {
         Ok(json) => json,
-        Err(error) => crate::exception::js_throw(syntax_error_value(&format!(
-            "Failed to convert TOML value: {error}"
-        ))),
+        Err(error) => {
+            return Err(syntax_error_value(&format!(
+                "Failed to convert TOML value: {error}"
+            )))
+        }
     };
     let source = js_string_from_bytes(json.as_ptr(), json.len() as u32);
     match unsafe { crate::json::js_json_parse_result(source) } {
-        Ok(value) => f64::from_bits(value.bits()),
-        Err(error) => crate::exception::js_throw(error),
+        Ok(value) => Ok(f64::from_bits(value.bits())),
+        Err(error) => Err(error),
     }
 }
 

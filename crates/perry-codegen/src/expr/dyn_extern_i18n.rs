@@ -9,7 +9,7 @@ use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
 
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
-use crate::rooting::{with_rooted_accumulator, Arg, Repr};
+use crate::rooting::{with_rooted_accumulator, with_rooted_group, Arg, Repr};
 use crate::types::{DOUBLE, I32, I64, PTR};
 
 use super::{
@@ -566,6 +566,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::DynamicImport {
             paths,
             arg,
+            options,
             deferred_error,
             synchronous,
             ..
@@ -577,191 +578,207 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if *synchronous {
                 return lower_dynamic_require(ctx, paths, arg);
             }
-            // #5230: a non-resolvable (runtime-computed) specifier was
-            // *deferred* (the default, non-strict policy — analog of #5206's
-            // eval deferral). Evaluate the arg, then hand the runtime value to
-            // the deferred-fallback helper (#6660): a specifier that names a
-            // node BUILTIN at runtime (`imp("node:os")` through a helper the
-            // resolver couldn't fold) resolves to the builtin namespace like
-            // Node; anything else rejects with the descriptive deferral
-            // `Error` so `await import(spec)` throws only if this site is
-            // actually reached, instead of failing the whole build.
-            if let Some(msg) = deferred_error {
-                let spec_val = lower_expr(ctx, arg)?;
-                let msg_val = lower_expr(ctx, &Expr::String(msg.clone()))?;
-                return Ok(ctx.block().call(
-                    DOUBLE,
-                    "js_module_dynamic_import_deferred",
-                    &[(DOUBLE, &spec_val), (DOUBLE, &msg_val)],
-                ));
-            }
+            with_rooted_group(ctx, 3, |ctx, roots| {
+                // Both arguments are evaluated once, in order. Keep the specifier
+                // live across option evaluation and options live across hooks/init.
+                let spec = roots.lower(ctx, arg, true)?;
+                let options =
+                    roots.lower(ctx, options.as_deref().unwrap_or(&Expr::Undefined), true)?;
+                // #5230: a non-resolvable (runtime-computed) specifier was
+                // *deferred* (the default, non-strict policy — analog of #5206's
+                // eval deferral). Evaluate the arg, then hand the runtime value to
+                // the deferred-fallback helper (#6660): a specifier that names a
+                // node BUILTIN at runtime (`imp("node:os")` through a helper the
+                // resolver couldn't fold) resolves to the builtin namespace like
+                // Node; anything else rejects with the descriptive deferral
+                // `Error` so `await import(spec)` throws only if this site is
+                // actually reached, instead of failing the whole build.
+                if let Some(msg) = deferred_error {
+                    let msg_val = lower_expr(ctx, &Expr::String(msg.clone()))?;
+                    let spec_val = roots.reread(ctx, spec)?;
+                    let options_val = roots.reread(ctx, options)?;
+                    return Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_module_dynamic_import_deferred",
+                        &[
+                            (DOUBLE, &spec_val),
+                            (DOUBLE, &options_val),
+                            (DOUBLE, &msg_val),
+                        ],
+                    ));
+                }
 
-            // Defensive: an empty `paths` list means the resolver pass
-            // failed to populate this node, which `collect_modules`
-            // should have raised as a compile error. Fall through to the
-            // runtime fallback (#6660: builtin-or-`ERR_MODULE_NOT_FOUND`
-            // rejection — historically this arm rejected with literal
-            // `undefined`, which surfaced as a reasonless
-            // `Uncaught (in promise) undefined`) rather than crashing the IR.
-            if paths.is_empty() {
-                let spec_val = lower_expr(ctx, arg)?;
-                let hooked = ctx.block().call(
+                // Defensive: an empty `paths` list means the resolver pass
+                // failed to populate this node, which `collect_modules`
+                // should have raised as a compile error. Fall through to the
+                // runtime fallback (#6660: builtin-or-`ERR_MODULE_NOT_FOUND`
+                // rejection — historically this arm rejected with literal
+                // `undefined`, which surfaced as a reasonless
+                // `Uncaught (in promise) undefined`) rather than crashing the IR.
+                if paths.is_empty() {
+                    let spec_val = roots.reread(ctx, spec)?;
+                    let hooked = ctx.block().call(
+                        DOUBLE,
+                        "js_module_dynamic_import_apply_hooks",
+                        &[(DOUBLE, &spec_val)],
+                    );
+                    let options_val = roots.reread(ctx, options)?;
+                    return Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_module_dynamic_import_fallback",
+                        &[(DOUBLE, &hooked), (DOUBLE, &options_val)],
+                    ));
+                }
+
+                // Evaluate the runtime path string, apply registered loader hooks,
+                // then emit a chain of `js_string_equals` compares. Do this even
+                // for a single statically-resolved candidate: TypeScript types are
+                // erased at runtime and a hook may rewrite the specifier, so the
+                // candidate count does not prove that the runtime value matches.
+                // Skipping the compare here used to silently initialize the sole
+                // candidate for `load("./other.ts" as any)` and for hook redirects.
+                // Each
+                // successful compare resolves to its corresponding
+                // namespace global. The final fallback emits a rejected
+                // promise.
+                let raw_path_val = roots.reread(ctx, spec)?;
+                let path_val = ctx.block().call(
                     DOUBLE,
                     "js_module_dynamic_import_apply_hooks",
-                    &[(DOUBLE, &spec_val)],
+                    &[(DOUBLE, &raw_path_val)],
                 );
-                return Ok(ctx.block().call(
+                let path = roots.adopt_emitted(ctx, Repr::Boxed, &path_val, true);
+                // Result phi slot: every successful match stores the
+                // promise (NaN-boxed POINTER_TAG f64) here, then jumps to
+                // a join block which loads and returns. Using an alloca
+                // keeps the IR straightforward without proper phi nodes.
+                let result_slot = ctx.block().alloca(DOUBLE);
+                let join_block_idx = ctx.new_block("dynamic_import_join");
+
+                // Unbox the path argument once into an i64 StringHeader*.
+                let path_handle =
+                    ctx.block()
+                        .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &path_val)]);
+
+                // Pre-resolve target prefixes so we can skip paths that
+                // don't have a known target (driver dropped them).
+                let resolved: Vec<(String, String)> = paths
+                    .iter()
+                    .filter_map(|p| {
+                        ctx.dynamic_import_path_to_prefix
+                            .get(p)
+                            .cloned()
+                            .map(|tgt| (p.clone(), tgt))
+                    })
+                    .collect();
+
+                for (i, (path_str, target_prefix)) in resolved.iter().enumerate() {
+                    // Intern the path string so the compare against the
+                    // runtime arg works on real StringHeader pointers.
+                    let key_idx = ctx.strings.intern(path_str);
+                    let key_entry = ctx.strings.entry(key_idx);
+                    let key_handle_global = format!("@{}", key_entry.handle_global);
+
+                    let blk = ctx.block();
+                    let key_box = blk.load(DOUBLE, &key_handle_global);
+                    let key_handle =
+                        blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &key_box)]);
+                    let eq_i32 = blk.call(
+                        I32,
+                        "js_string_equals",
+                        &[(I64, &path_handle), (I64, &key_handle)],
+                    );
+                    let cond = blk.icmp_ne(I32, &eq_i32, "0");
+
+                    let match_block_idx = ctx.new_block(&format!("dyn_import_match_{}", i));
+                    let next_label = if i + 1 < resolved.len() {
+                        ctx.new_block(&format!("dyn_import_next_{}", i))
+                    } else {
+                        ctx.new_block(&format!("dyn_import_reject_{}", i))
+                    };
+                    let match_label = ctx.block_label(match_block_idx);
+                    let next_label_str = ctx.block_label(next_label);
+                    ctx.block().cond_br(&cond, &match_label, &next_label_str);
+
+                    // Match arm — call target's __init (idempotent), load
+                    // namespace, wrap in promise, store into result_slot,
+                    // branch to join. Issue #753: the init call is the
+                    // only thing that triggers a Deferred target's body
+                    // and namespace populator; for Eager targets the
+                    // guard short-circuits.
+                    ctx.current_block = match_block_idx;
+                    let join_label = ctx.block_label(join_block_idx);
+                    // #1671: known node-submodule target (sentinel prefix) →
+                    // build its namespace via the runtime helper rather than a
+                    // compiled-module init + namespace global.
+                    let ns_val = if let Some(key) = target_prefix.strip_prefix("__node_submod__") {
+                        let key = key.to_string();
+                        let submod_label = emit_string_literal_global(ctx, &key);
+                        let submod_len = key.len();
+                        let install_sym = crate::nm_install::nm_submod_install_symbol(&key);
+                        let blk = ctx.block();
+                        if let Some(s) = install_sym {
+                            blk.call_void(s, &[]);
+                        }
+                        blk.call(
+                            DOUBLE,
+                            "js_node_submodule_namespace",
+                            &[(PTR, &submod_label), (I32, &submod_len.to_string())],
+                        )
+                    } else if let Some(name) = target_prefix.strip_prefix("__native_mod__") {
+                        // #1673: general native builtin target in a multi-path
+                        // (`import(cond ? 'node:crypto' : './local.ts')`) chain.
+                        let name = name.to_string();
+                        let mod_label = emit_string_literal_global(ctx, &name);
+                        let mod_len = name.len();
+                        let blk = ctx.block();
+                        if let Some(s) = crate::nm_install::nm_install_symbol(&name) {
+                            blk.call_void(s, &[]);
+                        }
+                        if name == "wasi" {
+                            blk.call(DOUBLE, "js_wasi_emit_warning", &[]);
+                        }
+                        blk.call(
+                            DOUBLE,
+                            "js_create_native_module_namespace",
+                            &[(PTR, &mod_label), (I64, &mod_len.to_string())],
+                        )
+                    } else {
+                        let blk = ctx.block();
+                        blk.call_void(&format!("{}__init", target_prefix), &[]);
+                        blk.load(DOUBLE, &format!("@__perry_ns_{}", target_prefix))
+                    };
+                    let blk = ctx.block();
+                    let promise = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &ns_val)]);
+                    let boxed = nanbox_pointer_inline(blk, &promise);
+                    blk.store(DOUBLE, &boxed, &result_slot);
+                    blk.br(&join_label);
+
+                    // Move to the next compare block (or fallthrough to
+                    // rejection on the last iteration).
+                    ctx.current_block = next_label;
+                }
+
+                // No-match fallthrough: runtime fallback (#6660) — a builtin
+                // specifier resolves like Node, everything else rejects with
+                // `ERR_MODULE_NOT_FOUND` (this arm used to reject with literal
+                // `undefined`).
+                let join_label = ctx.block_label(join_block_idx);
+                let path_val = roots.reread_emitted(ctx, path);
+                let options_val = roots.reread(ctx, options)?;
+                let blk = ctx.block();
+                let fallback = blk.call(
                     DOUBLE,
                     "js_module_dynamic_import_fallback",
-                    &[(DOUBLE, &hooked)],
-                ));
-            }
-
-            // Evaluate the runtime path string, apply registered loader hooks,
-            // then emit a chain of `js_string_equals` compares. Do this even
-            // for a single statically-resolved candidate: TypeScript types are
-            // erased at runtime and a hook may rewrite the specifier, so the
-            // candidate count does not prove that the runtime value matches.
-            // Skipping the compare here used to silently initialize the sole
-            // candidate for `load("./other.ts" as any)` and for hook redirects.
-            // Each
-            // successful compare resolves to its corresponding
-            // namespace global. The final fallback emits a rejected
-            // promise.
-            let raw_path_val = lower_expr(ctx, arg)?;
-            let path_val = ctx.block().call(
-                DOUBLE,
-                "js_module_dynamic_import_apply_hooks",
-                &[(DOUBLE, &raw_path_val)],
-            );
-            // Result phi slot: every successful match stores the
-            // promise (NaN-boxed POINTER_TAG f64) here, then jumps to
-            // a join block which loads and returns. Using an alloca
-            // keeps the IR straightforward without proper phi nodes.
-            let result_slot = ctx.block().alloca(DOUBLE);
-            let join_block_idx = ctx.new_block("dynamic_import_join");
-
-            // Unbox the path argument once into an i64 StringHeader*.
-            let path_handle =
-                ctx.block()
-                    .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &path_val)]);
-
-            // Pre-resolve target prefixes so we can skip paths that
-            // don't have a known target (driver dropped them).
-            let resolved: Vec<(String, String)> = paths
-                .iter()
-                .filter_map(|p| {
-                    ctx.dynamic_import_path_to_prefix
-                        .get(p)
-                        .cloned()
-                        .map(|tgt| (p.clone(), tgt))
-                })
-                .collect();
-
-            for (i, (path_str, target_prefix)) in resolved.iter().enumerate() {
-                // Intern the path string so the compare against the
-                // runtime arg works on real StringHeader pointers.
-                let key_idx = ctx.strings.intern(path_str);
-                let key_entry = ctx.strings.entry(key_idx);
-                let key_handle_global = format!("@{}", key_entry.handle_global);
-
-                let blk = ctx.block();
-                let key_box = blk.load(DOUBLE, &key_handle_global);
-                let key_handle =
-                    blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &key_box)]);
-                let eq_i32 = blk.call(
-                    I32,
-                    "js_string_equals",
-                    &[(I64, &path_handle), (I64, &key_handle)],
+                    &[(DOUBLE, &path_val), (DOUBLE, &options_val)],
                 );
-                let cond = blk.icmp_ne(I32, &eq_i32, "0");
-
-                let match_block_idx = ctx.new_block(&format!("dyn_import_match_{}", i));
-                let next_label = if i + 1 < resolved.len() {
-                    ctx.new_block(&format!("dyn_import_next_{}", i))
-                } else {
-                    ctx.new_block(&format!("dyn_import_reject_{}", i))
-                };
-                let match_label = ctx.block_label(match_block_idx);
-                let next_label_str = ctx.block_label(next_label);
-                ctx.block().cond_br(&cond, &match_label, &next_label_str);
-
-                // Match arm — call target's __init (idempotent), load
-                // namespace, wrap in promise, store into result_slot,
-                // branch to join. Issue #753: the init call is the
-                // only thing that triggers a Deferred target's body
-                // and namespace populator; for Eager targets the
-                // guard short-circuits.
-                ctx.current_block = match_block_idx;
-                let join_label = ctx.block_label(join_block_idx);
-                // #1671: known node-submodule target (sentinel prefix) →
-                // build its namespace via the runtime helper rather than a
-                // compiled-module init + namespace global.
-                let ns_val = if let Some(key) = target_prefix.strip_prefix("__node_submod__") {
-                    let key = key.to_string();
-                    let submod_label = emit_string_literal_global(ctx, &key);
-                    let submod_len = key.len();
-                    let install_sym = crate::nm_install::nm_submod_install_symbol(&key);
-                    let blk = ctx.block();
-                    if let Some(s) = install_sym {
-                        blk.call_void(s, &[]);
-                    }
-                    blk.call(
-                        DOUBLE,
-                        "js_node_submodule_namespace",
-                        &[(PTR, &submod_label), (I32, &submod_len.to_string())],
-                    )
-                } else if let Some(name) = target_prefix.strip_prefix("__native_mod__") {
-                    // #1673: general native builtin target in a multi-path
-                    // (`import(cond ? 'node:crypto' : './local.ts')`) chain.
-                    let name = name.to_string();
-                    let mod_label = emit_string_literal_global(ctx, &name);
-                    let mod_len = name.len();
-                    let blk = ctx.block();
-                    if let Some(s) = crate::nm_install::nm_install_symbol(&name) {
-                        blk.call_void(s, &[]);
-                    }
-                    if name == "wasi" {
-                        blk.call(DOUBLE, "js_wasi_emit_warning", &[]);
-                    }
-                    blk.call(
-                        DOUBLE,
-                        "js_create_native_module_namespace",
-                        &[(PTR, &mod_label), (I64, &mod_len.to_string())],
-                    )
-                } else {
-                    let blk = ctx.block();
-                    blk.call_void(&format!("{}__init", target_prefix), &[]);
-                    blk.load(DOUBLE, &format!("@__perry_ns_{}", target_prefix))
-                };
-                let blk = ctx.block();
-                let promise = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &ns_val)]);
-                let boxed = nanbox_pointer_inline(blk, &promise);
-                blk.store(DOUBLE, &boxed, &result_slot);
+                blk.store(DOUBLE, &fallback, &result_slot);
                 blk.br(&join_label);
 
-                // Move to the next compare block (or fallthrough to
-                // rejection on the last iteration).
-                ctx.current_block = next_label;
-            }
-
-            // No-match fallthrough: runtime fallback (#6660) — a builtin
-            // specifier resolves like Node, everything else rejects with
-            // `ERR_MODULE_NOT_FOUND` (this arm used to reject with literal
-            // `undefined`).
-            let join_label = ctx.block_label(join_block_idx);
-            let blk = ctx.block();
-            let fallback = blk.call(
-                DOUBLE,
-                "js_module_dynamic_import_fallback",
-                &[(DOUBLE, &path_val)],
-            );
-            blk.store(DOUBLE, &fallback, &result_slot);
-            blk.br(&join_label);
-
-            // Join: load result and return.
-            ctx.current_block = join_block_idx;
-            Ok(ctx.block().load(DOUBLE, &result_slot))
+                // Join: load result and return.
+                ctx.current_block = join_block_idx;
+                Ok(ctx.block().load(DOUBLE, &result_slot))
+            })
         }
 
         // -------- ExternFuncRef as a value --------

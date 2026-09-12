@@ -4,6 +4,8 @@
 //! public function shape. Full CommonJS file/package resolution remains in the
 //! compiler-side CJS wrapper and future `Module._*` work.
 
+mod data_import;
+
 use crate::closure::{
     js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64,
     js_register_closure_arity, ClosureHeader,
@@ -1215,7 +1217,9 @@ static KEEP_JS_MODULE_AMBIENT_REQUIRE_APPLY: extern "C" fn(f64) -> f64 =
 /// `deferred_note` carries the compile-time deferral message for #5230 sites
 /// (runtime-computed specifier, non-strict policy) so a genuinely unknown
 /// module still reports the site's `file:line`.
-fn dynamic_import_fallback_promise(spec: f64, deferred_note: Option<String>) -> f64 {
+fn dynamic_import_fallback_promise(spec: f64, options: f64, deferred_note: Option<String>) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let options = scope.root_nanbox_f64(options);
     // Arm the install-all hooks the way `getBuiltinModule`'s devirt entry does
     // (#6644): the namespace handed back below must dispatch methods even when
     // no static import of the module exists anywhere in the program. Codegen
@@ -1233,6 +1237,21 @@ fn dynamic_import_fallback_promise(spec: f64, deferred_note: Option<String>) -> 
             crate::exception::string_header_to_string(crate::value::js_jsvalue_to_string(spec))
         },
     };
+    match data_import::load(&spec_str, options.get_nanbox_f64()) {
+        Ok(Some(namespace)) => {
+            let namespace = scope.root_nanbox_f64(namespace);
+            return js_nanbox_pointer(
+                crate::promise::js_promise_resolved(namespace.get_nanbox_f64()) as i64,
+            );
+        }
+        Err(error) => {
+            let error = scope.root_nanbox_f64(error);
+            return js_nanbox_pointer(
+                crate::promise::js_promise_rejected(error.get_nanbox_f64()) as i64
+            );
+        }
+        Ok(None) => {}
+    }
     if let Some(module_name) = supported_require_builtin(&spec_str) {
         let scope = crate::gc::RuntimeHandleScope::new();
         let ns_handle = scope.root_nanbox_f64(require_builtin_value(module_name));
@@ -1306,14 +1325,14 @@ fn dynamic_import_javascript_data_url(specifier: &str) -> Option<f64> {
 /// arms (#6660). Returns a NaN-boxed promise; never throws synchronously
 /// (`import()` always rejects, per spec).
 #[no_mangle]
-pub extern "C" fn js_module_dynamic_import_fallback(spec: f64) -> f64 {
-    dynamic_import_fallback_promise(spec, None)
+pub extern "C" fn js_module_dynamic_import_fallback(spec: f64, options: f64) -> f64 {
+    dynamic_import_fallback_promise(spec, options, None)
 }
 
 /// Keepalive anchor (same pattern as the ambient-require anchors above).
 #[cfg(feature = "keepalive-anchors")]
 #[used]
-static KEEP_JS_MODULE_DYNAMIC_IMPORT_FALLBACK: extern "C" fn(f64) -> f64 =
+static KEEP_JS_MODULE_DYNAMIC_IMPORT_FALLBACK: extern "C" fn(f64, f64) -> f64 =
     js_module_dynamic_import_fallback;
 
 /// Codegen entry for #5230 *deferred* dynamic-import sites (runtime-computed
@@ -1322,20 +1341,20 @@ static KEEP_JS_MODULE_DYNAMIC_IMPORT_FALLBACK: extern "C" fn(f64) -> f64 =
 /// deferral message (which names the site's `file:line`) instead of the
 /// generic `Cannot find module` text. `msg` is the NaN-boxed deferral string.
 #[no_mangle]
-pub extern "C" fn js_module_dynamic_import_deferred(spec: f64, msg: f64) -> f64 {
+pub extern "C" fn js_module_dynamic_import_deferred(spec: f64, options: f64, msg: f64) -> f64 {
     let note = {
         let jv = JSValue::from_bits(msg.to_bits());
         let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         unsafe { crate::string::js_string_key_bytes(jv, &mut sso) }
             .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
     };
-    dynamic_import_fallback_promise(spec, note)
+    dynamic_import_fallback_promise(spec, options, note)
 }
 
 /// Keepalive anchor (same pattern as the ambient-require anchors above).
 #[cfg(feature = "keepalive-anchors")]
 #[used]
-static KEEP_JS_MODULE_DYNAMIC_IMPORT_DEFERRED: extern "C" fn(f64, f64) -> f64 =
+static KEEP_JS_MODULE_DYNAMIC_IMPORT_DEFERRED: extern "C" fn(f64, f64, f64) -> f64 =
     js_module_dynamic_import_deferred;
 
 /// #6651 family regression guard: createRequire's resolver must never drift

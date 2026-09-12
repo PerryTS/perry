@@ -783,13 +783,14 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
             // folder and populates `paths`. If the argument can't be folded
             // to a finite set, that pass raises a compile error before codegen
             // sees the empty node.
+            let mut args = args.into_iter();
             let arg = args
-                .into_iter()
                 .next()
                 .ok_or_else(|| anyhow::anyhow!("dynamic import() requires a path argument"))?;
             Ok(Expr::DynamicImport {
                 paths: Vec::new(),
                 arg: Box::new(arg),
+                options: args.next().map(Box::new),
                 byte_offset: call.span.lo.0,
                 deferred_error: None,
                 synchronous: false,
