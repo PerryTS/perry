@@ -176,16 +176,12 @@ fn unknown_numeric_read_guards_dense_subclass_families_and_spilled_length() {
         "the live length and cached dense-prefix bound must retain a semantic side exit:\n{ir}"
     );
     assert!(
-        ir.contains("arrlike.lazy.guard") && ir.contains("arrlike.lazy.load"),
-        "a materialized lazy JSON array must be readable without leaving the cache:\n{ir}"
+        ir.contains("arrlike.lazy.kind") && ir.contains("js_lazy_array_index_probe"),
+        "a lazy JSON array must reach its probe from the cache, not the dispatcher:\n{ir}"
     );
     assert!(
-        ir.contains("@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED"),
-        "the lazy tier must honour process-wide prototype invalidation:\n{ir}"
-    );
-    assert!(
-        ir.contains("arrlike.lazy.sparse.bit") && ir.contains("arrlike.lazy.sparse.load"),
-        "a tape-backed lazy array must probe its per-element cache inline:\n{ir}"
+        !ir.contains("arrlike.lazy.sparse") && !ir.contains("arrlike.lazy.guard"),
+        "the lazy proof belongs in the probe, not inlined at every read site:\n{ir}"
     );
 }
 

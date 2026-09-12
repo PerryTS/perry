@@ -60,6 +60,12 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         // `array/subclass.rs`: scalar descriptor/header comparison only. It
         // neither allocates nor enters user code; a miss returns zero.
         | "js_packed_arraylike_loop_revalidate_live"
+        // `json_tape/cached_read.rs`: reads an already-materialized lazy JSON
+        // element. Header/bitmap/slot loads only -- it is `lazy_get`'s two
+        // non-allocating branches with the rooted fallback deliberately left
+        // out, so every case it cannot serve returns TAG_HOLE and the emitted
+        // code takes its ordinary miss call instead.
+        | "js_lazy_array_index_probe"
         // `gc/roots/temp_roots.rs`: TLS vector operations and an incremental
         // marking barrier only. They never run a Perry collection.
         | "js_gc_temp_root_push"
