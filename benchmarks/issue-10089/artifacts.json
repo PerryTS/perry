@@ -1,0 +1,63 @@
+{
+  "date": "2026-09-12",
+  "host": {
+    "os": "Linux 6.17.0-23-generic x86_64",
+    "cpu": "AMD Ryzen 7 7700X 8-Core Processor",
+    "logical_cpus": 16
+  },
+  "toolchain": {
+    "node": "v26.5.1",
+    "node_sha256": "fb48e77df2f8e92fedfec39afa60a5f41563441f6b61316ada5fb295a431c2c6",
+    "rustc": "1.100.0-nightly (f7d782a3b 2026-08-19)",
+    "cargo": "1.100.0-nightly (514c56dd7 2026-08-19)",
+    "llvm": "22.1.8"
+  },
+  "build": {
+    "profile": "release",
+    "locked": true,
+    "codegen_units": 16,
+    "auto_optimize": false,
+    "packages": [
+      "perry",
+      "perry-runtime-static",
+      "perry-stdlib-static"
+    ]
+  },
+  "sources": {
+    "binary-dataview-set.ts": "c01d0c04e4e99fcc6725ee83d1a70cee6647217110c95a850d93ad98128375d3",
+    "binary-dataview-get.ts": "9693aea9afe91fb2ce471aee496fe3e883482a61e304400a1436d7cb411d32e8"
+  },
+  "builds": {
+    "attribution_baseline": {
+      "commit": "9495bfc95e2afcfb5a7cb535e440e61ec0722cb1",
+      "set_executable_sha256": "90f9ab906bb0df83f34fcb72f51efe06aec72c78474371ac3f003ada3826e5c4",
+      "get_executable_sha256": "9323e511ab8bb320c50895b97af9f15468792b446c0f81adbcded234c8ecbd91"
+    },
+    "attribution_no_handle_scope": {
+      "commit": "9495bfc95e2afcfb5a7cb535e440e61ec0722cb1",
+      "patch": "diagnostic-no-handle-scope.patch",
+      "set_executable_sha256": "d7cd59357fc0792d53a9ff2bb69b74a741fd264123fe5bbf608b95b738e3abb7",
+      "get_executable_sha256": "54584620ec9285184ab06a69eeee4665c72f5d3c1abdb840feebde03bb7c7ce5"
+    },
+    "attribution_no_view_propagation": {
+      "commit": "9495bfc95e2afcfb5a7cb535e440e61ec0722cb1",
+      "patch": "diagnostic-no-view-propagation.patch",
+      "set_executable_sha256": "2011401cade07d244a6ce6d92af4dd866376c157c5ade98920e6cbb102598df0",
+      "get_executable_sha256": "3ff30ca899c87c73643f304d5a879d53fd00b4b984bd0e5c49ef9e28faee07c9"
+    },
+    "before": {
+      "commit": "50e08e91dd6a54d9d9210c43a5d36c86d880d144",
+      "set_executable_sha256": "aec304da5fa6683767c99ab62477d5a4b381ff0e85d5112a00da4e7c703d16da",
+      "get_executable_sha256": "ffd6bc041b0c615d3c332ebc0b602361bbd573b6bd1f73ae0748baba1207743d"
+    },
+    "after": {
+      "commit": "50e08e91dd6a54d9d9210c43a5d36c86d880d144 plus working-tree change",
+      "set_executable_sha256": "ebdff93636b9326c526a29defb0235bff0e15548ccd7c40a834621f118aafa3b",
+      "get_executable_sha256": "4aac90b7e1aee138f907b2724032e4af6a97a1643e3c0933928e8cf33e59cfae",
+      "gap_executable_sha256": "4327c13fe7530f6fed629f405b83eed40db29d43ffe9e06a945b15bbd9125e1d",
+      "perry_sha256": "61b10fe2ceacdcc13ad6f5756eb2a22138e91542aa2c51582ceebc6374b1ee53",
+      "runtime_archive_sha256": "d811de0f23dadd9601c6821a7f81969f5d40ecb0af27001c5c3dce665648cf51",
+      "stdlib_archive_sha256": "f4515aa0e61db81a0480e164f910c1ae580eb80699acb9a0fbb725e5f68e89ca"
+    }
+  }
+}

@@ -1,0 +1,27 @@
+diff --git a/crates/perry-runtime/src/buffer/dataview.rs b/crates/perry-runtime/src/buffer/dataview.rs
+index 71727b2d24..0000000000 100644
+--- a/crates/perry-runtime/src/buffer/dataview.rs
++++ b/crates/perry-runtime/src/buffer/dataview.rs
+@@ -271,8 +271,7 @@ pub fn js_data_view_set(
+     kind: DataViewKind,
+     little: bool,
+ ) -> f64 {
+-    let scope = crate::gc::RuntimeHandleScope::new();
+-    let buf_handle = scope.root_nanbox_f64(buf_f64);
++    let buf = unbox_buffer_ptr(buf_f64.to_bits()) as *mut BufferHeader;
+     let offset = to_byte_offset(offset_value);
+     if kind.is_bigint() {
+         // SetViewValue for a BigInt accessor: `ToBigInt(value)` (a Number throws
+@@ -285,12 +284,10 @@ pub fn js_data_view_set(
+         } else {
+             raw.to_be_bytes()
+         };
+-        let buf = unbox_buffer_ptr(buf_handle.get_nanbox_f64().to_bits()) as *mut BufferHeader;
+         unsafe { write_bytes(buf, offset, &b) };
+         return f64::from_bits(crate::value::TAG_UNDEFINED);
+     }
+     let n = to_number(value);
+-    let buf = unbox_buffer_ptr(buf_handle.get_nanbox_f64().to_bits()) as *mut BufferHeader;
+     unsafe {
+         match kind {
+             DataViewKind::BigInt64 | DataViewKind::BigUint64 => unreachable!(),
