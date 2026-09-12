@@ -1174,7 +1174,7 @@ pub(super) fn declaration_sidecar_for_resolved_import(
         return canonical_existing_declaration(resolved_path.to_path_buf());
     }
 
-    if !(is_relative_specifier(import_source) || import_source.starts_with('/')) {
+    if !(is_relative_specifier(import_source) || is_absolute_specifier(import_source)) {
         let (package_name, subpath) = parse_package_specifier(import_source);
         if let Some(package_dir) = package_dir_for_resolved_path(resolved_path, &package_name) {
             if let Some(sidecar) = resolve_package_declaration_entry(
@@ -1283,7 +1283,7 @@ pub(super) fn resolve_relative_import_paths(
 }
 
 pub(super) fn resolve_absolute_import_paths(import_source: &str) -> Option<ResolvedPath> {
-    if !import_source.starts_with('/') {
+    if !is_absolute_specifier(import_source) {
         return None;
     }
     let source_path = resolve_with_extensions(&PathBuf::from(import_source))?;
@@ -1363,6 +1363,11 @@ pub(super) fn attempted_relative_import_path(
         std::env::current_dir().ok()?.join(joined)
     };
     Some(normalize_path_lexically(&absolute))
+}
+
+pub(super) fn is_absolute_specifier(import_source: &str) -> bool {
+    // Worker entries and file URLs also produce drive-letter or UNC paths.
+    import_source.starts_with('/') || Path::new(import_source).is_absolute()
 }
 
 /// True for ECMAScript relative-import specifiers. Besides the obvious `./x`
@@ -1517,7 +1522,7 @@ pub(super) fn resolve_import_with_bunfs(
     }
 
     // Handle absolute paths
-    if import_source.starts_with('/') {
+    if is_absolute_specifier(import_source) {
         let resolved = PathBuf::from(import_source);
         if let Some(path) = resolve_with_extensions(&resolved) {
             let canonical = path.canonicalize().ok()?;

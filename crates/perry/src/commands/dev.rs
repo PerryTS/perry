@@ -281,6 +281,7 @@ fn build_once(
     use_color: bool,
 ) -> Result<()> {
     let args = CompileArgs {
+        define: Vec::new(),
         input: input.to_path_buf(),
         output: Some(output.to_path_buf()),
         keep_intermediates: false,

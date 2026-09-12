@@ -37,6 +37,7 @@ mod eval_worker;
 mod feature_detect;
 mod import_helpers;
 mod import_meta_require;
+mod import_meta_resolve;
 mod json_module;
 mod native_addon;
 mod parse_error;
@@ -535,6 +536,10 @@ fn collect_module_one(
             }
         },
     };
+    let defined_module = ctx.parsed_defines.apply(ast_module);
+    let ast_module = defined_module.as_ref().unwrap_or(ast_module);
+    let resolved_module = import_meta_resolve::resolve_static(ast_module, &canonical, ctx)?;
+    let ast_module = resolved_module.as_ref().unwrap_or(ast_module);
     let file_loader_sources = file_loader_import_sources(ast_module);
     let source_file_path = canonical.to_string_lossy().to_string();
 

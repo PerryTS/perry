@@ -272,6 +272,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     "dirname" => Expr::String(dirname),
                     "filename" => Expr::String(filename),
                     "require" => super::expr_misc::import_meta_require_value(ctx),
+                    "resolve" => super::expr_misc::import_meta_resolve_value(ctx),
                     // Unknown property — undefined matches the spec'd
                     // "missing property on a frozen object" behavior of
                     // import.meta in Node / Bun.

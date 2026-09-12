@@ -88,6 +88,10 @@ pub struct CompileArgs {
     #[arg(short, long)]
     pub output: Option<PathBuf>,
 
+    /// Replace an unbound identifier or dotted name with a JS expression (repeatable)
+    #[arg(long, value_name = "NAME=EXPR")]
+    pub define: Vec<String>,
+
     /// Keep intermediate files (for debugging)
     #[arg(long)]
     pub keep_intermediates: bool,
@@ -1133,6 +1137,9 @@ pub struct CompilationContext {
     /// `NODE_ENV → "production"` default applied to `node_modules` code unless
     /// overridden. Keyed by the full `process.env.<NAME>` string.
     pub define: HashMap<String, DefineValue>,
+    pub expression_defines: BTreeMap<String, String>,
+    pub parsed_defines: perry_parser::defines::Defines,
+    pub resolve_inputs: BTreeSet<PathBuf>,
     /// #5247 (CJS-wrap coordinate skew): for each CommonJS module rewritten by
     /// `cjs_wrap::wrap_commonjs_for_target`, the final wrapped source
     /// text plus the number of newline characters the injected wrapper prefix
@@ -1312,6 +1319,9 @@ impl CompilationContext {
             deferred_refusals: Vec::new(),
             side_effects_cache: HashMap::new(),
             define: HashMap::new(),
+            expression_defines: BTreeMap::new(),
+            parsed_defines: perry_parser::defines::Defines::default(),
+            resolve_inputs: BTreeSet::new(),
             cjs_wrap_debug_sources: HashMap::new(),
             debug_symbols: false,
         }
