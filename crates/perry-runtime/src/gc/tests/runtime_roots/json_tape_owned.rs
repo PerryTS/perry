@@ -398,8 +398,12 @@ fn json_lazy_assignment_roots_heap_key_and_value_during_materialization() {
         string_bits(stored as usize),
         "stored string must move"
     );
-    let lazy = lazy_handle.get_raw_mut_ptr::<crate::json_tape::LazyArrayHeader>();
-    let array = unsafe { (*lazy).materialized };
+    // The header may have moved during the collection above, so read the
+    // materialized backing through the handle's scope rather than pinning a
+    // raw pointer across it (#7341).
+    let array = lazy_handle.with_mut_ptr(|lazy: *mut crate::json_tape::LazyArrayHeader| unsafe {
+        (*lazy).materialized
+    });
     assert!(!array.is_null());
     let actual = crate::array::js_array_get(array, 1);
     assert_eq!(actual.bits(), result.to_bits());
