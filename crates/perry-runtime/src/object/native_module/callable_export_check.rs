@@ -51,6 +51,7 @@ pub(crate) fn is_native_module_callable_export_reference(module: &str, prop: &st
                 | "hash"
                 | "listen"
                 | "pathToFileURL"
+                | "plugin"
                 | "serve"
                 | "spawn"
                 | "stringWidth"

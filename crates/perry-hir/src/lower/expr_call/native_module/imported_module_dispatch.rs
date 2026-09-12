@@ -114,12 +114,12 @@ pub(super) fn try_imported_module_dispatch(
                 }
                 // `import { YAML } from "bun"; YAML.parse(...)` and the other
                 // #9600 value namespaces call closures stored on that value.
-                // Do not reinterpret `.parse`/`.order`/`.xxHash64` as a
+                // Do not reinterpret `.parse`/`.order`/`.xxHash64`/`.clearAll` as a
                 // top-level `bun` native method.
                 if module_name == "bun"
                     && matches!(
                         imported_method,
-                        Some("YAML" | "TOML" | "semver" | "JSONL" | "hash")
+                        Some("YAML" | "TOML" | "semver" | "JSONL" | "hash" | "plugin")
                     )
                 {
                     return Ok(Err(args));

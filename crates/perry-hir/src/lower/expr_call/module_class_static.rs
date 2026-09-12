@@ -83,6 +83,7 @@ pub(super) fn try_module_class_static(
                                 | ("bun", "semver")
                                 | ("bun", "JSONL")
                                 | ("bun", "hash")
+                                | ("bun", "plugin")
                         );
                         // Unimplemented-API gate (#463) for the chained
                         // `mod.X.Y()` case. The lower_member gate fires

@@ -76,6 +76,7 @@ pub(super) fn try_module_static_methods(
                     if matches!(
                         method_ident.sym.as_ref(),
                         "stringWidth"
+                            | "plugin"
                             | "hash"
                             | "deepEquals"
                             | "stripANSI"

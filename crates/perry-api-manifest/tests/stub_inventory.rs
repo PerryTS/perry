@@ -93,6 +93,7 @@ fn stub_inventory_matches_known_clusters() {
         // event-loop refcount), mongodb.findOne (parsed document),
         // exponential-backoff options (honored, incl. retry predicate).
         ("#4917", 9),
+        ("#10100", 1),
     ];
     let expected_map: BTreeMap<String, usize> =
         expected.iter().map(|(k, v)| (k.to_string(), *v)).collect();
@@ -108,6 +109,7 @@ fn stubs_only_appear_in_allowlisted_modules() {
     // A stub flag showing up on a module not in this list is almost
     // certainly an accident — fail loud so it gets triaged.
     let allowed = [
+        "bun",
         "stream/web",
         "streams",
         "v8",
