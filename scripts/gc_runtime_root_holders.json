@@ -535,6 +535,18 @@
       "why": "#[cfg(test)] counter for repeated JSON output cache hits; absent from production builds and stores only a tally."
     },
     {
+      "file": "crates/perry-runtime/src/json/traversal_feedback.rs",
+      "name": "EAGER_RUN",
+      "verdict": "not_a_gc_pointer",
+      "why": "Per-thread count of consecutive eager route decisions since the last lazy resample (json/traversal_feedback.rs). A `Cell<u8>` reset to zero or incremented by one in `prefer_eager`; it never stores an address, handle, NaN-boxed value or anything derived from one."
+    },
+    {
+      "file": "crates/perry-runtime/src/json/traversal_feedback.rs",
+      "name": "SCORE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Per-thread traversal-evidence score for the lazy-vs-eager JSON.parse route (json/traversal_feedback.rs). A `Cell<u8>` saturating counter: incremented when a lazy array's cold read flips or completes an in-order scan, decremented when a lazy array is created, compared against a constant in `prefer_eager`. It never stores an address, handle, NaN-boxed value or anything derived from one."
+    },
+    {
       "file": "crates/perry-runtime/src/map.rs",
       "name": "MAP_COMPACTION_LOG",
       "count": 1,
