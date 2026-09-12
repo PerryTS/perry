@@ -219,6 +219,8 @@ crate::perry_thread_local! {
 /// The record for `func_ptr`, if module init registered anything about it.
 #[inline(always)]
 fn body_record(func_ptr: *const u8) -> Option<ClosureBodyRecord> {
+    #[cfg(test)]
+    BODY_RECORD_LOOKUPS.with(|lookups| lookups.set(lookups.get() + 1));
     CLOSURE_BODY_REGISTRY.with(|r| r.borrow().get(&(func_ptr as usize)).copied())
 }
 
@@ -307,6 +309,7 @@ crate::perry_thread_local! {
 #[cfg(test)]
 std::thread_local! {
     static RESOLVE_STRATEGY_SLOW_CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    static BODY_RECORD_LOOKUPS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
 #[derive(Clone, Copy)]
@@ -437,6 +440,27 @@ mod dispatch_recent_tests {
         4.0
     }
 
+    extern "C" fn add_two(_: *const ClosureHeader, left: f64, right: f64) -> f64 {
+        left + right
+    }
+
+    extern "C" fn identify_rest_array(_: *const ClosureHeader, value: f64) -> f64 {
+        let is_pointer = value.to_bits() >> 48 == crate::value::POINTER_TAG >> 48;
+        if is_pointer {
+            1.0
+        } else {
+            0.0
+        }
+    }
+
+    fn stack_closure(func_ptr: *const u8) -> ClosureHeader {
+        ClosureHeader {
+            func_ptr,
+            capture_count: 0,
+            type_tag: CLOSURE_MAGIC,
+        }
+    }
+
     #[test]
     fn four_alternating_bodies_stay_out_of_the_hash_lookup() {
         let bodies = [
@@ -484,6 +508,90 @@ mod dispatch_recent_tests {
             RESOLVE_STRATEGY_SLOW_CALLS.with(|calls| calls.get()),
             1,
             "late registration must evict a body from every recent-cache slot"
+        );
+    }
+
+    #[test]
+    fn repeated_array_calls_probe_the_body_registry_only_once() {
+        let body = add_two as *const u8;
+        let closure = stack_closure(body);
+        let args = [20.0, 22.0];
+        invalidate_dispatch_strategy(body);
+        RESOLVE_STRATEGY_SLOW_CALLS.with(|calls| calls.set(0));
+        BODY_RECORD_LOOKUPS.with(|lookups| lookups.set(0));
+
+        for _ in 0..32 {
+            assert_eq!(
+                unsafe {
+                    crate::closure::js_closure_call_array(
+                        &closure as *const ClosureHeader as i64,
+                        args.as_ptr(),
+                        args.len() as i64,
+                    )
+                },
+                42.0
+            );
+        }
+
+        assert_eq!(
+            RESOLVE_STRATEGY_SLOW_CALLS.with(|calls| calls.get()),
+            1,
+            "a warm non-rest call-array path must not hash-probe the registry per call"
+        );
+        assert_eq!(
+            BODY_RECORD_LOOKUPS.with(|lookups| lookups.get()),
+            1,
+            "32 repeated calls must perform one total closure-body hash lookup"
+        );
+    }
+
+    #[test]
+    fn late_rest_registration_invalidates_the_call_array_memo() {
+        let body = identify_rest_array as *const u8;
+        let closure = stack_closure(body);
+        let direct_arg = [0.0];
+        invalidate_dispatch_strategy(body);
+        RESOLVE_STRATEGY_SLOW_CALLS.with(|calls| calls.set(0));
+        BODY_RECORD_LOOKUPS.with(|lookups| lookups.set(0));
+
+        assert_eq!(
+            unsafe {
+                crate::closure::js_closure_call_array(
+                    &closure as *const ClosureHeader as i64,
+                    direct_arg.as_ptr(),
+                    direct_arg.len() as i64,
+                )
+            },
+            0.0,
+            "the first unregistered call must use direct dispatch"
+        );
+        assert_eq!(RESOLVE_STRATEGY_SLOW_CALLS.with(|calls| calls.get()), 1);
+        assert_eq!(BODY_RECORD_LOOKUPS.with(|lookups| lookups.get()), 1);
+
+        js_register_closure_rest(body, 0);
+        let rest_args = [1.0, 2.0, 3.0];
+        for _ in 0..2 {
+            assert_eq!(
+                unsafe {
+                    crate::closure::js_closure_call_array(
+                        &closure as *const ClosureHeader as i64,
+                        rest_args.as_ptr(),
+                        rest_args.len() as i64,
+                    )
+                },
+                1.0,
+                "late registration must switch the cached body to rest dispatch"
+            );
+        }
+        assert_eq!(
+            RESOLVE_STRATEGY_SLOW_CALLS.with(|calls| calls.get()),
+            2,
+            "registration should cause one fresh registry probe, then remain cached"
+        );
+        assert_eq!(
+            BODY_RECORD_LOOKUPS.with(|lookups| lookups.get()),
+            2,
+            "the initial call and post-registration miss should be the only hash lookups"
         );
     }
 }
@@ -557,7 +665,17 @@ pub fn lookup_closure_rest(func_ptr: *const u8) -> Option<u32> {
 
 #[inline(always)]
 pub fn lookup_closure_rest_full(func_ptr: *const u8) -> Option<(u32, RestDispatchKind)> {
-    body_record(func_ptr)?.rest()
+    // Rest-ness is part of the same immutable-at-dispatch-time answer as
+    // bound routing and declared arity. In particular, do not bypass
+    // `DISPATCH_RECENT` here: `js_closure_call_array` probes this on every
+    // Function.prototype.call/apply invocation, and a direct `body_record`
+    // read would pay a TLS RefCell borrow plus a pointer hash lookup every
+    // time through that hot path. Registration invalidates the memo, so the
+    // #6475 call-before-registration case still observes a later rest entry.
+    match resolve_strategy(func_ptr).kind() {
+        DispatchKind::Rest(fixed_arity, kind) => Some((fixed_arity, kind)),
+        _ => None,
+    }
 }
 
 /// Register a closure body's declared param count (for closures WITHOUT a rest
