@@ -52,7 +52,10 @@ fn unresolved_imports_name_the_module_and_native_build_remedy() {
         "file:///config/plugins/tui.tsx",
         "@example/custom-provider",
     ] {
-        let message = rejection_message(js_module_dynamic_import_fallback(string_value(specifier)));
+        let message = rejection_message(js_module_dynamic_import_fallback(
+            string_value(specifier),
+            undefined(),
+        ));
         assert_native_guidance(&message, specifier);
     }
 }
@@ -66,6 +69,7 @@ fn deferred_import_keeps_the_site_and_adds_the_runtime_specifier() {
     );
     let message = rejection_message(js_module_dynamic_import_deferred(
         specifier.get_nanbox_f64(),
+        undefined(),
         note,
     ));
     assert_native_guidance(&message, "some-npm-plugin");
@@ -78,7 +82,8 @@ fn deferred_builtin_imports_still_resolve() {
         let scope = crate::gc::RuntimeHandleScope::new();
         let specifier = scope.root_nanbox_f64(string_value(specifier));
         let note = string_value("deferred import at src/plugin/loader.ts:139");
-        let value = js_module_dynamic_import_deferred(specifier.get_nanbox_f64(), note);
+        let value =
+            js_module_dynamic_import_deferred(specifier.get_nanbox_f64(), undefined(), note);
         assert_ne!(crate::promise::js_value_is_promise(value), 0);
         let promise = crate::value::js_nanbox_get_pointer(value) as *mut Promise;
         assert_eq!(js_promise_state(promise), 1, "builtin import must resolve");
