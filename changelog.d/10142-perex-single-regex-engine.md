@@ -1,0 +1,4 @@
+### Changed
+
+- `RegExp` now runs on [Perex](https://github.com/PerryTS/perex), an independent ECMAScript engine, as the runtime's only regular-expression engine. `regex`, `regex-syntax`, `fancy-regex` and `regress` are no longer dependencies of the runtime; compiled programs are traced GC allocations owned by their `RegExp` header.
+- The CLI's own patterns (install scanner, CommonJS wrapping, module collection, linking) run on the same engine through `perry_perex::tooling`. It translates the `regex`-crate dialect those patterns were written in into ECMAScript with the same meaning — Unicode `\d`/`\s`/`\w`/`\b`, `\n`-only line anchors so CRLF sources match as before, Unicode case folding — and refuses anything it cannot translate intact rather than compiling a pattern that means something else.

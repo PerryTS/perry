@@ -23,7 +23,7 @@ pub(super) fn annotate_parse_error(
         return e;
     }
     let msg = format!("{}", e);
-    let span_re = regex::Regex::new(r"\((\d+)\.\.(\d+),").ok();
+    let span_re = perry_perex::tooling::Regex::new(r"\((\d+)\.\.(\d+),").ok();
     let offset = span_re
         .as_ref()
         .and_then(|re| re.captures(&msg))

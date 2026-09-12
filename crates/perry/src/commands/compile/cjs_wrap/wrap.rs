@@ -1270,7 +1270,7 @@ fn fold_parcel_watcher_template_require(source: &str, target: Option<&str>) -> O
         ""
     };
     let specifier = format!("@parcel/watcher-{platform}-{arch}{suffix}");
-    let template = regex::Regex::new(
+    let template = perry_perex::tooling::Regex::new(
         r#"`@parcel/watcher-\$\{process\.platform\}-\$\{process\.arch\}\$\{process\.platform\s*===\s*[\"']linux[\"']\s*\?\s*`-\$\{libc\s*\|\|\s*[\"']glibc[\"']\}`\s*:\s*[\"'][\"']\}`"#,
     )
     .expect("parcel watcher template regex");
@@ -1353,7 +1353,7 @@ fn cyclic_missing_property_names(
         })
         .min()
         .unwrap_or(target_source.len());
-    let assigned_before = regex::Regex::new(
+    let assigned_before = perry_perex::tooling::Regex::new(
         r#"(?:^|[^A-Za-z0-9_$])(?:exports|module\.exports)\.([A-Za-z_$][A-Za-z0-9_$]*)\s*="#,
     )
     .expect("CJS export assignment regex")
@@ -1363,9 +1363,9 @@ fn cyclic_missing_property_names(
     let masked_source = super::detect::strip_comments_and_strings(source);
     let mut missing = std::collections::BTreeSet::new();
     for alias in aliases {
-        let access = regex::Regex::new(&format!(
+        let access = perry_perex::tooling::Regex::new(&format!(
             r#"(?:^|[^A-Za-z0-9_$]){}\.([A-Za-z_$][A-Za-z0-9_$]*)"#,
-            regex::escape(&alias)
+            perry_perex::tooling::escape(&alias)
         ))
         .expect("CJS cyclic alias access regex");
         for capture in access.captures_iter(&masked_source) {
@@ -1409,7 +1409,7 @@ fn inactive_platform_guarded_requires(
     let Some(platform) = target_node_platform(target) else {
         return std::collections::HashSet::new();
     };
-    let re = regex::Regex::new(
+    let re = perry_perex::tooling::Regex::new(
         r#"(?s)if\s*\(\s*process\.platform\s*(===|!==)\s*['"]([^'"]+)['"]\s*\)\s*\{(?P<then>.*?)\}\s*else\s*\{(?P<else>.*?)\}"#,
     )
     .unwrap();

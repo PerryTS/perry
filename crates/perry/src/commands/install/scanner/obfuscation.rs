@@ -23,7 +23,7 @@
 //! tables). They only count when paired with eval/Function nearby, and
 //! that adjacency case is already covered by `patterns.rs`.
 
-use regex::Regex;
+use perry_perex::tooling::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;

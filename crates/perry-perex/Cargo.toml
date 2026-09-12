@@ -10,3 +10,8 @@ workspace = true
 
 [dependencies]
 perex.workspace = true
+
+[dev-dependencies]
+# Only to compare against, in `tests/dialect_parity.rs`. The crate under test
+# never depends on it, and neither does anything Perry ships.
+regex = { workspace = true }

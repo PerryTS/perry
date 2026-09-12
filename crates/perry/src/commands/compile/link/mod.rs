@@ -219,7 +219,7 @@ mod node_api_symbol_inventory_tests {
             include_str!("../../../../../perry-runtime/src/node_api_host/values.rs"),
         ]
         .join("\n");
-        let export_re = regex::Regex::new(
+        let export_re = perry_perex::tooling::Regex::new(
             r#"(?s)#\[no_mangle\]\s*pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+((?:napi|node_api)_[A-Za-z0-9_]+)"#,
         )
         .unwrap();
