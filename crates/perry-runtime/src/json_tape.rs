@@ -1153,6 +1153,17 @@ const _: () = assert!(
      `.length` as a raw u32 load there"
 );
 
+// `materialized` is the second codegen contract on this struct. The indexed
+// inline cache (`perry-codegen` `expr/index_get/inline_dyn_typed_array.rs`)
+// reads this slot directly to serve `lazy[i]` without a runtime call, exactly
+// as `cached_read::lazy_get` does. A reordered field would send that fast path
+// at an unrelated word, so pin the offset the same way `cached_length` is.
+const _: () = assert!(
+    std::mem::offset_of!(LazyArrayHeader, materialized) == 32,
+    "LazyArrayHeader::materialized must stay at offset 32 — the indexed inline \
+     cache loads the installed array from that word"
+);
+
 /// #7478: how long a run of consecutive ascending cold reads has to get
 /// before we stop materializing element-by-element and hand the whole
 /// array to the batch parser.

@@ -466,9 +466,132 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     let elem_bounds_label = ctx.block_label(elem_bounds_idx);
     let elem_load_label = ctx.block_label(elem_load_idx);
     let elem_value_label = ctx.block_label(elem_value_idx);
+    // A `JSON.parse` result is `GC_TYPE_LAZY_ARRAY`, not `GC_TYPE_ARRAY`, so
+    // every one of its indexed reads used to fall straight through to
+    // `arrlike.ic.miss` and re-classify the receiver three more times
+    // (`js_packed_arraylike_index_get` -> `js_array_get_f64` ->
+    // `json_tape::cached_read::lazy_get`). Once a scan or a random-access flip
+    // has installed the ordinary array, that whole chain resolves one word;
+    // serve it here instead, on exactly the proof `lazy_get` already uses.
+    let lazy_kind_idx = ctx.new_block("arrlike.lazy.kind");
+    let lazy_header_idx = ctx.new_block("arrlike.lazy.header");
+    let lazy_guard_idx = ctx.new_block("arrlike.lazy.guard");
+    let lazy_load_idx = ctx.new_block("arrlike.lazy.load");
+    let lazy_kind_label = ctx.block_label(lazy_kind_idx);
+    let lazy_header_label = ctx.block_label(lazy_header_idx);
+    let lazy_guard_label = ctx.block_label(lazy_guard_idx);
+    let lazy_load_label = ctx.block_label(lazy_load_idx);
+
     ctx.current_block = object_brand_idx;
     ctx.block()
-        .cond_br(&is_array, &object_array_guard_label, &elem_kind_label);
+        .cond_br(&is_array, &object_array_guard_label, &lazy_kind_label);
+
+    // `GC_TYPE_LAZY_ARRAY` (perry-runtime `gc/types.rs`). Anything else keeps
+    // the existing Array-subclass probe below.
+    ctx.current_block = lazy_kind_idx;
+    let lazy_is_lazy = ctx.block().icmp_eq(I8, &gc_type, "9");
+    ctx.block()
+        .cond_br(&lazy_is_lazy, &lazy_header_label, &elem_kind_label);
+
+    // `LazyArrayHeader::materialized` is word 4 (offset 32; pinned by a const
+    // assert in perry-runtime `json_tape.rs`). Null means the array is still
+    // tape-backed and only the sparse per-element cache can answer, which
+    // needs the bitmap probe in `lazy_get` — keep that on the miss path.
+    ctx.current_block = lazy_header_idx;
+    let lazy_materialized_addr = ctx.block().add(I64, &object_raw, "32");
+    let lazy_materialized_ptr = ctx.block().inttoptr(I64, &lazy_materialized_addr);
+    let lazy_materialized = ctx.block().load(I64, &lazy_materialized_ptr);
+    let lazy_has_array = ctx.block().icmp_ne(I64, &lazy_materialized, "0");
+    ctx.block()
+        .cond_br(&lazy_has_array, &lazy_guard_label, &object_miss_label);
+
+    // The same proof `cached_read::lazy_get` takes before its inline load: a
+    // live unforwarded ordinary Array, no descriptor overrides, no prototype
+    // invalidation, and a dense in-capacity index. A growth-forwarding stub
+    // keeps its own GC header and fails `obj_type`/`FORWARDED`, so it routes
+    // to the resolver exactly as before (#9717).
+    //
+    // `cached_length` is the length mirror codegen reads for `.length` at
+    // offset 0. `lazy_get` refreshes it when it takes this path; the cache
+    // cannot write, so it instead requires the mirror to already agree and
+    // sends a disagreement to the miss helper — which refreshes it, making the
+    // next read hit. That keeps a grown or shrunk array from reporting a stale
+    // length through a fast-path read.
+    ctx.current_block = lazy_guard_idx;
+    let lazy_type_addr = ctx.block().sub(I64, &lazy_materialized, "8");
+    let lazy_type_ptr = ctx.block().inttoptr(I64, &lazy_type_addr);
+    let lazy_type = ctx.block().load(I8, &lazy_type_ptr);
+    let lazy_is_array = ctx.block().icmp_eq(I8, &lazy_type, "1");
+    let lazy_flags_addr = ctx.block().sub(I64, &lazy_materialized, "7");
+    let lazy_flags_ptr = ctx.block().inttoptr(I64, &lazy_flags_addr);
+    let lazy_flags = ctx.block().load(I8, &lazy_flags_ptr);
+    let lazy_fwd = ctx.block().and(I8, &lazy_flags, "128");
+    let lazy_not_fwd = ctx.block().icmp_eq(I8, &lazy_fwd, "0");
+    let lazy_reserved_addr = ctx.block().sub(I64, &lazy_materialized, "6");
+    let lazy_reserved_ptr = ctx.block().inttoptr(I64, &lazy_reserved_addr);
+    let lazy_reserved = ctx.block().load(I16, &lazy_reserved_ptr);
+    let lazy_descriptor_bits = ctx.block().and(I16, &lazy_reserved, "1024");
+    let lazy_no_descriptors = ctx.block().icmp_eq(I16, &lazy_descriptor_bits, "0");
+    let lazy_invalidated = ctx
+        .block()
+        .load_volatile(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
+    let lazy_default_prototypes = ctx.block().icmp_eq(I8, &lazy_invalidated, "0");
+    let lazy_array_ptr = ctx.block().inttoptr(I64, &lazy_materialized);
+    let lazy_length = ctx.block().load(I32, &lazy_array_ptr);
+    let lazy_capacity_addr = ctx.block().add(I64, &lazy_materialized, "4");
+    let lazy_capacity_ptr = ctx.block().inttoptr(I64, &lazy_capacity_addr);
+    let lazy_capacity = ctx.block().load(I32, &lazy_capacity_ptr);
+    let lazy_mirror_ptr = ctx.block().inttoptr(I64, &object_raw);
+    let lazy_mirror = ctx.block().load(I32, &lazy_mirror_ptr);
+    let lazy_mirror_fresh = ctx.block().icmp_eq(I32, &lazy_mirror, &lazy_length);
+    let lazy_length_i64 = ctx.block().zext(I32, &lazy_length, I64);
+    let lazy_capacity_i64 = ctx.block().zext(I32, &lazy_capacity, I64);
+    let lazy_in_bounds = ctx.block().icmp_ult(I64, &object_idx_i64, &lazy_length_i64);
+    let lazy_within_capacity = ctx
+        .block()
+        .icmp_ule(I64, &lazy_length_i64, &lazy_capacity_i64);
+    // `lazy_get`'s own plausibility bound on an installed array. Keeping it
+    // makes this cache admit exactly the set the runtime helper admits, so the
+    // two can never disagree about which reads are fast.
+    let lazy_length_plausible = ctx
+        .block()
+        .icmp_ule(I64, &lazy_length_i64, "100000000");
+    let lazy_ok = ctx.block().and(I1, &lazy_is_array, &lazy_not_fwd);
+    let lazy_ok = ctx.block().and(I1, &lazy_ok, &lazy_no_descriptors);
+    let lazy_ok = ctx.block().and(I1, &lazy_ok, &lazy_default_prototypes);
+    let lazy_ok = ctx.block().and(I1, &lazy_ok, &lazy_mirror_fresh);
+    let lazy_ok = ctx.block().and(I1, &lazy_ok, &lazy_in_bounds);
+    let lazy_ok = ctx.block().and(I1, &lazy_ok, &lazy_within_capacity);
+    let lazy_ok = ctx.block().and(I1, &lazy_ok, &lazy_length_plausible);
+    ctx.block()
+        .cond_br(&lazy_ok, &lazy_load_label, &object_miss_label);
+
+    // A hole must still consult the prototype chain, so it keeps the complete
+    // dispatcher rather than becoming `undefined` here.
+    ctx.current_block = lazy_load_idx;
+    let lazy_element_word = ctx.block().add(I64, &object_idx_i64, "1");
+    let lazy_element_ptr =
+        ctx.block()
+            .gep_inbounds(I64, &lazy_array_ptr, &[(I64, &lazy_element_word)]);
+    let lazy_raw = ctx.block().load(DOUBLE, &lazy_element_ptr);
+    let lazy_raw_bits = ctx.block().bitcast_double_to_i64(&lazy_raw);
+    let lazy_is_hole = ctx
+        .block()
+        .icmp_eq(I64, &lazy_raw_bits, crate::nanbox::TAG_HOLE_I64);
+    let lazy_value_idx = ctx.new_block("arrlike.lazy.value");
+    let lazy_value_label = ctx.block_label(lazy_value_idx);
+    ctx.block()
+        .cond_br(&lazy_is_hole, &object_miss_label, &lazy_value_label);
+    ctx.current_block = lazy_value_idx;
+    let lazy_value = if coerce_slow_to_number {
+        ctx.block()
+            .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &lazy_raw)])
+    } else {
+        lazy_raw
+    };
+    let lazy_end_label = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+    kind_incoming.push((lazy_value, lazy_end_label));
     ctx.current_block = elem_kind_idx;
     let elem_is_object = ctx.block().icmp_eq(I8, &gc_type, "2");
     ctx.block()
