@@ -11,20 +11,20 @@ behind every reported median.
 
 Perry milliseconds per workload invocation:
 
-| workload | n | main `50e08e91dd` | candidate `b13e494127` |
+| workload | n | main `50e08e91dd` | candidate `51143d8dd8` |
 | --- | ---: | ---: | ---: |
 | middle remove | 100 | 0.011 | 0.009 |
 | | 1,000 | 0.568 | 0.110 |
-| | 10,000 | 50.089 | 2.487 |
-| | 100,000 | 4,943.798 | 173.040 |
+| | 10,000 | 50.089 | 2.477 |
+| | 100,000 | 4,943.798 | 177.435 |
 | middle insert | 100 | 0.012 | 0.010 |
-| | 1,000 | 0.559 | 0.110 |
-| | 10,000 | 50.121 | 2.403 |
-| | 100,000 | 4,924.992 | 166.133 |
+| | 1,000 | 0.559 | 0.109 |
+| | 10,000 | 50.121 | 2.387 |
+| | 100,000 | 4,924.992 | 167.874 |
 | unshift build | 100 | 0.010 | 0.005 |
-| | 1,000 | 0.552 | 0.078 |
-| | 10,000 | 50.885 | 3.540 |
-| | 100,000 | TIMEOUT | 315.464 |
+| | 1,000 | 0.552 | 0.072 |
+| | 10,000 | 50.885 | 3.522 |
+| | 100,000 | TIMEOUT | 314.457 |
 
 Every completed Perry checksum matches Node. All candidate processes complete
 100,000 operations. Over the shared 1,000-100,000 range, the log/log slopes
@@ -32,9 +32,9 @@ and Perry-minus-Node deltas are:
 
 | workload | Node slope | Perry slope | delta |
 | --- | ---: | ---: | ---: |
-| middle remove | 1.923 | 1.598 | -0.324 |
-| middle insert | 1.836 | 1.590 | -0.246 |
-| unshift build | 1.886 | 1.803 | -0.082 |
+| middle remove | 1.900 | 1.604 | -0.296 |
+| middle insert | 1.835 | 1.593 | -0.242 |
+| unshift build | 1.877 | 1.821 | -0.056 |
 
 ## Mechanism and bounded work
 
