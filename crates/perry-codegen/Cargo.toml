@@ -77,3 +77,4 @@ llvm-sys = { version = "221", features = ["no-llvm-linking"], optional = true }
 # dist` still compile the library with `testing` off.
 [dev-dependencies]
 perry-codegen = { path = ".", features = ["testing"] }
+perry-parser.workspace = true
