@@ -399,9 +399,7 @@ chrono = "0.4"
 regex = "1.12"
 aho-corasick = "1.1"
 # The single regular-expression engine, through crates/perry-perex.
-# Pinned to a revision of the public engine repository so CI resolves it
-# without a sibling checkout. Becomes a crates.io version once published.
-perex = { git = "https://github.com/PerryTS/perex", rev = "007a2f7b604d47e36f3f501d3dbcfba1071da6e0" }
+perex = "0.1"
 hex = "0.4"
 tempfile = "3"
 itoa = "1.0"
