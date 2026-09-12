@@ -322,7 +322,9 @@ fn perex_host_failures_release_scratch_and_preserve_consumed_work() {
     }
     assert_eq!(memory.live_bytes(), 0);
     assert_eq!(external_side_live_bytes(), before);
-    for (pattern, flags, work) in [("(", "", 100_000), ("[a]", "v", 100_000), ("a", "", 0)] {
+    // `[a]` under `v` compiles now that the engine implements the union
+    // grammar; its set *operators* are what remain unimplemented.
+    for (pattern, flags, work) in [("(", "", 100_000), ("[a--b]", "v", 100_000), ("a", "", 0)] {
         let input = subject(&scope, pattern.as_bytes());
         let mut budget = Budget::new(work);
         let result = host::compile(

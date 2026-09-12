@@ -78,3 +78,32 @@ pub(super) fn prefetch_boxed_child(bits: u64) {
         prefetch_read(addr.saturating_sub(super::GC_HEADER_SIZE));
     }
 }
+
+/// Pipeline header reads for an existing stable ownership walk.
+///
+/// The cloned iterator only supplies upcoming addresses to the prefetch
+/// instruction. The original iterator still yields every owner exactly once,
+/// in its original order. No address vector or registry is created here.
+/// Callers must keep the iterator's source unchanged until the walk finishes.
+/// The lookahead is shared with the collector's existing header walks.
+pub(crate) fn prefetch_gc_owner_headers<I>(owners: I) -> impl Iterator<Item = usize>
+where
+    I: Iterator<Item = usize> + Clone,
+{
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+    {
+        let mut ahead = owners.clone();
+        for addr in ahead.by_ref().take(PREFETCH_DISTANCE) {
+            prefetch_read(addr.saturating_sub(super::GC_HEADER_SIZE));
+        }
+        owners.inspect(move |_| {
+            if let Some(addr) = ahead.next() {
+                prefetch_read(addr.saturating_sub(super::GC_HEADER_SIZE));
+            }
+        })
+    }
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+    {
+        owners
+    }
+}

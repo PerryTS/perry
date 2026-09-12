@@ -598,8 +598,10 @@ mod regex_census_tests {
             .into_iter()
             .filter_map(|(name, _, _)| name.starts_with("regex.").then_some(name))
             .collect();
-        assert!(names.contains(&"regex.content_cache"), "rows: {names:?}");
-        assert!(names.contains(&"regex.literal_sites"), "rows: {names:?}");
+        // `regex.content_cache` and `regex.literal_sites` were the previous
+        // engine's compiled-program caches. Perex keeps no such table: a
+        // program is a GC allocation owned through its header, so the ordinary
+        // heap census counts it. The call-site header table is what remains.
         assert!(
             names.contains(&"regex.site_test_headers"),
             "rows: {names:?}"
