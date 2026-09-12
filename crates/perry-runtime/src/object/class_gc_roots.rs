@@ -46,12 +46,11 @@ pub fn scan_class_inheritance_roots_mut(visitor: &mut crate::gc::RuntimeRootVisi
         if let Ok(mut guard) = table.write() {
             if let Some(map) = guard.as_mut() {
                 for ptr in map.values_mut() {
+                    let old_ptr = *ptr;
                     visitor.visit_usize_slot(ptr);
-                    // Evacuation moves a prototype to an address the filter has
-                    // never seen. Admit what the visitor left behind, under the
-                    // same write guard, so the address is admitted before any
-                    // reader can find it.
-                    crate::object::class_registry::note_class_prototype_object_registered(*ptr);
+                    crate::object::class_registry::class_prototype_object_addr_index_rekey(
+                        old_ptr, *ptr,
+                    );
                 }
             }
         }
@@ -79,13 +78,16 @@ pub fn scan_class_inheritance_roots_mut(visitor: &mut crate::gc::RuntimeRootVisi
 #[cfg(test)]
 pub(crate) fn test_seed_class_inheritance_roots(proto_cid: u32, proto_ptr: usize) {
     // GC_STORE_AUDIT(ROOT): test seed mirrors CLASS_PROTOTYPE_OBJECTS values scanned by scan_class_inheritance_roots_mut.
-    crate::object::class_registry::note_class_prototype_object_registered(proto_ptr);
-    CLASS_PROTOTYPE_OBJECTS.with(|table| {
+    let old = CLASS_PROTOTYPE_OBJECTS.with(|table| {
         let mut guard = table.write().unwrap();
         guard
             .get_or_insert_with(std::collections::HashMap::new)
-            .insert(proto_cid, proto_ptr);
+            .insert(proto_cid, proto_ptr)
     });
+    crate::object::class_registry::class_prototype_object_addr_index_rekey(
+        old.unwrap_or(0),
+        proto_ptr,
+    );
 }
 
 #[cfg(test)]

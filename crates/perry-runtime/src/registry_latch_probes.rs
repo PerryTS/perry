@@ -378,40 +378,39 @@ fn symbol_probe_rejects_a_filtered_address_without_touching_the_registry() {
     );
 }
 
-/// The class-prototype address filter. The probe behind it is a LINEAR SCAN
-/// (#9225) reached through a thread-local and an `RwLock`, and its one caller —
-/// `descriptor_state::disable_inline_guards_for_descriptor_target` — runs on
-/// every `Object.defineProperty`, so the rejection is what keeps a bundle's
-/// `__export(exports, { … })` init off the scan entirely.
+/// The class-prototype probe uses an exact inverse address index. Keep both
+/// positive and negative membership covered: class-heavy bundles saturate the
+/// older monotone filter, while this index must remain O(1) and exact (#9225).
 #[test]
-fn class_prototype_probe_rejects_a_filtered_address_without_scanning() {
+fn class_prototype_probe_uses_exact_inverse_membership() {
     use crate::object as class_registry;
 
-    // A registered prototype, seeded through the real store so the filter is
-    // admitted exactly as production admits it.
+    // A registered prototype, seeded through the real store so the inverse
+    // index is updated exactly as production updates it.
     let proto = crate::object::js_object_alloc(0, 2) as usize;
     assert!(proto != 0, "test premise: the prototype object allocated");
     class_registry::test_seed_class_prototype_object_root(0x7f00_0001, proto);
 
-    let before = class_registry::test_class_prototype_scan_count();
     assert!(
         !class_registry::is_registered_class_prototype_object(FAR_OUTSIDE_ANY_WINDOW),
         "an address no registration admitted is not a class prototype"
     );
-    assert_eq!(
-        class_registry::test_class_prototype_scan_count(),
-        before,
-        "the address filter must answer without reaching the scan"
-    );
-
     assert!(
         class_registry::is_registered_class_prototype_object(proto),
-        "the filter must not hide a registered class prototype"
+        "the inverse index must find a registered class prototype"
     );
-    assert!(
-        class_registry::test_class_prototype_scan_count() > before,
-        "a filter-admitted address must reach the scan"
-    );
+
+    // Two class ids can share one prototype. Replacing one must retain the
+    // old address until the last forward-map reference moves away.
+    let replacement = crate::object::js_object_alloc(0, 2) as usize;
+    class_registry::test_seed_class_prototype_object_root(0x7f00_0002, proto);
+    class_registry::test_seed_class_prototype_object_root(0x7f00_0001, replacement);
+    assert!(class_registry::is_registered_class_prototype_object(proto));
+    class_registry::test_seed_class_prototype_object_root(0x7f00_0002, replacement);
+    assert!(!class_registry::is_registered_class_prototype_object(proto));
+    assert!(class_registry::is_registered_class_prototype_object(
+        replacement
+    ));
 }
 
 /// `alloc_shared_sab` publishes a backing that `is_registered_buffer` reports
