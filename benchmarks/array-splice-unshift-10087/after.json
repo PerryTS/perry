@@ -1,0 +1,341 @@
+{
+  "revision": "ccf2e64dd81b866ae0ad1f35883c556f07f301ff",
+  "node": "v26.5.1",
+  "host": "Linux-6.17.0-23-generic-x86_64-with-glibc2.39",
+  "cpu": "x86_64",
+  "artifact_sha256": {
+    "perry": "b6a2057331ddc4e3afdf07e773f88423673afd8bc22c74121b891ac9871e19c7",
+    "node": "fb48e77df2f8e92fedfec39afa60a5f41563441f6b61316ada5fb295a431c2c6",
+    "runtime": "c2a4047b352e088ab5e5d7d26f41b7afb67516a1d642ecc329f392bdec852ba4",
+    "stdlib": "fd95b86bc8631bb9acbce5d7479392eaa28693f8d685b64a3f6153e20fb390f0",
+    "array-splice-middle-remove.ts": "0ce71b76ad2801128883bd523af918e27ec4340e73d745582676dc2b77871b26",
+    "array-splice-middle-insert.ts": "5a17c728ca431cb2aca89d77315b394e2fb02f077c48cb64a8930d10483dd93e",
+    "array-unshift-build.ts": "8969ee530d12ec1aaa3d2714d86d7d13fa7cfd4d89aa98bf7d684962e4ed152f"
+  },
+  "workloads": {
+    "array-splice-middle-remove": {
+      "rows": [
+        {
+          "n": 100,
+          "node": {
+            "name": "array-splice-middle-remove",
+            "category": "arrays",
+            "n": 100,
+            "ms_per_run": 0.002476898204334356,
+            "runs": 56916,
+            "checksum": 658638221,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-splice-middle-remove",
+            "category": "arrays",
+            "n": 100,
+            "ms_per_run": 0.006224482576228473,
+            "runs": 22477,
+            "checksum": 658638221,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 1000,
+          "node": {
+            "name": "array-splice-middle-remove",
+            "category": "arrays",
+            "n": 1000,
+            "ms_per_run": 0.03759997744360875,
+            "runs": 3706,
+            "checksum": 109957063,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-splice-middle-remove",
+            "category": "arrays",
+            "n": 1000,
+            "ms_per_run": 0.08216087295081949,
+            "runs": 1705,
+            "checksum": 109957063,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 10000,
+          "node": {
+            "name": "array-splice-middle-remove",
+            "category": "arrays",
+            "n": 10000,
+            "ms_per_run": 1.6954285833333433,
+            "runs": 84,
+            "checksum": 733399264,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-splice-middle-remove",
+            "category": "arrays",
+            "n": 10000,
+            "ms_per_run": 2.2026380999999957,
+            "runs": 70,
+            "checksum": 733399264,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 100000,
+          "node": {
+            "name": "array-splice-middle-remove",
+            "category": "arrays",
+            "n": 100000,
+            "ms_per_run": 272.2018300000004,
+            "runs": 7,
+            "checksum": 452640523,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-splice-middle-remove",
+            "category": "arrays",
+            "n": 100000,
+            "ms_per_run": 173.49499300000002,
+            "runs": 7,
+            "checksum": 452640523,
+            "status": "OK"
+          }
+        }
+      ],
+      "common_sizes": [
+        100,
+        1000,
+        10000,
+        100000
+      ],
+      "common_slopes": {
+        "node": 1.6777040563242853,
+        "perry": 1.4763829172626732
+      },
+      "acceptance_sizes": [
+        1000,
+        10000,
+        100000
+      ],
+      "acceptance_slopes": {
+        "node": 1.9298517281128846,
+        "perry": 1.6623109503925215
+      },
+      "acceptance_slope_delta": -0.2675407777203631
+    },
+    "array-splice-middle-insert": {
+      "rows": [
+        {
+          "n": 100,
+          "node": {
+            "name": "array-splice-middle-insert",
+            "category": "arrays",
+            "n": 100,
+            "ms_per_run": 0.003342244737721392,
+            "runs": 41683,
+            "checksum": 619454386,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-splice-middle-insert",
+            "category": "arrays",
+            "n": 100,
+            "ms_per_run": 0.006913433805737594,
+            "runs": 20271,
+            "checksum": 619454386,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 1000,
+          "node": {
+            "name": "array-splice-middle-insert",
+            "category": "arrays",
+            "n": 1000,
+            "ms_per_run": 0.043440058441560736,
+            "runs": 3227,
+            "checksum": 604367096,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-splice-middle-insert",
+            "category": "arrays",
+            "n": 1000,
+            "ms_per_run": 0.08023765199999912,
+            "runs": 1747,
+            "checksum": 604367096,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 10000,
+          "node": {
+            "name": "array-splice-middle-insert",
+            "category": "arrays",
+            "n": 10000,
+            "ms_per_run": 1.6585673076923075,
+            "runs": 91,
+            "checksum": 37547811,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-splice-middle-insert",
+            "category": "arrays",
+            "n": 10000,
+            "ms_per_run": 2.0748618000000136,
+            "runs": 70,
+            "checksum": 37547811,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 100000,
+          "node": {
+            "name": "array-splice-middle-insert",
+            "category": "arrays",
+            "n": 100000,
+            "ms_per_run": 208.77947399999994,
+            "runs": 7,
+            "checksum": 275047240,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-splice-middle-insert",
+            "category": "arrays",
+            "n": 100000,
+            "ms_per_run": 162.66321100000005,
+            "runs": 7,
+            "checksum": 275047240,
+            "status": "OK"
+          }
+        }
+      ],
+      "common_sizes": [
+        100,
+        1000,
+        10000,
+        100000
+      ],
+      "common_slopes": {
+        "node": 1.5968791352557716,
+        "perry": 1.4527397560065625
+      },
+      "acceptance_sizes": [
+        1000,
+        10000,
+        100000
+      ],
+      "acceptance_slopes": {
+        "node": 1.8408986991166225,
+        "perry": 1.6534555648442628
+      },
+      "acceptance_slope_delta": -0.1874431342723597
+    },
+    "array-unshift-build": {
+      "rows": [
+        {
+          "n": 100,
+          "node": {
+            "name": "array-unshift-build",
+            "category": "arrays",
+            "n": 100,
+            "ms_per_run": 0.003409731674053986,
+            "runs": 41038,
+            "checksum": 922626605,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-unshift-build",
+            "category": "arrays",
+            "n": 100,
+            "ms_per_run": 0.0054488518114948785,
+            "runs": 25364,
+            "checksum": 922626605,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 1000,
+          "node": {
+            "name": "array-unshift-build",
+            "category": "arrays",
+            "n": 1000,
+            "ms_per_run": 0.0557300111420622,
+            "runs": 2515,
+            "checksum": 414934349,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-unshift-build",
+            "category": "arrays",
+            "n": 1000,
+            "ms_per_run": 0.07627028517110118,
+            "runs": 1829,
+            "checksum": 414934349,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 10000,
+          "node": {
+            "name": "array-unshift-build",
+            "category": "arrays",
+            "n": 10000,
+            "ms_per_run": 3.3082204285714334,
+            "runs": 49,
+            "checksum": 183209813,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-unshift-build",
+            "category": "arrays",
+            "n": 10000,
+            "ms_per_run": 3.578292,
+            "runs": 42,
+            "checksum": 183209813,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 100000,
+          "node": {
+            "name": "array-unshift-build",
+            "category": "arrays",
+            "n": 100000,
+            "ms_per_run": 321.05652299999997,
+            "runs": 7,
+            "checksum": 622348785,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-unshift-build",
+            "category": "arrays",
+            "n": 100000,
+            "ms_per_run": 314.60156800000004,
+            "runs": 7,
+            "checksum": 622348785,
+            "status": "OK"
+          }
+        }
+      ],
+      "common_sizes": [
+        100,
+        1000,
+        10000,
+        100000
+      ],
+      "common_slopes": {
+        "node": 1.6695089191634749,
+        "perry": 1.5955688065234597
+      },
+      "acceptance_sizes": [
+        1000,
+        10000,
+        100000
+      ],
+      "acceptance_slopes": {
+        "node": 1.8802461840733669,
+        "perry": 1.8077027563265196
+      },
+      "acceptance_slope_delta": -0.0725434277468473
+    }
+  }
+}
