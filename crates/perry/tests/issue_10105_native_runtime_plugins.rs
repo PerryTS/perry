@@ -75,16 +75,22 @@ console.log('startup continued');
     let executable = dir
         .path()
         .join(if cfg!(windows) { "main.exe" } else { "main" });
-    let compiled = Command::new(&perry)
+    let mut compile = Command::new(&perry);
+    compile
         .current_dir(dir.path())
         .args(["compile", "--no-cache"])
         .arg(&entry)
         .arg("-o")
         .arg(&executable)
         .env("PERRY_NO_AUTO_OPTIMIZE", "1")
-        .env("PERRY_RUNTIME_DIR", runtime_dir)
-        .output()
-        .expect("compile fixture");
+        .env("PERRY_RUNTIME_DIR", runtime_dir);
+    // #7354: LLVM's statepoint pass cannot process Windows catchpad EH.
+    // Exercise the supported shadow-frame path there; keep other hosts' GC
+    // defaults so this does not conceal an import/recovery regression.
+    if cfg!(windows) {
+        compile.env("PERRY_RS4GC", "0");
+    }
+    let compiled = compile.output().expect("compile fixture");
     assert!(
         compiled.status.success(),
         "compile failed: {}",
