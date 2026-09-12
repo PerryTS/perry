@@ -1617,6 +1617,10 @@ mod tests {
         assert_eq!(registered_module_handle(new_wrapper), None);
     }
 
+    // Exercises the ArrayBuffer-backed memory fallback, which #10138 gated to
+    // `not(wasm-host)` — with the feature on, memory comes from the real host
+    // and `wasm_memory_new_buffer` does not exist.
+    #[cfg(not(feature = "wasm-host"))]
     #[test]
     fn memory_descriptor_validation_and_buffer_backing() {
         // Valid: 1 page → 65536-byte zero-filled ArrayBuffer.
@@ -1671,6 +1675,7 @@ mod tests {
         ));
     }
 
+    #[cfg(not(feature = "wasm-host"))]
     #[test]
     fn memory_grow_replaces_buffer_and_returns_old_page_count() {
         let instance = js_object_alloc(0, 1);
