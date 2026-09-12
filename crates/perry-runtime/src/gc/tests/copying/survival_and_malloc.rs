@@ -395,7 +395,7 @@ fn test_budgeted_malloc_minor_rebaselines_the_whole_arena_trigger() {
     );
 
     // Arena arm armed but NOT due (1 MB of headroom); malloc pressure due.
-    let arena_total_before = crate::arena::arena_total_bytes();
+    let arena_total_before = arena_trigger_total_bytes();
     let stale_trigger = arena_total_before + 1024 * 1024;
     GC_NEXT_TRIGGER_BYTES.with(|trigger| trigger.set(stale_trigger));
     trigger_guard.make_malloc_sweep_due();
@@ -428,7 +428,7 @@ fn test_budgeted_malloc_minor_rebaselines_the_whole_arena_trigger() {
     );
 
     // (1) The budgeted finisher re-baselined the whole-arena trigger too.
-    let arena_total_after = crate::arena::arena_total_bytes();
+    let arena_total_after = arena_trigger_total_bytes();
     let next_trigger = GC_NEXT_TRIGGER_BYTES.with(|trigger| trigger.get());
     assert!(
         next_trigger >= arena_total_after + gc_trigger_headroom_floor_bytes(),
@@ -452,7 +452,7 @@ fn test_budgeted_malloc_minor_rebaselines_the_whole_arena_trigger() {
         ));
     }
     assert!(
-        crate::arena::arena_total_bytes() > stale_trigger,
+        arena_trigger_total_bytes() > stale_trigger,
         "the filler must grow the arena total past the PRE-collection trigger, \
          or the assertion below cannot distinguish the two behaviours"
     );

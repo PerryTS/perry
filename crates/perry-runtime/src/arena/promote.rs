@@ -91,16 +91,14 @@ pub(crate) struct InPlacePromotion {
     blocks: Vec<PromotedBlock>,
     /// Reserved bytes the young generation is about to lose to old-gen.
     ///
-    /// This is NOT bookkeeping trivia — it is the whole of the pacing contract.
-    /// The arena-bytes trigger fires on `arena_total_bytes()`, and the runway
-    /// between two collections is therefore "Eden's free capacity + the trigger
-    /// step". A copying minor recycles Eden's blocks, so that capacity survives
-    /// the collection and the runway stays wide. Promotion HANDS THOSE BLOCKS
-    /// AWAY, so without giving the capacity back the runway collapses to the
-    /// bare step. Measured on `retain.ts`: Eden's high-water fell 57 MB → 18 MB,
-    /// collections went 6 → 12, and the extra pressure bought a second full
-    /// collection at 690 ms — a 0.81 s → 1.52 s regression from a change that
-    /// made every individual promotion cheaper.
+    /// This is NOT bookkeeping trivia — it is part of the pacing contract.
+    /// Whole-block promotion removes reusable Eden capacity. Although that
+    /// capacity now becomes visible in the old-space ArenaBytes quantity, the
+    /// young allocation runway still needs to be restored separately or it
+    /// collapses to the bare trigger step. Measured on `retain.ts`: Eden's
+    /// high-water fell 57 MB → 18 MB, collections went 6 → 12, and the extra
+    /// pressure bought a second full collection at 690 ms — a 0.81 s → 1.52 s
+    /// regression from a change that made every individual promotion cheaper.
     ///
     /// The capacity is given back as trigger HEADROOM
     /// (`gc::note_promoted_young_capacity`), not as eagerly mapped blocks.
@@ -348,6 +346,10 @@ pub(crate) fn finish_in_place_promotion(
             retag_block_space(base, size, HeapGeneration::Old, HeapSpace::Old);
         }
     });
+    // Ownership moved from Eden/survivor to old-gen, but the whole-arena
+    // reservation did not change. Move only the cached nursery share so the
+    // ArenaBytes old-space reading sees promotion as old-space growth.
+    nursery_reserved_bytes_sub(promotion.reserved_bytes);
 
     // Both young regions are empty now. Eden needs a usable current block for
     // the inline bump allocator; the survivor flip keeps the semispace

@@ -321,6 +321,21 @@ pub fn arena_total_bytes() -> usize {
     ARENA_TOTAL_BYTES.with(|t| t.get())
 }
 
+/// Reserved copying-nursery capacity: Eden plus both survivor semispaces.
+/// This is the exact committed-capacity share excluded from old-space pacing.
+#[inline]
+pub fn copying_nursery_reserved_bytes() -> usize {
+    NURSERY_RESERVED_BYTES.with(|bytes| bytes.get())
+}
+
+/// Reserved non-nursery capacity (long-lived plus old generation).
+/// ArenaBytes arming, its rebaseline, and idle right-sizing all use this one
+/// definition so nursery growth cannot schedule a whole-heap sweep indirectly.
+#[inline]
+pub fn old_space_total_bytes() -> usize {
+    arena_total_bytes().saturating_sub(copying_nursery_reserved_bytes())
+}
+
 /// Get allocation high-water bytes (sum of `block.offset` across blocks).
 ///
 /// This includes swept holes in partially-live blocks and is deliberately a

@@ -68,7 +68,7 @@ fn arena_threshold_debt_starts_bounded_assist_without_monolithic_collection() {
         assert_string_bytes(live_after, b"arena_debt_live");
     }
     assert!(
-        GC_NEXT_TRIGGER_BYTES.with(|trigger| trigger.get()) > crate::arena::arena_total_bytes(),
+        GC_NEXT_TRIGGER_BYTES.with(|trigger| trigger.get()) > arena_trigger_total_bytes(),
         "completed arena debt cycle should rebaseline the heap goal"
     );
 }
@@ -430,7 +430,7 @@ fn direct_malloc_minor_also_rebaselines_the_whole_arena_trigger() {
     // The arena arm is ARMED BUT NOT DUE — 1 MB of headroom left. This is the
     // state the cc captures show at the start of a `MallocCount` run: the arena
     // arm re-baselined a while ago and the total has not yet reached it.
-    let arena_total_before = crate::arena::arena_total_bytes();
+    let arena_total_before = arena_trigger_total_bytes();
     GC_NEXT_TRIGGER_BYTES.with(|trigger| trigger.set(arena_total_before + 1024 * 1024));
     // ...and malloc pressure IS due, so the direct minor takes the MallocCount arm.
     trigger_guard.make_malloc_sweep_due();
@@ -452,7 +452,7 @@ fn direct_malloc_minor_also_rebaselines_the_whole_arena_trigger() {
 
     // (1) The whole-arena trigger is measured from what THIS collection left
     //     behind, with the same headroom floor the arena finisher applies.
-    let arena_total_after = crate::arena::arena_total_bytes();
+    let arena_total_after = arena_trigger_total_bytes();
     let next_trigger = GC_NEXT_TRIGGER_BYTES.with(|trigger| trigger.get());
     assert!(
         next_trigger >= arena_total_after + gc_trigger_headroom_floor_bytes(),
@@ -479,11 +479,11 @@ fn direct_malloc_minor_also_rebaselines_the_whole_arena_trigger() {
         ));
     }
     assert!(
-        crate::arena::arena_total_bytes() > arena_total_before + 1024 * 1024,
+        arena_trigger_total_bytes() > arena_total_before + 1024 * 1024,
         "the filler must grow the arena total past the PRE-collection trigger \
          value, or the second assertion cannot distinguish the two behaviours \
          (total={}, pre-collection trigger={})",
-        crate::arena::arena_total_bytes(),
+        arena_trigger_total_bytes(),
         arena_total_before + 1024 * 1024
     );
     reset_old_reclaim_pressure();
@@ -537,7 +537,7 @@ fn direct_malloc_minor_arena_rebaseline_kill_switch_restores_the_stale_threshold
     js_shadow_slot_set(0, ptr_bits(live_malloc as usize));
     let churn_headers = allocate_dead_malloc_churn_headers(128);
 
-    let arena_total_before = crate::arena::arena_total_bytes();
+    let arena_total_before = arena_trigger_total_bytes();
     let stale_trigger = arena_total_before + 1024 * 1024;
     GC_NEXT_TRIGGER_BYTES.with(|trigger| trigger.set(stale_trigger));
     trigger_guard.make_malloc_sweep_due();
@@ -579,9 +579,9 @@ fn direct_malloc_minor_arena_rebaseline_kill_switch_restores_the_stale_threshold
         ));
     }
     assert!(
-        crate::arena::arena_total_bytes() > stale_trigger,
+        arena_trigger_total_bytes() > stale_trigger,
         "the filler must cross the stale threshold (total={}, stale_trigger={})",
-        crate::arena::arena_total_bytes(),
+        arena_trigger_total_bytes(),
         stale_trigger
     );
     reset_old_reclaim_pressure();
@@ -608,6 +608,10 @@ fn mutator_assist_work_units_scale_with_debt() {
     let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
 
+    let _old_pressure_subject =
+        crate::arena::arena_alloc_gc_old(2 * 1024 * 1024, 8, GC_TYPE_STRING);
+    reset_old_reclaim_pressure();
+
     // Suppressed triggers (usize::MAX) → both debts read zero → base budget.
     assert_eq!(
         gc_mutator_assist_scaled_work_units(),
@@ -615,7 +619,7 @@ fn mutator_assist_work_units_scale_with_debt() {
     );
 
     // Arena debt scales at GC_ASSIST_DEBT_BYTES_PER_WORK_UNIT bytes per unit.
-    let total = crate::arena::arena_total_bytes();
+    let total = arena_trigger_total_bytes();
     let arena_debt = (2 * 1024 * 1024).min(total);
     GC_NEXT_TRIGGER_BYTES.with(|trigger| trigger.set(total - arena_debt));
     let expected = GC_MUTATOR_ASSIST_WORK_UNITS
@@ -655,8 +659,14 @@ fn debt_scaled_assists_cannot_be_outrun_by_allocation() {
         let _ = young_leaf();
     }
 
+    // ArenaBytes debt is old-space debt now; keep the large nursery as the
+    // collection workload, but arm the assist with real old capacity.
+    let _old_pressure_subject =
+        crate::arena::arena_alloc_gc_old(4 * 1024 * 1024, 8, GC_TYPE_STRING);
+    reset_old_reclaim_pressure();
+
     // Simulate the collector having fallen far behind: several MB of debt.
-    let total = crate::arena::arena_total_bytes();
+    let total = arena_trigger_total_bytes();
     let debt = (total / 2).max(1);
     GC_NEXT_TRIGGER_BYTES.with(|trigger| trigger.set(total - debt));
     assert!(
@@ -1026,10 +1036,17 @@ fn test_arena_debt_measured_against_effective_trigger_not_raw_cell() {
     GC_NEXT_TRIGGER_BYTES.with(|c| c.set(usize::MAX / 2));
     let ceiling = gc_trigger_absolute_ceiling_bytes();
     let overshoot = 64 * 1024 * 1024;
-    crate::arena::ARENA_TOTAL_BYTES.with(|c| c.set(ceiling.saturating_add(overshoot)));
+    let nursery = crate::arena::copying_nursery_reserved_bytes();
+    crate::arena::ARENA_TOTAL_BYTES.with(|c| {
+        c.set(
+            nursery
+                .saturating_add(ceiling)
+                .saturating_add(overshoot),
+        )
+    });
 
     let effective = effective_next_arena_trigger();
-    let due = crate::arena::arena_total_bytes() >= effective;
+    let due = arena_trigger_total_bytes() >= effective;
     let debt = GcDebtSnapshot::current().arena_debt_bytes;
     let units = gc_mutator_assist_scaled_work_units();
 

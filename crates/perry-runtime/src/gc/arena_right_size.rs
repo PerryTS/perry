@@ -146,7 +146,7 @@ fn current_usage(live_bytes: usize) -> ArenaUsage {
     }
     ArenaUsage {
         live_bytes,
-        capacity_bytes: crate::arena::arena_total_bytes(),
+        capacity_bytes: super::policy::arena_trigger_total_bytes(),
     }
 }
 

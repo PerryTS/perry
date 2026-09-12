@@ -39,12 +39,12 @@ pub(crate) use allocators::{
 #[cfg(test)]
 pub(crate) use block::old_gen_in_use_bytes_slot_index;
 pub(crate) use block::{
-    arena_cell_alloc, arena_cell_try_alloc_current, drain_block_pool_if_requested,
-    new_object_start_bitmap, old_gen_in_use_bytes_sub, release_arena_block,
-    request_block_pool_drain, Arena, ArenaBlock, ArenaBlockRelease, BlockPoolDrainStats,
-    ACTIVE_SURVIVOR, ARENA, ARENA_TOTAL_BYTES, BLOCK_SIZE, FRESH_GENERAL_BLOCK_MIN_USED_BYTES,
-    INLINE_STATE, LONGLIVED_ARENA, OBJECT_START_SHIFT, OLD_ARENA, OLD_GEN_IN_USE_BYTES,
-    SURVIVOR_ARENA_0, SURVIVOR_ARENA_1,
+    arena_cell_alloc, arena_cell_try_alloc_current, arena_reserved_bytes_sub,
+    drain_block_pool_if_requested, new_object_start_bitmap, nursery_reserved_bytes_sub,
+    old_gen_in_use_bytes_sub, release_arena_block, request_block_pool_drain, Arena, ArenaBlock,
+    ArenaBlockRelease, BlockPoolDrainStats, ACTIVE_SURVIVOR, ARENA, ARENA_TOTAL_BYTES, BLOCK_SIZE,
+    FRESH_GENERAL_BLOCK_MIN_USED_BYTES, INLINE_STATE, LONGLIVED_ARENA, NURSERY_RESERVED_BYTES,
+    OBJECT_START_SHIFT, OLD_ARENA, OLD_GEN_IN_USE_BYTES, SURVIVOR_ARENA_0, SURVIVOR_ARENA_1,
 };
 /// #7469 hot-TLS plumbing — see `crate::tls_hot`. The `*_hot_addr` half is
 /// consumed by `tls_hot::fill`; the `hot_*` half is the cached accessor the
@@ -94,8 +94,8 @@ pub(crate) use walk::ArenaRegionTelemetry;
 pub use walk::{
     arena_block_count, arena_in_use_bytes, arena_total_bytes, arena_walk_objects,
     arena_walk_objects_addr_sorted, arena_walk_objects_filtered,
-    arena_walk_objects_with_block_index, general_block_count, longlived_end,
-    old_arena_walk_objects, ArenaResetStats,
+    arena_walk_objects_with_block_index, copying_nursery_reserved_bytes, general_block_count,
+    longlived_end, old_arena_walk_objects, old_space_total_bytes, ArenaResetStats,
 };
 pub(crate) use walk::{
     arena_block_snapshots, arena_telemetry_snapshot, general_block_in_recent_window,
@@ -138,7 +138,9 @@ pub use stats::{
     arena_live_allocated_bytes, js_arena_stats, longlived_in_use_bytes, old_gen_in_use_bytes,
     pointer_in_nursery, pointer_in_old_gen,
 };
-pub(crate) use stats::{arena_live_from_space_bytes, record_arena_live_census};
+pub(crate) use stats::{
+    arena_live_from_space_bytes, old_space_live_allocated_bytes, record_arena_live_census,
+};
 #[cfg(test)]
 pub(crate) use stats::{old_gen_in_use_bytes_recomputed, old_gen_in_use_bytes_resync};
 

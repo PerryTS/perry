@@ -1,5 +1,6 @@
 mod alloc;
 mod arena_right_size;
+mod arena_trigger_old_space;
 mod array_pointer_slot_enumeration;
 mod barrier;
 mod barrier_arming;

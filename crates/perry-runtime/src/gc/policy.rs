@@ -9,7 +9,7 @@ crate::perry_thread_local! {
     pub(super) static GC_FLAGS: Cell<u8> = const { Cell::new(0) };
 }
 
-/// Threshold: run GC when total arena bytes exceed this.
+/// Threshold: run GC when reserved old-space bytes exceed this.
 ///
 /// Current app-pattern tuning: 128 MB. The earlier 64 MB setting reduced
 /// peak RSS on JSON round-trip style workloads, but it also forced a
@@ -27,7 +27,7 @@ pub(super) const GC_THRESHOLD_INITIAL_BYTES: usize = 128 * 1024 * 1024; // 128 M
 /// guardrail is `GC_TRIGGER_ABSOLUTE_CEILING` below.
 pub(super) const GC_THRESHOLD_MAX_BYTES: usize = 1024 * 1024 * 1024; // 1 GB
 
-/// Hard ceiling on the next-GC trigger (arena_total bytes), independent
+/// Hard ceiling on the next-GC trigger (old-space reserved bytes), independent
 /// of how productive recent sweeps have been. Without this, the
 /// >90%-freed branch doubles the step on every productive collection,
 /// > and `next_trigger = new_total + step` lets peak nursery occupancy
@@ -42,11 +42,11 @@ pub(super) const GC_THRESHOLD_MAX_BYTES: usize = 1024 * 1024 * 1024; // 1 GB
 /// > to roughly initial + one iter's allocation buffer + headroom for
 /// > non-arena overhead.
 ///
-/// Floor: even if `arena_total` is already near or past the ceiling
+/// Floor: even if old-space capacity is already near or past the ceiling
 /// (large old-gen + longlived combined live set), keep at least the
 /// 16 MB step floor as headroom — `next_trigger = max(new_total + 16 MB,
 /// min(new_total + step, ceiling))`. This avoids GC thrash when the
-/// non-nursery component of arena_total alone exceeds the ceiling.
+/// old-space component alone exceeds the ceiling.
 ///
 /// 2026-05-02 raise from 64 MB → 128 MB: ECS perf-comprehensive's
 /// allocation-heavy benches (10k two-comp + sync, 5k × 3 cmds) hit
@@ -78,9 +78,8 @@ pub(super) const GC_TRIGGER_ABSOLUTE_CEILING: usize = 128 * 1024 * 1024;
 /// device-derived ceiling while the cell still holds its desktop-default
 /// const initializer.
 /// The adaptive/armed arena trigger WITHOUT the scavenge nursery cap:
-/// compared against `arena_total_bytes()` (all generations), as it always
-/// was. The cap is deliberately not part of this value — it is
-/// young-generation-scoped and lives in [`young_scavenge_cap_due`].
+/// compared against [`crate::arena::old_space_total_bytes`]. Nursery capacity
+/// has its own young-generation trigger in [`young_scavenge_cap_due`].
 pub(super) fn next_arena_trigger_base() -> usize {
     if GC_TRIGGER_ARMED.with(|a| a.get()) {
         GC_NEXT_TRIGGER_BYTES.with(|c| c.get())
@@ -88,6 +87,42 @@ pub(super) fn next_arena_trigger_base() -> usize {
         GC_NEXT_TRIGGER_BYTES
             .with(|c| c.get())
             .min(gc_trigger_absolute_ceiling_bytes())
+    }
+}
+
+/// Committed capacity priced by the ArenaBytes arm.
+///
+/// In the generational collector this is old/long-lived capacity only: Eden
+/// and both survivor semispaces are owned by the copying minor's independent
+/// cap. The non-generational escape hatch has no copying nursery, so it keeps
+/// the historical whole-arena basis.
+#[inline]
+pub(super) fn arena_trigger_total_bytes() -> usize {
+    if gen_gc_enabled() {
+        crate::arena::old_space_total_bytes()
+    } else {
+        crate::arena::arena_total_bytes()
+    }
+}
+
+/// Live-allocation twin of [`arena_trigger_total_bytes`], used by tiny-parse
+/// pressure and idle right-sizing so neither path reintroduces the copying
+/// nursery into whole-heap work.
+#[inline]
+pub(super) fn arena_trigger_live_bytes() -> usize {
+    if gen_gc_enabled() {
+        crate::arena::old_space_live_allocated_bytes()
+    } else {
+        crate::arena::arena_live_allocated_bytes()
+    }
+}
+
+#[inline]
+pub(super) fn arena_trigger_nursery_excluded_bytes() -> usize {
+    if gen_gc_enabled() {
+        crate::arena::copying_nursery_reserved_bytes()
+    } else {
+        0
     }
 }
 
@@ -344,7 +379,7 @@ crate::perry_thread_local! {
     pub(super) static GC_TRIGGER_BUMPED: std::cell::Cell<bool> =
         const { std::cell::Cell::new(false) };
 
-    /// Issue #745: snapshot of `arena_total_bytes()` at the most
+    /// Issue #745: snapshot of `old_space_total_bytes()` at the most
     /// recent `gc_suppress` call. Used by `gc_bump_malloc_trigger`
     /// to compute the suppressed window's arena growth.
     pub(super) static GC_PRE_SUPPRESS_BYTES: std::cell::Cell<usize> =
@@ -412,7 +447,7 @@ pub(super) fn tiny_parse_pressure_headroom_bytes(step: usize) -> usize {
 /// while the adaptive step sat at its 1 GiB maximum saying "back off" and
 /// nothing consulted it. The growth clause is what that step is for.
 ///
-/// `base` is `arena_in_use_bytes()` as the last collection ended
+/// `base` is `old_space_live_allocated_bytes()` as the last collection ended
 /// (`GC_TINY_PARSE_PRESSURE_BASE_BYTES`); `in_use` is the same reading now.
 pub(super) fn tiny_parse_pressure_due_with(
     in_use: usize,
@@ -1119,11 +1154,10 @@ crate::perry_thread_local! {
     /// reading and still escalate. Nursery garbage is not.
     pub(super) static GC_LAST_COLLECTION_POST_IN_USE_BYTES: Cell<usize> =
         const { Cell::new(0) };
-    /// #9831: `arena_in_use_bytes()` as the most recent collection of ANY kind
-    /// ended — the base the tiny-parse pressure guard measures growth from.
-    /// The bump-offset reading rather than the live census above, because the
-    /// guard compares against `arena_in_use_bytes()` at every parse boundary,
-    /// and mixing the two would count every swept hole as growth.
+    /// #9831: `old_space_live_allocated_bytes()` as the most recent collection
+    /// of ANY kind ended — the base the tiny-parse pressure guard measures
+    /// growth from. The same running live-census accessor is read at parse
+    /// boundaries, so nursery bump growth and swept holes are both excluded.
     pub(super) static GC_TINY_PARSE_PRESSURE_BASE_BYTES: Cell<usize> = const { Cell::new(0) };
     #[cfg(test)]
     static GC_TINY_PARSE_PRESSURE_TEST_FORCE: Cell<bool> = const { Cell::new(false) };
@@ -1419,10 +1453,10 @@ pub fn gc_suppress() {
     {
         crate::arena::arena_start_fresh_general_block();
     }
-    // Issue #745: snapshot arena_total at suppress-start so the
+    // Issue #745: snapshot old-space capacity at suppress-start so the
     // matching `gc_bump_malloc_trigger` can size the suppressed
     // window's parse growth and gate the bytes-trigger bump on it.
-    GC_PRE_SUPPRESS_BYTES.with(|c| c.set(crate::arena::arena_total_bytes()));
+    GC_PRE_SUPPRESS_BYTES.with(|c| c.set(arena_trigger_total_bytes()));
     GC_FLAGS.with(|f| f.set(f.get() | GC_FLAG_SUPPRESSED));
 }
 
@@ -1499,8 +1533,7 @@ pub(crate) fn gc_bump_json_malloc_trigger_deferred() {
 
 fn gc_bump_malloc_trigger_inner(collect_now: bool) {
     let current = MALLOC_STATE.with(|s| s.borrow().objects.len());
-    use crate::arena::arena_total_bytes;
-    let bytes_now = arena_total_bytes();
+    let bytes_now = arena_trigger_total_bytes();
     let is_tiny_parse = gc_bump_malloc_trigger_with_snapshot(current, bytes_now);
     if is_tiny_parse {
         let use_gen_gc = gen_gc_enabled();
@@ -1508,7 +1541,7 @@ fn gc_bump_malloc_trigger_inner(collect_now: bool) {
         // EVERY tiny parse on a program whose live set never drops below it.
         // The guard now also requires the arena to have grown past the
         // productivity-priced headroom since the last collection ended.
-        let in_use = crate::arena::arena_in_use_bytes();
+        let in_use = arena_trigger_live_bytes();
         if !tiny_parse_pressure_due(in_use, tiny_parse_in_use_trigger_for_mode()) {
             return;
         }
@@ -1564,13 +1597,13 @@ fn gc_collect_pending_suppressed_parse_slow() {
     // since then has moved the base, and re-pricing here is what keeps the
     // boundary collection from stacking a second minor on top of it. A request
     // nothing has satisfied is still due and still collects.
-    let in_use = crate::arena::arena_in_use_bytes();
+    let in_use = arena_trigger_live_bytes();
     if !tiny_parse_pressure_due(in_use, tiny_parse_in_use_trigger_for_mode()) {
         return;
     }
     diag_tiny_parse_forced_collection("parse_boundary", in_use);
 
-    let total = crate::arena::arena_total_bytes();
+    let total = arena_trigger_total_bytes();
     GC_NEXT_TRIGGER_BYTES.with(|trigger| {
         if trigger.get() > total {
             trigger.set(total);
@@ -1595,7 +1628,7 @@ pub fn gc_schedule_parse_boundary_collection_if_pressure() {
     // #9831: priced the same way as the post-parse guard above — see
     // `tiny_parse_pressure_due_with`.
     if !tiny_parse_pressure_due(
-        crate::arena::arena_in_use_bytes(),
+        arena_trigger_live_bytes(),
         gc_tiny_parse_in_use_trigger_dyn_bytes(),
     ) {
         return;
@@ -2144,8 +2177,8 @@ pub(super) fn pacing_arena_in_use_bytes() -> usize {
 /// | cell | unit | read by |
 /// |---|---|---|
 /// | `GC_LAST_COLLECTION_POST_IN_USE_BYTES` | `pacing_arena_in_use_bytes()` — the LIVE census (`arena_live_allocated_bytes`), test-injectable | `arena_growth_full_escalation_due` |
-/// | `GC_TINY_PARSE_PRESSURE_BASE_BYTES` (#9831) | `arena_in_use_bytes()` — BUMP OFFSETS, the same reading the guard takes at each parse boundary | `tiny_parse_pressure_due_with` |
-/// | `GC_NEXT_TRIGGER_BYTES` (#9840) | `arena_total_bytes()` — COMMITTED bytes, which is what `next_arena_trigger_base()` is compared against | `gc_budgeted_due_trigger`'s `ArenaBytes` arm |
+/// | `GC_TINY_PARSE_PRESSURE_BASE_BYTES` (#9831) | `old_space_live_allocated_bytes()` — live non-nursery bytes, the same reading the guard takes at each parse boundary | `tiny_parse_pressure_due_with` |
+/// | `GC_NEXT_TRIGGER_BYTES` (#9840) | `old_space_total_bytes()` — committed non-nursery bytes, which is what `next_arena_trigger_base()` is compared against | `gc_budgeted_due_trigger`'s `ArenaBytes` arm |
 ///
 /// The third is *not* written here, and that is deliberate rather than an
 /// omission: re-arming the arena trigger needs the collection's productivity
@@ -2157,14 +2190,14 @@ pub(super) fn pacing_arena_in_use_bytes() -> usize {
 /// collection finishers call; #9840 is the change that made that "both"
 /// true, and it is the same symmetry #9831 applied to the cell above.
 /// Mixing the units — re-baselining a committed-bytes trigger from a bump-
-/// offset or live-census base — would arm it below the arena's own total and
-/// make the arm due the instant it re-armed.
+/// offset or live-census base would mix incompatible units.
 pub(super) fn note_collection_finished_arena_occupancy(full: bool) {
     let bytes = pacing_arena_in_use_bytes();
     GC_LAST_COLLECTION_POST_IN_USE_BYTES.with(|cell| cell.set(bytes));
     // #9831: the same moment, in the units the tiny-parse guard reads.
-    GC_TINY_PARSE_PRESSURE_BASE_BYTES.with(|cell| cell.set(crate::arena::arena_in_use_bytes()));
-    super::arena_right_size::note_collection_finished(bytes, full);
+    let old_live = arena_trigger_live_bytes();
+    GC_TINY_PARSE_PRESSURE_BASE_BYTES.with(|cell| cell.set(old_live));
+    super::arena_right_size::note_collection_finished(old_live, full);
 }
 
 /// The arena reading [`arena_growth_full_escalation_due`] tests — see
@@ -2342,7 +2375,7 @@ fn gc_rebaseline_malloc_trigger_to_survivors(mstep: usize) {
     GC_NEXT_MALLOC_TRIGGER.with(|c| c.set(survivors + mstep));
 }
 
-/// Which nursery-collection finisher is re-baselining the whole-arena trigger.
+/// Which nursery-collection finisher is re-baselining the old-space trigger.
 /// Diagnostic attribution only — the arithmetic is identical for both.
 #[derive(Clone, Copy)]
 enum ArenaRebaselineArm {
@@ -2375,8 +2408,8 @@ impl ArenaRebaselineArm {
 /// still here (see `gc_finish_arena_trigger_collection`): an arena minor that
 /// skipped the malloc sweep must not move the malloc trigger.
 ///
-/// **Unit.** The base is `arena_total_bytes()` — COMMITTED bytes, all
-/// generations — because that is the quantity `next_arena_trigger_base()` is
+/// **Unit.** The base is `old_space_total_bytes()` — COMMITTED non-nursery
+/// bytes — because that is the quantity `next_arena_trigger_base()` is
 /// compared against in `gc_budgeted_due_trigger`. It is deliberately neither
 /// of the two post-collection occupancy readings published at
 /// [`note_collection_finished_arena_occupancy`] (a live census, and #9831's
@@ -2384,7 +2417,7 @@ impl ArenaRebaselineArm {
 /// Re-baselining this cell from either of those would arm the trigger below
 /// the arena's own total and make the arm due the instant it re-armed.
 ///
-/// **What is in scope.** The two *nursery-trigger* finishers, whichever
+/// **What is in scope.** The two allocation-trigger finishers, whichever
 /// collection their arm ended up running — an `ArenaBytes` or `MallocCount`
 /// trigger that `arena_growth_full_escalation_due()` escalated to a full still
 /// finishes here, exactly as the arena arm's escalated fulls already did before
@@ -2548,10 +2581,10 @@ fn gc_rebaseline_arena_trigger_after_collection(
             );
         }
     }
-    let new_total = crate::arena::arena_total_bytes();
+    let new_total = arena_trigger_total_bytes();
     // C4b-δ-tune: hard cap on next_trigger so the >90%-freed
-    // step-doubling can't drive peak nursery past the initial
-    // threshold. Floor: at least 16 MB of headroom past
+    // step-doubling can't leave the old-space trigger unbounded. Floor: at
+    // least 16 MB of headroom past
     // `new_total` so a workload whose post-GC live set already
     // approaches the ceiling doesn't thrash on every fresh
     // allocation.
@@ -2572,10 +2605,10 @@ fn gc_rebaseline_arena_trigger_after_collection(
     let capped = stepped.min(gc_trigger_absolute_ceiling_bytes());
     let floor = new_total.saturating_add(gc_trigger_headroom_floor_bytes());
     // #7742: whole-block promotion hands Eden's blocks to old-gen instead of
-    // recycling them, so the free young capacity that would have carried the
-    // mutator to the next collection is gone from `new_total`. Give it back as
-    // headroom (consumed once) rather than by re-reserving the blocks, which
-    // would map memory the program may never reach.
+    // recycling them. `new_total` now sees those blocks as old space, but the
+    // free young capacity that would have carried the mutator to the next
+    // collection is still gone. Give that runway back as headroom (consumed
+    // once) rather than by re-reserving blocks the program may never reach.
     let next_trigger =
         std::cmp::max(capped, floor).saturating_add(super::take_promoted_young_capacity_credit());
     GC_NEXT_TRIGGER_BYTES.with(|c| c.set(next_trigger));
@@ -2586,10 +2619,12 @@ fn gc_rebaseline_arena_trigger_after_collection(
         // every `sweep_freed=`/`freed_bytes=` it can grep, so a second line
         // carrying those keys would double-count reclaim in the ratchet.
         eprintln!(
-            "[gc-arena-rebaseline] arm={} next_trigger={} total={} headroom={} pct={}% step={}→{}",
+            "[gc-arena-rebaseline] arm={} next_trigger={} total={} old_total={} nursery_excluded={} headroom={} pct={}% step={}→{}",
             arm.label(),
             next_trigger,
             new_total,
+            new_total,
+            arena_trigger_nursery_excluded_bytes(),
             next_trigger.saturating_sub(new_total),
             scored_pct_freed,
             old_step,
@@ -2717,8 +2752,9 @@ fn gc_finish_malloc_trigger_collection(
     if outcome.malloc_swept {
         GC_NEXT_MALLOC_TRIGGER.with(|c| c.set(survivors + mstep));
     }
-    // #9840: this collection swept the nursery too, so the whole-arena trigger
-    // is measured from after it — see `gc_rebaseline_arena_trigger_after_collection`.
+    // #9840: this collection can promote into or reclaim old space too, so the
+    // old-space trigger is measured from after it — see
+    // `gc_rebaseline_arena_trigger_after_collection`.
     if arena_rebaseline_all_enabled() {
         gc_rebaseline_arena_trigger_after_collection(
             pre_in_use,
@@ -3240,12 +3276,10 @@ fn gc_budgeted_due_trigger() -> Option<BudgetedGcTrigger> {
         return Some(BudgetedGcTrigger::OldReclaim);
     }
 
-    // Two separately-scoped arena arms (see `young_scavenge_cap_due` for why
-    // they must not share a basis): the adaptive base trigger against the
-    // whole arena, and the scavenge nursery cap against the young generation
-    // only.
-    let total = crate::arena::arena_total_bytes();
-    if total >= next_arena_trigger_base() {
+    // Two separately-scoped arms: ArenaBytes is old-space capacity only; the
+    // scavenge cap owns nursery occupancy and hands it to the copying minor.
+    let old_total = arena_trigger_total_bytes();
+    if old_total >= next_arena_trigger_base() {
         return Some(BudgetedGcTrigger::ArenaBytes);
     }
     if young_scavenge_cap_due() {

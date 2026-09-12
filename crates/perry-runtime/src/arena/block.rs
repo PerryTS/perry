@@ -556,7 +556,7 @@ impl Arena {
             space,
             initial.object_starts_ptr(),
         );
-        ARENA_TOTAL_BYTES.with(|t| t.set(t.get() + initial.size));
+        arena_reserved_bytes_add(generation, initial.size);
         Arena {
             blocks: vec![initial],
             current: 0,
@@ -686,7 +686,7 @@ impl Arena {
             }
         };
         self.current = new_idx;
-        ARENA_TOTAL_BYTES.with(|t| t.set(t.get() + fresh_size));
+        arena_reserved_bytes_add(self.generation, fresh_size);
     }
 
     fn alloc_fresh_block(&mut self, size: usize, align: usize) -> *mut u8 {
@@ -1004,6 +1004,13 @@ thread_local! {
     /// alloc into a tombstone slot or the end, and release inside
     /// `arena_reset_empty_blocks`).
     pub(crate) static ARENA_TOTAL_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+
+    /// Cached nursery share of [`ARENA_TOTAL_BYTES`]: Eden plus BOTH survivor
+    /// semispaces. The ArenaBytes policy subtracts this value so the copying
+    /// nursery cannot arm old-space work merely by filling its from-space.
+    /// Maintained beside the whole-arena counter so the allocation trigger
+    /// remains O(1).
+    pub(crate) static NURSERY_RESERVED_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 crate::perry_thread_local! {
@@ -1032,6 +1039,29 @@ crate::perry_thread_local! {
     /// the OldReclaim trigger.
     pub(crate) static OLD_GEN_IN_USE_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 
+}
+
+#[inline]
+pub(crate) fn arena_reserved_bytes_add(generation: HeapGeneration, bytes: usize) {
+    ARENA_TOTAL_BYTES.with(|total| total.set(total.get().saturating_add(bytes)));
+    if generation == HeapGeneration::Nursery {
+        NURSERY_RESERVED_BYTES.with(|nursery| nursery.set(nursery.get().saturating_add(bytes)));
+    }
+}
+
+#[inline]
+pub(crate) fn arena_reserved_bytes_sub(generation: HeapGeneration, bytes: usize) {
+    ARENA_TOTAL_BYTES.with(|total| total.set(total.get().saturating_sub(bytes)));
+    if generation == HeapGeneration::Nursery {
+        nursery_reserved_bytes_sub(bytes);
+    }
+}
+
+/// Transfer already-accounted capacity out of the nursery without changing
+/// the whole-arena total (whole-block promotion).
+#[inline]
+pub(crate) fn nursery_reserved_bytes_sub(bytes: usize) {
+    NURSERY_RESERVED_BYTES.with(|nursery| nursery.set(nursery.get().saturating_sub(bytes)));
 }
 
 // `ARENA` and `INLINE_STATE` below stay raw: they are NAMED `HotTls` fields

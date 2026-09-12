@@ -141,6 +141,15 @@ pub fn arena_live_allocated_bytes() -> usize {
     })
 }
 
+/// Header-inclusive live bytes outside the copying nursery.
+///
+/// Both operands advance from the same exact post-collection census, so their
+/// difference excludes nursery allocation growth between collections without
+/// adding accounting to the generated bump-allocation fast path.
+pub(crate) fn old_space_live_allocated_bytes() -> usize {
+    arena_live_allocated_bytes().saturating_sub(arena_live_from_space_bytes())
+}
+
 /// Get arena memory statistics: (heap_used, heap_total).
 /// `heap_used` is live allocated object bytes; `heap_total` is total reserved
 /// block capacity. Allocation high-water remains separately available through
