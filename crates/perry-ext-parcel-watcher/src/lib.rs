@@ -5,7 +5,6 @@
 //! that binding directly with `notify`, so platform packages whose `main` is a
 //! `.node` addon remain usable in a single static Perry binary.
 
-use fancy_regex::Regex;
 use notify::event::{ModifyKind, RenameMode};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use perry_ffi::{
@@ -16,6 +15,7 @@ use perry_ffi::{
     register_handle, ErrorKind, GcRootVisitor, Handle, JsClosure, JsPromise, JsString, JsValue,
     Promise, RawClosureHeader, StringHeader, TransientRootScope,
 };
+use perry_perex::{Budget, Limits, Regex};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
@@ -35,32 +35,62 @@ struct WatchOptionsKey {
     ignore_globs: Vec<String>,
 }
 
-#[derive(Clone)]
 struct IgnoreMatcher {
     paths: Vec<PathBuf>,
     globs: Vec<Regex>,
+    work: usize,
+}
+
+const REGEX_WORK: usize = 100_000_000;
+const MAX_IGNORE_PATTERNS: usize = 4096;
+
+impl Default for IgnoreMatcher {
+    fn default() -> Self {
+        Self {
+            paths: Vec::new(),
+            globs: Vec::new(),
+            work: REGEX_WORK,
+        }
+    }
 }
 
 impl IgnoreMatcher {
     fn compile(key: &WatchOptionsKey) -> Result<Self, String> {
-        let mut globs = Vec::with_capacity(key.ignore_globs.len());
+        if key.ignore_globs.len() > MAX_IGNORE_PATTERNS {
+            return Err("@parcel/watcher ignore pattern count limit exceeded".into());
+        }
+        let mut globs = Vec::new();
+        globs
+            .try_reserve_exact(key.ignore_globs.len())
+            .map_err(|_| "Unable to allocate @parcel/watcher ignore programs".to_owned())?;
+        let mut limits = Limits::default();
+        let mut budget = Budget::new(REGEX_WORK);
         for source in &key.ignore_globs {
-            globs.push(
-                Regex::new(source)
-                    .map_err(|error| format!("Invalid @parcel/watcher ignore regex: {error}"))?,
-            );
+            let regex = Regex::compile(source.as_bytes(), "", limits, &mut budget)
+                .map_err(|error| format!("Invalid @parcel/watcher ignore regex: {error}"))?;
+            // Bound the complete matcher's retained programs, not only each
+            // individual pattern. All compilation shares one work allowance.
+            limits.program_bytes -= regex.program_bytes();
+            globs.push(regex);
         }
         Ok(Self {
             paths: key.ignore_paths.clone(),
             globs,
+            work: REGEX_WORK,
         })
     }
 
-    fn ignores(&self, root: &Path, path: &Path) -> bool {
+    fn ignores(&self, root: &Path, path: &Path) -> Result<bool, String> {
         if self.paths.iter().any(|ignored| path.starts_with(ignored)) {
-            return true;
+            return Ok(true);
+        }
+        if self.globs.is_empty() {
+            return Ok(false);
         }
         let relative = path.strip_prefix(root).unwrap_or(path);
+        if relative.as_os_str().as_encoded_bytes().len() > Limits::default().input_bytes / 3 {
+            return Err("@parcel/watcher ignore path size limit exceeded".into());
+        }
         let relative = relative
             .components()
             .filter_map(|component| match component {
@@ -69,9 +99,16 @@ impl IgnoreMatcher {
             })
             .collect::<Vec<_>>()
             .join("/");
-        self.globs
-            .iter()
-            .any(|regex| regex.is_match(&relative).unwrap_or(false))
+        let mut budget = Budget::new(self.work);
+        for regex in &self.globs {
+            if regex
+                .is_match(relative.as_bytes(), Limits::default(), &mut budget)
+                .map_err(|error| format!("@parcel/watcher ignore matching failed: {error}"))?
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }
 
@@ -325,7 +362,7 @@ fn snapshot_tree(root: &Path, matcher: &IgnoreMatcher) -> Result<Snapshot, Strin
         for entry in entries {
             let entry = entry.map_err(|error| error.to_string())?;
             let path = entry.path();
-            if matcher.ignores(root, &path) {
+            if matcher.ignores(root, &path)? {
                 continue;
             }
             let Some(metadata) = snapshot_entry(&path) else {
@@ -391,7 +428,7 @@ fn coalesce(
     matcher: &IgnoreMatcher,
     snapshot: &Snapshot,
     changes: &[Change],
-) -> Vec<ParcelEvent> {
+) -> Result<Vec<ParcelEvent>, String> {
     let mut touched = BTreeSet::<PathBuf>::new();
     for change in changes {
         let path = match change {
@@ -399,7 +436,7 @@ fn coalesce(
             Change::Rescan => continue,
         };
         let path = normalize_root(path.clone());
-        if matcher.ignores(root, &path) {
+        if matcher.ignores(root, &path)? {
             continue;
         }
         touched.insert(path);
@@ -448,7 +485,7 @@ fn coalesce(
             .cmp(&rank(right.kind))
             .then_with(|| left.path.cmp(&right.path))
     });
-    events
+    Ok(events)
 }
 
 fn update_subscription_snapshot(subscription: &mut Subscription, events: &[ParcelEvent]) {
@@ -597,14 +634,21 @@ pub extern "C" fn js_parcel_watcher_process_pending() -> i32 {
                     }
                 }
             } else {
-                let events = coalesce(
+                match coalesce(
                     &subscription.root,
                     &subscription.matcher,
                     &subscription.snapshot,
                     &changes,
-                );
-                update_subscription_snapshot(subscription, &events);
-                events
+                ) {
+                    Ok(events) => {
+                        update_subscription_snapshot(subscription, &events);
+                        events
+                    }
+                    Err(error) => {
+                        errors.push((id, error));
+                        Vec::new()
+                    }
+                }
             }
         };
         if fire_events(id, events) {
@@ -896,6 +940,7 @@ mod tests {
         let matcher = IgnoreMatcher {
             paths: Vec::new(),
             globs: Vec::new(),
+            ..Default::default()
         };
         let created = root.join("created.ts");
         let transient = root.join("transient.ts");
@@ -910,7 +955,8 @@ mod tests {
                 Change::Create(transient.clone()),
                 Change::Delete(transient),
             ],
-        );
+        )
+        .unwrap();
         assert_eq!(
             events,
             vec![ParcelEvent {
@@ -929,11 +975,12 @@ mod tests {
         let matcher = IgnoreMatcher {
             paths: Vec::new(),
             globs: Vec::new(),
+            ..Default::default()
         };
         let snapshot = snapshot_tree(&root, &matcher).unwrap();
         fs::write(&path, "two-two").unwrap();
         assert_eq!(
-            coalesce(&root, &matcher, &snapshot, &[Change::Create(path.clone())],),
+            coalesce(&root, &matcher, &snapshot, &[Change::Create(path.clone())],).unwrap(),
             vec![ParcelEvent {
                 path,
                 kind: CoalescedKind::Update,
@@ -951,6 +998,7 @@ mod tests {
         let matcher = IgnoreMatcher {
             paths: Vec::new(),
             globs: Vec::new(),
+            ..Default::default()
         };
         let snapshot = snapshot_tree(&root, &matcher).unwrap();
         fs::rename(&old, &new).unwrap();
@@ -960,7 +1008,8 @@ mod tests {
                 &matcher,
                 &snapshot,
                 &[Change::Delete(old.clone()), Change::Create(new.clone())],
-            ),
+            )
+            .unwrap(),
             vec![
                 ParcelEvent {
                     path: old,
@@ -994,6 +1043,7 @@ mod tests {
         let matcher = IgnoreMatcher {
             paths: vec![temp.path().join("ignored.txt")],
             globs: Vec::new(),
+            ..Default::default()
         };
         let old = snapshot_tree(temp.path(), &matcher).unwrap();
         let encoded = serde_json::to_vec(&old).unwrap();
@@ -1043,9 +1093,83 @@ mod tests {
         let root = Path::new("/tmp/project");
         let matcher = IgnoreMatcher {
             paths: Vec::new(),
-            globs: vec![Regex::new(r"^(?:.*\.log)$").unwrap()],
+            globs: vec![Regex::compile(
+                br"^(?:.*\.log)$",
+                "",
+                Limits::default(),
+                &mut Budget::new(REGEX_WORK),
+            )
+            .unwrap()],
+            ..Default::default()
         };
-        assert!(matcher.ignores(root, &root.join(".cache/debug.log")));
-        assert!(!matcher.ignores(root, &root.join("src/main.ts")));
+        assert!(matcher
+            .ignores(root, &root.join(".cache/debug.log"))
+            .unwrap());
+        assert!(!matcher.ignores(root, &root.join("src/main.ts")).unwrap());
+    }
+
+    #[test]
+    fn perex_failures_reach_snapshot_and_batch_error_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("a.txt");
+        fs::write(&path, "a").unwrap();
+        let mut matcher = IgnoreMatcher::compile(&WatchOptionsKey {
+            ignore_globs: vec!["^unmatched$".into()],
+            ..Default::default()
+        })
+        .unwrap();
+        matcher.work = 0;
+        assert!(matcher
+            .ignores(temp.path(), &path)
+            .unwrap_err()
+            .contains("WorkLimit"));
+        assert!(snapshot_tree(temp.path(), &matcher)
+            .unwrap_err()
+            .contains("WorkLimit"));
+        assert!(coalesce(
+            temp.path(),
+            &matcher,
+            &Snapshot::new(),
+            &[Change::Create(path)]
+        )
+        .unwrap_err()
+        .contains("WorkLimit"));
+        assert!(IgnoreMatcher::compile(&WatchOptionsKey {
+            ignore_globs: vec!["(".into()],
+            ..Default::default()
+        })
+        .is_err());
+        assert!(IgnoreMatcher::compile(&WatchOptionsKey {
+            ignore_globs: vec![String::new(); MAX_IGNORE_PATTERNS + 1],
+            ..Default::default()
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn perex_ignore_patterns_follow_javascript_classes_and_lookarounds() {
+        let root = Path::new("/project");
+        for (pattern, path, expected) in [
+            (r"^\d+\.log$", "123.log", true),
+            (r"^\d+\.log$", "١٢٣.log", false),
+            (r"^\w+\.log$", "é.log", false),
+            (r"^(?!keep/).*\.log$", "keep/a.log", false),
+            (r"^(?!keep/).*\.log$", "cache/a.log", true),
+            (r"(?<=cache/)[^/]+\.log$", "cache/a.log", true),
+            (r"^(a+)\1\.txt$", "aaaa.txt", true),
+            (r"^(a+)\1\.txt$", "aaa.txt", false),
+            (r"^.*\.log$", "x.log\n", false),
+        ] {
+            let matcher = IgnoreMatcher::compile(&WatchOptionsKey {
+                ignore_globs: vec![pattern.to_owned()],
+                ..Default::default()
+            })
+            .unwrap();
+            assert_eq!(
+                matcher.ignores(root, &root.join(path)).unwrap(),
+                expected,
+                "{pattern:?} {path:?}"
+            );
+        }
     }
 }

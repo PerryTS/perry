@@ -37,6 +37,9 @@ pub extern "C" fn js_new_target_value() -> f64 {
     f64::from_bits(CURRENT_NEW_TARGET.with(|value| value.get()))
 }
 
+mod rooted_arguments;
+pub(crate) use rooted_arguments::{construct_rooted_arguments, construct_two_rooted};
+
 /// Issue #838 followup (b): construct an instance from a function value.
 /// Pairs with `js_register_function_prototype_method` — both arms route
 /// through `synthetic_class_id_for_function` so the instance's
@@ -692,31 +695,9 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
             // #2889: `new (rebound RegExp)(pattern, flags)`.
             #[cfg(feature = "regex-engine")]
             "RegExp" => {
-                let flags_value = if args.len() < 2 {
-                    f64::from_bits(crate::value::TAG_UNDEFINED)
-                } else {
-                    args[1]
-                };
-                let scope = crate::gc::RuntimeHandleScope::new();
-                let flags_value_handle = scope.root_nanbox_f64(flags_value);
-                let (pattern, flags_value) = flags_value_handle.across_nanbox(|| {
-                    if args.is_empty() {
-                        std::ptr::null_mut()
-                    } else {
-                        crate::builtins::js_string_coerce(args[0])
-                    }
-                });
-                let pattern_handle = scope.root_string_ptr(pattern);
-                let (flags, pattern) =
-                    pattern_handle.across_const::<crate::StringHeader, _>(|| {
-                        if flags_value.to_bits() == crate::value::TAG_UNDEFINED {
-                            std::ptr::null_mut()
-                        } else {
-                            crate::builtins::js_string_coerce(flags_value)
-                        }
-                    });
-                let re = crate::regex::js_regexp_new(pattern, flags);
-                return crate::value::js_nanbox_pointer(re as i64);
+                let pattern = args.first().copied().unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+                let flags = args.get(1).copied().unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+                return crate::value::js_nanbox_pointer(crate::regex::js_regexp_construct(pattern, flags) as i64);
             }
             // #2889: `new (rebound TypedArray)(lengthOrSource)`.
             "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"

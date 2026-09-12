@@ -1099,9 +1099,9 @@ pub(crate) fn accessor_descriptor_keys_for_obj(obj: usize) -> Vec<String> {
 /// invoking it. Returns `None` (rather than reading the field) when there is no
 /// accessor at all, so the caller falls back to an ordinary field read.
 pub(crate) fn reflect_getter_closure_bits(value: f64, key: f64) -> Option<u64> {
-    if !state().descriptors.accessors_in_use.get() {
-        return None;
-    }
+    // Builtin accessors live in the descriptor table without arming the
+    // user-accessor fast-path gate. Reflect.get with a distinct receiver must
+    // find them too; get_accessor_descriptor uses each owner's key summary.
     // #6943: `js_string_coerce` allocates for every non-heap-string key and can
     // run a user `toString` / `valueOf` for an object key, so it can trigger a
     // GC that **evacuates**. `value` (the prototype-chain walk's starting

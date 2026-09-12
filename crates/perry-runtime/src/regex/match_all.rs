@@ -1,397 +1,284 @@
-use super::{
-    byte_index_to_utf16_index, is_valid_ptr, is_valid_regex_ptr, js_regexp_new, js_string_from_str,
-    set_exec_array_metadata_value, string_as_str, throw_match_all_non_global_regex,
-    utf16_index_to_byte, RegExpHeader,
-};
-use crate::array::ArrayHeader;
+//! Lazy RegExp String Iterators. All retained values are ordinary traced
+//! fields; each next call reacquires the original subject and owns its scratch.
+use super::perex_api as api;
+use super::perex_dispatch as dispatch;
+use super::perex_match_search::{advance, scan_flags, subject};
+use super::perex_memory::MemoryBudget;
+use super::perex_runtime::{self as host, EngineError};
+use super::REGEXP_STRING_ITERATOR_CLASS_ID;
+use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 use crate::object::ObjectHeader;
 use crate::string::StringHeader;
 use crate::value::{
-    js_nanbox_get_pointer, js_nanbox_pointer, js_nanbox_string, JSValue, TAG_UNDEFINED,
+    js_nanbox_get_pointer, js_nanbox_pointer, js_nanbox_string, JSValue, TAG_NULL, TAG_UNDEFINED,
 };
+use perex::Budget;
 
-/// Class id for `String.prototype.matchAll`'s RegExp String Iterator object.
-/// Re-exported from the parent (kept ungated there so always-linked iterator
-/// dispatch can reference it even when this engine module is gated out).
-use super::REGEXP_STRING_ITERATOR_CLASS_ID;
+const MATCHER: u32 = 0;
+const INPUT: u32 = 1;
+const GLOBAL: u32 = 2;
+const UNICODE: u32 = 3;
+const DONE: u32 = 4;
 
-/// Owned, GC-inert snapshot of one matchAll result, copied OUT of the subject
-/// string before the allocating phase below. There is no user callback here —
-/// sweeping isn't the risk (internal allocations only), MOVING is: an
-/// alloc-point minor can be moving under the evacuation policy, and both a
-/// cached `&str` and the `Captures` borrowing it would silently read
-/// from-space after the subject relocates (2026-07-09 audit, wave 1).
-struct OwnedMatchAllData {
-    /// Group 0 (full match) + capture groups (None = non-participating).
-    groups: Vec<Option<String>>,
-    /// Named groups in declaration order: (name, text).
-    named: Vec<(String, Option<String>)>,
-    /// Char index of the match start in the full subject.
-    match_index: f64,
+fn get(iter: &RuntimeHandle<'_>, slot: u32) -> f64 {
+    f64::from_bits(crate::object::js_object_get_field(iter.get_raw_const_ptr(), slot).bits())
 }
-
-/// Build the named-capture `groups` object from an owned snapshot, or return
-/// `undefined` when the pattern declares no named groups.
-fn build_match_all_groups_owned(
-    named: &[(String, Option<String>)],
-    scope: &crate::gc::RuntimeHandleScope,
-) -> f64 {
-    if named.is_empty() {
-        return f64::from_bits(TAG_UNDEFINED);
-    }
-    let groups_obj = crate::object::js_object_alloc(0, 0);
-    let groups_handle = scope.root_raw_mut_ptr(groups_obj);
-    for (name, text) in named {
-        let val = match text {
-            Some(t) => js_nanbox_string(js_string_from_str(t) as i64),
-            None => f64::from_bits(TAG_UNDEFINED),
-        };
-        // Root the value across the key allocation below.
-        let val_handle = scope.root_nanbox_f64(val);
-        let key_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        let groups_obj = groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
-        crate::object::js_object_set_field_by_name(
-            groups_obj,
-            key_ptr,
-            val_handle.get_nanbox_f64(),
-        );
-    }
-    js_nanbox_pointer(groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64)
-}
-
-fn set_match_all_groups(arr: *mut ArrayHeader, groups_value: f64) {
-    // Root both sides across the key-string allocation (a moving minor at
-    // that point would leave either raw local stale).
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let arr_handle = scope.root_raw_mut_ptr(arr);
-    let groups_handle = scope.root_nanbox_f64(groups_value);
-    let groups_key = js_string_from_str("groups");
-    crate::array::js_array_set_string_key(
-        arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
-        groups_key,
-        groups_handle.get_nanbox_f64(),
-    );
-}
-
-unsafe fn materialize_match_all_results(
-    s: *const StringHeader,
-    re: *const RegExpHeader,
-    start_char_index: usize,
-) -> *mut ArrayHeader {
-    if !is_valid_ptr(s) || !is_valid_regex_ptr(re) {
-        return crate::array::js_array_alloc(0);
-    }
-
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let s_handle = scope.root_string_ptr(s);
-
-    // Phase 1 (borrowing, no JS allocation): snapshot every match into owned
-    // Rust data. The fancy-regex fallback (lookbehind/backreferences) is
-    // needed because the never-match standard program would yield
-    // an empty iterator otherwise.
-    // The scan starts AT `search_start` inside the whole subject — never on a
-    // `&str_data[search_start..]` slice, which would strip the context every
-    // zero-width assertion reads (#9429) — and follows the ECMAScript
-    // empty-match rule rather than a Rust iterator's (#9430).
-    let str_data = string_as_str(s);
-    let search_start = utf16_index_to_byte(str_data, start_char_index);
-
-    let mut owned: Vec<OwnedMatchAllData> = Vec::new();
-    if let Some(repeat_matcher) = super::lookup_repeat_matcher_for(re, str_data, search_start) {
-        // `regress`'s own iterator is positional and already advances one
-        // position past a zero-width match, which is the ECMAScript rule.
-        for matched in repeat_matcher.regex.find_from(str_data, search_start) {
-            owned.push(OwnedMatchAllData {
-                groups: matched
-                    .groups()
-                    .map(|group| group.map(|range| str_data[range].to_string()))
-                    .collect(),
-                named: repeat_matcher
-                    .capture_names
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(index, name)| {
-                        name.as_ref().map(|name| {
-                            (
-                                name.clone(),
-                                matched
-                                    .group(index + 1)
-                                    .map(|range| str_data[range].to_string()),
-                            )
-                        })
-                    })
-                    .collect(),
-                match_index: byte_index_to_utf16_index(str_data, matched.start()) as f64,
-            });
-        }
-    } else if let Some(fre) = super::lookup_fancy_regex(re) {
-        let named_names: Vec<(usize, String)> = fre
-            .capture_names()
-            .enumerate()
-            .filter_map(|(i, name)| name.map(|n| (i, n.to_string())))
-            .collect();
-        for caps in super::global_scan::fancy_captures(&fre, str_data, search_start) {
-            owned.push(OwnedMatchAllData {
-                groups: (0..caps.len())
-                    .map(|j| caps.get(j).map(|m| m.as_str().to_string()))
-                    .collect(),
-                named: named_names
-                    .iter()
-                    .map(|(gi, n)| (n.clone(), caps.get(*gi).map(|m| m.as_str().to_string())))
-                    .collect(),
-                match_index: caps
-                    .get(0)
-                    .map(|m| byte_index_to_utf16_index(str_data, m.start()) as f64)
-                    .unwrap_or(start_char_index as f64),
-            });
-        }
-    } else {
-        let regex = super::lazy::header_std_regex(re);
-        let named_names: Vec<(usize, String)> = regex
-            .capture_names()
-            .enumerate()
-            .filter_map(|(i, name)| name.map(|n| (i, n.to_string())))
-            .collect();
-        for caps in super::global_scan::std_captures(regex, str_data, search_start) {
-            owned.push(OwnedMatchAllData {
-                groups: (0..caps.len())
-                    .map(|j| caps.get(j).map(|m| m.as_str().to_string()))
-                    .collect(),
-                named: named_names
-                    .iter()
-                    .map(|(gi, n)| (n.clone(), caps.get(*gi).map(|m| m.as_str().to_string())))
-                    .collect(),
-                match_index: caps
-                    .get(0)
-                    .map(|m| byte_index_to_utf16_index(str_data, m.start()) as f64)
-                    .unwrap_or(start_char_index as f64),
-            });
-        }
-    }
-
-    // Phase 2 (allocating, no borrows into the subject): build the result
-    // arrays from the owned snapshots. Every heap pointer lives in a rooted
-    // handle and is re-derived after each allocation; the `input` metadata
-    // is the rooted subject itself (same string value, current address).
-    let outer = crate::array::js_array_alloc(owned.len() as u32);
-    let outer_handle = scope.root_raw_mut_ptr(outer);
-    (*outer_handle.get_raw_mut_ptr::<ArrayHeader>()).length = owned.len() as u32;
-
-    for (i, m) in owned.iter().enumerate() {
-        let match_scope = crate::gc::RuntimeHandleScope::new();
-        let inner = crate::array::js_array_alloc(m.groups.len() as u32);
-        let inner_handle = match_scope.root_raw_mut_ptr(inner);
-        (*inner_handle.get_raw_mut_ptr::<ArrayHeader>()).length = m.groups.len() as u32;
-
-        for (j, group) in m.groups.iter().enumerate() {
-            let value = match group {
-                Some(text) => js_nanbox_string(js_string_from_str(text) as i64),
-                None => f64::from_bits(TAG_UNDEFINED),
-            };
-            let inner = inner_handle.get_raw_mut_ptr::<ArrayHeader>();
-            crate::array::store_array_slot(inner, j, value.to_bits());
-        }
-
-        set_exec_array_metadata_value(
-            inner_handle.get_raw_mut_ptr::<ArrayHeader>(),
-            js_nanbox_string(s_handle.get_raw_const_ptr::<StringHeader>() as i64),
-            m.match_index,
-        );
-        // #7341: `build_match_all_groups_owned` allocates; pair it with the
-        // inner-array re-read rather than reading it separately afterwards.
-        let (groups_value, inner_after) = inner_handle
-            .across_mut::<ArrayHeader, _>(|| build_match_all_groups_owned(&m.named, &match_scope));
-        set_match_all_groups(inner_after, groups_value);
-
-        let inner_boxed = js_nanbox_pointer(inner_handle.get_raw_mut_ptr::<ArrayHeader>() as i64);
-        let outer = outer_handle.get_raw_mut_ptr::<ArrayHeader>();
-        crate::array::store_array_slot(outer, i, inner_boxed.to_bits());
-    }
-
-    outer_handle.get_raw_mut_ptr::<ArrayHeader>()
-}
-
-unsafe fn alloc_regexp_string_iterator(matches: *mut ArrayHeader) -> *mut ObjectHeader {
-    // Root the matches array across the iterator-object allocation.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let matches_handle = scope.root_raw_mut_ptr(matches);
-    let obj = crate::object::js_object_alloc(REGEXP_STRING_ITERATOR_CLASS_ID, 2);
+fn set(iter: &RuntimeHandle<'_>, slot: u32, value: f64) {
     crate::object::js_object_set_field(
-        obj,
-        0,
-        JSValue::from_bits(
-            js_nanbox_pointer(matches_handle.get_raw_mut_ptr::<ArrayHeader>() as i64).to_bits(),
-        ),
+        iter.get_raw_mut_ptr(),
+        slot,
+        JSValue::from_bits(value.to_bits()),
     );
-    crate::object::js_object_set_field(obj, 1, JSValue::number(0.0));
-    crate::object::attach_iterator_prototype(obj, REGEXP_STRING_ITERATOR_CLASS_ID);
-    obj
+}
+fn complete(iter: &RuntimeHandle<'_>) {
+    set(iter, DONE, f64::from_bits(crate::value::TAG_TRUE));
+    // Further next calls only inspect DONE. Release the retained graph as soon
+    // as it is no longer needed, even if JavaScript keeps the iterator alive.
+    set(iter, MATCHER, f64::from_bits(TAG_UNDEFINED));
+    set(iter, INPUT, f64::from_bits(TAG_UNDEFINED));
+}
+fn result(value: f64, done: bool) -> Result<f64, EngineError> {
+    api::caught(|| unsafe {
+        crate::iter_result::make_iter_result(JSValue::from_bits(value.to_bits()), done)
+    })
 }
 
-fn match_all_pattern_to_regex(pattern_value: f64) -> *mut RegExpHeader {
-    let pattern_jsval = JSValue::from_bits(pattern_value.to_bits());
-    let pattern_ptr = if pattern_jsval.is_undefined() {
-        js_string_from_str("")
-    } else {
-        crate::value::js_jsvalue_to_string(pattern_value)
-    };
-    let flags_ptr = js_string_from_str("g");
-    js_regexp_new(
-        pattern_ptr as *const StringHeader,
-        flags_ptr as *const StringHeader,
-    )
-}
-
-/// `String.prototype.matchAll` returns a RegExp String Iterator object.
-#[no_mangle]
-pub extern "C" fn js_string_match_all_value(
-    s: *const StringHeader,
-    pattern_value: f64,
-) -> *mut ObjectHeader {
-    if !is_valid_ptr(s) {
-        let empty = crate::array::js_array_alloc(0);
-        return unsafe { alloc_regexp_string_iterator(empty) };
-    }
-
-    // Root the subject across the pattern→RegExp conversion below, which
-    // allocates (ToString of the pattern, the "g" flags string, the RegExp
-    // registration) before `materialize_match_all_results` roots it again.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let s_handle = scope.root_string_ptr(s);
-
-    let pattern_jsval = JSValue::from_bits(pattern_value.to_bits());
-    let raw = if pattern_jsval.is_pointer() {
-        js_nanbox_get_pointer(pattern_value)
-    } else {
-        0
-    };
-    let (start_index, re) = if raw != 0 && is_valid_regex_ptr(raw as *const RegExpHeader) {
-        let re = raw as *const RegExpHeader;
-        unsafe {
-            if !(*re).global {
-                throw_match_all_non_global_regex();
-            }
-            // The ToLength coercion inside `regex_last_index_offset` runs user
-            // `valueOf`/`toString`, so it can move the regex header too — not
-            // just the subject `s_handle` already covers (#8428).
-            let re_handle = scope.root_raw_const_ptr(re);
-            re_handle.across_const::<RegExpHeader, _>(|| {
-                re_handle.with_const_ptr(crate::regex::regex_last_index_offset)
-            })
-        }
-    } else {
-        (
-            0,
-            match_all_pattern_to_regex(pattern_value) as *const RegExpHeader,
+fn allocate(
+    matcher: &RuntimeHandle<'_>,
+    input: &RuntimeHandle<'_>,
+    global: bool,
+    unicode: bool,
+) -> Result<f64, EngineError> {
+    let scope = RuntimeHandleScope::new();
+    // Initialize the prototype before allocating the iterator. Lazy intrinsic
+    // setup may collect; matcher and input already have independent roots.
+    let proto = scope.root_nanbox_f64(api::caught(|| {
+        crate::object::iterator_prototype_for_class_id(REGEXP_STRING_ITERATOR_CLASS_ID).unwrap()
+    })?);
+    let iter = scope.root_raw_mut_ptr(api::caught(|| {
+        crate::object::js_object_alloc(REGEXP_STRING_ITERATOR_CLASS_ID, 5)
+    })?);
+    set(&iter, MATCHER, matcher.get_nanbox_f64());
+    set(
+        &iter,
+        INPUT,
+        js_nanbox_string(input.get_raw_const_ptr::<StringHeader>() as i64),
+    );
+    set(&iter, GLOBAL, f64::from_bits(JSValue::bool(global).bits()));
+    set(
+        &iter,
+        UNICODE,
+        f64::from_bits(JSValue::bool(unicode).bits()),
+    );
+    set(&iter, DONE, f64::from_bits(crate::value::TAG_FALSE));
+    api::caught(|| {
+        crate::proxy::js_reflect_set_prototype_of(
+            js_nanbox_pointer(iter.get_raw_mut_ptr::<ObjectHeader>() as i64),
+            proto.get_nanbox_f64(),
         )
-    };
-
-    let matches = unsafe {
-        materialize_match_all_results(
-            s_handle.get_raw_const_ptr::<StringHeader>(),
-            re,
-            start_index,
-        )
-    };
-    unsafe { alloc_regexp_string_iterator(matches) }
+    })?;
+    Ok(js_nanbox_pointer(
+        iter.get_raw_mut_ptr::<ObjectHeader>() as i64
+    ))
 }
 
-/// Compatibility entry point for older call sites that already hold a RegExp.
-#[no_mangle]
-pub extern "C" fn js_string_match_all(
-    s: *const StringHeader,
-    re: *const RegExpHeader,
-) -> *mut ObjectHeader {
-    if !is_valid_regex_ptr(re) {
-        let empty = crate::array::js_array_alloc(0);
-        return unsafe { alloc_regexp_string_iterator(empty) };
+/// SpeciesConstructor: None denotes the intrinsic default, independent of a
+/// user replacement of globalThis.RegExp. Preserve the selected constructor
+/// through subsequent flag getters and coercions.
+pub(super) fn species(receiver: &RuntimeHandle<'_>) -> Result<Option<f64>, EngineError> {
+    let scope = RuntimeHandleScope::new();
+    let constructor = scope.root_nanbox_f64(dispatch::get(receiver, b"constructor")?);
+    if constructor.get_nanbox_f64().to_bits() == TAG_UNDEFINED {
+        return Ok(None);
     }
-    unsafe {
-        if !(*re).global {
-            throw_match_all_non_global_regex();
-        }
-        // `regex_last_index_offset` ToLength-coerces `lastIndex`, which runs
-        // user `valueOf`/`toString` and can therefore move both arguments
-        // (#8428). Rust evaluates call arguments left to right, so the previous
-        // shape passed the PRE-coercion `s` — a from-space subject that
-        // `materialize_match_all_results` then rooted and snapshotted. Root
-        // first, coerce, then hand over the refreshed addresses.
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let s_handle = scope.root_string_ptr(s);
-        let re_handle = scope.root_raw_const_ptr(re);
-        let ((start_index, re), s) = s_handle.across_const::<StringHeader, _>(|| {
-            re_handle.across_const::<RegExpHeader, _>(|| {
-                re_handle.with_const_ptr(crate::regex::regex_last_index_offset)
-            })
-        });
-        let matches = materialize_match_all_results(s, re, start_index);
-        alloc_regexp_string_iterator(matches)
+    dispatch::require_object(constructor.get_nanbox_f64())?;
+    let species = dispatch::get_symbol(&constructor, "species")?;
+    if matches!(species.to_bits(), TAG_NULL | TAG_UNDEFINED) {
+        return Ok(None);
     }
+    if !crate::proxy::is_constructor_function(species) {
+        return Err(EngineError::Type("RegExp species is not a constructor"));
+    }
+    Ok(Some(species))
 }
 
-unsafe fn regexp_string_iter_result(value: JSValue, done: bool) -> f64 {
-    let obj = crate::object::js_object_alloc(0, 2);
-    let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
-    let done_key = crate::string::js_string_from_bytes(b"done".as_ptr(), 4);
-    let keys = crate::array::js_array_alloc(2);
-    crate::array::js_array_push(keys, JSValue::string_ptr(value_key));
-    crate::array::js_array_push(keys, JSValue::string_ptr(done_key));
-    crate::object::js_object_set_keys(obj, keys);
-    crate::object::js_object_set_field(obj, 0, value);
-    crate::object::js_object_set_field(obj, 1, JSValue::bool(done));
-    js_nanbox_pointer(obj as i64)
+pub(crate) fn regexp(receiver: f64, argument: f64) -> Result<f64, EngineError> {
+    dispatch::require_object(receiver)?;
+    let scope = RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
+    let argument = scope.root_nanbox_f64(argument);
+    let input = scope.root_string_ptr(dispatch::to_string(&argument)?);
+    let constructor = species(&receiver)?.map(|value| scope.root_nanbox_f64(value));
+    let flags_value = scope.root_nanbox_f64(dispatch::get(&receiver, b"flags")?);
+    let flags = scope.root_string_ptr(dispatch::to_string(&flags_value)?);
+    let flags_argument = scope.root_nanbox_f64(js_nanbox_string(
+        flags.get_raw_const_ptr::<StringHeader>() as i64,
+    ));
+    let matcher = scope.root_nanbox_f64(api::caught(|| match &constructor {
+        None => js_nanbox_pointer(super::js_regexp_construct(
+            receiver.get_nanbox_f64(),
+            flags_argument.get_nanbox_f64(),
+        ) as i64),
+        Some(constructor) => crate::object::construct_two_rooted(
+            constructor.get_nanbox_f64(),
+            receiver.get_nanbox_f64(),
+            flags_argument.get_nanbox_f64(),
+        ),
+    })?);
+    let index = scope.root_nanbox_f64(dispatch::get(&receiver, b"lastIndex")?);
+    dispatch::set_last_index(&matcher, dispatch::to_length(&index)?)?;
+    let (global, unicode) = scan_flags(&flags, &mut Budget::new(api::WORK))?;
+    allocate(&matcher, &input, global, unicode)
 }
 
-pub unsafe fn dispatch_regexp_string_iterator_method(
-    iter_obj: *mut ObjectHeader,
-    method_name: &str,
+pub(crate) extern "C" fn regexp_thunk(
+    _: *const crate::closure::ClosureHeader,
+    argument: f64,
 ) -> f64 {
-    dispatch_regexp_string_iterator_method_inner(iter_obj, method_name, true)
+    api::finish(regexp(crate::object::js_implicit_this_get(), argument))
 }
 
-/// Builtin advance only — the canonical prototype thunk's entry (#9019); see
-/// `dispatch_array_iterator_method_builtin` for the recursion rationale.
+fn string(receiver: f64, pattern: f64) -> Result<f64, EngineError> {
+    if matches!(receiver.to_bits(), TAG_NULL | TAG_UNDEFINED) {
+        return Err(EngineError::Type(
+            "String.matchAll called on null or undefined",
+        ));
+    }
+    let scope = RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
+    let pattern = scope.root_nanbox_f64(pattern);
+    if crate::proxy::reflect_value_is_object(pattern.get_nanbox_f64()) {
+        if dispatch::is_regexp(&pattern)? {
+            let flags = scope.root_nanbox_f64(dispatch::get(&pattern, b"flags")?);
+            if matches!(flags.get_nanbox_f64().to_bits(), TAG_NULL | TAG_UNDEFINED) {
+                return Err(EngineError::Type(
+                    "RegExp flags cannot be null or undefined",
+                ));
+            }
+            let flags = scope.root_string_ptr(dispatch::to_string(&flags)?);
+            if !scan_flags(&flags, &mut Budget::new(api::WORK))?.0 {
+                return Err(EngineError::Type(
+                    "String.prototype.matchAll called with a non-global RegExp argument",
+                ));
+            }
+        }
+        let method = scope.root_nanbox_f64(dispatch::get_symbol(&pattern, "matchAll")?);
+        if !matches!(method.get_nanbox_f64().to_bits(), TAG_NULL | TAG_UNDEFINED) {
+            if !crate::proxy::proxy_wraps_callable(method.get_nanbox_f64()) {
+                return Err(EngineError::Type("RegExp matchAll method is not callable"));
+            }
+            return dispatch::call_one(&method, &pattern, &receiver);
+        }
+    }
+    let input = scope.root_string_ptr(dispatch::to_string(&receiver)?);
+    let source = if pattern.get_nanbox_f64().to_bits() == TAG_UNDEFINED {
+        api::caught(|| crate::string::js_string_from_bytes(b"".as_ptr(), 0))?
+    } else {
+        dispatch::to_string(&pattern)?
+    };
+    let source = scope.root_string_ptr(source);
+    let flags = scope.root_string_ptr(api::caught(|| {
+        crate::string::js_string_from_bytes(b"g".as_ptr(), 1)
+    })?);
+    let re = api::caught(|| {
+        super::perex_construct::new(source.get_raw_const_ptr(), flags.get_raw_const_ptr())
+    })??;
+    let re = scope.root_nanbox_f64(js_nanbox_pointer(re as i64));
+    let method = scope.root_nanbox_f64(dispatch::get_symbol(&re, "matchAll")?);
+    if !crate::proxy::proxy_wraps_callable(method.get_nanbox_f64()) {
+        return Err(EngineError::Type("RegExp matchAll method is not callable"));
+    }
+    let argument = scope.root_nanbox_f64(js_nanbox_string(
+        input.get_raw_const_ptr::<StringHeader>() as i64,
+    ));
+    dispatch::call_one(&method, &re, &argument)
+}
+
+#[no_mangle]
+pub extern "C" fn js_string_match_all_js(receiver: f64, pattern: f64) -> f64 {
+    api::finish(string(receiver, pattern))
+}
+#[no_mangle]
+pub extern "C" fn js_string_match_all_value(s: *const StringHeader, pattern: f64) -> f64 {
+    js_string_match_all_js(js_nanbox_string(s as i64), pattern)
+}
+#[cfg(test)]
+pub fn js_string_match_all(
+    s: *const StringHeader,
+    re: *const super::RegExpHeader,
+) -> *mut ObjectHeader {
+    js_nanbox_get_pointer(js_string_match_all_value(s, js_nanbox_pointer(re as i64)))
+        as *mut ObjectHeader
+}
+
+fn next(iter: *mut ObjectHeader) -> Result<f64, EngineError> {
+    let scope = RuntimeHandleScope::new();
+    let iter = scope.root_raw_mut_ptr(iter);
+    if get(&iter, DONE).to_bits() == crate::value::TAG_TRUE {
+        return result(f64::from_bits(TAG_UNDEFINED), true);
+    }
+    let matcher = scope.root_nanbox_f64(get(&iter, MATCHER));
+    let input = scope.root_string_ptr(
+        crate::value::js_get_string_pointer_unified(get(&iter, INPUT)) as *const StringHeader,
+    );
+    let global = get(&iter, GLOBAL).to_bits() == crate::value::TAG_TRUE;
+    let unicode = get(&iter, UNICODE).to_bits() == crate::value::TAG_TRUE;
+    // Each next call is an independent operation. No scratch or native owner
+    // is retained between calls or exposed to reentrant next invocations.
+    let memory = MemoryBudget::new(api::SCRATCH_BYTES);
+    let mut budget = Budget::new(api::WORK);
+    let found = dispatch::execute(
+        &matcher,
+        &input,
+        true,
+        &mut budget,
+        &memory,
+        &mut host::poll,
+    )?;
+    let Some(found) = found else {
+        complete(&iter);
+        return result(f64::from_bits(TAG_UNDEFINED), true);
+    };
+    let found = scope.root_nanbox_f64(found.object());
+    if !global {
+        complete(&iter);
+    } else {
+        let text = scope.root_nanbox_f64(dispatch::get(&found, b"0")?);
+        let text = scope.root_string_ptr(dispatch::to_string(&text)?);
+        if text.with_const_ptr::<StringHeader, _>(|s| unsafe { (*s).utf16_len == 0 }) {
+            let index = scope.root_nanbox_f64(dispatch::get(&matcher, b"lastIndex")?);
+            let index = dispatch::to_length(&index)?;
+            let subject = subject(input)?;
+            let length =
+                input.with_const_ptr::<StringHeader, _>(|s| unsafe { (*s).utf16_len as usize });
+            let index = advance(&subject, index, length, unicode, &mut budget)?;
+            dispatch::set_last_index(&matcher, index)?;
+        }
+    }
+    result(found.get_nanbox_f64(), false)
+}
+
+pub unsafe fn dispatch_regexp_string_iterator_method(iter: *mut ObjectHeader, method: &str) -> f64 {
+    let scope = RuntimeHandleScope::new();
+    let iter = scope.root_raw_mut_ptr(iter);
+    if method == "next" {
+        if let Some(value) = crate::object::call_overridden_iterator_next(
+            iter.get_raw_mut_ptr(),
+            REGEXP_STRING_ITERATOR_CLASS_ID,
+        ) {
+            return value;
+        }
+    }
+    dispatch_regexp_string_iterator_method_builtin(iter.get_raw_mut_ptr(), method)
+}
+
 pub(crate) unsafe fn dispatch_regexp_string_iterator_method_builtin(
-    iter_obj: *mut ObjectHeader,
-    method_name: &str,
+    iter: *mut ObjectHeader,
+    method: &str,
 ) -> f64 {
-    dispatch_regexp_string_iterator_method_inner(iter_obj, method_name, false)
-}
-
-unsafe fn dispatch_regexp_string_iterator_method_inner(
-    iter_obj: *mut ObjectHeader,
-    method_name: &str,
-    honor_override: bool,
-) -> f64 {
-    match method_name {
-        "next" => {
-            // #9019: an own `next` assigned onto the iterator instance wins
-            // over the builtin advance, exactly as on the Map/Set path.
-            if honor_override {
-                if let Some(result) = crate::object::call_overridden_iterator_next(
-                    iter_obj,
-                    REGEXP_STRING_ITERATOR_CLASS_ID,
-                ) {
-                    return result;
-                }
-            }
-            let backing = f64::from_bits(crate::object::js_object_get_field(iter_obj, 0).bits());
-            let arr = js_nanbox_get_pointer(backing) as *const ArrayHeader;
-            let idx = f64::from_bits(crate::object::js_object_get_field(iter_obj, 1).bits()) as u32;
-            let len = if arr.is_null() {
-                0
-            } else {
-                crate::array::js_array_length(arr)
-            };
-            if idx >= len {
-                return regexp_string_iter_result(JSValue::undefined(), true);
-            }
-            crate::object::js_object_set_field(iter_obj, 1, JSValue::number((idx + 1) as f64));
-            let elem = crate::array::js_array_get_f64(arr, idx);
-            regexp_string_iter_result(JSValue::from_bits(elem.to_bits()), false)
-        }
-        "Symbol.iterator" | "@@iterator" => js_nanbox_pointer(iter_obj as i64),
-        "return" | "throw" => regexp_string_iter_result(JSValue::undefined(), true),
+    match method {
+        "next" => api::finish(next(iter)),
+        "Symbol.iterator" | "@@iterator" => js_nanbox_pointer(iter as i64),
         _ => f64::from_bits(TAG_UNDEFINED),
     }
 }

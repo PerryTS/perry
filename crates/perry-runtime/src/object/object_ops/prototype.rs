@@ -500,6 +500,12 @@ fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                 if (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
                     return f64::from_bits(TAG_NULL);
                 }
+                // A RegExp's internal prototype does not depend on its
+                // observable constructor property. Resolve it before the
+                // generic constructor probe, which would recurse through Get.
+                if (*gc).obj_type == crate::gc::GC_TYPE_REGEXP {
+                    return crate::object::builtin_prototype_value("RegExp");
+                }
                 // #2145: per-kind typed-array `.prototype` objects share a
                 // single `%TypedArray%.prototype` parent. Resolved off the
                 // cached intrinsic pointer (also a GC root) so the chain holds
@@ -715,6 +721,9 @@ fn get_prototype_of_resolved(obj_value: f64) -> f64 {
             let gc = gc_header_for(obj);
             if (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
                 return f64::from_bits(TAG_NULL);
+            }
+            if (*gc).obj_type == crate::gc::GC_TYPE_REGEXP {
+                return crate::object::builtin_prototype_value("RegExp");
             }
             if (*gc)._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0 {
                 let p = crate::object::typed_array_intrinsic_proto_ptr();

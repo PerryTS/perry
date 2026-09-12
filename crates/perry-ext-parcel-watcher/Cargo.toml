@@ -14,7 +14,7 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 perry-ffi.workspace = true
 notify.workspace = true
-fancy-regex = "0.18"
+perry-perex.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 

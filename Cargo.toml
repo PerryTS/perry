@@ -18,6 +18,8 @@ members = [
     "crates/perry-ext-argon2",
     "crates/perry-ext-jsonwebtoken",
     "crates/perry-ext-validator",
+    "crates/perry-validation",
+    "crates/perry-perex",
     "crates/perry-ext-lru-cache",
     "crates/perry-ext-better-sqlite3",
     "crates/perry-ext-zlib",
@@ -396,7 +398,8 @@ lazy_static = "1.5"
 chrono = "0.4"
 regex = "1.12"
 aho-corasick = "1.1"
-regress = "0.11.1"
+# The single regular-expression engine, through crates/perry-perex.
+perex = { path = "../perex" }
 hex = "0.4"
 tempfile = "3"
 itoa = "1.0"
@@ -484,6 +487,8 @@ perry-ext-bcrypt = { path = "crates/perry-ext-bcrypt" }
 perry-ext-argon2 = { path = "crates/perry-ext-argon2" }
 perry-ext-jsonwebtoken = { path = "crates/perry-ext-jsonwebtoken" }
 perry-ext-validator = { path = "crates/perry-ext-validator" }
+perry-validation = { path = "crates/perry-validation" }
+perry-perex = { path = "crates/perry-perex" }
 perry-ext-lru-cache = { path = "crates/perry-ext-lru-cache" }
 perry-ext-better-sqlite3 = { path = "crates/perry-ext-better-sqlite3" }
 perry-ext-zlib = { path = "crates/perry-ext-zlib" }

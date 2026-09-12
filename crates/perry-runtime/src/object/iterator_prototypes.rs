@@ -188,7 +188,13 @@ extern "C" fn regexp_string_iterator_next_thunk(
     _c: *const crate::closure::ClosureHeader,
     _arg: f64,
 ) -> f64 {
-    unsafe { dispatch_on_implicit_this("next") }
+    unsafe {
+        let Some(obj) = implicit_this_iterator_object() else { return brand_type_error("next"); };
+        if (*obj).class_id != crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID {
+            return brand_type_error("next");
+        }
+        dispatch_on_implicit_this("next")
+    }
 }
 
 /// `%Iterator Helper Prototype%.next` has a helper-specific brand check. Use

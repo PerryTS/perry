@@ -16,6 +16,30 @@ mod json_shape_template;
 mod json_tape_owned;
 mod native_module_name;
 mod old_defrag_contract;
+#[cfg(feature = "regex-engine")]
+mod perex_construction;
+#[cfg(feature = "regex-engine")]
+mod perex_dispatch;
+#[cfg(feature = "regex-engine")]
+mod perex_execution;
+#[cfg(feature = "regex-engine")]
+mod perex_glob;
+#[cfg(feature = "regex-engine")]
+mod perex_lifecycle;
+#[cfg(feature = "regex-engine")]
+mod perex_match_all;
+#[cfg(feature = "regex-engine")]
+mod perex_match_search;
+#[cfg(feature = "regex-engine")]
+mod perex_ownership;
+#[cfg(feature = "regex-engine")]
+mod perex_public;
+#[cfg(feature = "regex-engine")]
+mod perex_replace;
+#[cfg(feature = "regex-engine")]
+mod perex_split;
+#[cfg(feature = "regex-engine")]
+mod perex_strings;
 mod prototype_addr_cache;
 mod regexp_last_index;
 mod segment_record_keys;

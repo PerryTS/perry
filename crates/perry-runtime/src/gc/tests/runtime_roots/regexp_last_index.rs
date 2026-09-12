@@ -147,12 +147,11 @@ fn regexp_exec_survives_a_moving_minor_inside_the_lastindex_coercion() {
     );
 }
 
-/// #8449: once the engine has produced `Captures`, the result-array allocation
-/// itself may move the subject. The captures borrow the subject payload, so all
-/// ranges and UTF-16 indices must be snapshotted before this planted collection.
-///
-/// SABOTAGE CHECK: restoring the pre-fix `caps`/`str_data` materialization in
-/// `js_regexp_exec` makes this fail after the subject moves at `js_array_alloc`.
+/// #8449: once the engine has produced capture spans, result-array allocation
+/// may move the subject. Exercise the same execution adapter as public exec,
+/// with runtime assists suppressed so the planted allocation-point collection
+/// cannot be replaced by an earlier incremental cycle. The public entry point
+/// and collection at its normal polls are covered in `perex_public`.
 #[test]
 fn regexp_exec_materializes_an_owned_snapshot_after_an_alloc_point_minor() {
     let _guard = CopyingNurseryTestGuard::new(4);
@@ -170,14 +169,29 @@ fn regexp_exec_materializes_an_owned_snapshot_after_an_alloc_point_minor() {
     let re = crate::regex::js_regexp_new(heap_string(br"(?<word>young)-(\d+)"), heap_string(b"gd"));
     let re_handle = scope.root_raw_mut_ptr(re);
 
+    // Finish lazy program compilation before planting the allocation trigger.
+    // This call produces no result array and automatic triggers are suppressed.
+    assert_eq!(
+        crate::regex::js_regexp_test(
+            re_handle.get_raw_const_ptr::<RegExpHeader>(),
+            subject_handle.get_raw_const_ptr::<StringHeader>(),
+        ),
+        1
+    );
+    unsafe {
+        (*re_handle.get_raw_mut_ptr::<RegExpHeader>()).last_index = 0.0f64.to_bits();
+    }
+
     // The next general-arena block allocation is the result array created only
-    // after the engine has matched and Phase 1 has snapshotted the captures.
+    // after the engine has matched and copied the scalar capture spans.
     super::force_next_general_arena_alloc_slow();
     trigger_guard.make_arena_trigger_due();
     let collections_before = gc_collection_count();
     let matched = subject_handle.with_const_ptr::<StringHeader, _>(|subject_now| {
         re_handle.with_mut_ptr::<RegExpHeader, _>(|re_now| {
-            crate::regex::js_regexp_exec(re_now, subject_now)
+            crate::regex::perex_api::execute(re_now, subject_now, true, &mut || Ok(()))
+                .unwrap()
+                .map_or(std::ptr::null_mut(), |found| found.array)
         })
     });
 

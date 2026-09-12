@@ -148,37 +148,47 @@ pub(super) extern "C" fn regex_proto_source_getter(
 /// the (generic) receiver via `Get` + `ToBoolean` and assembles in canonical
 /// order `d g i m s u v y`. Throws `TypeError` only if `this` is not an Object.
 pub(super) extern "C" fn regex_proto_flags_getter(_c: *const crate::closure::ClosureHeader) -> f64 {
-    let receiver = crate::value::JSValue::from_bits(IMPLICIT_THIS.with(|c| c.get()));
-    // Type(R) must be Object. Pointer-tagged values are objects EXCEPT Symbols
-    // (which are also pointer-tagged via the symbol side-table); a Symbol `this`
-    // must throw a TypeError, not silently assemble "".
-    if !receiver.is_pointer()
-        || crate::symbol::is_registered_symbol(receiver.as_pointer::<u8>() as usize)
+    #[cfg(feature = "regex-engine")]
     {
-        throw_regex_brand_error("flags");
+        let value = crate::regex::perex_api::finish(crate::regex::perex_match_search::flags(
+            crate::object::js_implicit_this_get(),
+        ));
+        crate::value::js_nanbox_string(value as i64)
     }
-    let recv_bits = receiver.bits();
-    let recv_f64 = f64::from_bits(recv_bits);
-    let mut out = String::with_capacity(8);
-    for (name, ch) in [
-        ("hasIndices", 'd'),
-        ("global", 'g'),
-        ("ignoreCase", 'i'),
-        ("multiline", 'm'),
-        ("dotAll", 's'),
-        ("unicode", 'u'),
-        ("unicodeSets", 'v'),
-        ("sticky", 'y'),
-    ] {
-        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        let key_val = crate::js_nanbox_string(key as i64);
-        let v = crate::value::js_dyn_index_get(recv_f64, key_val);
-        if crate::value::js_is_truthy(v) != 0 {
-            out.push(ch);
+    #[cfg(not(feature = "regex-engine"))]
+    {
+        let receiver = crate::value::JSValue::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+        // Type(R) must be Object. Pointer-tagged values are objects EXCEPT Symbols
+        // (which are also pointer-tagged via the symbol side-table); a Symbol `this`
+        // must throw a TypeError, not silently assemble "".
+        if !receiver.is_pointer()
+            || crate::symbol::is_registered_symbol(receiver.as_pointer::<u8>() as usize)
+        {
+            throw_regex_brand_error("flags");
         }
+        let recv_bits = receiver.bits();
+        let recv_f64 = f64::from_bits(recv_bits);
+        let mut out = String::with_capacity(8);
+        for (name, ch) in [
+            ("hasIndices", 'd'),
+            ("global", 'g'),
+            ("ignoreCase", 'i'),
+            ("multiline", 'm'),
+            ("dotAll", 's'),
+            ("unicode", 'u'),
+            ("unicodeSets", 'v'),
+            ("sticky", 'y'),
+        ] {
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            let key_val = crate::js_nanbox_string(key as i64);
+            let v = crate::value::js_dyn_index_get(recv_f64, key_val);
+            if crate::value::js_is_truthy(v) != 0 {
+                out.push(ch);
+            }
+        }
+        let s = crate::string::js_string_from_bytes(out.as_ptr(), out.len() as u32);
+        f64::from_bits(crate::js_nanbox_string(s as i64).to_bits())
     }
-    let s = crate::string::js_string_from_bytes(out.as_ptr(), out.len() as u32);
-    f64::from_bits(crate::js_nanbox_string(s as i64).to_bits())
 }
 
 /// Install one accessor getter (`set: undefined`) onto `proto_obj` with the
@@ -223,8 +233,10 @@ pub(super) extern "C" fn regex_proto_exec_thunk(
     arg: f64,
 ) -> f64 {
     let re = regex_instance_or_throw("exec");
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let re = scope.root_raw_const_ptr(re);
     let s = crate::value::js_jsvalue_to_string_coerce(arg);
-    let arr = crate::regex::js_regexp_exec(re as *mut crate::regex::RegExpHeader, s);
+    let arr = crate::regex::js_regexp_exec(re.get_raw_mut_ptr::<crate::regex::RegExpHeader>(), s);
     if arr.is_null() {
         f64::from_bits(crate::value::TAG_NULL)
     } else {
@@ -232,16 +244,29 @@ pub(super) extern "C" fn regex_proto_exec_thunk(
     }
 }
 
-/// `RegExp.prototype.test(string)` — brand-checks `this`, `ToString`s the arg,
-/// returns a boolean.
+/// Recognize the actual builtin implementation after observable Get(exec).
+/// Property names and the receiver's brand do not prove a callable is builtin.
+#[cfg(feature = "regex-engine")]
+pub(crate) fn is_builtin_regexp_exec(value: f64) -> bool {
+    if !super::is_callable_function_value(value) {
+        return false;
+    }
+    let closure =
+        crate::value::js_nanbox_get_pointer(value) as *const crate::closure::ClosureHeader;
+    crate::closure::js_closure_get_func(closure) == regex_proto_exec_thunk as *const u8
+}
+
+/// Generic `RegExp.prototype.test(string)`: require an object, ToString the
+/// argument, then RegExpExec (including an overridden exec).
 #[cfg(feature = "regex-engine")]
 pub(super) extern "C" fn regex_proto_test_thunk(
     _c: *const crate::closure::ClosureHeader,
     arg: f64,
 ) -> f64 {
-    let re = regex_instance_or_throw("test");
-    let s = crate::value::js_jsvalue_to_string_coerce(arg);
-    let matched = crate::regex::js_regexp_test(re as *const crate::regex::RegExpHeader, s) != 0;
+    let matched = crate::regex::perex_api::finish(crate::regex::perex_dispatch::test_value(
+        crate::object::js_implicit_this_get(),
+        arg,
+    ));
     f64::from_bits(crate::value::JSValue::bool(matched).bits())
 }
 
@@ -298,7 +323,7 @@ pub(super) extern "C" fn regex_proto_to_string_thunk(
 
 /// Resolve `IMPLICIT_THIS` to a live RegExp instance (with `[[RegExpMatcher]]`),
 /// throwing `TypeError` otherwise. Unlike the flag/`source` getters, this does
-/// NOT treat `RegExp.prototype` specially — `exec`/`test` require a real matcher.
+/// NOT treat `RegExp.prototype` specially — builtin exec requires a matcher.
 #[cfg(feature = "regex-engine")]
 fn regex_instance_or_throw(method: &str) -> *const crate::regex::RegExpHeader {
     let receiver = crate::value::JSValue::from_bits(IMPLICIT_THIS.with(|c| c.get()));
@@ -464,6 +489,36 @@ pub(crate) fn regexp_prototype_test_is_canonical(value: f64) -> bool {
     })
 }
 
+/// Non-observable admission for a substring view. An exec/test accessor or
+/// override must run once on the materialized JS argument, so never invoke
+/// one while deciding whether to take this optimization.
+#[cfg(feature = "regex-engine")]
+pub(crate) fn regexp_view_uses_builtin(value: f64) -> bool {
+    if !regexp_prototype_test_is_canonical(value) {
+        return false;
+    }
+    let addr = crate::value::js_nanbox_get_pointer(value) as usize;
+    for name in ["test", "exec"] {
+        if super::exotic_expando::exotic_has_own_property(
+            super::exotic_expando::ExoticKind::RegExp,
+            addr,
+            name,
+        ) {
+            return false;
+        }
+    }
+    let proto = REGEXP_PROTOTYPE_PTR.load(std::sync::atomic::Ordering::Acquire);
+    if super::descriptor_state::may_have_descriptor_entry(proto as usize, "exec", true) {
+        return false;
+    }
+    let exec = super::js_object_get_own_field_or_undef(
+        crate::value::js_nanbox_pointer(proto as i64),
+        b"exec".as_ptr(),
+        4,
+    );
+    is_builtin_regexp_exec(exec)
+}
+
 /// Record the prototype, the index of its own `test`, and the canonical
 /// closure. Called once, from the installer below.
 #[cfg(feature = "regex-engine")]
@@ -552,6 +607,72 @@ pub(super) fn install_regex_proto_methods(proto_obj: *mut ObjectHeader) {
         regex_proto_to_string_thunk as *const u8,
         0,
     );
+    #[cfg(feature = "regex-engine")]
+    install_regex_symbol_methods(proto_obj);
+}
+
+#[cfg(feature = "regex-engine")]
+fn install_regex_symbol_methods(proto: *mut crate::object::ObjectHeader) {
+    use crate::gc::RuntimeHandleScope;
+    use crate::value::js_nanbox_pointer;
+    let scope = RuntimeHandleScope::new();
+    let proto = scope.root_raw_mut_ptr(proto);
+    for (symbol, name, fp, arity) in [
+        (
+            "match",
+            "[Symbol.match]",
+            crate::regex::perex_match_search::match_thunk as *const u8,
+            1,
+        ),
+        (
+            "search",
+            "[Symbol.search]",
+            crate::regex::perex_match_search::search_thunk as *const u8,
+            1,
+        ),
+        (
+            "matchAll",
+            "[Symbol.matchAll]",
+            crate::regex::match_all::regexp_thunk as *const u8,
+            1,
+        ),
+        (
+            "split",
+            "[Symbol.split]",
+            crate::regex::perex_split::regexp_thunk as *const u8,
+            2,
+        ),
+        (
+            "replace",
+            "[Symbol.replace]",
+            crate::regex::perex_replace::regexp_thunk as *const u8,
+            2,
+        ),
+    ] {
+        let iteration = RuntimeHandleScope::new();
+        crate::closure::js_register_closure_arity(fp, arity);
+        let function = iteration.root_raw_mut_ptr(crate::closure::js_closure_alloc(fp, 0));
+        super::native_module::set_bound_native_closure_name(function.get_raw_mut_ptr(), name);
+        super::native_module::set_builtin_closure_length(
+            function.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
+            arity,
+        );
+        let key = iteration.root_raw_mut_ptr(crate::symbol::well_known_symbol(symbol));
+        unsafe {
+            crate::symbol::js_object_set_symbol_property(
+                js_nanbox_pointer(proto.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64),
+                js_nanbox_pointer(key.get_raw_mut_ptr::<crate::symbol::SymbolHeader>() as i64),
+                js_nanbox_pointer(
+                    function.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64
+                ),
+            );
+        }
+        crate::symbol::set_symbol_property_attrs(
+            proto.get_raw_mut_ptr::<crate::object::ObjectHeader>() as usize,
+            key.get_raw_mut_ptr::<crate::symbol::SymbolHeader>() as usize,
+            crate::object::PropertyAttrs::new(true, false, true),
+        );
+    }
 }
 
 /// Install all RegExp.prototype accessor getters.
@@ -586,4 +707,58 @@ pub(super) fn install_regex_proto_accessors(proto_obj: *mut ObjectHeader) {
         "hasIndices",
         regex_proto_has_indices_getter as *const u8,
     );
+}
+
+/// RegExp owns lastIndex; source/flags/boolean getters live on its prototype.
+/// Keep property-key ownership and all GC roots outside callback traps.
+pub(crate) fn regexp_get_property(
+    receiver: *const ObjectHeader,
+    key: *const crate::StringHeader,
+) -> crate::JSValue {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(receiver as i64));
+    let key = scope.root_string_ptr(key);
+    let name = unsafe {
+        key.with_string_bytes(|bytes| std::str::from_utf8(bytes).ok().map(str::to_owned))
+    };
+    if name.as_deref() == Some("lastIndex") {
+        let re = crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64())
+            as *const crate::regex::RegExpHeader;
+        return crate::JSValue::from_bits(crate::regex::js_regexp_get_last_index(re).to_bits());
+    }
+    let previous = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
+    let result = crate::exception::catch_js_throw(|| {
+        if let Some(name) = &name {
+            let addr = crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as usize;
+            // The caller classified this receiver as a live RegExp, and the
+            // root above keeps it current across an own-property getter.
+            if let Some(value) = unsafe {
+                super::exotic_expando::exotic_get_own_property(
+                    addr,
+                    super::exotic_expando::ExoticKind::RegExp,
+                    name,
+                    receiver.get_nanbox_f64(),
+                )
+            } {
+                return value;
+            }
+        }
+        let proto = scope.root_nanbox_f64(crate::object::js_object_get_prototype_of(
+            receiver.get_nanbox_f64(),
+        ));
+        if !crate::proxy::reflect_value_is_object(proto.get_nanbox_f64()) {
+            return f64::from_bits(crate::value::TAG_UNDEFINED);
+        }
+        crate::proxy::js_reflect_get(
+            proto.get_nanbox_f64(),
+            crate::value::js_nanbox_string(key.get_raw_const_ptr::<crate::StringHeader>() as i64),
+            receiver.get_nanbox_f64(),
+        )
+    });
+    crate::object::js_implicit_this_set(previous.get_nanbox_f64());
+    drop(name);
+    match result {
+        Ok(value) => crate::JSValue::from_bits(value.to_bits()),
+        Err(error) => crate::exception::js_throw(error),
+    }
 }

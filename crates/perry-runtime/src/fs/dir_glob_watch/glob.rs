@@ -17,13 +17,14 @@ use std::path::Path;
 use std::path::PathBuf;
 
 #[cfg(feature = "regex-engine")]
-use crate::closure::ClosureHeader;
-
-/// Compiled exclude-pattern type for `fs.glob`. Backed by `fancy_regex::Regex`.
-/// Only referenced by the regex-engine-gated glob machinery (`FsGlobOptions`),
-/// so it's defined only when that engine is linked.
+use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 #[cfg(feature = "regex-engine")]
-type GlobExcludeRegex = fancy_regex::Regex;
+use crate::regex::perex_glob::{js_error as glob_engine_error, GlobProgram};
+
+/// The same GC-owned Perex program used by ordinary RegExp operations.
+/// Its mutable root belongs to the enclosing filesystem operation scope.
+#[cfg(feature = "regex-engine")]
+type GlobExcludeRegex<'s> = GlobProgram<'s>;
 
 #[derive(Clone)]
 pub(crate) struct FsGlobMatch {
@@ -43,23 +44,23 @@ pub(crate) struct FsGlobRun {
 }
 
 #[cfg(feature = "regex-engine")]
-struct FsGlobOptions {
+struct FsGlobOptions<'s> {
     cwd_actual: String,
     cwd_display: String,
     with_file_types: bool,
     follow_symlinks: bool,
-    exclude_patterns: Vec<GlobExcludeRegex>,
-    exclude_fn: Option<*const ClosureHeader>,
+    exclude_patterns: Vec<GlobExcludeRegex<'s>>,
+    exclude_fn: Option<RuntimeHandle<'s>>,
 }
 
 #[cfg(feature = "regex-engine")]
-struct BunGlobOptions {
+struct BunGlobOptions<'s> {
     cwd_actual: String,
     only_files: bool,
     dot: bool,
     absolute: bool,
     follow_symlinks: bool,
-    ignore_patterns: Vec<GlobExcludeRegex>,
+    ignore_patterns: Vec<GlobExcludeRegex<'s>>,
 }
 
 #[cfg(feature = "regex-engine")]
@@ -250,10 +251,11 @@ fn glob_patterns_from_value_result(pattern_value: f64) -> Result<Vec<String>, f6
 }
 
 #[cfg(feature = "regex-engine")]
-fn compile_exclude_patterns_result(
+fn compile_exclude_patterns_result<'s>(
+    scope: &'s RuntimeHandleScope,
     exclude_value: f64,
     cwd_actual: &str,
-) -> Result<Vec<GlobExcludeRegex>, f64> {
+) -> Result<Vec<GlobExcludeRegex<'s>>, f64> {
     let Some(arr) = array_ptr_from_value(exclude_value) else {
         let message = format!(
             "The \"options.exclude\" property must be of type function or string[]. Received {}",
@@ -264,10 +266,11 @@ fn compile_exclude_patterns_result(
             "ERR_INVALID_ARG_TYPE",
         ));
     };
-    let len = crate::array::js_array_length(arr) as usize;
+    let arr = scope.root_raw_const_ptr(arr);
+    let len = crate::array::js_array_length(arr.get_raw_const_ptr()) as usize;
     let mut patterns = Vec::with_capacity(len);
     for i in 0..len {
-        let value = crate::array::js_array_get_f64(arr, i as u32);
+        let value = crate::array::js_array_get_f64(arr.get_raw_const_ptr(), i as u32);
         let Some(pattern) = decode_string_value(value) else {
             let message = format!(
                 "The \"options.exclude[{i}]\" property must be of type string. Received {}",
@@ -284,7 +287,7 @@ fn compile_exclude_patterns_result(
         } else {
             join_slash(cwd_actual, &normalized)
         };
-        if let Some(re) = glob_regex_from_pattern(&absolute) {
+        if let Some(re) = glob_regex_from_pattern(scope, &absolute)? {
             patterns.push(re);
         }
     }
@@ -292,14 +295,18 @@ fn compile_exclude_patterns_result(
 }
 
 #[cfg(feature = "regex-engine")]
-fn glob_options_from_value_result(options_value: f64) -> Result<FsGlobOptions, f64> {
+fn glob_options_from_value_result<'s>(
+    scope: &'s RuntimeHandleScope,
+    options_value: f64,
+) -> Result<FsGlobOptions<'s>, f64> {
+    let options = scope.root_nanbox_f64(options_value);
     if let Some(err) = validate::object_options_type_error_value("options", options_value) {
         return Err(err);
     }
     let mut cwd_actual = current_dir_slashes();
     let mut cwd_display = ".".to_string();
     unsafe {
-        if let Some(cwd) = options_field_value(options_value, b"cwd") {
+        if let Some(cwd) = options_field_value(options.get_nanbox_f64(), b"cwd") {
             let cwd_value = f64::from_bits(cwd.bits());
             if !is_nullish(cwd_value) {
                 let Some(cwd_raw) = decode_string_or_file_url(cwd_value) else {
@@ -318,19 +325,21 @@ fn glob_options_from_value_result(options_value: f64) -> Result<FsGlobOptions, f
             }
         }
     }
-    let with_file_types = unsafe { options_bool_field(options_value, b"withFileTypes") };
-    let follow_symlinks = unsafe { options_bool_field(options_value, b"followSymlinks") };
+    let with_file_types = unsafe { options_bool_field(options.get_nanbox_f64(), b"withFileTypes") };
+    let follow_symlinks =
+        unsafe { options_bool_field(options.get_nanbox_f64(), b"followSymlinks") };
     let mut exclude_patterns = Vec::new();
     let mut exclude_fn = None;
     unsafe {
-        if let Some(exclude) = options_field_value(options_value, b"exclude") {
+        if let Some(exclude) = options_field_value(options.get_nanbox_f64(), b"exclude") {
             let exclude_value = f64::from_bits(exclude.bits());
             if !is_nullish(exclude_value) {
                 let callable = extract_closure_ptr(exclude_value);
                 if callable.is_null() {
-                    exclude_patterns = compile_exclude_patterns_result(exclude_value, &cwd_actual)?;
+                    exclude_patterns =
+                        compile_exclude_patterns_result(scope, exclude_value, &cwd_actual)?;
                 } else {
-                    exclude_fn = Some(callable);
+                    exclude_fn = Some(scope.root_nanbox_f64(exclude_value));
                 }
             }
         }
@@ -372,13 +381,17 @@ fn bun_glob_cwd_result(options_value: f64) -> Result<String, f64> {
 }
 
 #[cfg(feature = "regex-engine")]
-fn bun_ignore_patterns_result(options_value: f64) -> Result<Vec<GlobExcludeRegex>, f64> {
+fn bun_ignore_patterns_result<'s>(
+    scope: &'s RuntimeHandleScope,
+    options_value: f64,
+) -> Result<Vec<GlobExcludeRegex<'s>>, f64> {
+    let options = scope.root_nanbox_f64(options_value);
     if is_nullish(options_value) || decode_string_value(options_value).is_some() {
         return Ok(Vec::new());
     }
     let ignore_value = unsafe {
-        options_field_value(options_value, b"ignore")
-            .or_else(|| options_field_value(options_value, b"exclude"))
+        options_field_value(options.get_nanbox_f64(), b"ignore")
+            .or_else(|| options_field_value(options.get_nanbox_f64(), b"exclude"))
     };
     let Some(ignore_value) = ignore_value else {
         return Ok(Vec::new());
@@ -388,26 +401,34 @@ fn bun_ignore_patterns_result(options_value: f64) -> Result<Vec<GlobExcludeRegex
         return Ok(Vec::new());
     }
     let patterns = glob_patterns_from_value_result(ignore_value)?;
-    Ok(patterns
-        .into_iter()
-        .filter_map(|pattern| glob_regex_from_pattern(&pattern))
-        .collect())
+    let mut compiled = Vec::new();
+    for pattern in patterns {
+        if let Some(program) = glob_regex_from_pattern(scope, &pattern)? {
+            compiled.push(program);
+        }
+    }
+    Ok(compiled)
 }
 
 #[cfg(feature = "regex-engine")]
-fn bun_glob_options_from_value_result(options_value: f64) -> Result<BunGlobOptions, f64> {
-    let cwd_actual = bun_glob_cwd_result(options_value)?;
-    let is_object = !is_nullish(options_value) && decode_string_value(options_value).is_none();
+fn bun_glob_options_from_value_result<'s>(
+    scope: &'s RuntimeHandleScope,
+    options_value: f64,
+) -> Result<BunGlobOptions<'s>, f64> {
+    let options = scope.root_nanbox_f64(options_value);
+    let cwd_actual = bun_glob_cwd_result(options.get_nanbox_f64())?;
+    let is_object = !is_nullish(options.get_nanbox_f64())
+        && decode_string_value(options.get_nanbox_f64()).is_none();
     let (only_files, dot, absolute, follow_symlinks) = if is_object {
         unsafe {
-            let only_files = options_field_value(options_value, b"onlyFiles")
+            let only_files = options_field_value(options.get_nanbox_f64(), b"onlyFiles")
                 .map(|v| crate::value::js_is_truthy(f64::from_bits(v.bits())) != 0)
                 .unwrap_or(true);
             (
                 only_files,
-                options_bool_field(options_value, b"dot"),
-                options_bool_field(options_value, b"absolute"),
-                options_bool_field(options_value, b"followSymlinks"),
+                options_bool_field(options.get_nanbox_f64(), b"dot"),
+                options_bool_field(options.get_nanbox_f64(), b"absolute"),
+                options_bool_field(options.get_nanbox_f64(), b"followSymlinks"),
             )
         }
     } else {
@@ -419,7 +440,7 @@ fn bun_glob_options_from_value_result(options_value: f64) -> Result<BunGlobOptio
         dot,
         absolute,
         follow_symlinks,
-        ignore_patterns: bun_ignore_patterns_result(options_value)?,
+        ignore_patterns: bun_ignore_patterns_result(scope, options.get_nanbox_f64())?,
     })
 }
 
@@ -427,7 +448,7 @@ fn bun_glob_options_from_value_result(options_value: f64) -> Result<BunGlobOptio
 fn regex_escape_char(out: &mut String, ch: char) {
     if matches!(
         ch,
-        '.' | '+' | '(' | ')' | '|' | '^' | '$' | '{' | '}' | '[' | ']' | '\\'
+        '.' | '+' | '*' | '?' | '(' | ')' | '|' | '^' | '$' | '{' | '}' | '[' | ']' | '\\'
     ) {
         out.push('\\');
     }
@@ -522,7 +543,11 @@ fn parse_char_class(chars: &[char], pos: &mut usize) -> String {
         }
     }
     let literal: String = chars[start..*pos].iter().collect();
-    regex::escape(&literal)
+    let mut escaped = String::new();
+    for ch in literal.chars() {
+        regex_escape_char(&mut escaped, ch);
+    }
+    escaped
 }
 
 #[cfg(feature = "regex-engine")]
@@ -550,7 +575,7 @@ fn parse_glob_chars(chars: &[char], pos: &mut usize) -> Option<String> {
                 '?' => out.push_str(&format!("(?:{joined})?")),
                 '+' => out.push_str(&format!("(?:{joined})+")),
                 '*' => out.push_str(&format!("(?:{joined})*")),
-                '!' => out.push_str(&format!("(?!(?:{joined})(?:/|$))[^/]*")),
+                '!' => out.push_str(&format!("(?!(?:{joined})(?:/|(?![\\s\\S])))[^/]*")),
                 _ => {}
             }
             continue;
@@ -588,10 +613,22 @@ fn parse_glob_chars(chars: &[char], pos: &mut usize) -> Option<String> {
 }
 
 #[cfg(feature = "regex-engine")]
-pub(crate) fn glob_regex_from_pattern(pattern: &str) -> Option<fancy_regex::Regex> {
+pub(crate) fn glob_regex_from_pattern<'s>(
+    scope: &'s RuntimeHandleScope,
+    pattern: &str,
+) -> Result<Option<GlobExcludeRegex<'s>>, f64> {
     let normalized = normalize_slashes(pattern);
-    let body = glob_fragment_to_regex(&normalized)?;
-    fancy_regex::Regex::new(&format!("^{body}$")).ok()
+    let Some(body) = glob_fragment_to_regex(&normalized) else {
+        return Ok(None);
+    };
+    // Absolute-end assertion: ECMAScript `$` also accepts a final line break.
+    match GlobProgram::new(scope, &format!(r"^{body}(?![\s\S])")) {
+        Ok(program) => Ok(Some(program)),
+        Err(crate::regex::perex_runtime::EngineError::Compile(
+            perex::compiler::CompileError::Syntax { .. },
+        )) => Ok(None),
+        Err(error) => Err(glob_engine_error(error)),
+    }
 }
 
 #[cfg(feature = "regex-engine")]
@@ -647,7 +684,7 @@ fn walk_paths_for_glob(dir: &Path, follow_symlinks: bool, out: &mut Vec<GlobCand
 fn glob_match_from_candidate(
     candidate: &GlobCandidate,
     pattern_is_absolute: bool,
-    options: &FsGlobOptions,
+    options: &FsGlobOptions<'_>,
 ) -> Option<FsGlobMatch> {
     let actual_path = normalize_slashes(&candidate.actual_path);
     let rel_output = relative_to_base(&actual_path, &options.cwd_actual);
@@ -686,24 +723,36 @@ fn glob_match_from_candidate(
 }
 
 #[cfg(feature = "regex-engine")]
-fn excluded_by_patterns(path: &str, options: &FsGlobOptions) -> bool {
-    options
-        .exclude_patterns
-        .iter()
-        .any(|re| re.is_match(path).unwrap_or(false))
+fn excluded_by_patterns(path: &str, options: &FsGlobOptions<'_>) -> Result<bool, f64> {
+    for program in &options.exclude_patterns {
+        if program.is_match(path).map_err(glob_engine_error)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 #[cfg(feature = "regex-engine")]
-fn excluded_by_function(entry: &FsGlobMatch, options: &FsGlobOptions) -> bool {
-    let Some(callback) = options.exclude_fn else {
-        return false;
+fn excluded_by_function(entry: &FsGlobMatch, options: &FsGlobOptions<'_>) -> Result<bool, f64> {
+    let Some(callback) = &options.exclude_fn else {
+        return Ok(false);
     };
-    let arg = if options.with_file_types {
-        unsafe { build_dirent_object(&entry.dirent_name, &entry.dirent_parent, entry.kind) }
-    } else {
-        string_value(entry.output.as_bytes())
-    };
-    crate::value::js_is_truthy(crate::closure::js_closure_call1(callback, arg)) != 0
+    let scope = RuntimeHandleScope::new();
+    let previous = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
+    let result = crate::exception::catch_js_throw(|| {
+        let arg = if options.with_file_types {
+            unsafe { build_dirent_object(&entry.dirent_name, &entry.dirent_parent, entry.kind) }
+        } else {
+            string_value(entry.output.as_bytes())
+        };
+        let arg = scope.root_nanbox_f64(arg);
+        crate::closure::js_closure_call1(
+            extract_closure_ptr(callback.get_nanbox_f64()),
+            arg.get_nanbox_f64(),
+        )
+    });
+    crate::object::js_implicit_this_set(previous.get_nanbox_f64());
+    result.map(|value| crate::value::js_is_truthy(value) != 0)
 }
 
 pub(crate) fn glob_entry_value(entry: &FsGlobMatch, with_file_types: bool) -> f64 {
@@ -716,17 +765,21 @@ pub(crate) fn glob_entry_value(entry: &FsGlobMatch, with_file_types: bool) -> f6
 
 #[cfg(feature = "regex-engine")]
 pub(crate) fn run_fs_glob_result(pattern_value: f64, options_value: f64) -> Result<FsGlobRun, f64> {
-    let patterns = glob_patterns_from_value_result(pattern_value)?;
-    let options = glob_options_from_value_result(options_value)?;
+    let scope = RuntimeHandleScope::new();
+    let pattern_value = scope.root_nanbox_f64(pattern_value);
+    let options_value = scope.root_nanbox_f64(options_value);
+    let patterns = glob_patterns_from_value_result(pattern_value.get_nanbox_f64())?;
+    let options = glob_options_from_value_result(&scope, options_value.get_nanbox_f64())?;
     let mut matches: BTreeMap<String, FsGlobMatch> = BTreeMap::new();
     for pattern in patterns {
+        let pattern_scope = RuntimeHandleScope::new();
         let pattern_is_absolute = Path::new(&pattern).is_absolute();
         let pattern_for_match = if pattern_is_absolute {
             normalize_slashes(&pattern)
         } else {
             normalize_slashes(&pattern)
         };
-        let Some(re) = glob_regex_from_pattern(&pattern_for_match) else {
+        let Some(re) = glob_regex_from_pattern(&pattern_scope, &pattern_for_match)? else {
             continue;
         };
         let root = glob_search_root(&pattern_for_match);
@@ -747,15 +800,15 @@ pub(crate) fn run_fs_glob_result(pattern_value: f64, options_value: f64) -> Resu
             } else {
                 relative_to_base(&candidate.actual_path, &options.cwd_actual)
             };
-            if !re.is_match(&target).unwrap_or(false) {
+            if !re.is_match(&target).map_err(glob_engine_error)? {
                 continue;
             }
             let Some(entry) = glob_match_from_candidate(candidate, pattern_is_absolute, &options)
             else {
                 continue;
             };
-            if excluded_by_patterns(&entry.actual_path, &options)
-                || excluded_by_function(&entry, &options)
+            if excluded_by_patterns(&entry.actual_path, &options)?
+                || excluded_by_function(&entry, &options)?
             {
                 continue;
             }
@@ -784,12 +837,18 @@ pub(crate) fn run_bun_glob_result(
     pattern_value: f64,
     options_value: f64,
 ) -> Result<FsGlobRun, f64> {
-    let Some(pattern) = decode_string_value(pattern_value) else {
-        return Err(glob_pattern_string_error("pattern", pattern_value));
+    let scope = RuntimeHandleScope::new();
+    let pattern_value = scope.root_nanbox_f64(pattern_value);
+    let options_value = scope.root_nanbox_f64(options_value);
+    let Some(pattern) = decode_string_value(pattern_value.get_nanbox_f64()) else {
+        return Err(glob_pattern_string_error(
+            "pattern",
+            pattern_value.get_nanbox_f64(),
+        ));
     };
     let pattern = normalize_slashes(&pattern);
-    let options = bun_glob_options_from_value_result(options_value)?;
-    let Some(re) = glob_regex_from_pattern(&pattern) else {
+    let options = bun_glob_options_from_value_result(&scope, options_value.get_nanbox_f64())?;
+    let Some(re) = glob_regex_from_pattern(&scope, &pattern)? else {
         return Ok(FsGlobRun {
             matches: Vec::new(),
             with_file_types: false,
@@ -825,14 +884,17 @@ pub(crate) fn run_bun_glob_result(
         if !options.dot && !pattern_mentions_hidden && bun_path_is_hidden(&relative) {
             continue;
         }
-        if !re.is_match(&target).unwrap_or(false) {
+        if !re.is_match(&target).map_err(glob_engine_error)? {
             continue;
         }
-        if options
-            .ignore_patterns
-            .iter()
-            .any(|ignore| ignore.is_match(&relative).unwrap_or(false))
-        {
+        let mut ignored = false;
+        for program in &options.ignore_patterns {
+            if program.is_match(&relative).map_err(glob_engine_error)? {
+                ignored = true;
+                break;
+            }
+        }
+        if ignored {
             continue;
         }
         let Some(mut entry) = glob_match_from_candidate(
@@ -880,9 +942,13 @@ pub(crate) fn bun_glob_matches(pattern_value: f64, path_value: f64) -> Result<bo
     let Some(path) = decode_string_value(path_value) else {
         return Err(glob_pattern_string_error("path", path_value));
     };
-    Ok(glob_regex_from_pattern(&normalize_slashes(&pattern))
-        .map(|re| re.is_match(&normalize_slashes(&path)).unwrap_or(false))
-        .unwrap_or(false))
+    let scope = RuntimeHandleScope::new();
+    match glob_regex_from_pattern(&scope, &normalize_slashes(&pattern))? {
+        Some(program) => program
+            .is_match(&normalize_slashes(&path))
+            .map_err(glob_engine_error),
+        None => Ok(false),
+    }
 }
 
 #[cfg(not(feature = "regex-engine"))]
@@ -908,13 +974,6 @@ pub(crate) fn run_fs_glob_result(
     })
 }
 
-fn run_fs_glob(pattern_value: f64, options_value: f64) -> FsGlobRun {
-    match run_fs_glob_result(pattern_value, options_value) {
-        Ok(run) => run,
-        Err(err) => crate::exception::js_throw(err),
-    }
-}
-
 /// `fs.globSync(pattern)` — deterministic Node-compatible glob subset.
 #[no_mangle]
 pub extern "C" fn js_fs_glob_sync(pattern_value: f64) -> f64 {
@@ -923,12 +982,30 @@ pub extern "C" fn js_fs_glob_sync(pattern_value: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_fs_glob_sync_options(pattern_value: f64, options_value: f64) -> f64 {
-    use crate::array::{js_array_alloc, js_array_push_f64};
-
-    let run = run_fs_glob(pattern_value, options_value);
-    let mut arr = js_array_alloc(run.matches.len() as u32);
-    for entry in &run.matches {
-        arr = js_array_push_f64(arr, glob_entry_value(entry, run.with_file_types));
+    match glob_sync_value_result(pattern_value, options_value) {
+        Ok(value) => value,
+        Err(error) => crate::exception::js_throw(error),
     }
-    f64::from_bits(i64::cast_unsigned(arr as i64))
+}
+
+fn glob_sync_value_result(pattern_value: f64, options_value: f64) -> Result<f64, f64> {
+    use crate::array::{js_array_alloc, js_array_push_f64};
+    let run = run_fs_glob_result(pattern_value, options_value)?;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr = scope.root_raw_mut_ptr(crate::exception::catch_js_throw(|| {
+        js_array_alloc(run.matches.len() as u32)
+    })?);
+    for entry in &run.matches {
+        let local = crate::gc::RuntimeHandleScope::new();
+        let value = local.root_nanbox_f64(crate::exception::catch_js_throw(|| {
+            glob_entry_value(entry, run.with_file_types)
+        })?);
+        let pointer = crate::exception::catch_js_throw(|| {
+            js_array_push_f64(arr.get_raw_mut_ptr(), value.get_nanbox_f64())
+        })?;
+        arr.set_raw_mut_ptr(pointer);
+    }
+    Ok(f64::from_bits(
+        arr.get_raw_const_ptr::<crate::array::ArrayHeader>() as u64,
+    ))
 }

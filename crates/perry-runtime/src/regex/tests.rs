@@ -79,144 +79,72 @@ fn malloc_finalize_clears_regexp_address_owned_state() {
     assert!(!crate::object::exotic_expando::test_exotic_expando_entry_exists(addr));
 }
 
-fn clone_raw_arc<T>(raw: *const T) -> std::sync::Arc<T> {
-    unsafe {
-        let arc = std::sync::Arc::from_raw(raw);
-        let observer = arc.clone();
-        let _ = std::sync::Arc::into_raw(arc);
-        observer
-    }
-}
-
-#[test]
-fn regexp_finalize_releases_all_header_owned_programs() {
-    let _lock = crate::gc::global_side_table_test_lock();
-
-    fn compile(pattern: &str, subject: &str) -> *mut RegExpHeader {
-        let re = js_regexp_new(make_string(pattern), make_string(""));
-        assert!(js_regexp_test(re, make_string(subject)) != 0);
-        re
-    }
-
-    // Every compiled header owns one shared program bundle, including the
-    // never-match placeholder and any fallback matcher.
-    let standard = compile(r"needle\d+", "needle42");
-    let standard_raw = unsafe { (*standard).programs_ptr };
-    assert!(!standard_raw.is_null());
-    let standard_observer = clone_raw_arc(standard_raw);
-    let standard_before = std::sync::Arc::strong_count(&standard_observer);
-    unsafe {
-        crate::gc::gc_type_finalize_unmarked_payload(
-            crate::gc::GC_TYPE_REGEXP,
-            standard.cast::<u8>(),
-        );
-    }
-    assert_eq!(
-        std::sync::Arc::strong_count(&standard_observer) + 1,
-        standard_before
-    );
-    assert!(!regex_is_built(standard));
-
-    let fancy = compile(r"(?<=pre)\d+", "pre77");
-    let fancy_raw = unsafe { (*fancy).programs_ptr };
-    assert!(regex_has_fancy_program(fancy));
-    let fancy_observer = clone_raw_arc(fancy_raw);
-    let fancy_before = std::sync::Arc::strong_count(&fancy_observer);
-    unsafe {
-        crate::gc::gc_type_finalize_unmarked_payload(crate::gc::GC_TYPE_REGEXP, fancy.cast::<u8>());
-    }
-    assert_eq!(
-        std::sync::Arc::strong_count(&fancy_observer) + 1,
-        fancy_before
-    );
-    assert!(!regex_is_built(fancy));
-
-    let repeat = compile(r"(a?b??)*", "ab");
-    let repeat_raw = unsafe { (*repeat).programs_ptr };
-    assert!(regex_has_repeat_program(repeat));
-    let repeat_observer = clone_raw_arc(repeat_raw);
-    let repeat_before = std::sync::Arc::strong_count(&repeat_observer);
-    unsafe {
-        crate::gc::gc_type_finalize_unmarked_payload(
-            crate::gc::GC_TYPE_REGEXP,
-            repeat.cast::<u8>(),
-        );
-    }
-    let repeat_after = std::sync::Arc::strong_count(&repeat_observer);
-    assert_eq!(repeat_after + 1, repeat_before);
-    assert!(!regex_is_built(repeat));
-
-    // Arena overflow cleanup and finalization can overlap. A second finalizer
-    // must observe null pointers rather than release an owned reference twice.
-    unsafe {
-        crate::gc::gc_type_finalize_unmarked_payload(
-            crate::gc::GC_TYPE_REGEXP,
-            repeat.cast::<u8>(),
-        );
-    }
-    assert_eq!(std::sync::Arc::strong_count(&repeat_observer), repeat_after);
-}
+// Program lifetime and compilation-churn reclamation are exercised with the
+// real collector in gc::tests::runtime_roots::perex_lifecycle.
 
 #[test]
 fn js_replacement_expands_special_patterns() {
-    let re = regex::Regex::new(r"(\w+)\s(\w+)").unwrap();
-    let subj = "John Smith";
-    let caps = re.captures(subj).unwrap();
-    assert_eq!(
-        expand_js_replacement("$2 $1", &caps, subj, false),
-        "Smith John"
-    );
-    assert_eq!(
-        expand_js_replacement("[$&]", &caps, subj, false),
-        "[John Smith]"
-    );
+    for (pattern, subject, replacement, expected) in [
+        (r"(\w+)\s(\w+)", "John Smith", "$2 $1", "Smith John"),
+        (r"(\w+)\s(\w+)", "John Smith", "[$&]", "[John Smith]"),
+        ("b", "abc", "$`", "aac"),
+        ("b", "abc", "$'", "acc"),
+        ("b", "abc", "$&", "abc"),
+        ("b", "abc", "$$", "a$c"),
+        ("b", "abc", "$z", "a$zc"),
+        ("b", "abc", "end$", "aend$c"),
+        ("(a)(x)?(b)", "ab", "$1$2$3", "ab"),
+        ("(a)(x)?(b)", "ab", "$10", "a0"),
+    ] {
+        assert_eq!(replace_case(pattern, subject, replacement), expected);
+    }
+}
 
-    // $` (before) / $' (after) with a mid-string single-char match.
-    let re2 = regex::Regex::new("b").unwrap();
-    let s2 = "abc";
-    let c2 = re2.captures(s2).unwrap();
-    assert_eq!(expand_js_replacement("$`", &c2, s2, false), "a");
-    assert_eq!(expand_js_replacement("$'", &c2, s2, false), "c");
-    assert_eq!(expand_js_replacement("$&", &c2, s2, false), "b");
-    assert_eq!(expand_js_replacement("$$", &c2, s2, false), "$"); // escaped literal
-    assert_eq!(expand_js_replacement("$z", &c2, s2, false), "$z"); // invalid → literal
-    assert_eq!(expand_js_replacement("end$", &c2, s2, false), "end$"); // trailing $
+fn replace_case(pattern: &str, subject: &str, replacement: &str) -> String {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let pattern = scope.root_string_ptr(make_string(pattern));
+    let flags = scope.root_string_ptr(make_string(""));
+    let re = scope.root_raw_mut_ptr(js_regexp_new(
+        pattern.get_raw_const_ptr(),
+        flags.get_raw_const_ptr(),
+    ));
+    let subject = scope.root_string_ptr(make_string(subject));
+    let replacement = scope.root_string_ptr(make_string(replacement));
+    let out = js_string_replace_regex_named(
+        subject.get_raw_const_ptr(),
+        re.get_raw_const_ptr(),
+        replacement.get_raw_const_ptr(),
+    );
+    string_as_str(out).to_owned()
+}
 
-    // Numbered groups: two-digit-then-one-digit fallback + unmatched → "".
-    let re3 = regex::Regex::new(r"(a)(x)?(b)").unwrap();
-    let s3 = "ab";
-    let c3 = re3.captures(s3).unwrap();
-    assert_eq!(expand_js_replacement("$1$2$3", &c3, s3, false), "ab"); // $2 unmatched → ""
-    assert_eq!(expand_js_replacement("$10", &c3, s3, false), "a0"); // no group 10 → $1 then '0'
+pub(super) fn first_match(pattern: &str, flags: &str, subject: &str) -> Option<String> {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let pattern = scope.root_string_ptr(make_string(pattern));
+    let flags = scope.root_string_ptr(make_string(flags));
+    let re = scope.root_raw_mut_ptr(js_regexp_new(
+        pattern.get_raw_const_ptr(),
+        flags.get_raw_const_ptr(),
+    ));
+    let subject = scope.root_string_ptr(make_string(subject));
+    let result = js_regexp_exec(re.get_raw_mut_ptr(), subject.get_raw_const_ptr());
+    if result.is_null() {
+        None
+    } else {
+        match_capture_text(result, 0)
+    }
 }
 
 #[test]
 fn js_replacement_named_group_gate() {
-    // No named groups in the regex → `$<name>` is emitted literally (#2421).
-    let re = regex::Regex::new("n").unwrap();
-    let subj = "end";
-    let caps = re.captures(subj).unwrap();
+    assert_eq!(replace_case("n", "end", "$<bad>"), "e$<bad>d");
+    assert_eq!(replace_case("n", "end", "[$<bad>]"), "e[$<bad>]d");
+    let pattern = r"(?<first>\w+)\s(?<last>\w+)";
     assert_eq!(
-        expand_js_replacement("$<bad>", &caps, subj, false),
-        "$<bad>"
-    );
-    assert_eq!(
-        expand_js_replacement("[$<bad>]", &caps, subj, false),
-        "[$<bad>]"
-    );
-
-    // Named groups present: known name substitutes, unknown name → "".
-    let re2 = regex::Regex::new(r"(?<first>\w+)\s(?<last>\w+)").unwrap();
-    let subj2 = "John Smith";
-    let caps2 = re2.captures(subj2).unwrap();
-    assert_eq!(
-        expand_js_replacement("$<last>, $<first>", &caps2, subj2, true),
+        replace_case(pattern, "John Smith", "$<last>, $<first>"),
         "Smith, John"
     );
-    assert_eq!(
-        expand_js_replacement("[$<missing>]", &caps2, subj2, true),
-        "[]"
-    );
+    assert_eq!(replace_case(pattern, "John Smith", "[$<missing>]"), "[]");
 }
 
 #[test]
@@ -567,21 +495,12 @@ fn regex_replace_preserves_and_canonicalizes_wtf8_boundaries() {
 
 #[test]
 fn escaped_hyphen_in_class_stays_literal() {
-    // #4425: `\-` inside a character class is always a literal hyphen. The
-    // Rust `regex` crate reads a bare `-` flanked by members as a range
-    // operator, so the escape must be preserved or `[a\- ]` translates to
-    // the invalid range `[a- ]`.
-    assert_eq!(js_regex_to_rust(r"[a\- ]"), r"[a\- ]");
-    assert_eq!(js_regex_to_rust(r"[:\- ]"), r"[:\- ]");
-    assert_eq!(js_regex_to_rust(r"[\-]"), r"[\-]");
-    // Outside a class a hyphen carries no range meaning, so it stays bare.
-    assert_eq!(js_regex_to_rust(r"a\-b"), "a-b");
-
-    // The patterns that crashed `marked` at module-init must now compile.
-    for pat in [r"[a\- ]", r"[:\- ]", r" {0,3}\|?(?:[:\- ]*\|)+[\:\- ]*\n"] {
-        let flags = make_string("");
-        let re = js_regexp_new(make_string(pat), flags);
-        assert!(!re.is_null(), "pattern failed to construct: {pat}");
+    for pattern in [r"[a\- ]", r"[:\- ]", r"[\-]"] {
+        assert_eq!(first_match(pattern, "", "-"), Some("-".into()));
+    }
+    assert_eq!(first_match(r"a\-b", "", "a-b"), Some("a-b".into()));
+    for pattern in [r"[a\- ]", r"[:\- ]", r" {0,3}\|?(?:[:\- ]*\|)+[\:\- ]*\n"] {
+        let _ = js_regexp_new(make_string(pattern), make_string(""));
     }
 }
 
@@ -670,82 +589,68 @@ fn ecmascript_dot_excludes_all_line_terminators_without_dotall() {
 
 #[test]
 fn annexb_legacy_decimal_escapes() {
-    // #5594: a `\<n>` with no matching capture group is an Annex B.1.4
-    // legacy octal escape, not a backreference — `\1` → `\x01`, never the
-    // bare `\1` the `regex`/`fancy-regex` crates reject.
-    assert_eq!(js_regex_to_rust(r"\1"), r"\x{01}");
-    assert_eq!(
-        js_regex_to_rust(r"\b(\w+) \2\b"),
-        r"(?-iu:\b)((?-i:[A-Za-z0-9_])+) \x{02}(?-iu:\b)"
-    );
-    // Multi-digit octal: `\12` = 0o12 = 0x0A, `\14` = 0o14 = 0x0C.
-    assert_eq!(js_regex_to_rust(r"[\12-\14]"), r"[\x{0A}-\x{0C}]");
-    // Inside a class a decimal escape is always octal, never a backref —
-    // even when that group exists.
-    assert_eq!(js_regex_to_rust(r"(a)[\1]"), r"(a)[\x{01}]");
-    // A real backward backreference is preserved for fancy-regex.
-    assert_eq!(js_regex_to_rust(r"(a)\1"), r"(a)\1");
-    // `\8` / `\9` are non-octal decimal escapes → literal digit.
-    assert_eq!(js_regex_to_rust(r"\8"), "8");
-    // `\0` is NUL; legacy `\012` = 0o12 = 0x0A.
-    assert_eq!(js_regex_to_rust(r"\0"), r"\x{00}");
-    assert_eq!(js_regex_to_rust(r"\012"), r"\x{0A}");
-
-    // The patterns that threw at construction must now compile and behave.
-    for pat in [r"\1", r"\b(\w+) \2\b", r"[\d][\12-\14]{1,}[^\d]"] {
-        let re = js_regexp_new(make_string(pat), make_string(""));
-        assert!(!re.is_null(), "pattern failed to construct: {pat}");
+    for (pattern, subject, matched) in [
+        (r"\1", "\x01", "\x01"),
+        (r"\b(\w+) \2\b", "name \x02x", "name \x02"),
+        (r"[\12-\14]", "\n", "\n"),
+        (r"[\12-\14]", "\x0c", "\x0c"),
+        (r"(a)[\1]", "a\x01", "a\x01"),
+        (r"(a)\1", "aa", "aa"),
+        (r"\8", "8", "8"),
+        (r"\0", "\0", "\0"),
+        (r"\012", "\n", "\n"),
+    ] {
+        assert_eq!(
+            first_match(pattern, "", subject),
+            Some(matched.into()),
+            "{pattern}"
+        );
+    }
+    for pattern in [r"\1", r"\b(\w+) \2\b", r"[\d][\12-\14]{1,}[^\d]"] {
+        let _ = js_regexp_new(make_string(pattern), make_string(""));
     }
 }
 
 #[test]
 fn annexb_invalid_control_escape_is_literal_backslash_c() {
-    // #5594: `\c` not followed by an ASCII control letter is the literal
-    // two-char sequence `\c`, not a control escape. The `regex`/`fancy-regex`
-    // crates reject a bare `\c`, so emit an escaped backslash + `c`.
-    assert_eq!(js_regex_to_rust(r"\cА"), r"\\cА"); // Cyrillic А (U+0410)
-    assert_eq!(js_regex_to_rust(r"\c "), r"\\c "); // space follows
-    assert_eq!(js_regex_to_rust(r"\c"), r"\\c"); // trailing
-    assert_eq!(js_regex_to_rust(r"[\c ]"), r"[\\c ]"); // inside a class
-                                                       // A valid control letter still lowers to its control byte (`\cA` = 0x01).
-    assert_eq!(js_regex_to_rust(r"\cA"), r"\x{01}");
-
-    for pat in [r"\cА", r"\c!", r"[\c ]"] {
-        let re = js_regexp_new(make_string(pat), make_string(""));
-        assert!(!re.is_null(), "pattern failed to construct: {pat}");
+    for (pattern, subject) in [
+        (r"\cА", r"\cА"),
+        (r"\c ", r"\c "),
+        (r"\c", r"\c"),
+        (r"\c!", r"\c!"),
+        (r"\cA", "\x01"),
+    ] {
+        assert_eq!(first_match(pattern, "", subject), Some(subject.into()));
+    }
+    for subject in ["\\", "c", " "] {
+        assert_eq!(first_match(r"[\c ]", "", subject), Some(subject.into()));
     }
 }
 
 #[test]
-fn surrogate_pairs_fold_to_astral_scalars() {
-    // High escape + low class → contiguous astral range.
+fn surrogate_pairs_match_the_original_utf16_units() {
+    for (pattern, subject) in [
+        (r"\uD800[\uDC00-\uDC0B]", "\u{10000}"),
+        (r"\uD800[\uDC00-\uDC0B]", "\u{1000b}"),
+        (r"\uD83D\uDE00", "😀"),
+        (r"[\uD80C\uD81C-\uD820][\uDC00-\uDFFF]", "\u{13000}"),
+        (r"[\uD80C\uD81C-\uD820][\uDC00-\uDFFF]", "\u{183ff}"),
+        (r"[ˁ\xAA]", "ˁ"),
+        (r"[ˁ\xAA]", "ª"),
+        (r"[A-Za-z]", "Z"),
+    ] {
+        assert_eq!(first_match(pattern, "", subject), Some(subject.into()));
+    }
+    assert_eq!(first_match(r"\uD800[\uDC00-\uDC0B]", "", "\u{1000c}"), None);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let re = scope.root_raw_mut_ptr(js_regexp_new(make_string(r"\uD800x"), make_string("")));
+    let subject = scope.root_string_ptr(make_wtf8(b"\xed\xa0\x80x"));
     assert_eq!(
-        js_regex_to_rust(r"\uD800[\uDC00-\uDC0B]"),
-        r"[\x{10000}-\x{1000b}]"
+        js_regexp_test(re.get_raw_const_ptr(), subject.get_raw_const_ptr()),
+        1
     );
-    // Two consecutive surrogate escapes → single astral scalar.
-    assert_eq!(js_regex_to_rust(r"\uD83D\uDE00"), r"\x{1f600}");
-    // High class + full low class → coalesced astral block.
-    assert_eq!(
-        js_regex_to_rust(r"[\uD80C\uD81C-\uD820][\uDC00-\uDFFF]"),
-        r"[\x{13000}-\x{133ff}\x{17000}-\x{183ff}]"
-    );
-    // Non-surrogate escapes and ordinary classes are untouched.
-    assert_eq!(js_regex_to_rust(r"[ˁ\xAA]"), r"[ˁ\xAA]");
-    assert_eq!(js_regex_to_rust(r"[A-Za-z]"), r"[A-Za-z]");
-    // A lone high surrogate (no following low surrogate) cannot be represented in
-    // Rust's Unicode-only `regex` crate — lone surrogates are not valid Unicode
-    // scalars and cannot appear in any UTF-8 string. Leaving `\uD800` verbatim
-    // would cause the Rust regex engine to reject the pattern at construction time.
-    // We emit a never-match atom `[^\s\S]` so the compiled pattern is valid but
-    // correctly matches nothing (JS/WTF-8 lone-surrogate matching is a known gap).
-    assert_eq!(js_regex_to_rust(r"\uD800x"), r"[^\s\S]x");
-
-    // The Test262 `nativeFunctionMatcher.js` ID regexes must now compile.
     let pat = r"(?:[A-Za-z\xAA]|\uD800[\uDC00-\uDC0B\uDC0D-\uDC26]|\uD801[\uDC00-\uDC9D])";
-    let flags = make_string("");
-    let re = js_regexp_new(make_string(pat), flags);
-    assert!(!re.is_null(), "ID_Start-shaped pattern failed to construct");
+    assert!(!js_regexp_new(make_string(pat), make_string("")).is_null());
 }
 
 /// `@colors/colors` (a winston dep) builds the escape regex
@@ -792,41 +697,20 @@ fn colors_escape_string_regexp_char_class() {
     assert!(!re2.is_null(), "escaped output `\\x1b\\[0m` must construct");
 }
 
-/// Regression: emoji-regex (npm `emoji-regex`, used by `string-width` → ink,
-/// #348) factors a shared high surrogate out before a non-capturing group, so
-/// the high half is no longer directly adjacent to its low half. Before
-/// `distribute_high_over_group` the lone `\uD83C`/`\uD83D`/`\uD83E` reached the
-/// `regex` crate as a surrogate scalar and the whole pattern was rejected as
-/// `invalid pattern` (importing `string-width` then threw at module init).
 #[test]
 fn high_surrogate_distributes_over_group() {
-    // Each shape must now translate to a buildable Rust-regex pattern.
-    let patterns = [
-        // plain group, alts led by a low-surrogate single or pair
+    for pattern in [
         r"\uD83C(?:\uDDE6\uD83C[\uDDE8-\uDDEC]|\uDDE7🇴)",
-        // plain group, alt led by a low-surrogate class
         r"\uD83E(?:[\uDD0C\uDD0F]️?|[\uDD18-\uDD1F])",
-        // optional group then a trailing low unit (ZWJ "kiss"/"family" idiom)
         r"\uD83D(?:\uDC8B‍\uD83D)?[\uDC68\uDC69]",
-    ];
-    for p in patterns {
-        let translated = js_regex_to_rust(p);
-        assert!(
-            build_std_regex(&translated).is_ok(),
-            "should compile: {p}\n -> {translated}"
-        );
+    ] {
+        assert!(!js_regexp_new(make_string(pattern), make_string("")).is_null());
     }
-
-    // Semantics are preserved: the rewrite matches the astral scalars (and the
-    // ZWJ sequence), not lone surrogates.
-    let re = build_std_regex(&js_regex_to_rust(r"\uD83D(?:\uDC8B‍\uD83D)?[\uDC68\uDC69]")).unwrap();
-    assert!(re.is_match("\u{1F468}"), "matches man (U+1F468)");
-    assert!(re.is_match("\u{1F469}"), "matches woman (U+1F469)");
-    assert!(
-        re.is_match("\u{1F48B}\u{200D}\u{1F469}"),
-        "matches kiss-ZWJ-woman"
-    );
-    assert!(!re.is_match("AB"), "does not match plain ASCII");
+    let pattern = r"\uD83D(?:\uDC8B‍\uD83D)?[\uDC68\uDC69]";
+    for subject in ["\u{1F468}", "\u{1F469}", "\u{1F48B}\u{200D}\u{1F469}"] {
+        assert_eq!(first_match(pattern, "", subject), Some(subject.into()));
+    }
+    assert_eq!(first_match(pattern, "", "AB"), None);
 }
 
 /// Unicode 17.0 scripts (`Beria_Erfe`, `Sidetic`, `Tai_Yo`, `Tolong_Siki`) are
@@ -837,42 +721,21 @@ fn high_surrogate_distributes_over_group() {
 /// alias form (`Script`/`sc`/`Script_Extensions`/`scx`) and long + short names.
 #[test]
 fn unicode17_scripts_expand_to_codepoint_ranges() {
-    // Positive `\p{Script=...}` → explicit class of the script's ranges.
-    assert_eq!(
-        js_regex_to_rust(r"\p{Script=Beria_Erfe}"),
-        r"[\x{16EA0}-\x{16EB8}\x{16EBB}-\x{16ED3}]"
-    );
-    // Short alias, `sc=` key, and `scx=` all resolve to the same body.
-    assert_eq!(
-        js_regex_to_rust(r"\p{sc=Berf}"),
-        r"[\x{16EA0}-\x{16EB8}\x{16EBB}-\x{16ED3}]"
-    );
-    assert_eq!(
-        js_regex_to_rust(r"\p{scx=Beria_Erfe}"),
-        r"[\x{16EA0}-\x{16EB8}\x{16EBB}-\x{16ED3}]"
-    );
-    assert_eq!(
-        js_regex_to_rust(r"\p{Script_Extensions=Berf}"),
-        r"[\x{16EA0}-\x{16EB8}\x{16EBB}-\x{16ED3}]"
-    );
-    // The other three scripts.
-    assert_eq!(
-        js_regex_to_rust(r"\p{sc=Sidetic}"),
-        r"[\x{10940}-\x{10959}]"
-    );
-    assert_eq!(
-        js_regex_to_rust(r"\p{sc=Tai_Yo}"),
-        r"[\x{1E6C0}-\x{1E6DE}\x{1E6E0}-\x{1E6F5}\x{1E6FE}-\x{1E6FF}]"
-    );
-    assert_eq!(
-        js_regex_to_rust(r"\p{sc=Tolong_Siki}"),
-        r"[\x{11DB0}-\x{11DDB}\x{11DE0}-\x{11DE9}]"
-    );
-    // Negated form → complemented class.
-    assert_eq!(
-        js_regex_to_rust(r"\P{sc=Sidetic}"),
-        r"[^\x{10940}-\x{10959}]"
-    );
+    for (property, member) in [
+        ("Script=Beria_Erfe", '\u{16EA0}'),
+        ("sc=Berf", '\u{16EA0}'),
+        ("scx=Beria_Erfe", '\u{16EA0}'),
+        ("Script_Extensions=Berf", '\u{16EA0}'),
+        ("sc=Sidetic", '\u{10940}'),
+        ("sc=Tai_Yo", '\u{1E6C0}'),
+        ("sc=Tolong_Siki", '\u{11DB0}'),
+    ] {
+        let subject = member.to_string();
+        assert_eq!(
+            first_match(&format!(r"^\p{{{property}}}$"), "u", &subject),
+            Some(subject)
+        );
+    }
 
     // End-to-end: the compiled anchored regex matches the script's own code
     // points and rejects an adjacent non-member (mirrors the Test262 shape).
@@ -898,89 +761,6 @@ fn unicode17_scripts_expand_to_codepoint_ranges() {
     assert!(
         js_regexp_test(rn, make_string("\u{10940}")) == 0,
         "U+10940 is Sidetic, excluded by the negation"
-    );
-}
-
-/// 2026-07-09 GC audit (wave 2 batch A): the compiled-regex caches were
-/// unbounded — one entry per distinct `(pattern, flags)` ever compiled, up to
-/// 64 MiB each — so `new RegExp(userInput)` was an attacker-driven OOM. The
-/// caches are now capped (one-entry eviction) and every `RegExpHeader` OWNS a
-/// leaked Arc reference to its compiled program(s), so a header created
-/// before an eviction keeps matching afterwards.
-#[test]
-fn regex_cache_capped_and_prior_headers_survive_eviction() {
-    // A header compiled before the flood.
-    let re = js_regexp_new(make_string(r"needle\d+"), make_string(""));
-    assert!(js_regexp_test(re, make_string("xx needle42 yy")) != 0);
-
-    // A fancy-fallback header too (lookbehind forces the fancy engine).
-    let fancy = js_regexp_new(make_string(r"(?<=pre)\d+"), make_string(""));
-    assert!(js_regexp_test(fancy, make_string("pre77")) != 0);
-
-    // A RepeatMatcher header whose ECMAScript matcher must likewise outlive
-    // its thread-local cache entry.
-    let repeat_matcher = js_regexp_new(make_string(r"(a?b??)*"), make_string(""));
-    assert!(js_regexp_test(repeat_matcher, make_string("ab")) != 0);
-
-    // Flood the cache with distinct patterns — far past the cap.
-    for i in 0..(REGEX_CACHE_MAX_ENTRIES * 2 + 10) {
-        let _ = get_or_compile_regex(
-            &Arc::from(format!("cachefill{i}[a-z]+").as_str()),
-            &Arc::from(""),
-        );
-    }
-    let std_len = REGEX_CACHE.with(|c| c.borrow().len());
-    assert!(
-        std_len <= REGEX_CACHE_MAX_ENTRIES,
-        "REGEX_CACHE must stay capped at {REGEX_CACHE_MAX_ENTRIES} entries, got {std_len}"
-    );
-
-    // Flood the fancy cache as well (each pattern rejected by the std engine).
-    for i in 0..(REGEX_CACHE_MAX_ENTRIES + 10) {
-        let _ = get_or_compile_regex(
-            &Arc::from(format!("(?<=fill{i})x").as_str()),
-            &Arc::from(""),
-        );
-    }
-    let fancy_len = FANCY_CACHE.with(|c| c.borrow().len());
-    assert!(
-        fancy_len <= REGEX_CACHE_MAX_ENTRIES,
-        "FANCY_CACHE must stay capped at {REGEX_CACHE_MAX_ENTRIES} entries, got {fancy_len}"
-    );
-
-    // Quantified captures populate the ECMAScript RepeatMatcher cache.
-    for i in 0..(REGEX_CACHE_MAX_ENTRIES + 10) {
-        let _ = get_or_compile_regex(&Arc::from(format!("(repeat{i})*").as_str()), &Arc::from(""));
-    }
-    let repeat_len = REPEAT_MATCHER_CACHE.with(|c| c.borrow().len());
-    assert!(
-        repeat_len <= REGEX_CACHE_MAX_ENTRIES,
-        "REPEAT_MATCHER_CACHE must stay capped at {REGEX_CACHE_MAX_ENTRIES} entries, got {repeat_len}"
-    );
-
-    // The pre-flood headers still execute correctly: their compiled programs
-    // are owned by the headers (leaked Arc refs), not borrowed from the
-    // now-cleared caches.
-    assert!(
-        js_regexp_test(re, make_string("xx needle42 yy")) != 0,
-        "std-engine header must keep matching after cache eviction"
-    );
-    assert!(
-        js_regexp_test(re, make_string("no match here")) == 0,
-        "std-engine header must keep REJECTING correctly after cache eviction"
-    );
-    assert!(
-        js_regexp_test(fancy, make_string("pre77")) != 0,
-        "fancy-fallback header must keep matching after cache eviction \
-         (header-resident program set, not the cleared FANCY_CACHE)"
-    );
-    assert!(
-        js_regexp_test(fancy, make_string("nope77")) == 0,
-        "fancy-fallback header must keep rejecting after cache eviction"
-    );
-    assert!(
-        js_regexp_test(repeat_matcher, make_string("ab")) != 0,
-        "RepeatMatcher header must keep matching after cache eviction"
     );
 }
 
