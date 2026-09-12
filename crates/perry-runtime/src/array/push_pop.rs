@@ -1748,26 +1748,29 @@ pub extern "C" fn js_array_unshift_variadic(
         return arr;
     }
     let scope = crate::gc::RuntimeHandleScope::new();
-    let _arr_handle = scope.root_raw_mut_ptr(arr);
-    // Copy the items out before any grow can move arena memory; `items`
-    // points at a caller-owned alloca, so it is stable, but we read it
-    // before mutating to keep the logic simple.
-    let item_vec: Vec<f64> = unsafe {
+    let arr_handle = scope.root_raw_mut_ptr(arr);
+    // The caller-owned alloca itself is stable, but a copying collection can
+    // move any pointer values stored in it without rewriting those raw words.
+    // Give every item a mutable runtime root before growth can allocate.
+    let item_handles = unsafe {
         if items.is_null() {
             Vec::new()
         } else {
-            std::slice::from_raw_parts(items, count as usize).to_vec()
+            scope.root_nanbox_f64_slice(std::slice::from_raw_parts(items, count as usize))
         }
     };
-    let n = item_vec.len();
+    let n = item_handles.len();
     unsafe {
-        let length = (*arr).length;
-        let capacity = (*arr).capacity;
+        let current = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+        let length = (*current).length;
+        let capacity = (*current).capacity;
         let arr = if length + n as u32 > capacity {
-            js_array_grow(arr, length + n as u32)
+            js_array_grow(current, length + n as u32)
         } else {
-            arr
+            current
         };
+        arr_handle.set_raw_mut_ptr(arr);
+        let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
         let flags = array_object_flags_resolved(arr);
         let elements_ptr = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
         // Shift existing elements up by `n`.
@@ -1777,7 +1780,8 @@ pub extern "C" fn js_array_unshift_variadic(
         // Write items in source order at the front. #5552: demote each
         // uniquely-owned string before it aliases its slot (no-op for SSO /
         // non-string).
-        for (i, v) in item_vec.into_iter().enumerate() {
+        for (i, value) in item_handles.iter().enumerate() {
+            let v = value.get_nanbox_f64();
             crate::string::js_string_addref_if_heap_string(v);
             let v = canonicalize_array_numeric_store_value_from_flags(flags, v);
             // GC_STORE_AUDIT(BARRIERED): inserted slots are covered by the

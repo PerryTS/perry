@@ -78,13 +78,14 @@ function benchmarkMain(): void {
     runs += count;
   }
   // Do not depend on Array.sort to compute the median of a sort benchmark.
-  for (let i = 1; i < samples.length; i++) {
-    const v = samples[i];
+  const sortedSamples = samples.slice();
+  for (let i = 1; i < sortedSamples.length; i++) {
+    const v = sortedSamples[i];
     let j = i - 1;
-    while (j >= 0 && samples[j] > v) { samples[j + 1] = samples[j]; j--; }
-    samples[j + 1] = v;
+    while (j >= 0 && sortedSamples[j] > v) { sortedSamples[j + 1] = sortedSamples[j]; j--; }
+    sortedSamples[j + 1] = v;
   }
   console.log(JSON.stringify({name: "array-splice-middle-insert", category: "arrays", n,
-    ms_per_run: samples[3], runs, checksum}));
+    ms_per_run: sortedSamples[3], samples, runs, checksum}));
 }
 benchmarkMain();
