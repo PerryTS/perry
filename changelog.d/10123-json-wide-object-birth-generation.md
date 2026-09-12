@@ -46,3 +46,27 @@
   their width from the governing ceiling, so the old-gen path stays covered whatever that
   constant is — previously they silently depended on it being 128 KB and failed on their
   premise rather than their subject.
+
+- **Large JSON record arrays are allocated once, at their estimated size (#10123).** The
+  direct parser already pre-sized `[{...}]` arrays from `remaining_bytes / 96`, but clamped
+  the estimate at 16,384 slots — a 131,088-byte allocation, **16 bytes over** the
+  131,072-byte pointer-bearing birth threshold. Every large record array was therefore born
+  old on its very first allocation and then doubled twice more in old-gen (131 → 262 →
+  524 KB for 59,000 rows), and an old array of young records keeps them alive through the
+  remembered set after the document dies. On `records_object_8m:parse`
+  `remembered_set/array` was the origin of 98% of minor survivors, across three minors and no
+  full collection.
+
+  The estimate is now used as-is: one allocation, admitted into the nursery when it fits the
+  JSON young-birth ceiling (raised to 768 KB, three quarters of a nursery block, so a 7.1 MB
+  document's 593 KB estimate qualifies) and born old in a single allocation past it.
+  Measured in one binary against the previous clamp, all 50 matrix cells:
+
+  | row | before | after |
+  |---|---:|---:|
+  | `records_object_8m:parse` | 187 MiB / 167 ms | **118 MiB** / 206 ms |
+  | `records_array_20m:parse`, `:scan`, `:sparse` | 256 MiB | **240 MiB** |
+  | `records_object_20m:parse` | 256 MiB | **240 MiB** |
+
+  `records_object_8m:parse` reaches parity with the better of Node and Bun on RSS (1.68× →
+  1.05×) while its CPU stays at 0.88× of the better engine. No other cell moved outside noise.
