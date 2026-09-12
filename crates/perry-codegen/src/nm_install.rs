@@ -37,7 +37,7 @@ pub(crate) fn nm_install_symbol(name: &str) -> Option<&'static str> {
         "module" => Some("js_nm_install_module"),
         "net" => Some("js_nm_install_net"),
         // #6563: node-pty + the API-identical @lydell fork share one bucket.
-        "node-pty" | "@lydell/node-pty" => Some("js_nm_install_node_pty"),
+        "node-pty" | "@lydell/node-pty" | "bun-pty" => Some("js_nm_install_node_pty"),
         "os" => Some("js_nm_install_os"),
         "path" | "path/posix" | "path/win32" | "path.posix" | "path.win32" => {
             Some("js_nm_install_path")

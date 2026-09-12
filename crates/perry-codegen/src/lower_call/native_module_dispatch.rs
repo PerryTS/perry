@@ -44,7 +44,7 @@ pub fn native_module_lookup(
         // #6563: @lydell/node-pty is an API-identical fork of node-pty
         // (opencode imports the fork, kimi-code the original); both route to
         // the one runtime pty implementation.
-        "@lydell/node-pty" => "node-pty",
+        "@lydell/node-pty" | "bun-pty" => "node-pty",
         m => m,
     };
     // First pass: look for an exact class_filter match.

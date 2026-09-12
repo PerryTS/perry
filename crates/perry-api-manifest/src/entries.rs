@@ -185,6 +185,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     // the API-identical @lydell fork (opencode's static import) resolve to
     // the one perry-runtime implementation — no N-API addon involved.
     "node-pty",
+    "bun-pty",
     "@lydell/node-pty", // API-identical node-pty fork (see above)
     // #466: node-forge PKI subset (RSA keygen, X.509 build/sign, PEM).
     // Bundled wrapper at `crates/perry-ext-node-forge`; served natively
@@ -292,6 +293,7 @@ pub const RUNTIME_ONLY_MODULES: &[&str] = &[
     "bun",
     // #6563: the pty lives in perry-runtime (child_process-style reactor).
     "node-pty",
+    "bun-pty",
     "@lydell/node-pty",
 ];
 
