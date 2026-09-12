@@ -22,21 +22,23 @@ Perry checksum matched Node at every size.
 
 | n | Before Perry setter | After Perry setter | After Node setter | Before ratio | After ratio | After getter ratio |
 |---:|---:|---:|---:|---:|---:|---:|
-| 100 | 0.006030 | 0.005401 | 0.000269 | 22.50x | 20.06x | 11.51x |
-| 1,000 | 0.058436 | 0.052417 | 0.002511 | 23.36x | 20.87x | 12.15x |
-| 10,000 | 0.581095 | 0.541799 | 0.024828 | 23.51x | 21.82x | 12.50x |
-| 100,000 | 5.730139 | 5.177306 | 0.247883 | 23.26x | 20.89x | 12.55x |
-| 1,000,000 | 58.591890 | 51.871222 | 2.477711 | 23.70x | 20.94x | 12.46x |
+| 100 | 0.006030 | 0.005485 | 0.000273 | 22.50x | 20.10x | 11.50x |
+| 1,000 | 0.058436 | 0.052530 | 0.002515 | 23.36x | 20.88x | 12.25x |
+| 10,000 | 0.581095 | 0.522024 | 0.025047 | 23.51x | 20.84x | 12.27x |
+| 100,000 | 5.730139 | 5.185880 | 0.250468 | 23.26x | 20.70x | 12.24x |
+| 1,000,000 | 58.591890 | 58.148333 | 2.509861 | 23.70x | 23.17x | 12.25x |
 
-The Perry setter workload improves by 6.8–11.5%. Its ratio is 1.66–1.75 times
-the getter control, rather than the issue's original 6.68 times at 1M. The
-remaining difference includes a second accessor per iteration and numeric
+Across the stable 100–100k range, the Perry setter workload improves by
+9.0–10.2% and is 1.70–1.77 times the getter control. The 1M row still improves
+by 0.8% but hits the threshold anomaly described in the issue, at 1.90 times
+the getter rather than the issue's original 6.68 times. The remaining
+difference includes a second accessor per iteration and numeric
 wrapping/storage; the getter baseline itself remains out of scope. Raw results
 are `before.json` and `after.json`.
 
-Least-squares log(time)/log(n) slopes remain linear: before setter Perry 0.997,
-Node 0.992; after setter Perry 0.996, Node 0.992. After getter slopes are Perry
-0.999 and Node 0.991.
+Least-squares log(time)/log(n) slopes remain near-linear: before setter Perry
+0.997, Node 0.992; after setter Perry 1.005, Node 0.993. After getter slopes are
+Perry 0.999 and Node 0.993.
 
 ## Pre-change attribution
 
