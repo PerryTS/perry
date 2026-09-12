@@ -22,7 +22,6 @@ mod perex_split_compat;
 #[cfg(feature = "regex-engine")]
 pub use perex_split_compat::{js_string_split_n, js_string_split_regex, js_string_split_regex_n};
 #[cfg(feature = "regex-engine")]
-pub(crate) use census_rows::{census_snapshot, RegexCensusRow};
 pub(crate) mod perex_split;
 #[cfg(feature = "regex-engine")]
 pub use perex_split::js_string_split_js;
@@ -31,10 +30,12 @@ pub(crate) mod match_all;
 #[cfg(feature = "regex-engine")]
 pub(crate) mod perex_api;
 #[cfg(feature = "regex-engine")]
+pub(crate) mod site_test;
+#[cfg(feature = "regex-engine")]
 mod perex_construct;
 #[cfg(feature = "regex-engine")]
 pub(crate) mod perex_dispatch;
-mod properties;
+#[cfg(feature = "regex-engine")]
 mod perex_display;
 #[cfg(feature = "regex-engine")]
 pub(crate) mod perex_glob;
@@ -82,16 +83,13 @@ pub use match_all::js_string_match_all;
 pub use match_all::{
     dispatch_regexp_string_iterator_method, js_string_match_all_js, js_string_match_all_value,
 };
-pub use properties::{
-    js_regexp_empty_source, js_regexp_get_flags, js_regexp_get_last_index, js_regexp_get_source,
-    js_regexp_set_last_index, js_regexp_to_string,
-};
 #[cfg(all(test, feature = "regex-engine"))]
 use utf16::{byte_index_to_utf16_index, utf16_index_to_byte};
 
-/// Class id shared with the always-linked RegExp string-iterator dispatch.
+/// Class id for `RegExp String Iterator` exotic objects. Referenced by the
+/// always-linked iterator-prototype dispatch, so it stays ungated even when
+/// the regex engine (which produces these iterators) is compiled out.
 pub const REGEXP_STRING_ITERATOR_CLASS_ID: u32 = 0xFFFF_000A;
-
 #[cfg(feature = "regex-engine")]
 pub use perex_replace_compat::*;
 #[cfg(not(feature = "regex-engine"))]
@@ -149,7 +147,7 @@ pub(crate) fn is_regex_pointer(ptr: *const u8) -> bool {
 
 /// Monotone "this process has ever constructed a `RegExp`" latch.
 ///
-/// The three `REGEX_POINTERS` probes all reach the thread-local table only
+/// The three owner-registration probes all reach the thread-local table only
 /// *after* the header-magic check misses — which is the common case, since they
 /// are asked about ordinary objects on the generic property-dispatch path
 /// (`object::exotic_expando::exotic_expando_kind`) and from `String.prototype`
@@ -163,7 +161,12 @@ fn regex_pointers_contains(addr: usize) -> bool {
     if REGEX_EVER_REGISTERED.is_idle() {
         return false;
     }
-    REGEX_POINTERS.with(|s| s.borrow().contains(&addr))
+    REGEX_SOURCE_TABLE.with(|table| {
+        table
+            .borrow()
+            .get(&addr)
+            .is_some_and(|entry| entry.registered_owner)
+    })
 }
 
 /// Rekey every address-owned RegExp table after payload evacuation. Header
@@ -173,13 +176,20 @@ pub(crate) fn regex_header_moved_for_gc(old_addr: usize, new_addr: usize) {
     if old_addr == new_addr {
         return;
     }
-    if crate::hot_diag::regex_on() {
-        crate::hot_diag::regex_counters(|d| d.side_table_rekeys += 1);
-    }
-    REGEX_POINTERS.with(|table| {
+    REGEX_SOURCE_TABLE.with(|table| {
         let mut table = table.borrow_mut();
-        if table.remove(&old_addr) {
-            table.insert(new_addr);
+        if let Some(mut metadata) = table.remove(&old_addr) {
+            match table.entry(new_addr) {
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    // The former set retained destination registration too;
+                    // the source metadata still comes from the moved owner.
+                    metadata.registered_owner |= entry.get().registered_owner;
+                    entry.insert(metadata);
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(metadata);
+                }
+            }
         }
     });
     crate::object::exotic_expando::exotic_expando_owner_moved(old_addr, new_addr);
@@ -187,17 +197,7 @@ pub(crate) fn regex_header_moved_for_gc(old_addr: usize, new_addr: usize) {
 
 /// Remove address-owned RegExp metadata when the cell is proven dead.
 pub(crate) fn regex_header_clear_dead_for_gc(addr: usize) {
-    // Counted, not timed: this runs inside a collection, so a probe here must
-    // allocate nothing and must not dump. `regex_counters` does neither, and
-    // `regex_on`'s one-time env read cannot first happen here — a header can
-    // only die after `js_regexp_new` created it, and that path arms the
-    // instrument first.
-    if crate::hot_diag::regex_on() {
-        crate::hot_diag::regex_counters(|d| {
-            d.pointer_table_removals += 1;
-        });
-    }
-    REGEX_POINTERS.with(|table| {
+    REGEX_SOURCE_TABLE.with(|table| {
         table.borrow_mut().remove(&addr);
     });
     crate::object::exotic_expando::exotic_expando_owner_clear_dead(addr);
@@ -225,11 +225,12 @@ pub(crate) unsafe fn regex_header_finalize_for_gc(re: *mut RegExpHeader) {
 /// minor) — the same order as the malloc sweep this replaces, and
 /// proportional to allocation, not to program history.
 pub(crate) fn finalize_dead_copied_minor_from_space_regexps() -> usize {
-    let dead: Vec<usize> = REGEX_POINTERS.with(|table| {
-        table
-            .borrow()
+    let dead: Vec<usize> = REGEX_SOURCE_TABLE.with(|table| {
+        let table = table.borrow();
+        let owners = table
             .iter()
-            .copied()
+            .filter_map(|(&addr, entry)| entry.registered_owner.then_some(addr));
+        crate::gc::prefetch::prefetch_gc_owner_headers(owners)
             .filter(|&addr| {
                 crate::gc::owner_is_dead_copied_minor_from_space_of_type(
                     addr,
@@ -239,7 +240,7 @@ pub(crate) fn finalize_dead_copied_minor_from_space_regexps() -> usize {
             .collect()
     });
     let count = dead.len();
-    for addr in dead {
+    for addr in crate::gc::prefetch::prefetch_gc_owner_headers(dead.iter().copied()) {
         unsafe { regex_header_finalize_for_gc(addr as *mut RegExpHeader) };
     }
     count
@@ -252,11 +253,11 @@ pub(crate) fn finalize_dead_copied_minor_from_space_regexps() -> usize {
 /// Deadness: unmarked ∧ not pinned ∧ not forwarded, and for a minor trace also
 /// not tenured and physically in the nursery.
 pub(crate) fn collect_dead_registered_regexps_post_trace(full_trace: bool) -> Vec<usize> {
-    REGEX_POINTERS.with(|table| {
+    REGEX_SOURCE_TABLE.with(|table| {
         table
             .borrow()
             .iter()
-            .copied()
+            .filter_map(|(&addr, entry)| entry.registered_owner.then_some(addr))
             .filter(|&addr| unsafe { registered_regexp_is_dead_post_trace(addr, full_trace) })
             .collect()
     })
@@ -333,7 +334,17 @@ pub(crate) fn test_regexp_program_address(re: *const RegExpHeader) -> usize {
 
 #[cfg(test)]
 pub(crate) fn test_regex_pointer_entry_exists(addr: usize) -> bool {
-    REGEX_POINTERS.with(|table| table.borrow().contains(&addr))
+    REGEX_SOURCE_TABLE.with(|table| {
+        table
+            .borrow()
+            .get(&addr)
+            .is_some_and(|entry| entry.registered_owner)
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn test_regex_source_entry_exists(addr: usize) -> bool {
+    REGEX_SOURCE_TABLE.with(|table| table.borrow().contains_key(&addr))
 }
 
 /// Build a minimal nursery-resident RegExp payload for the copying collector's
@@ -365,7 +376,6 @@ pub(crate) fn test_alloc_nursery_regexp_for_move(source: &str, flags: &str) -> *
         (*ptr).dot_all = flags.contains('s');
         (*ptr).unicode = flags.contains('u') || flags.contains('v');
         (*ptr).has_indices = flags.contains('d');
-        (*ptr).matcher_kind = MatcherKind::Unbuilt;
         (*ptr).last_index = crate::value::JSValue::number(0.0).bits();
         (*ptr).magic = REGEXP_MAGIC;
 
@@ -456,9 +466,6 @@ pub struct RegExpHeader {
     pub dot_all: bool,
     pub unicode: bool,
     pub has_indices: bool,
-    /// Selected engine after the first build. This occupies the byte that was
-    /// padding before `last_index`, so it does not grow the 56-byte header.
-    matcher_kind: MatcherKind,
     /// `lastIndex` is a writable data property holding an *arbitrary* JSValue
     /// (spec: `Set(R, "lastIndex", v)` with no coercion on write). Stored as the
     /// raw NaN-boxed bits; `exec`/`test` apply `ToLength` on read to derive the
@@ -467,7 +474,7 @@ pub struct RegExpHeader {
     /// Wall 18 (nestjs / get-intrinsic): self-identifying sentinel.
     ///
     /// `is_valid_regex_ptr` / `is_regex_pointer` / `is_registered_regex` used to
-    /// rely SOLELY on the `REGEX_POINTERS` thread-local set. That breaks when a
+    /// rely SOLELY on thread-local owner registration. That breaks when a
     /// statically-linked app pulls a second copy of `perry-runtime` (every
     /// `perry-ext-*` archive bundles its own — the link emits duplicate-symbol
     /// warnings): `js_regexp_new` inserts into copy-A's thread-local while the
@@ -547,7 +554,7 @@ pub(crate) fn is_valid_ptr<T>(p: *const T) -> bool {
 }
 
 /// Check if a RegExpHeader pointer is legitimate — it must point to a
-/// header we allocated via `js_regexp_new` (tracked in REGEX_POINTERS).
+/// header we allocated via `js_regexp_new` (recorded as a registered owner).
 /// The LLVM backend's `new RegExp(pat, flags)` currently falls through
 /// to the generic `lower_new` path which allocates an empty object and
 /// NaN-boxes it as a regex; subsequent `.exec()` / `.test()` calls would
@@ -570,6 +577,8 @@ pub(crate) fn is_valid_regex_ptr(p: *const RegExpHeader) -> bool {
 static REGEX_PTR_VALIDATION_CALLS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
+/// How many times a pointer has been validated. A bounded view call must
+/// validate its regex exactly once; counting is how that stays true.
 #[cfg(test)]
 pub(crate) fn test_regex_ptr_validation_calls() -> u64 {
     REGEX_PTR_VALIDATION_CALLS.load(std::sync::atomic::Ordering::Relaxed)
@@ -924,9 +933,5 @@ pub extern "C" fn js_regexp_set_last_index(re: *mut RegExpHeader, value: f64) {
 
 #[cfg(all(test, feature = "regex-engine"))]
 mod tests;
-#[cfg(all(test, feature = "regex-engine"))]
-mod tests_cache;
-#[cfg(all(test, feature = "regex-engine"))]
-mod tests_header;
 #[cfg(all(test, feature = "regex-engine"))]
 mod tests_part2;

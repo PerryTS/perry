@@ -528,8 +528,10 @@ pub(super) fn census_parts() -> (usize, usize, Vec<usize>, Vec<usize>) {
                 if header.is_null() || !is_valid_regex_ptr(header) {
                     return None;
                 }
-                let programs = unsafe { (*header).programs_ptr };
-                (!programs.is_null()).then_some(programs as usize)
+                // A header's compiled program is now a GC allocation reached
+                // through the header, not an off-heap program set.
+                let program = unsafe { (*header).perex_program };
+                (!program.is_null()).then_some(program as usize)
             })
             .collect::<std::collections::HashSet<_>>()
             .into_iter()
@@ -554,11 +556,10 @@ pub(super) fn active_factory_census_parts() -> (usize, usize) {
 }
 
 pub(crate) fn side_table_census() -> Vec<crate::gc::census::SideTableRow> {
-    vec![
-        super::site_cache::census(),
-        super::site_key::census(),
-        census(),
-    ]
+    // The construction and pattern caches this used to report alongside are
+    // gone with the engine that owned them; Perex programs are GC allocations
+    // counted by the ordinary heap census.
+    vec![census()]
 }
 
 #[cfg(test)]

@@ -5684,7 +5684,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "perex"
-version = "0.0.0"
+version = "0.1.0"
 
 [[package]]
 name = "perry"
@@ -6388,7 +6388,7 @@ dependencies = [
 
 [[package]]
 name = "perry-perex"
-version = "0.5.1520"
+version = "0.5.1541"
 dependencies = [
  "perex",
 ]
@@ -6777,7 +6777,7 @@ dependencies = [
 
 [[package]]
 name = "perry-validation"
-version = "0.5.1520"
+version = "0.5.1541"
 dependencies = [
  "idna",
  "regex",
