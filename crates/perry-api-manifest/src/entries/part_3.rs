@@ -1277,6 +1277,8 @@ pub(crate) const API_MANIFEST_PART_3: &[ApiEntry] = &[
     //     name passes the #463 surface gate. ---
     method("node-pty", "spawn", false, None),
     property("node-pty", "default"),
+    method("bun-pty", "spawn", false, None),
+    property("bun-pty", "default"),
     method("@lydell/node-pty", "spawn", false, None),
     property("@lydell/node-pty", "default"),
     // --- tty ---

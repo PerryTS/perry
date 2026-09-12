@@ -449,7 +449,7 @@ impl Drop for AttributeList {
     }
 }
 
-fn command_line(command: &Command) -> io::Result<Vec<u16>> {
+pub(crate) fn command_line(command: &Command) -> io::Result<Vec<u16>> {
     let mut out = Vec::new();
     append_quoted(&mut out, command.get_program())?;
     for arg in command.get_args() {
@@ -497,7 +497,7 @@ fn append_quoted(out: &mut Vec<u16>, value: &OsStr) -> io::Result<()> {
     Ok(())
 }
 
-fn environment_block(command: &Command, clear: bool) -> io::Result<Vec<u16>> {
+pub(crate) fn environment_block(command: &Command, clear: bool) -> io::Result<Vec<u16>> {
     let mut values: BTreeMap<String, (OsString, OsString)> = BTreeMap::new();
     if !clear {
         for (key, value) in std::env::vars_os() {
@@ -535,7 +535,7 @@ fn environment_block(command: &Command, clear: bool) -> io::Result<Vec<u16>> {
     Ok(block)
 }
 
-fn wide_nul(value: &OsStr) -> io::Result<Vec<u16>> {
+pub(crate) fn wide_nul(value: &OsStr) -> io::Result<Vec<u16>> {
     let mut wide: Vec<u16> = value.encode_wide().collect();
     if wide.contains(&0) {
         return Err(io::Error::new(

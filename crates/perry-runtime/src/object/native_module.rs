@@ -641,7 +641,7 @@ pub(crate) fn normalize_native_module_alias(module_name: &str) -> &str {
         "path/win32" => "path.win32",
         // #6563: `@lydell/node-pty` is an API-identical fork of node-pty
         // (opencode's import); both names resolve to the one runtime pty.
-        "@lydell/node-pty" => "node-pty",
+        "@lydell/node-pty" | "bun-pty" => "node-pty",
         _ => module_name,
     }
 }

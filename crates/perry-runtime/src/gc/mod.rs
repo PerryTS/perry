@@ -1102,7 +1102,7 @@ pub fn gc_init() {
     reg_scanner!(crate::child_process::reactor::cp_reactor_scan_roots_mut);
     // #6563: live node-pty IPty objects are likewise reachable only from the
     // pty reactor's registry while their onData/onExit handlers are pending.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     reg_scanner!(crate::pty::reactor::pty_reactor_scan_roots_mut);
     // #4911: a bound node:dgram socket is reachable only from the dgram
     // reactor's registry while its recv thread runs; scan + rewrite it so a GC

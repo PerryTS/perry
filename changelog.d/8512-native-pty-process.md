@@ -1,0 +1,3 @@
+Add a native Windows ConPTY backend shared by `node-pty`, `@lydell/node-pty`, and `bun-pty`, including interactive input, resize, cwd/env, exit notification, and attached-process cleanup. PTY writes and Windows child-process stdin now drain on workers so backpressure cannot block cancellation or formatter timeouts. Implement PTY pause/resume, retain output before exit, and report Unix PTY spawn errors synchronously.
+
+Add native fixtures for PTY lifecycle, import aliases, LSP-style request/shutdown framing, and timeout/AbortSignal event ordering, plus a compiled TypeScript `bun-pty` round-trip. No N-API or JavaScript-runtime fallback is involved. Addresses #8512.
