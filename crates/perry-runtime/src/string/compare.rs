@@ -727,7 +727,18 @@ fn locale_compare_canonical(a: &str, b: &str, compare: fn(&str, &str) -> f64) ->
     }
     #[cfg(feature = "string-normalize")]
     {
-        use unicode_normalization::UnicodeNormalization;
+        use unicode_normalization::{is_nfc_quick, IsNormalized, UnicodeNormalization};
+        // Non-ASCII text is still usually *already* NFC — precomposed letters,
+        // CJK and emoji all are; only combining marks and decomposable
+        // singletons are not. The quick check is a table lookup per scalar and
+        // allocates nothing, so only text that genuinely needs rewriting pays
+        // for the two `String`s. (#10094: this ran on every comparison, and a
+        // sort pays it O(n log n) times.)
+        if is_nfc_quick(a.chars()) == IsNormalized::Yes
+            && is_nfc_quick(b.chars()) == IsNormalized::Yes
+        {
+            return compare(a, b);
+        }
         let a_nfc: String = a.nfc().collect();
         let b_nfc: String = b.nfc().collect();
         compare(&a_nfc, &b_nfc)
@@ -736,15 +747,146 @@ fn locale_compare_canonical(a: &str, b: &str, compare: fn(&str, &str) -> f64) ->
     compare(a, b)
 }
 
+/// One step of the streaming lowercase view that the primary collation pass
+/// walks instead of materializing `str::to_lowercase`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum LowerStep {
+    /// The next scalar of the lowercased form.
+    Char(char),
+    /// Input exhausted.
+    End,
+    /// U+03A3 GREEK CAPITAL LETTER SIGMA — the one *contextual* (but
+    /// language-independent) lowercase mapping in `SpecialCasing.txt`: it
+    /// becomes ς at the end of a word and σ everywhere else, which needs the
+    /// `Cased` / `Case_Ignorable` properties of the surrounding text. This
+    /// walk reports it instead of guessing, and the caller falls back to
+    /// `str::to_lowercase`, which implements the rule.
+    Contextual,
+}
+
+/// `str::to_lowercase` as a borrow-only iterator over scalars.
+///
+/// `str::to_lowercase` is exactly `chars().flat_map(char::to_lowercase)` apart
+/// from the final-sigma rule above, so walking two of these in lockstep
+/// answers the primary comparison without materializing either lowercased
+/// string — and, because the walk stops at the first difference, usually
+/// without case-mapping more than the first scalar or two.
+struct LowerChars<'a> {
+    rest: std::str::Chars<'a>,
+    /// Tail of a one-to-many expansion. U+0130 (`İ` → `i` + U+0307) is the
+    /// only unconditional one, but `char::to_lowercase` is allowed up to
+    /// three scalars and this holds whatever it yields.
+    pending: Option<std::char::ToLowercase>,
+}
+
+impl<'a> LowerChars<'a> {
+    fn new(s: &'a str) -> Self {
+        LowerChars {
+            rest: s.chars(),
+            pending: None,
+        }
+    }
+
+    fn next(&mut self) -> LowerStep {
+        if let Some(pending) = self.pending.as_mut() {
+            if let Some(c) = pending.next() {
+                return LowerStep::Char(c);
+            }
+            self.pending = None;
+        }
+        let c = match self.rest.next() {
+            Some(c) => c,
+            None => return LowerStep::End,
+        };
+        // ASCII is one-to-one and needs no case table.
+        if c.is_ascii() {
+            return LowerStep::Char(c.to_ascii_lowercase());
+        }
+        if c == GREEK_CAPITAL_SIGMA {
+            return LowerStep::Contextual;
+        }
+        let mut expansion = c.to_lowercase();
+        let first = expansion.next().unwrap_or(c);
+        self.pending = Some(expansion);
+        LowerStep::Char(first)
+    }
+}
+
+/// U+03A3, the only scalar whose lowercase mapping depends on its context.
+const GREEK_CAPITAL_SIGMA: char = '\u{03A3}';
+
+/// Primary (case-insensitive) collation pass: order the two inputs exactly as
+/// `a.to_lowercase().cmp(&b.to_lowercase())` would, without allocating either
+/// lowercased form.
+///
+/// Comparing the lowercased scalar streams by code point is equivalent to
+/// `String::cmp`, because UTF-8 (and WTF-8) byte order and code point order
+/// agree.
+///
+/// Returns `None` when a context-dependent mapping is reached before the
+/// answer is decided — the caller's signal to fall back to the allocating
+/// comparison, which resolves the final-sigma rule properly.
+fn locale_primary_cmp(a: &str, b: &str) -> Option<std::cmp::Ordering> {
+    // ASCII maps one-to-one under `to_lowercase`, so while both sides are
+    // ASCII the lowercased streams stay byte-aligned with the inputs and a
+    // plain byte walk decides the comparison without decoding anything.
+    let (a_bytes, b_bytes) = (a.as_bytes(), b.as_bytes());
+    let common = a_bytes.len().min(b_bytes.len());
+    let mut i = 0;
+    while i < common && a_bytes[i].is_ascii() && b_bytes[i].is_ascii() {
+        let x = a_bytes[i].to_ascii_lowercase();
+        let y = b_bytes[i].to_ascii_lowercase();
+        if x != y {
+            return Some(x.cmp(&y));
+        }
+        i += 1;
+    }
+    // Everything before `i` was ASCII on both sides, so `i` is a scalar
+    // boundary in both strings and both lowercased streams are `i` scalars in.
+    locale_primary_cmp_scalars(&a[i..], &b[i..])
+}
+
+fn locale_primary_cmp_scalars(a: &str, b: &str) -> Option<std::cmp::Ordering> {
+    use std::cmp::Ordering;
+    let mut ai = LowerChars::new(a);
+    let mut bi = LowerChars::new(b);
+    loop {
+        match (ai.next(), bi.next()) {
+            (LowerStep::Contextual, _) | (_, LowerStep::Contextual) => return None,
+            (LowerStep::End, LowerStep::End) => return Some(Ordering::Equal),
+            (LowerStep::End, LowerStep::Char(_)) => return Some(Ordering::Less),
+            (LowerStep::Char(_), LowerStep::End) => return Some(Ordering::Greater),
+            (LowerStep::Char(x), LowerStep::Char(y)) => {
+                if x != y {
+                    return Some(x.cmp(&y));
+                }
+            }
+        }
+    }
+}
+
 /// Approximate the Unicode default collation with a two-pass comparison:
 /// first case-insensitive (so the character class wins) and then
 /// case-sensitive with lowercase < uppercase (matching V8's default ICU
 /// behavior where 'a' < 'A').
+///
+/// Both passes are allocation-free and short-circuit at the first difference;
+/// see [`locale_primary_cmp`]. The ordering is deliberately unchanged from the
+/// allocating formulation it replaced (#10094).
 fn locale_compare_default(a_str: &str, b_str: &str) -> f64 {
-    // Case-insensitive primary comparison
-    let a_lower = a_str.to_lowercase();
-    let b_lower = b_str.to_lowercase();
-    match a_lower.cmp(&b_lower) {
+    // Case-insensitive primary comparison.
+    let primary = match locale_primary_cmp(a_str, b_str) {
+        Some(ordering) => ordering,
+        None => {
+            // Final sigma reached before the answer was decided. Rare enough
+            // to be worth two allocations rather than a second, divergent copy
+            // of the Final_Sigma rule here.
+            let a_lower = a_str.to_lowercase();
+            let b_lower = b_str.to_lowercase();
+            a_lower.cmp(&b_lower)
+        }
+    };
+    match primary {
         std::cmp::Ordering::Less => return -1.0,
         std::cmp::Ordering::Greater => return 1.0,
         std::cmp::Ordering::Equal => {}
@@ -776,9 +918,38 @@ fn locale_compare_default(a_str: &str, b_str: &str) -> f64 {
     }
 }
 
-/// String.prototype.localeCompare(other) — returns negative/zero/positive number.
-/// We don't ship a true ICU collator, but canonical equivalence is a mandatory
-/// part of the String.prototype.localeCompare contract.
+/// `String.prototype.localeCompare(other)` — returns a negative number, zero,
+/// or a positive number.
+///
+/// **What this guarantees, and what it deliberately does not.** Perry ships no
+/// collation table — no DUCET or CLDR root weights — and no locale tailoring:
+/// the `locales` argument is accepted and ignored. The ordering is
+/// *approximate by design*, not an unimplemented path. See #10094 and the
+/// `localeCompare()` row of `docs/typescript-parity-gaps.md`, which record the
+/// decision not to link ICU data (~27 MB) for this. What it does guarantee:
+///
+/// 1. **Canonical equivalence.** Decomposed and precomposed spellings of the
+///    same text compare equal — a mandatory part of the `localeCompare`
+///    contract (see [`locale_compare_canonical`]).
+/// 2. **Primary: case-insensitive *code point* order** — the order of the two
+///    `toLowerCase` forms, including the contextual final-sigma rule.
+/// 3. **Tertiary: case.** Strings that differ only in case order lowercase
+///    first, matching the default Unicode tertiary weight (`'a' < 'A'`).
+///
+/// Because the primary key is the code point rather than a collation weight,
+/// the result differs from Node/ICU wherever root collation reorders the code
+/// point space: accented letters sort after the whole unaccented alphabet
+/// instead of beside their base letter (`ä` is U+00E4, above `z` at U+007A),
+/// and symbols and emoji sort after letters instead of before them. So
+/// `"ä".localeCompare("😀")` is negative here and positive in Node. Note that
+/// the "correct" answer is locale-dependent even with a table — German sorts
+/// `ä` with `a`, Swedish after `z` — which is part of why one untailored table
+/// was not judged worth its bytes.
+///
+/// The relation is nonetheless a strict weak ordering (in fact a total order
+/// on distinct canonical forms), so `Array.prototype.sort` results are
+/// well-defined; `locale_compare_is_a_strict_weak_ordering` proves it over a
+/// mixed-script corpus.
 #[no_mangle]
 pub extern "C" fn js_string_locale_compare(a: *const StringHeader, b: *const StringHeader) -> f64 {
     let a_valid = is_valid_string_ptr(a);
@@ -1272,6 +1443,348 @@ mod numeric_collation_tests {
             );
             assert_eq!(locale_compare_numeric(a, b), 0.0);
         }
+    }
+}
+
+/// #10094: the primary collation pass stopped materializing two lowercased
+/// `String`s per comparison. These tests pin the two properties that makes
+/// safe — the ordering is byte-for-byte what the allocating formulation
+/// produced, and the relation is a strict weak ordering so
+/// `Array.prototype.sort` stays well-defined.
+#[cfg(test)]
+mod locale_collation_tests {
+    use super::{locale_compare_canonical, locale_compare_default, locale_primary_cmp};
+    use std::cmp::Ordering;
+
+    /// The formulation this replaced, kept verbatim as the oracle: lowercase
+    /// both sides with `str::to_lowercase` and compare the results. If the
+    /// streaming walk ever disagrees with this, the ordering has moved.
+    fn reference_compare(a_str: &str, b_str: &str) -> f64 {
+        let a_lower = a_str.to_lowercase();
+        let b_lower = b_str.to_lowercase();
+        match a_lower.cmp(&b_lower) {
+            Ordering::Less => return -1.0,
+            Ordering::Greater => return 1.0,
+            Ordering::Equal => {}
+        }
+        let mut ai = a_str.chars();
+        let mut bi = b_str.chars();
+        loop {
+            match (ai.next(), bi.next()) {
+                (None, None) => return 0.0,
+                (None, Some(_)) => return -1.0,
+                (Some(_), None) => return 1.0,
+                (Some(ca), Some(cb)) => {
+                    if ca == cb {
+                        continue;
+                    }
+                    let a_lower = ca.is_lowercase();
+                    let b_lower = cb.is_lowercase();
+                    if a_lower && !b_lower {
+                        return -1.0;
+                    }
+                    if !a_lower && b_lower {
+                        return 1.0;
+                    }
+                    return if (ca as u32) < (cb as u32) { -1.0 } else { 1.0 };
+                }
+            }
+        }
+    }
+
+    /// A WTF-8 lone surrogate, which `string_as_str` hands the comparator as a
+    /// `&str` exactly like this. Not representable as a Rust string literal.
+    fn wtf8(bytes: &'static [u8]) -> &'static str {
+        unsafe { std::str::from_utf8_unchecked(bytes) }
+    }
+
+    /// Spans every class the issue names: ASCII (incl. case-only and
+    /// long-common-prefix pairs), Latin-1 accented letters in both precomposed
+    /// and decomposed spellings, CJK, emoji, bare combining marks, the two
+    /// special case mappings (U+0130, U+03A3), and lone surrogates.
+    fn corpus() -> Vec<&'static str> {
+        vec![
+            "",
+            "a",
+            "A",
+            "b",
+            "B",
+            "z",
+            "Z",
+            "ab",
+            "aB",
+            "Ab",
+            "AB",
+            "abc",
+            "abd",
+            "abcd",
+            "aBcDa",
+            "aBcDz",
+            "aBcDB",
+            "aBcD7",
+            "record-000000000001",
+            "record-000000000002",
+            "Record-000000000001",
+            "0",
+            "9",
+            " ",
+            "~",
+            "\u{7f}",
+            "ä",
+            "Ä",
+            "a\u{308}",
+            "A\u{308}",
+            "ö",
+            "Ö",
+            "o\u{308}",
+            "é",
+            "è",
+            "ß",
+            "\u{1e9e}",
+            "\u{308}",
+            "\u{323}",
+            "a\u{308}\u{323}",
+            "a\u{323}\u{308}",
+            "İ",
+            "i\u{307}",
+            "ı",
+            "I",
+            "i",
+            "Σ",
+            "σ",
+            "ς",
+            "ΣΑ",
+            "ΑΣ",
+            "ΟΔΟΣ",
+            "Οδος",
+            "οδος",
+            "漢",
+            "字",
+            "漢字",
+            "日本語",
+            "ä中😀Öa",
+            "ä中😀Öz",
+            "ä中😀ÖB",
+            "ä中😀Ö7",
+            "😀",
+            "🚀",
+            "\u{10ffff}",
+            "ä:123",
+            "Ö:123",
+            "😀:9",
+            wtf8(&[0xED, 0xA0, 0x80]),
+            wtf8(&[0xED, 0xB0, 0x80]),
+            wtf8(&[b'a', 0xED, 0xA0, 0x80]),
+        ]
+    }
+
+    /// Behaviour preservation, the issue's first acceptance criterion: the
+    /// allocation-free walk must return exactly what the two-`to_lowercase`
+    /// formulation returned, on every ordered pair. The corpus must also reach
+    /// all three arms — the ASCII byte loop, the scalar walk, and the
+    /// contextual fallback — or a green run would prove nothing.
+    #[test]
+    fn matches_the_allocating_reference_on_every_pair() {
+        let corpus = corpus();
+        let (mut ascii_arm, mut scalar_arm, mut contextual_arm) = (0usize, 0usize, 0usize);
+        for a in &corpus {
+            for b in &corpus {
+                assert_eq!(
+                    locale_compare_default(a, b),
+                    reference_compare(a, b),
+                    "locale_compare_default({a:?}, {b:?})"
+                );
+                if locale_primary_cmp(a, b).is_none() {
+                    contextual_arm += 1;
+                } else if a.is_ascii() && b.is_ascii() {
+                    ascii_arm += 1;
+                } else {
+                    scalar_arm += 1;
+                }
+            }
+        }
+        assert!(ascii_arm > 0, "corpus never took the ASCII byte loop");
+        assert!(scalar_arm > 0, "corpus never took the scalar walk");
+        assert!(
+            contextual_arm > 0,
+            "corpus never reached the final-sigma fallback"
+        );
+    }
+
+    /// xorshift32, so a failure is reproducible from the seed alone.
+    fn xorshift(state: &mut u32) -> u32 {
+        *state ^= *state << 13;
+        *state ^= *state >> 17;
+        *state ^= *state << 5;
+        *state
+    }
+
+    /// Randomized differential coverage of shapes the hand-written corpus does
+    /// not enumerate: mixed-script strings, shared prefixes of every length,
+    /// and case expansions landing at arbitrary offsets.
+    #[test]
+    fn matches_the_allocating_reference_on_random_strings() {
+        const ALPHABET: [&str; 16] = [
+            "a", "B", "z", "7", "-", "ä", "Ö", "ß", "İ", "Σ", "ς", "\u{308}", "漢", "😀", "\u{7f}",
+            "i\u{307}",
+        ];
+        let mut state: u32 = 0x1234_5678;
+        for _ in 0..20_000 {
+            let shared = xorshift(&mut state) % 6;
+            let mut prefix = String::new();
+            for _ in 0..shared {
+                prefix.push_str(ALPHABET[(xorshift(&mut state) % 16) as usize]);
+            }
+            let mut pair = [prefix.clone(), prefix];
+            for s in pair.iter_mut() {
+                let tail = xorshift(&mut state) % 5;
+                for _ in 0..tail {
+                    s.push_str(ALPHABET[(xorshift(&mut state) % 16) as usize]);
+                }
+            }
+            let (a, b) = (&pair[0], &pair[1]);
+            assert_eq!(
+                locale_compare_default(a, b),
+                reference_compare(a, b),
+                "locale_compare_default({a:?}, {b:?})"
+            );
+        }
+    }
+
+    /// Sort-safety. `Array.prototype.sort` is only well-defined for a
+    /// consistent comparator, so an approximate ordering still has to be a
+    /// strict weak ordering: irreflexive-equal, antisymmetric, and transitive.
+    /// Checked through `locale_compare_canonical`, which is what
+    /// `js_string_locale_compare` actually calls.
+    #[test]
+    fn locale_compare_is_a_strict_weak_ordering() {
+        let corpus = corpus();
+        let cmp = |a: &str, b: &str| {
+            let v = locale_compare_canonical(a, b, locale_compare_default);
+            if v < 0.0 {
+                Ordering::Less
+            } else if v > 0.0 {
+                Ordering::Greater
+            } else {
+                Ordering::Equal
+            }
+        };
+        for a in &corpus {
+            assert_eq!(cmp(a, a), Ordering::Equal, "cmp({a:?}, itself)");
+            for b in &corpus {
+                assert_eq!(
+                    cmp(a, b),
+                    cmp(b, a).reverse(),
+                    "antisymmetry broken for ({a:?}, {b:?})"
+                );
+            }
+        }
+        // Transitivity of both `<` and the equivalence it induces, over every
+        // triple.
+        for a in &corpus {
+            for b in &corpus {
+                let ab = cmp(a, b);
+                for c in &corpus {
+                    let bc = cmp(b, c);
+                    let ac = cmp(a, c);
+                    if ab == Ordering::Equal && bc == Ordering::Equal {
+                        assert_eq!(
+                            ac,
+                            Ordering::Equal,
+                            "equivalence not transitive: {a:?} ~ {b:?} ~ {c:?}"
+                        );
+                    }
+                    if ab != Ordering::Greater && bc != Ordering::Greater {
+                        assert_ne!(
+                            ac,
+                            Ordering::Greater,
+                            "order not transitive: {a:?} <= {b:?} <= {c:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The contract the doc comment now states out loud, spelled out as
+    /// assertions so a future rewrite has to face them.
+    #[test]
+    fn documented_guarantees_hold() {
+        let cmp = |a: &str, b: &str| locale_compare_canonical(a, b, locale_compare_default);
+        // Identical, empty, and prefix pairs.
+        assert_eq!(cmp("", ""), 0.0);
+        assert_eq!(cmp("abc", "abc"), 0.0);
+        assert_eq!(cmp("", "a"), -1.0);
+        assert_eq!(cmp("a", ""), 1.0);
+        assert_eq!(cmp("abc", "abcd"), -1.0);
+        assert_eq!(cmp("abcd", "abc"), 1.0);
+        // Differing only after a long common prefix.
+        let prefix = "x".repeat(512);
+        assert_eq!(cmp(&format!("{prefix}a"), &format!("{prefix}b")), -1.0);
+        assert_eq!(cmp(&format!("{prefix}b"), &format!("{prefix}a")), 1.0);
+        // Case-only differences: lowercase first (tertiary weight).
+        assert_eq!(cmp("a", "A"), -1.0);
+        assert_eq!(cmp("A", "a"), 1.0);
+        assert_eq!(cmp("aBc", "AbC"), -1.0);
+        assert_eq!(cmp("ä", "Ä"), -1.0);
+        // Primary beats tertiary: the letter class wins over case.
+        assert_eq!(cmp("B", "a"), 1.0);
+        assert_eq!(cmp("a", "B"), -1.0);
+        // The documented divergence from ICU, asserted rather than implied:
+        // code point order puts accented letters after `z` and emoji last.
+        assert_eq!(cmp("ä", "z"), 1.0);
+        assert_eq!(cmp("ä", "😀"), -1.0);
+        assert_eq!(cmp("Ö", "字"), -1.0);
+    }
+
+    /// Canonical equivalence is a mandatory part of the contract, so it has to
+    /// survive the rewrite of the pass that runs after it.
+    #[cfg(feature = "string-normalize")]
+    #[test]
+    fn canonical_equivalents_stay_equal() {
+        for (a, b) in [
+            ("o\u{308}", "ö"),
+            ("O\u{308}", "Ö"),
+            ("a\u{308}\u{323}", "a\u{323}\u{308}"),
+            ("\u{1111}\u{1171}\u{11b6}", "퓛"),
+            ("Å", "A\u{30a}"),
+            ("ä中😀Öa", "a\u{308}中😀O\u{308}a"),
+        ] {
+            assert_eq!(
+                locale_compare_canonical(a, b, locale_compare_default),
+                0.0,
+                "{a:?} vs {b:?}"
+            );
+            // …and the case tiebreak still applies across spellings.
+            let upper_a = a.to_uppercase();
+            assert!(
+                locale_compare_canonical(a, &upper_a, locale_compare_default) <= 0.0,
+                "{a:?} vs {upper_a:?}"
+            );
+        }
+    }
+
+    /// Final sigma is the one mapping the streaming walk refuses to guess.
+    /// It must both report the fallback and get the answer right.
+    #[test]
+    fn final_sigma_falls_back_and_stays_correct() {
+        // "ΟΔΟΣ".to_lowercase() is "οδος" — word-final Σ becomes ς.
+        assert_eq!("ΟΔΟΣ".to_lowercase(), "οδος");
+        assert!(locale_primary_cmp("ΟΔΟΣ", "οδος").is_none());
+        assert_eq!(locale_compare_default("ΟΔΟΣ", "οδος"), 1.0); // case tiebreak
+        for (a, b) in [
+            ("ΟΔΟΣ", "οδος"),
+            ("ΟΔΟΣ", "οδοσ"),
+            ("Σ", "σ"),
+            ("Σ", "ς"),
+            ("ΣΑ", "σα"),
+            ("aΣ", "aς"),
+        ] {
+            assert_eq!(locale_compare_default(a, b), reference_compare(a, b));
+            assert_eq!(locale_compare_default(b, a), reference_compare(b, a));
+        }
+        // A Σ *after* the deciding position must not force the fallback.
+        assert!(locale_primary_cmp("aΣ", "bΣ").is_some());
     }
 }
 

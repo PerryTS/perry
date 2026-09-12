@@ -152,12 +152,29 @@ Everything the Perry compiler is missing for absolute parity with Node.js runnin
 | `fromCharCode` | ✓ |
 | `at()` | Missing |
 | `normalize()` | Listed but may not work |
-| `localeCompare()` | Missing (needs Intl) |
-| `toLocaleLowerCase()` / `toLocaleUpperCase()` | Missing (needs Intl) |
+| `localeCompare()` | ✓ — implemented, approximate ordering (no collation table); see the note below |
+| `toLocaleLowerCase()` / `toLocaleUpperCase()` | ✓ — BCP 47 `locales` validation plus `tr`/`az`/`lt` casing tailoring (#2781) |
 | `codePointAt()` | Missing |
 | `fromCodePoint()` | Missing |
 | `raw()` | Missing |
 | `isWellFormed()` / `toWellFormed()` | Missing |
+
+**`localeCompare()` — implemented, with an ordering that is approximate by design.**
+Both this row and the `toLocale{Lower,Upper}Case()` row above previously read "Missing
+(needs Intl)"; both methods exist. `localeCompare` preserves canonical equivalence
+(decomposed and precomposed spellings compare equal), then orders case-insensitively by
+**code point**, with a case tiebreak that puts lowercase first. It ships **no collation
+table** — no DUCET or CLDR root weights — and no locale tailoring; the `locales`
+argument is accepted and ignored. So the order differs from Node/ICU wherever root
+collation reorders the code point space: accented letters sort after the whole
+unaccented alphabet rather than beside their base letter (`ä` is U+00E4, above `z`), and
+symbols and emoji sort after letters rather than before them — `"ä".localeCompare("😀")`
+is negative here and positive in Node. That is an accepted limitation for the same
+reason the rest of `Intl` is deferred ("Full `Intl` — requires ICU data (~27MB)",
+further down this page), not an unimplemented path — and one untailored table would not
+settle it anyway, since German sorts `ä` with `a` and Swedish sorts it after `z`. The
+relation is a strict weak ordering, so `Array.prototype.sort` results are well-defined.
+Tracked in [#10094](https://github.com/PerryTS/perry/issues/10094).
 
 ### Object
 
