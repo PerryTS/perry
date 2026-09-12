@@ -149,6 +149,18 @@
       "why": "#9794 allocation-site sampling: bytes remaining until the next sample. A `Cell<usize>` countdown, decremented per allocation and reset on fire — a quantity, never an address."
     },
     {
+      "file": "crates/perry-runtime/src/array/header_gc_slots.rs",
+      "name": "DENSE_MOVE_LAYOUT_CLASSIFIED_SLOTS",
+      "verdict": "test_only",
+      "why": "#[cfg(test)] Cell<usize> counter for asserting bounded dense-move layout classification work. It stores only a slot count and is absent from shipped binaries."
+    },
+    {
+      "file": "crates/perry-runtime/src/array/splice_slice.rs",
+      "name": "SPLICE_COLLECT_AFTER_ROOTING_ONCE",
+      "verdict": "test_only",
+      "why": "#[cfg(test)] Cell<bool> one-shot flag that forces a collection after splice roots its receiver and inserted values. It stores only true/false and is absent from shipped binaries."
+    },
+    {
       "file": "crates/perry-runtime/src/async_hooks.rs",
       "name": "ASYNC_HOOK_HANDLES",
       "verdict": "not_a_gc_pointer",
