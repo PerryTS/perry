@@ -13,6 +13,7 @@ swc_ecma_parser.workspace = true
 swc_ecma_ast.workspace = true
 swc_ecma_visit.workspace = true
 swc_common.workspace = true
+swc_ecma_transforms_base.workspace = true
 
 thiserror.workspace = true
 anyhow.workspace = true

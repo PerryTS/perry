@@ -1,6 +1,22 @@
 {
     if module == "__perry_runtime" && class_name.is_none() && object.is_none() {
         match method {
+            "importMetaResolve" | "importMetaResolveValue" => {
+                let values = args
+                    .iter()
+                    .map(|arg| lower_expr(ctx, arg))
+                    .collect::<Result<Vec<_>>>()?;
+                let values = values
+                    .iter()
+                    .map(|value| (DOUBLE, value.as_str()))
+                    .collect::<Vec<_>>();
+                let name = if method == "importMetaResolve" {
+                    "js_import_meta_resolve"
+                } else {
+                    "js_import_meta_resolve_value"
+                };
+                return Ok(ctx.block().call(DOUBLE, name, &values));
+            }
             "iteratorNextResult" => {
                 let iter = args.first().map_or_else(
                     || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),

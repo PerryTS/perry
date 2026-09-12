@@ -187,6 +187,37 @@ pub(crate) fn try_import_meta_require(
     {
         return Ok(None);
     }
+    let is_resolve = match &member.prop {
+        ast::MemberProp::Ident(name) => name.sym == "resolve",
+        ast::MemberProp::Computed(key) => matches!(strip_require_wrappers(&key.expr),
+            ast::Expr::Lit(ast::Lit::Str(name)) if name.value.as_str() == Some("resolve")),
+        _ => false,
+    };
+    if is_resolve && call.args.len() <= 2 && call.args.iter().all(|arg| arg.spread.is_none()) {
+        let specifier = call
+            .args
+            .first()
+            .map(|arg| lower_expr(ctx, &arg.expr))
+            .transpose()?
+            .unwrap_or(Expr::Undefined);
+        let parent = call
+            .args
+            .get(1)
+            .map(|arg| lower_expr(ctx, &arg.expr))
+            .transpose()?
+            .unwrap_or(Expr::Undefined);
+        return Ok(Some(Expr::NativeMethodCall {
+            module: "__perry_runtime".into(),
+            class_name: None,
+            object: None,
+            method: "importMetaResolve".into(),
+            args: vec![
+                specifier,
+                parent,
+                Expr::String(ctx.source_file_path.clone()),
+            ],
+        }));
+    }
     let is_require = match &member.prop {
         ast::MemberProp::Ident(name) => name.sym == "require",
         ast::MemberProp::Computed(key) => matches!(strip_require_wrappers(&key.expr),

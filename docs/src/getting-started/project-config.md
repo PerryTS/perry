@@ -2,6 +2,10 @@
 
 Perry projects use `perry.toml` and `package.json` for configuration. No special config file is required for basic usage, but larger projects benefit from Perry-specific settings.
 
+Build-time identifier substitutions can also be configured in `perry.json`'s
+`define` map. See [build-time defines](../cli/flags.md#build-time-defines) for
+expression syntax, CLI overrides, and the OpenCode build harness.
+
 > **Looking for the full perry.toml reference?** See [perry.toml Reference](../cli/perry-toml.md) for every field, section, platform option, and environment variable.
 
 ## Basic Setup

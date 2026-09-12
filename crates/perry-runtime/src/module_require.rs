@@ -12,6 +12,8 @@ use crate::object::{js_object_alloc, js_object_get_field_by_name, js_object_set_
 use crate::string::js_string_from_bytes;
 use crate::value::{js_nanbox_pointer, JSValue, TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED};
 
+mod import_meta_resolve;
+
 fn undefined() -> f64 {
     f64::from_bits(TAG_UNDEFINED)
 }

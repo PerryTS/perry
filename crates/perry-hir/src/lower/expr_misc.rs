@@ -388,6 +388,7 @@ pub(super) fn lower_meta_prop(
                 ("dirname".to_string(), Expr::String(dirname)),
                 ("filename".to_string(), Expr::String(filename)),
                 ("require".to_string(), import_meta_require_value(ctx)),
+                ("resolve".to_string(), import_meta_resolve_value(ctx)),
             ]))
         }
         ast::MetaPropKind::NewTarget => {
@@ -430,6 +431,16 @@ pub(crate) fn import_meta_require_value(ctx: &mut LoweringContext) -> Expr {
         }
     };
     Expr::LocalGet(id)
+}
+
+pub(crate) fn import_meta_resolve_value(ctx: &LoweringContext) -> Expr {
+    Expr::NativeMethodCall {
+        module: "__perry_runtime".into(),
+        class_name: None,
+        object: None,
+        method: "importMetaResolveValue".into(),
+        args: vec![Expr::String(ctx.source_file_path.clone())],
+    }
 }
 
 /// Issue #444: compute the `(url, dirname, filename)` triplet exposed via

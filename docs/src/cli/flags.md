@@ -4,6 +4,60 @@ Reference for the public `perry compile` flags plus Perry's global flags. The
 installed binary remains authoritative for feature-gated commands; use
 `perry --help` and `perry <command> --help` to inspect that exact build.
 
+## Build-time defines
+
+`--define NAME=EXPR` is repeatable. It replaces unbound identifier reads and
+dotted names before lowering, including `typeof` guards, object shorthand,
+and worker paths. Local variables and parameters with the same name retain
+their normal meaning. Values are JSON expressions or identifier expressions;
+quote a JavaScript string inside the shell argument:
+
+```sh
+perry compile src/index.ts --define 'OPENCODE_VERSION="1.18.30"' \
+  --define 'process.env.OPENTUI_LIBC="glibc"'
+```
+
+The nearest `perry.json` above the entry can hold the same expressions:
+
+```json
+{
+  "define": {
+    "OPENCODE_VERSION": "\"1.18.30\"",
+    "OPENCODE_CHANNEL": "\"latest\"",
+    "OPENCODE_MODELS_DEV": "{\"provider\":{\"models\":{}}}"
+  }
+}
+```
+
+Strings in `perry.json` are JavaScript expressions, as in Bun's `define` map.
+Existing `package.json` `perry.define` strings keep their literal-string
+meaning. Precedence is package literals, then `perry.json`, then CLI flags;
+the last CLI value wins. Both build and object caches include the effective map.
+
+`import.meta.resolve(specifier[, parent])` returns a `file://` URL for filesystem
+targets and a `node:` specifier for supported builtins. Literal
+module and asset specifiers resolve at compile time; dynamic specifiers resolve
+from the calling module or an explicit directory/file URL at runtime, including
+packages installed in that directory's `node_modules` after compilation.
+Resolution does not execute the target module. Missing runtime targets throw
+an error with code `ERR_MODULE_NOT_FOUND`. Static URLs refer to the resolved
+files; deploy those files when the application reads their contents.
+
+For OpenCode v1.18.30, after installing its dependencies, run:
+
+```sh
+MODELS_DEV_API_JSON=/path/to/models-snapshot.json \
+  bun scripts/build_opencode.ts /path/to/opencode --perry /path/to/perry \
+  --output ./opencode-native
+```
+
+The harness merges release defines into `packages/opencode/perry.json`, reads
+the version from OpenCode's package, uses channel `latest`, imports upstream
+`script/generate.ts` for the models snapshot, and supplies native worker source
+entries. Use `--os linux --libc glibc` (or `musl`) for the eight Linux defines;
+`--prepare-only` writes the configuration without compiling. Other OpenCode
+compatibility requirements are tracked separately in issue #10107.
+
 ## Global Flags
 
 Available on all commands:
