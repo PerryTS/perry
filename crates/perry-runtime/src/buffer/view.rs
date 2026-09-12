@@ -106,6 +106,50 @@ pub(crate) fn alloc(backing: *const BufferHeader, offset: u32, length: u32) -> *
     view
 }
 
+/// Allocate a DataView with one cached native data pointer after its
+/// `BufferHeader`. Unlike Buffer/Uint8Array views, DataView byte access always
+/// enters a runtime helper, so this private payload is never mistaken for
+/// indexed storage. The backing remains owned and traced by `VIEW_REGISTRY`.
+///
+/// Buffer allocations and foreign/shared ArrayBuffer storage are non-moving:
+/// `buffer_alloc` uses the old arena because native callers retain byte
+/// pointers, and foreign/shared backings have the same stable-address contract.
+/// The cached interior pointer therefore stays valid until detach, which zeroes
+/// the view length before its backing storage can be released.
+pub(crate) fn alloc_data_view(
+    backing: *const BufferHeader,
+    offset: u32,
+    length: u32,
+) -> *mut BufferHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let owner = scope.root_raw_const_ptr(backing);
+    let view = buffer_alloc(std::mem::size_of::<usize>() as u32);
+    unsafe {
+        (*view).length = length;
+        owner.with_const_ptr::<BufferHeader, _>(|backing| {
+            register(view as usize, backing as usize, offset);
+            let data = buffer_data(backing).add(offset as usize);
+            data_view_cache_slot(view).write(data as usize);
+        });
+    }
+    view
+}
+
+#[inline(always)]
+unsafe fn data_view_cache_slot(view: *mut BufferHeader) -> *mut usize {
+    (view as *mut u8)
+        .add(std::mem::size_of::<BufferHeader>())
+        .cast::<usize>()
+}
+
+/// Load the stable byte pointer cached by [`alloc_data_view`]. The caller must
+/// first bounds-check the DataView and reject a detached backing.
+#[inline(always)]
+pub(crate) unsafe fn data_view_data_ptr(view: *mut BufferHeader) -> *mut u8 {
+    debug_assert!((*view).capacity >= std::mem::size_of::<usize>() as u32);
+    data_view_cache_slot(view).read() as *mut u8
+}
+
 fn register(view_ptr: usize, backing_ptr: usize, offset: u32) {
     let (backing, offset) = lookup(backing_ptr)
         .map(|parent| (parent.backing, parent.offset + offset))

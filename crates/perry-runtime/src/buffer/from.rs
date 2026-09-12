@@ -936,7 +936,7 @@ pub extern "C" fn js_data_view_new(value: f64, offset_value: f64, length_value: 
     // report the right values, including zero-length views at the end.
     let start = offset as u32;
     let len = view_len as u32;
-    let view = super::view::alloc(src, start, len);
+    let view = super::view::alloc_data_view(src, start, len);
     mark_as_data_view(view as usize);
     set_buffer_ab_alias(view as usize, resolve_buffer_ab_alias(addr));
     f64::from_bits(crate::value::JSValue::pointer(view as *mut u8).bits())

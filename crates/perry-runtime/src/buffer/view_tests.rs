@@ -23,6 +23,36 @@ fn suffix_views_allocate_only_headers_and_share_native_bytes() {
 }
 
 #[test]
+fn data_view_caches_its_stable_window_pointer_in_the_header_payload() {
+    let backing = js_array_buffer_new(16);
+    let backing_value = value(backing);
+    let view_value = js_data_view_new(backing_value, 4.0, 8.0);
+    let view = crate::value::JSValue::from_bits(view_value.to_bits()).as_pointer::<BufferHeader>()
+        as *mut BufferHeader;
+
+    unsafe {
+        assert_eq!((*view).length, 8);
+        assert_eq!((*view).capacity, std::mem::size_of::<usize>() as u32);
+        assert_eq!(
+            view::data_view_data_ptr(view) as *const u8,
+            buffer_data(backing).add(4)
+        );
+    }
+
+    js_data_view_set(
+        view_value,
+        0.0,
+        0x0102_0304 as f64,
+        DataViewKind::Uint32,
+        false,
+    );
+    assert_eq!(
+        unsafe { std::slice::from_raw_parts(buffer_data(backing).add(4), 4) },
+        &[1, 2, 3, 4]
+    );
+}
+
+#[test]
 fn overlapping_nested_views_share_every_write_path() {
     let source = js_buffer_alloc(12, 0);
     let a = js_buffer_slice(source, 2, 10);
