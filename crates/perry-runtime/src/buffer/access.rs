@@ -171,6 +171,44 @@ unsafe fn collect_buffer_set_bytes(source: BufferSetSource, source_len: usize) -
     bytes
 }
 
+/// Resolve a raw byte span for sources whose elements need no per-index
+/// coercion: a `Buffer`/`Uint8Array` source, or a same-element-width
+/// (1-byte-per-element) `TypedArray` source (`Int8Array`, `Uint8Array`,
+/// `Uint8ClampedArray`) — for these kinds the stored byte already equals
+/// `to_uint8` of the read element (two's-complement reinterpretation for
+/// `Int8Array`, identity for the other two), so the underlying bytes can be
+/// copied directly. Returns `None` for `Array`/`Object` sources (need
+/// per-index `ToNumber`/property-read coercion) and for wider or BigInt
+/// `TypedArray` kinds (need per-element numeric coercion) — those fall back
+/// to [`collect_buffer_set_bytes`].
+///
+/// Resolving through [`super::view::resolve_data_ptr`] / [`crate::
+/// typedarray::data_ptr`] here (once) rather than through [`js_buffer_get`]
+/// / [`crate::typedarray::js_typed_array_get`] per byte (#10088) is what
+/// collapses the view-registry lookup from O(n) to O(1) per call.
+unsafe fn bulk_copy_source_ptr(source: BufferSetSource) -> Option<*const u8> {
+    match source {
+        BufferSetSource::Buffer(ptr) => {
+            if ptr.is_null() {
+                None
+            } else {
+                Some(super::view::resolve_data_ptr(ptr))
+            }
+        }
+        BufferSetSource::TypedArray(ptr) => {
+            let kind = crate::typedarray::lookup_typed_array_kind(ptr as usize)?;
+            matches!(
+                kind,
+                crate::typedarray::KIND_INT8
+                    | crate::typedarray::KIND_UINT8
+                    | crate::typedarray::KIND_UINT8_CLAMPED
+            )
+            .then(|| crate::typedarray::data_ptr(ptr))
+        }
+        BufferSetSource::Array(_) | BufferSetSource::Object(_) | BufferSetSource::Empty => None,
+    }
+}
+
 /// Read the byte at `index`, resolving a registered view to its ultimate
 /// backing buffer. Returns `None` for a null receiver or an out-of-range
 /// index (`index < 0` or `index >= length`). Shared by the native i32
@@ -313,10 +351,24 @@ pub extern "C" fn js_buffer_set_from_value(
             super::numeric::throw_out_of_range();
         }
 
-        let bytes = collect_buffer_set_bytes(source, source_len);
-        if !bytes.is_empty() {
-            let target_data = buffer_data_mut(target).add(offset);
-            ptr::copy_nonoverlapping(bytes.as_ptr(), target_data, bytes.len());
+        match bulk_copy_source_ptr(source) {
+            Some(src_data) if source_len > 0 => {
+                // `ptr::copy` (memmove) rather than `copy_nonoverlapping`:
+                // `src_data` can legitimately point into the same backing
+                // buffer `target` is a view of (or vice versa), e.g.
+                // `buf.set(buf.subarray(2))`, so source and destination
+                // ranges may overlap for real.
+                let target_data = buffer_data_mut(target).add(offset);
+                ptr::copy(src_data, target_data, source_len);
+            }
+            Some(_) => {}
+            None => {
+                let bytes = collect_buffer_set_bytes(source, source_len);
+                if !bytes.is_empty() {
+                    let target_data = buffer_data_mut(target).add(offset);
+                    ptr::copy_nonoverlapping(bytes.as_ptr(), target_data, bytes.len());
+                }
+            }
         }
     }
 
