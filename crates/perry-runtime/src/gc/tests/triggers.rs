@@ -288,62 +288,6 @@ fn test_old_reclaim_band_is_proportional_and_promotion_credits_baseline() {
     GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|b| b.set(prev));
 }
 
-/// #10123: the suspect-promotion arm is a SECOND signal, not a correction to
-/// the baseline the test above pins. Both must hold at once -- promotion still
-/// credits the baseline (#7902/#7965), and pathological survival still makes a
-/// reclaim due, because at 999 permille "promotion" is the nursery being
-/// laundered into old-gen where no minor will look at it again.
-#[test]
-fn pathological_survival_makes_an_old_reclaim_due_without_moving_the_baseline() {
-    let _guard = GcTestIsolationGuard::new();
-    let prev_baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|b| b.get());
-    let prev_suspect = GC_OLD_GARBAGE_SUSPECT_BYTES.with(|c| c.get());
-    GC_OLD_GARBAGE_SUSPECT_BYTES.with(|c| c.set(0));
-    GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|b| b.set(4 * 1024 * 1024));
-
-    // Healthy survival: the nursery is doing its job, so nothing accumulates
-    // and the arm stays silent no matter how much was promoted.
-    note_promotion_survival(512 * 1024 * 1024, 100);
-    assert_eq!(
-        GC_OLD_GARBAGE_SUSPECT_BYTES.with(|c| c.get()),
-        0,
-        "promotion under a healthy survival ratio is not suspect"
-    );
-
-    let baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|b| b.get());
-    assert!(
-        !old_reclaim_pressure_or_suspect_due(baseline, baseline),
-        "no growth and no suspect material means no reclaim"
-    );
-
-    // Pathological survival: nothing died, so the promotion is suspect. One
-    // minor below the floor must not be enough to schedule a whole-heap mark.
-    note_promotion_survival(8 * 1024 * 1024, 999);
-    assert!(
-        !old_reclaim_pressure_or_suspect_due(baseline, baseline),
-        "a single sub-floor suspect minor must not schedule a full"
-    );
-
-    // Accumulated past the floor, it is.
-    note_promotion_survival(8 * 1024 * 1024, 999);
-    assert!(
-        old_reclaim_pressure_or_suspect_due(baseline, baseline),
-        "suspect material past the floor is the only signal that old-gen holds \
-         garbage a minor structurally cannot see"
-    );
-
-    // ...and it did all that WITHOUT disturbing the baseline, which #7902 and
-    // #7965 settled is the base of a growth measurement, not a liveness claim.
-    assert_eq!(
-        GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|b| b.get()),
-        baseline,
-        "the suspect arm must never move the old-reclaim baseline"
-    );
-
-    GC_OLD_GARBAGE_SUSPECT_BYTES.with(|c| c.set(prev_suspect));
-    GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|b| b.set(prev_baseline));
-}
-
 /// #7937: the ABSOLUTE first-crossing arm is granularity-sensitive, and the
 /// RETAINING latch is what stops that from costing a futile full.
 ///

@@ -1799,12 +1799,6 @@ pub(super) fn run_copied_minor_attempt(
     // liveness claim, and withholding it pins that base at 0 on exactly the
     // workloads that reach this path.
     credit_promoted_bytes_to_old_baseline(collector.stats.promoted_bytes);
-    // #10123: the baseline above cannot answer "is this promotion garbage?" by
-    // construction. Record it separately when survival says nothing died.
-    super::policy::note_promotion_survival(
-        collector.stats.promoted_bytes,
-        collector.stats.young_survival_permille as u64,
-    );
     // Everything outside from-space retains its pre-minor accounting. Remove
     // the from-space share of that accounting, then add back exactly the
     // objects that survived by copy or promotion. This also preserves objects
