@@ -734,6 +734,7 @@ impl BuildCacheProbe {
         runtime_inputs: &[PathBuf],
     ) -> Result<BuildCacheManifest, String> {
         let mut source_paths = ctx.native_modules.keys().cloned().collect::<BTreeSet<_>>();
+        source_paths.extend(ctx.resolve_inputs.iter().cloned());
         // Graph-discovered assets (including `/$bunfs/root/...` literals) are
         // not necessarily modules. Fingerprint their source bytes alongside
         // modules so changing an embedded file cannot reuse a stale binary.
@@ -932,6 +933,14 @@ fn entry_uses_precompile(input: &Path) -> bool {
 fn args_key(args: &CompileArgs, output_path: &Path, project_root: &Path) -> String {
     let mut hasher = Sha256::new();
     hash_field(&mut hasher, "args-debug", &format!("{args:?}"));
+    match super::defines::load(project_root, &args.define) {
+        Ok(defines) => hash_field(
+            &mut hasher,
+            "defines",
+            &serde_json::to_string(&defines).unwrap(),
+        ),
+        Err(error) => hash_field(&mut hasher, "defines-error", &error.to_string()),
+    }
     hash_field(&mut hasher, "input", &absolute_identity(&args.input));
     hash_field(&mut hasher, "output", &absolute_identity(output_path));
     if let Some(root) = &args.bunfs_root {
@@ -1052,7 +1061,13 @@ fn config_inputs_for(
     cache_root: &Path,
 ) -> BTreeSet<PathBuf> {
     let mut out = BTreeSet::new();
-    for name in ["package.json", "perry.toml", "tsconfig.json", "perry.lock"] {
+    for name in [
+        "package.json",
+        "perry.json",
+        "perry.toml",
+        "tsconfig.json",
+        "perry.lock",
+    ] {
         let path = project_root.join(name);
         if path.exists() {
             out.insert(path);
@@ -1066,7 +1081,7 @@ fn config_inputs_for(
         let mut dir = PathBuf::from(&source.path);
         dir.pop();
         loop {
-            for name in ["package.json", "perry.toml"] {
+            for name in ["package.json", "perry.json", "perry.toml"] {
                 let candidate = dir.join(name);
                 if candidate.exists() {
                     out.insert(candidate);

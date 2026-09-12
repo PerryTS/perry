@@ -145,10 +145,12 @@ pub(super) fn collect_js_module_imports(file_path: &std::path::Path, source: &st
         // so the most common case (top-level package brings in submodules)
         // is covered. Inside a package's `node_modules` tree, all
         // sibling imports are relative-path anyway.
-        if !(super::super::resolve::is_relative_specifier(&spec) || spec.starts_with('/')) {
+        if !(super::super::resolve::is_relative_specifier(&spec)
+            || super::super::resolve::is_absolute_specifier(&spec))
+        {
             continue;
         }
-        let resolved_path = if spec.starts_with('/') {
+        let resolved_path = if super::super::resolve::is_absolute_specifier(&spec) {
             super::super::resolve::resolve_absolute_import_paths(&spec)
         } else {
             super::super::resolve::resolve_relative_import_paths(&spec, file_path)
@@ -214,7 +216,7 @@ fn source_visible_resolved_path(
     importer_path: &Path,
     canonical_path: &Path,
 ) -> PathBuf {
-    let resolved = if import_source.starts_with('/') {
+    let resolved = if super::super::resolve::is_absolute_specifier(import_source) {
         super::super::resolve::resolve_absolute_import_paths(import_source)
     } else if super::super::resolve::is_relative_specifier(import_source) {
         super::super::resolve::resolve_relative_import_paths(import_source, importer_path)

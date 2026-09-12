@@ -814,6 +814,8 @@ pub fn run_with_parse_cache(
     // otherwise enable debug locations or symbols.
     ctx.debug_symbols = args.debug_symbols || opt_report_format == Some(OptReportFormat::Text);
 
+    ctx.expression_defines = super::defines::load(&project_root, &args.define)?;
+    ctx.parsed_defines = perry_parser::defines::Defines::parse(&ctx.expression_defines)?;
     let build_cache_probe =
         BuildCacheProbe::new(&args, &project_root, &ctx.cache_root, &ctx.cache_dir);
     let mut build_cache_stats = build_cache_probe.probe();
@@ -5541,7 +5543,7 @@ pub fn run_with_parse_cache(
             let (cache_key, hir_hash_for_diag) = if object_cache.is_enabled() {
                 let hir_hash = perry_hir::stable_hash::hash_module(hir_module);
                 (
-                    Some(compute_object_cache_key(&opts, hir_hash, perry_version)),
+                    Some(compute_object_cache_key(&opts, super::defines::object_hash(hir_hash, &ctx.expression_defines), perry_version)),
                     Some(hir_hash),
                 )
             } else {

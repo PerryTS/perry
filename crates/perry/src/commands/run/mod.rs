@@ -193,6 +193,7 @@ pub fn run(args: RunArgs, format: OutputFormat, use_color: bool, verbose: u8) ->
 
     // Local compile path
     let compile_args = CompileArgs {
+        define: Vec::new(),
         input: input.clone(),
         output: Some(PathBuf::from(&app_name)),
         keep_intermediates: false,
