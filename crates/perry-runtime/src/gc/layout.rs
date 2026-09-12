@@ -1836,10 +1836,7 @@ pub(super) unsafe fn gc_child_slots(header: *mut GcHeader) -> HeapChildSlotItera
             // THIS iterator (its rewrite arm delegates here), so the edge has
             // to be enumerated at this point, not in the rewrite match.
             .with_meta_slot(crate::object::cell_meta_slot(user_ptr as usize).map(|s| s as *mut u64))
-            .with_meta_slot2(Some(
-                std::ptr::addr_of_mut!((* (user_ptr as *mut crate::regex::RegExpHeader)).perex_program)
-                    as *mut u64,
-            ))
+            .with_meta_slot2(crate::regex::regex_program_slot(user_ptr))
         }
         GcLayoutSlotKind::ObjectMeta => {
             // Prototype and the private-evaluation brand are explicit prefix

@@ -1,4 +1,5 @@
 use super::*;
+use crate::array::ArrayHeader;
 use crate::string::js_string_from_bytes;
 
 pub(super) fn make_string(s: &str) -> *mut StringHeader {
@@ -13,14 +14,6 @@ pub(super) fn string_payload(s: *const StringHeader) -> Vec<u8> {
     unsafe {
         std::slice::from_raw_parts(crate::string::string_data(s), (*s).byte_len as usize).to_vec()
     }
-}
-
-/// A header carries its compiled program as a GC allocation. There is one
-/// engine now, so there is no second or third program to ask about: the
-/// `fancy` and `repeat` variants these helpers reported are gone with the
-/// matchers that needed them.
-pub(super) fn regex_is_built(re: *const RegExpHeader) -> bool {
-    !unsafe { (*re).perex_program.is_null() }
 }
 
 #[test]
@@ -100,17 +93,19 @@ fn replace_case(pattern: &str, subject: &str, replacement: &str) -> String {
     let scope = crate::gc::RuntimeHandleScope::new();
     let pattern = scope.root_string_ptr(make_string(pattern));
     let flags = scope.root_string_ptr(make_string(""));
-    let re = scope.root_raw_mut_ptr(js_regexp_new(
-        pattern.get_raw_const_ptr(),
-        flags.get_raw_const_ptr(),
-    ));
+    let re = scope.root_raw_mut_ptr(
+        pattern
+            .with_const_ptr(|pattern| flags.with_const_ptr(|flags| js_regexp_new(pattern, flags))),
+    );
     let subject = scope.root_string_ptr(make_string(subject));
     let replacement = scope.root_string_ptr(make_string(replacement));
-    let out = js_string_replace_regex_named(
-        subject.get_raw_const_ptr(),
-        re.get_raw_const_ptr(),
-        replacement.get_raw_const_ptr(),
-    );
+    let out = subject.with_const_ptr(|subject| {
+        re.with_const_ptr(|re| {
+            replacement.with_const_ptr(|replacement| {
+                js_string_replace_regex_named(subject, re, replacement)
+            })
+        })
+    });
     string_as_str(out).to_owned()
 }
 
@@ -118,12 +113,13 @@ pub(super) fn first_match(pattern: &str, flags: &str, subject: &str) -> Option<S
     let scope = crate::gc::RuntimeHandleScope::new();
     let pattern = scope.root_string_ptr(make_string(pattern));
     let flags = scope.root_string_ptr(make_string(flags));
-    let re = scope.root_raw_mut_ptr(js_regexp_new(
-        pattern.get_raw_const_ptr(),
-        flags.get_raw_const_ptr(),
-    ));
+    let re = scope.root_raw_mut_ptr(
+        pattern
+            .with_const_ptr(|pattern| flags.with_const_ptr(|flags| js_regexp_new(pattern, flags))),
+    );
     let subject = scope.root_string_ptr(make_string(subject));
-    let result = js_regexp_exec(re.get_raw_mut_ptr(), subject.get_raw_const_ptr());
+    let result =
+        re.with_mut_ptr(|re| subject.with_const_ptr(|subject| js_regexp_exec(re, subject)));
     if result.is_null() {
         None
     } else {
@@ -642,7 +638,7 @@ fn surrogate_pairs_match_the_original_utf16_units() {
     let re = scope.root_raw_mut_ptr(js_regexp_new(make_string(r"\uD800x"), make_string("")));
     let subject = scope.root_string_ptr(make_wtf8(b"\xed\xa0\x80x"));
     assert_eq!(
-        js_regexp_test(re.get_raw_const_ptr(), subject.get_raw_const_ptr()),
+        re.with_const_ptr(|re| subject.with_const_ptr(|subject| js_regexp_test(re, subject))),
         1
     );
     let pat = r"(?:[A-Za-z\xAA]|\uD800[\uDC00-\uDC0B\uDC0D-\uDC26]|\uD801[\uDC00-\uDC9D])";

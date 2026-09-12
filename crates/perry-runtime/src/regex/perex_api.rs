@@ -71,13 +71,15 @@ fn raise(error: EngineError) -> ! {
     let scope = RuntimeHandleScope::new();
     let text = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let text = scope.root_string_ptr(text);
-    let exception = if type_error {
-        crate::error::js_typeerror_new(text.get_raw_mut_ptr::<StringHeader>())
-    } else if syntax {
-        crate::error::js_syntaxerror_new(text.get_raw_mut_ptr::<StringHeader>())
-    } else {
-        crate::error::js_rangeerror_new(text.get_raw_mut_ptr::<StringHeader>())
-    };
+    let exception = text.with_mut_ptr::<StringHeader, _>(|text| {
+        if type_error {
+            crate::error::js_typeerror_new(text)
+        } else if syntax {
+            crate::error::js_syntaxerror_new(text)
+        } else {
+            crate::error::js_rangeerror_new(text)
+        }
+    });
     crate::exception::js_throw(crate::value::js_nanbox_pointer(exception as i64))
 }
 
@@ -201,7 +203,7 @@ pub(crate) fn execute_with_resources(
     let scope = RuntimeHandleScope::new();
     let receiver = scope.root_raw_mut_ptr(receiver);
     let input = scope.root_string_ptr(input);
-    let last_index = caught(|| receiver.with_const_ptr(super::regex_last_index_offset))?;
+    let last_index = caught(|| receiver.with_const_ptr(|p| super::regex_last_index_offset(p)))?;
     let (stateful, has_indices) = receiver.with_const_ptr::<RegExpHeader, _>(|r| unsafe {
         ((*r).global || (*r).sticky, (*r).has_indices)
     });
@@ -210,7 +212,7 @@ pub(crate) fn execute_with_resources(
     if start > length {
         if stateful {
             caught(|| {
-                super::set_last_index_throwing(receiver.get_raw_mut_ptr::<RegExpHeader>(), 0)
+                receiver.with_mut_ptr::<RegExpHeader, _>(|re| super::set_last_index_throwing(re, 0))
             })?;
         }
         return Ok(None);
@@ -238,7 +240,7 @@ pub(crate) fn execute_with_resources(
     if stateful {
         let next = found.as_ref().map_or(0, |m| m.full.end());
         caught(|| {
-            super::set_last_index_throwing(receiver.get_raw_mut_ptr::<RegExpHeader>(), next)
+            receiver.with_mut_ptr::<RegExpHeader, _>(|re| super::set_last_index_throwing(re, next))
         })?;
     }
     let Some(found) = found else {

@@ -44,6 +44,9 @@ pub(crate) fn construct_rooted_arguments(function: f64, args: &[f64], new_target
     }
 }
 
+/// Only the regular-expression species constructors construct with exactly two
+/// rooted arguments, so a build without the engine has no caller.
+#[cfg(feature = "regex-engine")]
 pub(crate) fn construct_two_rooted(function: f64, first: f64, second: f64) -> f64 {
     construct_rooted_arguments(function, &[first, second], function)
 }

@@ -1539,7 +1539,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::StringMatchAll { string, regex } => {
             rooting::with_operands_rooted(ctx, &[string, regex], |ctx, vals| {
                 Ok(ctx.block().call(
-                    DOUBLE, "js_string_match_all_js", &[(DOUBLE, &vals[0]), (DOUBLE, &vals[1])],
+                    DOUBLE,
+                    "js_string_match_all_js",
+                    &[(DOUBLE, &vals[0]), (DOUBLE, &vals[1])],
                 ))
             })
         }

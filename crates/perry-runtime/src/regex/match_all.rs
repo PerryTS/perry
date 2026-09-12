@@ -9,9 +9,7 @@ use super::REGEXP_STRING_ITERATOR_CLASS_ID;
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 use crate::object::ObjectHeader;
 use crate::string::StringHeader;
-use crate::value::{
-    js_nanbox_get_pointer, js_nanbox_pointer, js_nanbox_string, JSValue, TAG_NULL, TAG_UNDEFINED,
-};
+use crate::value::{js_nanbox_pointer, js_nanbox_string, JSValue, TAG_NULL, TAG_UNDEFINED};
 use perex::Budget;
 
 const MATCHER: u32 = 0;
@@ -207,7 +205,7 @@ pub fn js_string_match_all(
     s: *const StringHeader,
     re: *const super::RegExpHeader,
 ) -> *mut ObjectHeader {
-    js_nanbox_get_pointer(js_string_match_all_value(s, js_nanbox_pointer(re as i64)))
+    crate::value::js_nanbox_get_pointer(js_string_match_all_value(s, js_nanbox_pointer(re as i64)))
         as *mut ObjectHeader
 }
 

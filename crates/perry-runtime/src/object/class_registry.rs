@@ -45,7 +45,9 @@ use super::*;
 mod builtin_alias_construct;
 mod class_meta;
 mod construct;
-pub(crate) use construct::{construct_rooted_arguments, construct_two_rooted, scan_current_new_target_root_mut};
+#[cfg(feature = "regex-engine")]
+pub(crate) use construct::construct_two_rooted;
+pub(crate) use construct::{construct_rooted_arguments, scan_current_new_target_root_mut};
 pub mod decl_prototype_table;
 mod dispatch;
 pub(crate) mod evaluation_heritage;

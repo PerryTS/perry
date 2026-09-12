@@ -108,7 +108,7 @@ pub(crate) fn copy_bytes(
     if count > max_bytes {
         return Err(StorageError::Limit.into());
     }
-    crate::string::js_string_addref(input.get_raw_mut_ptr());
+    input.with_mut_ptr(|input| crate::string::js_string_addref(input));
     poll()?;
     let mut measured = Metadata::default();
     let mut offset = 0;
@@ -161,7 +161,7 @@ pub(crate) fn copy_bytes(
     if written != measured {
         return Err(EngineError::InvalidSpan);
     }
-    Ok(output.get_raw_mut_ptr())
+    Ok(output.with_mut_ptr(|output| output))
 }
 
 pub(super) fn split(
@@ -172,8 +172,8 @@ pub(super) fn split(
     budget: &mut Budget,
     memory: &MemoryBudget,
 ) -> Result<(), EngineError> {
-    crate::string::js_string_addref(input.get_raw_mut_ptr());
-    crate::string::js_string_addref(needle.get_raw_mut_ptr());
+    input.with_mut_ptr(|input| crate::string::js_string_addref(input));
+    needle.with_mut_ptr(|needle| crate::string::js_string_addref(needle));
     let (n, m) = (byte_len(input), byte_len(needle));
     if m == 0 {
         // Preserve the same bounded WTF-8-shape walk as Perry's scalar

@@ -29,9 +29,11 @@ impl MemoryBudget {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn live_bytes(&self) -> usize {
         self.live.get()
     }
+    #[cfg(test)]
     pub(crate) fn peak_bytes(&self) -> usize {
         self.peak.get()
     }

@@ -296,6 +296,7 @@ pub(super) fn copy_units(
                 let end = offset.checked_add(bytes.len()).ok_or(StorageError::Limit)?;
                 let target = data.get_mut(offset..end).ok_or(StorageError::Limit)?;
                 for (slot, &byte) in target.iter_mut().zip(bytes) {
+                    // GC_STORE_AUDIT(POINTER_FREE): UTF-8 payload bytes of a string under construction.
                     slot.write(byte);
                 }
                 offset = end;
@@ -334,5 +335,5 @@ pub(super) fn copy_units(
     {
         return Err(EngineError::InvalidSpan);
     }
-    Ok(output.get_raw_mut_ptr::<StringHeader>())
+    Ok(output.with_mut_ptr::<StringHeader, _>(|output| output))
 }

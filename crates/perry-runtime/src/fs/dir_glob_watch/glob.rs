@@ -267,10 +267,11 @@ fn compile_exclude_patterns_result<'s>(
         ));
     };
     let arr = scope.root_raw_const_ptr(arr);
-    let len = crate::array::js_array_length(arr.get_raw_const_ptr()) as usize;
+    let len = arr.with_const_ptr(|p| crate::array::js_array_length(p)) as usize;
     let mut patterns = Vec::with_capacity(len);
     for i in 0..len {
-        let value = crate::array::js_array_get_f64(arr.get_raw_const_ptr(), i as u32);
+        // Re-read each iteration: decoding below may allocate.
+        let value = arr.with_const_ptr(|arr| crate::array::js_array_get_f64(arr, i as u32));
         let Some(pattern) = decode_string_value(value) else {
             let message = format!(
                 "The \"options.exclude[{i}]\" property must be of type string. Received {}",
@@ -1001,11 +1002,11 @@ fn glob_sync_value_result(pattern_value: f64, options_value: f64) -> Result<f64,
             glob_entry_value(entry, run.with_file_types)
         })?);
         let pointer = crate::exception::catch_js_throw(|| {
-            js_array_push_f64(arr.get_raw_mut_ptr(), value.get_nanbox_f64())
+            arr.with_mut_ptr(|arr| js_array_push_f64(arr, value.get_nanbox_f64()))
         })?;
         arr.set_raw_mut_ptr(pointer);
     }
     Ok(f64::from_bits(
-        arr.get_raw_const_ptr::<crate::array::ArrayHeader>() as u64,
+        arr.with_const_ptr::<crate::array::ArrayHeader, _>(|arr| arr as u64),
     ))
 }

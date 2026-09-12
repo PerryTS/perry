@@ -34,7 +34,7 @@ fn canonical<'s>(
     } else {
         scope.root_string_ptr(super::js_string_from_str(canonical.as_str()))
     };
-    crate::string::js_string_addref(flags.get_raw_mut_ptr::<StringHeader>());
+    flags.with_mut_ptr::<StringHeader, _>(|flags| crate::string::js_string_addref(flags));
     Ok((canonical, flags))
 }
 
@@ -67,29 +67,32 @@ unsafe fn publish(
     canonical: CanonicalFlags,
     program: &GcProgram<'_>,
 ) {
-    let re = receiver.get_raw_mut_ptr::<RegExpHeader>();
-    (*re).pattern_ptr = source.get_raw_const_ptr::<StringHeader>();
-    (*re).flags_ptr = flags.get_raw_const_ptr::<StringHeader>();
-    let flags = canonical.as_str();
-    (*re).case_insensitive = flags.contains('i');
-    (*re).global = flags.contains('g');
-    (*re).multiline = flags.contains('m');
-    (*re).sticky = flags.contains('y');
-    (*re).dot_all = flags.contains('s');
-    (*re).unicode = flags.contains('u') || flags.contains('v');
-    (*re).has_indices = flags.contains('d');
-    for (slot, value) in [
-        (
-            std::ptr::addr_of!((*re).pattern_ptr) as usize,
-            js_nanbox_string((*re).pattern_ptr as i64),
-        ),
-        (
-            std::ptr::addr_of!((*re).flags_ptr) as usize,
-            js_nanbox_string((*re).flags_ptr as i64),
-        ),
-    ] {
-        crate::gc::runtime_write_barrier_gc_slot(re as usize, slot, value.to_bits());
-    }
+    // Field writes and write barriers only: nothing here allocates, so the
+    // three addresses stay current until `install` re-reads the receiver.
+    receiver.with_mut_ptr::<RegExpHeader, _>(|re| {
+        source.with_const_ptr::<StringHeader, _>(|source| (*re).pattern_ptr = source);
+        flags.with_const_ptr::<StringHeader, _>(|flags| (*re).flags_ptr = flags);
+        let flags = canonical.as_str();
+        (*re).case_insensitive = flags.contains('i');
+        (*re).global = flags.contains('g');
+        (*re).multiline = flags.contains('m');
+        (*re).sticky = flags.contains('y');
+        (*re).dot_all = flags.contains('s');
+        (*re).unicode = flags.contains('u') || flags.contains('v');
+        (*re).has_indices = flags.contains('d');
+        for (slot, value) in [
+            (
+                std::ptr::addr_of!((*re).pattern_ptr) as usize,
+                js_nanbox_string((*re).pattern_ptr as i64),
+            ),
+            (
+                std::ptr::addr_of!((*re).flags_ptr) as usize,
+                js_nanbox_string((*re).flags_ptr as i64),
+            ),
+        ] {
+            crate::gc::runtime_write_barrier_gc_slot(re as usize, slot, value.to_bits());
+        }
+    });
     program.install(receiver);
 }
 
@@ -101,10 +104,10 @@ pub(super) fn new(
     // Root both arguments before either default/canonical string allocates.
     let source = scope.root_string_ptr(source);
     let flags = scope.root_string_ptr(flags);
-    if !super::is_valid_ptr(source.get_raw_const_ptr::<StringHeader>()) {
+    if !source.with_const_ptr::<StringHeader, _>(|p| super::is_valid_ptr(p)) {
         source.set_raw_const_ptr(super::js_string_from_str(""));
     }
-    if !super::is_valid_ptr(flags.get_raw_const_ptr::<StringHeader>()) {
+    if !flags.with_const_ptr::<StringHeader, _>(|p| super::is_valid_ptr(p)) {
         flags.set_raw_const_ptr(super::js_string_from_str(""));
     }
     let (canonical, flags) = canonical(&scope, flags)?;
@@ -121,6 +124,7 @@ pub(super) fn new(
     }
     unsafe {
         // No collecting action until the entire header and all edges are valid.
+        // GC_STORE_AUDIT(INIT): fresh header with every edge null; `publish` stores the pattern, flags and program edges through the barrier.
         re.write(RegExpHeader {
             pattern_ptr: std::ptr::null(),
             flags_ptr: std::ptr::null(),
@@ -145,13 +149,13 @@ pub(super) fn new(
     REGEX_EVER_REGISTERED.arm();
     REGEX_SOURCE_TABLE.with(|t| {
         t.borrow_mut().insert(
-            receiver.get_raw_mut_ptr::<RegExpHeader>() as usize,
+            receiver.with_mut_ptr::<RegExpHeader, _>(|re| re as usize),
             RegexMetadata {
                 registered_owner: true,
             },
         );
     });
-    Ok(receiver.get_raw_mut_ptr::<RegExpHeader>())
+    Ok(receiver.with_mut_ptr::<RegExpHeader, _>(|re| re))
 }
 
 fn actual_regex(value: f64) -> Option<*mut RegExpHeader> {
@@ -199,10 +203,10 @@ pub(super) fn construct(pattern: f64, flags: f64, called: bool) -> *mut RegExpHe
     }
     let source = string(&scope, &pattern);
     let flags = string(&scope, &flags);
-    api::finish(new(
-        source.get_raw_const_ptr::<StringHeader>(),
-        flags.get_raw_const_ptr::<StringHeader>(),
-    ))
+    // `new` roots both strings before it allocates anything.
+    api::finish(source.with_const_ptr::<StringHeader, _>(|source| {
+        flags.with_const_ptr::<StringHeader, _>(|flags| new(source, flags))
+    }))
 }
 
 pub(super) fn recompile(re: *mut RegExpHeader, pattern: f64, flags: f64) -> f64 {
@@ -230,6 +234,7 @@ pub(super) fn recompile(re: *mut RegExpHeader, pattern: f64, flags: f64) -> f64 
     }
     // RegExpInitialize publishes the new source/flags/program before the
     // throwing lastIndex write. A failed compile above publishes nothing.
-    super::set_last_index_throwing(receiver.get_raw_mut_ptr::<RegExpHeader>(), 0);
-    js_nanbox_pointer(receiver.get_raw_mut_ptr::<RegExpHeader>() as i64)
+    // Allocates only on its throwing path, which does not return.
+    receiver.with_mut_ptr::<RegExpHeader, _>(|re| super::set_last_index_throwing(re, 0));
+    receiver.with_mut_ptr::<RegExpHeader, _>(|re| js_nanbox_pointer(re as i64))
 }

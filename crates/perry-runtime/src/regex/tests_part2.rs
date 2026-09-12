@@ -512,7 +512,8 @@ fn quantified_capture_pattern_does_not_backtrack_on_a_non_matching_subject() {
     let re = scope.root_raw_mut_ptr(re);
     // Assert the actual single-engine owner before exercising the hard case.
     assert!(
-        test_original_strings_and_program(re.get_raw_const_ptr()).2,
+        re.with_const_ptr(|p| test_original_strings_and_program(p))
+            .2,
         "the matcher must be a GC-owned Perex program"
     );
 
@@ -520,7 +521,7 @@ fn quantified_capture_pattern_does_not_backtrack_on_a_non_matching_subject() {
     let subject = scope.root_string_ptr(make_string(&hay));
     let started = std::time::Instant::now();
     let outcome = crate::exception::catch_js_throw(|| {
-        js_regexp_test(re.get_raw_const_ptr(), subject.get_raw_const_ptr())
+        re.with_const_ptr(|re| subject.with_const_ptr(|subject| js_regexp_test(re, subject)))
     });
     let answer = outcome.unwrap_or_else(|error| {
         let error = scope.root_nanbox_f64(error);
@@ -543,7 +544,7 @@ fn quantified_capture_pattern_does_not_backtrack_on_a_non_matching_subject() {
     // reports the spec's captures.
     let good = scope.root_string_ptr(make_string("aaaa"));
     assert_eq!(
-        good.with_const_ptr::<StringHeader, _>(|s| js_regexp_test(re.get_raw_const_ptr(), s)),
+        re.with_const_ptr(|re| good.with_const_ptr::<StringHeader, _>(|s| js_regexp_test(re, s))),
         1
     );
 }

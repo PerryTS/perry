@@ -236,7 +236,9 @@ pub(super) extern "C" fn regex_proto_exec_thunk(
     let scope = crate::gc::RuntimeHandleScope::new();
     let re = scope.root_raw_const_ptr(re);
     let s = crate::value::js_jsvalue_to_string_coerce(arg);
-    let arr = crate::regex::js_regexp_exec(re.get_raw_mut_ptr::<crate::regex::RegExpHeader>(), s);
+    // Re-read after the coercion; `js_regexp_exec` roots both arguments.
+    let arr =
+        re.with_mut_ptr::<crate::regex::RegExpHeader, _>(|re| crate::regex::js_regexp_exec(re, s));
     if arr.is_null() {
         f64::from_bits(crate::value::TAG_NULL)
     } else {
@@ -655,26 +657,34 @@ fn install_regex_symbol_methods(proto: *mut crate::object::ObjectHeader) {
         let iteration = RuntimeHandleScope::new();
         crate::closure::js_register_closure_arity(fp, arity);
         let function = iteration.root_raw_mut_ptr(crate::closure::js_closure_alloc(fp, 0));
-        super::native_module::set_bound_native_closure_name(function.get_raw_mut_ptr(), name);
-        super::native_module::set_builtin_closure_length(
-            function.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
-            arity,
-        );
+        function.with_mut_ptr(|function| {
+            super::native_module::set_bound_native_closure_name(function, name)
+        });
+        function.with_mut_ptr::<crate::closure::ClosureHeader, _>(|function| {
+            super::native_module::set_builtin_closure_length(function as usize, arity)
+        });
         let key = iteration.root_raw_mut_ptr(crate::symbol::well_known_symbol(symbol));
+        let boxed = |handle: &crate::gc::RuntimeHandle<'_>| {
+            handle.with_mut_ptr(|p: *mut u8| js_nanbox_pointer(p as i64))
+        };
+        // All three are read as the call's arguments; it roots them.
         unsafe {
             crate::symbol::js_object_set_symbol_property(
-                js_nanbox_pointer(proto.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64),
-                js_nanbox_pointer(key.get_raw_mut_ptr::<crate::symbol::SymbolHeader>() as i64),
-                js_nanbox_pointer(
-                    function.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64
-                ),
+                boxed(&proto),
+                boxed(&key),
+                boxed(&function),
             );
         }
-        crate::symbol::set_symbol_property_attrs(
-            proto.get_raw_mut_ptr::<crate::object::ObjectHeader>() as usize,
-            key.get_raw_mut_ptr::<crate::symbol::SymbolHeader>() as usize,
-            crate::object::PropertyAttrs::new(true, false, true),
-        );
+        // Owner addresses key a side table; nothing here allocates.
+        proto.with_mut_ptr::<crate::object::ObjectHeader, _>(|proto| {
+            key.with_mut_ptr::<crate::symbol::SymbolHeader, _>(|key| {
+                crate::symbol::set_symbol_property_attrs(
+                    proto as usize,
+                    key as usize,
+                    crate::object::PropertyAttrs::new(true, false, true),
+                )
+            })
+        });
     }
 }
 
@@ -752,11 +762,10 @@ pub(crate) fn regexp_get_property(
         if !crate::proxy::reflect_value_is_object(proto.get_nanbox_f64()) {
             return f64::from_bits(crate::value::TAG_UNDEFINED);
         }
-        crate::proxy::js_reflect_get(
-            proto.get_nanbox_f64(),
-            crate::value::js_nanbox_string(key.get_raw_const_ptr::<crate::StringHeader>() as i64),
-            receiver.get_nanbox_f64(),
-        )
+        let key = key.with_const_ptr::<crate::StringHeader, _>(|key| {
+            crate::value::js_nanbox_string(key as i64)
+        });
+        crate::proxy::js_reflect_get(proto.get_nanbox_f64(), key, receiver.get_nanbox_f64())
     });
     crate::object::js_implicit_this_set(previous.get_nanbox_f64());
     drop(name);

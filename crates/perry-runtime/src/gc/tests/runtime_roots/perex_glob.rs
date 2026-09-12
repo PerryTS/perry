@@ -195,12 +195,12 @@ fn perex_glob_filesystem_callbacks_reenter_collect_and_throw_without_lost_roots(
     let result =
         crate::fs::js_fs_glob_sync_options(pattern.get_nanbox_f64(), options.get_nanbox_f64());
     let result = scope.root_raw_mut_ptr(result.to_bits() as *mut crate::array::ArrayHeader);
-    assert_eq!(crate::array::js_array_length(result.get_raw_const_ptr()), 1);
     assert_eq!(
-        bytes(crate::array::js_array_get_f64(
-            result.get_raw_const_ptr(),
-            0
-        )),
+        result.with_const_ptr(|p| crate::array::js_array_length(p)),
+        1
+    );
+    assert_eq!(
+        bytes(result.with_const_ptr(|result| crate::array::js_array_get_f64(result, 0))),
         b"keep.txt"
     );
     assert_ne!(callback.get_nanbox_f64().to_bits(), before);
