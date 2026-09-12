@@ -175,17 +175,13 @@ pub(crate) fn js_format_f64(value: f64) -> String {
         // Integer-like, format without decimal
         format!("{}", value as i64)
     } else {
-        // ECMAScript NumberToString: switch to scientific notation when
-        // |n| >= 10^21 or |n| < 10^-6 (otherwise Rust's `{}` produces
-        // 300-digit decimals for `Number.MAX_VALUE` and 16-digit
-        // 0.000…0002… decimals for `Number.EPSILON`, neither of which
-        // matches Node's output).
-        let abs = value.abs();
-        if !(1e-6..1e21).contains(&abs) {
-            fix_exponent_format(&format!("{:e}", value))
-        } else {
-            format!("{}", value)
-        }
+        // Rust's Display formatter also emits a shortest round-tripping
+        // decimal, but it can choose the odd final digit when the two shortest
+        // candidates are equidistant. ECMA-262 Number::toString requires the
+        // even candidate. `ryu-js` implements that tie-break together with
+        // JavaScript's fixed/scientific notation thresholds.
+        let mut buffer = ryu_js::Buffer::new();
+        buffer.format_finite(value).to_owned()
     }
 }
 
@@ -716,30 +712,7 @@ pub(crate) fn fix_exponent_format(s: &str) -> String {
     }
 }
 
-/// Format a number per JS toString rules (helper for toPrecision when precision=0)
+/// Format a number per JS toString rules (helper for toPrecision with no precision).
 fn format_number_for_js(value: f64) -> String {
-    if value.is_nan() {
-        return "NaN".to_string();
-    }
-    if value.is_infinite() {
-        return if value > 0.0 {
-            "Infinity".to_string()
-        } else {
-            "-Infinity".to_string()
-        };
-    }
-    if value == 0.0 {
-        return "0".to_string();
-    }
-    if value.fract() == 0.0 && value.abs() < 1e15 {
-        format!("{}", value as i64)
-    } else {
-        // ECMAScript NumberToString — see js_number_to_string for rationale.
-        let abs = value.abs();
-        if !(1e-6..1e21).contains(&abs) {
-            fix_exponent_format(&format!("{:e}", value))
-        } else {
-            format!("{}", value)
-        }
-    }
+    js_format_f64(value)
 }

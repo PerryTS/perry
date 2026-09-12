@@ -23,6 +23,67 @@ fn fnv1a_for_test(bytes: &[u8]) -> u64 {
 }
 
 #[test]
+fn number_to_string_uses_ecmascript_tie_to_even() {
+    let cases = [
+        // The issue's exact tie, its adjacent doubles, and positive counterpart.
+        (0xc0d9_2b80_21ff_ffff, "-25774.00207519531"),
+        (0xc0d9_2b80_2200_0000, "-25774.002075195312"),
+        (0xc0d9_2b80_2200_0001, "-25774.002075195316"),
+        (0x40d9_2b80_2200_0000, "25774.002075195312"),
+        // Further exact ties found by the issue's seeded differential sweep.
+        (0xc03c_d941_0000_0000, "-28.848648071289062"),
+        (0x40d1_4b6e_da00_0000, "17709.732055664062"),
+        (0x40c1_b0ff_d400_0000, "9057.998657226562"),
+    ];
+    for (bits, expected) in cases {
+        assert_eq!(js_format_f64(f64::from_bits(bits)), expected, "{bits:016x}");
+    }
+}
+
+#[test]
+fn number_to_string_preserves_special_values_and_notation_boundaries() {
+    let cases = [
+        (1e21, "1e+21"),
+        (1e-7, "1e-7"),
+        (1e20, "100000000000000000000"),
+        (1e-6, "0.000001"),
+        (f64::MAX, "1.7976931348623157e+308"),
+        (f64::MIN_POSITIVE, "2.2250738585072014e-308"),
+        (f64::from_bits(1), "5e-324"),
+        (f64::EPSILON, "2.220446049250313e-16"),
+        (999_999_999_999_999.0, "999999999999999"),
+        (999_999_999_999_999.9, "999999999999999.9"),
+        (1_000_000_000_000_000.0, "1000000000000000"),
+        (1_000_000_000_000_000.1, "1000000000000000.1"),
+        (-0.0, "0"),
+        (f64::INFINITY, "Infinity"),
+        (f64::NEG_INFINITY, "-Infinity"),
+    ];
+    for (value, expected) in cases {
+        assert_eq!(js_format_f64(value), expected, "{:016x}", value.to_bits());
+    }
+    assert_eq!(js_format_f64(f64::NAN), "NaN");
+}
+
+#[test]
+fn number_to_string_million_seeded_doubles_match_the_ecmascript_formatter() {
+    let mut seed = 0x1234_5678_u32;
+    let mut oracle = ryu_js::Buffer::new();
+    for index in 0..1_000_000 {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        let value = (seed as f64 / 4_294_967_296.0 - 0.5) * 1_000_000.0 / 7.0;
+        assert_eq!(
+            js_format_f64(value),
+            oracle.format_finite(value),
+            "seeded value {index}, bits {:016x}",
+            value.to_bits()
+        );
+    }
+}
+
+#[test]
 fn test_string_create() {
     let data = b"hello";
     let s = js_string_from_bytes(data.as_ptr(), data.len() as u32);
