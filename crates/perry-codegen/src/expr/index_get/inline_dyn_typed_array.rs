@@ -106,15 +106,33 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     // ABA-proof for a value held by live code: the arena rewrites `obj_type`
     // before it hands the address out again, and a live reference keeps the
     // typed array alive.
+    // The brand test is the FIRST thing every indexed read on an unknown
+    // receiver executes, and until #10118 it computed the whole guard set --
+    // element kind, both index range checks, three ANDs -- before finding out
+    // the receiver was not a typed array at all. A `JSON.parse` array, and any
+    // ordinary Array behind an erased receiver, paid that on every element
+    // read forever. Decide on the tag alone and leave; the rest of the guard
+    // set is only meaningful once the tag says typed array.
+    let kind_guard_idx = ctx.new_block("tav.get.kind_guard");
+    let kind_guard_label = ctx.block_label(kind_guard_idx);
     ctx.current_block = brand_idx;
-    let entry_guard = {
+    let is_typed_array = {
         let blk = ctx.block();
         let obj_bits = blk.bitcast_double_to_i64(obj_box);
         let raw = blk.and(I64, &obj_bits, pointer_mask);
         let gc_type_addr = blk.sub(I64, &raw, "8");
         let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
         let gc_type = blk.load(I8, &gc_type_ptr);
-        let is_typed_array = blk.icmp_eq(I8, &gc_type, "11"); // GC_TYPE_TYPED_ARRAY
+        blk.icmp_eq(I8, &gc_type, "11") // GC_TYPE_TYPED_ARRAY
+    };
+    ctx.block()
+        .cond_br(&is_typed_array, &kind_guard_label, &slow_label);
+
+    ctx.current_block = kind_guard_idx;
+    let entry_guard = {
+        let blk = ctx.block();
+        let obj_bits = blk.bitcast_double_to_i64(obj_box);
+        let raw = blk.and(I64, &obj_bits, pointer_mask);
         let kind_addr = blk.add(I64, &raw, "8");
         let kind_ptr = blk.inttoptr(I64, &kind_addr);
         let kind_i8 = blk.load(I8, &kind_ptr);
@@ -127,9 +145,7 @@ pub(super) fn lower_inline_dyn_typed_array_get(
         // result is never poison there.
         let idx_ge0 = blk.fcmp("oge", idx_d, "0.0");
         let idx_lt = blk.fcmp("olt", idx_d, "4294967296.0");
-        // AND-reduce all guards.
-        let g = blk.and(I1, &is_typed_array, &kind_ok);
-        let g = blk.and(I1, &g, &idx_ge0);
+        let g = blk.and(I1, &kind_ok, &idx_ge0);
         blk.and(I1, &g, &idx_lt)
     };
     ctx.block().cond_br(&entry_guard, &fast_label, &slow_label);
