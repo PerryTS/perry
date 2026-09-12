@@ -11,15 +11,21 @@
 //! That keeps the wasmi version surface small and lets us swap engines
 //! (wasmtime, etc.) behind the same shape later.
 
-use std::cell::RefCell;
+use std::cell::{RefCell, UnsafeCell};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicI32, AtomicU64, Ordering},
+    Arc,
+};
 
-use wasmi::{Engine, ExternRef, ExternType, Func, Linker, Module, Ref, Store, Table, Val, ValType};
+use wasmi::{
+    Engine, Extern, ExternRef, ExternType, Func, Global, Linker, Memory, MemoryType, Module,
+    Mutability, Ref, Store, Table, TableType, Val, ValType,
+};
 
-/// Numeric WebAssembly value. MVP supports only the four core numeric types;
-/// `externref` / `funcref` / `v128` are out of scope (see issue #76, "Open
-/// questions").
+/// Numeric WebAssembly value used by the public Rust call API. JavaScript
+/// import callbacks additionally marshal `externref`, while `funcref` values
+/// cross the C boundary as opaque external handles.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum WasmVal {
     I32(i32),
@@ -47,16 +53,76 @@ pub struct WasmModuleHandle(Arc<ModuleInner>);
 struct ModuleInner {
     engine: Engine,
     module: Module,
+    diagnostic_id: u64,
+    byte_len: usize,
 }
 
-/// Opaque instance. Owns its own `Store` so each instance has independent
-/// memory / globals — matches JS `WebAssembly.Instance` semantics.
+static NEXT_MODULE_ID: AtomicU64 = AtomicU64::new(1);
+
+fn diagnostics_enabled() -> bool {
+    std::env::var_os("PERRY_WASM_TRACE").is_some()
+        || std::env::var_os("PERRY_WASM_DIAGNOSTICS").is_some()
+}
+
+fn trace_module(module: &ModuleInner, event: &str) {
+    if !diagnostics_enabled() {
+        return;
+    }
+    let imports = module
+        .module
+        .imports()
+        .map(|import| format!("{}.{}", import.module(), import.name()))
+        .collect::<Vec<_>>()
+        .join(",");
+    let exports = module
+        .module
+        .exports()
+        .map(|export| export.name())
+        .collect::<Vec<_>>()
+        .join(",");
+    eprintln!(
+        "[perry-wasm] module#{} {event} bytes={} imports=[{imports}] exports=[{exports}]",
+        module.diagnostic_id, module.byte_len
+    );
+}
+
+/// All WebAssembly objects in one JavaScript agent share an engine and store.
+///
+/// Emscripten side modules import the main module's memory, table, functions,
+/// and mutable globals. wasmi external handles can only be linked into the
+/// store that owns them, so the former one-store-per-instance layout could
+/// never represent that graph. JavaScript execution in Perry is thread-local;
+/// mirroring that here gives each Worker an independent WebAssembly agent
+/// while allowing every instance on a worker to exchange externals.
+struct HostRuntime {
+    engine: Engine,
+    store: Store<()>,
+}
+
+thread_local! {
+    static HOST_RUNTIME: UnsafeCell<HostRuntime> = UnsafeCell::new({
+        let engine = Engine::default();
+        let store = Store::new(&engine, ());
+        HostRuntime { engine, store }
+    });
+}
+
+fn with_host_runtime<R>(f: impl FnOnce(&mut HostRuntime) -> R) -> R {
+    HOST_RUNTIME.with(|runtime| unsafe { f(&mut *runtime.get()) })
+}
+
+/// Opaque instance backed by its JavaScript agent's shared store. Wasm
+/// instances still own their defined state, while imported externals retain
+/// identity across an Emscripten main/side-module graph.
 pub struct WasmInstanceHandle {
     inner: Box<InstanceInner>,
 }
 
 struct InstanceInner {
-    store: Store<WasmHostState>,
+    /// Pointer to this thread's [`HOST_RUNTIME`] store. The thread-local
+    /// allocation lives for the worker lifetime and instance handles never
+    /// cross workers.
+    store: *mut Store<()>,
     instance: wasmi::Instance,
     /// Keep the module alive for the lifetime of the instance so `engine` /
     /// `module` references stay valid.
@@ -74,6 +140,18 @@ struct InstanceInner {
     /// `get_memory` there would put a string lookup back on the hot path
     /// (#9611).
     memory: Option<wasmi::Memory>,
+    import_context: Arc<AtomicU64>,
+    exit_code: Arc<AtomicI32>,
+}
+
+impl WasmInstanceHandle {
+    fn store(&self) -> &Store<()> {
+        unsafe { &*self.inner.store }
+    }
+
+    fn store_mut(&mut self) -> &mut Store<()> {
+        unsafe { &mut *self.inner.store }
+    }
 }
 
 /// One resolved export: the `Func` handle, its signature, and the argument /
@@ -87,16 +165,11 @@ struct CachedExport {
     outs: Vec<Val>,
 }
 
-struct WasmHostState {
-    exit_code: Option<i32>,
-    import_callback: Option<WasmImportCallback>,
-    import_context: u64,
-}
-
 #[derive(Clone, Copy)]
 struct PendingTableValue {
     bits: u64,
     is_null: bool,
+    external: *mut c_void,
 }
 
 enum PendingTableOp {
@@ -137,14 +210,10 @@ fn begin_instance_call(inst: &mut WasmInstanceHandle) {
         if table_type.element() != ValType::ExternRef {
             continue;
         }
-        let Some(table) = inst
-            .inner
-            .instance
-            .get_table(&inst.inner.store, export.name())
-        else {
+        let Some(table) = inst.inner.instance.get_table(inst.store(), export.name()) else {
             continue;
         };
-        if let Ok(len) = usize::try_from(table.size(&inst.inner.store)) {
+        if let Ok(len) = usize::try_from(table.size(inst.store())) {
             lengths.insert(export.name().to_string(), len);
         }
     }
@@ -173,9 +242,17 @@ fn finish_instance_call(inst: &mut WasmInstanceHandle) -> Result<(), WasmHostErr
                         "table export {name:?} disappeared during imported callback"
                     )));
                 };
-                let value = table_value(inst, value.bits, value.is_null as i32);
+                let Some(value) = table_value(
+                    inst,
+                    table,
+                    value.bits,
+                    value.is_null as i32,
+                    value.external,
+                ) else {
+                    return Err(WasmHostError::Runtime("invalid table value".into()));
+                };
                 table
-                    .set(&mut inst.inner.store, index as u64, value)
+                    .set(inst.store_mut(), index as u64, value)
                     .map_err(|error| WasmHostError::Runtime(error.to_string()))?;
             }
             PendingTableOp::Grow { name, delta, value } => {
@@ -184,9 +261,17 @@ fn finish_instance_call(inst: &mut WasmInstanceHandle) -> Result<(), WasmHostErr
                         "table export {name:?} disappeared during imported callback"
                     )));
                 };
-                let value = table_value(inst, value.bits, value.is_null as i32);
+                let Some(value) = table_value(
+                    inst,
+                    table,
+                    value.bits,
+                    value.is_null as i32,
+                    value.external,
+                ) else {
+                    return Err(WasmHostError::Runtime("invalid table value".into()));
+                };
                 table
-                    .grow(&mut inst.inner.store, delta as u64, value)
+                    .grow(inst.store_mut(), delta as u64, value)
                     .map_err(|error| WasmHostError::Runtime(error.to_string()))?;
             }
         }
@@ -222,6 +307,24 @@ pub type WasmImportCallback = unsafe extern "C" fn(
     result_count: usize,
 ) -> i32;
 
+/// Resolve a JavaScript import value to a host-owned WebAssembly external.
+/// Returning null asks the host to use the ordinary JS function callback;
+/// non-function imports must resolve to a matching external.
+pub type WasmImportResolverCallback = unsafe extern "C" fn(
+    context: u64,
+    module: *const u8,
+    module_len: usize,
+    name: *const u8,
+    name_len: usize,
+    kind: u8,
+) -> *mut c_void;
+
+/// Opaque external handle shared with the JS wrapper layer. The external is
+/// copyable, and its backing entity remains owned by the thread-local store.
+struct WasmExternHandle {
+    item: Extern,
+}
+
 #[derive(Debug)]
 pub enum WasmHostError {
     Compile(String),
@@ -250,15 +353,24 @@ impl std::error::Error for WasmHostError {}
 /// Cheap byte-level magic check (`\0asm\01\0\0\0`). Mirrors `WebAssembly.validate`
 /// — for the MVP we delegate to wasmi's full module decode.
 pub fn validate(bytes: &[u8]) -> bool {
-    let engine = Engine::default();
-    Module::new(&engine, bytes).is_ok()
+    with_host_runtime(|runtime| Module::new(&runtime.engine, bytes).is_ok())
 }
 
 /// Compile bytes to a module. No imports resolved at this stage.
 pub fn compile(bytes: &[u8]) -> Result<WasmModuleHandle, WasmHostError> {
-    let engine = Engine::default();
-    let module = Module::new(&engine, bytes).map_err(|e| WasmHostError::Compile(e.to_string()))?;
-    Ok(WasmModuleHandle(Arc::new(ModuleInner { engine, module })))
+    with_host_runtime(|runtime| {
+        let engine = runtime.engine.clone();
+        let module =
+            Module::new(&engine, bytes).map_err(|e| WasmHostError::Compile(e.to_string()))?;
+        let inner = Arc::new(ModuleInner {
+            engine,
+            module,
+            diagnostic_id: NEXT_MODULE_ID.fetch_add(1, Ordering::Relaxed),
+            byte_len: bytes.len(),
+        });
+        trace_module(&inner, "compiled");
+        Ok(WasmModuleHandle(inner))
+    })
 }
 
 /// Instantiate with the module's imported numeric functions routed through an
@@ -266,35 +378,66 @@ pub fn compile(bytes: &[u8]) -> Result<WasmModuleHandle, WasmHostError> {
 /// zero-result fallback. `proc_exit` records its status so the JS WASI wrapper
 /// can return it after `_start` completes.
 pub fn instantiate(module: &WasmModuleHandle) -> Result<WasmInstanceHandle, WasmHostError> {
-    instantiate_with_import_callback(module, None, 0)
+    instantiate_with_import_callbacks(module, None, None, 0)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn instantiate_with_import_callback(
     module: &WasmModuleHandle,
     import_callback: Option<WasmImportCallback>,
     import_context: u64,
 ) -> Result<WasmInstanceHandle, WasmHostError> {
-    let mut store = Store::new(
-        &module.0.engine,
-        WasmHostState {
-            exit_code: None,
-            import_callback,
-            import_context,
-        },
-    );
-    let mut linker = <Linker<WasmHostState>>::new(&module.0.engine);
+    instantiate_with_import_callbacks(module, import_callback, None, import_context)
+}
+
+fn instantiate_with_import_callbacks(
+    module: &WasmModuleHandle,
+    import_callback: Option<WasmImportCallback>,
+    import_resolver: Option<WasmImportResolverCallback>,
+    import_context_value: u64,
+) -> Result<WasmInstanceHandle, WasmHostError> {
+    trace_module(&module.0, "instantiating");
+    let store = with_host_runtime(|runtime| &mut runtime.store as *mut Store<()>);
+    let import_context = Arc::new(AtomicU64::new(import_context_value));
+    // i32::MIN is not a valid WASI process status and acts as "not exited".
+    let exit_code = Arc::new(AtomicI32::new(i32::MIN));
+    let mut linker = <Linker<()>>::new(&module.0.engine);
     for import in module.0.module.imports() {
-        let ExternType::Func(ty) = import.ty() else {
-            return Err(WasmHostError::Link(format!(
-                "unsupported import {}.{}",
-                import.module(),
-                import.name()
-            )));
-        };
         let module_name = import.module().to_owned();
         let import_name = import.name().to_owned();
+        let import_kind = extern_type_kind(import.ty());
+        let resolved = import_resolver
+            .map(|resolver| unsafe {
+                resolver(
+                    import_context_value,
+                    module_name.as_ptr(),
+                    module_name.len(),
+                    import_name.as_ptr(),
+                    import_name.len(),
+                    import_kind,
+                )
+            })
+            .unwrap_or(std::ptr::null_mut());
+        if !resolved.is_null() {
+            let external = unsafe { &*(resolved as *const WasmExternHandle) }.item;
+            linker
+                .define(&module_name, &import_name, external)
+                .map_err(|e| WasmHostError::Link(e.to_string()))?;
+            continue;
+        }
+
+        let ExternType::Func(ty) = import.ty() else {
+            return Err(WasmHostError::Link(format!(
+                "WebAssembly import {}.{} requires a {} value",
+                import.module(),
+                import.name(),
+                extern_kind_label(import_kind),
+            )));
+        };
         let callback_module = module_name.clone();
         let callback_name = import_name.clone();
+        let callback_context = import_context.clone();
+        let callback_exit_code = exit_code.clone();
         linker
             .func_new(
                 &module_name,
@@ -307,10 +450,10 @@ fn instantiate_with_import_callback(
                     ) && callback_name == "proc_exit"
                     {
                         if let Some(Val::I32(code)) = params.first() {
-                            caller.data_mut().exit_code = Some(*code);
+                            callback_exit_code.store(*code, Ordering::Relaxed);
                         }
                     }
-                    if let Some(callback) = caller.data().import_callback {
+                    if let Some(callback) = import_callback {
                         let mut arg_kinds = Vec::with_capacity(params.len());
                         let mut arg_bits = Vec::with_capacity(params.len());
                         let mut numeric = true;
@@ -318,9 +461,26 @@ fn instantiate_with_import_callback(
                             if let Some((kind, bits)) = val_kind_bits(param) {
                                 arg_kinds.push(kind);
                                 arg_bits.push(bits);
-                            } else {
-                                numeric = false;
-                                break;
+                                continue;
+                            }
+                            match param {
+                                Val::ExternRef(Ref::Null) => {
+                                    arg_kinds.push(WASM_VAL_KIND_EXTERNREF);
+                                    arg_bits.push(JS_NULL_BITS);
+                                }
+                                Val::ExternRef(Ref::Val(value)) => {
+                                    let Some(bits) = value.data(&caller).downcast_ref::<u64>()
+                                    else {
+                                        numeric = false;
+                                        break;
+                                    };
+                                    arg_kinds.push(WASM_VAL_KIND_EXTERNREF);
+                                    arg_bits.push(*bits);
+                                }
+                                _ => {
+                                    numeric = false;
+                                    break;
+                                }
                             }
                         }
                         let mut result_kinds = Vec::with_capacity(results.len());
@@ -328,15 +488,20 @@ fn instantiate_with_import_callback(
                         for result in results.iter() {
                             if let Some((kind, _)) = val_kind_bits(result) {
                                 result_kinds.push(kind);
-                            } else {
-                                numeric = false;
-                                break;
+                                continue;
+                            }
+                            match result {
+                                Val::ExternRef(_) => result_kinds.push(WASM_VAL_KIND_EXTERNREF),
+                                _ => {
+                                    numeric = false;
+                                    break;
+                                }
                             }
                         }
                         if numeric {
                             let called = unsafe {
                                 callback(
-                                    caller.data().import_context,
+                                    callback_context.load(Ordering::Relaxed),
                                     callback_module.as_ptr(),
                                     callback_module.len(),
                                     callback_name.as_ptr(),
@@ -355,7 +520,15 @@ fn instantiate_with_import_callback(
                                     .zip(result_kinds.iter())
                                     .zip(result_bits.iter())
                                 {
-                                    *result = val_from_kind_bits(*kind, *bits);
+                                    *result = if *kind == WASM_VAL_KIND_EXTERNREF {
+                                        if *bits == JS_NULL_BITS {
+                                            Val::ExternRef(Ref::Null)
+                                        } else {
+                                            Val::from(ExternRef::new(&mut caller, *bits))
+                                        }
+                                    } else {
+                                        val_from_kind_bits(*kind, *bits)
+                                    };
                                 }
                                 return Ok(());
                             }
@@ -370,9 +543,10 @@ fn instantiate_with_import_callback(
             .map_err(|e| WasmHostError::Link(e.to_string()))?;
     }
     let instance = linker
-        .instantiate_and_start(&mut store, &module.0.module)
+        .instantiate_and_start(unsafe { &mut *store }, &module.0.module)
         .map_err(|e| WasmHostError::Link(e.to_string()))?;
-    let memory = instance.get_memory(&store, "memory");
+    let memory = instance.get_memory(unsafe { &*store }, "memory");
+    trace_module(&module.0, "instantiated");
     Ok(WasmInstanceHandle {
         inner: Box::new(InstanceInner {
             store,
@@ -381,11 +555,18 @@ fn instantiate_with_import_callback(
             exports: Vec::new(),
             export_handles: HashMap::new(),
             memory,
+            import_context,
+            exit_code,
         }),
     })
 }
 
 fn coerce_numeric_value(value: WasmVal, expected: ValType) -> Option<Val> {
+    match (value, expected) {
+        (WasmVal::I32(value), ValType::I32) => return Some(Val::I32(value)),
+        (WasmVal::I64(value), ValType::I64) => return Some(Val::I64(value)),
+        _ => {}
+    }
     let number = match value {
         WasmVal::I32(value) => value as f64,
         WasmVal::I64(value) => value as f64,
@@ -408,8 +589,8 @@ fn resolve_export(inst: &mut WasmInstanceHandle, name: &str) -> Option<usize> {
     if let Some(&index) = inst.inner.export_handles.get(name) {
         return Some(index);
     }
-    let func = inst.inner.instance.get_func(&inst.inner.store, name)?;
-    let ty = func.ty(&inst.inner.store);
+    let func = inst.inner.instance.get_func(inst.store(), name)?;
+    let ty = func.ty(inst.store());
     let index = inst.inner.exports.len();
     inst.inner.exports.push(CachedExport {
         name: name.to_string(),
@@ -465,11 +646,12 @@ fn call_resolved_export(
         // Split the borrow: the call needs the store mutably while reading the
         // cached argument buffer and filling the cached result buffer, and all
         // three are disjoint fields of the same `InstanceInner`.
+        let store = inst.inner.store;
         let inner = &mut *inst.inner;
         let CachedExport {
             func, args, outs, ..
         } = &mut inner.exports[index];
-        func.call(&mut inner.store, args, outs)
+        func.call(unsafe { &mut *store }, args, outs)
     };
     let table_result = finish_instance_call(inst);
     call_result.map_err(|e| WasmHostError::Runtime(e.to_string()))?;
@@ -527,7 +709,7 @@ pub fn call_export(
 // `perry_wasm_host_string_free`).
 // ────────────────────────────────────────────────────────────────────────
 
-use std::ffi::{c_char, CString};
+use std::ffi::{c_char, c_void, CString};
 use std::slice;
 
 fn capture_err(out_err: *mut *mut c_char, e: WasmHostError) {
@@ -605,6 +787,16 @@ fn extern_type_kind(ty: &ExternType) -> u8 {
         ExternType::Table(_) => WASM_EXTERN_KIND_TABLE,
         ExternType::Memory(_) => WASM_EXTERN_KIND_MEMORY,
         ExternType::Global(_) => WASM_EXTERN_KIND_GLOBAL,
+    }
+}
+
+fn extern_kind_label(kind: u8) -> &'static str {
+    match kind {
+        WASM_EXTERN_KIND_FUNCTION => "function",
+        WASM_EXTERN_KIND_TABLE => "table",
+        WASM_EXTERN_KIND_MEMORY => "memory",
+        WASM_EXTERN_KIND_GLOBAL => "global",
+        _ => "external",
     }
 }
 
@@ -790,6 +982,7 @@ pub extern "C" fn perry_wasm_host_module_custom_section_at(
 pub extern "C" fn perry_wasm_host_instance_new(
     module: *mut WasmModuleHandle,
     import_callback: Option<WasmImportCallback>,
+    import_resolver: Option<WasmImportResolverCallback>,
     import_context: u64,
     out_err: *mut *mut c_char,
 ) -> *mut WasmInstanceHandle {
@@ -798,7 +991,12 @@ pub extern "C" fn perry_wasm_host_instance_new(
         return std::ptr::null_mut();
     }
     let module = unsafe { &*module };
-    match instantiate_with_import_callback(module, import_callback, import_context) {
+    match instantiate_with_import_callbacks(
+        module,
+        import_callback,
+        import_resolver,
+        import_context,
+    ) {
         Ok(i) => Box::into_raw(Box::new(i)),
         Err(e) => {
             capture_err(out_err, e);
@@ -813,7 +1011,9 @@ pub extern "C" fn perry_wasm_host_instance_set_import_context(
     import_context: u64,
 ) {
     if let Some(inst) = unsafe { inst.as_mut() } {
-        inst.inner.store.data_mut().import_context = import_context;
+        inst.inner
+            .import_context
+            .store(import_context, Ordering::Relaxed);
     }
 }
 
@@ -824,6 +1024,16 @@ pub extern "C" fn perry_wasm_host_instance_drop(inst: *mut WasmInstanceHandle) {
     }
 }
 
+pub(crate) fn extern_handle(item: Extern) -> *mut c_void {
+    Box::into_raw(Box::new(WasmExternHandle { item })) as *mut c_void
+}
+
+pub(crate) fn extern_from_handle(handle: *mut c_void) -> Option<Extern> {
+    (!handle.is_null()).then(|| unsafe { (*(handle as *const WasmExternHandle)).item })
+}
+
+mod externals;
+
 /// Return the byte length of the exported `memory`, or zero when absent.
 #[no_mangle]
 pub extern "C" fn perry_wasm_host_instance_memory_len(inst: *mut WasmInstanceHandle) -> usize {
@@ -832,8 +1042,8 @@ pub extern "C" fn perry_wasm_host_instance_memory_len(inst: *mut WasmInstanceHan
     };
     inst.inner
         .instance
-        .get_memory(&inst.inner.store, "memory")
-        .map(|memory| memory.data_size(&inst.inner.store))
+        .get_memory(inst.store(), "memory")
+        .map(|memory| memory.data_size(inst.store()))
         .unwrap_or(0)
 }
 
@@ -869,9 +1079,9 @@ pub extern "C" fn perry_wasm_host_instance_memory_span(
         return std::ptr::null_mut();
     };
     if !out_len.is_null() {
-        unsafe { *out_len = memory.data_size(&inst.inner.store) };
+        unsafe { *out_len = memory.data_size(inst.store()) };
     }
-    memory.data_ptr(&inst.inner.store)
+    memory.data_ptr(inst.store())
 }
 
 /// Copy the exported `memory` into caller-provided storage.
@@ -887,10 +1097,10 @@ pub extern "C" fn perry_wasm_host_instance_memory_copy(
     let Some(inst) = (unsafe { inst.as_ref() }) else {
         return 0;
     };
-    let Some(memory) = inst.inner.instance.get_memory(&inst.inner.store, "memory") else {
+    let Some(memory) = inst.inner.instance.get_memory(inst.store(), "memory") else {
         return 0;
     };
-    let data = memory.data(&inst.inner.store);
+    let data = memory.data(inst.store());
     let copied = data.len().min(len);
     unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), out, copied) };
     copied
@@ -911,10 +1121,10 @@ pub extern "C" fn perry_wasm_host_instance_memory_write(
     let Some(inst) = (unsafe { inst.as_mut() }) else {
         return 0;
     };
-    let Some(memory) = inst.inner.instance.get_memory(&inst.inner.store, "memory") else {
+    let Some(memory) = inst.inner.instance.get_memory(inst.store(), "memory") else {
         return 0;
     };
-    let target = memory.data_mut(&mut inst.inner.store);
+    let target = memory.data_mut(inst.store_mut());
     let copied = target.len().min(len);
     unsafe { std::ptr::copy_nonoverlapping(data, target.as_mut_ptr(), copied) };
     copied
@@ -923,6 +1133,8 @@ pub extern "C" fn perry_wasm_host_instance_memory_write(
 mod tables;
 pub use tables::WASM_VAL_KIND_NONE;
 use tables::*;
+
+const JS_NULL_BITS: u64 = 0x7FFC_0000_0000_0002;
 
 /// Shared marshalling for both C call paths: decode the argument arrays, run
 /// the export, and encode the results into the caller's output arrays.
@@ -1185,7 +1397,7 @@ mod tests {
         0x01, 0x02, 0x03,
     ];
 
-    fn memory_span(inst: &mut WasmInstanceHandle) -> (*mut u8, usize) {
+    pub(super) fn memory_span(inst: &mut WasmInstanceHandle) -> (*mut u8, usize) {
         let mut len = 0usize;
         let ptr = perry_wasm_host_instance_memory_span(inst, &mut len);
         (ptr, len)
@@ -1287,8 +1499,8 @@ mod tests {
         let mut inst =
             instantiate_with_import_callback(&module, Some(peek_memory_span_import_callback), 0)
                 .expect("instantiate");
-        inst.inner.store.data_mut().import_context =
-            &mut inst as *mut WasmInstanceHandle as usize as u64;
+        let context = &mut inst as *mut WasmInstanceHandle as usize as u64;
+        inst.inner.import_context.store(context, Ordering::Relaxed);
         call_export(&mut inst, "store", &[WasmVal::I32(5), WasmVal::I32(65)]).expect("store");
 
         assert_eq!(
@@ -1495,6 +1707,7 @@ mod tests {
                 1,
                 0x1234,
                 0,
+                std::ptr::null_mut(),
             ),
             1
         );
@@ -1508,6 +1721,7 @@ mod tests {
                 1,
                 &mut bits,
                 &mut is_null,
+                std::ptr::null_mut(),
             ),
             1
         );
@@ -1522,6 +1736,7 @@ mod tests {
                 3,
                 0,
                 1,
+                std::ptr::null_mut(),
                 &mut old_len,
             ),
             1
@@ -1561,6 +1776,7 @@ mod tests {
                 2,
                 0,
                 1,
+                std::ptr::null_mut(),
                 &mut old_len,
             ),
             1
@@ -1574,6 +1790,7 @@ mod tests {
                 3,
                 0x5678,
                 0,
+                std::ptr::null_mut(),
             ),
             1
         );
@@ -1586,8 +1803,8 @@ mod tests {
         let mut inst =
             instantiate_with_import_callback(&module, Some(reentrant_table_import_callback), 0)
                 .expect("instantiate");
-        inst.inner.store.data_mut().import_context =
-            &mut inst as *mut WasmInstanceHandle as usize as u64;
+        let context = &mut inst as *mut WasmInstanceHandle as usize as u64;
+        inst.inner.import_context.store(context, Ordering::Relaxed);
         call_export(&mut inst, "start", &[]).expect("start");
 
         let name = b"refs";
@@ -1609,6 +1826,7 @@ mod tests {
                 3,
                 &mut bits,
                 &mut is_null,
+                std::ptr::null_mut(),
             ),
             1
         );
@@ -1622,7 +1840,7 @@ mod tests {
         let module = compile(bytes).expect("compile");
         let mut inst = instantiate(&module).expect("instantiate with proc_exit");
         call_export(&mut inst, "_start", &[]).expect("call _start");
-        assert_eq!(inst.inner.store.data_mut().exit_code.take(), Some(7));
+        assert_eq!(inst.inner.exit_code.swap(i32::MIN, Ordering::Relaxed), 7);
     }
 
     #[test]
@@ -1754,3 +1972,6 @@ mod tests {
         perry_wasm_host_module_drop(custom);
     }
 }
+
+#[cfg(test)]
+mod shared_import_tests;

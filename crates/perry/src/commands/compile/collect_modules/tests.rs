@@ -753,6 +753,67 @@ console.log(tone);
     assert!(ctx.native_modules.contains_key(&canonical_asset));
 }
 
+fn assert_dynamic_asset_import(source: &str, filename: &str, bytes: &[u8]) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let asset = root.join(filename);
+    let entry = root.join("entry.ts");
+    std::fs::write(&asset, bytes).expect("write asset");
+    std::fs::write(&entry, source).expect("write entry");
+
+    let mut ctx = CompilationContext::new(root.to_path_buf());
+    ctx.entry_canonical = Some(entry.canonicalize().unwrap());
+    let mut visited = HashSet::new();
+    let mut next_class_id: perry_hir::ClassId = 1;
+    let progress = VerboseProgress::new(OutputFormat::Text, 0);
+    collect_modules(
+        &entry,
+        &mut ctx,
+        &mut visited,
+        OutputFormat::Text,
+        None,
+        &mut next_class_id,
+        false,
+        &progress,
+        None,
+    )
+    .expect("collect modules");
+
+    let canonical_asset = asset.canonicalize().unwrap();
+    assert!(ctx.file_loader_asset_paths.contains(&canonical_asset));
+    assert!(ctx
+        .embedded_assets
+        .iter()
+        .any(|(name, path)| path == &canonical_asset && name.ends_with(filename)));
+    assert!(ctx.native_modules.contains_key(&canonical_asset));
+}
+
+#[test]
+fn dynamic_wasm_import_attribute_returns_embedded_path() {
+    assert_dynamic_asset_import(
+        r#"
+export async function load() {
+  return import("./tree-sitter.wasm", { with: { type: "wasm" } });
+}
+"#,
+        "tree-sitter.wasm",
+        &[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00],
+    );
+}
+
+#[test]
+fn dynamic_file_import_attribute_handles_tree_sitter_queries() {
+    assert_dynamic_asset_import(
+        r#"
+export async function load() {
+  return import("./highlights.scm", { with: { type: "file" } });
+}
+"#,
+        "highlights.scm",
+        b"(comment) @comment\n",
+    );
+}
+
 #[test]
 fn missing_generated_module_fails_with_preparation_remediation() {
     let dir = tempfile::tempdir().expect("tempdir");

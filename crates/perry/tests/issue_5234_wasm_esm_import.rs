@@ -163,6 +163,43 @@ const EXTERNREF_TABLE_CYCLE_WASM: &[u8] = &[
     0x01, 0x0a, 0x06, 0x01, 0x04, 0x00, 0x10, 0x00, 0x0b,
 ];
 
+/// Main module for #10102's Emscripten-style shared-resource graph. Its
+/// memory, funcref table, mutable global and function are all imported by
+/// `SHARED_SIDE_WASM` through a Proxy-backed namespace.
+const SHARED_MAIN_WASM: &[u8] = &[
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x06, 0x01, 0x60, 0x01, 0x7f, 0x01, 0x7f,
+    0x03, 0x02, 0x01, 0x00, 0x04, 0x05, 0x01, 0x70, 0x01, 0x02, 0x0a, 0x05, 0x03, 0x01, 0x00, 0x01,
+    0x06, 0x06, 0x01, 0x7f, 0x01, 0x41, 0x07, 0x0b, 0x07, 0x1f, 0x04, 0x06, 0x6d, 0x65, 0x6d, 0x6f,
+    0x72, 0x79, 0x02, 0x00, 0x05, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x01, 0x00, 0x04, 0x62, 0x61, 0x73,
+    0x65, 0x03, 0x00, 0x03, 0x69, 0x6e, 0x63, 0x00, 0x00, 0x0a, 0x09, 0x01, 0x07, 0x00, 0x20, 0x00,
+    0x41, 0x01, 0x6a, 0x0b,
+];
+
+const SHARED_SIDE_WASM: &[u8] = &[
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x12, 0x04, 0x60, 0x01, 0x7f, 0x01, 0x7f,
+    0x60, 0x00, 0x01, 0x7f, 0x60, 0x00, 0x00, 0x60, 0x02, 0x7f, 0x7f, 0x00, 0x02, 0x34, 0x04, 0x03,
+    0x65, 0x6e, 0x76, 0x06, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, 0x02, 0x00, 0x01, 0x03, 0x65, 0x6e,
+    0x76, 0x05, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x01, 0x70, 0x01, 0x02, 0x0a, 0x03, 0x65, 0x6e, 0x76,
+    0x04, 0x62, 0x61, 0x73, 0x65, 0x03, 0x7f, 0x01, 0x03, 0x65, 0x6e, 0x76, 0x03, 0x69, 0x6e, 0x63,
+    0x00, 0x00, 0x03, 0x06, 0x05, 0x01, 0x02, 0x00, 0x03, 0x00, 0x07, 0x30, 0x05, 0x08, 0x72, 0x65,
+    0x61, 0x64, 0x42, 0x61, 0x73, 0x65, 0x00, 0x01, 0x08, 0x62, 0x75, 0x6d, 0x70, 0x42, 0x61, 0x73,
+    0x65, 0x00, 0x02, 0x07, 0x63, 0x61, 0x6c, 0x6c, 0x49, 0x6e, 0x63, 0x00, 0x03, 0x05, 0x73, 0x74,
+    0x6f, 0x72, 0x65, 0x00, 0x04, 0x04, 0x6c, 0x6f, 0x61, 0x64, 0x00, 0x05, 0x0a, 0x29, 0x05, 0x04,
+    0x00, 0x23, 0x00, 0x0b, 0x09, 0x00, 0x23, 0x00, 0x41, 0x01, 0x6a, 0x24, 0x00, 0x0b, 0x06, 0x00,
+    0x20, 0x00, 0x10, 0x00, 0x0b, 0x09, 0x00, 0x20, 0x00, 0x20, 0x01, 0x3a, 0x00, 0x00, 0x0b, 0x07,
+    0x00, 0x20, 0x00, 0x2d, 0x00, 0x00, 0x0b,
+];
+
+/// Tree-sitter query exports use more than four parameters. Keep the wasm
+/// wrapper aligned with Perry's existing dynamic closure ABI (0..=16 args).
+const SUM11_WASM: &[u8] = &[
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x10, 0x01, 0x60, 0x0b, 0x7f, 0x7f, 0x7f,
+    0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x01, 0x7f, 0x03, 0x02, 0x01, 0x00, 0x07, 0x09,
+    0x01, 0x05, 0x73, 0x75, 0x6d, 0x31, 0x31, 0x00, 0x00, 0x0a, 0x24, 0x01, 0x22, 0x00, 0x20, 0x00,
+    0x20, 0x01, 0x6a, 0x20, 0x02, 0x6a, 0x20, 0x03, 0x6a, 0x20, 0x04, 0x6a, 0x20, 0x05, 0x6a, 0x20,
+    0x06, 0x6a, 0x20, 0x07, 0x6a, 0x20, 0x08, 0x6a, 0x20, 0x09, 0x6a, 0x20, 0x0a, 0x6a, 0x0b,
+];
+
 const MAIN_FIXTURE: &str = r#"
 import wasmDefault, { add } from "./add.wasm";
 import * as wasmNamespace from "./add.wasm";
@@ -181,6 +218,9 @@ import { growThenPeek, load as peekLoad, store as peekStore } from "./grow-then-
 import { runTableCycle } from "./table-glue";
 import addWasmPath from "./file-add.wasm" with { type: "file" };
 import importedWasmPath from "./file-imported.wasm" with { type: "file" };
+import sharedMainPath from "./shared-main.wasm" with { type: "file" };
+import sharedSidePath from "./shared-side.wasm" with { type: "file" };
+import sum11Path from "./sum11.wasm" with { type: "file" };
 import { readFileSync } from "node:fs";
 
 console.log("namespace=" + wasmNamespace.add(2, 3));
@@ -217,6 +257,52 @@ const importedInstance = new WebAssembly.Instance(importedModule, {
 });
 console.log("fileImported=" + importedInstance.exports.call(20));
 console.log("instanceLength=" + WebAssembly.Instance.length);
+
+// #10102: Emscripten side modules import the main module's live externals via
+// a Proxy. These must remain the exact same wasmi memory/table/global/function,
+// not JS snapshots or placeholder resources from a second store.
+const sharedMain = new WebAssembly.Instance(
+    new WebAssembly.Module(readFileSync(sharedMainPath)),
+);
+const sharedEnv = new Proxy({}, {
+    get(_target: object, name: string) {
+        return sharedMain.exports[name];
+    },
+});
+const sharedSide = new WebAssembly.Instance(
+    new WebAssembly.Module(readFileSync(sharedSidePath)),
+    { env: sharedEnv },
+);
+console.log("sharedGlobal=" + sharedSide.exports.readBase());
+sharedSide.exports.bumpBase();
+console.log("sharedGlobalAfter=" + sharedMain.exports.base.value);
+console.log("sharedFunction=" + sharedSide.exports.callInc(41));
+sharedSide.exports.store(3, 99);
+console.log("sharedMemory=" + new Uint8Array(sharedMain.exports.memory.buffer)[3]);
+console.log("sharedTable=" + sharedMain.exports.table.length);
+WebAssembly.instantiate(readFileSync(sharedSidePath), { env: sharedEnv }).then(({ instance }) => {
+    console.log("sharedThen=" + instance.exports.callInc(8));
+});
+const sum11 = new WebAssembly.Instance(new WebAssembly.Module(readFileSync(sum11Path)));
+console.log("sum11=" + sum11.exports.sum11(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11));
+
+// Emscripten creates its table in JS and stores wasm-wrapped callbacks in it.
+const jsTable = new WebAssembly.Table({ initial: 2, maximum: 4, element: "anyfunc" });
+jsTable.set(0, fileInstance.exports.add);
+console.log("tableFunction=" + jsTable.get(0)(18, 24));
+console.log("tableGrow=" + jsTable.grow(1) + ":" + jsTable.length);
+
+const jsGlobal = new WebAssembly.Global({ value: "i32", mutable: true }, 7);
+jsGlobal.value = 9;
+console.log("globalCtor=" + jsGlobal.value);
+const jsMemory = new WebAssembly.Memory({ initial: 1, maximum: 2 });
+new Uint8Array(jsMemory.buffer)[0] = 17;
+console.log("memoryCtor=" + jsMemory.buffer.byteLength + ":" + new Uint8Array(jsMemory.buffer)[0]);
+try {
+    jsMemory.grow(2);
+} catch (error) {
+    console.log("memoryMaximum=" + error.name);
+}
 
 // #9611: `memory.buffer` exposes the engine's linear memory itself rather than
 // a copy synchronised around each call, so a view built BEFORE a call observes
@@ -320,6 +406,11 @@ fn write_fixture(root: &std::path::Path) {
         EXTERNREF_TABLE_CYCLE_WASM,
     )
     .expect("write externref table cycle wasm");
+    std::fs::write(root.join("shared-main.wasm"), SHARED_MAIN_WASM)
+        .expect("write shared main wasm");
+    std::fs::write(root.join("shared-side.wasm"), SHARED_SIDE_WASM)
+        .expect("write shared side wasm");
+    std::fs::write(root.join("sum11.wasm"), SUM11_WASM).expect("write sum11 wasm");
     std::fs::write(root.join("glue.ts"), GLUE_FIXTURE).expect("write glue.ts");
     std::fs::write(root.join("table-glue.ts"), TABLE_GLUE_FIXTURE).expect("write table glue ts");
     std::fs::write(root.join("main.ts"), MAIN_FIXTURE).expect("write main.ts");
@@ -383,6 +474,21 @@ fn wasm_esm_import_instantiates_and_exposes_exports() {
     assert!(stdout.contains("fileInstance=21"), "stdout:\n{stdout}");
     assert!(stdout.contains("fileImported=21"), "stdout:\n{stdout}");
     assert!(stdout.contains("instanceLength=1"), "stdout:\n{stdout}");
+    assert!(stdout.contains("sharedGlobal=7"), "stdout:\n{stdout}");
+    assert!(stdout.contains("sharedGlobalAfter=8"), "stdout:\n{stdout}");
+    assert!(stdout.contains("sharedFunction=42"), "stdout:\n{stdout}");
+    assert!(stdout.contains("sharedMemory=99"), "stdout:\n{stdout}");
+    assert!(stdout.contains("sharedTable=2"), "stdout:\n{stdout}");
+    assert!(stdout.contains("sharedThen=9"), "stdout:\n{stdout}");
+    assert!(stdout.contains("sum11=66"), "stdout:\n{stdout}");
+    assert!(stdout.contains("tableFunction=42"), "stdout:\n{stdout}");
+    assert!(stdout.contains("tableGrow=2:3"), "stdout:\n{stdout}");
+    assert!(stdout.contains("globalCtor=9"), "stdout:\n{stdout}");
+    assert!(stdout.contains("memoryCtor=65536:17"), "stdout:\n{stdout}");
+    assert!(
+        stdout.contains("memoryMaximum=RangeError"),
+        "stdout:\n{stdout}"
+    );
     // #9611 — zero-copy linear memory.
     assert!(stdout.contains("viewToWasm=21"), "stdout:\n{stdout}");
     assert!(stdout.contains("wasmToView=77"), "stdout:\n{stdout}");

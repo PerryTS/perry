@@ -158,6 +158,14 @@ fn module_wrappers() -> &'static std::sync::Mutex<std::collections::HashMap<usiz
     REG.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
+type ExternWrapperRegistry =
+    std::sync::Mutex<std::collections::HashMap<usize, (&'static [u8], usize)>>;
+
+fn extern_wrappers() -> &'static ExternWrapperRegistry {
+    static REG: std::sync::OnceLock<ExternWrapperRegistry> = std::sync::OnceLock::new();
+    REG.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
 /// Fast-path latch for the GC hooks. Most programs never construct a wasm
 /// module, so their ordinary-object move/death path pays only one atomic load
 /// and never initializes or locks the registry.
@@ -176,6 +184,29 @@ pub(crate) fn register_module_wrapper(wrapper: usize, host_handle: usize) {
             module_wrapper_registry_used().store(true, std::sync::atomic::Ordering::Release);
         }
     }
+}
+
+/// Bind a genuine Memory/Table/Global wrapper identity to the opaque host
+/// external used when another WebAssembly module imports it.
+#[cfg(any(test, feature = "wasm-host"))]
+pub(crate) fn register_extern_wrapper(wrapper: usize, kind: &'static [u8], host_handle: usize) {
+    if wrapper != 0 && host_handle != 0 {
+        if let Ok(mut wrappers) = extern_wrappers().lock() {
+            wrappers.insert(wrapper, (kind, host_handle));
+            module_wrapper_registry_used().store(true, std::sync::atomic::Ordering::Release);
+        }
+    }
+}
+
+pub(crate) fn registered_extern_handle(wrapper: usize, expected_kind: &[u8]) -> Option<usize> {
+    if wrapper == 0 || !module_wrapper_registry_used().load(std::sync::atomic::Ordering::Acquire) {
+        return None;
+    }
+    extern_wrappers().lock().ok().and_then(|wrappers| {
+        wrappers
+            .get(&wrapper)
+            .and_then(|(kind, handle)| (*kind == expected_kind).then_some(*handle))
+    })
 }
 
 /// Return the trusted host handle for a registered wrapper identity. A
@@ -202,6 +233,11 @@ pub(crate) fn module_wrapper_owner_moved(old_wrapper: usize, new_wrapper: usize)
             wrappers.insert(new_wrapper, host_handle);
         }
     }
+    if let Ok(mut wrappers) = extern_wrappers().lock() {
+        if let Some(host_handle) = wrappers.remove(&old_wrapper) {
+            wrappers.insert(new_wrapper, host_handle);
+        }
+    }
 }
 
 /// Clear the identity before a dead wrapper's address can be reused.
@@ -210,6 +246,9 @@ pub(crate) fn clear_module_wrapper_for_dead_ptr(wrapper: usize) {
         return;
     }
     if let Ok(mut wrappers) = module_wrappers().lock() {
+        wrappers.remove(&wrapper);
+    }
+    if let Ok(mut wrappers) = extern_wrappers().lock() {
         wrappers.remove(&wrapper);
     }
 }
@@ -415,14 +454,16 @@ extern "C" fn webassembly_compile_thunk(
 extern "C" fn webassembly_instantiate_thunk(
     _closure: *const crate::closure::ClosureHeader,
     bytes: f64,
+    imports: f64,
 ) -> f64 {
-    crate::webassembly::js_webassembly_instantiate(bytes, undefined())
+    crate::webassembly::js_webassembly_instantiate(bytes, imports)
 }
 
 #[cfg(not(feature = "wasm-host"))]
 extern "C" fn webassembly_instantiate_thunk(
     _closure: *const crate::closure::ClosureHeader,
     _bytes: f64,
+    _imports: f64,
 ) -> f64 {
     wasm_unsupported_rejection("WebAssembly.instantiate")
 }
@@ -518,25 +559,49 @@ extern "C" fn webassembly_instance_ctor_thunk(
 
 extern "C" fn webassembly_table_ctor_thunk(
     closure: *const crate::closure::ClosureHeader,
-    _descriptor: f64,
+    descriptor: f64,
 ) -> f64 {
     if !invoked_as_constructor(closure) {
         throw_requires_new("WebAssembly.Table");
     }
-    crate::exception::js_throw(wasm_unsupported_error(b"RuntimeError", "WebAssembly.Table"));
+    #[cfg(feature = "wasm-host")]
+    {
+        crate::webassembly::js_webassembly_table_new(
+            descriptor,
+            crate::object::js_implicit_this_get(),
+        )
+    }
+    #[cfg(not(feature = "wasm-host"))]
+    {
+        let _ = descriptor;
+        crate::exception::js_throw(wasm_unsupported_error(b"RuntimeError", "WebAssembly.Table"));
+    }
 }
 
 extern "C" fn webassembly_global_ctor_thunk(
     closure: *const crate::closure::ClosureHeader,
-    _descriptor: f64,
+    descriptor: f64,
+    initial: f64,
 ) -> f64 {
     if !invoked_as_constructor(closure) {
         throw_requires_new("WebAssembly.Global");
     }
-    crate::exception::js_throw(wasm_unsupported_error(
-        b"RuntimeError",
-        "WebAssembly.Global",
-    ));
+    #[cfg(feature = "wasm-host")]
+    {
+        crate::webassembly::js_webassembly_global_new(
+            descriptor,
+            initial,
+            crate::object::js_implicit_this_get(),
+        )
+    }
+    #[cfg(not(feature = "wasm-host"))]
+    {
+        let _ = (descriptor, initial);
+        crate::exception::js_throw(wasm_unsupported_error(
+            b"RuntimeError",
+            "WebAssembly.Global",
+        ));
+    }
 }
 
 // ── Memory: minimally functional (real ArrayBuffer backing) ─────────────
@@ -586,6 +651,21 @@ fn wasm_memory_descriptor_pages(descriptor: f64) -> Result<u32, MemoryCtorError>
     Ok(pages)
 }
 
+fn wasm_memory_descriptor_maximum(descriptor: f64) -> u32 {
+    let Some(obj) = value_object_ptr(descriptor) else {
+        return u32::MAX;
+    };
+    let maximum = crate::value::JSValue::from_bits(
+        js_object_get_field_by_name_f64(obj, named_key(b"maximum")).to_bits(),
+    );
+    if maximum.is_undefined() {
+        u32::MAX
+    } else {
+        maximum.to_number().trunc().max(0.0).min(u32::MAX as f64) as u32
+    }
+}
+
+#[cfg(not(feature = "wasm-host"))]
 fn wasm_memory_new_buffer(pages: u32) -> f64 {
     let buf = crate::buffer::js_array_buffer_new((pages * WASM_PAGE_BYTES) as i32);
     crate::value::js_nanbox_pointer(buf as i64)
@@ -609,22 +689,33 @@ extern "C" fn webassembly_memory_ctor_thunk(
             crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
         }
     };
-    let buffer = wasm_memory_new_buffer(pages);
     // The dynamic construct path pre-allocated the receiver with
     // `Memory.prototype` linked (so `instanceof` works); fill it in place.
     let this = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
-    if let Some(this_obj) = value_object_ptr(this) {
-        js_object_set_field_by_name(this_obj, named_key(b"buffer"), buffer);
-        undefined()
-    } else {
-        // Reached only from a non-construct dispatch that faked new.target;
-        // still return a usable standalone instance rather than crashing.
-        let obj = js_object_alloc(0, 1);
-        if obj.is_null() {
-            return undefined();
+    #[cfg(feature = "wasm-host")]
+    {
+        crate::webassembly::js_webassembly_memory_new(
+            pages,
+            wasm_memory_descriptor_maximum(descriptor),
+            this,
+        )
+    }
+    #[cfg(not(feature = "wasm-host"))]
+    {
+        let buffer = wasm_memory_new_buffer(pages);
+        if let Some(this_obj) = value_object_ptr(this) {
+            js_object_set_field_by_name(this_obj, named_key(b"buffer"), buffer);
+            undefined()
+        } else {
+            // Reached only from a non-construct dispatch that faked new.target;
+            // still return a usable standalone instance rather than crashing.
+            let obj = js_object_alloc(0, 1);
+            if obj.is_null() {
+                return undefined();
+            }
+            js_object_set_field_by_name(obj, named_key(b"buffer"), buffer);
+            crate::value::js_nanbox_pointer(obj as i64)
         }
-        js_object_set_field_by_name(obj, named_key(b"buffer"), buffer);
-        crate::value::js_nanbox_pointer(obj as i64)
     }
 }
 
@@ -642,6 +733,23 @@ fn memory_buffer_ptr(value: f64) -> Option<*mut crate::buffer::BufferHeader> {
 /// copy (the spec detaches the old buffer; perry's baseline leaves the old
 /// buffer intact — stale aliases keep reading the pre-grow bytes).
 fn wasm_memory_grow_on(this: f64, delta: f64) -> Result<u32, MemoryCtorError> {
+    #[cfg(feature = "wasm-host")]
+    if let Some(object) = value_object_ptr(this) {
+        if registered_extern_handle(object as usize, b"memory").is_some() {
+            if !delta.is_finite() || delta < 0.0 {
+                return Err(MemoryCtorError::Type(
+                    "WebAssembly.Memory.grow(): argument must be a non-negative number",
+                ));
+            }
+            let old = crate::webassembly::js_webassembly_memory_grow(this, delta.trunc() as u32);
+            if old >= 0.0 {
+                return Ok(old as u32);
+            }
+            return Err(MemoryCtorError::Range(
+                "WebAssembly.Memory.grow(): could not grow memory",
+            ));
+        }
+    }
     let Some(this_obj) = value_object_ptr(this) else {
         return Err(MemoryCtorError::Type(
             "WebAssembly.Memory.prototype.grow called on an incompatible receiver",
@@ -866,6 +974,7 @@ pub(super) fn create_webassembly_namespace() -> f64 {
         "Global",
         webassembly_global_ctor_thunk as *const u8,
     );
+    crate::closure::js_register_closure_arity(webassembly_global_ctor_thunk as *const u8, 2);
     install_webassembly_proto_data(global_ctor, "value", undefined());
     install_webassembly_proto_method(global_ctor, "valueOf", 0);
 
@@ -901,6 +1010,7 @@ pub(super) fn create_webassembly_namespace() -> f64 {
         1,
         true,
     );
+    crate::closure::js_register_closure_arity(webassembly_instantiate_thunk as *const u8, 2);
     install_webassembly_static_fn(
         ns_obj,
         "validate",
@@ -1302,7 +1412,7 @@ mod tests {
             "WebAssembly.compile",
         );
         assert_rejected_with_compile_error(
-            webassembly_instantiate_thunk(closure, undefined()),
+            webassembly_instantiate_thunk(closure, undefined(), undefined()),
             "WebAssembly.instantiate",
         );
         assert_rejected_with_compile_error(
