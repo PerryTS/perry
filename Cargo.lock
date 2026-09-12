@@ -2313,17 +2313,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
 
 [[package]]
-name = "fancy-regex"
-version = "0.18.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1e1dacd0d2082dfcf1351c4bdd566bbe89a2b263235a2b50058f1e130a47277"
-dependencies = [
- "bit-set",
- "regex-automata",
- "regex-syntax",
-]
-
-[[package]]
 name = "fast_image_resize"
 version = "6.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5694,6 +5683,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
+name = "perex"
+version = "0.0.0"
+
+[[package]]
 name = "perry"
 version = "0.5.1542"
 dependencies = [
@@ -5863,7 +5856,6 @@ dependencies = [
  "once_cell",
  "proptest",
  "rand 0.10.2",
- "regex",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -6214,9 +6206,9 @@ dependencies = [
 name = "perry-ext-parcel-watcher"
 version = "0.5.1542"
 dependencies = [
- "fancy-regex",
  "notify",
  "perry-ffi",
+ "perry-perex",
  "serde",
  "serde_json",
  "tempfile",
@@ -6318,9 +6310,8 @@ name = "perry-ext-validator"
 version = "0.5.1542"
 dependencies = [
  "perry-ffi",
- "regex",
+ "perry-validation",
  "serde_json",
- "validator",
 ]
 
 [[package]]
@@ -6396,6 +6387,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "perry-perex"
+version = "0.5.1520"
+dependencies = [
+ "perex",
+]
+
+[[package]]
 name = "perry-runtime"
 version = "0.5.1542"
 dependencies = [
@@ -6405,7 +6403,6 @@ dependencies = [
  "cc",
  "dirs",
  "encoding_rs",
- "fancy-regex",
  "gimli",
  "hex",
  "hickory-proto",
@@ -6426,13 +6423,11 @@ dependencies = [
  "mimalloc",
  "node-semver",
  "notify",
+ "perex",
  "perry-diagnostics",
  "perry-dispatch",
  "perry-parser",
  "rand 0.10.2",
- "regex",
- "regex-syntax",
- "regress",
  "resolv-conf",
  "rustc-demangle",
  "ryu",
@@ -6520,11 +6515,11 @@ dependencies = [
  "perry-ffi",
  "perry-runtime",
  "perry-updater",
+ "perry-validation",
  "proptest",
  "rand 0.10.2",
  "rand_core 0.6.4",
  "redis",
- "regex",
  "reqwest",
  "rsa 0.9.10",
  "rusqlite",
@@ -6553,7 +6548,6 @@ dependencies = [
  "tokio-rustls",
  "tokio-tungstenite",
  "uuid",
- "validator",
  "windows-sys 0.61.2",
  "x25519-dalek",
  "x448",
@@ -6779,6 +6773,16 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "tempfile",
+]
+
+[[package]]
+name = "perry-validation"
+version = "0.5.1520"
+dependencies = [
+ "idna",
+ "regex",
+ "url",
+ "validator",
 ]
 
 [[package]]
@@ -7178,28 +7182,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "version_check",
-]
-
-[[package]]
-name = "proc-macro-error-attr2"
-version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96de42df36bb9bba5542fe9f1a054b8cc87e172759a1868aa05c1f3acc89dfc5"
-dependencies = [
- "proc-macro2",
- "quote",
-]
-
-[[package]]
-name = "proc-macro-error2"
-version = "2.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11ec05c52be0a07b08061f7dd003e7d7092e0472bc731b4af7bb1ef876109802"
-dependencies = [
- "proc-macro-error-attr2",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
 ]
 
 [[package]]
@@ -7662,16 +7644,6 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
-
-[[package]]
-name = "regress"
-version = "0.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "158a764437582235e3501f683b93a0a6f8d825d04a789dbe5ed30b8799b8908a"
-dependencies = [
- "hashbrown 0.16.1",
- "memchr",
-]
 
 [[package]]
 name = "relative-path"
@@ -10222,21 +10194,6 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "url",
- "validator_derive",
-]
-
-[[package]]
-name = "validator_derive"
-version = "0.20.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7df16e474ef958526d1205f6dda359fdfab79d9aa6d54bafcb92dcd07673dca"
-dependencies = [
- "darling 0.20.11",
- "once_cell",
- "proc-macro-error2",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
 ]
 
 [[package]]

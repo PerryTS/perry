@@ -38,7 +38,7 @@ pub unsafe extern "C" fn js_validator_is_email(input_ptr: *const StringHeader) -
     let Some(input) = read_str(input_ptr) else {
         return 0.0;
     };
-    b(validator::ValidateEmail::validate_email(&input))
+    b(perry_validation::is_email(input))
 }
 
 /// `validator.isURL(str)`.
@@ -51,7 +51,7 @@ pub unsafe extern "C" fn js_validator_is_url(input_ptr: *const StringHeader) -> 
     let Some(input) = read_str(input_ptr) else {
         return 0.0;
     };
-    b(validator::ValidateUrl::validate_url(&input))
+    b(perry_validation::is_url(input))
 }
 
 /// `validator.isUUID(str)`.
@@ -64,16 +64,7 @@ pub unsafe extern "C" fn js_validator_is_uuid(input_ptr: *const StringHeader) ->
     let Some(input) = read_str(input_ptr) else {
         return 0.0;
     };
-    // Cache the regex so repeated validate calls don't recompile it.
-    use std::sync::OnceLock;
-    static UUID_RE: OnceLock<regex::Regex> = OnceLock::new();
-    let re = UUID_RE.get_or_init(|| {
-        regex::Regex::new(
-            r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
-        )
-        .expect("static regex")
-    });
-    b(re.is_match(input))
+    b(perry_validation::is_uuid(input))
 }
 
 /// `validator.isAlpha(str)`. Empty string is `false`.
@@ -340,6 +331,25 @@ mod tests {
                 1.0
             );
             assert_eq!(js_validator_is_uuid(p("not-a-uuid")), 0.0);
+        }
+    }
+
+    #[test]
+    fn shared_validation_rules() {
+        unsafe {
+            assert_eq!(js_validator_is_email(p("a@bücher.de")), 1.0);
+            assert_eq!(js_validator_is_email(p("a@prefix[127.0.0.1]")), 1.0);
+            assert_eq!(js_validator_is_email(p("a@b.com\n")), 0.0);
+            assert_eq!(js_validator_is_url(p("https://example.com")), 1.0);
+            assert_eq!(js_validator_is_url(p("not a url")), 0.0);
+            assert_eq!(
+                js_validator_is_uuid(p("FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF")),
+                1.0
+            );
+            assert_eq!(
+                js_validator_is_uuid(p("550e8400-e29b-41d4-a716-446655440000\n")),
+                0.0
+            );
         }
     }
 

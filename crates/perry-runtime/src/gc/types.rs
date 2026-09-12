@@ -65,7 +65,10 @@ pub const GC_TYPE_OBJECT_META: u8 = 19;
 /// ObjectHeader consumer to inspect unrelated payload words for a magic value.
 /// A distinct GC kind is the authoritative, header-external discriminator.
 pub const GC_TYPE_REGEXP: u8 = 20;
-pub const GC_TYPE_MAX: u8 = GC_TYPE_REGEXP;
+/// Immutable Perex program words. All operands are integers/relative offsets;
+/// the allocation is a movable leaf reached through its RegExp owner.
+pub const GC_TYPE_REGEX_PROGRAM: u8 = 21;
+pub const GC_TYPE_MAX: u8 = GC_TYPE_REGEX_PROGRAM;
 
 pub(super) const MALLOC_KIND_UNKNOWN_INDEX: usize = 0;
 pub(super) const MALLOC_KIND_BUCKET_COUNT: usize = GC_TYPE_MAX as usize + 1;
@@ -691,6 +694,21 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         GcMoveHookKind::RegExpSideTables,
         GcRewriteHookKind::None,
         GcFinalizeHookKind::RegExpSideTables,
+    )),
+    Some(gc_type_info_entry(
+        GC_TYPE_REGEX_PROGRAM,
+        "regex_program",
+        GcAllocationPolicy::Arena,
+        true,
+        GcRewriteDescriptorKind::Leaf,
+        GcLayoutSlotKind::None,
+        true,
+        GcExternalBytePolicy::InlinePayload,
+        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        true,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::None,
     )),
 ];
 

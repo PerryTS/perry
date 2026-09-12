@@ -1208,7 +1208,7 @@ fn extglob_alternation(pattern: &str, open: usize) -> Option<(usize, char, Vec<&
 #[cfg(feature = "regex-engine")]
 fn push_regex_literal(c: char, out: &mut String) {
     match c {
-        '.' | '+' | '(' | ')' | '|' | '^' | '$' | '}' | '\\' => {
+        '.' | '+' | '(' | ')' | '|' | '^' | '$' | '}' | ']' | '\\' => {
             out.push('\\');
             out.push(c);
         }
@@ -1217,11 +1217,11 @@ fn push_regex_literal(c: char, out: &mut String) {
 }
 
 #[cfg(feature = "regex-engine")]
-fn push_glob_regex(pattern: &str, out: &mut String) {
+fn push_glob_regex(pattern: &str, out: &mut String, win32: bool) {
     let bytes = pattern.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        let c = bytes[i] as char;
+        let c = pattern[i..].chars().next().unwrap();
         if matches!(c, '@' | '+' | '?' | '*') && i + 1 < bytes.len() && bytes[i + 1] == b'(' {
             if let Some((close, op, arms)) = extglob_alternation(pattern, i) {
                 out.push_str("(?:");
@@ -1229,7 +1229,7 @@ fn push_glob_regex(pattern: &str, out: &mut String) {
                     if idx > 0 {
                         out.push('|');
                     }
-                    push_glob_regex(arm, out);
+                    push_glob_regex(arm, out, win32);
                 }
                 out.push(')');
                 match op {
@@ -1251,33 +1251,42 @@ fn push_glob_regex(pattern: &str, out: &mut String) {
                     let segment_end = after == bytes.len() || bytes[after] == b'/';
                     if segment_start && segment_end {
                         if after < bytes.len() && bytes[after] == b'/' {
-                            out.push_str("(?:[^/]+/)*");
+                            out.push_str(if win32 {
+                                r"(?:[^/\\]+[/\\])*"
+                            } else {
+                                "(?:[^/]+/)*"
+                            });
                             i = after + 1;
                         } else {
                             out.push_str(".*");
                             i = after;
                         }
                     } else {
-                        out.push_str("[^/]*");
+                        out.push_str(if win32 { r"[^/\\]*" } else { "[^/]*" });
                         i += 2;
                     }
                     continue;
                 } else {
-                    out.push_str("[^/]*");
+                    out.push_str(if win32 { r"[^/\\]*" } else { "[^/]*" });
                 }
             }
-            '?' => out.push_str("[^/]"),
+            '?' => out.push_str(if win32 { r"[^/\\]" } else { "[^/]" }),
+            '/' if win32 => out.push_str(r"[/\\]"),
             '[' => {
                 out.push('[');
                 i += 1;
                 while i < bytes.len() && bytes[i] as char != ']' {
-                    let ch = bytes[i] as char;
+                    let ch = pattern[i..].chars().next().unwrap();
                     if ch == '!' && out.ends_with('[') {
                         out.push('^');
                     } else {
-                        out.push(ch);
+                        if ch == '/' && win32 {
+                            out.push_str(r"/\\");
+                        } else {
+                            out.push(ch);
+                        }
                     }
-                    i += 1;
+                    i += ch.len_utf8();
                 }
                 out.push(']');
             }
@@ -1288,7 +1297,7 @@ fn push_glob_regex(pattern: &str, out: &mut String) {
                         if idx > 0 {
                             out.push('|');
                         }
-                        push_glob_regex(arm, out);
+                        push_glob_regex(arm, out, win32);
                     }
                     out.push(')');
                     i = close;
@@ -1300,7 +1309,7 @@ fn push_glob_regex(pattern: &str, out: &mut String) {
             '.' | '+' | '(' | ')' | '|' | '^' | '$' | '}' | '\\' => push_regex_literal(c, out),
             _ => push_regex_literal(c, out),
         }
-        i += 1;
+        i += c.len_utf8();
     }
 }
 
@@ -1310,12 +1319,40 @@ fn push_glob_regex(pattern: &str, out: &mut String) {
 /// path separators, not escapes. `**` is a globstar only as a whole path
 /// segment; embedded `**` has ordinary `*` segment-wildcard behavior.
 #[cfg(feature = "regex-engine")]
-fn glob_to_regex(pattern: &str) -> String {
+fn glob_to_regex(pattern: &str, win32: bool) -> String {
     let mut out = String::from("^");
     let normalized = pattern.replace('\\', "/");
-    push_glob_regex(&normalized, &mut out);
-    out.push('$');
+    push_glob_regex(&normalized, &mut out, win32);
+    // Keep an explicit subject-end condition for the complete path.
+    out.push_str(r"(?![\s\S])");
     out
+}
+
+#[cfg(feature = "regex-engine")]
+fn perex_path_matches_glob(
+    path: *const StringHeader,
+    pattern: *const StringHeader,
+    win32: bool,
+) -> Result<i32, crate::regex::perex_runtime::EngineError> {
+    use crate::regex::{perex_api as api, perex_glob::GlobProgram, perex_runtime::EngineError};
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let path = scope.root_string_ptr(path);
+    let pattern = scope.root_string_ptr(pattern);
+    if !crate::string::is_valid_string_ptr(path.get_raw_const_ptr()) {
+        path.set_raw_const_ptr(api::caught(|| {
+            crate::string::js_string_from_bytes(b"".as_ptr(), 0)
+        })?);
+    }
+    let pattern = unsafe { string_from_header(pattern.get_raw_const_ptr()).unwrap_or_default() };
+    let source = glob_to_regex(&pattern, win32);
+    let program = match GlobProgram::new(&scope, &source) {
+        Ok(program) => program,
+        Err(EngineError::Compile(perex::compiler::CompileError::Syntax { .. })) => return Ok(0),
+        Err(error) => return Err(error),
+    };
+    // Win32 separator equivalence lives in the generated character classes,
+    // so the original path remains rooted and is never slash-normalized/copied.
+    program.test_heap(path).map(i32::from)
 }
 
 /// `path.matchesGlob(path, pattern)` — Node 22.5+ API. Returns whether the
@@ -1337,20 +1374,8 @@ pub(crate) fn js_path_posix_matches_glob(
     pattern_ptr: *const StringHeader,
 ) -> i32 {
     #[cfg(feature = "regex-engine")]
-    unsafe {
-        let path_str = string_from_header(path_ptr).unwrap_or_default();
-        let pattern = string_from_header(pattern_ptr).unwrap_or_default();
-        let regex_src = glob_to_regex(&pattern);
-        match regex::Regex::new(&regex_src) {
-            Ok(re) => {
-                if re.is_match(&path_str) {
-                    1
-                } else {
-                    0
-                }
-            }
-            Err(_) => 0,
-        }
+    {
+        crate::regex::perex_api::finish(perex_path_matches_glob(path_ptr, pattern_ptr, false))
     }
     // Glob matching is built on the regex engine; with it gated off, report
     // "no match" (a program that calls `path.matchesGlob` forces the engine on).
@@ -1716,22 +1741,8 @@ pub extern "C" fn js_path_win32_matches_glob(
     pattern_ptr: *const StringHeader,
 ) -> i32 {
     #[cfg(feature = "regex-engine")]
-    unsafe {
-        let path_str = string_from_header(path_ptr)
-            .unwrap_or_default()
-            .replace('\\', "/");
-        let pattern = string_from_header(pattern_ptr).unwrap_or_default();
-        let regex_src = glob_to_regex(&pattern);
-        match regex::Regex::new(&regex_src) {
-            Ok(re) => {
-                if re.is_match(&path_str) {
-                    1
-                } else {
-                    0
-                }
-            }
-            Err(_) => 0,
-        }
+    {
+        crate::regex::perex_api::finish(perex_path_matches_glob(path_ptr, pattern_ptr, true))
     }
     #[cfg(not(feature = "regex-engine"))]
     {

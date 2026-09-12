@@ -490,6 +490,9 @@ pub(crate) unsafe fn array_named_props_install_fresh(
     if arr.is_null() {
         return;
     }
+    if !entries.is_empty() {
+        note_array_named_props_ever();
+    }
     let owner = arr as usize;
     mark_array_named_properties(arr);
     ARRAY_NAMED_PROPS.with(|m| {

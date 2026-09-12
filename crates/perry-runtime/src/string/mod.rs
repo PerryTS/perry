@@ -123,8 +123,6 @@ mod split;
 pub(crate) mod suffix_cursor;
 pub(crate) mod trim_cache;
 mod utf16_count;
-#[cfg(feature = "regex-engine")]
-pub(crate) use split::{spec_fancy_regex_split, spec_regex_split};
 
 #[cfg(test)]
 mod slice_tests;
@@ -208,6 +206,8 @@ pub(crate) use format::js_format_f64;
 pub(crate) fn canonical_key(name: &[u8]) -> *mut StringHeader {
     intern::intern_dispatch_bytes(0, name.as_ptr(), name.len(), 0, false) as *mut StringHeader
 }
+#[cfg(feature = "regex-engine")]
+pub use crate::regex::{js_string_split_js, js_string_split_n};
 pub use format::{
     js_number_to_exponential, js_number_to_fixed, js_number_to_precision, js_number_to_string,
     scan_small_int_cache_roots, scan_small_int_cache_roots_mut,
@@ -239,7 +239,9 @@ pub use slice_ops::{
     js_string_to_lower_case, js_string_to_upper_case, js_string_trim, js_string_trim_end,
     js_string_trim_start,
 };
-pub use split::{js_string_split, js_string_split_n};
+pub use split::js_string_split;
+#[cfg(not(feature = "regex-engine"))]
+pub use split::{js_string_split_js, js_string_split_n};
 
 pub(crate) use intern::intern_lookup_bytes;
 

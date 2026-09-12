@@ -420,7 +420,8 @@ pub(super) unsafe fn dispatch_raw_pointer(
                 ));
             }
             #[cfg(feature = "regex-engine")]
-            if (*obj).class_id == crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID {
+            if (*obj).class_id == crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID
+                && crate::collection_iter_object::is_intrinsic_iterator_method(method_name) {
                 return Some(crate::regex::dispatch_regexp_string_iterator_method(
                     obj as *mut ObjectHeader,
                     method_name,

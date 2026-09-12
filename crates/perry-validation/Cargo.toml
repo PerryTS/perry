@@ -1,0 +1,18 @@
+[package]
+name = "perry-validation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared borrowed string validators for Perry's bundled and extension bindings"
+
+[lints]
+workspace = true
+
+[dependencies]
+idna = "1"
+url.workspace = true
+
+[dev-dependencies]
+# The previous implementations are correctness references, never production dependencies.
+validator = "=0.21.0"
+regex.workspace = true

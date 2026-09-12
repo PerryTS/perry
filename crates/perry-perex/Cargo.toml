@@ -1,0 +1,12 @@
+[package]
+name = "perry-perex"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native storage adapter for Perry's single Perex compiler and matcher"
+
+[lints]
+workspace = true
+
+[dependencies]
+perex.workspace = true
