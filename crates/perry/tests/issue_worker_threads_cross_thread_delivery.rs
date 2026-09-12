@@ -216,3 +216,111 @@ worker.onmessage = (ev: any) => {
         "ready 1 web-env\nready 2 web-env\nreply 8509 8509 true\ndone\n"
     );
 }
+
+/// OpenCode mixes the browser/Bun Worker surface in the parent with Node's
+/// `parentPort` surface in OpenTUI's parser worker. Its RPC payloads also carry
+/// byte arrays, and its TUI server worker receives a complete `process.env`
+/// snapshot. Exercise that exact boundary plus the SIGUSR2 reload and SIGINT
+/// shutdown sequence rather than testing the two Worker API shapes only in
+/// isolation.
+#[cfg(unix)]
+#[test]
+fn global_worker_interops_with_parent_port_and_uint8array() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join("parser-worker.ts"),
+        r#"
+import { isMainThread, parentPort } from "node:worker_threads";
+
+parentPort!.on("message", (message: any) => {
+  if (message.method === "reload" || message.method === "shutdown") {
+    parentPort!.postMessage({
+      type: "rpc.result",
+      id: message.id,
+      result: message.method,
+    });
+    return;
+  }
+  const input = message.input as Uint8Array;
+  parentPort!.postMessage({
+    type: "rpc.result",
+    id: message.id,
+    env: process.env.OPENCODE_WORKER_TOKEN,
+    workerThread: !isMainThread,
+    inputBrand: input instanceof Uint8Array,
+    payload: new Uint8Array([input[2], input[1], input[0], 255]),
+  });
+});
+parentPort!.postMessage({ type: "ready" });
+"#,
+    )
+    .expect("write parser worker");
+
+    let stdout = compile_and_run(
+        dir.path(),
+        r#"
+setTimeout(() => { console.log("TIMEOUT"); process.exit(2); }, 8000);
+process.env.OPENCODE_WORKER_TOKEN = "copied-env";
+const worker = new Worker(new URL("./parser-worker.ts", import.meta.url), {
+  env: Object.fromEntries(
+    Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+  ),
+});
+const reload = () => worker.postMessage({ type: "rpc.request", method: "reload", id: 10104 });
+const shutdown = () => worker.postMessage({ type: "rpc.request", method: "shutdown", id: 10105 });
+process.on("SIGUSR2", reload);
+process.on("SIGINT", shutdown);
+worker.onerror = (event: any) => {
+  console.log("worker-error", event.message);
+  process.exit(3);
+};
+worker.on("exit", (code: number) => console.log("exit", code));
+worker.onmessage = (event: any) => {
+  const message = event.data;
+  if (message.type === "ready") {
+    worker.postMessage({
+      type: "rpc.request",
+      method: "roundTrip",
+      id: 10103,
+      input: new Uint8Array([3, 5, 8]),
+    });
+    return;
+  }
+  if (message.id === 10104) {
+    console.log("signal", message.result);
+    process.kill(process.pid, "SIGINT");
+    return;
+  }
+  if (message.id === 10105) {
+    console.log("signal", message.result);
+    process.off("SIGUSR2", reload);
+    process.off("SIGINT", shutdown);
+    worker.terminate().then((code: number) => {
+      console.log("terminated", code);
+      process.exit(0);
+    });
+    return;
+  }
+  const bytes = message.payload as Uint8Array;
+  console.log(
+    "reply",
+    message.id,
+    message.env,
+    message.workerThread,
+    message.inputBrand,
+    bytes instanceof Uint8Array,
+    bytes.length,
+    bytes[0],
+    bytes[1],
+    bytes[2],
+    bytes[3],
+  );
+  process.kill(process.pid, "SIGUSR2");
+};
+"#,
+    );
+    assert_eq!(
+        stdout,
+        "reply 10103 copied-env true true true 4 8 5 3 255\nsignal reload\nsignal shutdown\nexit 1\nterminated 1\n"
+    );
+}

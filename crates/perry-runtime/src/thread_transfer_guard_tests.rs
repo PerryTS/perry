@@ -150,3 +150,36 @@ fn serialize_supported_values_still_transfer() {
         assert_eq!((*back_arr).length, 3);
     }
 }
+
+#[test]
+fn uint8array_round_trips_bytes_and_brand() {
+    unsafe {
+        let source = crate::buffer::js_uint8array_alloc(4);
+        std::ptr::copy_nonoverlapping(
+            [3u8, 5, 8, 255].as_ptr(),
+            crate::buffer::buffer_data_mut(source),
+            4,
+        );
+        let source_bits = JSValue::pointer(source as *const u8).bits();
+
+        let serialized = serialize_nanbox_for_thread(source_bits);
+        assert!(
+            matches!(&serialized, SerializedValue::Uint8Array(bytes) if bytes == &[3, 5, 8, 255]),
+            "Uint8Array must serialize with its bytes, got {serialized:?}"
+        );
+        assert_eq!(first_unsupported_transfer_type(&serialized), None);
+
+        let result_bits = deserialize_nanbox_on_current_thread(&serialized);
+        let result = (result_bits & POINTER_MASK) as *const crate::buffer::BufferHeader;
+        assert_ne!(
+            result, source,
+            "structured clone must allocate fresh storage"
+        );
+        assert!(crate::buffer::is_uint8array_buffer(result as usize));
+        assert_eq!((*result).length, 4);
+        assert_eq!(
+            std::slice::from_raw_parts(crate::buffer::buffer_data(result), 4),
+            &[3, 5, 8, 255]
+        );
+    }
+}
