@@ -164,10 +164,30 @@ fn build_pad_chunk(pad_units: &[u16], pad_needed: usize) -> (Vec<u8>, bool) {
     (out, has_lone_surrogate)
 }
 
+/// Wrap fully assembled result bytes (receiver + padding, in either order) in
+/// the constructor matching the WTF-8/clean split, then canonicalize any
+/// surrogate pair that now straddles the receiver/padding boundary.
+/// `pad_has_lone_surrogate` reports the padding alone; the receiver's own
+/// `STRING_FLAG_HAS_LONE_SURROGATES` is read here so every call site doesn't
+/// have to.
+fn wrap_pad_result(
+    s: *const StringHeader,
+    bytes: &[u8],
+    pad_has_lone_surrogate: bool,
+) -> *mut StringHeader {
+    let receiver_has_lone_surrogate = unsafe { (*s).flags & STRING_FLAG_HAS_LONE_SURROGATES != 0 };
+    let result = if pad_has_lone_surrogate || receiver_has_lone_surrogate {
+        js_string_from_wtf8_bytes(bytes.as_ptr(), bytes.len() as u32)
+    } else {
+        js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+    };
+    super::concat::canonicalize_surrogate_pairs(result)
+}
+
 /// Assemble the padded result from the receiver's raw bytes and a padding
-/// chunk, using the WTF-8-flagged constructor when either side may hold a
-/// lone surrogate (the receiver's existing flag, or one newly introduced by
-/// truncating the pad string mid-surrogate-pair).
+/// chunk built by the general per-code-unit `build_pad_chunk` path (used only
+/// when the pad string itself contains a surrogate code unit — see
+/// `pad_units_surrogate_free`).
 fn finish_pad_result(
     s: *const StringHeader,
     str_data: &str,
@@ -175,7 +195,6 @@ fn finish_pad_result(
     pad_has_lone_surrogate: bool,
     prepend_pad: bool,
 ) -> *mut StringHeader {
-    let receiver_has_lone_surrogate = unsafe { (*s).flags & STRING_FLAG_HAS_LONE_SURROGATES != 0 };
     let mut bytes = Vec::with_capacity(str_data.len() + pad_chunk.len());
     if prepend_pad {
         bytes.extend_from_slice(pad_chunk);
@@ -184,12 +203,89 @@ fn finish_pad_result(
         bytes.extend_from_slice(str_data.as_bytes());
         bytes.extend_from_slice(pad_chunk);
     }
-    let result = if pad_has_lone_surrogate || receiver_has_lone_surrogate {
-        js_string_from_wtf8_bytes(bytes.as_ptr(), bytes.len() as u32)
+    wrap_pad_result(s, &bytes, pad_has_lone_surrogate)
+}
+
+/// True when no code unit in a decoded pad string is a UTF-16 surrogate
+/// (high or low). Such a pad string can never straddle a surrogate pair
+/// across a tile-cycle boundary and truncating it can never produce a lone
+/// surrogate, so every per-unit decision `build_pad_chunk` makes (the
+/// lookahead, the two moduli, the lone-surrogate bookkeeping) is dead weight
+/// — this is also the overwhelmingly common case (issue #10091: a plain
+/// ASCII pad string, including the default single space).
+fn pad_units_surrogate_free(pad_units: &[u16]) -> bool {
+    !pad_units.iter().any(|&u| (0xD800..=0xDFFF).contains(&u))
+}
+
+/// Grow `bytes[start..start + total_len]` from an already-written
+/// `unit_len`-byte prefix by repeatedly doubling the written region. Source
+/// and destination ranges never overlap: each step copies at most as many
+/// bytes as are already written, so the copied range always ends at or
+/// before where it's copied to. Returns the number of bulk copies performed
+/// — O(log(total_len / unit_len)), never one per output unit (issue #10091).
+fn tile_by_doubling(bytes: &mut [u8], start: usize, unit_len: usize, total_len: usize) -> u32 {
+    let mut written = unit_len;
+    let mut steps = 0u32;
+    while written < total_len {
+        let chunk = written.min(total_len - written);
+        bytes.copy_within(start..start + chunk, start + written);
+        written += chunk;
+        steps += 1;
+    }
+    steps
+}
+
+/// Build the fully assembled padded result (receiver + padding, in either
+/// order) for a surrogate-free pad string, without a per-code-unit loop.
+/// Encodes exactly one cycle of `pad_units` once, then bulk-tiles it to the
+/// needed length by doubling (`tile_by_doubling`) and appends the leftover
+/// partial-cycle remainder — a logarithmic number of bulk copies rather than
+/// one modulo-and-push per output code unit.
+fn build_pad_result_surrogate_free(
+    str_data: &[u8],
+    pad_units: &[u16],
+    pad_needed: usize,
+    prepend_pad: bool,
+) -> Vec<u8> {
+    let unit_count = pad_units.len();
+    // One full cycle, plus each unit's cumulative byte offset so the
+    // sub-one-cycle remainder (always the *first* `remainder_units` units —
+    // cycling restarts at index 0 every time) can be sliced out below without
+    // re-encoding it.
+    let mut cycle = Vec::with_capacity(unit_count * 3);
+    let mut offsets = Vec::with_capacity(unit_count + 1);
+    offsets.push(0usize);
+    for &unit in pad_units {
+        // No unit here is a surrogate, so this never sets the lone-surrogate
+        // flag — that's exactly what makes this path safe to skip.
+        super::char_ops::push_code_unit_wtf8(&mut cycle, unit);
+        offsets.push(cycle.len());
+    }
+    let cycle_len = cycle.len();
+
+    let full_cycles = pad_needed / unit_count;
+    let remainder_units = pad_needed % unit_count;
+    let remainder_len = offsets[remainder_units];
+    let full_bytes = cycle_len * full_cycles;
+    let pad_len = full_bytes + remainder_len;
+
+    let mut bytes = vec![0u8; str_data.len() + pad_len];
+    let (pad_start, str_start) = if prepend_pad {
+        (0, pad_len)
     } else {
-        js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+        (str_data.len(), 0)
     };
-    super::concat::canonicalize_surrogate_pairs(result)
+    bytes[str_start..str_start + str_data.len()].copy_from_slice(str_data);
+
+    if full_bytes > 0 {
+        bytes[pad_start..pad_start + cycle_len].copy_from_slice(&cycle);
+        tile_by_doubling(&mut bytes, pad_start, cycle_len, full_bytes);
+    }
+    if remainder_len > 0 {
+        bytes[pad_start + full_bytes..pad_start + full_bytes + remainder_len]
+            .copy_from_slice(&cycle[..remainder_len]);
+    }
+    bytes
 }
 
 /// Pad the start of a string to reach target length (in UTF-16 code units).
@@ -231,6 +327,11 @@ pub extern "C" fn js_string_pad_start(
 
     let pad_needed = target_len - current_len;
     let pad_units = decode_wtf8_units(pad_bytes);
+    if pad_units_surrogate_free(&pad_units) {
+        let bytes =
+            build_pad_result_surrogate_free(str_data.as_bytes(), &pad_units, pad_needed, true);
+        return wrap_pad_result(s, &bytes, false);
+    }
     let (pad_chunk, pad_has_lone_surrogate) = build_pad_chunk(&pad_units, pad_needed);
     finish_pad_result(s, str_data, &pad_chunk, pad_has_lone_surrogate, true)
 }
@@ -274,6 +375,11 @@ pub extern "C" fn js_string_pad_end(
 
     let pad_needed = target_len - current_len;
     let pad_units = decode_wtf8_units(pad_bytes);
+    if pad_units_surrogate_free(&pad_units) {
+        let bytes =
+            build_pad_result_surrogate_free(str_data.as_bytes(), &pad_units, pad_needed, false);
+        return wrap_pad_result(s, &bytes, false);
+    }
     let (pad_chunk, pad_has_lone_surrogate) = build_pad_chunk(&pad_units, pad_needed);
     finish_pad_result(s, str_data, &pad_chunk, pad_has_lone_surrogate, false)
 }
@@ -529,5 +635,100 @@ mod builder_tests {
             assert_eq!((*result).utf16_len, 6);
             assert_eq!((*result).flags & STRING_FLAG_HAS_LONE_SURROGATES, 0);
         }
+    }
+}
+
+/// Issue #10091: the surrogate-free fast path must (a) route ASCII/BMP pad
+/// strings there at all, (b) produce byte-identical output to the general
+/// per-code-unit `build_pad_chunk` path it replaces, across cycle-boundary
+/// remainders and multi-byte-but-surrogate-free pad characters, and (c)
+/// actually perform a logarithmic, not linear, number of bulk copies.
+#[cfg(test)]
+mod surrogate_free_fast_path_tests {
+    use super::*;
+
+    #[test]
+    fn ascii_pad_string_is_surrogate_free() {
+        assert!(pad_units_surrogate_free(&decode_wtf8_units(b"aBcD")));
+        assert!(pad_units_surrogate_free(&decode_wtf8_units(b" ")));
+    }
+
+    #[test]
+    fn astral_pad_string_is_not_surrogate_free() {
+        // "😀" decodes to a high/low surrogate pair.
+        assert!(!pad_units_surrogate_free(&decode_wtf8_units(
+            "😀".as_bytes()
+        )));
+    }
+
+    /// Cross-check the fast path against the general per-unit path it
+    /// bypasses, across pad_needed values that land exactly on, one below,
+    /// and one above a full-cycle boundary, plus pad strings whose units
+    /// encode to 1, 2 and 3 WTF-8 bytes (still surrogate-free throughout).
+    #[test]
+    fn matches_general_path_across_cycle_boundaries_and_encodings() {
+        for pad_str in ["a", "aBcD", "é", "€ab", " "] {
+            let pad_units = decode_wtf8_units(pad_str.as_bytes());
+            assert!(pad_units_surrogate_free(&pad_units));
+            let cycle_len = pad_units.len();
+            for pad_needed in 1..=(cycle_len * 3 + 2) {
+                let (expected, expected_lone) = build_pad_chunk(&pad_units, pad_needed);
+                assert!(!expected_lone, "surrogate-free pad must never set the flag");
+
+                let start_bytes =
+                    build_pad_result_surrogate_free(b"RECEIVER", &pad_units, pad_needed, true);
+                assert_eq!(
+                    &start_bytes[..expected.len()],
+                    expected.as_slice(),
+                    "padStart mismatch for pad={pad_str:?} pad_needed={pad_needed}"
+                );
+                assert_eq!(&start_bytes[expected.len()..], b"RECEIVER");
+
+                let end_bytes =
+                    build_pad_result_surrogate_free(b"RECEIVER", &pad_units, pad_needed, false);
+                assert_eq!(&end_bytes[..b"RECEIVER".len()], b"RECEIVER");
+                assert_eq!(&end_bytes[b"RECEIVER".len()..], expected.as_slice());
+            }
+        }
+    }
+
+    #[test]
+    fn empty_receiver_and_single_unit_pad_needed() {
+        let pad_units = decode_wtf8_units(b"x");
+        let bytes = build_pad_result_surrogate_free(b"", &pad_units, 1, true);
+        assert_eq!(bytes, b"x");
+    }
+
+    /// The whole point of issue #10091: padding to a million units must not
+    /// take a million per-unit steps. log2(1_000_000) ~= 20; 32 leaves ample
+    /// margin while still being nowhere near linear.
+    #[test]
+    fn tile_by_doubling_is_logarithmic_not_linear() {
+        let mut buf = vec![0u8; 1_000_001];
+        buf[0] = b'x';
+        let total_len = buf.len();
+        let steps = tile_by_doubling(&mut buf, 0, 1, total_len);
+        assert!(
+            steps <= 32,
+            "expected O(log n) bulk copies for 1M units, got {steps}"
+        );
+        assert!(buf.iter().all(|&b| b == b'x'));
+    }
+
+    #[test]
+    fn pad_start_and_pad_end_use_fast_path_for_large_ascii_target() {
+        let source = js_string_from_str("!");
+        let pad = js_string_from_str("aBcD");
+        let target = 1_000_001.0;
+
+        let start = js_string_pad_start(source, target, pad);
+        unsafe { assert_eq!((*start).utf16_len, 1_000_001) };
+        assert!(string_as_str(start).starts_with("aBcD"));
+        assert!(string_as_str(start).ends_with('!'));
+
+        let end = js_string_pad_end(source, target, pad);
+        unsafe { assert_eq!((*end).utf16_len, 1_000_001) };
+        assert!(string_as_str(end).starts_with('!'));
+        assert!(string_as_str(end).ends_with("aBcD"));
     }
 }
