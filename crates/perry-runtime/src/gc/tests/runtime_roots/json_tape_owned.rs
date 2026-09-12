@@ -345,6 +345,12 @@ fn json_lazy_assignment_roots_heap_key_and_value_during_materialization() {
         crate::arena::ProtectionModeGuard::set(crate::arena::FromSpaceProtection::PoisonOnly);
     register_runtime_handle_root_scanner_for_tests();
     let lazy = unsafe { owned_small(b"[1,2,3]") };
+    // The header is movable now, and this test forces an evacuation through
+    // `js_dyn_index_set_strict`. Root it: reading `(*lazy).materialized` off
+    // the pre-collection address afterwards reads poisoned from-space and
+    // faults on the `0xDEADBEEFBAADF0DE` fill.
+    let lazy_scope = RuntimeHandleScope::new();
+    let lazy_handle = lazy_scope.root_raw_mut_ptr(lazy);
     let key = crate::js_string_from_bytes(b"1".as_ptr(), 1);
     let bytes = b"owned mutation value survives movement";
     let stored = crate::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
@@ -364,6 +370,7 @@ fn json_lazy_assignment_roots_heap_key_and_value_during_materialization() {
         string_bits(stored as usize),
         "stored string must move"
     );
+    let lazy = lazy_handle.get_raw_mut_ptr::<crate::json_tape::LazyArrayHeader>();
     let array = unsafe { (*lazy).materialized };
     assert!(!array.is_null());
     let actual = crate::array::js_array_get(array, 1);

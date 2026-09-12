@@ -270,6 +270,62 @@ pub(crate) fn registry_is_empty() -> bool {
     !TAPE_REGISTRY_NONEMPTY.with(Cell::get)
 }
 
+/// Rekey a tape whose owner the collector just relocated.
+///
+/// `GcMoveHookKind::LazyArrayTape`. The registry is keyed by the owner's
+/// address, which was the reason `GC_TYPE_LAZY_ARRAY` had to be immovable and
+/// old-gen: a moved header silently orphaned its tape, and the tape then
+/// outlived every path that could free it. RegExp solved the same problem the
+/// same way (`GcMoveHookKind::RegExpSideTables`), so this is that precedent
+/// rather than a new mechanism.
+pub(crate) fn owner_moved(old_addr: usize, new_addr: usize) {
+    if registry_is_empty() || old_addr == new_addr {
+        return;
+    }
+    TAPE_REGISTRY.with(|r| {
+        let mut registry = r.borrow_mut();
+        if let Some(allocation) = registry.remove(&old_addr) {
+            debug_assert!(
+                !registry.contains_key(&new_addr),
+                "a relocated lazy header must not land on a registered address"
+            );
+            registry.insert(new_addr, allocation);
+        }
+    });
+}
+
+/// Release the tapes whose owners just died in a copying minor's from-space.
+///
+/// The copying minor's flip runs no per-object finalize hooks, so without this
+/// a lazy header that dies young leaks its tape — which is the other half of
+/// what kept the type pinned in the old generation. Twin of the sweep-entry
+/// [`collect_owners`] pass, mirroring Map/Set/Error/RegExp.
+///
+/// Cost: O(registry), i.e. proportional to live-plus-recently-allocated lazy
+/// arrays, not to program history.
+pub(crate) fn finalize_dead_copied_minor_from_space_lazy_tapes() -> usize {
+    if registry_is_empty() {
+        return 0;
+    }
+    let dead: Vec<usize> = TAPE_REGISTRY.with(|r| {
+        r.borrow()
+            .keys()
+            .copied()
+            .filter(|&addr| {
+                crate::gc::owner_is_dead_copied_minor_from_space_of_type(
+                    addr,
+                    crate::gc::GC_TYPE_LAZY_ARRAY,
+                )
+            })
+            .collect()
+    });
+    let count = dead.len();
+    for addr in dead {
+        release(addr);
+    }
+    count
+}
+
 /// Registered owner addresses matching `is_dead`. Split from the release so
 /// the caller can budget-chunk the frees the way the Map/Set sweep does.
 pub(crate) fn collect_owners(is_dead: &dyn Fn(usize) -> bool) -> Vec<usize> {
