@@ -74,6 +74,85 @@ pub unsafe fn lazy_get(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
     super::lazy_get_rooted(hdr, i)
 }
 
+/// Probe an already-materialized lazy element for emitted code.
+///
+/// This is `lazy_get`'s two non-allocating branches and nothing else. It exists
+/// so the indexed inline cache can skip the dispatcher chain
+/// (`js_packed_arraylike_index_get` -> `js_array_get_f64` -> `lazy_get`) with
+/// ONE call instead of inlining ~87 instructions at every indexed read site in
+/// the program: the inline form measurably grew `run()` by 10% in the JSON
+/// access benchmark and cost an untouched ordinary-Array row ~4.8% to code
+/// layout alone.
+///
+/// `raw` must be a live, unforwarded `GC_TYPE_LAZY_ARRAY` pointer -- the caller
+/// proves that from the GC header before calling. Returns `TAG_HOLE` to mean
+/// "this read needs the rooted accessor"; that is unambiguous because a hole is
+/// never a value a read yields, and the caller already routes holes to its miss
+/// helper. Cold elements, holes, descriptors, out-of-bounds indices, growth
+/// stubs and a stale length mirror all take that exit.
+///
+/// Cannot allocate a managed value, run user code or collect, so the caller
+/// needs no additional rooting around it.
+#[no_mangle]
+pub unsafe extern "C" fn js_lazy_array_index_probe(raw: i64, idx: i64) -> f64 {
+    let miss = f64::from_bits(crate::value::TAG_HOLE);
+    if raw == 0 || !(0..=u32::MAX as i64).contains(&idx) {
+        return miss;
+    }
+    let hdr = raw as *mut LazyArrayHeader;
+    let i = idx as u32;
+    if (*hdr).materialized.is_null() {
+        // Sparse: the bitmap is the liveness test, because `JSValue::ZERO` is a
+        // legal cached value whose bits are all zero.
+        if i >= (*hdr).cached_length {
+            return miss;
+        }
+        let bitmap = (*hdr).materialized_bitmap;
+        let cache = (*hdr).materialized_elements;
+        if bitmap.is_null()
+            || cache.is_null()
+            || *bitmap.add(i as usize / 64) & (1u64 << (i % 64)) == 0
+        {
+            return miss;
+        }
+        let bits = (*cache.add(i as usize)).bits();
+        if bits == crate::value::TAG_HOLE {
+            return miss;
+        }
+        return f64::from_bits(bits);
+    }
+    // Materialized: the same proof `lazy_get` takes before its inline load.
+    // A growth-forwarding stub keeps its own GC header and fails these, so it
+    // routes to the resolver through the caller's miss path exactly as before.
+    let cached = (*hdr).materialized;
+    let header = &*cached
+        .cast::<u8>()
+        .sub(crate::gc::GC_HEADER_SIZE)
+        .cast::<crate::gc::GcHeader>();
+    if header.obj_type != crate::gc::GC_TYPE_ARRAY
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
+        || (*cached).length > (*cached).capacity
+        || (*cached).length > 100_000_000
+        || i >= (*cached).length
+    {
+        return miss;
+    }
+    // `lazy_get` refreshes this mirror when it serves the read; a probe must not
+    // write, so it declines instead and lets the rooted accessor refresh it.
+    // That keeps a grown or shrunk array from reporting a stale `.length`.
+    if (*hdr).cached_length != (*cached).length {
+        return miss;
+    }
+    let elements =
+        (cached as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const u64;
+    let bits = *elements.add(i as usize);
+    if bits == crate::value::TAG_HOLE {
+        return miss;
+    }
+    f64::from_bits(bits)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::*;

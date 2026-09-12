@@ -50,6 +50,11 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // Refs #488: bulk push for `arr.push(...src)` spread call.
     module.declare_function("js_array_push_spread_f64", I64, &[I64, I64]);
     module.declare_function("js_array_get_f64", DOUBLE, &[I64, I32]);
+    // The indexed inline cache's lazy tier: `lazy_get`'s two non-allocating
+    // branches, reached once the receiver's GC header proves a live
+    // GC_TYPE_LAZY_ARRAY. Returns the element, or TAG_HOLE when the read needs
+    // the rooted accessor and the cache must take its ordinary miss call.
+    module.declare_function("js_lazy_array_index_probe", DOUBLE, &[I64, I64]);
     // repsel #7480 / #5093: the element-shape versioned loop's preheader
     // guard. Establishes-or-confirms the per-array homogeneous element-shape
     // invariant and returns the proven class id (0 = no proof). O(n) on the
