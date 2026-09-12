@@ -477,6 +477,16 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     let lazy_header_idx = ctx.new_block("arrlike.lazy.header");
     let lazy_guard_idx = ctx.new_block("arrlike.lazy.guard");
     let lazy_load_idx = ctx.new_block("arrlike.lazy.load");
+    let lazy_sparse_bounds_idx = ctx.new_block("arrlike.lazy.sparse.bounds");
+    let lazy_sparse_probe_idx = ctx.new_block("arrlike.lazy.sparse.probe");
+    let lazy_sparse_bit_idx = ctx.new_block("arrlike.lazy.sparse.bit");
+    let lazy_sparse_load_idx = ctx.new_block("arrlike.lazy.sparse.load");
+    let lazy_sparse_value_idx = ctx.new_block("arrlike.lazy.sparse.value");
+    let lazy_sparse_bounds_label = ctx.block_label(lazy_sparse_bounds_idx);
+    let lazy_sparse_probe_label = ctx.block_label(lazy_sparse_probe_idx);
+    let lazy_sparse_bit_label = ctx.block_label(lazy_sparse_bit_idx);
+    let lazy_sparse_load_label = ctx.block_label(lazy_sparse_load_idx);
+    let lazy_sparse_value_label = ctx.block_label(lazy_sparse_value_idx);
     let lazy_kind_label = ctx.block_label(lazy_kind_idx);
     let lazy_header_label = ctx.block_label(lazy_header_idx);
     let lazy_guard_label = ctx.block_label(lazy_guard_idx);
@@ -503,7 +513,93 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     let lazy_materialized = ctx.block().load(I64, &lazy_materialized_ptr);
     let lazy_has_array = ctx.block().icmp_ne(I64, &lazy_materialized, "0");
     ctx.block()
-        .cond_br(&lazy_has_array, &lazy_guard_label, &object_miss_label);
+        .cond_br(&lazy_has_array, &lazy_guard_label, &lazy_sparse_bounds_label);
+
+    // Still tape-backed: the sparse per-element cache is the only thing that
+    // can answer without materializing a subtree, and it is what a repeated or
+    // clustered read pattern actually hits — an array small enough that the
+    // adaptive walk never trips the full-materialization flip stays here for
+    // the life of the program. `lazy_get`'s own sparse branch is three loads
+    // and a bit test, so inline exactly that and leave every cold read, hole
+    // and out-of-bounds index to the miss helper.
+    //
+    // Out-of-bounds deliberately does NOT shortcut to `undefined` here even
+    // though `lazy_get` does: the prototype chain is the miss helper's job.
+    ctx.current_block = lazy_sparse_bounds_idx;
+    let sparse_invalidated = ctx
+        .block()
+        .load_volatile(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
+    let sparse_default_prototypes = ctx.block().icmp_eq(I8, &sparse_invalidated, "0");
+    let sparse_length_ptr = ctx.block().inttoptr(I64, &object_raw);
+    let sparse_length = ctx.block().load(I32, &sparse_length_ptr);
+    let sparse_length_i64 = ctx.block().zext(I32, &sparse_length, I64);
+    let sparse_in_bounds = ctx
+        .block()
+        .icmp_ult(I64, &object_idx_i64, &sparse_length_i64);
+    let sparse_bounds_ok = ctx
+        .block()
+        .and(I1, &sparse_default_prototypes, &sparse_in_bounds);
+    ctx.block()
+        .cond_br(&sparse_bounds_ok, &lazy_sparse_probe_label, &object_miss_label);
+
+    // `materialized_bitmap` is word 6 and `materialized_elements` word 5
+    // (offsets 48 and 40; both pinned by const asserts in perry-runtime
+    // `json_tape.rs`). A null on either side means nothing has been cached yet.
+    ctx.current_block = lazy_sparse_probe_idx;
+    let sparse_bitmap_addr = ctx.block().add(I64, &object_raw, "48");
+    let sparse_bitmap_slot = ctx.block().inttoptr(I64, &sparse_bitmap_addr);
+    let sparse_bitmap = ctx.block().load(I64, &sparse_bitmap_slot);
+    let sparse_elements_addr = ctx.block().add(I64, &object_raw, "40");
+    let sparse_elements_slot = ctx.block().inttoptr(I64, &sparse_elements_addr);
+    let sparse_elements = ctx.block().load(I64, &sparse_elements_slot);
+    let sparse_has_bitmap = ctx.block().icmp_ne(I64, &sparse_bitmap, "0");
+    let sparse_has_elements = ctx.block().icmp_ne(I64, &sparse_elements, "0");
+    let sparse_probe_ok = ctx
+        .block()
+        .and(I1, &sparse_has_bitmap, &sparse_has_elements);
+    ctx.block()
+        .cond_br(&sparse_probe_ok, &lazy_sparse_bit_label, &object_miss_label);
+
+    // The bitmap is the authoritative "this slot holds a materialized value"
+    // signal — `JSValue::ZERO` is a legal cached value, so a null/zero element
+    // word cannot be used as the liveness test.
+    ctx.current_block = lazy_sparse_bit_idx;
+    let sparse_word_index = ctx.block().lshr(I64, &object_idx_i64, "6");
+    let sparse_word_offset = ctx.block().shl(I64, &sparse_word_index, "3");
+    let sparse_word_addr = ctx.block().add(I64, &sparse_bitmap, &sparse_word_offset);
+    let sparse_word_ptr = ctx.block().inttoptr(I64, &sparse_word_addr);
+    let sparse_word = ctx.block().load(I64, &sparse_word_ptr);
+    let sparse_bit_index = ctx.block().and(I64, &object_idx_i64, "63");
+    let sparse_shifted = ctx.block().lshr(I64, &sparse_word, &sparse_bit_index);
+    let sparse_bit = ctx.block().and(I64, &sparse_shifted, "1");
+    let sparse_cached = ctx.block().icmp_ne(I64, &sparse_bit, "0");
+    ctx.block()
+        .cond_br(&sparse_cached, &lazy_sparse_load_label, &object_miss_label);
+
+    // A bitmap-set slot always holds a real materialized JSValue, so the hole
+    // test below can never fire; keep it anyway, since its only effect is to
+    // route an impossible value to the same helper that would have produced it.
+    ctx.current_block = lazy_sparse_load_idx;
+    let sparse_elem_offset = ctx.block().shl(I64, &object_idx_i64, "3");
+    let sparse_elem_addr = ctx.block().add(I64, &sparse_elements, &sparse_elem_offset);
+    let sparse_elem_ptr = ctx.block().inttoptr(I64, &sparse_elem_addr);
+    let sparse_raw = ctx.block().load(DOUBLE, &sparse_elem_ptr);
+    let sparse_raw_bits = ctx.block().bitcast_double_to_i64(&sparse_raw);
+    let sparse_is_hole = ctx
+        .block()
+        .icmp_eq(I64, &sparse_raw_bits, crate::nanbox::TAG_HOLE_I64);
+    ctx.block()
+        .cond_br(&sparse_is_hole, &object_miss_label, &lazy_sparse_value_label);
+    ctx.current_block = lazy_sparse_value_idx;
+    let sparse_value = if coerce_slow_to_number {
+        ctx.block()
+            .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &sparse_raw)])
+    } else {
+        sparse_raw
+    };
+    let sparse_end_label = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+    kind_incoming.push((sparse_value, sparse_end_label));
 
     // The same proof `cached_read::lazy_get` takes before its inline load: a
     // live unforwarded ordinary Array, no descriptor overrides, no prototype
