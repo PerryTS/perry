@@ -473,6 +473,8 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     // `json_tape::cached_read::lazy_get`). Once a scan or a random-access flip
     // has installed the ordinary array, that whole chain resolves one word;
     // serve it here instead, on exactly the proof `lazy_get` already uses.
+    // The blocks are declared here; they are reached from `arrlike.elem.kind`
+    // below, after the ordinary-Array and elements-subclass probes both miss.
     let lazy_kind_idx = ctx.new_block("arrlike.lazy.kind");
     let lazy_header_idx = ctx.new_block("arrlike.lazy.header");
     let lazy_guard_idx = ctx.new_block("arrlike.lazy.guard");
@@ -494,14 +496,18 @@ pub(super) fn lower_inline_dyn_typed_array_get(
 
     ctx.current_block = object_brand_idx;
     ctx.block()
-        .cond_br(&is_array, &object_array_guard_label, &lazy_kind_label);
+        .cond_br(&is_array, &object_array_guard_label, &elem_kind_label);
 
-    // `GC_TYPE_LAZY_ARRAY` (perry-runtime `gc/types.rs`). Anything else keeps
-    // the existing Array-subclass probe below.
+    // `GC_TYPE_LAZY_ARRAY` (perry-runtime `gc/types.rs`). This tier hangs off
+    // the Array-subclass probe's miss edge rather than off `brand`, so the
+    // ordinary-Array path keeps exactly the control flow it had: measured on
+    // the 20 MiB fixture (above the lazy admission bound, so a plain Array),
+    // routing `brand`'s not-array edge through here cost +4 retired
+    // instructions per read on that untouched path.
     ctx.current_block = lazy_kind_idx;
     let lazy_is_lazy = ctx.block().icmp_eq(I8, &gc_type, "9");
     ctx.block()
-        .cond_br(&lazy_is_lazy, &lazy_header_label, &elem_kind_label);
+        .cond_br(&lazy_is_lazy, &lazy_header_label, &object_miss_label);
 
     // `LazyArrayHeader::materialized` is word 4 (offset 32; pinned by a const
     // assert in perry-runtime `json_tape.rs`). Null means the array is still
@@ -691,7 +697,7 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     ctx.current_block = elem_kind_idx;
     let elem_is_object = ctx.block().icmp_eq(I8, &gc_type, "2");
     ctx.block()
-        .cond_br(&elem_is_object, &elem_meta_label, &object_miss_label);
+        .cond_br(&elem_is_object, &elem_meta_label, &lazy_kind_label);
     ctx.current_block = elem_meta_idx;
     let elem_meta_addr = ctx.block().add(I64, &object_raw, &meta_offset);
     let elem_meta_slot_ptr = ctx.block().inttoptr(I64, &elem_meta_addr);
