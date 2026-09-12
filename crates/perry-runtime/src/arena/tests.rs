@@ -211,7 +211,7 @@ fn old_page_meta(page: usize) -> OldPageMeta {
     old_page_meta_for_tests(page).expect("old page metadata should be registered")
 }
 
-fn old_header_and_size(user_ptr: usize) -> (usize, usize) {
+pub(super) fn old_header_and_size(user_ptr: usize) -> (usize, usize) {
     let header_addr = user_ptr - GC_HEADER_SIZE;
     let total_size = unsafe { (*(header_addr as *const GcHeader)).size as usize };
     (header_addr, total_size)
