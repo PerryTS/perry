@@ -388,10 +388,16 @@ fn test_json_tape_lazy_get_records_its_cache_store_as_an_external_edge() {
     // Born-old header. That is the shape the #7538 workload had and the only
     // one where the in-object/external distinction bites — a nursery header is
     // traced directly and its descriptor reaches the cache without any
-    // remembered-set entry at all. #7539 moved the tape into a side allocation
-    // but deliberately kept the header in the old generation, so this premise
-    // still holds by construction rather than by the header being large.
-    let elements = 4096;
+    // remembered-set entry at all.
+    //
+    // The cluster's generation is decided by its cache size now, against the
+    // POINTER-BEARING threshold (128 KB), so the premise has to be bought with
+    // element count rather than assumed: 20 000 JSValues is ~156 KB, safely
+    // over the line. 4096 elements used to suffice only because every lazy
+    // header was born old unconditionally, and at 32 KB it would now be a
+    // NURSERY cluster — this test would still pass its later assertions while
+    // exercising none of the containment branch it exists for.
+    let elements = 20_000;
     let mut input = String::with_capacity(elements * 8 + 2);
     input.push('[');
     for i in 0..elements {
