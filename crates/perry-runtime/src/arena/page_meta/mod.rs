@@ -1285,6 +1285,115 @@ pub(crate) fn unregister_old_object_pages(header_addr: usize, total_size: usize)
     update_old_page_meta_for_object(&removed_pages, false);
 }
 
+/// Batched [`unregister_old_object_pages`] for the dead old objects one sweep
+/// step found.
+///
+/// The per-object remover allocates two `Vec`s, flushes the deferral buffer,
+/// borrows both tables, and then finds the header in its page's object list
+/// with a linear `position` before `swap_remove`. Freeing every object on a
+/// page that way is quadratic in objects per page, and a full collection frees
+/// whole pages of small objects: on records_array_8m:scan (~720k dead records
+/// per full) it was 15.8% of ALL samples, the single largest cost of a full
+/// collection. The registration side already batches for the same reason
+/// (`flush_deferred_old_page_registrations_batch`); this is its mirror.
+///
+/// One flush, one run materialization per touched page, then one `retain` per
+/// page against that page's dead headers (sorted, so membership is a binary
+/// search). Page-meta decrements for a page are applied together and its
+/// reset/refresh run once: allocated bytes and object counts only fall here,
+/// so "both reached zero at some point" and "both are zero at the end" are the
+/// same event, and `reset_cycle_sweep_accounting` / `refresh_policy_bits` are
+/// pure recomputes of the page's own fields.
+///
+/// `scratch` is caller-owned and reused across steps, so a flush allocates
+/// nothing once warm (the #7624 lesson: re-growing staging buffers per batch
+/// cost +31 MB peak RSS on json_pipeline).
+pub(crate) fn unregister_old_objects_batch(
+    dead: &[(usize, usize)],
+    scratch: &mut Vec<(usize, usize, usize)>,
+) {
+    if dead.is_empty() {
+        return;
+    }
+    flush_deferred_old_page_registrations();
+    scratch.clear();
+    for &(header_addr, total_size) in dead {
+        if header_addr == 0 || total_size == 0 {
+            continue;
+        }
+        let object_end = header_addr + total_size;
+        let first_page = generation_page_for_addr(header_addr);
+        let last_page = generation_page_for_addr(object_end - 1);
+        for page in first_page..=last_page {
+            let page_base = generation_page_base(page);
+            let overlap_start = header_addr.max(page_base);
+            let overlap_end = object_end.min(page_base + GENERATION_PAGE_SIZE);
+            if overlap_start < overlap_end {
+                scratch.push((page, header_addr, overlap_end - overlap_start));
+            }
+        }
+    }
+    // RUN REMOVER, as the per-object path: expand before touching membership.
+    // Done before borrowing the index, because expansion writes it.
+    if OLD_GEN_PAGE_PROMOTED_RUNS_NONEMPTY.with(Cell::get) {
+        let mut last = usize::MAX;
+        for &(page, _, _) in scratch.iter() {
+            if page != last {
+                materialize_promoted_page_runs(core::iter::once(page));
+                last = page;
+            }
+        }
+    }
+    scratch.sort_unstable_by_key(|&(page, header, _)| (page, header));
+    OLD_GEN_PAGE_OBJECTS.with(|index| {
+        OLD_GEN_PAGE_META.with(|meta| {
+            let mut index = index.borrow_mut();
+            let mut meta = meta.borrow_mut();
+            let mut start = 0;
+            while start < scratch.len() {
+                let page = scratch[start].0;
+                let mut end = start;
+                while end < scratch.len() && scratch[end].0 == page {
+                    end += 1;
+                }
+                let group = &scratch[start..end];
+                let mut removed_bytes = 0usize;
+                let mut removed_objects = 0usize;
+                let mut remove_page = false;
+                if let Some(headers) = index.get_mut(&page) {
+                    headers.retain(|&addr| {
+                        match group.binary_search_by_key(&addr, |&(_, header, _)| header) {
+                            Ok(i) => {
+                                removed_bytes = removed_bytes.saturating_add(group[i].2);
+                                removed_objects += 1;
+                                false
+                            }
+                            Err(_) => true,
+                        }
+                    });
+                    remove_page = headers.is_empty();
+                }
+                if remove_page {
+                    index.remove(&page);
+                }
+                if removed_objects != 0 {
+                    let page_meta = meta
+                        .entry(page)
+                        .or_insert_with(|| OldPageMeta::zero_for_page(page));
+                    page_meta.allocated_bytes =
+                        page_meta.allocated_bytes.saturating_sub(removed_bytes);
+                    page_meta.object_count = page_meta.object_count.saturating_sub(removed_objects);
+                    if page_meta.allocated_bytes == 0 && page_meta.object_count == 0 {
+                        page_meta.reset_cycle_sweep_accounting();
+                    }
+                    page_meta.refresh_policy_bits();
+                }
+                start = end;
+            }
+        });
+    });
+}
+
 pub(crate) fn old_pages_begin_gc_cycle() {
     // #7624 CYCLE START: all three cycle constructors route through here
     // (`gc/mod.rs`'s minor, `gc/cycle.rs`'s `new_full`, `gc/policy.rs`'s
