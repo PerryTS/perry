@@ -6,8 +6,6 @@
 use std::cell::RefCell;
 use std::ptr;
 
-#[cfg(feature = "regex-engine")]
-use crate::array::ArrayHeader;
 use crate::string::StringHeader;
 
 use crate::object::ObjectHeader;
@@ -29,8 +27,6 @@ pub use perex_split::js_string_split_js;
 pub(crate) mod match_all;
 #[cfg(feature = "regex-engine")]
 pub(crate) mod perex_api;
-#[cfg(feature = "regex-engine")]
-pub(crate) mod site_test;
 #[cfg(feature = "regex-engine")]
 mod perex_construct;
 #[cfg(feature = "regex-engine")]
@@ -55,6 +51,8 @@ pub(crate) mod perex_replace;
 mod perex_replace_storage;
 #[cfg(feature = "regex-engine")]
 mod perex_substitution;
+#[cfg(feature = "regex-engine")]
+pub(crate) mod site_test;
 #[cfg(feature = "regex-engine")]
 pub use perex_replace::{js_string_replace_all_js, js_string_replace_js};
 #[cfg(feature = "regex-engine")]
@@ -307,10 +305,12 @@ pub(crate) fn test_construct_regexp_and_exec_once(pattern: &str, flags: &str) ->
     });
     let re = scope.root_raw_mut_ptr(re);
     let subject = scope.root_string_ptr(js_string_from_str("abc"));
-    subject.with_const_ptr::<StringHeader, _>(|s| {
-        let _ = js_regexp_test(re.get_raw_const_ptr::<RegExpHeader>(), s);
+    re.with_const_ptr::<RegExpHeader, _>(|re| {
+        subject.with_const_ptr::<StringHeader, _>(|s| {
+            let _ = js_regexp_test(re, s);
+        })
     });
-    re.get_raw_mut_ptr::<RegExpHeader>()
+    re.with_mut_ptr::<RegExpHeader, _>(|re| re)
 }
 
 #[cfg(all(test, feature = "regex-engine"))]
@@ -366,8 +366,9 @@ pub(crate) fn test_alloc_nursery_regexp_for_move(source: &str, flags: &str) -> *
         // Neither `gc_malloc` nor the arena zeroes reused memory, so this
         // must be set explicitly or the GC follows a garbage pointer.
         (*ptr).meta = std::ptr::null_mut();
-        (*ptr).pattern_ptr = source.get_raw_const_ptr::<StringHeader>();
-        (*ptr).flags_ptr = flags_root.get_raw_const_ptr::<StringHeader>();
+        // Both strings are rooted and read after the allocation above.
+        source.with_const_ptr::<StringHeader, _>(|source| (*ptr).pattern_ptr = source);
+        flags_root.with_const_ptr::<StringHeader, _>(|flags| (*ptr).flags_ptr = flags);
         (*ptr).perex_program = std::ptr::null();
         (*ptr).case_insensitive = flags.contains('i');
         (*ptr).global = flags.contains('g');
@@ -446,6 +447,14 @@ pub(crate) unsafe fn regex_gc_slot_ptrs(re: *mut RegExpHeader) -> (*mut u64, usi
     // exact; assert so a future field reorder is caught in debug builds.
     debug_assert_eq!(flags as usize - pattern as usize, 8);
     (pattern, 2, last_index)
+}
+
+/// The header's compiled-program edge: a GC allocation owned only through this
+/// slot, so the layout visitor must enumerate it for marking and relocation or
+/// the program is collected (or left dangling after a move) under a live RegExp.
+#[inline]
+pub(crate) unsafe fn regex_program_slot(user_ptr: *mut u8) -> Option<*mut u64> {
+    Some(std::ptr::addr_of_mut!((*user_ptr.cast::<RegExpHeader>()).perex_program) as *mut u64)
 }
 
 /// Header for heap-allocated RegExp objects
@@ -758,13 +767,15 @@ pub(crate) fn dispatch_regex_receiver_method(
     match method {
         "test" => {
             let s_ptr = crate::value::js_jsvalue_to_string_coerce(arg0);
-            let matched = js_regexp_test(re.get_raw_const_ptr(), s_ptr) != 0;
+            // The receiver is re-read after the coercion; `js_regexp_test` roots
+            // both arguments before it allocates.
+            let matched = re.with_const_ptr(|re| js_regexp_test(re, s_ptr)) != 0;
             Some(f64::from_bits(crate::value::JSValue::bool(matched).bits()))
         }
         // exec: the match array, or `null` on no match (spec-correct).
         "exec" => {
             let s_ptr = crate::value::js_jsvalue_to_string_coerce(arg0);
-            let arr = js_regexp_exec(re.get_raw_mut_ptr(), s_ptr);
+            let arr = re.with_mut_ptr(|re| js_regexp_exec(re, s_ptr));
             Some(if arr.is_null() {
                 f64::from_bits(crate::value::TAG_NULL)
             } else {
@@ -773,7 +784,7 @@ pub(crate) fn dispatch_regex_receiver_method(
         }
         // `regex.toString()` → `/source/flags` (RegExp.prototype.toString).
         "toString" => {
-            let s = js_regexp_to_string(re.get_raw_const_ptr());
+            let s = re.with_const_ptr(|p| js_regexp_to_string(p));
             Some(f64::from_bits(
                 crate::value::js_nanbox_string(s as i64).to_bits(),
             ))
@@ -850,7 +861,10 @@ pub extern "C" fn js_regexp_get_source(re: *const RegExpHeader) -> *mut StringHe
         if is_valid_ptr((*re).pattern_ptr) {
             // Return a copy of the pattern string
             let pattern_str = string_as_str((*re).pattern_ptr);
-            js_string_from_str(&escape_regexp_source(pattern_str))
+            // Escaping only inserts ASCII into text that came from a `&str`, so
+            // the result is UTF-8 and the lossy conversion never substitutes.
+            let escaped = escape_regexp_source(pattern_str.as_bytes());
+            js_string_from_str(&String::from_utf8_lossy(&escaped))
         } else {
             js_string_from_str("(?:)")
         }
@@ -893,13 +907,12 @@ pub extern "C" fn js_regexp_to_string(re: *const RegExpHeader) -> *mut StringHea
     {
         let scope = crate::gc::RuntimeHandleScope::new();
         let re = scope.root_raw_const_ptr(re);
-        let src = scope.root_string_ptr(js_regexp_get_source(re.get_raw_const_ptr()));
-        let flg = scope.root_string_ptr(js_regexp_get_flags(re.get_raw_const_ptr()));
-        let out = format!(
-            "/{}/{}",
-            string_as_str(src.get_raw_const_ptr()),
-            string_as_str(flg.get_raw_const_ptr())
-        );
+        let src = scope.root_string_ptr(re.with_const_ptr(|p| js_regexp_get_source(p)));
+        let flg = scope.root_string_ptr(re.with_const_ptr(|p| js_regexp_get_flags(p)));
+        // Copied into Rust storage before the next GC allocation.
+        let out = src.with_const_ptr(|src| {
+            flg.with_const_ptr(|flg| format!("/{}/{}", string_as_str(src), string_as_str(flg)))
+        });
         js_string_from_str(&out)
     }
 }

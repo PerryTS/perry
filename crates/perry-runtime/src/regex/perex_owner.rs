@@ -73,6 +73,7 @@ impl<'scope> GcProgram<'scope> {
         // leaves a valid GC leaf that can be reclaimed normally, without a
         // finalizer or a leaked external owner. No GC call occurs in this scope.
         unsafe {
+            // GC_STORE_AUDIT(POINTER_FREE): the program cell is a leaf of u32 words; its prefix is a count.
             cell.write(ProgramCell { word_count: words });
             let output = cell.add(1).cast::<u32>();
             output.write_bytes(0, words);
@@ -91,14 +92,17 @@ impl<'scope> GcProgram<'scope> {
     /// `receiver` must root a live initialized RegExpHeader. No mutable program
     /// words may be published through any other interface.
     pub(crate) unsafe fn install(&self, receiver: &RuntimeHandle<'_>) {
-        let program = self.root.get_raw_const_ptr::<u8>();
-        receiver.with_mut_ptr::<super::RegExpHeader, _>(|receiver| unsafe {
-            (*receiver).perex_program = program;
-            crate::gc::runtime_write_barrier_gc_slot(
-                receiver as usize,
-                std::ptr::addr_of!((*receiver).perex_program) as usize,
-                program as u64,
-            );
+        // A field store and its barrier: neither allocates, so both addresses
+        // stay current for the whole store.
+        self.root.with_const_ptr::<u8, _>(|program| {
+            receiver.with_mut_ptr::<super::RegExpHeader, _>(|receiver| unsafe {
+                (*receiver).perex_program = program;
+                crate::gc::runtime_write_barrier_gc_slot(
+                    receiver as usize,
+                    std::ptr::addr_of!((*receiver).perex_program) as usize,
+                    program as u64,
+                );
+            })
         });
     }
 
@@ -168,11 +172,10 @@ impl<'scope> HeapSubject<'scope> {
     /// `root` must have been created with root_string_ptr from a live, initialized
     /// heap string. All mutable string writers must respect Perry's sharing rule.
     pub(crate) unsafe fn new(root: RuntimeHandle<'scope>) -> Result<Self, OwnerError> {
-        let ptr = root.get_raw_const_ptr::<StringHeader>();
-        if ptr.is_null() {
+        if root.with_const_ptr::<StringHeader, _>(|ptr| ptr.is_null()) {
             return Err(OwnerError::Missing);
         }
-        crate::string::js_string_addref(ptr.cast_mut());
+        root.with_mut_ptr::<StringHeader, _>(|ptr| crate::string::js_string_addref(ptr));
         Ok(Self {
             root,
             byte_window: None,

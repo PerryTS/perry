@@ -96,14 +96,15 @@ fn live_output(capacity: usize) -> Option<usize> {
     let valid = build_valid_pointer_set();
     crate::arena::arena_walk_objects(|header| unsafe {
         let gc = header as *const GcHeader;
-        if (*gc).obj_type != GC_TYPE_STRING
-            || (*gc).gc_flags & GC_FLAG_FORWARDED != 0
-            || ((*gc).size as usize)
-                < GC_HEADER_SIZE + std::mem::size_of::<crate::StringHeader>() + capacity
-        {
+        if (*gc).obj_type != GC_TYPE_STRING || (*gc).gc_flags & GC_FLAG_FORWARDED != 0 {
             return;
         }
         let address = header.add(GC_HEADER_SIZE) as usize;
+        // The allocation must hold `capacity` payload bytes past the header.
+        let payload = crate::string::string_data(address as *const crate::StringHeader) as usize;
+        if header as usize + ((*gc).size as usize) < payload + capacity {
+            return;
+        }
         if !valid.contains(&address) {
             return;
         }
@@ -165,7 +166,7 @@ fn perex_capture_output_itself_moves_during_bounded_construction() {
     let result = scope.root_string_ptr(result);
     assert!(first.is_some() && observed_move);
     assert_ne!(
-        result.get_raw_const_ptr::<crate::StringHeader>() as usize,
+        handle_address::<crate::StringHeader>(&result),
         first.unwrap()
     );
     unsafe {

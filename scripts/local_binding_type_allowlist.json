@@ -354,14 +354,6 @@
       "reason": "Restore bookkeeping for a ternary's branch-scoped narrowing: the snapshot is written back after each arm and is never read as a type fact."
     },
     {
-      "path": "crates/perry-codegen/src/lower_string_method.rs",
-      "function": "lower_string_method_dispatch",
-      "access": "stable_local_type_proof",
-      "count": 1,
-      "classification": "representation-proven",
-      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
-    },
-    {
       "path": "crates/perry-codegen/src/rooting/temp_root.rs",
       "function": "local_is_inert_primitive",
       "access": "stable_local_type_proof",

@@ -144,6 +144,7 @@ pub extern "C" fn js_regexp_escape(input: f64) -> f64 {
 static KEEP_REGEXP_ESCAPE: extern "C" fn(f64) -> f64 = js_regexp_escape;
 
 /// ECMA-262 22.2.6.10 EscapeRegExpPattern for a valid UTF-8 pattern.
+#[cfg(not(feature = "regex-engine"))]
 fn escape_regexp_source_utf8(pattern: &str) -> String {
     if pattern.is_empty() {
         return "(?:)".to_string();
@@ -183,6 +184,7 @@ fn escape_regexp_source_utf8(pattern: &str) -> String {
 /// between two `/` characters, parse as the same pattern. JavaScript strings
 /// may contain lone UTF-16 surrogates, represented by Perry as WTF-8; those
 /// bytes must round-trip rather than pass through Rust's `str::chars()`.
+#[cfg(not(feature = "regex-engine"))]
 pub(super) fn escape_regexp_source(pattern: &[u8]) -> Vec<u8> {
     if let Ok(pattern) = std::str::from_utf8(pattern) {
         return escape_regexp_source_utf8(pattern).into_bytes();

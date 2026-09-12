@@ -38,7 +38,9 @@ pub extern "C" fn js_new_target_value() -> f64 {
 }
 
 mod rooted_arguments;
-pub(crate) use rooted_arguments::{construct_rooted_arguments, construct_two_rooted};
+pub(crate) use rooted_arguments::construct_rooted_arguments;
+#[cfg(feature = "regex-engine")]
+pub(crate) use rooted_arguments::construct_two_rooted;
 
 /// Issue #838 followup (b): construct an instance from a function value.
 /// Pairs with `js_register_function_prototype_method` — both arms route
@@ -695,9 +697,17 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
             // #2889: `new (rebound RegExp)(pattern, flags)`.
             #[cfg(feature = "regex-engine")]
             "RegExp" => {
-                let pattern = args.first().copied().unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
-                let flags = args.get(1).copied().unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
-                return crate::value::js_nanbox_pointer(crate::regex::js_regexp_construct(pattern, flags) as i64);
+                let pattern = args
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+                let flags = args
+                    .get(1)
+                    .copied()
+                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+                return crate::value::js_nanbox_pointer(crate::regex::js_regexp_construct(
+                    pattern, flags,
+                ) as i64);
             }
             // #2889: `new (rebound TypedArray)(lengthOrSource)`.
             "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"

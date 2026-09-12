@@ -99,9 +99,11 @@ impl Substitution<'_, '_> {
                     let previous = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
                     let groups = self.groups.unwrap();
                     let value = api::caught(|| {
+                        let key = key
+                            .with_const_ptr::<StringHeader, _>(|key| js_nanbox_string(key as i64));
                         crate::proxy::js_reflect_get(
                             groups.get_nanbox_f64(),
-                            js_nanbox_string(key.get_raw_const_ptr::<StringHeader>() as i64),
+                            key,
                             groups.get_nanbox_f64(),
                         )
                     });

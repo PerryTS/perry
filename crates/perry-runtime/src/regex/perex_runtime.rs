@@ -3,7 +3,7 @@
 
 use super::flags::CanonicalFlags;
 use super::perex_memory::{Buffer, MemoryBudget, StorageError};
-use super::perex_owner::{BuildError, GcProgram, HeapSubject, OwnerError};
+use super::perex_owner::{BuildError, GcProgram, OwnerError};
 use crate::gc::RuntimeHandleScope;
 use perex::binding::{
     BoundProgram, BoundProgramError, BoundResources, BoundSubject, ImmutableSubject, PairError,
@@ -25,6 +25,9 @@ pub(crate) enum EngineError {
     Subject(SubjectError<OwnerError>),
     Program(BoundProgramError<OwnerError>),
     Execution(ExecError),
+    /// Returned by a host callback that stops an operation early. The runtime
+    /// reports it, but only the paused-execution witnesses construct it today.
+    #[cfg_attr(not(test), allow(dead_code))]
     Cancelled,
     InvalidQuantum,
     InvalidSpan,
@@ -229,8 +232,9 @@ pub(crate) fn find<'mem, S: ImmutableSubject<Error = OwnerError>>(
 
 /// AdvanceStringIndex after an empty match. UTF-16 mode keeps the second half
 /// of an astral character observable; Unicode mode consumes a complete pair.
+#[cfg(test)]
 pub(crate) fn advance_empty(
-    subject: &BoundSubject<HeapSubject<'_>>,
+    subject: &BoundSubject<super::perex_owner::HeapSubject<'_>>,
     index: usize,
     unicode: bool,
 ) -> Result<usize, EngineError> {

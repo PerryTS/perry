@@ -49,10 +49,31 @@ fn text<'s>(scope: &'s RuntimeHandleScope, bytes: &[u8]) -> RuntimeHandle<'s> {
 fn regex<'s>(scope: &'s RuntimeHandleScope, pattern: &str, flags: &str) -> RuntimeHandle<'s> {
     let pattern = text(scope, pattern.as_bytes());
     let flags = text(scope, flags.as_bytes());
-    scope.root_raw_mut_ptr(crate::regex::js_regexp_new(
-        pattern.get_raw_const_ptr::<StringHeader>(),
-        flags.get_raw_const_ptr::<StringHeader>(),
-    ))
+    scope.root_raw_mut_ptr(pattern.with_const_ptr::<StringHeader, _>(|pattern| {
+        flags.with_const_ptr::<StringHeader, _>(|flags| crate::regex::js_regexp_new(pattern, flags))
+    }))
+}
+
+/// `js_regexp_exec` on the receiver and subject the handles currently hold.
+fn exec(receiver: &RuntimeHandle<'_>, input: &RuntimeHandle<'_>) -> *mut ArrayHeader {
+    receiver.with_mut_ptr::<RegExpHeader, _>(|receiver| {
+        input.with_const_ptr::<StringHeader, _>(|input| {
+            crate::regex::js_regexp_exec(receiver, input)
+        })
+    })
+}
+
+/// `js_regexp_test` on the receiver and subject the handles currently hold.
+fn test(receiver: &RuntimeHandle<'_>, input: &RuntimeHandle<'_>) -> i32 {
+    receiver.with_const_ptr::<RegExpHeader, _>(|receiver| {
+        input.with_const_ptr::<StringHeader, _>(|input| {
+            crate::regex::js_regexp_test(receiver, input)
+        })
+    })
+}
+
+fn address<T>(handle: &RuntimeHandle<'_>) -> usize {
+    handle.with_const_ptr(|p: *const T| p as usize)
 }
 
 fn bytes(value: f64) -> Vec<u8> {
@@ -63,7 +84,7 @@ fn bytes(value: f64) -> Vec<u8> {
 }
 
 fn item(array: &RuntimeHandle<'_>, index: u32) -> f64 {
-    crate::array::js_array_get_f64(array.get_raw_const_ptr::<ArrayHeader>(), index)
+    array.with_const_ptr::<ArrayHeader, _>(|array| crate::array::js_array_get_f64(array, index))
 }
 
 fn array<'s>(scope: &'s RuntimeHandleScope, value: f64) -> RuntimeHandle<'s> {
@@ -71,13 +92,11 @@ fn array<'s>(scope: &'s RuntimeHandleScope, value: f64) -> RuntimeHandle<'s> {
 }
 
 fn named(array: &RuntimeHandle<'_>, name: &str) -> f64 {
-    unsafe {
-        crate::array::array_named_property_get_by_name(
-            array.get_raw_const_ptr::<ArrayHeader>(),
-            name,
-        )
+    array
+        .with_const_ptr::<ArrayHeader, _>(|array| unsafe {
+            crate::array::array_named_property_get_by_name(array, name)
+        })
         .unwrap_or_else(|| panic!("exec result must have the named property {name}"))
-    }
 }
 
 fn field(object: &RuntimeHandle<'_>, name: &str) -> f64 {
@@ -85,10 +104,9 @@ fn field(object: &RuntimeHandle<'_>, name: &str) -> f64 {
     let key = text(&scope, name.as_bytes());
     let object =
         crate::value::js_nanbox_get_pointer(object.get_nanbox_f64()) as *const ObjectHeader;
-    f64::from_bits(
-        crate::object::js_object_get_field_by_name(object, key.get_raw_const_ptr::<StringHeader>())
-            .bits(),
-    )
+    key.with_const_ptr::<StringHeader, _>(|key| {
+        f64::from_bits(crate::object::js_object_get_field_by_name(object, key).bits())
+    })
 }
 
 #[test]
@@ -101,27 +119,26 @@ fn perex_public_exec_preserves_half_pairs_unset_groups_indices_and_input_identit
     let scope = RuntimeHandleScope::new();
     let receiver = regex(&scope, "(?<letter>.)(?<optional>x)?", "d");
     let input = text(&scope, "😀".as_bytes());
-    let result = crate::regex::js_regexp_exec(
-        receiver.get_raw_mut_ptr::<RegExpHeader>(),
-        input.get_raw_const_ptr::<StringHeader>(),
-    );
+    let result = exec(&receiver, &input);
     assert!(!result.is_null());
     let result = scope.root_raw_mut_ptr(result);
-    assert!(unsafe {
-        crate::array::array_named_property_names(result.get_raw_const_ptr::<ArrayHeader>(), true)
+    assert!(result.with_const_ptr::<ArrayHeader, _>(|result| unsafe {
+        crate::array::array_named_property_names(result, true)
             .iter()
             .any(|name| name == "indices")
-    });
-    let original = result.get_raw_mut_ptr::<ArrayHeader>() as usize;
+    }));
+    let original = address::<ArrayHeader>(&result);
     gc_collect_minor();
-    assert_ne!(result.get_raw_mut_ptr::<ArrayHeader>() as usize, original);
+    assert_ne!(address::<ArrayHeader>(&result), original);
     assert_eq!(bytes(item(&result, 0)), [0xed, 0xa0, 0xbd]);
     assert_eq!(bytes(item(&result, 1)), [0xed, 0xa0, 0xbd]);
     assert_eq!(item(&result, 2).to_bits(), TAG_UNDEFINED);
     assert_eq!(named(&result, "index"), 0.0);
     assert_eq!(
         named(&result, "input").to_bits(),
-        crate::value::js_nanbox_string(input.get_raw_const_ptr::<StringHeader>() as i64).to_bits()
+        input.with_const_ptr(|input: *const StringHeader| {
+            crate::value::js_nanbox_string(input as i64).to_bits()
+        })
     );
     let groups = scope.root_nanbox_f64(named(&result, "groups"));
     assert_eq!(
@@ -140,7 +157,7 @@ fn perex_public_exec_preserves_half_pairs_unset_groups_indices_and_input_identit
     assert_eq!((item(&pair, 0), item(&pair, 1)), (0.0, 1.0));
     assert_eq!(
         field(&index_groups, "letter").to_bits(),
-        js_nanbox_pointer(pair.get_raw_mut_ptr::<ArrayHeader>() as i64).to_bits()
+        pair.with_const_ptr(|pair: *const ArrayHeader| js_nanbox_pointer(pair as i64).to_bits())
     );
     assert_eq!(field(&index_groups, "optional").to_bits(), TAG_UNDEFINED);
     assert_eq!(item(&indices, 2).to_bits(), TAG_UNDEFINED);
@@ -184,17 +201,17 @@ fn perex_public_exec_uses_installed_program_and_exact_duplicate_or_astral_names(
             receiver.with_const_ptr::<RegExpHeader, _>(|r| unsafe { (*r).perex_program as usize });
         let input = text(&scope, subject.as_bytes());
         let cycles = copying_minor_cycles();
-        let found = perex_api::execute(
-            receiver.get_raw_mut_ptr::<RegExpHeader>(),
-            input.get_raw_const_ptr::<StringHeader>(),
-            true,
-            &mut || {
-                gc_collect_minor();
-                Ok(())
-            },
-        )
-        .unwrap()
-        .unwrap();
+        let found = receiver
+            .with_mut_ptr::<RegExpHeader, _>(|receiver| {
+                input.with_const_ptr::<StringHeader, _>(|input| {
+                    perex_api::execute(receiver, input, true, &mut || {
+                        gc_collect_minor();
+                        Ok(())
+                    })
+                })
+            })
+            .unwrap()
+            .unwrap();
         let result = scope.root_raw_mut_ptr(found.array);
         assert!(copying_minor_cycles() > cycles);
         assert_ne!(
@@ -222,45 +239,33 @@ fn perex_public_exec_and_test_share_lastindex_and_empty_match_behavior() {
     let scope = RuntimeHandleScope::new();
     let input = text(&scope, b"ba");
     let receiver = regex(&scope, "a", "g");
-    let test = || {
-        crate::regex::js_regexp_test(
-            receiver.get_raw_const_ptr::<RegExpHeader>(),
-            input.get_raw_const_ptr::<StringHeader>(),
-        )
-    };
-    assert_eq!(test(), 1);
+    assert_eq!(test(&receiver, &input), 1);
     assert_eq!(
-        receiver.with_const_ptr(crate::regex::regex_last_index_offset),
+        receiver.with_const_ptr(|p| crate::regex::regex_last_index_offset(p)),
         2
     );
-    assert_eq!(test(), 0);
+    assert_eq!(test(&receiver, &input), 0);
     assert_eq!(
-        receiver.with_const_ptr(crate::regex::regex_last_index_offset),
+        receiver.with_const_ptr(|p| crate::regex::regex_last_index_offset(p)),
         0
     );
-    let result = crate::regex::js_regexp_exec(
-        receiver.get_raw_mut_ptr::<RegExpHeader>(),
-        input.get_raw_const_ptr::<StringHeader>(),
-    );
+    let result = exec(&receiver, &input);
     assert!(!result.is_null());
     let result = scope.root_raw_mut_ptr(result);
     assert_eq!(named(&result, "index"), 1.0);
     assert_eq!(named(&result, "groups").to_bits(), TAG_UNDEFINED);
     let receiver = regex(&scope, "(?:)", "g");
     let input = text(&scope, "😀".as_bytes());
-    unsafe {
-        (*receiver.get_raw_mut_ptr::<RegExpHeader>()).last_index = 1.0f64.to_bits();
-    }
-    let result = crate::regex::js_regexp_exec(
-        receiver.get_raw_mut_ptr::<RegExpHeader>(),
-        input.get_raw_const_ptr::<StringHeader>(),
-    );
+    receiver.with_mut_ptr::<RegExpHeader, _>(|receiver| unsafe {
+        (*receiver).last_index = 1.0f64.to_bits();
+    });
+    let result = exec(&receiver, &input);
     assert!(!result.is_null());
     let result = scope.root_raw_mut_ptr(result);
     assert_eq!(bytes(item(&result, 0)), b"");
     assert_eq!(named(&result, "index"), 1.0);
     assert_eq!(
-        receiver.with_const_ptr(crate::regex::regex_last_index_offset),
+        receiver.with_const_ptr(|p| crate::regex::regex_last_index_offset(p)),
         1
     );
 }
@@ -274,30 +279,19 @@ fn perex_public_throwing_lastindex_write_releases_native_scratch_and_roots() {
     let scope = RuntimeHandleScope::new();
     let receiver = regex(&scope, "(a)", "gd");
     let input = text(&scope, b"a");
-    assert_eq!(
-        crate::regex::js_regexp_test(
-            receiver.get_raw_const_ptr::<RegExpHeader>(),
-            input.get_raw_const_ptr::<StringHeader>()
-        ),
-        1
-    );
-    unsafe {
-        (*receiver.get_raw_mut_ptr::<RegExpHeader>()).last_index = 0.0f64.to_bits();
-    }
-    crate::object::set_property_attrs(
-        receiver.get_raw_mut_ptr::<RegExpHeader>() as usize,
-        "lastIndex".to_string(),
-        crate::object::PropertyAttrs::new(false, false, false),
-    );
+    assert_eq!(test(&receiver, &input), 1);
+    receiver.with_mut_ptr::<RegExpHeader, _>(|receiver| {
+        unsafe { (*receiver).last_index = 0.0f64.to_bits() };
+        crate::object::set_property_attrs(
+            receiver as usize,
+            "lastIndex".to_string(),
+            crate::object::PropertyAttrs::new(false, false, false),
+        );
+    });
     let live = external_side_live_bytes();
     let roots = RuntimeHandleScope::active_len_for_tests();
-    let thrown = crate::exception::catch_js_throw(|| {
-        crate::regex::js_regexp_exec(
-            receiver.get_raw_mut_ptr::<RegExpHeader>(),
-            input.get_raw_const_ptr::<StringHeader>(),
-        )
-    })
-    .expect_err("matching must throw when its lastIndex write is forbidden");
+    let thrown = crate::exception::catch_js_throw(|| exec(&receiver, &input))
+        .expect_err("matching must throw when its lastIndex write is forbidden");
     assert_eq!(RuntimeHandleScope::active_len_for_tests(), roots);
     assert_eq!(
         external_side_live_bytes(),
@@ -307,7 +301,7 @@ fn perex_public_throwing_lastindex_write_releases_native_scratch_and_roots() {
     let thrown = scope.root_nanbox_f64(thrown);
     assert_eq!(bytes(field(&thrown, "name")), b"TypeError");
     assert_eq!(
-        receiver.with_const_ptr(crate::regex::regex_last_index_offset),
+        receiver.with_const_ptr(|p| crate::regex::regex_last_index_offset(p)),
         0
     );
 }
@@ -332,25 +326,25 @@ fn perex_public_nonglobal_test_propagates_lastindex_coercion_throw() {
     let fp = throw_on_coercion as *const u8;
     crate::closure::js_register_closure_arity(fp, 0);
     let closure = crate::closure::js_closure_alloc_singleton(fp);
-    crate::object::js_object_set_field_by_name(
-        coercer.get_raw_mut_ptr::<ObjectHeader>(),
-        key.get_raw_const_ptr::<StringHeader>(),
-        js_nanbox_pointer(closure as i64),
-    );
-    unsafe {
-        (*receiver.get_raw_mut_ptr::<RegExpHeader>()).last_index =
-            js_nanbox_pointer(coercer.get_raw_mut_ptr::<ObjectHeader>() as i64).to_bits();
-    }
-    let before = input.get_raw_const_ptr::<StringHeader>() as usize;
+    coercer.with_mut_ptr::<ObjectHeader, _>(|coercer| {
+        key.with_const_ptr::<StringHeader, _>(|key| {
+            crate::object::js_object_set_field_by_name(
+                coercer,
+                key,
+                js_nanbox_pointer(closure as i64),
+            )
+        })
+    });
+    // Re-read after the store above, which may have grown and moved `coercer`.
+    coercer.with_mut_ptr::<ObjectHeader, _>(|coercer| {
+        receiver.with_mut_ptr::<RegExpHeader, _>(|receiver| unsafe {
+            (*receiver).last_index = js_nanbox_pointer(coercer as i64).to_bits();
+        })
+    });
+    let before = address::<StringHeader>(&input);
     let roots = RuntimeHandleScope::active_len_for_tests();
-    let error = crate::exception::catch_js_throw(|| {
-        crate::regex::js_regexp_test(
-            receiver.get_raw_const_ptr::<RegExpHeader>(),
-            input.get_raw_const_ptr::<StringHeader>(),
-        )
-    })
-    .unwrap_err();
+    let error = crate::exception::catch_js_throw(|| test(&receiver, &input)).unwrap_err();
     assert_eq!(error, 731.0);
     assert_eq!(RuntimeHandleScope::active_len_for_tests(), roots);
-    assert_ne!(input.get_raw_const_ptr::<StringHeader>() as usize, before);
+    assert_ne!(address::<StringHeader>(&input), before);
 }

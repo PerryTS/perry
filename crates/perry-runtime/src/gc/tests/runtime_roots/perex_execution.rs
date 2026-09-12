@@ -100,10 +100,7 @@ fn perex_host_compile_grows_scratch_and_reborrows_a_moving_pattern() {
     )
     .unwrap();
     assert!(polls > 2, "must retry at least once before final emission");
-    assert_ne!(
-        observe.get_raw_mut_ptr::<crate::StringHeader>() as usize,
-        original
-    );
+    assert_ne!(handle_address::<crate::StringHeader>(&observe), original);
     assert!(
         memory.peak_bytes() > 64 * (std::mem::size_of::<Node>() + std::mem::size_of::<Range>())
     );

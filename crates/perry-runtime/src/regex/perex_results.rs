@@ -29,9 +29,9 @@ pub(super) fn materialize(
     let scope = RuntimeHandleScope::new();
     let result = crate::array::js_array_alloc(captures.len() as u32);
     let result = scope.root_raw_mut_ptr(result);
-    unsafe {
-        (*result.get_raw_mut_ptr::<ArrayHeader>()).length = captures.len() as u32;
-    }
+    result.with_mut_ptr::<ArrayHeader, _>(|result| unsafe {
+        (*result).length = captures.len() as u32;
+    });
     for (index, capture) in captures.iter().enumerate() {
         let value = if let Some(span) = capture {
             let text = copy_span(subject, *span, budget, OUTPUT_BYTES, QUANTUM, poll)?;
@@ -39,16 +39,17 @@ pub(super) fn materialize(
         } else {
             crate::value::TAG_UNDEFINED
         };
-        unsafe {
-            crate::array::store_array_slot(result.get_raw_mut_ptr::<ArrayHeader>(), index, value);
-        }
+        // Re-read after `copy_span`, which allocates; the store itself does not.
+        result.with_mut_ptr::<ArrayHeader, _>(|result| unsafe {
+            crate::array::store_array_slot(result, index, value);
+        });
     }
     let indices = if has_indices {
         let array = crate::array::js_array_alloc(captures.len() as u32);
         let array = scope.root_raw_mut_ptr(array);
-        unsafe {
-            (*array.get_raw_mut_ptr::<ArrayHeader>()).length = captures.len() as u32;
-        }
+        array.with_mut_ptr::<ArrayHeader, _>(|array| unsafe {
+            (*array).length = captures.len() as u32;
+        });
         for (index, capture) in captures.iter().enumerate() {
             let value = if let Some(span) = capture {
                 let pair = crate::array::js_array_alloc(2);
@@ -61,13 +62,10 @@ pub(super) fn materialize(
             } else {
                 crate::value::TAG_UNDEFINED
             };
-            unsafe {
-                crate::array::store_array_slot(
-                    array.get_raw_mut_ptr::<ArrayHeader>(),
-                    index,
-                    value,
-                );
-            }
+            // Re-read after the pair allocation above; the store does not allocate.
+            array.with_mut_ptr::<ArrayHeader, _>(|array| unsafe {
+                crate::array::store_array_slot(array, index, value);
+            });
         }
         Some(array)
     } else {
@@ -113,13 +111,15 @@ pub(super) fn materialize(
         ] {
             if let (Some(owner), Some(array)) = (owner, array) {
                 let value = selected.map_or(f64::from_bits(crate::value::TAG_UNDEFINED), |index| {
-                    crate::array::js_array_get_f64(array.get_raw_const_ptr::<ArrayHeader>(), index)
+                    array.with_const_ptr::<ArrayHeader, _>(|array| {
+                        crate::array::js_array_get_f64(array, index)
+                    })
                 });
-                if !crate::proxy::create_data_property(
-                    owner.get_nanbox_f64(),
-                    crate::value::js_nanbox_string(key.get_raw_const_ptr::<StringHeader>() as i64),
-                    value,
-                ) {
+                // `create_data_property` roots all three values before it can allocate.
+                let key = key.with_const_ptr::<StringHeader, _>(|key| {
+                    crate::value::js_nanbox_string(key as i64)
+                });
+                if !crate::proxy::create_data_property(owner.get_nanbox_f64(), key, value) {
                     return Err(EngineError::InvalidSpan);
                 }
             }
@@ -129,42 +129,42 @@ pub(super) fn materialize(
         f64::from_bits(crate::value::TAG_UNDEFINED),
         RuntimeHandle::get_nanbox_f64,
     );
-    let input_value =
-        crate::value::js_nanbox_string(input.get_raw_const_ptr::<StringHeader>() as i64);
+    // Nothing from here to the install allocates on the GC heap: the refcount
+    // bump and the named-property side table are Rust-owned, so the boxed input
+    // and the array address stay current.
+    let input_value = input
+        .with_const_ptr::<StringHeader, _>(|input| crate::value::js_nanbox_string(input as i64));
     crate::string::js_string_addref_if_heap_string(input_value);
-    unsafe {
+    result.with_mut_ptr::<ArrayHeader, _>(|result| unsafe {
         crate::array::array_named_props_install_fresh(
-            result.get_raw_mut_ptr::<ArrayHeader>(),
+            result,
             &[
                 ("index", found.full.start() as f64),
                 ("input", input_value),
                 ("groups", groups_value),
             ],
         );
-    }
+    });
     if let Some(indices) = indices {
         let groups_value = index_groups.as_ref().map_or(
             f64::from_bits(crate::value::TAG_UNDEFINED),
             RuntimeHandle::get_nanbox_f64,
         );
-        unsafe {
-            crate::array::array_named_props_install_fresh(
-                indices.get_raw_mut_ptr::<ArrayHeader>(),
-                &[("groups", groups_value)],
-            );
-        }
-        unsafe {
-            crate::array::array_named_props_install_fresh(
-                result.get_raw_mut_ptr::<ArrayHeader>(),
-                &[(
-                    "indices",
-                    crate::value::js_nanbox_pointer(indices.get_raw_mut_ptr::<ArrayHeader>() as i64),
-                )],
-            );
-        }
+        indices.with_mut_ptr::<ArrayHeader, _>(|indices| unsafe {
+            crate::array::array_named_props_install_fresh(indices, &[("groups", groups_value)]);
+            result.with_mut_ptr::<ArrayHeader, _>(|result| {
+                crate::array::array_named_props_install_fresh(
+                    result,
+                    &[("indices", crate::value::js_nanbox_pointer(indices as i64))],
+                );
+            });
+        });
     }
     let groups = groups.as_ref().map_or(std::ptr::null_mut(), |g| {
         crate::value::js_nanbox_get_pointer(g.get_nanbox_f64()) as *mut ObjectHeader
     });
-    Ok((result.get_raw_mut_ptr::<ArrayHeader>(), groups))
+    Ok((
+        result.with_mut_ptr::<ArrayHeader, _>(|result| result),
+        groups,
+    ))
 }

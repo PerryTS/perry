@@ -211,10 +211,6 @@ pub struct RegexDiag {
     pub site_test_declined_patched_prototype: u64,
     pub site_test_declined_callee_mismatch: u64,
     pub site_test_declined_non_literal: u64,
-    #[cfg(test)]
-    test_program_builds: u64,
-    #[cfg(test)]
-    test_cache_evictions: u64,
     per_pattern: HashMap<usize, PatStat>,
 }
 
@@ -275,33 +271,6 @@ pub fn regex_with(f: impl FnOnce(&mut RegexDiag)) {
             }
         }
     });
-}
-
-#[cfg(test)]
-pub(crate) fn test_reset_regex_builds_and_evictions() {
-    REGEX_DIAG.with(|diag| {
-        let mut diag = diag.borrow_mut();
-        diag.test_program_builds = 0;
-        diag.test_cache_evictions = 0;
-    });
-}
-
-#[cfg(test)]
-pub(crate) fn test_note_regex_program_build() {
-    REGEX_DIAG.with(|diag| diag.borrow_mut().test_program_builds += 1);
-}
-
-#[cfg(test)]
-pub(crate) fn test_note_regex_cache_eviction() {
-    REGEX_DIAG.with(|diag| diag.borrow_mut().test_cache_evictions += 1);
-}
-
-#[cfg(test)]
-pub(crate) fn test_regex_builds_and_evictions() -> (u64, u64) {
-    REGEX_DIAG.with(|diag| {
-        let diag = diag.borrow();
-        (diag.test_program_builds, diag.test_cache_evictions)
-    })
 }
 
 impl RegexDiag {
