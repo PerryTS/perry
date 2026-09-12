@@ -1086,6 +1086,20 @@ crate::perry_thread_local! {
         const { Cell::new(DeferredGcRequest::None) };
     pub(super) static GC_OLD_RECLAIM_PENDING: Cell<bool> = const { Cell::new(false) };
     pub(super) static GC_LAST_OLD_RECLAIM_IN_USE_BYTES: Cell<usize> = const { Cell::new(0) };
+    /// Bytes promoted by a minor whose survival was PATHOLOGICAL (#10123).
+    ///
+    /// Deliberately NOT a correction to `GC_LAST_OLD_RECLAIM_IN_USE_BYTES`:
+    /// #7902 and #7965 settled that the baseline is the base of a GROWTH
+    /// measurement, not a liveness claim, and that withholding the promotion
+    /// credit pins that base at 0 on exactly the workloads that reach it. Both
+    /// still hold. This is a SECOND, independent signal answering the question
+    /// the baseline deliberately cannot: how much of old-gen arrived because a
+    /// minor could not tell garbage from survivors.
+    ///
+    /// At >=950 permille the generational hypothesis is false for that minor --
+    /// nothing died -- so its "promotion" is the nursery being laundered into
+    /// old-gen, where no minor will ever look at it again. Only a full can.
+    pub(super) static GC_OLD_GARBAGE_SUSPECT_BYTES: Cell<usize> = const { Cell::new(0) };
     /// Live allocated arena bytes measured right after the last FULL
     /// mark-sweep — the baseline for major-GC pacing
     /// (`arena_growth_full_escalation_due`).
@@ -1916,6 +1930,40 @@ pub(super) fn copied_minor_promotion_handoff_due(trigger_kind: GcTriggerKind) ->
 /// outright when the measurement contradicts the predictor. Those act on
 /// evidence about the cohort; a pinned pacing base acts on every program that
 /// retains, whether or not anything about it is uncertain.
+/// Survival at or above which a minor's promotion is treated as suspect.
+const GARBAGE_SUSPECT_SURVIVAL_PERMILLE: u64 = 950;
+
+/// Record a minor's promotion against the suspect pool, gated on its survival.
+pub fn note_promotion_survival(promoted_bytes: usize, survival_permille: u64) {
+    if promoted_bytes == 0 || survival_permille < GARBAGE_SUSPECT_SURVIVAL_PERMILLE {
+        return;
+    }
+    GC_OLD_GARBAGE_SUSPECT_BYTES.with(|c| c.set(c.get().saturating_add(promoted_bytes)));
+}
+
+/// How much suspect old-gen material justifies a reclaim on its own.
+/// Measured knee on #10123's `wide_1m:parse`, swept 2/4/8/16/32/64/128 MB at
+/// 256 iterations. Below 16 MB the extra fulls cost CPU (3.14 s) for no further
+/// RSS (243 MiB either way); above it RSS climbs away fast (32 MB -> 274 MiB,
+/// 64 MB -> 510 MiB). 16 MB is the last point that holds 243 MiB at baseline
+/// CPU (3.00 s vs 3.03 s unpatched).
+const OLD_GEN_SUSPECT_RECLAIM_FLOOR_BYTES: usize = 16 * 1024 * 1024;
+
+fn old_gen_suspect_reclaim_floor_bytes() -> usize {
+    OLD_GEN_SUSPECT_RECLAIM_FLOOR_BYTES
+}
+
+/// [`old_reclaim_pressure_due`] plus the suspect-promotion arm.
+///
+/// Split off the shared predicate on purpose: that predicate is also what
+/// `copied_minor_promotion_handoff_pressure_due` asks, and an arm there would
+/// schedule a full immediately BEFORE a promotion, over survivors it cannot
+/// reclaim -- the futile-handoff shape #7592 removed.
+pub(super) fn old_reclaim_pressure_or_suspect_due(old_in_use: usize, baseline: usize) -> bool {
+    old_reclaim_pressure_due(old_in_use, baseline)
+        || GC_OLD_GARBAGE_SUSPECT_BYTES.with(|c| c.get()) >= old_gen_suspect_reclaim_floor_bytes()
+}
+
 pub(super) fn credit_promoted_bytes_to_old_baseline(promoted_bytes: usize) {
     if promoted_bytes == 0 {
         return;
@@ -1999,6 +2047,7 @@ pub(super) fn finish_full_old_reclaim_baseline() {
     let old_in_use =
         old_gen_reclaimable_pressure_bytes().saturating_add(external_side_live_bytes());
     GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.set(old_in_use));
+    GC_OLD_GARBAGE_SUSPECT_BYTES.with(|c| c.set(0));
     // Record the TOTAL post-full live set for major-GC pacing (young+old): the
     // full sweep is the only collection that frees forwarding stubs, so this is
     // the "clean" size the arena returns to and the base for the K× growth gate.
@@ -3236,7 +3285,7 @@ fn gc_budgeted_due_trigger() -> Option<BudgetedGcTrigger> {
     let old_in_use =
         old_gen_reclaimable_pressure_bytes().saturating_add(external_side_live_bytes());
     let old_baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.get());
-    if old_pending || old_reclaim_pressure_due(old_in_use, old_baseline) {
+    if old_pending || old_reclaim_pressure_or_suspect_due(old_in_use, old_baseline) {
         return Some(BudgetedGcTrigger::OldReclaim);
     }
 
