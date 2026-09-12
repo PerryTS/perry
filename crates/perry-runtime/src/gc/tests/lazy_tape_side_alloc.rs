@@ -133,22 +133,25 @@ fn test_old_generation_growth_does_not_scale_with_tape_size() {
     );
 }
 
-/// The header allocation no longer scales with the tape — but it stays in the
-/// OLD generation and born tenured, exactly where a multi-megabyte inline-tape
-/// header always landed.
+/// The header allocation no longer scales with the tape, and a LARGE cluster
+/// still lands in the old generation born tenured.
 ///
-/// That is the load-bearing half of this test, not a leftover. `json_tape_store`
-/// keys a tape by its owner's address, and every caller outside `json_tape`
-/// holds raw `*mut LazyArrayHeader` across allocations —
-/// `json::stringify_api::try_stringify_lazy_array` reads `blob_bytes` off a raw
-/// header and then allocates the result string. Letting the shrunken header
-/// fall into the nursery made it movable for the first time and the copying
-/// minor relocated it out from under those callers: `field_access` went
-/// non-deterministic, emitting a JSON string of NUL bytes for
-/// `JSON.stringify(parsed)` on 3 of 60 iterations. If a future change routes
-/// the header allocation back through `arena_alloc_gc`, this fails.
+/// It stays there on size now, not on principle. The old-gen request used to be
+/// unconditional because `json_tape_store` keys a tape by its owner's address
+/// and the copying minor's flip runs no finalize hook, so a nursery header
+/// would orphan or leak its tape — `JSON.stringify(parsed)` emitted a string of
+/// NUL bytes on 3 of 60 `field_access` iterations when that was tried.
+/// `GcMoveHookKind::LazyArrayTape` and
+/// `json_tape_store::finalize_dead_copied_minor_from_space_lazy_tapes` remove
+/// both reasons, so the generation is decided by cache size — and #7546's rule
+/// that header, cache and bitmap share one generation still decides it once.
+///
+/// This fixture is `big_blob()`, whose cache is far over the large-object line,
+/// so it must still be old: if a future change made even a large cluster
+/// nursery-resident, the promotion behaviour this test pins would stop being
+/// exercised.
 #[test]
-fn test_lazy_header_is_small_but_stays_old_gen_and_immovable() {
+fn test_large_lazy_cluster_is_still_born_old_and_tenured() {
     let _guard = GcTestIsolationGuard::new();
     let blob = big_blob();
     let tape_bytes = tape_bytes_of(&blob);
@@ -158,12 +161,13 @@ fn test_lazy_header_is_small_but_stays_old_gen_and_immovable() {
 
     assert!(
         crate::arena::pointer_in_old_gen(lazy as usize),
-        "the header must stay old-gen: callers outside json_tape hold raw \
-         header pointers across allocations"
+        "a cluster this large must still be born old — otherwise the \
+         large-object promotion path here stops being exercised"
     );
     assert!(
-        !crate::gc::gc_type_is_movable(crate::gc::GC_TYPE_LAZY_ARRAY),
-        "a lazy array must not be movable — its tape is keyed by its address"
+        crate::gc::gc_type_is_movable(crate::gc::GC_TYPE_LAZY_ARRAY),
+        "the type is movable now: the tape registration follows its owner and \
+         a from-space death gives the tape back"
     );
     unsafe {
         let header = (lazy as *const u8).sub(GC_HEADER_SIZE) as *const GcHeader;
