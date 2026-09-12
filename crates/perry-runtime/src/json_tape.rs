@@ -1164,6 +1164,20 @@ const _: () = assert!(
      cache loads the installed array from that word"
 );
 
+// The sparse tier of that same cache probes the per-element cache directly:
+// bitmap bit first, then the parallel element slot. Both offsets are read as
+// raw words from emitted code, so neither may drift either.
+const _: () = assert!(
+    std::mem::offset_of!(LazyArrayHeader, materialized_elements) == 40,
+    "LazyArrayHeader::materialized_elements must stay at offset 40 — the \
+     indexed inline cache loads a cached element from that word"
+);
+const _: () = assert!(
+    std::mem::offset_of!(LazyArrayHeader, materialized_bitmap) == 48,
+    "LazyArrayHeader::materialized_bitmap must stay at offset 48 — the indexed \
+     inline cache proves a cached element live from that word"
+);
+
 /// #7478: how long a run of consecutive ascending cold reads has to get
 /// before we stop materializing element-by-element and hand the whole
 /// array to the batch parser.

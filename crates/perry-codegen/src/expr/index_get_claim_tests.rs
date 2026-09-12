@@ -175,6 +175,18 @@ fn unknown_numeric_read_guards_dense_subclass_families_and_spilled_length() {
         ir.contains("arrlike.ic.range") && ir.contains("arrlike.ic.miss"),
         "the live length and cached dense-prefix bound must retain a semantic side exit:\n{ir}"
     );
+    assert!(
+        ir.contains("arrlike.lazy.guard") && ir.contains("arrlike.lazy.load"),
+        "a materialized lazy JSON array must be readable without leaving the cache:\n{ir}"
+    );
+    assert!(
+        ir.contains("@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED"),
+        "the lazy tier must honour process-wide prototype invalidation:\n{ir}"
+    );
+    assert!(
+        ir.contains("arrlike.lazy.sparse.bit") && ir.contains("arrlike.lazy.sparse.load"),
+        "a tape-backed lazy array must probe its per-element cache inline:\n{ir}"
+    );
 }
 
 fn dynamic_symbol_access_ir(symbol_init: Expr, field: Option<&str>) -> String {
