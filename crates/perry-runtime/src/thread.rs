@@ -266,6 +266,12 @@ pub enum SerializedValue {
     /// another thread's arena.
     Date(f64),
 
+    /// A constructor-created `Uint8Array`, copied byte-for-byte into fresh
+    /// buffer storage on the receiving thread. Perry represents these with a
+    /// `BufferHeader` plus an address-keyed brand, so the brand must be
+    /// restored as well as the bytes (#10103).
+    Uint8Array(Vec<u8>),
+
     /// An `fs.promises.FileHandle` crossing a `perry/thread` boundary.
     /// Perry's fd registry is thread-local, so handles are not transferable;
     /// deserialize as a FileHandle-shaped object with `fd === -1`.
@@ -282,8 +288,8 @@ pub enum SerializedValue {
     SharedArrayBuffer { addr: usize },
 
     /// A value whose runtime type cannot cross a `perry/thread` boundary
-    /// (Map, Set, Promise, Error, TypedArray, Buffer, Symbol, Temporal,
-    /// native handles, unmaterialized lazy JSON arrays, …).
+    /// (Map, Set, Promise, Error, non-Uint8 TypedArray, Buffer, Symbol,
+    /// Temporal, native handles, unmaterialized lazy JSON arrays, …).
     ///
     /// The serializer used to lower every one of these to `Inline(TAG_UNDEFINED)`,
     /// so a capture/return of such a value crossed silently as `undefined`
@@ -408,6 +414,23 @@ pub unsafe fn serialize_nanbox_for_thread(bits: u64) -> SerializedValue {
             return SerializedValue::SharedArrayBuffer {
                 addr: raw_ptr as usize,
             };
+        }
+
+        // Uint8Array can be backed by an ordinary GC allocation, a registered
+        // view, or an external BufferHeader with no preceding GcHeader. Brand
+        // detection must therefore precede the GcHeader read below, just like
+        // SharedArrayBuffer detection does. Always read through buffer_data so
+        // views and external storage copy their authoritative byte window.
+        if crate::buffer::is_uint8array_buffer(raw_ptr as usize) {
+            let buffer = raw_ptr as *const crate::buffer::BufferHeader;
+            let len = (*buffer).length as usize;
+            let data = crate::buffer::buffer_data(buffer);
+            let bytes = if len == 0 {
+                Vec::new()
+            } else {
+                std::slice::from_raw_parts(data, len).to_vec()
+            };
+            return SerializedValue::Uint8Array(bytes);
         }
 
         // Check GcHeader to determine type
@@ -892,6 +915,23 @@ pub unsafe fn deserialize_nanbox_on_current_thread(sv: &SerializedValue) -> u64 
         SerializedValue::Date(ts) => {
             // #2089: allocate a fresh DateCell in THIS thread's arena.
             crate::date::alloc_date_cell(*ts).to_bits()
+        }
+
+        SerializedValue::Uint8Array(bytes) => {
+            // Rebuild both halves of Perry's Uint8Array representation: fresh
+            // BufferHeader storage and the constructor-brand side-table entry.
+            let len = u32::try_from(bytes.len()).expect("serialized Uint8Array exceeds u32::MAX");
+            let buffer = crate::buffer::buffer_alloc(len);
+            (*buffer).length = len;
+            if !bytes.is_empty() {
+                ptr::copy_nonoverlapping(
+                    bytes.as_ptr(),
+                    crate::buffer::buffer_data_mut(buffer),
+                    bytes.len(),
+                );
+            }
+            crate::buffer::mark_as_uint8array(buffer as usize);
+            JSValue::pointer(buffer as *const u8).bits()
         }
 
         SerializedValue::DetachedFileHandle => match fs_thread_codec() {
