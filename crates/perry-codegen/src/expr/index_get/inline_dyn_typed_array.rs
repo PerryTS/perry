@@ -518,8 +518,11 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     let lazy_materialized_ptr = ctx.block().inttoptr(I64, &lazy_materialized_addr);
     let lazy_materialized = ctx.block().load(I64, &lazy_materialized_ptr);
     let lazy_has_array = ctx.block().icmp_ne(I64, &lazy_materialized, "0");
-    ctx.block()
-        .cond_br(&lazy_has_array, &lazy_guard_label, &lazy_sparse_bounds_label);
+    ctx.block().cond_br(
+        &lazy_has_array,
+        &lazy_guard_label,
+        &lazy_sparse_bounds_label,
+    );
 
     // Still tape-backed: the sparse per-element cache is the only thing that
     // can answer without materializing a subtree, and it is what a repeated or
@@ -545,8 +548,11 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     let sparse_bounds_ok = ctx
         .block()
         .and(I1, &sparse_default_prototypes, &sparse_in_bounds);
-    ctx.block()
-        .cond_br(&sparse_bounds_ok, &lazy_sparse_probe_label, &object_miss_label);
+    ctx.block().cond_br(
+        &sparse_bounds_ok,
+        &lazy_sparse_probe_label,
+        &object_miss_label,
+    );
 
     // `materialized_bitmap` is word 6 and `materialized_elements` word 5
     // (offsets 48 and 40; both pinned by const asserts in perry-runtime
@@ -594,8 +600,11 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     let sparse_is_hole = ctx
         .block()
         .icmp_eq(I64, &sparse_raw_bits, crate::nanbox::TAG_HOLE_I64);
-    ctx.block()
-        .cond_br(&sparse_is_hole, &object_miss_label, &lazy_sparse_value_label);
+    ctx.block().cond_br(
+        &sparse_is_hole,
+        &object_miss_label,
+        &lazy_sparse_value_label,
+    );
     ctx.current_block = lazy_sparse_value_idx;
     let sparse_value = if coerce_slow_to_number {
         ctx.block()
@@ -655,9 +664,7 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     // `lazy_get`'s own plausibility bound on an installed array. Keeping it
     // makes this cache admit exactly the set the runtime helper admits, so the
     // two can never disagree about which reads are fast.
-    let lazy_length_plausible = ctx
-        .block()
-        .icmp_ule(I64, &lazy_length_i64, "100000000");
+    let lazy_length_plausible = ctx.block().icmp_ule(I64, &lazy_length_i64, "100000000");
     let lazy_ok = ctx.block().and(I1, &lazy_is_array, &lazy_not_fwd);
     let lazy_ok = ctx.block().and(I1, &lazy_ok, &lazy_no_descriptors);
     let lazy_ok = ctx.block().and(I1, &lazy_ok, &lazy_default_prototypes);
