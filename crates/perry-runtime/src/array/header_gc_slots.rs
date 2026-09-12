@@ -6,6 +6,29 @@
 use super::header::*;
 use super::ArrayHeader;
 
+#[cfg(test)]
+thread_local! {
+    static DENSE_MOVE_LAYOUT_CLASSIFIED_SLOTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_reset_dense_move_layout_classified_slots() {
+    DENSE_MOVE_LAYOUT_CLASSIFIED_SLOTS.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn test_dense_move_layout_classified_slots() -> usize {
+    DENSE_MOVE_LAYOUT_CLASSIFIED_SLOTS.with(std::cell::Cell::get)
+}
+
+#[inline]
+fn note_layout_classified_slots(count: usize) {
+    #[cfg(test)]
+    DENSE_MOVE_LAYOUT_CLASSIFIED_SLOTS.with(|total| total.set(total.get() + count));
+    #[cfg(not(test))]
+    let _ = count;
+}
+
 pub(crate) unsafe fn gc_element_slot_range(
     arr: *mut ArrayHeader,
 ) -> Option<crate::gc::HeapSlotRange> {
@@ -187,6 +210,7 @@ pub(crate) unsafe fn rebuild_array_layout(arr: *mut ArrayHeader) {
         crate::gc::layout_mark_unknown(arr as *mut u8);
         return;
     }
+    note_layout_classified_slots(length);
     let was_all_pointer = super::header::array_object_flags_resolved(arr)
         & (crate::gc::GC_LAYOUT_STATE_MASK | crate::gc::GC_LAYOUT_ALL_POINTERS)
         == (crate::gc::GC_LAYOUT_SIDE_MASK | crate::gc::GC_LAYOUT_ALL_POINTERS);
@@ -256,6 +280,89 @@ pub(crate) unsafe fn rebuild_array_layout(arr: *mut ArrayHeader) {
             array_elements_ptr(arr),
             length,
         );
+    }
+}
+
+/// Settle GC metadata after a dense in-place element move without rebuilding
+/// it from every live slot.
+///
+/// `moved_src..moved_src + moved_count` was copied verbatim to `moved_dst` and
+/// `inserted_start..inserted_start + inserted_count` contains the newly-written
+/// values. A pointer-free layout remains exact when the inserted values are
+/// pointer-free, and the header-only all-pointer proof remains exact when they
+/// are all pointers. An index-specific mixed mask no longer names the moved
+/// slots, so it is dropped to UNKNOWN in O(1). Element-shape evidence is always
+/// revoked: inserted values can change KIND even when the array length does
+/// not change (#7480).
+///
+/// Survivor references are not new edges, but an old array's dirty-page
+/// coverage follows their byte move. Translate that coverage instead of
+/// replaying a write barrier for every survivor. A live incremental mark is
+/// the rare case where the translation helper declines; the value-derived
+/// replay then preserves its insertion-shading contract.
+///
+/// # Safety
+///
+/// `arr` is a live, forwarding-resolved ordinary Array. All ranges belong to
+/// its inline allocation and no safepoint may occur between the move and this
+/// call. The caller has already published the new logical length.
+#[inline]
+pub(crate) unsafe fn finish_array_dense_move_layout(
+    arr: *mut ArrayHeader,
+    moved_src: *const u64,
+    moved_dst: *mut u64,
+    moved_count: usize,
+    inserted_start: *mut u64,
+    inserted_count: usize,
+) {
+    if arr.is_null() {
+        return;
+    }
+
+    super::element_shape::clear_element_shape(arr);
+    let flags = super::header::array_object_flags_resolved(arr);
+    let layout = flags & (crate::gc::GC_LAYOUT_STATE_MASK | crate::gc::GC_LAYOUT_ALL_POINTERS);
+    let pointer_free = layout == crate::gc::GC_LAYOUT_POINTER_FREE;
+    let all_pointer =
+        layout == (crate::gc::GC_LAYOUT_SIDE_MASK | crate::gc::GC_LAYOUT_ALL_POINTERS);
+
+    if moved_count != 0 && moved_src != moved_dst.cast_const() && !pointer_free {
+        let copied_bytes = moved_count * std::mem::size_of::<u64>();
+        if !crate::gc::relocate_copied_old_object_dirty_pages(
+            arr as usize,
+            moved_src as usize,
+            moved_dst as usize,
+            copied_bytes,
+        ) {
+            crate::gc::replay_old_parent_slot_range_barriers(arr as usize, moved_dst, moved_count);
+        }
+    }
+
+    note_layout_classified_slots(inserted_count);
+    let mut inserted_are_pointer_free = true;
+    let mut inserted_are_all_pointer = true;
+    let mut inserted_are_all_numeric = true;
+    for index in 0..inserted_count {
+        let slot = inserted_start.add(index);
+        let bits = *slot;
+        let pointer = crate::gc::layout_pointer_bearing_bits(bits);
+        inserted_are_pointer_free &= !pointer;
+        inserted_are_all_pointer &= pointer;
+        inserted_are_all_numeric &= value_bits_to_number(bits).is_some();
+        crate::gc::runtime_write_barrier_slot(arr as usize, slot as usize, bits);
+    }
+
+    if !inserted_are_all_numeric {
+        clear_array_numeric_layout(arr);
+    }
+    if (pointer_free && inserted_are_pointer_free)
+        || (all_pointer && inserted_are_all_pointer)
+        || (moved_count == 0 && inserted_count == 0)
+    {
+        return;
+    }
+    if flags & crate::gc::GC_LAYOUT_STATE_MASK != 0 {
+        crate::gc::layout_mark_unknown(arr.cast());
     }
 }
 

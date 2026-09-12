@@ -1,0 +1,290 @@
+{
+  "revision": "50e08e91dd6a54d9d9210c43a5d36c86d880d144",
+  "node": "v26.5.1",
+  "host": "Linux-6.17.0-23-generic-x86_64-with-glibc2.39",
+  "cpu": "x86_64",
+  "artifact_sha256": {
+    "perry": "69cdc2258e9e5ae66ac42f1a29e54bb3f44a136e1c3e5632c65b86215a172ed1",
+    "node": "fb48e77df2f8e92fedfec39afa60a5f41563441f6b61316ada5fb295a431c2c6",
+    "runtime": "c9b6cd15f8ded630ef23e2faf529e94af927df2fd5194f5c51e8ca1d220e8cbc",
+    "stdlib": "b49927e243be3298d146afd57ce86287be1840829e67940bebc4b1bd928a7be4",
+    "array-splice-middle-remove.ts": "0ce71b76ad2801128883bd523af918e27ec4340e73d745582676dc2b77871b26",
+    "array-splice-middle-insert.ts": "5a17c728ca431cb2aca89d77315b394e2fb02f077c48cb64a8930d10483dd93e",
+    "array-unshift-build.ts": "8969ee530d12ec1aaa3d2714d86d7d13fa7cfd4d89aa98bf7d684962e4ed152f"
+  },
+  "workloads": {
+    "array-splice-middle-remove": {
+      "rows": [
+        {
+          "n": 100,
+          "node": {
+            "name": "array-splice-middle-remove",
+            "category": "arrays",
+            "n": 100,
+            "ms_per_run": 0.002542719171116567,
+            "runs": 55133,
+            "checksum": 658638221,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-splice-middle-remove",
+            "category": "arrays",
+            "n": 100,
+            "ms_per_run": 0.011850479857819961,
+            "runs": 11882,
+            "checksum": 658638221,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 1000,
+          "node": {
+            "name": "array-splice-middle-remove",
+            "category": "arrays",
+            "n": 1000,
+            "ms_per_run": 0.03876850000000078,
+            "runs": 3587,
+            "checksum": 109957063,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-splice-middle-remove",
+            "category": "arrays",
+            "n": 1000,
+            "ms_per_run": 0.5791328000000021,
+            "runs": 245,
+            "checksum": 109957063,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 10000,
+          "node": {
+            "name": "array-splice-middle-remove",
+            "category": "arrays",
+            "n": 10000,
+            "ms_per_run": 1.7828065833333302,
+            "runs": 84,
+            "checksum": 733399264,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-splice-middle-remove",
+            "category": "arrays",
+            "n": 10000,
+            "ms_per_run": 51.293488000000025,
+            "runs": 7,
+            "checksum": 733399264,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 100000,
+          "node": {
+            "name": "array-splice-middle-remove",
+            "category": "arrays",
+            "n": 100000,
+            "ms_per_run": 249.9612900000002,
+            "runs": 7,
+            "checksum": 452640523,
+            "status": "OK"
+          },
+          "perry": {
+            "status": "TIMEOUT"
+          }
+        }
+      ],
+      "common_sizes": [
+        100,
+        1000,
+        10000
+      ],
+      "common_slopes": {
+        "node": 1.422902915830406,
+        "perry": 1.818163148001364
+      }
+    },
+    "array-splice-middle-insert": {
+      "rows": [
+        {
+          "n": 100,
+          "node": {
+            "name": "array-splice-middle-insert",
+            "category": "arrays",
+            "n": 100,
+            "ms_per_run": 0.003527362257494725,
+            "runs": 39499,
+            "checksum": 619454386,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-splice-middle-insert",
+            "category": "arrays",
+            "n": 100,
+            "ms_per_run": 0.012534371553884009,
+            "runs": 11235,
+            "checksum": 619454386,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 1000,
+          "node": {
+            "name": "array-splice-middle-insert",
+            "category": "arrays",
+            "n": 1000,
+            "ms_per_run": 0.04604668275862028,
+            "runs": 3046,
+            "checksum": 604367096,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-splice-middle-insert",
+            "category": "arrays",
+            "n": 1000,
+            "ms_per_run": 0.5808904857142823,
+            "runs": 245,
+            "checksum": 604367096,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 10000,
+          "node": {
+            "name": "array-splice-middle-insert",
+            "category": "arrays",
+            "n": 10000,
+            "ms_per_run": 1.754180750000008,
+            "runs": 84,
+            "checksum": 37547811,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-splice-middle-insert",
+            "category": "arrays",
+            "n": 10000,
+            "ms_per_run": 51.82242600000001,
+            "runs": 7,
+            "checksum": 37547811,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 100000,
+          "node": {
+            "name": "array-splice-middle-insert",
+            "category": "arrays",
+            "n": 100000,
+            "ms_per_run": 214.31949000000031,
+            "runs": 7,
+            "checksum": 275047240,
+            "status": "OK"
+          },
+          "perry": {
+            "status": "TIMEOUT"
+          }
+        }
+      ],
+      "common_sizes": [
+        100,
+        1000,
+        10000
+      ],
+      "common_slopes": {
+        "node": 1.348312138582441,
+        "perry": 1.8082075879008503
+      }
+    },
+    "array-unshift-build": {
+      "rows": [
+        {
+          "n": 100,
+          "node": {
+            "name": "array-unshift-build",
+            "category": "arrays",
+            "n": 100,
+            "ms_per_run": 0.0033888458149777907,
+            "runs": 41225,
+            "checksum": 922626605,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-unshift-build",
+            "category": "arrays",
+            "n": 100,
+            "ms_per_run": 0.010258765128205217,
+            "runs": 13533,
+            "checksum": 922626605,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 1000,
+          "node": {
+            "name": "array-unshift-build",
+            "category": "arrays",
+            "n": 1000,
+            "ms_per_run": 0.057028461538462895,
+            "runs": 2458,
+            "checksum": 414934349,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-unshift-build",
+            "category": "arrays",
+            "n": 1000,
+            "ms_per_run": 0.5598590833333369,
+            "runs": 252,
+            "checksum": 414934349,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 10000,
+          "node": {
+            "name": "array-unshift-build",
+            "category": "arrays",
+            "n": 10000,
+            "ms_per_run": 3.357314666666658,
+            "runs": 42,
+            "checksum": 183209813,
+            "status": "OK"
+          },
+          "perry": {
+            "name": "array-unshift-build",
+            "category": "arrays",
+            "n": 10000,
+            "ms_per_run": 51.20603699999998,
+            "runs": 7,
+            "checksum": 183209813,
+            "status": "OK"
+          }
+        },
+        {
+          "n": 100000,
+          "node": {
+            "name": "array-unshift-build",
+            "category": "arrays",
+            "n": 100000,
+            "ms_per_run": 328.3525890000001,
+            "runs": 7,
+            "checksum": 622348785,
+            "status": "OK"
+          },
+          "perry": {
+            "status": "TIMEOUT"
+          }
+        }
+      ],
+      "common_sizes": [
+        100,
+        1000,
+        10000
+      ],
+      "common_slopes": {
+        "node": 1.4979701189328156,
+        "perry": 1.8491130394091182
+      }
+    }
+  }
+}
