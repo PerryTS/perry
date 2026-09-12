@@ -227,55 +227,44 @@ static BUFFER_LIKE_EVER_REGISTERED: RegistryLatch = RegistryLatch::new();
 /// [`RegistryAddrWindow`] for the ordering rule that makes it so.
 static BUFFER_LIKE_ADDR_WINDOW: RegistryAddrWindow = RegistryAddrWindow::new();
 
-/// The set filter behind the window, for the addresses `[lo, hi]` cannot
-/// discriminate.
-///
-/// The window's 98.0 % rejection rate above is measured on `claude-code
-/// --help`, which registers **10** buffers. On a streaming turn cc registers
-/// **213**, scattered across a **527 MB** span — so `[lo, hi]` covers half a
-/// gigabyte of ordinary heap and stops rejecting. `PERRY_BUFFER_DIAG`, one
-/// 400-character reply:
-///
-/// ```text
-/// probes=34,603,009 admits=25,627,160 (74.06 %) rejected=8,975,849 (25.94 %)
-/// true_positives=53,109 (0.207 % of admits)
-/// window [0x5b718eb73e8, 0x5b739e1c0b8] span 527.4 MB
-/// registrations=213 unregistrations=12 live_max=201
-/// ```
-///
-/// 25.6 million out-of-line probes per reply, 99.79 % of which find nothing.
-/// That is the failure [`RegistryAddrFilter`] was built for after #9272
-/// (`is_registered_symbol`: a window rejects 38.3 %, the filter 99.58 %) — its
-/// entries are ordinary heap objects interleaved with everything else, which
-/// its doc comment names as the case a window cannot serve.
-///
-/// **The capacity question this structure demands was asked before adopting
-/// it.** `RegistryAddrFilter` accrues bits per ADMISSION and never clears them,
-/// so a high-churn set saturates it — the trap #9807 documented for the
-/// per-object layout filter, which held 162,258 keys against 4,096 bits and
-/// answered "may hold" to every probe. Buffers are not that case: probing is
-/// hot but registration is rare, and **213 cumulative admissions against 1,024
-/// bits and 3 hashes is a 10.0 % false-positive rate**, so the filter rejects
-/// about nine of every ten addresses the window admits. The counter that says
-/// so ships with it.
-///
-/// The window stays in front: two static loads reject 25.94 % for less than
-/// the filter's three hashes cost.
-static BUFFER_LIKE_ADDR_FILTER: crate::registry_latch::RegistryAddrFilter =
-    crate::registry_latch::RegistryAddrFilter::new();
-
-/// `PERRY_BUFFER_ADDR_FILTER=0` restores the window-only probe, so one binary
-/// carries both and the A/B is one environment variable.
-fn buffer_addr_filter_enabled() -> bool {
-    use std::sync::OnceLock;
-    static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| {
-        !matches!(
-            std::env::var("PERRY_BUFFER_ADDR_FILTER").as_deref(),
-            Ok("0") | Ok("off") | Ok("false")
-        )
-    })
-}
+// The set filter that used to sit behind the window was REMOVED on 2026-09-12,
+// measured. Its own adoption note asked the capacity question and answered it
+// from a 400-character reply: 213 cumulative registrations, live_max 201, and
+// `true_positives=53,109 (0.207 % of admits)`, giving a predicted 10.0 %
+// false-positive rate — "the filter rejects about nine of every ten addresses
+// the window admits".
+//
+// Both premises fail on an ordinary command (startup, two real `Read` tool
+// calls, streamed reply). `PERRY_BUFFER_DIAG`, two rows:
+//
+//     probes=31,457,281 admits=26,577,900 (84.49 %) rejected=4,879,381 (15.51 %)
+//     true_positives=23,620,613 (88.873135 % of admits)
+//     registrations=3232 unregistrations=1907 live_max=1618
+//
+//   * The population is 15x larger than assumed — 3,232 cumulative admissions
+//     and 1,618 live against 1,024 bits — so the filter ended every row with
+//     ALL 1,024 BITS SET. It rejected nothing: every rejection in the row above
+//     comes from `BUFFER_LIKE_ADDR_WINDOW` in front of it, at 15.51 %, not the
+//     25.94 % the old note quoted.
+//   * The question's answer is usually YES here. 88.87 % of admitted probes
+//     find a real registered buffer, against 0.207 % on the `--help`-shaped
+//     workload the note measured. A filter cannot remove work the registry
+//     genuinely has to do, so even a correctly sized one could only have taken
+//     the ~2.96 M false positives per row off the slow path.
+//
+// So the structure cost three hash rounds and up to three dependent loads on
+// every one of ~26.6 M admitted probes per run and bought zero rejections.
+// Removing it is worth 2.46 % of minimum command CPU and 3.60 % paired median:
+// six interleaved pairs, one binary, the filter's own env-var arm against the
+// default, 1.22 -> 1.19 s minimum, faster in five pairs and tied in the sixth,
+// peak RSS no worse. The window stays — two static loads that reject 15.51 %
+// for less than the filter's three hashes cost.
+//
+// The general rule, because this is the second owner of this type measured the
+// same night: an occupancy number prices a filter only together with the
+// TRUE-POSITIVE RATE of what it admits. The sibling canonical-handle owner was
+// saturated the same way but resolved only 0.021 % of its admissions, and there
+// the remedy was the opposite one — size the structure to its population.
 
 #[cfg(test)]
 thread_local! {
@@ -316,7 +305,6 @@ pub(crate) fn note_buffer_like_registered(addr: usize) {
     // checks the latch and then the window, so both must already cover this
     // address by the time it becomes findable.
     BUFFER_LIKE_ADDR_WINDOW.admit(addr);
-    BUFFER_LIKE_ADDR_FILTER.admit(addr);
     BUFFER_LIKE_EVER_REGISTERED.arm();
 }
 
@@ -466,7 +454,6 @@ pub fn register_buffer(ptr: *const BufferHeader) {
     // the idle fast path and denies it. See `crate::registry_latch`.
     let addr = ptr as usize;
     BUFFER_LIKE_ADDR_WINDOW.admit(addr);
-    BUFFER_LIKE_ADDR_FILTER.admit(addr);
     BUFFER_LIKE_EVER_REGISTERED.arm();
     BUFFER_ADDR_RANGE.with(|r| {
         let (lo, hi) = r.get();
@@ -508,8 +495,7 @@ pub fn is_registered_buffer(addr: usize) -> bool {
     // call, the thread-local resolution, the `RefCell` borrow or the hash.
     // Every writer widens the window before it publishes, which is what makes
     // rejecting sound; see `BUFFER_LIKE_ADDR_WINDOW`.
-    let admitted = BUFFER_LIKE_ADDR_WINDOW.may_contain(addr)
-        && (!buffer_addr_filter_enabled() || BUFFER_LIKE_ADDR_FILTER.may_contain(addr));
+    let admitted = BUFFER_LIKE_ADDR_WINDOW.may_contain(addr);
     if crate::hot_diag::buffer_on() {
         crate::hot_diag::buffer_note_probe(addr, admitted, BUFFER_LIKE_ADDR_WINDOW.bounds());
     }
