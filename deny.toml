@@ -52,6 +52,3 @@ multiple-versions = "warn"
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
-# The regular-expression engine resolves from its public repository at a pinned
-# revision until it is published to crates.io; remove this entry then.
-allow-git = ["https://github.com/PerryTS/perex"]
