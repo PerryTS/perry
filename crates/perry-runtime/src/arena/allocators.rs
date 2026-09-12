@@ -428,7 +428,11 @@ pub fn arena_alloc_gc(size: usize, align: usize, obj_type: u8) -> *mut u8 {
     // slots per minor because of it).
     let total = gc_padded_total_size(size, align);
     super::alloc_sample::note(total, obj_type);
-    if crate::gc::is_large_object_total_size_for_type(total, obj_type) {
+    // `&&` short-circuits, so the scope check is reached only by an allocation
+    // the size test has ALREADY called large -- never on the hot path (#10123).
+    if crate::gc::is_large_object_total_size_for_type(total, obj_type)
+        && !crate::gc::json_wide_birth_permits(total, obj_type)
+    {
         let user_ptr = arena_alloc_gc_old(size, align, obj_type);
         unsafe {
             let header = user_ptr.sub(GC_HEADER_SIZE) as *mut GcHeader;

@@ -539,6 +539,10 @@ unsafe fn allocate_parse_shape_keys_array(keys: &[*const StringHeader]) -> *mut 
     // construction helper publishes its pointer layout and, for large arrays
     // born in old generation, remembers young key strings before return.
     let _suppressed = crate::gc::GcSuppressScope::new();
+    // #10123: same reasoning as the object storage -- a wide document's keys
+    // array crosses the threshold, is born tenured, and then holds its whole
+    // key set live long after every instance has died.
+    let _wide = crate::gc::JsonWideBirthScope::keys_array();
     let mut batch = crate::arena::ConstructionBatch::new();
     let mut array = construction_array::ConstructionArray::new(&mut batch, keys.len() as u32);
     for &key_ptr in keys {
