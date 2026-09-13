@@ -652,7 +652,13 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
             "emit_proven_shape_recheck",
             "emit_class_field_inline_precheck",
         )),
-        (raw_element_guard, ("emit_element_shape_field_load",)),
+        # #10185: the element clone's residual moved out of
+        # `emit_element_shape_field_load` into the deref helper both the
+        # per-read path and the shared once-per-iteration prologue call, so the
+        # ShapeId read this asserts now lives there. Naming the function that
+        # actually emits the check is what keeps the assertion from going
+        # vacuous the next time the emitter is split.
+        (raw_element_guard, ("emit_element_deref_with_residual",)),
     ):
         for name in names:
             body = function_body(source, name)
