@@ -460,7 +460,7 @@ unsafe fn emit_cached_record_uncached(
         return None;
     }
     let construction = large_output.then(crate::gc::GcSuppressScope::new);
-    let (result, output) = json_output_storage_alloc(bytes);
+    let (result, output, malloc_tracked) = json_output_storage_alloc(bytes);
     init_string_header(result, units, bytes, bytes, 0, 0);
     let value = input.with_const_ptr(|obj: *const crate::ObjectHeader| {
         let mut at = 0usize;
@@ -505,7 +505,7 @@ unsafe fn emit_cached_record_uncached(
         Some(JSValue::string_ptr(result))
     });
     drop(construction);
-    if large_output {
+    if malloc_tracked {
         super::stringify_flat::note_completed_malloc_json_output(bytes);
     }
     value
@@ -562,7 +562,7 @@ unsafe fn emit_cached_record_memo(
     }
     let repeated_candidate = bytes as usize <= MAX_REPEATED_OUTPUT_BYTES;
     let construction = large_output.then(crate::gc::GcSuppressScope::new);
-    let (result, output) = json_output_storage_alloc(bytes);
+    let (result, output, malloc_tracked) = json_output_storage_alloc(bytes);
     init_string_header(result, units, bytes, bytes, 0, 0);
     let value = input.with_const_ptr(|obj: *const crate::ObjectHeader| {
         let mut at = 0usize;
@@ -665,7 +665,7 @@ unsafe fn emit_cached_record_memo(
         Some(JSValue::string_ptr(result))
     });
     drop(construction);
-    if large_output {
+    if malloc_tracked {
         super::stringify_flat::note_completed_malloc_json_output(bytes);
     }
     value
@@ -745,7 +745,7 @@ unsafe fn emit_record(obj: *const crate::ObjectHeader, fields: usize) -> Option<
         return None;
     }
     let construction = large_output.then(crate::gc::GcSuppressScope::new);
-    let (result, output) = json_output_storage_alloc(bytes);
+    let (result, output, malloc_tracked) = json_output_storage_alloc(bytes);
     init_string_header(result, units, bytes, bytes, 0, 0);
     let value = input.with_const_ptr(|obj: *const crate::ObjectHeader| {
         let keys = crate::object::object_keys_array(obj);
@@ -797,7 +797,7 @@ unsafe fn emit_record(obj: *const crate::ObjectHeader, fields: usize) -> Option<
         Some(JSValue::string_ptr(result))
     });
     drop(construction);
-    if large_output {
+    if malloc_tracked {
         super::stringify_flat::note_completed_malloc_json_output(bytes);
     }
     value
