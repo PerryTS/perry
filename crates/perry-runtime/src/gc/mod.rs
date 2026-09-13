@@ -39,9 +39,11 @@ mod json_defer;
 mod policy;
 pub(crate) use json_defer::JsonParseAllocation;
 pub(crate) use policy::gc_runtime_safepoint;
+pub(crate) use policy::note_young_leaf_born_old;
 /// The one writer of `GC_SAFEPOINT_PENDING` — it also keeps the poll's global
 /// arming shadow in step. See `gc/poll_arm.rs`.
 pub(crate) use policy::set_safepoint_pending;
+pub(crate) use policy::young_generation_holds_a_nursery;
 pub use policy::*;
 mod progress;
 pub use progress::*;
@@ -231,9 +233,16 @@ mod native_stack_scan;
 /// mechanism is `arena/promote.rs`; this decides when to use it.
 mod promote_in_place;
 use promote_in_place::*;
+#[cfg(test)]
+pub(crate) use promote_in_place::{
+    clear_young_survival_for_tests, last_young_survival_permille, seed_young_survival_for_tests,
+};
 pub use promote_in_place::{
     first_cycle_promotion_attempts, first_cycle_promotion_rollbacks, in_place_promoted_objects,
     in_place_promotion_cycles, untraced_promoted_objects, untraced_promotion_cycles,
+};
+pub(crate) use promote_in_place::{
+    young_generation_measured_dying, young_generation_measured_retained,
 };
 /// Instrument-liveness counters (#7604): copying minors completed, objects
 /// relocated, loop back-edge polls reached. Mode-independent — they count what

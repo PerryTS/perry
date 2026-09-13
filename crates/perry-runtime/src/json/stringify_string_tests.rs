@@ -98,3 +98,63 @@ fn direct_quoted_raw_strings_preserve_fallback_length_semantics() {
         }
     }
 }
+
+/// #10169: a large leaf stays malloc-tracked while the young generation is
+/// smaller than the leaf or was measured as mostly garbage; it is born old in
+/// the arena when the young generation holds at least the leaf's own bytes
+/// and is unmeasured or measured as retained — the shape of a freshly parsed
+/// document whose result the caller is about to stringify.
+#[test]
+fn large_json_leaf_routes_by_young_generation_occupancy() {
+    if !crate::gc::gen_gc_enabled() {
+        return;
+    }
+    let previous_survival = crate::gc::last_young_survival_permille();
+    let _suppress = crate::gc::GcSuppressScope::new();
+    let young_before = crate::arena::copying_from_space_in_use_bytes();
+    let leaf = (young_before as u32 + (1 << 20)).max(crate::string::JSON_MALLOC_OUTPUT_THRESHOLD);
+    crate::gc::seed_young_survival_for_tests(999);
+    let (_, _, tracked_below) = crate::string::json_output_storage_alloc(leaf);
+    assert!(
+        tracked_below,
+        "a young generation smaller than the leaf keeps malloc tracking"
+    );
+
+    let filler = vec![b'y'; 1024];
+    while crate::arena::copying_from_space_in_use_bytes() < leaf as usize {
+        crate::string::js_string_from_bytes(filler.as_ptr(), filler.len() as u32);
+    }
+    if !crate::gc::young_generation_holds_a_nursery() {
+        let (_, _, tracked_below_nursery) = crate::string::json_output_storage_alloc(leaf);
+        assert!(
+            tracked_below_nursery,
+            "a young generation below one nursery keeps malloc tracking"
+        );
+        while !crate::gc::young_generation_holds_a_nursery() {
+            crate::string::js_string_from_bytes(filler.as_ptr(), filler.len() as u32);
+        }
+    }
+    crate::gc::clear_young_survival_for_tests();
+    let (_, _, tracked_unmeasured) = crate::string::json_output_storage_alloc(leaf);
+    assert!(
+        !tracked_unmeasured,
+        "an unmeasured young generation at or above the leaf size births the leaf in the arena"
+    );
+    crate::gc::seed_young_survival_for_tests(100);
+    let (_, _, tracked_dying) = crate::string::json_output_storage_alloc(leaf);
+    assert!(
+        tracked_dying,
+        "a young generation measured as mostly garbage keeps malloc tracking"
+    );
+    crate::gc::seed_young_survival_for_tests(999);
+    let (_, _, tracked_retained) = crate::string::json_output_storage_alloc(leaf);
+    assert!(
+        !tracked_retained,
+        "a retained young generation at or above the leaf size births the leaf in the arena"
+    );
+
+    match previous_survival {
+        Some(permille) => crate::gc::seed_young_survival_for_tests(permille),
+        None => crate::gc::clear_young_survival_for_tests(),
+    }
+}
