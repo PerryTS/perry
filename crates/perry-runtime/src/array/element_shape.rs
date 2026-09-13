@@ -143,6 +143,11 @@ struct ElementShapeRecord {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ElementShapeProof {
     pub(crate) class_id: u32,
+    /// The exact ordinary ShapeId every element carries. Meaningful for a
+    /// class-keyed proof too, but it is the WHOLE identity of a `class_id == 0`
+    /// one (#10123) — the element-shape loop clone keys its per-element
+    /// residual check on it.
+    pub(crate) ordinary_shape_id: u32,
     pub(crate) verified_len: u32,
     pub(crate) epoch: u64,
 }
@@ -289,11 +294,23 @@ fn element_identity_of_bits(value_bits: u64) -> Option<(u32, u32)> {
         }) {
             return None;
         }
-        let class_id = (*obj).class_id;
-        if class_id == 0 {
-            return None;
-        }
-        Some((class_id, shape_id))
+        // #10123: a class-0 ordinary object is admitted, keyed on the exact
+        // ShapeId the descriptor probe above just validated. Every
+        // `JSON.parse`'d record is one (`object/json_construction.rs` stamps
+        // `class_id = 0` and an ordinary birth shape), and refusing them here
+        // is the reason no element-shape proof was ever established for a
+        // parsed record array.
+        //
+        // The identity is never `(0, 0)`: `shape_descriptor_by_id` answers
+        // `None` for id 0, so the `Ordinary` test above already rejected it.
+        // And a class-0 proof cannot be mistaken for a class-keyed one by an
+        // existing consumer, because every one of them compares against a
+        // NONZERO class id — `js_array_ensure_element_shape` keeps returning
+        // `class_id`, so a class-0 proof reads to them exactly as "no proof".
+        // What makes the identity usable is that a class-0 record's shape is
+        // compared EXACTLY (see `element_matches_record`), which is strictly
+        // narrower than the class-level match.
+        Some(((*obj).class_id, shape_id))
     }
 }
 
@@ -325,6 +342,18 @@ fn element_matches_record(value_bits: u64, record: ElementShapeRecord) -> bool {
             #[cfg(test)]
             EXACT_SHAPE_STORE_HITS.with(|hits| hits.set(hits.get().wrapping_add(1)));
             return true;
+        }
+        // #10123: a class-0 proof is the exact ShapeId and NOTHING else. The
+        // two fallbacks below are class-level, and "same class" is vacuous for
+        // class 0 — every plain object shares it — so reaching them would
+        // widen a shape proof into no proof at all. Both already fail closed
+        // for class 0 (`array_subclass_named_prefix_token_matches_class`
+        // returns false, and `element_identity_of_validated_object` requires a
+        // nonzero class), and `class_zero_record_declines_a_different_shape`
+        // pins that; this makes the rule local rather than a coincidence of
+        // two other functions.
+        if record.class_id == 0 {
+            return false;
         }
         // Object-backed Array subclasses publish a move-stable, class-wide
         // ordinary-prefix proof precisely because their numeric tail mints a
@@ -498,6 +527,7 @@ pub(crate) unsafe fn element_shape_proof(arr: *const ArrayHeader) -> Option<Elem
     }
     Some(ElementShapeProof {
         class_id: record.class_id,
+        ordinary_shape_id: record.ordinary_shape_id,
         verified_len: record.verified_len,
         epoch: record.epoch,
     })
@@ -742,6 +772,28 @@ pub extern "C" fn js_array_ensure_element_shape(arr: *mut ArrayHeader) -> i32 {
     unsafe { ensure_element_shape(arr).map_or(0, |p| p.class_id as i32) }
 }
 
+/// #10123: establish-or-confirm for a **class-0** (plain-object) element
+/// array, returning the exact ordinary ShapeId every element carries, or `0`.
+///
+/// The sibling above answers the class question and therefore answers `0` for
+/// a `JSON.parse`'d record array — correctly, since those records have no
+/// class. This entry point answers the question that array CAN answer: they
+/// all carry one exact ShapeId. A class-KEYED proof deliberately reports `0`
+/// here rather than its shape id: the two proofs are not interchangeable
+/// (`element_matches_record` matches a class-keyed record at class level, so
+/// its `ordinary_shape_id` is the shape of the first element and not a
+/// per-element guarantee), and handing one out would licence a shape-keyed
+/// clone on a proof that never checked shapes.
+#[no_mangle]
+pub extern "C" fn js_array_ensure_element_shape_ordinary(arr: *mut ArrayHeader) -> i32 {
+    unsafe {
+        match ensure_element_shape(arr) {
+            Some(proof) if proof.class_id == 0 => proof.ordinary_shape_id as i32,
+            _ => 0,
+        }
+    }
+}
+
 /// The O(1) query with no scan: the proven `class_id`, or `0`.
 #[no_mangle]
 pub extern "C" fn js_array_element_shape_class(arr: *const ArrayHeader) -> i32 {
@@ -776,18 +828,24 @@ pub extern "C" fn js_array_element_shape_check(
     }
 }
 
-// NOTE — exactly ONE `keepalive-anchors` `#[used]` static, deliberately.
+// NOTE — anchor EXACTLY the entries codegen emits a call to, and no more.
 // `keepalive-anchors` is a DEFAULT feature, so an anchor pins its symbol into
-// every shipped binary: anchoring all five would be the dead-strip defeat the
+// every shipped binary: anchoring all six would be the dead-strip defeat the
 // hello-size campaign traced its regression to. #5093's element-shape
-// versioned-loop clone emits a call to exactly one of them
-// (`js_array_ensure_element_shape`, from the loop preheader), so that one —
-// and only that one — is anchored. The other four stay unanchored and
-// dead-strippable until something emits a call to them.
+// versioned-loop clone emits a call from its preheader to
+// `js_array_ensure_element_shape` (the class-keyed arm) or to
+// `js_array_ensure_element_shape_ordinary` (#10123's shape-keyed arm), so
+// those two — and only those two — are anchored. The other four stay
+// unanchored and dead-strippable until something emits a call to them.
 #[cfg(feature = "keepalive-anchors")]
 #[used]
 static KEEP_ARRAY_ENSURE_ELEMENT_SHAPE: extern "C" fn(*mut ArrayHeader) -> i32 =
     js_array_ensure_element_shape;
+
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_ARRAY_ENSURE_ELEMENT_SHAPE_ORDINARY: extern "C" fn(*mut ArrayHeader) -> i32 =
+    js_array_ensure_element_shape_ordinary;
 
 #[cfg(test)]
 pub(crate) fn test_element_shape_record_exists(owner: usize) -> bool {

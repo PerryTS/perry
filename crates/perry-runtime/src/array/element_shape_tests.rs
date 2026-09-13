@@ -661,3 +661,265 @@ fn pruning_dead_owners_removes_their_records() {
         "pruning must not disturb a live array's proof"
     );
 }
+
+// ---------------------------------------------------------------------------
+// #10123 — CLASS-0 (plain-object) element arrays.
+//
+// A `JSON.parse`'d record has `class_id == 0` and an ordinary birth ShapeId
+// (`object/json_construction.rs`), so the class-keyed invariant declined every
+// parsed record array: `element_identity_of_bits` refused class 0 outright and
+// no proof was ever established. The proof below is keyed on the EXACT ShapeId
+// instead, which is strictly narrower than a class-level match — and it has to
+// be, because "same class" is vacuous when the class is 0.
+// ---------------------------------------------------------------------------
+
+/// A keys array of heap-allocated interned property names, the shape a
+/// parser's canonical keys array has.
+fn keys_array(names: &[&str]) -> *mut ArrayHeader {
+    let keys = crate::array::js_array_alloc_with_length(names.len() as u32);
+    for (index, name) in names.iter().enumerate() {
+        let string = crate::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        crate::array::js_array_set(keys, index as u32, crate::JSValue::string_ptr(string));
+    }
+    keys
+}
+
+/// `(keys, shape_id)` for a plain ordinary shape over `names`.
+fn record_shape(names: &[&str]) -> (*mut ArrayHeader, u32) {
+    let keys = keys_array(names);
+    let shape_id = crate::object::shapes::shape_id_for_keys_ensure(keys, names.len() as u32);
+    assert_ne!(shape_id, 0, "test premise: the keys must mint a shape");
+    (keys, shape_id)
+}
+
+/// One class-0 ordinary record, birthed exactly the way
+/// `object/json_construction.rs` births a parsed one: class 0, the shape
+/// stamped from the canonical keys array, values in key order.
+fn json_like_record(keys: *mut ArrayHeader, shape_id: u32, field_count: u32) -> f64 {
+    let obj =
+        crate::object::js_object_alloc_class_inline_keys_stamped(0, 0, field_count, keys, shape_id);
+    unsafe {
+        assert_eq!(
+            (*obj).class_id,
+            0,
+            "test premise: the fixture record must be class 0"
+        );
+        assert_eq!(
+            (*obj).parent_class_id,
+            shape_id,
+            "test premise: the fixture record must carry the requested shape"
+        );
+    }
+    crate::value::js_nanbox_pointer(obj as i64)
+}
+
+#[test]
+fn a_homogeneous_class_zero_record_array_proves_on_its_shape_id() {
+    let _serialized = test_serialize();
+    let (keys, shape_id) = record_shape(&["id", "name"]);
+    let mut arr = js_array_alloc(4);
+    for _ in 0..4 {
+        arr = push(arr, json_like_record(keys, shape_id, 2));
+    }
+
+    let established = unsafe { ensure_element_shape(arr) }
+        .expect("a homogeneous class-0 record array must prove (#10123)");
+    assert_eq!(
+        established.class_id, 0,
+        "the proof stays class 0 — every class-keyed consumer must read it as `no class`"
+    );
+    assert_eq!(established.ordinary_shape_id, shape_id);
+    assert_eq!(established.verified_len, 4);
+
+    // The FFI the clone's shape-keyed preheader calls.
+    assert_eq!(
+        js_array_ensure_element_shape_ordinary(arr),
+        shape_id as i32,
+        "the shape-keyed entry point must hand back the exact ShapeId"
+    );
+    // ... and the class-keyed one still answers 0, so a class-keyed preheader
+    // comparing against its own (nonzero) class id takes the slow clone.
+    assert_eq!(
+        js_array_ensure_element_shape(arr),
+        0,
+        "a class-0 proof must never read as a class proof"
+    );
+}
+
+#[test]
+fn a_mixed_shape_class_zero_record_array_declines() {
+    let _serialized = test_serialize();
+    let (keys_a, shape_a) = record_shape(&["id", "name"]);
+    let (keys_b, shape_b) = record_shape(&["id", "name", "extra"]);
+    assert_ne!(shape_a, shape_b, "test premise: two distinct shapes");
+    let mut arr = js_array_alloc(4);
+    arr = push(arr, json_like_record(keys_a, shape_a, 2));
+    arr = push(arr, json_like_record(keys_a, shape_a, 2));
+    arr = push(arr, json_like_record(keys_b, shape_b, 3));
+
+    assert!(
+        unsafe { ensure_element_shape(arr) }.is_none(),
+        "a record with a DIFFERENT key set must decline the whole array — this is \
+         the heterogeneous JSON case, and admitting it would licence a field read \
+         at a slot the second shape does not have"
+    );
+    assert_eq!(js_array_ensure_element_shape_ordinary(arr), 0);
+}
+
+#[test]
+fn class_zero_record_declines_a_different_shape() {
+    // The load-bearing narrowing: `element_matches_record`'s class-level
+    // fallbacks are vacuous for class 0 (every plain object shares it), so a
+    // class-0 record is matched on its exact ShapeId and nothing else.
+    let _serialized = test_serialize();
+    let (keys_a, shape_a) = record_shape(&["id", "name"]);
+    let (keys_b, shape_b) = record_shape(&["id", "flag"]);
+    assert_ne!(shape_a, shape_b);
+    let mut arr = js_array_alloc(4);
+    for _ in 0..3 {
+        arr = push(arr, json_like_record(keys_a, shape_a, 2));
+    }
+    assert_eq!(
+        unsafe { ensure_element_shape(arr) }
+            .expect("proven")
+            .ordinary_shape_id,
+        shape_a
+    );
+
+    js_array_set_f64(arr, 1, json_like_record(keys_b, shape_b, 2));
+
+    assert!(
+        proof(arr).is_none(),
+        "a same-class (class 0) but different-SHAPE store must clear the proof"
+    );
+    unsafe { assert!(!test_element_shape_bit_set(arr)) };
+}
+
+#[test]
+fn class_zero_proof_keeps_a_same_shape_store_and_clears_a_primitive_one() {
+    let _serialized = test_serialize();
+    let (keys, shape_id) = record_shape(&["id", "name"]);
+    let mut arr = js_array_alloc(4);
+    for _ in 0..3 {
+        arr = push(arr, json_like_record(keys, shape_id, 2));
+    }
+    let established = unsafe { ensure_element_shape(arr) }.expect("proven");
+
+    js_array_set_f64(arr, 1, json_like_record(keys, shape_id, 2));
+    let kept = proof(arr).expect("a same-shape store must keep the proof");
+    assert_eq!(kept.epoch, established.epoch, "the proof identity survives");
+    assert_eq!(kept.ordinary_shape_id, shape_id);
+
+    js_array_set_f64(arr, 1, 42.0);
+    assert!(
+        proof(arr).is_none(),
+        "a primitive store must clear a class-0 proof like any other"
+    );
+}
+
+#[test]
+fn a_class_keyed_proof_reports_no_ordinary_shape_id_to_the_shape_keyed_entry() {
+    // The two proofs are not interchangeable: a class-keyed record matches at
+    // CLASS level, so its `ordinary_shape_id` is the first element's shape and
+    // not a per-element guarantee. Handing it to the shape-keyed clone would
+    // licence an exact-shape read on a proof that never checked shapes.
+    let _serialized = test_serialize();
+    let arr = built_from_pushes(CLASS_A, 3);
+    assert_eq!(js_array_ensure_element_shape(arr), CLASS_A as i32);
+    assert_eq!(
+        js_array_ensure_element_shape_ordinary(arr),
+        0,
+        "a class-keyed proof must not hand its shape id to the shape-keyed clone"
+    );
+    assert_eq!(
+        proof(arr).expect("proven").class_id,
+        CLASS_A,
+        "and the class-keyed proof itself is unchanged"
+    );
+}
+
+#[test]
+fn class_zero_admission_does_not_disturb_class_keyed_proofs() {
+    let _serialized = test_serialize();
+    let arr = built_from_pushes(CLASS_A, 4);
+    let established = proof(arr).expect("proven");
+    assert_eq!(established.class_id, CLASS_A);
+    assert_ne!(
+        established.ordinary_shape_id, 0,
+        "a class instance still carries an exact ordinary shape id"
+    );
+
+    // A class-B store still clears; a class-A store with a DIFFERENT shape
+    // still keeps through the class-level fallback (the behaviour #10123 must
+    // not narrow for a nonzero class).
+    js_array_set_f64(arr, 1, instance(CLASS_A));
+    assert!(proof(arr).is_some(), "a same-class store must still keep");
+    js_array_set_f64(arr, 1, instance(CLASS_B));
+    assert!(proof(arr).is_none(), "a different-class store must clear");
+}
+
+// ---------------------------------------------------------------------------
+// #10123 — the shape's key -> inline slot query the clone's preheader asks.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_ordinary_slot_query_answers_the_key_position() {
+    let _serialized = test_serialize();
+    let (_keys, shape_id) = record_shape(&["id", "name", "score"]);
+    for (index, name) in ["id", "name", "score"].iter().enumerate() {
+        let key = crate::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        assert_eq!(
+            crate::object::shapes::js_shape_ordinary_inline_slot_for_key(
+                shape_id,
+                crate::JSValue::string_ptr(key).bits(),
+            ),
+            index as i32,
+            "slot k must be key position k for a plain birth-stamped shape"
+        );
+    }
+}
+
+#[test]
+fn the_ordinary_slot_query_declines_an_absent_key_and_an_unknown_shape() {
+    let _serialized = test_serialize();
+    let (_keys, shape_id) = record_shape(&["id", "name"]);
+    let missing = crate::js_string_from_bytes(b"nope".as_ptr(), 4);
+    assert_eq!(
+        crate::object::shapes::js_shape_ordinary_inline_slot_for_key(
+            shape_id,
+            crate::JSValue::string_ptr(missing).bits(),
+        ),
+        -1
+    );
+    assert_eq!(
+        crate::object::shapes::js_shape_ordinary_inline_slot_for_key(0, {
+            let key = crate::js_string_from_bytes(b"id".as_ptr(), 2);
+            crate::JSValue::string_ptr(key).bits()
+        }),
+        -1,
+        "shape id 0 names no descriptor"
+    );
+}
+
+#[test]
+fn the_ordinary_slot_query_matches_an_sso_immediate_against_a_heap_key() {
+    // Codegen hands the key over as the whole NaN-boxed pool value, and a
+    // short property name ("id") reaches the pool as an SSO IMMEDIATE whose
+    // masked low bits are packed characters, not an address. A pointer-only
+    // comparison would answer -1 for exactly the key names this optimization
+    // exists for.
+    let _serialized = test_serialize();
+    let (_keys, shape_id) = record_shape(&["id", "name"]);
+    let heap = crate::js_string_from_bytes(b"id".as_ptr(), 2);
+    let sso = unsafe { crate::string::short_ascii_sso_bits(heap) }
+        .expect("test premise: `id` fits the SSO immediate form");
+    assert_ne!(
+        sso,
+        crate::JSValue::string_ptr(heap).bits(),
+        "test premise: the two representations really are different bits"
+    );
+    assert_eq!(
+        crate::object::shapes::js_shape_ordinary_inline_slot_for_key(shape_id, sso),
+        0
+    );
+}

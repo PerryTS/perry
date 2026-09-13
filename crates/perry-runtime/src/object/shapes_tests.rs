@@ -1132,3 +1132,53 @@ fn fresh_shape_creation_does_not_flush_the_lookup_cache() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// #10123: `js_shape_ordinary_inline_slot_for_key` — the element-shape loop
+// clone's "which inline slot holds this key?" preheader query.
+//
+// The positive cases and the SSO-vs-heap representation case live with the
+// invariant they serve (`array/element_shape_tests.rs`). What belongs HERE is
+// the conjunct that is a property of the shape TABLE: a shape whose kind is
+// `Class` describes a class layout, not "slot k == key position k", and
+// answering a slot for one would hand the clone a wrong offset rather than a
+// missed optimization.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_ordinary_slot_query_declines_a_class_kind_shape() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    unsafe {
+        let keys = crate::array::js_array_alloc_with_length(1);
+        let name = crate::string::js_string_from_bytes(b"id".as_ptr(), 2);
+        crate::array::js_array_set(keys, 0, crate::JSValue::string_ptr(name));
+        let key_bits = crate::JSValue::string_ptr(name).bits();
+        let ordinary = shape_id_for_keys_ensure(keys, 1);
+        assert_eq!(
+            js_shape_ordinary_inline_slot_for_key(ordinary, key_bits),
+            0,
+            "test premise: the ORDINARY shape answers slot 0 for its only key — \
+             otherwise the negative below is vacuous"
+        );
+
+        // `transition_object_shape_to_class` keeps the keys array and both
+        // counts and changes ONLY the kind, so the pair below differs in
+        // exactly the conjunct under test.
+        let obj = crate::object::js_object_alloc_class_inline_keys_stamped(0, 0, 1, keys, ordinary);
+        assert_eq!((*obj).parent_class_id, ordinary, "test premise: stamped");
+        let class_kind = transition_object_shape_to_class(obj);
+        assert_ne!(
+            ordinary, class_kind,
+            "test premise: the kind really changed"
+        );
+        assert_eq!(
+            shape_object_kind_by_id(class_kind),
+            Some(ShapeObjectKind::Class)
+        );
+        assert_eq!(
+            js_shape_ordinary_inline_slot_for_key(class_kind, key_bits),
+            -1,
+            "a class-kind shape names a class layout, not key positions"
+        );
+    }
+}
