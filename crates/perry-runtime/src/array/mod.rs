@@ -56,6 +56,8 @@ mod collection_tag_tests;
 #[cfg(test)]
 mod dense_move_tests;
 #[cfg(test)]
+mod dynamic_numeric_key_tests;
+#[cfg(test)]
 mod forwarding_tests;
 #[cfg(test)]
 mod index_get_exit_tests;
