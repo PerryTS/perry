@@ -8,24 +8,26 @@ fn wide_inline_reads_use_the_published_slot_bound() {
     for count in [9_999, 10_000, 10_001, 60_000] {
         let object = scope.root_raw_mut_ptr(js_object_alloc(0, count));
         assert_eq!(
-            unsafe { object_live_slot_count(object.get_raw_const_ptr()) },
+            object.with_const_ptr(|o: *const ObjectHeader| unsafe { object_live_slot_count(o) }),
             count
         );
         for index in [0, 5, count / 2, count - 1] {
-            js_object_set_field(
-                object.get_raw_mut_ptr(),
-                index,
-                JSValue::number(index as f64),
-            );
+            object.with_mut_ptr(|o: *mut ObjectHeader| {
+                js_object_set_field(o, index, JSValue::number(index as f64))
+            });
             assert_eq!(
-                js_object_get_field(object.get_raw_const_ptr(), index).as_number(),
+                object
+                    .with_const_ptr(|o: *const ObjectHeader| js_object_get_field(o, index))
+                    .as_number(),
                 index as f64,
                 "count={count}, index={index}"
             );
         }
         for index in [count, count + 1, u32::MAX] {
             assert!(
-                js_object_get_field(object.get_raw_const_ptr(), index).is_undefined(),
+                object
+                    .with_const_ptr(|o: *const ObjectHeader| js_object_get_field(o, index))
+                    .is_undefined(),
                 "out-of-bounds count={count}, index={index}"
             );
         }
@@ -48,9 +50,8 @@ fn parsed_wide_objects_keep_computed_reads_and_entries() {
         assert!(parsed.is_pointer());
         let scope = crate::gc::RuntimeHandleScope::new();
         let object = scope.root_raw_const_ptr(parsed.as_pointer::<ObjectHeader>());
-        let raw = || object.get_raw_const_ptr::<ObjectHeader>();
         assert_eq!(
-            unsafe { object_live_slot_count(raw()) },
+            object.with_const_ptr(|o: *const ObjectHeader| unsafe { object_live_slot_count(o) }),
             count,
             "the parser must exercise the wide inline representation"
         );
@@ -58,17 +59,24 @@ fn parsed_wide_objects_keep_computed_reads_and_entries() {
             let name = format!("k{index}");
             let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
             assert_eq!(
-                js_object_get_field_by_name(raw(), key).as_number(),
+                object
+                    .with_const_ptr(|o: *const ObjectHeader| js_object_get_field_by_name(o, key))
+                    .as_number(),
                 index as f64
             );
         }
-        let entries = scope.root_raw_mut_ptr(js_object_entries(raw()));
+        let entries = scope
+            .root_raw_mut_ptr(object.with_const_ptr(|o: *const ObjectHeader| js_object_entries(o)));
         assert_eq!(
-            crate::array::js_array_length(entries.get_raw_const_ptr()),
+            entries.with_const_ptr(|e: *const crate::array::ArrayHeader| {
+                crate::array::js_array_length(e)
+            }),
             count
         );
         for index in [0, 5, count / 2, count - 1] {
-            let pair = crate::array::js_array_get(entries.get_raw_const_ptr(), index);
+            let pair = entries.with_const_ptr(|e: *const crate::array::ArrayHeader| {
+                crate::array::js_array_get(e, index)
+            });
             assert_eq!(
                 crate::array::js_array_get(pair.as_pointer(), 1).as_number(),
                 index as f64

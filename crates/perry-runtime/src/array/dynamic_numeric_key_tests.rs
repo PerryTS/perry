@@ -19,13 +19,16 @@ fn receiver(state: u8) -> f64 {
     let array = scope
         .root_raw_mut_ptr(unsafe { crate::json_tape::alloc_lazy_array(&tape.entries, 0, 3, text) });
     if state == 2 {
-        unsafe { crate::json_tape::force_materialize_lazy(array.get_raw_mut_ptr()) };
+        array.with_mut_ptr(|lazy: *mut crate::json_tape::LazyArrayHeader| unsafe {
+            crate::json_tape::force_materialize_lazy(lazy)
+        });
     }
-    let raw = array.get_raw_const_ptr::<crate::json_tape::LazyArrayHeader>();
-    let header = unsafe { crate::value::addr_class::try_read_gc_header(raw as usize) }.unwrap();
-    assert_eq!(header.obj_type, crate::gc::GC_TYPE_LAZY_ARRAY);
-    assert_eq!(unsafe { !(*raw).materialized.is_null() }, state == 2);
-    crate::value::js_nanbox_pointer(raw as i64)
+    array.with_const_ptr(|raw: *const crate::json_tape::LazyArrayHeader| {
+        let header = unsafe { crate::value::addr_class::try_read_gc_header(raw as usize) }.unwrap();
+        assert_eq!(header.obj_type, crate::gc::GC_TYPE_LAZY_ARRAY);
+        assert_eq!(unsafe { !(*raw).materialized.is_null() }, state == 2);
+        crate::value::js_nanbox_pointer(raw as i64)
+    })
 }
 
 #[test]
@@ -108,12 +111,13 @@ fn boxed_integer_keys_keep_their_object_property_semantics() {
     let scope = crate::gc::RuntimeHandleScope::new();
     let object = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
     let key = crate::string::js_string_from_bytes(b"2".as_ptr(), 1);
-    crate::object::js_object_set_field_by_name(object.get_raw_mut_ptr(), key, 42.0);
+    object.with_mut_ptr(|o: *mut crate::object::ObjectHeader| {
+        crate::object::js_object_set_field_by_name(o, key, 42.0)
+    });
     let read = |key| {
-        let receiver = crate::value::js_nanbox_pointer(
-            object.get_raw_const_ptr::<crate::object::ObjectHeader>() as i64,
-        );
-        js_dyn_index_get(receiver, key)
+        object.with_const_ptr(|o: *const crate::object::ObjectHeader| {
+            js_dyn_index_get(crate::value::js_nanbox_pointer(o as i64), key)
+        })
     };
     assert_eq!(read(2.0), 42.0);
     assert_eq!(read(f64::from_bits(JSValue::int32(2).bits())), 42.0);
