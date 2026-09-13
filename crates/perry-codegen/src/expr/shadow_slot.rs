@@ -172,10 +172,19 @@ pub(crate) fn emit_shadow_slot_clear(ctx: &mut FnCtx<'_>, slot_idx: u32) {
     // a moving collection rewrites like any root, and every later user of a
     // shared slot index binds before use. The slow clone, lowered after the
     // fact is popped, keeps its clear.
+    //
+    // #10123's derived index (`const d = j % m`) is the same case for the same
+    // reason: its `Let` emits one `srem` into a private i32 alloca, never a
+    // shadow bind, so a lexical-death clear would be the clone's only call.
     if ctx.element_shape_loop_facts.iter().any(|fact| {
+        let virtual_binding = match &fact.index {
+            crate::expr::ElementShapeIndex::DerivedMod { local_id, .. } => Some(*local_id),
+            _ => None,
+        };
         fact.element_binding
-            .and_then(|id| ctx.shadow_slot_map.get(&id))
-            == Some(&slot_idx)
+            .into_iter()
+            .chain(virtual_binding)
+            .any(|id| ctx.shadow_slot_map.get(&id) == Some(&slot_idx))
     }) {
         return;
     }

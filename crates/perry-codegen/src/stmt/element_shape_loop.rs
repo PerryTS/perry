@@ -40,8 +40,10 @@
 //!    binding whose only uses are tracked `r.field` reads (#7766: the shape
 //!    the `for…of` desugar emits, and the form a parameter array reaches the
 //!    clone through — the binding is virtual in the fast clone: its `Let`
-//!    emits nothing and the reads lower through the fact). No store of any
-//!    kind, no call, no closure, no `await`, no update other than the
+//!    emits nothing and the reads lower through the fact), or, since #10123,
+//!    by exactly one `const d = i % m` binding whose only use is as the
+//!    element index (equally virtual: its `Let` emits one `srem`). No store of
+//!    any kind, no call, no closure, no `await`, no update other than the
 //!    counter's.
 //! 2. **By construction (the lowering).** After the fast clone is emitted,
 //!    every one of its blocks is scanned for a GC-unsafe call
@@ -88,12 +90,52 @@
 //! runtime invalidation deopt needs an on-stack-replacement mechanism Perry
 //! does not have.
 //!
+//! ## The SHAPE-keyed arm (#10123)
+//!
+//! Everything above keys on a compile-time CLASS, which excluded the one array
+//! shape record-processing code is actually written against: `JSON.parse`'d
+//! objects are `class_id == 0` with an ordinary birth ShapeId, and the class
+//! resolver has nothing to resolve for a `rows: any` receiver. The clone
+//! therefore never fired for a parsed record array — the measured case it
+//! exists for.
+//!
+//! The second arm proves the same thing about a different identity: the
+//! preheader asks `js_array_ensure_element_shape_ordinary` for the exact
+//! ordinary ShapeId every element carries, then asks
+//! `js_shape_ordinary_inline_slot_for_key` where each tracked property sits in
+//! THAT shape. Both answers are loop-invariant values, so the clone's read is
+//! still one bare offset load.
+//!
+//! **The revocation argument is unchanged**, because it never mentioned
+//! classes: every funnel in the table above retires a shape-keyed proof
+//! exactly as it retires a class-keyed one (`note_element_store` compares the
+//! record, which for a class-0 proof is the exact ShapeId; a length change
+//! fails `verified_len`; prototype surgery bumps the generation). Call-free is
+//! still the whole admission test.
+//!
+//! Two things ARE different, and both are narrowings:
+//!
+//! * the per-element residual drops `GC_OBJ_TYPED_LAYOUT_INTACT`. A parsed
+//!   record never has that bit — `object/json_construction.rs` finishes every
+//!   record with `layout_init_pointer_free` or `layout_mark_unknown`, and both
+//!   clear it — so keeping it would have side-exited on the FIRST element of
+//!   every loop while every IR-census assertion still passed. What the bit
+//!   bought was "this slot holds a raw `double`"; the shape arm buys the same
+//!   claim per read, from the value, with the Number-tag test
+//!   `emit_js_value_is_number` and a side exit to the slow clone.
+//! * the index grammar widens to `arr[k]` and `const d = j % m; arr[d]` — the
+//!   `repeat` and `sequential` shapes of real access code. Each carries its
+//!   own preheader bounds obligation (`length > k`, `m <= length`), so the
+//!   clone still pays no per-read bounds test, and the matcher admits exactly
+//!   ONE index form per loop so a fact can never be consulted for a spelling
+//!   whose obligation was not discharged.
+//!
 //! ## Extension plan (write-up for #5093 / #7480)
 //!
-//! The clone still pays a residual per-element check — `keys_array` identity,
-//! `field_count`, the per-object descriptor flag and the typed-layout intact
-//! bit — because the array-level invariant deliberately does not cover them.
-//! Folding them into `element_class_of_bits` would make the reads bare, but it
+//! The clone still pays a residual per-element check — the exact ShapeId, the
+//! per-object descriptor flag and (class arm) the typed-layout intact bit —
+//! because the array-level invariant deliberately does not cover them. Folding
+//! them into `element_identity_of_bits` would make the reads bare, but it
 //! needs an invalidation surface for `delete elem.f`, `defineProperty(elem)`
 //! and typed-layout downgrade that does not exist today; #7496 kept the
 //! maintenance matrix small precisely by not opening that surface. That is the
@@ -128,33 +170,95 @@ enum ElementShapeLoopBound {
     ArrayLength(u32),
 }
 
+/// #10123: which identity the clone keys the elements on.
+#[derive(Debug)]
+enum ElementShapeIdentity {
+    /// The original arm. A compile-time class supplies the id the preheader
+    /// compares against, the canonical keys global the expected ShapeId is
+    /// loaded from, and a packed slot index per property.
+    Class {
+        class_name: String,
+        expected_class_id: u32,
+        keys_global_name: String,
+        /// property name -> packed slot index.
+        packed_fields: std::collections::BTreeMap<String, u32>,
+        /// The native-region E1--E5 proof already establishes every element's
+        /// exact class for this array's whole lifetime. When true, the
+        /// preheader need not rebuild the weaker runtime invariant by scanning
+        /// the array.
+        statically_class_proven: bool,
+        /// The same contained group proof also established that every requested
+        /// field remains a raw-f64 slot, so per-object residual checks are
+        /// redundant inside the call-free clone.
+        statically_layout_proven: bool,
+    },
+    /// #10123: an `any`-typed array of plain objects — canonically the result
+    /// of `JSON.parse`. There is no class and no compile-time layout; the
+    /// preheader asks the runtime for the exact ordinary ShapeId every element
+    /// carries and for each tracked property's inline slot in that shape, and
+    /// the per-element residual adds a Number-tag test on the loaded word.
+    Shape,
+}
+
+/// #10123: the index spelling the whole body uses.
+///
+/// One form per loop, deliberately: each carries its own preheader bounds
+/// obligation (`expr::element_shape_guard::ElementShapeIndexBound`), so a body
+/// mixing `arr[j]` with `arr[7]` would need both discharged and both matched
+/// at every read. The matcher declines such a body instead.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MatchedIndex {
+    Counter,
+    Constant(i64),
+    DerivedMod { local_id: u32, modulus_id: u32 },
+}
+
+impl MatchedIndex {
+    /// Mirror of [`crate::expr::ElementShapeIndex::needs_counter_i32_slot`],
+    /// asked before the fact exists.
+    fn needs_counter_i32_slot(self) -> bool {
+        !matches!(self, MatchedIndex::Constant(_))
+    }
+}
+
 #[derive(Debug)]
 struct ElementShapeVersionedLoop {
     counter_id: u32,
     bound: ElementShapeLoopBound,
     array_id: u32,
-    class_name: String,
-    expected_class_id: u32,
-    keys_global_name: String,
-    /// The native-region E1--E5 proof already establishes every element's
-    /// exact class for this array's whole lifetime. When true, the preheader
-    /// need not rebuild the weaker runtime invariant by scanning the array.
-    statically_class_proven: bool,
-    /// The same contained group proof also established that every requested
-    /// field remains a raw-f64 slot, so per-object residual checks are
-    /// redundant inside the call-free clone.
-    statically_layout_proven: bool,
-    /// property name -> packed slot index.
-    fields: std::collections::BTreeMap<String, u32>,
+    identity: ElementShapeIdentity,
+    /// Tracked property names, in both arms. The class arm additionally
+    /// carries a packed slot index per name inside its `identity`.
+    props: std::collections::BTreeSet<String>,
+    index: MatchedIndex,
     /// #7771: the body's `const r = arr[counter]` binding in the two-statement
     /// form; `None` for the original single-statement accumulator body.
     element_binding: Option<u32>,
     accumulator_id: u32,
 }
 
+/// The locals the pure-expression walk reasons about.
+#[derive(Clone, Copy)]
+struct PureExprScope {
+    counter_id: u32,
+    accumulator_id: u32,
+    element_binding: Option<u32>,
+    /// #10123: `(d, m)` for a body whose first statement is
+    /// `const d = counter % m`.
+    derived: Option<(u32, u32)>,
+}
+
+/// What the walk collects.
+#[derive(Default)]
+struct PureExprFacts {
+    array: Option<u32>,
+    props: std::collections::BTreeSet<String>,
+    index: Option<MatchedIndex>,
+}
+
 /// Effect-free expression walk for the element-shape loop.
 ///
-/// Admits exactly: tracked `arr[counter].prop` reads on ONE array, numeric
+/// Admits exactly: tracked `arr[<index>].prop` reads on ONE array, numeric
 /// locals, numeric literals, and pure arithmetic / `Math` (libm intrinsics
 /// cannot trigger a GC). Everything else bails the whole match — a catch-all
 /// that silently accepted an unknown expression would be the #6377 shape, and
@@ -163,11 +267,8 @@ struct ElementShapeVersionedLoop {
 fn element_shape_loop_pure_expr_collect(
     ctx: &FnCtx<'_>,
     expr: &perry_hir::Expr,
-    counter_id: u32,
-    accumulator_id: u32,
-    element_binding: Option<u32>,
-    array: &mut Option<u32>,
-    props: &mut std::collections::BTreeSet<String>,
+    scope: &PureExprScope,
+    out: &mut PureExprFacts,
 ) -> bool {
     use perry_hir::Expr;
     match expr {
@@ -175,46 +276,56 @@ fn element_shape_loop_pure_expr_collect(
             object, property, ..
         } => match object.as_ref() {
             Expr::IndexGet { object, index } => {
-                let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) =
-                    (object.as_ref(), index.as_ref())
-                else {
+                let Expr::LocalGet(arr_id) = object.as_ref() else {
                     return false;
                 };
-                // The index must be the loop counter itself. An offset index
-                // (`arr[j + 1]`) would need the preheader's `length >= bound`
-                // check widened; deliberately out of the first slice.
-                if *idx_id != counter_id || *arr_id == counter_id {
+                if *arr_id == scope.counter_id {
                     return false;
                 }
-                match array {
-                    Some(a) if *a == *arr_id => {}
-                    Some(_) => return false, // one array per loop
-                    None => *array = Some(*arr_id),
+                // #10123: the admitted index spellings. `Counter` is the
+                // original one, and the two additions are the shapes real
+                // record-access loops are written in (`rows[7]`, and
+                // `const d = i % n; rows[d]`). An offset index (`arr[j + 1]`)
+                // is still out: it would need a bounds obligation of its own.
+                let Some(form) = match_index_form(index.as_ref(), scope) else {
+                    return false;
+                };
+                match out.index {
+                    Some(seen) if seen == form => {}
+                    Some(_) => return false,
+                    None => out.index = Some(form),
                 }
-                props.insert(property.clone());
+                match out.array {
+                    Some(a) if a == *arr_id => {}
+                    Some(_) => return false, // one array per loop
+                    None => out.array = Some(*arr_id),
+                }
+                out.props.insert(property.clone());
                 true
             }
             // #7771: `r.field` through the body's `const r = arr[counter]`
             // binding is the same tracked read spelled through the Let the
             // body match admitted; the binding already pins (array, counter),
             // so only the property is left to record.
-            Expr::LocalGet(recv_id) if element_binding == Some(*recv_id) => {
-                props.insert(property.clone());
+            Expr::LocalGet(recv_id) if scope.element_binding == Some(*recv_id) => {
+                out.props.insert(property.clone());
                 true
             }
             _ => false,
         },
-        // A bare read of the array, the counter, or the element binding as a
-        // VALUE could flow it into arbitrary lowering; only scalar reads the
-        // analysis proves numeric are admitted. The element binding is
-        // excluded EXPLICITLY rather than via the numeric test: a bare `r`
-        // would hand out a reference the clone's skipped `Let` never bound
-        // (#7771), and betting that exclusion on a type predicate is the
+        // A bare read of the array, the counter, the element binding or the
+        // derived index as a VALUE could flow it into arbitrary lowering; only
+        // scalar reads the analysis proves numeric are admitted. The element
+        // binding and the derived index are excluded EXPLICITLY rather than via
+        // the numeric test: both are bound by a `Let` the fast clone does not
+        // lower generically, so a bare read would hand out a reference nothing
+        // bound (#7771), and betting that exclusion on a type predicate is the
         // #6377 shape this walk's docs warn about.
         Expr::LocalGet(id) => {
-            element_binding != Some(*id)
-                && array.is_none_or(|a| a != *id)
-                && (*id == accumulator_id || crate::type_analysis::is_numeric_expr(ctx, expr))
+            scope.element_binding != Some(*id)
+                && scope.derived.map(|(d, _)| d) != Some(*id)
+                && out.array.is_none_or(|a| a != *id)
+                && (*id == scope.accumulator_id || crate::type_analysis::is_numeric_expr(ctx, expr))
         }
         Expr::Number(_) | Expr::Integer(_) => true,
         // NOTE (#7480 step 3): deliberately NOT gated on
@@ -225,7 +336,8 @@ fn element_shape_loop_pure_expr_collect(
         // locals and literals by their own arms, and tracked `arr[j].field`
         // reads because the caller rejects the whole loop unless every
         // collected property is a declared raw-f64 candidate on the resolved
-        // element class.
+        // element class (class arm) or the emitted read tag-tests the loaded
+        // word and side-exits when it is not a Number (#10123's shape arm).
         //
         // The gate had to go for the object-literal kernel: at match time no
         // fact is installed yet, so `is_numeric_expr` cannot see through
@@ -234,63 +346,19 @@ fn element_shape_loop_pure_expr_collect(
         // object-literal element). Keeping it would have declined #7480's own
         // kernel before the class resolver was ever consulted.
         Expr::Binary { left, right, .. } => {
-            element_shape_loop_pure_expr_collect(
-                ctx,
-                left,
-                counter_id,
-                accumulator_id,
-                element_binding,
-                array,
-                props,
-            ) && element_shape_loop_pure_expr_collect(
-                ctx,
-                right,
-                counter_id,
-                accumulator_id,
-                element_binding,
-                array,
-                props,
-            )
+            element_shape_loop_pure_expr_collect(ctx, left, scope, out)
+                && element_shape_loop_pure_expr_collect(ctx, right, scope, out)
         }
-        Expr::NumberCoerce(operand) => element_shape_loop_pure_expr_collect(
-            ctx,
-            operand,
-            counter_id,
-            accumulator_id,
-            element_binding,
-            array,
-            props,
-        ),
+        Expr::NumberCoerce(operand) => {
+            element_shape_loop_pure_expr_collect(ctx, operand, scope, out)
+        }
         Expr::MathImul(left, right) | Expr::MathPow(left, right) => {
-            element_shape_loop_pure_expr_collect(
-                ctx,
-                left,
-                counter_id,
-                accumulator_id,
-                element_binding,
-                array,
-                props,
-            ) && element_shape_loop_pure_expr_collect(
-                ctx,
-                right,
-                counter_id,
-                accumulator_id,
-                element_binding,
-                array,
-                props,
-            )
+            element_shape_loop_pure_expr_collect(ctx, left, scope, out)
+                && element_shape_loop_pure_expr_collect(ctx, right, scope, out)
         }
-        Expr::MathMin(values) | Expr::MathMax(values) => values.iter().all(|e| {
-            element_shape_loop_pure_expr_collect(
-                ctx,
-                e,
-                counter_id,
-                accumulator_id,
-                element_binding,
-                array,
-                props,
-            )
-        }),
+        Expr::MathMin(values) | Expr::MathMax(values) => values
+            .iter()
+            .all(|e| element_shape_loop_pure_expr_collect(ctx, e, scope, out)),
         Expr::MathAbs(value)
         | Expr::MathSqrt(value)
         | Expr::MathFloor(value)
@@ -298,16 +366,29 @@ fn element_shape_loop_pure_expr_collect(
         | Expr::MathRound(value)
         | Expr::MathTrunc(value)
         | Expr::MathSign(value)
-        | Expr::MathF16round(value) => element_shape_loop_pure_expr_collect(
-            ctx,
-            value,
-            counter_id,
-            accumulator_id,
-            element_binding,
-            array,
-            props,
-        ),
+        | Expr::MathF16round(value) => element_shape_loop_pure_expr_collect(ctx, value, scope, out),
         _ => false,
+    }
+}
+
+/// Classify one `arr[<index>]` subscript. `None` declines the whole match.
+fn match_index_form(index: &perry_hir::Expr, scope: &PureExprScope) -> Option<MatchedIndex> {
+    use perry_hir::Expr;
+    match index {
+        Expr::LocalGet(id) if *id == scope.counter_id => Some(MatchedIndex::Counter),
+        Expr::LocalGet(id) => match scope.derived {
+            Some((derived_id, modulus_id)) if derived_id == *id => Some(MatchedIndex::DerivedMod {
+                local_id: derived_id,
+                modulus_id,
+            }),
+            _ => None,
+        },
+        // `0..=i32::MAX`, so the preheader's `length > k` compare is an i32
+        // one and the emitted index needs no conversion.
+        Expr::Integer(k) if (0..=i64::from(i32::MAX)).contains(k) => {
+            Some(MatchedIndex::Constant(*k))
+        }
+        _ => None,
     }
 }
 
@@ -509,7 +590,46 @@ fn anon_shape_field_type_is_compatible(
     }
 }
 
-/// Match `for (let j = k0; j < B; j++) acc = <pure over arr[j].field>`.
+/// Is `array_id` an untyped receiver — the shape-keyed arm's entry condition?
+///
+/// The class resolver having declined is not on its own enough: a `Node[]`
+/// whose class the module does not define, or a shape the anon-shape resolver
+/// found ambiguous, are both "declined" and both name a layout this arm would
+/// be guessing about. Requiring the declared type to be absent / `any` /
+/// `unknown` keeps #10123 to exactly the receivers that carry no layout claim
+/// at all, which is what `JSON.parse` hands back.
+fn array_is_untyped(ctx: &FnCtx<'_>, array_id: u32) -> bool {
+    use perry_hir::types::Type;
+    matches!(
+        ctx.local_type_hint(&array_id)
+            .map(|ty| resolve_type_alias(ctx, ty)),
+        None | Some(Type::Any) | Some(Type::Unknown)
+    )
+}
+
+/// A modulus local for #10123's `const d = counter % m` index.
+///
+/// `m` must be readable and provably unchanged for the loop's duration: the
+/// preheader materializes it ONCE and the clone's `srem` uses that value for
+/// every iteration, so a body that could rewrite `m` would derive indices
+/// against a stale bound. `local_bound_is_loop_invariant` answers exactly
+/// that (it looks for WRITES, so the `const d = counter % m` read itself is
+/// not a mutation).
+fn modulus_local_is_admissible(
+    ctx: &FnCtx<'_>,
+    modulus_id: u32,
+    condition: &perry_hir::Expr,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+) -> bool {
+    !ctx.boxed_vars.contains(&modulus_id)
+        && !ctx.closure_captures.contains_key(&modulus_id)
+        && (local_has_readable_slot(ctx, modulus_id)
+            || ctx.module_globals.contains_key(&modulus_id))
+        && local_bound_is_loop_invariant(condition, update, body, modulus_id)
+}
+
+/// Match `for (let j = k0; j < B; j++) acc = <pure over arr[<index>].field>`.
 ///
 /// The single-statement, store-free body is the revocation argument (see the
 /// module docs) AND the side-exit protocol: the residual per-element check
@@ -522,7 +642,7 @@ fn match_element_shape_versioned_loop(
     update: Option<&perry_hir::Expr>,
     body: &[Stmt],
 ) -> Option<ElementShapeVersionedLoop> {
-    use perry_hir::{CompareOp, Expr, UpdateOp};
+    use perry_hir::{BinaryOp, CompareOp, Expr, UpdateOp};
 
     // Oversized modules full-outline the class-field diamonds for code size;
     // a clone that re-inlines them there would fight that decision.
@@ -613,50 +733,87 @@ fn match_element_shape_versioned_loop(
         return None;
     }
 
-    // Store-free body, in one of two admitted shapes (see the module docs):
+    // Store-free body, in one of three admitted shapes (see the module docs):
     //
-    //   1. `acc = <pure numeric over arr[j].field>` — the original single
-    //      statement;
+    //   1. `acc = <pure numeric over arr[<index>].field>` — the original
+    //      single statement;
     //   2. `const r = arr[j]; acc = <pure numeric over r.field>` — #7771's
-    //      element-binding form, the shape real read loops are written in.
-    //      The binding is VIRTUAL inside the fast clone: its `Let` emits
-    //      nothing (`stmt/let_stmt.rs`) and every `r.field` lowers through
-    //      the fact, so the revocation argument (no store, no call in the
-    //      clone) is unchanged. `const`-only, deliberately: a `var` binding
-    //      is function-scoped and observable after the loop, where the
-    //      skipped `Let` would leave the slot holding its pre-loop value.
+    //      element-binding form, the shape real read loops are written in;
+    //   3. `const d = j % m; acc = <pure numeric over arr[d].field>` —
+    //      #10123's derived-index form, the shape every sequential pass over a
+    //      parsed record array is written in.
+    //
+    // In 2 and 3 the binding is VIRTUAL inside the fast clone: its `Let`
+    // emits nothing (form 2) or one `srem i32` (form 3) rather than the
+    // generic lowering (`stmt/let_stmt.rs`), so the revocation argument (no
+    // store, no call in the clone) is unchanged. `const`-only, deliberately: a
+    // `var` binding is function-scoped and observable after the loop, where
+    // the skipped `Let` would leave the slot holding its pre-loop value.
     //
     // NOTHING else is admitted.
-    let (element_binding, acc_id, value) = match body {
-        [Stmt::Expr(Expr::LocalSet(acc_id, value))] => (None, acc_id, value),
+    let mut element_binding: Option<(u32, u32)> = None;
+    let mut derived: Option<(u32, u32)> = None;
+    let (acc_id, value) = match body {
+        [Stmt::Expr(Expr::LocalSet(acc_id, value))] => (acc_id, value),
         [Stmt::Let {
             id,
             mutable: false,
-            init: Some(Expr::IndexGet { object, index }),
+            init: Some(binding_init),
             ..
         }, Stmt::Expr(Expr::LocalSet(acc_id, value))] => {
-            let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) =
-                (object.as_ref(), index.as_ref())
-            else {
-                return None;
-            };
-            // Same receiver/index discipline as the walk's IndexGet arm: the
-            // fetch must be `arr[counter]` exactly.
-            if *idx_id != counter_id || *arr_id == counter_id || *id == counter_id {
-                return None;
-            }
-            // The binding must be a plain, loop-owned const local. A boxed or
-            // captured binding lives in a cell the skipped `Let` would leave
-            // stale for an observer outside the clone; a module-global id is
-            // not a body-scoped binding at all.
-            if *id == *arr_id
+            // The binding must be a plain, loop-owned const local in either
+            // form. A boxed or captured binding lives in a cell the clone's
+            // replacement `Let` would leave stale for an observer outside the
+            // clone; a module-global id is not a body-scoped binding at all.
+            if *id == counter_id
                 || ctx.boxed_vars.contains(id)
                 || ctx.module_globals.contains_key(id)
                 || ctx.closure_captures.contains_key(id)
             {
                 return None;
             }
-            (Some((*id, *arr_id)), acc_id, value)
+            match binding_init {
+                Expr::IndexGet { object, index } => {
+                    let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) =
+                        (object.as_ref(), index.as_ref())
+                    else {
+                        return None;
+                    };
+                    // Same receiver/index discipline as the walk's IndexGet
+                    // arm: the fetch must be `arr[counter]` exactly.
+                    if *idx_id != counter_id || *arr_id == counter_id || *id == *arr_id {
+                        return None;
+                    }
+                    element_binding = Some((*id, *arr_id));
+                }
+                // #10123. `%` on two locals, the left one the counter. The
+                // modulus is validated below (it must be readable and
+                // loop-invariant), and the RANGE obligation — `1 <= m` so the
+                // `srem` cannot divide by zero, `m <= length` so every derived
+                // index is in bounds — is discharged in the preheader, which
+                // is also where a non-number / fractional `m` sends the loop
+                // to the slow clone.
+                Expr::Binary {
+                    op: BinaryOp::Mod,
+                    left,
+                    right,
+                } => {
+                    let (Expr::LocalGet(num_id), Expr::LocalGet(modulus_id)) =
+                        (left.as_ref(), right.as_ref())
+                    else {
+                        return None;
+                    };
+                    if *num_id != counter_id || *modulus_id == counter_id || *id == *modulus_id {
+                        return None;
+                    }
+                    if !modulus_local_is_admissible(ctx, *modulus_id, condition?, update, body) {
+                        return None;
+                    }
+                    derived = Some((*id, *modulus_id));
+                }
+                _ => return None,
+            }
+            (acc_id, value)
         }
         _ => return None,
     };
@@ -664,39 +821,53 @@ fn match_element_shape_versioned_loop(
         || !ctx.locals.contains_key(acc_id)
         || ctx.boxed_vars.contains(acc_id)
         || ctx.module_globals.contains_key(acc_id)
-        // The declared type is only a candidate. The lowering validates the
-        // accumulator's current NaN-box tag in the preheader before installing
-        // the numeric fact for the fast clone.
-        || !matches!(ctx.local_type_hint(acc_id), Some(perry_hir::types::Type::Number | perry_hir::types::Type::Int32))
     {
         return None;
     }
     // The binding form pins the array before the walk runs, so a body mixing
     // `r.field` with `other[j].field` is declined by the walk's one-array rule.
-    let mut array: Option<u32> = element_binding.map(|(_, arr_id)| arr_id);
-    let element_binding = element_binding.map(|(id, _)| id);
-    if element_binding == Some(*acc_id) {
-        return None;
-    }
-    let mut props: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    if !element_shape_loop_pure_expr_collect(
-        ctx,
-        value,
+    let scope = PureExprScope {
         counter_id,
-        *acc_id,
-        element_binding,
-        &mut array,
-        &mut props,
-    ) {
+        accumulator_id: *acc_id,
+        element_binding: element_binding.map(|(id, _)| id),
+        derived,
+    };
+    if scope.element_binding == Some(*acc_id) || derived.map(|(d, _)| d) == Some(*acc_id) {
         return None;
     }
-    let array_id = array?;
-    if props.is_empty() || array_id == *acc_id || array_id == counter_id {
+    let mut facts = PureExprFacts {
+        array: element_binding.map(|(_, arr_id)| arr_id),
+        ..PureExprFacts::default()
+    };
+    if !element_shape_loop_pure_expr_collect(ctx, value, &scope, &mut facts) {
         return None;
+    }
+    let array_id = facts.array?;
+    if facts.props.is_empty() || array_id == *acc_id || array_id == counter_id {
+        return None;
+    }
+    // The element-binding form carries no subscript at the reads, so its index
+    // form comes from the binding rather than from the walk.
+    let index = match element_binding {
+        Some(_) => MatchedIndex::Counter,
+        None => facts.index?,
+    };
+    if let MatchedIndex::DerivedMod {
+        local_id,
+        modulus_id,
+    } = index
+    {
+        if modulus_id == array_id || modulus_id == *acc_id || local_id == array_id {
+            return None;
+        }
     }
     match bound {
         ElementShapeLoopBound::Local(bound_id) => {
-            if bound_id == array_id || bound_id == *acc_id || Some(bound_id) == element_binding {
+            if bound_id == array_id
+                || bound_id == *acc_id
+                || Some(bound_id) == scope.element_binding
+                || derived.map(|(d, _)| d) == Some(bound_id)
+            {
                 return None;
             }
         }
@@ -728,7 +899,7 @@ fn match_element_shape_versioned_loop(
     // #7480: the preheader must be able to write the growth-forwarding-repaired
     // head BACK into the binding (see
     // `expr::element_shape_guard::emit_element_shape_loop_preheader_check`
-    // step 2b). A closure-captured array lives in a capture cell that a plain
+    // step 2). A closure-captured array lives in a capture cell that a plain
     // slot store would not update, so the two views could disagree; decline
     // rather than repair only half of them.
     if ctx.closure_captures.contains_key(&array_id) {
@@ -738,11 +909,72 @@ fn match_element_shape_versioned_loop(
         return None;
     }
 
-    let class_name = element_class_name(ctx, array_id, counter_id)?;
-    if CLASS_FIELD_LOOP_CLASS_DENYLIST.contains(&class_name.as_str()) {
+    for prop in &facts.props {
+        if CLASS_FIELD_LOOP_PROP_DENYLIST.contains(&prop.as_str()) {
+            return None;
+        }
+    }
+
+    let identity = match element_class_name(ctx, array_id, counter_id) {
+        Some(class_name) => {
+            // The class arm keeps its ORIGINAL grammar. Its bounds argument is
+            // "the trip count covers every index", which only `Counter`
+            // satisfies, and widening it here would change the emitted code
+            // for receivers #10123 never measured.
+            if index != MatchedIndex::Counter {
+                return None;
+            }
+            match_class_identity(ctx, array_id, &class_name, &facts.props)?
+        }
+        // #10123. A receiver that declares no element type at all is the
+        // `JSON.parse` case: nothing is known statically, so everything is
+        // asked of the runtime in the preheader.
+        None if array_is_untyped(ctx, array_id) => ElementShapeIdentity::Shape,
+        None => return None,
+    };
+
+    // The declared accumulator type is only a candidate: the lowering
+    // validates the accumulator's current NaN-box tag in the preheader before
+    // installing the numeric fact for the fast clone. The class arm keeps its
+    // original Number/Int32 requirement; the shape arm also admits an
+    // untyped accumulator, because `let sum = 0; sum += rows[i].id` over an
+    // `any` array is the shape this optimization exists for and HIR widens
+    // `sum` to `Any` exactly when the element read is untyped. The preheader
+    // tag check is what makes that safe, and it is emitted either way.
+    let accumulator_hint_ok = match ctx.local_type_hint(acc_id) {
+        Some(perry_hir::types::Type::Number | perry_hir::types::Type::Int32) => true,
+        None | Some(perry_hir::types::Type::Any | perry_hir::types::Type::Unknown) => {
+            matches!(identity, ElementShapeIdentity::Shape)
+        }
+        _ => false,
+    };
+    if !accumulator_hint_ok {
         return None;
     }
-    let class = ctx.classes.get(&class_name)?;
+
+    Some(ElementShapeVersionedLoop {
+        counter_id,
+        bound,
+        array_id,
+        identity,
+        props: facts.props,
+        index,
+        element_binding: scope.element_binding,
+        accumulator_id: *acc_id,
+    })
+}
+
+/// Resolve the class arm's compile-time facts, or decline.
+fn match_class_identity(
+    ctx: &FnCtx<'_>,
+    array_id: u32,
+    class_name: &str,
+    props: &std::collections::BTreeSet<String>,
+) -> Option<ElementShapeIdentity> {
+    if CLASS_FIELD_LOOP_CLASS_DENYLIST.contains(&class_name) {
+        return None;
+    }
+    let class = ctx.classes.get(class_name)?;
     if !class.computed_members.is_empty() {
         return None;
     }
@@ -752,57 +984,95 @@ fn match_element_shape_versioned_loop(
     if class.extends_name.is_some() {
         return None;
     }
-    let expected_class_id = *ctx.class_ids.get(&class_name)?;
-    let keys_global_name = ctx.class_keys_globals.get(&class_name)?.clone();
+    let expected_class_id = *ctx.class_ids.get(class_name)?;
+    let keys_global_name = ctx.class_keys_globals.get(class_name)?.clone();
     let statically_class_proven = ctx
         .native_facts
         .exact_element_class(array_id)
         .is_some_and(|proven| proven == class_name);
 
-    let mut fields = std::collections::BTreeMap::new();
+    let mut packed_fields = std::collections::BTreeMap::new();
     for prop in props {
-        if CLASS_FIELD_LOOP_PROP_DENYLIST.contains(&prop.as_str()) {
-            return None;
-        }
         // Accessors route through synthesized __get_/__set_ methods before the
         // class-field diamond; mirror that dispatch gate exactly.
         if ctx
             .methods
-            .contains_key(&(class_name.clone(), format!("__get_{prop}")))
+            .contains_key(&(class_name.to_string(), format!("__get_{prop}")))
             || ctx
                 .methods
-                .contains_key(&(class_name.clone(), format!("__set_{prop}")))
+                .contains_key(&(class_name.to_string(), format!("__set_{prop}")))
         {
             return None;
         }
-        let field_index = crate::type_analysis::class_field_global_index(ctx, &class_name, &prop)?;
-        let raw_f64 = crate::type_analysis::class_field_declared_type(ctx, &class_name, &prop)
+        let field_index = crate::type_analysis::class_field_global_index(ctx, class_name, prop)?;
+        let raw_f64 = crate::type_analysis::class_field_declared_type(ctx, class_name, prop)
             .as_ref()
             .is_some_and(crate::typed_shape::type_is_raw_f64_candidate);
         if !raw_f64 {
             return None;
         }
-        fields.insert(prop, field_index);
+        packed_fields.insert(prop.clone(), field_index);
     }
     let statically_layout_proven = statically_class_proven
         && ctx
             .native_facts
             .exact_numeric_element_fields(array_id)
-            .is_some_and(|proven| fields.keys().all(|field| proven.contains(field)));
+            .is_some_and(|proven| packed_fields.keys().all(|field| proven.contains(field)));
 
-    Some(ElementShapeVersionedLoop {
-        counter_id,
-        bound,
-        array_id,
-        class_name,
+    Some(ElementShapeIdentity::Class {
+        class_name: class_name.to_string(),
         expected_class_id,
         keys_global_name,
+        packed_fields,
         statically_class_proven,
         statically_layout_proven,
-        fields,
-        element_binding,
-        accumulator_id: *acc_id,
     })
+}
+
+/// Materialize a NaN-boxed local as an i32 in `[min, max]`, taking the slow
+/// clone on a non-number, out-of-range or fractional value.
+///
+/// Leaves `ctx.current_block` on a fresh block dominated by all three checks,
+/// and returns the i32 SSA value. Call-free by construction — the whole point
+/// is that the clone's hot path reads an i32 it can trust.
+fn materialize_loop_i32(
+    ctx: &mut FnCtx<'_>,
+    local_id: u32,
+    min: i32,
+    max: i32,
+    slow_label: &str,
+    label_prefix: &str,
+) -> Result<String> {
+    let value = lower_expr(ctx, &perry_hir::Expr::LocalGet(local_id))?;
+    let is_number = emit_js_value_is_number(ctx, &value);
+    let range_idx = ctx.new_block(&format!("{label_prefix}.range"));
+    let convert_idx = ctx.new_block(&format!("{label_prefix}.convert"));
+    let done_idx = ctx.new_block(&format!("{label_prefix}.ok"));
+    let range_label = ctx.block_label(range_idx);
+    let convert_label = ctx.block_label(convert_idx);
+    let done_label = ctx.block_label(done_idx);
+    ctx.block().cond_br(&is_number, &range_label, slow_label);
+
+    ctx.current_block = range_idx;
+    let ge_min = {
+        let min_literal = format!("{:.1}", f64::from(min));
+        ctx.block().fcmp("oge", &value, &min_literal)
+    };
+    let le_max = {
+        let max_literal = format!("{:.1}", f64::from(max));
+        ctx.block().fcmp("ole", &value, &max_literal)
+    };
+    let in_range = ctx.block().and(I1, &ge_min, &le_max);
+    ctx.block().cond_br(&in_range, &convert_label, slow_label);
+
+    ctx.current_block = convert_idx;
+    let as_i32 = ctx.block().fptosi(DOUBLE, &value, I32);
+    let roundtrip = ctx.block().sitofp(I32, &as_i32, DOUBLE);
+    let is_integral = ctx.block().fcmp("oeq", &roundtrip, &value);
+    ctx.block().cond_br(&is_integral, &done_label, slow_label);
+
+    ctx.current_block = done_idx;
+    Ok(as_i32)
 }
 
 /// Lower the matched loop as a guarded fast clone plus the unchanged generic
@@ -824,9 +1094,15 @@ pub(super) fn lower_element_shape_versioned_for(
     else {
         return Ok(false);
     };
-    // The fast clone reads the counter through its canonical i32 slot; without
-    // one it would win nothing (and the element GEP would need an fptosi).
-    if !ctx.i32_counter_slots.contains_key(&matched.counter_id) {
+    // A counter- or modulo-derived index reads the counter through its
+    // canonical i32 slot; without one the element GEP would need an fptosi and
+    // the clone would win nothing. A CONSTANT index never reads the counter
+    // (#10123), and its loops are exactly the ones `stmt/let_stmt.rs` mints no
+    // i32 slot for — the counter is neither index-used nor i32-bounded — so
+    // demanding one there would decline the shape this arm was written for.
+    if matched.index.needs_counter_i32_slot()
+        && !ctx.i32_counter_slots.contains_key(&matched.counter_id)
+    {
         return Ok(false);
     }
 
@@ -844,38 +1120,30 @@ pub(super) fn lower_element_shape_versioned_for(
     let materialized_bound: Option<String> = match matched.bound {
         ElementShapeLoopBound::ArrayLength(_) => None,
         ElementShapeLoopBound::Constant(k) => Some(k.to_string()),
-        ElementShapeLoopBound::Local(bound_id) => Some({
-            let bound_d = lower_expr(ctx, &perry_hir::Expr::LocalGet(bound_id))?;
-            let is_number = emit_js_value_is_number(ctx, &bound_d);
-            let range_idx = ctx.new_block("element_shape.loop.bound.range");
-            let convert_idx = ctx.new_block("element_shape.loop.bound.convert");
-            let check_idx = ctx.new_block("element_shape.loop.shape_check");
-            let range_label = ctx.block_label(range_idx);
-            let convert_label = ctx.block_label(convert_idx);
-            let check_label = ctx.block_label(check_idx);
-            ctx.block()
-                .cond_br(&is_number, &range_label, &slow_pre_label);
+        ElementShapeLoopBound::Local(bound_id) => Some(materialize_loop_i32(
+            ctx,
+            bound_id,
+            0,
+            i32::MAX,
+            &slow_pre_label,
+            "element_shape.loop.bound",
+        )?),
+    };
 
-            ctx.current_block = range_idx;
-            let ge_zero = ctx.block().fcmp("oge", &bound_d, "0.0");
-            let le_max = {
-                let max_literal = format!("{:.1}", i32::MAX as f64);
-                ctx.block().fcmp("ole", &bound_d, &max_literal)
-            };
-            let in_range = ctx.block().and(I1, &ge_zero, &le_max);
-            ctx.block()
-                .cond_br(&in_range, &convert_label, &slow_pre_label);
-
-            ctx.current_block = convert_idx;
-            let bound_i32 = ctx.block().fptosi(DOUBLE, &bound_d, I32);
-            let roundtrip = ctx.block().sitofp(I32, &bound_i32, DOUBLE);
-            let is_integral = ctx.block().fcmp("oeq", &roundtrip, &bound_d);
-            ctx.block()
-                .cond_br(&is_integral, &check_label, &slow_pre_label);
-
-            ctx.current_block = check_idx;
-            bound_i32
-        }),
+    // #10123: the same materialization for a derived index's modulus, with a
+    // floor of 1 — `srem` by zero is undefined behaviour, and `x % 0` is NaN
+    // in JS, so a zero modulus is a slow-clone case rather than something the
+    // clone may compute.
+    let modulus_i32: Option<String> = match matched.index {
+        MatchedIndex::DerivedMod { modulus_id, .. } => Some(materialize_loop_i32(
+            ctx,
+            modulus_id,
+            1,
+            i32::MAX,
+            &slow_pre_label,
+            "element_shape.loop.modulus",
+        )?),
+        _ => None,
     };
 
     let trip_count = match &materialized_bound {
@@ -884,23 +1152,112 @@ pub(super) fn lower_element_shape_versioned_for(
         }
         None => crate::expr::element_shape_guard::ElementShapeLoopTripCount::ArrayLength,
     };
-    let expected_class_id_str = matched.expected_class_id.to_string();
-    let (elements_base, expected_shape_id, shape_ok, bound_i32) =
-        crate::expr::element_shape_guard::emit_element_shape_loop_preheader_check(
-            ctx,
-            matched.array_id,
-            &expected_class_id_str,
-            &matched.keys_global_name,
-            trip_count,
-            &slow_pre_label,
-            matched.statically_class_proven,
-        )?;
+    let index_bound = match (&matched.index, &modulus_i32) {
+        (MatchedIndex::Counter, _) => {
+            crate::expr::element_shape_guard::ElementShapeIndexBound::FromTripCount
+        }
+        (MatchedIndex::Constant(k), _) => {
+            crate::expr::element_shape_guard::ElementShapeIndexBound::Constant(*k)
+        }
+        (MatchedIndex::DerivedMod { .. }, Some(modulus)) => {
+            crate::expr::element_shape_guard::ElementShapeIndexBound::Modulus(modulus.as_str())
+        }
+        (MatchedIndex::DerivedMod { .. }, None) => {
+            unreachable!("a derived index always materializes its modulus")
+        }
+    };
+    let expected_class_id_str = match &matched.identity {
+        ElementShapeIdentity::Class {
+            expected_class_id, ..
+        } => expected_class_id.to_string(),
+        ElementShapeIdentity::Shape => String::new(),
+    };
+    let guard_kind = match &matched.identity {
+        ElementShapeIdentity::Class {
+            keys_global_name, ..
+        } => crate::expr::element_shape_guard::ElementShapeGuardKind::Class {
+            expected_class_id: expected_class_id_str.as_str(),
+            keys_global_name: keys_global_name.as_str(),
+        },
+        ElementShapeIdentity::Shape => {
+            crate::expr::element_shape_guard::ElementShapeGuardKind::Shape {
+                properties: &matched.props,
+            }
+        }
+    };
+    let statically_proven = matches!(
+        matched.identity,
+        ElementShapeIdentity::Class {
+            statically_class_proven: true,
+            ..
+        }
+    );
+    let guard = crate::expr::element_shape_guard::emit_element_shape_loop_preheader_check(
+        ctx,
+        matched.array_id,
+        guard_kind,
+        trip_count,
+        index_bound,
+        &slow_pre_label,
+        statically_proven,
+    )?;
     let accumulator = lower_expr(ctx, &perry_hir::Expr::LocalGet(matched.accumulator_id))?;
     let accumulator_is_number = emit_js_value_is_number(ctx, &accumulator);
-    let fast_path_ok = ctx.block().and(I1, &shape_ok, &accumulator_is_number);
+    let fast_path_ok = ctx.block().and(I1, &guard.shape_ok, &accumulator_is_number);
     // Deliberately unterminated: it branches into the fast clone only after
     // the clone is PROVEN call-free below.
     let deref_idx = ctx.current_block;
+
+    let (shape_keyed, statically_layout_proven, fields, report_class) = match &matched.identity {
+        ElementShapeIdentity::Class {
+            class_name,
+            packed_fields,
+            statically_layout_proven,
+            ..
+        } => (
+            false,
+            *statically_layout_proven,
+            packed_fields
+                .iter()
+                .map(|(prop, index)| {
+                    (
+                        prop.clone(),
+                        crate::expr::ElementShapeFieldSlot::Packed(*index),
+                    )
+                })
+                .collect(),
+            class_name.clone(),
+        ),
+        ElementShapeIdentity::Shape => (
+            true,
+            false,
+            guard
+                .field_slots
+                .iter()
+                .map(|(prop, slot)| {
+                    (
+                        prop.clone(),
+                        crate::expr::ElementShapeFieldSlot::Runtime(slot.clone()),
+                    )
+                })
+                .collect(),
+            "<runtime shape>".to_string(),
+        ),
+    };
+    let fact_index = match matched.index {
+        MatchedIndex::Counter => crate::expr::ElementShapeIndex::Counter,
+        MatchedIndex::Constant(k) => crate::expr::ElementShapeIndex::Constant(k),
+        MatchedIndex::DerivedMod { local_id, .. } => crate::expr::ElementShapeIndex::DerivedMod {
+            local_id,
+            modulus_i32: modulus_i32
+                .clone()
+                .expect("a derived index always materializes its modulus"),
+            // Entry-block alloca: LLVM lowers a non-entry `alloca` as a real
+            // stack bump with no restore, and this one is written once per
+            // iteration.
+            slot: ctx.func.alloca_entry(I32),
+        },
+    };
 
     let scope_id = ctx.next_loop_proof_scope_id();
     let fast_scan_start = ctx.func.num_blocks();
@@ -909,13 +1266,15 @@ pub(super) fn lower_element_shape_versioned_for(
         .push(crate::expr::ElementShapeLoopFact {
             array_local_id: matched.array_id,
             index_local_id: matched.counter_id,
+            index: fact_index,
+            shape_keyed,
             scope_id,
-            class_name: matched.class_name.clone(),
-            elements_base,
-            expected_shape_id,
+            class_name: report_class,
+            elements_base: guard.elements_base,
+            expected_shape_id: guard.expected_shape_id,
             side_exit_label: slow_pre_label.clone(),
-            statically_layout_proven: matched.statically_layout_proven,
-            fields: matched.fields.clone(),
+            statically_layout_proven,
+            fields,
             element_binding: matched.element_binding,
             numeric_accumulator: matched.accumulator_id,
         });
@@ -926,7 +1285,7 @@ pub(super) fn lower_element_shape_versioned_for(
         update,
         body,
         "for.element_shape_fast",
-        Some((matched.counter_id, bound_i32)),
+        Some((matched.counter_id, guard.bound_i32)),
     );
     ctx.element_shape_loop_facts
         .retain(|fact| fact.scope_id != scope_id);
@@ -973,6 +1332,27 @@ pub(super) fn lower_element_shape_versioned_for(
                 None,
             ),
         };
+        let (mode, described) = match &matched.identity {
+            ElementShapeIdentity::Class {
+                class_name,
+                statically_class_proven,
+                statically_layout_proven,
+                ..
+            } => (
+                if *statically_layout_proven {
+                    "statically layout-proven"
+                } else if *statically_class_proven {
+                    "statically proven"
+                } else {
+                    "runtime-guarded"
+                },
+                format!("class {class_name}"),
+            ),
+            ElementShapeIdentity::Shape => (
+                "runtime-guarded",
+                "runtime ordinary shape (class-less records)".to_string(),
+            ),
+        };
         crate::opt_report::select(
             crate::opt_report::Position::Local,
             &name,
@@ -981,17 +1361,9 @@ pub(super) fn lower_element_shape_versioned_for(
             "Ptr<Shape>",
             1,
             Some(format!(
-                "element-shape loop clone ({}): class {}, {} tracked field(s); \
+                "element-shape loop clone ({mode}): {described}, {} tracked field(s); \
                  element reads in this loop lower to offset loads behind the preheader guard",
-                if matched.statically_layout_proven {
-                    "statically layout-proven"
-                } else if matched.statically_class_proven {
-                    "statically proven"
-                } else {
-                    "runtime-guarded"
-                },
-                matched.class_name,
-                matched.fields.len()
+                matched.props.len()
             )),
         );
     }
