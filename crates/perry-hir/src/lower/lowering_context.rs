@@ -569,6 +569,10 @@ pub struct LoweringContext {
     /// reusing an enclosing same-named binding (e.g. a parameter). Saved/restored
     /// across nested function bodies alongside `annexb_block_fn_var_ids`.
     pub(crate) annexb_block_fn_names_all: HashSet<String>,
+    /// Block-entry function bindings, keyed by declaration span and name.
+    /// Scoped by the block hoisting pass; declaration lowering reuses these
+    /// identities so earlier reads and Annex B's later outer copy agree.
+    pub(crate) block_fn_decl_bindings: HashMap<(u32, String), LocalId>,
     /// #4973: top-of-function-body `let`/`const` Ident bindings pre-registered
     /// by the function-body hoist pass so hoisted sibling FUNCTIONS that
     /// reference them before their lexical position bind the (boxed) local

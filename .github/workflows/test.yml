@@ -1524,8 +1524,13 @@ jobs:
                 --features perry-stdlib/external-net-pump
               export PERRY_TEST_RUNTIME_PREBUILT=1
             else
-              cargo build --release -p perry-runtime -p perry-stdlib \
-                -p perry-runtime-static -p perry-stdlib-static
+              runtime_packages=(-p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static)
+              if printf '%s\n' "$SUITES" | grep -qE '^perry issue_10079_script_block_function_hoisting '; then
+                # The pinned script/ESM matrix uses --platform bun, whose
+                # startup installs the net provider even without imports.
+                runtime_packages+=(-p perry-ext-net)
+              fi
+              cargo build --release "${runtime_packages[@]}"
             fi
             export PERRY_RUNTIME_DIR="$PWD/target/release"
           fi
