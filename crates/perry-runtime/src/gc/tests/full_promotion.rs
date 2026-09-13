@@ -16,7 +16,8 @@
 //!    walking the index, because the `debug_assert` inside the run expansion is
 //!    compiled out of the `--release` test build this suite runs under.
 //! 4. **Both states of the decision**: a mostly-dead nursery declines (and says
-//!    so in its own counter), and a thread that is not admitted never plans.
+//!    so in its own counter, without overwriting the copying minor's
+//!    predictor), and a thread that is not admitted never plans.
 //!
 //! Each test runs on a fresh thread: the arenas are thread-local, so that is
 //! what makes "survival" a property of the heap the test built rather than of
@@ -106,11 +107,6 @@ fn a_full_over_a_live_nursery_promotes_it_in_place_and_leaves_no_young_generatio
             promoted > LIVE_LEAVES as u64,
             "the promotion must have covered the array and all {LIVE_LEAVES} leaves, got {promoted}"
         );
-        assert!(
-            super::super::promote_in_place::last_young_survival_permille()
-                .is_some_and(|p| p >= 950),
-            "the full's own measurement must have been fed to the predictor"
-        );
 
         // (1) No young generation remains.
         assert_eq!(
@@ -197,6 +193,7 @@ fn a_full_over_a_mostly_dead_nursery_declines_and_keeps_its_young_generation() {
 
         let cycles_before = crate::gc::full_promotion_cycles();
         let declined_before = crate::gc::full_promotion_declined_cycles();
+        let predictor_before = super::super::promote_in_place::last_young_survival_permille();
         full_collect();
 
         assert_eq!(
@@ -205,10 +202,11 @@ fn a_full_over_a_mostly_dead_nursery_declines_and_keeps_its_young_generation() {
             "the full was admitted, measured a mostly-dead nursery, and must say it declined"
         );
         assert_eq!(crate::gc::full_promotion_cycles(), cycles_before);
-        assert!(
-            super::super::promote_in_place::last_young_survival_permille()
-                .is_some_and(|p| p < 950),
-            "the declining measurement must still reach the copying minor's predictor"
+        assert_eq!(
+            super::super::promote_in_place::last_young_survival_permille(),
+            predictor_before,
+            "a full's young census is taken wherever the full lands and is NOT the \
+             copying minor's measurement to overwrite (see `maybe_promote_young_after_full`)"
         );
         assert!(
             crate::arena::pointer_in_nursery(survivor),

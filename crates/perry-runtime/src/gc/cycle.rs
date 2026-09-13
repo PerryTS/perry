@@ -655,40 +655,22 @@ impl GcCycleState {
         let progress_kind = trigger_kind.progress_kind(GcCollectionKind::Full);
         // #10182: a full mark-sweep is the one collection that can promote its
         // Eden survivors for free — it has already proven them live, and its
-        // own sweep has already reclaimed everything around them. The guards
-        // are the full-cycle-specific half of the decision; the shared policy
-        // guards live in `full_promotion_admissible`, and the measurement that
-        // decides it is taken after the sweep.
-        //
-        //  * **Synchronous only.** A budgeted full opens mutator windows
-        //    between steps. The retag hands every in-use young block to
-        //    old-gen in one operation and `reset_young_after_promotion` then
-        //    re-seats the inline bump allocator; an allocation landing between
-        //    the two would be an allocation into a block that is registered
-        //    old and owned by a young arena.
-        //  * **Generational only.** Without the generational collector there
-        //    is no young generation to promote and no barrier to uphold.
-        //  * **Precise roots only.** A conservative stack scan's mark set is
-        //    not a sound liveness measurement — the same exclusion
-        //    `seed_promote_lock_from_sweep` applies two phases later, for the
-        //    same reason.
-        //  * **Old→young tracking complete.** Promotion makes these objects
-        //    old; a later minor will only find their young children through
-        //    the remembered set. This is the predicate the copying minor's
-        //    `BarriersInactive` fallback tests, and it means the same here.
-        let promote_young_in_place = !progress_kind.is_budgeted()
-            && super::gen_gc_enabled()
-            && super::full_promotion_admissible()
-            && matches!(
-                super::roots::conservative_stack_scan_decision(),
-                super::roots::ConservativeStackScanDecision::SkipDisabled
-            )
-            && super::barrier::old_to_young_tracking_complete();
+        // own sweep has already reclaimed everything around them. Whether it
+        // MAY is `full_promotion_planned` (one gate, shared with the safepoint
+        // pre-emption); whether it DOES is decided after the sweep, from the
+        // measurement.
+        let promote_young_in_place = super::full_promotion_planned(progress_kind);
         let young_in_use_at_start = if promote_young_in_place {
             crate::arena::copying_from_space_in_use_bytes()
         } else {
             0
         };
+        if promote_young_in_place && crate::gc::gc_diag_enabled() {
+            eprintln!(
+                "[gc-full-promote] plan young_bytes={young_in_use_at_start} survivor_bytes={}",
+                crate::arena::copying_active_survivor_in_use_bytes()
+            );
+        }
         Self {
             collection_kind: GcCollectionKind::Full,
             trigger_kind,
@@ -1660,17 +1642,38 @@ impl GcCycleState {
         }
         let young_bytes = self.young_in_use_at_start;
         let live_bytes = sweep.arena_live_from_space_bytes as usize;
-        // The most accurate young-survival figure the collector produces: a
-        // full trace's own census, not a prediction. Feed it to the copying
-        // minor's predictor whichever way the decision goes.
-        super::note_full_young_survival(young_bytes, live_bytes);
-        if !super::full_promotion_survival_holds_up(young_bytes, live_bytes) {
+        // The denominator is what the promotion would CARRY, not what the cycle
+        // started with: the sweep has already reset and released every young
+        // block that held nothing live, so those bytes cannot become old-gen
+        // garbage. What remains in use is exactly the set `retag_young_for_in_place_promotion`
+        // captures, and the threshold keeps the meaning it has on the copying
+        // minor — at most 5% of the promoted bytes are dead. Measured on
+        // `records_array_20m:parse`: 58.0 MB young at cycle start, 29.0 MB live,
+        // 29.7 MB still in use after the sweep (976‰ of what would be promoted).
+        //
+        // ★ The measurement is deliberately NOT fed to the copying minor's
+        // predictor (`note_young_survival`). The young census of a full is taken
+        // at whatever point the full runs, and on the #10182 rows that is a
+        // point where Eden still holds a parse result the JSON construction
+        // grace (`gc/json_defer.rs`) let die: 7‰ on `records_array_20m:roundtrip`,
+        // 333‰ on `records_array_8m:scan`. Fed to the predictor it turns the
+        // next minors into full evacuations of the following tree. Measured
+        // interleaved on the same binary (best of 3): 20m roundtrip 169.8 ms
+        // fed vs 131.0 ms not fed, 8m scan 415.2 ms / 168 MiB fed vs 338.0 ms /
+        // 155 MiB not fed, every other row of the 22-row matrix within noise.
+        let promotable_bytes = crate::arena::copying_from_space_in_use_bytes();
+        if !super::full_promotion_survival_holds_up(promotable_bytes, live_bytes) {
             super::note_full_promotion_declined();
             if crate::gc::gc_diag_enabled() {
                 eprintln!(
                     "[gc-full-promote] declined young_bytes={young_bytes} live_bytes={live_bytes} \
-                     survival_permille={}",
-                    super::full_young_survival_permille(young_bytes, live_bytes),
+                     promotable_bytes={promotable_bytes} carried_live_permille={} eden_live_bytes={} \
+                     eden_dead_bytes={} arena_live_bytes={} freed_bytes={}",
+                    super::full_young_survival_permille(promotable_bytes, live_bytes),
+                    sweep.eden_live_bytes,
+                    sweep.eden_dead_bytes,
+                    sweep.arena_live_bytes,
+                    sweep.freed_bytes,
                 );
             }
             return;
@@ -1701,12 +1704,14 @@ impl GcCycleState {
         }
         if crate::gc::gc_diag_enabled() {
             eprintln!(
-                "[gc-full-promote] promoted blocks={blocks} objects={} bytes={} \
-                 reserved_bytes={reserved_bytes} young_bytes={young_bytes} \
-                 live_bytes={live_bytes} survival_permille={} cycles={} declined={}",
+                "[gc-full-promote] promoted blocks={blocks} objects={} bytes={} live_objects={} \
+                 promoted_live_bytes={} reserved_bytes={reserved_bytes} young_bytes={young_bytes} \
+                 live_bytes={live_bytes} carried_live_permille={} cycles={} declined={}",
                 stats.objects,
                 stats.bytes,
-                super::full_young_survival_permille(young_bytes, live_bytes),
+                stats.live_objects,
+                stats.live_bytes,
+                super::full_young_survival_permille(promotable_bytes, live_bytes),
                 super::full_promotion_cycles(),
                 super::full_promotion_declined_cycles(),
             );

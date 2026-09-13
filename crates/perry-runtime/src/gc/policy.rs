@@ -1973,7 +1973,16 @@ pub(super) fn promoted_cohort_bound_bytes(old_live_at_last_full: usize) -> usize
 
 #[inline]
 fn promoted_cohort_bound_due() -> bool {
-    GC_PROMOTED_SINCE_FULL.with(Cell::get)
+    promoted_cohort_bound_due_with(0)
+}
+
+/// [`promoted_cohort_bound_due`] as it will read once `pending_promotion_bytes`
+/// more have been promoted — see `promoting_full_preempts_nursery_minor`.
+#[inline]
+pub(super) fn promoted_cohort_bound_due_with(pending_promotion_bytes: usize) -> bool {
+    GC_PROMOTED_SINCE_FULL
+        .with(Cell::get)
+        .saturating_add(pending_promotion_bytes)
         >= promoted_cohort_bound_bytes(GC_OLD_LIVE_AT_LAST_FULL.with(Cell::get))
 }
 
@@ -3405,6 +3414,35 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
     // mirror would leave the back-edge poll armed forever.
     set_safepoint_pending(false);
     let _declared = DeclaredSafepointGuard::enter();
+    // #10182: a nursery collection whose promotion would make the promoted-
+    // cohort bound due runs as the full that bound would schedule next, while
+    // the young generation is still here for it to promote in place. See
+    // `promoting_full_preempts_nursery_minor`.
+    if !scheduled
+        && matches!(
+            due,
+            Some(BudgetedGcTrigger::ArenaBytes | BudgetedGcTrigger::YoungScavengeCap)
+        )
+        && !GC_OLD_RECLAIM_IN_PROGRESS.with(Cell::get)
+        && super::promoting_full_preempts_nursery_minor()
+    {
+        let _reentry = OldReclaimReentryGuard::enter();
+        GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
+        super::note_nursery_minor_preempted_by_full();
+        super::diag_sites::trigger_decision("safepoint", "PromotingFull");
+        super::diag_sites::set_full_site("safepoint_promoting_full");
+        // No `force_full_scan`: roots are precise at this safepoint, which is
+        // one of the conditions the pre-emption checked.
+        let pre_in_use = crate::arena::arena_in_use_bytes();
+        let outcome = gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(
+            GcTriggerKind::OldGenBytes,
+        ));
+        // It stood in for the nursery collection, so it re-baselines the
+        // nursery trigger the way that collection would have.
+        gc_finish_arena_trigger_collection(pre_in_use, outcome);
+        super::record_safepoint_drain(super::SafepointDrainKind::OldReclaim);
+        return true;
+    }
     let kind = match due {
         // #7909: the nursery cap and the whole-arena trigger are the same
         // collection here — this IS the evacuating collector the cap is for.

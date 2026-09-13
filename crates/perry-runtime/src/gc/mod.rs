@@ -234,8 +234,8 @@ use promote_in_place::*;
 pub use promote_in_place::{
     first_cycle_promotion_attempts, first_cycle_promotion_rollbacks, full_promoted_bytes,
     full_promoted_objects, full_promotion_cycles, full_promotion_declined_cycles,
-    in_place_promoted_objects, in_place_promotion_cycles, untraced_promoted_objects,
-    untraced_promotion_cycles,
+    in_place_promoted_objects, in_place_promotion_cycles, nursery_minors_preempted_by_full,
+    untraced_promoted_objects, untraced_promotion_cycles,
 };
 /// Instrument-liveness counters (#7604): copying minors completed, objects
 /// relocated, loop back-edge polls reached. Mode-independent — they count what

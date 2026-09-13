@@ -81,3 +81,52 @@ impl ArenaSweepCleanupState {
         self.stats
     }
 }
+
+impl IncrementalSweepState {
+    /// #10182: a synchronous full that intends to promote its young generation
+    /// in place must leave the young blocks in a state the promotion walk can
+    /// read. `finish_in_place_promotion`'s only liveness sources are the mark
+    /// bits (which this sweep clears as it goes) and "is this header's
+    /// `obj_type` arena-walkable" — so the sweep invalidates the headers of the
+    /// dead young objects it reclaims, exactly the way it already invalidates
+    /// dead OLD ones (`invalidate_dead_old_arena_header`). After that the
+    /// promotion's `PromotionLiveness::AssumeAllLive` walk registers precisely
+    /// the survivors, and the page-run description re-parses to the same count
+    /// because producer and expander apply the same `gc_type_is_arena_walkable`
+    /// filter.
+    ///
+    /// Here rather than in `oldgen.rs` for the 2000-line file cap.
+    pub(in crate::gc) fn invalidating_dead_young_headers(mut self, on: bool) -> Self {
+        self.arena.invalidate_dead_young_headers = on;
+        self
+    }
+}
+
+impl ArenaSweepObjectsState {
+    /// #10182: the per-object half of [`IncrementalSweepState::invalidating_dead_young_headers`].
+    ///
+    /// Only young (from-space: Eden + active survivor) blocks, only when the
+    /// cycle planned a promotion. No `unregister_old_object_pages`: these
+    /// objects were young, so they were never in the old-gen page index. `size`
+    /// is deliberately preserved — every arena walker hops by it, the promotion
+    /// walk and the page-run expansion included.
+    #[inline]
+    pub(super) unsafe fn invalidate_dead_young_header_for_promotion(
+        &self,
+        header: *mut GcHeader,
+        block_idx: usize,
+    ) {
+        if !self.invalidate_dead_young_headers
+            || !crate::arena::block_in_copying_from_space(
+                block_idx,
+                self.resettable_general_n,
+                &self.active_survivor_blocks,
+            )
+        {
+            return;
+        }
+        (*header).obj_type = 0;
+        (*header).gc_flags = 0;
+        (*header)._reserved = 0;
+    }
+}

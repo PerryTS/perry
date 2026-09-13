@@ -1240,25 +1240,6 @@ impl IncrementalSweepState {
         self
     }
 
-    /// #10182: a synchronous full that intends to promote its young generation
-    /// in place must leave the young blocks in a state the promotion walk can
-    /// read. `finish_in_place_promotion`'s only liveness sources are the mark
-    /// bits (which this sweep clears as it goes) and "is this header's
-    /// `obj_type` arena-walkable" — so the sweep invalidates the headers of the
-    /// dead young objects it reclaims, exactly the way it already invalidates
-    /// dead OLD ones (`invalidate_dead_old_arena_header`). After that the
-    /// promotion's `PromotionLiveness::AssumeAllLive` walk registers precisely
-    /// the survivors, and the page-run description re-parses to the same count
-    /// because producer and expander apply the same `gc_type_is_arena_walkable`
-    /// filter.
-    ///
-    /// No `unregister_old_object_pages` here: these objects were young, so they
-    /// were never in the old-gen page index to be removed from.
-    pub(super) fn invalidating_dead_young_headers(mut self, on: bool) -> Self {
-        self.arena.invalidate_dead_young_headers = on;
-        self
-    }
-
     pub(super) fn step(&mut self, budget: usize) -> bool {
         match self.subphase {
             SweepCycleSubphase::CollectionSideBuffers => {
@@ -1411,8 +1392,7 @@ struct ArenaSweepObjectsState {
     /// #7901: see `SweepTraceStats::arena_live_from_space_bytes`.
     arena_live_from_space_bytes: u64,
     active_survivor_blocks: std::ops::Range<usize>,
-    /// #10182: see `IncrementalSweepState::invalidating_dead_young_headers`.
-    invalidate_dead_young_headers: bool,
+    invalidate_dead_young_headers: bool, // #10182: see `sweep_cleanup.rs`
 }
 
 impl ArenaSweepObjectsState {
@@ -1673,20 +1653,8 @@ impl ArenaSweepObjectsState {
         finalize_dead_arena_payload(header, user_ptr, self.overflow_active);
         if self.reclaim_dead_old_blocks && dead_old {
             self.pending_old_unregister.defer(header, total_size);
-        } else if self.invalidate_dead_young_headers
-            && crate::arena::block_in_copying_from_space(
-                block_idx,
-                self.resettable_general_n,
-                &self.active_survivor_blocks,
-            )
-        {
-            // #10182: this block is about to be handed to old-gen whole. Leave
-            // the header unparseable as an object so the promotion walk and the
-            // page-run expansion both skip it. `size` is deliberately preserved
-            // — every arena walker hops by it, this one included.
-            (*header).obj_type = 0;
-            (*header).gc_flags = 0;
-            (*header)._reserved = 0;
+        } else {
+            self.invalidate_dead_young_header_for_promotion(header, block_idx);
         }
     }
 }

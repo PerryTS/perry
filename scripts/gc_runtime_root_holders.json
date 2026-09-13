@@ -3422,6 +3422,26 @@
     },
     {
       "file": "crates/perry-runtime/src/gc/promote_in_place.rs",
+      "name": "FULL_PROMOTED_BYTES"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/promote_in_place.rs",
+      "name": "FULL_PROMOTED_OBJECTS"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/promote_in_place.rs",
+      "name": "FULL_PROMOTION_CYCLES"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/promote_in_place.rs",
+      "name": "FULL_PROMOTION_DECLINED_CYCLES"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/promote_in_place.rs",
+      "name": "NURSERY_MINORS_PREEMPTED_BY_FULL"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/promote_in_place.rs",
       "name": "IN_PLACE_PROMOTION_CYCLES"
     },
     {

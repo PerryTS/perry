@@ -201,6 +201,7 @@ thread_local! {
     static FULL_PROMOTION_DECLINED_CYCLES: Cell<u64> = const { Cell::new(0) };
     static FULL_PROMOTED_OBJECTS: Cell<u64> = const { Cell::new(0) };
     static FULL_PROMOTED_BYTES: Cell<usize> = const { Cell::new(0) };
+    static NURSERY_MINORS_PREEMPTED_BY_FULL: Cell<u64> = const { Cell::new(0) };
 }
 
 /// Record that `bytes` of young capacity became old-gen, so the next
@@ -401,26 +402,95 @@ pub(super) fn full_promotion_admissible() -> bool {
     in_place_promotion_admissible()
 }
 
-/// Did the full's own sweep measure the young generation as live enough to
-/// promote it whole? (#10182)
+/// The whole "may this full plan a promotion" gate, shared by the cycle
+/// constructor and by [`promoting_full_preempts_nursery_minor`] so the two can
+/// never disagree — a pre-emption the full then refuses to act on would leave
+/// Eden full and the predicate still true at the next safepoint.
 ///
-/// `young_bytes` is from-space occupancy captured at cycle start,
-/// `live_bytes` the from-space share of the sweep's live census. The threshold
-/// is [`PROMOTE_SURVIVAL_THRESHOLD_PERMILLE`], the same 95% the copying minor
-/// uses, and it means the same thing: at most 5% of the promoted bytes are
-/// dead, and they cost footprint until the next full.
+///  * **Synchronous only.** A budgeted full opens mutator windows between
+///    steps; the retag hands every in-use young block to old-gen in one
+///    operation and `reset_young_after_promotion` then re-seats the inline
+///    bump allocator, and an allocation between the two would land in a block
+///    registered old and owned by a young arena.
+///  * **Generational only.** Without it there is no young generation to
+///    promote and no barrier to uphold.
+///  * **Precise roots only.** A conservative scan's mark set is not a sound
+///    liveness measurement — the exclusion `seed_promote_lock_from_sweep`
+///    already applies to the same sweep census, for the same reason.
+///  * **Old→young tracking complete.** Promotion makes these objects old, and
+///    a later minor finds their young children only through the remembered
+///    set: the predicate behind the copying minor's `BarriersInactive`
+///    fallback.
+pub(super) fn full_promotion_planned(progress_kind: super::GcProgressKind) -> bool {
+    !progress_kind.is_budgeted()
+        && super::gen_gc_enabled()
+        && full_promotion_admissible()
+        && matches!(
+            super::roots::conservative_stack_scan_decision(),
+            super::roots::ConservativeStackScanDecision::SkipDisabled
+        )
+        && super::barrier::old_to_young_tracking_complete()
+}
+
+/// Should the nursery collection due at this precise safepoint be a full that
+/// promotes in place, rather than a copying minor followed by a full? (#10182)
+///
+/// The promoted-cohort bound (`policy::promoted_cohort_bound_bytes`) can only
+/// become due AFTER a promotion lands, i.e. after the copying minor has handed
+/// the young generation to old-gen. Its full then runs at the next allocation
+/// point — behind a conservative scan, over an EMPTY young generation, with
+/// nothing left to promote. Measured on `records_array_8m:scan` with the bound
+/// alone: 4 minors, 2 fulls, both fulls at `site=alloc_point` with
+/// `from_space` ≤ 1376 bytes, and the in-place promotion at the full never ran
+/// once. Two collections doing the work of one, and the second one blind.
+///
+/// So ask the question one collection earlier, while the tree is still in
+/// Eden: would the promotion this minor is about to perform make the cohort
+/// bound due? If so, run the full now. It traces the young generation anyway,
+/// so it promotes it itself — verified rather than assumed — and it sweeps
+/// the old cohort the bound exists to reclaim, in the same pass.
+///
+/// Conditions, each load-bearing:
+///  * the copying minor's own predictor says it would promote the whole young
+///    generation (`should_promote_young_in_place`) — otherwise the minor
+///    evacuates, the cohort does not grow, and there is nothing to pre-empt;
+///  * the full would be allowed to plan the promotion
+///    ([`full_promotion_planned`], the same gate the cycle reads) — otherwise
+///    this is a full that leaves Eden as it found it;
+///  * `promoted_since_full + young_in_use` reaches the bound — the same
+///    predicate the bound itself evaluates, one promotion ahead.
+///
+/// Not a #7594-style prediction of pressure the full cannot relieve: the
+/// promotable bytes it counts are the ones this full promotes, and the old-gen
+/// cohort it reclaims is already there.
+pub(super) fn promoting_full_preempts_nursery_minor() -> bool {
+    if !should_promote_young_in_place()
+        || !full_promotion_planned(super::GcProgressKind::LegacySynchronous)
+    {
+        return false;
+    }
+    super::policy::promoted_cohort_bound_due_with(crate::arena::copying_from_space_in_use_bytes())
+}
+
+/// Did the full's own sweep leave young blocks live enough to promote whole?
+/// (#10182)
+///
+/// `carried_bytes` is young (from-space) occupancy AFTER the sweep — the bytes
+/// the promotion would hand to old-gen, since the sweep has already reset every
+/// young block with nothing live on it — and `live_bytes` the from-space share
+/// of the sweep's live census. The threshold is
+/// [`PROMOTE_SURVIVAL_THRESHOLD_PERMILLE`], the same 95% the copying minor
+/// uses, and it bounds the same thing: at most 5% of the promoted bytes are
+/// dead and cost footprint until the next full.
 ///
 /// ★ The number this tests is a MEASUREMENT, not a prediction. The copying
 /// minor reads the *previous* cycle's ratio because it must decide before it
-/// traces; this reads the ratio this very cycle just measured. A misprediction
-/// is therefore impossible here — what remains is the ordinary policy question
-/// of whether a 95%-live nursery is worth tenuring whole, and the answer is
-/// the one #7742 already argued.
-pub(super) fn full_promotion_survival_holds_up(young_bytes: usize, live_bytes: usize) -> bool {
-    if young_bytes == 0 {
+/// traces; this reads what this very cycle just traced and swept.
+pub(super) fn full_promotion_survival_holds_up(carried_bytes: usize, live_bytes: usize) -> bool {
+    if carried_bytes == 0 {
         return false;
     }
-    full_young_survival_permille(young_bytes, live_bytes) >= PROMOTE_SURVIVAL_THRESHOLD_PERMILLE
+    full_young_survival_permille(carried_bytes, live_bytes) >= PROMOTE_SURVIVAL_THRESHOLD_PERMILLE
 }
 
 /// The ratio itself, in permille, clamped to 1000. Shared by the decision and
@@ -431,30 +501,6 @@ pub(super) fn full_young_survival_permille(young_bytes: usize, live_bytes: usize
         .checked_div(young_bytes as u64)
         .unwrap_or(0)
         .min(1000)
-}
-
-/// Record a full's exact young-survival measurement for the copying minor's
-/// predictor (#10182).
-///
-/// Deliberately NOT [`note_young_survival`]. That function does three other
-/// things — it settles the untraced run, re-bases the untraced budget against
-/// the current old-gen, and can raise an old-reclaim request — all of which a
-/// full either does itself or makes meaningless: `finish_full_old_reclaim_baseline`
-/// runs `note_full_collection_reclaimed_old_gen` moments later and resets both
-/// the untraced run and the budget base, and clears any old-reclaim request.
-/// Calling it would therefore be a no-op wrapped around a redundant request,
-/// and the redundant request is the kind that schedules a second full behind
-/// the one that just ran.
-///
-/// What IS worth keeping is the ratio: it is the most accurate young-survival
-/// figure the collector ever produces, and the next copying minor's in-place
-/// decision reads exactly this cell.
-pub(super) fn note_full_young_survival(young_bytes: usize, live_bytes: usize) {
-    if young_bytes == 0 {
-        return;
-    }
-    LAST_YOUNG_SURVIVAL_PERMILLE
-        .with(|c| c.set(Some(full_young_survival_permille(young_bytes, live_bytes))));
 }
 
 /// A full mark-sweep promoted its Eden survivors in place (#10182).
@@ -489,6 +535,16 @@ pub fn full_promoted_objects() -> u64 {
 
 pub fn full_promoted_bytes() -> usize {
     FULL_PROMOTED_BYTES.with(Cell::get)
+}
+
+pub(super) fn note_nursery_minor_preempted_by_full() {
+    NURSERY_MINORS_PREEMPTED_BY_FULL.with(|c| c.set(c.get().saturating_add(1)));
+}
+
+/// How many nursery-due safepoints ran a promoting full instead of a copying
+/// minor ([`promoting_full_preempts_nursery_minor`]).
+pub fn nursery_minors_preempted_by_full() -> u64 {
+    NURSERY_MINORS_PREEMPTED_BY_FULL.with(Cell::get)
 }
 
 /// The untraced-promotion budget, and therefore **the worst-case retained
