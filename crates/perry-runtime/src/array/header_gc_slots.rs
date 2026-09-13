@@ -37,7 +37,9 @@ pub(crate) unsafe fn gc_element_slot_range(
     }
     let length = (*arr).length as usize;
     let capacity = (*arr).capacity as usize;
-    if capacity > 16_000_000 || capacity > super::array_physical_capacity(arr) {
+    // Capacity includes growth slack. Only the allocation bounds it: a valid
+    // live prefix must remain visible to every GC walk after a grow.
+    if capacity > super::array_physical_capacity(arr) {
         return None;
     }
     if length > capacity {
