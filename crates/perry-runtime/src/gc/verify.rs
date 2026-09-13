@@ -232,9 +232,9 @@ pub(super) unsafe fn remember_evacuated_old_to_young_slot(
     sticky: &mut StickyRememberedSet,
     parent_header: *mut GcHeader,
     slot: *mut u64,
-) {
+) -> bool {
     if slot.is_null() {
-        return;
+        return false;
     }
     let child_addr = decode_heap_addr(*slot);
     // Nursery AND malloc-GC children both need their pages kept dirty:
@@ -242,13 +242,17 @@ pub(super) unsafe fn remember_evacuated_old_to_young_slot(
     // leaves — dropping an old→malloc page here would free the malloc
     // child on the next minor (see remembered_child_needs_tracking).
     if child_addr == 0 || !crate::gc::barrier::remembered_child_needs_tracking(child_addr) {
-        return;
+        return false;
     }
     sticky.remember_slot(
         parent_header,
         slot,
         slot_is_external_to(parent_header, slot),
     );
+    // Report the child's tracking requirement, not whether its page was new.
+    // The repair diagnostic can count productive slots without decoding and
+    // classifying the same child a second time.
+    true
 }
 
 /// Is `slot` outside `parent_header`'s own allocation, or on a page the
@@ -337,9 +341,26 @@ pub(super) fn restore_surviving_dirty_coverage(
     covered: &crate::fast_hash::PtrHashSet<usize>,
     cycle_label: &str,
 ) {
+    // Keep slot accounting out of the normal GC walk. Both instantiations
+    // perform exactly the same repair; only the diagnostic one counts it.
+    if crate::gc::gc_diag_enabled() {
+        restore_surviving_dirty_coverage_impl::<true>(snapshot, covered, cycle_label);
+    } else {
+        restore_surviving_dirty_coverage_impl::<false>(snapshot, covered, cycle_label);
+    }
+}
+
+fn restore_surviving_dirty_coverage_impl<const DIAGNOSTICS: bool>(
+    snapshot: &RememberedDirtySnapshot,
+    covered: &crate::fast_hash::PtrHashSet<usize>,
+    cycle_label: &str,
+) {
     let mut sticky = StickyRememberedSet::default();
     let mut walked = 0usize;
     let mut skipped = 0usize;
+    let mut parents_visited = 0usize;
+    let mut slots_visited = 0usize;
+    let mut slots_tracking = 0usize;
     #[cfg(debug_assertions)]
     let mut skipped_sticky = StickyRememberedSet::default();
     // Mirror scan_remembered_dirty_slots_copying's scan_header guards: the
@@ -367,12 +388,23 @@ pub(super) fn restore_surviving_dirty_coverage(
         {
             return;
         }
+        if DIAGNOSTICS {
+            parents_visited += 1;
+        }
         visit_gc_rewrite_slots(header, |slot| {
+            if DIAGNOSTICS {
+                // Count all enumerated slots, including unproductive weak
+                // targets and primitive values. This measures traversal work.
+                slots_visited += 1;
+            }
             if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
                 return;
             }
             slot.record_layout_read();
-            remember_evacuated_old_to_young_slot(&mut sticky, header, slot.slot);
+            let tracking = remember_evacuated_old_to_young_slot(&mut sticky, header, slot.slot);
+            if DIAGNOSTICS && tracking {
+                slots_tracking += 1;
+            }
         });
     };
     if !snapshot.dirty_old_pages.is_empty() {
@@ -429,10 +461,19 @@ pub(super) fn restore_surviving_dirty_coverage(
              object `scan_dirty_object_slots` reported complete"
         );
     }
-    if crate::gc::gc_diag_enabled() {
+    if DIAGNOSTICS {
+        // These are the two actual snapshot inputs and the skip-set size.
+        // `dirty_pages` also includes external pages and is NOT the set the
+        // old-arena walk iterates. Candidate counts precede validity guards;
+        // parent visits and slot counts describe the admitted traversal.
         eprintln!(
-            "[gc-restore-coverage] {cycle_label} dirty_pages={} objects_walked={walked} objects_skipped={skipped} pages_added={added}",
-            snapshot.dirty_pages.len()
+            "[gc-restore-coverage] {cycle_label} dirty_old_pages={} external_entries={} \
+             covered={} objects_walked={walked} objects_skipped={skipped} \
+             parents_visited={parents_visited} slots_visited={slots_visited} \
+             slots_tracking={slots_tracking} pages_added={added}",
+            snapshot.dirty_old_pages.len(),
+            snapshot.external_dirty_entries.len(),
+            covered.len(),
         );
     }
 }

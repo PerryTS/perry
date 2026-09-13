@@ -50,6 +50,7 @@ mod oldgen;
 mod os_tag;
 mod promote_in_place;
 mod proxy_registry;
+mod restore_coverage;
 mod retention_9628_9629;
 mod root_words;
 mod rooted_container_values;
