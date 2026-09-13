@@ -1211,6 +1211,7 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
                     &combined,
                     &hoisted_id_set,
                 );
+                prealloc.retain(|id| !ctx.nested_forward_scope_ids.contains(id));
                 for id in &forward_boxed_ids {
                     if !prealloc.contains(id) {
                         prealloc.push(*id);

@@ -593,6 +593,8 @@ pub struct LoweringContext {
     /// enclosing scope). Without this, a same-named `let` in a sibling block
     /// was skipped (deduped by name) and any post-block reference of the name
     /// resolved to the block's box instead of the outer binding.
+    /// Their TDZ cells are also allocated at block entry, rather than function
+    /// entry, to preserve per-entry binding identity and the TDZ in loops.
     pub(crate) nested_forward_scope_ids: HashSet<LocalId>,
     /// Shadow index: function name -> index in `functions` Vec (last entry for shadowing)
     pub(crate) functions_index: HashMap<String, usize>,

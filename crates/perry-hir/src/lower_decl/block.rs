@@ -21,7 +21,7 @@ pub(crate) use var_names::{
 };
 
 pub fn lower_block_stmt(ctx: &mut LoweringContext, block: &ast::BlockStmt) -> Result<Vec<Stmt>> {
-    rebind_nested_forward_scope_lets(ctx, &block.stmts);
+    let tdz_boxes = rebind_nested_forward_scope_lets(ctx, &block.stmts);
     // #9466: `class` is block-scoped, so a `class X` here is a DISTINCT class
     // from any enclosing/prior `class X` and needs its own registration key.
     // This is the funnel every `{}`-shaped scope shares — bare block, `if` /
@@ -37,7 +37,12 @@ pub fn lower_block_stmt(ctx: &mut LoweringContext, block: &ast::BlockStmt) -> Re
     let saved_class_renames = enter_class_rename_scope(ctx, block.span.lo.0, &block.stmts);
     let lowered = lower_stmts_using_aware(ctx, &block.stmts);
     exit_class_rename_scope(ctx, saved_class_renames);
-    lowered
+    lowered.map(|mut body| {
+        if !tdz_boxes.is_empty() {
+            body.insert(0, Stmt::PreallocateTdzBoxes(tdz_boxes));
+        }
+        body
+    })
 }
 
 /// Make the forward-captured `let`/`const` bindings that
@@ -50,15 +55,22 @@ pub fn lower_block_stmt(ctx: &mut LoweringContext, block: &ast::BlockStmt) -> Re
 /// unwinds, so the binding is visible exactly within its block — a same-named
 /// `let` in a sibling block gets its own id/box, and references after the
 /// block resolve to the outer binding (or stay global) as in Node.
+/// Returns the cells to allocate at this scope's runtime entry. In particular,
+/// a loop must allocate NEW cells on every entry, both to restart the TDZ and
+/// to leave callbacks from previous iterations attached to their original cells.
 ///
 /// Called from [`lower_block_stmt`] (every `{}`-shaped scope: block, `try` /
 /// `catch` / `finally`, block-bodied `if` / loop / labeled bodies) and from
 /// the two switch-case lowering arms (`lower/stmt.rs`, `lower_decl/
 /// body_stmt.rs`), whose case statement-lists share the switch's block scope
 /// without being a `BlockStmt`.
-pub(crate) fn rebind_nested_forward_scope_lets(ctx: &mut LoweringContext, stmts: &[ast::Stmt]) {
+pub(crate) fn rebind_nested_forward_scope_lets(
+    ctx: &mut LoweringContext,
+    stmts: &[ast::Stmt],
+) -> Vec<LocalId> {
+    let mut tdz_boxes = Vec::new();
     if ctx.lexical_forward_decls.is_empty() {
-        return;
+        return tdz_boxes;
     }
     for stmt in stmts {
         let ast::Stmt::Decl(ast::Decl::Var(var_decl)) = stmt else {
@@ -77,11 +89,13 @@ pub(crate) fn rebind_nested_forward_scope_lets(ctx: &mut LoweringContext, stmts:
                 if let Some(&id) = ctx.lexical_forward_decls.get(&span_lo) {
                     if ctx.nested_forward_scope_ids.contains(&id) {
                         ctx.locals.push((name, id, Type::Any));
+                        tdz_boxes.push(id);
                     }
                 }
             }
         }
     }
+    tdz_boxes
 }
 
 /// Collect identifier names referenced INSIDE any closure (arrow / function
@@ -108,7 +122,9 @@ pub(crate) fn rebind_nested_forward_scope_lets(ctx: &mut LoweringContext, stmts:
 /// scope local now (so the earlier closure resolves it to the local and
 /// captures the live box) and span-keyed in `lexical_forward_decls` so the
 /// declaration — including a destructuring leaf — reuses the same id. Returns
-/// the pre-registered ids so the caller can prealloc their boxes at entry.
+/// the function-scoped ids so the caller can prealloc their boxes at function
+/// entry. Nested lexical ids are allocated at their own scope's entry by
+/// `rebind_nested_forward_scope_lets`'s callers.
 ///
 /// `body_entry_locals_len` is `ctx.locals.len()` captured before any of this
 /// body's own locals were defined — anything at or above it is in THIS scope,
@@ -133,9 +149,9 @@ pub(crate) fn pre_register_forward_captured_lets(
     // `try { let cb = () => x; let x = …; cb() }` (esbuild `__esm` streaming
     // closures in the compiled query async-generator) fell through to
     // `js_global_get_or_throw_unresolved` → `ReferenceError: x is not
-    // defined`. Forward-captured boxes from any depth still preallocate at
-    // function entry (Phase 4/5) and each declaration reuses its id by span
-    // (`lexical_forward_decls`).
+    // defined`. Function-scoped boxes preallocate at function entry (Phase
+    // 4/5); nested lexical boxes at their own block entry. Each declaration
+    // reuses its id by span (`lexical_forward_decls`).
     //
     // The bool is `is_nested`: only the function-body top level (front entry)
     // defines its pre-registrations as name-visible function-scope locals.
@@ -220,7 +236,6 @@ pub(crate) fn pre_register_forward_captured_lets(
                                 ctx.var_hoisted_ids.insert(id);
                                 ctx.tdz_forward_ids.insert(id);
                                 ctx.nested_forward_scope_ids.insert(id);
-                                forward_boxed_ids.push(id);
                                 ctx.lexical_forward_decls.insert(span_lo, id);
                                 registered_here.insert(name);
                             } else {
@@ -756,6 +771,7 @@ pub fn lower_fn_body_block_stmt(
     // the box before the declaration assigns through it.
     let combined: Vec<Stmt> = hoisted_lets.iter().chain(other.iter()).cloned().collect();
     let mut prealloc = compute_prealloc_for_hoisted_closures(&combined, &hoisted_id_set);
+    prealloc.retain(|id| !ctx.nested_forward_scope_ids.contains(id));
     for id in forward_boxed_ids {
         if !prealloc.contains(&id) {
             prealloc.push(id);
@@ -1065,7 +1081,7 @@ pub fn lower_block_stmt_scoped(
 fn lower_block_fn_decls(ctx: &mut LoweringContext, block: &ast::BlockStmt) -> Result<Vec<Stmt>> {
     use std::collections::{HashMap, HashSet};
 
-    rebind_nested_forward_scope_lets(ctx, &block.stmts);
+    let tdz_boxes = rebind_nested_forward_scope_lets(ctx, &block.stmts);
 
     let mut hoisted_ids = HashSet::new();
     let mut block_ids = HashMap::new();
@@ -1089,7 +1105,11 @@ fn lower_block_fn_decls(ctx: &mut LoweringContext, block: &ast::BlockStmt) -> Re
         hoisted_ids.insert(id);
     }
     if hoisted_ids.is_empty() {
-        return lower_stmts_using_aware(ctx, &block.stmts);
+        let mut body = lower_stmts_using_aware(ctx, &block.stmts)?;
+        if !tdz_boxes.is_empty() {
+            body.insert(0, Stmt::PreallocateTdzBoxes(tdz_boxes));
+        }
+        return Ok(body);
     }
 
     // Lower in source order first: a declaration body may capture lexical
@@ -1120,8 +1140,15 @@ fn lower_block_fn_decls(ctx: &mut LoweringContext, block: &ast::BlockStmt) -> Re
     }
 
     let combined: Vec<_> = hoisted.iter().chain(other.iter()).cloned().collect();
-    let prealloc = compute_prealloc_for_hoisted_closures(&combined, &hoisted_ids);
+    let mut prealloc = compute_prealloc_for_hoisted_closures(&combined, &hoisted_ids);
+    // A hoisted closure may capture a forward lexical from this block. Its
+    // TDZ cell is already allocated here; never replace it with an ordinary
+    // undefined-seeded cell or hoist a nested block's cell into this scope.
+    prealloc.retain(|id| !ctx.nested_forward_scope_ids.contains(id));
     let mut result = Vec::new();
+    if !tdz_boxes.is_empty() {
+        result.push(Stmt::PreallocateTdzBoxes(tdz_boxes));
+    }
     if !prealloc.is_empty() {
         result.push(Stmt::PreallocateBoxes(prealloc));
     }

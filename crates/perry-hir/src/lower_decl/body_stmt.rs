@@ -1012,7 +1012,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             result.push(Stmt::Throw(expr));
         }
         ast::Stmt::Switch(switch_stmt) => {
-            let discriminant = lower_expr(ctx, &switch_stmt.discriminant)?;
+            let mut discriminant = lower_expr(ctx, &switch_stmt.discriminant)?;
             let mut cases = Vec::new();
             let switch_scope_mark = ctx.push_block_scope();
             // Case statement-lists share the switch's block scope without
@@ -1024,8 +1024,11 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             // one shared scope key: a second case re-declaring the name is a
             // redeclaration, not a shadow.
             let mut saved_class_renames = Vec::new();
+            let mut tdz_boxes = Vec::new();
             for case in &switch_stmt.cases {
-                crate::lower_decl::rebind_nested_forward_scope_lets(ctx, &case.cons);
+                tdz_boxes.extend(crate::lower_decl::rebind_nested_forward_scope_lets(
+                    ctx, &case.cons,
+                ));
                 saved_class_renames.extend(crate::lower_decl::enter_class_rename_scope(
                     ctx,
                     switch_stmt.span.lo.0,
@@ -1047,6 +1050,20 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             crate::lower_decl::exit_class_rename_scope(ctx, saved_class_renames);
             ctx.pop_block_scope(switch_scope_mark);
 
+            if !tdz_boxes.is_empty() {
+                // Evaluate the discriminant before entering the case block.
+                // All cases share one environment, including fallthrough.
+                let id = ctx.fresh_local();
+                result.push(Stmt::Let {
+                    id,
+                    name: "__switch_discriminant".into(),
+                    ty: Type::Any,
+                    mutable: false,
+                    init: Some(discriminant),
+                });
+                result.push(Stmt::PreallocateTdzBoxes(tdz_boxes));
+                discriminant = Expr::LocalGet(id);
+            }
             result.push(Stmt::Switch {
                 discriminant,
                 cases,

@@ -72,6 +72,9 @@ pub enum Stmt {
     /// read of such a box before its `Stmt::Let` runs throws a spec
     /// ReferenceError; the `Stmt::Let` (or `let x;` with no init) overwrites
     /// the sentinel with the real value / `undefined`, ending the dead zone.
+    /// Nested lexical scopes emit this at block entry: every execution must
+    /// allocate a fresh cell, even when codegen emits multiple copies of that
+    /// block (such as a finally body on normal and exceptional paths).
     PreallocateTdzBoxes(Vec<LocalId>),
     /// Hand the heap box cells behind a set of boxed LocalIds to the async
     /// activation lifetime tracker (#7933 / #8213). A cell no closure captures

@@ -33,6 +33,8 @@ mod loops;
 mod masked_window_region;
 #[cfg(test)]
 mod prealloc_module_global_tests;
+#[cfg(test)]
+mod prealloc_tdz_path_tests;
 pub(crate) mod stable_packed_accumulator;
 pub(crate) mod stable_packed_loop;
 mod stable_packed_typed_array;
@@ -690,14 +692,10 @@ fn emit_preallocate_boxes(ctx: &mut FnCtx<'_>, ids: &[u32], tdz: bool) -> Result
         if ctx.module_globals.contains_key(id) {
             continue;
         }
-        if ctx.locals.contains_key(id) {
-            // A previous PreallocateBoxes (or an unusual nesting)
-            // already set this up -- skip to keep the existing slot.
+        if !tdz && ctx.locals.contains_key(id) {
+            // Ordinary preallocation preserves a shared function-scoped cell.
             ctx.prealloc_boxes.insert(*id);
             ctx.boxed_vars.insert(*id);
-            if tdz {
-                ctx.tdz_boxes.insert(*id);
-            }
             continue;
         }
         let is_i32_control = crate::expr::is_compiler_private_async_i32_control_local(ctx, *id);
@@ -740,19 +738,29 @@ fn emit_preallocate_boxes(ctx: &mut FnCtx<'_>, ids: &[u32], tdz: bool) -> Result
                 "jsvalue_box_cell",
             )
         };
-        let slot = ctx.func.alloca_entry(crate::types::I64);
-        // perry#4926: PreallocateBoxes can sit nested inside an If/Try/Labeled
-        // body (e.g. the async state-machine wrapper), so this block's
-        // box-pointer store doesn't necessarily dominate every load of the
-        // slot. Entry-init the slot to TAG_UNDEFINED so paths that bypass this
-        // statement read a defined sentinel instead of `undef` (see the boxed
-        // `Stmt::Let` arm in let_stmt.rs). The slot holds a *box pointer*, not
-        // the value, so it is TAG_UNDEFINED-initialized in both the TDZ and
-        // non-TDZ cases -- the TAG_TDZ sentinel lives in the box cell, not the
-        // slot.
-        let undef_bits = crate::nanbox::TAG_UNDEFINED_I64.to_string();
-        ctx.func
-            .entry_allocas_push_store(crate::types::I64, &undef_bits, &slot);
+        // #10051: a TDZ statement creates this entry's lexical environment.
+        // Emit its allocation even when an earlier COPY of the statement was
+        // lowered already (normal/exceptional finally paths, for example).
+        // Reuse the stack slot, but never the previous entry's heap cell:
+        // retained closures must keep their original binding and value.
+        let slot = if let Some(slot) = ctx.locals.get(id) {
+            slot.clone()
+        } else {
+            let slot = ctx.func.alloca_entry(crate::types::I64);
+            // perry#4926: PreallocateBoxes can sit nested inside an If/Try/Labeled
+            // body (e.g. the async state-machine wrapper), so this block's
+            // box-pointer store doesn't necessarily dominate every load of the
+            // slot. Entry-init the slot to TAG_UNDEFINED so paths that bypass this
+            // statement read a defined sentinel instead of `undef` (see the boxed
+            // `Stmt::Let` arm in let_stmt.rs). The slot holds a *box pointer*, not
+            // the value, so it is TAG_UNDEFINED-initialized in both the TDZ and
+            // non-TDZ cases -- the TAG_TDZ sentinel lives in the box cell, not the
+            // slot.
+            let undef_bits = crate::nanbox::TAG_UNDEFINED_I64.to_string();
+            ctx.func
+                .entry_allocas_push_store(crate::types::I64, &undef_bits, &slot);
+            slot
+        };
         ctx.block().store(crate::types::I64, &box_ptr, &slot);
         record_boxed_slot_js_value_bits(ctx, *id, &box_ptr, "preallocate_boxes.box_ptr_slot");
         if cell_note != "jsvalue_box_cell" {
