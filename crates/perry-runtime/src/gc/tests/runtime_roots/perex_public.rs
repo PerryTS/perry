@@ -348,3 +348,59 @@ fn perex_public_nonglobal_test_propagates_lastindex_coercion_throw() {
     assert_eq!(RuntimeHandleScope::active_len_for_tests(), roots);
     assert_ne!(address::<StringHeader>(&input), before);
 }
+
+#[test]
+fn perex_public_exec_captures_agree_across_inline_and_heap_slots_and_storage() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _scan = ConservativeScanDisabledGuard::new();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _force = ForcedEvacuationTestGuard::on();
+    register_host_roots();
+    let twenty_groups = "(a)".repeat(20);
+    let twenty_a = "a".repeat(20);
+    // A few captures fit the inline slots. Twenty groups need 42 registers and
+    // 21 capture spans, past both inline limits. The alternation backtracks,
+    // growing frames through a rebuffer. `None` is an unset group.
+    let cases: [(&str, &str, Vec<Option<&str>>); 4] = [
+        ("(a)(b)?c", "acz", vec![Some("ac"), Some("a"), None]),
+        (&twenty_groups, &twenty_a, {
+            let mut all = vec![Some(twenty_a.as_str())];
+            all.extend(std::iter::repeat_n(Some("a"), 20));
+            all
+        }),
+        (
+            "(a|ab)(c|bcd)(d*)",
+            "abcd",
+            vec![Some("abcd"), Some("a"), Some("bcd"), Some("")],
+        ),
+        ("(x*)$", "abc", vec![Some(""), Some("")]),
+    ];
+    for (pattern, tail, expected) in cases {
+        // The same match behind an ASCII prefix and a non-ASCII one, so both
+        // the byte copy and the unit-by-unit copy produce these captures.
+        for prefix in ["!", "\u{e9}"] {
+            let scope = RuntimeHandleScope::new();
+            let receiver = regex(&scope, pattern, "");
+            let subject = format!("{prefix}{tail}");
+            let input = text(&scope, subject.as_bytes());
+            let result = exec(&receiver, &input);
+            assert!(!result.is_null(), "/{pattern}/ must match {subject:?}");
+            let result = scope.root_raw_mut_ptr(result);
+            for (index, want) in expected.iter().enumerate() {
+                let value = item(&result, index as u32);
+                match want {
+                    None => assert_eq!(
+                        value.to_bits(),
+                        TAG_UNDEFINED,
+                        "/{pattern}/ over {subject:?}: group {index} must be unset"
+                    ),
+                    Some(want) => assert_eq!(
+                        bytes(value),
+                        want.as_bytes(),
+                        "/{pattern}/ over {subject:?}: group {index}"
+                    ),
+                }
+            }
+        }
+    }
+}

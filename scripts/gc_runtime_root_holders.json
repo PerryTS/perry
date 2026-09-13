@@ -824,6 +824,12 @@
       "why": "Address-KEYED owner set, not a root, and the successor of REGEX_POINTERS under the single engine: its map is `usize` header address -> `RegexMetadata { registered_owner: bool }`, so the VALUE holds no heap address at all (source and flags live only in the header's traced string edges, and the compiled program is a traced GC child of the header). The key is rekeyed by `regex_header_moved_for_gc` when a RegExpHeader moves and removed on death by the finalize hook, the copying-minor from-space walk and the full-cycle post-trace walk; it never keeps a header alive. Reached from those GC hooks rather than a registered scanner, so the walk misses it."
     },
     {
+      "file": "crates/perry-runtime/src/regex/perex_dispatch.rs",
+      "name": "EXEC_LOOKUPS",
+      "verdict": "test_only",
+      "why": "#[cfg(test)] Cell<usize> counting Get(R, \"exec\") lookups taken by `execute`, so a test can assert the lookup is skipped only when unobservable (#10166). It stores a count, never an address, and is absent from shipped binaries."
+    },
+    {
       "file": "crates/perry-runtime/src/regex/perex_position_hint.rs",
       "name": "HINT_USES",
       "verdict": "test_only",
