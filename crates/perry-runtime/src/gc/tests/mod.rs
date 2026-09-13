@@ -27,6 +27,7 @@ mod forwarding_target_validation;
 mod forwarding_verification;
 mod fromspace_protect;
 mod fromspace_scan;
+mod full_rebuild_skip;
 mod global_bootstrap;
 mod global_sink_isolation;
 mod handle_bound_method_name;

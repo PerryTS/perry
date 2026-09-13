@@ -550,6 +550,48 @@ unsafe fn remember_retained_old_to_young_slots(
     });
 }
 
+crate::perry_thread_local! {
+    /// Synchronous full collections whose old→young remembered-set rebuild was
+    /// replaced by an exact clear because the young generation held no marked
+    /// object (#10182). Live-subject counter for the tests and the diag line.
+    static FULL_REMEMBERED_REBUILDS_SKIPPED: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
+}
+
+/// Running count of [`FULL_REMEMBERED_REBUILDS_SKIPPED`] on this thread.
+pub(crate) fn full_remembered_rebuilds_skipped() -> u64 {
+    FULL_REMEMBERED_REBUILDS_SKIPPED.with(std::cell::Cell::get)
+}
+
+/// #10182: after a synchronous full's mark, can the old→young remembered-set
+/// rebuild only produce an empty set?
+///
+/// The rebuild remembers a slot of a marked (or pinned) old parent exactly when
+/// its child classifies as young (nursery) or is a registered malloc object
+/// (`remembered_child_needs_tracking`). A marked parent's strong child is
+/// marked too, and the rebuild skips weak slots exactly as the trace does. So:
+///
+/// * if no young object is marked or pinned (`young_generation_unmarked`),
+///   every young child a marked parent could name is garbage the sweep is
+///   about to reclaim, and no mutator runs in between to make one live; and
+/// * if the malloc registry is empty — the same premise the copying minor's
+///   `skip_remembering` uses — there is no malloc child at all,
+///
+/// then the walk can insert nothing that names a live object, and the
+/// remembered set this full leaves behind is exactly empty. The pre-cycle
+/// dirty snapshot repair (`restore_surviving_dirty_coverage`) still runs in
+/// reclaim as before. A budgeted cycle has no census, so it never qualifies.
+pub(super) fn full_remembered_rebuild_provably_empty(census: &super::trace::BlockCensus) -> bool {
+    #[cfg(test)]
+    if super::trace::block_skip::sabotage::get()
+        & super::trace::block_skip::sabotage::FORCE_REBUILD_SKIP
+        != 0
+    {
+        return census.is_armed();
+    }
+    census.young_generation_unmarked() && MALLOC_STATE.with(|s| s.borrow().objects.is_empty())
+}
+
 pub(super) struct OldToYoungRememberedRebuildState {
     require_marked: bool,
     sticky: StickyRememberedSet,
@@ -583,6 +625,27 @@ impl OldToYoungRememberedRebuildState {
             malloc_index: 0,
             objects_scanned: 0,
             done: false,
+        }
+    }
+
+    /// The rebuild of a full whose result is provably empty
+    /// (`full_remembered_rebuild_provably_empty`): no walk, an empty set.
+    pub(super) fn provably_empty() -> Self {
+        FULL_REMEMBERED_REBUILDS_SKIPPED.with(|c| c.set(c.get().saturating_add(1)));
+        if crate::gc::gc_diag_enabled() {
+            eprintln!(
+                "[gc-remembered-rebuild] full skipped=young_generation_unmarked skips_total={}",
+                full_remembered_rebuilds_skipped()
+            );
+        }
+        Self {
+            require_marked: true,
+            sticky: StickyRememberedSet::default(),
+            arena_cursor: None,
+            arena_done: true,
+            malloc_index: 0,
+            objects_scanned: 0,
+            done: true,
         }
     }
 

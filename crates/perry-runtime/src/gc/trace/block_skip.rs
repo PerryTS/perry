@@ -62,6 +62,10 @@ pub(crate) struct CensusBlock {
     pub(crate) censused: bool,
     /// Some object in the block needs the per-object sweep path.
     pub(crate) obligation: bool,
+    /// Some header in the block was already MARKED or PINNED when the census
+    /// read it (a subset of `obligation`, kept apart for
+    /// `young_generation_unmarked`).
+    pub(crate) premarked: bool,
 }
 
 /// Per-block census facts and trace reachability for one cycle's
@@ -135,6 +139,7 @@ impl BlockCensus {
             bytes: 0,
             censused: true,
             obligation: false,
+            premarked: false,
         };
     }
 
@@ -151,6 +156,7 @@ impl BlockCensus {
         let exceptional_flags = (flags ^ GC_FLAG_ARENA)
             & (GC_FLAG_ARENA | GC_FLAG_MARKED | GC_FLAG_PINNED | GC_FLAG_FORWARDED)
             != 0;
+        let premarked = flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) != 0;
         let raw_f64_array = obj_type == GC_TYPE_ARRAY
             && (*header)._reserved & (GC_ARRAY_RAW_F64_LAYOUT | GC_ARRAY_RAW_F64_HOLES) != 0;
         let type_obligation = self.obligation_by_type[obj_type as usize];
@@ -158,6 +164,7 @@ impl BlockCensus {
         block.objects += 1;
         block.bytes += size;
         block.obligation |= exceptional_flags | type_obligation | raw_f64_array;
+        block.premarked |= premarked;
     }
 
     /// Fold the current block into the per-index table. Called at every block
@@ -213,6 +220,38 @@ impl BlockCensus {
         any.then_some(skip)
     }
 
+    /// After the mark of a synchronous full: does the young generation (Eden
+    /// and both survivor spaces) hold **no** marked or pinned object?
+    ///
+    /// Every in-use young block must be censused, unchanged since the census
+    /// (no allocate-black birth, no block created after it), free of headers
+    /// that were already marked or pinned when censused, and unreached by the
+    /// trace. An unreached block holds no object the trace marked (see this
+    /// module's doc: every census-built mark passes a membership query that
+    /// records its block), so every young object is then garbage. `false` when
+    /// the census is disarmed or anything is uncertain.
+    pub(crate) fn young_generation_unmarked(&self) -> bool {
+        if !self.armed {
+            return false;
+        }
+        let snapshots = crate::arena::arena_block_snapshots();
+        let young = crate::arena::young_block_count().min(snapshots.len());
+        snapshots[..young]
+            .iter()
+            .enumerate()
+            .all(|(block_idx, snapshot)| {
+                if snapshot.data == 0 || snapshot.offset == 0 {
+                    return true;
+                }
+                self.block(block_idx).is_some_and(|block| {
+                    !block.premarked
+                        && !self.reached(block_idx)
+                        && block.data == snapshot.data
+                        && block.end == snapshot.data.saturating_add(snapshot.offset)
+                })
+            })
+    }
+
     pub(crate) fn block(&self, block_idx: usize) -> Option<CensusBlock> {
         self.blocks.get(block_idx).copied().filter(|b| b.censused)
     }
@@ -231,6 +270,9 @@ pub(crate) mod sabotage {
 
     pub(crate) const FORGET_REACHED: u8 = 1;
     pub(crate) const FORGET_OBLIGATIONS: u8 = 2;
+    /// `verify::full_remembered_rebuild_provably_empty` answers true whatever
+    /// the heap holds.
+    pub(crate) const FORCE_REBUILD_SKIP: u8 = 4;
 
     thread_local! {
         static SABOTAGE: Cell<u8> = const { Cell::new(0) };
