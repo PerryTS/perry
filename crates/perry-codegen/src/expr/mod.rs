@@ -156,6 +156,8 @@ mod array_push_guard_tests;
 mod barrier_stem_census_tests;
 #[cfg(test)]
 mod class_field_barrier_tests;
+#[cfg(test)]
+mod class_field_get_shape_tests;
 mod dispatch;
 #[cfg(test)]
 mod index_set_barrier_tests;

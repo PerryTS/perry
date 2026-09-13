@@ -3038,3 +3038,148 @@ fn function_source_array_literal_keeps_the_array_index_fast_path_armed() {
         "the emitted guard must still admit plain arrays to the fast path"
     );
 }
+
+// ---------------------------------------------------------------------------
+// `js_class_field_get_ic` — the class-field GET tower's ONE exit.
+//
+// The helper predates these tests: it was written for the #5391 path-2 full
+// outline, which only fires on oversized modules, so its four arms had no
+// direct coverage. Every monomorphic `this.field` read whose inline pre-check
+// misses now routes through it, so each arm is pinned here:
+//
+//   guard PASS, boxed slot     -> the same value the slot holds;
+//   guard PASS, raw-f64 slot   -> the same double, with the intact bit live;
+//   nullish receiver           -> TypeError, not `undefined` (#7153);
+//   guard FAIL                 -> one recorded fallback + the by-name answer.
+//
+// The pass cases assert the site counters too: a helper that silently took the
+// fallback on every call would return the right value and pass a value-only
+// test, which is exactly the "gate whose subject never ran" shape.
+// ---------------------------------------------------------------------------
+
+// `guards` is a private submodule and its items are not re-exported through
+// `super::*`, so name the helper explicitly.
+use crate::typed_feedback::guards::js_class_field_get_ic;
+
+#[test]
+fn class_field_get_ic_reads_the_boxed_slot_on_a_guard_pass() {
+    let _guard = typed_feedback_test_lock();
+    reset_typed_feedback_for_tests();
+    register(7401, TypedFeedbackSiteKind::PropertyGet, "obj.x");
+
+    let class_id = 0x7EED_7401;
+    let (obj, _, key_x, receiver) = class_instance(class_id, b"x");
+    let expected_shape_id = shape_id(obj);
+    let payload = crate::string::js_string_from_bytes(b"boxed".as_ptr(), 5);
+    let stored = crate::JSValue::string_ptr(payload);
+    crate::object::js_object_set_field(obj, 0, stored);
+
+    let got = js_class_field_get_ic(7401, receiver, class_id, expected_shape_id, key_x, 0, 0);
+    assert_eq!(
+        got.to_bits(),
+        stored.bits(),
+        "a guard PASS must answer with the slot's own NaN-box, bit for bit"
+    );
+
+    let site = &typed_feedback_snapshot().sites[0];
+    assert_eq!(site.guard_passes, 1);
+    assert_eq!(site.guard_failures, 0);
+    assert_eq!(
+        site.fallback_calls, 0,
+        "the fast arm must not record a fallback; a helper that always took the \
+         by-name path would return the same value"
+    );
+}
+
+#[test]
+fn class_field_get_ic_reads_the_raw_f64_slot_on_a_guard_pass() {
+    let _guard = typed_feedback_test_lock();
+    reset_typed_feedback_for_tests();
+    register(7402, TypedFeedbackSiteKind::PropertyGet, "obj.x");
+
+    let class_id = 0x7EED_7402;
+    let (obj, _, key_x, receiver) = class_instance(class_id, b"x");
+    let expected_shape_id = shape_id(obj);
+    crate::object::js_object_set_field(obj, 0, crate::JSValue::number(5.25));
+    let raw_mask = [0b1u64];
+    crate::gc::js_gc_init_typed_shape_layout(
+        obj as u64,
+        1,
+        raw_mask.as_ptr(),
+        raw_mask.len() as u32,
+        std::ptr::null(),
+        0,
+    );
+
+    let got = js_class_field_get_ic(7402, receiver, class_id, expected_shape_id, key_x, 0, 1);
+    assert_eq!(
+        got, 5.25,
+        "a `require_raw_f64` PASS must answer with the raw double the codegen \
+         fast block would have loaded"
+    );
+
+    let site = &typed_feedback_snapshot().sites[0];
+    assert_eq!(site.guard_passes, 1);
+    assert_eq!(site.fallback_calls, 0);
+}
+
+#[test]
+fn class_field_get_ic_records_the_fallback_and_answers_by_name_on_a_guard_fail() {
+    let _guard = typed_feedback_test_lock();
+    reset_typed_feedback_for_tests();
+    register(7403, TypedFeedbackSiteKind::PropertyGet, "obj.x");
+
+    let class_id = 0x7EED_7403;
+    let (obj, original_keys, key_x, receiver) = class_instance(class_id, b"x");
+    let expected_shape_id = shape_id(obj);
+    crate::object::js_object_set_field(obj, 0, crate::JSValue::from_bits(5.0f64.to_bits()));
+
+    // Add a key: the shape moves, so the cached (class id, shape id) pair the
+    // site was compiled against no longer describes this receiver.
+    let key_y = crate::string::js_string_from_bytes(b"y".as_ptr(), 1);
+    crate::object::js_object_set_field_by_name(obj, key_y, 10.0);
+    assert_ne!(
+        unsafe { crate::object::object_keys_array(obj) },
+        original_keys,
+        "the fixture must actually transition the shape, or the FAIL arm never runs"
+    );
+
+    let got = js_class_field_get_ic(7403, receiver, class_id, expected_shape_id, key_x, 0, 0);
+    assert_eq!(
+        got.to_bits(),
+        5.0f64.to_bits(),
+        "the FAIL arm must answer by name, not from the stale cached slot"
+    );
+
+    let site = &typed_feedback_snapshot().sites[0];
+    assert_eq!(site.guard_passes, 0);
+    assert_eq!(site.guard_failures, 1);
+    assert_eq!(
+        site.fallback_calls, 1,
+        "the helper records the fallback itself — codegen no longer emits the \
+         `js_typed_feedback_record_fallback_call` beside it"
+    );
+}
+
+#[test]
+fn class_field_get_ic_throws_a_type_error_on_a_nullish_receiver() {
+    let _guard = typed_feedback_test_lock();
+    reset_typed_feedback_for_tests();
+    register(7404, TypedFeedbackSiteKind::PropertyGet, "obj.x");
+
+    let class_id = 0x7EED_7404;
+    let (obj, _, key_x, _) = class_instance(class_id, b"x");
+    let expected_shape_id = shape_id(obj);
+
+    for nullish in [crate::value::TAG_UNDEFINED, crate::value::TAG_NULL] {
+        let receiver = f64::from_bits(nullish);
+        let threw = catch_runtime_throw(|| {
+            js_class_field_get_ic(7404, receiver, class_id, expected_shape_id, key_x, 0, 0);
+        });
+        assert!(
+            threw,
+            "a field read on a nullish receiver must throw TypeError, not \
+             answer `undefined` through the by-name lookup (#7153); bits={nullish:#x}"
+        );
+    }
+}

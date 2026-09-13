@@ -210,13 +210,20 @@ fn guarded_call_routes_to_shadow_rooted_direct_field_clone() {
         clone.contains("inttoptr i64") && clone.contains("getelementptr double"),
         "the clone must use direct declared-field addressing:\n{clone}"
     );
+    // One-exit class-field GET: the tower's miss arm is a single
+    // `js_class_field_get_ic` call whose body IS the guard, so the IC is now a
+    // witness of "a field IC diamond was rebuilt" and must be excluded here
+    // too -- otherwise this negative assertion silently stops covering the
+    // shape it was written for.
     assert!(
         !clone.contains("js_typed_feedback_class_field_get_guard")
+            && !clone.contains("js_class_field_get_ic")
             && !clone.contains("shape_descriptor_by_id"),
         "the clone fast body must not rebuild the field IC diamond:\n{clone}"
     );
     assert!(
-        generic.contains("js_typed_feedback_class_field_get_guard")
+        generic.contains("js_class_field_get_ic")
+            || generic.contains("js_typed_feedback_class_field_get_guard")
             || generic.contains("js_object_get_field"),
         "the generic fallback must retain guarded field semantics:\n{generic}"
     );
@@ -264,6 +271,7 @@ fn unannotated_parameter_uses_the_runtime_validated_class_overlay() {
     );
     assert!(
         !clone.contains("js_typed_feedback_class_field_get_guard")
+            && !clone.contains("js_class_field_get_ic")
             && !clone.contains("shape_descriptor_by_id"),
         "the unannotated clone must not rebuild the field IC diamond:\n{clone}"
     );
