@@ -7,9 +7,9 @@ array indexing, then `q.w + q.tags.length + q.id` on 400 records. The separate
 `numbers.ts` and `records.ts` run those same loops in separate entrypoints. The
 generated fixtures are deliberately outside the repository.
 
-Run on a Linux build host with LLVM 22 and a release compiler plus matching
-runtime/stdlib archives. In the issue lane, every command below is passed through
-`./remote.sh`; do not build or run the probes on the Mac.
+Use a release compiler plus matching runtime/stdlib archives. The cutoff
+measurements were taken on a Linux host with LLVM 22; for an A/B on any host,
+build both arms' compiler and archives from their own trees.
 
 ```sh
 python3 benchmarks/large_json_literals/generate.py /tmp/literal-probes
