@@ -7,6 +7,10 @@ pub(super) struct ArenaSweepObjectsState {
     cursor: crate::arena::ArenaObjectCursor,
     /// Dead old headers awaiting one batched page-index removal (see `sweep_batch`).
     pending_old_unregister: super::sweep_batch::PendingOldUnregister,
+    /// Page accounting of consecutive single-page old objects, applied once per
+    /// page (see `arena::page_meta::sweep_tally`). `usize::MAX` when empty.
+    old_page_tally_page: usize,
+    old_page_tally: crate::arena::OldPageSweepTally,
     block_snapshots: Vec<crate::arena::ArenaBlockSnapshot>,
     block_has_live: Vec<bool>,
     resettable_general_n: usize,
@@ -71,6 +75,8 @@ impl ArenaSweepObjectsState {
         Self {
             cursor: crate::arena::ArenaObjectCursor::new(crate::arena::ArenaWalkOrder::BlockIndex),
             pending_old_unregister: Default::default(),
+            old_page_tally_page: usize::MAX,
+            old_page_tally: Default::default(),
             block_snapshots,
             block_has_live: vec![false; n_blocks],
             resettable_general_n: crate::arena::general_block_count(),
@@ -218,9 +224,77 @@ impl ArenaSweepObjectsState {
             remaining -= 1;
             self.process_object(header_ptr as *mut GcHeader, block_idx);
         }
-        // Never leave a dead header in the page index across a step boundary.
-        self.pending_old_unregister.flush();
+        // Never leave a dead header in the page index, or a page's accounting
+        // unapplied, across a step boundary. The tally goes first: the
+        // unregister flush zeroes the accounting of pages it empties.
+        if self.page_tally_order_kept() {
+            self.apply_old_page_tally();
+            self.pending_old_unregister.flush();
+        } else {
+            self.pending_old_unregister.flush();
+            self.apply_old_page_tally();
+        }
         done
+    }
+
+    /// Account one swept old object on its page(s), batching single-page
+    /// objects per page.
+    #[inline]
+    fn account_old_object(
+        &mut self,
+        header: *mut GcHeader,
+        total_size: usize,
+        live: bool,
+        pinned: bool,
+    ) {
+        match crate::arena::old_object_single_page(header as usize, total_size) {
+            Some(page) => {
+                if page != self.old_page_tally_page {
+                    self.apply_old_page_tally();
+                    self.old_page_tally_page = page;
+                }
+                self.old_page_tally.add(total_size, live, pinned);
+            }
+            None => crate::arena::old_page_account_swept_object(
+                header as usize,
+                total_size,
+                live,
+                pinned,
+            ),
+        }
+    }
+
+    fn apply_old_page_tally(&mut self) {
+        if self.old_page_tally_page != usize::MAX {
+            crate::arena::old_page_account_swept_tally(
+                self.old_page_tally_page,
+                &self.old_page_tally,
+            );
+        }
+        self.old_page_tally_page = usize::MAX;
+        self.old_page_tally = Default::default();
+    }
+
+    /// The tally is applied before every page-index flush (always, outside the
+    /// sabotaged test).
+    #[inline(always)]
+    fn page_tally_order_kept(&self) -> bool {
+        #[cfg(test)]
+        {
+            use super::super::trace::block_skip::sabotage;
+            sabotage::get() & sabotage::FORGET_PAGE_TALLY_ORDER == 0
+        }
+        #[cfg(not(test))]
+        true
+    }
+
+    /// Queue a dead old header's page-index removal, applying the page tally
+    /// first when the queue is about to flush.
+    unsafe fn defer_old_unregister(&mut self, header: *mut GcHeader, total_size: usize) {
+        if self.pending_old_unregister.flushes_on_next_defer() && self.page_tally_order_kept() {
+            self.apply_old_page_tally();
+        }
+        self.pending_old_unregister.defer(header, total_size);
     }
 
     pub(super) fn block_has_live(&self) -> &[bool] {
@@ -315,12 +389,7 @@ impl ArenaSweepObjectsState {
         count_in_live_census: bool,
     ) {
         if block_idx >= self.old_block_start {
-            crate::arena::old_page_account_swept_object(
-                header as usize,
-                (*header).size as usize,
-                true,
-                pinned,
-            );
+            self.account_old_object(header, (*header).size as usize, true, pinned);
         }
         if block_idx < self.block_has_live.len() {
             self.block_has_live[block_idx] = true;
@@ -386,7 +455,7 @@ impl ArenaSweepObjectsState {
         let total_size = (*header).size as usize;
         let dead_old = block_idx >= self.old_block_start;
         if dead_old {
-            crate::arena::old_page_account_swept_object(header as usize, total_size, false, false);
+            self.account_old_object(header, total_size, false, false);
         }
         let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
         self.freed_bytes = self.freed_bytes.saturating_add(total_size as u64);
@@ -395,7 +464,7 @@ impl ArenaSweepObjectsState {
             gc_type_clear_dead_payload_side_tables((*header).obj_type, user_ptr as usize);
         }
         if self.reclaim_dead_old_blocks && dead_old {
-            self.pending_old_unregister.defer(header, total_size);
+            self.defer_old_unregister(header, total_size);
         } else {
             (*header).gc_flags = flags & !(GC_FLAG_FORWARDED | GC_FLAG_MARKED);
         }
@@ -405,7 +474,7 @@ impl ArenaSweepObjectsState {
         let total_size = (*header).size as usize;
         let dead_old = block_idx >= self.old_block_start;
         if dead_old {
-            crate::arena::old_page_account_swept_object(header as usize, total_size, false, false);
+            self.account_old_object(header, total_size, false, false);
         }
         let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
         self.freed_bytes = self.freed_bytes.saturating_add(total_size as u64);
@@ -414,7 +483,7 @@ impl ArenaSweepObjectsState {
         }
         finalize_dead_arena_payload(header, user_ptr, self.overflow_active);
         if self.reclaim_dead_old_blocks && dead_old {
-            self.pending_old_unregister.defer(header, total_size);
+            self.defer_old_unregister(header, total_size);
         }
     }
 }

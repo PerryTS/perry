@@ -273,6 +273,9 @@ pub(crate) mod sabotage {
     /// `verify::full_remembered_rebuild_provably_empty` answers true whatever
     /// the heap holds.
     pub(crate) const FORCE_REBUILD_SKIP: u8 = 4;
+    /// The sweep never applies its per-page accounting tally before a page-index
+    /// flush or a step end (it is applied only at page changes).
+    pub(crate) const FORGET_PAGE_TALLY_ORDER: u8 = 8;
 
     thread_local! {
         static SABOTAGE: Cell<u8> = const { Cell::new(0) };

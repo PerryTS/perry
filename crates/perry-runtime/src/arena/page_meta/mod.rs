@@ -139,7 +139,11 @@ impl PageGenerationCache {
 const PAGE_GENERATION_CACHE_WAYS: usize = 4;
 
 mod page_class;
+mod sweep_tally;
 pub(crate) use page_class::*;
+pub(crate) use sweep_tally::{
+    old_object_single_page, old_page_account_swept_tally, OldPageSweepTally,
+};
 
 #[cfg(test)]
 mod tests;
