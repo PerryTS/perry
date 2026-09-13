@@ -624,6 +624,7 @@ pub struct GeneratedAssetModule {
 pub struct CompilationContext {
     /// Native TypeScript modules to compile
     pub native_modules: BTreeMap<PathBuf, HirModule>,
+    pub(crate) reexport_pruner: super::collect_modules::reexport_prune::ReexportPruner,
     /// JavaScript modules to interpret via V8
     pub js_modules: BTreeMap<String, JsModule>,
     /// Declaration sidecars discovered for resolved implementation files.
@@ -1217,6 +1218,7 @@ impl CompilationContext {
     pub fn new(project_root: PathBuf) -> Self {
         Self {
             native_modules: BTreeMap::new(),
+            reexport_pruner: Default::default(),
             js_modules: BTreeMap::new(),
             declaration_sidecars: BTreeMap::new(),
             import_map: BTreeMap::new(),

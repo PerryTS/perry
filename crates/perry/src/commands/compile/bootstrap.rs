@@ -211,6 +211,7 @@ pub(super) fn rerun_collect_with_class_field_types(
     ctx.cross_module_class_field_types = field_map;
     ctx.cross_module_class_accessors = accessor_map;
     ctx.native_modules.clear();
+    ctx.reexport_pruner = Default::default();
     visited.clear();
     *next_class_id = 1;
     collect_modules(
@@ -972,10 +973,11 @@ pub(super) fn run_post_collect_preflight(
     match format {
         OutputFormat::Text => {
             println!(
-                "Found {} module(s): {} native, {} JavaScript",
+                "Found {} module(s): {} native, {} JavaScript, {} pruned as unreferenced side-effect-free re-exports",
                 total_modules,
                 ctx.native_modules.len(),
-                ctx.js_modules.len()
+                ctx.js_modules.len(),
+                ctx.reexport_pruner.pruned
             );
         }
         OutputFormat::Json => {}

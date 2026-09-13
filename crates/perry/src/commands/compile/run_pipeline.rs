@@ -934,7 +934,20 @@ pub fn run_with_parse_cache(
         }
     }
 
+    collect_modules::reexport_prune::finish(&mut ctx);
     run_post_collect_preflight(&args, &mut ctx, format)?;
+    if std::env::var("PERRY_COLLECT_ONLY").ok().as_deref() == Some("1") {
+        collect_modules::reexport_prune::write_graph(&mut ctx, &args.input.canonicalize()?)?;
+        return Ok(CompileResult {
+            output_path: ctx.cache_dir.join("audit.json"),
+            target: "module-graph".into(),
+            bundle_id: None,
+            is_dylib: false,
+            codegen_cache_stats: None,
+            link_cache_stats: None,
+            build_cache_stats: None,
+        });
+    }
 
     // #2309: tree-shake the final module graph — prune unreachable
     // node_modules modules and re-raise any deferred refusal that survives.

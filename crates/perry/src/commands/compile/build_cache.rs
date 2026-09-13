@@ -127,6 +127,7 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // cache entries.
     "PERRY_TARGET_CPU",
     "PERRY_NO_AUTO_OPTIMIZE",
+    "PERRY_NO_REEXPORT_PRUNE",
     "PERRY_DISABLE_WELL_KNOWN",
     "PERRY_FORCE_WELL_KNOWN",
     // Both switches change native-vs-JavaScript module routing and therefore
@@ -589,6 +590,21 @@ impl BuildCacheProbe {
         if verify_files(&manifest.sources).is_err() {
             return miss("source");
         }
+        // A newly added nested package.json can override a pruning contract.
+        // Verifying only previously existing files misses that graph change.
+        let config_paths =
+            config_inputs_for(&manifest.sources, &self.project_root, &self.cache_root)
+                .iter()
+                .map(|path| absolute_identity(path))
+                .collect::<BTreeSet<_>>();
+        let recorded_config_paths = manifest
+            .config_inputs
+            .iter()
+            .map(|input| input.path.clone())
+            .collect::<BTreeSet<_>>();
+        if config_paths != recorded_config_paths {
+            return miss("config-paths");
+        }
         if verify_files(&manifest.config_inputs).is_err() {
             return miss("config");
         }
@@ -838,7 +854,11 @@ fn eligibility(args: &CompileArgs, project_root: &Path) -> Result<(), String> {
     if args.type_check {
         return Err("type-check".to_string());
     }
-    if args.print_hir || args.trace.is_some() || args.focus.is_some() {
+    if args.print_hir
+        || args.trace.is_some()
+        || args.focus.is_some()
+        || std::env::var("PERRY_COLLECT_ONLY").ok().as_deref() == Some("1")
+    {
         return Err("diagnostic-mode".to_string());
     }
     if args.typed_feedback_profile.is_some() || args.typed_feedback_sites.is_some() {

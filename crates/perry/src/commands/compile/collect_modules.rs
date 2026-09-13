@@ -41,6 +41,7 @@ mod import_meta_resolve;
 mod json_module;
 mod native_addon;
 mod parse_error;
+pub(crate) mod reexport_prune;
 mod script_string;
 mod static_require_transform;
 #[cfg(test)]
@@ -541,6 +542,9 @@ fn collect_module_one(
     let ast_module = defined_module.as_ref().unwrap_or(ast_module);
     let resolved_module = import_meta_resolve::resolve_static(ast_module, &canonical, ctx)?;
     let ast_module = resolved_module.as_ref().unwrap_or(ast_module);
+    let forwarding_module =
+        reexport_prune::normalize_forwarding_barrel(ast_module, entry_path, ctx);
+    let ast_module = forwarding_module.as_ref().unwrap_or(ast_module);
     let file_loader_sources = file_loader_import_sources(ast_module);
     let source_file_path = canonical.to_string_lossy().to_string();
 
@@ -1797,8 +1801,10 @@ fn collect_module_one(
         }
     }
 
+    ctx.reexport_pruner.imports(&hir_module.imports);
+
     // Process re-exports
-    for export in &hir_module.exports {
+    for (export_index, export) in hir_module.exports.iter().enumerate() {
         let source = match export {
             perry_hir::Export::ReExport { source, .. } => Some(source),
             perry_hir::Export::ExportAll { source } => Some(source),
@@ -1925,7 +1931,18 @@ fn collect_module_one(
                 }
 
                 match kind {
-                    ModuleKind::NativeCompiled => pending.push(source_path),
+                    ModuleKind::NativeCompiled => {
+                        if reexport_prune::record(
+                            ctx,
+                            &canonical,
+                            export_index,
+                            export,
+                            &resolved_path,
+                            &source_path,
+                        ) {
+                            pending.push(source_path);
+                        }
+                    }
                     ModuleKind::Interpreted => {
                         // JS runtime (V8) support was removed, so interpreted
                         // node_modules dependencies are not followed. A direct
