@@ -369,6 +369,25 @@ pub(crate) unsafe fn header_may_hold_weak_target_slots(header: *mut crate::gc::G
 /// True when `slot` is a weak target edge and must not be treated as a
 /// strong child during mark/remembered-set scans. Rewrite/copy passes should
 /// still visit these slots so live weak targets get moved addresses repaired.
+/// Is `header` an object of a class whose weak slots
+/// [`is_weak_target_trace_slot`] can name? When false, that function answers
+/// false for every slot of the object (#10182: the trace asks this once per
+/// object instead of asking the slot question for every slot).
+///
+/// # Safety
+/// `header` is null or a readable GC header.
+#[inline]
+pub(crate) unsafe fn is_weak_holder_header(header: *mut crate::gc::GcHeader) -> bool {
+    if header.is_null() || (*header).obj_type != crate::gc::GC_TYPE_OBJECT {
+        return false;
+    }
+    let obj = (header as *mut u8).add(crate::gc::GC_HEADER_SIZE) as *mut ObjectHeader;
+    matches!(
+        (*obj).class_id,
+        CLASS_ID_WEAKREF | CLASS_ID_WEAK_ENTRY | CLASS_ID_FINALIZATION_RECORD
+    )
+}
+
 pub(crate) unsafe fn is_weak_target_trace_slot(
     header: *mut crate::gc::GcHeader,
     slot: *mut u64,
