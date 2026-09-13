@@ -12,7 +12,18 @@ use perex::executor::ExecError;
 use perex::{span::Span, Budget};
 
 // One explicit host policy; no retained scratch cache or alternate engine.
-pub(crate) const WORK: usize = 100_000_000;
+/// A RegExp operation's work allowance: effectively unlimited (#10164).
+///
+/// JavaScript engines never abort regex matching for doing too much work, and
+/// no finite allowance separates valid programs from pathological ones: Perex's
+/// charge per subject unit depends on the program (about 1 for `/x/`, 60 for
+/// `/([a-z]+)([0-9]+)/g`, over 200 for a 32-unit lookahead), so any cap throws
+/// on some large linear input Node completes. The former 100,000,000 did, as
+/// `RangeError: Regular expression work limit exceeded`. Searches still run in
+/// `QUANTUM` slices with a GC poll between them, so collection and cancellation
+/// keep working; a catastrophic pattern runs as long as it does in Node. The
+/// memory limits below are unchanged.
+pub(crate) const WORK: usize = usize::MAX;
 pub(crate) const SCRATCH_BYTES: usize = 64 * 1024 * 1024;
 pub(crate) const PROGRAM_BYTES: usize = 32 * 1024 * 1024;
 pub(crate) const QUANTUM: usize = 4096;
