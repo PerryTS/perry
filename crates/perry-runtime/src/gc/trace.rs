@@ -1285,6 +1285,19 @@ pub(super) unsafe fn mark_field_into_worklist(
         return false;
     }
     (*header).gc_flags = flags | GC_FLAG_MARKED;
+    // #10182: tracing a pointer-free object that is not a forwarding stub does
+    // nothing — `trace_one_worklist_header` would only follow a FORWARDED hop,
+    // and a leaf descriptor visits no slot — so it is marked and not queued.
+    // Strings are half the objects of a JSON tree.
+    #[cfg(not(test))]
+    let forwarded = flags & GC_FLAG_FORWARDED != 0;
+    #[cfg(test)]
+    let forwarded = flags & GC_FLAG_FORWARDED != 0 && !leaf_mark_sabotage::ignoring_forwarding();
+    if !forwarded
+        && gc_type_rewrite_descriptor_kind((*header).obj_type) == GcRewriteDescriptorKind::Leaf
+    {
+        return true;
+    }
     // Push directly onto the caller's worklist. No MARK_SEEDS push —
     // that's only needed for root-phase callers that don't own a
     // worklist (mark_mutable_root_slots, mark_registered_roots,
@@ -1292,6 +1305,37 @@ pub(super) unsafe fn mark_field_into_worklist(
     // already owns and consumes this worklist.
     worklist.push(header);
     true
+}
+
+/// Sabotage switch for the leaf-mark test: a forwarded pointer-free object is
+/// not queued either, so its forwarding hop is never followed. Test builds
+/// only.
+#[cfg(test)]
+pub(crate) mod leaf_mark_sabotage {
+    use std::cell::Cell;
+
+    thread_local! {
+        static IGNORE_FORWARDING: Cell<bool> = const { Cell::new(false) };
+    }
+
+    #[inline]
+    pub(crate) fn ignoring_forwarding() -> bool {
+        IGNORE_FORWARDING.with(Cell::get)
+    }
+
+    pub(crate) struct Guard(bool);
+
+    impl Guard {
+        pub(crate) fn arm() -> Self {
+            Self(IGNORE_FORWARDING.with(|s| s.replace(true)))
+        }
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            IGNORE_FORWARDING.with(|s| s.set(self.0));
+        }
+    }
 }
 
 pub(super) fn try_mark_young_value_as_seed(value_bits: u64, valid_ptrs: &ValidPointerSet) -> bool {

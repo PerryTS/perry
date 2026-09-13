@@ -49,6 +49,7 @@ mod layout_residue_histogram;
 mod layout_trace;
 mod lazy_intrinsic_towers;
 mod lazy_tape_side_alloc;
+mod leaf_marks;
 mod mark_slot_hoists;
 mod oldgen;
 mod os_tag;
