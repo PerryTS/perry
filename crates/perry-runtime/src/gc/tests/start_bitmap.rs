@@ -197,7 +197,7 @@ fn a_full_collection_marks_through_the_bitmap_and_the_sorted_list() {
             GcTriggerKind::OldGenBytes,
         ));
         for user in [small, big] {
-            let header = header_from_user_ptr(user as *const u8);
+            let header = unsafe { header_from_user_ptr(user as *const u8) };
             assert_eq!(
                 unsafe { (*header).obj_type },
                 GC_TYPE_STRING,
