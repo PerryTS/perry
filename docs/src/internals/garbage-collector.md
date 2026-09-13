@@ -73,6 +73,47 @@ with the live set, and each has a cheaper exact form:
 <!-- gc-symbol: sabotaged_skip_loses_an_unbarriered_young_edge in crates/perry-runtime/src/gc/tests/full_rebuild_skip.rs -->
 <!-- gc-symbol: full_sweep_page_accounting_matches_the_planted_liveness in crates/perry-runtime/src/gc/tests/sweep_page_tally.rs -->
 
+**Promoted-cohort fulls.** Old-reclaim pacing credits every promotion to its
+growth baseline, so old-gen garbage that a minor promoted and that died after
+it is invisible to it. A document parse loop is that shape: each result's
+top-level array is born old, its young contents stay reachable through that
+array's remembered slots until a full proves the array dead, and every
+nursery minor promotes the previous (dead) tree together with the current
+one. A full therefore also becomes due when the bytes promoted since the last
+full reach the larger of one base nursery and the old-gen live set the last
+full verified. The bound is consulted only right after a nursery minor at a
+precise safepoint, so the full runs with precise roots and, after an in-place
+promotion, with an empty young generation; it is not an arm of the old-reclaim
+growth predicate. A cohort full that reclaims less than half its cohort
+doubles the bound (at most three times) and a productive one restores it, so a
+heap whose promoted data stays live pays a logarithmic number of such fulls.
+When the minor's promotion can reach the bound, its promotion walk records
+each promoted block's census facts, and the full started at the same
+safepoint adopts them instead of walking those blocks again. `PERRY_GC_DIAG=1`
+prints `promoted_since_full=`/`cohort_bound=` on `[gc-trigger]` lines and a
+`[gc-promoted-cohort]` line per cohort full.
+<!-- gc-symbol: a_cohort_full_after_a_promotion_reclaims_the_promoted_object_that_died in crates/perry-runtime/src/gc/tests/promoted_cohort.rs -->
+<!-- gc-symbol: a_retaining_promotion_schedule_pays_a_bounded_number_of_futile_cohort_fulls in crates/perry-runtime/src/gc/tests/promoted_cohort.rs -->
+<!-- gc-symbol: a_cohort_full_adopts_the_promotion_census_and_collects_exactly in crates/perry-runtime/src/gc/tests/adopt_census.rs -->
+
+**One pass per block in a synchronous full.** An unbudgeted census and an
+unbudgeted sweep parse each arena block themselves instead of calling the
+object cursor once per object, with the block's constants hoisted; both are
+compared with the per-object walk in tests. The hole-list rebuild skips a live
+old block the census proved free of invalidated headers. A full no longer
+expands promoted page runs up front: a page's run is expanded only right before
+the sweep invalidates a dead header on it. The mark reads its proxy and
+weak-holder facts once per object, finds a pointer's census block through a
+direct-mapped 1 MiB window index, and marks a pointer-free object that is not a
+forwarding stub without queueing it.
+<!-- gc-symbol: the_whole_block_census_records_exactly_what_the_per_object_census_records in crates/perry-runtime/src/gc/tests/census_whole_block.rs -->
+<!-- gc-symbol: the_whole_block_sweep_matches_the_per_object_sweep in crates/perry-runtime/src/gc/tests/sweep_whole_block.rs -->
+<!-- gc-symbol: a_hole_in_a_live_block_reaches_the_free_list_and_hole_free_blocks_are_not_parsed in crates/perry-runtime/src/gc/tests/sweep_hole_rebuild.rs -->
+<!-- gc-symbol: a_dead_object_on_a_described_page_leaves_the_page_accounting_exact in crates/perry-runtime/src/gc/tests/sweep_described_runs.rs -->
+<!-- gc-symbol: the_block_window_index_answers_exactly_like_the_fence_search in crates/perry-runtime/src/gc/tests/census_block_windows.rs -->
+<!-- gc-symbol: unqueued_leaf_marks_keep_leaves_and_a_forwarded_leaf_still_hops in crates/perry-runtime/src/gc/tests/leaf_marks.rs -->
+<!-- gc-symbol: a_full_skips_a_weak_holders_weak_slot_through_the_per_object_fact in crates/perry-runtime/src/gc/tests/mark_slot_hoists.rs -->
+
 `PERRY_GC_SCAVENGE` is on by default and lets nursery pressure route to the
 direct minor. `PERRY_GC_SCAVENGE_NURSERY_MB` tunes its base high-water cap,
 16 MiB by default
