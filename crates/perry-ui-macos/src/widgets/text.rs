@@ -16,6 +16,7 @@ pub fn create(text_ptr: *const u8) -> i64 {
     let ns_string = NSString::from_str(&text);
 
     let label = NSTextField::labelWithString(&ns_string, mtm);
+    super::padding::install_label_cell(&label, mtm);
     unsafe {
         let _: () = objc2::msg_send![&*label, setAccessibilityLabel: &*ns_string];
         // Disable autoresizing mask so Auto Layout can size this view in NSStackView.
