@@ -6,6 +6,8 @@ use objc2_core_foundation::CGRect;
 use objc2_foundation::{MainThreadMarker, NSEdgeInsets, NSObjectProtocol};
 use std::cell::Cell;
 
+mod button;
+
 pub struct PerryInsetCellIvars {
     top: Cell<f64>,
     left: Cell<f64>,
@@ -49,14 +51,14 @@ define_class!(
     impl PerryInsetTextFieldCell {
         #[unsafe(method(drawingRectForBounds:))]
         fn drawing_rect_for_bounds(&self, bounds: CGRect) -> CGRect {
-            let bounds = inset_rect(bounds, self.ivars().get());
+            let bounds = inset_rect(bounds, self.ivars().get(), unsafe { self.controlView() }.is_some_and(|view| view.isFlipped()));
             unsafe { msg_send![super(self), drawingRectForBounds: bounds] }
         }
 
         #[unsafe(method(cellSizeForBounds:))]
         fn cell_size_for_bounds(&self, bounds: CGRect) -> objc2_core_foundation::CGSize {
             let insets = self.ivars().get();
-            let bounds = inset_rect(bounds, insets);
+            let bounds = inset_rect(bounds, insets, unsafe { self.controlView() }.is_some_and(|view| view.isFlipped()));
             let size: objc2_core_foundation::CGSize =
                 unsafe { msg_send![super(self), cellSizeForBounds: bounds] };
             padded_size(size, insets)
@@ -71,7 +73,7 @@ define_class!(
             delegate: Option<&AnyObject>,
             event: Option<&NSEvent>,
         ) {
-            let frame = inset_rect(frame, self.ivars().get());
+            let frame = inset_rect(frame, self.ivars().get(), view.isFlipped());
             let _: () = msg_send![super(self), editWithFrame: frame, inView: view, editor: editor, delegate: delegate, event: event];
         }
 
@@ -85,7 +87,7 @@ define_class!(
             start: isize,
             length: isize,
         ) {
-            let frame = inset_rect(frame, self.ivars().get());
+            let frame = inset_rect(frame, self.ivars().get(), view.isFlipped());
             let _: () = msg_send![super(self), selectWithFrame: frame, inView: view, editor: editor, delegate: delegate, start: start, length: length];
         }
 
@@ -105,14 +107,14 @@ define_class!(
     impl PerryInsetSecureTextFieldCell {
         #[unsafe(method(drawingRectForBounds:))]
         fn drawing_rect_for_bounds(&self, bounds: CGRect) -> CGRect {
-            let bounds = inset_rect(bounds, self.ivars().get());
+            let bounds = inset_rect(bounds, self.ivars().get(), unsafe { self.controlView() }.is_some_and(|view| view.isFlipped()));
             unsafe { msg_send![super(self), drawingRectForBounds: bounds] }
         }
 
         #[unsafe(method(cellSizeForBounds:))]
         fn cell_size_for_bounds(&self, bounds: CGRect) -> objc2_core_foundation::CGSize {
             let insets = self.ivars().get();
-            let bounds = inset_rect(bounds, insets);
+            let bounds = inset_rect(bounds, insets, unsafe { self.controlView() }.is_some_and(|view| view.isFlipped()));
             let size: objc2_core_foundation::CGSize =
                 unsafe { msg_send![super(self), cellSizeForBounds: bounds] };
             padded_size(size, insets)
@@ -127,7 +129,7 @@ define_class!(
             delegate: Option<&AnyObject>,
             event: Option<&NSEvent>,
         ) {
-            let frame = inset_rect(frame, self.ivars().get());
+            let frame = inset_rect(frame, self.ivars().get(), view.isFlipped());
             let _: () = msg_send![super(self), editWithFrame: frame, inView: view, editor: editor, delegate: delegate, event: event];
         }
 
@@ -141,7 +143,7 @@ define_class!(
             start: isize,
             length: isize,
         ) {
-            let frame = inset_rect(frame, self.ivars().get());
+            let frame = inset_rect(frame, self.ivars().get(), view.isFlipped());
             let _: () = msg_send![super(self), selectWithFrame: frame, inView: view, editor: editor, delegate: delegate, start: start, length: length];
         }
 
@@ -152,12 +154,13 @@ define_class!(
     }
 );
 
-fn inset_rect(rect: CGRect, insets: NSEdgeInsets) -> CGRect {
-    // AppKit's unflipped cell coordinates grow upward, so bottom moves origin.y.
+fn inset_rect(rect: CGRect, insets: NSEdgeInsets, flipped: bool) -> CGRect {
+    // Native text fields and buttons are flipped: their top moves origin.y.
+    // Keep bottom-origin coordinates correct for an unflipped control view.
     CGRect::new(
         objc2_core_foundation::CGPoint::new(
             rect.origin.x + insets.left,
-            rect.origin.y + insets.bottom,
+            rect.origin.y + if flipped { insets.top } else { insets.bottom },
         ),
         objc2_core_foundation::CGSize::new(
             (rect.size.width - insets.left - insets.right).max(0.0),
@@ -200,9 +203,31 @@ pub(crate) fn install_secure_text_field_cell(field: &NSTextField, mtm: MainThrea
     }
 }
 
+/// Install at label creation, before callers apply attributed text or styles.
+/// Keep the factory label's text, font and line-breaking defaults.
+pub(crate) fn install_label_cell(field: &NSTextField, mtm: MainThreadMarker) {
+    let value = field.attributedStringValue();
+    let font = field.font();
+    let original = field.cell().expect("label has a cell");
+    install_text_field_cell(field, mtm);
+    field.setBezeled(false);
+    field.setBordered(false);
+    field.setEditable(false);
+    field.setSelectable(false);
+    field.setDrawsBackground(false);
+    field.setFont(font.as_deref());
+    field.setAttributedStringValue(&value);
+    if let Some(cell) = field.cell() {
+        cell.setWraps(original.wraps());
+        cell.setScrollable(original.isScrollable());
+        cell.setUsesSingleLineMode(original.usesSingleLineMode());
+        cell.setLineBreakMode(original.lineBreakMode());
+    }
+}
+
 /// Apply padding to AppKit widgets with a native content-inset mechanism.
-/// NSButton, NSTextField labels, and NSImageView do not expose one and remain
-/// explicit no-ops until Perry gives those leaf widgets content wrappers.
+/// Perry's labels and buttons include padding in their native sizing and
+/// drawing paths, without replacing the widget or its target/action.
 pub(crate) fn set_edge_insets(view: &NSView, top: f64, left: f64, bottom: f64, right: f64) {
     let insets = NSEdgeInsets {
         top,
@@ -218,6 +243,11 @@ pub(crate) fn set_edge_insets(view: &NSView, top: f64, left: f64, bottom: f64, r
             }
         }
 
+        if AnyClass::get(c"NSButton").is_some_and(|cls| view.isKindOfClass(cls)) {
+            button::set_insets(view, insets);
+            return;
+        }
+
         if let Some(cls) = AnyClass::get(c"NSTextField") {
             if view.isKindOfClass(cls) {
                 let cell: *mut AnyObject = msg_send![view, cell];
@@ -227,10 +257,11 @@ pub(crate) fn set_edge_insets(view: &NSView, top: f64, left: f64, bottom: f64, r
                     let responds: bool = msg_send![cell, respondsToSelector: selector];
                     if responds {
                         let _: () = msg_send![cell, setPerryInsetsTop: top, left: left, bottom: bottom, right: right];
+                        let _: () = msg_send![view, invalidateIntrinsicContentSize];
                         let _: () = msg_send![view, setNeedsDisplay: true];
+                        return;
                     }
                 }
-                return;
             }
         }
 
@@ -248,9 +279,15 @@ pub(crate) fn set_edge_insets(view: &NSView, top: f64, left: f64, bottom: f64, r
                 // TextArea is registered as its enclosing NSScrollView, and
                 // NSScrollView's four-sided contentInsets preserve asymmetry.
                 let _: () = msg_send![view, setContentInsets: insets];
+                return;
             }
         }
     }
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "[perry/ui] setPadding is not supported for {}; place the widget in a padded stack",
+        view.class()
+    );
 }
 
 #[cfg(test)]
@@ -271,6 +308,7 @@ mod tests {
                 bottom: 7.0,
                 right: 14.0,
             },
+            false,
         );
         assert_eq!(got.origin.x, 10.0);
         assert_eq!(got.origin.y, 10.0);

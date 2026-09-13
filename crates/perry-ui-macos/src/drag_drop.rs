@@ -112,11 +112,22 @@ unsafe fn call_provider(cb: f64) -> Option<String> {
 /// to it (idempotent).
 unsafe fn ensure_swizzled(view: *mut AnyObject) {
     let cls = (*view).class();
-    if cls.name().to_bytes().starts_with(b"PerryDragDrop_") {
+    if drag_drop_class(cls).is_some() {
         return; // already swizzled
     }
     let sub = get_or_create_subclass(cls);
     objc2::ffi::object_setClass(view, sub as *const AnyClass as *mut AnyClass);
+}
+
+// Padding can add a subclass above ours. Find the class that owns our
+// methods instead of wrapping it twice or losing mouseDown forwarding.
+fn drag_drop_class(mut cls: &'static AnyClass) -> Option<&'static AnyClass> {
+    loop {
+        if cls.name().to_bytes().starts_with(b"PerryDragDrop_") {
+            return Some(cls);
+        }
+        cls = cls.superclass()?;
+    }
 }
 
 unsafe fn get_or_create_subclass(orig: &AnyClass) -> &'static AnyClass {
@@ -300,7 +311,7 @@ extern "C-unwind" fn mouse_down(this: *mut AnyObject, cmd: Sel, event: *mut AnyO
     // Not a drag source — forward to the original class's mouseDown: so the
     // underlying control (button, text field, …) keeps behaving normally.
     unsafe {
-        let sub = (*this).class();
+        let sub = drag_drop_class((*this).class()).expect("drag/drop method owner");
         let imp =
             ORIG_MOUSEDOWN.with(|m| m.borrow().get(&(sub as *const AnyClass as usize)).copied());
         if let Some(imp) = imp {

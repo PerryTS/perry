@@ -160,6 +160,15 @@ Use `setPadding(widget, value)` for uniform padding, or
 The old `widgetSetEdgeInsets` name is deprecated and remains an alias during
 the deprecation window.
 
+On macOS, padding applies to stacks, buttons (including borderless buttons),
+`Text` and `AttributedText` labels, text fields, text areas, and scroll views.
+Button and label padding adds to their natural size and moves the content
+inside the existing background or border. Setting padding again replaces the
+previous insets; setting it to zero restores the natural size.
+
+For other macOS controls, place the control inside a padded `VStack` or `HStack`.
+Development builds print a diagnostic when a native view has no padding support.
+
 ### Sizing
 
 ```typescript

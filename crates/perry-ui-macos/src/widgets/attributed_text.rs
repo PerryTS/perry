@@ -34,6 +34,7 @@ pub fn create() -> i64 {
     let mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
     let empty = NSString::from_str("");
     let label = NSTextField::labelWithString(&empty, mtm);
+    super::padding::install_label_cell(&label, mtm);
     unsafe {
         let _: () = msg_send![&*label, setTranslatesAutoresizingMaskIntoConstraints: false];
         // Enable wrapping by default — per-range styling is most useful
