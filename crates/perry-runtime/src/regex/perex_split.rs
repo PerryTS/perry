@@ -128,6 +128,7 @@ pub(crate) fn regexp(receiver: f64, argument: f64, limit_value: f64) -> Result<f
             &mut budget,
             &memory,
             &mut host::poll,
+            None,
         )?
         .is_none()
         {
@@ -136,6 +137,7 @@ pub(crate) fn regexp(receiver: f64, argument: f64, limit_value: f64) -> Result<f
         return Ok(output.value());
     }
     let bound = subject(input)?;
+    let reuse = api::Reuse::new(&scope, &splitter, input, &bound, &mut budget);
     let mut units = Units::new(&bound)?;
     let mut copies = SpanCopies::new(&bound)?;
     let (mut p, mut q) = (0, 0);
@@ -149,6 +151,7 @@ pub(crate) fn regexp(receiver: f64, argument: f64, limit_value: f64) -> Result<f
             &mut budget,
             &memory,
             &mut host::poll,
+            Some(&reuse),
         )?;
         if let Some(found) = found {
             let found = local.root_nanbox_f64(found.object());

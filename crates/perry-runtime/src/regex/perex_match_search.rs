@@ -169,7 +169,7 @@ fn search(
     if previous.get_nanbox_f64().to_bits() != 0 {
         dispatch::set_last_index(receiver, 0.0)?;
     }
-    let result = dispatch::execute(receiver, input, true, budget, memory, &mut host::poll)?;
+    let result = dispatch::execute(receiver, input, true, budget, memory, &mut host::poll, None)?;
     let result = scope.root_nanbox_f64(result.map_or(f64::from_bits(TAG_NULL), |r| r.object()));
     let current = scope.root_nanbox_f64(dispatch::get(receiver, b"lastIndex")?);
     if !dispatch::same_value(&current, &previous)? {
@@ -190,19 +190,28 @@ fn matches(
 ) -> Result<f64, EngineError> {
     let (global, unicode) = match_flags(receiver, budget)?;
     if !global {
-        return dispatch::execute(receiver, input, true, budget, memory, &mut host::poll)
+        return dispatch::execute(receiver, input, true, budget, memory, &mut host::poll, None)
             .map(|result| result.map_or(f64::from_bits(TAG_NULL), |r| r.object()));
     }
     dispatch::set_last_index(receiver, 0.0)?;
     let scope = RuntimeHandleScope::new();
     let array = scope.root_raw_mut_ptr(api::caught(|| crate::array::js_array_alloc(0))?);
     let subject = subject(*input)?;
+    let reuse = api::Reuse::new(&scope, receiver, *input, &subject, budget);
     let length = input.with_const_ptr::<StringHeader, _>(|s| unsafe { (*s).utf16_len as usize });
     let mut count = 0u32;
     loop {
         // A fresh scope per iteration bounds roots regardless of match count.
         let iteration = RuntimeHandleScope::new();
-        let result = dispatch::execute(receiver, input, false, budget, memory, &mut host::poll)?;
+        let result = dispatch::execute(
+            receiver,
+            input,
+            false,
+            budget,
+            memory,
+            &mut host::poll,
+            Some(&reuse),
+        )?;
         let Some(result) = result else {
             return Ok(if count == 0 {
                 f64::from_bits(TAG_NULL)
