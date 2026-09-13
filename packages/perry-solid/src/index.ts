@@ -2,7 +2,7 @@ import {
   VStack, HStack, Text, Button, Spacer, Divider,
   textSetString, buttonSetTitle, textSetFontSize,
   widgetAddChildAt, widgetRemoveChild, widgetReorderChild,
-  widgetSetWidth, widgetSetHeight, widgetSetOpacity,
+  widgetSetWidth, widgetSetMaxWidth, widgetSetHeight, widgetSetOpacity,
   widgetSetHidden, widgetSetEnabled, widgetSetTooltip,
   widgetSetBackgroundColor, setCornerRadius, setPadding,
   type Widget,
@@ -40,6 +40,7 @@ const driver: NativeDriver = {
         else throw new Error(`text is unsupported on ${kind}`);
         return;
       case "width": widgetSetWidth(widget, numeric(value, 0)); return;
+      case "maxWidth": widgetSetMaxWidth(widget, numeric(value, 0)); return;
       case "height": widgetSetHeight(widget, numeric(value, 0)); return;
       case "opacity": widgetSetOpacity(widget, numeric(value, 1)); return;
       case "hidden": widgetSetHidden(widget, value ? 1 : 0); return;

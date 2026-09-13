@@ -20,7 +20,7 @@ import {
     widgetAddChild,
     widgetSetBackgroundColor, widgetSetBackgroundGradient,
     widgetSetBorderColor, widgetSetBorderWidth,
-    widgetSetWidth, widgetSetHeight, widgetMatchParentWidth,
+    widgetSetWidth, widgetSetHeight, widgetSetMaxWidth, widgetMatchParentWidth,
     widgetSetOpacity,
     widgetSetControlSize,
     widgetSetTooltip,
@@ -64,6 +64,11 @@ widgetSetWidth(sized, 300)
 widgetSetHeight(sized, 200)
 widgetMatchParentWidth(sized) // expand to fill parent's width
 // ANCHOR_END: sizing
+
+// ANCHOR: max-width
+const column = VStack(0, [Text("Centered content column")])
+widgetSetMaxWidth(column, 480) // fill the parent up to 480pt, then cap and center
+// ANCHOR_END: max-width
 
 // ANCHOR: opacity
 const dim = Text("Semi-transparent")
@@ -114,7 +119,7 @@ App({
     width: 600,
     height: 800,
     body: VStack(12, [
-        colored, font, rounded, bordered, padded, sized,
+        colored, font, rounded, bordered, padded, sized, column,
         dim, grad, small, tip, submit,
         card([Text("Title"), Text("Body text")]),
         Spacer(),

@@ -721,6 +721,7 @@ function buildImports() {
           focus: "perry_ui_textfield_focus",
           // Widget sizing
           setWidth: "perry_ui_widget_set_width", setHeight: "perry_ui_widget_set_height",
+          setMaxWidth: "perry_ui_widget_set_max_width",
           matchParentWidth: "perry_ui_widget_match_parent_width",
           matchParentHeight: "perry_ui_widget_match_parent_height",
           setHidden: "perry_ui_set_widget_hidden",
@@ -1964,6 +1965,7 @@ const __memDispatch = {
       setFont: "perry_ui_canvas_set_font", drawImage: "perry_ui_canvas_draw_image",
       setChild: "perry_ui_scrollview_set_child", focus: "perry_ui_textfield_focus",
       setWidth: "perry_ui_widget_set_width", setHeight: "perry_ui_widget_set_height",
+      setMaxWidth: "perry_ui_widget_set_max_width",
       matchParentWidth: "perry_ui_widget_match_parent_width",
       matchParentHeight: "perry_ui_widget_match_parent_height",
       setHidden: "perry_ui_set_widget_hidden", setEdgeInsets: "perry_ui_widget_set_edge_insets",
@@ -3100,6 +3102,7 @@ function perry_ui_widget_set_background_gradient(h, r1, g1, b1, a1, r2, g2, b2, 
   el.style.background = `linear-gradient(${dir}, ${c1}, ${c2})`;
 }
 function perry_ui_widget_set_width(h, w) { const el = uiGet(h); if (el) el.style.width = w + "px"; }
+function perry_ui_widget_set_max_width(h, w) { const el = uiGet(h); if (el) { el.style.maxWidth = w + "px"; el.style.marginLeft = "auto"; el.style.marginRight = "auto"; } }
 function perry_ui_widget_set_height(h, height) { const el = uiGet(h); if (el) el.style.height = height + "px"; }
 function perry_ui_widget_set_hugging(h) { const el = uiGet(h); if (el) el.style.flex = "0 0 auto"; }
 function perry_ui_widget_match_parent_width(h) { const el = uiGet(h); if (el) el.style.width = "100%"; }
@@ -4723,7 +4726,7 @@ const __perryUiDispatch = {
   perry_ui_widget_set_border_color, perry_ui_widget_set_border_width,
   perry_ui_text_set_decoration,
   perry_ui_textfield_set_borderless, perry_ui_stack_set_alignment,
-  perry_ui_widget_set_width, perry_ui_widget_set_height, perry_ui_widget_set_hugging,
+  perry_ui_widget_set_width, perry_ui_widget_set_max_width, perry_ui_widget_set_height, perry_ui_widget_set_hugging,
   perry_ui_widget_match_parent_width, perry_ui_widget_match_parent_height,
   perry_ui_widget_set_edge_insets, perry_ui_stack_set_detaches_hidden, perry_ui_stack_set_distribution,
   perry_ui_widget_set_context_menu,
@@ -4858,6 +4861,7 @@ const __uiMethodMap = {
   setFont: "perry_ui_canvas_set_font", drawImage: "perry_ui_canvas_draw_image",
   setChild: "perry_ui_scrollview_set_child", focus: "perry_ui_textfield_focus",
   setWidth: "perry_ui_widget_set_width", setHeight: "perry_ui_widget_set_height",
+  setMaxWidth: "perry_ui_widget_set_max_width",
   matchParentWidth: "perry_ui_widget_match_parent_width",
   matchParentHeight: "perry_ui_widget_match_parent_height",
   setHidden: "perry_ui_set_widget_hidden",

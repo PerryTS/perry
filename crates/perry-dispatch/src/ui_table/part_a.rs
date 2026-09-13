@@ -558,6 +558,12 @@ pub(crate) const PERRY_UI_TABLE_PART_A: &[MethodRow] = &[
         ret: ReturnKind::Void,
     },
     MethodRow {
+        method: "widgetSetMaxWidth",
+        runtime: "perry_ui_widget_set_max_width",
+        args: &[ArgKind::Widget, ArgKind::F64],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
         method: "widgetSetWidth",
         runtime: "perry_ui_widget_set_width",
         args: &[ArgKind::Widget, ArgKind::F64],

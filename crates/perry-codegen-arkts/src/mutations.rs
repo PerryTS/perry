@@ -644,6 +644,24 @@ pub(crate) fn collect_mutations_in_expr(
                 cond,
             );
         }
+        "widgetSetMaxWidth" => {
+            // CSS `max-width` + `margin: auto`: fill the available width up to
+            // the cap, then stop and center as the parent grows past it.
+            // ArkUI: `.width('100%')` fills, `.constraintSize({ maxWidth })`
+            // caps, `.alignSelf(ItemAlign.Center)` centers within the parent.
+            // Skip-on-unresolved: an unresolved arg would emit a bogus cap.
+            let Some(n) = numeric_arg_resolved(&args[1..], 0, bindings) else {
+                return;
+            };
+            push_mut(
+                Mutation::Modifier(format!(
+                    ".width('100%').constraintSize({{ maxWidth: {} }}).alignSelf(ItemAlign.Center)",
+                    fmt_num(n)
+                )),
+                out,
+                cond,
+            );
+        }
         "widgetSetHeight" => {
             let Some(n) = numeric_arg_resolved(&args[1..], 0, bindings) else {
                 return;

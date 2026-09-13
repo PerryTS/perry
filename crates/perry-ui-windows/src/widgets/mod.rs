@@ -105,6 +105,9 @@ pub struct WidgetEntry {
     pub fills_remaining: bool,
     /// Fixed width in pixels (set by widgetSetWidth)
     pub fixed_width: Option<i32>,
+    /// Max width in pixels (set by widgetSetMaxWidth) — a CSS `max-width` cap:
+    /// fill up to this on the cross axis, then center. Honoured in layout.
+    pub max_width: Option<i32>,
     /// Fixed height in pixels (set by widgetSetHeight)
     pub fixed_height: Option<i32>,
     /// Whether this widget should stretch to match its parent's height
@@ -128,6 +131,7 @@ pub struct WidgetInfo {
     pub hidden: bool,
     pub fills_remaining: bool,
     pub fixed_width: Option<i32>,
+    pub max_width: Option<i32>,
     pub fixed_height: Option<i32>,
     pub match_parent_height: bool,
     pub match_parent_width: bool,
@@ -278,6 +282,7 @@ pub fn register_widget(hwnd: HWND, kind: WidgetKind, control_id: u16) -> i64 {
             control_id,
             fills_remaining: false,
             fixed_width: None,
+            max_width: None,
             fixed_height: None,
             match_parent_height: false,
             match_parent_width: false,
@@ -305,6 +310,7 @@ pub fn register_widget(hwnd: isize, kind: WidgetKind, control_id: u16) -> i64 {
             control_id,
             fills_remaining: false,
             fixed_width: None,
+            max_width: None,
             fixed_height: None,
             match_parent_height: false,
             match_parent_width: false,
@@ -338,6 +344,7 @@ pub fn register_widget_with_layout(
             control_id,
             fills_remaining: false,
             fixed_width: None,
+            max_width: None,
             fixed_height: None,
             match_parent_height: false,
             match_parent_width: false,
@@ -371,6 +378,7 @@ pub fn register_widget_with_layout(
             control_id,
             fills_remaining: false,
             fixed_width: None,
+            max_width: None,
             fixed_height: None,
             match_parent_height: false,
             match_parent_width: false,
@@ -432,6 +440,7 @@ pub fn get_widget_info(handle: i64) -> Option<WidgetInfo> {
                 hidden: widgets[idx].hidden,
                 fills_remaining: widgets[idx].fills_remaining,
                 fixed_width: widgets[idx].fixed_width,
+                max_width: widgets[idx].max_width,
                 fixed_height: widgets[idx].fixed_height,
                 match_parent_height: widgets[idx].match_parent_height,
                 match_parent_width: widgets[idx].match_parent_width,
@@ -1818,6 +1827,18 @@ pub fn set_fixed_width(handle: i64, width: i32) {
         let idx = (handle - 1) as usize;
         if idx < widgets.len() {
             widgets[idx].fixed_width = Some(width);
+        }
+    });
+}
+
+/// Set the max width of a widget (in pixels). Honoured on the cross axis at
+/// layout time: the widget fills up to this width, then centers.
+pub fn set_max_width(handle: i64, width: i32) {
+    WIDGETS.with(|w| {
+        let mut widgets = w.borrow_mut();
+        let idx = (handle - 1) as usize;
+        if idx < widgets.len() {
+            widgets[idx].max_width = Some(width);
         }
     });
 }

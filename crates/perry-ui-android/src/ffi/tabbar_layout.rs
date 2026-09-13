@@ -141,6 +141,13 @@ pub extern "C" fn perry_ui_widget_match_parent_width(handle: i64) {
 }
 
 #[no_mangle]
+pub extern "C" fn perry_ui_widget_set_max_width(handle: i64, max_width: f64) {
+    catch_panic_void("perry_ui_widget_set_max_width", || {
+        widgets::set_max_width(handle, max_width)
+    });
+}
+
+#[no_mangle]
 pub extern "C" fn perry_ui_widget_match_parent_height(handle: i64) {
     catch_panic_void("perry_ui_widget_match_parent_height", || {
         widgets::match_parent_height(handle)

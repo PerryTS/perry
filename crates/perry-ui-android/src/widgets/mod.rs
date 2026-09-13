@@ -1119,6 +1119,68 @@ pub fn match_parent_width(child_handle: i64) {
     }
 }
 
+/// Approximate the CSS `max-width` cap on a child view.
+///
+/// Android's `View` exposes no generic maximum-width property, so "fill the
+/// parent up to `max_width`, then center" cannot be enforced for an arbitrary
+/// view — only `TextView`/`ImageView` have a native `setMaxWidth`, and calling
+/// a missing method through JNI would leave a pending exception. This applies
+/// the two parts that are expressible through `LayoutParams` on any view:
+///   - `width = MATCH_PARENT`, so the view fills the parent (the sub-cap regime);
+///   - `layout_gravity = CENTER_HORIZONTAL` on a `LinearLayout` child, so it
+///     centers.
+/// The hard cap itself (stop growing at `max_width`, grow the side gutters) is
+/// not applied here — Android has no measure-time hook at this call site to
+/// clamp against the parent width. `max_width` is accepted so the C symbol
+/// exists and the contract is honoured as far as the platform allows.
+pub fn set_max_width(child_handle: i64, _max_width: f64) {
+    if let Some(view_ref) = get_widget(child_handle) {
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 16);
+            if let Ok(lp) = env.call_method(
+                view_ref.as_obj(),
+                jni::jni_str!("getLayoutParams"),
+                jni::jni_sig!("()Landroid/view/ViewGroup$LayoutParams;"),
+                &[],
+            ) {
+                if let Ok(lp_obj) = lp.l() {
+                    if !lp_obj.is_null() {
+                        let _ = env.set_field(
+                            &lp_obj,
+                            jni::jni_str!("width"),
+                            jni::jni_sig!("I"),
+                            JValue::Int(-1),
+                        ); // MATCH_PARENT
+                        if env
+                            .is_instance_of(
+                                &lp_obj,
+                                jni::jni_str!("android/widget/LinearLayout$LayoutParams"),
+                            )
+                            .unwrap_or(false)
+                        {
+                            let _ = env.set_field(
+                                &lp_obj,
+                                jni::jni_str!("gravity"),
+                                jni::jni_sig!("I"),
+                                JValue::Int(1), // Gravity.CENTER_HORIZONTAL
+                            );
+                        }
+                        let _ = env.call_method(
+                            view_ref.as_obj(),
+                            jni::jni_str!("setLayoutParams"),
+                            jni::jni_sig!("(Landroid/view/ViewGroup$LayoutParams;)V"),
+                            &[JValue::Object(&lp_obj)],
+                        );
+                    }
+                }
+            }
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+            }
+        })
+    }
+}
+
 /// Pin a child view's height to match its parent (MATCH_PARENT).
 pub fn match_parent_height(child_handle: i64) {
     if let Some(view_ref) = get_widget(child_handle) {

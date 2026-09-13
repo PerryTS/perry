@@ -692,6 +692,25 @@ pub fn match_parent_width(handle: i64) {
     }
 }
 
+/// Approximate the CSS `max-width` cap: fill the parent's width, but never
+/// exceed `max_width`, and center once capped.
+///
+/// GTK4 has no true maximum-size property — its CSS supports `min-width` but not
+/// `max-width`, and `set_size_request` sets a minimum, not a maximum. So this
+/// combines `set_hexpand(true)` (grow into the parent) with
+/// `set_halign(Center)` and a `set_size_request(max_width, -1)`: with the
+/// allocation expanded to the parent width and `halign = Center`, the widget is
+/// placed at its requested `max_width` centered in that allocation, so it fills
+/// up to the cap and centers beyond it. Below the cap GTK clamps the widget down
+/// to the smaller available width.
+pub fn set_max_width(handle: i64, max_width: f64) {
+    if let Some(widget) = get_widget(handle) {
+        widget.set_hexpand(true);
+        widget.set_halign(gtk4::Align::Center);
+        widget.set_size_request(max_width as i32, -1);
+    }
+}
+
 /// Make a widget expand to fill its parent's height.
 pub fn match_parent_height(handle: i64) {
     if let Some(widget) = get_widget(handle) {

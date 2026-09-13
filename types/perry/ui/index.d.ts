@@ -879,6 +879,7 @@ export function widgetClearChildren(widget: Widget): void;
 export function widgetRemoveChild(parent: Widget, child: Widget): void;
 export function widgetReorderChild(widget: Widget, fromIndex: number, toIndex: number): void;
 export function widgetSetWidth(widget: Widget, width: number): void;
+export function widgetSetMaxWidth(widget: Widget, maxWidth: number): void;
 export function widgetSetHeight(widget: Widget, height: number): void;
 export function widgetSetHugging(widget: Widget, priority: number): void;
 export function widgetSetHidden(widget: Widget, hidden: number): void;
