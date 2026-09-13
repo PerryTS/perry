@@ -1993,6 +1993,9 @@ pub(super) fn credit_promoted_bytes_to_old_baseline(promoted_bytes: usize) {
     }
     GC_LAST_OLD_RECLAIM_IN_USE_BYTES
         .with(|bytes| bytes.set(bytes.get().saturating_add(promoted_bytes)));
+    // #10182: the credit hides these bytes from the growth band by design; the
+    // promoted-cohort bound is what still counts them.
+    super::promoted_cohort::note_promoted(promoted_bytes);
 }
 
 /// Feed a copying minor's measured young-survival ratio to arena-growth pacing.
@@ -2070,6 +2073,8 @@ pub(super) fn finish_full_old_reclaim_baseline() {
     let old_in_use =
         old_gen_reclaimable_pressure_bytes().saturating_add(external_side_live_bytes());
     GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.set(old_in_use));
+    // #10182: this full verified everything old; the promoted cohort starts over.
+    super::promoted_cohort::note_full_finished(old_in_use);
     // Record the TOTAL post-full live set for major-GC pacing (young+old): the
     // full sweep is the only collection that frees forwarding stubs, so this is
     // the "clean" size the arena returns to and the base for the K× growth gate.
@@ -3538,6 +3543,40 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
     // the precise collection that replaced it actually ran (CLAUDE.md, four
     // ways a gate cannot fail — #4, the gate runs but its subject never did).
     super::record_safepoint_drain(super::SafepointDrainKind::NurseryMinor);
+    run_promoted_cohort_full_if_due();
+    true
+}
+
+/// #10182: run the promoted-cohort full (`gc::promoted_cohort`) if the nursery
+/// minor this precise safepoint just ran brought the cohort to its bound.
+///
+/// Same collection the OldReclaim safepoint arm runs — a synchronous full with
+/// `SkipDisabled` roots — at the same kind of point, and right after a minor,
+/// so an in-place promotion has left no young object for the remembered-set
+/// rebuild to find. Returns whether a full ran.
+pub(super) fn run_promoted_cohort_full_if_due() -> bool {
+    if !super::promoted_cohort::full_due() || GC_OLD_RECLAIM_IN_PROGRESS.with(Cell::get) {
+        return false;
+    }
+    let _reentry = OldReclaimReentryGuard::enter();
+    let cohort = super::promoted_cohort::promoted_since_full();
+    let bound = super::promoted_cohort::bound_bytes();
+    let before = old_gen_reclaimable_pressure_bytes().saturating_add(external_side_live_bytes());
+    super::diag_sites::trigger_decision("safepoint", "PromotedCohort");
+    super::diag_sites::set_full_site("safepoint_promoted_cohort");
+    // No `force_full_scan`: roots are precise at this safepoint.
+    gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::OldGenBytes))
+        .emit_after_current();
+    let after = old_gen_reclaimable_pressure_bytes().saturating_add(external_side_live_bytes());
+    let reclaimed = before.saturating_sub(after);
+    let productive = super::promoted_cohort::record_full_yield(cohort, reclaimed);
+    if super::gc_diag_enabled() {
+        eprintln!(
+            "[gc-promoted-cohort] full cohort={cohort} bound={bound} reclaimed={reclaimed} \
+             productive={productive} backoff_shift={}",
+            super::promoted_cohort::backoff_shift()
+        );
+    }
     true
 }
 

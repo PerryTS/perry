@@ -236,6 +236,8 @@ mod native_stack_scan;
 /// mechanism is `arena/promote.rs`; this decides when to use it.
 mod promote_in_place;
 use promote_in_place::*;
+/// #10182: full collections paced by the bytes promoted since the last full.
+mod promoted_cohort;
 #[cfg(test)]
 pub(crate) use promote_in_place::{
     clear_young_survival_for_tests, last_young_survival_permille, seed_young_survival_for_tests,

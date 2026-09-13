@@ -54,6 +54,7 @@ mod mark_slot_hoists;
 mod oldgen;
 mod os_tag;
 mod promote_in_place;
+mod promoted_cohort;
 mod proxy_registry;
 mod restore_coverage;
 mod retention_9628_9629;
