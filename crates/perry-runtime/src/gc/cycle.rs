@@ -624,9 +624,11 @@ impl GcCycleState {
         let trace = GcCycleTrace::new(GcCollectionKind::Full, trigger);
         let start = Instant::now();
         crate::arena::old_pages_begin_gc_cycle();
-        // The one constructor that sweeps old-gen, so the one that invalidates
-        // a promoted run's bounds. See the fn's doc for why no minor needs it.
-        crate::arena::materialize_all_promoted_page_runs();
+        // #10182: promoted page runs are NOT expanded here any more. The sweep
+        // expands a run only on a page where it is about to invalidate a dead
+        // header (`PendingOldUnregister::defer`), and a block it reclaims whole
+        // drops its runs unexpanded (`unregister_old_block_pages`). A page on
+        // which every object survives keeps its run: nothing reshapes it.
         clear_mark_seeds();
         // Allocate-black for the WHOLE cycle, from the first build slice on:
         // the mark barrier only engages at the END of BuildValidPointerSet

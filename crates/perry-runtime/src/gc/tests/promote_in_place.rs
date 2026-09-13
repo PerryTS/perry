@@ -953,8 +953,9 @@ fn old_page_relocation_expands_a_described_run_before_it_moves_anything() {
 /// comment: a page that has only just been promoted is not defrag-eligible at
 /// all, because `register_promoted_page_run` records live bytes and never dead
 /// ones, and `old_page_defrag_eligible` requires `dead_bytes > 0`. Dead bytes
-/// come only from the old-gen sweep, and the sweep's cycle constructor
-/// (`GcCycleState::new_full`) expands every pending run before it starts.
+/// come only from the old-gen sweep, and since #10182 the sweep expands a
+/// page's pending run before it invalidates the first dead header on that page
+/// (`PendingOldUnregister::defer`), so no page with dead bytes keeps a run.
 #[test]
 fn a_freshly_described_page_is_not_defrag_eligible() {
     let _isolation = copying_nursery_isolation_lock();
