@@ -954,3 +954,5 @@ fn mixed_type_and_value_specifier_import_keeps_runtime_edge() {
         "dependency initialized\n42\n"
     );
 }
+#[path = "source_graph_export_regressions/issue_10160.rs"]
+mod issue_10160;

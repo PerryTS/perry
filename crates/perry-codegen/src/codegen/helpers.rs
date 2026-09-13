@@ -1428,10 +1428,21 @@ pub(super) fn emit_namespace_populator(
             let len_slot = blk.gep(I32, &lens_buf, &[(I64, &idx_str)]);
             blk.store(I32, &format!("{}", key_len), &len_slot);
 
-            let is_live_binding = matches!(
-                entry.kind,
-                NamespaceEntryKind::LocalVar { .. } | NamespaceEntryKind::ForeignVar { .. }
+            // #10160: `export * as Self from "./self"` — this module's own
+            // `@__perry_ns_<prefix>` is only stored after `js_create_namespace`
+            // returns below, so loading it here would freeze `undefined` into
+            // the entry. Publish it as a live accessor instead; its getter
+            // wrapper (emitted next to the LocalVar wrappers in artifacts.rs)
+            // loads the global at read time.
+            let is_self_namespace = matches!(
+                &entry.kind,
+                NamespaceEntryKind::NestedNamespace { source_prefix } if source_prefix == module_prefix
             );
+            let is_live_binding = is_self_namespace
+                || matches!(
+                    entry.kind,
+                    NamespaceEntryKind::LocalVar { .. } | NamespaceEntryKind::ForeignVar { .. }
+                );
             let live_slot = blk.gep(I8, &live_buf, &[(I64, &idx_str)]);
             blk.store(I8, if is_live_binding { "1" } else { "0" }, &live_slot);
 
@@ -1493,6 +1504,16 @@ pub(super) fn emit_namespace_populator(
                         I64,
                         "js_closure_alloc_singleton",
                         &[(PTR, &format!("@{}", wrapper_name))],
+                    );
+                    crate::expr::nanbox_pointer_inline(blk, &handle)
+                }
+                NamespaceEntryKind::NestedNamespace { .. } if is_self_namespace => {
+                    let wrapper = namespace_live_getter_wrapper_symbol(module_prefix, i);
+                    let blk = ctx.block();
+                    let handle = blk.call(
+                        I64,
+                        "js_closure_alloc_singleton",
+                        &[(PTR, &format!("@{}", wrapper))],
                     );
                     crate::expr::nanbox_pointer_inline(blk, &handle)
                 }
