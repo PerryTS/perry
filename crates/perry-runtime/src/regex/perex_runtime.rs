@@ -3,11 +3,10 @@
 
 use super::flags::CanonicalFlags;
 use super::perex_memory::{Buffer, MemoryBudget, StorageError};
-use super::perex_owner::{BuildError, GcProgram, OwnerError};
+use super::perex_owner::{BuildError, GcBinding, GcProgram, OwnerError};
 use crate::gc::RuntimeHandleScope;
 use perex::binding::{
-    BoundProgram, BoundProgramError, BoundResources, BoundSubject, ImmutableSubject, PairError,
-    SubjectError,
+    BoundProgramError, BoundResources, BoundSubject, ImmutableSubject, PairError, SubjectError,
 };
 use perex::compiler::{self, CompileError, Node, Range};
 use perex::executor::{
@@ -159,7 +158,7 @@ fn search_error(error: SearchError<PairError<OwnerError, OwnerError>>) -> Engine
 /// Find from an absolute UTF-16 position in the complete original string.
 /// The caller supplies the same budget across repeated global searches.
 pub(crate) fn find<'mem, S: ImmutableSubject<Error = OwnerError>>(
-    program: &BoundProgram<GcProgram<'_>>,
+    program: &GcBinding<'_>,
     subject: &BoundSubject<S>,
     start: usize,
     mode: CaptureMode,
@@ -183,7 +182,7 @@ pub(crate) fn find<'mem, S: ImmutableSubject<Error = OwnerError>>(
 /// string with an identical layout cannot be detected and would give wrong
 /// answers, so callers keep a position only as long as the binding it came from.
 pub(crate) fn find_near<'mem, S: ImmutableSubject<Error = OwnerError>>(
-    program: &BoundProgram<GcProgram<'_>>,
+    program: &GcBinding<'_>,
     subject: &BoundSubject<S>,
     start: usize,
     near: Option<Position>,
@@ -199,32 +198,18 @@ pub(crate) fn find_near<'mem, S: ImmutableSubject<Error = OwnerError>>(
     if quantum == 0 {
         return Err(EngineError::InvalidQuantum);
     }
-    let (registers, (frames, undo)) = program
-        .with_view(|program| {
-            // This binding owns a GcProgram, whose views preserve the complete
-            // inline word slice. Copy scalars before any poll or allocation.
-            (program.register_count(), unsafe {
-                super::perex_owner::scratch_hint(program.words()).get()
-            })
-        })
+    let registers = program
+        .with_view(|program| program.register_count())
         .map_err(EngineError::Program)?;
-    let resources = BoundResources { program, subject };
+    let resources = BoundResources {
+        program: &**program,
+        subject,
+    };
     let mut size = ScratchRequirements {
         registers,
         frames: 0,
         undo: 0,
     };
-    let hinted_bytes = registers
-        .checked_mul(std::mem::size_of::<usize>())
-        .and_then(|n| {
-            n.checked_add(
-                frames * std::mem::size_of::<Frame>() + undo * std::mem::size_of::<Undo>(),
-            )
-        });
-    if hinted_bytes.is_some_and(|bytes| memory.can_fit(bytes)) {
-        size.frames = frames;
-        size.undo = undo;
-    }
     poll()?;
     let buffers = MatchBuffers::new(memory, size)?;
     let mut search = match near {
@@ -275,14 +260,28 @@ pub(crate) fn find_near<'mem, S: ImmutableSubject<Error = OwnerError>>(
                         .max(size.undo.checked_mul(2).ok_or(StorageError::Limit)?)
                         .max(16);
                 }
-                program
-                    .with_view(|program| unsafe {
-                        // Retain bounded scalar hints, never native scratch or a
-                        // program/subject view. The binding reacquires after GC.
-                        super::perex_owner::scratch_hint(program.words())
-                            .set((size.frames.min(16), size.undo.min(32)));
-                    })
-                    .map_err(EngineError::Program)?;
+                // Start every search with register-only scratch. A no-match
+                // pays no frame/undo allocation even after a complex match.
+                // Once growth is required, combine the remembered capacities
+                // into this replacement and skip intermediate growth steps.
+                let (frames, undo) = program.scratch_hint();
+                let frames = frames.max(size.frames);
+                let undo = undo.max(size.undo);
+                let hinted_bytes = registers
+                    .checked_mul(std::mem::size_of::<usize>())
+                    .and_then(|n| {
+                        frames
+                            .checked_mul(std::mem::size_of::<Frame>())
+                            .and_then(|f| {
+                                undo.checked_mul(std::mem::size_of::<Undo>())
+                                    .and_then(|u| n.checked_add(f)?.checked_add(u))
+                            })
+                    });
+                if hinted_bytes.is_some_and(|bytes| memory.can_fit(bytes)) {
+                    size.frames = frames;
+                    size.undo = undo;
+                }
+                program.record_scratch_hint(size.frames, size.undo);
                 poll()?;
                 let replacement = MatchBuffers::new(memory, size)?;
                 search = search

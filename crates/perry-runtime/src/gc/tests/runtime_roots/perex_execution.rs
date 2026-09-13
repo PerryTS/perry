@@ -2,10 +2,10 @@
 //! native-allocation accounting. Complete UTF-16 captures remain observable.
 use super::*;
 use crate::regex::perex_memory::{Buffer, MemoryBudget, StorageError};
-use crate::regex::perex_owner::{GcProgram, HeapSubject};
+use crate::regex::perex_owner::{GcBinding, GcProgram, HeapSubject};
 use crate::regex::perex_runtime::{self as host, CaptureMode, EngineError};
 use crate::regex::validate_and_canonicalize_flags;
-use perex::binding::{BoundProgram, BoundSubject};
+use perex::binding::BoundSubject;
 use perex::compiler::{CompileError, Node, Range};
 use perex::executor::ExecError;
 use perex::{span::Span, Budget};
@@ -15,11 +15,7 @@ fn subject<'s>(scope: &'s RuntimeHandleScope, bytes: &[u8]) -> BoundSubject<Heap
     BoundSubject::new(unsafe { HeapSubject::new(scope.root_string_ptr(ptr)).unwrap() }).unwrap()
 }
 
-fn compile<'s>(
-    scope: &'s RuntimeHandleScope,
-    text: &str,
-    flags: &str,
-) -> BoundProgram<GcProgram<'s>> {
+fn compile<'s>(scope: &'s RuntimeHandleScope, text: &str, flags: &str) -> GcBinding<'s> {
     let pattern = subject(scope, text.as_bytes());
     let memory = MemoryBudget::new(1 << 20);
     let mut budget = Budget::new(1_000_000);
@@ -34,7 +30,7 @@ fn compile<'s>(
     )
     .unwrap();
     assert_eq!(memory.live_bytes(), 0);
-    BoundProgram::new(program, &mut budget).unwrap()
+    GcBinding::new(program, &mut budget).unwrap()
 }
 
 #[test]
@@ -107,7 +103,7 @@ fn perex_host_compile_grows_scratch_and_reborrows_a_moving_pattern() {
     assert!(budget.remaining() < 1_000_000);
     assert_eq!(memory.live_bytes(), 0);
     assert_eq!(external_side_live_bytes(), before);
-    let program = BoundProgram::new(program, &mut budget).unwrap();
+    let program = GcBinding::new(program, &mut budget).unwrap();
     let input = subject(&scope, "a".repeat(100).as_bytes());
     let result = host::find(
         &program,
@@ -230,7 +226,7 @@ fn perex_host_running_search_survives_reentrant_receiver_recompile() {
             initial.install(&receiver);
         }
     }
-    let active = BoundProgram::new(
+    let active = GcBinding::new(
         unsafe { GcProgram::from_receiver(&scope, &receiver).unwrap() },
         &mut Budget::new(100_000),
     )
@@ -268,7 +264,7 @@ fn perex_host_running_search_survives_reentrant_receiver_recompile() {
         &[Span::new(0, 3), Span::new(0, 3)]
     );
     drop(old_result);
-    let next = BoundProgram::new(
+    let next = GcBinding::new(
         unsafe { GcProgram::from_receiver(&scope, &receiver).unwrap() },
         &mut Budget::new(100_000),
     )
@@ -521,6 +517,11 @@ fn regexp_scratch_hint_reduces_rebuffering_survives_movement_and_respects_budget
     };
     let cold = MemoryBudget::new(1 << 20);
     run(&cold);
+    assert_ne!(
+        program.scratch_hint(),
+        (0, 0),
+        "the owner must retain the hint"
+    );
     let old = program.with_view(|p| p.words().as_ptr() as usize).unwrap();
     gc_collect_minor();
     assert_ne!(

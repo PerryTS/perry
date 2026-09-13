@@ -38,6 +38,7 @@ pub(crate) enum BuildError {
 }
 
 /// An immutable program held by a real mutable collector root.
+#[derive(Clone, Copy)]
 pub(crate) struct GcProgram<'scope> {
     root: RuntimeHandle<'scope>,
 }
@@ -189,22 +190,63 @@ impl<'scope> GcProgram<'scope> {
     }
 }
 
-/// Advisory scalar capacities beside the immutable words. The returned cell
-/// is used only inside the program borrow; no address may survive a safepoint.
-///
-/// # Safety
-/// `words` must be the complete slice supplied by `GcProgram::with_words`, as
-/// retained by `BoundProgram<GcProgram>`. Perex views preserve that slice base.
-/// The prefix is disjoint from the borrowed words, and only this Cell changes.
-pub(super) unsafe fn scratch_hint(words: &[u32]) -> &std::cell::Cell<(usize, usize)> {
-    let cell = unsafe {
-        words
-            .as_ptr()
-            .cast::<u8>()
-            .sub(std::mem::size_of::<ProgramCell>())
-            .cast::<ProgramCell>()
-    };
-    unsafe { &(*cell).scratch_hint }
+/// A validated binding and a copy of its existing rooted owner. Keeping the
+/// owner gives scalar metadata its original allocation provenance; deriving
+/// a writable prefix pointer from a shared word slice would violate that
+/// slice's read-only borrow in optimized code. Both copies name one handle
+/// slot, owned by the caller's scope, and reacquire after every collection.
+pub(crate) struct GcBinding<'scope> {
+    bound: perex::binding::BoundProgram<GcProgram<'scope>>,
+    owner: GcProgram<'scope>,
+}
+
+impl<'scope> GcBinding<'scope> {
+    pub(crate) fn new(
+        owner: GcProgram<'scope>,
+        budget: &mut perex::Budget,
+    ) -> Result<
+        Self,
+        perex::binding::BindingError<
+            GcProgram<'scope>,
+            perex::binding::BoundProgramError<OwnerError>,
+        >,
+    > {
+        perex::binding::BoundProgram::new(owner, budget).map(|bound| Self { bound, owner })
+    }
+
+    /// `bound` must have consumed a copy of this same immutable owner.
+    pub(crate) fn from_bound(
+        owner: GcProgram<'scope>,
+        bound: perex::binding::BoundProgram<GcProgram<'scope>>,
+    ) -> Self {
+        Self { bound, owner }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn into_storage(self) -> GcProgram<'scope> {
+        self.bound.into_storage()
+    }
+
+    pub(crate) fn scratch_hint(&self) -> (usize, usize) {
+        self.owner
+            .root
+            .with_const_ptr::<ProgramCell, _>(|cell| unsafe { (*cell).scratch_hint.get() })
+    }
+
+    pub(crate) fn record_scratch_hint(&self, frames: usize, undo: usize) {
+        self.owner
+            .root
+            .with_const_ptr::<ProgramCell, _>(|cell| unsafe {
+                (*cell).scratch_hint.set((frames.min(32), undo.min(32)));
+            });
+    }
+}
+
+impl<'scope> std::ops::Deref for GcBinding<'scope> {
+    type Target = perex::binding::BoundProgram<GcProgram<'scope>>;
+    fn deref(&self) -> &Self::Target {
+        &self.bound
+    }
 }
 
 /// The witness stored in the program cell at `program` (a RegExp's

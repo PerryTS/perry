@@ -4,15 +4,14 @@ use super::perex_api as api;
 use super::perex_dispatch as dispatch;
 use super::perex_match_search::subject;
 use super::perex_memory::MemoryBudget;
-use super::perex_owner::GcProgram;
-use super::perex_owner::HeapSubject;
+use super::perex_owner::{GcBinding, HeapSubject};
 use super::perex_replace::{callable, index_property};
 use super::perex_replace_storage::{boxed, call, length, text, List, Pieces, Units};
 use super::perex_runtime::{self as host, CaptureMode, EngineError};
 use super::perex_strings::SpanCopies;
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 use crate::value::{js_nanbox_pointer, js_nanbox_string, TAG_NULL, TAG_UNDEFINED};
-use perex::binding::{BoundProgram, BoundSubject, SubjectError};
+use perex::binding::{BoundSubject, SubjectError};
 use perex::input::Position;
 use perex::Budget;
 
@@ -87,7 +86,7 @@ fn forward_program<'s>(
     constructor: Option<&RuntimeHandle<'_>>,
     splitter: &RuntimeHandle<'_>,
     budget: &mut Budget,
-) -> Option<BoundProgram<GcProgram<'s>>> {
+) -> Option<GcBinding<'s>> {
     if constructor.is_some_and(|c| {
         !crate::object::regex_proto_thunks::is_intrinsic_regexp_constructor(c.get_nanbox_f64())
     }) {
@@ -102,7 +101,7 @@ fn forward_program<'s>(
     }
     let splitter = scope.root_raw_const_ptr(re);
     let program = super::perex_construct::nonsticky_program(scope, &splitter).ok()?;
-    BoundProgram::new(program, budget).ok()
+    GcBinding::new(program, budget).ok()
 }
 
 fn push_span(
