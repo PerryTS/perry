@@ -100,6 +100,17 @@ crate::perry_thread_local! {
 /// its whole extent would be mostly zero words.
 const CENSUS_BITMAP_MAX_EXTENT: usize = crate::arena::BLOCK_SIZE;
 
+/// Start bitmaps are allocated in chunks of this many words (8 KiB), one or two
+/// per block. A bitmap kept in one contiguous vector grew past the allocator's
+/// small and medium size classes and made it commit a fresh large page:
+/// `records_array_1m:sparse` read +4.8 MiB peak RSS for a ~100 KB index. The
+/// start runs this replaces were 8 KiB vectors too.
+const CENSUS_BITMAP_CHUNK_WORDS: usize = 1024;
+const CENSUS_BITMAP_CHUNK_WORD_SHIFT: u32 = 10;
+/// Chunks a bitmap block can need: `CENSUS_BITMAP_MAX_EXTENT` bytes at one bit
+/// per 8 bytes is `2 * CENSUS_BITMAP_CHUNK_WORDS` words.
+const CENSUS_BITMAP_MAX_CHUNKS: usize = 2;
+
 /// Arena object starts sit on 8-byte boundaries relative to their block's
 /// `data` pointer: `ArenaObjectCursor::next_budgeted` rounds every header
 /// offset up to a multiple of 8 before reading it, and the census consumes
@@ -116,12 +127,30 @@ pub(super) struct CensusStartBlock {
     pub(super) extent: usize,
     /// Global arena block index (`u32::MAX` when unknown).
     pub(super) block_idx: u32,
-    /// Bitmap blocks: index of the block's first word in `start_bits`.
+    /// Bitmap blocks: the block's bitmap chunks (owned by
+    /// `ValidPointerSet::start_bitmap_chunks`); word `w` is word
+    /// `w & (CENSUS_BITMAP_CHUNK_WORDS - 1)` of chunk `w >> 10`. Null past the
+    /// block's word count.
+    pub(super) chunks: [*mut u64; CENSUS_BITMAP_MAX_CHUNKS],
     /// Sorted blocks: index of the block's first start in `large_starts`.
     pub(super) first: usize,
     /// Bitmap blocks: word count. Sorted blocks: start count.
     pub(super) len: usize,
     pub(super) sorted: bool,
+}
+
+impl CensusStartBlock {
+    /// Word `word_idx` of this bitmap block's start bitmap.
+    ///
+    /// # Safety
+    /// `self` is a bitmap block of a live `ValidPointerSet` and
+    /// `word_idx < self.len`.
+    #[inline(always)]
+    unsafe fn word_ptr(&self, word_idx: usize) -> *mut u64 {
+        debug_assert!(!self.sorted && word_idx < self.len);
+        self.chunks[word_idx >> CENSUS_BITMAP_CHUNK_WORD_SHIFT]
+            .add(word_idx & (CENSUS_BITMAP_CHUNK_WORDS - 1))
+    }
 }
 
 pub(crate) struct ValidPointerSet {
@@ -147,9 +176,11 @@ pub(crate) struct ValidPointerSet {
     /// `arena_blocks[i].base`, mirrored into one contiguous vector so the
     /// block-level binary search reads 8-byte fences only.
     pub(super) arena_block_bases: Vec<usize>,
-    /// Concatenated start bitmaps of the bitmap blocks. Bit `k` of a block's
-    /// bitmap is set iff a censused header starts at `base + (k << 3)`.
-    pub(super) start_bits: Vec<u64>,
+    /// Storage of the bitmap blocks' start bitmaps, in 8 KiB chunks (see
+    /// `CENSUS_BITMAP_CHUNK_WORDS`). Bit `k` of a block's bitmap is set iff a
+    /// censused header starts at `base + (k << 3)`. A chunk's heap buffer never
+    /// moves, so `CensusStartBlock::chunks` may point into it.
+    pub(super) start_bitmap_chunks: Vec<Vec<u64>>,
     /// Concatenated ascending start lists (user pointers) of the sorted blocks.
     pub(super) large_starts: Vec<usize>,
     /// Per-block census facts and trace reachability (#10182). Disarmed
@@ -198,7 +229,7 @@ impl ValidPointerSet {
         Self {
             arena_blocks: Vec::new(),
             arena_block_bases: Vec::new(),
-            start_bits: Vec::new(),
+            start_bitmap_chunks: Vec::new(),
             large_starts: Vec::new(),
             block_census: BlockCensus::disarmed(),
             arena_count: 0,
@@ -228,20 +259,29 @@ impl ValidPointerSet {
             );
         }
         let sorted = offset > CENSUS_BITMAP_MAX_EXTENT;
+        let mut chunks = [std::ptr::null_mut(); CENSUS_BITMAP_MAX_CHUNKS];
         let (first, len) = if sorted {
             (self.large_starts.len(), 0)
         } else {
             let bits = offset.div_ceil(1 << CENSUS_START_ALIGN_SHIFT);
             let words = bits.div_ceil(64);
-            let first = self.start_bits.len();
-            self.start_bits.resize(first + words, 0);
-            (first, words)
+            for (index, chunk) in chunks.iter_mut().enumerate() {
+                let start = index * CENSUS_BITMAP_CHUNK_WORDS;
+                if start >= words {
+                    break;
+                }
+                let mut storage = vec![0u64; (words - start).min(CENSUS_BITMAP_CHUNK_WORDS)];
+                *chunk = storage.as_mut_ptr();
+                self.start_bitmap_chunks.push(storage);
+            }
+            (0, words)
         };
         self.arena_block_bases.push(data);
         self.arena_blocks.push(CensusStartBlock {
             base: data,
             extent: offset,
             block_idx,
+            chunks,
             first,
             len,
             sorted,
@@ -278,7 +318,11 @@ impl ValidPointerSet {
             block.len += 1;
         } else {
             let bit = header_offset >> CENSUS_START_ALIGN_SHIFT;
-            self.start_bits[block.first + (bit >> 6)] |= 1u64 << (bit & 63);
+            // SAFETY: `header_offset < extent` (asserted above), so the word
+            // index is below the block's word count.
+            unsafe {
+                *block.word_ptr(bit >> 6) |= 1u64 << (bit & 63);
+            }
         }
         self.arena_count += 1;
         self.record_pointer_range(ptr);
@@ -310,7 +354,12 @@ impl ValidPointerSet {
     pub(super) fn arena_index_bytes(&self) -> usize {
         self.arena_blocks.capacity() * std::mem::size_of::<CensusStartBlock>()
             + self.arena_block_bases.capacity() * std::mem::size_of::<usize>()
-            + self.start_bits.capacity() * std::mem::size_of::<u64>()
+            + self
+                .start_bitmap_chunks
+                .iter()
+                .map(|chunk| chunk.capacity() * std::mem::size_of::<u64>())
+                .sum::<usize>()
+            + self.start_bitmap_chunks.capacity() * std::mem::size_of::<Vec<u64>>()
             + self.large_starts.capacity() * std::mem::size_of::<usize>()
     }
 
@@ -447,9 +496,12 @@ impl ValidPointerSet {
                 let bit = header_offset >> CENSUS_START_ALIGN_SHIFT;
                 #[cfg(test)]
                 let bit = start_bitmap_sabotage::shift_probe(bit);
-                self.start_bits
-                    .get(block.first + (bit >> 6))
-                    .is_some_and(|word| (word >> (bit & 63)) & 1 != 0)
+                // SAFETY: `header_offset < extent`, so the word index is below
+                // the block's word count (the sabotaged probe in test builds
+                // may step one bit past it, still inside the last word).
+                let word_idx = bit >> 6;
+                word_idx < block.len
+                    && unsafe { (*block.word_ptr(word_idx) >> (bit & 63)) & 1 != 0 }
             }
         };
         if hit {
@@ -479,7 +531,9 @@ impl ValidPointerSet {
         } else {
             (1u64 << (top + 1)) - 1
         };
-        let mut word = self.start_bits[block.first + word_idx] & keep;
+        // SAFETY: `bit` derives from an offset below `extent`, and every
+        // later index is smaller.
+        let mut word = unsafe { *block.word_ptr(word_idx) } & keep;
         loop {
             if word != 0 {
                 let floor_bit = word_idx * 64 + (63 - word.leading_zeros() as usize);
@@ -489,7 +543,7 @@ impl ValidPointerSet {
                 return None;
             }
             word_idx -= 1;
-            word = self.start_bits[block.first + word_idx];
+            word = unsafe { *block.word_ptr(word_idx) };
         }
     }
 
