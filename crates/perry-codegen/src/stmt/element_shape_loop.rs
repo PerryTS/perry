@@ -214,7 +214,7 @@ enum MatchedIndex {
         local_id: u32,
         modulus_id: u32,
     },
-    /// #10199: `c = (a*c + b) % m; … arr[c]`, optionally spelled through a
+    /// #10185: `c = (a*c + b) % m; … arr[c]`, optionally spelled through a
     /// `const index = c` alias. The recurrence itself lives on
     /// [`ElementShapeVersionedLoop::carried`] — this arm records only the
     /// spellings the subscript may take. See `stmt/element_shape_carried.rs`.
@@ -249,9 +249,9 @@ struct ElementShapeVersionedLoop {
     /// form; `None` for the original single-statement accumulator body.
     element_binding: Option<u32>,
     accumulator_id: u32,
-    /// #10199: the matched recurrence, for the [`MatchedIndex::Carried`] form.
+    /// #10185: the matched recurrence, for the [`MatchedIndex::Carried`] form.
     carried: Option<super::element_shape_carried::MatchedCarried>,
-    /// #10199: the body the FAST clone lowers, when it is not the source body.
+    /// #10185: the body the FAST clone lowers, when it is not the source body.
     ///
     /// Two rewrites, both of which exist to put every side exit an iteration
     /// can take BEFORE any of its stores:
@@ -275,7 +275,7 @@ struct PureExprScope {
     /// #10123: `(d, m)` for a body whose first statement is
     /// `const d = counter % m`.
     derived: Option<(u32, u32)>,
-    /// #10199: `(carried, alias)` for a body whose first statement advances a
+    /// #10185: `(carried, alias)` for a body whose first statement advances a
     /// loop-carried index. Both are excluded from bare reads for the same
     /// reason `derived` is — inside the clone the real slot is one iteration
     /// behind until the trailing commit.
@@ -345,7 +345,7 @@ fn element_shape_loop_pure_expr_collect(
                 out.props.insert(property.clone());
                 true
             }
-            // #10199: `arr[<index>].prop.length` — a STRING field's JS length.
+            // #10185: `arr[<index>].prop.length` — a STRING field's JS length.
             // Admitted as its own form rather than as "a read of `prop`
             // followed by a generic `.length`", because the generic one is a
             // property diamond ending in a runtime call, and a call inside this
@@ -357,7 +357,7 @@ fn element_shape_loop_pure_expr_collect(
             }
             _ => false,
         },
-        // #10199: `arr[<index>].prop ? A : B` with constant arms. JS truthiness
+        // #10185: `arr[<index>].prop ? A : B` with constant arms. JS truthiness
         // of an arbitrary value is a runtime question the clone is not allowed
         // to guess, so the emitted read admits ONLY the two boolean singletons
         // and side-exits on everything else. Anything but a tracked element
@@ -383,7 +383,7 @@ fn element_shape_loop_pure_expr_collect(
         Expr::LocalGet(id) => {
             scope.element_binding != Some(*id)
                 && scope.derived.map(|(d, _)| d) != Some(*id)
-                // #10199: the carried index and its alias are virtual too —
+                // #10185: the carried index and its alias are virtual too —
                 // their real slots are one iteration behind inside the clone,
                 // so a bare read would hand out a stale value.
                 && scope.carried.is_none_or(|(c, alias)| *id != c && alias != Some(*id))
@@ -444,7 +444,7 @@ fn match_index_form(index: &perry_hir::Expr, scope: &PureExprScope) -> Option<Ma
                 local_id: derived_id,
                 modulus_id,
             }),
-            // #10199: `arr[c]` and `const index = c; arr[index]` are the same
+            // #10185: `arr[c]` and `const index = c; arr[index]` are the same
             // subscript; the alias is virtual and carries no obligation of its
             // own.
             _ => match scope.carried {
@@ -695,7 +695,7 @@ fn anon_shape_field_type_is_compatible(
 /// clone, never correctness.
 pub(super) fn lower_virtual_clone_binding(ctx: &mut FnCtx<'_>, id: u32) -> Result<bool> {
     enum VirtualBinding {
-        /// #7771 `const r = arr[j]` and #10199 `const index = c`: pure aliases,
+        /// #7771 `const r = arr[j]` and #10185 `const index = c`: pure aliases,
         /// no instruction of their own.
         Alias,
         /// #10123 `const d = j % m`: one `srem i32`.
@@ -748,13 +748,13 @@ pub(super) fn lower_virtual_clone_binding(ctx: &mut FnCtx<'_>, id: u32) -> Resul
             blk.store(I32, &derived, &slot);
         }
     }
-    // #10199: this iteration's index is now in its slot, so this is where the
+    // #10185: this iteration's index is now in its slot, so this is where the
     // shared element deref belongs — for the ONE binding that owns it.
     emit_element_prefetch_for(ctx, scope_id, id);
     Ok(true)
 }
 
-/// #10199: emit the once-per-iteration element prologue, if `site_local` is the
+/// #10185: emit the once-per-iteration element prologue, if `site_local` is the
 /// statement the fact designated to own it.
 ///
 /// Every read in the clone loads the handle this parks, so the designated
@@ -941,7 +941,7 @@ fn match_element_shape_versioned_loop(
     //   3. `const d = j % m; acc = <pure numeric over arr[d].field>` —
     //      #10123's derived-index form, the shape every sequential pass over a
     //      parsed record array is written in;
-    //   4. #10199's loop-carried form, `c = (a*c + b) % m;` optionally followed
+    //   4. #10185's loop-carried form, `c = (a*c + b) % m;` optionally followed
     //      by `const index = c;`.
     //
     // In 2, 3 and 4 the leading statement is VIRTUAL inside the fast clone: it
@@ -954,7 +954,7 @@ fn match_element_shape_versioned_loop(
     // value. Form 4's `c` is the one mutable exception, and it pays for it with
     // a write-back (see `element_shape_carried`).
     //
-    // #10199 also admits K >= 1 accumulator statements instead of exactly one,
+    // #10185 also admits K >= 1 accumulator statements instead of exactly one,
     // which is what `sum += rows[i].id; sum += rows[i].name.length; …` needs.
     // NOTHING else is admitted.
     let mut element_binding: Option<(u32, u32)> = None;
@@ -1034,7 +1034,7 @@ fn match_element_shape_versioned_loop(
                 }
                 derived = Some((*id, *modulus_id));
             }
-            // #10199: `const index = c` after the recurrence. A pure alias, so
+            // #10185: `const index = c` after the recurrence. A pure alias, so
             // it emits nothing at all — the subscript resolves to the carried
             // slot either way.
             Expr::LocalGet(aliased) => {
@@ -1072,7 +1072,7 @@ fn match_element_shape_versioned_loop(
     {
         return None;
     }
-    // #10199: statements 2..K are folded into statement 1 for the fast clone
+    // #10185: statements 2..K are folded into statement 1 for the fast clone
     // (`acc = a; acc = acc + b` ≡ `acc = (a) + b`), so that the WHOLE iteration
     // commits once, after every side exit it can take. Each of them must
     // therefore be `acc <op> <pure>` with `acc` as the left operand — the shape
@@ -1134,7 +1134,7 @@ fn match_element_shape_versioned_loop(
             return None;
         }
     }
-    // #10199: a matched recurrence whose value nothing subscripts with would
+    // #10185: a matched recurrence whose value nothing subscripts with would
     // still have its `LocalSet` lowered generically — a `frem` libcall inside
     // the clone, which deletes it. Decline instead, so the loop keeps whatever
     // lowering it has today.
@@ -1223,7 +1223,7 @@ fn match_element_shape_versioned_loop(
         None => return None,
     };
 
-    // The property denylist, which is arm-specific (#10199).
+    // The property denylist, which is arm-specific (#10185).
     //
     // The CLASS arm's list exists because its read bakes in a compile-time
     // packed slot index while the surrounding lowering may route the name
@@ -1278,7 +1278,7 @@ fn match_element_shape_versioned_loop(
         return None;
     }
 
-    // #10199: the fast clone's body, when the two rewrites apply. `lead` is
+    // #10185: the fast clone's body, when the two rewrites apply. `lead` is
     // whatever statements the walk consumed ahead of the accumulator run (the
     // recurrence and/or the virtual binding), kept verbatim.
     let lead = &body[..body.len() - rest.len()];
@@ -1497,7 +1497,7 @@ pub(super) fn lower_element_shape_versioned_for(
     // in JS, so a zero modulus is a slow-clone case rather than something the
     // clone may compute.
     //
-    // #10199's carried recurrence takes the same obligation for the same
+    // #10185's carried recurrence takes the same obligation for the same
     // reason, and one more of its own: its ENTRY value must be a non-negative
     // integral i32, because the whole i64 recurrence bound
     // (`a * i32::MAX + b < 2^53`, and a non-negative dividend for `srem` to
@@ -1555,7 +1555,7 @@ pub(super) fn lower_element_shape_versioned_for(
         (MatchedIndex::Constant(k), _) => {
             crate::expr::element_shape_guard::ElementShapeIndexBound::Constant(*k)
         }
-        // #10199: the recurrence's result is `srem` of a non-negative dividend
+        // #10185: the recurrence's result is `srem` of a non-negative dividend
         // by `m`, so it lands in `[0, m)` exactly like the derived index and
         // takes exactly the same preheader obligation, `m <= length`.
         (MatchedIndex::DerivedMod { .. } | MatchedIndex::Carried { .. }, Some(modulus)) => {
@@ -1684,10 +1684,10 @@ pub(super) fn lower_element_shape_versioned_for(
         }
     };
 
-    // #10199: the shared once-per-iteration element deref, hung off the body's
+    // #10185: the shared once-per-iteration element deref, hung off the body's
     // leading virtual statement. Shape-keyed only: the class-keyed arm's reads
     // are raw doubles behind a `GC_OBJ_TYPED_LAYOUT_INTACT` residual whose
-    // emitted IR #7480's census pins, and nothing in #10199 measures it.
+    // emitted IR #7480's census pins, and nothing in #10185 measures it.
     let elem_prefetch = shape_keyed
         .then(|| {
             let site_local_id = match (&fact_index, matched.element_binding) {

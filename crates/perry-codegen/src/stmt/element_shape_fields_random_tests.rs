@@ -1,4 +1,4 @@
-//! #10199: the `fields` and `random` access shapes — IR census for the
+//! #10185: the `fields` and `random` access shapes — IR census for the
 //! element-shape clone's loop-carried index, its multi-statement accumulator
 //! fold, and its two non-numeric reads.
 //!
@@ -248,7 +248,7 @@ fn store_count(fast: &str) -> usize {
 }
 
 // ---------------------------------------------------------------------------
-// #10199 — the LOOP-CARRIED index (`random`).
+// #10185 — the LOOP-CARRIED index (`random`).
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -459,7 +459,7 @@ fn a_recurrence_over_a_second_variable_declines() {
 }
 
 // ---------------------------------------------------------------------------
-// #10199 — the MULTI-STATEMENT body, the string `.length` and the ternary
+// #10185 — the MULTI-STATEMENT body, the string `.length` and the ternary
 // (`fields`).
 // ---------------------------------------------------------------------------
 

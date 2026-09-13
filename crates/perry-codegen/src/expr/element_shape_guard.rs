@@ -563,7 +563,7 @@ pub(crate) fn emit_element_shape_index(
             let slot = slot.clone();
             Some(ctx.block().load(I32, &slot))
         }
-        // #10199: the carried recurrence's private i32 slot, written by the
+        // #10185: the carried recurrence's private i32 slot, written by the
         // body's first statement earlier in this same iteration. The REAL
         // binding slot is deliberately NOT read here — it is one iteration
         // behind until the trailing write-back commits, which is exactly what
@@ -642,14 +642,14 @@ pub(crate) fn emit_element_deref_with_residual(
 
     let ok = blk.and(I1, &hdr_ok, &shape_ok);
     // The side exit resumes the CURRENT iteration in the slow clone; no effect
-    // of this iteration has committed yet (#10199: with a prefetch this is the
+    // of this iteration has committed yet (#10185: with a prefetch this is the
     // ONLY residual exit in the iteration, and it precedes every store).
     blk.cond_br(&ok, &load_label, &fact.side_exit_label);
     ctx.current_block = load_idx;
     elem_handle
 }
 
-/// #10199: the once-per-iteration element prologue.
+/// #10185: the once-per-iteration element prologue.
 ///
 /// Emitted by the body's leading virtual binding (`stmt/let_stmt.rs` →
 /// `stmt/element_shape_loop::lower_virtual_clone_binding`) once the index for

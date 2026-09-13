@@ -177,7 +177,7 @@ pub(crate) fn emit_shadow_slot_clear(ctx: &mut FnCtx<'_>, slot_idx: u32) {
     // reason: its `Let` emits one `srem` into a private i32 alloca, never a
     // shadow bind, so a lexical-death clear would be the clone's only call.
     //
-    // #10199's carried index (`c = (a*c + b) % m`) and its optional
+    // #10185's carried index (`c = (a*c + b) % m`) and its optional
     // `const index = c` alias are two more of the same.
     if ctx.element_shape_loop_facts.iter().any(|fact| {
         fact.element_binding
@@ -187,7 +187,7 @@ pub(crate) fn emit_shadow_slot_clear(ctx: &mut FnCtx<'_>, slot_idx: u32) {
     }) {
         return;
     }
-    // #10199: a SYNTHESIZED fast-clone body (the accumulator fold, the carried
+    // #10185: a SYNTHESIZED fast-clone body (the accumulator fold, the carried
     // write-back) no longer has the statement indices the function-wide clear
     // map is keyed by, so every clear reached from inside it would be
     // attributed to some other statement's local. Suppress them for the fast
