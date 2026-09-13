@@ -1412,6 +1412,13 @@ pub(super) fn drain_trace_worklist_step(
     let mut remaining = budget;
     while remaining > 0 && *cursor < worklist.len() {
         let header = worklist[*cursor];
+        // #10182: the drain visits headers in queue order and each one is a
+        // cold DRAM read on a heap larger than the cache (a 20 MB JSON tree);
+        // start the read of the entry a few places ahead, as the copying
+        // minor's drain already does. A prefetch cannot fault.
+        if let Some(&ahead) = worklist.get(*cursor + super::prefetch::PREFETCH_DISTANCE) {
+            super::prefetch::prefetch_read(ahead as usize);
+        }
         *cursor += 1;
         trace_one_worklist_header(header, valid_ptrs, worklist, minor_only);
         remaining -= 1;
