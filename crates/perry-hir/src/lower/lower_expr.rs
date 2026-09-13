@@ -29,6 +29,7 @@ mod arm_optchain;
 mod arm_unary;
 mod assignment;
 mod helpers;
+mod json_literal;
 mod reactive_text;
 
 pub(crate) use arm_bin::lower_bin_expr;
@@ -99,6 +100,11 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
 }
 
 fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> {
+    if matches!(expr, ast::Expr::Object(_) | ast::Expr::Array(_)) {
+        if let Some(value) = json_literal::lower_large_json_literal(expr) {
+            return Ok(value);
+        }
+    }
     match expr {
         ast::Expr::Lit(lit) => lower_lit(lit),
         ast::Expr::Ident(ident) => lower_ident_expr(ctx, ident),
