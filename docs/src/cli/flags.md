@@ -34,12 +34,19 @@ Existing `package.json` `perry.define` strings keep their literal-string
 meaning. Precedence is package literals, then `perry.json`, then CLI flags;
 the last CLI value wins. Both build and object caches include the effective map.
 
-Large JSON-compatible object and array literals (including defines) stay
-serialized in the executable and use the built-in JSON parser when evaluated.
-This avoids generating a constructor/store sequence for every data value.
-The threshold is 1,024 value nodes or 64 KiB of key/string data; small literals
-keep their existing lowering. Each evaluation creates a fresh value, and
-`typeof` guards still fold before lowering. Literals with JavaScript-specific
+Large JSON-compatible literals (including defines) can stay serialized in the
+executable and use the built-in JSON parser when evaluated. Two thresholds
+control this, independently of generated function instruction budgets:
+
+- Flat arrays of numbers, strings, booleans and null use this path at 1,024
+  value nodes or 64 KiB of string data.
+- All other JSON-compatible object/array literals use it at 24,576 value nodes
+  or 1 MiB of key/string data, to avoid excessive LLVM code generation.
+
+Nodes include the root and nested values; bytes count UTF-8 key/string content,
+excluding whitespace. Mid-size records keep ordinary lowering and its static
+property layouts for fast reads. Each evaluation still creates a fresh value,
+and `typeof` guards fold before lowering. Literals with JavaScript-specific
 behavior, such as a `__proto__` setter, keep ordinary expression lowering.
 
 `import.meta.resolve(specifier[, parent])` returns a `file://` URL for filesystem

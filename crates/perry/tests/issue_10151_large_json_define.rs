@@ -151,14 +151,28 @@ console.log(b.items[0]);
     );
     assert_eq!(run(root), "items,name\n1 true null small\nfalse\n1\n");
 
+    // A record above the primitive-array text threshold still stays direct.
+    let mid = format!(
+        r#"{{items:[1,true,null],name:"small",padding:"{}"}}"#,
+        "x".repeat(65_536)
+    );
+    config(root, &mid);
+    let hir = compile(root, &["--print-hir"]);
+    assert!(hir.contains("=== HIR") && !hir.contains("JsonParse("));
+    assert_eq!(
+        run(root),
+        "items,name,padding\n1 true null small\nfalse\n1\n"
+    );
+
     // Large define literals share the lowering path. Shadowing JSON must not
     // intercept compiler-generated parsing, and mutations must stay local.
     let large = format!(
         r#"{{items:[1,true,null],name:"small",padding:"{}"}}"#,
-        "x".repeat(65_536)
+        "x".repeat(1024 * 1024)
     );
     config(root, &large);
-    compile(root, &[]);
+    let hir = compile(root, &["--print-hir"]);
+    assert!(hir.contains("JsonParse("), "huge records must stay compact");
     assert_eq!(
         run(root),
         "items,name,padding\n1 true null small\nfalse\n1\n"
@@ -184,7 +198,11 @@ console.log(a.length, a.pop(), a.length);
 "#,
     )
     .unwrap();
-    compile(root, &[]);
+    let hir = compile(root, &["--print-hir"]);
+    assert!(
+        hir.contains("JsonParse("),
+        "primitive arrays keep the fast path"
+    );
     assert_eq!(run(root), "true 1024 true 255 2\n1025 7 1024\n");
 }
 
@@ -199,7 +217,7 @@ console.log(Object.keys(value).join(","));
 console.log(value.z, Object.is(value.a, -0), value[1e-7]);
 console.log(JSON.stringify(value.nested));
 "#,
-        "x".repeat(65_536),
+        "x".repeat(1024 * 1024),
     );
     std::fs::write(root.join("main.ts"), source).unwrap();
     compile(root, &[]);
