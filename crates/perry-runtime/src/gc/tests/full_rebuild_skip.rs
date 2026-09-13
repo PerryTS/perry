@@ -44,6 +44,21 @@ fn rooted_old_parent() -> (usize, *mut u64) {
     (parent as usize, fields)
 }
 
+/// The old→young edge verifier checks a parent only while it is marked or
+/// pinned (or already remembered); after a completed full no mark is left, so
+/// check the known-live parent explicitly.
+fn verify_live_parent(parent: usize) -> OldYoungEdgeVerifyStats {
+    let header = unsafe { header_from_user_ptr(parent as *const u8) };
+    unsafe {
+        (*header).gc_flags |= GC_FLAG_MARKED;
+    }
+    let stats = verify_old_to_young_edges_collect();
+    unsafe {
+        (*header).gc_flags &= !GC_FLAG_MARKED;
+    }
+    stats
+}
+
 /// Store `child_bits` into the parent's field WITHOUT a write barrier.
 fn raw_store(parent: usize, fields: *mut u64, child_bits: u64) {
     unsafe {
@@ -77,7 +92,8 @@ fn a_full_with_no_live_young_object_skips_the_rebuild() {
             0,
             "the skipped rebuild leaves an empty set"
         );
-        assert_eq!(verify_old_to_young_edges_collect().missing_edges, 0);
+        let verify = verify_live_parent(parent);
+        assert_eq!(verify.missing_edges, 0, "{verify:?}");
 
         // The mutator's next old→young store is still remembered and survives
         // a copying minor.
@@ -113,14 +129,14 @@ fn plant_unbarriered_young_edge() -> (usize, *mut u64, usize) {
 #[test]
 fn a_live_young_child_keeps_the_rebuild_and_its_edge() {
     run_isolated(|| {
-        let (_parent, fields, child) = plant_unbarriered_young_edge();
+        let (parent, fields, child) = plant_unbarriered_young_edge();
         let skips = crate::gc::full_remembered_rebuilds_skipped();
 
         let trace = synchronous_full();
 
         assert_eq!(crate::gc::full_remembered_rebuilds_skipped(), skips);
         assert!(trace.old_to_young_rebuild_objects_scanned > 0);
-        let verify = verify_old_to_young_edges_collect();
+        let verify = verify_live_parent(parent);
         assert!(verify.checked_old_to_young_edges > 0, "premise: {verify:?}");
         assert_eq!(
             verify.missing_edges, 0,
@@ -133,12 +149,12 @@ fn a_live_young_child_keeps_the_rebuild_and_its_edge() {
 #[test]
 fn sabotaged_skip_loses_an_unbarriered_young_edge() {
     run_isolated(|| {
-        let _ = plant_unbarriered_young_edge();
+        let (parent, _, _) = plant_unbarriered_young_edge();
         {
             let _sabotage = sabotage::Guard::arm(sabotage::FORCE_REBUILD_SKIP);
             let _ = synchronous_full();
         }
-        let verify = verify_old_to_young_edges_collect();
+        let verify = verify_live_parent(parent);
         assert!(
             verify.missing_edges > 0,
             "a wrongly skipped rebuild must leave the young edge unremembered: {verify:?}"
@@ -148,7 +164,7 @@ fn sabotaged_skip_loses_an_unbarriered_young_edge() {
 
 /// A malloc-registry child of an old parent, stored without a barrier, with an
 /// empty young generation: only the malloc guard stops the skip.
-fn plant_unbarriered_malloc_edge() -> *mut u64 {
+fn plant_unbarriered_malloc_edge() -> usize {
     activate_malloc_registry_for_tests();
     let (parent, fields) = rooted_old_parent();
     let symbol = alloc_tracked_test_symbol() as usize;
@@ -159,19 +175,19 @@ fn plant_unbarriered_malloc_edge() -> *mut u64 {
         0,
         "premise: no barrier recorded the edge"
     );
-    fields
+    parent
 }
 
 #[test]
 fn a_live_malloc_child_keeps_the_rebuild_and_its_edge() {
     run_isolated(|| {
-        let _fields = plant_unbarriered_malloc_edge();
+        let parent = plant_unbarriered_malloc_edge();
         let skips = crate::gc::full_remembered_rebuilds_skipped();
 
         let _ = synchronous_full();
 
         assert_eq!(crate::gc::full_remembered_rebuilds_skipped(), skips);
-        let verify = verify_old_to_young_edges_collect();
+        let verify = verify_live_parent(parent);
         assert!(verify.checked_old_to_young_edges > 0, "premise: {verify:?}");
         assert_eq!(
             verify.missing_edges, 0,
@@ -183,12 +199,12 @@ fn a_live_malloc_child_keeps_the_rebuild_and_its_edge() {
 #[test]
 fn sabotaged_skip_loses_an_unbarriered_malloc_edge() {
     run_isolated(|| {
-        let _ = plant_unbarriered_malloc_edge();
+        let parent = plant_unbarriered_malloc_edge();
         {
             let _sabotage = sabotage::Guard::arm(sabotage::FORCE_REBUILD_SKIP);
             let _ = synchronous_full();
         }
-        let verify = verify_old_to_young_edges_collect();
+        let verify = verify_live_parent(parent);
         assert!(
             verify.missing_edges > 0,
             "a wrongly skipped rebuild must leave the malloc edge unremembered: {verify:?}"
