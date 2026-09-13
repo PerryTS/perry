@@ -63,10 +63,9 @@ pub(crate) unsafe fn object_field_at_with_live(
             None => JSValue::undefined(),
         };
     }
-    // Guard: corrupted objects with unreasonably large field_count
-    if live > 10000 {
-        return JSValue::undefined();
-    }
+    // The published shape bound already proves this slot is inline. JSON
+    // objects can legitimately have more than 10,000 slots (#10175); their
+    // total field count is not a reason to reject an in-bounds read.
     let fields_ptr = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const JSValue;
     let val = *fields_ptr.add(field_index as usize);
     // Guard: null POINTER_TAG (0x7FFD_0000_0000_0000) is never legitimate — replace with undefined
