@@ -97,6 +97,86 @@ pub(crate) fn program<'s>(
     BoundProgram::new(owner, budget).map_err(|e| EngineError::Program(e.error))
 }
 
+/// Bindings one compound operation reuses across its searches (#10165).
+///
+/// Split, replace and global match run many searches over one string with one
+/// matcher. Binding per search decodes the entire subject and revalidates the
+/// entire program every time, which made those loops quadratic in the input.
+/// Perex's binding contract lets a binding outlive allocation, collection and
+/// JS callbacks: both owners hold registered roots and reacquire their base on
+/// every view, so no search needs to rebind because the collector moved them.
+///
+/// Build it before the operation's loop. Runtime handle scopes are a stack, so
+/// its roots must sit below every per-iteration scope; nothing here roots
+/// lazily. A search uses a binding only while it is provably the same object:
+/// the same string, and the same receiver still holding the same program cell.
+/// Anything else (an `exec` override, a recompiled receiver, another string)
+/// binds afresh for that search exactly as before.
+pub(crate) struct Reuse<'b, 's> {
+    input: RuntimeHandle<'s>,
+    subject: &'b BoundSubject<HeapSubject<'s>>,
+    program: Option<ReusedProgram<'s>>,
+}
+
+struct ReusedProgram<'s> {
+    receiver: RuntimeHandle<'s>,
+    cell: RuntimeHandle<'s>,
+    bound: BoundProgram<GcProgram<'s>>,
+}
+
+impl<'b, 's> Reuse<'b, 's> {
+    /// `subject` must bind the whole of `input` (not a window), as the
+    /// operations' own `subject(input)` bindings do.
+    pub(crate) fn new(
+        scope: &'s RuntimeHandleScope,
+        receiver: &RuntimeHandle<'_>,
+        input: RuntimeHandle<'s>,
+        subject: &'b BoundSubject<HeapSubject<'s>>,
+        budget: &mut Budget,
+    ) -> Self {
+        let re =
+            crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as *const RegExpHeader;
+        // A receiver that is not a RegExp with a published program runs no
+        // builtin search here; its failure belongs to the ordinary path.
+        let program = (super::is_valid_regex_ptr(re) && unsafe { !(*re).perex_program.is_null() })
+            .then(|| {
+                // Rooting pushes a handle slot and never collects, so `re` and
+                // its program edge are still current for every read below.
+                let receiver = scope.root_raw_const_ptr(re);
+                let cell = scope.root_raw_const_ptr(unsafe { (*re).perex_program });
+                let owner = unsafe { GcProgram::from_receiver(scope, &receiver) }.ok()?;
+                let bound = BoundProgram::new(owner, budget).ok()?;
+                Some(ReusedProgram {
+                    receiver,
+                    cell,
+                    bound,
+                })
+            })
+            .flatten();
+        Self {
+            input,
+            subject,
+            program,
+        }
+    }
+
+    fn subject_for(&self, input: &RuntimeHandle<'_>) -> Option<&BoundSubject<HeapSubject<'s>>> {
+        let current = input.with_const_ptr::<StringHeader, _>(|p| p);
+        let bound = self.input.with_const_ptr::<StringHeader, _>(|p| p);
+        (current == bound).then_some(self.subject)
+    }
+
+    /// Both roots are live, so equal addresses name the same objects even after
+    /// either moved; a replaced program cannot reuse a cell this root retains.
+    fn program_for(&self, receiver: &RuntimeHandle<'_>) -> Option<&BoundProgram<GcProgram<'s>>> {
+        let reused = self.program.as_ref()?;
+        let current = receiver.with_const_ptr::<RegExpHeader, _>(|p| p);
+        let bound = reused.receiver.with_const_ptr::<RegExpHeader, _>(|p| p);
+        let cell = reused.cell.with_const_ptr::<u8, _>(|p| p);
+        (current == bound && unsafe { (*current).perex_program } == cell).then_some(&reused.bound)
+    }
+}
+
 pub(crate) struct ExecMatch {
     pub(crate) full: Span,
     pub(crate) array: *mut crate::array::ArrayHeader,
@@ -186,12 +266,13 @@ pub(crate) fn execute(
         &mut Budget::new(WORK),
         &MemoryBudget::new(SCRATCH_BYTES),
         poll,
+        None,
     )
 }
 
 /// Compound String operations keep one allowance across successive matches.
 /// Each execution has its own root scope, so a global loop cannot retain a
-/// root for every previous result.
+/// root for every previous result. `reuse` carries the operation's bindings.
 pub(crate) fn execute_with_resources(
     receiver: *mut RegExpHeader,
     input: *const StringHeader,
@@ -199,6 +280,7 @@ pub(crate) fn execute_with_resources(
     budget: &mut Budget,
     memory: &MemoryBudget,
     poll: &mut impl FnMut() -> Result<(), EngineError>,
+    reuse: Option<&Reuse<'_, '_>>,
 ) -> Result<Option<ExecMatch>, EngineError> {
     let scope = RuntimeHandleScope::new();
     let receiver = scope.root_raw_mut_ptr(receiver);
@@ -217,15 +299,29 @@ pub(crate) fn execute_with_resources(
         }
         return Ok(None);
     }
-    let program = program(&scope, &receiver, budget, memory, poll)?;
-    let subject = BoundSubject::new(
-        unsafe { HeapSubject::new(input) }
-            .map_err(|e| EngineError::Subject(perex::binding::SubjectError::Resource(e)))?,
-    )
-    .map_err(|e| EngineError::Subject(e.error))?;
+    let fresh_program;
+    let program = match reuse.and_then(|reuse| reuse.program_for(&receiver)) {
+        Some(program) => program,
+        None => {
+            fresh_program = program(&scope, &receiver, budget, memory, poll)?;
+            &fresh_program
+        }
+    };
+    let fresh_subject;
+    let subject = match reuse.and_then(|reuse| reuse.subject_for(&input)) {
+        Some(subject) => subject,
+        None => {
+            fresh_subject =
+                BoundSubject::new(unsafe { HeapSubject::new(input) }.map_err(|e| {
+                    EngineError::Subject(perex::binding::SubjectError::Resource(e))
+                })?)
+                .map_err(|e| EngineError::Subject(e.error))?;
+            &fresh_subject
+        }
+    };
     let found = host::find(
-        &program,
-        &subject,
+        program,
+        subject,
         start,
         if materialize {
             CaptureMode::All
@@ -252,8 +348,8 @@ pub(crate) fn execute_with_resources(
         caught(|| {
             super::perex_results::materialize(
                 &input,
-                &subject,
-                &program,
+                subject,
+                program,
                 &found,
                 has_indices,
                 budget,

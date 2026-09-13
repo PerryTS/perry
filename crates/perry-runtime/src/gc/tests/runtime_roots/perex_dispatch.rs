@@ -238,6 +238,7 @@ fn perex_dispatch_getter_and_callback_reacquire_original_input_after_gc() {
         &mut Budget::new(api::WORK),
         &MemoryBudget::new(api::SCRATCH_BYTES),
         &mut crate::regex::perex_runtime::poll,
+        None,
     ))
     .unwrap()
     .object();
@@ -349,7 +350,8 @@ fn perex_dispatch_validates_override_results_and_keeps_one_work_allowance() {
             false,
             &mut budget,
             &memory,
-            &mut crate::regex::perex_runtime::poll
+            &mut crate::regex::perex_runtime::poll,
+            None,
         ))
         .is_some());
         assert_eq!(budget.remaining(), expected);
@@ -361,7 +363,8 @@ fn perex_dispatch_validates_override_results_and_keeps_one_work_allowance() {
             false,
             &mut budget,
             &memory,
-            &mut crate::regex::perex_runtime::poll
+            &mut crate::regex::perex_runtime::poll,
+            None,
         ),
         Err(EngineError::Execution(
             perex::executor::ExecError::WorkLimit

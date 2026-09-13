@@ -74,6 +74,7 @@ pub(crate) fn regexp(receiver: f64, argument: f64, replacement: f64) -> Result<f
     }
     let mut results = List::new(&scope)?;
     let bound = subject(input)?;
+    let reuse = api::Reuse::new(&scope, &receiver, input, &bound, &mut budget);
     let input_length = length(&input);
     loop {
         let local = RuntimeHandleScope::new();
@@ -84,6 +85,7 @@ pub(crate) fn regexp(receiver: f64, argument: f64, replacement: f64) -> Result<f
             &mut budget,
             &memory,
             &mut host::poll,
+            Some(&reuse),
         )?
         else {
             break;

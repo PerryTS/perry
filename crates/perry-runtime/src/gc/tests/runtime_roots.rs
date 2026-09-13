@@ -37,6 +37,8 @@ mod perex_public;
 #[cfg(feature = "regex-engine")]
 mod perex_replace;
 #[cfg(feature = "regex-engine")]
+mod perex_reuse;
+#[cfg(feature = "regex-engine")]
 mod perex_split;
 #[cfg(feature = "regex-engine")]
 mod perex_strings;
