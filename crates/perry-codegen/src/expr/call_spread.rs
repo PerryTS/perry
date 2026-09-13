@@ -431,7 +431,24 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     } else {
                         ctx.imported_func_has_rest.contains(property)
                     };
-                    if ctx.namespace_imports.contains(ns_name) && has_rest && declared_count == 1 {
+                    // #10197: a `let`/`const`-bound export (`export const
+                    // mergeAll = (...ctxs) => …`) has no callable
+                    // `perry_fn_<src>__<name>` — that symbol is its zero-arg
+                    // VALUE getter — so bundling the spread into it returns
+                    // the closure instead of calling it (effect's
+                    // `Context.mergeAll(...contexts)` in `Layer.mergeAll`).
+                    // Mirror `try_lower_namespace_member_call`: vars take the
+                    // closure-callee path below, which reads the value and
+                    // applies the spread through
+                    // `js_closure_call_apply_with_spread`.
+                    let is_var = ctx
+                        .imported_vars
+                        .contains(&crate::namespace_member_var_key(ns_name, property));
+                    if ctx.namespace_imports.contains(ns_name)
+                        && has_rest
+                        && declared_count == 1
+                        && !is_var
+                    {
                         let source_prefix_opt = ctx
                             .namespace_member_prefixes
                             .get(&(ns_name.clone(), property.clone()))
