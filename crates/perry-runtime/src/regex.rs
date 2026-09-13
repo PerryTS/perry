@@ -50,6 +50,8 @@ pub(crate) mod perex_position_hint;
 #[cfg(feature = "regex-engine")]
 pub(crate) mod perex_replace;
 #[cfg(feature = "regex-engine")]
+pub(crate) mod perex_replace_direct;
+#[cfg(feature = "regex-engine")]
 mod perex_replace_storage;
 #[cfg(feature = "regex-engine")]
 mod perex_substitution;

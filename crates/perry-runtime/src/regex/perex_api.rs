@@ -271,6 +271,17 @@ impl<'b, 's> Reuse<'b, 's> {
 
     /// Both roots are live, so equal addresses name the same objects even after
     /// either moved; a replaced program cannot reuse a cell this root retains.
+    /// How many named groups the program of the RegExp at `receiver` declares,
+    /// when this binding is for that receiver's current program.
+    pub(crate) fn name_count(&self, receiver: *const RegExpHeader) -> Option<usize> {
+        let reused = self.program.as_ref()?;
+        let bound = reused.receiver.with_const_ptr::<RegExpHeader, _>(|p| p);
+        let cell = reused.cell.with_const_ptr::<u8, _>(|p| p);
+        (receiver == bound && unsafe { (*receiver).perex_program } == cell)
+            .then(|| reused.bound.with_view(|program| program.name_count()).ok())
+            .flatten()
+    }
+
     fn program_for(&self, receiver: &RuntimeHandle<'_>) -> Option<&BoundProgram<GcProgram<'s>>> {
         let reused = self.program.as_ref()?;
         let current = receiver.with_const_ptr::<RegExpHeader, _>(|p| p);
@@ -385,6 +396,36 @@ pub(crate) fn execute_with_resources(
     poll: &mut impl FnMut() -> Result<(), EngineError>,
     reuse: Option<&Reuse<'_, '_>>,
 ) -> Result<Option<ExecMatch>, EngineError> {
+    let output = if materialize {
+        ExecOutput::Object
+    } else {
+        ExecOutput::Test
+    };
+    execute_output(receiver, input, output, budget, memory, poll, reuse)
+}
+
+/// What a builtin search produces when it matches.
+pub(crate) enum ExecOutput<'v> {
+    /// Only the full match (`test`).
+    Test,
+    /// The exec result array and its groups object.
+    Object,
+    /// Every capture span, group zero first, appended to the vector as
+    /// UTF-16 `start, end` pairs, with `u32::MAX, u32::MAX` for an unset
+    /// group. No JS object is created (#10165).
+    Spans(&'v mut Vec<u32>),
+}
+
+/// [`execute_with_resources`] with an explicit output.
+pub(crate) fn execute_output(
+    receiver: *mut RegExpHeader,
+    input: *const StringHeader,
+    output: ExecOutput<'_>,
+    budget: &mut Budget,
+    memory: &MemoryBudget,
+    poll: &mut impl FnMut() -> Result<(), EngineError>,
+    reuse: Option<&Reuse<'_, '_>>,
+) -> Result<Option<ExecMatch>, EngineError> {
     let scope = RuntimeHandleScope::new();
     let receiver = scope.root_raw_mut_ptr(receiver);
     let input = scope.root_string_ptr(input);
@@ -434,10 +475,10 @@ pub(crate) fn execute_with_resources(
         subject,
         start,
         near,
-        if materialize {
-            CaptureMode::All
-        } else {
+        if matches!(output, ExecOutput::Test) {
             CaptureMode::Full
+        } else {
+            CaptureMode::All
         },
         budget,
         memory,
@@ -462,10 +503,10 @@ pub(crate) fn execute_with_resources(
     let Some(found) = found else {
         return Ok(None);
     };
-    let (array, groups) = if materialize {
+    let (array, groups) = match output {
         // Captures and all native owners remain ABOVE the JS trap. A thrown
         // allocation/property operation returns here before they are dropped.
-        caught(|| {
+        ExecOutput::Object => caught(|| {
             super::perex_results::materialize(
                 &input,
                 subject,
@@ -477,9 +518,26 @@ pub(crate) fn execute_with_resources(
                 budget,
                 poll,
             )
-        })??
-    } else {
-        (std::ptr::null_mut(), std::ptr::null_mut())
+        })??,
+        ExecOutput::Spans(spans) => {
+            let captures = found.captures.as_ref().ok_or(EngineError::InvalidSpan)?;
+            spans
+                .try_reserve(captures.len() * 2)
+                .map_err(|_| StorageError::Allocation)?;
+            for capture in captures.iter() {
+                let (start, end) = match capture {
+                    Some(span) => (
+                        u32::try_from(span.start()).map_err(|_| StorageError::Limit)?,
+                        u32::try_from(span.end()).map_err(|_| StorageError::Limit)?,
+                    ),
+                    None => (u32::MAX, u32::MAX),
+                };
+                spans.push(start);
+                spans.push(end);
+            }
+            (std::ptr::null_mut(), std::ptr::null_mut())
+        }
+        ExecOutput::Test => (std::ptr::null_mut(), std::ptr::null_mut()),
     };
     Ok(Some(ExecMatch {
         full: found.full,
