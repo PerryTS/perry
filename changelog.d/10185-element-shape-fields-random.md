@@ -94,24 +94,25 @@ built from this worktree, `base` at #10171's head `2b77e7d4fe`):
 
 | cell | base (#10171) | new | node 26.5.1 | bun 1.3.14 | new / best |
 |---|---:|---:|---:|---:|---:|
-| 16k `repeat` | 4.15 | 4.19 | 3.24 | 5.03 | 1.293 |
-| 16k `sequential` | 4.21 | 4.17 | 4.35 | 6.14 | 0.959 |
-| 16k `random` | 15.38 | **4.99** | 7.10 | 9.61 | **0.703** |
-| 16k `fields` | 25.76 | **6.19** | 5.75 | 8.35 | **1.077** |
-| 1m `repeat` | 4.12 | 4.19 | 3.57 | 5.25 | 1.174 |
-| 1m `sequential` | 4.24 | 4.18 | 9.35 | 8.06 | 0.519 |
-| 1m `random` | 15.90 | **5.25** | 12.66 | 11.66 | **0.450** |
-| 1m `fields` | 29.02 | **6.31** | 12.68 | 15.41 | **0.498** |
-| 20m `repeat` | 4.19 | 4.17 | 3.52 | 5.13 | 1.185 |
-| 20m `sequential` | 4.29 | 4.37 | 7.48 | 8.83 | 0.584 |
-| 20m `random` | 27.56 | **5.60** | 9.45 | 10.64 | **0.593** |
-| 20m `fields` | 27.26 | **6.22** | 11.53 | 14.93 | **0.539** |
+| 16k `repeat` | 4.21 | 4.17 | 3.56 | 5.23 | 1.171 |
+| 16k `sequential` | 4.17 | 4.30 | 4.57 | 6.25 | 0.941 |
+| 16k `random` | 15.48 | **4.97** | 7.16 | 9.96 | **0.694** |
+| 16k `fields` | 25.59 | **6.05** | 5.88 | 9.77 | **1.029** |
+| 1m `repeat` | 4.15 | 4.17 | 3.19 | 5.05 | 1.307 |
+| 1m `sequential` | 4.26 | 4.20 | 9.42 | 7.96 | 0.528 |
+| 1m `random` | 16.00 | **5.32** | 11.71 | 11.17 | **0.476** |
+| 1m `fields` | 28.14 | **6.17** | 12.70 | 14.91 | **0.486** |
+| 20m `repeat` | 4.12 | 4.11 | 3.50 | 5.24 | 1.174 |
+| 20m `sequential` | 4.20 | 4.19 | 6.98 | 8.51 | 0.600 |
+| 20m `random` | 27.53 | **5.63** | 9.31 | 10.56 | **0.605** |
+| 20m `fields` | 27.05 | **6.06** | 10.98 | 14.81 | **0.552** |
 
-The two targeted shapes move 3.1x-4.9x and land below the better of node and
+The two targeted shapes move 3.0x-4.9x and land below the better of node and
 bun on five of their six cells. The sixth, 16k `fields`, is the one that does
-not reach parity: 6.08 against node's 5.83 on a 12-round re-measure (1.043x).
+not reach parity: 6.05 against node's 5.88 (1.029x; 6.08 vs 5.83 on a
+separate 12-round re-measure of just that pair).
 That is the smallest fixture, where the whole array is in L1 and the guard
-overhead is the only thing left — node's own `fields` is just 1.34x its
+overhead is the only thing left — node's own `fields` is just 1.29x its
 `sequential` there, because its inline caches have type feedback proving `name`
 is a string and `active` a boolean, while this clone tag-tests both on every
 read. Paying that test is what lets it side-exit instead of deoptimize, so it
@@ -128,10 +129,10 @@ Instructions retired per iteration on the 16k fixture (2M iterations minus a
 
 | shape | base | new |
 |---|---:|---:|
-| random | 207.9 | 29.1 |
-| fields | 466.6 | 47.0 |
-| sequential | 25.1 | 25.1 |
-| repeat | 16.1 | 15.8 |
+| random | 207.6 | 29.1 |
+| fields | 466.4 | 47.0 |
+| sequential | 25.0 | 25.6 |
+| repeat | 16.0 | 16.1 |
 
 `random` lands one recurrence above `sequential`'s 25, and `fields` two extra
 guarded reads plus a string decode and a select above it — which is what the
