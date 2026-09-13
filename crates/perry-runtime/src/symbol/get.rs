@@ -648,8 +648,9 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
         // the parent closure — own symbol props plus, via the closure symbol
         // getter, its static prototype (`Svc[TagTypeId]`/`Svc[EffectTypeId]`
         // live on TagProto). Recurse into the closure-aware getter so its proto
-        // walk fires.
-        if let Some(closure_ptr) = crate::object::class_parent_closure(class_id) {
+        // walk fires. #10210: the edge may sit on an ancestor class — walk
+        // the chain.
+        if let Some(closure_ptr) = crate::object::parent_closure_in_chain(class_id) {
             let closure_f64 =
                 f64::from_bits(crate::value::js_nanbox_pointer(closure_ptr as i64).to_bits());
             let v = js_object_get_symbol_property(closure_f64, sym_f64);
