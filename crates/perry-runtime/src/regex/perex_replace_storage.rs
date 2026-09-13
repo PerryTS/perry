@@ -52,11 +52,13 @@ impl<'a> List<'a> {
         self.root
             .with_const_ptr(|array| crate::array::js_array_get_f64(array, index as u32))
     }
+    /// Append one value. The list is an ordinary GC array, so it is bounded
+    /// by what can be allocated, not by a count: the scratch limit is for
+    /// native buffers, and a list's length follows the subject. A replacement
+    /// producing more pieces than that limit's entries once threw a memory
+    /// error on subjects Node replaces in a fraction of a second (#10164).
     pub(super) fn push(&mut self, value: f64, budget: &mut Budget) -> Result<(), EngineError> {
         host::charge(budget, 1)?;
-        if self.count >= api::SCRATCH_BYTES / 8 {
-            return Err(StorageError::Limit.into());
-        }
         let scope = RuntimeHandleScope::new();
         let value = scope.root_nanbox_f64(value);
         let array = api::caught(|| {

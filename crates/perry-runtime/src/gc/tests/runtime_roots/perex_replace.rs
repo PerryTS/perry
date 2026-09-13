@@ -492,3 +492,27 @@ fn perex_replace_primitive_search_skips_prototype_hook_and_coerces_receiver() {
         );
     }
 }
+
+#[test]
+fn perex_replace_output_is_not_capped_by_the_scratch_limit() {
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    super::perex_public::register_host_roots();
+    let scope = RuntimeHandleScope::new();
+    // Each match after the first appends the preceding "b" and the "x" that
+    // replaces it: two pieces of three list entries each. The scratch limit
+    // divided by eight was the list's former entry cap, so this is one match
+    // past what could be written before.
+    let former_cap = api::SCRATCH_BYTES / 8;
+    let matches = former_cap / 6 + 1;
+    let input = text(&scope, &b"ab".repeat(matches));
+    let search = text(&scope, b"a");
+    let replacement = text(&scope, b"x");
+    let result = crate::regex::js_string_replace_all_js(
+        input.get_nanbox_f64(),
+        search.get_nanbox_f64(),
+        replacement.get_nanbox_f64(),
+    );
+    let output = bytes(result);
+    assert_eq!(output.len(), matches * 2);
+    assert!(output.as_chunks::<2>().0.iter().all(|pair| pair == b"xb"));
+}
