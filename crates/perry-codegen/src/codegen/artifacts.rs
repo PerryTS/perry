@@ -1356,6 +1356,23 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                     blk.ret(DOUBLE, &value);
                     continue;
                 }
+                crate::NamespaceEntryKind::NestedNamespace { source_prefix }
+                    if source_prefix == module_prefix =>
+                {
+                    // #10160: `export * as Self from "./self"` reads this
+                    // module's own namespace global at access time; the
+                    // populator publishes the entry as a live accessor.
+                    let wrapper = llmod.define_function(
+                        &wrapper_name,
+                        DOUBLE,
+                        vec![(I64, "%this_closure".to_string())],
+                    );
+                    let _ = wrapper.create_block("entry");
+                    let blk = wrapper.block_mut(0).unwrap();
+                    let value = blk.load(DOUBLE, &format!("@__perry_ns_{module_prefix}"));
+                    blk.ret(DOUBLE, &value);
+                    continue;
+                }
                 crate::NamespaceEntryKind::ForeignVar {
                     source_prefix,
                     source_local,
