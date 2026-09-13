@@ -150,8 +150,23 @@ fn direct_parse_depth_exceeded(input: &[u8], shape_keys: Option<&[u8]>) -> bool 
 /// The descent replaces the whole-document pre-scan, so it must draw the
 /// same line: at the bound stays direct, one past it aborts with the flag,
 /// and neither closers, quoted openers nor a shallow syntax error count.
+///
+/// The bound is sized for the release runtime's frames; a debug test build's
+/// parser frames are several times larger, so the 1000-level cases run on a
+/// roomy worker thread rather than the harness's default stack.
 #[test]
 fn direct_parser_bounds_nesting_inside_the_descent() {
+    std::thread::Builder::new()
+        .name("json-depth-bound".into())
+        .stack_size(256 * 1024 * 1024)
+        .spawn(direct_parser_bounds_nesting_inside_the_descent_body)
+        .expect("worker thread starts")
+        .join()
+        .expect("depth-bound checks do not panic");
+}
+
+#[cfg(test)]
+fn direct_parser_bounds_nesting_inside_the_descent_body() {
     let limit = crate::json::parser::MAX_RECURSIVE_NESTING_DEPTH;
     let mut at_bound = vec![b'['; limit];
     at_bound.extend(std::iter::repeat_n(b']', limit));
