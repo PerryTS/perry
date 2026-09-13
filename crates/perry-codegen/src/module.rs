@@ -23,6 +23,9 @@ use crate::types::LlvmType;
 mod linkage;
 pub(crate) use linkage::*;
 
+#[cfg(test)]
+mod unit_partition_tests;
+
 fn push_statepoint_declarations(ir: &mut String) {
     ir.push_str(
         "declare token @llvm.experimental.gc.statepoint.p0(i64 immarg, i32 immarg, ptr, \
@@ -825,7 +828,7 @@ impl LlModule {
                 refs
             })
             .collect();
-        let bucket_needs: Vec<HashSet<usize>> = bucket_refs
+        let mut bucket_needs: Vec<HashSet<usize>> = bucket_refs
             .iter()
             .map(|refs| {
                 let mut need: HashSet<usize> = refs
@@ -858,6 +861,26 @@ impl LlModule {
                     .unwrap_or(0)
             })
             .collect();
+        // #10152: otherwise-unreferenced globals are retained in unit 0, but
+        // their initializers were absent from the function-rooted closure
+        // above. An orphaned string dispatch descriptor can still name bytes
+        // owned by another unit. Close those retained roots too, AFTER choosing
+        // owners so ELF/COFF keep existing definitions and only add declares;
+        // Mach-O's replication counts below include the added dependencies.
+        let mut work: Vec<usize> = global_owners
+            .iter()
+            .enumerate()
+            .filter_map(|(gi, &owner)| (owner == 0 && bucket_needs[0].insert(gi)).then_some(gi))
+            .collect();
+        while let Some(gi) = work.pop() {
+            for nm in &global_refs[gi] {
+                if let Some(&next) = global_index.get(nm.as_str()) {
+                    if bucket_needs[0].insert(next) {
+                        work.push(next);
+                    }
+                }
+            }
+        }
         let replicate_globals = self.target_triple.contains("apple");
         // #9610: how many units end up DEFINING each global. Under the
         // replicated (Mach-O) policy that is one unit per referencing bucket;
