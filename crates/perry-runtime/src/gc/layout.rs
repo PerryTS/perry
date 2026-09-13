@@ -1878,19 +1878,12 @@ impl GcMutableSlot {
         Self { slot, layout_kind }
     }
 
-    /// Is the slot's own address outside the old generation?
-    ///
-    /// #10182: classified when asked, not when the slot is enumerated. The one
-    /// reader (the copying minor's `scan_object_fields`) asks immediately, so
-    /// the answer is the same; the full mark, which enumerates every traced
-    /// slot through this type and never asks, stopped paying a page-generation
-    /// lookup per slot.
+    /// Is the slot's address outside old-gen? #10182: classified on demand (its
+    /// one reader asks at once), so the full mark no longer classifies per slot.
     #[inline]
     pub(super) fn external(self) -> bool {
-        !matches!(
-            crate::arena::classify_heap_generation(self.slot as usize),
-            crate::arena::HeapGeneration::Old
-        )
+        let generation = crate::arena::classify_heap_generation(self.slot as usize);
+        !matches!(generation, crate::arena::HeapGeneration::Old)
     }
 
     #[inline]
