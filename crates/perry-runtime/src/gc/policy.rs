@@ -120,6 +120,19 @@ pub(super) fn young_scavenge_cap_due() -> bool {
     from_space_in_use >= scavenge_nursery_cap_dueness_bytes()
 }
 
+/// #10169: does the young generation hold at least one BASE nursery cap of
+/// bytes — a minor's worth of data, whatever the adaptive cap currently says?
+/// Read by `string::json_leaf_prefers_arena` from inside a suppressed
+/// construction window. The base cap rather than [`young_scavenge_cap_due`]'s
+/// adaptive one on purpose: after a fully-live minor the adaptive cap scales
+/// past the very tree that made it scale, and a gate keyed on it would flip
+/// the next leaf back to the malloc registry, where one tracked leaf is enough
+/// to veto the untraced promotion the route exists to enable.
+pub(crate) fn young_generation_holds_a_nursery() -> bool {
+    nursery_cap_active()
+        && crate::arena::copying_from_space_in_use_bytes() >= gc_scavenge_nursery_cap_bytes()
+}
+
 /// The cap value [`young_scavenge_cap_due`] compares against.
 ///
 /// Split out only so a test can make the cap due without allocating the real
@@ -1085,6 +1098,9 @@ crate::perry_thread_local! {
     pub(super) static GC_DEFERRED_REQUEST: Cell<DeferredGcRequest> =
         const { Cell::new(DeferredGcRequest::None) };
     pub(super) static GC_OLD_RECLAIM_PENDING: Cell<bool> = const { Cell::new(false) };
+    /// #10169: a document-sized JSON leaf was born old under young pressure
+    /// since the last trigger decision (`note_young_leaf_born_old`).
+    pub(super) static GC_YOUNG_LEAF_BORN_OLD: Cell<bool> = const { Cell::new(false) };
     pub(super) static GC_LAST_OLD_RECLAIM_IN_USE_BYTES: Cell<usize> = const { Cell::new(0) };
     /// Live allocated arena bytes measured right after the last FULL
     /// mark-sweep — the baseline for major-GC pacing
@@ -3117,7 +3133,7 @@ struct BudgetedGcCycle {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum BudgetedGcTrigger {
+pub(super) enum BudgetedGcTrigger {
     OldReclaim,
     ArenaBytes,
     /// The young-generation scavenge cap ([`young_scavenge_cap_due`]).
@@ -3230,7 +3246,31 @@ pub(crate) fn trigger_path_hot_slot_indices() -> Vec<(&'static str, u32)> {
     ]
 }
 
-fn gc_budgeted_due_trigger() -> Option<BudgetedGcTrigger> {
+/// #10169: record that a document-sized JSON leaf was just born old in the
+/// arena because the young generation is at least that large and has not been
+/// measured as dying (`string::json_leaf_prefers_arena`). Read once by the
+/// next trigger decision.
+pub(crate) fn note_young_leaf_born_old() {
+    GC_YOUNG_LEAF_BORN_OLD.with(|flag| flag.set(true));
+}
+
+pub(super) fn gc_budgeted_due_trigger() -> Option<BudgetedGcTrigger> {
+    // #10169: a leaf born old under young pressure gives the nursery minor
+    // ONE-TIME priority over old-reclaim, and only while the young generation
+    // is still unmeasured. A young generation that a minor has already
+    // measured as retained wholesale is either promoted (so the next leaf
+    // finds it small) or, when it dies at every loop edge, best left to the
+    // old-reclaim full that sweeps it in Eden together with the leaf. The one
+    // case that must not fall through is an unmeasured young generation that
+    // stays live: old-reclaim would re-mark it in place at every full, so it
+    // is promoted by a minor first. The flag is consumed here whatever the
+    // decision, so it can never starve old-reclaim.
+    if GC_YOUNG_LEAF_BORN_OLD.with(Cell::get) {
+        GC_YOUNG_LEAF_BORN_OLD.with(|flag| flag.set(false));
+        if !super::young_generation_measured_retained() && young_scavenge_cap_due() {
+            return Some(BudgetedGcTrigger::YoungScavengeCap);
+        }
+    }
     let old_pending = GC_OLD_RECLAIM_PENDING.with(Cell::get);
     // #6010: external Map/Set side-buffer bytes escalate to OldReclaim too.
     let old_in_use =

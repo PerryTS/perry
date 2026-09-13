@@ -28,7 +28,6 @@ pub(crate) mod match_all;
 #[cfg(feature = "regex-engine")]
 pub(crate) mod perex_api;
 #[cfg(feature = "regex-engine")]
-pub(crate) mod perex_binding_cache;
 #[cfg(feature = "regex-engine")]
 pub(crate) mod perex_cache;
 #[cfg(feature = "regex-engine")]

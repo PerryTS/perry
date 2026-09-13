@@ -352,9 +352,12 @@ pub struct UnitCodegenStats {
     /// Functions stamped `"disable-tail-calls"` because their alloca-walk
     /// estimate exceeded [`DEFAULT_TRE_MAX_ALLOCA_WALK`] (#8883).
     pub tail_call_elim_skipped: Vec<TreWalkOverBudget>,
-    /// The widest function which made this unit use LLVM's bounded O0 machine
-    /// pipeline after completing the requested IR optimization pipeline.
-    pub fast_emit_fallback: Option<FastEmitFallback>,
+    /// Every function over the target's ceiling (see
+    /// [`default_fast_emit_max_instrs`]), widest first —
+    /// the ones which made this unit use LLVM's bounded O0 machine pipeline
+    /// after completing the requested IR optimization pipeline. Empty when
+    /// the unit kept the optimized machine pipeline.
+    pub fast_emit_fallbacks: Vec<FastEmitFallback>,
 }
 
 fn function_instruction_count(function: inkwell::values::FunctionValue<'_>) -> usize {
@@ -400,20 +403,85 @@ fn module_instruction_census(
 /// live-interval and register-allocation pipeline for a unit containing an
 /// extreme generated function.
 ///
-/// The threshold is bracketed by real arm64/LLVM 22 measurements. Machine-IR
-/// expansion depends on CFG shape, so raw IR size is deliberately only a
-/// conservative guard: one 161k-instruction function emitted normally in
-/// ~19s, while a different 100,152-instruction Claude Code 2.1.259 function
-/// grew past ~10 GiB RSS in the optimized machine pipeline. The same function
-/// emitted through an O0 target machine in 6s. Another 277k-instruction async
-/// state-machine function remained in LiveIntervals / register allocation for
-/// more than 16 minutes at ~10 GiB RSS; its already-Os-optimized IR emitted
-/// through an O0 target machine in 3.5s at ~550 MiB RSS. 100k is immediately
-/// below the smallest observed pathological case.
+/// **The demotion is a whole-unit act, so the budget must not be set where
+/// ordinary functions pay for it.** A `TargetMachine`'s optimization level is
+/// a per-module property: LLVM has no per-function escape from the optimized
+/// machine pipeline (`optnone` reaches instruction selection and the optional
+/// machine passes, but *not* LiveIntervals or the greedy register allocator —
+/// measured below), so every ordinary function sharing the unit with one
+/// extreme function is emitted through the O0 machine pipeline too.
 ///
-/// `PERRY_LL_FAST_EMIT_MAX_INSTRS=<n>` raises or lowers the ceiling; `0` /
-/// `off` disables the fallback.
-const DEFAULT_FAST_EMIT_MAX_INSTRS: usize = 100_000;
+/// Measured on `@babel/parser`'s unit 0, LLVM 22 / x86-64 / `-Os` IR pipeline:
+/// one 227,108-instruction closure (163,100 of those are `gc.relocate`) and
+/// 282 ordinary siblings, each arm emitting the same post-`default<Os>` IR:
+///
+/// | machine pipeline | unit `.text` | the closure | its 282 siblings | `llc` | peak RSS |
+/// |---|---|---|---|---|---|
+/// | optimized (`-O2`) | 1,689,851 B | 241,218 B | 1.382 MiB | 10.0 s | 464 MiB |
+/// | O0 (this fallback) | 5,862,077 B | 2,253,658 B | 3.441 MiB | 3.9 s | 499 MiB |
+/// | `optnone` on the closure only | 2,070,326 B | 621,693 B | 1.382 MiB | 9.5 s | 518 MiB |
+/// | the same unit *without* the closure | 1,448,633 B | — | 1.382 MiB | 6.4 s | 208 MiB |
+///
+/// So the siblings are pure loss: the fallback costs them 2.06 MiB of machine
+/// code (168 of 282 functions change) to save ~6 s, and their emitted code is
+/// byte-for-byte what a unit without the extreme function produces as soon as
+/// the unit keeps the optimized pipeline. The `optnone` row is why this is a
+/// budget and not a per-function demotion: it frees the siblings but bounds
+/// neither time (9.5 s of 10.0 s) nor memory (518 MiB — *above* the -O2 arm),
+/// because the greedy allocator still runs on the demoted function.
+///
+/// On x86-64 the ceiling is therefore set above the whole measured
+/// population of extreme generated functions rather than immediately below
+/// the smallest pathological one. On the OpenCode corpus 60 of the 61
+/// functions past the old 100k ceiling are under 600k (median 153,455;
+/// largest 982,912), and the
+/// largest one measured end-to-end — the 522,756-instruction `mime`
+/// `types/other.ts` constructor — emits through the optimized machine pipeline
+/// in 704 s at 2.26 GB peak RSS, against 393 s at 2.34 GB demoted, for a
+/// module `.text` of 13.72 MB against 36.97 MB.
+///
+/// **Every measurement above is x86-64, so only x86-64 gets the raised
+/// ceiling.** Machine-IR expansion depends on CFG shape *and* on the target's
+/// instruction selection and register allocation, and the two observations
+/// that set the 100k ceiling in the first place are both arm64/LLVM 22: a
+/// 100,152-instruction Claude Code 2.1.259 function grew past ~10 GiB RSS in
+/// the optimized machine pipeline (6 s through an O0 target machine), and a
+/// 277k-instruction async state-machine function sat in LiveIntervals /
+/// register allocation for more than 16 minutes at ~10 GiB (3.5 s at ~550 MiB
+/// demoted). Both postdate #8679's shadow-frame retry, so they are current
+/// observations, not stale ones — and both sit *inside* the 600k band. Every
+/// CI runner and developer build here is macOS arm64, so raising the ceiling
+/// there on x86-64 evidence would trade a measured size win for an unmeasured
+/// 10 GiB compile. aarch64/arm64 — and every other target nobody has measured
+/// — therefore keep 100k until someone measures them the way `x86_64` was
+/// measured above, at which point `default_fast_emit_max_instrs` grows a
+/// match arm and this comment grows a row.
+///
+/// `PERRY_LL_FAST_EMIT_MAX_INSTRS=<n>` raises or lowers the ceiling on every
+/// target; `0` / `off` disables the fallback. On x86-64,
+/// `PERRY_LL_FAST_EMIT_MAX_INSTRS=100000` reproduces the old behaviour
+/// byte-for-byte.
+const DEFAULT_FAST_EMIT_MAX_INSTRS_X86_64: usize = 600_000;
+
+/// The ceiling for every target whose optimized machine pipeline has not been
+/// measured against a corpus of extreme generated functions — including
+/// aarch64/arm64, where the two pathological observations quoted in
+/// [`DEFAULT_FAST_EMIT_MAX_INSTRS_X86_64`] were made.
+const DEFAULT_FAST_EMIT_MAX_INSTRS_UNMEASURED: usize = 100_000;
+
+/// The ceiling for the target this unit is being emitted *for* — not the host.
+/// A cross-compile from an x86-64 box to arm64 runs arm64's instruction
+/// selection and register allocator, so it is arm64's ceiling that applies.
+fn default_fast_emit_max_instrs(effective_target: &str) -> usize {
+    let arch = effective_target
+        .split('-')
+        .next()
+        .unwrap_or(effective_target);
+    match arch {
+        "x86_64" | "x86_64h" | "amd64" => DEFAULT_FAST_EMIT_MAX_INSTRS_X86_64,
+        _ => DEFAULT_FAST_EMIT_MAX_INSTRS_UNMEASURED,
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FastEmitBudget {
@@ -421,19 +489,20 @@ enum FastEmitBudget {
     Cap(usize),
 }
 
-fn parse_fast_emit_budget(value: Option<&str>) -> FastEmitBudget {
+fn parse_fast_emit_budget(value: Option<&str>, effective_target: &str) -> FastEmitBudget {
+    let default = || FastEmitBudget::Cap(default_fast_emit_max_instrs(effective_target));
     match value.map(str::trim) {
-        None | Some("") => FastEmitBudget::Cap(DEFAULT_FAST_EMIT_MAX_INSTRS),
+        None | Some("") => default(),
         Some("0") | Some("off") | Some("false") => FastEmitBudget::Off,
         Some(v) => match v.parse::<usize>() {
             Ok(0) => FastEmitBudget::Off,
             Ok(n) => FastEmitBudget::Cap(n),
-            Err(_) => FastEmitBudget::Cap(DEFAULT_FAST_EMIT_MAX_INSTRS),
+            Err(_) => default(),
         },
     }
 }
 
-fn fast_emit_budget() -> FastEmitBudget {
+fn fast_emit_budget(effective_target: &str) -> FastEmitBudget {
     #[cfg(test)]
     if let Some(budget) = TEST_FAST_EMIT_BUDGET.with(std::cell::Cell::get) {
         return budget;
@@ -442,6 +511,7 @@ fn fast_emit_budget() -> FastEmitBudget {
         std::env::var("PERRY_LL_FAST_EMIT_MAX_INSTRS")
             .ok()
             .as_deref(),
+        effective_target,
     )
 }
 
@@ -456,23 +526,34 @@ thread_local! {
 /// other LLVM tests in this binary.
 #[cfg(test)]
 fn with_test_fast_emit_budget<T>(cap: usize, run: impl FnOnce() -> T) -> T {
+    with_test_fast_emit_budget_value(FastEmitBudget::Cap(cap), run)
+}
+
+/// [`with_test_fast_emit_budget`] for a budget that is not a cap — the arm
+/// that proves what an undemoted unit emits.
+#[cfg(test)]
+fn with_test_fast_emit_budget_value<T>(budget: FastEmitBudget, run: impl FnOnce() -> T) -> T {
     struct Restore(Option<FastEmitBudget>);
     impl Drop for Restore {
         fn drop(&mut self) {
             TEST_FAST_EMIT_BUDGET.with(|budget| budget.set(self.0));
         }
     }
-    let old = TEST_FAST_EMIT_BUDGET.replace(Some(FastEmitBudget::Cap(cap)));
+    let old = TEST_FAST_EMIT_BUDGET.replace(Some(budget));
     let _restore = Restore(old);
     run()
 }
 
-/// The extreme function which selected bounded machine-code emission.
+/// One extreme function which selected bounded machine-code emission, and how
+/// many defined functions in its unit are demoted along with it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FastEmitFallback {
     pub name: String,
     pub instructions: usize,
     pub cap: usize,
+    /// Defined functions in the unit — the size of the collateral, since the
+    /// machine pipeline is selected per module and not per function.
+    pub unit_functions: usize,
 }
 
 impl std::fmt::Display for FastEmitFallback {
@@ -480,43 +561,57 @@ impl std::fmt::Display for FastEmitFallback {
         write!(
             f,
             "`{}` has {} instructions after IR optimization, above the optimized machine-pipeline \
-             budget {}; keeping the requested IR optimization, then emitting this unit through \
-             LLVM's O0 machine pipeline to bound instruction selection, live intervals and \
-             register allocation. Override with PERRY_LL_FAST_EMIT_MAX_INSTRS=<n> (raise) or \
-             =0 (disable).",
-            self.name, self.instructions, self.cap
+             budget {}; keeping the requested IR optimization, then emitting this unit — all {} \
+             of its defined functions, not only this one — through LLVM's O0 machine pipeline to \
+             bound instruction selection, live intervals and register allocation. LLVM selects \
+             that pipeline per module, so the siblings are demoted too and grow: shrinking this \
+             function is what lifts the whole unit back. Override with \
+             PERRY_LL_FAST_EMIT_MAX_INSTRS=<n> (raise) or =0 (disable).",
+            self.name, self.instructions, self.cap, self.unit_functions
         )
     }
 }
 
-fn fast_emit_fallback(
+/// Every defined function over `budget`, widest first.
+///
+/// The decision is per function; the consequence cannot be (see
+/// [`DEFAULT_FAST_EMIT_MAX_INSTRS_X86_64`]), which is why every offender is
+/// returned
+/// rather than only the widest: the compile log then names each function that
+/// has to shrink before the unit can keep the optimized machine pipeline,
+/// instead of naming one and re-reporting a new widest on the next build.
+fn fast_emit_fallbacks(
     module: &inkwell::module::Module<'_>,
     budget: FastEmitBudget,
-) -> Option<FastEmitFallback> {
+) -> Vec<FastEmitFallback> {
     let cap = match budget {
-        FastEmitBudget::Off => return None,
+        FastEmitBudget::Off => return Vec::new(),
         FastEmitBudget::Cap(cap) => cap,
     };
-    let mut widest: Option<FastEmitFallback> = None;
+    let mut defined = 0usize;
+    let mut over: Vec<(String, usize)> = Vec::new();
     let mut function = module.get_first_function();
     while let Some(f) = function {
         if f.count_basic_blocks() > 0 {
+            defined += 1;
             let instructions = function_instruction_count(f);
-            if instructions > cap
-                && widest
-                    .as_ref()
-                    .is_none_or(|current| instructions > current.instructions)
-            {
-                widest = Some(FastEmitFallback {
-                    name: f.get_name().to_string_lossy().into_owned(),
-                    instructions,
-                    cap,
-                });
+            if instructions > cap {
+                over.push((f.get_name().to_string_lossy().into_owned(), instructions));
             }
         }
         function = f.get_next_function();
     }
-    widest
+    // Widest first, ties by name: one deterministic order for the log and the
+    // per-unit report, whatever order LLVM holds the functions in.
+    over.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    over.into_iter()
+        .map(|(name, instructions)| FastEmitFallback {
+            name,
+            instructions,
+            cap,
+            unit_functions: defined,
+        })
+        .collect()
 }
 
 /// Instruction budget for ONE function after `rewrite-statepoints-for-gc`.

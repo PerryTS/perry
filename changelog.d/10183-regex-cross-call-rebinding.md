@@ -1,0 +1,3 @@
+### Performance
+
+- **A RegExp search per JavaScript call binds its program and subject in constant work** (#10166). JS-level `exec` and `test` loops, `matchAll` iteration and `search` used to decode the whole string and revalidate the whole program on every call, so a loop over one string did quadratic work and each `.test()` paid a full program validation. A compiled program now keeps a small witness of its validation, and a string remembers that its bytes validated, both as plain data with no extra garbage-collector work. Non-ASCII subjects still seek from the nearer end once per call. Requires `perex` 0.1.3.

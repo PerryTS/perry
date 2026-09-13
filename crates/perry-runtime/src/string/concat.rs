@@ -806,7 +806,7 @@ pub extern "C" fn js_string_concat_value(
         let memoizable = total_blen <= CONCAT_MEMO_MAX_BYTES as usize
             && is_valid_string_ptr(prefix)
             && prefix_u16 == prefix_blen
-            && unsafe { (*prefix).flags == 0 }
+            && unsafe { (*prefix).flags & !STRING_FLAG_WTF8_VALIDATED == 0 }
             && bytes_all_ascii(string_data(prefix), prefix_blen)
             && concat_memo_should_probe();
         let mut memo_buf = [0u8; CONCAT_MEMO_MAX_BYTES as usize];
@@ -1073,7 +1073,8 @@ fn append_chain_all_heap_strings<const MAX_PARTS: usize>(
             }
             (*dest).byte_len = total_blen;
             (*dest).utf16_len = total_u16;
-            (*dest).flags |= piece_flags;
+            // The destination's payload just changed; no piece's validation carries over.
+            (*dest).flags = ((*dest).flags | piece_flags) & !STRING_FLAG_WTF8_VALIDATED;
             return if piece_flags & STRING_FLAG_HAS_LONE_SURROGATES != 0 {
                 canonicalize_surrogate_pairs(dest)
             } else {

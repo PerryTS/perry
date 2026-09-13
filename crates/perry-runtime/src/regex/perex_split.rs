@@ -13,6 +13,7 @@ use super::perex_strings::SpanCopies;
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 use crate::value::{js_nanbox_pointer, js_nanbox_string, TAG_NULL, TAG_UNDEFINED};
 use perex::binding::{BoundProgram, BoundSubject, SubjectError};
+use perex::input::Position;
 use perex::Budget;
 
 /// Literal String operations also accept Perry's raw Buffer/FFI payloads.
@@ -57,10 +58,12 @@ fn advance(
     Ok(index + 1)
 }
 
-// Counts forward splits taken, so tests can tell which path ran.
+// Counts forward splits taken, and the work the last one charged, so tests can
+// tell which path ran and how its cost scales.
 #[cfg(test)]
 thread_local! {
     pub(crate) static FORWARD_SPLITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static LAST_FORWARD_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// The program for split's forward search, when it is admissible (#10165).
@@ -190,19 +193,29 @@ pub(crate) fn regexp(receiver: f64, argument: f64, limit_value: f64) -> Result<f
     if let Some(forward) = forward_program(&scope, constructor.as_ref(), &splitter, &mut budget) {
         #[cfg(test)]
         FORWARD_SPLITS.with(|n| n.set(n.get() + 1));
+        let charged = |budget: &Budget| {
+            #[cfg(test)]
+            LAST_FORWARD_WORK.with(|w| w.set(api::WORK - budget.remaining()));
+            let _ = budget;
+        };
+        // Each search starts where the previous one stood, so on non-ASCII
+        // storage it does not seek from an end of the subject (#10164).
+        let mut near: Option<Position> = None;
         while q < size {
             let local = RuntimeHandleScope::new();
-            let Some(found) = host::find(
+            let (found, position) = host::find_near(
                 &forward,
                 &bound,
                 q,
+                near,
                 CaptureMode::All,
                 &mut budget,
                 &memory,
                 api::QUANTUM,
                 &mut host::poll,
-            )?
-            else {
+            )?;
+            near = Some(position);
+            let Some(found) = found else {
                 break;
             };
             let start = found.full.start();
@@ -220,6 +233,7 @@ pub(crate) fn regexp(receiver: f64, argument: f64, limit_value: f64) -> Result<f
             }
             push_span(&mut output, &mut copies, p, start, &mut budget)?;
             if output.len() == lim {
+                charged(&budget);
                 return Ok(output.value());
             }
             p = end;
@@ -231,6 +245,8 @@ pub(crate) fn regexp(receiver: f64, argument: f64, limit_value: f64) -> Result<f
                         &bound,
                         &forward,
                         &found,
+                        // Captures lie within this match, just behind the search's end.
+                        Some(position),
                         false,
                         &mut budget,
                         &mut host::poll,
@@ -243,6 +259,7 @@ pub(crate) fn regexp(receiver: f64, argument: f64, limit_value: f64) -> Result<f
                     });
                     output.push(value, &mut budget)?;
                     if output.len() == lim {
+                        charged(&budget);
                         return Ok(output.value());
                     }
                 }
@@ -251,6 +268,7 @@ pub(crate) fn regexp(receiver: f64, argument: f64, limit_value: f64) -> Result<f
             host::poll()?;
         }
         push_span(&mut output, &mut copies, p, size, &mut budget)?;
+        charged(&budget);
         return Ok(output.value());
     }
     while q < size {

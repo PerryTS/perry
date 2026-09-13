@@ -604,13 +604,15 @@ pub(crate) fn json_string_from_native_output_bytes(bytes: &[u8]) -> *mut StringH
         crate::string::compute_utf16_len(bytes.as_ptr(), len)
     };
     stringify_flat::service_json_output_sweep_boundary();
-    let (ptr, data) = crate::string::json_output_storage_alloc(len);
+    let (ptr, data, malloc_tracked) = crate::string::json_output_storage_alloc(len);
     unsafe {
         crate::string::init_string_header(ptr, utf16_len, len, len, 0, 0);
         // GC_STORE_AUDIT(POINTER_FREE): completed JSON payload bytes.
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), data, len as usize);
     }
-    stringify_flat::note_completed_malloc_json_output(len);
+    if malloc_tracked {
+        stringify_flat::note_completed_malloc_json_output(len);
+    }
     ptr
 }
 

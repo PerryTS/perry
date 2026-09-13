@@ -416,7 +416,7 @@ unsafe fn emit_two_field_parsed_string_object(
 
     let large_output = bytes >= JSON_MALLOC_OUTPUT_THRESHOLD;
     let construction = large_output.then(crate::gc::GcSuppressScope::new);
-    let (result, output) = json_output_storage_alloc(bytes);
+    let (result, output, malloc_tracked) = json_output_storage_alloc(bytes);
     let value = input.with_const_ptr(|obj: *const crate::ObjectHeader| {
         let keys = crate::object::object_keys_array(obj);
         init_string_header(result, units, bytes, bytes, 0, 0);
@@ -449,7 +449,7 @@ unsafe fn emit_two_field_parsed_string_object(
         Some(JSValue::string_ptr(result))
     });
     drop(construction);
-    if large_output {
+    if malloc_tracked {
         note_completed_malloc_json_output(bytes);
     }
     value

@@ -580,10 +580,7 @@ pub(super) fn side_tables() -> Vec<SideTableRow> {
     #[cfg(feature = "regex-engine")]
     rows.extend(crate::regex::site_test::side_table_census());
     #[cfg(feature = "regex-engine")]
-    rows.extend([
-        crate::regex::perex_cache::census(),
-        crate::regex::perex_binding_cache::census(),
-    ]);
+    rows.push(crate::regex::perex_cache::census());
     let (masks, typed) = super::layout_tables::per_object_layout_table_sizes();
     rows.push(("gc.layout_slot_masks", masks, masks * 24));
     rows.push(("gc.typed_layouts", typed, typed * 24));
@@ -606,9 +603,7 @@ mod regex_census_tests {
         // Programs themselves remain GC leaves, counted by the ordinary heap
         // census. These rows account for the bounded native cache metadata.
         #[cfg(feature = "regex-engine")]
-        for name in ["regex.program_cache", "regex.program_bindings"] {
-            assert!(names.contains(&name), "rows: {names:?}");
-        }
+        assert!(names.contains(&"regex.program_cache"), "rows: {names:?}");
         assert!(
             names.contains(&"regex.site_test_headers"),
             "rows: {names:?}"

@@ -254,13 +254,11 @@ pub(crate) fn clear_for_tests() {
             ..Cache::default()
         };
     });
-    super::perex_binding_cache::clear_for_tests();
 }
 
 #[cfg(test)]
 pub(crate) fn reset_registration_for_tests() {
     REGEX_CACHE.with(|cache| cache.borrow_mut().registered = false);
-    super::perex_binding_cache::reset_registration_for_tests();
 }
 
 #[cfg(test)]

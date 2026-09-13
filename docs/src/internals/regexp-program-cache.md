@@ -18,25 +18,23 @@ unique-string append from modifying the cached pattern or OriginalSource.
 The cache holds at most 512 entries and 32 MiB of source/program payload.
 Least-recently-used entries are evicted individually. Programs above the byte
 limit remain usable through their RegExp owner without cache retention.
-Each cache registers its scanner before publishing its first root, so unused
-caches add no GC scanner work. Source and program slots are mutable GC roots;
+The cache registers its scanner before publishing its first root, so programs
+that never construct a RegExp add no cache scanner work. Source and program slots are mutable GC roots;
 evacuation rewrites them and
 rebuilds the source-identity index. Content hashes are address independent.
 
-`regex/perex_binding_cache.rs` similarly bounds validated Perex bindings.
-`BoundProgram` retains its original immutable owner rather than validating a
-fresh program view for every search. That owner's address lives in an
-`Rc<Cell<*const u8>>`. A mutable-root scanner visits a list of weak references,
-so an operation's cloned binding survives eviction and collection, while a
-weak registration cannot retain an unused owner. Movement rebuilds the cache's
-address index. No borrowed program slice survives a safepoint. The cache keeps
-only small scalar scratch-size hints; scratch buffers remain operation-owned
-and charged to the existing memory budget.
+Perex's `ProgramWitness` lives beside the immutable words in each program GC
+cell (upstream #10166/#10183). The first binding validates the words; subsequent
+bindings use that witness in constant work, including bindings from another
+RegExp sharing the cached program. Each operation still roots its own program,
+so eviction, collection, and reentrant receiver recompilation cannot invalidate
+an active search. No borrowed program slice survives a safepoint. Scratch
+buffers remain operation-owned and charged to the existing memory budget.
 
-Compound split/replace/match operations retain this same shared binding in
-`perex_api::Reuse`, alongside their operation-owned subject. Each search checks
-the current receiver and program cell before reusing it, so a callback that
-recompiles the RegExp still switches to its new program.
+Compound split/replace/match operations retain program and subject bindings in
+`perex_api::Reuse`, checking the current receiver and program cell before reuse.
+The previous search position is reused only with the same subject binding.
+Validated heap strings use the existing counted-subject path.
 
 The fast builtin dispatch guard contains only immutable ShapeIds, field
 indices, and epochs, with no untraced GC address. It verifies the current
@@ -52,4 +50,4 @@ hits, bytes hashed, canonical dispatches, searches, and scratch allocation and
 growth counts. Diagnostics deliberately inspect source bytes for attribution;
 measure timings with diagnostics disabled. Cache payload lives in traced GC
 cells; the census separately reports native cache metadata as
-`regex.program_cache` and `regex.program_bindings`.
+`regex.program_cache`.

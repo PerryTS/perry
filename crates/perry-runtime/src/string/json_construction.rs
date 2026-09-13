@@ -23,7 +23,8 @@ pub(crate) unsafe fn string_from_json_bytes(
     };
     let (header, data) = if raw.is_null() {
         if large_json_leaf {
-            json_output_storage_alloc(len)
+            let (header, data, _malloc_tracked) = json_output_storage_alloc(len);
+            (header, data)
         } else {
             string_storage_alloc(len)
         }

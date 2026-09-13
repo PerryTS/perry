@@ -74,20 +74,24 @@ pub(super) fn try_remove(
     let subject = subject(input)?;
     let mut output: Option<Pieces<'_>> = None;
     let mut copied = 0;
+    let mut near = None;
     loop {
         let found = if start > input_length {
             None
         } else {
-            host::find_cached(
+            let (found, position) = host::find_near(
                 &program,
                 &subject,
                 start,
+                near,
                 CaptureMode::Full,
                 &mut budget,
                 &memory,
                 api::QUANTUM,
                 &mut host::poll,
-            )?
+            )?;
+            near = Some(position);
+            found
         };
         if global || sticky {
             re.with_mut_ptr(|re| {

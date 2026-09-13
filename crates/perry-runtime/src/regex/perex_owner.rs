@@ -13,6 +13,12 @@ use perex::compiler::{CompileError, Prepared};
 #[repr(C)]
 struct ProgramCell {
     word_count: usize,
+    /// What validating these words established, so later bindings of this same
+    /// cell skip validation (#10166). Plain data beside the words it describes:
+    /// the words never change, and a recompile emits a new cell that starts
+    /// with none, so it cannot describe other words. Stored by the first
+    /// validating bind; the cell stays a pointer-free leaf.
+    witness: Option<perex::binding::ProgramWitness>,
     // Immediately followed by word_count initialized u32 words.
 }
 
@@ -42,15 +48,21 @@ impl std::fmt::Debug for GcProgram<'_> {
 }
 
 impl<'scope> GcProgram<'scope> {
-    /// The cache owns a traced program root. Establish the operation's root
-    /// before returning, so eviction cannot invalidate an in-flight use.
-    pub(super) unsafe fn from_cached(scope: &'scope RuntimeHandleScope, ptr: *const u8) -> Self {
+    /// Root an immutable program retrieved from the construction cache.
+    ///
+    /// # Safety
+    /// `program` must be a live cell emitted here, with no collecting operation
+    /// between the cache lookup and establishing this independent root.
+    pub(crate) unsafe fn from_cached(
+        scope: &'scope RuntimeHandleScope,
+        program: *const u8,
+    ) -> Self {
         Self {
-            root: scope.root_raw_const_ptr(ptr),
+            root: scope.root_raw_const_ptr(program),
         }
     }
 
-    pub(super) fn with_ptr<T>(&self, f: impl FnOnce(*const u8) -> T) -> T {
+    pub(crate) fn with_ptr<T>(&self, f: impl FnOnce(*const u8) -> T) -> T {
         self.root.with_const_ptr(f)
     }
 
@@ -86,7 +98,10 @@ impl<'scope> GcProgram<'scope> {
         // finalizer or a leaked external owner. No GC call occurs in this scope.
         unsafe {
             // GC_STORE_AUDIT(POINTER_FREE): the program cell is a leaf of u32 words; its prefix is a count.
-            cell.write(ProgramCell { word_count: words });
+            cell.write(ProgramCell {
+                word_count: words,
+                witness: None,
+            });
             let output = cell.add(1).cast::<u32>();
             output.write_bytes(0, words);
             let output = std::slice::from_raw_parts_mut(output, words);
@@ -118,6 +133,39 @@ impl<'scope> GcProgram<'scope> {
         });
     }
 
+    /// The witness stored beside this program's words, if a binding validated
+    /// them before (#10166).
+    pub(crate) fn witness(&self) -> Option<perex::binding::ProgramWitness> {
+        self.root
+            .with_const_ptr::<ProgramCell, _>(|cell| unsafe { (*cell).witness })
+    }
+
+    /// Record what validating this program established. `witness` must come
+    /// from a binding of this same cell.
+    pub(crate) fn record_witness(
+        root: &RuntimeHandle<'_>,
+        witness: perex::binding::ProgramWitness,
+    ) {
+        // The prefix lies outside the word slice, but the write still goes
+        // through the cell's own pointer and never under a live view of its
+        // words (a binding holds none between calls).
+        #[cfg(debug_assertions)]
+        debug_assert_eq!(
+            PROGRAM_VIEWS.with(std::cell::Cell::get),
+            0,
+            "a program cell's witness must not be written while a view of its words is live"
+        );
+        // A plain-data store into a pointer-free leaf: no allocation, no barrier.
+        root.with_const_ptr::<ProgramCell, _>(|cell| unsafe {
+            (*(cell as *mut ProgramCell)).witness = Some(witness);
+        });
+    }
+
+    /// This program's registered root, which survives consuming the owner.
+    pub(crate) fn root(&self) -> RuntimeHandle<'scope> {
+        self.root
+    }
+
     /// Establish a separate operation root, so reentrant receiver recompilation
     /// cannot replace the immutable program of an already-running operation.
     ///
@@ -139,40 +187,72 @@ impl<'scope> GcProgram<'scope> {
     }
 }
 
+/// The witness stored in the program cell at `program` (a RegExp's
+/// `perex_program`), for tests.
+#[cfg(test)]
+pub(crate) unsafe fn cell_witness(program: *const u8) -> Option<perex::binding::ProgramWitness> {
+    unsafe { (*(program as *const ProgramCell)).witness }
+}
+
+/// Overwrite the witness stored in the program cell at `program`, for tests.
+#[cfg(test)]
+pub(crate) unsafe fn set_cell_witness(
+    program: *const u8,
+    witness: Option<perex::binding::ProgramWitness>,
+) {
+    unsafe { (*(program as *mut ProgramCell)).witness = witness };
+}
+
+// How many `with_words` views of any program cell are live on this thread, so
+// debug builds can prove a witness is never written under one (#10166).
+#[cfg(debug_assertions)]
+thread_local! {
+    static PROGRAM_VIEWS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+struct ProgramView;
+
+impl ProgramView {
+    fn open() -> Self {
+        #[cfg(debug_assertions)]
+        PROGRAM_VIEWS.with(|views| views.set(views.get() + 1));
+        ProgramView
+    }
+}
+
+impl Drop for ProgramView {
+    fn drop(&mut self) {
+        #[cfg(debug_assertions)]
+        PROGRAM_VIEWS.with(|views| views.set(views.get() - 1));
+    }
+}
+
 impl ImmutableProgram for GcProgram<'_> {
     type Error = OwnerError;
 
     fn with_words<T>(&self, f: impl FnOnce(&[u32]) -> T) -> Result<T, Self::Error> {
-        self.root
-            .with_const_ptr::<u8, _>(|cell| unsafe { with_cell_words(cell, f) })
+        self.root.with_const_ptr::<ProgramCell, _>(|cell| unsafe {
+            if cell.is_null() {
+                return Err(OwnerError::Missing);
+            }
+            let header = cell
+                .cast::<u8>()
+                .sub(crate::gc::GC_HEADER_SIZE)
+                .cast::<crate::gc::GcHeader>();
+            let count = (*cell).word_count;
+            let available = ((*header).size as usize)
+                .checked_sub(crate::gc::GC_HEADER_SIZE + std::mem::size_of::<ProgramCell>())
+                .ok_or(OwnerError::InvalidLayout)?;
+            if (*header).obj_type != crate::gc::GC_TYPE_REGEX_PROGRAM || count > available / 4 {
+                return Err(OwnerError::InvalidLayout);
+            }
+            // Only emit creates these cells; no mutable word access escapes.
+            // Binding validation is separate, once per immutable owner. This
+            // getter neither allocates nor polls and always reacquires the base.
+            let _view = ProgramView::open();
+            Ok(f(std::slice::from_raw_parts(cell.add(1).cast(), count)))
+        })
     }
-}
-
-/// Borrow a rooted immutable program cell; the caller must prevent collection
-/// throughout the callback and re-read its root before every subsequent view.
-pub(super) unsafe fn with_cell_words<T>(
-    cell: *const u8,
-    f: impl FnOnce(&[u32]) -> T,
-) -> Result<T, OwnerError> {
-    let cell = cell.cast::<ProgramCell>();
-    if cell.is_null() {
-        return Err(OwnerError::Missing);
-    }
-    let header = cell
-        .cast::<u8>()
-        .sub(crate::gc::GC_HEADER_SIZE)
-        .cast::<crate::gc::GcHeader>();
-    let count = (*cell).word_count;
-    let available = ((*header).size as usize)
-        .checked_sub(crate::gc::GC_HEADER_SIZE + std::mem::size_of::<ProgramCell>())
-        .ok_or(OwnerError::InvalidLayout)?;
-    if (*header).obj_type != crate::gc::GC_TYPE_REGEX_PROGRAM || count > available / 4 {
-        return Err(OwnerError::InvalidLayout);
-    }
-    // Only emit creates these cells; no mutable word access escapes.
-    // Binding validation is separate, once per immutable owner. This
-    // getter neither allocates nor polls and always reacquires the base.
-    Ok(f(std::slice::from_raw_parts(cell.add(1).cast(), count)))
 }
 
 /// Original heap-string storage. Sharing disables Perry's unique-owner append

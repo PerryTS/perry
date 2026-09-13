@@ -6,9 +6,10 @@ use super::perex_runtime::{self as host, CaptureMode, EngineError};
 use super::RegExpHeader;
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 use crate::string::StringHeader;
-use perex::binding::BoundSubject;
+use perex::binding::{BoundProgram, BoundSubject};
 use perex::compiler::CompileError;
 use perex::executor::ExecError;
+use perex::input::Position;
 use perex::{span::Span, Budget};
 
 // One explicit host policy; no retained scratch cache or alternate engine.
@@ -102,10 +103,78 @@ pub(crate) fn program<'s>(
     budget: &mut Budget,
     _memory: &MemoryBudget,
     _poll: &mut impl FnMut() -> Result<(), EngineError>,
-) -> Result<super::perex_binding_cache::SharedProgram, EngineError> {
+) -> Result<BoundProgram<GcProgram<'s>>, EngineError> {
     let owner = unsafe { GcProgram::from_receiver(scope, receiver) }
         .map_err(|e| EngineError::Subject(perex::binding::SubjectError::Resource(e)))?;
-    super::perex_binding_cache::bind(owner, budget)
+    bind_program(owner, budget)
+}
+
+/// Bind a program, in constant work when a binding validated this same cell
+/// before (#10166): the witness lives beside the words in the program cell, so
+/// it cannot describe other words. A witness that does not match falls back to
+/// validation, which records a fresh one. No allocation and nothing traced.
+pub(crate) fn bind_program<'s>(
+    owner: GcProgram<'s>,
+    budget: &mut Budget,
+) -> Result<BoundProgram<GcProgram<'s>>, EngineError> {
+    let root = owner.root();
+    let owner = match owner.witness() {
+        Some(witness) => match BoundProgram::new_witnessed(owner, witness) {
+            Ok(bound) => return Ok(bound),
+            Err(failed) => failed.storage,
+        },
+        None => owner,
+    };
+    let bound = BoundProgram::new(owner, budget).map_err(|e| EngineError::Program(e.error))?;
+    if crate::hot_diag::regex_on() {
+        crate::hot_diag::regex_with(|d| d.perex_validations += 1);
+    }
+    GcProgram::record_witness(&root, bound.witness());
+    Ok(bound)
+}
+
+/// Bind a whole heap string, in constant work when this header was validated
+/// before (#10166). The first binding decodes it; if that succeeds and its
+/// UTF-16 length matches the header, the header is marked
+/// `STRING_FLAG_WTF8_VALIDATED` and later bindings use `new_counted`.
+///
+/// Perry strings are not all valid WTF-8 (raw Buffer and FFI payloads reach
+/// here too), so validity is never assumed: a string that fails to validate is
+/// never marked and keeps failing exactly as before. `HeapSubject::new` has
+/// already marked the header shared, so a marked payload is never mutated in
+/// place, and the mark is never copied to another string (see the flag).
+pub(crate) fn bind_heap_subject(
+    input: RuntimeHandle<'_>,
+) -> Result<BoundSubject<HeapSubject<'_>>, EngineError> {
+    use crate::string::STRING_FLAG_WTF8_VALIDATED;
+    let (utf16_len, validated) = input.with_const_ptr::<StringHeader, _>(|s| unsafe {
+        (
+            (*s).utf16_len as usize,
+            (*s).flags & STRING_FLAG_WTF8_VALIDATED != 0,
+        )
+    });
+    let owner = unsafe { HeapSubject::new(input) }
+        .map_err(|e| EngineError::Subject(perex::binding::SubjectError::Resource(e)))?;
+    let owner = if validated {
+        match BoundSubject::new_counted(owner, utf16_len) {
+            Ok(bound) => return Ok(bound),
+            Err(failed) => failed.storage,
+        }
+    } else {
+        owner
+    };
+    let bound = BoundSubject::new(owner).map_err(|e| EngineError::Subject(e.error))?;
+    let decoded = bound
+        .with_view(|view| view.len_utf16())
+        .map_err(EngineError::Subject)?;
+    // An empty string has nothing to decode. `HeapSubject::new` already wrote
+    // this header's refcount, so it is writable.
+    if decoded == utf16_len && utf16_len > 0 {
+        input.with_const_ptr::<StringHeader, _>(|s| unsafe {
+            (*(s as *mut StringHeader)).flags |= STRING_FLAG_WTF8_VALIDATED;
+        });
+    }
+    Ok(bound)
 }
 
 /// Bindings one compound operation reuses across its searches (#10165).
@@ -123,16 +192,21 @@ pub(crate) fn program<'s>(
 /// the same string, and the same receiver still holding the same program cell.
 /// Anything else (an `exec` override, a recompiled receiver, another string)
 /// binds afresh for that search exactly as before.
+///
+/// `near` is where the previous search over the reused subject stood (#10164),
+/// so the next search seeks from there instead of from an end of the subject.
+/// It is only ever set from, and only ever used with, the reused binding.
 pub(crate) struct Reuse<'b, 's> {
     input: RuntimeHandle<'s>,
     subject: &'b BoundSubject<HeapSubject<'s>>,
     program: Option<ReusedProgram<'s>>,
+    near: std::cell::Cell<Option<Position>>,
 }
 
 struct ReusedProgram<'s> {
     receiver: RuntimeHandle<'s>,
     cell: RuntimeHandle<'s>,
-    bound: super::perex_binding_cache::SharedProgram,
+    bound: BoundProgram<GcProgram<'s>>,
 }
 
 impl<'b, 's> Reuse<'b, 's> {
@@ -156,7 +230,7 @@ impl<'b, 's> Reuse<'b, 's> {
                 let receiver = scope.root_raw_const_ptr(re);
                 let cell = scope.root_raw_const_ptr(unsafe { (*re).perex_program });
                 let owner = unsafe { GcProgram::from_receiver(scope, &receiver) }.ok()?;
-                let bound = super::perex_binding_cache::bind(owner, budget).ok()?;
+                let bound = bind_program(owner, budget).ok()?;
                 Some(ReusedProgram {
                     receiver,
                     cell,
@@ -168,7 +242,13 @@ impl<'b, 's> Reuse<'b, 's> {
             input,
             subject,
             program,
+            near: std::cell::Cell::new(None),
         }
+    }
+
+    /// Where the last search over the reused subject stood, if any.
+    pub(crate) fn near(&self) -> Option<Position> {
+        self.near.get()
     }
 
     fn subject_for(&self, input: &RuntimeHandle<'_>) -> Option<&BoundSubject<HeapSubject<'s>>> {
@@ -179,10 +259,7 @@ impl<'b, 's> Reuse<'b, 's> {
 
     /// Both roots are live, so equal addresses name the same objects even after
     /// either moved; a replaced program cannot reuse a cell this root retains.
-    fn program_for(
-        &self,
-        receiver: &RuntimeHandle<'_>,
-    ) -> Option<&super::perex_binding_cache::SharedProgram> {
+    fn program_for(&self, receiver: &RuntimeHandle<'_>) -> Option<&BoundProgram<GcProgram<'s>>> {
         let reused = self.program.as_ref()?;
         let current = receiver.with_const_ptr::<RegExpHeader, _>(|p| p);
         let bound = reused.receiver.with_const_ptr::<RegExpHeader, _>(|p| p);
@@ -230,7 +307,7 @@ pub(crate) fn test_window(
     let owner = unsafe { HeapSubject::window(input, start, end) }
         .map_err(|e| EngineError::Subject(perex::binding::SubjectError::Resource(e)))?;
     let subject = BoundSubject::new(owner).map_err(|e| EngineError::Subject(e.error))?;
-    host::find_cached(
+    host::find(
         &program,
         &subject,
         0,
@@ -299,8 +376,8 @@ pub(crate) fn execute_with_resources(
     let scope = RuntimeHandleScope::new();
     let receiver = scope.root_raw_mut_ptr(receiver);
     let input = scope.root_string_ptr(input);
-    let stored = receiver.with_const_ptr::<RegExpHeader, _>(|p| unsafe {
-        crate::value::JSValue::from_bits((*p).last_index)
+    let stored = receiver.with_const_ptr::<RegExpHeader, _>(|r| unsafe {
+        crate::value::JSValue::from_bits((*r).last_index)
     });
     let last_index = if stored.is_number() {
         stored
@@ -333,21 +410,23 @@ pub(crate) fn execute_with_resources(
         }
     };
     let fresh_subject;
-    let subject = match reuse.and_then(|reuse| reuse.subject_for(&input)) {
+    let reused_subject = reuse.and_then(|reuse| reuse.subject_for(&input));
+    // A position is valid only on the binding it came from.
+    let near = reuse
+        .filter(|_| reused_subject.is_some())
+        .and_then(|reuse| reuse.near());
+    let subject = match reused_subject {
         Some(subject) => subject,
         None => {
-            fresh_subject =
-                BoundSubject::new(unsafe { HeapSubject::new(input) }.map_err(|e| {
-                    EngineError::Subject(perex::binding::SubjectError::Resource(e))
-                })?)
-                .map_err(|e| EngineError::Subject(e.error))?;
+            fresh_subject = bind_heap_subject(input)?;
             &fresh_subject
         }
     };
-    let found = host::find_cached(
+    let (found, position) = host::find_near(
         program,
         subject,
         start,
+        near,
         if materialize {
             CaptureMode::All
         } else {
@@ -358,6 +437,9 @@ pub(crate) fn execute_with_resources(
         QUANTUM,
         poll,
     )?;
+    if let (Some(reuse), Some(_)) = (reuse, reused_subject) {
+        reuse.near.set(Some(position));
+    }
     if stateful {
         let next = found.as_ref().map_or(0, |m| m.full.end());
         caught(|| {
@@ -376,6 +458,8 @@ pub(crate) fn execute_with_resources(
                 subject,
                 program,
                 &found,
+                // From the search that just ran over this same binding.
+                Some(position),
                 has_indices,
                 budget,
                 poll,

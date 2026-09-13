@@ -135,6 +135,8 @@ mod trim_tests;
 /// end of an exact-sized payload. Unix-only (needs `mmap` + `mprotect`).
 #[cfg(all(test, unix))]
 mod tests_guard_page;
+#[cfg(test)]
+mod tests_validated_flag;
 
 // Explicit named re-exports — preserve the original `crate::string::*`
 // surface 1:1. NO glob re-exports.
@@ -262,6 +264,17 @@ pub const STRING_FLAG_HAS_LONE_SURROGATES: u32 = 1;
 /// byte-level escape scan. String-producing mutations do not propagate this
 /// provenance bit unless they independently prove the resulting payload.
 pub(crate) const STRING_FLAG_JSON_ESCAPE_FREE: u32 = 1 << 1;
+/// This exact header's payload was fully validated as generalized WTF-8 and its
+/// `utf16_len` found exact, so a RegExp can bind it again in constant work
+/// (`perex::binding::BoundSubject::new_counted`) instead of decoding it (#10166).
+///
+/// Only the regex subject binding sets it, after a full validation succeeds. It
+/// describes one payload, so it must never reach another string:
+/// `init_string_header` strips it from every constructed string, and the
+/// in-place writers (`js_string_append`, `js_string_append_chain`) clear it on
+/// the destination they change. A validated header is already shared
+/// (`js_string_addref`), so it is never itself mutated in place afterwards.
+pub(crate) const STRING_FLAG_WTF8_VALIDATED: u32 = 1 << 2;
 
 /// A static empty string that can be used as a safe fallback for null pointers.
 /// Has utf16_len=0, byte_len=0, capacity=0, refcount=0, flags=0 (shared).
@@ -669,23 +682,62 @@ pub(crate) fn string_storage_alloc(capacity: u32) -> (*mut StringHeader, *mut u8
 /// JSON results at or above this size use individually tracked storage.
 pub(crate) const JSON_MALLOC_OUTPUT_THRESHOLD: u32 = 512 * 1024;
 
-/// Allocate a large, pointer-free JSON result outside old-generation arenas.
+/// Allocate a large, pointer-free JSON result. The flag reports whether it is
+/// malloc-tracked (`true`) or born old in the arena (`false`), so callers
+/// charge malloc-output debt only for tracked leaves.
 ///
 /// Ordinary large strings are born old because copying them through survivor
 /// space is wasteful. Repeated `JSON.stringify` is different: each result is a
 /// leaf commonly discarded at the next loop edge. Tracking that leaf as an
 /// individual malloc object lets the next minor sweep reclaim it without a
 /// whole-old-heap trace. Smaller results retain the arena fast path.
+///
+/// #10169: that trade inverts when the young generation already holds at
+/// least as many bytes as the leaf — typically a freshly parsed document the
+/// caller is still using — unless the previous minor measured the young
+/// generation as mostly garbage. A non-empty malloc registry forbids the
+/// untraced in-place promotion (`skip_remembering` needs it empty), so the
+/// next minor would trace that whole tree — 55 ms for a 20 MB document — to
+/// reclaim one leaf; and a single stale tracked leaf keeps vetoing it until
+/// swept. Such a leaf is born old in the arena instead, and the collector is
+/// told (`gc::note_young_leaf_born_old`) so that an UNMEASURED young
+/// generation gets a minor before old-reclaim can re-mark it in place: a
+/// stringify-only loop over one parsed input thus has its input promoted
+/// once, after which the young generation is too small for this route, while
+/// a parse/stringify loop's transient tree dies in Eden under the old-reclaim
+/// full that also reclaims the leaf.
 #[inline]
-pub(crate) fn json_output_storage_alloc(capacity: u32) -> (*mut StringHeader, *mut u8) {
+pub(crate) fn json_output_storage_alloc(capacity: u32) -> (*mut StringHeader, *mut u8, bool) {
     if capacity < JSON_MALLOC_OUTPUT_THRESHOLD {
-        return string_storage_alloc(capacity);
+        let (ptr, data) = string_storage_alloc(capacity);
+        return (ptr, data, false);
+    }
+    if json_leaf_prefers_arena(capacity) {
+        let (ptr, data) = string_storage_alloc(capacity);
+        crate::gc::note_young_leaf_born_old();
+        return (ptr, data, false);
     }
     let payload_size = std::mem::size_of::<StringHeader>() + capacity as usize;
     let raw = crate::gc::gc_malloc(payload_size, crate::gc::GC_TYPE_STRING);
     let ptr = raw as *mut StringHeader;
     let data = unsafe { raw.add(std::mem::size_of::<StringHeader>()) };
-    (ptr, data)
+    (ptr, data, true)
+}
+
+/// The young generation holds at least the leaf's own bytes and at least one
+/// nursery's worth of data (so a minor is what comes next, which is the only
+/// time tracking the leaf costs a whole-young trace), and was not measured as
+/// dying. Below a nursery the malloc path stays: a loop that stringifies a
+/// small parsed input into document-sized results never collects at all, and
+/// born-old results would only trade malloc's recycled pages for fresh arena
+/// pages (measured: +17 % CPU on a 1 MB stringify loop). See
+/// [`json_output_storage_alloc`].
+#[inline]
+pub(crate) fn json_leaf_prefers_arena(capacity: u32) -> bool {
+    crate::gc::gen_gc_enabled()
+        && crate::arena::copying_from_space_in_use_bytes() >= capacity as usize
+        && crate::gc::young_generation_holds_a_nursery()
+        && !crate::gc::young_generation_measured_dying()
 }
 
 /// Maximum number of UTF-16 code units in one Perry string. Mirrors V8's
@@ -812,7 +864,9 @@ pub(crate) unsafe fn init_string_header(
     (*ptr).byte_len = byte_len;
     (*ptr).capacity = capacity;
     (*ptr).refcount = refcount;
-    (*ptr).flags = flags;
+    // A new header never inherits its source's validation (#10166), however a
+    // caller computed `flags`.
+    (*ptr).flags = flags & !STRING_FLAG_WTF8_VALIDATED;
 }
 
 #[inline]

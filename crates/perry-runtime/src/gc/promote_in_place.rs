@@ -577,6 +577,27 @@ pub(crate) fn last_young_survival_permille() -> Option<u64> {
     LAST_YOUNG_SURVIVAL_PERMILLE.with(Cell::get)
 }
 
+/// #10169: did the previous copying minor measure the young generation as
+/// retained wholesale? This is the in-place promotion signal read directly,
+/// without the test-build opt-in that gates the promotion itself, so a
+/// scheduling decision elsewhere can key on the measurement alone. `None` —
+/// no copying minor has run on this thread — is deliberately `false`.
+pub(crate) fn young_generation_measured_retained() -> bool {
+    LAST_YOUNG_SURVIVAL_PERMILLE
+        .with(Cell::get)
+        .is_some_and(|permille| permille >= PROMOTE_SURVIVAL_THRESHOLD_PERMILLE)
+}
+
+/// #10169: the complement that is NOT `!measured_retained`: the previous
+/// copying minor measured the young generation as mostly garbage. `None` — no
+/// measurement yet — is `false` here too, so an unmeasured young generation
+/// is neither retained nor dying.
+pub(crate) fn young_generation_measured_dying() -> bool {
+    LAST_YOUNG_SURVIVAL_PERMILLE
+        .with(Cell::get)
+        .is_some_and(|permille| permille < PROMOTE_SURVIVAL_THRESHOLD_PERMILLE)
+}
+
 #[cfg(test)]
 pub(crate) fn promoted_dead_bytes_since_full() -> usize {
     PROMOTED_DEAD_BYTES.with(Cell::get)
@@ -644,12 +665,12 @@ impl Drop for InPlacePromotionTestGuard {
 /// MEASUREMENT of "almost nothing survived", and only this exercises the
 /// `None` arm of the decision.
 #[cfg(test)]
-pub(super) fn clear_young_survival_for_tests() {
+pub(crate) fn clear_young_survival_for_tests() {
     LAST_YOUNG_SURVIVAL_PERMILLE.with(|c| c.set(None));
 }
 
 #[cfg(test)]
-pub(super) fn seed_young_survival_for_tests(permille: u64) {
+pub(crate) fn seed_young_survival_for_tests(permille: u64) {
     LAST_YOUNG_SURVIVAL_PERMILLE.with(|c| c.set(Some(permille)));
 }
 

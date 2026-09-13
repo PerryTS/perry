@@ -44,17 +44,16 @@ fn regexp_cache_registers_roots_only_on_use_and_not_again_after_eviction() {
     let _ = crate::object::js_get_global_this();
     let before = root_scanner_registry_counts().1;
     crate::regex::perex_cache::census();
-    crate::regex::perex_binding_cache::census();
     assert_eq!(root_scanner_registry_counts().1, before);
     let scope = RuntimeHandleScope::new();
     let re = regex(&scope, "registered-on-use", "");
     assert_eq!(root_scanner_registry_counts().1, before + 1);
     assert!(matches(&re, "registered-on-use"));
-    assert_eq!(root_scanner_registry_counts().1, before + 2);
+    assert_eq!(root_scanner_registry_counts().1, before + 1);
     crate::regex::perex_cache::clear_for_tests();
     let re = regex(&scope, "registered-on-use", "");
     assert!(matches(&re, "registered-on-use"));
-    assert_eq!(root_scanner_registry_counts().1, before + 2);
+    assert_eq!(root_scanner_registry_counts().1, before + 1);
 }
 
 #[test]
@@ -103,8 +102,6 @@ fn perex_lifecycle_reclaims_evicted_programs_when_their_only_receivers_die() {
     assert!(matches(&survivor, "pre77"));
     assert!(!matches(&survivor, "nope77"));
     drop(survivor_scope);
-    // The two searches above populated the validated-program cache again.
-    crate::regex::perex_cache::clear_for_tests();
     gc_collect_minor();
     assert_eq!(
         programs(),
@@ -251,7 +248,7 @@ fn regexp_cache_is_the_only_root_and_rekeys_after_actual_movement() {
     assert_eq!(
         programs(),
         before,
-        "eviction must release both caches' roots"
+        "eviction must release the construction cache's roots"
     );
 }
 
@@ -266,18 +263,16 @@ fn regexp_active_binding_survives_eviction_and_relocation() {
     let _force = ForcedEvacuationTestGuard::on();
     super::perex_public::register_host_roots();
     let before = programs();
-    let program = {
-        let scope = RuntimeHandleScope::new();
-        let re = regex(&scope, "active-binding", "");
-        api::program(
-            &scope,
-            &re,
-            &mut Budget::new(api::WORK),
-            &MemoryBudget::new(api::SCRATCH_BYTES),
-            &mut host::poll,
-        )
-        .unwrap()
+    let scope = RuntimeHandleScope::new();
+    let raw = {
+        let temporary = RuntimeHandleScope::new();
+        let re = regex(&temporary, "active-binding", "");
+        re.with_const_ptr::<RegExpHeader, _>(|re| unsafe { (*re).perex_program })
     };
+    // No collecting operation between extracting the live cache entry and
+    // rooting it in the outer scope, after the temporary scope has ended.
+    let owner = unsafe { crate::regex::perex_owner::GcProgram::from_cached(&scope, raw) };
+    let program = api::bind_program(owner, &mut Budget::new(api::WORK)).unwrap();
     let old = program.with_view(|p| p.words().as_ptr() as usize).unwrap();
     crate::regex::perex_cache::clear_for_tests();
     gc_collect_minor();
@@ -301,6 +296,7 @@ fn regexp_active_binding_survives_eviction_and_relocation() {
     .unwrap()
     .is_some());
     drop(program);
+    drop(scope);
     gc_collect_minor();
     assert_eq!(programs(), before);
 }
