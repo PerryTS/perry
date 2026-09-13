@@ -665,6 +665,7 @@ impl MallocSweepCycleState {
             layout_clear_for_ptr(user_ptr as usize);
             gc_type_finalize_unmarked_payload(obj_type, user_ptr);
             let layout = Layout::from_size_align(total_size, 8).unwrap();
+            crate::gc::heap_generation::debug_assert_heap_change_open();
             dealloc(header as *mut u8, layout);
             self.remove_tracked_header(header, obj_type, total_size as u64);
         }
@@ -1334,6 +1335,7 @@ impl IncrementalSweepState {
 
     #[allow(dead_code)]
     pub(super) fn finish_unbounded(&mut self) -> SweepTraceStats {
+        let _heap_change = HeapChange::begin(HeapChangeKind::Sweep);
         while !self.step(usize::MAX) {}
         self.stats()
     }
@@ -1665,6 +1667,7 @@ enum ArenaSweepCleanupSubphase {
 
 mod sweep_batch;
 mod sweep_cleanup;
+use super::heap_generation::{HeapChange, HeapChangeKind};
 use sweep_cleanup::*;
 
 fn add_reset_stats(
@@ -1950,6 +1953,7 @@ pub(super) fn evacuate_selected_old_pages_collecting(
 pub(super) fn release_evacuated_original_forwarding_stubs(
     evacuated_original_headers: &[*mut GcHeader],
 ) -> EvacuationTraceStats {
+    crate::gc::heap_generation::debug_assert_heap_change_open();
     let mut released = EvacuationTraceStats::default();
     for &header in evacuated_original_headers {
         if header.is_null() {

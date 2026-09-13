@@ -96,6 +96,9 @@ fn budgeted_step_until_phase(target: GcCyclePhase) -> JsGcStepResult {
 }
 
 fn complete_incremental_sweep(sweep: &mut IncrementalSweepState) -> SweepTraceStats {
+    let _heap_change = crate::gc::heap_generation::HeapChange::begin(
+        crate::gc::heap_generation::HeapChangeKind::Sweep,
+    );
     for _ in 0..500_000 {
         if sweep.step(1) {
             return sweep.stats();
@@ -123,6 +126,9 @@ fn realloc_until_header_moves(mut ptr: *mut u8) -> *mut u8 {
 
 #[test]
 fn malloc_sweep_pauses_mid_list_and_eventually_frees_dead_malloc() {
+    let _heap_change = crate::gc::heap_generation::HeapChange::begin(
+        crate::gc::heap_generation::HeapChangeKind::Sweep,
+    );
     // #7056: this exercises the BUDGETED/incremental stepper, which the
     // shipped default now bypasses — scavenge defers alloc-point
     // collections to a precise safepoint instead of starting a cycle here.

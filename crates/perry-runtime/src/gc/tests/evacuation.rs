@@ -675,6 +675,9 @@ fn test_evacuate_tenured_marks_forwarded_and_copies_payload() {
 
 #[test]
 fn test_release_evacuated_original_forwarding_stub_before_sweep() {
+    let _heap_change = crate::gc::heap_generation::HeapChange::begin(
+        crate::gc::heap_generation::HeapChangeKind::Evacuation,
+    );
     CONS_PINNED.with(|s| s.borrow_mut().clear());
     clear_marks();
     let user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);

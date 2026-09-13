@@ -35,6 +35,8 @@ mod perex_match_search;
 #[cfg(feature = "regex-engine")]
 mod perex_ownership;
 #[cfg(feature = "regex-engine")]
+mod perex_position_hint;
+#[cfg(feature = "regex-engine")]
 mod perex_public;
 #[cfg(feature = "regex-engine")]
 mod perex_replace;

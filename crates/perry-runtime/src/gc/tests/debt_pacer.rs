@@ -903,6 +903,9 @@ fn forwarded_array_stub_propagates_liveness_to_grown_array() {
 /// the precise pre-fix reclaim conditions.
 #[test]
 fn minor_sweep_retains_window_expired_growth_stub() {
+    let _heap_change = crate::gc::heap_generation::HeapChange::begin(
+        crate::gc::heap_generation::HeapChangeKind::Sweep,
+    );
     // #7056: this exercises the BUDGETED/incremental stepper, which the
     // shipped default now bypasses — scavenge defers alloc-point
     // collections to a precise safepoint instead of starting a cycle here.

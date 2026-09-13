@@ -30,6 +30,7 @@ mod global_bootstrap;
 mod global_sink_isolation;
 mod handle_bound_method_name;
 mod heap_accounting;
+mod heap_generation;
 mod helper_stores;
 mod host_safepoints;
 mod idle_compact;
