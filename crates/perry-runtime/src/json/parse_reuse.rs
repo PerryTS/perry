@@ -19,7 +19,6 @@ struct ParseStringCacheEntry {
     token_start: u32,
     token_end: u32,
     value: *const StringHeader,
-    direct_depth_validated: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -120,7 +119,6 @@ pub(crate) fn remember_parse_string(
             token_start: token_start as u32,
             token_end: token_end as u32,
             value,
-            direct_depth_validated: false,
         });
         crate::gc::runtime_write_barrier_root_nanbox(
             crate::JSValue::string_ptr(source.cast_mut()).bits(),
@@ -128,31 +126,6 @@ pub(crate) fn remember_parse_string(
         crate::gc::runtime_write_barrier_root_nanbox(
             crate::JSValue::string_ptr(value.cast_mut()).bits(),
         );
-    });
-}
-
-#[inline]
-pub(crate) fn cached_parse_source_is_direct(
-    source: *const StringHeader,
-    source_len: usize,
-) -> bool {
-    PARSE_STRING_CACHE.with(|cache| {
-        cache.borrow().as_ref().is_some_and(|entry| {
-            entry.source == source
-                && entry.source_len as usize == source_len
-                && entry.direct_depth_validated
-        })
-    })
-}
-
-#[inline]
-pub(crate) fn validate_cached_parse_source(source: *const StringHeader, source_len: usize) {
-    PARSE_STRING_CACHE.with(|cache| {
-        if let Some(entry) = cache.borrow_mut().as_mut() {
-            if entry.source == source && entry.source_len as usize == source_len {
-                entry.direct_depth_validated = true;
-            }
-        }
     });
 }
 
@@ -335,7 +308,6 @@ pub(crate) fn test_seed_root_scanner_slots(
             token_start: 0,
             token_end: 1,
             value: string_value,
-            direct_depth_validated: false,
         });
     });
     let mut values = [EMPTY_PARSE_TEMPLATE_VALUE; PARSE_OBJECT_TEMPLATE_MAX_FIELDS];
