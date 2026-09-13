@@ -33,7 +33,11 @@ buffers remain operation-owned and charged to the existing memory budget.
 
 Compound split/replace/match operations retain program and subject bindings in
 `perex_api::Reuse`, checking the current receiver and program cell before reuse.
-The previous search position is reused only with the same subject binding.
+Within a compound operation, the previous position is reused only with the same
+subject binding. Across JavaScript calls, upstream's four-entry scalar position
+table can reuse a non-ASCII string's cursor when its concealed address, lengths
+and heap generation still agree. Heap changes or in-place length changes
+invalidate that identity. The table does not retain a string or program.
 Validated heap strings use the existing counted-subject path.
 
 The fast builtin dispatch guard contains only immutable ShapeIds, field

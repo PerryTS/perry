@@ -11,6 +11,7 @@ pattern. The current compiler reports 10 modules for this probe.
 
 ```sh
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$PWD/target}"
+export RUSTFLAGS="-C force-unwind-tables=yes -C force-frame-pointers=yes"
 cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static
 export PERRY_RUNTIME_DIR="$CARGO_TARGET_DIR/release"
 python3 benchmarks/regexp-construction/prepare.py /tmp/regexp-probe.ts
@@ -60,9 +61,10 @@ run in each balanced four-run block (the probe omits Bun in this mode).
 export PATH=/tmp/regexp-oracle/node-v26.5.1-linux-x64/bin:$PATH
 python3 benchmarks/regexp-construction/compare.py \
   --before /tmp/regexp-baseline-libs --after "$CARGO_TARGET_DIR/release" \
-  --output /tmp/regexp-app-comparison --runs 7
+  --output /tmp/regexp-app-comparison --runs 12
 ```
 
-See [final-results.md](final-results.md) for the Perex 0.1.4 comparison,
+See [current-results.md](current-results.md) for the latest integration comparison,
+[final-results.md](final-results.md) for the prior Perex 0.1.4 measurements,
 [results.md](results.md) for the original attribution, and
 [merged-results.md](merged-results.md) for the earlier integration measurements.

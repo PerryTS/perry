@@ -1,5 +1,8 @@
 # RegExp construction cache: final Perex 0.1.4 verification
 
+Historical verification against Perry 0.5.1554. See
+[current-results.md](current-results.md) for the subsequent 0.5.1557 integration.
+
 The final runtime is `7be32ca293`, integrating main
 `5d3bf85f92632cd026ec2695fd1a6929ffb56d72` (Perry 0.5.1554 / Perex 0.1.4).
 Its production runtime sources match preserved build snapshot
