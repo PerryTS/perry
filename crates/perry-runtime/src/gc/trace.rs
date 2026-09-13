@@ -1770,6 +1770,19 @@ pub(super) unsafe fn trace_heap_rewrite_slots(
             }
             GcMutableSlotDescriptor::Slot(slot) => visit_slot(slot.slot, slot.layout_kind),
             GcMutableSlotDescriptor::Range { range, layout_kind } => {
+                // Start the header reads of the range's pointer children
+                // before marking any of them: each is a cold DRAM read the
+                // mark would otherwise take one at a time. A prefetch cannot
+                // fault, so the candidate need not be proven a pointer yet.
+                for i in 0..range.slot_count() {
+                    let bits = *range.slot(i);
+                    let tag = bits & TAG_MASK;
+                    if tag == POINTER_TAG || tag == STRING_TAG {
+                        super::prefetch::prefetch_read(
+                            ((bits & POINTER_MASK) as usize).wrapping_sub(GC_HEADER_SIZE),
+                        );
+                    }
+                }
                 for i in 0..range.slot_count() {
                     visit_slot(range.slot(i), layout_kind);
                 }

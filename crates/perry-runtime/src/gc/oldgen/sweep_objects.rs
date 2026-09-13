@@ -382,7 +382,7 @@ impl ArenaSweepObjectsState {
 
     /// Account one swept old object on its page(s), batching single-page
     /// objects per page.
-    #[inline]
+    #[inline(always)]
     fn account_old_object(
         &mut self,
         header: *mut GcHeader,
