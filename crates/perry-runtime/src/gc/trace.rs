@@ -873,6 +873,7 @@ impl ValidPointerSetBuilder {
         let mut last_start = 0usize;
         let mut bitmap_starts = 0usize;
         let mut tenured_bytes = 0usize;
+        let mut non_walkable_before_first_object = false;
         while cursor < offset {
             let aligned = (cursor + 7) & !7;
             if aligned >= offset {
@@ -885,6 +886,11 @@ impl ValidPointerSetBuilder {
             }
             cursor = aligned + total_size;
             if !crate::gc::gc_type_is_arena_walkable((*header).obj_type) {
+                if begun {
+                    self.set.block_census.note_non_walkable();
+                } else {
+                    non_walkable_before_first_object = true;
+                }
                 continue;
             }
             let user_ptr = data + aligned + GC_HEADER_SIZE;
@@ -898,6 +904,10 @@ impl ValidPointerSetBuilder {
                 );
                 if self.census_armed {
                     self.set.block_census.begin_block(block_idx, data, offset);
+                    self.set.block_census.note_whole_block_walk();
+                    if non_walkable_before_first_object {
+                        self.set.block_census.note_non_walkable();
+                    }
                 }
                 let block = self
                     .set
