@@ -1546,8 +1546,8 @@ fn deferred_registration_flush_sites() {
             "expand_promoted_run",
             "expands a DESCRIBED promoted page into the object list. Every \
              caller has already flushed: the four readers/removers do so as \
-             their #7624 obligation, `materialize_all_promoted_page_runs` runs \
-             immediately after `old_pages_begin_gc_cycle`, and \
+             their #7624 obligation, `materialize_promoted_page_runs_for_object` \
+             flushes before it expands (#10182), and \
              `register_promoted_page_run` is inside the promotion walk covered \
              by the entry above",
         ),

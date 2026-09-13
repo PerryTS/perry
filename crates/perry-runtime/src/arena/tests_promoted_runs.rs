@@ -141,10 +141,11 @@ fn a_full_cycle_expands_every_pending_run_before_it_can_sweep() {
         let pages = register_region_runs(&region);
         assert!(pending_promoted_page_runs() > 0);
 
-        // What `GcCycleState::new_full` calls. A run's bounds are addresses
-        // captured at promotion; once the sweep can free objects inside the
-        // block and `old_free` can refill the holes, those bounds stop being
-        // object boundaries.
+        // What full and budgeted cycle constructors called before #10182 (the
+        // sweep now expands a page only where it reshapes one). A run's bounds
+        // are addresses captured at promotion; once the sweep can free objects
+        // inside the block and `old_free` can refill the holes, those bounds
+        // stop being object boundaries.
         materialize_all_promoted_page_runs();
 
         assert_eq!(pending_promoted_page_runs(), 0);

@@ -13,10 +13,23 @@ use super::super::*;
 /// of a large heap never stages an unbounded buffer.
 const FLUSH_AT: usize = 4096;
 
-#[derive(Default)]
 pub(super) struct PendingOldUnregister {
     dead: Vec<(usize, usize)>,
     scratch: Vec<(usize, usize, usize)>,
+    /// `(first page, last page)` of the last dead header whose described
+    /// promoted runs were expanded: consecutive dead objects on one page expand
+    /// it once.
+    expanded_pages: (usize, usize),
+}
+
+impl Default for PendingOldUnregister {
+    fn default() -> Self {
+        Self {
+            dead: Vec::new(),
+            scratch: Vec::new(),
+            expanded_pages: (usize::MAX, usize::MAX),
+        }
+    }
 }
 
 impl PendingOldUnregister {
@@ -26,6 +39,30 @@ impl PendingOldUnregister {
     ///
     /// `header` must be a dead old-gen arena header of `total_size` bytes.
     pub(super) unsafe fn defer(&mut self, header: *mut GcHeader, total_size: usize) {
+        // #10182: a described promoted page is re-parsed by header type when it
+        // is expanded, so it must be expanded BEFORE this header stops parsing
+        // as an object. Expanded after, the list would silently lack the dead
+        // object, the batched removal below would not find it, and the page's
+        // `allocated_bytes`/`object_count` would keep counting it.
+        #[cfg(test)]
+        let expand = super::super::trace::block_skip::sabotage::get()
+            & super::super::trace::block_skip::sabotage::FORGET_RUN_EXPANSION
+            == 0;
+        #[cfg(not(test))]
+        let expand = true;
+        if expand {
+            let pages = (
+                crate::arena::generation_page_for_addr(header as usize),
+                crate::arena::generation_page_for_addr(header as usize + total_size - 1),
+            );
+            if pages != self.expanded_pages {
+                crate::arena::materialize_promoted_page_runs_for_object(
+                    header as usize,
+                    total_size,
+                );
+                self.expanded_pages = pages;
+            }
+        }
         (*header).obj_type = 0;
         (*header).gc_flags = 0;
         (*header)._reserved = 0;

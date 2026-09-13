@@ -276,6 +276,9 @@ pub(crate) mod sabotage {
     /// The sweep never applies its per-page accounting tally before a page-index
     /// flush or a step end (it is applied only at page changes).
     pub(crate) const FORGET_PAGE_TALLY_ORDER: u8 = 8;
+    /// A dead old header is invalidated without first expanding the described
+    /// promoted run of its page.
+    pub(crate) const FORGET_RUN_EXPANSION: u8 = 16;
 
     thread_local! {
         static SABOTAGE: Cell<u8> = const { Cell::new(0) };

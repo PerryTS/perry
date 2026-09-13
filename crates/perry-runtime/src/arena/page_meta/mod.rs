@@ -759,16 +759,37 @@ pub(crate) fn materialize_promoted_page_runs(pages: impl IntoIterator<Item = usi
     }
 }
 
-/// Expand every pending run.
+/// Expand the pending runs of every page `[header, header + total_size)`
+/// overlaps. One `Cell` read when no run is pending anywhere.
 ///
-/// Called before anything that can reshape an old-gen block — the full and
-/// budgeted cycle constructors, whose sweep frees objects in place and whose
-/// holes are then refilled by `old_free` with objects of a different size. A
-/// run's `last_header` is an address remembered at promotion time; once
-/// boundaries inside it can move, that address stops being a header boundary.
-/// Expanding first keeps the run representation confined to the window in which
-/// promoted blocks are immutable: between the promotion and the next old-gen
-/// sweep.
+/// #10182: this is how a sweep keeps a run exact without expanding every run
+/// up front. A run's `last_header` is an address remembered at promotion time,
+/// and it stops describing the page once a boundary inside it can move — which
+/// happens only when an object on the page dies: the sweep invalidates its
+/// header (`PendingOldUnregister::defer`, `invalidate_dead_old_arena_header`)
+/// and `old_free` may later refill the hole with an object of another size.
+/// Both removers expand the object's pages first, so a page keeps its run
+/// exactly while every object on it survives, and a block the sweep reclaims
+/// whole discards its runs unexpanded (`unregister_old_block_pages`).
+#[inline]
+pub(crate) fn materialize_promoted_page_runs_for_object(header: usize, total_size: usize) {
+    if !OLD_GEN_PAGE_PROMOTED_RUNS_NONEMPTY.with(Cell::get) || header == 0 || total_size == 0 {
+        return;
+    }
+    // #7624: every expansion runs against a flushed deferral buffer (see
+    // `expand_promoted_run`). A synchronous full has no births to defer; a
+    // budgeted one can, across its mutator windows.
+    flush_deferred_old_page_registrations();
+    let first = generation_page_for_addr(header);
+    let last = generation_page_for_addr(header + total_size - 1);
+    materialize_promoted_page_runs(first..=last);
+}
+
+/// Expand every pending run. Test builds only since #10182: full and budgeted
+/// cycles used to call this from their constructor, expanding the runs of
+/// blocks the sweep then released whole; the sweep now expands a page only
+/// where it reshapes one ([`materialize_promoted_page_runs_for_object`]).
+#[cfg(test)]
 pub(crate) fn materialize_all_promoted_page_runs() {
     if !OLD_GEN_PAGE_PROMOTED_RUNS_NONEMPTY.with(Cell::get) {
         return;
@@ -813,6 +834,12 @@ pub(crate) fn register_promoted_page_headers(page: usize, headers: &[usize], byt
 #[cfg(test)]
 pub(crate) fn pending_promoted_page_runs() -> usize {
     OLD_GEN_PAGE_PROMOTED_RUNS.with(|runs| runs.borrow().len())
+}
+
+/// Is `page`'s object list still DESCRIBED by a pending run? Tests only.
+#[cfg(test)]
+pub(crate) fn promoted_page_run_pending(page: usize) -> bool {
+    OLD_GEN_PAGE_PROMOTED_RUNS.with(|runs| runs.borrow().contains_key(&page))
 }
 
 pub(crate) fn unregister_block_generation(base: usize, size: usize) {
