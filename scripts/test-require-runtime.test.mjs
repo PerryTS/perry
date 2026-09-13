@@ -97,6 +97,17 @@ test('scoped CI prepares coherent providers for each standalone native consumer'
   }
 });
 
+test('sloppy block-function suite builds its Bun startup provider with the runtime', () => {
+  const result = ciSetup('perry issue_10079_script_block_function_hoisting 1500');
+  assert.equal(result.status, 0, result.stderr);
+  const calls = result.stdout.split('\n').filter(line => line.startsWith('cargo:'));
+  assert.equal(calls.length, 1);
+  assert.match(calls[0], /-p perry-runtime-static /);
+  assert.match(calls[0], /-p perry-stdlib-static /);
+  assert.match(calls[0], /-p perry-ext-net$/);
+  assert.match(result.stdout, /prepared:unset\n/);
+});
+
 test('scoped CI does not mark unrelated or partial runtime setup prepared', () => {
   for (const suites of ['', 'perry-codegen minsize_inline_policy 300',
     'perry minsize_inline_policy_extra 1500', 'perry unrelated 1500']) {

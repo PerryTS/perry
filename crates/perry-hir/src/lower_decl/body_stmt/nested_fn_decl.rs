@@ -62,7 +62,13 @@ pub(super) fn lower_nested_fn_decl(
     // LocalGet(local_id) rather than FuncRef(func_id). This ensures
     // the LLVM backend's boxed-var analysis sees the same LocalId at
     // both the declaration and self-reference sites.
-    let local_id = if is_block_nested {
+    let predeclared = ctx
+        .block_fn_decl_bindings
+        .get(&(fn_decl.ident.span.lo.0, func_name.clone()))
+        .copied();
+    let local_id = if let Some(id) = predeclared {
+        id
+    } else if is_block_nested {
         // Fresh block-local binding, independent of any enclosing same-named
         // parameter / `var` (the latter is written separately below).
         ctx.define_local(func_name.clone(), Type::Any)

@@ -10,6 +10,8 @@ use crate::lower::LoweringContext;
 use super::*;
 
 mod closure_ident_scan;
+#[cfg(test)]
+mod hoisting_tests;
 mod var_names;
 
 use closure_ident_scan::{cic_expr, cic_stmt};
@@ -1045,18 +1047,10 @@ pub fn lower_block_stmt_scoped(
     block: &ast::BlockStmt,
 ) -> Result<Vec<Stmt>> {
     let mark = ctx.push_block_scope();
-    // #9466: the strict-mode branch does NOT route through `lower_block_stmt`,
-    // so the block-scoped class disambiguation is bracketed here, around both
-    // branches. On the non-strict path `lower_block_stmt`'s own bracket sees
-    // this same span key and is a no-op.
+    // #9466: this path does not route through `lower_block_stmt`, so bracket
+    // block-scoped class disambiguation here.
     let saved_class_renames = enter_class_rename_scope(ctx, block.span.lo.0, &block.stmts);
-    // Via `lower_block_stmt` so this scope's pre-registered forward-captured
-    // lets are re-bound at entry (`rebind_nested_forward_scope_lets`).
-    let stmts = if ctx.current_strict {
-        lower_strict_block_fn_decls(ctx, block)
-    } else {
-        lower_block_stmt(ctx, block)
-    };
+    let stmts = lower_block_fn_decls(ctx, block);
     exit_class_rename_scope(ctx, saved_class_renames);
     // `?` deliberately AFTER the rename restore but BEFORE `pop_block_scope`,
     // preserving this function's original error control flow exactly.
@@ -1065,19 +1059,17 @@ pub fn lower_block_stmt_scoped(
     Ok(stmts)
 }
 
-/// Strict-mode block function declarations are lexical bindings initialized
-/// when the block is entered. Pre-register their locals before lowering an
-/// earlier callback that captures one, then move the declarations' closure
-/// initializers ahead of the block's executable statements.
-fn lower_strict_block_fn_decls(
-    ctx: &mut LoweringContext,
-    block: &ast::BlockStmt,
-) -> Result<Vec<Stmt>> {
-    use std::collections::HashSet;
+/// Block functions are lexical bindings initialized at block entry in both
+/// strict and sloppy code (#10079). Only their closure initializers move:
+/// Annex B's outer-var copies stay at the textual declaration positions.
+fn lower_block_fn_decls(ctx: &mut LoweringContext, block: &ast::BlockStmt) -> Result<Vec<Stmt>> {
+    use std::collections::{HashMap, HashSet};
 
     rebind_nested_forward_scope_lets(ctx, &block.stmts);
 
     let mut hoisted_ids = HashSet::new();
+    let mut block_ids = HashMap::new();
+    let mut saved_bindings = Vec::new();
     for stmt in &block.stmts {
         let ast::Stmt::Decl(ast::Decl::Fn(fn_decl)) = stmt else {
             continue;
@@ -1086,9 +1078,14 @@ fn lower_strict_block_fn_decls(
             continue;
         }
         let name = fn_decl.ident.sym.to_string();
-        let id = ctx
-            .lookup_local_in_current_scope(&name)
-            .unwrap_or_else(|| ctx.define_local(name, Type::Any));
+        // Always shadow enclosing bindings, including parameters and Annex
+        // B's hoisted var. Duplicate declarations in this block share one id.
+        let id = *block_ids
+            .entry(name.clone())
+            .or_insert_with(|| ctx.define_local(name.clone(), Type::Any));
+        let key = (fn_decl.ident.span.lo.0, name);
+        let previous = ctx.block_fn_decl_bindings.insert(key.clone(), id);
+        saved_bindings.push((key, previous));
         hoisted_ids.insert(id);
     }
     if hoisted_ids.is_empty() {
@@ -1098,7 +1095,15 @@ fn lower_strict_block_fn_decls(
     // Lower in source order first: a declaration body may capture lexical
     // bindings declared earlier in the block. Only its runtime initializer is
     // hoisted after every reference has resolved to the correct LocalId.
-    let body = lower_stmts_using_aware(ctx, &block.stmts)?;
+    let body = lower_stmts_using_aware(ctx, &block.stmts);
+    for (key, previous) in saved_bindings.into_iter().rev() {
+        if let Some(id) = previous {
+            ctx.block_fn_decl_bindings.insert(key, id);
+        } else {
+            ctx.block_fn_decl_bindings.remove(&key);
+        }
+    }
+    let body = body?;
     let mut hoisted = Vec::new();
     let mut other = Vec::new();
     for stmt in body {
