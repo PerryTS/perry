@@ -192,6 +192,15 @@ thread_local! {
     /// rollback.
     static FIRST_CYCLE_PROMOTION_ATTEMPTS: Cell<u64> = const { Cell::new(0) };
     static FIRST_CYCLE_PROMOTION_ROLLBACKS: Cell<u64> = const { Cell::new(0) };
+    /// #10182 live-subject counters for the promotion a FULL mark-sweep
+    /// performs. Separate from `IN_PLACE_PROMOTION_CYCLES` (which they also
+    /// feed) because "a full promoted its Eden survivors" is the claim every
+    /// acceptance measurement of #10182 rests on, and a counter that also
+    /// counts copying minors cannot carry it.
+    static FULL_PROMOTION_CYCLES: Cell<u64> = const { Cell::new(0) };
+    static FULL_PROMOTION_DECLINED_CYCLES: Cell<u64> = const { Cell::new(0) };
+    static FULL_PROMOTED_OBJECTS: Cell<u64> = const { Cell::new(0) };
+    static FULL_PROMOTED_BYTES: Cell<usize> = const { Cell::new(0) };
 }
 
 /// Record that `bytes` of young capacity became old-gen, so the next
@@ -368,6 +377,118 @@ pub(super) fn should_promote_young_in_place() -> bool {
     LAST_YOUNG_SURVIVAL_PERMILLE
         .with(Cell::get)
         .is_some_and(|permille| permille >= PROMOTE_SURVIVAL_THRESHOLD_PERMILLE)
+}
+
+/// May a synchronous FULL mark-sweep promote its young generation in place?
+/// (#10182)
+///
+/// This answers only "may it try", the way
+/// [`should_attempt_first_cycle_promotion`] does — and for the same reason.
+/// The copying minor has to PREDICT the ratio (it decides before its trace);
+/// a full decides after its own trace and its own sweep, so it has the
+/// measurement itself. [`full_promotion_survival_holds_up`] is the decision.
+///
+/// The shared guards are exactly `in_place_promotion_admissible`'s: the
+/// `PERRY_GC_PROMOTE_IN_PLACE` kill switch, the forced-evacuation stress modes
+/// (which exist to make objects move — leave them a copier to drive), and the
+/// running dead-byte budget. The caller adds the ones that are specific to a
+/// full cycle: it must be synchronous (a budgeted full opens mutator windows
+/// between steps, and the retag is not an operation that can be interleaved
+/// with allocation), generational, and its stack roots must be precise — a
+/// conservative scan's mark set is not a sound liveness measurement, which is
+/// the same reason `seed_promote_lock_from_sweep` excludes those cycles.
+pub(super) fn full_promotion_admissible() -> bool {
+    in_place_promotion_admissible()
+}
+
+/// Did the full's own sweep measure the young generation as live enough to
+/// promote it whole? (#10182)
+///
+/// `young_bytes` is from-space occupancy captured at cycle start,
+/// `live_bytes` the from-space share of the sweep's live census. The threshold
+/// is [`PROMOTE_SURVIVAL_THRESHOLD_PERMILLE`], the same 95% the copying minor
+/// uses, and it means the same thing: at most 5% of the promoted bytes are
+/// dead, and they cost footprint until the next full.
+///
+/// ★ The number this tests is a MEASUREMENT, not a prediction. The copying
+/// minor reads the *previous* cycle's ratio because it must decide before it
+/// traces; this reads the ratio this very cycle just measured. A misprediction
+/// is therefore impossible here — what remains is the ordinary policy question
+/// of whether a 95%-live nursery is worth tenuring whole, and the answer is
+/// the one #7742 already argued.
+pub(super) fn full_promotion_survival_holds_up(young_bytes: usize, live_bytes: usize) -> bool {
+    if young_bytes == 0 {
+        return false;
+    }
+    full_young_survival_permille(young_bytes, live_bytes) >= PROMOTE_SURVIVAL_THRESHOLD_PERMILLE
+}
+
+/// The ratio itself, in permille, clamped to 1000. Shared by the decision and
+/// the diagnostic so the two cannot disagree.
+pub(super) fn full_young_survival_permille(young_bytes: usize, live_bytes: usize) -> u64 {
+    (live_bytes as u64)
+        .saturating_mul(1000)
+        .checked_div(young_bytes as u64)
+        .unwrap_or(0)
+        .min(1000)
+}
+
+/// Record a full's exact young-survival measurement for the copying minor's
+/// predictor (#10182).
+///
+/// Deliberately NOT [`note_young_survival`]. That function does three other
+/// things — it settles the untraced run, re-bases the untraced budget against
+/// the current old-gen, and can raise an old-reclaim request — all of which a
+/// full either does itself or makes meaningless: `finish_full_old_reclaim_baseline`
+/// runs `note_full_collection_reclaimed_old_gen` moments later and resets both
+/// the untraced run and the budget base, and clears any old-reclaim request.
+/// Calling it would therefore be a no-op wrapped around a redundant request,
+/// and the redundant request is the kind that schedules a second full behind
+/// the one that just ran.
+///
+/// What IS worth keeping is the ratio: it is the most accurate young-survival
+/// figure the collector ever produces, and the next copying minor's in-place
+/// decision reads exactly this cell.
+pub(super) fn note_full_young_survival(young_bytes: usize, live_bytes: usize) {
+    if young_bytes == 0 {
+        return;
+    }
+    LAST_YOUNG_SURVIVAL_PERMILLE
+        .with(|c| c.set(Some(full_young_survival_permille(young_bytes, live_bytes))));
+}
+
+/// A full mark-sweep promoted its Eden survivors in place (#10182).
+pub(super) fn note_full_promotion(promoted_bytes: usize, promoted_objects: usize) {
+    FULL_PROMOTION_CYCLES.with(|c| c.set(c.get().saturating_add(1)));
+    FULL_PROMOTED_OBJECTS.with(|c| c.set(c.get().saturating_add(promoted_objects as u64)));
+    FULL_PROMOTED_BYTES.with(|c| c.set(c.get().saturating_add(promoted_bytes)));
+}
+
+/// A full mark-sweep was ELIGIBLE to promote and its own measurement said no.
+///
+/// The counterpart counter matters as much as the positive one: "the promotion
+/// never fired" and "the promotion was never eligible" are different verdicts,
+/// and only one of them is a policy result.
+pub(super) fn note_full_promotion_declined() {
+    FULL_PROMOTION_DECLINED_CYCLES.with(|c| c.set(c.get().saturating_add(1)));
+}
+
+/// Live-subject counters for the full-collection promotion (#10182): a green
+/// acceptance run that never promoted at a full proves nothing about it.
+pub fn full_promotion_cycles() -> u64 {
+    FULL_PROMOTION_CYCLES.with(Cell::get)
+}
+
+pub fn full_promotion_declined_cycles() -> u64 {
+    FULL_PROMOTION_DECLINED_CYCLES.with(Cell::get)
+}
+
+pub fn full_promoted_objects() -> u64 {
+    FULL_PROMOTED_OBJECTS.with(Cell::get)
+}
+
+pub fn full_promoted_bytes() -> usize {
+    FULL_PROMOTED_BYTES.with(Cell::get)
 }
 
 /// The untraced-promotion budget, and therefore **the worst-case retained

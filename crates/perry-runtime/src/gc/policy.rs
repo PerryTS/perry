@@ -1085,6 +1085,13 @@ crate::perry_thread_local! {
     pub(super) static GC_DEFERRED_REQUEST: Cell<DeferredGcRequest> =
         const { Cell::new(DeferredGcRequest::None) };
     pub(super) static GC_OLD_RECLAIM_PENDING: Cell<bool> = const { Cell::new(false) };
+    /// #10182: bytes promoted into old-gen since the last full old reclaim.
+    /// Every promotion is credited to the old baseline so it never reads as
+    /// growth; this is the running total of that credited, unverified cohort.
+    pub(super) static GC_PROMOTED_SINCE_FULL: Cell<usize> = const { Cell::new(0) };
+    /// #10182: old-gen occupancy the last full old reclaim left behind — the
+    /// verified live set the cohort bound is proportional to.
+    pub(super) static GC_OLD_LIVE_AT_LAST_FULL: Cell<usize> = const { Cell::new(0) };
     pub(super) static GC_LAST_OLD_RECLAIM_IN_USE_BYTES: Cell<usize> = const { Cell::new(0) };
     /// Live allocated arena bytes measured right after the last FULL
     /// mark-sweep — the baseline for major-GC pacing
@@ -1355,6 +1362,9 @@ impl Drop for OldReclaimReentryGuard {
 
 pub(super) const GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES: usize = 48 * 1024 * 1024;
 pub(super) const GC_OLD_GEN_RECLAIM_GROWTH_BYTES: usize = 32 * 1024 * 1024;
+/// #10182: the cohort bound above the floor, as a multiple of the old-gen
+/// live set the last full verified.
+const PROMOTED_COHORT_GROWTH_MULTIPLIER: usize = 2;
 pub(super) const GC_COPY_PROMOTION_HANDOFF_MIN_BYTES: usize = 24 * 1024 * 1024;
 
 #[inline]
@@ -1737,6 +1747,7 @@ pub(super) fn old_reclaim_pressure_due(old_in_use: usize, baseline: usize) -> bo
         && !GC_MAJOR_PACING_RETAINING.with(|c| c.get());
     crossed_absolute_threshold
         || old_in_use.saturating_sub(baseline) >= gc_old_reclaim_growth_band_bytes(baseline)
+        || promoted_cohort_bound_due()
 }
 
 /// Whether an imminent promotion justifies a full old reclaim FIRST.
@@ -1922,6 +1933,62 @@ pub(super) fn credit_promoted_bytes_to_old_baseline(promoted_bytes: usize) {
     }
     GC_LAST_OLD_RECLAIM_IN_USE_BYTES
         .with(|bytes| bytes.set(bytes.get().saturating_add(promoted_bytes)));
+    // #10182: the credit makes promoted bytes invisible to the growth band by
+    // design; the cohort bound is what still sees them.
+    GC_PROMOTED_SINCE_FULL.with(|bytes| bytes.set(bytes.get().saturating_add(promoted_bytes)));
+}
+
+/// #10182: how many promoted-but-unverified bytes old-reclaim may leave
+/// unexamined before a full is due: `max(floor, k × old live at last full)`.
+///
+/// The growth band cannot see this cohort: promotion credits the old baseline
+/// (#7965, and rightly — a pinned baseline degenerates the band), so a loop
+/// that parses a document, promotes it whole (untraced, #7888) and drops it
+/// leaves one dead tree per iteration in old-gen that `old_in_use − baseline`
+/// never counts, the absolute first-crossing arm is exempted while the heap is
+/// classified retaining, and the untraced-cohort instruments only act on a
+/// contradicting survival measurement the workload never produces (the tree
+/// IS live at every minor; it dies afterwards). Measured on
+/// `records_array_8m:scan`: 4 minors, 0 fulls, 105 MB of old-gen holding one
+/// live 23 MB tree, peak RSS 188 MiB against Node's 110.
+///
+/// Bounding the unverified cohort by a multiple of the verified live set keeps
+/// total major work linear in the live set (the #7592 argument, applied to
+/// promotions instead of arena growth) while capping residency: a full every
+/// `k × live` bytes of promotion, at a cost proportional to `live`.
+///
+/// The floor is ONE base nursery cap (`gc_promoted_cohort_floor_dyn_bytes`,
+/// which carries the argument), not a separate constant.
+///
+/// ★ This arm is paired with a full that promotes its own Eden survivors in
+/// place (`GcCycleState::maybe_promote_young_after_full`). A non-promoting full
+/// leaves the tree it just proved live in Eden, where the next copying minor
+/// can find it sharing the nursery with the following tree and evacuate it.
+/// The first draft of this bound shipped without that pairing, with a 64 MB
+/// floor, and measured peak RSS UP on all three target rows of #10182.
+pub(super) fn promoted_cohort_bound_bytes(old_live_at_last_full: usize) -> usize {
+    super::gc_promoted_cohort_floor_dyn_bytes()
+        .max(old_live_at_last_full.saturating_mul(PROMOTED_COHORT_GROWTH_MULTIPLIER))
+}
+
+#[inline]
+fn promoted_cohort_bound_due() -> bool {
+    GC_PROMOTED_SINCE_FULL.with(Cell::get)
+        >= promoted_cohort_bound_bytes(GC_OLD_LIVE_AT_LAST_FULL.with(Cell::get))
+}
+
+/// Trace/test observability for the cohort bound.
+pub(crate) fn promoted_bytes_since_full() -> usize {
+    GC_PROMOTED_SINCE_FULL.with(Cell::get)
+}
+
+#[cfg(test)]
+pub(super) fn seed_promoted_cohort_for_tests(
+    promoted_since_full: usize,
+    old_live_at_last_full: usize,
+) {
+    GC_PROMOTED_SINCE_FULL.with(|c| c.set(promoted_since_full));
+    GC_OLD_LIVE_AT_LAST_FULL.with(|c| c.set(old_live_at_last_full));
 }
 
 /// Feed a copying minor's measured young-survival ratio to arena-growth pacing.
@@ -1999,6 +2066,9 @@ pub(super) fn finish_full_old_reclaim_baseline() {
     let old_in_use =
         old_gen_reclaimable_pressure_bytes().saturating_add(external_side_live_bytes());
     GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.set(old_in_use));
+    // #10182: this full verified everything old; the cohort starts over.
+    GC_OLD_LIVE_AT_LAST_FULL.with(|bytes| bytes.set(old_in_use));
+    GC_PROMOTED_SINCE_FULL.with(|bytes| bytes.set(0));
     // Record the TOTAL post-full live set for major-GC pacing (young+old): the
     // full sweep is the only collection that frees forwarding stubs, so this is
     // the "clean" size the arena returns to and the base for the K× growth gate.
@@ -3211,6 +3281,14 @@ pub(crate) fn trigger_path_hot_slot_indices() -> Vec<(&'static str, u32)> {
         (
             "GC_MAJOR_PACING_RETAINING",
             GC_MAJOR_PACING_RETAINING.slot_index(),
+        ),
+        (
+            "GC_PROMOTED_SINCE_FULL",
+            GC_PROMOTED_SINCE_FULL.slot_index(),
+        ),
+        (
+            "GC_OLD_LIVE_AT_LAST_FULL",
+            GC_OLD_LIVE_AT_LAST_FULL.slot_index(),
         ),
         ("GC_FLAGS", GC_FLAGS.slot_index()),
         (

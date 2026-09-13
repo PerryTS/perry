@@ -54,11 +54,15 @@ pub(super) fn trigger_decision(site: &'static str, kind: &'static str) {
     let next_malloc = policy::GC_NEXT_MALLOC_TRIGGER.with(Cell::get);
     let old_in_use = crate::arena::old_gen_in_use_bytes();
     let old_free = old_free_bytes();
+    let promoted_since_full = policy::promoted_bytes_since_full();
+    let cohort_bound =
+        policy::promoted_cohort_bound_bytes(policy::GC_OLD_LIVE_AT_LAST_FULL.with(Cell::get));
     eprintln!(
         "[gc-trigger] site={site} kind={kind} arena_total={arena_total} next_base={next_base} armed={armed} \
          from_space={from_space} nursery_cap={nursery_cap} old_in_use={old_in_use} old_free={old_free} \
          old_reclaimable={old_reclaimable} external_side={external} old_baseline={old_baseline} \
          old_band={old_band} old_threshold={old_threshold} old_pending={old_pending} retaining={retaining} \
+         promoted_since_full={promoted_since_full} cohort_bound={cohort_bound} \
          malloc={malloc} next_malloc={next_malloc}"
     );
 }

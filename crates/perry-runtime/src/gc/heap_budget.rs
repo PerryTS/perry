@@ -164,6 +164,35 @@ budget_scaled_accessor!(
     12,
     2 * 1024 * 1024
 );
+/// #10182: floor of the promoted-but-unverified old-gen cohort — **one base
+/// nursery cap**, budget-scaled like every other threshold in this file.
+///
+/// Not a constant of its own, and not the 64 MB the first draft used. The
+/// cohort this bounds is produced one nursery at a time: every in-place
+/// promotion hands the whole young generation to old-gen, so the quantum of
+/// the thing being bounded IS the nursery cap. A floor of one quantum is the
+/// tightest bound that cannot fire twice for a single promotion, and it is
+/// what makes a parse/scan loop over document-sized inputs reach the
+/// fulls-dominated regime instead of stranding a dead tree per iteration
+/// (#10182). At 64 MB — four quanta on the 16 MB default cap — the arm fired
+/// only after the third or fourth promotion, i.e. after the peak it was meant
+/// to cap had already been set: measured 200/276/210 MiB against main's
+/// 188/256/187 on the three target rows.
+///
+/// The denominator tracks `gc_scavenge_nursery_cap_bytes`'s own default, so a
+/// budget-constrained device gets a floor in the same proportion to its heap
+/// that a desktop gets to the 16 MB cap.
+pub(crate) fn gc_promoted_cohort_floor_dyn_bytes() -> usize {
+    static CACHED: OnceLock<usize> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        budget_scaled(
+            super::policy::gc_scavenge_nursery_cap_bytes(),
+            1,
+            24,
+            1024 * 1024,
+        )
+    })
+}
 budget_scaled_accessor!(
     gc_copy_promotion_handoff_min_dyn_bytes,
     GC_COPY_PROMOTION_HANDOFF_MIN_BYTES,

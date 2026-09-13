@@ -598,6 +598,19 @@ pub(super) struct GcCycleState {
     sweep: Option<SweepTraceStats>,
     freed_bytes: u64,
     outcome: Option<GcCollectOutcome>,
+    /// #10182: may this cycle promote its young generation in place when its
+    /// own sweep measures it live? Decided in the constructor because the
+    /// SWEEP has to know (it invalidates the headers of the dead young objects
+    /// it reclaims so the promotion walk can tell survivors apart); the
+    /// decision itself is taken after the sweep, from the measurement.
+    promote_young_in_place: bool,
+    /// From-space occupancy at cycle start — the denominator of that
+    /// measurement. Captured in the constructor, before anything is reclaimed.
+    young_in_use_at_start: usize,
+    /// #10182: did the promotion actually run? The census `publish_reclaim_outcome`
+    /// hands the next copying minor depends on it — after a promotion the
+    /// from-space live share is zero, because there is no from-space left.
+    promoted_young_in_place: bool,
 }
 
 impl GcCycleState {
@@ -639,10 +652,47 @@ impl GcCycleState {
         // "already traced"). Every black birth is also pushed as a mark
         // seed — see `gc_note_black_birth`.
         super::barrier::GC_BIRTH_EXTRA_FLAGS.with(|cell| cell.set(GC_FLAG_MARKED));
+        let progress_kind = trigger_kind.progress_kind(GcCollectionKind::Full);
+        // #10182: a full mark-sweep is the one collection that can promote its
+        // Eden survivors for free — it has already proven them live, and its
+        // own sweep has already reclaimed everything around them. The guards
+        // are the full-cycle-specific half of the decision; the shared policy
+        // guards live in `full_promotion_admissible`, and the measurement that
+        // decides it is taken after the sweep.
+        //
+        //  * **Synchronous only.** A budgeted full opens mutator windows
+        //    between steps. The retag hands every in-use young block to
+        //    old-gen in one operation and `reset_young_after_promotion` then
+        //    re-seats the inline bump allocator; an allocation landing between
+        //    the two would be an allocation into a block that is registered
+        //    old and owned by a young arena.
+        //  * **Generational only.** Without the generational collector there
+        //    is no young generation to promote and no barrier to uphold.
+        //  * **Precise roots only.** A conservative stack scan's mark set is
+        //    not a sound liveness measurement — the same exclusion
+        //    `seed_promote_lock_from_sweep` applies two phases later, for the
+        //    same reason.
+        //  * **Old→young tracking complete.** Promotion makes these objects
+        //    old; a later minor will only find their young children through
+        //    the remembered set. This is the predicate the copying minor's
+        //    `BarriersInactive` fallback tests, and it means the same here.
+        let promote_young_in_place = !progress_kind.is_budgeted()
+            && super::gen_gc_enabled()
+            && super::full_promotion_admissible()
+            && matches!(
+                super::roots::conservative_stack_scan_decision(),
+                super::roots::ConservativeStackScanDecision::SkipDisabled
+            )
+            && super::barrier::old_to_young_tracking_complete();
+        let young_in_use_at_start = if promote_young_in_place {
+            crate::arena::copying_from_space_in_use_bytes()
+        } else {
+            0
+        };
         Self {
             collection_kind: GcCollectionKind::Full,
             trigger_kind,
-            progress_kind: trigger_kind.progress_kind(GcCollectionKind::Full),
+            progress_kind,
             phase: GcCyclePhase::BuildValidPointerSet,
             trace,
             active_elapsed: start.elapsed(),
@@ -661,6 +711,9 @@ impl GcCycleState {
             sweep: None,
             freed_bytes: 0,
             outcome: None,
+            promote_young_in_place,
+            young_in_use_at_start,
+            promoted_young_in_place: false,
         }
     }
 
@@ -722,6 +775,9 @@ impl GcCycleState {
             sweep: None,
             freed_bytes: 0,
             outcome: None,
+            promote_young_in_place: false,
+            young_in_use_at_start: 0,
+            promoted_young_in_place: false,
         }
     }
 
@@ -1497,7 +1553,9 @@ impl GcCycleState {
                 .with_dead_collection_finalize(
                     full_trace,
                     full_trace && !self.progress_kind.is_budgeted(),
-                ),
+                )
+                // #10182: see `GcCycleState::promote_young_in_place`.
+                .invalidating_dead_young_headers(self.promote_young_in_place),
             );
         }
         let done = self
@@ -1527,6 +1585,11 @@ impl GcCycleState {
             trace.old_pages = crate::arena::old_page_summary();
         }
         self.sweep = Some(sweep);
+        // #10182: the young generation is proven and its garbage is reclaimed;
+        // this is the one moment a non-moving full can hand its survivors to
+        // old-gen for nothing. Before the remembered-set clear below, which is
+        // exact precisely because no young generation remains afterwards.
+        self.maybe_promote_young_after_full(&sweep);
         // #7598: seed promote-on-first-copy from THIS completed collection.
         // Every cycle reaching here is a full or a non-copying minor — the two
         // blind spots of `retune_after_scavenge`, which only copying minors
@@ -1546,6 +1609,116 @@ impl GcCycleState {
             );
         }
         self.phase = GcCyclePhase::Reclaim;
+    }
+
+    /// #10182: let a full mark-sweep promote its Eden survivors in place.
+    ///
+    /// # Why here
+    ///
+    /// A full is non-moving and promotes nothing (#7592's latch comment in
+    /// `gc/mod.rs`), so a parse/scan loop over document-sized inputs strands a
+    /// dead tree per iteration: the copying minor correctly measures the tree
+    /// live, promotes it untraced (#7888), and it dies one iteration later in
+    /// old-gen where only a full can reclaim it. The cohort bound below makes
+    /// that full happen; this is what stops the full from handing the NEXT
+    /// tree straight back to a copying minor that would evacuate all 58 MB of
+    /// it (survival drops as soon as two trees share Eden).
+    ///
+    /// # Ordering, and why it is this and not another
+    ///
+    /// Directly after the sweep completes, before `ReclaimSubphase::RememberedSet`:
+    ///
+    ///  * **After the sweep** because the sweep is what makes the blocks
+    ///    promotable. It has finalized and invalidated every dead young object
+    ///    on them (`invalidating_dead_young_headers`), reset and released the
+    ///    blocks that held nothing live, and left the survivors' page state
+    ///    correct. Promoting before it would hand old-gen the garbage too.
+    ///  * **Before the remembered-set clear** because that clear is
+    ///    unconditional on a full and is *exact* only once no young generation
+    ///    remains — which is true here by construction: `retag_young_for_in_place_promotion`
+    ///    takes every in-use Eden and survivor block, both semispaces.
+    ///  * **Before `publish_reclaim_outcome`**, so `finish_full_old_reclaim_baseline`
+    ///    measures an old generation that already contains the promoted bytes.
+    ///    That is also why nothing calls `credit_promoted_bytes_to_old_baseline`
+    ///    here: the credit exists so a MINOR's promotion does not read as
+    ///    old-gen growth, and a full overwrites the baseline outright moments
+    ///    later. Crediting first would only add the bytes to the promoted
+    ///    cohort that the same function then resets to zero — and resetting it
+    ///    is right, because a cohort a full just traced is verified, not
+    ///    assumed.
+    ///
+    /// # Liveness
+    ///
+    /// `PromotionLiveness::AssumeAllLive`, which after this sweep means
+    /// "everything still parseable", because the sweep zeroed the `obj_type` of
+    /// everything it reclaimed on these blocks. The cheap described page-runs
+    /// are therefore exact rather than approximate, and the traced path's
+    /// per-object header list — ~1M entries for a 58 MB tree — is not built.
+    fn maybe_promote_young_after_full(&mut self, sweep: &SweepTraceStats) {
+        if !self.promote_young_in_place {
+            return;
+        }
+        let young_bytes = self.young_in_use_at_start;
+        let live_bytes = sweep.arena_live_from_space_bytes as usize;
+        // The most accurate young-survival figure the collector produces: a
+        // full trace's own census, not a prediction. Feed it to the copying
+        // minor's predictor whichever way the decision goes.
+        super::note_full_young_survival(young_bytes, live_bytes);
+        if !super::full_promotion_survival_holds_up(young_bytes, live_bytes) {
+            super::note_full_promotion_declined();
+            if crate::gc::gc_diag_enabled() {
+                eprintln!(
+                    "[gc-full-promote] declined young_bytes={young_bytes} live_bytes={live_bytes} \
+                     survival_permille={}",
+                    super::full_young_survival_permille(young_bytes, live_bytes),
+                );
+            }
+            return;
+        }
+        let promotion = crate::arena::retag_young_for_in_place_promotion(false);
+        if promotion.is_empty() {
+            // Nothing in use to promote: the sweep reset every young block. The
+            // retag captured nothing, so there is nothing to undo.
+            super::note_full_promotion_declined();
+            return;
+        }
+        let reserved_bytes = promotion.reserved_bytes();
+        let blocks = promotion.block_count();
+        super::note_promoted_young_capacity(reserved_bytes);
+        let stats = crate::arena::finish_in_place_promotion(
+            promotion,
+            crate::arena::PromotionLiveness::AssumeAllLive,
+        );
+        self.promoted_young_in_place = true;
+        super::note_in_place_promotion(stats.bytes, stats.live_bytes, stats.objects);
+        super::note_full_promotion(stats.bytes, stats.objects);
+        // Deliberately NOT `instruments::note_copying_minor_moved`: that bumps
+        // `copying_minor_cycles`, and a full counted as a copying minor is
+        // #7025's shape — a liveness counter summing two collectors, so a cell
+        // can pass having run no copying minor at all.
+        if let Some(trace) = self.trace.as_mut() {
+            trace.old_pages = crate::arena::old_page_summary();
+        }
+        if crate::gc::gc_diag_enabled() {
+            eprintln!(
+                "[gc-full-promote] promoted blocks={blocks} objects={} bytes={} \
+                 reserved_bytes={reserved_bytes} young_bytes={young_bytes} \
+                 live_bytes={live_bytes} survival_permille={} cycles={} declined={}",
+                stats.objects,
+                stats.bytes,
+                super::full_young_survival_permille(young_bytes, live_bytes),
+                super::full_promotion_cycles(),
+                super::full_promotion_declined_cycles(),
+            );
+        }
+        debug_assert_eq!(
+            crate::arena::copying_from_space_in_use_bytes(),
+            0,
+            "a promoting full must leave the young generation EMPTY: the \
+             remembered-set clear below is exact only if nothing young remains, \
+             and the next copying minor would otherwise evacuate a nursery that \
+             still holds the tree this full just proved live"
+        );
     }
 
     fn step_reclaim(&mut self, budget: GcWorkBudget) {
@@ -1750,7 +1923,15 @@ impl GcCycleState {
         let (arena_live_bytes, from_space_live) = match self.sweep {
             Some(sweep) => (
                 sweep.arena_live_bytes as usize,
-                Some(sweep.arena_live_from_space_bytes as usize),
+                // #10182: a promoting full leaves NO from-space. Publishing the
+                // sweep's from-space share here would hand the next copied
+                // minor bytes to subtract that are no longer in from-space at
+                // all — the #7901 double-charge, one collection removed.
+                Some(if self.promoted_young_in_place {
+                    0
+                } else {
+                    sweep.arena_live_from_space_bytes as usize
+                }),
             ),
             None => (crate::arena::arena_live_allocated_bytes(), None),
         };
