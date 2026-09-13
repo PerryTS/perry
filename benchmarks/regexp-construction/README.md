@@ -33,14 +33,17 @@ identical iteration counts and include the printed checksum. Timing is wall
 microseconds per iteration and includes the first operation; larger scales
 amortize initial compilation/validation and Bun's warmup.
 
-`measure.py` alternates before/after/Bun, checks checksums, and retains all
-samples plus medians. Repeat `--case MODE:SCALE` to select individual cases.
+`measure.py` checks checksums and retains samples, medians, and execution
+orders. Native builds run from one fixed pathname/inode; copying happens
+outside the timing window. Rotation plus reversal covers all six orders of
+before/after/Bun. Use a multiple of six rounds for balanced positions, and
+repeat `--case MODE:SCALE` to select individual cases.
 
 ```sh
 taskset -c 15 python3 benchmarks/regexp-construction/measure.py \
   --before /tmp/regexp-probe-before --after /tmp/regexp-probe \
   --source /tmp/regexp-probe.ts --bun /root/claude-opencode/bun/bin/bun \
-  --output /tmp/regexp-probe-results.json --runs 7
+  --output /tmp/regexp-probe-results.json --runs 12
 ```
 
 For existing benchmark regressions, `compare.py` compiles all 12 existing
@@ -48,7 +51,9 @@ For existing benchmark regressions, `compare.py` compiles all 12 existing
 checks outputs against the repository's pinned Node oracle, and alternates
 before/after execution order. Each build is copied to the same executable path
 outside the timed window. It reports child user CPU as well as wall time;
-use identical `--before`/`--after` bundles for an A/A noise control:
+use identical `--before`/`--after` bundles for an A/A noise control. Both
+harnesses also accept `--paired-controls`: two identical-copy labels per build
+run in each balanced four-run block (the probe omits Bun in this mode).
 
 ```sh
 export PATH=/tmp/regexp-oracle/node-v26.5.1-linux-x64/bin:$PATH
@@ -57,4 +62,6 @@ python3 benchmarks/regexp-construction/compare.py \
   --output /tmp/regexp-app-comparison --runs 7
 ```
 
-See [results.md](results.md) for the measured attribution, commands, and results.
+See [merged-results.md](merged-results.md) for the final comparison against
+current main, and [results.md](results.md) for the original attribution and
+measurements before integrating main.

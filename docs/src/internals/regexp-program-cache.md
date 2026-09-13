@@ -33,6 +33,11 @@ address index. No borrowed program slice survives a safepoint. The cache keeps
 only small scalar scratch-size hints; scratch buffers remain operation-owned
 and charged to the existing memory budget.
 
+Compound split/replace/match operations retain this same shared binding in
+`perex_api::Reuse`, alongside their operation-owned subject. Each search checks
+the current receiver and program cell before reusing it, so a callback that
+recompiles the RegExp still switches to its new program.
+
 The fast builtin dispatch guard contains only immutable ShapeIds, field
 indices, and epochs, with no untraced GC address. It verifies the current
 builtin `exec` value, the receiver's metadata, expando table, and prototype.

@@ -20,7 +20,10 @@ parser.add_argument("--after", type=Path)
 parser.add_argument("--output", type=Path, required=True)
 parser.add_argument("--runs", type=int, default=7)
 parser.add_argument("--filter", default="")
+parser.add_argument("--paired-controls", action="store_true", help="Add two identical-copy labels per build to each round")
 args = parser.parse_args()
+if args.paired_controls and args.after is None:
+    parser.error('--paired-controls requires --after')
 args.output.mkdir(parents=True, exist_ok=True)
 runner = args.output / "run-benchmark"
 root = Path(__file__).resolve().parents[2]
@@ -57,9 +60,18 @@ for source in sorted((root / "benchmarks/app-patterns/kernels").glob("*.ts")):
     expected = oracle.stdout.strip()
     row["node_exit"] = oracle.returncode
     samples = {label: [] for label in binaries}
+    if args.paired_controls:
+        for label in ('before', 'after'):
+            binaries[label + '_control'] = binaries[label]
+            samples[label + '_control'] = []
     for iteration in range(args.runs + 1):
         order = list(binaries)
-        if iteration % 2:
+        if args.paired_controls:
+            order = [('before', 'after', 'after_control', 'before_control'),
+                     ('after', 'before', 'before_control', 'after_control'),
+                     ('before_control', 'after_control', 'after', 'before'),
+                     ('after_control', 'before_control', 'before', 'after')][iteration % 4]
+        elif iteration % 2:
             order.reverse()
         for label in order:
             # argv[0]/execPath length can change startup allocation and GC

@@ -1,5 +1,9 @@
 # Issue #10179: measurement and verification record
 
+This is the original lane record. See [merged-results.md](merged-results.md)
+for the final revision after integrating current main, with matching build
+flags and improved benchmark controls.
+
 Linux x86-64 build host, 2026-09-13. Baseline: Perry
 `9b911855f8ca877ee439d5ddc416b27d4b7b018f`, Perex 0.1.0. Both compilers
 use release builds and matching runtime/stdlib archives. All native compilation,

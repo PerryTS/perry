@@ -3,6 +3,7 @@
 import argparse
 import json
 from pathlib import Path
+import shutil
 import statistics
 import subprocess
 
@@ -14,21 +15,45 @@ parser.add_argument('--bun', required=True)
 parser.add_argument('--output', type=Path, required=True)
 parser.add_argument('--runs', type=int, default=7)
 parser.add_argument('--case', action='append', help='MODE:SCALE; repeat to override the default cases')
+parser.add_argument('--paired-controls', action='store_true', help='Compare two identical-copy labels per build in each round, without Bun')
 args = parser.parse_args()
 commands = {'before': [args.before], 'after': [args.after], 'bun': [args.bun, args.source]}
+if args.paired_controls:
+    commands = {'before': [args.before], 'after': [args.after],
+                'before_control': [args.before], 'after_control': [args.after]}
+runner = args.output.with_suffix('.runner')
 rows = []
 cases = [(mode, int(scale)) for mode, scale in (case.split(':') for case in args.case)] if args.case else [
     ('all', 1), ('construct', 10), ('test-ascii', 100),
     ('test-emoji', 100), ('stripAnsi', 100), ('stripAnsi-match', 100)]
 for mode, scale in cases:
-    row = {'mode': mode, 'scale': scale, 'samples': {label: [] for label in commands}}
+    row = {'mode': mode, 'scale': scale, 'orders': [],
+           'samples': {label: [] for label in commands}}
     expected = None
     for iteration in range(args.runs):
         order = list(commands)
-        if iteration % 2:
-            order.reverse()
+        if args.paired_controls:
+            order = [('before', 'after', 'after_control', 'before_control'),
+                     ('after', 'before', 'before_control', 'after_control'),
+                     ('before_control', 'after_control', 'after', 'before'),
+                     ('after_control', 'before_control', 'before', 'after')][iteration % 4]
+        else:
+            # Rotation plus reversal covers all six orders; reversal alone
+            # would always run the candidate in the middle of three builds.
+            offset = iteration % len(order)
+            order = order[offset:] + order[:offset]
+            if iteration % 2:
+                order.reverse()
+        row['orders'].append(order)
         for label in order:
-            result = subprocess.run(commands[label] + [mode, str(scale)], check=True,
+            command = commands[label]
+            if label != 'bun':
+                # Startup layout can affect allocation/GC inside a timed loop.
+                # Keep argv[0], execPath, pathname and inode identical.
+                shutil.copyfile(command[0], runner)
+                runner.chmod(0o755)
+                command = [str(runner)]
+            result = subprocess.run(command + [mode, str(scale)], check=True,
                                     capture_output=True, text=True, timeout=180)
             times = {}
             other = []
