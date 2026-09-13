@@ -429,6 +429,22 @@ fn imports_used_by_module_code_are_not_normalized() {
 }
 
 #[test]
+fn import_attributes_keep_forwarding_imports_and_their_loader() {
+    let dir = fixture(Some(false.into()));
+    write(
+        dir.path(),
+        "node_modules/fixture/payload.js",
+        "export default 99;",
+    );
+    write(dir.path(), "node_modules/fixture/index.js", "import { default as asset } from './payload.js' with { type: 'file' }; import { used } from './used.js'; import { unused } from './unused.js'; export { asset, used, unused };");
+    write(dir.path(), "main.ts", "import { asset, used } from 'fixture'; console.log(used, typeof asset, asset.endsWith('payload.js'));");
+    let (paths, output) = compile(dir.path(), false, false);
+    assert_eq!(output, "42 string true\n");
+    assert!(contains(&paths, "/fixture/unused.js"));
+    assert_eq!(output, compile(dir.path(), true, false).1);
+}
+
+#[test]
 fn forwarding_barrels_keep_effectful_dependencies_and_bare_imports() {
     let dir = fixture(Some(false.into()));
     write(dir.path(), "node_modules/fixture/index.js", "import { used } from './used.js'; import { unused } from './unused.js'; import './bare.js'; export { used, unused };");

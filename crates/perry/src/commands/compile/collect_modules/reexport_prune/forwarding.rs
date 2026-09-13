@@ -30,12 +30,13 @@ pub(crate) fn normalize(
     {
         return None;
     }
-    // Ordinary imports apply packageAliases before resolving; re-export
-    // declarations currently do not. Do not normalize across that distinction.
+    // Import aliases/attributes can change resolution or select a file loader.
+    // Re-export collection does not share those paths; retain such imports.
     if module.body.iter().any(|item| {
         matches!(item,
             ast::ModuleItem::ModuleDecl(ast::ModuleDecl::Import(import))
                 if import.phase != ast::ImportPhase::Evaluation
+                    || import.with.is_some()
                     || ctx.package_aliases.contains_key(import.src.value.to_string_lossy().as_ref())
         )
     }) {
