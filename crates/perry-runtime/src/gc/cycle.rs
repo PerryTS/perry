@@ -1283,12 +1283,25 @@ impl GcCycleState {
                     return;
                 }
                 let done = {
+                    // #10182: a synchronous full's census knows which blocks
+                    // the trace never reached; the require-marked walk skips
+                    // them. A budgeted cycle has no census (and its mutator
+                    // windows can still shade), so it walks everything.
+                    let budgeted = self.progress_kind.is_budgeted();
+                    let valid_ptrs = self.valid_ptrs.as_ref();
                     let state = self
                         .atomic_finalize
                         .as_mut()
                         .expect("atomic finalize state exists");
                     let rebuild = state.remembered_rebuild.get_or_insert_with(|| {
-                        OldToYoungRememberedRebuildState::new(/* require_marked = */ true)
+                        let skip = if budgeted {
+                            None
+                        } else {
+                            valid_ptrs.and_then(|ptrs| ptrs.block_census.unmarked_blocks())
+                        };
+                        OldToYoungRememberedRebuildState::new_skipping(
+                            /* require_marked = */ true, skip,
+                        )
                     });
                     rebuild.step(budget)
                 };
@@ -1517,6 +1530,16 @@ impl GcCycleState {
                     full_trace && !self.progress_kind.is_budgeted(),
                 ),
             );
+            // #10182: a synchronous full reclaims dead, obligation-free blocks
+            // without walking them. Only its census-built pointer set records
+            // which blocks the trace reached; a budgeted cycle's classifier
+            // set is disarmed and this is a no-op.
+            if full_trace && !self.progress_kind.is_budgeted() {
+                if let Some(valid_ptrs) = self.valid_ptrs.as_ref() {
+                    let sweep = self.sweep_state.take().expect("sweep state was just built");
+                    self.sweep_state = Some(sweep.with_block_skip(&valid_ptrs.block_census));
+                }
+            }
         }
         let done = self
             .sweep_state

@@ -33,6 +33,9 @@ pub(crate) struct ArenaObjectCursor {
     block_pos: usize,
     offset: usize,
     finished: bool,
+    /// Global block indices this cursor never enters (#10182 block-granular
+    /// sweep). Empty for every other walker.
+    skip_blocks: Vec<bool>,
 }
 
 enum ArenaObjectCursorBlocks {
@@ -110,6 +113,7 @@ impl ArenaObjectCursorBuilder {
                 block_pos: 0,
                 offset: 0,
                 finished: false,
+                skip_blocks: Vec::new(),
             });
         }
 
@@ -264,6 +268,20 @@ impl ArenaObjectCursor {
         self.finished
     }
 
+    /// Never enter the blocks whose global index is set in `skip` (#10182).
+    /// Must be installed before the first `next`; a block the cursor is
+    /// already inside is not affected.
+    pub(crate) fn set_skip_blocks(&mut self, skip: Vec<bool>) {
+        self.skip_blocks = skip;
+    }
+
+    /// `(global block index, data, offset)` of the block the last yielded
+    /// object came from, as snapshotted when the cursor was built.
+    pub(crate) fn current_block_extent(&self) -> Option<(usize, usize, usize)> {
+        self.current_block
+            .map(|block| (block.block_idx, block.data, block.offset))
+    }
+
     pub(crate) fn next(&mut self) -> Option<(*mut u8, usize)> {
         let mut remaining = usize::MAX;
         self.next_budgeted(&mut remaining)
@@ -273,21 +291,31 @@ impl ArenaObjectCursor {
         if self.current_block.is_some() {
             return true;
         }
-        self.current_block = match &mut self.blocks {
-            ArenaObjectCursorBlocks::BlockIndex(blocks) => {
-                let block = blocks.get(self.block_pos).copied();
-                if block.is_some() {
-                    self.block_pos += 1;
+        loop {
+            self.current_block = match &mut self.blocks {
+                ArenaObjectCursorBlocks::BlockIndex(blocks) => {
+                    let block = blocks.get(self.block_pos).copied();
+                    if block.is_some() {
+                        self.block_pos += 1;
+                    }
+                    block
                 }
-                block
+                ArenaObjectCursorBlocks::Address(blocks) => blocks.next(),
+            };
+            let Some(block) = self.current_block else {
+                self.finished = true;
+                return false;
+            };
+            if !self
+                .skip_blocks
+                .get(block.block_idx)
+                .copied()
+                .unwrap_or(false)
+            {
+                return true;
             }
-            ArenaObjectCursorBlocks::Address(blocks) => blocks.next(),
-        };
-        if self.current_block.is_none() {
-            self.finished = true;
-            return false;
+            self.current_block = None;
         }
-        true
     }
 }
 
