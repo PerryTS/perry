@@ -2,10 +2,10 @@
 //! native-allocation accounting. Complete UTF-16 captures remain observable.
 use super::*;
 use crate::regex::perex_memory::{Buffer, MemoryBudget, StorageError};
-use crate::regex::perex_owner::{GcBinding, GcProgram, HeapSubject};
+use crate::regex::perex_owner::{GcProgram, HeapSubject};
 use crate::regex::perex_runtime::{self as host, CaptureMode, EngineError};
 use crate::regex::validate_and_canonicalize_flags;
-use perex::binding::BoundSubject;
+use perex::binding::{BoundProgram, BoundSubject};
 use perex::compiler::{CompileError, Node, Range};
 use perex::executor::ExecError;
 use perex::{span::Span, Budget};
@@ -15,7 +15,11 @@ fn subject<'s>(scope: &'s RuntimeHandleScope, bytes: &[u8]) -> BoundSubject<Heap
     BoundSubject::new(unsafe { HeapSubject::new(scope.root_string_ptr(ptr)).unwrap() }).unwrap()
 }
 
-fn compile<'s>(scope: &'s RuntimeHandleScope, text: &str, flags: &str) -> GcBinding<'s> {
+fn compile<'s>(
+    scope: &'s RuntimeHandleScope,
+    text: &str,
+    flags: &str,
+) -> BoundProgram<GcProgram<'s>> {
     let pattern = subject(scope, text.as_bytes());
     let memory = MemoryBudget::new(1 << 20);
     let mut budget = Budget::new(1_000_000);
@@ -30,7 +34,7 @@ fn compile<'s>(scope: &'s RuntimeHandleScope, text: &str, flags: &str) -> GcBind
     )
     .unwrap();
     assert_eq!(memory.live_bytes(), 0);
-    GcBinding::new(program, &mut budget).unwrap()
+    BoundProgram::new(program, &mut budget).unwrap()
 }
 
 #[test]
@@ -103,7 +107,7 @@ fn perex_host_compile_grows_scratch_and_reborrows_a_moving_pattern() {
     assert!(budget.remaining() < 1_000_000);
     assert_eq!(memory.live_bytes(), 0);
     assert_eq!(external_side_live_bytes(), before);
-    let program = GcBinding::new(program, &mut budget).unwrap();
+    let program = BoundProgram::new(program, &mut budget).unwrap();
     let input = subject(&scope, "a".repeat(100).as_bytes());
     let result = host::find(
         &program,
@@ -226,7 +230,7 @@ fn perex_host_running_search_survives_reentrant_receiver_recompile() {
             initial.install(&receiver);
         }
     }
-    let active = GcBinding::new(
+    let active = BoundProgram::new(
         unsafe { GcProgram::from_receiver(&scope, &receiver).unwrap() },
         &mut Budget::new(100_000),
     )
@@ -264,7 +268,7 @@ fn perex_host_running_search_survives_reentrant_receiver_recompile() {
         &[Span::new(0, 3), Span::new(0, 3)]
     );
     drop(old_result);
-    let next = GcBinding::new(
+    let next = BoundProgram::new(
         unsafe { GcProgram::from_receiver(&scope, &receiver).unwrap() },
         &mut Budget::new(100_000),
     )
@@ -488,69 +492,4 @@ fn perex_host_global_empty_matches_keep_surrogate_halves_and_share_work() {
         assert_eq!(memory.live_bytes(), 0);
     }
     assert_eq!(host::advance_empty(&input, 1, true).unwrap(), 2);
-}
-
-#[test]
-fn regexp_scratch_hint_reduces_rebuffering_survives_movement_and_respects_budget() {
-    let _guard = CopyingNurseryTestGuard::new(0);
-    let _scan = ConservativeScanDisabledGuard::new();
-    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    let _force = ForcedEvacuationTestGuard::on();
-    register_runtime_handle_root_scanner_for_tests();
-    let scope = RuntimeHandleScope::new();
-    let program = compile(&scope, "(ab|ac)+z", "");
-    let input = subject(&scope, b"ababz");
-    let run = |memory: &MemoryBudget| {
-        assert!(host::find(
-            &program,
-            &input,
-            0,
-            CaptureMode::Full,
-            &mut Budget::new(1_000_000),
-            memory,
-            32,
-            &mut host::poll,
-        )
-        .unwrap()
-        .is_some());
-        assert_eq!(memory.live_bytes(), 0, "no scratch is retained");
-    };
-    let cold = MemoryBudget::new(1 << 20);
-    run(&cold);
-    assert_ne!(
-        program.scratch_hint(),
-        (0, 0),
-        "the owner must retain the hint"
-    );
-    let old = program.with_view(|p| p.words().as_ptr() as usize).unwrap();
-    gc_collect_minor();
-    assert_ne!(
-        old,
-        program.with_view(|p| p.words().as_ptr() as usize).unwrap()
-    );
-    let warm = MemoryBudget::new(1 << 20);
-    run(&warm);
-    assert!(
-        warm.peak_bytes() < cold.peak_bytes(),
-        "warm buffers avoid growth overlap"
-    );
-
-    // A learned hint must not make a register-only no-match exceed a budget
-    // that cannot hold those optional frame/undo buffers.
-    let registers = program.with_view(|p| p.register_count()).unwrap();
-    let tight = MemoryBudget::new(registers * std::mem::size_of::<usize>());
-    let miss = subject(&scope, b"!");
-    assert!(host::find(
-        &program,
-        &miss,
-        0,
-        CaptureMode::Full,
-        &mut Budget::new(1_000_000),
-        &tight,
-        32,
-        &mut host::poll,
-    )
-    .unwrap()
-    .is_none());
-    assert_eq!(tight.live_bytes(), 0);
 }

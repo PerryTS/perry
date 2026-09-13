@@ -2,10 +2,10 @@
 //! filesystem strings are borrowed directly; no JS subject copy is required.
 use super::perex_api as api;
 use super::perex_memory::MemoryBudget;
-use super::perex_owner::{GcBinding, HeapSubject, OwnerError};
+use super::perex_owner::{GcProgram, HeapSubject, OwnerError};
 use super::perex_runtime::{self as host, CaptureMode, EngineError};
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
-use perex::binding::{BoundSubject, ImmutableSubject, Subject};
+use perex::binding::{BoundProgram, BoundSubject, ImmutableSubject, Subject};
 use perex::Budget;
 
 #[derive(Debug)]
@@ -18,7 +18,7 @@ impl ImmutableSubject for NativeText<'_> {
 }
 
 pub(crate) struct GlobProgram<'s> {
-    program: GcBinding<'s>,
+    program: BoundProgram<GcProgram<'s>>,
 }
 impl<'s> GlobProgram<'s> {
     #[cfg(test)]
@@ -42,7 +42,7 @@ impl<'s> GlobProgram<'s> {
             &mut host::poll,
         )?;
         let program =
-            GcBinding::new(program, &mut budget).map_err(|e| EngineError::Program(e.error))?;
+            BoundProgram::new(program, &mut budget).map_err(|e| EngineError::Program(e.error))?;
         Ok(Self { program })
     }
 

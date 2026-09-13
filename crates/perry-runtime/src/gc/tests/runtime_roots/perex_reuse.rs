@@ -143,9 +143,10 @@ fn perex_reuse_serves_a_whole_global_loop_across_moving_collections() {
     // Construction now shares the same program cell and its validation witness.
     // The second receiver pays no validation; the remaining work difference
     // must come from resuming searches near the preceding match.
-    assert_eq!(unsafe { (*receiver_ptr(&fresh)).perex_program }, unsafe {
-        (*receiver_ptr(&reused)).perex_program
-    });
+    assert_eq!(
+        unsafe { (*receiver_ptr(&fresh)).perex_program },
+        unsafe { (*receiver_ptr(&reused)).perex_program }
+    );
     let validation = api::WORK - setup.remaining();
     assert!(validation > 0, "the first binding must really validate");
     assert!(

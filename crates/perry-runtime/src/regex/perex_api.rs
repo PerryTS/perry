@@ -1,7 +1,7 @@
 //! Perry's public RegExp execution boundary. JS throws are caught below native
 //! owners and rethrown only after those owners have been released normally.
 use super::perex_memory::{MemoryBudget, StorageError};
-use super::perex_owner::{BuildError, GcBinding, GcProgram, HeapSubject};
+use super::perex_owner::{BuildError, GcProgram, HeapSubject};
 use super::perex_runtime::{self as host, CaptureMode, EngineError};
 use super::RegExpHeader;
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
@@ -103,7 +103,7 @@ pub(crate) fn program<'s>(
     budget: &mut Budget,
     _memory: &MemoryBudget,
     _poll: &mut impl FnMut() -> Result<(), EngineError>,
-) -> Result<GcBinding<'s>, EngineError> {
+) -> Result<BoundProgram<GcProgram<'s>>, EngineError> {
     let owner = unsafe { GcProgram::from_receiver(scope, receiver) }
         .map_err(|e| EngineError::Subject(perex::binding::SubjectError::Resource(e)))?;
     bind_program(owner, budget)
@@ -116,11 +116,11 @@ pub(crate) fn program<'s>(
 pub(crate) fn bind_program<'s>(
     owner: GcProgram<'s>,
     budget: &mut Budget,
-) -> Result<GcBinding<'s>, EngineError> {
+) -> Result<BoundProgram<GcProgram<'s>>, EngineError> {
     let root = owner.root();
     let owner = match owner.witness() {
         Some(witness) => match BoundProgram::new_witnessed(owner, witness) {
-            Ok(bound) => return Ok(GcBinding::from_bound(owner, bound)),
+            Ok(bound) => return Ok(bound),
             Err(failed) => failed.storage,
         },
         None => owner,
@@ -130,7 +130,7 @@ pub(crate) fn bind_program<'s>(
         crate::hot_diag::regex_with(|d| d.perex_validations += 1);
     }
     GcProgram::record_witness(&root, bound.witness());
-    Ok(GcBinding::from_bound(owner, bound))
+    Ok(bound)
 }
 
 /// Bind a whole heap string, in constant work when this header was validated
@@ -206,7 +206,7 @@ pub(crate) struct Reuse<'b, 's> {
 struct ReusedProgram<'s> {
     receiver: RuntimeHandle<'s>,
     cell: RuntimeHandle<'s>,
-    bound: GcBinding<'s>,
+    bound: BoundProgram<GcProgram<'s>>,
 }
 
 impl<'b, 's> Reuse<'b, 's> {
@@ -259,7 +259,7 @@ impl<'b, 's> Reuse<'b, 's> {
 
     /// Both roots are live, so equal addresses name the same objects even after
     /// either moved; a replaced program cannot reuse a cell this root retains.
-    fn program_for(&self, receiver: &RuntimeHandle<'_>) -> Option<&GcBinding<'s>> {
+    fn program_for(&self, receiver: &RuntimeHandle<'_>) -> Option<&BoundProgram<GcProgram<'s>>> {
         let reused = self.program.as_ref()?;
         let current = receiver.with_const_ptr::<RegExpHeader, _>(|p| p);
         let bound = reused.receiver.with_const_ptr::<RegExpHeader, _>(|p| p);

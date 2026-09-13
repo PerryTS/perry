@@ -3,10 +3,11 @@
 
 use super::flags::CanonicalFlags;
 use super::perex_memory::{Buffer, MemoryBudget, StorageError};
-use super::perex_owner::{BuildError, GcBinding, GcProgram, OwnerError};
+use super::perex_owner::{BuildError, GcProgram, OwnerError};
 use crate::gc::RuntimeHandleScope;
 use perex::binding::{
-    BoundProgramError, BoundResources, BoundSubject, ImmutableSubject, PairError, SubjectError,
+    BoundProgram, BoundProgramError, BoundResources, BoundSubject, ImmutableSubject, PairError,
+    SubjectError,
 };
 use perex::compiler::{self, CompileError, Node, Range};
 use perex::executor::{
@@ -158,7 +159,7 @@ fn search_error(error: SearchError<PairError<OwnerError, OwnerError>>) -> Engine
 /// Find from an absolute UTF-16 position in the complete original string.
 /// The caller supplies the same budget across repeated global searches.
 pub(crate) fn find<'mem, S: ImmutableSubject<Error = OwnerError>>(
-    program: &GcBinding<'_>,
+    program: &BoundProgram<GcProgram<'_>>,
     subject: &BoundSubject<S>,
     start: usize,
     mode: CaptureMode,
@@ -182,7 +183,7 @@ pub(crate) fn find<'mem, S: ImmutableSubject<Error = OwnerError>>(
 /// string with an identical layout cannot be detected and would give wrong
 /// answers, so callers keep a position only as long as the binding it came from.
 pub(crate) fn find_near<'mem, S: ImmutableSubject<Error = OwnerError>>(
-    program: &GcBinding<'_>,
+    program: &BoundProgram<GcProgram<'_>>,
     subject: &BoundSubject<S>,
     start: usize,
     near: Option<Position>,
@@ -201,10 +202,7 @@ pub(crate) fn find_near<'mem, S: ImmutableSubject<Error = OwnerError>>(
     let registers = program
         .with_view(|program| program.register_count())
         .map_err(EngineError::Program)?;
-    let resources = BoundResources {
-        program: &**program,
-        subject,
-    };
+    let resources = BoundResources { program, subject };
     let mut size = ScratchRequirements {
         registers,
         frames: 0,
@@ -260,28 +258,6 @@ pub(crate) fn find_near<'mem, S: ImmutableSubject<Error = OwnerError>>(
                         .max(size.undo.checked_mul(2).ok_or(StorageError::Limit)?)
                         .max(16);
                 }
-                // Start every search with register-only scratch. A no-match
-                // pays no frame/undo allocation even after a complex match.
-                // Once growth is required, combine the remembered capacities
-                // into this replacement and skip intermediate growth steps.
-                let (frames, undo) = program.scratch_hint();
-                let frames = frames.max(size.frames);
-                let undo = undo.max(size.undo);
-                let hinted_bytes = registers
-                    .checked_mul(std::mem::size_of::<usize>())
-                    .and_then(|n| {
-                        frames
-                            .checked_mul(std::mem::size_of::<Frame>())
-                            .and_then(|f| {
-                                undo.checked_mul(std::mem::size_of::<Undo>())
-                                    .and_then(|u| n.checked_add(f)?.checked_add(u))
-                            })
-                    });
-                if hinted_bytes.is_some_and(|bytes| memory.can_fit(bytes)) {
-                    size.frames = frames;
-                    size.undo = undo;
-                }
-                program.record_scratch_hint(size.frames, size.undo);
                 poll()?;
                 let replacement = MatchBuffers::new(memory, size)?;
                 search = search

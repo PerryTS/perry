@@ -1,8 +1,10 @@
 //! Actual collector witnesses for Perex's program edge and scoped input.
 //! These assert movement and sole-root reachability, not just matching output.
 use super::*;
-use crate::regex::perex_owner::{BuildError, GcBinding, GcProgram, HeapSubject};
-use perex::binding::{BoundResources, BoundSubject, ImmutableProgram, ImmutableSubject, Subject};
+use crate::regex::perex_owner::{BuildError, GcProgram, HeapSubject};
+use perex::binding::{
+    BoundProgram, BoundResources, BoundSubject, ImmutableProgram, ImmutableSubject, Subject,
+};
 use perex::compiler::{prepare, CompileError, Node, Range};
 use perex::executor::{Frame, Progress, Scratch, Search, Undo};
 use perex::input::Input;
@@ -23,8 +25,8 @@ fn compile<'a>(scope: &'a RuntimeHandleScope, pattern: &str, flags: &str) -> GcP
     GcProgram::emit(scope, plan, 1 << 20).unwrap()
 }
 
-fn bound_program<'a>(owner: GcProgram<'a>) -> GcBinding<'a> {
-    GcBinding::new(owner, &mut Budget::new(100_000)).unwrap()
+fn bound_program<'a>(owner: GcProgram<'a>) -> BoundProgram<GcProgram<'a>> {
+    BoundProgram::new(owner, &mut Budget::new(100_000)).unwrap()
 }
 
 #[test]
