@@ -359,24 +359,43 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
     // candidate at the packed slot index carried here. So the lowering needs
     // nothing from the receiver's static type, and asking for it would have
     // made the whole clone dead IR.
-    if let Some((fact, field_index)) =
+    if let Some((fact, field_slot)) =
         crate::expr::element_shape_loop_fact_for_property_get(ctx, object, property)
-            .map(|(fact, idx)| (fact.clone(), idx))
+            .map(|(fact, slot)| (fact.clone(), slot.clone()))
     {
         // Both receiver spellings — `arr[j].field` and #7771's `r.field`
         // through the clone's element binding — resolve to the fact's own
         // array; the report below must not re-derive it from the expression
         // shape, which the binding form does not carry.
         let arr_id = fact.array_local_id;
-        // The counter's canonical i32 slot is what the matcher required;
-        // without it there is nothing to index with.
-        if let Some(slot) = ctx.i32_counter_slots.get(&fact.index_local_id).cloned() {
-            let idx_i32 = ctx.block().load(I32, &slot);
+        // The counter's canonical i32 slot is what the matcher required for
+        // every index form that reads the counter; without it there is nothing
+        // to index with. A constant index reads no counter and needs none.
+        let counter_slot = ctx.i32_counter_slots.get(&fact.index_local_id).cloned();
+        if counter_slot.is_some() || !fact.index.needs_counter_i32_slot() {
+            // #10123: the index the preheader discharged a bounds obligation
+            // for. All three forms are i32 and in `[0, length)` by the time
+            // they reach the GEP, which is why the fast clone pays no per-read
+            // bounds test in any of them.
+            let idx_i32 = match &fact.index {
+                crate::expr::ElementShapeIndex::Counter => {
+                    let slot = counter_slot.expect("checked above");
+                    ctx.block().load(I32, &slot)
+                }
+                crate::expr::ElementShapeIndex::Constant(k) => k.to_string(),
+                // The derived `const d = j % m` binding's own slot, written by
+                // the `Let` arm in `stmt/let_stmt.rs` earlier in this same
+                // iteration.
+                crate::expr::ElementShapeIndex::DerivedMod { slot, .. } => {
+                    let slot = slot.clone();
+                    ctx.block().load(I32, &slot)
+                }
+            };
             let value = crate::expr::element_shape_guard::emit_element_shape_field_load(
                 ctx,
                 &fact,
                 &idx_i32,
-                field_index,
+                &field_slot,
             );
             let lowered = LoweredValue {
                 semantic: SemanticKind::JsNumber,

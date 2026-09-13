@@ -48,6 +48,46 @@ pub(crate) fn lower_let(
     {
         return Ok(());
     }
+    // #10123: the derived-index twin. Inside a shape-keyed element-shape fast
+    // clone, `const d = j % m` is not lowered generically — `%` on two
+    // possibly-untyped operands is a runtime call, and a call inside the clone
+    // DELETES it (#7690) rather than slowing it. The preheader already proved
+    // `m` is an integral `1..=i32::MAX` and materialized it as an i32, and the
+    // counter is a non-negative i32, so the whole statement is one `srem`.
+    //
+    // Sound for the same four reasons the element binding is: nothing reads
+    // `d` bare inside the clone (matcher), the clone is call-free so no GC
+    // observes the slot mid-loop, `const` scoping means nothing after the loop
+    // can read it, and a residual-check side exit re-runs the current
+    // iteration in the slow clone, whose OWN `Let` binds the real slot before
+    // any use. The fact is popped before the slow clone lowers, so this arm
+    // cannot fire there.
+    if let Some((counter_slot, modulus_i32, derived_slot)) =
+        ctx.element_shape_loop_facts.iter().rev().find_map(|fact| {
+            let crate::expr::ElementShapeIndex::DerivedMod {
+                local_id,
+                modulus_i32,
+                slot,
+            } = &fact.index
+            else {
+                return None;
+            };
+            if *local_id != id {
+                return None;
+            }
+            Some((
+                ctx.i32_counter_slots.get(&fact.index_local_id)?.clone(),
+                modulus_i32.clone(),
+                slot.clone(),
+            ))
+        })
+    {
+        let blk = ctx.block();
+        let counter = blk.load(I32, &counter_slot);
+        let derived = blk.srem(I32, &counter, &modulus_i32);
+        blk.store(I32, &derived, &derived_slot);
+        return Ok(());
+    }
     // `let C = SomeClass` aliases the local `C` to the class
     // `SomeClass` for `new C()` site rerouting. The HIR lowers
     // class identifiers referenced as values to `Expr::ClassRef`,
