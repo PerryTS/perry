@@ -38,6 +38,10 @@ impl MemoryBudget {
         self.peak.get()
     }
 
+    pub(super) fn can_fit(&self, extra: usize) -> bool {
+        self.check(extra).is_ok()
+    }
+
     fn check(&self, extra: usize) -> Result<usize, StorageError> {
         self.live
             .get()

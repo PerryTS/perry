@@ -30,6 +30,10 @@ RegExp sharing the cached program. Each operation still roots its own program,
 so eviction, collection, and reentrant receiver recompilation cannot invalidate
 an active search. No borrowed program slice survives a safepoint. Scratch
 buffers remain operation-owned and charged to the existing memory budget.
+Two scalar size hints beside the program words remember at most 16 frames and
+32 undo slots, avoiding repeated rebuffering. A hint is ignored when the initial
+buffers would exceed the operation budget. The hint cell is accessed only under
+a current program view; no interior address survives a safepoint.
 
 Compound split/replace/match operations retain program and subject bindings in
 `perex_api::Reuse`, checking the current receiver and program cell before reuse.

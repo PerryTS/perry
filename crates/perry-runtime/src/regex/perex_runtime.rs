@@ -199,8 +199,14 @@ pub(crate) fn find_near<'mem, S: ImmutableSubject<Error = OwnerError>>(
     if quantum == 0 {
         return Err(EngineError::InvalidQuantum);
     }
-    let registers = program
-        .with_view(|program| program.register_count())
+    let (registers, (frames, undo)) = program
+        .with_view(|program| {
+            // This binding owns a GcProgram, whose views preserve the complete
+            // inline word slice. Copy scalars before any poll or allocation.
+            (program.register_count(), unsafe {
+                super::perex_owner::scratch_hint(program.words()).get()
+            })
+        })
         .map_err(EngineError::Program)?;
     let resources = BoundResources { program, subject };
     let mut size = ScratchRequirements {
@@ -208,6 +214,17 @@ pub(crate) fn find_near<'mem, S: ImmutableSubject<Error = OwnerError>>(
         frames: 0,
         undo: 0,
     };
+    let hinted_bytes = registers
+        .checked_mul(std::mem::size_of::<usize>())
+        .and_then(|n| {
+            n.checked_add(
+                frames * std::mem::size_of::<Frame>() + undo * std::mem::size_of::<Undo>(),
+            )
+        });
+    if hinted_bytes.is_some_and(|bytes| memory.can_fit(bytes)) {
+        size.frames = frames;
+        size.undo = undo;
+    }
     poll()?;
     let buffers = MatchBuffers::new(memory, size)?;
     let mut search = match near {
@@ -258,6 +275,14 @@ pub(crate) fn find_near<'mem, S: ImmutableSubject<Error = OwnerError>>(
                         .max(size.undo.checked_mul(2).ok_or(StorageError::Limit)?)
                         .max(16);
                 }
+                program
+                    .with_view(|program| unsafe {
+                        // Retain bounded scalar hints, never native scratch or a
+                        // program/subject view. The binding reacquires after GC.
+                        super::perex_owner::scratch_hint(program.words())
+                            .set((size.frames.min(16), size.undo.min(32)));
+                    })
+                    .map_err(EngineError::Program)?;
                 poll()?;
                 let replacement = MatchBuffers::new(memory, size)?;
                 search = search

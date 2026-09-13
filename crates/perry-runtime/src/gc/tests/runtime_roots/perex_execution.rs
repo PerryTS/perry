@@ -493,3 +493,63 @@ fn perex_host_global_empty_matches_keep_surrogate_halves_and_share_work() {
     }
     assert_eq!(host::advance_empty(&input, 1, true).unwrap(), 2);
 }
+
+#[test]
+fn regexp_scratch_hint_reduces_rebuffering_survives_movement_and_respects_budget() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _scan = ConservativeScanDisabledGuard::new();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _force = ForcedEvacuationTestGuard::on();
+    register_runtime_handle_root_scanner_for_tests();
+    let scope = RuntimeHandleScope::new();
+    let program = compile(&scope, "(ab|ac)+z", "");
+    let input = subject(&scope, b"ababz");
+    let run = |memory: &MemoryBudget| {
+        assert!(host::find(
+            &program,
+            &input,
+            0,
+            CaptureMode::Full,
+            &mut Budget::new(1_000_000),
+            memory,
+            32,
+            &mut host::poll,
+        )
+        .unwrap()
+        .is_some());
+        assert_eq!(memory.live_bytes(), 0, "no scratch is retained");
+    };
+    let cold = MemoryBudget::new(1 << 20);
+    run(&cold);
+    let old = program.with_view(|p| p.words().as_ptr() as usize).unwrap();
+    gc_collect_minor();
+    assert_ne!(
+        old,
+        program.with_view(|p| p.words().as_ptr() as usize).unwrap()
+    );
+    let warm = MemoryBudget::new(1 << 20);
+    run(&warm);
+    assert!(
+        warm.peak_bytes() < cold.peak_bytes(),
+        "warm buffers avoid growth overlap"
+    );
+
+    // A learned hint must not make a register-only no-match exceed a budget
+    // that cannot hold those optional frame/undo buffers.
+    let registers = program.with_view(|p| p.register_count()).unwrap();
+    let tight = MemoryBudget::new(registers * std::mem::size_of::<usize>());
+    let miss = subject(&scope, b"!");
+    assert!(host::find(
+        &program,
+        &miss,
+        0,
+        CaptureMode::Full,
+        &mut Budget::new(1_000_000),
+        &tight,
+        32,
+        &mut host::poll,
+    )
+    .unwrap()
+    .is_none());
+    assert_eq!(tight.live_bytes(), 0);
+}

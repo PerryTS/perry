@@ -1,6 +1,6 @@
 //! Perry's program and subject owners for Perex's scoped-borrow API.
 //!
-//! Programs contain only an inline word count and immutable program words.
+//! Programs contain an inline scalar prefix and immutable program words.
 //! The collector can move them; owners retain registered handles, never bases.
 //! Compilation scratch belongs to the caller, and emission writes directly
 //! into the final GC allocation after the pattern borrow has ended.
@@ -19,6 +19,7 @@ struct ProgramCell {
     /// with none, so it cannot describe other words. Stored by the first
     /// validating bind; the cell stays a pointer-free leaf.
     witness: Option<perex::binding::ProgramWitness>,
+    scratch_hint: std::cell::Cell<(usize, usize)>,
     // Immediately followed by word_count initialized u32 words.
 }
 
@@ -101,6 +102,7 @@ impl<'scope> GcProgram<'scope> {
             cell.write(ProgramCell {
                 word_count: words,
                 witness: None,
+                scratch_hint: std::cell::Cell::new((0, 0)),
             });
             let output = cell.add(1).cast::<u32>();
             output.write_bytes(0, words);
@@ -185,6 +187,24 @@ impl<'scope> GcProgram<'scope> {
             root: scope.root_raw_const_ptr(ptr),
         })
     }
+}
+
+/// Advisory scalar capacities beside the immutable words. The returned cell
+/// is used only inside the program borrow; no address may survive a safepoint.
+///
+/// # Safety
+/// `words` must be the complete slice supplied by `GcProgram::with_words`, as
+/// retained by `BoundProgram<GcProgram>`. Perex views preserve that slice base.
+/// The prefix is disjoint from the borrowed words, and only this Cell changes.
+pub(super) unsafe fn scratch_hint(words: &[u32]) -> &std::cell::Cell<(usize, usize)> {
+    let cell = unsafe {
+        words
+            .as_ptr()
+            .cast::<u8>()
+            .sub(std::mem::size_of::<ProgramCell>())
+            .cast::<ProgramCell>()
+    };
+    unsafe { &(*cell).scratch_hint }
 }
 
 /// The witness stored in the program cell at `program` (a RegExp's
