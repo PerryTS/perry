@@ -1287,3 +1287,31 @@ fn perex_split_user_species_regexp_keeps_the_observable_sticky_loop() {
     let splitter = scope.root_nanbox_f64(get(&re, b"splitter"));
     assert_eq!(get(&splitter, b"lastIndex"), 2.0);
 }
+
+/// Work one forward split of `repeats` non-ASCII records charges.
+fn forward_split_work(repeats: usize) -> usize {
+    let scope = RuntimeHandleScope::new();
+    let input = text(&scope, "ä中12，Ö漢345；ef6😀".repeat(repeats).as_bytes());
+    let re = regex(&scope, "[，；😀]+".as_bytes(), b"u");
+    let before = forward_splits();
+    let out = run(&scope, &input, &re, -1.0);
+    assert_eq!(forward_splits(), before + 1, "the forward search must run");
+    // Three pieces per record and the empty piece after the final emoji.
+    assert_eq!(get(&out, b"length"), (3 * repeats + 1) as f64);
+    split::LAST_FORWARD_WORK.with(Cell::get)
+}
+
+/// On non-ASCII storage a search that seeks from an end of the subject makes a
+/// loop of them quadratic (#10164). Resuming each from the previous one keeps
+/// the forward split's work proportional to the input.
+#[test]
+fn perex_split_forward_search_resumes_each_search_on_non_ascii_input() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    super::perex_public::register_host_roots();
+    let ratio = forward_split_work(2_000) as f64 / forward_split_work(1_000) as f64;
+    assert!(
+        ratio < 2.3,
+        "doubling the input must roughly double the work, got {ratio:.2}x"
+    );
+}
