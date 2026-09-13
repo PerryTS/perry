@@ -73,6 +73,7 @@ mod survival_diag;
 mod sweep_described_runs;
 mod sweep_hole_rebuild;
 mod sweep_page_tally;
+mod sweep_whole_block;
 mod teardown;
 mod telemetry_verifier;
 mod temp_roots;

@@ -274,6 +274,14 @@ impl ArenaSweepObjectsState {
     pub(super) fn step(&mut self, budget: usize) -> bool {
         let mut remaining = budget;
         let mut done = false;
+        if budget == usize::MAX && self.cursor.at_block_boundary() {
+            while let Some((block_idx, data, offset, size)) = self.cursor.next_whole_block() {
+                // SAFETY: the block was snapshotted by this sweep's cursor.
+                unsafe { self.sweep_whole_block(block_idx, data, offset, size) };
+            }
+            remaining = 0;
+            done = true;
+        }
         while remaining > 0 {
             let Some((header_ptr, block_idx)) = self.cursor.next() else {
                 done = true;
@@ -293,6 +301,83 @@ impl ArenaSweepObjectsState {
             self.apply_old_page_tally();
         }
         done
+    }
+
+    /// Sweep one whole block in a single pass (#10182). It visits exactly the
+    /// headers `ArenaObjectCursor::next_budgeted` yields for the block and
+    /// handles each exactly as `process_object` would. The common case — a
+    /// marked, unpinned, unforwarded object in a block that does not age-bump —
+    /// is `keep_live_object` with the per-block constants (old or general,
+    /// from-space membership, age bumping) hoisted out of the loop; every other
+    /// header goes through `process_object` unchanged.
+    ///
+    /// # Safety
+    /// `data`/`offset`/`size` are an arena block as this sweep's cursor
+    /// snapshotted it.
+    unsafe fn sweep_whole_block(
+        &mut self,
+        block_idx: usize,
+        data: usize,
+        offset: usize,
+        size: usize,
+    ) {
+        let is_old = block_idx >= self.old_block_start;
+        let general = block_idx < self.resettable_general_n;
+        let age_bump = self.do_age_bump && general;
+        let from_space = crate::arena::block_in_copying_from_space(
+            block_idx,
+            self.resettable_general_n,
+            &self.active_survivor_blocks,
+        );
+        #[cfg(test)]
+        let record_live = super::super::trace::block_skip::sabotage::get()
+            & super::super::trace::block_skip::sabotage::FORGET_WHOLE_BLOCK_LIVE
+            == 0;
+        #[cfg(not(test))]
+        let record_live = true;
+        let mut kept_live = false;
+        let mut cursor = 0usize;
+        while cursor < offset {
+            let aligned = (cursor + 7) & !7;
+            if aligned >= offset {
+                break;
+            }
+            let header = (data + aligned) as *mut GcHeader;
+            let total_size = (*header).size as usize;
+            if total_size == 0 || total_size > size {
+                break;
+            }
+            cursor = aligned + total_size;
+            if !crate::gc::gc_type_is_arena_walkable((*header).obj_type) {
+                continue;
+            }
+            let flags = (*header).gc_flags;
+            if age_bump
+                || flags & (GC_FLAG_MARKED | GC_FLAG_PINNED | GC_FLAG_FORWARDED) != GC_FLAG_MARKED
+            {
+                self.process_object(header, block_idx);
+                continue;
+            }
+            if is_old {
+                self.account_old_object(header, total_size, true, false);
+            }
+            kept_live = true;
+            if general {
+                self.eden_live_bytes = self.eden_live_bytes.saturating_add(total_size as u64);
+            }
+            self.arena_live_bytes = self.arena_live_bytes.saturating_add(total_size as u64);
+            if from_space {
+                self.arena_live_from_space_bytes = self
+                    .arena_live_from_space_bytes
+                    .saturating_add(total_size as u64);
+            }
+            (*header).gc_flags = flags & !GC_FLAG_MARKED;
+        }
+        if kept_live && record_live {
+            if let Some(slot) = self.block_has_live.get_mut(block_idx) {
+                *slot = true;
+            }
+        }
     }
 
     /// Account one swept old object on its page(s), batching single-page

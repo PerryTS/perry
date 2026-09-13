@@ -307,6 +307,9 @@ pub(crate) mod sabotage {
     /// The sweep treats every whole-walked block as holding no invalidated
     /// header, whatever the census saw.
     pub(crate) const FORGET_HOLES: u8 = 32;
+    /// The whole-block sweep's fast path keeps objects without recording that
+    /// their block holds a live object.
+    pub(crate) const FORGET_WHOLE_BLOCK_LIVE: u8 = 64;
 
     thread_local! {
         static SABOTAGE: Cell<u8> = const { Cell::new(0) };
