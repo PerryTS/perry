@@ -14,6 +14,7 @@ pub(crate) fn collect_modules(
     progress: &VerboseProgress,
     mut parse_cache: Option<&mut ParseCache>,
 ) -> Result<()> {
+    ctx.reexport_pruner.root(&entry_path.canonicalize()?);
     let mut states: HashMap<PathBuf, VisitState> = HashMap::new();
     let mut stack = vec![WorkFrame::Enter(entry_path.clone())];
     // Next.js wall 54 (part 2): a standalone `server.js` loads its page, route,
@@ -47,61 +48,78 @@ pub(crate) fn collect_modules(
             }
         }
     }
-    while let Some(frame) = stack.pop() {
-        match frame {
-            WorkFrame::Enter(next_path) => {
-                let canonical = next_path.canonicalize().map_err(|e| {
-                    anyhow!("Failed to canonicalize {}: {}", next_path.display(), e)
-                })?;
+    loop {
+        while let Some(frame) = stack.pop() {
+            match frame {
+                WorkFrame::Enter(next_path) => {
+                    let canonical = next_path.canonicalize().map_err(|e| {
+                        anyhow!("Failed to canonicalize {}: {}", next_path.display(), e)
+                    })?;
+                    // Worker/asset/standalone roots can enter outside ordinary
+                    // import edges. Their full namespace must remain available.
+                    ctx.reexport_pruner.implicit_root(&canonical);
 
-                if matches!(
-                    states.get(&canonical),
-                    Some(VisitState::InProgress | VisitState::Done)
-                ) {
-                    continue;
+                    if matches!(
+                        states.get(&canonical),
+                        Some(VisitState::InProgress | VisitState::Done)
+                    ) {
+                        continue;
+                    }
+                    if visited.contains(&canonical) {
+                        states.insert(canonical, VisitState::Done);
+                        continue;
+                    }
+
+                    states.insert(canonical.clone(), VisitState::InProgress);
+                    visited.insert(canonical.clone());
+                    progress.record(ProgressSnapshot {
+                        stage: "collect-module",
+                        module_path: Some(&canonical),
+                        visited: Some(visited.len()),
+                        collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
+                        ..Default::default()
+                    });
+
+                    let discovered = collect_module_one(
+                        &next_path,
+                        canonical.clone(),
+                        ctx,
+                        visited,
+                        format,
+                        target,
+                        next_class_id,
+                        progress,
+                        parse_cache.as_deref_mut(),
+                    )?;
+
+                    if let Some(prepared) = discovered.finish {
+                        stack.push(WorkFrame::Finish(prepared));
+                    } else {
+                        states.insert(canonical, VisitState::Done);
+                    }
+                    for child in discovered.children.into_iter().rev() {
+                        stack.push(WorkFrame::Enter(child));
+                    }
                 }
-                if visited.contains(&canonical) {
+                WorkFrame::Finish(prepared) => {
+                    let canonical = prepared.canonical.clone();
+                    collect_module_finish(
+                        prepared,
+                        ctx,
+                        visited,
+                        target,
+                        skip_transforms,
+                        progress,
+                    )?;
                     states.insert(canonical, VisitState::Done);
-                    continue;
                 }
-
-                states.insert(canonical.clone(), VisitState::InProgress);
-                visited.insert(canonical.clone());
-                progress.record(ProgressSnapshot {
-                    stage: "collect-module",
-                    module_path: Some(&canonical),
-                    visited: Some(visited.len()),
-                    collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
-                    ..Default::default()
-                });
-
-                let discovered = collect_module_one(
-                    &next_path,
-                    canonical.clone(),
-                    ctx,
-                    visited,
-                    format,
-                    target,
-                    next_class_id,
-                    progress,
-                    parse_cache.as_deref_mut(),
-                )?;
-
-                if let Some(prepared) = discovered.finish {
-                    stack.push(WorkFrame::Finish(prepared));
-                } else {
-                    states.insert(canonical, VisitState::Done);
-                }
-                for child in discovered.children.into_iter().rev() {
-                    stack.push(WorkFrame::Enter(child));
-                }
-            }
-            WorkFrame::Finish(prepared) => {
-                let canonical = prepared.canonical.clone();
-                collect_module_finish(prepared, ctx, visited, target, skip_transforms, progress)?;
-                states.insert(canonical, VisitState::Done);
             }
         }
+        let pending = reexport_prune::settle(ctx);
+        if pending.is_empty() {
+            break;
+        }
+        stack.extend(pending.into_iter().rev().map(WorkFrame::Enter));
     }
     Ok(())
 }

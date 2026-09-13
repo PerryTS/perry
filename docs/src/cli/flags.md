@@ -618,3 +618,31 @@ coercion. Replay does not relax ownership, alias, lifetime or method-identity
 checks. Native-region verification requires a consumed fresh replay fact,
 a matching runtime guard and an explicit fallback/materialization record for
 every claimed profile selection.
+
+## Unused re-export collection
+
+Collection prunes unused `export { name } from`, `export * from`, and namespace
+re-export edges by default when the exporting package declares the file free
+of side effects and every static dependency of the omitted target has the same
+guarantee. Perry honors `sideEffects: false` and arrays of `*`, `**`, and `?`
+globs. Unsupported patterns, missing contracts, CommonJS, and unresolved
+dependencies conservatively retain the edge. This pass does not remove direct
+imports used by module code or individual declarations. An `import { x }; export { x }`
+pair is first normalized to a re-export only in barrels containing imports and
+export lists, whose entire static dependency tree has side-effect-free contracts.
+Namespace and dynamic imports retain the
+complete exported surface, and existing dynamic initialization stays deferred.
+
+Set `PERRY_NO_REEXPORT_PRUNE=1` to disable this collection pass for an A/B build.
+The compile summary reports unique omitted modules in the proven static
+dependency trees, excluding modules retained by another importer.
+
+Set `PERRY_COLLECT_ONLY=1` to stop after collection and write `<cache-dir>/audit.json`
+and `module-graph.json` (paths, eager/deferred initialization, and pruned count)
+without generating objects or linking an executable. This mode bypasses the
+finished-build cache and runs normal collection/preflight checks. For example:
+
+```sh
+PERRY_COLLECT_ONLY=1 perry compile src/index.ts --cache-dir /tmp/graph-after
+PERRY_COLLECT_ONLY=1 PERRY_NO_REEXPORT_PRUNE=1 perry compile src/index.ts --cache-dir /tmp/graph-before
+```
