@@ -40,9 +40,8 @@ const SCORE_MAX: u8 = 8;
 /// the evidence keeps being refreshed.
 const RESAMPLE_EVERY: u8 = 16;
 
-// Two byte counters read once per parse: plain `thread_local!`, not the hot-TLS
-// macro, and no heap pointer can live in either.
-thread_local! {
+// Two byte counters read once per parse. No heap pointer can live in either.
+crate::perry_thread_local! {
     static SCORE: Cell<u8> = const { Cell::new(0) };
     static EAGER_RUN: Cell<u8> = const { Cell::new(0) };
 }
