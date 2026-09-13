@@ -1,0 +1,3 @@
+### Performance
+
+- **RegExp `replace` no longer builds an exec result object per match** (#10225). When a regular expression's `exec` is the builtin and it has no named groups, `str.replace(re, …)` collects each match's positions directly and builds the output from pieces of the original string, instead of creating a result array per match and reading it back property by property. A callback replacement over 400,000 matches uses 2.7× less CPU, a `"[$&]"` template 3.0× less, and a `"$2$1"` template 4.5× less; results, callback arguments and `lastIndex` are unchanged, and every match is still found before the first callback runs.
