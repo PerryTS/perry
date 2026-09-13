@@ -466,6 +466,10 @@ fn a_recurrence_over_a_second_variable_declines() {
 #[test]
 fn the_fields_body_gets_a_shape_keyed_clone() {
     let ir = emit(&access_module(fields_body()));
+    assert!(
+        fast_clone_slice(&ir).contains("sso.utf16"),
+        "the entered, call-free clone must count non-ASCII SSO code units"
+    );
     assert_shape_keyed_clone(&ir, "three reads of one element");
     let fast = fast_clone_slice(&ir);
     assert!(

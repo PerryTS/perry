@@ -1007,6 +1007,10 @@ fn generic_length_read_serves_a_string_inline() {
         .unwrap_or(sso_body.len());
     let sso_body = &sso_body[..sso_end];
     assert!(
+        ir.contains("\nsso.utf16") && ir.contains("\nsso.length.done"),
+        "non-ASCII inline strings must have a UTF-16 counting arm:\n{ir}"
+    );
+    assert!(
         sso_body.contains("lshr i64") && sso_body.contains(", 40"),
         "the SSO arm must extract the inline length byte, not call the \
          by-name helper:\n{sso_body}"

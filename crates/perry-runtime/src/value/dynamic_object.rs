@@ -30,15 +30,9 @@ pub extern "C" fn js_value_length_f64(value: f64) -> f64 {
     let bits = value.to_bits();
     let top16 = bits >> 48;
 
-    // SHORT_STRING_TAG (SSO) — length is the byte count stored in
-    // bits 40..=47. Fast path, no heap access. For multibyte UTF-8
-    // content the byte length and UTF-16 code-unit count differ,
-    // but SSO strings are ≤5 bytes and the vast majority are ASCII
-    // where they match. Non-ASCII SSO values go through a slower
-    // full-parse path — tolerated because the distinction doesn't
-    // come up in practice for 5-byte strings.
+    // SHORT_STRING_TAG stores a byte count; JS length counts UTF-16 units.
     if top16 == 0x7FF9 {
-        return ((bits & SHORT_STRING_LEN_MASK) >> SHORT_STRING_LEN_SHIFT) as f64;
+        return JSValue::from_bits(bits).short_string_utf16_len() as f64;
     }
 
     // STRING_TAG — length is code-unit count from js_string_length.
@@ -299,8 +293,7 @@ fn value_length_property_with_cache(value: f64, cache_slot: *mut LengthPicCacheS
     }
 
     if jsval.is_short_string() {
-        let string = crate::string::js_string_materialize_to_heap(value);
-        return crate::string::js_string_length(string) as f64;
+        return jsval.short_string_utf16_len() as f64;
     }
 
     if let Some(length) = crate::array::array_subclass_fast_length_with_ic(value, cache_slot) {
