@@ -240,6 +240,14 @@ pub(crate) fn module_wrapper_owner_moved(old_wrapper: usize, new_wrapper: usize)
     }
 }
 
+/// Whether any wrapper identity was ever registered on this process. While
+/// false, [`clear_module_wrapper_for_dead_ptr`] is a no-op for every address,
+/// which is what lets the full sweep reclaim a dead object's whole block
+/// without visiting it (#10182).
+pub(crate) fn module_wrapper_registry_ever_used() -> bool {
+    module_wrapper_registry_used().load(std::sync::atomic::Ordering::Acquire)
+}
+
 /// Clear the identity before a dead wrapper's address can be reused.
 pub(crate) fn clear_module_wrapper_for_dead_ptr(wrapper: usize) {
     if !module_wrapper_registry_used().load(std::sync::atomic::Ordering::Acquire) {

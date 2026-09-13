@@ -40,6 +40,19 @@ A collection can take one of three paths:
    work, or `PERRY_GEN_GC=0` trace both generations and reclaim dead old objects
    as well as nursery garbage.
 
+**Block-granular reclamation in the full sweep.** A synchronous full sweep
+reclaims an arena block without entering it when the cycle's exact pointer
+census shows that the trace reached no object in the block and that no object
+in it owes per-object sweep work — no finalizer, no pinned, forwarded or
+already-marked header, and no address-keyed side-table entry that the full
+trace's dead-owner prune does not already drop. The block cleanup then resets
+or releases the block exactly as it would after walking it. Budgeted fulls,
+minors, the recent general-block window and the longlived arena keep the
+per-object walk. `PERRY_GC_DIAG=1` reports the reclaimed blocks, objects and
+bytes on each sweep's `[gc] blocks:` line.
+<!-- gc-symbol: a_dead_block_of_plain_objects_is_reclaimed_without_visiting_it in crates/perry-runtime/src/gc/tests/block_skip.rs -->
+<!-- gc-symbol: a_live_neighbour_keeps_its_block_on_the_per_object_path in crates/perry-runtime/src/gc/tests/block_skip.rs -->
+
 `PERRY_GC_SCAVENGE` is on by default and lets nursery pressure route to the
 direct minor. `PERRY_GC_SCAVENGE_NURSERY_MB` tunes its base high-water cap,
 16 MiB by default

@@ -852,6 +852,13 @@ pub(crate) fn test_element_shape_record_exists(owner: usize) -> bool {
     ELEMENT_SHAPES.with(|m| m.borrow().contains_key(&owner))
 }
 
+/// Plant a record (and its advertising bit) for `owner` without verifying any
+/// elements — a fixture for the collector's side-table tests.
+#[cfg(test)]
+pub(crate) fn test_seed_element_shape_record(owner: usize) {
+    unsafe { establish(owner as *mut ArrayHeader, 1, 0, 0) };
+}
+
 #[cfg(test)]
 pub(crate) fn test_clear_element_shape_table() {
     ELEMENT_SHAPES.with(|m| m.borrow_mut().clear());

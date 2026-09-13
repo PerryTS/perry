@@ -1,5 +1,9 @@
 use super::*;
 
+#[path = "trace/block_skip.rs"]
+pub(super) mod block_skip;
+pub(super) use block_skip::BlockCensus;
+
 crate::perry_thread_local! {
     /// Set by test-only helpers that wipe page metadata for isolation
     /// (`old_arena_page_index_clear_for_tests`): real objects become
@@ -107,6 +111,15 @@ pub(crate) struct ValidPointerSet {
     /// full collection** (`phase_us.build_valid_pointer_set`), 12.6% of the
     /// `build_out` phase, and ~40 MB of transient peak heap (#7592).
     pub(super) arena_runs: Vec<Vec<usize>>,
+    /// `arena_runs[i]`'s global arena block index (`u32::MAX` for runs pushed
+    /// without one). The census seals a run at every block boundary, so a
+    /// run never straddles two blocks and a membership hit names its block
+    /// for free (#10182).
+    pub(super) arena_run_blocks: Vec<u32>,
+    pub(super) current_arena_run_block: u32,
+    /// Per-block census facts and trace reachability (#10182). Disarmed
+    /// unless this set was built by the production census walk.
+    pub(super) block_census: BlockCensus,
     /// `arena_runs[i].first()`, mirrored into one contiguous vector so the
     /// run-level binary search reads 8-byte fences instead of chasing a
     /// `Vec` header per probe. At 500k `json_pipeline` records this is ~4k
@@ -158,6 +171,9 @@ impl ValidPointerSet {
     pub(super) fn new() -> Self {
         Self {
             arena_runs: Vec::new(),
+            arena_run_blocks: Vec::new(),
+            current_arena_run_block: u32::MAX,
+            block_census: BlockCensus::disarmed(),
             arena_run_firsts: Vec::new(),
             current_arena_run: Vec::with_capacity(VALID_POINTER_ARENA_RUN_CAPACITY),
             arena_count: 0,
@@ -172,10 +188,16 @@ impl ValidPointerSet {
 
     /// Caller must guarantee that pushes happen in ascending address
     /// order — `ValidPointerSetBuilder` does so via `ArenaObjectCursor`
-    /// in address order.
-    pub(super) fn push_arena(&mut self, ptr: usize) {
+    /// in address order. `block_idx` is the start's global arena block; the
+    /// open run is sealed whenever it changes, so no run straddles two blocks
+    /// (#10182).
+    pub(super) fn push_arena_in_block(&mut self, ptr: usize, block_idx: u32) {
         if self.classifier_mode {
             return; // #6179: no exact census in classifier mode
+        }
+        if block_idx != self.current_arena_run_block {
+            self.seal_current_arena_run();
+            self.current_arena_run_block = block_idx;
         }
         if let Some(previous) = self
             .current_arena_run
@@ -237,6 +259,7 @@ impl ValidPointerSet {
         // with `arena_runs` — `arena_run_firsts[i] == arena_runs[i][0]`.
         self.arena_run_firsts.push(sealed[0]);
         self.arena_runs.push(sealed);
+        self.arena_run_blocks.push(self.current_arena_run_block);
     }
 
     /// Cheap O(1) range-rejection prefilter. Most stack words and
@@ -313,16 +336,26 @@ impl ValidPointerSet {
     /// iteration. Find the largest entry `<= query`, then validate via
     /// the GcHeader's size field.
     pub(crate) fn enclosing_object(&self, ptr: usize) -> Option<usize> {
-        let candidate = self.find_arena_floor(ptr)?;
+        let (candidate, run) = self.find_arena_floor_run(ptr)?;
         unsafe {
             let header = (candidate as *const u8).sub(GC_HEADER_SIZE) as *const GcHeader;
             let total = (*header).size as usize;
             let payload_end = candidate + total.saturating_sub(GC_HEADER_SIZE);
             if ptr >= candidate && ptr < payload_end {
+                self.note_run_reached(run);
                 Some(candidate)
             } else {
                 None
             }
+        }
+    }
+
+    /// A census hit in run `run`: its block was reached by the trace (#10182).
+    /// See `block_skip`'s module doc for why every mark passes through here.
+    #[inline(always)]
+    fn note_run_reached(&self, run: usize) {
+        if let Some(&block_idx) = self.arena_run_blocks.get(run) {
+            self.block_census.note_reached(block_idx);
         }
     }
 
@@ -353,15 +386,21 @@ impl ValidPointerSet {
              {} censused starts are invisible to this lookup",
             self.current_arena_run.len()
         );
-        self.find_arena_floor(ptr) == Some(ptr)
+        match self.find_arena_floor_run(ptr) {
+            Some((floor, run)) if floor == ptr => {
+                self.note_run_reached(run);
+                true
+            }
+            _ => false,
+        }
     }
 
-    fn find_arena_floor(&self, ptr: usize) -> Option<usize> {
+    fn find_arena_floor_run(&self, ptr: usize) -> Option<(usize, usize)> {
         let idx = self.arena_run_firsts.partition_point(|&first| first <= ptr);
         if idx == 0 {
             return None;
         }
-        Self::find_floor(&self.arena_runs[idx - 1], ptr)
+        Self::find_floor(&self.arena_runs[idx - 1], ptr).map(|floor| (floor, idx - 1))
     }
 
     pub(super) fn find_floor(sorted: &[usize], ptr: usize) -> Option<usize> {
@@ -386,6 +425,10 @@ pub(crate) fn build_valid_pointer_set() -> ValidPointerSet {
 
 pub(super) struct ValidPointerSetBuilder {
     set: ValidPointerSet,
+    /// #10182: census the per-block facts `block_skip` needs (exact census
+    /// only), and the block the walk is currently inside.
+    census_armed: bool,
+    census_block_idx: usize,
     phase: ValidPointerSetBuildPhase,
     arena_cursor_builder: Option<crate::arena::ArenaObjectCursorBuilder>,
     arena_cursor: Option<crate::arena::ArenaObjectCursor>,
@@ -420,12 +463,18 @@ impl ValidPointerSetBuilder {
     pub(super) fn new_classifier() -> Self {
         let mut b = Self::new();
         b.set.classifier_mode = true;
+        b.set.block_census = BlockCensus::disarmed();
+        b.census_armed = false;
         b
     }
 
     pub(super) fn new() -> Self {
+        let mut set = ValidPointerSet::new();
+        set.block_census = BlockCensus::armed();
         Self {
-            set: ValidPointerSet::new(),
+            set,
+            census_armed: true,
+            census_block_idx: usize::MAX,
             phase: ValidPointerSetBuildPhase::ArenaCursorSetup,
             arena_cursor_builder: Some(crate::arena::ArenaObjectCursorBuilder::new(
                 crate::arena::ArenaWalkOrder::Address,
@@ -485,6 +534,7 @@ impl ValidPointerSetBuilder {
                     if remaining == 0 {
                         return false;
                     }
+                    self.set.block_census.flush_block();
                     self.set.finalize();
                     self.phase = ValidPointerSetBuildPhase::Done;
                     return true;
@@ -511,7 +561,7 @@ impl ValidPointerSetBuilder {
                     .expect("arena cursor exists during arena walk");
                 cursor.next_budgeted(remaining)
             };
-            let Some((header_ptr, _block_idx)) = next else {
+            let Some((header_ptr, block_idx)) = next else {
                 let finished = self
                     .arena_cursor
                     .as_ref()
@@ -523,14 +573,34 @@ impl ValidPointerSetBuilder {
                 }
                 return false;
             };
-            self.record_arena_header(header_ptr);
+            if self.census_armed {
+                if block_idx != self.census_block_idx {
+                    self.census_block_idx = block_idx;
+                    if let Some((_, data, offset)) = self
+                        .arena_cursor
+                        .as_ref()
+                        .and_then(crate::arena::ArenaObjectCursor::current_block_extent)
+                    {
+                        self.set.block_census.begin_block(block_idx, data, offset);
+                    }
+                }
+                unsafe {
+                    self.set
+                        .block_census
+                        .note_header(header_ptr as *const GcHeader);
+                }
+            }
+            self.record_arena_header(header_ptr, block_idx);
         }
         false
     }
 
-    fn record_arena_header(&mut self, header_ptr: *mut u8) {
+    fn record_arena_header(&mut self, header_ptr: *mut u8, block_idx: usize) {
         let user_ptr = unsafe { header_ptr.add(GC_HEADER_SIZE) };
-        self.set.push_arena(user_ptr as usize);
+        self.set.push_arena_in_block(
+            user_ptr as usize,
+            u32::try_from(block_idx).unwrap_or(u32::MAX),
+        );
         unsafe {
             let header = header_ptr as *const GcHeader;
             let flags = (*header).gc_flags;
