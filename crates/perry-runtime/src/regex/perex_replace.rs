@@ -75,6 +75,21 @@ pub(crate) fn regexp(receiver: f64, argument: f64, replacement: f64) -> Result<f
     let mut results = List::new(&scope)?;
     let bound = subject(input)?;
     let reuse = api::Reuse::new(&scope, &receiver, input, &bound, &mut budget);
+    if super::perex_replace_direct::admissible(&receiver, &reuse) {
+        return super::perex_replace_direct::replace(
+            &scope,
+            &receiver,
+            &input,
+            &bound,
+            &reuse,
+            global,
+            unicode,
+            &replacement,
+            template.as_ref(),
+            &mut budget,
+            &memory,
+        );
+    }
     let input_length = length(&input);
     loop {
         let local = RuntimeHandleScope::new();
