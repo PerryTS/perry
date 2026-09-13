@@ -1294,6 +1294,15 @@ impl GcCycleState {
                         .as_mut()
                         .expect("atomic finalize state exists");
                     let rebuild = state.remembered_rebuild.get_or_insert_with(|| {
+                        // #10182: nothing young is marked and no malloc object
+                        // exists, so the walk could only insert nothing.
+                        if !budgeted
+                            && valid_ptrs.is_some_and(|ptrs| {
+                                full_remembered_rebuild_provably_empty(&ptrs.block_census)
+                            })
+                        {
+                            return OldToYoungRememberedRebuildState::provably_empty();
+                        }
                         let skip = if budgeted {
                             None
                         } else {

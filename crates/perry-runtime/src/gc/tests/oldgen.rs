@@ -1305,7 +1305,14 @@ fn test_minor_skips_whole_heap_old_to_young_rebuild() {
 
     // A full cycle DOES run the rebuild — the counter proves it is wired and
     // scales with the (now-large) heap, so the minor's 0 is a genuine skip
-    // rather than the counter being dead.
+    // rather than the counter being dead. #10182: a full whose young generation
+    // holds nothing live replaces the rebuild by an exact clear, so keep one
+    // pinned young object alive across it.
+    let (young, _young_fields) = unsafe { alloc_nursery_test_object(1) };
+    let young_header = unsafe { header_from_user_ptr(young as *const u8) };
+    unsafe {
+        crate::gc::pin_object(young_header);
+    }
     let full_outcome = gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot {
         kind: GcTriggerKind::Direct,
         steps_before: Some(GcStepSnapshot::current()),
@@ -1316,6 +1323,9 @@ fn test_minor_skips_whole_heap_old_to_young_rebuild() {
         "a full cycle must walk the whole heap for the RS rebuild (got {}, expected >= {OLD_OBJECTS})",
         full_trace.old_to_young_rebuild_objects_scanned,
     );
+    unsafe {
+        crate::gc::unpin_object(young_header);
+    }
 
     for header in old_headers {
         unsafe {

@@ -905,6 +905,16 @@ pub fn general_block_count() -> usize {
     ARENA.with(|arena| unsafe { (*arena.get()).blocks.len() })
 }
 
+/// Global block indices `0..young_block_count()` are the young generation:
+/// the general (Eden) arena's blocks, then both survivor semispaces' — the
+/// order `arena_block_snapshots` and the object cursors use.
+pub(crate) fn young_block_count() -> usize {
+    let g = ARENA.with(|arena| unsafe { (*arena.get()).blocks.len() });
+    let s0 = SURVIVOR_ARENA_0.with(|arena| unsafe { (*arena.get()).blocks.len() });
+    let s1 = SURVIVOR_ARENA_1.with(|arena| unsafe { (*arena.get()).blocks.len() });
+    g + s0 + s1
+}
+
 /// Per-block `size` for the general (nursery-Eden) arena, indexed by
 /// general block index (`0..general_block_count()`, tombstones report
 /// size 0). Used by the evacuation policy to translate "this block's
