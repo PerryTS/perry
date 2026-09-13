@@ -1,0 +1,3 @@
+### Performance
+
+- **RegExp `split`, `replace` and global `match` bind the subject and program once per operation, and `split` searches forward** (#10165). Each search used to decode the whole string and revalidate the whole program, so these operations did quadratic work: an ASCII `split(/[,; ]+/)` of 150,000 units took 8.1 s. They are now linear. `split` also searches for the next match instead of trying a sticky match at every position, whenever nothing can observe the difference (an absent or intrinsic `RegExp` species and the builtin `exec`), which brings ASCII split to about 13× Node from about 220×.
