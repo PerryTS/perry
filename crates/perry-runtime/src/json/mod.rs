@@ -29,6 +29,7 @@ mod parse_inline_object;
 mod parse_reuse;
 mod parse_scalar;
 mod parser;
+pub(crate) mod traversal_feedback;
 // `pub(crate)` so `gc::mod` can register `scan_raw_json_key_root_mut` (#7211):
 // the interned `"rawJSON"` key is a GC root.
 pub(crate) mod raw_json;
