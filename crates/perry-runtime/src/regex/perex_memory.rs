@@ -47,6 +47,28 @@ impl MemoryBudget {
     }
 }
 
+/// Bytes charged to an operation's limit for storage it holds without
+/// allocating, such as match slots kept inline. The limit and peak see them as
+/// they would a buffer's; the collector is not told, since nothing is on its
+/// heap or the native heap.
+pub(crate) struct Charge<'a> {
+    budget: &'a MemoryBudget,
+    bytes: usize,
+}
+impl<'a> Charge<'a> {
+    pub(crate) fn new(budget: &'a MemoryBudget, bytes: usize) -> Result<Self, StorageError> {
+        let live = budget.check(bytes)?;
+        budget.live.set(live);
+        budget.peak.set(budget.peak.get().max(live));
+        Ok(Self { budget, bytes })
+    }
+}
+impl Drop for Charge<'_> {
+    fn drop(&mut self) {
+        self.budget.live.set(self.budget.live.get() - self.bytes);
+    }
+}
+
 /// Account a stable native allocation whose GC-bearing slots are separately
 /// registered with the host's mutable root scanner before this can collect.
 pub(super) struct Reservation<'a> {

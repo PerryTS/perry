@@ -2,7 +2,7 @@
 //! is a UTF-16 span. Collection and cancellation occur outside resource views.
 
 use super::flags::CanonicalFlags;
-use super::perex_memory::{Buffer, MemoryBudget, StorageError};
+use super::perex_memory::{Buffer, Charge, MemoryBudget, StorageError};
 use super::perex_owner::{BuildError, GcProgram, OwnerError};
 use crate::gc::RuntimeHandleScope;
 use perex::binding::{
@@ -106,18 +106,79 @@ pub(crate) fn compile<'scope, S: ImmutableSubject<Error = OwnerError>>(
     }
 }
 
+/// Match slots a search per call needs, held inline when they fit: such a call
+/// allocates nothing and notes no external bytes. A heap buffer was about a
+/// tenth of every short `test` (#10166). Inline slots are still charged to the
+/// operation's limit, exactly as a buffer of the same count is. Past `N`
+/// slots, and for any growth, they are a heap buffer as before.
+pub(crate) enum Slots<'a, T: Copy + Default, const N: usize> {
+    /// The slots, how many are in use, and their charge to the limit, which
+    /// is released when they are dropped.
+    Inline {
+        slots: [T; N],
+        count: usize,
+        _charge: Charge<'a>,
+    },
+    Heap(Buffer<'a, T>),
+}
+
+impl<'a, T: Copy + Default, const N: usize> Slots<'a, T, N> {
+    fn new(memory: &'a MemoryBudget, count: usize) -> Result<Self, StorageError> {
+        if count <= N {
+            let bytes = count
+                .checked_mul(std::mem::size_of::<T>())
+                .ok_or(StorageError::Limit)?;
+            let charge = Charge::new(memory, bytes)?;
+            Ok(Self::Inline {
+                slots: [T::default(); N],
+                count,
+                _charge: charge,
+            })
+        } else {
+            Buffer::new(memory, count).map(Self::Heap)
+        }
+    }
+}
+
+impl<T: Copy + Default, const N: usize> std::ops::Deref for Slots<'_, T, N> {
+    type Target = [T];
+    fn deref(&self) -> &[T] {
+        match self {
+            Self::Inline { slots, count, .. } => &slots[..*count],
+            Self::Heap(buffer) => buffer,
+        }
+    }
+}
+
+impl<T: Copy + Default, const N: usize> std::ops::DerefMut for Slots<'_, T, N> {
+    fn deref_mut(&mut self) -> &mut [T] {
+        match self {
+            Self::Inline { slots, count, .. } => &mut slots[..*count],
+            Self::Heap(buffer) => buffer,
+        }
+    }
+}
+
+/// Registers a program can have and still search without allocating. Frames
+/// and undo entries start empty and only grow through `rebuffer`, so they are
+/// never inline.
+const INLINE_REGISTERS: usize = 32;
+/// Capture spans an `exec` result can have and still be read without
+/// allocating.
+const INLINE_CAPTURES: usize = 16;
+
 struct MatchBuffers<'a> {
-    registers: Buffer<'a, usize>,
-    frames: Buffer<'a, Frame>,
-    undo: Buffer<'a, Undo>,
+    registers: Slots<'a, usize, INLINE_REGISTERS>,
+    frames: Slots<'a, Frame, 0>,
+    undo: Slots<'a, Undo, 0>,
 }
 
 impl<'a> MatchBuffers<'a> {
     fn new(memory: &'a MemoryBudget, size: ScratchRequirements) -> Result<Self, StorageError> {
         Ok(Self {
-            registers: Buffer::new(memory, size.registers)?,
-            frames: Buffer::new(memory, size.frames)?,
-            undo: Buffer::new(memory, size.undo)?,
+            registers: Slots::new(memory, size.registers)?,
+            frames: Slots::new(memory, size.frames)?,
+            undo: Slots::new(memory, size.undo)?,
         })
     }
 }
@@ -142,7 +203,7 @@ pub(crate) enum CaptureMode {
 pub(crate) struct Match<'a> {
     pub(crate) full: Span,
     /// None under Full. All retains unset groups and includes group zero.
-    pub(crate) captures: Option<Buffer<'a, Option<Span>>>,
+    pub(crate) captures: Option<Slots<'a, Option<Span>, INLINE_CAPTURES>>,
 }
 
 fn search_error(error: SearchError<PairError<OwnerError, OwnerError>>) -> EngineError {
@@ -225,7 +286,7 @@ pub(crate) fn find_near<'mem, S: ImmutableSubject<Error = OwnerError>>(
                     CaptureMode::Full => None,
                     CaptureMode::All => {
                         poll()?;
-                        let mut output = Buffer::new(memory, search.capture_count())?;
+                        let mut output = Slots::new(memory, search.capture_count())?;
                         search
                             .copy_captures(&mut output)
                             .map_err(EngineError::Execution)?;

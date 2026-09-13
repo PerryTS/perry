@@ -460,3 +460,73 @@ fn perex_dispatch_proxy_apply_getter_and_nested_trap_survive_movement() {
         );
     }
 }
+
+#[test]
+fn perex_dispatch_skips_the_exec_lookup_only_when_nothing_can_observe_it() {
+    // The guard holds the global side-table lock, which the prototype edits
+    // below need; taking it again here would deadlock.
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    super::perex_public::register_host_roots();
+    let scope = RuntimeHandleScope::new();
+    let miss = text(&scope, b"x");
+    let hit = text(&scope, b"NEVER");
+    let lookups = || dispatch::EXEC_LOOKUPS.with(Cell::get);
+    let yes = function(&scope, return_this as *const u8, 1);
+
+    // Untouched: the builtin runs with no lookup, and still answers. The
+    // realm records RegExp.prototype's canonical site on first use, so the
+    // first call on a thread may take the lookup; none after it does.
+    let plain = regex(&scope);
+    assert!(!test(&plain, &miss));
+    let before = lookups();
+    for _ in 0..10 {
+        assert!(!test(&plain, &miss));
+        assert!(test(&plain, &hit));
+    }
+    assert_eq!(
+        lookups(),
+        before,
+        "an untouched RegExp needs no exec lookup"
+    );
+
+    // An own exec is found by the lookup, and runs.
+    let own = regex(&scope);
+    put(&own, b"exec", &yes);
+    let before = lookups();
+    assert!(test(&own, &miss), "an own exec override must run");
+    assert!(lookups() > before);
+
+    // A reparented RegExp resolves exec on its new prototype.
+    let reparented = regex(&scope);
+    let parent = object(&scope);
+    put(&parent, b"exec", &yes);
+    assert_eq!(
+        crate::proxy::js_reflect_set_prototype_of(
+            reparented.get_nanbox_f64(),
+            parent.get_nanbox_f64()
+        )
+        .to_bits(),
+        crate::value::TAG_TRUE
+    );
+    let before = lookups();
+    assert!(
+        test(&reparented, &miss),
+        "the new prototype's exec must run"
+    );
+    assert!(lookups() > before);
+
+    // Replacing RegExp.prototype.exec reaches every RegExp, including a fresh
+    // one; restoring it restores the skipped lookup.
+    let proto = scope.root_nanbox_f64(crate::object::builtin_prototype_value("RegExp"));
+    let original = scope.root_nanbox_f64(api::finish(dispatch::get(&proto, b"exec")));
+    put(&proto, b"exec", &yes);
+    let fresh = regex(&scope);
+    let before = lookups();
+    assert!(test(&fresh, &miss), "a replaced prototype exec must run");
+    assert!(lookups() > before);
+    put(&proto, b"exec", &original);
+    let before = lookups();
+    assert!(!test(&fresh, &miss));
+    assert_eq!(lookups(), before);
+}
