@@ -53,11 +53,7 @@ pub(crate) fn flags(receiver: f64) -> Result<*mut StringHeader, EngineError> {
 pub(super) fn subject(
     input: RuntimeHandle<'_>,
 ) -> Result<BoundSubject<HeapSubject<'_>>, EngineError> {
-    BoundSubject::new(
-        unsafe { HeapSubject::new(input) }
-            .map_err(|e| EngineError::Subject(perex::binding::SubjectError::Resource(e)))?,
-    )
-    .map_err(|e| EngineError::Subject(e.error))
+    api::bind_heap_subject(input)
 }
 
 fn match_flags(

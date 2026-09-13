@@ -135,6 +135,8 @@ mod trim_tests;
 /// end of an exact-sized payload. Unix-only (needs `mmap` + `mprotect`).
 #[cfg(all(test, unix))]
 mod tests_guard_page;
+#[cfg(test)]
+mod tests_validated_flag;
 
 // Explicit named re-exports — preserve the original `crate::string::*`
 // surface 1:1. NO glob re-exports.
@@ -262,6 +264,17 @@ pub const STRING_FLAG_HAS_LONE_SURROGATES: u32 = 1;
 /// byte-level escape scan. String-producing mutations do not propagate this
 /// provenance bit unless they independently prove the resulting payload.
 pub(crate) const STRING_FLAG_JSON_ESCAPE_FREE: u32 = 1 << 1;
+/// This exact header's payload was fully validated as generalized WTF-8 and its
+/// `utf16_len` found exact, so a RegExp can bind it again in constant work
+/// (`perex::binding::BoundSubject::new_counted`) instead of decoding it (#10166).
+///
+/// Only the regex subject binding sets it, after a full validation succeeds. It
+/// describes one payload, so it must never reach another string:
+/// `init_string_header` strips it from every constructed string, and the
+/// in-place writers (`js_string_append`, `js_string_append_chain`) clear it on
+/// the destination they change. A validated header is already shared
+/// (`js_string_addref`), so it is never itself mutated in place afterwards.
+pub(crate) const STRING_FLAG_WTF8_VALIDATED: u32 = 1 << 2;
 
 /// A static empty string that can be used as a safe fallback for null pointers.
 /// Has utf16_len=0, byte_len=0, capacity=0, refcount=0, flags=0 (shared).
@@ -812,7 +825,9 @@ pub(crate) unsafe fn init_string_header(
     (*ptr).byte_len = byte_len;
     (*ptr).capacity = capacity;
     (*ptr).refcount = refcount;
-    (*ptr).flags = flags;
+    // A new header never inherits its source's validation (#10166), however a
+    // caller computed `flags`.
+    (*ptr).flags = flags & !STRING_FLAG_WTF8_VALIDATED;
 }
 
 #[inline]
