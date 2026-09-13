@@ -11,6 +11,12 @@ use crate::ir::Expr;
 
 const MIN_NODES: usize = 1024;
 const MIN_TEXT_BYTES: usize = 64 * 1024;
+// Parsed records lose the static shapes used by ordinary literal lowering.
+// Reserve that tradeoff for codegen-sized data: the record-array probe in
+// benchmarks/large_json_literals measures the LLVM cliff independently of
+// function instruction budgets. Keep mid-size typed records on the fast read path.
+const CODEGEN_NODES: usize = 24 * 1024;
+const CODEGEN_TEXT_BYTES: usize = 1024 * 1024;
 // Bound speculative subtree walks, including on deeply nested non-JSON input.
 const MAX_DEPTH: usize = 128;
 
@@ -30,6 +36,11 @@ pub(super) fn lower_large_json_literal(expr: &ast::Expr) -> Option<Expr> {
 /// irrelevant. Stop as soon as either threshold is reached, then validate and
 /// serialize the whole candidate exactly once.
 fn is_large(expr: &ast::Expr) -> bool {
+    let (min_nodes, min_bytes) = if is_primitive_array(expr) {
+        (MIN_NODES, MIN_TEXT_BYTES)
+    } else {
+        (CODEGEN_NODES, CODEGEN_TEXT_BYTES)
+    };
     let mut pending = vec![(expr, 0)];
     let (mut nodes, mut bytes) = (0, 0);
     while let Some((expr, depth)) = pending.pop() {
@@ -74,11 +85,40 @@ fn is_large(expr: &ast::Expr) -> bool {
             ast::Expr::Lit(ast::Lit::Num(_) | ast::Lit::Bool(_) | ast::Lit::Null(_)) => {}
             _ => return false,
         }
-        if nodes >= MIN_NODES || bytes >= MIN_TEXT_BYTES {
+        if nodes >= min_nodes || bytes >= min_bytes {
             return true;
         }
     }
     false
+}
+
+/// Only flat arrays get the lower threshold. In particular, an array of
+/// records must not lose its statically known property layout at this size.
+fn is_primitive_array(expr: &ast::Expr) -> bool {
+    let ast::Expr::Array(array) = expr else {
+        return false;
+    };
+    array.elems.iter().all(|elem| {
+        elem.as_ref()
+            .is_some_and(|elem| elem.spread.is_none() && is_primitive(&elem.expr, 0))
+    })
+}
+
+fn is_primitive(expr: &ast::Expr, depth: usize) -> bool {
+    if depth > MAX_DEPTH {
+        return false;
+    }
+    match expr {
+        ast::Expr::Lit(
+            ast::Lit::Num(_) | ast::Lit::Str(_) | ast::Lit::Bool(_) | ast::Lit::Null(_),
+        ) => true,
+        ast::Expr::Paren(paren) => is_primitive(&paren.expr, depth + 1),
+        ast::Expr::Unary(unary) => {
+            matches!(unary.op, ast::UnaryOp::Minus | ast::UnaryOp::Plus)
+                && matches!(unary.arg.as_ref(), ast::Expr::Lit(ast::Lit::Num(_)))
+        }
+        _ => false,
+    }
 }
 
 fn string(text: &mut Vec<u8>, value: &str) -> Option<()> {
