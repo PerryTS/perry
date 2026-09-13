@@ -22,7 +22,7 @@ rows runs a full collection on `main`.
 The #10182 pacing half — an old-reclaim trigger bounded by the promoted cohort
 — was measured and not included: every variant that produced the intended
 regime (a full every two to three parses, peak RSS at or below Node's) cost
-+130 to +300 ms of CPU on the target rows, far beyond their CPU lead. A full
++136 to +304 ms of CPU on the target rows, far beyond their CPU lead. A full
 over one live 20 MB tree costs ~100 ms even with dead blocks skipped: mark
 45 ms, remembered-set rebuild 21 ms, per-live-object sweep accounting 16–19 ms,
 census 10–15 ms.
