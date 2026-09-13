@@ -125,6 +125,8 @@ pub(crate) mod trim_cache;
 mod utf16_count;
 
 #[cfg(test)]
+mod case_tests;
+#[cfg(test)]
 mod slice_tests;
 #[cfg(test)]
 mod tests;

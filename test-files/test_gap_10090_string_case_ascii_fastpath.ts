@@ -58,12 +58,8 @@ console.log("default-I-lower:" + "I".toLowerCase()); // "i"
 console.log("i-with-dot-lower:" + JSON.stringify("İ".toLowerCase()));
 console.log("i-with-dot-lower-units:" + JSON.stringify(units("İ".toLowerCase())));
 
-// NOTE: Greek final sigma (context-dependent Σ -> ς vs σ) is intentionally
-// NOT covered here. It is a pre-existing gap in the untouched scalar path
-// (Rust's char::to_lowercase() has no notion of the conditional Final_Sigma
-// rule) unrelated to the ASCII fast path added by this file's issue, and
-// asserting Node's correct output here would fail on main regardless of this
-// fix. Tracked separately as #10116.
+// Greek final sigma (context-dependent Σ -> ς vs σ) is covered separately
+// in test_gap_10116_final_sigma.ts.
 
 // ---- Cherokee (Unicode 8.0 added case pairs) ----
 console.log("cherokee-lower:" + "Ꭰ".toLowerCase()); // U+AB70
