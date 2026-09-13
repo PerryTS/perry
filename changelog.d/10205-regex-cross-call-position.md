@@ -1,0 +1,3 @@
+### Performance
+
+- **JavaScript regex loops over a non-ASCII string resume where the previous call stopped** (#10205). A `while (re.exec(s))` or `for (const m of s.matchAll(re))` loop used to pay a seek from an end of the string on every call, so a loop over one long string with umlauts, CJK or emoji did quadratic work. For 80,000 matches the `exec` loop drops from 28.5 s to 314 ms, and `matchAll` from 26.9 s to 463 ms. A new per-thread heap generation, advanced by every collection that frees or moves memory, is what lets a remembered position be matched to the same string safely; RegExp objects and strings gain no state.

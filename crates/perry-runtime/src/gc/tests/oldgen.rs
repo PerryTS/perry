@@ -489,6 +489,9 @@ fn test_old_page_defrag_policy_selection_prefers_fragmented_unpinned_pages() {
 
 #[test]
 fn test_old_page_defrag_moves_every_source_block_occupant_during_a_minor() {
+    let _heap_change = crate::gc::heap_generation::HeapChange::begin(
+        crate::gc::heap_generation::HeapChangeKind::Compaction,
+    );
     let _isolation = copying_nursery_isolation_lock();
     reset_remembered_set();
     clear_marks();
@@ -554,6 +557,9 @@ fn test_old_page_defrag_moves_every_source_block_occupant_during_a_minor() {
 
 #[test]
 fn test_old_page_defrag_copy_avoids_selected_pages_and_rebuilds_remembered_set() {
+    let _heap_change = crate::gc::heap_generation::HeapChange::begin(
+        crate::gc::heap_generation::HeapChangeKind::Compaction,
+    );
     let _isolation = copying_nursery_isolation_lock();
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     reset_remembered_set();
@@ -637,6 +643,9 @@ fn test_old_page_defrag_copy_avoids_selected_pages_and_rebuilds_remembered_set()
 
 #[test]
 fn test_old_page_defrag_skips_pinned_old_objects() {
+    let _heap_change = crate::gc::heap_generation::HeapChange::begin(
+        crate::gc::heap_generation::HeapChangeKind::Compaction,
+    );
     let _isolation = copying_nursery_isolation_lock();
     reset_remembered_set();
     clear_marks();
@@ -687,6 +696,9 @@ fn test_old_page_defrag_skips_pinned_old_objects() {
 
 #[test]
 fn test_old_page_defrag_skips_non_movable_buffer_and_typed_array() {
+    let _heap_change = crate::gc::heap_generation::HeapChange::begin(
+        crate::gc::heap_generation::HeapChangeKind::Compaction,
+    );
     let _isolation = copying_nursery_isolation_lock();
     reset_remembered_set();
     clear_marks();
@@ -947,6 +959,9 @@ fn test_old_page_defrag_target_gate_emits_trace() {
 
 #[test]
 fn test_old_page_defrag_mixed_size_fragmentation_converges_to_released_block() {
+    let _heap_change = crate::gc::heap_generation::HeapChange::begin(
+        crate::gc::heap_generation::HeapChangeKind::Compaction,
+    );
     let _isolation = copying_nursery_isolation_lock();
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _defrag = OldDefragTestEnable::new();
@@ -1475,6 +1490,9 @@ fn test_minor_preserves_old_to_young_edge_across_minors() {
 /// children that were still referenced.
 #[test]
 fn test_minor_sweep_keeps_unmarked_old_object_layout_mask() {
+    let _heap_change = crate::gc::heap_generation::HeapChange::begin(
+        crate::gc::heap_generation::HeapChangeKind::Sweep,
+    );
     let _isolation = copying_nursery_isolation_lock();
     reset_remembered_set();
     clear_marks();
@@ -1519,6 +1537,9 @@ fn test_minor_sweep_keeps_unmarked_old_object_layout_mask() {
 /// being widened into "never reclaim the old generation".
 #[test]
 fn test_full_sweep_still_finalizes_unmarked_old_object() {
+    let _heap_change = crate::gc::heap_generation::HeapChange::begin(
+        crate::gc::heap_generation::HeapChangeKind::Sweep,
+    );
     let _isolation = copying_nursery_isolation_lock();
     reset_remembered_set();
     clear_marks();

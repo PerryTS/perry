@@ -69,6 +69,7 @@ pub(crate) fn old_free_bytes_slot_index() -> u32 {
 }
 
 fn old_free_push(user_ptr: usize, total_size: usize) {
+    crate::gc::heap_generation::debug_assert_heap_change_open();
     if user_ptr == 0 || total_size < GC_HEADER_SIZE {
         return;
     }
@@ -236,6 +237,9 @@ pub(crate) fn old_free_filter_pages(excluded_pages: &crate::fast_hash::PtrHashSe
 
 #[cfg(test)]
 pub(super) fn old_free_push_for_test(user_ptr: usize, total_size: usize) {
+    let _heap_change = crate::gc::heap_generation::HeapChange::begin(
+        crate::gc::heap_generation::HeapChangeKind::Sweep,
+    );
     old_free_push(user_ptr, total_size);
 }
 

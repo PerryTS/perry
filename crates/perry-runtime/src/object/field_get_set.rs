@@ -309,8 +309,14 @@ pub use ic_miss::{
     js_object_set_field_by_property_id, js_private_brand_add, js_private_brand_check,
     js_private_field_add, js_private_guard, PicCache, PicCacheSlot, PIC_CACHE_WORDS,
 };
+/// The one slow exit of the emitted generic property-get tower. Declared here
+/// rather than inside `ic_miss.rs` only because that file sits at the
+/// 2000-line cap; the source lives next to its sibling entries.
+#[path = "field_get_set/ic_miss/ic_slow.rs"]
+mod ic_slow;
 pub(crate) use ic_slot::pic_slot_census;
 pub use ic_slot::{pic_arena_bytes, pic_slot_peek, pic_slot_resolve, pic_slots_resolved};
+pub use ic_slow::{js_object_get_field_ic_nonptr, js_object_get_field_ic_slow};
 
 #[cfg(test)]
 mod buffer_ic_miss_tests {

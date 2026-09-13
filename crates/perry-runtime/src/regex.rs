@@ -28,7 +28,6 @@ pub(crate) mod match_all;
 #[cfg(feature = "regex-engine")]
 pub(crate) mod perex_api;
 #[cfg(feature = "regex-engine")]
-#[cfg(feature = "regex-engine")]
 pub(crate) mod perex_cache;
 #[cfg(feature = "regex-engine")]
 mod perex_construct;
@@ -48,6 +47,8 @@ pub(crate) mod perex_match_search;
 pub(crate) mod perex_memory;
 #[cfg(feature = "regex-engine")]
 pub(crate) mod perex_owner;
+#[cfg(feature = "regex-engine")]
+pub(crate) mod perex_position_hint;
 #[cfg(feature = "regex-engine")]
 mod perex_remove;
 #[cfg(feature = "regex-engine")]

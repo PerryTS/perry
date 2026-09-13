@@ -652,7 +652,11 @@ fn native_pod_view_length_survives_immutable_local_alias() {
         "an immutable PodView alias must use the validating length helper:\n{ir}"
     );
     assert!(
-        !ir.contains("call double @js_object_get_field_ic_miss"),
+        // T1 renamed the tower's exits; a negative assertion that names only
+        // the retired symbol can no longer fail, so it names the live ones.
+        !ir.contains("call double @js_object_get_field_ic_slow")
+            && !ir.contains("call double @js_object_get_field_ic_nonptr")
+            && !ir.contains("call double @js_object_get_field_ic_miss"),
         "a PodView alias must not enter the ordinary object-property PIC:\n{ir}"
     );
 }

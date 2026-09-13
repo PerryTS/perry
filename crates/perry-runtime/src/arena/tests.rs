@@ -31,6 +31,9 @@ pub(super) fn run_with_fresh_arenas(test: impl FnOnce() + Send + 'static) {
 }
 
 fn reset_old_nursery_block(dead_cycles_before: u32) -> (usize, usize, usize, ArenaResetStats) {
+    let _heap_change = crate::gc::heap_generation::HeapChange::begin(
+        crate::gc::heap_generation::HeapChangeKind::Sweep,
+    );
     let mut blocks = Vec::new();
     for _ in 0..7 {
         let ptr = arena_alloc(BLOCK_SIZE, 8) as usize;
@@ -69,6 +72,9 @@ fn reset_old_nursery_block(dead_cycles_before: u32) -> (usize, usize, usize, Are
 fn reset_single_reclaimable_nursery_block(
     dead_cycles_before: u32,
 ) -> (usize, usize, usize, usize, ArenaResetStats) {
+    let _heap_change = crate::gc::heap_generation::HeapChange::begin(
+        crate::gc::heap_generation::HeapChangeKind::Sweep,
+    );
     let mut blocks = Vec::new();
     for _ in 0..6 {
         let ptr = arena_alloc(BLOCK_SIZE, 8) as usize;
@@ -144,6 +150,9 @@ fn object_start_bitmap_stamps_only_maps_and_clears_on_reset() {
 #[test]
 fn survivor_reclaim_resets_dead_blocks() {
     run_with_fresh_arenas(|| {
+        let _heap_change = crate::gc::heap_generation::HeapChange::begin(
+            crate::gc::heap_generation::HeapChangeKind::Sweep,
+        );
         let baseline = arena_telemetry_snapshot();
         let _dead = arena_alloc_gc_survivor(2 * 1024 * 1024, 8, GC_TYPE_STRING);
         let after_alloc = arena_telemetry_snapshot();
@@ -177,6 +186,9 @@ fn survivor_reclaim_resets_dead_blocks() {
 #[test]
 fn budgeted_survivor_reclaim_accumulates_release_stats_across_slices() {
     run_with_fresh_arenas(|| {
+        let _heap_change = crate::gc::heap_generation::HeapChange::begin(
+            crate::gc::heap_generation::HeapChangeKind::Sweep,
+        );
         for _ in 0..3 {
             let ptr = arena_alloc_gc_survivor(BLOCK_SIZE, 8, GC_TYPE_STRING);
             assert!(!ptr.is_null());
@@ -838,6 +850,9 @@ fn longlived_pointer_is_disjoint_from_general_blocks() {
 
 #[test]
 fn test_arena_reset_reuses_dead_general_block_without_touching_live_block() {
+    let _heap_change = crate::gc::heap_generation::HeapChange::begin(
+        crate::gc::heap_generation::HeapChangeKind::Sweep,
+    );
     let mut dead_blocks = Vec::new();
 
     for _ in 0..6 {
@@ -954,6 +969,9 @@ fn longlived_walk_yields_indices_outside_general_range() {
 /// is the only thing referencing them.
 #[test]
 fn reset_never_clears_longlived_blocks() {
+    let _heap_change = crate::gc::heap_generation::HeapChange::begin(
+        crate::gc::heap_generation::HeapChangeKind::Sweep,
+    );
     let ll = arena_alloc_gc_longlived(40, 8, GC_TYPE_STRING) as usize;
     let ll_header_in_block = {
         // The header sits GC_HEADER_SIZE before the user pointer;
@@ -1061,6 +1079,9 @@ fn old_gen_walk_yields_indices_after_longlived() {
 /// block is marked dead. Promotion implies indefinite lifetime.
 #[test]
 fn reset_never_clears_old_gen_blocks() {
+    let _heap_change = crate::gc::heap_generation::HeapChange::begin(
+        crate::gc::heap_generation::HeapChangeKind::Sweep,
+    );
     let old_ptr = arena_alloc_gc_old(40, 8, GC_TYPE_STRING) as usize;
     let old_header = old_ptr - GC_HEADER_SIZE;
     let n_blocks = arena_block_count();

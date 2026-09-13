@@ -303,6 +303,9 @@ pub(crate) fn finish_in_place_promotion(
     promotion: InPlacePromotion,
     liveness: PromotionLiveness,
 ) -> InPlacePromotionStats {
+    let _heap_change = crate::gc::heap_generation::HeapChange::begin(
+        crate::gc::heap_generation::HeapChangeKind::Promotion,
+    );
     let mut stats = InPlacePromotionStats::default();
     if promotion.blocks.is_empty() {
         return stats;
@@ -567,6 +570,7 @@ fn stamp_and_index_block(block: &ArenaBlock, liveness: PromotionLiveness) -> (us
 /// `InPlacePromotion::reserved_bytes`), so the mutator maps only what it
 /// actually allocates.
 fn reset_young_after_promotion() {
+    crate::gc::heap_generation::debug_assert_heap_change_open();
     crate::gc::ARENA_FREE_LIST.with(|fl| fl.borrow_mut().clear());
     crate::gc::ARENA_FREE_LIST_NONEMPTY.with(|c| c.set(false));
 

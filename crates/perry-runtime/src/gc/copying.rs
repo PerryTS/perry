@@ -500,6 +500,7 @@ impl CopyingNurseryCollector {
     }
 
     pub(super) unsafe fn move_young(&mut self, ptr: CopyingPointer) -> usize {
+        crate::gc::heap_generation::debug_assert_heap_change_open();
         let header = ptr.header;
         let old_user = (header as *mut u8).add(GC_HEADER_SIZE);
         let flags = (*header).gc_flags;
@@ -1098,6 +1099,9 @@ pub(super) fn run_copied_minor_attempt(
     _trigger_kind: GcTriggerKind,
     may_speculate: bool,
 ) -> CopiedMinorAttempt {
+    let _heap_change = crate::gc::heap_generation::HeapChange::begin(
+        crate::gc::heap_generation::HeapChangeKind::CopyingMinor,
+    );
     if let Some(trace) = trace.as_mut() {
         trace.copying_nursery = eligibility.trace_stats();
         trace.legacy_copy_only_scanner_pinned = eligibility.legacy_root_stats;

@@ -150,8 +150,13 @@ fn callback_body(ir: &str) -> &str {
 fn inline_array_callback_field_read_has_no_shape_guard() {
     let ir = emit(&module_with_callback(false));
     let callback = callback_body(&ir);
+    // `js_class_field_get_ic` is the one-exit tower's miss arm (guard + slot
+    // load + by-name fallback in one call), so it is the current witness that a
+    // guarded read was emitted; without it this negative assertion would pass
+    // on a callback that is still fully guarded.
     assert!(
         !callback.contains("js_typed_feedback_class_field_get_guard")
+            && !callback.contains("js_class_field_get_ic")
             && !callback.contains("js_object_get_field_by_name_f64"),
         "the proven element parameter must use a direct fixed-offset load:\n{callback}"
     );
@@ -166,7 +171,8 @@ fn callback_source_array_alias_keeps_the_shape_guard() {
     let ir = emit(&module_with_callback(true));
     let callback = callback_body(&ir);
     assert!(
-        callback.contains("js_typed_feedback_class_field_get_guard")
+        callback.contains("js_class_field_get_ic")
+            || callback.contains("js_typed_feedback_class_field_get_guard")
             || callback.contains("js_object_get_field_by_name_f64"),
         "declaring the source-array argument must deny the cross-boundary fact:\n{callback}"
     );

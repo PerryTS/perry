@@ -275,6 +275,8 @@ helper called from a loop body is in-loop too. `movers`
 and `UnrootedAlloca`) counts `js_gc_loop_safepoint`, anything in
 `poll_reaching`, **and** anything in `POLL_CAPABLE_RUNTIME` — the runtime
 helpers that can re-enter JS, such as `js_object_set_field_by_name`,
+`js_object_get_field_ic_slow` (the generic property-GET tower's single slow
+exit, and since T1 the only GET symbol most emitted sites carry),
 `js_object_get_field_ic_miss` and `js_closure_call1`. Those are moving with no
 poll anywhere near them.
 
@@ -293,7 +295,11 @@ like coverage while doing it. Two rounds of this have now been measured:
    SET verbatim but lowers every GET to `js_object_get_field_by_name_f64`,
    `js_object_get_field_ic_miss` or
    `js_typed_feedback_object_get_field_by_name_f64`, none of which were in the
-   set. Property sets classified `MOVING: YES`, property gets classified
+   set. (T1 later collapsed the generic tower's six cold arms into one
+   `js_object_get_field_ic_slow` call, which is in the set for the same reason
+   and is now the GET symbol a stale-register window is most likely to span —
+   a size optimisation is exactly the kind of change that can silently retire
+   the symbol an audit is keyed on.) Property sets classified `MOVING: YES`, property gets classified
    `MOVING: no`, and 31 `--stale-registers` hits on the gate corpus were dropped
    by `--moving-only` as a result — including the shape that faults
    deterministically under `PERRY_GC_PROTECT_FROMSPACE=1

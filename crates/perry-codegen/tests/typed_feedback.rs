@@ -581,8 +581,9 @@ fn a_default_build_emits_no_typed_feedback_recording_calls() {
     // empty string. The property boundaries themselves must still be here —
     // this test proves the RECORDING is gone, not the program.
     assert!(
-        ir.contains("js_object_get_field_by_name_f64")
-            || ir.contains("js_object_get_field_ic_miss"),
+        ir.contains("call double @js_object_get_field_ic_slow(")
+            || ir.contains("call double @js_object_get_field_by_name_f64(")
+            || ir.contains("call double @js_object_get_field_ic_miss"),
         "the property reads themselves must still be lowered; emitted:\n{ir}"
     );
     // And the helpers that DECIDE something, rather than merely counting, are
@@ -598,8 +599,15 @@ fn a_default_build_emits_no_typed_feedback_recording_calls() {
     // the two dispatchers this same fixture still emits -- the property GET
     // (the set dispatcher's twin) and the method call -- and as CALLS, since
     // the old symbol match was satisfied by the `declare` line alone.
+    // T1: the property GET's dispatching wrapper is one indirection further
+    // out. `js_typed_feedback_object_get_field_by_name_f64` is no longer
+    // emitted per site — it is the INT32 class-ref arm of
+    // `js_object_get_field_ic_nonptr`, which the site calls with the same
+    // `site_id`. The line this assertion draws is unchanged: a dispatcher that
+    // DECIDES something is emitted in a default build, a helper that merely
+    // counts is not (all six are asserted absent above).
     assert!(
-        ir.contains("call double @js_typed_feedback_object_get_field_by_name_f64("),
+        ir.contains("call double @js_object_get_field_ic_nonptr("),
         "dispatching feedback wrappers must still be emitted in a default build \
          (property get):\n{ir}"
     );
@@ -646,20 +654,28 @@ fn typed_feedback_guards_direct_class_field_specialization() {
     ));
 
     assert!(ir.contains("class_field_set_guard"));
-    assert!(ir.contains("class_field_get_guard"));
     assert!(ir.contains("@perry_typed_shape_raw_f64_mask_"));
     assert!(ir.contains("js_typed_feedback_class_field_set_guard"));
-    assert!(ir.contains("js_typed_feedback_class_field_get_guard"));
     assert!(ir.contains("class_field_set.fast"));
     assert!(ir.contains("class_field_set.fallback"));
     // #8033: `receiver_class_name` now consults `stable_local_type_proof`
     // (runtime evidence), which a bare parameter lacks. The numeric-specific
     // `class_field_get_number.*` path is therefore not selected; the generic
-    // `class_field_get.*` diamond is emitted instead, with its own fast/fallback
-    // arms and the typed-feedback guard. The guard assertions above (lines
-    // 493-499) validate the test's core purpose.
+    // `class_field_get.*` tower is emitted instead.
+    //
+    // One-exit class-field GET: the tower keeps the #5093 inline pre-check and
+    // the fast slot load, and everything behind the pre-check — the guard call,
+    // the guard-PASS load, the nullish TypeError and the by-name lookup — is
+    // now the body of `js_class_field_get_ic`. The guard therefore still runs
+    // on every miss, one frame deeper; asserting `js_typed_feedback_class_
+    // field_get_guard` as a bare substring here would prove nothing either way,
+    // because the `declare` line alone satisfies it (the same trap #7480's
+    // comment below describes). Assert the call FORMS instead.
     assert!(ir.contains("class_field_get.fast"));
-    assert!(ir.contains("class_field_get.fallback"));
+    assert!(ir.contains("class_field_inline.deref"));
+    assert!(ir.contains("call double @js_class_field_get_ic("));
+    assert!(!ir.contains("call i32 @js_typed_feedback_class_field_get_guard("));
+    assert!(!ir.contains("class_field_get.fallback"));
     assert!(ir.contains("store double"));
     assert!(!ir.contains("call void @js_gc_note_slot_layout"));
     // #5334 lever A: the SET fallback arm collapses to one outlined call; the
@@ -670,9 +686,13 @@ fn typed_feedback_guards_direct_class_field_specialization() {
     // (from the class-field-GET fallback block, not the SET site — the SET copy
     // was folded into js_class_field_set_fallback by #5334). It is now emitted
     // only in a typed-feedback build, like the registration call beside it.
-    // The fallback ARM itself is unchanged and is asserted above/below.
+    // The fallback ARM itself is asserted above.
     assert!(!ir.contains("call void @js_typed_feedback_record_fallback_call"));
-    assert!(ir.contains("call double @js_object_get_field_by_name_f64"));
+    // The GET miss arm's by-name lookup moved inside `js_class_field_get_ic`
+    // (which records the fallback call itself, under the same runtime
+    // `typed_feedback_enabled()` gate the elided emission above respects), so
+    // the site no longer emits it.
+    assert!(!ir.contains("call double @js_object_get_field_by_name_f64("));
 }
 
 /// Body of the first rendered block whose label starts with `label_prefix`,
@@ -774,23 +794,27 @@ fn full_outline_ic_collapses_class_field_get_to_single_call() {
 
     let _lock = env_lock();
 
-    // Forced ON: one outlined call, no inline get diamond.
+    // Forced ON: one outlined call and NO tower at all -- not even the #5093
+    // inline pre-check, which is the whole point on an oversized module.
     {
         let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some("1"));
         let ir = ir_for(build());
         assert!(ir.contains("call double @js_class_field_get_ic"));
         assert!(!ir.contains("class_field_get.fast"));
-        assert!(!ir.contains("class_field_get.fallback"));
-        assert!(!ir.contains("call i32 @js_typed_feedback_class_field_get_guard"));
+        assert!(!ir.contains("class_field_inline.deref"));
+        assert!(!ir.contains("call i32 @js_typed_feedback_class_field_get_guard("));
     }
 
-    // Forced OFF: the inline diamond, no full-outline call.
+    // Forced OFF: the inline tower. Since the one-exit change, BOTH arms call
+    // `js_class_field_get_ic`, so the discriminator is the TOWER, not the call:
+    // OFF keeps the pre-check and the fast slot load, ON has neither.
     {
         let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some("0"));
         let ir = ir_for(build());
-        assert!(!ir.contains("call double @js_class_field_get_ic"));
+        assert!(ir.contains("class_field_inline.deref"));
         assert!(ir.contains("class_field_get.fast"));
-        assert!(ir.contains("js_typed_feedback_class_field_get_guard"));
+        assert!(ir.contains("call double @js_class_field_get_ic"));
+        assert!(!ir.contains("call i32 @js_typed_feedback_class_field_get_guard("));
     }
 }
 

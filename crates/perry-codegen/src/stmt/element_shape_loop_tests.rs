@@ -402,14 +402,34 @@ fn assert_fast_clone_is_entered(ir: &str) {
 fn fast_clone_slice(ir: &str) -> String {
     let mut owned = String::new();
     let mut in_fast_block = false;
+    // #10185: the emitted text carries the function TWICE (same block labels),
+    // so every block would be collected twice and any `matches().count()`
+    // assertion against the slice would read double. Stop at the first repeated
+    // label, which is where the second copy begins — `contains` assertions are
+    // unaffected, and counting one iteration of the clone is what makes "the
+    // residual check happens ONCE" expressible at all.
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for line in ir.split_inclusive('\n') {
         let trimmed = line.trim_end();
         // A block DEFINITION starts at column 0 and ends in `:`; anything else
         // belongs to whichever block was last opened.
         if !line.starts_with(char::is_whitespace) && trimmed.ends_with(':') {
+            // #10185 added three more: the string-`.length` decode
+            // (`element_shape.strlen*`), the boolean ternary's admitted arm
+            // (`element_shape.bool`), and nothing for the shared prefetch,
+            // which reuses `element_shape.load`. Every block the clone can
+            // execute must be listed, or the negatives below go vacuous for it.
             in_fast_block = trimmed.starts_with("for.element_shape_fast.")
                 || trimmed.starts_with("element_shape.load")
-                || trimmed.starts_with("element_shape.number");
+                || trimmed.starts_with("element_shape.number")
+                || trimmed.starts_with("element_shape.strlen")
+                || trimmed.starts_with("element_shape.bool");
+            // Only a repeated CLONE label means the second copy: unrelated
+            // functions share ordinary labels (`entry:`), and breaking on one
+            // of those would slice away the clone entirely.
+            if in_fast_block && !seen.insert(trimmed.to_string()) {
+                break;
+            }
         }
         if in_fast_block {
             owned.push_str(line);
@@ -999,7 +1019,10 @@ fn object_literal_element_resolution_does_not_escape_the_clone() {
         .expect("the merge block should be DEFINED in the emitted IR")..];
     assert!(
         after.contains("js_object_get_field_by_name_f64")
-            || after.contains("js_object_get_field_ic_miss"),
+            || after.contains("js_object_get_field_ic_miss")
+            // T1: the generic tower's cold arms are behind these two entries now.
+            || after.contains("js_object_get_field_ic_slow")
+            || after.contains("js_object_get_field_ic_nonptr"),
         "the post-loop read must stay on the by-name path; emitted:\n{after}"
     );
 }
@@ -1488,6 +1511,7 @@ fn assert_clone_fires_call_free(ir: &str, what: &str) {
     assert!(
         !fast.contains("js_object_get_field_by_name_f64")
             && !fast.contains("js_typed_feedback_class_field_get_guard")
+            && !fast.contains("js_class_field_get_ic")
             && !fast.contains("js_number_coerce"),
         "{what}: the by-name field diamond must be gone from the fast clone"
     );

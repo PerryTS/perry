@@ -13,7 +13,7 @@ use crate::value::{js_nanbox_pointer, js_nanbox_string};
 use perex::binding::BoundSubject;
 use perex::Budget;
 
-fn text<'s>(scope: &'s RuntimeHandleScope, bytes: &[u8]) -> RuntimeHandle<'s> {
+pub(super) fn text<'s>(scope: &'s RuntimeHandleScope, bytes: &[u8]) -> RuntimeHandle<'s> {
     scope.root_string_ptr(crate::string::js_string_from_bytes(
         bytes.as_ptr(),
         bytes.len() as u32,
@@ -21,7 +21,11 @@ fn text<'s>(scope: &'s RuntimeHandleScope, bytes: &[u8]) -> RuntimeHandle<'s> {
 }
 
 /// A NaN-boxed receiver handle, as split/replace/match root their receivers.
-fn regex<'s>(scope: &'s RuntimeHandleScope, pattern: &str, flags: &str) -> RuntimeHandle<'s> {
+pub(super) fn regex<'s>(
+    scope: &'s RuntimeHandleScope,
+    pattern: &str,
+    flags: &str,
+) -> RuntimeHandle<'s> {
     let pattern = text(scope, pattern.as_bytes());
     let flags = text(scope, flags.as_bytes());
     let re = pattern.with_const_ptr::<StringHeader, _>(|pattern| {
@@ -52,7 +56,7 @@ fn global_loop(
     global_loop_collecting(receiver, input, reuse, true)
 }
 
-fn global_loop_collecting(
+pub(super) fn global_loop_collecting(
     receiver: &RuntimeHandle<'_>,
     input: &RuntimeHandle<'_>,
     reuse: Option<&Reuse<'_, '_>>,
@@ -245,6 +249,8 @@ fn perex_reuse_binds_a_different_string_afresh() {
 
 /// Work a global loop over `repeats` copies of a non-ASCII record charges.
 fn non_ascii_loop_work(repeats: usize, reuse: bool) -> usize {
+    // The unpositioned control must not pick up a cross-call position either.
+    let _hints = (!reuse).then(crate::regex::perex_position_hint::DisableHintsForTest::new);
     let local = RuntimeHandleScope::new();
     let input = text(&local, "ä1 ö22 ".repeat(repeats).as_bytes());
     let receiver = regex(&local, "[a-zäö]+\\d+", "gu");

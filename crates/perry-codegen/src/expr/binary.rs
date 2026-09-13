@@ -504,6 +504,17 @@ fn reduction_add_is_reassociable(ctx: &FnCtx<'_>, left: &Expr, right: &Expr) -> 
 }
 
 fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String, bool)> {
+    // #10185: the element-shape fast clone's two NON-numeric reads —
+    // `arr[i].name.length` and `arr[i].active ? 1 : 0`. Both are numbers by the
+    // time they get here, each proven from the loaded word's own NaN-box tag
+    // with a side exit to the slow clone on a miss, so the `true` suppresses
+    // the residual `js_number_coerce` below: that call would not slow the clone
+    // down, it would delete it. Outside a clone the fact vector is empty and
+    // this is a no-op. See `expr::element_shape_reads`.
+    if let Some(value) = crate::expr::element_shape_reads::try_lower_cloned_read_operand(ctx, expr)?
+    {
+        return Ok((value, true));
+    }
     // A stable-packed numeric clone has a stronger fact than the generic
     // untyped-local typed-array probe below: its preheader scanned the exact
     // range, and its emitted-IR gate proved that no call can invalidate that

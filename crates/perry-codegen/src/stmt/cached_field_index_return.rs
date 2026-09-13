@@ -207,7 +207,11 @@ pub(super) fn try_emit_cached_field_index_return(
         .cond_br(&exact, &field_load_label, &prefix_meta_label);
 
     ctx.current_block = prefix_meta_idx;
-    let cached_prefix_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "2")]);
+    // The same cache word the generic property-get tower's named-prefix proof
+    // uses, and the same one the runtime publishes it in.
+    let prefix_word =
+        crate::expr::property_get::generic_dispatch::PIC_NAMED_PREFIX_TOKEN.to_string();
+    let cached_prefix_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, &prefix_word)]);
     let cached_prefix = ctx.block().load(I64, &cached_prefix_ptr);
     let prefix_armed = ctx.block().icmp_ne(I64, &cached_prefix, "0");
     let pointer_bytes = if crate::target_layout::target_is_ilp32(ctx.target_triple) {

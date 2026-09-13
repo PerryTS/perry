@@ -12843,8 +12843,15 @@ fn typed_f64_receiver_method_clone_raw_loads_after_composed_guards() {
     // about which emission shape carried it.
     let inline_probe = caller_ir.find("@PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED");
     let method_proof = inline_probe.map_or(method_guard, |p| p.min(method_guard));
+    // One-exit class-field GET: at a field-GET site the runtime guard is no
+    // longer CALLED -- it is the body of `js_class_field_get_ic`, the inline
+    // pre-check's single miss edge. Other lowerings (the method-override
+    // receiver-clone gate) still call the guard directly, so accept either
+    // witness; what this assertion is about is that a field proof exists and
+    // dominates the typed call, not which symbol carries it.
     let field_guard = caller_ir
-        .find("call i32 @js_typed_feedback_class_field_get_guard")
+        .find("call double @js_class_field_get_ic")
+        .or_else(|| caller_ir.find("call i32 @js_typed_feedback_class_field_get_guard"))
         .unwrap_or_else(|| panic!("caller should guard raw-f64 receiver fields:\n{caller_ir}"));
     // Same for the raw-f64 FIELD proof: one inline class-field precheck
     // (the field-GET sites' form, first mentioned by its `deref` block in the
@@ -14866,7 +14873,11 @@ fn annotated_class_method_value_uses_generic_lookup() {
     // fallback, which is the exact regression #8033 exists to prevent.
     let generic = ir_function_body(&ir, "__probe$generic(");
     assert!(
-        generic.contains("call double @js_object_get_field_ic_miss"),
+        // T1 renamed the tower's cold exits; this assertion is about the
+        // unguarded body keeping GENERIC lookup, not about which symbol
+        // serves it.
+        generic.contains("call double @js_object_get_field_ic_slow")
+            || generic.contains("call double @js_object_get_field_ic_miss"),
         "an annotation-only class receiver must preserve generic property \
          lookup in the unguarded body:\n{generic}"
     );

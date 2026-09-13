@@ -904,6 +904,9 @@ fn test_thread_bigint_deserialization_uses_managed_nursery_page() {
 
 #[test]
 fn test_malloc_kind_telemetry_sweep_by_kind() {
+    let _heap_change = crate::gc::heap_generation::HeapChange::begin(
+        crate::gc::heap_generation::HeapChangeKind::Sweep,
+    );
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     reset_malloc_kind_telemetry_for_tests();
     let kinds = [

@@ -20,6 +20,7 @@ mod cached_field_index_return;
 #[cfg(test)]
 mod class_field_loop_tests;
 mod counter_range;
+mod element_shape_carried;
 mod element_shape_loop;
 #[cfg(test)]
 mod element_shape_loop_tests;
@@ -281,6 +282,15 @@ fn lower_return_expr(ctx: &mut FnCtx<'_>, expr: &perry_hir::Expr) -> Result<Stri
 pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
     match stmt {
         Stmt::Expr(e) => {
+            // #10185: the element-shape fast clone's carried-index statements
+            // (the recurrence and its trailing write-back) are lowered
+            // VIRTUALLY, exactly like the `Let` bindings in `let_stmt.rs` —
+            // the generic lowering of `c = (c * 17 + 7) % length` is an
+            // `frem` libcall, and a call inside the clone DELETES it (#7690).
+            // Outside a clone the fact vector is empty and this is a no-op.
+            if element_shape_carried::lower_virtual_carried_stmt(ctx, e)? {
+                return Ok(());
+            }
             let prev_discard = ctx.discard_expr_value;
             ctx.discard_expr_value = true;
             // #7590: the non-leaking companion. `lower_expr` takes this at the
