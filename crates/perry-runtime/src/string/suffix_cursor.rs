@@ -19,7 +19,7 @@ pub struct SuffixCursor {
 fn length(source: f64) -> u32 {
     let value = crate::value::JSValue::from_bits(source.to_bits());
     if value.is_short_string() {
-        value.short_string_len() as u32
+        value.short_string_utf16_len()
     } else {
         unsafe { (*value.as_string_ptr()).utf16_len }
     }

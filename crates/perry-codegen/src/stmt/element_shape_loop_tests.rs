@@ -423,6 +423,8 @@ fn fast_clone_slice(ir: &str) -> String {
                 || trimmed.starts_with("element_shape.load")
                 || trimmed.starts_with("element_shape.number")
                 || trimmed.starts_with("element_shape.strlen")
+                || trimmed.starts_with("sso.utf16")
+                || trimmed.starts_with("sso.length.done")
                 || trimmed.starts_with("element_shape.bool");
             // Only a repeated CLONE label means the second copy: unrelated
             // functions share ordinary labels (`entry:`), and breaking on one

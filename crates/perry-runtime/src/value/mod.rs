@@ -48,6 +48,8 @@ pub(crate) mod to_string_class_ref;
 mod truthy;
 
 #[cfg(test)]
+mod sso_length_tests;
+#[cfg(test)]
 mod tests;
 
 // ----- Tag constants (load-bearing for codegen + cross-module match patterns) -----
