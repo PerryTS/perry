@@ -71,6 +71,7 @@ mod step_bounds;
 pub(super) mod support;
 mod survival_diag;
 mod sweep_described_runs;
+mod sweep_hole_rebuild;
 mod sweep_page_tally;
 mod teardown;
 mod telemetry_verifier;

@@ -66,6 +66,13 @@ pub(crate) struct CensusBlock {
     /// read it (a subset of `obligation`, kept apart for
     /// `young_generation_unmarked`).
     pub(crate) premarked: bool,
+    /// The census parsed every header of the block itself, walkable or not
+    /// (`ValidPointerSetBuilder::census_whole_block`), so `non_walkable` is a
+    /// complete answer. The per-object census never sees a non-walkable header.
+    pub(crate) whole_walk: bool,
+    /// Some header in the block does not parse as an arena object — an
+    /// invalidated dead header (`obj_type == 0`) among them.
+    pub(crate) non_walkable: bool,
 }
 
 /// Per-block census facts and trace reachability for one cycle's
@@ -140,7 +147,25 @@ impl BlockCensus {
             censused: true,
             obligation: false,
             premarked: false,
+            whole_walk: false,
+            non_walkable: false,
         };
+    }
+
+    /// The block just begun is being parsed header by header in one pass.
+    #[inline]
+    pub(crate) fn note_whole_block_walk(&mut self) {
+        if self.armed {
+            self.current.whole_walk = true;
+        }
+    }
+
+    /// The current block holds a header that does not parse as an object.
+    #[inline]
+    pub(crate) fn note_non_walkable(&mut self) {
+        if self.armed {
+            self.current.non_walkable = true;
+        }
     }
 
     /// Record one censused header of the current block. Branch-light: this
@@ -279,6 +304,9 @@ pub(crate) mod sabotage {
     /// A dead old header is invalidated without first expanding the described
     /// promoted run of its page.
     pub(crate) const FORGET_RUN_EXPANSION: u8 = 16;
+    /// The sweep treats every whole-walked block as holding no invalidated
+    /// header, whatever the census saw.
+    pub(crate) const FORGET_HOLES: u8 = 32;
 
     thread_local! {
         static SABOTAGE: Cell<u8> = const { Cell::new(0) };
@@ -344,6 +372,22 @@ pub(crate) fn type_needs_per_object_sweep(obj_type: u8, object_side_tables_live:
         | GcMoveHookKind::SetSideTables
         | GcMoveHookKind::ExoticExpandoOwner => false,
     }
+}
+
+crate::perry_thread_local! {
+    static HOLE_REBUILD_BLOCKS_SKIPPED: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Record live old blocks one sweep's hole-list rebuild did not parse because
+/// they provably hold no invalidated header (live-subject counter).
+pub(crate) fn note_hole_rebuild_blocks_skipped(blocks: u64) {
+    HOLE_REBUILD_BLOCKS_SKIPPED.with(|c| c.set(c.get().saturating_add(blocks)));
+}
+
+/// Live old blocks this thread's hole-list rebuilds skipped, since thread start.
+#[cfg(test)]
+pub(crate) fn hole_rebuild_blocks_skipped() -> u64 {
+    HOLE_REBUILD_BLOCKS_SKIPPED.with(Cell::get)
 }
 
 crate::perry_thread_local! {

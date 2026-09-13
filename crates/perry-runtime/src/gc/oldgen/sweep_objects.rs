@@ -60,6 +60,12 @@ pub(super) struct ArenaSweepObjectsState {
     block_skip_blocks: u64,
     block_skip_objects: u64,
     block_skip_bytes: u64,
+    /// #10182: per block, the census parsed every header and none of them was
+    /// invalidated, and the block has not changed since. Empty unless the
+    /// block skip ran against an armed census.
+    census_hole_free: Vec<bool>,
+    /// #10182: per block, this sweep invalidated a dead header in it.
+    invalidated_in_block: Vec<bool>,
 }
 
 impl ArenaSweepObjectsState {
@@ -100,6 +106,8 @@ impl ArenaSweepObjectsState {
             block_skip_blocks: 0,
             block_skip_objects: 0,
             block_skip_bytes: 0,
+            census_hole_free: Vec::new(),
+            invalidated_in_block: vec![false; n_blocks],
         }
     }
 
@@ -130,6 +138,25 @@ impl ArenaSweepObjectsState {
             return;
         }
         let survivors = crate::arena::survivor_block_index_range();
+        #[cfg(not(test))]
+        let forget_holes = false;
+        #[cfg(test)]
+        let forget_holes = super::super::trace::block_skip::sabotage::get()
+            & super::super::trace::block_skip::sabotage::FORGET_HOLES
+            != 0;
+        self.census_hole_free = self
+            .block_snapshots
+            .iter()
+            .enumerate()
+            .map(|(block_idx, snapshot)| {
+                census.block(block_idx).is_some_and(|block| {
+                    block.whole_walk
+                        && (!block.non_walkable || forget_holes)
+                        && block.data == snapshot.data
+                        && block.end == snapshot.data.saturating_add(snapshot.offset)
+                })
+            })
+            .collect();
         let mut skip = vec![false; self.block_snapshots.len()];
         let mut any = false;
         for (block_idx, snapshot) in self.block_snapshots.iter().enumerate() {
@@ -201,14 +228,45 @@ impl ArenaSweepObjectsState {
     /// completes — block liveness is final at that point, and the block
     /// cleanup that follows only touches blocks with NO live object, which
     /// the rebuild's filter already skips.
+    ///
+    /// #10182: the rebuild also skips a live block that provably holds no
+    /// hole, i.e. no header with `obj_type == 0`. Those headers are produced
+    /// only by invalidating a dead old object, and consumed only by reuse.
+    /// A block qualifies when this cycle's census parsed all of its headers
+    /// and found none that does not parse as an object, the block has not
+    /// grown since, and this sweep invalidated nothing in it. Nothing else in a
+    /// synchronous full writes a header between the census and here. On a
+    /// pacing full that keeps one promoted JSON tree, the rebuild otherwise
+    /// re-parses the whole tree to find no hole.
     pub(super) fn push_live_block_holes(&mut self) {
         if self.reclaim_dead_old_blocks {
-            super::old_free_rebuild_from_live_old_blocks(
-                &self.block_has_live,
-                self.old_block_start,
-            );
+            let mut parse = self.block_has_live.clone();
+            let mut skipped = 0u64;
+            for (block_idx, live) in parse.iter_mut().enumerate() {
+                if block_idx >= self.old_block_start
+                    && *live
+                    && self
+                        .census_hole_free
+                        .get(block_idx)
+                        .copied()
+                        .unwrap_or(false)
+                    && !self
+                        .invalidated_in_block
+                        .get(block_idx)
+                        .copied()
+                        .unwrap_or(true)
+                {
+                    *live = false;
+                    skipped += 1;
+                }
+            }
+            super::super::trace::block_skip::note_hole_rebuild_blocks_skipped(skipped);
+            super::old_free_rebuild_from_live_old_blocks(&parse, self.old_block_start);
             if crate::gc::gc_diag_enabled() {
-                eprintln!("[gc-old-free] reusable_bytes={}", super::old_free_bytes());
+                eprintln!(
+                    "[gc-old-free] reusable_bytes={} rebuild_skipped_blocks={skipped}",
+                    super::old_free_bytes()
+                );
             }
         }
     }
@@ -464,6 +522,7 @@ impl ArenaSweepObjectsState {
             gc_type_clear_dead_payload_side_tables((*header).obj_type, user_ptr as usize);
         }
         if self.reclaim_dead_old_blocks && dead_old {
+            self.note_invalidated(block_idx);
             self.defer_old_unregister(header, total_size);
         } else {
             (*header).gc_flags = flags & !(GC_FLAG_FORWARDED | GC_FLAG_MARKED);
@@ -483,7 +542,15 @@ impl ArenaSweepObjectsState {
         }
         finalize_dead_arena_payload(header, user_ptr, self.overflow_active);
         if self.reclaim_dead_old_blocks && dead_old {
+            self.note_invalidated(block_idx);
             self.defer_old_unregister(header, total_size);
+        }
+    }
+
+    #[inline]
+    fn note_invalidated(&mut self, block_idx: usize) {
+        if let Some(slot) = self.invalidated_in_block.get_mut(block_idx) {
+            *slot = true;
         }
     }
 }
