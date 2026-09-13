@@ -364,7 +364,7 @@ impl ValidPointerSet {
     }
 
     #[inline(always)]
-    fn record_pointer_range(&mut self, ptr: usize) {
+    pub(super) fn record_pointer_range(&mut self, ptr: usize) {
         if ptr < self.range_min {
             self.range_min = ptr;
         }
@@ -559,6 +559,37 @@ impl ValidPointerSet {
     }
 }
 
+/// Sabotage switch for the whole-block census test: the one-pass walk skips
+/// recording every start bit. Test builds only.
+#[cfg(test)]
+pub(crate) mod whole_block_census_sabotage {
+    use std::cell::Cell;
+
+    thread_local! {
+        static DROP_STARTS: Cell<bool> = const { Cell::new(false) };
+    }
+
+    #[inline]
+    pub(crate) fn dropping_starts() -> bool {
+        DROP_STARTS.with(Cell::get)
+    }
+
+    /// Arms the dropped starts until the guard drops.
+    pub(crate) struct Guard(bool);
+
+    impl Guard {
+        pub(crate) fn arm() -> Self {
+            Self(DROP_STARTS.with(|s| s.replace(true)))
+        }
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            DROP_STARTS.with(|s| s.set(self.0));
+        }
+    }
+}
+
 /// Sabotage switch for the start-bitmap tests: shifts every bitmap probe by
 /// one alignment unit, so a test can show its membership oracle notices a
 /// bitmap that answers for the wrong address. Test builds only.
@@ -692,6 +723,10 @@ impl ValidPointerSetBuilder {
                     }
                 }
                 ValidPointerSetBuildPhase::ArenaWalk => {
+                    if unbounded && self.walk_whole_blocks() {
+                        self.phase = ValidPointerSetBuildPhase::MallocWalk;
+                        continue;
+                    }
                     if !self.step_arena_walk(&mut remaining) {
                         return false;
                     }
@@ -778,6 +813,138 @@ impl ValidPointerSetBuilder {
             self.record_arena_header(header_ptr);
         }
         false
+    }
+
+    /// An unbudgeted census walks each block in one pass
+    /// ([`Self::census_whole_block`]) instead of one cursor call per object:
+    /// the census reads every header of the arena, and on a pacing full over
+    /// two promoted 20 MB JSON trees its per-object overhead, not the memory
+    /// traffic, was three quarters of the phase (#10182). Returns false, and
+    /// walks nothing, when the per-object path must be kept: classifier mode
+    /// records no starts, and a cursor a budgeted step left inside a block
+    /// resumes mid-block.
+    fn walk_whole_blocks(&mut self) -> bool {
+        if self.set.classifier_mode
+            || !self
+                .arena_cursor
+                .as_ref()
+                .is_some_and(crate::arena::ArenaObjectCursor::at_block_boundary)
+        {
+            return false;
+        }
+        loop {
+            let next = self
+                .arena_cursor
+                .as_mut()
+                .expect("arena cursor exists during arena walk")
+                .next_whole_block();
+            let Some((block_idx, data, offset, size)) = next else {
+                self.arena_cursor = None;
+                return true;
+            };
+            // SAFETY: the cursor snapshotted this block for this census, and
+            // nothing runs between that snapshot and this walk.
+            unsafe { self.census_whole_block(block_idx, data, offset, size) };
+        }
+    }
+
+    /// Census one whole arena block in a single pass. It yields exactly the
+    /// headers `ArenaObjectCursor::next_budgeted` yields for the block (same
+    /// alignment, stop conditions and walkability filter) and records exactly
+    /// what `step_arena_walk` records for each of them; the per-block constants
+    /// (the bitmap chunks, the nursery classification, the pointer range) are
+    /// hoisted out of the per-object loop.
+    ///
+    /// # Safety
+    /// `data`/`offset`/`size` are an arena block as the census cursor
+    /// snapshotted it.
+    unsafe fn census_whole_block(
+        &mut self,
+        block_idx: usize,
+        data: usize,
+        offset: usize,
+        size: usize,
+    ) {
+        let mut cursor = 0usize;
+        let mut begun = false;
+        let mut bitmap: Option<[*mut u64; CENSUS_BITMAP_MAX_CHUNKS]> = None;
+        let mut nursery = false;
+        let mut first_start = 0usize;
+        let mut last_start = 0usize;
+        let mut bitmap_starts = 0usize;
+        let mut tenured_bytes = 0usize;
+        while cursor < offset {
+            let aligned = (cursor + 7) & !7;
+            if aligned >= offset {
+                break;
+            }
+            let header = (data + aligned) as *const GcHeader;
+            let total_size = (*header).size as usize;
+            if total_size == 0 || total_size > size {
+                break;
+            }
+            cursor = aligned + total_size;
+            if !crate::gc::gc_type_is_arena_walkable((*header).obj_type) {
+                continue;
+            }
+            let user_ptr = data + aligned + GC_HEADER_SIZE;
+            if !begun {
+                begun = true;
+                self.census_block_idx = block_idx;
+                self.set.begin_arena_block(
+                    u32::try_from(block_idx).unwrap_or(u32::MAX),
+                    data,
+                    offset,
+                );
+                if self.census_armed {
+                    self.set.block_census.begin_block(block_idx, data, offset);
+                }
+                let block = self
+                    .set
+                    .arena_blocks
+                    .last()
+                    .expect("census block just opened");
+                if !block.sorted {
+                    bitmap = Some(block.chunks);
+                }
+                // Every object of the block has the block's classification.
+                nursery = crate::arena::pointer_in_nursery(user_ptr);
+                first_start = user_ptr;
+            }
+            if self.census_armed {
+                self.set.block_census.note_header(header);
+            }
+            match bitmap {
+                Some(chunks) => {
+                    #[cfg(test)]
+                    if whole_block_census_sabotage::dropping_starts() {
+                        last_start = user_ptr;
+                        continue;
+                    }
+                    // `aligned` is a multiple of 8 below `offset`, the block's
+                    // extent: the bit and its word are inside the bitmap.
+                    let bit = aligned >> CENSUS_START_ALIGN_SHIFT;
+                    let word = bit >> 6;
+                    *chunks[word >> CENSUS_BITMAP_CHUNK_WORD_SHIFT]
+                        .add(word & (CENSUS_BITMAP_CHUNK_WORDS - 1)) |= 1u64 << (bit & 63);
+                    bitmap_starts += 1;
+                }
+                None => self.set.push_arena(user_ptr),
+            }
+            last_start = user_ptr;
+            let flags = (*header).gc_flags;
+            if nursery && flags & GC_FLAG_TENURED != 0 && flags & GC_FLAG_FORWARDED == 0 {
+                tenured_bytes += total_size;
+            }
+        }
+        if begun {
+            if bitmap.is_some() {
+                self.set.arena_count += bitmap_starts;
+                self.set.record_pointer_range(first_start);
+                self.set.record_pointer_range(last_start);
+            }
+            self.set.record_tenured_nursery_bytes(tenured_bytes);
+        }
     }
 
     fn record_arena_header(&mut self, header_ptr: *mut u8) {
