@@ -2136,6 +2136,66 @@ pub(crate) enum ElementShapeIndex {
         /// Entry-block i32 alloca the clone writes the derived index to.
         slot: String,
     },
+    /// #10199: a LOOP-CARRIED index — `let c = …;` outside the loop,
+    /// `c = (a*c + b) % m;` as the body's first statement, then `arr[c]` (or
+    /// `const index = c; arr[index]`). The benchmark's `random` mode, and the
+    /// shape every pseudo-random walk over a record array is written in.
+    ///
+    /// Unlike [`Self::DerivedMod`]'s `d`, `c` is a real mutable binding that is
+    /// LIVE AFTER THE LOOP, so the clone owes a write-back. It pays it once per
+    /// iteration, at the END of the iteration (`Carried::commit_slot`), which is
+    /// also what makes the residual side exit correct: every exit from the
+    /// middle of an iteration leaves the real slot holding the value it had at
+    /// that iteration's ENTRY, so the slow clone re-runs the update exactly
+    /// once. A write-back at the update site would double-apply the recurrence.
+    Carried(Box<CarriedIndex>),
+}
+
+/// #10199: everything [`ElementShapeIndex::Carried`] needs, boxed to keep the
+/// enum small.
+#[derive(Debug, Clone)]
+pub(crate) struct CarriedIndex {
+    /// The `let` binding the recurrence advances.
+    pub local_id: u32,
+    /// `const index = c` — an optional alias the body may spell the subscript
+    /// through. Also virtual: its `Let` emits nothing.
+    pub alias_id: Option<u32>,
+    /// `c' = (a*c + b) % m`, folded to one affine pair by the matcher. Both
+    /// non-negative, and `|a| * i32::MAX + |b|` proven below 2^53 so the i64
+    /// evaluation agrees with the f64 one JavaScript performs.
+    pub coeff_a: i64,
+    pub coeff_b: i64,
+    /// i32 SSA value of the modulus, materialized in the preheader.
+    pub modulus_i32: String,
+    /// Entry-block i32 alloca holding the live carried value inside the clone.
+    pub slot: String,
+    /// The binding's REAL (NaN-boxed double) slot, written once per iteration
+    /// after every side exit for that iteration has been passed.
+    pub commit_slot: String,
+}
+
+/// #10199: the per-iteration element prefetch.
+///
+/// `rows[index].id + rows[index].name.length + (rows[index].active ? 1 : 0)`
+/// reads ONE element three times. Without this each read repeats the element
+/// load AND the residual header/ShapeId check, which is three branches and
+/// three redundant loads per iteration. The prologue attached to the body's
+/// leading virtual binding does both once and parks the masked element handle
+/// in an entry alloca; every read is then a bare offset load plus the tag test
+/// its own consumer needs.
+///
+/// It is also what makes a MULTI-READ body's side exit correct: every residual
+/// exit now happens in the prologue, before any accumulator store has
+/// committed, so resuming the iteration in the slow clone cannot double-apply
+/// an earlier read.
+#[derive(Debug, Clone)]
+pub(crate) struct ElementPrefetch {
+    /// The virtual binding whose lowering emits the prologue. Exactly one
+    /// statement owns it, so a body with both a carried update and an alias
+    /// emits it once.
+    pub site_local_id: u32,
+    /// Entry-block i64 alloca holding the masked element handle.
+    pub handle_slot: String,
 }
 
 impl ElementShapeIndex {
@@ -2154,7 +2214,22 @@ impl ElementShapeIndex {
     /// then declined would hand `is_numeric_expr` a raw-double promise the
     /// generic path does not keep.
     pub(crate) fn needs_counter_i32_slot(&self) -> bool {
-        !matches!(self, ElementShapeIndex::Constant(_))
+        !matches!(
+            self,
+            ElementShapeIndex::Constant(_) | ElementShapeIndex::Carried(_)
+        )
+    }
+
+    /// #10199: the locals whose `Let` / `LocalSet` the fast clone lowers
+    /// VIRTUALLY for this index form. Nothing may read one of them bare inside
+    /// the clone, and their shadow slots must not be cleared there.
+    pub(crate) fn virtual_locals(&self) -> impl Iterator<Item = u32> + '_ {
+        let (a, b) = match self {
+            ElementShapeIndex::DerivedMod { local_id, .. } => (Some(*local_id), None),
+            ElementShapeIndex::Carried(carried) => (Some(carried.local_id), carried.alias_id),
+            _ => (None, None),
+        };
+        a.into_iter().chain(b)
     }
 }
 
@@ -2202,6 +2277,10 @@ pub(crate) struct ElementShapeLoopFact {
     pub index_local_id: u32,
     /// #10123: how the clone computes the element index.
     pub index: ElementShapeIndex,
+    /// #10199: the shared per-iteration element deref, when the body has a
+    /// leading virtual binding to hang it off. `None` keeps #10123's per-read
+    /// deref + residual check.
+    pub elem_prefetch: Option<ElementPrefetch>,
     /// #10123: true when the preheader proved an exact ordinary ShapeId rather
     /// than a class id. The per-element residual check then drops the
     /// typed-layout conjunct (a parsed record's layout is
@@ -2231,6 +2310,15 @@ pub(crate) struct ElementShapeLoopFact {
     /// raw-f64 candidates; shape-keyed ones are the preheader's live query
     /// results (#10123).
     pub fields: std::collections::BTreeMap<String, ElementShapeFieldSlot>,
+    /// #10199: true when the fast clone lowers a body the matcher SYNTHESIZED
+    /// (the K-statement accumulator fold, or the carried index's trailing
+    /// write-back) rather than the source body. The function-wide
+    /// shadow-slot-clear map is keyed by statement INDEX, so a rewritten body
+    /// would attribute a clear to the wrong statement; the clone is call-free,
+    /// so no collection can observe a slot inside it and the clears are simply
+    /// suppressed there (`expr::emit_shadow_slot_clear`). The slow clone lowers
+    /// the original body, with its original indices and its original clears.
+    pub synthesized_body: bool,
     /// #7771: the body's `const r = arr[counter]` binding, when the matcher
     /// admitted the element-binding form. Inside the fast clone the `Let`
     /// itself emits nothing (`stmt/let_stmt.rs`) and every `r.field` read
@@ -2305,6 +2393,12 @@ pub(crate) fn element_shape_loop_fact_for_property_get<'f>(
                     (ElementShapeIndex::Constant(k), Expr::Integer(n)) => *n == *k,
                     (ElementShapeIndex::DerivedMod { local_id, .. }, Expr::LocalGet(id)) => {
                         *id == *local_id
+                    }
+                    // #10199: `arr[c]` and `const index = c; arr[index]` are
+                    // the same subscript — the alias is virtual, so both
+                    // spellings read the carried slot the preheader bounded.
+                    (ElementShapeIndex::Carried(carried), Expr::LocalGet(id)) => {
+                        *id == carried.local_id || carried.alias_id == Some(*id)
                     }
                     _ => false,
                 };
@@ -2925,6 +3019,7 @@ mod typed_array_rmw;
 pub(crate) use instance_misc1::builtin_parent_reserved_class_id;
 pub(crate) mod class_field_inline_guard;
 pub(crate) mod element_shape_guard;
+pub(crate) mod element_shape_reads;
 mod js_runtime;
 mod literals_vars;
 mod logical_collections;

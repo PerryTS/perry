@@ -152,7 +152,7 @@ use super::loops::{
     CLASS_FIELD_LOOP_PROP_DENYLIST,
 };
 use crate::expr::{lower_expr, FnCtx};
-use crate::types::{DOUBLE, I1, I32};
+use crate::types::{DOUBLE, I1, I32, I64};
 
 /// Loop bound: a literal, a loop-invariant local / module global that is
 /// materialized to i32 once in the preheader, or the tracked array's own
@@ -210,14 +210,28 @@ enum ElementShapeIdentity {
 enum MatchedIndex {
     Counter,
     Constant(i64),
-    DerivedMod { local_id: u32, modulus_id: u32 },
+    DerivedMod {
+        local_id: u32,
+        modulus_id: u32,
+    },
+    /// #10199: `c = (a*c + b) % m; … arr[c]`, optionally spelled through a
+    /// `const index = c` alias. The recurrence itself lives on
+    /// [`ElementShapeVersionedLoop::carried`] — this arm records only the
+    /// spellings the subscript may take. See `stmt/element_shape_carried.rs`.
+    Carried {
+        carried_id: u32,
+        alias_id: Option<u32>,
+    },
 }
 
 impl MatchedIndex {
     /// Mirror of [`crate::expr::ElementShapeIndex::needs_counter_i32_slot`],
     /// asked before the fact exists.
     fn needs_counter_i32_slot(self) -> bool {
-        !matches!(self, MatchedIndex::Constant(_))
+        !matches!(
+            self,
+            MatchedIndex::Constant(_) | MatchedIndex::Carried { .. }
+        )
     }
 }
 
@@ -235,6 +249,21 @@ struct ElementShapeVersionedLoop {
     /// form; `None` for the original single-statement accumulator body.
     element_binding: Option<u32>,
     accumulator_id: u32,
+    /// #10199: the matched recurrence, for the [`MatchedIndex::Carried`] form.
+    carried: Option<super::element_shape_carried::MatchedCarried>,
+    /// #10199: the body the FAST clone lowers, when it is not the source body.
+    ///
+    /// Two rewrites, both of which exist to put every side exit an iteration
+    /// can take BEFORE any of its stores:
+    ///
+    /// * K accumulator statements fold into one, so a tag test that fails on
+    ///   the third read cannot leave the first two already applied to `acc`
+    ///   when the slow clone re-runs the iteration;
+    /// * a carried recurrence gains a trailing commit statement, so the real
+    ///   binding is published once the iteration is past every exit.
+    ///
+    /// The SLOW clone always lowers the original `body`.
+    fast_body: Option<Vec<Stmt>>,
 }
 
 /// The locals the pure-expression walk reasons about.
@@ -246,6 +275,11 @@ struct PureExprScope {
     /// #10123: `(d, m)` for a body whose first statement is
     /// `const d = counter % m`.
     derived: Option<(u32, u32)>,
+    /// #10199: `(carried, alias)` for a body whose first statement advances a
+    /// loop-carried index. Both are excluded from bare reads for the same
+    /// reason `derived` is — inside the clone the real slot is one iteration
+    /// behind until the trailing commit.
+    carried: Option<(u32, Option<u32>)>,
 }
 
 /// What the walk collects.
@@ -311,8 +345,33 @@ fn element_shape_loop_pure_expr_collect(
                 out.props.insert(property.clone());
                 true
             }
+            // #10199: `arr[<index>].prop.length` — a STRING field's JS length.
+            // Admitted as its own form rather than as "a read of `prop`
+            // followed by a generic `.length`", because the generic one is a
+            // property diamond ending in a runtime call, and a call inside this
+            // clone deletes it. The emitted read tag-tests the loaded word for
+            // both string representations and side-exits otherwise
+            // (`expr::element_shape_reads`).
+            Expr::PropertyGet { .. } if property == "length" => {
+                element_shape_loop_pure_expr_collect(ctx, object, scope, out)
+            }
             _ => false,
         },
+        // #10199: `arr[<index>].prop ? A : B` with constant arms. JS truthiness
+        // of an arbitrary value is a runtime question the clone is not allowed
+        // to guess, so the emitted read admits ONLY the two boolean singletons
+        // and side-exits on everything else. Anything but a tracked element
+        // read in the condition, or a non-constant arm, declines.
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            matches!(condition.as_ref(), Expr::PropertyGet { .. })
+                && crate::expr::element_shape_reads::integer_arm(then_expr).is_some()
+                && crate::expr::element_shape_reads::integer_arm(else_expr).is_some()
+                && element_shape_loop_pure_expr_collect(ctx, condition, scope, out)
+        }
         // A bare read of the array, the counter, the element binding or the
         // derived index as a VALUE could flow it into arbitrary lowering; only
         // scalar reads the analysis proves numeric are admitted. The element
@@ -324,6 +383,10 @@ fn element_shape_loop_pure_expr_collect(
         Expr::LocalGet(id) => {
             scope.element_binding != Some(*id)
                 && scope.derived.map(|(d, _)| d) != Some(*id)
+                // #10199: the carried index and its alias are virtual too —
+                // their real slots are one iteration behind inside the clone,
+                // so a bare read would hand out a stale value.
+                && scope.carried.is_none_or(|(c, alias)| *id != c && alias != Some(*id))
                 && out.array.is_none_or(|a| a != *id)
                 && (*id == scope.accumulator_id || crate::type_analysis::is_numeric_expr(ctx, expr))
         }
@@ -381,7 +444,18 @@ fn match_index_form(index: &perry_hir::Expr, scope: &PureExprScope) -> Option<Ma
                 local_id: derived_id,
                 modulus_id,
             }),
-            _ => None,
+            // #10199: `arr[c]` and `const index = c; arr[index]` are the same
+            // subscript; the alias is virtual and carries no obligation of its
+            // own.
+            _ => match scope.carried {
+                Some((carried_id, alias_id)) if carried_id == *id || alias_id == Some(*id) => {
+                    Some(MatchedIndex::Carried {
+                        carried_id,
+                        alias_id,
+                    })
+                }
+                _ => None,
+            },
         },
         // `0..=i32::MAX`, so the preheader's `length > k` compare is an i32
         // one and the emitted index needs no conversion.
@@ -619,41 +693,100 @@ fn anon_shape_field_type_is_compatible(
 /// Answering `false` for want of the counter's i32 slot cannot happen — the
 /// matcher requires one for the derived-index form — and would only cost the
 /// clone, never correctness.
-pub(super) fn lower_virtual_clone_binding(ctx: &mut FnCtx<'_>, id: u32) -> bool {
-    if ctx
-        .element_shape_loop_facts
-        .iter()
-        .any(|fact| fact.element_binding == Some(id))
-    {
-        return true;
+pub(super) fn lower_virtual_clone_binding(ctx: &mut FnCtx<'_>, id: u32) -> Result<bool> {
+    enum VirtualBinding {
+        /// #7771 `const r = arr[j]` and #10199 `const index = c`: pure aliases,
+        /// no instruction of their own.
+        Alias,
+        /// #10123 `const d = j % m`: one `srem i32`.
+        DerivedMod {
+            counter_id: u32,
+            modulus_i32: String,
+            slot: String,
+        },
     }
-    let Some((counter_slot, modulus_i32, derived_slot)) =
-        ctx.element_shape_loop_facts.iter().rev().find_map(|fact| {
-            let crate::expr::ElementShapeIndex::DerivedMod {
+
+    let Some((scope_id, binding)) = ctx.element_shape_loop_facts.iter().rev().find_map(|fact| {
+        if fact.element_binding == Some(id) {
+            return Some((fact.scope_id, VirtualBinding::Alias));
+        }
+        match &fact.index {
+            crate::expr::ElementShapeIndex::DerivedMod {
                 local_id,
                 modulus_i32,
                 slot,
-            } = &fact.index
-            else {
-                return None;
-            };
-            if *local_id != id {
-                return None;
+            } if *local_id == id => Some((
+                fact.scope_id,
+                VirtualBinding::DerivedMod {
+                    counter_id: fact.index_local_id,
+                    modulus_i32: modulus_i32.clone(),
+                    slot: slot.clone(),
+                },
+            )),
+            crate::expr::ElementShapeIndex::Carried(carried) if carried.alias_id == Some(id) => {
+                Some((fact.scope_id, VirtualBinding::Alias))
             }
-            Some((
-                ctx.i32_counter_slots.get(&fact.index_local_id)?.clone(),
-                modulus_i32.clone(),
-                slot.clone(),
-            ))
-        })
-    else {
-        return false;
+            _ => None,
+        }
+    }) else {
+        return Ok(false);
     };
-    let blk = ctx.block();
-    let counter = blk.load(I32, &counter_slot);
-    let derived = blk.srem(I32, &counter, &modulus_i32);
-    blk.store(I32, &derived, &derived_slot);
-    true
+
+    match binding {
+        VirtualBinding::Alias => {}
+        VirtualBinding::DerivedMod {
+            counter_id,
+            modulus_i32,
+            slot,
+        } => {
+            let Some(counter_slot) = ctx.i32_counter_slots.get(&counter_id).cloned() else {
+                return Ok(false);
+            };
+            let blk = ctx.block();
+            let counter = blk.load(I32, &counter_slot);
+            let derived = blk.srem(I32, &counter, &modulus_i32);
+            blk.store(I32, &derived, &slot);
+        }
+    }
+    // #10199: this iteration's index is now in its slot, so this is where the
+    // shared element deref belongs — for the ONE binding that owns it.
+    emit_element_prefetch_for(ctx, scope_id, id);
+    Ok(true)
+}
+
+/// #10199: emit the once-per-iteration element prologue, if `site_local` is the
+/// statement the fact designated to own it.
+///
+/// Every read in the clone loads the handle this parks, so the designated
+/// statement MUST run before any of them — which is why the matcher only ever
+/// designates the body's leading virtual statement, and why a fact carrying a
+/// prefetch whose index cannot be materialized is a compiler bug rather than a
+/// missed optimization (the reads would load an uninitialized alloca). The
+/// matcher checks `needs_counter_i32_slot` before the fact is built, so the
+/// index is always available here.
+pub(super) fn emit_element_prefetch_for(ctx: &mut FnCtx<'_>, scope_id: u32, site_local: u32) {
+    let Some(fact) = ctx
+        .element_shape_loop_facts
+        .iter()
+        .find(|fact| fact.scope_id == scope_id)
+        .cloned()
+    else {
+        return;
+    };
+    let Some(prefetch) = fact.elem_prefetch.clone() else {
+        return;
+    };
+    if prefetch.site_local_id != site_local {
+        return;
+    }
+    let idx_i32 = crate::expr::element_shape_guard::emit_element_shape_index(ctx, &fact)
+        .expect("a prefetching fact always has a materializable index");
+    crate::expr::element_shape_guard::emit_element_shape_prefetch(
+        ctx,
+        &fact,
+        &idx_i32,
+        &prefetch.handle_slot,
+    );
 }
 
 /// Is `array_id` an untyped receiver — the shape-keyed arm's entry condition?
@@ -799,7 +932,7 @@ fn match_element_shape_versioned_loop(
         return None;
     }
 
-    // Store-free body, in one of three admitted shapes (see the module docs):
+    // Store-free body, in one of four admitted shapes (see the module docs):
     //
     //   1. `acc = <pure numeric over arr[<index>].field>` — the original
     //      single statement;
@@ -807,89 +940,156 @@ fn match_element_shape_versioned_loop(
     //      element-binding form, the shape real read loops are written in;
     //   3. `const d = j % m; acc = <pure numeric over arr[d].field>` —
     //      #10123's derived-index form, the shape every sequential pass over a
-    //      parsed record array is written in.
+    //      parsed record array is written in;
+    //   4. #10199's loop-carried form, `c = (a*c + b) % m;` optionally followed
+    //      by `const index = c;`.
     //
-    // In 2 and 3 the binding is VIRTUAL inside the fast clone: its `Let`
-    // emits nothing (form 2) or one `srem i32` (form 3) rather than the
-    // generic lowering (`stmt/let_stmt.rs`), so the revocation argument (no
-    // store, no call in the clone) is unchanged. `const`-only, deliberately: a
-    // `var` binding is function-scoped and observable after the loop, where
-    // the skipped `Let` would leave the slot holding its pre-loop value.
+    // In 2, 3 and 4 the leading statement is VIRTUAL inside the fast clone: it
+    // emits nothing (form 2), one `srem i32` (form 3) or the i64 recurrence
+    // (form 4) rather than the generic lowering (`stmt/let_stmt.rs`,
+    // `stmt/element_shape_carried.rs`), so the revocation argument (no store,
+    // no call in the clone) is unchanged. The bindings are `const`-only,
+    // deliberately: a `var` binding is function-scoped and observable after the
+    // loop, where the skipped `Let` would leave the slot holding its pre-loop
+    // value. Form 4's `c` is the one mutable exception, and it pays for it with
+    // a write-back (see `element_shape_carried`).
     //
+    // #10199 also admits K >= 1 accumulator statements instead of exactly one,
+    // which is what `sum += rows[i].id; sum += rows[i].name.length; …` needs.
     // NOTHING else is admitted.
     let mut element_binding: Option<(u32, u32)> = None;
     let mut derived: Option<(u32, u32)> = None;
-    let (acc_id, value) = match body {
-        [Stmt::Expr(Expr::LocalSet(acc_id, value))] => (acc_id, value),
-        [Stmt::Let {
-            id,
-            mutable: false,
-            init: Some(binding_init),
-            ..
-        }, Stmt::Expr(Expr::LocalSet(acc_id, value))] => {
-            // The binding must be a plain, loop-owned const local in either
-            // form. A boxed or captured binding lives in a cell the clone's
-            // replacement `Let` would leave stale for an observer outside the
-            // clone; a module-global id is not a body-scoped binding at all.
-            if *id == counter_id
-                || ctx.boxed_vars.contains(id)
-                || ctx.module_globals.contains_key(id)
-                || ctx.closure_captures.contains_key(id)
-            {
-                return None;
-            }
-            match binding_init {
-                Expr::IndexGet { object, index } => {
-                    let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) =
-                        (object.as_ref(), index.as_ref())
-                    else {
-                        return None;
-                    };
-                    // Same receiver/index discipline as the walk's IndexGet
-                    // arm: the fetch must be `arr[counter]` exactly.
-                    if *idx_id != counter_id || *arr_id == counter_id || *id == *arr_id {
-                        return None;
-                    }
-                    element_binding = Some((*id, *arr_id));
-                }
-                // #10123. `%` on two locals, the left one the counter. The
-                // modulus is validated below (it must be readable and
-                // loop-invariant), and the RANGE obligation — `1 <= m` so the
-                // `srem` cannot divide by zero, `m <= length` so every derived
-                // index is in bounds — is discharged in the preheader, which
-                // is also where a non-number / fractional `m` sends the loop
-                // to the slow clone.
-                Expr::Binary {
-                    op: BinaryOp::Mod,
-                    left,
-                    right,
-                } => {
-                    let (Expr::LocalGet(num_id), Expr::LocalGet(modulus_id)) =
-                        (left.as_ref(), right.as_ref())
-                    else {
-                        return None;
-                    };
-                    if *num_id != counter_id || *modulus_id == counter_id || *id == *modulus_id {
-                        return None;
-                    }
-                    if !modulus_local_is_admissible(ctx, *modulus_id, condition?, update, body) {
-                        return None;
-                    }
-                    derived = Some((*id, *modulus_id));
-                }
-                _ => return None,
-            }
-            (acc_id, value)
+    let mut carried: Option<super::element_shape_carried::MatchedCarried> = None;
+    let mut carried_alias: Option<u32> = None;
+    let mut rest: &[Stmt] = body;
+
+    // (4) The recurrence, which must be the body's FIRST statement: the index
+    // it produces is read by every statement after it, and a read BEFORE it
+    // would see a value the preheader bounded but the commit protocol does not
+    // describe.
+    if let Some(first) = rest.first() {
+        if let Some(matched) = super::element_shape_carried::match_carried_update(
+            ctx, first, counter_id, condition?, update, body,
+        ) {
+            carried = Some(matched);
+            rest = &rest[1..];
         }
-        _ => return None,
-    };
+    }
+
+    // (2)/(3)/(4-alias) The leading virtual binding.
+    if let Some(Stmt::Let {
+        id,
+        mutable: false,
+        init: Some(binding_init),
+        ..
+    }) = rest.first()
+    {
+        // The binding must be a plain, loop-owned const local in every form. A
+        // boxed or captured binding lives in a cell the clone's replacement
+        // `Let` would leave stale for an observer outside the clone; a
+        // module-global id is not a body-scoped binding at all.
+        if *id == counter_id
+            || ctx.boxed_vars.contains(id)
+            || ctx.module_globals.contains_key(id)
+            || ctx.closure_captures.contains_key(id)
+        {
+            return None;
+        }
+        match binding_init {
+            Expr::IndexGet { object, index } if carried.is_none() => {
+                let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) =
+                    (object.as_ref(), index.as_ref())
+                else {
+                    return None;
+                };
+                // Same receiver/index discipline as the walk's IndexGet
+                // arm: the fetch must be `arr[counter]` exactly.
+                if *idx_id != counter_id || *arr_id == counter_id || *id == *arr_id {
+                    return None;
+                }
+                element_binding = Some((*id, *arr_id));
+            }
+            // #10123. `%` on two locals, the left one the counter. The
+            // modulus is validated below (it must be readable and
+            // loop-invariant), and the RANGE obligation — `1 <= m` so the
+            // `srem` cannot divide by zero, `m <= length` so every derived
+            // index is in bounds — is discharged in the preheader, which
+            // is also where a non-number / fractional `m` sends the loop
+            // to the slow clone.
+            Expr::Binary {
+                op: BinaryOp::Mod,
+                left,
+                right,
+            } if carried.is_none() => {
+                let (Expr::LocalGet(num_id), Expr::LocalGet(modulus_id)) =
+                    (left.as_ref(), right.as_ref())
+                else {
+                    return None;
+                };
+                if *num_id != counter_id || *modulus_id == counter_id || *id == *modulus_id {
+                    return None;
+                }
+                if !modulus_local_is_admissible(ctx, *modulus_id, condition?, update, body) {
+                    return None;
+                }
+                derived = Some((*id, *modulus_id));
+            }
+            // #10199: `const index = c` after the recurrence. A pure alias, so
+            // it emits nothing at all — the subscript resolves to the carried
+            // slot either way.
+            Expr::LocalGet(aliased) => {
+                let matched = carried.as_ref()?;
+                if *aliased != matched.carried_id || *id == matched.modulus_id {
+                    return None;
+                }
+                carried_alias = Some(*id);
+            }
+            _ => return None,
+        }
+        rest = &rest[1..];
+    }
+
+    // (1) One or more accumulator statements over the SAME local.
+    let mut acc_id: Option<&u32> = None;
+    let mut values: Vec<&perry_hir::Expr> = Vec::new();
+    for stmt in rest {
+        let Stmt::Expr(Expr::LocalSet(id, value)) = stmt else {
+            return None;
+        };
+        match acc_id {
+            None => acc_id = Some(id),
+            Some(seen) if seen == id => {}
+            Some(_) => return None,
+        }
+        values.push(value.as_ref());
+    }
+    let acc_id = acc_id?;
     if *acc_id == counter_id
         || !ctx.locals.contains_key(acc_id)
         || ctx.boxed_vars.contains(acc_id)
         || ctx.module_globals.contains_key(acc_id)
+        || carried.is_some_and(|c| c.carried_id == *acc_id || c.modulus_id == *acc_id)
     {
         return None;
     }
+    // #10199: statements 2..K are folded into statement 1 for the fast clone
+    // (`acc = a; acc = acc + b` ≡ `acc = (a) + b`), so that the WHOLE iteration
+    // commits once, after every side exit it can take. Each of them must
+    // therefore be `acc <op> <pure>` with `acc` as the left operand — the shape
+    // every compound assignment lowers to — and the right operand must not read
+    // `acc`, or substituting it would make it see the pre-statement value.
+    for value in &values[1..] {
+        let Expr::Binary { left, right, .. } = value else {
+            return None;
+        };
+        if !matches!(left.as_ref(), Expr::LocalGet(id) if id == acc_id) {
+            return None;
+        }
+        if super::element_shape_carried::expr_reads_local(right, *acc_id) {
+            return None;
+        }
+    }
+
     // The binding form pins the array before the walk runs, so a body mixing
     // `r.field` with `other[j].field` is declined by the walk's one-array rule.
     let scope = PureExprScope {
@@ -897,15 +1097,22 @@ fn match_element_shape_versioned_loop(
         accumulator_id: *acc_id,
         element_binding: element_binding.map(|(id, _)| id),
         derived,
+        carried: carried.map(|c| (c.carried_id, carried_alias)),
     };
-    if scope.element_binding == Some(*acc_id) || derived.map(|(d, _)| d) == Some(*acc_id) {
+    if scope.element_binding == Some(*acc_id)
+        || derived.map(|(d, _)| d) == Some(*acc_id)
+        || carried_alias == Some(*acc_id)
+    {
         return None;
     }
     let mut facts = PureExprFacts {
         array: element_binding.map(|(_, arr_id)| arr_id),
         ..PureExprFacts::default()
     };
-    if !element_shape_loop_pure_expr_collect(ctx, value, &scope, &mut facts) {
+    if !values
+        .iter()
+        .all(|value| element_shape_loop_pure_expr_collect(ctx, value, &scope, &mut facts))
+    {
         return None;
     }
     let array_id = facts.array?;
@@ -927,12 +1134,35 @@ fn match_element_shape_versioned_loop(
             return None;
         }
     }
+    // #10199: a matched recurrence whose value nothing subscripts with would
+    // still have its `LocalSet` lowered generically — a `frem` libcall inside
+    // the clone, which deletes it. Decline instead, so the loop keeps whatever
+    // lowering it has today.
+    match (carried.as_ref(), index) {
+        (Some(matched), MatchedIndex::Carried { .. }) => {
+            if matched.carried_id == array_id
+                || matched.modulus_id == array_id
+                || carried_alias == Some(array_id)
+            {
+                return None;
+            }
+        }
+        // A recurrence the subscripts do not use, or a carried subscript with
+        // no recurrence (which the walk's scope makes unreachable).
+        (Some(_), _) | (None, MatchedIndex::Carried { .. }) => return None,
+        (None, _) => {}
+    }
     match bound {
         ElementShapeLoopBound::Local(bound_id) => {
             if bound_id == array_id
                 || bound_id == *acc_id
                 || Some(bound_id) == scope.element_binding
                 || derived.map(|(d, _)| d) == Some(bound_id)
+                // The bound is materialized ONCE in the preheader, so a bound
+                // the recurrence rewrites every iteration would be stale. The
+                // carried local is also not readable bare inside the clone.
+                || carried.is_some_and(|c| c.carried_id == bound_id)
+                || carried_alias == Some(bound_id)
             {
                 return None;
             }
@@ -975,12 +1205,6 @@ fn match_element_shape_versioned_loop(
         return None;
     }
 
-    for prop in &facts.props {
-        if CLASS_FIELD_LOOP_PROP_DENYLIST.contains(&prop.as_str()) {
-            return None;
-        }
-    }
-
     let identity = match element_class_name(ctx, array_id, counter_id) {
         Some(class_name) => {
             // The class arm keeps its ORIGINAL grammar. Its bounds argument is
@@ -998,6 +1222,42 @@ fn match_element_shape_versioned_loop(
         None if array_is_untyped(ctx, array_id) => ElementShapeIdentity::Shape,
         None => return None,
     };
+
+    // The property denylist, which is arm-specific (#10199).
+    //
+    // The CLASS arm's list exists because its read bakes in a compile-time
+    // packed slot index while the surrounding lowering may route the name
+    // somewhere else entirely (`length` header loads, `errors` runtime calls,
+    // accessor-ish names) — a name collision there costs the call-free
+    // guarantee.
+    //
+    // The SHAPE arm bakes in nothing: the preheader asks the runtime for the
+    // inline slot of that exact key in that exact ordinary ShapeId and declines
+    // on `-1`, and the per-element residual pins `obj_type == GC_TYPE_OBJECT`
+    // with no per-object descriptors. Every receiver kind whose builtin branch
+    // could answer a name differently — a function's `name`, an array's
+    // `length`, a Map's `size`, an AggregateError's `errors` — fails that
+    // residual, and for a plain record an own data property SHADOWS the
+    // prototype name it collides with, which is exactly what the inline slot
+    // holds. The whole list would otherwise have cost the benchmark its
+    // `fields` shape outright, for a field literally called `name`.
+    //
+    // `__proto__` stays denied, and not because of JavaScript: node gives
+    // `JSON.parse('{"__proto__":1}')` an OWN `__proto__` data property and
+    // reads `1` back from it, so the inline slot would be right. It is denied
+    // because Perry's generic property path may special-case the name ahead of
+    // own-property lookup, and the clone must agree with the clone-of, not with
+    // the spec, wherever those two differ.
+    const SHAPE_PROP_DENYLIST: &[&str] = &["__proto__"];
+    let denylist = match identity {
+        ElementShapeIdentity::Class { .. } => CLASS_FIELD_LOOP_PROP_DENYLIST,
+        ElementShapeIdentity::Shape => SHAPE_PROP_DENYLIST,
+    };
+    for prop in &facts.props {
+        if denylist.contains(&prop.as_str()) {
+            return None;
+        }
+    }
 
     // The declared accumulator type is only a candidate: the lowering
     // validates the accumulator's current NaN-box tag in the preheader before
@@ -1018,6 +1278,40 @@ fn match_element_shape_versioned_loop(
         return None;
     }
 
+    // #10199: the fast clone's body, when the two rewrites apply. `lead` is
+    // whatever statements the walk consumed ahead of the accumulator run (the
+    // recurrence and/or the virtual binding), kept verbatim.
+    let lead = &body[..body.len() - rest.len()];
+    let fast_body = (values.len() > 1 || carried.is_some()).then(|| {
+        let mut stmts: Vec<Stmt> = lead.to_vec();
+        // `acc = v1; acc = acc <op> p2; acc = acc <op> p3`
+        //   ≡ `acc = ((v1) <op> p2) <op> p3`
+        // — the same operations on the same operands in the same order, which
+        // is what keeps the folded float arithmetic bit-identical.
+        let mut folded = values[0].clone();
+        for value in &values[1..] {
+            let Expr::Binary { op, right, .. } = value else {
+                unreachable!("the accumulator fold validated every statement's shape");
+            };
+            folded = Expr::Binary {
+                op: *op,
+                left: Box::new(folded),
+                right: right.clone(),
+            };
+        }
+        stmts.push(Stmt::Expr(Expr::LocalSet(*acc_id, Box::new(folded))));
+        if let Some(matched) = carried.as_ref() {
+            // The commit marker (`stmt/element_shape_carried.rs`). It is the
+            // LAST statement, so it runs only once the iteration is past every
+            // exit it could take.
+            stmts.push(Stmt::Expr(Expr::LocalSet(
+                matched.carried_id,
+                Box::new(Expr::LocalGet(matched.carried_id)),
+            )));
+        }
+        stmts
+    });
+
     Some(ElementShapeVersionedLoop {
         counter_id,
         bound,
@@ -1027,6 +1321,8 @@ fn match_element_shape_versioned_loop(
         index,
         element_binding: scope.element_binding,
         accumulator_id: *acc_id,
+        carried,
+        fast_body,
     })
 }
 
@@ -1200,16 +1496,50 @@ pub(super) fn lower_element_shape_versioned_for(
     // floor of 1 — `srem` by zero is undefined behaviour, and `x % 0` is NaN
     // in JS, so a zero modulus is a slow-clone case rather than something the
     // clone may compute.
-    let modulus_i32: Option<String> = match matched.index {
-        MatchedIndex::DerivedMod { modulus_id, .. } => Some(materialize_loop_i32(
+    //
+    // #10199's carried recurrence takes the same obligation for the same
+    // reason, and one more of its own: its ENTRY value must be a non-negative
+    // integral i32, because the whole i64 recurrence bound
+    // (`a * i32::MAX + b < 2^53`, and a non-negative dividend for `srem` to
+    // agree with JS `%`) is stated over that range. A fractional, negative or
+    // non-number `cursor` at loop entry is a slow-clone case.
+    let modulus_i32: Option<String> = match (&matched.index, &matched.carried) {
+        (MatchedIndex::DerivedMod { modulus_id, .. }, _) => Some(materialize_loop_i32(
             ctx,
-            modulus_id,
+            *modulus_id,
+            1,
+            i32::MAX,
+            &slow_pre_label,
+            "element_shape.loop.modulus",
+        )?),
+        (MatchedIndex::Carried { .. }, Some(carried)) => Some(materialize_loop_i32(
+            ctx,
+            carried.modulus_id,
             1,
             i32::MAX,
             &slow_pre_label,
             "element_shape.loop.modulus",
         )?),
         _ => None,
+    };
+    let carried_slot: Option<String> = match &matched.carried {
+        Some(carried) => {
+            let entry = materialize_loop_i32(
+                ctx,
+                carried.carried_id,
+                0,
+                i32::MAX,
+                &slow_pre_label,
+                "element_shape.loop.carried",
+            )?;
+            // Entry-block alloca: LLVM lowers a non-entry `alloca` as a real
+            // stack bump with no restore, and this one is written every
+            // iteration.
+            let slot = ctx.func.alloca_entry(I32);
+            ctx.block().store(I32, &entry, &slot);
+            Some(slot)
+        }
+        None => None,
     };
 
     let trip_count = match &materialized_bound {
@@ -1225,11 +1555,14 @@ pub(super) fn lower_element_shape_versioned_for(
         (MatchedIndex::Constant(k), _) => {
             crate::expr::element_shape_guard::ElementShapeIndexBound::Constant(*k)
         }
-        (MatchedIndex::DerivedMod { .. }, Some(modulus)) => {
+        // #10199: the recurrence's result is `srem` of a non-negative dividend
+        // by `m`, so it lands in `[0, m)` exactly like the derived index and
+        // takes exactly the same preheader obligation, `m <= length`.
+        (MatchedIndex::DerivedMod { .. } | MatchedIndex::Carried { .. }, Some(modulus)) => {
             crate::expr::element_shape_guard::ElementShapeIndexBound::Modulus(modulus.as_str())
         }
-        (MatchedIndex::DerivedMod { .. }, None) => {
-            unreachable!("a derived index always materializes its modulus")
+        (MatchedIndex::DerivedMod { .. } | MatchedIndex::Carried { .. }, None) => {
+            unreachable!("a modulo-derived index always materializes its modulus")
         }
     };
     let expected_class_id_str = match &matched.identity {
@@ -1323,7 +1656,57 @@ pub(super) fn lower_element_shape_versioned_for(
             // iteration.
             slot: ctx.func.alloca_entry(I32),
         },
+        MatchedIndex::Carried {
+            carried_id,
+            alias_id,
+        } => {
+            let carried = matched
+                .carried
+                .as_ref()
+                .expect("a carried index always matches a recurrence");
+            crate::expr::ElementShapeIndex::Carried(Box::new(crate::expr::CarriedIndex {
+                local_id: carried_id,
+                alias_id,
+                coeff_a: carried.coeff_a,
+                coeff_b: carried.coeff_b,
+                modulus_i32: modulus_i32
+                    .clone()
+                    .expect("a carried index always materializes its modulus"),
+                slot: carried_slot
+                    .clone()
+                    .expect("a carried index always materializes its entry value"),
+                commit_slot: ctx
+                    .locals
+                    .get(&carried_id)
+                    .cloned()
+                    .expect("the matcher required a directly-addressable local"),
+            }))
+        }
     };
+
+    // #10199: the shared once-per-iteration element deref, hung off the body's
+    // leading virtual statement. Shape-keyed only: the class-keyed arm's reads
+    // are raw doubles behind a `GC_OBJ_TYPED_LAYOUT_INTACT` residual whose
+    // emitted IR #7480's census pins, and nothing in #10199 measures it.
+    let elem_prefetch = shape_keyed
+        .then(|| {
+            let site_local_id = match (&fact_index, matched.element_binding) {
+                (_, Some(binding)) => Some(binding),
+                (crate::expr::ElementShapeIndex::DerivedMod { local_id, .. }, _) => Some(*local_id),
+                // With an alias the prologue belongs to the alias `Let`, which
+                // runs after the recurrence; without one it belongs to the
+                // recurrence itself. Exactly one statement owns it either way.
+                (crate::expr::ElementShapeIndex::Carried(carried), _) => {
+                    Some(carried.alias_id.unwrap_or(carried.local_id))
+                }
+                _ => None,
+            }?;
+            Some(crate::expr::ElementPrefetch {
+                site_local_id,
+                handle_slot: ctx.func.alloca_entry(I64),
+            })
+        })
+        .flatten();
 
     let scope_id = ctx.next_loop_proof_scope_id();
     let fast_scan_start = ctx.func.num_blocks();
@@ -1333,6 +1716,7 @@ pub(super) fn lower_element_shape_versioned_for(
             array_local_id: matched.array_id,
             index_local_id: matched.counter_id,
             index: fact_index,
+            elem_prefetch,
             shape_keyed,
             scope_id,
             class_name: report_class,
@@ -1341,6 +1725,7 @@ pub(super) fn lower_element_shape_versioned_for(
             side_exit_label: slow_pre_label.clone(),
             statically_layout_proven,
             fields,
+            synthesized_body: matched.fast_body.is_some(),
             element_binding: matched.element_binding,
             numeric_accumulator: matched.accumulator_id,
         });
@@ -1349,7 +1734,7 @@ pub(super) fn lower_element_shape_versioned_for(
         init,
         condition,
         update,
-        body,
+        matched.fast_body.as_deref().unwrap_or(body),
         "for.element_shape_fast",
         Some((matched.counter_id, guard.bound_i32)),
     );

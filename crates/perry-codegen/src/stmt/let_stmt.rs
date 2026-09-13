@@ -31,7 +31,7 @@ pub(crate) fn lower_let(
     // binding is VIRTUAL — the element binding emits nothing and the derived
     // index emits one `srem`. Both live with the clone, which is where their
     // soundness arguments and the preheader that validated them are.
-    if super::element_shape_loop::lower_virtual_clone_binding(ctx, id) {
+    if super::element_shape_loop::lower_virtual_clone_binding(ctx, id)? {
         return Ok(());
     }
     // `let C = SomeClass` aliases the local `C` to the class

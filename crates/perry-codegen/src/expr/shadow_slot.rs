@@ -176,16 +176,30 @@ pub(crate) fn emit_shadow_slot_clear(ctx: &mut FnCtx<'_>, slot_idx: u32) {
     // #10123's derived index (`const d = j % m`) is the same case for the same
     // reason: its `Let` emits one `srem` into a private i32 alloca, never a
     // shadow bind, so a lexical-death clear would be the clone's only call.
+    //
+    // #10199's carried index (`c = (a*c + b) % m`) and its optional
+    // `const index = c` alias are two more of the same.
     if ctx.element_shape_loop_facts.iter().any(|fact| {
-        let virtual_binding = match &fact.index {
-            crate::expr::ElementShapeIndex::DerivedMod { local_id, .. } => Some(*local_id),
-            _ => None,
-        };
         fact.element_binding
             .into_iter()
-            .chain(virtual_binding)
+            .chain(fact.index.virtual_locals())
             .any(|id| ctx.shadow_slot_map.get(&id) == Some(&slot_idx))
     }) {
+        return;
+    }
+    // #10199: a SYNTHESIZED fast-clone body (the accumulator fold, the carried
+    // write-back) no longer has the statement indices the function-wide clear
+    // map is keyed by, so every clear reached from inside it would be
+    // attributed to some other statement's local. Suppress them for the fast
+    // clone only: it is call-free, so no collection can observe a shadow slot
+    // while it runs, an over-rooted stale value is rewritten like any root, and
+    // the slow clone — lowered from the ORIGINAL body after the facts are
+    // popped — keeps every clear it always had.
+    if ctx
+        .element_shape_loop_facts
+        .iter()
+        .any(|fact| fact.synthesized_body)
+    {
         return;
     }
     // Never-bound slot: it provably still holds its initial 0 (slots are only
