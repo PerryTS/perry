@@ -51,13 +51,26 @@ is still the whole admission test, enforced by the matcher and by the
 post-emission scan of every block the clone owns.
 
 Measured with `benchmarks/json_performance/.work/fixtures/records_array_*.json`
-and a `rows: any` access worker, best of five, ns per iteration:
+and a `rows: any` access worker, five interleaved rounds, best of five, on one
+compiler binary per arm. Checksums agree across all four engines.
 
 | cell | before | after | node 26.5.1 | bun 1.3.14 |
 |---|---|---|---|---|
-| 16k repeat | 5.73 | BEFORE_AFTER | 3.06 | 3.63 |
-| 16k sequential | 12.27 | BEFORE_AFTER | 4.39 | 4.29 |
-| 1m repeat | 5.74 | BEFORE_AFTER | 3.49 | 4.66 |
-| 1m sequential | 15.80 | BEFORE_AFTER | 9.51 | 6.76 |
-| 20m repeat | 5.24 | BEFORE_AFTER | 3.59 | 5.17 |
-| 20m sequential | 17.65 | BEFORE_AFTER | 7.22 | 8.37 |
+| 16k repeat | 5.98 | **4.29** | 3.21 | 3.55 |
+| 16k sequential | 12.78 | **4.29** | 4.68 | 4.68 |
+| 1m repeat | 5.96 | **4.29** | 4.03 | 4.12 |
+| 1m sequential | 16.43 | **4.32** | 9.97 | 10.72 |
+| 20m repeat | 5.45 | **4.29** | 3.58 | 5.01 |
+| 20m sequential | 18.30 | **4.56** | 7.85 | 7.72 |
+
+(ns per iteration.) Instructions retired per iteration, the same loops minus a
+zero-iteration run: repeat 116 -> 16, sequential 166-184 -> 24-25. The
+wall-clock win is smaller than the instruction win because a 16-instruction
+body is latency-bound on the element load, not instruction-bound.
+
+No-regression cells (`benchmarks/json_performance/worker.ts`, five interleaved
+rounds): `heterogeneous_1m parse` -2.2%, `records_array_1m parse` +0.2%,
+`records_array_1m sparse` +0.2%, and `records_array_16k scan` **-30.1%** — the
+counter-indexed loop inside that cell is the same clone, over an array the
+preheader now materializes in bulk instead of leaving lazy for per-element
+reads.
