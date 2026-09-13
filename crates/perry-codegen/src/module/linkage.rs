@@ -251,7 +251,10 @@ pub(crate) fn helper_decl_attrs(name: &str) -> &'static str {
         // register saves and code layout focused on the inline continuation.
         // `cold` is only a profitability hint: both calls remain fully
         // memory-clobbering and the cache miss remains GC-capable/throwing.
-        "js_object_get_field_ic_miss_packed" | "js_write_barrier_root_nanbox" => " cold",
+        "js_object_get_field_ic_miss_packed"
+        | "js_object_get_field_ic_slow"
+        | "js_object_get_field_ic_nonptr"
+        | "js_write_barrier_root_nanbox" => " cold",
         // PURE — each verified: pure bit tests/masking on the f64/i64 args,
         // total over arbitrary bits, no memory access anywhere in the body.
         //   js_nanbox_pointer        value/nanbox.rs — tag ladder, 0 → TAG_NULL

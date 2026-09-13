@@ -537,7 +537,7 @@ fn ic_diag_note(
 mod packed_get;
 pub use packed_get::{js_object_get_field_ic_miss, js_object_get_field_ic_miss_packed};
 
-fn get_field_ic_miss_impl(
+pub(super) fn get_field_ic_miss_impl(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
     cache_slot: *mut PicCacheSlot,

@@ -690,7 +690,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     for fragment in (
         'letpacked_present=ctx.block().icmp_ne(I64,&packed_word,"0");',
         'letis_plain_object=ctx.block().and(I1,&is_plain_kind,&packed_present);',
-        'cond_br(&is_plain_object,&tok_label,&desc_classify_label)',
+        'cond_br(&is_plain_object,&tok_label,&cold_label)',
         'letpacked_stamp=ctx.block().trunc(I64,&packed_word,I32);',
         'lettoken_eq=ctx.block().icmp_eq(I32,&pcid,&packed_stamp);',
         'cond_br(&token_eq,&hit_label,&token_miss_label)',

@@ -136,10 +136,15 @@ fn imported_variable_read_preserves_class_tags_and_calls_the_live_getter_once() 
             (operand == format!("{value} to i64")).then_some(result)
         })
         .expect("getter result must be classified by its intact value tag");
+    // #9366's invariant, one indirection later: T1 moved the INT32 class-ref
+    // arm (and its `js_typed_feedback_object_get_field_by_name_f64` call) into
+    // `js_object_get_field_ic_nonptr`, which routes on the tag — so the bits it
+    // receives must still be the getter's UNMASKED value. A masked handle here
+    // would lose the 0x7FFE tag and the class would dispatch as an object.
     assert!(
         ir.lines().any(|line| {
-            line.contains("call double @js_typed_feedback_object_get_field_by_name_f64(")
-                && line.contains(&format!(", i64 {bits},"))
+            line.contains("call double @js_object_get_field_ic_nonptr(")
+                && line.contains(&format!("i64 {bits},"))
         }),
         "class dispatch must receive the getter's unmasked value bits:\n{ir}"
     );
@@ -391,40 +396,56 @@ fn pic_cache_layout_matches_runtime() {
     );
 }
 
-/// Object-backed Array subclasses mint one ShapeId per numeric tail length.
-/// A named-field site on such a receiver must try the independently proved
-/// class prefix before falling into the bounded shape ways / runtime miss.
+/// Object-backed Array subclasses mint one ShapeId per numeric tail length, so
+/// a named-field site on such a receiver is served from the independently
+/// proved class prefix rather than the exact ShapeId.
+///
+/// Renamed from `generic_property_get_emits_array_subclass_named_prefix_guard`
+/// (T1): the proof itself is unchanged and still runs on exactly the same two
+/// words, but it runs in `js_object_get_field_ic_slow` instead of in FOUR
+/// emitted blocks per site (`pic.prefix.*`) plus FOUR more for the
+/// descriptor-bearing twin (`pic.desc.prefix.*`). Its behaviour is pinned by
+/// `an_armed_named_prefix_serves_the_cached_slot` in
+/// `perry-runtime/src/object/field_get_set/ic_miss/ic_slow.rs`; what this test
+/// keeps is the CODEGEN half of the contract — the emitted site must hand the
+/// runtime the two operands that proof reads, and must not have grown its own
+/// copy back.
 #[test]
-fn generic_property_get_emits_array_subclass_named_prefix_guard() {
-    use crate::expr::property_get::generic_dispatch::PIC_NAMED_PREFIX_TOKEN;
-
+fn array_subclass_named_prefix_proof_is_reached_through_the_one_exit() {
     let ir = emit(false, None);
-    let guard = ir
-        .find("\npic.prefix.guard")
-        .unwrap_or_else(|| panic!("expected a named-prefix guard block:\n{ir}"));
-    let token = ir
-        .find("\npic.prefix.token")
-        .unwrap_or_else(|| panic!("expected a named-prefix token block:\n{ir}"));
-    let hit = ir
-        .find("\npic.prefix.hit")
-        .unwrap_or_else(|| panic!("expected a named-prefix hit block:\n{ir}"));
-    let miss = ir
-        .find("\npic.miss")
-        .unwrap_or_else(|| panic!("expected the ordinary PIC miss block:\n{ir}"));
+    for gone in [
+        "pic.prefix.guard",
+        "pic.prefix.meta",
+        "pic.prefix.token",
+        "pic.prefix.hit",
+        "pic.desc.classify",
+        "pic.desc.prefix.guard",
+        "pic.desc.prefix.meta",
+        "pic.desc.prefix.token",
+        "pic.desc.prefix.hit",
+    ] {
+        assert!(
+            !ir.contains(gone),
+            "the named-prefix ladder must not be emitted per site any more, \
+             found `{gone}`:\n{ir}"
+        );
+    }
+    // The runtime half reads cache word 2 against ObjectMeta word 6 and then
+    // the cached slot, so the emitted site has to hand it both per-site
+    // globals — a call that lost either operand would silently stop serving
+    // Array-subclass named fields and fall back to the full lookup.
+    let call = ir
+        .find("\npic.miss.call")
+        .unwrap_or_else(|| panic!("expected the single slow-exit block:\n{ir}"));
+    let call_line = ir[call..]
+        .lines()
+        .find(|l| l.contains("@js_object_get_field_ic_slow("))
+        .unwrap_or_else(|| panic!("expected the one slow call:\n{ir}"));
     assert!(
-        guard < token && token < hit && hit < miss,
-        "prefix guard must precede the ordinary miss path:\n{ir}"
-    );
-
-    let guard_body = &ir[guard..token];
-    assert!(
-        guard_body.contains(&format!("i64 {PIC_NAMED_PREFIX_TOKEN}\n")),
-        "the cheap first gate must read cache word 2 before touching ObjectMeta:\n{guard_body}"
-    );
-    let token_body = &ir[token..hit];
-    assert!(
-        token_body.contains("getelementptr i64") && token_body.contains("i64 6\n"),
-        "ObjectMeta word 6 must carry the runtime-paired prefix token:\n{token_body}"
+        call_line.contains("ptr @perry_ic_") && call_line.contains("_packed_get"),
+        "the slow exit must receive BOTH the cache slot (which holds the \
+         named-prefix token in word 2) and the packed MRU word, or the runtime \
+         cannot reproduce the arms this site stopped emitting:\n{call_line}"
     );
 }
 
@@ -471,8 +492,8 @@ fn generic_property_get_tries_ways_before_calling_the_miss_handler() {
          miss call — otherwise the compares are not gating anything:\n{ways_body}"
     );
     assert!(
-        !ways_body.contains("call double @js_object_get_field_ic_miss"),
-        "the miss call must not sit inside the way block:\n{ways_body}"
+        !ways_body.contains("call double @js_object_get_field_ic"),
+        "the slow call must not sit inside the way block:\n{ways_body}"
     );
     // The way compares read (token, slot) pairs at words PIC_WAY_BASE.. and the
     // gate reads the state word — all inside pic.ways, none anywhere else.
@@ -520,10 +541,43 @@ fn pic_miss_reuses_the_token_blocks_values_instead_of_re_deriving_them() {
         main.contains("@perry_ic_"),
         "test premise: the generic read reaches the inline PIC:\n{ir}"
     );
+    // T1: the landing block is now the single slow exit itself, and the
+    // dominance is structural — `pic.miss` has exactly ONE predecessor,
+    // `pic.token.miss`, which `pic.token` dominates. Assert that directly:
+    // routing any receiver-validation failure back into `pic.miss` would add a
+    // predecessor and immediately re-introduce the phis #7907 removed.
+    // `pic.miss` carries a numeric suffix and `pic.miss.call` starts with the
+    // same text, so match the block's own label exactly and then count the
+    // branches whose TARGET is that label (a `br i1` naming both blocks counts
+    // once, for the right one).
+    let miss_label = main
+        .lines()
+        .filter(|l| !l.starts_with(' ') && l.ends_with(':'))
+        .map(|l| l.trim_end_matches(':'))
+        .find(|l| {
+            l.strip_prefix("pic.miss.")
+                .is_some_and(|tail| tail.chars().all(|c| c.is_ascii_digit()))
+        })
+        .unwrap_or_else(|| panic!("expected a pic.miss block:\n{ir}"))
+        .to_string();
+    let preds = main
+        .lines()
+        .filter(|l| l.trim_start().starts_with("br "))
+        .filter(|l| {
+            l.split("label %")
+                .skip(1)
+                .any(|t| t.trim_end_matches(&[',', ' '][..]) == miss_label)
+        })
+        .count();
+    assert_eq!(
+        preds, 1,
+        "pic.miss must have exactly one predecessor (pic.token.miss), or it is \
+         no longer dominated by pic.token:\n{ir}"
+    );
     assert!(
-        main.contains("\npic.miss.cold"),
-        "the two receiver-validation failures need their own landing block, \
-         otherwise pic.miss is not dominated by pic.token:\n{ir}"
+        main.contains("label %pic.miss.call"),
+        "every receiver-validation failure must land on the single slow \
+         exit:\n{ir}"
     );
     assert!(
         !main.contains("@PERRY_IC_EPOCH"),
@@ -963,28 +1017,56 @@ fn generic_length_read_serves_a_string_inline() {
     );
     // Everything that is NOT a string keeps the tower.
     assert!(
-        ir.contains("@perry_ic_") && ir.contains("js_object_get_field_ic_miss"),
-        "non-string receivers must still reach the inline PIC and its miss \
-         handler:\n{ir}"
+        ir.contains("@perry_ic_") && ir.contains("js_object_get_field_ic_slow"),
+        "non-string receivers must still reach the inline PIC and its slow \
+         exit:\n{ir}"
     );
 }
 
 /// The short-circuit is keyed on the property name: any other key on a string
-/// receiver (`s.charCodeAt`, `s.constructor`) still needs the runtime, so no
-/// other read may grow the string blocks.
+/// receiver (`s.charCodeAt`, `s.constructor`) still needs the runtime.
+///
+/// T1 moved the SSO arm itself behind the one exit — an SSO receiver with any
+/// key but `length` is served by `js_object_get_field_ic_slow`'s tag ladder
+/// (`sso_receiver_routes_to_the_by_name_helper` in
+/// `ic_miss/ic_slow.rs` pins that it still reaches the by-name helper). What
+/// codegen must guarantee is that such a receiver LEAVES: it must never fall
+/// into the PIC, whose header loads would read the SSO payload as an address.
 #[test]
 fn generic_non_length_read_keeps_the_whole_tower() {
     let ir = emit_read("charCodeAt");
+    for gone in ["pget.strlen_heap", "pget.recv_sso"] {
+        assert!(
+            !ir.contains(gone),
+            "only `.length` may grow an inline string arm, found `{gone}`:\n{ir}"
+        );
+    }
+    // 32765 = (STRING_TAG|POINTER_TAG) & 0xFFFD: the one test that decides
+    // whether the receiver may be dereferenced at all. Its false edge must be
+    // the NON-POINTER exit — a distinct block with a distinct callee, which is
+    // what stops SimplifyCFG folding this guard into the next one.
+    let tag_branch = ir
+        .lines()
+        .find(|l| l.contains("icmp eq i64") && l.contains("32765"))
+        .unwrap_or_else(|| panic!("expected the receiver-tag test:\n{ir}"));
+    let cond = tag_branch
+        .trim()
+        .split_once(" = ")
+        .map(|(lhs, _)| lhs.to_string())
+        .unwrap_or_else(|| panic!("malformed tag test: {tag_branch}"));
+    let branch = ir
+        .lines()
+        .find(|l| l.trim_start().starts_with(&format!("br i1 {cond},")))
+        .unwrap_or_else(|| panic!("expected a branch on the receiver tag:\n{ir}"));
     assert!(
-        !ir.contains("pget.strlen_heap"),
-        "only `.length` may take the inline string arm:\n{ir}"
+        branch.contains("label %pget.recv_other") && !branch.contains("label %pic.miss.call"),
+        "a non-pointer receiver must leave for its OWN exit — sharing the \
+         object exit's block is what cost +4 instructions per hit:\n{branch}"
     );
-    let sso = ir
-        .find("\npget.recv_sso")
-        .unwrap_or_else(|| panic!("expected an SSO receiver block:\n{ir}"));
     assert!(
-        ir[sso..].contains("js_object_get_field_by_name_f64"),
-        "a non-`length` SSO read must still call the by-name helper:\n{ir}"
+        ir.contains("@js_object_get_field_ic_slow(")
+            && ir.contains("@js_object_get_field_ic_nonptr("),
+        "the tower must still reach both slow entries:\n{ir}"
     );
 }
 
@@ -1015,7 +1097,7 @@ fn generic_size_read_serves_native_collections_inline() {
          {collection_body}"
     );
     assert!(
-        ir.contains("@perry_ic_") && ir.contains("js_object_get_field_ic_miss"),
+        ir.contains("@perry_ic_") && ir.contains("js_object_get_field_ic_slow"),
         "non-collection receivers must retain the generic property tower:\n{ir}"
     );
 }
@@ -1069,10 +1151,18 @@ fn packed_pic_header_guard_is_endianness_aware() {
                 ir.contains("load i16"),
                 "descriptor guard must retain native endianness: {ir}"
             );
+            assert!(
+                ir.contains(", 2048"),
+                "the native-endian arm must still test OBJ_FLAG_HAS_DESCRIPTORS: {ir}"
+            );
         }
+        // T1: the descriptor-bearing fallback is the one exit. It must still
+        // be a distinct EDGE — a descriptor-bearing receiver may never take
+        // the raw-slot hit — and the runtime keeps the Array-subclass
+        // named-prefix exception behind it.
         assert!(
-            ir.contains("pic.desc.prefix.guard"),
-            "descriptor fallback must remain: {ir}"
+            ir.contains("@js_object_get_field_ic_slow(") && ir.contains("\npic.miss.call"),
+            "descriptor fallback must remain, through the one exit: {ir}"
         );
     }
 }
@@ -1088,7 +1178,7 @@ fn compact_get_mru_is_atomic_and_full_cache_remains_lazy() {
         ir.contains("load atomic i64") && ir.contains("monotonic, align 8"),
         "{ir}"
     );
-    assert!(ir.contains("@js_object_get_field_ic_miss_packed("), "{ir}");
+    assert!(ir.contains("@js_object_get_field_ic_slow("), "{ir}");
     assert!(
         ir.contains("trunc i64") && ir.contains("icmp ne i64"),
         "{ir}"
@@ -1096,5 +1186,106 @@ fn compact_get_mru_is_atomic_and_full_cache_remains_lazy() {
     assert!(
         ir.contains("pic.token.miss"),
         "a full-cache dereference must still guard a null site: {ir}"
+    );
+}
+
+/// T1: the whole point — per untyped `obj.prop` the emitted tower is TWO calls
+/// and a handful of blocks, with the inline hit and the polymorphic ways kept.
+///
+/// This is a ratchet, so it is an EXACT count in both dimensions. The tower it
+/// replaced expanded 33 tower blocks and SIX runtime call sites per site
+/// (`js_object_get_field_by_name_f64` twice, the feedback-wrapped class-ref
+/// helper, `js_throw_type_error_property_access`,
+/// `js_object_get_field_ic_overflow_load`, `js_object_get_field_ic_miss_packed`),
+/// each one a statepoint whose live GC values are written into
+/// `.perry_gcmap`. On @babel/parser that was 29% of all emitted IR over 6,487
+/// sites; a single arm creeping back inline is a regression measured in
+/// megabytes of `.text`, and nothing else in the suite would report it.
+///
+/// Two and not one: a single shared exit let SimplifyCFG fold the receiver-tag
+/// test and the small-handle test into one flat predicate, costing +4.00
+/// instructions on every HIT (measured). The separate non-pointer callee is
+/// what keeps that guard chain branchy, so the count below is 2 — and a change
+/// that makes it 1 is a hit-path regression, not a size win.
+#[test]
+fn the_generic_tower_is_two_calls_and_a_bounded_number_of_blocks() {
+    let ir = emit(false, None);
+    let func = ir
+        .split("\ndefine ")
+        .find(|f| f.contains("\npic.miss.call"))
+        .unwrap_or_else(|| panic!("no function contains the generic tower:\n{ir}"));
+
+    // Every call/invoke in the whole function, by callee. Feedback records are
+    // compile-time gated and absent from this build; anything else must be the
+    // one exit (the fixture's module init contributes its own calls, so match
+    // on the property-GET family rather than on a total).
+    let pget_calls: Vec<&str> = func
+        .lines()
+        .filter(|l| l.contains(" call ") || l.contains(" invoke "))
+        .filter_map(|l| l.split(" @").nth(1))
+        .filter_map(|c| c.split('(').next())
+        .filter(|c| {
+            c.starts_with("js_object_get_field")
+                || c.starts_with("js_typed_feedback_object_get_field")
+                || *c == "js_throw_type_error_property_access"
+        })
+        .collect();
+    let mut sorted = pget_calls.clone();
+    sorted.sort();
+    assert_eq!(
+        sorted,
+        vec![
+            "js_object_get_field_ic_nonptr",
+            "js_object_get_field_ic_slow"
+        ],
+        "the tower must expand exactly two property-GET call sites:\n{func}"
+    );
+
+    let blocks: Vec<&str> = func
+        .lines()
+        .filter(|l| !l.starts_with(' ') && l.ends_with(':'))
+        .map(|l| l.trim_end_matches(':'))
+        .filter(|l| l.starts_with("pget.") || l.starts_with("pic."))
+        .collect();
+    let mut expected = vec![
+        // the guard chain and the inline hit
+        "pget.recv_ok",
+        // the non-pointer exit, off the tag test's false edge
+        "pget.recv_other",
+        "pic.recv_hdr",
+        "pic.token",
+        "pic.token.miss",
+        "pic.hit",
+        "pic.hit.inline",
+        // The hit's hole edge keeps its own landing block so its tail is not
+        // congruent with `pic.way.load`'s; `pic.hit.live` exists only when
+        // typed feedback has something to record on the live edge.
+        "pic.hit.deleted",
+        // the polymorphic ways, deliberately still inline (#7753)
+        "pic.miss",
+        "pic.ways",
+        "pic.way.load",
+        "pic.way.live",
+        // the one exit, and the join
+        "pic.miss.call",
+        "pget.recv_merge",
+    ];
+    // Labels carry a numeric suffix (`pic.ways.16`); strip it for comparison.
+    let mut normalized: Vec<String> = blocks
+        .iter()
+        .map(|b| {
+            let mut parts: Vec<&str> = b.split('.').collect();
+            if parts.last().is_some_and(|p| p.parse::<u32>().is_ok()) {
+                parts.pop();
+            }
+            parts.join(".")
+        })
+        .collect();
+    normalized.sort();
+    expected.sort();
+    assert_eq!(
+        normalized,
+        expected.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        "the emitted tower's block set changed:\n{func}"
     );
 }

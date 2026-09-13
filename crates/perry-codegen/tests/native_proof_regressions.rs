@@ -14873,7 +14873,11 @@ fn annotated_class_method_value_uses_generic_lookup() {
     // fallback, which is the exact regression #8033 exists to prevent.
     let generic = ir_function_body(&ir, "__probe$generic(");
     assert!(
-        generic.contains("call double @js_object_get_field_ic_miss"),
+        // T1 renamed the tower's cold exits; this assertion is about the
+        // unguarded body keeping GENERIC lookup, not about which symbol
+        // serves it.
+        generic.contains("call double @js_object_get_field_ic_slow")
+            || generic.contains("call double @js_object_get_field_ic_miss"),
         "an annotation-only class receiver must preserve generic property \
          lookup in the unguarded body:\n{generic}"
     );

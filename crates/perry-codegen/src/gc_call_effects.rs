@@ -750,6 +750,11 @@ mod tests {
             "js_rel_lt",
             "js_rel_gt",
             "js_object_get_field_ic_miss_packed",
+            // T1: the generic-get tower's two slow exits. One reaches the same
+            // `get_field_ic_miss_impl`, the other the by-name helper, so both
+            // allocate and can run a user getter.
+            "js_object_get_field_ic_slow",
+            "js_object_get_field_ic_nonptr",
         ] {
             assert_ne!(
                 classify_direct_callee(name),
