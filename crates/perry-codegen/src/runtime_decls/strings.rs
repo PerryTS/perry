@@ -727,7 +727,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     );
     module.declare_function("js_dyn_index_get", DOUBLE, &[DOUBLE, DOUBLE]);
     // #8655: guarded packed-array / dense Array-subclass read before the
-    // fully generic dynamic dispatcher. Used by unknown-receiver loop reads.
+    // fully generic dynamic dispatcher. Used by unknown-receiver loop reads,
+    // and (#T2) the single out-of-line exit of the emitted dynamic `obj[i]`
+    // site (`expr/index_get/inline_dyn_typed_array.rs`): it absorbs the
+    // per-kind typed-array ladder's rejected cases, the whole shape-carried
+    // Array-subclass IC tower and the lazy-JSON-array probe, each of which was
+    // an acceleration of a decision this helper already makes — and it is
+    // handed the SAME site cache slot, so the primed words are unchanged.
     module.declare_function(
         "js_packed_arraylike_index_get",
         DOUBLE,

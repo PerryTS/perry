@@ -126,8 +126,39 @@ fn numeric_layout_oob_array_read_returns_undefined_inline() {
     );
 }
 
+/// The ordered block labels of ONE dynamic element-read site, with the
+/// per-site numeric suffix stripped.
+fn dynamic_index_site_blocks(ir: &str) -> Vec<String> {
+    ir.lines()
+        .filter(|line| !line.starts_with(char::is_whitespace))
+        .filter_map(|line| line.trim_end().strip_suffix(':'))
+        .filter(|label| label.starts_with("arrlike.") || label.starts_with("tav."))
+        .map(|label| {
+            label
+                .rsplit_once('.')
+                .filter(|(_, suffix)| suffix.chars().all(|c| c.is_ascii_digit()))
+                .map_or(label.to_string(), |(head, _)| head.to_string())
+        })
+        .collect()
+}
+
+/// #T2 ("inline hit, one exit"): the emitted `obj[i]` for an erased receiver
+/// keeps exactly two inline hits — the packed ordinary-Array arm and the
+/// object-backed MRU cache hit — and routes everything else through ONE
+/// runtime call.
+///
+/// This replaces `unknown_numeric_read_guards_dense_subclass_families_and_
+/// spilled_length`, which pinned the tower those arms used to be inlined
+/// into (eight typed-array kind arms behind a seven-block kind dispatch, the
+/// dense-tail family-token tier, the spilled-`length` and spilled-element
+/// tiers, the elements-backed subclass probe and the lazy-JSON-array probe —
+/// ~50 blocks and ~316 pre-RS4GC instructions per site, 55% of all IR on
+/// `prettier/plugins/flow.mjs`). Each of those was an acceleration of a
+/// decision `js_packed_arraylike_index_get` already makes, and the exit still
+/// calls it with this site's own cache slot, so neither the answer nor the
+/// primed cache words moved.
 #[test]
-fn unknown_numeric_read_guards_dense_subclass_families_and_spilled_length() {
+fn unknown_numeric_read_is_one_inline_hit_and_one_out_of_line_exit() {
     let ir = ir_for(
         "unknown_dense_subclass_read",
         vec![
@@ -159,30 +190,213 @@ fn unknown_numeric_read_guards_dense_subclass_families_and_spilled_length() {
             },
         ],
     );
-    assert!(
-        ir.contains("arrlike.ic.family_token"),
-        "the generated IC must compare the move-stable dense-tail family token:\n{ir}"
+    // The complete emitted shape of one site, in order. A change here is a
+    // change to the per-site code-size contract and must be measured, not
+    // waved through.
+    assert_eq!(
+        dynamic_index_site_blocks(&ir),
+        vec![
+            "arrlike.ic.header",
+            "arrlike.ic.brand",
+            "arrlike.ic.array_guard",
+            "arrlike.ic.array_load",
+            "tav.brand",
+            "tav.kind_guard",
+            "tav.width",
+            "tav.width4",
+            "tav.width2",
+            "tav.w8",
+            "tav.w4",
+            "tav.w2",
+            "tav.w1",
+            "arrlike.elem.kind",
+            "arrlike.elem.meta",
+            "arrlike.elem.store",
+            "arrlike.elem.bounds",
+            "arrlike.elem.load",
+            "arrlike.elem.value",
+            "arrlike.ic.miss",
+            "arrlike.ic.merge",
+        ],
+        "the dynamic element read must emit exactly the inline hit plus one exit:\n{ir}"
     );
-    assert!(
-        ir.contains("arrlike.ic.array_guard") && ir.contains("arrlike.ic.array_load"),
-        "an ordinary Array behind the erased receiver must retain a direct guarded load:\n{ir}"
+    // Exactly one runtime call for the whole site, and it is the exit.
+    assert_eq!(
+        ir.matches("call double @js_packed_arraylike_index_get(")
+            .count(),
+        1,
+        "the site must have exactly one out-of-line edge:\n{ir}"
     );
+    for absent in [
+        // the per-kind typed-array ladder, collapsed onto element width
+        "tav.get.brand",
+        "tav.k.i8",
+        "tav.k.f64",
+        "tav.kd1",
+        // the whole shape-carried Array-subclass IC tower, which cannot hit
+        // while the elements store is the default representation
+        "arrlike.ic.shape",
+        "arrlike.ic.identity",
+        "arrlike.ic.exact",
+        "arrlike.ic.family_meta",
+        "arrlike.ic.family_token",
+        "arrlike.ic.bounds",
+        "arrlike.ic.length_inline",
+        "arrlike.ic.length_spill_meta",
+        "arrlike.ic.length_spill_ptr",
+        "arrlike.ic.length_spill_load",
+        "arrlike.ic.range",
+        "arrlike.ic.inline",
+        "arrlike.ic.spill_or_miss",
+        "arrlike.ic.spill_ptr",
+        "arrlike.ic.spill_load",
+        // the lazy-JSON-array tier
+        "arrlike.lazy.kind",
+        "arrlike.lazy.call",
+        // and the runtime entries only those arms called
+        "js_lazy_array_index_probe",
+        "js_dyn_index_get",
+        "js_number_coerce",
+    ] {
+        assert!(
+            !ir.contains(absent),
+            "`{absent}` must no longer be emitted at a dynamic element-read site:\n{ir}"
+        );
+    }
+    // The inline hits themselves: a guarded ordinary-Array element load, and
+    // the elements-backed Array-subclass probe's own load.
+    let array_load = super::class_field_barrier_tests::block_body(&ir, "arrlike.ic.array_load.")
+        .expect("the ordinary-Array load block exists");
     assert!(
-        ir.contains("arrlike.ic.length_spill_load"),
-        "an Array-subclass whose length slot spilled must retain an inline IC tier:\n{ir}"
+        array_load.contains("load double") && array_load.contains("select i1"),
+        "the packed Array hit must stay a direct load with an inline hole->undefined:\n{array_load}"
     );
+    let store = super::class_field_barrier_tests::block_body(&ir, "arrlike.elem.store.")
+        .expect("the elements-store probe block exists");
     assert!(
-        ir.contains("arrlike.ic.range") && ir.contains("arrlike.ic.miss"),
-        "the live length and cached dense-prefix bound must retain a semantic side exit:\n{ir}"
+        store.contains("getelementptr i64, ptr %") && store.contains(", i64 12"),
+        "the probe must load ObjectMeta.elements at word 12:\n{store}"
     );
+    let elem_load = super::class_field_barrier_tests::block_body(&ir, "arrlike.elem.load.")
+        .expect("the elements-store load block exists");
     assert!(
-        ir.contains("arrlike.lazy.kind") && ir.contains("js_lazy_array_index_probe"),
-        "a lazy JSON array must reach its probe from the cache, not the dispatcher:\n{ir}"
+        elem_load.contains("load double") && !elem_load.contains("call "),
+        "the elements-backed hit must load the element with no runtime call:\n{elem_load}"
     );
-    assert!(
-        !ir.contains("arrlike.lazy.sparse") && !ir.contains("arrlike.lazy.guard"),
-        "the lazy proof belongs in the probe, not inlined at every read site:\n{ir}"
-    );
+    // Nothing inline reads the site's cache any more; only the exit mentions
+    // it, and only as an ADDRESS — a link-time constant needing no load. (The
+    // tier that used to load word 0 through `emit_inline_cache_slot` is the
+    // shape-carried tower, now behind the exit.)
+    for block in dynamic_index_site_blocks(&ir) {
+        let body = super::class_field_barrier_tests::block_body(&ir, &format!("{block}."))
+            .unwrap_or_else(|| panic!("{block} block exists"));
+        if block == "arrlike.ic.miss" {
+            assert!(
+                body.contains("ptr @perry_ic_") && !body.contains("load ptr, ptr @perry_ic_"),
+                "the exit must take the slot's address, not its contents:\n{body}"
+            );
+        } else {
+            assert!(
+                !body.contains("@perry_ic_"),
+                "no inline arm may touch the site's cache slot ({block}):\n{body}"
+            );
+        }
+    }
+}
+
+/// In a number context every arm's value must be a Number, or the merge phi
+/// is not uniformly one. The coercion is therefore COUPLED: each inline hit
+/// and the exit either all wrap their result in `js_number_coerce` or none
+/// does.
+///
+/// The exit deliberately does NOT fold that coercion into a flag argument of
+/// its own (a fourth parameter on `js_packed_arraylike_index_get`): the extra
+/// argument and its test are paid by every receiver that reaches the exit,
+/// and measured +0.43% retired instructions on `object_deep_clone`, +0.18% on
+/// `json_parse_1mb` and +0.13% on `batch` — to spare a `js_number_coerce`
+/// from an arm that no TypeScript fixture can reach.
+///
+/// `coerce_slow_to_number = true` is currently **unreachable from
+/// TypeScript**, on `main` as well as here: `lower_binary` routes `-`/`*`/`/`
+/// with an unproven operand to `lower_guarded_numeric_arith` and the bitwise
+/// ops to the `ToInt32` lowering, so `lower_arithmetic_operand` — the only
+/// caller of `lower_unknown_local_index_get_for_number_context` — is not
+/// reached by an erased-receiver element read. Measured: no
+/// `js_number_coerce` is emitted inside the site blocks of any of eleven
+/// probe shapes (`a[i] * 2`, `a[i] ^ 0`, `a[i] - 1`, `a[i] | 0`, `2 - a[i]`,
+/// `a[i] << 1`, `a[i] * a[i]`, a loop accumulator, and the declared-array
+/// claim forms `a[b[i]] - 1`, `a[i] * 3`, `a[k] - 1`) under the base
+/// toolchain either. This test therefore pins the COUPLING rather than a
+/// literal expectation: it fails the moment a site coerces on one arm and not
+/// another.
+#[test]
+fn the_number_context_coercion_is_coupled_across_every_arm() {
+    for name in [
+        "unknown_dense_subclass_read",
+        "unknown_dense_subclass_read_number_context",
+    ] {
+        let ir = ir_for(
+            name,
+            vec![
+                Stmt::Let {
+                    id: ITEMS,
+                    name: "items".to_string(),
+                    ty: Type::Any,
+                    mutable: false,
+                    init: Some(Expr::PropertyGet {
+                        object: Box::new(Expr::Object(vec![(
+                            "value".to_string(),
+                            Expr::Array(vec![Expr::Number(7.0)]),
+                        )])),
+                        property: "value".to_string(),
+                        byte_offset: 0,
+                    }),
+                },
+                Stmt::Let {
+                    id: RESULT,
+                    name: "result".to_string(),
+                    ty: Type::Number,
+                    mutable: false,
+                    init: Some(Expr::Binary {
+                        op: BinaryOp::Sub,
+                        left: Box::new(Expr::IndexGet {
+                            object: Box::new(Expr::LocalGet(ITEMS)),
+                            index: Box::new(Expr::Integer(0)),
+                        }),
+                        right: Box::new(Expr::Number(1.0)),
+                    }),
+                },
+            ],
+        );
+        assert_eq!(
+            dynamic_index_site_blocks(&ir).len(),
+            21,
+            "{name}: a number context must not change the emitted block shape:\n{ir}"
+        );
+        let miss = super::class_field_barrier_tests::block_body(&ir, "arrlike.ic.miss.")
+            .unwrap_or_else(|| panic!("{name}: the exit block exists"));
+        assert!(
+            miss.contains("call double @js_packed_arraylike_index_get("),
+            "{name}: the exit must be the dispatcher call:\n{miss}"
+        );
+        let coerces = miss.contains("call double @js_number_coerce(");
+        assert_eq!(
+            miss.matches("call ").count(),
+            if coerces { 2 } else { 1 },
+            "{name}: the exit is one receiver classification, plus a ToNumber only \
+             in a number context:\n{miss}"
+        );
+        for hit in ["arrlike.ic.array_load.", "arrlike.elem.value."] {
+            let body = super::class_field_barrier_tests::block_body(&ir, hit)
+                .unwrap_or_else(|| panic!("{name}: {hit} block exists"));
+            assert_eq!(
+                body.contains("call double @js_number_coerce("),
+                coerces,
+                "{name}: {hit} must coerce exactly when the exit does, or the merge \
+                 phi is not uniformly a Number:\n{body}"
+            );
+        }
+    }
 }
 
 fn dynamic_symbol_access_ir(symbol_init: Expr, field: Option<&str>) -> String {
@@ -289,14 +503,17 @@ fn erased_symbol_annotation_does_not_bypass_runtime_validation() {
     );
 }
 
-/// The inline dynamic typed-array read brands the receiver off its managed
-/// `GC_TYPE_TYPED_ARRAY` header and reads the element kind from the
-/// `TypedArrayHeader` itself, instead of probing the 64-slot direct-mapped
-/// `PERRY_TA_KIND_CACHE` that every ordinary-array registry miss also writes
-/// negative entries into (a hot typed array kept getting evicted and missed
-/// the tier on every access).
+/// #T2: a typed-array receiver behind an erased type leaves through the
+/// site's single exit instead of the eight inline element-kind arms.
+///
+/// This replaces `unknown_numeric_read_brands_typed_arrays_off_the_header_
+/// not_the_kind_cache`, which pinned that inlined ladder. The brand is still
+/// read off the managed `GcHeader` and never from the 64-slot direct-mapped
+/// `PERRY_TA_KIND_CACHE` — the runtime exit reads the `TypedArrayHeader`
+/// itself, exactly as the inline arms did — so the #5525 property that made
+/// them worth inlining is intact; only their per-site code is gone.
 #[test]
-fn unknown_numeric_read_brands_typed_arrays_off_the_header_not_the_kind_cache() {
+fn unknown_numeric_read_routes_typed_arrays_through_the_single_exit() {
     let ir = ir_for(
         "unknown_typed_array_read_brand",
         vec![
@@ -326,23 +543,80 @@ fn unknown_numeric_read_brands_typed_arrays_off_the_header_not_the_kind_cache() 
             },
         ],
     );
+    // The site reads ONE managed-header brand byte, and it selects the
+    // ordinary-Array arm; every other `obj_type` — typed arrays included —
+    // continues to the object arm's own `GC_TYPE_OBJECT` test and, failing
+    // that, to the exit.
+    let header = super::class_field_barrier_tests::block_body(&ir, "arrlike.ic.header.")
+        .expect("the managed-header block exists");
     assert!(
-        ir.contains("tav.get.brand"),
-        "the inline typed-array tier must brand the receiver off its header:\n{ir}"
+        header.contains("load i8") && header.contains(", 1\n"),
+        "the site must brand the receiver off its GcHeader:\n{header}"
     );
-    let brand = super::class_field_barrier_tests::block_body(&ir, "tav.get.brand.")
-        .expect("brand block exists");
+    // The typed-array arm is back inline (measured: out of line it cost a
+    // dynamically-typed `Float64Array` sum +122.9% walltime / +206.3%
+    // instructions), but collapsed onto the ELEMENT WIDTH the header stores
+    // rather than the element KIND: four load blocks, not eight behind a
+    // seven-block dispatch.
+    for width in ["tav.w1", "tav.w2", "tav.w4", "tav.w8"] {
+        assert!(
+            ir.contains(width),
+            "the width-collapsed typed-array arm must emit `{width}`:\n{ir}"
+        );
+    }
+    for gone in ["tav.get.", "tav.k.", "tav.kd"] {
+        assert!(
+            !ir.contains(gone),
+            "the per-kind ladder `{gone}` must not come back:\n{ir}"
+        );
+    }
+    // #10118: the brand test decides on the TAG ALONE. Everything an
+    // Array-subclass or `JSON.parse` receiver would otherwise compute before
+    // failing it — the view guard, the element kind, the bounds check — sits
+    // behind the tag in `tav.kind_guard`.
+    let ta_brand = super::class_field_barrier_tests::block_body(&ir, "tav.brand.")
+        .expect("the typed-array brand block exists");
     assert!(
-        brand.contains("icmp eq i8") && brand.contains(", 11"),
-        "the brand block must test GC_TYPE_TYPED_ARRAY (11):\n{brand}"
+        ta_brand.contains(", 11") && ta_brand.contains("arrlike.elem.kind"),
+        "the arm must test GC_TYPE_TYPED_ARRAY and decline to the object arm:\n{ta_brand}"
+    );
+    assert_eq!(
+        (
+            ta_brand.matches("icmp ").count(),
+            ta_brand.matches("load ").count(),
+            ta_brand.matches("and i1").count()
+        ),
+        (1, 0, 0),
+        "the brand test must be ONE compare on the already-loaded tag — no kind \
+         load, no view-guard load, no AND-reduction:\n{ta_brand}"
+    );
+    let ta_kind_guard = super::class_field_barrier_tests::block_body(&ir, "tav.kind_guard.")
+        .expect("the typed-array kind/bounds guard exists");
+    assert!(
+        ta_kind_guard.contains("@PERRY_TA_VIEW_GUARD") && ta_kind_guard.contains("arrlike.ic.miss"),
+        "inline storage, the element kind and the bounds check belong behind the \
+         tag, and their miss leaves through the single exit:\n{ta_kind_guard}"
+    );
+    let w4 = super::class_field_barrier_tests::block_body(&ir, "tav.w4.")
+        .expect("the 4-byte width block exists");
+    assert_eq!(
+        w4.matches("load ").count(),
+        1,
+        "Int32Array/Uint32Array/Float32Array must resolve from ONE load:\n{w4}"
+    );
+    assert_eq!(
+        w4.matches("select ").count(),
+        2,
+        "signedness and the float form must be `select`s, not branches:\n{w4}"
     );
     assert!(
-        brand.contains("load i8"),
-        "the element kind must be read from the TypedArrayHeader:\n{brand}"
+        ir.contains("call double @js_packed_arraylike_index_get("),
+        "a BigInt/Float16 lane, a live view or an out-of-bounds typed-array read \
+         must still reach the single exit:\n{ir}"
     );
     assert!(
         !ir.contains("@PERRY_TA_KIND_CACHE"),
-        "the inline read must no longer depend on the kind cache:\n{ir}"
+        "neither the site nor its exit may depend on the kind cache:\n{ir}"
     );
 }
 
@@ -414,52 +688,30 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
         "the integer test must be the fptosi/sitofp round trip:\n{exact}"
     );
     assert!(
-        ir.contains("tav.get.brand") && ir.contains("arrlike.ic.family_token"),
-        "an integer key must reach the inline typed-array and dense-subclass tiers:\n{ir}"
+        ir.contains("arrlike.ic.header") && ir.contains("arrlike.elem.store"),
+        "an integer key must reach the inline element-read hit:\n{ir}"
     );
-    // Only an ordinary ObjectHeader has the `meta` slot used by the
-    // elements-backed Array-subclass probe. Native Buffers and other exotic
-    // managed cells must leave through the complete dispatcher before that
-    // load; interpreting their header word at offset 8 as ObjectMeta crashes.
+    // Only an ordinary `ObjectHeader` has the words the MRU cache hit reads,
+    // so the object arm must re-test `GC_TYPE_OBJECT` itself: the brand block
+    // only proves "not GC_TYPE_ARRAY". Native Buffers, typed arrays, lazy
+    // JSON arrays and every other exotic managed cell must leave through the
+    // exit BEFORE that load — reading their header word at offset 0/4 as a
+    // `(class_id, ShapeId)` identity would compare garbage.
     let kind = super::class_field_barrier_tests::block_body(&ir, "arrlike.elem.kind.")
-        .expect("the elements-store object-kind guard exists");
+        .expect("the object-kind guard exists");
     assert!(
-        kind.contains("icmp eq i8") && kind.contains(", 2") && kind.contains("arrlike.elem.meta"),
-        "only GC_TYPE_OBJECT may reach the ObjectMeta.elements load:\n{kind}"
+        kind.contains("icmp eq i8") && kind.contains(", 2") && kind.contains("arrlike.ic.miss"),
+        "only GC_TYPE_OBJECT may reach the ObjectMeta.elements load; everything \
+         else must leave through the single exit:\n{kind}"
     );
-    // #10114 put the lazy-JSON-array tier on this guard's miss edge, so the
-    // exit is one block further out than it used to be. Pin BOTH hops rather
-    // than the old block adjacency: a non-object must fall to the lazy kind
-    // test, and anything that is not GC_TYPE_LAZY_ARRAY (9) must still leave
-    // through the complete dispatcher at `arrlike.ic.miss`. Native Buffers and
-    // other exotic managed cells reach that exit unchanged; what must never
-    // happen is either tier reading their header word at offset 8 as
-    // ObjectMeta.
+    // The elements-backed subclass probe, the lazy-JSON-array probe and the
+    // dense-tail family token now live behind that exit rather than at every
+    // read site.
+    let miss = super::class_field_barrier_tests::block_body(&ir, "arrlike.ic.miss.")
+        .expect("the exit block exists");
     assert!(
-        kind.contains("arrlike.lazy.kind"),
-        "a non-object must fall through to the lazy tier's own kind test:\n{kind}"
-    );
-    let lazy_kind = super::class_field_barrier_tests::block_body(&ir, "arrlike.lazy.kind.")
-        .expect("the lazy-array kind guard exists");
-    assert!(
-        lazy_kind.contains("icmp eq i8")
-            && lazy_kind.contains(", 9")
-            && lazy_kind.contains("arrlike.lazy.call")
-            && lazy_kind.contains("arrlike.ic.miss"),
-        "only GC_TYPE_LAZY_ARRAY may reach the lazy probe; everything else must \
-         still exit through the complete dispatcher:\n{lazy_kind}"
-    );
-    // The elements-backed subclass probe sits ahead of the shape IC: meta
-    // word → `ObjectMeta.elements` (word 12) → inner-array bounds → slot.
-    let store = super::class_field_barrier_tests::block_body(&ir, "arrlike.elem.store.")
-        .expect("the elements-store probe block exists");
-    assert!(
-        store.contains("getelementptr i64, ptr %") && store.contains(", i64 12"),
-        "the probe must load ObjectMeta.elements at word 12:\n{store}"
-    );
-    assert!(
-        ir.contains("arrlike.elem.bounds") && ir.contains("arrlike.elem.load"),
-        "the probe must bounds-check and load from the inner array:\n{ir}"
+        miss.contains("call double @js_packed_arraylike_index_get("),
+        "the exit must be one call:\n{miss}"
     );
     assert!(
         ir.contains("call double @js_array_get_index_or_string("),
@@ -539,9 +791,9 @@ fn claimed_array_receiver_brands_before_committing_a_canonical_key_to_the_plain_
     );
     assert!(
         ir.contains("aidx.claimed.other")
-            && ir.matches("arrlike.ic.family_token").count() >= 2
-            && ir.matches("tav.get.brand").count() >= 2,
-        "every other heap receiver must reach the inline typed-array and dense-subclass tiers from BOTH the canonical and the runtime-key arm:\n{ir}"
+            && ir.matches("arrlike.elem.store").count() >= 2
+            && ir.matches("call double @js_packed_arraylike_index_get(").count() >= 2,
+        "every other heap receiver must reach the inline element-read hit and its single exit from BOTH the canonical and the runtime-key arm:\n{ir}"
     );
 }
 

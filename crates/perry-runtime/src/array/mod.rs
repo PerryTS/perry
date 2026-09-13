@@ -58,6 +58,8 @@ mod dense_move_tests;
 #[cfg(test)]
 mod forwarding_tests;
 #[cfg(test)]
+mod index_get_exit_tests;
+#[cfg(test)]
 mod push_pop_tests;
 #[cfg(test)]
 mod spread_dense_tests;
