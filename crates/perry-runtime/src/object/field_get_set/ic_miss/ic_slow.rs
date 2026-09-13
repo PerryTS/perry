@@ -510,8 +510,11 @@ mod tests {
         });
         // Give the receiver a meta record and an arbitrary prefix token.
         const TOKEN: u64 = 0xA11CE;
-        let (meta, _) = obj.across_mut::<ObjectHeader, _>(|| unsafe {
-            crate::object::object_meta_ensure(obj.get_raw_mut_ptr::<ObjectHeader>())
+        // Collections are suppressed around the allocating meta mint, so the
+        // receiver cannot move while the scoped pointer is live.
+        let meta = obj.with_mut_ptr(|o: *mut ObjectHeader| {
+            let _no_gc = crate::gc::GcSuppressScope::new();
+            unsafe { crate::object::object_meta_ensure(o) }
         });
         assert!(
             !meta.is_null(),
