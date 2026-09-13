@@ -33,7 +33,7 @@ struct Population {
 }
 
 unsafe fn plant() -> Population {
-    for i in 0..6000usize {
+    for i in 0..40_000usize {
         let payload = [0usize, 8, 13, 40, 200][i % 5];
         crate::arena::arena_alloc_gc_old(payload, 8, GC_TYPE_STRING);
     }
