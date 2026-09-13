@@ -117,6 +117,14 @@ const CENSUS_BITMAP_MAX_CHUNKS: usize = 2;
 /// exactly the headers that cursor yields.
 const CENSUS_START_ALIGN_SHIFT: u32 = 3;
 
+/// Window of the direct-mapped block index (#10182): one arena block (1 MiB).
+/// Distinct arena blocks are at least this large and never overlap, so no two
+/// census block bases fall into one window.
+const CENSUS_BLOCK_WINDOW_SHIFT: u32 = 20;
+/// Largest direct-mapped block index built: 16 GiB of address span, 128 KiB of
+/// table. A census spread wider keeps the binary search.
+const CENSUS_BLOCK_WINDOW_MAX: usize = 1 << 14;
+
 /// One censused arena block, in address order (#10182).
 #[derive(Clone, Copy, Debug)]
 pub(super) struct CensusStartBlock {
@@ -186,6 +194,13 @@ pub(crate) struct ValidPointerSet {
     /// Per-block census facts and trace reachability (#10182). Disarmed
     /// unless this set was built by the production census walk.
     pub(super) block_census: BlockCensus,
+    /// Direct-mapped block index (#10182): one entry per 1 MiB window from
+    /// `block_windows_lo`, holding the index of the greatest census block whose
+    /// base is at or below the window start and the index of the census block,
+    /// at most one, whose base lies inside the window (`u32::MAX` for none).
+    /// Empty means `census_block_at` binary-searches `arena_block_bases`.
+    pub(super) block_windows: Vec<(u32, u32)>,
+    pub(super) block_windows_lo: usize,
     /// Live count of pushed arena starts, kept so `lookup_count` stays O(1).
     pub(super) arena_count: usize,
     /// Exact membership for **malloc-tracked** objects only, which have no
@@ -232,6 +247,8 @@ impl ValidPointerSet {
             start_bitmap_chunks: Vec::new(),
             large_starts: Vec::new(),
             block_census: BlockCensus::disarmed(),
+            block_windows: Vec::new(),
+            block_windows_lo: 0,
             arena_count: 0,
             malloc_lookup: std::collections::BTreeSet::new(),
             range_min: usize::MAX,
@@ -326,6 +343,46 @@ impl ValidPointerSet {
         }
         self.arena_count += 1;
         self.record_pointer_range(ptr);
+    }
+
+    /// Build the direct-mapped block index once the census is complete. It is
+    /// left empty — `census_block_at` keeps the binary search — when two block
+    /// bases share a window (only fabricated test sets do) or the blocks span
+    /// more than `CENSUS_BLOCK_WINDOW_MAX` windows.
+    pub(super) fn build_block_windows(&mut self) {
+        self.block_windows.clear();
+        let (Some(first), Some(last)) = (self.arena_blocks.first(), self.arena_blocks.last())
+        else {
+            return;
+        };
+        let lo = first.base >> CENSUS_BLOCK_WINDOW_SHIFT;
+        let hi = last.base.saturating_add(last.extent.max(1) - 1) >> CENSUS_BLOCK_WINDOW_SHIFT;
+        let windows = hi - lo + 1;
+        if windows > CENSUS_BLOCK_WINDOW_MAX || self.arena_blocks.len() >= u32::MAX as usize {
+            return;
+        }
+        let mut table = vec![(u32::MAX, u32::MAX); windows];
+        let mut previous = usize::MAX;
+        for (idx, block) in self.arena_blocks.iter().enumerate() {
+            let window = (block.base >> CENSUS_BLOCK_WINDOW_SHIFT) - lo;
+            if window == previous {
+                return;
+            }
+            table[window].1 = idx as u32;
+            previous = window;
+        }
+        let mut greatest = u32::MAX;
+        let mut next = 0usize;
+        for (window, entry) in table.iter_mut().enumerate() {
+            let window_start = (lo + window) << CENSUS_BLOCK_WINDOW_SHIFT;
+            while next < self.arena_blocks.len() && self.arena_blocks[next].base <= window_start {
+                greatest = next as u32;
+                next += 1;
+            }
+            entry.0 = greatest;
+        }
+        self.block_windows = table;
+        self.block_windows_lo = lo;
     }
 
     pub(super) fn push_malloc(&mut self, ptr: usize) {
@@ -463,13 +520,56 @@ impl ValidPointerSet {
 
     /// The census block whose base is the greatest one `<= ptr`, if any.
     /// `ptr` may still lie past that block's walked extent.
+    ///
+    /// #10182: answered from the direct-mapped block index when one was built.
+    /// The window holding `ptr` names the greatest base at or below the window
+    /// start and the one base, if any, inside the window, so the greatest base
+    /// at or below `ptr` is the inside one when `ptr` has reached it. Past the
+    /// last window every base is below `ptr`; before the first none is.
     #[inline(always)]
     fn census_block_at(&self, ptr: usize) -> Option<&CensusStartBlock> {
+        if !self.block_windows.is_empty() {
+            let window = ptr >> CENSUS_BLOCK_WINDOW_SHIFT;
+            let idx = match self
+                .block_windows
+                .get(window.wrapping_sub(self.block_windows_lo))
+            {
+                Some(&(below, inside)) => {
+                    #[cfg(test)]
+                    if block_window_sabotage::ignoring_inside() {
+                        return self.arena_blocks.get(below as usize);
+                    }
+                    if inside != u32::MAX && ptr >= self.arena_block_bases[inside as usize] {
+                        inside
+                    } else {
+                        below
+                    }
+                }
+                None if window < self.block_windows_lo => return None,
+                None => return self.arena_blocks.last(),
+            };
+            return self.arena_blocks.get(idx as usize);
+        }
+        self.census_block_at_by_search(ptr)
+    }
+
+    #[inline(always)]
+    fn census_block_at_by_search(&self, ptr: usize) -> Option<&CensusStartBlock> {
         let idx = self.arena_block_bases.partition_point(|&base| base <= ptr);
         if idx == 0 {
             return None;
         }
         self.arena_blocks.get(idx - 1)
+    }
+
+    /// `(direct-mapped answer, binary-search answer)` as block bases, for the
+    /// block-index test.
+    #[cfg(test)]
+    pub(super) fn census_block_base_both_ways(&self, ptr: usize) -> (Option<usize>, Option<usize>) {
+        (
+            self.census_block_at(ptr).map(|b| b.base),
+            self.census_block_at_by_search(ptr).map(|b| b.base),
+        )
     }
 
     /// Exact arena membership: a census hit also records that the trace
@@ -556,6 +656,36 @@ impl ValidPointerSet {
             return None;
         }
         Some(sorted[idx - 1])
+    }
+}
+
+/// Sabotage switch for the block-index test: a lookup ignores the base inside
+/// the window and answers with the block below it. Test builds only.
+#[cfg(test)]
+pub(crate) mod block_window_sabotage {
+    use std::cell::Cell;
+
+    thread_local! {
+        static IGNORE_INSIDE: Cell<bool> = const { Cell::new(false) };
+    }
+
+    #[inline]
+    pub(crate) fn ignoring_inside() -> bool {
+        IGNORE_INSIDE.with(Cell::get)
+    }
+
+    pub(crate) struct Guard(bool);
+
+    impl Guard {
+        pub(crate) fn arm() -> Self {
+            Self(IGNORE_INSIDE.with(|s| s.replace(true)))
+        }
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            IGNORE_INSIDE.with(|s| s.set(self.0));
+        }
     }
 }
 
@@ -749,6 +879,7 @@ impl ValidPointerSetBuilder {
                         return false;
                     }
                     self.set.block_census.flush_block();
+                    self.set.build_block_windows();
                     self.phase = ValidPointerSetBuildPhase::Done;
                     return true;
                 }

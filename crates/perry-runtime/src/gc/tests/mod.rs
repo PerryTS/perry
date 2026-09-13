@@ -11,6 +11,7 @@ mod budgeted_step_api;
 mod buffer_bound_method_name;
 mod buffer_side_tables;
 mod census;
+mod census_block_windows;
 mod census_whole_block;
 mod concat_site;
 mod contract;
