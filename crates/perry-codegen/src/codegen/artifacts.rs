@@ -1955,5 +1955,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     );
     progress.checkpoint("string pool and registration initializer");
 
+    super::namespace_value_getters::emit(llmod, module_prefix, cross_module);
+
     Ok(())
 }

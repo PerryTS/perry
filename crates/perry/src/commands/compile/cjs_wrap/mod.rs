@@ -21,7 +21,8 @@
 //!      `_req_N` bindings, runs the original code, and returns
 //!      `module.exports`. The IIFE result is bound to `_cjs`.
 //!   3. Emit `export default _cjs;` plus `export const X = _cjs.X;` for each
-//!      detected named export.
+//!      detected named export. Codegen turns these synthetic property exports
+//!      into live getters on `_cjs`, without evaluating a snapshot at init.
 //!
 //! Two named-export sources are unioned:
 //!

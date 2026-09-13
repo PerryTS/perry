@@ -385,7 +385,8 @@ pub fn extract_object_literal_exports_from_require(source: &str) -> Vec<(String,
     out
 }
 
-/// Extract named-export patterns from CJS source. Three shapes are matched:
+/// Extract named-export patterns from CJS source. These are value bindings,
+/// including properties installed by accessors or by later function calls.
 ///
 ///   1. `exports.X = ...` and `module.exports.X = ...` — the canonical CJS
 ///      named-export form. Skips `__esModule` (the interop marker injected
@@ -460,6 +461,23 @@ pub fn extract_exports_from_source(source: &str) -> Vec<String> {
     for cap in bracket_re.captures_iter(source) {
         if let Some(m) = cap.get(1) {
             push_unique(&mut names, m.as_str());
+        }
+    }
+
+    // #10153: Babel emits accessor re-exports with defineProperty rather
+    // than an assignment. A descriptor's `get` or `value` may hold a function,
+    // but that is not a function declaration in this module. Surface the name
+    // through the same value-export path as ordinary exports assignments.
+    let descriptor_re = perry_perex::tooling::Regex::new(
+        r#"(?:^|[^A-Za-z0-9_$.])(Object\s*\.\s*defineProperty\s*\(\s*(?:module\s*\.\s*)?exports\s*,\s*['"]([A-Za-z_$][A-Za-z0-9_$]*)['"]\s*,)"#,
+    )
+    .unwrap();
+    let stripped = detect::strip_comments_and_strings(source);
+    for cap in descriptor_re.captures_iter(source) {
+        let call = cap.get(1).unwrap();
+        // Ignore examples embedded in comments and strings.
+        if stripped[call.start()..].starts_with("Object") {
+            push_unique(&mut names, cap.get(2).unwrap().as_str());
         }
     }
 
