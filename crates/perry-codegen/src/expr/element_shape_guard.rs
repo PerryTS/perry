@@ -538,6 +538,155 @@ pub(crate) fn emit_element_shape_loop_preheader_check(
     })
 }
 
+/// Materialize this iteration's element index as an i32, or report that the
+/// clone cannot index at all.
+///
+/// One arm per [`super::ElementShapeIndex`] spelling, and each reads exactly
+/// the storage whose bounds obligation the preheader discharged
+/// ([`ElementShapeIndexBound`]). `None` means the counter's canonical i32 slot
+/// the matcher required has gone missing — that costs the read its fast
+/// lowering, never correctness, and the matcher, the fact lookup and this must
+/// all agree (`ElementShapeIndex::needs_counter_i32_slot`).
+pub(crate) fn emit_element_shape_index(
+    ctx: &mut FnCtx,
+    fact: &super::ElementShapeLoopFact,
+) -> Option<String> {
+    match &fact.index {
+        super::ElementShapeIndex::Counter => {
+            let slot = ctx.i32_counter_slots.get(&fact.index_local_id).cloned()?;
+            Some(ctx.block().load(I32, &slot))
+        }
+        super::ElementShapeIndex::Constant(k) => Some(k.to_string()),
+        // The derived `const d = j % m` binding's own slot, written by the
+        // `Let` arm in `stmt/let_stmt.rs` earlier in this same iteration.
+        super::ElementShapeIndex::DerivedMod { slot, .. } => {
+            let slot = slot.clone();
+            Some(ctx.block().load(I32, &slot))
+        }
+        // #10199: the carried recurrence's private i32 slot, written by the
+        // body's first statement earlier in this same iteration. The REAL
+        // binding slot is deliberately NOT read here — it is one iteration
+        // behind until the trailing write-back commits, which is exactly what
+        // makes a mid-iteration side exit correct.
+        super::ElementShapeIndex::Carried(carried) => {
+            let slot = carried.slot.clone();
+            Some(ctx.block().load(I32, &slot))
+        }
+    }
+}
+
+/// The masked heap handle of `arr[idx]` for THIS iteration, with the residual
+/// per-element facts discharged.
+///
+/// Two sources. When the matcher installed an [`super::ElementPrefetch`] the
+/// body's leading virtual binding already did the deref and the residual check
+/// for the whole iteration, so this is one load of an entry alloca; otherwise
+/// (#10123's original shape) the deref and the check are emitted here, once per
+/// read.
+pub(crate) fn emit_element_shape_element_handle(
+    ctx: &mut FnCtx,
+    fact: &super::ElementShapeLoopFact,
+    idx_i32: &str,
+) -> String {
+    if let Some(prefetch) = &fact.elem_prefetch {
+        let slot = prefetch.handle_slot.clone();
+        return ctx.block().load(I64, &slot);
+    }
+    emit_element_deref_with_residual(ctx, fact, idx_i32)
+}
+
+/// Bare element load plus the residual per-OBJECT facts the array-level
+/// invariant deliberately does not cover. Returns the masked handle.
+///
+/// Emits nothing but loads, ALU and one `cond_br` — call-free by construction,
+/// which is the whole revocation argument (see the module docs).
+pub(crate) fn emit_element_deref_with_residual(
+    ctx: &mut FnCtx,
+    fact: &super::ElementShapeLoopFact,
+    idx_i32: &str,
+) -> String {
+    let blk = ctx.block();
+    // The element-shape invariant proved every slot in the verified prefix
+    // is a POINTER_TAG object of the guarded identity, so the unbox needs
+    // no tag test and no handle-band test — the two checks that make up the
+    // element-read tier.
+    let idx64 = blk.sext(I32, idx_i32, I64);
+    let slot_ptr = blk.gep(I64, &fact.elements_base, &[(I64, &idx64)]);
+    let elem_bits = blk.load(I64, &slot_ptr);
+    let elem_handle = blk.and(I64, &elem_bits, crate::nanbox::POINTER_MASK_I64);
+
+    if fact.statically_layout_proven {
+        return elem_handle;
+    }
+    let elem_ptr = blk.inttoptr(I64, &elem_handle);
+    let load_idx = ctx.new_block("element_shape.load");
+    let load_label = ctx.block_label(load_idx);
+    let blk = ctx.block();
+
+    // Residual per-OBJECT facts (see the module docs for why they cannot come
+    // from the runtime array-level invariant).
+    let hdr_ptr = blk.gep(I8, &elem_ptr, &[(I64, "-8")]);
+    let hdr = blk.load(I32, &hdr_ptr);
+    let (mask, expect) = if fact.shape_keyed {
+        (ELEM_HEADER_SHAPE_MASK, ELEM_HEADER_SHAPE_EXPECT)
+    } else {
+        (ELEM_HEADER_MASK, ELEM_HEADER_EXPECT)
+    };
+    let hdr_masked = blk.and(I32, &hdr, mask);
+    let hdr_ok = blk.icmp_eq(I32, &hdr_masked, expect);
+
+    // #8113: the ShapeId moved from header offset 8 to 4.
+    let sid_ptr = blk.gep(I8, &elem_ptr, &[(I64, "4")]);
+    let shape_id = blk.load(I32, &sid_ptr);
+    let shape_ok = blk.icmp_eq(I32, &shape_id, &fact.expected_shape_id);
+
+    let ok = blk.and(I1, &hdr_ok, &shape_ok);
+    // The side exit resumes the CURRENT iteration in the slow clone; no effect
+    // of this iteration has committed yet (#10199: with a prefetch this is the
+    // ONLY residual exit in the iteration, and it precedes every store).
+    blk.cond_br(&ok, &load_label, &fact.side_exit_label);
+    ctx.current_block = load_idx;
+    elem_handle
+}
+
+/// #10199: the once-per-iteration element prologue.
+///
+/// Emitted by the body's leading virtual binding (`stmt/let_stmt.rs` →
+/// `stmt/element_shape_loop::lower_virtual_clone_binding`) once the index for
+/// this iteration is in its slot. Parks the masked handle in an entry alloca so
+/// every read in the iteration is a bare offset load.
+pub(crate) fn emit_element_shape_prefetch(
+    ctx: &mut FnCtx,
+    fact: &super::ElementShapeLoopFact,
+    idx_i32: &str,
+    handle_slot: &str,
+) {
+    let handle = emit_element_deref_with_residual(ctx, fact, idx_i32);
+    ctx.block().store(I64, &handle, handle_slot);
+}
+
+/// One tracked property's RAW slot word — a NaN-boxed `JSValue` in the
+/// shape-keyed arm, a raw `double` in the class-keyed one. No tag test; the
+/// caller adds the one its consumer needs.
+pub(crate) fn emit_element_shape_slot_load(
+    ctx: &mut FnCtx,
+    fact: &super::ElementShapeLoopFact,
+    idx_i32: &str,
+    field_slot: &super::ElementShapeFieldSlot,
+) -> String {
+    let header_skip = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+    let (slot_ty, slot_value) = match field_slot {
+        super::ElementShapeFieldSlot::Packed(index) => (I64, index.to_string()),
+        super::ElementShapeFieldSlot::Runtime(reg) => (I64, reg.clone()),
+    };
+    let elem_handle = emit_element_shape_element_handle(ctx, fact, idx_i32);
+    let blk = ctx.block();
+    let elem_ptr = blk.inttoptr(I64, &elem_handle);
+    let fields_base = blk.gep(I8, &elem_ptr, &[(I64, &header_skip)]);
+    let field_ptr = blk.gep(DOUBLE, &fields_base, &[(slot_ty, &slot_value)]);
+    blk.load(DOUBLE, &field_ptr)
+}
+
 /// Emit one `arr[i].field` read inside the fast clone: bare element load,
 /// an optional residual per-element check, then a bare raw-f64 slot load.
 ///
@@ -550,59 +699,7 @@ pub(crate) fn emit_element_shape_field_load(
     idx_i32: &str,
     field_slot: &super::ElementShapeFieldSlot,
 ) -> String {
-    let header_skip = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
-    let (slot_ty, slot_value) = match field_slot {
-        super::ElementShapeFieldSlot::Packed(index) => (I64, index.to_string()),
-        super::ElementShapeFieldSlot::Runtime(reg) => (I64, reg.clone()),
-    };
-
-    let elem_ptr = {
-        let blk = ctx.block();
-        // The element-shape invariant proved every slot in the verified prefix
-        // is a POINTER_TAG object of the guarded identity, so the unbox needs
-        // no tag test and no handle-band test — the two checks that make up the
-        // element-read tier.
-        let idx64 = blk.sext(I32, idx_i32, I64);
-        let slot_ptr = blk.gep(I64, &fact.elements_base, &[(I64, &idx64)]);
-        let elem_bits = blk.load(I64, &slot_ptr);
-        let elem_handle = blk.and(I64, &elem_bits, crate::nanbox::POINTER_MASK_I64);
-        let elem_ptr = blk.inttoptr(I64, &elem_handle);
-
-        if !fact.statically_layout_proven {
-            let load_idx = ctx.new_block("element_shape.load");
-            let load_label = ctx.block_label(load_idx);
-            let blk = ctx.block();
-
-            // Residual per-OBJECT facts (see the module docs for why they
-            // cannot come from the runtime array-level invariant).
-            let hdr_ptr = blk.gep(I8, &elem_ptr, &[(I64, "-8")]);
-            let hdr = blk.load(I32, &hdr_ptr);
-            let (mask, expect) = if fact.shape_keyed {
-                (ELEM_HEADER_SHAPE_MASK, ELEM_HEADER_SHAPE_EXPECT)
-            } else {
-                (ELEM_HEADER_MASK, ELEM_HEADER_EXPECT)
-            };
-            let hdr_masked = blk.and(I32, &hdr, mask);
-            let hdr_ok = blk.icmp_eq(I32, &hdr_masked, expect);
-
-            // #8113: the ShapeId moved from header offset 8 to 4.
-            let sid_ptr = blk.gep(I8, &elem_ptr, &[(I64, "4")]);
-            let shape_id = blk.load(I32, &sid_ptr);
-            let shape_ok = blk.icmp_eq(I32, &shape_id, &fact.expected_shape_id);
-
-            let ok = blk.and(I1, &hdr_ok, &shape_ok);
-            // One branch per access. The side exit resumes the CURRENT
-            // iteration in the slow clone; no effect has committed yet.
-            blk.cond_br(&ok, &load_label, &fact.side_exit_label);
-            ctx.current_block = load_idx;
-        }
-        elem_ptr
-    };
-
-    let blk = ctx.block();
-    let fields_base = blk.gep(I8, &elem_ptr, &[(I64, &header_skip)]);
-    let field_ptr = blk.gep(DOUBLE, &fields_base, &[(slot_ty, &slot_value)]);
-    let value = blk.load(DOUBLE, &field_ptr);
+    let value = emit_element_shape_slot_load(ctx, fact, idx_i32, field_slot);
 
     // #10123: the shape-keyed arm's representation check.
     //

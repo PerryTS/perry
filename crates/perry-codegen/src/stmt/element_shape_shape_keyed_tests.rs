@@ -450,21 +450,78 @@ fn an_untracked_local_index_declines() {
 }
 
 #[test]
-fn a_denylisted_property_declines_the_shape_keyed_arm() {
-    // `length`, `name`, `constructor`, … are answered by the runtime or by the
-    // prototype, not out of an inline slot, so a shape's key position for one
-    // would be the wrong answer even when it exists.
+fn the_shape_keyed_arm_denies_only_proto() {
+    // #10199 narrowed this list. The CLASS arm still denies every name with a
+    // dedicated branch in the property dispatch, because its read bakes in a
+    // compile-time packed slot. The SHAPE arm bakes in nothing: the preheader
+    // asks the runtime for that exact key's inline slot in that exact ordinary
+    // ShapeId and declines on `-1`, and the residual pins
+    // `obj_type == GC_TYPE_OBJECT` with no per-object descriptors — so every
+    // receiver whose builtin branch could answer a name differently (a
+    // function's `name`, an array's `length`, a Map's `size`) is already
+    // excluded, and for a plain record an own data property shadows the
+    // prototype name it collides with. Denying the whole list cost the access
+    // benchmark its `fields` shape outright, for a field called `name`.
+    for property in ["length", "name", "constructor", "size", "message"] {
+        let ir = emit(&untyped_param_module(
+            Type::Any,
+            Type::Number,
+            vec![untyped_accumulate(untyped_elem_field(
+                Expr::LocalGet(U_COUNTER_ID),
+                property,
+            ))],
+        ));
+        assert!(
+            ir.contains("element_shape.loop.fast.preheader"),
+            "`{property}` is an ordinary own inline slot on a parsed record; \
+             the shape-keyed arm must serve it"
+        );
+    }
+    // `__proto__` stays denied — not because of JavaScript (node gives
+    // `JSON.parse('{\"__proto__\":1}')` an own data property and reads `1`
+    // back), but because Perry's generic property path may special-case the
+    // name ahead of own-property lookup, and the clone must agree with the
+    // path it is a clone of.
     let ir = emit(&untyped_param_module(
         Type::Any,
         Type::Number,
         vec![untyped_accumulate(untyped_elem_field(
             Expr::LocalGet(U_COUNTER_ID),
-            "length",
+            "__proto__",
         ))],
     ));
     assert!(
         !ir.contains("element_shape.loop.fast.preheader"),
-        "a denylisted property must decline the clone"
+        "`__proto__` must decline the shape-keyed clone"
+    );
+}
+
+#[test]
+fn the_class_keyed_arm_keeps_the_full_property_denylist() {
+    // The narrowing above is shape-arm-only: a class-keyed read bakes in a
+    // packed slot index while the surrounding lowering may route the name
+    // somewhere else entirely, which is what the list has always protected.
+    let ir = emit(&element_shape_module(
+        vec![Stmt::Expr(Expr::LocalSet(
+            SUM_ID,
+            Box::new(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(Expr::LocalGet(SUM_ID)),
+                right: Box::new(Expr::PropertyGet {
+                    object: Box::new(Expr::IndexGet {
+                        object: Box::new(Expr::LocalGet(ARRAY_ID)),
+                        index: Box::new(Expr::LocalGet(COUNTER_ID)),
+                    }),
+                    property: "length".to_string(),
+                    byte_offset: 0,
+                }),
+            }),
+        ))],
+        None,
+    ));
+    assert!(
+        !ir.contains("element_shape.loop.fast.preheader"),
+        "a denylisted property must still decline the CLASS-keyed clone"
     );
 }
 
@@ -489,3 +546,9 @@ fn a_declared_but_unresolvable_element_type_still_declines() {
         "an unresolvable declared element type must decline both arms"
     );
 }
+
+/// #10199's `fields` and `random` shapes — a child module so it inherits both
+/// this file's shape-keyed assertions and `element_shape_loop_tests`'s slicing
+/// helpers.
+#[path = "element_shape_fields_random_tests.rs"]
+mod fields_random;

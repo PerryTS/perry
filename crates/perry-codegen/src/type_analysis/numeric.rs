@@ -356,6 +356,18 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::Logical { left, right, .. } => {
             is_numeric_expr(ctx, left) && is_numeric_expr(ctx, right)
         }
+        // #10199: `arr[i].<boolean field> ? 1 : 0` inside an element-shape fast
+        // clone. Deliberately NOT the general "both arms are numeric" rule — a
+        // general ternary's CONDITION is an arbitrary JS truthiness test, which
+        // is a runtime call; this arm is true only for the exact shape the
+        // clone lowers itself, where the condition is a tracked element read
+        // admitted as one of the two boolean singletons and everything else
+        // side-exits.
+        Expr::Conditional { .. }
+            if crate::expr::element_shape_reads::cloned_bool_select_read(ctx, e).is_some() =>
+        {
+            true
+        }
         // `obj.field` where the field is declared as `number` on the
         // owning class. Without this, `this.value + 1` in a hot loop
         // wraps the field load in `js_number_coerce` which prevents
@@ -372,6 +384,17 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                 return true;
             }
             if property == "length" && expression_has_numeric_length(ctx, object) {
+                return true;
+            }
+            // #10199: `arr[i].<string field>.length` inside an element-shape
+            // fast clone. The receiver is an untyped element read, so the
+            // declared-type answer above cannot see a string there; the clone's
+            // own lowering tag-tests the loaded word for both string
+            // representations and side-exits when it is not one, which is a
+            // stronger proof than an annotation. Without this the `+` consuming
+            // it bails to `js_dynamic_string_or_number_add` and the call
+            // deletes the clone.
+            if crate::expr::element_shape_reads::cloned_string_length_read(ctx, e).is_some() {
                 return true;
             }
             // repsel #7480 step 3: inside an element-shape fast clone a tracked
