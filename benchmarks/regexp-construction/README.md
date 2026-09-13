@@ -10,6 +10,7 @@ strip-ansi 7.1.2, and get-east-asian-width 1.6.0. Nothing substitutes a shortene
 pattern. The current compiler reports 10 modules for this probe.
 
 ```sh
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$PWD/target}"
 cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static
 export PERRY_RUNTIME_DIR="$CARGO_TARGET_DIR/release"
 python3 benchmarks/regexp-construction/prepare.py /tmp/regexp-probe.ts
@@ -62,6 +63,6 @@ python3 benchmarks/regexp-construction/compare.py \
   --output /tmp/regexp-app-comparison --runs 7
 ```
 
-See [merged-results.md](merged-results.md) for the final comparison against
-current main, and [results.md](results.md) for the original attribution and
-measurements before integrating main.
+See [final-results.md](final-results.md) for the Perex 0.1.4 comparison,
+[results.md](results.md) for the original attribution, and
+[merged-results.md](merged-results.md) for the earlier integration measurements.

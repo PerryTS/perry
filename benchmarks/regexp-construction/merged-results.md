@@ -1,4 +1,8 @@
-# Verification after integrating current main
+# Historical verification against main df886c6445
+
+This intermediate revision predates upstream cross-call program witnesses and
+Perex 0.1.4. Its binding cache has since been removed.
+See [final-results.md](final-results.md) for the final implementation and evidence.
 
 The original measurements in [results.md](results.md) apply to commit
 `62bddb2929` against `9b911855f8ca`. Before publishing the final revision, main

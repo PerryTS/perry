@@ -1,8 +1,8 @@
 # Issue #10179: measurement and verification record
 
-This is the original lane record. See [merged-results.md](merged-results.md)
-for the final revision after integrating current main, with matching build
-flags and improved benchmark controls.
+This is the historical Perex 0.1.0 lane record, including a binding cache later
+removed in favor of upstream program witnesses. See [final-results.md](final-results.md)
+for the final Perex 0.1.4 implementation and comparison.
 
 Linux x86-64 build host, 2026-09-13. Baseline: Perry
 `9b911855f8ca877ee439d5ddc416b27d4b7b018f`, Perex 0.1.0. Both compilers
@@ -34,7 +34,7 @@ brought tests to 1.115 µs and plain `stripAnsi` to 0.568 µs. These exploratory
 samples used `all 10` and were collected at different host loads, so they are
 attribution evidence, not the controlled final comparison.
 
-The final design keeps eager syntax checking, two bounded LRU caches (512
+That revision kept eager syntax checking, two bounded LRU caches (512
 entries/32 MiB each), per-object state, and operation-owned scratch. Source
 identity hits avoid hashing the pattern; independently allocated equal sources
 use a hash and exact comparison. Perex bindings retain their original immutable

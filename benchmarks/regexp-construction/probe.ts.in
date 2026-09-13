@@ -6,6 +6,7 @@ import { eastAsianWidth } from "@NPM@/get-east-asian-width@1.6.0/node_modules/ge
 
 const mode = process.argv[2] || "all";
 const scale = Number(process.argv[3] || "1");
+if (!Number.isSafeInteger(scale) || scale < 1) throw new Error("scale must be a positive integer");
 let sink: any;
 let checksum = 0;
 function t(name: string, n: number, f: () => void) {

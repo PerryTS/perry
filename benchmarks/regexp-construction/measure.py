@@ -7,14 +7,32 @@ import shutil
 import statistics
 import subprocess
 
+
+def positive_integer(value):
+    try:
+        number = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError('expected a positive integer') from None
+    if number < 1:
+        raise argparse.ArgumentTypeError('expected a positive integer')
+    return number
+
+
+def probe_case(value):
+    mode, separator, scale = value.partition(':')
+    if not mode or not separator:
+        raise argparse.ArgumentTypeError('expected MODE:SCALE')
+    return mode, positive_integer(scale)
+
+
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--before', required=True)
 parser.add_argument('--after', required=True)
 parser.add_argument('--source', required=True)
 parser.add_argument('--bun', required=True)
 parser.add_argument('--output', type=Path, required=True)
-parser.add_argument('--runs', type=int, default=7)
-parser.add_argument('--case', action='append', help='MODE:SCALE; repeat to override the default cases')
+parser.add_argument('--runs', type=positive_integer, default=7)
+parser.add_argument('--case', type=probe_case, action='append', help='MODE:SCALE; repeat to override the default cases')
 parser.add_argument('--paired-controls', action='store_true', help='Compare two identical-copy labels per build in each round, without Bun')
 args = parser.parse_args()
 commands = {'before': [args.before], 'after': [args.after], 'bun': [args.bun, args.source]}
@@ -23,7 +41,7 @@ if args.paired_controls:
                 'before_control': [args.before], 'after_control': [args.after]}
 runner = args.output.with_suffix('.runner')
 rows = []
-cases = [(mode, int(scale)) for mode, scale in (case.split(':') for case in args.case)] if args.case else [
+cases = args.case or [
     ('all', 1), ('construct', 10), ('test-ascii', 100),
     ('test-emoji', 100), ('stripAnsi', 100), ('stripAnsi-match', 100)]
 for mode, scale in cases:

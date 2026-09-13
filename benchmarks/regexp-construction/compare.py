@@ -14,11 +14,22 @@ import statistics
 import subprocess
 import time
 
+
+def positive_integer(value):
+    try:
+        number = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("expected a positive integer") from None
+    if number < 1:
+        raise argparse.ArgumentTypeError("expected a positive integer")
+    return number
+
+
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--before", type=Path, required=True)
 parser.add_argument("--after", type=Path)
 parser.add_argument("--output", type=Path, required=True)
-parser.add_argument("--runs", type=int, default=7)
+parser.add_argument("--runs", type=positive_integer, default=7)
 parser.add_argument("--filter", default="")
 parser.add_argument("--paired-controls", action="store_true", help="Add two identical-copy labels per build to each round")
 args = parser.parse_args()
