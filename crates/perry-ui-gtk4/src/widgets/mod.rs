@@ -15,6 +15,7 @@ pub mod image;
 pub mod image_gallery;
 pub mod lazyvstack;
 pub mod map_view;
+pub mod max_width_bin;
 pub mod navstack;
 pub mod picker;
 pub mod progressview;
@@ -692,22 +693,44 @@ pub fn match_parent_width(handle: i64) {
     }
 }
 
-/// Approximate the CSS `max-width` cap: fill the parent's width, but never
-/// exceed `max_width`, and center once capped.
+/// Cap a widget's width at `max_width`, filling the parent below the cap and
+/// centering at or above it — the CSS `max-width` + `margin: auto` behaviour.
 ///
-/// GTK4 has no true maximum-size property — its CSS supports `min-width` but not
-/// `max-width`, and `set_size_request` sets a minimum, not a maximum. So this
-/// combines `set_hexpand(true)` (grow into the parent) with
-/// `set_halign(Center)` and a `set_size_request(max_width, -1)`: with the
-/// allocation expanded to the parent width and `halign = Center`, the widget is
-/// placed at its requested `max_width` centered in that allocation, so it fills
-/// up to the cap and centers beyond it. Below the cap GTK clamps the widget down
-/// to the smaller available width.
+/// GTK4 has no max-width property (CSS honours only `min-width`, and
+/// `set_size_request` sets a minimum), so the child is wrapped in a
+/// [`max_width_bin::MaxWidthBin`] — a one-child widget that measures and
+/// allocates the child itself: below the cap the child fills, at/above it the
+/// child holds at `max_width` centered. The bin is inserted in the child's place
+/// inside its parent `GtkBox`. A re-call updates the existing bin's cap.
 pub fn set_max_width(handle: i64, max_width: f64) {
-    if let Some(widget) = get_widget(handle) {
-        widget.set_hexpand(true);
-        widget.set_halign(gtk4::Align::Center);
-        widget.set_size_request(max_width as i32, -1);
+    let Some(child) = get_widget(handle) else {
+        return;
+    };
+    let cap = max_width as i32;
+
+    // Already wrapped (a re-call): just update the cap on the existing bin.
+    if let Some(parent) = child.parent() {
+        if let Some(bin) = parent.downcast_ref::<max_width_bin::MaxWidthBin>() {
+            bin.set_max(cap);
+            return;
+        }
+    }
+
+    // Only a GtkBox parent (VStack/HStack) supports positional re-insertion; for
+    // any other container leave the child as-is rather than detach it wrongly.
+    let Some(parent) = child.parent() else {
+        return;
+    };
+    let Ok(box_parent) = parent.downcast::<gtk4::Box>() else {
+        return;
+    };
+
+    let prev = child.prev_sibling();
+    box_parent.remove(&child);
+    let bin = max_width_bin::MaxWidthBin::wrap(&child, cap);
+    match prev {
+        Some(sibling) => box_parent.insert_child_after(&bin, Some(&sibling)),
+        None => box_parent.prepend(&bin),
     }
 }
 

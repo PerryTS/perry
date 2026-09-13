@@ -1133,52 +1133,125 @@ pub fn match_parent_width(child_handle: i64) {
 /// not applied here — Android has no measure-time hook at this call site to
 /// clamp against the parent width. `max_width` is accepted so the C symbol
 /// exists and the contract is honoured as far as the platform allows.
-pub fn set_max_width(child_handle: i64, _max_width: f64) {
-    if let Some(view_ref) = get_widget(child_handle) {
-        jni_bridge::with_env(|env| {
-            let _ = jni_bridge::push_local_frame(env, 16);
-            if let Ok(lp) = env.call_method(
-                view_ref.as_obj(),
-                jni::jni_str!("getLayoutParams"),
-                jni::jni_sig!("()Landroid/view/ViewGroup$LayoutParams;"),
-                &[],
-            ) {
-                if let Ok(lp_obj) = lp.l() {
-                    if !lp_obj.is_null() {
-                        let _ = env.set_field(
-                            &lp_obj,
-                            jni::jni_str!("width"),
-                            jni::jni_sig!("I"),
-                            JValue::Int(-1),
-                        ); // MATCH_PARENT
-                        if env
-                            .is_instance_of(
-                                &lp_obj,
-                                jni::jni_str!("android/widget/LinearLayout$LayoutParams"),
-                            )
-                            .unwrap_or(false)
-                        {
-                            let _ = env.set_field(
-                                &lp_obj,
-                                jni::jni_str!("gravity"),
-                                jni::jni_sig!("I"),
-                                JValue::Int(1), // Gravity.CENTER_HORIZONTAL
-                            );
-                        }
-                        let _ = env.call_method(
-                            view_ref.as_obj(),
-                            jni::jni_str!("setLayoutParams"),
-                            jni::jni_sig!("(Landroid/view/ViewGroup$LayoutParams;)V"),
-                            &[JValue::Object(&lp_obj)],
-                        );
+/// Cap a widget's width at `max_width`, filling the parent below the cap and
+/// centering at or above it — the CSS `max-width` + `margin: auto` behaviour.
+///
+/// A plain Android `View`/`LinearLayout` child has no maximum-width property, so
+/// the child is wrapped in a `PerryMaxWidthLayout` (a `FrameLayout` whose
+/// `onMeasure` clamps the child to the cap and centers it). The bin is inserted
+/// where the child sat in its parent. A re-call updates the existing bin's cap.
+pub fn set_max_width(child_handle: i64, max_width: f64) {
+    let Some(view_ref) = get_widget(child_handle) else {
+        return;
+    };
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 16);
+        let cap_px = dp_to_px(env, max_width as f32);
+
+        let parent = match env.call_method(
+            view_ref.as_obj(),
+            jni::jni_str!("getParent"),
+            jni::jni_sig!("()Landroid/view/ViewParent;"),
+            &[],
+        ) {
+            Ok(p) => match p.l() {
+                Ok(obj) if !obj.is_null() => obj,
+                _ => {
+                    unsafe {
+                        let _ = jni_bridge::pop_local_frame(env, &JObject::null());
                     }
+                    return;
                 }
+            },
+            Err(_) => {
+                unsafe {
+                    let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+                }
+                return;
             }
+        };
+
+        // Already wrapped (a re-call): update the existing bin's cap and stop.
+        if env
+            .is_instance_of(&parent, jni::jni_str!("com/perry/app/PerryMaxWidthLayout"))
+            .unwrap_or(false)
+        {
+            let _ = env.call_method(
+                &parent,
+                jni::jni_str!("setMaxWidthPx"),
+                jni::jni_sig!("(I)V"),
+                &[JValue::Int(cap_px)],
+            );
             unsafe {
                 let _ = jni_bridge::pop_local_frame(env, &JObject::null());
             }
-        })
-    }
+            return;
+        }
+
+        // Only a ViewGroup parent supports indexed re-insertion.
+        if !env
+            .is_instance_of(&parent, jni::jni_str!("android/view/ViewGroup"))
+            .unwrap_or(false)
+        {
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+            }
+            return;
+        }
+
+        let index = env
+            .call_method(
+                &parent,
+                jni::jni_str!("indexOfChild"),
+                jni::jni_sig!("(Landroid/view/View;)I"),
+                &[JValue::Object(view_ref.as_obj())],
+            )
+            .and_then(|v| v.i())
+            .unwrap_or(-1);
+
+        let context = get_activity(env);
+        let Ok(bin) = env.new_object(
+            jni::jni_str!("com/perry/app/PerryMaxWidthLayout"),
+            jni::jni_sig!("(Landroid/content/Context;)V"),
+            &[JValue::Object(&context)],
+        ) else {
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+            }
+            return;
+        };
+        let _ = env.call_method(
+            &bin,
+            jni::jni_str!("setMaxWidthPx"),
+            jni::jni_sig!("(I)V"),
+            &[JValue::Int(cap_px)],
+        );
+
+        // Move the child out of its parent and into the bin, then drop the bin
+        // where the child was.
+        let _ = env.call_method(
+            &parent,
+            jni::jni_str!("removeView"),
+            jni::jni_sig!("(Landroid/view/View;)V"),
+            &[JValue::Object(view_ref.as_obj())],
+        );
+        let _ = env.call_method(
+            &bin,
+            jni::jni_str!("addView"),
+            jni::jni_sig!("(Landroid/view/View;)V"),
+            &[JValue::Object(view_ref.as_obj())],
+        );
+        let _ = env.call_method(
+            &parent,
+            jni::jni_str!("addView"),
+            jni::jni_sig!("(Landroid/view/View;I)V"),
+            &[JValue::Object(&bin), JValue::Int(index)],
+        );
+
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+        }
+    })
 }
 
 /// Pin a child view's height to match its parent (MATCH_PARENT).

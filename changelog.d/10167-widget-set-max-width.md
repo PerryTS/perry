@@ -11,37 +11,34 @@ Wired through the central `PERRY_UI_TABLE` dispatch as
 lowers it generically and the JS/WASM codegen resolve it via the existing
 `ui_method_to_runtime` fall-through — no per-backend codegen change.
 
-Per-backend behaviour:
+Per-backend behaviour, all reproducing fill-below-cap + cap-and-center:
 
-- **macOS / iOS / tvOS / visionOS** — real Auto Layout, three constraints on the
-  view: `width <= maxWidth` (required), `width == superview.width` at priority
-  999 (grow to fill until the cap binds), and `centerX == superview.centerX`
-  (center once capped). Idempotent: a prior set is deactivated before re-apply.
-  The widget must already have a superview when called, matching
-  `widgetMatchParentWidth`.
-- **GTK4** — `hexpand(true)` + `halign(Center)` + `set_size_request(maxWidth,
-  -1)`; GTK has no true max-width property, so this fills to the requested cap
-  and centers beyond it.
-- **Windows (Win32)** — a `max_width` field on the widget entry, honoured at
-  layout time (clamp the cross-axis width to the cap and center by growing the
-  gutters). DPI-scaled, mirroring `set_width`.
-- **WinUI** — `MaxWidth` + `HorizontalAlignment::Stretch` through
-  `windows_reactor`, which is exactly the fill-then-center contract.
-- **Android** — fill (`MATCH_PARENT`) + `CENTER_HORIZONTAL`; a generic `View`
-  has no max-width and there is no measure-time hook at this call site, so the
-  hard cap is not enforced yet (documented in the impl). The FFI symbol exists so
-  the target links.
-- **watchOS** — documented no-op (WatchKit has no Auto Layout), matching its
-  `match_parent_width` stub.
-- **web (JS + WASM runtimes)** — `el.style.maxWidth` + `margin-left/right: auto`,
-  a faithful reproduction of the behaviour.
-- **ArkTS (HarmonyOS)** — emits `.width('100%').constraintSize({ maxWidth })
-  .alignSelf(ItemAlign.Center)`, the nearest ArkUI idiom.
+- **macOS / iOS / tvOS / visionOS** — three Auto Layout constraints:
+  `width <= maxWidth` (required), `width == superview.width` at priority 999
+  (grow to fill until the cap binds), `centerX == superview.centerX`. Idempotent.
+- **GTK4** — a `MaxWidthBin` widget subclass (GTK4 has no max-width property);
+  its `measure`/`size_allocate` cap the child at the width and center it. The
+  child is re-parented through the bin inside its `GtkBox`.
+- **Windows (Win32)** — a `max_width` field honoured at layout time (clamp the
+  cross-axis width and center by growing the gutters), DPI-scaled.
+- **WinUI** — `MaxWidth` + `HorizontalAlignment::Stretch` via `windows_reactor`.
+- **Android** — a `PerryMaxWidthLayout` (`FrameLayout` whose `onMeasure` clamps
+  the child to the cap and centers it); `widgetSetMaxWidth` re-parents the child
+  through it via JNI.
+- **watchOS** — the SwiftUI host applies `.frame(maxWidth:, alignment: .center)`
+  from a new `frame_max_width` introspection field.
+- **web (JS + WASM runtimes)** — `width: 100%` + `max-width` + `margin: auto`.
+- **ArkTS (HarmonyOS)** — `.width('100%').constraintSize({ maxWidth })
+  .alignSelf(ItemAlign.Center)`.
 
 Also exposed as a `maxWidth` prop in the `perry-solid` renderer, documented on
-the UI styling page, and covered by a runnable doc-example snippet.
+the UI styling page, and covered by a runnable doc-example
+(`ui/layout/max_width_centered.ts`) that the iOS simulator harness runs.
 
-Incidental fix: the Android `set_max_width` shim uses the correct `i64` handle
-ABI (`decode`d via `match_parent_width`'s path), not the `f64` handle its
-existing `set_width` shim still uses — a latent ABI mismatch against the
-`ArgKind::Widget` codegen lowering, noted for a separate cleanup.
+Verification (see the PR description for the full per-backend matrix and the
+environmental limits behind each): macOS pixel-measured (320pt cap, equal
+gutters); iOS run clean on a real simulator; web measured in a browser (the
+same 320/290/290); the GTK4 `MaxWidthBin` measure/allocate pixel-proven with a
+standalone GTK4 program. Windows/WinUI compile in CI; Android, tvOS, visionOS,
+watchOS and the GTK4 integration have no build or run path in the authoring
+environment and rest on review plus their platform builds.

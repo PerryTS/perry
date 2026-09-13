@@ -1243,7 +1243,9 @@ function perry_ui_widget_set_width(h, w) {
 
 function perry_ui_widget_set_max_width(h, w) {
     const el = getHandle(h);
-    if (el) { el.style.maxWidth = w + "px"; el.style.marginLeft = "auto"; el.style.marginRight = "auto"; }
+    // width:100% fills up to the cap, max-width stops it, auto margins center it.
+    // Without width:100% a block shrinks to its content and never fills the cap.
+    if (el) { el.style.width = "100%"; el.style.maxWidth = w + "px"; el.style.marginLeft = "auto"; el.style.marginRight = "auto"; }
 }
 
 function perry_ui_widget_set_hugging(h, priority) {

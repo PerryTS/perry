@@ -54,6 +54,7 @@ func js_gc_step_us(_ budgetUs: UInt64, _ out: UnsafeMutablePointer<UInt8>?) -> U
 @_silgen_name("perry_watchos_node_bg_color") func perry_watchos_node_bg_color(_ id: Int64, _ c: Int32) -> Double
 @_silgen_name("perry_watchos_node_corner_radius") func perry_watchos_node_corner_radius(_ id: Int64) -> Double
 @_silgen_name("perry_watchos_node_frame_width") func perry_watchos_node_frame_width(_ id: Int64) -> Double
+@_silgen_name("perry_watchos_node_frame_max_width") func perry_watchos_node_frame_max_width(_ id: Int64) -> Double
 @_silgen_name("perry_watchos_node_frame_height") func perry_watchos_node_frame_height(_ id: Int64) -> Double
 @_silgen_name("perry_watchos_node_padding") func perry_watchos_node_padding(_ id: Int64) -> Double
 @_silgen_name("perry_watchos_node_text_wraps") func perry_watchos_node_text_wraps(_ id: Int64) -> Bool
@@ -521,6 +522,12 @@ struct CommonModifiers: ViewModifier {
             view = AnyView(view.frame(width: fw))
         } else if fh >= 0 {
             view = AnyView(view.frame(height: fh))
+        }
+
+        // Max width: fill up to the cap, then center (CSS max-width).
+        let mw = perry_watchos_node_frame_max_width(nodeId)
+        if mw >= 0 {
+            view = AnyView(view.frame(maxWidth: CGFloat(mw), alignment: .center))
         }
 
         // Padding
