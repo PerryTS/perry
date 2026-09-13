@@ -1,6 +1,7 @@
-//! #10182: old-reclaim is due once the promoted-but-unverified cohort exceeds
-//! `max(floor, 2 × old live at last full)`, independently of the growth band
-//! (which promotion credits blind) and of the retaining exemption.
+//! #10182: the promoted-but-unverified cohort bound, `max(floor, 2 × old live
+//! at last full)` with a floor of one base nursery cap. It is read one promotion
+//! ahead by the nursery-safepoint pre-emption and is never an arm of
+//! `old_reclaim_pressure_due` (which would reinstate #7592's futile full).
 
 use super::super::policy::{
     old_reclaim_pressure_due, promoted_cohort_bound_bytes, seed_promoted_cohort_for_tests,
@@ -19,38 +20,27 @@ fn promoted_cohort_bound_is_the_floor_or_twice_the_verified_live_set() {
 }
 
 #[test]
-fn promoted_cohort_makes_old_reclaim_due_even_when_growth_reads_zero_and_the_heap_retains() {
+fn the_cohort_bound_never_makes_old_reclaim_due_on_its_own() {
+    // #7592/#7965: a full that is due only because promotion moved bytes into
+    // old-gen frees nothing. The cohort bound must not reintroduce that arm —
+    // however large the unverified cohort, growth pacing reads zero here and
+    // only the safepoint pre-emption may act on the bound.
     let _isolation = GcTestIsolationGuard::new();
     let _pacing = crate::gc::policy::force_moving_gc_pacing();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let previous_retaining = GC_MAJOR_PACING_RETAINING.with(std::cell::Cell::get);
-    let floor = gc_promoted_cohort_floor_dyn_bytes();
-    // Growth reads zero (old_in_use == baseline) and the heap is classified
-    // retaining, so neither existing arm can fire: only the cohort can.
     GC_MAJOR_PACING_RETAINING.with(|c| c.set(true));
+    let floor = gc_promoted_cohort_floor_dyn_bytes();
     let occupancy = 10 * floor;
-
-    seed_promoted_cohort_for_tests(floor - 1, 0);
+    seed_promoted_cohort_for_tests(100 * floor, 0);
+    assert!(
+        super::super::policy::promoted_cohort_bound_due_with(0),
+        "precondition: the cohort is far past its bound"
+    );
     assert!(
         !old_reclaim_pressure_due(occupancy, occupancy),
-        "below the floor: not due"
+        "the cohort bound alone must not schedule an old reclaim"
     );
-    seed_promoted_cohort_for_tests(floor, 0);
-    assert!(
-        old_reclaim_pressure_due(occupancy, occupancy),
-        "at the floor: due"
-    );
-    seed_promoted_cohort_for_tests(floor, floor);
-    assert!(
-        !old_reclaim_pressure_due(occupancy, occupancy),
-        "below 2 × live: not due"
-    );
-    seed_promoted_cohort_for_tests(2 * floor, floor);
-    assert!(
-        old_reclaim_pressure_due(occupancy, occupancy),
-        "at 2 × live: due"
-    );
-
     seed_promoted_cohort_for_tests(0, 0);
     GC_MAJOR_PACING_RETAINING.with(|c| c.set(previous_retaining));
 }

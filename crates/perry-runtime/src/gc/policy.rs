@@ -1745,9 +1745,17 @@ pub(super) fn old_reclaim_pressure_due(old_in_use: usize, baseline: usize) -> bo
     let crossed_absolute_threshold = old_in_use >= threshold
         && baseline < threshold
         && !GC_MAJOR_PACING_RETAINING.with(|c| c.get());
+    // #10182: the promoted-cohort bound is deliberately NOT a disjunct here.
+    // As one it schedules exactly the full #7592 and #7965 pin as futile — a
+    // full that becomes due only because a promotion just landed, reached at
+    // the next allocation point behind a conservative scan with the young
+    // generation already empty. Measured with it: `12_large_live_set` gained
+    // one such full (+55% wall) and `records_array_20m:parse` paid 115 ms for
+    // one. The bound is consulted one promotion EARLIER instead, at the
+    // nursery safepoint, where the full it justifies can promote the young
+    // generation itself (`promoting_full_preempts_nursery_minor`).
     crossed_absolute_threshold
         || old_in_use.saturating_sub(baseline) >= gc_old_reclaim_growth_band_bytes(baseline)
-        || promoted_cohort_bound_due()
 }
 
 /// Whether an imminent promotion justifies a full old reclaim FIRST.
@@ -1938,8 +1946,9 @@ pub(super) fn credit_promoted_bytes_to_old_baseline(promoted_bytes: usize) {
     GC_PROMOTED_SINCE_FULL.with(|bytes| bytes.set(bytes.get().saturating_add(promoted_bytes)));
 }
 
-/// #10182: how many promoted-but-unverified bytes old-reclaim may leave
-/// unexamined before a full is due: `max(floor, k × old live at last full)`.
+/// #10182: how many promoted-but-unverified bytes may accumulate before the
+/// nursery collection that would add more runs as a promoting full instead:
+/// `max(floor, k × old live at last full)`.
 ///
 /// The growth band cannot see this cohort: promotion credits the old baseline
 /// (#7965, and rightly — a pinned baseline degenerates the band), so a loop
@@ -1971,13 +1980,8 @@ pub(super) fn promoted_cohort_bound_bytes(old_live_at_last_full: usize) -> usize
         .max(old_live_at_last_full.saturating_mul(PROMOTED_COHORT_GROWTH_MULTIPLIER))
 }
 
-#[inline]
-fn promoted_cohort_bound_due() -> bool {
-    promoted_cohort_bound_due_with(0)
-}
-
-/// [`promoted_cohort_bound_due`] as it will read once `pending_promotion_bytes`
-/// more have been promoted — see `promoting_full_preempts_nursery_minor`.
+/// Is the promoted cohort at its bound once `pending_promotion_bytes` more have
+/// been promoted? Read only by `promoting_full_preempts_nursery_minor`.
 #[inline]
 pub(super) fn promoted_cohort_bound_due_with(pending_promotion_bytes: usize) -> bool {
     GC_PROMOTED_SINCE_FULL
