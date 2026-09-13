@@ -271,13 +271,13 @@ fn build_valid_pointer_set_sliced_build_preserves_contains_and_enclosing_object(
     }
 }
 
-/// #7646: arena membership now answers from the address-ordered census runs
-/// rather than a shadow `BTreeSet`, which makes RUN BOUNDARIES load-bearing.
-/// Runs seal every `VALID_POINTER_ARENA_RUN_CAPACITY` (1024) starts, so the
-/// final run is partial and is only sealed by `finalize()`. The sliced-build
-/// test above allocates 1100 strings — enough to cross the boundary — but
-/// checks only the first 16, which all live in the FIRST run: it passes
-/// unchanged if every later run is lost.
+/// #7646: arena membership answers from the census's own address-ordered
+/// structure rather than a shadow `BTreeSet`, which makes the structure's
+/// boundaries load-bearing. It was a list of 1024-start runs whose last, partial
+/// run only `finalize()` sealed; since #10182 it is one start bitmap per censused
+/// block, where a lost block entry or a stale fence would drop every start of
+/// that block. The sliced-build test above checks only the first 16 starts, so
+/// it passes unchanged if every later start is lost.
 ///
 /// This checks every start, both directions.
 #[test]
@@ -285,8 +285,6 @@ fn valid_pointer_membership_spans_every_census_run_including_the_partial_one_764
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
 
-    // > 2 full runs, so the last one is partial and cannot be sealed by the
-    // capacity check alone.
     let arena_strings = (0..2600).map(|_| young_leaf()).collect::<Vec<_>>();
     let (arena_object, fields) = unsafe { alloc_nursery_test_object(4) };
     let arena_object = arena_object as usize;
@@ -295,30 +293,29 @@ fn valid_pointer_membership_spans_every_census_run_including_the_partial_one_764
     let valid_ptrs = ValidPointerSetBuilder::new().finish();
 
     assert!(
-        valid_ptrs.arena_runs.len() >= 3,
-        "premise: the census must span several runs, got {}",
-        valid_ptrs.arena_runs.len()
-    );
-    assert!(
-        valid_ptrs.current_arena_run.is_empty(),
-        "finalize() must seal the open run before the set escapes the builder; \
-         {} starts would otherwise be invisible to membership",
-        valid_ptrs.current_arena_run.len()
+        !valid_ptrs.arena_blocks.is_empty(),
+        "premise: the census must have opened at least one block"
     );
     assert_eq!(
-        valid_ptrs.arena_run_firsts.len(),
-        valid_ptrs.arena_runs.len(),
-        "the fence mirror must stay index-aligned with the runs"
+        valid_ptrs.arena_block_bases.len(),
+        valid_ptrs.arena_blocks.len(),
+        "the fence mirror must stay index-aligned with the census blocks"
     );
-    for (index, run) in valid_ptrs.arena_runs.iter().enumerate() {
+    for (index, block) in valid_ptrs.arena_blocks.iter().enumerate() {
         assert_eq!(
-            valid_ptrs.arena_run_firsts[index], run[0],
-            "fence {index} must equal its run's first key"
+            valid_ptrs.arena_block_bases[index], block.base,
+            "fence {index} must equal its block's base"
         );
+        if index > 0 {
+            let previous = valid_ptrs.arena_blocks[index - 1];
+            assert!(
+                previous.base + previous.extent <= block.base,
+                "census blocks must be ascending and disjoint"
+            );
+        }
     }
 
-    // Positive: EVERY censused start, not a prefix — a start in the last,
-    // partial run is the one a lost `finalize()` drops.
+    // Positive: EVERY censused start, not a prefix.
     for (index, &ptr) in arena_strings.iter().enumerate() {
         assert!(
             valid_ptrs.contains(&ptr),
@@ -372,7 +369,7 @@ fn build_valid_pointer_set_finalize_is_separate_bounded_phase() {
     }
     let before_finalize = builder.snapshot_for_tests();
     assert_eq!(before_finalize.phase, ValidPointerSetBuildPhase::Finalize);
-    assert!(before_finalize.current_arena_run_len > 0 || before_finalize.arena_run_count > 0);
+    assert!(before_finalize.arena_block_count > 0);
 
     assert!(!builder.step(0));
     assert_eq!(
