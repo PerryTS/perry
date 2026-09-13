@@ -664,6 +664,14 @@
       "count": 1,
       "classification": "metadata-only",
       "reason": "This indexed scope-stack iteration performs lexical name resolution during HIR construction and does not establish a codegen runtime representation."
+    },
+    {
+      "path": "crates/perry-codegen/src/stmt/element_shape_loop.rs",
+      "function": "array_is_untyped",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The declared type is read only to DECLINE the shape-keyed loop clone for a receiver that carries any layout claim (a named class or an anon-shape the resolver found ambiguous); it never selects a layout. A receiver admitted here (no annotation, any, unknown) still goes through the preheader's runtime proof \u2014 js_array_ensure_element_shape_ordinary must return a nonzero ShapeId and js_shape_ordinary_inline_slot_for_key a slot for every tracked key \u2014 and the per-element residual check re-validates that ShapeId on every read, so a stale or wrong hint can only cost the clone, never a wrong offset."
     }
   ]
 }
