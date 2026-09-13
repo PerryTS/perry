@@ -282,7 +282,7 @@ fn lower_return_expr(ctx: &mut FnCtx<'_>, expr: &perry_hir::Expr) -> Result<Stri
 pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
     match stmt {
         Stmt::Expr(e) => {
-            // #10199: the element-shape fast clone's carried-index statements
+            // #10185: the element-shape fast clone's carried-index statements
             // (the recurrence and its trailing write-back) are lowered
             // VIRTUALLY, exactly like the `Let` bindings in `let_stmt.rs` —
             // the generic lowering of `c = (c * 17 + 7) % length` is an

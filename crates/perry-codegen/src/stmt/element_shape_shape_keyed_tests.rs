@@ -451,7 +451,7 @@ fn an_untracked_local_index_declines() {
 
 #[test]
 fn the_shape_keyed_arm_denies_only_proto() {
-    // #10199 narrowed this list. The CLASS arm still denies every name with a
+    // #10185 narrowed this list. The CLASS arm still denies every name with a
     // dedicated branch in the property dispatch, because its read bakes in a
     // compile-time packed slot. The SHAPE arm bakes in nothing: the preheader
     // asks the runtime for that exact key's inline slot in that exact ordinary
@@ -547,7 +547,7 @@ fn a_declared_but_unresolvable_element_type_still_declines() {
     );
 }
 
-/// #10199's `fields` and `random` shapes — a child module so it inherits both
+/// #10185's `fields` and `random` shapes — a child module so it inherits both
 /// this file's shape-keyed assertions and `element_shape_loop_tests`'s slicing
 /// helpers.
 #[path = "element_shape_fields_random_tests.rs"]

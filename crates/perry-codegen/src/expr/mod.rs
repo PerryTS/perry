@@ -2136,7 +2136,7 @@ pub(crate) enum ElementShapeIndex {
         /// Entry-block i32 alloca the clone writes the derived index to.
         slot: String,
     },
-    /// #10199: a LOOP-CARRIED index — `let c = …;` outside the loop,
+    /// #10185: a LOOP-CARRIED index — `let c = …;` outside the loop,
     /// `c = (a*c + b) % m;` as the body's first statement, then `arr[c]` (or
     /// `const index = c; arr[index]`). The benchmark's `random` mode, and the
     /// shape every pseudo-random walk over a record array is written in.
@@ -2151,7 +2151,7 @@ pub(crate) enum ElementShapeIndex {
     Carried(Box<CarriedIndex>),
 }
 
-/// #10199: everything [`ElementShapeIndex::Carried`] needs, boxed to keep the
+/// #10185: everything [`ElementShapeIndex::Carried`] needs, boxed to keep the
 /// enum small.
 #[derive(Debug, Clone)]
 pub(crate) struct CarriedIndex {
@@ -2174,7 +2174,7 @@ pub(crate) struct CarriedIndex {
     pub commit_slot: String,
 }
 
-/// #10199: the per-iteration element prefetch.
+/// #10185: the per-iteration element prefetch.
 ///
 /// `rows[index].id + rows[index].name.length + (rows[index].active ? 1 : 0)`
 /// reads ONE element three times. Without this each read repeats the element
@@ -2220,7 +2220,7 @@ impl ElementShapeIndex {
         )
     }
 
-    /// #10199: the locals whose `Let` / `LocalSet` the fast clone lowers
+    /// #10185: the locals whose `Let` / `LocalSet` the fast clone lowers
     /// VIRTUALLY for this index form. Nothing may read one of them bare inside
     /// the clone, and their shadow slots must not be cleared there.
     pub(crate) fn virtual_locals(&self) -> impl Iterator<Item = u32> + '_ {
@@ -2277,7 +2277,7 @@ pub(crate) struct ElementShapeLoopFact {
     pub index_local_id: u32,
     /// #10123: how the clone computes the element index.
     pub index: ElementShapeIndex,
-    /// #10199: the shared per-iteration element deref, when the body has a
+    /// #10185: the shared per-iteration element deref, when the body has a
     /// leading virtual binding to hang it off. `None` keeps #10123's per-read
     /// deref + residual check.
     pub elem_prefetch: Option<ElementPrefetch>,
@@ -2310,7 +2310,7 @@ pub(crate) struct ElementShapeLoopFact {
     /// raw-f64 candidates; shape-keyed ones are the preheader's live query
     /// results (#10123).
     pub fields: std::collections::BTreeMap<String, ElementShapeFieldSlot>,
-    /// #10199: true when the fast clone lowers a body the matcher SYNTHESIZED
+    /// #10185: true when the fast clone lowers a body the matcher SYNTHESIZED
     /// (the K-statement accumulator fold, or the carried index's trailing
     /// write-back) rather than the source body. The function-wide
     /// shadow-slot-clear map is keyed by statement INDEX, so a rewritten body
@@ -2394,7 +2394,7 @@ pub(crate) fn element_shape_loop_fact_for_property_get<'f>(
                     (ElementShapeIndex::DerivedMod { local_id, .. }, Expr::LocalGet(id)) => {
                         *id == *local_id
                     }
-                    // #10199: `arr[c]` and `const index = c; arr[index]` are
+                    // #10185: `arr[c]` and `const index = c; arr[index]` are
                     // the same subscript — the alias is virtual, so both
                     // spellings read the carried slot the preheader bounded.
                     (ElementShapeIndex::Carried(carried), Expr::LocalGet(id)) => {

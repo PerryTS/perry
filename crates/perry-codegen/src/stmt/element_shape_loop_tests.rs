@@ -402,7 +402,7 @@ fn assert_fast_clone_is_entered(ir: &str) {
 fn fast_clone_slice(ir: &str) -> String {
     let mut owned = String::new();
     let mut in_fast_block = false;
-    // #10199: the emitted text carries the function TWICE (same block labels),
+    // #10185: the emitted text carries the function TWICE (same block labels),
     // so every block would be collected twice and any `matches().count()`
     // assertion against the slice would read double. Stop at the first repeated
     // label, which is where the second copy begins — `contains` assertions are
@@ -414,7 +414,7 @@ fn fast_clone_slice(ir: &str) -> String {
         // A block DEFINITION starts at column 0 and ends in `:`; anything else
         // belongs to whichever block was last opened.
         if !line.starts_with(char::is_whitespace) && trimmed.ends_with(':') {
-            // #10199 added three more: the string-`.length` decode
+            // #10185 added three more: the string-`.length` decode
             // (`element_shape.strlen*`), the boolean ternary's admitted arm
             // (`element_shape.bool`), and nothing for the shared prefetch,
             // which reuses `element_shape.load`. Every block the clone can

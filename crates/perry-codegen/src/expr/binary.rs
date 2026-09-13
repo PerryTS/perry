@@ -504,7 +504,7 @@ fn reduction_add_is_reassociable(ctx: &FnCtx<'_>, left: &Expr, right: &Expr) -> 
 }
 
 fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String, bool)> {
-    // #10199: the element-shape fast clone's two NON-numeric reads —
+    // #10185: the element-shape fast clone's two NON-numeric reads —
     // `arr[i].name.length` and `arr[i].active ? 1 : 0`. Both are numbers by the
     // time they get here, each proven from the loaded word's own NaN-box tag
     // with a side exit to the slow clone on a miss, so the `true` suppresses

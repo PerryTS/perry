@@ -356,7 +356,7 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::Logical { left, right, .. } => {
             is_numeric_expr(ctx, left) && is_numeric_expr(ctx, right)
         }
-        // #10199: `arr[i].<boolean field> ? 1 : 0` inside an element-shape fast
+        // #10185: `arr[i].<boolean field> ? 1 : 0` inside an element-shape fast
         // clone. Deliberately NOT the general "both arms are numeric" rule — a
         // general ternary's CONDITION is an arbitrary JS truthiness test, which
         // is a runtime call; this arm is true only for the exact shape the
@@ -386,7 +386,7 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             if property == "length" && expression_has_numeric_length(ctx, object) {
                 return true;
             }
-            // #10199: `arr[i].<string field>.length` inside an element-shape
+            // #10185: `arr[i].<string field>.length` inside an element-shape
             // fast clone. The receiver is an untyped element read, so the
             // declared-type answer above cannot see a string there; the clone's
             // own lowering tag-tests the loaded word for both string

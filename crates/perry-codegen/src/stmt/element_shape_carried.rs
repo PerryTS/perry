@@ -1,4 +1,4 @@
-//! #10199: the element-shape clone's LOOP-CARRIED index — the `random` access
+//! #10185: the element-shape clone's LOOP-CARRIED index — the `random` access
 //! shape.
 //!
 //! ```text

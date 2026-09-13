@@ -1,4 +1,4 @@
-//! #10199: the two NON-numeric reads the element-shape fast clone admits —
+//! #10185: the two NON-numeric reads the element-shape fast clone admits —
 //! `arr[i].prop.length` on a string field and `arr[i].prop ? A : B` on a
 //! boolean one.
 //!
