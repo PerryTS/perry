@@ -62,7 +62,11 @@ pub(in crate::commands::compile) fn is_commonjs(source: &str) -> bool {
         // — no `exports.X =`, no `require(`. Without this arm they fall
         // through to the ESM pipeline, where the bare `exports` identifier
         // throws a ReferenceError at module init.
-        || stripped.contains("defineProperty(exports,")
+        || perry_perex::tooling::Regex::new(
+            r"(?:^|[^A-Za-z0-9_$.])Object\s*\.\s*defineProperty\s*\(\s*(?:module\s*\.\s*)?exports\s*,",
+        )
+        .unwrap()
+        .is_match(&stripped)
     {
         return true;
     }

@@ -160,6 +160,7 @@ pub(crate) fn emit_module_globals(
     imported_classes: &[ImportedClass],
     compile_time_constants: &HashMap<u32, f64>,
     module_prefix: &str,
+    cjs_property_exports: &super::cjs_exports::PropertyExports,
 ) -> ModuleGlobals {
     // Module-level globals registry. Pre-walk:
     //   1. Collect every LocalId referenced from any function or method
@@ -170,6 +171,9 @@ pub(crate) fn emit_module_globals(
     //      as cheap stack alloca (preserves perf for the bench
     //      benchmarks that don't share state with helper functions).
     let mut referenced_from_fn: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    // Live CJS value getters read the namespace even after its synthetic
+    // snapshot initializers have been removed.
+    referenced_from_fn.extend(cjs_property_exports.values().map(|(id, _)| *id));
     // Helper that handles "params + lets define a scope, refs minus
     // defines flow out". Used for every function/method/closure body.
     let scan_body = |params: &[perry_hir::Param],
@@ -505,11 +509,21 @@ pub(crate) fn emit_module_globals(
                         let getter_name =
                             format!("perry_fn_{}__{}", module_prefix, sanitize(public_name));
                         if !llmod.has_function(&getter_name) {
-                            let getter = llmod.define_function(&getter_name, DOUBLE, vec![]);
-                            let _ = getter.create_block("entry");
-                            let blk = getter.block_mut(0).unwrap();
-                            let val = blk.load(DOUBLE, &format!("@{}", global_name));
-                            blk.ret(DOUBLE, &val);
+                            if let Some((object_id, property)) = cjs_property_exports.get(name) {
+                                super::cjs_exports::emit_getter(
+                                    llmod,
+                                    &getter_name,
+                                    module_prefix,
+                                    *object_id,
+                                    property,
+                                );
+                            } else {
+                                let getter = llmod.define_function(&getter_name, DOUBLE, vec![]);
+                                let _ = getter.create_block("entry");
+                                let blk = getter.block_mut(0).unwrap();
+                                let val = blk.load(DOUBLE, &format!("@{}", global_name));
+                                blk.ret(DOUBLE, &val);
+                            }
                         }
 
                         // Import-origin metadata preserves the raw exported

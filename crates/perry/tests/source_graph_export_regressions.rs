@@ -6,6 +6,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Once;
 
+#[path = "source_graph_export_regressions/issue_10153.rs"]
+mod issue_10153;
+
 const GC_ENV_OVERRIDES: &[&str] = &[
     "PERRY_GEN_GC",
     "PERRY_GC_SCAVENGE",
