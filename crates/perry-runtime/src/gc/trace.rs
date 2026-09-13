@@ -4,6 +4,10 @@ use super::*;
 pub(super) mod block_skip;
 pub(super) use block_skip::BlockCensus;
 
+#[path = "trace/adopt_census.rs"]
+pub(crate) mod adopt_census;
+pub(crate) use adopt_census::AdoptableBlockBuilder;
+
 crate::perry_thread_local! {
     /// Set by test-only helpers that wipe page metadata for isolation
     /// (`old_arena_page_index_clear_for_tests`): real objects become
@@ -302,6 +306,49 @@ impl ValidPointerSet {
             first,
             len,
             sorted,
+        });
+    }
+
+    /// Open census block `block_idx` with start-bitmap storage built by someone
+    /// else (`adopt_census`): `chunks` hold `words` words in the census layout
+    /// for a block whose walked extent is `offset`.
+    pub(super) fn begin_arena_block_with_chunks(
+        &mut self,
+        block_idx: u32,
+        data: usize,
+        offset: usize,
+        words: usize,
+        mut chunks: Vec<Vec<u64>>,
+    ) {
+        debug_assert!(!self.classifier_mode && offset <= CENSUS_BITMAP_MAX_EXTENT);
+        if let Some(previous) = self.arena_blocks.last() {
+            assert!(
+                previous.base.saturating_add(previous.extent) <= data,
+                "census blocks must arrive in ascending, non-overlapping address order: \
+                 {:#x}+{:#x} then {data:#x}",
+                previous.base,
+                previous.extent
+            );
+        }
+        assert_eq!(
+            words,
+            offset.div_ceil(1 << CENSUS_START_ALIGN_SHIFT).div_ceil(64),
+            "adopted bitmap must cover exactly the block's walked extent"
+        );
+        let mut pointers = [std::ptr::null_mut(); CENSUS_BITMAP_MAX_CHUNKS];
+        for (index, chunk) in chunks.iter_mut().enumerate().take(CENSUS_BITMAP_MAX_CHUNKS) {
+            pointers[index] = chunk.as_mut_ptr();
+        }
+        self.start_bitmap_chunks.extend(chunks);
+        self.arena_block_bases.push(data);
+        self.arena_blocks.push(CensusStartBlock {
+            base: data,
+            extent: offset,
+            block_idx,
+            chunks: pointers,
+            first: 0,
+            len: words,
+            sorted: false,
         });
     }
 
@@ -990,6 +1037,25 @@ impl ValidPointerSetBuilder {
     /// `data`/`offset`/`size` are an arena block as the census cursor
     /// snapshotted it.
     unsafe fn census_whole_block(
+        &mut self,
+        block_idx: usize,
+        data: usize,
+        offset: usize,
+        size: usize,
+    ) {
+        // #10182: a block the in-place promotion walk of this very safepoint
+        // recorded is adopted instead of walked (see `adopt_census`).
+        if self.adopt_promoted_block(block_idx, data, offset, size) {
+            return;
+        }
+        self.walk_census_block(block_idx, data, offset, size);
+    }
+
+    /// The census walk of one whole block (see [`Self::census_whole_block`]).
+    ///
+    /// # Safety
+    /// As `census_whole_block`.
+    pub(super) unsafe fn walk_census_block(
         &mut self,
         block_idx: usize,
         data: usize,

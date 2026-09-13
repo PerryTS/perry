@@ -1,3 +1,4 @@
+mod adopt_census;
 mod alloc;
 mod arena_right_size;
 mod arguments_objects;

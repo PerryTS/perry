@@ -97,6 +97,11 @@ pub(super) fn bound_from(floor: usize, old_live: usize, shift: u32) -> usize {
     )
 }
 
+/// Could a promotion of `young_bytes` bring the cohort to its bound?
+pub(super) fn promotion_may_reach_bound(young_bytes: usize) -> bool {
+    promoted_since_full().saturating_add(young_bytes) >= bound_bytes()
+}
+
 pub(super) fn full_due() -> bool {
     promoted_since_full() >= bound_bytes()
 }

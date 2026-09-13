@@ -3528,8 +3528,21 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
             _ => "ArenaBytes",
         },
     );
+    // #10182: when this minor's promotion can bring the promoted cohort to its
+    // bound, its promotion walk records the census facts of the blocks it
+    // promotes for the cohort full that would follow at this safepoint.
+    let record_census = matches!(kind, GcTriggerKind::ArenaBytes)
+        && super::promoted_cohort::promotion_may_reach_bound(
+            crate::arena::copying_from_space_in_use_bytes(),
+        );
+    if record_census {
+        super::trace::adopt_census::begin_recording();
+    }
     // No `force_full_scan`: roots are precise at this safepoint.
     let outcome = super::gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(kind));
+    if record_census {
+        super::trace::adopt_census::finish_recording();
+    }
     match kind {
         GcTriggerKind::MallocCount => {
             gc_finish_malloc_trigger_collection(pre_malloc_count, pre_in_use, outcome);
@@ -3544,6 +3557,7 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
     // ways a gate cannot fail — #4, the gate runs but its subject never did).
     super::record_safepoint_drain(super::SafepointDrainKind::NurseryMinor);
     run_promoted_cohort_full_if_due();
+    super::trace::adopt_census::discard();
     true
 }
 
@@ -3564,16 +3578,20 @@ pub(super) fn run_promoted_cohort_full_if_due() -> bool {
     let before = old_gen_reclaimable_pressure_bytes().saturating_add(external_side_live_bytes());
     super::diag_sites::trigger_decision("safepoint", "PromotedCohort");
     super::diag_sites::set_full_site("safepoint_promoted_cohort");
+    let adopted_before = super::trace::adopt_census::adopted_blocks();
+    super::trace::adopt_census::begin_adopting();
     // No `force_full_scan`: roots are precise at this safepoint.
     gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::OldGenBytes))
         .emit_after_current();
+    super::trace::adopt_census::discard();
+    let adopted = super::trace::adopt_census::adopted_blocks() - adopted_before;
     let after = old_gen_reclaimable_pressure_bytes().saturating_add(external_side_live_bytes());
     let reclaimed = before.saturating_sub(after);
     let productive = super::promoted_cohort::record_full_yield(cohort, reclaimed);
     if super::gc_diag_enabled() {
         eprintln!(
             "[gc-promoted-cohort] full cohort={cohort} bound={bound} reclaimed={reclaimed} \
-             productive={productive} backoff_shift={}",
+             productive={productive} adopted_census_blocks={adopted} backoff_shift={}",
             super::promoted_cohort::backoff_shift()
         );
     }
