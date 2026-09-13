@@ -2,7 +2,7 @@ use crate::ffi::{js_gc_pin_user_ptr, js_string_from_bytes};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
 use objc2::{define_class, msg_send, AnyThread, DefinedClass};
-use objc2_app_kit::{NSTextField, NSView};
+use objc2_app_kit::{NSLineBreakMode, NSTextField, NSView};
 use objc2_foundation::{
     MainThreadMarker, NSNotification, NSNotificationCenter, NSObject, NSString,
 };
@@ -196,6 +196,17 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
         // Make it editable
         text_field.setEditable(true);
         text_field.setBezeled(true);
+
+        // Single-line, to match TextField on every other backend; TextArea is
+        // the multiline widget. textFieldWithString: hands back a cell that
+        // wraps and grows tall, so a fixed-width field must be told to keep one
+        // line and scroll horizontally instead.
+        if let Some(cell) = text_field.cell() {
+            cell.setUsesSingleLineMode(true);
+            cell.setScrollable(true);
+            cell.setWraps(false);
+            cell.setLineBreakMode(NSLineBreakMode::ByClipping);
+        }
 
         let view: Retained<NSView> = Retained::cast_unchecked(text_field);
         let handle = super::register_widget(view);
