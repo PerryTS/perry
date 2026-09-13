@@ -2,11 +2,11 @@
 //! Input is traversed in place; no UTF-16 buffer or temporary substring exists.
 
 use super::perex_memory::StorageError;
-use super::perex_owner::{GcProgram, HeapSubject, OwnerError};
+use super::perex_owner::{HeapSubject, OwnerError};
 use super::perex_runtime::EngineError;
 use crate::gc::RuntimeHandleScope;
 use crate::string::{StringHeader, STRING_FLAG_HAS_LONE_SURROGATES};
-use perex::binding::{BoundProgram, BoundSubject};
+use perex::binding::{BoundProgram, BoundSubject, ImmutableProgram};
 use perex::executor::ExecError;
 use perex::span::{BoundSpan, ReadError, ReadProgress, Span};
 use perex::Budget;
@@ -192,8 +192,8 @@ impl<'a, 's> SpanCopies<'a, 's> {
 
 /// Decode a packed program name directly into its final string. No native
 /// name copy or program view survives an allocation, poll or object update.
-pub(crate) fn copy_name(
-    program: &BoundProgram<GcProgram<'_>>,
+pub(crate) fn copy_name<P: ImmutableProgram<Error = OwnerError>>(
+    program: &BoundProgram<P>,
     index: usize,
     budget: &mut Budget,
     max_output_bytes: usize,

@@ -579,6 +579,11 @@ pub(super) fn side_tables() -> Vec<SideTableRow> {
     rows.push(crate::symbol::symbol_registry_census());
     #[cfg(feature = "regex-engine")]
     rows.extend(crate::regex::site_test::side_table_census());
+    #[cfg(feature = "regex-engine")]
+    rows.extend([
+        crate::regex::perex_cache::census(),
+        crate::regex::perex_binding_cache::census(),
+    ]);
     let (masks, typed) = super::layout_tables::per_object_layout_table_sizes();
     rows.push(("gc.layout_slot_masks", masks, masks * 24));
     rows.push(("gc.typed_layouts", typed, typed * 24));
@@ -598,10 +603,12 @@ mod regex_census_tests {
             .into_iter()
             .filter_map(|(name, _, _)| name.starts_with("regex.").then_some(name))
             .collect();
-        // `regex.content_cache` and `regex.literal_sites` were the previous
-        // engine's compiled-program caches. Perex keeps no such table: a
-        // program is a GC allocation owned through its header, so the ordinary
-        // heap census counts it. The call-site header table is what remains.
+        // Programs themselves remain GC leaves, counted by the ordinary heap
+        // census. These rows account for the bounded native cache metadata.
+        #[cfg(feature = "regex-engine")]
+        for name in ["regex.program_cache", "regex.program_bindings"] {
+            assert!(names.contains(&name), "rows: {names:?}");
+        }
         assert!(
             names.contains(&"regex.site_test_headers"),
             "rows: {names:?}"

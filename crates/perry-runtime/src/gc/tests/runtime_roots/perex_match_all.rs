@@ -304,6 +304,8 @@ fn perex_match_all_iterator_is_the_only_input_owner_and_releases_on_completion()
     assert_eq!(get(&step, b"done").to_bits(), crate::value::TAG_TRUE);
     assert_eq!(slot(&iter, 0).to_bits(), TAG_UNDEFINED);
     assert_eq!(slot(&iter, 1).to_bits(), TAG_UNDEFINED);
+    // Isolate the iterator's ownership from the bounded program caches.
+    crate::regex::perex_cache::clear_for_tests();
     gc_collect_minor();
     let live = build_valid_pointer_set();
     assert!(

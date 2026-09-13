@@ -171,6 +171,8 @@ mod prototype_helpers;
 mod reflect_support;
 mod reserved_floor;
 pub(crate) use reserved_floor::{ensure_reserved_floor_keys, reserved_slot_floor_for_class_id};
+#[cfg(feature = "regex-engine")]
+pub(crate) mod regex_canonical;
 pub(crate) mod regex_proto_thunks;
 // #6812 object-owned overflow storage + the legacy thread-local side table.
 // Split out of this file to stay under the 2000-line CI cap; the sibling

@@ -1,14 +1,14 @@
 //! Complete exec-result construction from scalar Perex captures. Named groups
 //! have null prototypes and indices.groups aliases the numbered pair objects.
 use super::perex_api::{OUTPUT_BYTES, QUANTUM};
-use super::perex_owner::{GcProgram, HeapSubject};
+use super::perex_owner::{HeapSubject, OwnerError};
 use super::perex_runtime::{self as host, EngineError, Match};
 use super::perex_strings::{copy_name, copy_span};
 use crate::array::ArrayHeader;
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 use crate::object::ObjectHeader;
 use crate::string::StringHeader;
-use perex::binding::{BoundProgram, BoundSubject};
+use perex::binding::{BoundProgram, BoundSubject, ImmutableProgram};
 use perex::Budget;
 
 fn null_groups(scope: &RuntimeHandleScope) -> RuntimeHandle<'_> {
@@ -16,10 +16,10 @@ fn null_groups(scope: &RuntimeHandleScope) -> RuntimeHandle<'_> {
     scope.root_nanbox_f64(value)
 }
 
-pub(super) fn materialize(
+pub(super) fn materialize<P: ImmutableProgram<Error = OwnerError>>(
     input: &RuntimeHandle<'_>,
     subject: &BoundSubject<HeapSubject<'_>>,
-    program: &BoundProgram<GcProgram<'_>>,
+    program: &BoundProgram<P>,
     found: &Match<'_>,
     has_indices: bool,
     budget: &mut Budget,

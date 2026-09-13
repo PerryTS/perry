@@ -38,6 +38,13 @@ extern "C" fn collect_then_zero(_closure: *const crate::closure::ClosureHeader) 
     0.0
 }
 
+fn register_regex_roots() {
+    register_runtime_handle_root_scanner_for_tests();
+    gc_register_mutable_root_scanner(
+        crate::object::regex_proto_thunks::scan_canonical_test_site_roots_mut,
+    );
+}
+
 fn heap_string(bytes: &[u8]) -> *mut StringHeader {
     crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
 }
@@ -72,7 +79,7 @@ fn regexp_exec_survives_a_moving_minor_inside_the_lastindex_coercion() {
     let _scan = ConservativeScanDisabledGuard::new();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _force = ForcedEvacuationTestGuard::on();
-    register_runtime_handle_root_scanner_for_tests();
+    register_regex_roots();
 
     let scope = crate::gc::RuntimeHandleScope::new();
 
@@ -158,7 +165,7 @@ fn regexp_exec_materializes_an_owned_snapshot_after_an_alloc_point_minor() {
     let _pacing = crate::gc::policy::force_alloc_point_minor_pacing();
     let _scan = ConservativeScanDisabledGuard::new();
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    register_runtime_handle_root_scanner_for_tests();
+    register_regex_roots();
 
     let scope = crate::gc::RuntimeHandleScope::new();
     let subject = heap_string(b"prefix-young-42-suffix");
@@ -217,7 +224,7 @@ fn string_match_fancy_materializes_an_owned_snapshot_after_an_alloc_point_minor(
     let _pacing = crate::gc::policy::force_alloc_point_minor_pacing();
     let _scan = ConservativeScanDisabledGuard::new();
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    register_runtime_handle_root_scanner_for_tests();
+    register_regex_roots();
 
     let scope = crate::gc::RuntimeHandleScope::new();
     let subject = heap_string(b"prefix-young-42-suffix");

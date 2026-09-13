@@ -119,6 +119,16 @@ pub struct RegexDiag {
     last_dump: Option<Instant>,
     events: u32,
     pub new_calls: u64,
+    pub perex_compiles: u64,
+    pub perex_validations: u64,
+    pub perex_canonical_execs: u64,
+    pub perex_removes: u64,
+    pub perex_searches: u64,
+    pub perex_scratch_allocs: u64,
+    pub perex_scratch_grows: u64,
+    pub program_identity_hits: u64,
+    pub program_content_hits: u64,
+    pub program_hash_bytes: u64,
     /// `js_regexp_new` found `(pattern, flags)` in `VALIDATED_PATTERNS`.
     pub new_validated_hit: u64,
     /// `js_regexp_new` answered from the literal-site cache (no validation,
@@ -349,6 +359,10 @@ impl RegexDiag {
         use std::fmt::Write as _;
         let mut out = String::with_capacity(4096);
         let secs = self.started.map_or(0.0, |t| t.elapsed().as_secs_f64());
+        let _ = writeln!(out, "[regex-cache] perex_compiles={} validations={} identity_hits={} content_hits={} hash_bytes={}",
+            self.perex_compiles, self.perex_validations, self.program_identity_hits, self.program_content_hits, self.program_hash_bytes);
+        let _ = writeln!(out, "[regex-perex] canonical_execs={} removes={} searches={} scratch_allocs={} scratch_grows={}",
+            self.perex_canonical_execs, self.perex_removes, self.perex_searches, self.perex_scratch_allocs, self.perex_scratch_grows);
         let _ = writeln!(
             out,
             "[regex-diag] t={secs:.1}s new={} validated_hit={} site_hit={} pattern_bytes={} \

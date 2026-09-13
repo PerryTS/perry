@@ -405,6 +405,23 @@ pub(crate) fn test_recorded_regexp_prototype() -> i64 {
         .with(|site| site.prototype.load(std::sync::atomic::Ordering::Acquire))
 }
 
+#[cfg(feature = "regex-engine")]
+pub(super) fn recorded_regexp_prototype() -> *mut ObjectHeader {
+    REGEXP_PROTOTYPE_TEST_SITE
+        .with(|site| site.prototype.load(std::sync::atomic::Ordering::Acquire) as *mut ObjectHeader)
+}
+
+#[cfg(all(test, feature = "regex-engine"))]
+pub(crate) fn test_clear_canonical_site() {
+    REGEXP_PROTOTYPE_TEST_SITE.with(|site| {
+        site.prototype
+            .store(0, std::sync::atomic::Ordering::Release);
+        site.closure.store(0, std::sync::atomic::Ordering::Release);
+        site.index
+            .store(u32::MAX, std::sync::atomic::Ordering::Release);
+    });
+}
+
 /// How many by-name walks the canonicality proof has done in this process.
 /// The fast path does none: the only walk is the one-time recording below, so
 /// this must read **1 per realm**, not one per call. It is the counter that

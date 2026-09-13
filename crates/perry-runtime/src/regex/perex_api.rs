@@ -6,7 +6,7 @@ use super::perex_runtime::{self as host, CaptureMode, EngineError};
 use super::RegExpHeader;
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 use crate::string::StringHeader;
-use perex::binding::{BoundProgram, BoundSubject};
+use perex::binding::BoundSubject;
 use perex::compiler::CompileError;
 use perex::executor::ExecError;
 use perex::{span::Span, Budget};
@@ -91,10 +91,10 @@ pub(crate) fn program<'s>(
     budget: &mut Budget,
     _memory: &MemoryBudget,
     _poll: &mut impl FnMut() -> Result<(), EngineError>,
-) -> Result<BoundProgram<GcProgram<'s>>, EngineError> {
+) -> Result<super::perex_binding_cache::SharedProgram, EngineError> {
     let owner = unsafe { GcProgram::from_receiver(scope, receiver) }
         .map_err(|e| EngineError::Subject(perex::binding::SubjectError::Resource(e)))?;
-    BoundProgram::new(owner, budget).map_err(|e| EngineError::Program(e.error))
+    super::perex_binding_cache::bind(owner, budget)
 }
 
 pub(crate) struct ExecMatch {
@@ -136,7 +136,7 @@ pub(crate) fn test_window(
     let owner = unsafe { HeapSubject::window(input, start, end) }
         .map_err(|e| EngineError::Subject(perex::binding::SubjectError::Resource(e)))?;
     let subject = BoundSubject::new(owner).map_err(|e| EngineError::Subject(e.error))?;
-    host::find(
+    host::find_cached(
         &program,
         &subject,
         0,
@@ -203,7 +203,18 @@ pub(crate) fn execute_with_resources(
     let scope = RuntimeHandleScope::new();
     let receiver = scope.root_raw_mut_ptr(receiver);
     let input = scope.root_string_ptr(input);
-    let last_index = caught(|| receiver.with_const_ptr(|p| super::regex_last_index_offset(p)))?;
+    let stored = receiver.with_const_ptr::<RegExpHeader, _>(|p| unsafe {
+        crate::value::JSValue::from_bits((*p).last_index)
+    });
+    let last_index = if stored.is_number() {
+        stored
+            .as_number()
+            .max(0.0)
+            .floor()
+            .min(9_007_199_254_740_991.0) as usize
+    } else {
+        caught(|| receiver.with_const_ptr(|p| super::regex_last_index_offset(p)))?
+    };
     let (stateful, has_indices) = receiver.with_const_ptr::<RegExpHeader, _>(|r| unsafe {
         ((*r).global || (*r).sticky, (*r).has_indices)
     });
@@ -223,7 +234,7 @@ pub(crate) fn execute_with_resources(
             .map_err(|e| EngineError::Subject(perex::binding::SubjectError::Resource(e)))?,
     )
     .map_err(|e| EngineError::Subject(e.error))?;
-    let found = host::find(
+    let found = host::find_cached(
         &program,
         &subject,
         start,

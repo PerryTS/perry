@@ -434,6 +434,12 @@ pub(super) fn reset_copying_nursery_runtime_test_state() {
     crate::json::test_clear_parse_roots();
     crate::string::prune_dead_utf16_indexes(&|_| true);
     crate::string::trim_cache::test_clear_trim_cache();
+    #[cfg(feature = "regex-engine")]
+    crate::regex::perex_cache::clear_for_tests();
+    #[cfg(feature = "regex-engine")]
+    crate::regex::perex_cache::reset_registration_for_tests();
+    #[cfg(feature = "regex-engine")]
+    crate::object::regex_proto_thunks::test_clear_canonical_site();
     crate::set::test_clear_set_roots();
     crate::os::test_clear_process_event_listeners();
     crate::promise::test_clear_promise_scanner_roots();

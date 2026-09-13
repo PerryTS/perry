@@ -42,6 +42,18 @@ impl std::fmt::Debug for GcProgram<'_> {
 }
 
 impl<'scope> GcProgram<'scope> {
+    /// The cache owns a traced program root. Establish the operation's root
+    /// before returning, so eviction cannot invalidate an in-flight use.
+    pub(super) unsafe fn from_cached(scope: &'scope RuntimeHandleScope, ptr: *const u8) -> Self {
+        Self {
+            root: scope.root_raw_const_ptr(ptr),
+        }
+    }
+
+    pub(super) fn with_ptr<T>(&self, f: impl FnOnce(*const u8) -> T) -> T {
+        self.root.with_const_ptr(f)
+    }
+
     /// Consume a prepared compiler plan with no retained pattern/flag views.
     /// No host callback or collecting operation occurs during emission.
     pub(crate) fn emit(
@@ -131,27 +143,36 @@ impl ImmutableProgram for GcProgram<'_> {
     type Error = OwnerError;
 
     fn with_words<T>(&self, f: impl FnOnce(&[u32]) -> T) -> Result<T, Self::Error> {
-        self.root.with_const_ptr::<ProgramCell, _>(|cell| unsafe {
-            if cell.is_null() {
-                return Err(OwnerError::Missing);
-            }
-            let header = cell
-                .cast::<u8>()
-                .sub(crate::gc::GC_HEADER_SIZE)
-                .cast::<crate::gc::GcHeader>();
-            let count = (*cell).word_count;
-            let available = ((*header).size as usize)
-                .checked_sub(crate::gc::GC_HEADER_SIZE + std::mem::size_of::<ProgramCell>())
-                .ok_or(OwnerError::InvalidLayout)?;
-            if (*header).obj_type != crate::gc::GC_TYPE_REGEX_PROGRAM || count > available / 4 {
-                return Err(OwnerError::InvalidLayout);
-            }
-            // Only emit creates these cells; no mutable word access escapes.
-            // Binding validation is separate, once per immutable owner. This
-            // getter neither allocates nor polls and always reacquires the base.
-            Ok(f(std::slice::from_raw_parts(cell.add(1).cast(), count)))
-        })
+        self.root
+            .with_const_ptr::<u8, _>(|cell| unsafe { with_cell_words(cell, f) })
     }
+}
+
+/// Borrow a rooted immutable program cell; the caller must prevent collection
+/// throughout the callback and re-read its root before every subsequent view.
+pub(super) unsafe fn with_cell_words<T>(
+    cell: *const u8,
+    f: impl FnOnce(&[u32]) -> T,
+) -> Result<T, OwnerError> {
+    let cell = cell.cast::<ProgramCell>();
+    if cell.is_null() {
+        return Err(OwnerError::Missing);
+    }
+    let header = cell
+        .cast::<u8>()
+        .sub(crate::gc::GC_HEADER_SIZE)
+        .cast::<crate::gc::GcHeader>();
+    let count = (*cell).word_count;
+    let available = ((*header).size as usize)
+        .checked_sub(crate::gc::GC_HEADER_SIZE + std::mem::size_of::<ProgramCell>())
+        .ok_or(OwnerError::InvalidLayout)?;
+    if (*header).obj_type != crate::gc::GC_TYPE_REGEX_PROGRAM || count > available / 4 {
+        return Err(OwnerError::InvalidLayout);
+    }
+    // Only emit creates these cells; no mutable word access escapes.
+    // Binding validation is separate, once per immutable owner. This
+    // getter neither allocates nor polls and always reacquires the base.
+    Ok(f(std::slice::from_raw_parts(cell.add(1).cast(), count)))
 }
 
 /// Original heap-string storage. Sharing disables Perry's unique-owner append

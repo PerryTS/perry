@@ -21,6 +21,9 @@ pub(crate) struct MemoryBudget {
 }
 
 impl MemoryBudget {
+    pub(super) fn can_fit(&self, bytes: usize) -> bool {
+        self.check(bytes).is_ok()
+    }
     pub(crate) fn new(limit: usize) -> Self {
         Self {
             limit,

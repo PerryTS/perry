@@ -6,8 +6,8 @@ use super::perex_memory::{Buffer, MemoryBudget, StorageError};
 use super::perex_owner::{BuildError, GcProgram, OwnerError};
 use crate::gc::RuntimeHandleScope;
 use perex::binding::{
-    BoundProgram, BoundProgramError, BoundResources, BoundSubject, ImmutableSubject, PairError,
-    SubjectError,
+    BoundProgram, BoundProgramError, BoundResources, BoundSubject, ImmutableProgram,
+    ImmutableSubject, PairError, SubjectError,
 };
 use perex::compiler::{self, CompileError, Node, Range};
 use perex::executor::{
@@ -113,6 +113,14 @@ struct MatchBuffers<'a> {
 
 impl<'a> MatchBuffers<'a> {
     fn new(memory: &'a MemoryBudget, size: ScratchRequirements) -> Result<Self, StorageError> {
+        if crate::hot_diag::regex_on() {
+            crate::hot_diag::regex_counters(|d| {
+                d.perex_scratch_allocs += [size.registers, size.frames, size.undo]
+                    .into_iter()
+                    .filter(|&n| n != 0)
+                    .count() as u64
+            });
+        }
         Ok(Self {
             registers: Buffer::new(memory, size.registers)?,
             frames: Buffer::new(memory, size.frames)?,
@@ -154,8 +162,12 @@ fn search_error(error: SearchError<PairError<OwnerError, OwnerError>>) -> Engine
 
 /// Find from an absolute UTF-16 position in the complete original string.
 /// The caller supplies the same budget across repeated global searches.
-pub(crate) fn find<'mem, S: ImmutableSubject<Error = OwnerError>>(
-    program: &BoundProgram<GcProgram<'_>>,
+pub(crate) fn find<
+    'mem,
+    P: ImmutableProgram<Error = OwnerError>,
+    S: ImmutableSubject<Error = OwnerError>,
+>(
+    program: &BoundProgram<P>,
     subject: &BoundSubject<S>,
     start: usize,
     mode: CaptureMode,
@@ -164,6 +176,55 @@ pub(crate) fn find<'mem, S: ImmutableSubject<Error = OwnerError>>(
     quantum: usize,
     poll: &mut impl FnMut() -> Result<(), EngineError>,
 ) -> Result<Option<Match<'mem>>, EngineError> {
+    find_impl(
+        program, subject, start, mode, budget, memory, quantum, poll, None,
+    )
+}
+
+/// Retain only small scalar high-water hints, never scratch storage. A pattern
+/// that needed backtracking on its last call can allocate once on the next;
+/// straight-line patterns retain the original zero-frame/zero-undo start.
+pub(crate) fn find_cached<'mem, S: ImmutableSubject<Error = OwnerError>>(
+    program: &super::perex_binding_cache::ValidatedProgram,
+    subject: &BoundSubject<S>,
+    start: usize,
+    mode: CaptureMode,
+    budget: &mut Budget,
+    memory: &'mem MemoryBudget,
+    quantum: usize,
+    poll: &mut impl FnMut() -> Result<(), EngineError>,
+) -> Result<Option<Match<'mem>>, EngineError> {
+    find_impl(
+        program,
+        subject,
+        start,
+        mode,
+        budget,
+        memory,
+        quantum,
+        poll,
+        Some(&program.scratch_hint),
+    )
+}
+
+fn find_impl<
+    'mem,
+    P: ImmutableProgram<Error = OwnerError>,
+    S: ImmutableSubject<Error = OwnerError>,
+>(
+    program: &BoundProgram<P>,
+    subject: &BoundSubject<S>,
+    start: usize,
+    mode: CaptureMode,
+    budget: &mut Budget,
+    memory: &'mem MemoryBudget,
+    quantum: usize,
+    poll: &mut impl FnMut() -> Result<(), EngineError>,
+    hint: Option<&std::cell::Cell<(usize, usize)>>,
+) -> Result<Option<Match<'mem>>, EngineError> {
+    if crate::hot_diag::regex_on() {
+        crate::hot_diag::regex_counters(|d| d.perex_searches += 1);
+    }
     if quantum == 0 {
         return Err(EngineError::InvalidQuantum);
     }
@@ -176,6 +237,20 @@ pub(crate) fn find<'mem, S: ImmutableSubject<Error = OwnerError>>(
         frames: 0,
         undo: 0,
     };
+    if let Some(hint) = hint {
+        let (frames, undo) = hint.get();
+        let bytes = registers
+            .checked_mul(std::mem::size_of::<usize>())
+            .and_then(|n| {
+                n.checked_add(
+                    frames * std::mem::size_of::<Frame>() + undo * std::mem::size_of::<Undo>(),
+                )
+            });
+        if bytes.is_some_and(|n| memory.can_fit(n)) {
+            size.frames = frames;
+            size.undo = undo;
+        }
+    }
     poll()?;
     let buffers = MatchBuffers::new(memory, size)?;
     let mut search = Search::new(&resources, start, buffers, *budget).map_err(search_error)?;
@@ -206,6 +281,9 @@ pub(crate) fn find<'mem, S: ImmutableSubject<Error = OwnerError>>(
             }
             Ok(Progress::Pending) => poll()?,
             Err(SearchError::Execution(ExecError::Frames | ExecError::Undo)) => {
+                if crate::hot_diag::regex_on() {
+                    crate::hot_diag::regex_counters(|d| d.perex_scratch_grows += 1);
+                }
                 let required = search.required_scratch();
                 if required.frames > size.frames {
                     size.frames = required
@@ -218,6 +296,9 @@ pub(crate) fn find<'mem, S: ImmutableSubject<Error = OwnerError>>(
                         .undo
                         .max(size.undo.checked_mul(2).ok_or(StorageError::Limit)?)
                         .max(16);
+                }
+                if let Some(hint) = hint {
+                    hint.set((size.frames.min(16), size.undo.min(32)));
                 }
                 poll()?;
                 let replacement = MatchBuffers::new(memory, size)?;
