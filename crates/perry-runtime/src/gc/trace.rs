@@ -306,6 +306,7 @@ impl ValidPointerSet {
     }
     /// Transient heap bytes the arena membership index holds (fences, block
     /// table, bitmaps, oversized-block start lists).
+    #[cfg(test)]
     pub(super) fn arena_index_bytes(&self) -> usize {
         self.arena_blocks.capacity() * std::mem::size_of::<CensusStartBlock>()
             + self.arena_block_bases.capacity() * std::mem::size_of::<usize>()
