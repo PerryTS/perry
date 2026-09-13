@@ -26,11 +26,11 @@ changes:
 On a loop that keeps one parsed `records_array_20m.json` tree in the old
 generation and calls `gc()`, a full drops from 82–83 ms to 37–39 ms: mark
 43 → 25 ms, rebuild 21 → 0 ms, sweep 13 → 7 ms, census 5 ms unchanged; peak
-footprint 129 → 119 MiB. The 22-row JSON matrix and the gc-ratchet gated
-counters are unchanged (none of the matrix rows runs a full on this base).
+footprint 129 → 119 MiB. The 22-row JSON matrix stays within ±2 % CPU with no
+row worse on RSS, and the gc-ratchet gated counters are identical.
 
 Retrying the promoted-cohort pacing bound with these costs still does not
 meet the #10182 bar: at `k=1, floor 16 MB` the 20 MB parse/scan/sparse rows
 reach 179 MiB (below Node's 220) but cost 266–275 ms of CPU against a 208 ms
-best, and `records_array_8m:scan` has 9 ms of CPU headroom for 8 iterations,
-less than one full over its tree. No pacing change is included.
+best, and `records_array_8m:scan` has 13.7 ms of CPU headroom for 8
+iterations, less than one ~30 ms full over its tree. No pacing change is included.
