@@ -259,6 +259,14 @@ pub(crate) struct DirectParser<'a> {
     input: &'a [u8],
     pos: usize,
     valid: bool,
+    /// Containers open on the native stack. The descent bounds itself at
+    /// `MAX_RECURSIVE_NESTING_DEPTH` instead of relying on a whole-document
+    /// nesting pre-scan, which re-read every byte of a large record document
+    /// on every parse.
+    depth: usize,
+    /// Set when the bound aborted the parse. The value is invalid; the entry
+    /// points hand such input to the heap-stack parser.
+    depth_exceeded: bool,
     /// Issue #179 typed-parse: if Some, the top-level value is
     /// expected to be `Array<Object>` matching this shape. Each
     /// record uses the fast path; mismatches silently fall through
@@ -298,6 +306,8 @@ impl<'a> DirectParser<'a> {
             input,
             pos: 0,
             valid: true,
+            depth: 0,
+            depth_exceeded: false,
             shape: None,
             hot_shape_len: 0,
             hot_shape_keys: [std::ptr::null(); 8],
@@ -347,6 +357,8 @@ impl<'a> DirectParser<'a> {
             input,
             pos: 0,
             valid: true,
+            depth: 0,
+            depth_exceeded: false,
             shape: Some(shape),
             hot_shape_len: 0,
             hot_shape_keys: [std::ptr::null(); 8],
@@ -460,12 +472,57 @@ impl<'a> DirectParser<'a> {
         JSValue::null()
     }
 
+    /// True once the descent aborted at the native recursion bound.
+    #[inline]
+    pub(crate) fn depth_exceeded(&self) -> bool {
+        self.depth_exceeded
+    }
+
+    /// Account one container on the native stack, or abort the parse at the
+    /// bound. Every recursive container entry goes through this, including
+    /// the shaped-record path, so the three parse entries cannot drift.
+    #[inline(always)]
+    fn enter_container(&mut self) -> bool {
+        if self.depth >= MAX_RECURSIVE_NESTING_DEPTH {
+            self.depth_exceeded = true;
+            self.valid = false;
+            return false;
+        }
+        self.depth += 1;
+        true
+    }
+
+    #[inline(always)]
+    fn leave_container(&mut self) {
+        self.depth -= 1;
+    }
+
+    #[inline]
+    unsafe fn parse_array_nested(&mut self) -> JSValue {
+        if !self.enter_container() {
+            return JSValue::null();
+        }
+        let value = self.parse_array();
+        self.leave_container();
+        value
+    }
+
+    #[inline]
+    unsafe fn parse_object_shaped_nested(&mut self, shape: *const ObjectShapeHint) -> JSValue {
+        if !self.enter_container() {
+            return JSValue::null();
+        }
+        let value = self.parse_object_shaped(&*shape);
+        self.leave_container();
+        value
+    }
+
     pub(crate) unsafe fn parse_value(&mut self) -> JSValue {
         self.skip_whitespace();
         match self.peek() {
             Some(b'"') => self.parse_string_value(),
             Some(b'{') => self.parse_object(),
-            Some(b'[') => self.parse_array(),
+            Some(b'[') => self.parse_array_nested(),
             Some(b't') => self.parse_true(),
             Some(b'f') => self.parse_false(),
             Some(b'n') => self.parse_null(),
@@ -873,6 +930,16 @@ impl<'a> DirectParser<'a> {
             // without the array-outer shape).
             return self.parse_value_generic();
         }
+        if !self.enter_container() {
+            return JSValue::null();
+        }
+        let value = self.parse_array_typed_body();
+        self.leave_container();
+        value
+    }
+
+    /// The top-level typed array; its container level is already accounted.
+    unsafe fn parse_array_typed_body(&mut self) -> JSValue {
         self.advance();
         self.skip_whitespace();
 
@@ -906,7 +973,7 @@ impl<'a> DirectParser<'a> {
             // Per-element: shaped object or generic value (if element
             // isn't an object, fall back).
             let value = if self.peek() == Some(b'{') {
-                self.parse_object_shaped(&*shape_ptr)
+                self.parse_object_shaped_nested(shape_ptr)
             } else {
                 self.parse_value_generic()
             };
@@ -941,8 +1008,8 @@ impl<'a> DirectParser<'a> {
         self.skip_whitespace();
         match self.peek() {
             Some(b'"') => self.parse_string_value(),
-            Some(b'{') => self.parse_object_untyped(),
-            Some(b'[') => self.parse_array(),
+            Some(b'{') => self.parse_object(),
+            Some(b'[') => self.parse_array_nested(),
             Some(b't') => self.parse_true(),
             Some(b'f') => self.parse_false(),
             Some(b'n') => self.parse_null(),
@@ -957,7 +1024,12 @@ impl<'a> DirectParser<'a> {
         // `parse_object` here the only callers are (a) untyped parses
         // and (b) nested objects inside a shaped record — both want
         // generic behavior. Delegate to `parse_object_untyped`.
-        self.parse_object_untyped()
+        if !self.enter_container() {
+            return JSValue::null();
+        }
+        let value = self.parse_object_untyped();
+        self.leave_container();
+        value
     }
 
     pub(crate) unsafe fn parse_object_untyped(&mut self) -> JSValue {

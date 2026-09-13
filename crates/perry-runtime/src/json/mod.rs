@@ -87,9 +87,8 @@ pub(crate) unsafe fn test_json_stringify_record_output(bits: u64) -> Option<JSVa
     stringify_record_output::try_object(bits)
 }
 pub(crate) use parse_reuse::{
-    cached_parse_source_is_direct, cached_parse_string, remember_parse_object_template,
-    remember_parse_string, try_reuse_parse_object_template, validate_cached_parse_source,
-    ParseStringReuse,
+    cached_parse_string, remember_parse_object_template, remember_parse_string,
+    try_reuse_parse_object_template, ParseStringReuse,
 };
 #[cfg(test)]
 pub(crate) use parse_reuse::{

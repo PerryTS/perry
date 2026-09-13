@@ -84,14 +84,14 @@ fn throw_range_error(message: &str) -> ! {
     crate::exception::js_throw(range_error_value(message))
 }
 
-/// Select the heap-stack parser before recursive validation or materialization
-/// gets close to the smallest worker-thread stack.
-///
-/// `js_json_parse` and `js_json_parse_result` are separate implementations of
-/// the same flow, and the typed-array path is a third. Sharing the decision is
-/// what keeps them from drifting — the first version of this fix guarded only
-/// one of the three and appeared to do nothing at all, because the entry point
-/// codegen actually calls was one of the other two.
+/// Whole-document nesting classifier for the cold paths only: a direct parse
+/// that failed (malformed, or deeper than the native bound?) and a forced tape
+/// above the lazy size ceiling. Valid documents never pay it: `DirectParser`
+/// bounds its own recursion (`enter_container`), so the three parse entries
+/// (`js_json_parse`, `js_json_parse_result`, the typed-array path) share one
+/// decision inside the descent instead of a scan each. The first version of
+/// the depth fix guarded only one of the three and appeared to do nothing at
+/// all, because the entry point codegen actually calls was one of the others.
 fn requires_iterative_parse(bytes: &[u8]) -> bool {
     // Every nesting level requires an opening byte, even in malformed input.
     // A scalar root is parsed and then `finish` rejects any second token, so
@@ -117,6 +117,72 @@ fn json_parse_entry_depth_bound_preserves_the_first_excess_opening() {
     assert!(!requires_iterative_parse(&vec![b'}'; limit + 1]));
     let quoted = format!("\"{}\"", "[".repeat(limit + 1));
     assert!(!requires_iterative_parse(quoted.as_bytes()));
+}
+
+#[cfg(test)]
+fn direct_parse_depth_exceeded(input: &[u8], shape_keys: Option<&[u8]>) -> bool {
+    let saved_roots = parse_root_save_len();
+    let exceeded = {
+        let _suppress = crate::gc::GcSuppressScope::new();
+        unsafe {
+            match shape_keys {
+                Some(keys) => {
+                    let shape = build_shape_hint(keys.as_ptr(), keys.len() as u32, 1)
+                        .expect("one packed key builds a shape hint");
+                    let mut parser = DirectParser::with_shape(input, shape);
+                    parser.parse_array_typed();
+                    let _ = parser.finish();
+                    parser.depth_exceeded()
+                }
+                None => {
+                    let mut parser = DirectParser::new(input);
+                    parser.parse_value();
+                    let _ = parser.finish();
+                    parser.depth_exceeded()
+                }
+            }
+        }
+    };
+    parse_root_restore(saved_roots);
+    exceeded
+}
+
+/// The descent replaces the whole-document pre-scan, so it must draw the
+/// same line: at the bound stays direct, one past it aborts with the flag,
+/// and neither closers, quoted openers nor a shallow syntax error count.
+#[test]
+fn direct_parser_bounds_nesting_inside_the_descent() {
+    let limit = crate::json::parser::MAX_RECURSIVE_NESTING_DEPTH;
+    let mut at_bound = vec![b'['; limit];
+    at_bound.extend(std::iter::repeat_n(b']', limit));
+    assert!(!direct_parse_depth_exceeded(&at_bound, None));
+    assert!(direct_parse_depth_exceeded(&vec![b'['; limit + 1], None));
+    assert!(direct_parse_depth_exceeded(
+        &b"{\"a\":".repeat(limit + 1),
+        None
+    ));
+    assert!(!direct_parse_depth_exceeded(&vec![b'}'; limit + 1], None));
+    let quoted = format!("\"{}\"", "[".repeat(limit + 1));
+    assert!(!direct_parse_depth_exceeded(quoted.as_bytes(), None));
+    assert!(!direct_parse_depth_exceeded(b"[?,[[[[", None));
+
+    // The shaped-record path counts the outer array and every record level.
+    let typed_records = |records: usize| {
+        let mut input = b"[".to_vec();
+        input.extend_from_slice(&b"{\"x\":".repeat(records));
+        input.push(b'1');
+        input.extend(std::iter::repeat_n(b'}', records));
+        input.push(b']');
+        input
+    };
+    assert!(direct_parse_depth_exceeded(
+        &typed_records(limit),
+        Some(b"x\0")
+    ));
+    assert!(!direct_parse_depth_exceeded(
+        &typed_records(limit - 1),
+        Some(b"x\0")
+    ));
 }
 
 fn exceeds_iterative_budget(bytes: &[u8]) -> bool {
@@ -243,13 +309,6 @@ unsafe fn parse_result_slow(text_ptr: *const StringHeader, len: usize) -> Result
             }
         }
     }
-    if !cached_parse_source_is_direct(text_ptr, len) && requires_iterative_parse(bytes) {
-        if exceeds_iterative_budget(bytes) {
-            return Err(range_error_value(&iterative_budget_message()));
-        }
-        return try_parse_deep_iterative(text_ptr, len)
-            .ok_or_else(|| syntax_error_value("JSON parse error: malformed deep document"));
-    }
 
     // #7341: root the source string BEFORE the collection points, then
     // re-derive the input slice from the rooted value.
@@ -280,8 +339,8 @@ unsafe fn parse_result_slow(text_ptr: *const StringHeader, len: usize) -> Result
     let mut parser = DirectParser::new_batched_from_string(bytes, source);
     let result = parser.parse_value();
     let parse_ok = parser.finish();
+    let depth_exceeded = parser.depth_exceeded();
     if parse_ok {
-        validate_cached_parse_source(source, len);
         remember_parse_object_template(source, len, result);
     }
     parse_root_push(result);
@@ -289,11 +348,18 @@ unsafe fn parse_result_slow(text_ptr: *const StringHeader, len: usize) -> Result
     super::stringify_flat::finish_parse_gc_accounting();
     crate::gc::gc_schedule_parse_boundary_collection_if_pressure();
     gc_allocation.finish();
+    // Re-derive the source from its root before releasing it: a failed parse
+    // may still hand the document to the heap-stack parser, which installs
+    // its own root, and nothing in between collects.
+    let text = parse_root_get(text_root).as_string_ptr();
     parse_root_restore(text_root);
 
     super::parse_scalar::clear_oversized_key_cache();
 
     if !parse_ok {
+        if failed_direct_parse_is_deep(depth_exceeded, text, len) {
+            return parse_deep_or_error(text, len);
+        }
         return Err(syntax_error_value("JSON parse error: malformed input"));
     }
 
@@ -397,13 +463,10 @@ unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
     }
     let use_tape = tape_route_eligible(len, bytes);
     // The tape's explicit stack proves shallow/deep admission in its syntax
-    // pass. Keep the preflight for direct parses and forced oversized tapes:
-    // a huge over-budget input must fail before reserving its native tape.
-    let preflight_depth = !use_tape || len > LAZY_MAX_BLOB_BYTES;
-    if preflight_depth
-        && !cached_parse_source_is_direct(text_ptr, len)
-        && requires_iterative_parse(bytes)
-    {
+    // pass, and the direct parser bounds its own descent. Only a forced tape
+    // above the lazy size ceiling still needs the whole-document scan: a huge
+    // over-budget input must fail before reserving its native tape.
+    if use_tape && len > LAZY_MAX_BLOB_BYTES && requires_iterative_parse(bytes) {
         return parse_deep_or_throw(text_ptr, len);
     }
 
@@ -464,16 +527,9 @@ unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
             parse_root_restore(text_root);
             return result;
         }
-        // A malformed or over-budget tape must not enter recursion without
-        // the old depth check. Re-derive the source after the entry collection.
-        let text = parse_root_get(text_root).as_string_ptr();
-        let bytes = std::slice::from_raw_parts(crate::string::string_data(text), len);
-        if !preflight_depth && requires_iterative_parse(bytes) {
-            // No collection occurs between releasing this root and the deep
-            // helper installing its own source root.
-            parse_root_restore(text_root);
-            return parse_deep_or_throw(text, len);
-        }
+        // A declined tape (malformed, or past the iterative budget) falls
+        // through to the direct parser, whose own depth accounting hands deep
+        // input to the heap-stack parser after the failed descent.
     }
 
     // #64 follow-up: opportunistic pre-parse cleanup. When parse runs in a
@@ -525,8 +581,8 @@ unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
     let mut parser = DirectParser::new_batched_from_string(bytes, source);
     let result = parser.parse_value();
     let parse_ok = parser.finish();
+    let depth_exceeded = parser.depth_exceeded();
     if parse_ok {
-        validate_cached_parse_source(source, len);
         remember_parse_object_template(source, len, result);
     }
     parse_root_push(result);
@@ -538,6 +594,10 @@ unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
     super::stringify_flat::finish_parse_gc_accounting();
     crate::gc::gc_schedule_parse_boundary_collection_if_pressure();
     gc_allocation.finish();
+    // Re-derive the source from its root before releasing it: a failed parse
+    // may still hand the document to the heap-stack parser, which installs
+    // its own root, and nothing in between collects.
+    let text = parse_root_get(text_root).as_string_ptr();
     parse_root_restore(text_root);
 
     // Keep key intern cache across parses — scan_parse_roots marks cached
@@ -547,6 +607,9 @@ unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
     super::parse_scalar::clear_oversized_key_cache();
 
     if !parse_ok {
+        if failed_direct_parse_is_deep(depth_exceeded, text, len) {
+            return parse_deep_or_throw(text, len);
+        }
         throw_syntax_error("JSON parse error: malformed input");
     }
 
@@ -563,6 +626,31 @@ unsafe fn parse_deep_or_throw(text: *const StringHeader, len: usize) -> JSValue 
     match try_parse_deep_iterative(text, len) {
         Some(value) => value,
         None => throw_syntax_error("JSON parse error: malformed deep document"),
+    }
+}
+
+/// The `Result` form of `parse_deep_or_throw`, for `js_json_parse_result`.
+unsafe fn parse_deep_or_error(text: *const StringHeader, len: usize) -> Result<JSValue, f64> {
+    let bytes = std::slice::from_raw_parts(crate::string::string_data(text), len);
+    if exceeds_iterative_budget(bytes) {
+        return Err(range_error_value(&iterative_budget_message()));
+    }
+    try_parse_deep_iterative(text, len)
+        .ok_or_else(|| syntax_error_value("JSON parse error: malformed deep document"))
+}
+
+/// A failed direct parse goes to the heap-stack parser when the descent
+/// aborted at its bound, or when the document nests past that bound anyway:
+/// malformed deep input keeps reporting through the path it always used, and
+/// only failed parses pay the whole-document scan.
+unsafe fn failed_direct_parse_is_deep(
+    depth_exceeded: bool,
+    text: *const StringHeader,
+    len: usize,
+) -> bool {
+    depth_exceeded || {
+        let bytes = std::slice::from_raw_parts(crate::string::string_data(text), len);
+        requires_iterative_parse(bytes)
     }
 }
 
@@ -725,12 +813,6 @@ pub unsafe extern "C" fn js_json_parse_typed_array(
         return js_json_parse(text_ptr);
     }
 
-    // Deep input uses the generic entry's heap-stack fallback. The shape fast
-    // path is deliberately retained for ordinary payloads only.
-    if requires_iterative_parse(bytes) {
-        return js_json_parse(text_ptr);
-    }
-
     // Same pre-parse cleanup + GC suppression as `js_json_parse` —
     // root before the collection point and re-derive the source bytes after it.
     let text_root = parse_root_push(JSValue::string_ptr(text_ptr as *mut StringHeader));
@@ -764,16 +846,24 @@ pub unsafe extern "C" fn js_json_parse_typed_array(
     let mut parser = DirectParser::with_shape(bytes, shape);
     let result = parser.parse_array_typed();
     let parse_ok = parser.finish();
+    let depth_exceeded = parser.depth_exceeded();
     parse_root_push(result);
 
     crate::gc::gc_unsuppress();
     super::stringify_flat::finish_parse_gc_accounting();
     gc_allocation.finish();
+    // Re-derive the source from its root before releasing it: a failed parse
+    // may still hand the document to the heap-stack parser, which installs
+    // its own root, and nothing in between collects.
+    let text = parse_root_get(text_root).as_string_ptr();
     parse_root_restore(text_root);
 
     super::parse_scalar::clear_oversized_key_cache();
 
     if !parse_ok {
+        if failed_direct_parse_is_deep(depth_exceeded, text, len) {
+            return parse_deep_or_throw(text, len);
+        }
         throw_syntax_error("JSON parse error: malformed input");
     }
 
