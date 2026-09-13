@@ -804,15 +804,16 @@ fn u31_bitset_clone_uses_one_guarded_uint32_load_and_keeps_dynamic_miss() {
             && clone.contains("load i32")
             && clone.contains("call double @js_dyn_index_get(")
             && clone.contains("call double @js_dynamic_bitand(")
-            && !clone.contains("tav.k.i8")
-            && !clone.contains("tav.k.f64"),
+            && !clone.contains("arrlike.ic.header")
+            && !clone.contains("js_packed_arraylike_index_get"),
         "the u31 clone must use the monomorphic Uint32 bitset tier and a canonical miss:\n{clone}"
     );
     assert!(
-        generic.contains("tav.k.i8")
-            && generic.contains("tav.k.f64")
+        generic.contains("arrlike.ic.header")
+            && generic.contains("call double @js_packed_arraylike_index_get(")
             && generic.contains("call double @js_dynamic_bitand("),
-        "the unproven body must retain the full dynamic typed-array and BigInt behavior:\n{generic}"
+        "the unproven body must retain the complete dynamic element read (inline hit \
+         plus its one out-of-line exit) and the BigInt behavior:\n{generic}"
     );
 }
 
@@ -843,7 +844,7 @@ fn u31_transition_clone_returns_a_proved_cached_array_hit_without_second_get() {
                 .and_then(|tail| tail.split("\ncached_field_index.normal.").next())
                 .is_some_and(|fast_return| fast_return.contains("ret double"))
             && clone.contains("cached_field_index.normal")
-            && clone.contains("tav.k.i8")
+            && clone.contains("arrlike.ic.header")
             && clone.contains("if.then"),
         "the proved truthy hit must return directly while the complete original body remains as fallback:\n{clone}"
     );

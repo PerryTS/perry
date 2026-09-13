@@ -44,6 +44,45 @@ pub extern "C" fn js_packed_arraylike_index_get(
             if let Some(header) =
                 unsafe { crate::value::addr_class::try_read_gc_header(raw as usize) }
             {
+                // #10114's lazy-JSON-array tier. It used to be three emitted
+                // blocks and a direct `js_lazy_array_index_probe` call at
+                // EVERY indexed read site; it lives here now, so a site pays
+                // nothing for it and a `JSON.parse` result still skips the
+                // `js_array_get_f64` -> `lazy_get` chain (~227 retired
+                // instructions for `rows[7].id`). `TAG_HOLE` is the probe's
+                // "this read needs the rooted accessor" signal — unambiguous,
+                // because a hole is never a value a read yields — and covers
+                // cold elements, descriptors, out-of-bounds, growth-forwarding
+                // stubs and a stale `cached_length` mirror, all of which fall
+                // through to the unchanged accessor below.
+                //
+                // The `GC_FLAG_FORWARDED` test is load-bearing, not defensive:
+                // the probe's contract is "a live, UNFORWARDED
+                // `GC_TYPE_LAZY_ARRAY` pointer -- the caller proves that from
+                // the GC header", and since #10098 a lazy array is movable and
+                // nursery-resident, so a forwarded one is reachable here. When
+                // this tier was three emitted blocks that proof came from
+                // `arrlike.ic.header`, which dominated them; folding the tier
+                // into this helper moved the obligation here with it. A
+                // forwarded receiver falls through to `js_array_get_f64`,
+                // whose `clean_arr_ptr` resolves the forwarding pointer.
+                //
+                // Nothing between the header read and the probe can collect
+                // (the probe is `CannotCollect` and `try_read_gc_header` only
+                // reads), so `raw` cannot go stale across this window.
+                if header.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
+                    && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+                {
+                    let probed = unsafe {
+                        crate::json_tape::js_lazy_array_index_probe(
+                            raw as i64,
+                            i64::from(index_u32),
+                        )
+                    };
+                    if probed.to_bits() != crate::value::TAG_HOLE {
+                        return probed;
+                    }
+                }
                 if matches!(
                     header.obj_type,
                     crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY
