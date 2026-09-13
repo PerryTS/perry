@@ -806,6 +806,12 @@
       "why": "Address-KEYED owner set, not a root, and the successor of REGEX_POINTERS under the single engine: its map is `usize` header address -> `RegexMetadata { registered_owner: bool }`, so the VALUE holds no heap address at all (source and flags live only in the header's traced string edges, and the compiled program is a traced GC child of the header). The key is rekeyed by `regex_header_moved_for_gc` when a RegExpHeader moves and removed on death by the finalize hook, the copying-minor from-space walk and the full-cycle post-trace walk; it never keeps a header alive. Reached from those GC hooks rather than a registered scanner, so the walk misses it."
     },
     {
+      "file": "crates/perry-runtime/src/regex/perex_split.rs",
+      "name": "FORWARD_SPLITS",
+      "verdict": "test_only",
+      "why": "#10165: #[cfg(test)] Cell<usize> counter of how many splits took the forward-search path, so tests can tell which path ran. It stores only a count and is absent from shipped binaries."
+    },
+    {
       "file": "crates/perry-runtime/src/regex/site_test.rs",
       "name": "DIRECT_G",
       "verdict": "test_only",
