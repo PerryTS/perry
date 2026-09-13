@@ -443,34 +443,51 @@ pub(crate) fn emit_element_shape_loop_preheader_check(
 
     // `ArrayHeader { length: u32 @0, capacity: u32 @4 }`. The invariant's
     // query requires `verified_len == length`, and nothing has run since, so
-    // `length >= bound` is exactly "the verified prefix covers every index the
-    // loop reads". The matcher already pinned `start >= 0`.
+    // the comparisons below are exactly "the verified prefix covers every
+    // index the loop reads". The matcher already pinned `start >= 0`.
     let len_ptr = blk.inttoptr(I64, &handle1);
     let length = blk.load(I32, &len_ptr);
-    let (bound_i32, len_ok) = match trip_count {
-        ElementShapeLoopTripCount::Bound(bound) => {
-            (bound.to_string(), blk.icmp_uge(I32, &length, bound))
+    let bound_i32 = match trip_count {
+        ElementShapeLoopTripCount::Bound(bound) => bound.to_string(),
+        ElementShapeLoopTripCount::ArrayLength => length.clone(),
+    };
+
+    // The TRIP-COUNT obligation, which exists only when the counter is also
+    // the index.
+    //
+    // #10123: this used to be unconditional, and that made the whole
+    // shape-keyed arm dead on its own benchmark. `for (i = 0; i < 1000000;
+    // i++) sum += rows[7].id` over a 7,600-element array asks the preheader to
+    // prove `length >= 1000000`, which is false — so the clone was emitted,
+    // was branched into by a `cond_br` the IR census could see, and was never
+    // once entered at run time. The counter is not an index here; the verified
+    // prefix has nothing to say about the trip count, and `ElementShapeIndex`
+    // carries its own obligation instead.
+    let trip_ok = match (trip_count, index_bound) {
+        (ElementShapeLoopTripCount::Bound(bound), ElementShapeIndexBound::FromTripCount) => {
+            Some(blk.icmp_uge(I32, &length, bound))
         }
+        // A caller-materialized bound is already a non-negative i32
+        // (`materialize_loop_i32`), and the counter indexes nothing.
+        (ElementShapeLoopTripCount::Bound(_), _) => None,
         // #7480 step 4: `for (j = 0; j < arr.length; j++)` — the trip count IS
         // the length this block just read, so "the verified prefix covers every
         // index" is true by construction and there is nothing to compare it
-        // against. What still has to be proven is that the u32 fits a
-        // non-negative i32: the clone's counter is an i32 and the emitted trip
-        // test is signed, so a length above `i32::MAX` would read as negative
-        // and run zero iterations while the slow clone ran billions. No such
-        // array is allocatable today (it would need 32 GB of element slots),
-        // which is exactly why the check is one `icmp` rather than a comment.
-        ElementShapeLoopTripCount::ArrayLength => {
-            let fits = blk.icmp_sgt(I32, &length, "-1");
-            (length.clone(), fits)
-        }
+        // against. What still has to be proven, for EVERY index form, is that
+        // the u32 fits a non-negative i32: the clone's counter is an i32 and
+        // the emitted trip test is signed, so a length above `i32::MAX` would
+        // read as negative and run zero iterations while the slow clone ran
+        // billions. No such array is allocatable today (it would need 32 GB of
+        // element slots), which is exactly why the check is one `icmp` rather
+        // than a comment.
+        (ElementShapeLoopTripCount::ArrayLength, _) => Some(blk.icmp_sgt(I32, &length, "-1")),
     };
 
-    // #10123: the index obligation. `FromTripCount` adds nothing — the trip
-    // count already covers every read — and the other two are compared
-    // UNSIGNED for the same reason `Bound` is: `length` is a `u32` read into
-    // an i32, so a hypothetical 2^31-element array must not read as negative
-    // and pass.
+    // #10123: the INDEX obligation, one per spelling. `FromTripCount` adds
+    // nothing — the trip-count test above already covers every read — and the
+    // other two are compared UNSIGNED for the same reason: `length` is a `u32`
+    // read into an i32, so a hypothetical 2^31-element array must not read as
+    // negative and pass.
     let index_ok = match index_bound {
         ElementShapeIndexBound::FromTripCount => None,
         ElementShapeIndexBound::Constant(k) => Some(blk.icmp_ugt(I32, &length, &k.to_string())),
@@ -503,7 +520,9 @@ pub(crate) fn emit_element_shape_loop_preheader_check(
 
     let mut acc = blk.and(I1, &is_ptr1, &above1);
     acc = blk.and(I1, &acc, &is_array1);
-    acc = blk.and(I1, &acc, &len_ok);
+    if let Some(trip_ok) = trip_ok {
+        acc = blk.and(I1, &acc, &trip_ok);
+    }
     if let Some(index_ok) = index_ok {
         acc = blk.and(I1, &acc, &index_ok);
     }

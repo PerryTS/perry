@@ -590,6 +590,72 @@ fn anon_shape_field_type_is_compatible(
     }
 }
 
+/// Lower one of the fast clone's VIRTUAL body bindings, or report that `id` is
+/// not one. Called from `stmt/let_stmt.rs` before the generic `Let` lowering.
+///
+/// Two shapes, both admitted by the matcher and neither lowered generically:
+///
+/// * **#7771's element binding** (`const r = arr[j]`) emits NOTHING. The
+///   matcher admitted the body only because every use of `r` is a tracked
+///   `r.field` read, and each of those lowers through
+///   `element_shape_loop_fact_for_property_get` to a bare element load.
+///   Lowering the generic `IndexGet` would put a runtime-call diamond inside
+///   the clone, fail its call-free admission scan, and DELETE the clone rather
+///   than slow it (#7690's lesson).
+/// * **#10123's derived index** (`const d = j % m`) emits one `srem i32`. `%`
+///   on two possibly-untyped operands is a runtime call, with the same
+///   consequence. The preheader already proved `m` is an integral
+///   `1..=i32::MAX` and materialized it as an i32, and the counter is a
+///   non-negative i32, so the whole statement is one instruction.
+///
+/// Both are sound for the same four reasons: nothing reads the binding bare
+/// inside the clone (the matcher's walk excludes both explicitly), the clone
+/// is call-free so no GC observes the slot mid-loop, `const` scoping means
+/// nothing after the loop can read it, and a residual-check side exit re-runs
+/// the current iteration in the slow clone, whose OWN `Let` binds the real
+/// slot before any use. The facts are popped before the slow clone lowers, so
+/// this cannot fire there.
+///
+/// Answering `false` for want of the counter's i32 slot cannot happen — the
+/// matcher requires one for the derived-index form — and would only cost the
+/// clone, never correctness.
+pub(super) fn lower_virtual_clone_binding(ctx: &mut FnCtx<'_>, id: u32) -> bool {
+    if ctx
+        .element_shape_loop_facts
+        .iter()
+        .any(|fact| fact.element_binding == Some(id))
+    {
+        return true;
+    }
+    let Some((counter_slot, modulus_i32, derived_slot)) =
+        ctx.element_shape_loop_facts.iter().rev().find_map(|fact| {
+            let crate::expr::ElementShapeIndex::DerivedMod {
+                local_id,
+                modulus_i32,
+                slot,
+            } = &fact.index
+            else {
+                return None;
+            };
+            if *local_id != id {
+                return None;
+            }
+            Some((
+                ctx.i32_counter_slots.get(&fact.index_local_id)?.clone(),
+                modulus_i32.clone(),
+                slot.clone(),
+            ))
+        })
+    else {
+        return false;
+    };
+    let blk = ctx.block();
+    let counter = blk.load(I32, &counter_slot);
+    let derived = blk.srem(I32, &counter, &modulus_i32);
+    blk.store(I32, &derived, &derived_slot);
+    true
+}
+
 /// Is `array_id` an untyped receiver — the shape-keyed arm's entry condition?
 ///
 /// The class resolver having declined is not on its own enough: a `Node[]`
