@@ -69,6 +69,7 @@ mod start_bitmap;
 mod step_bounds;
 pub(super) mod support;
 mod survival_diag;
+mod sweep_page_tally;
 mod teardown;
 mod telemetry_verifier;
 mod temp_roots;

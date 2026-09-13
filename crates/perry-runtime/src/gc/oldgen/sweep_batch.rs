@@ -35,6 +35,13 @@ impl PendingOldUnregister {
         }
     }
 
+    /// Will the next `defer` flush the queue (and so zero the sweep accounting
+    /// of every page whose last object it removes)?
+    #[inline]
+    pub(super) fn flushes_on_next_defer(&self) -> bool {
+        self.dead.len() + 1 >= FLUSH_AT
+    }
+
     /// Remove every queued header from the page index.
     pub(super) fn flush(&mut self) {
         if self.dead.is_empty() {
