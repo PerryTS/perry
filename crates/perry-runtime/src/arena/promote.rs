@@ -465,6 +465,14 @@ fn stamp_and_index_block(block: &ArenaBlock, liveness: PromotionLiveness) -> (us
     let mut run_count = 0usize;
     let mut run_bytes = 0usize;
     let mut run_headers: Vec<usize> = Vec::new();
+    // #10182: record the census facts of an untraced promotion's blocks for the
+    // promoted-cohort full that may follow at this safepoint (`adopt_census`).
+    let mut census = if describe {
+        crate::gc::AdoptableBlockBuilder::begin(block.data as usize, block.offset, block.size)
+    } else {
+        crate::gc::AdoptableBlockBuilder::begin(block.data as usize, 0, block.size)
+    };
+    let mut stopped_early = false;
 
     let mut offset = 0usize;
     while offset < block.offset {
@@ -478,6 +486,7 @@ fn stamp_and_index_block(block: &ArenaBlock, liveness: PromotionLiveness) -> (us
         if total < crate::gc::GC_HEADER_SIZE || total > block.size - aligned {
             // Same guard the arena walkers use: an implausible size means we
             // have run off the end of the initialised region.
+            stopped_early = true;
             break;
         }
         let obj_type = unsafe { (*header).obj_type };
@@ -489,6 +498,7 @@ fn stamp_and_index_block(block: &ArenaBlock, liveness: PromotionLiveness) -> (us
         // be looked at again.
         unsafe {
             crate::gc::stamp_header_promoted_in_place(header);
+            census.note(header, aligned);
         }
         objects += 1;
 
@@ -552,6 +562,7 @@ fn stamp_and_index_block(block: &ArenaBlock, liveness: PromotionLiveness) -> (us
             run_bytes,
         );
     }
+    census.finish(!stopped_early);
     debug_assert_eq!(
         offset, block.offset,
         "a promoted block did not parse to its own bump offset — its tail is \

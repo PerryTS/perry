@@ -175,21 +175,46 @@ impl BlockCensus {
     /// `header` must be a walkable arena header inside the current block.
     #[inline(always)]
     pub(crate) unsafe fn note_header(&mut self, header: *const GcHeader) {
-        let flags = (*header).gc_flags;
         let obj_type = (*header).obj_type;
         let size = (*header).size as u64;
-        let exceptional_flags = (flags ^ GC_FLAG_ARENA)
-            & (GC_FLAG_ARENA | GC_FLAG_MARKED | GC_FLAG_PINNED | GC_FLAG_FORWARDED)
-            != 0;
-        let premarked = flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) != 0;
-        let raw_f64_array = obj_type == GC_TYPE_ARRAY
-            && (*header)._reserved & (GC_ARRAY_RAW_F64_LAYOUT | GC_ARRAY_RAW_F64_HOLES) != 0;
+        let (flag_obligation, premarked) = census_header_flag_facts(header);
         let type_obligation = self.obligation_by_type[obj_type as usize];
         let block = &mut self.current;
         block.objects += 1;
         block.bytes += size;
-        block.obligation |= exceptional_flags | type_obligation | raw_f64_array;
+        block.obligation |= flag_obligation | type_obligation;
         block.premarked |= premarked;
+    }
+
+    /// Set the current block's facts from a record another walk made of it
+    /// (`adopt_census`), applying this census's per-type obligations to the
+    /// recorded object types.
+    pub(crate) fn adopt_block_facts(
+        &mut self,
+        objects: u64,
+        bytes: u64,
+        types: &[u64; 4],
+        flag_obligation: bool,
+        premarked: bool,
+        non_walkable: bool,
+    ) {
+        if !self.armed {
+            return;
+        }
+        let type_obligation = (0..256usize)
+            .any(|t| types[t >> 6] & (1u64 << (t & 63)) != 0 && self.obligation_by_type[t]);
+        let block = &mut self.current;
+        block.objects = objects;
+        block.bytes = bytes;
+        block.obligation = flag_obligation || type_obligation;
+        block.premarked = premarked;
+        block.non_walkable = non_walkable;
+    }
+
+    /// The facts of the block currently being censused (tests only).
+    #[cfg(test)]
+    pub(crate) fn current_facts_for_tests(&self) -> CensusBlock {
+        self.current
     }
 
     /// Fold the current block into the per-index table. Called at every block
@@ -349,6 +374,27 @@ pub(crate) mod sabotage {
             SABOTAGE.with(|s| s.set(self.0));
         }
     }
+}
+
+/// The per-object census facts that depend on a header's flags rather than its
+/// type: `(flag obligation, pre-marked)`. The flag obligation covers a pinned,
+/// forwarded or already-marked header, one without `GC_FLAG_ARENA`, and an array
+/// whose raw-f64 layout bits would fire a typed-feedback invalidation.
+///
+/// # Safety
+/// `header` is a readable arena header.
+#[inline(always)]
+pub(crate) unsafe fn census_header_flag_facts(header: *const GcHeader) -> (bool, bool) {
+    let flags = (*header).gc_flags;
+    let exceptional_flags = (flags ^ GC_FLAG_ARENA)
+        & (GC_FLAG_ARENA | GC_FLAG_MARKED | GC_FLAG_PINNED | GC_FLAG_FORWARDED)
+        != 0;
+    let raw_f64_array = (*header).obj_type == GC_TYPE_ARRAY
+        && (*header)._reserved & (GC_ARRAY_RAW_F64_LAYOUT | GC_ARRAY_RAW_F64_HOLES) != 0;
+    (
+        exceptional_flags | raw_f64_array,
+        flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) != 0,
+    )
 }
 
 /// Does a dead object of `obj_type` need `reclaim_dead_object`'s per-object
