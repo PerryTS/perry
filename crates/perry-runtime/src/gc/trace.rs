@@ -82,11 +82,11 @@ pub(super) fn classifier_valid_object_start(addr: usize) -> bool {
 
 /// #6179: differential-verification mode for the page-metadata classifier.
 pub(super) fn classifier_verify_enabled() -> bool {
-    if CLASSIFIER_VERIFY_SUPPRESSED.with(|c| c.get()) {
-        return false;
-    }
+    // The cached process-wide switch first: this runs on every census hit, and
+    // the suppression flag is a thread-local (#10182).
     static CACHED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *CACHED.get_or_init(|| super::env_flag_enabled("PERRY_GC_VERIFY_CLASSIFIER"))
+        && !CLASSIFIER_VERIFY_SUPPRESSED.with(|c| c.get())
 }
 
 crate::perry_thread_local! {
@@ -1109,14 +1109,16 @@ pub(super) fn try_mark_raw_root_addr(addr: usize, valid_ptrs: &ValidPointerSet) 
 /// on exact mutable roots. `PERRY_CONSERVATIVE_STACK_SCAN=full` forces the
 /// legacy path for debugging and makes copied-minor ineligible.
 
+#[inline(always)]
 pub(super) unsafe fn mark_field_into_worklist(
     val_bits: u64,
     valid_ptrs: &ValidPointerSet,
     worklist: &mut Vec<*mut GcHeader>,
+    proxy_trace_active: bool,
 ) -> bool {
-    if crate::proxy::gc_full_trace_active()
-        && crate::proxy::gc_observe_traced_value(val_bits, valid_ptrs)
-    {
+    // `proxy_trace_active` is `crate::proxy::gc_full_trace_active()`, read by
+    // the caller once for the whole object being traced (#10182).
+    if proxy_trace_active && crate::proxy::gc_observe_traced_value(val_bits, valid_ptrs) {
         return false;
     }
     let tag = val_bits & TAG_MASK;
@@ -1486,26 +1488,77 @@ pub(super) unsafe fn trace_heap_rewrite_slots(
     valid_ptrs: &ValidPointerSet,
     worklist: &mut Vec<*mut GcHeader>,
 ) {
+    // #10182: two per-object facts read once instead of once per slot —
+    // whether the proxy registry observes this trace (it changes only when a
+    // proxy is created, and none is created inside one object's visit), and
+    // whether the object is one of the weak-holder classes whose weak slots
+    // the trace skips (its class cannot change while it is traced). Range
+    // descriptors are walked here directly rather than through a per-slot
+    // dynamic callback.
+    let proxy_trace_active = crate::proxy::gc_full_trace_active();
+    #[cfg(not(test))]
+    let weak_holder = crate::weakref::is_weak_holder_header(header);
+    #[cfg(test)]
+    let weak_holder =
+        crate::weakref::is_weak_holder_header(header) && !mark_hoist_sabotage::forgetting_weak();
     visit_gc_rewrite_slot_descriptors(header, |descriptor| unsafe {
-        if let GcMutableSlotDescriptor::PointerFreeRange(range) = descriptor {
-            if crate::proxy::gc_full_trace_active() {
-                for i in 0..range.slot_count() {
-                    crate::proxy::gc_observe_traced_value(*range.slot(i), valid_ptrs);
-                }
-            }
-            return;
-        }
-        descriptor.visit_slots(&mut |slot| {
-            if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
+        let mut visit_slot = |slot: *mut u64, layout_kind: Option<HeapChildSlotReadKind>| {
+            if weak_holder && crate::weakref::is_weak_target_trace_slot(header, slot) {
                 return;
             }
-            slot.record_layout_read();
-            if slot.layout_kind.is_some() {
+            if let Some(kind) = layout_kind {
+                record_layout_child_slot_read(kind);
                 record_trace_slot_read();
             }
-            mark_field_into_worklist(*slot.slot, valid_ptrs, worklist);
-        });
+            mark_field_into_worklist(*slot, valid_ptrs, worklist, proxy_trace_active);
+        };
+        match descriptor {
+            GcMutableSlotDescriptor::PointerFreeRange(range) => {
+                if proxy_trace_active {
+                    for i in 0..range.slot_count() {
+                        crate::proxy::gc_observe_traced_value(*range.slot(i), valid_ptrs);
+                    }
+                }
+            }
+            GcMutableSlotDescriptor::Slot(slot) => visit_slot(slot.slot, slot.layout_kind),
+            GcMutableSlotDescriptor::Range { range, layout_kind } => {
+                for i in 0..range.slot_count() {
+                    visit_slot(range.slot(i), layout_kind);
+                }
+            }
+        }
     });
+}
+
+/// Sabotage switch for the mark-hoist test: the per-object weak-holder fact
+/// reads false, so a weak holder's weak slots are traced strongly. Test builds
+/// only.
+#[cfg(test)]
+pub(crate) mod mark_hoist_sabotage {
+    use std::cell::Cell;
+
+    thread_local! {
+        static FORGET_WEAK: Cell<bool> = const { Cell::new(false) };
+    }
+
+    #[inline]
+    pub(crate) fn forgetting_weak() -> bool {
+        FORGET_WEAK.with(Cell::get)
+    }
+
+    pub(crate) struct Guard(bool);
+
+    impl Guard {
+        pub(crate) fn arm() -> Self {
+            Self(FORGET_WEAK.with(|s| s.replace(true)))
+        }
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            FORGET_WEAK.with(|s| s.set(self.0));
+        }
+    }
 }
 
 /// Trace array elements.

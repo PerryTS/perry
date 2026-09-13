@@ -745,7 +745,7 @@ impl CopyingNurseryCollector {
         visit_gc_rewrite_slots(header, |slot| unsafe {
             slot.record_layout_read();
             let before = *slot.slot;
-            self.visit_slot_with_parent(slot.slot, header, slot.external);
+            self.visit_slot_with_parent(slot.slot, header, slot.external());
             changed |= *slot.slot != before;
         });
         if changed {

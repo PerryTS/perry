@@ -572,6 +572,19 @@ pub(super) fn layout_scan_trace_active() -> bool {
 
 #[inline]
 pub(super) fn record_layout_child_slot_read(kind: HeapChildSlotReadKind) {
+    // #10182: the process-wide arm flag inline, the thread-local out of line.
+    // Inlined together into the mark's per-slot path, the optimizer fetched
+    // the thread-local's address before testing the flag, i.e. on every
+    // traced slot of every collection with tracing off.
+    if !LAYOUT_SCAN_TRACE_ARMED_ANY.load(std::sync::atomic::Ordering::Acquire) {
+        return;
+    }
+    record_layout_child_slot_read_armed(kind);
+}
+
+#[cold]
+#[inline(never)]
+fn record_layout_child_slot_read_armed(kind: HeapChildSlotReadKind) {
     if !layout_scan_trace_active() {
         return;
     }
