@@ -64,6 +64,7 @@ mod shadow_stack_ops;
 mod shape_descriptor_authority;
 mod shape_keys_descriptor_edge;
 mod smoke;
+mod start_bitmap;
 mod step_bounds;
 pub(super) mod support;
 mod survival_diag;

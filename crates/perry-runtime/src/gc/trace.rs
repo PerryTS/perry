@@ -94,42 +94,68 @@ crate::perry_thread_local! {
         const { std::cell::UnsafeCell::new(Vec::new()) };
 }
 
-const VALID_POINTER_ARENA_RUN_CAPACITY: usize = 1024;
+/// Census blocks whose walked extent exceeds this keep a sorted start list
+/// instead of a start bitmap: an oversized block (one large allocation rounded
+/// up to a `BLOCK_SIZE` multiple) holds a handful of objects, and a bitmap over
+/// its whole extent would be mostly zero words.
+const CENSUS_BITMAP_MAX_EXTENT: usize = crate::arena::BLOCK_SIZE;
+
+/// Arena object starts sit on 8-byte boundaries relative to their block's
+/// `data` pointer: `ArenaObjectCursor::next_budgeted` rounds every header
+/// offset up to a multiple of 8 before reading it, and the census consumes
+/// exactly the headers that cursor yields.
+const CENSUS_START_ALIGN_SHIFT: u32 = 3;
+
+/// One censused arena block, in address order (#10182).
+#[derive(Clone, Copy, Debug)]
+pub(super) struct CensusStartBlock {
+    /// The block's `data` address as the census cursor snapshotted it.
+    pub(super) base: usize,
+    /// Bytes the census walked (`offset` in the snapshot). No censused header
+    /// starts at or past `base + extent`.
+    pub(super) extent: usize,
+    /// Global arena block index (`u32::MAX` when unknown).
+    pub(super) block_idx: u32,
+    /// Bitmap blocks: index of the block's first word in `start_bits`.
+    /// Sorted blocks: index of the block's first start in `large_starts`.
+    pub(super) first: usize,
+    /// Bitmap blocks: word count. Sorted blocks: start count.
+    pub(super) len: usize,
+    pub(super) sorted: bool,
+}
 
 pub(crate) struct ValidPointerSet {
-    /// Arena-only start pointers in address-ordered runs — **the exact arena
-    /// membership set**, not merely an index for `enclosing_object`'s floor
-    /// lookups. `ArenaObjectCursorBuilder::new(ArenaWalkOrder::Address)` hands
-    /// the census headers over in ascending address order, so each run is
-    /// sorted by construction and a floor lookup that lands on the query IS
-    /// the membership answer.
+    /// **The exact arena membership set**, one entry per censused arena block
+    /// in ascending address order. `ArenaObjectCursorBuilder::new(
+    /// ArenaWalkOrder::Address)` hands the census the blocks in address order
+    /// and each block's headers in address order, so the table is sorted by
+    /// construction and a block never appears twice.
     ///
-    /// This used to be shadowed by a parallel `BTreeSet` over the same
-    /// addresses. That set cost one B-tree insert per live arena object with
-    /// nothing to show for it: the runs already held the same data in the same
-    /// order. On `json_pipeline` 500k the shadow cost **245.5 ms of a 748.3 ms
-    /// full collection** (`phase_us.build_valid_pointer_set`), 12.6% of the
-    /// `build_out` phase, and ~40 MB of transient peak heap (#7592).
-    pub(super) arena_runs: Vec<Vec<usize>>,
-    /// `arena_runs[i]`'s global arena block index (`u32::MAX` for runs pushed
-    /// without one). The census seals a run at every block boundary, so a
-    /// run never straddles two blocks and a membership hit names its block
-    /// for free (#10182).
-    pub(super) arena_run_blocks: Vec<u32>,
-    pub(super) current_arena_run_block: u32,
+    /// Membership used to answer from address-ordered runs of user pointers
+    /// (1024 per run, sealed at block boundaries): a binary search over every
+    /// run's first key, then a second binary search inside the run — about 21
+    /// cache-missing probes per traced pointer field, which was ~46 % of a full
+    /// mark on a live 20 MB JSON tree. The runs replaced a shadow `BTreeSet`
+    /// (#7592) and cost 8 bytes per censused object.
+    ///
+    /// Now each block carries an **object-start bitmap** (1 bit per 8-byte
+    /// alignment unit of its walked extent, 16 KB for a full 1 MB block) and a
+    /// query is a search over the block fences (`arena_block_bases`, one entry
+    /// per block) plus one bit test. Oversized blocks keep a sorted start list
+    /// (`large_starts`), since they hold a few objects over many megabytes.
+    pub(super) arena_blocks: Vec<CensusStartBlock>,
+    /// `arena_blocks[i].base`, mirrored into one contiguous vector so the
+    /// block-level binary search reads 8-byte fences only.
+    pub(super) arena_block_bases: Vec<usize>,
+    /// Concatenated start bitmaps of the bitmap blocks. Bit `k` of a block's
+    /// bitmap is set iff a censused header starts at `base + (k << 3)`.
+    pub(super) start_bits: Vec<u64>,
+    /// Concatenated ascending start lists (user pointers) of the sorted blocks.
+    pub(super) large_starts: Vec<usize>,
     /// Per-block census facts and trace reachability (#10182). Disarmed
     /// unless this set was built by the production census walk.
     pub(super) block_census: BlockCensus,
-    /// `arena_runs[i].first()`, mirrored into one contiguous vector so the
-    /// run-level binary search reads 8-byte fences instead of chasing a
-    /// `Vec` header per probe. At 500k `json_pipeline` records this is ~4k
-    /// entries (32 KB, L2-resident) against 33 MB of run storage, and it is
-    /// what keeps the membership lookup competitive with the B-tree probe it
-    /// replaces (#7592).
-    pub(super) arena_run_firsts: Vec<usize>,
-    pub(super) current_arena_run: Vec<usize>,
-    /// Live count of pushed arena starts (sealed runs + the open one), kept so
-    /// `lookup_count` stays O(1).
+    /// Live count of pushed arena starts, kept so `lookup_count` stays O(1).
     pub(super) arena_count: usize,
     /// Exact membership for **malloc-tracked** objects only, which have no
     /// address order to exploit. A B-tree avoids hash-table rebuilds in tiny
@@ -170,12 +196,11 @@ pub(crate) struct ValidPointerSet {
 impl ValidPointerSet {
     pub(super) fn new() -> Self {
         Self {
-            arena_runs: Vec::new(),
-            arena_run_blocks: Vec::new(),
-            current_arena_run_block: u32::MAX,
+            arena_blocks: Vec::new(),
+            arena_block_bases: Vec::new(),
+            start_bits: Vec::new(),
+            large_starts: Vec::new(),
             block_census: BlockCensus::disarmed(),
-            arena_run_firsts: Vec::new(),
-            current_arena_run: Vec::with_capacity(VALID_POINTER_ARENA_RUN_CAPACITY),
             arena_count: 0,
             malloc_lookup: std::collections::BTreeSet::new(),
             range_min: usize::MAX,
@@ -186,34 +211,77 @@ impl ValidPointerSet {
         }
     }
 
-    /// Caller must guarantee that pushes happen in ascending address
-    /// order — `ValidPointerSetBuilder` does so via `ArenaObjectCursor`
-    /// in address order. `block_idx` is the start's global arena block; the
-    /// open run is sealed whenever it changes, so no run straddles two blocks
-    /// (#10182).
-    pub(super) fn push_arena_in_block(&mut self, ptr: usize, block_idx: u32) {
+    /// Open census block `block_idx`: `data`/`offset` exactly as the census
+    /// cursor snapshotted it. Every start pushed until the next call belongs to
+    /// this block. Blocks must be opened in ascending address order.
+    pub(super) fn begin_arena_block(&mut self, block_idx: u32, data: usize, offset: usize) {
         if self.classifier_mode {
             return; // #6179: no exact census in classifier mode
         }
-        if block_idx != self.current_arena_run_block {
-            self.seal_current_arena_run();
-            self.current_arena_run_block = block_idx;
+        if let Some(previous) = self.arena_blocks.last() {
+            assert!(
+                previous.base.saturating_add(previous.extent) <= data,
+                "census blocks must arrive in ascending, non-overlapping address order: \
+                 {:#x}+{:#x} then {data:#x}",
+                previous.base,
+                previous.extent
+            );
         }
-        if let Some(previous) = self
-            .current_arena_run
-            .last()
-            .copied()
-            .or_else(|| self.arena_runs.last().and_then(|run| run.last()).copied())
-        {
-            debug_assert!(previous <= ptr);
-        }
+        let sorted = offset > CENSUS_BITMAP_MAX_EXTENT;
+        let (first, len) = if sorted {
+            (self.large_starts.len(), 0)
+        } else {
+            let bits = offset.div_ceil(1 << CENSUS_START_ALIGN_SHIFT);
+            let words = bits.div_ceil(64);
+            let first = self.start_bits.len();
+            self.start_bits.resize(first + words, 0);
+            (first, words)
+        };
+        self.arena_block_bases.push(data);
+        self.arena_blocks.push(CensusStartBlock {
+            base: data,
+            extent: offset,
+            block_idx,
+            first,
+            len,
+            sorted,
+        });
+    }
 
-        self.record_pointer_range(ptr);
-        self.current_arena_run.push(ptr);
-        self.arena_count += 1;
-        if self.current_arena_run.len() >= VALID_POINTER_ARENA_RUN_CAPACITY {
-            self.seal_current_arena_run();
+    /// Record a censused arena start (user pointer) in the block opened by the
+    /// last `begin_arena_block`. Starts arrive in ascending address order —
+    /// `ValidPointerSetBuilder` feeds them from `ArenaObjectCursor` in address
+    /// order.
+    pub(super) fn push_arena(&mut self, ptr: usize) {
+        if self.classifier_mode {
+            return; // #6179: no exact census in classifier mode
         }
+        let block = self
+            .arena_blocks
+            .last_mut()
+            .expect("an arena start is pushed only inside an opened census block");
+        let header_offset = ptr.wrapping_sub(block.base).wrapping_sub(GC_HEADER_SIZE);
+        // A start the bitmap cannot represent would be a silent false negative
+        // (swept live), so the cursor's alignment contract is checked, not
+        // assumed. One predictable compare per censused object.
+        assert!(
+            header_offset < block.extent
+                && header_offset & ((1 << CENSUS_START_ALIGN_SHIFT) - 1) == 0,
+            "census start {ptr:#x} is outside or misaligned in its block \
+             {:#x}+{:#x}",
+            block.base,
+            block.extent
+        );
+        if block.sorted {
+            debug_assert!(self.large_starts.last().is_none_or(|&last| last < ptr));
+            self.large_starts.push(ptr);
+            block.len += 1;
+        } else {
+            let bit = header_offset >> CENSUS_START_ALIGN_SHIFT;
+            self.start_bits[block.first + (bit >> 6)] |= 1u64 << (bit & 63);
+        }
+        self.arena_count += 1;
+        self.record_pointer_range(ptr);
     }
 
     pub(super) fn push_malloc(&mut self, ptr: usize) {
@@ -236,8 +304,13 @@ impl ValidPointerSet {
     pub(super) fn tenured_nursery_bytes(&self) -> usize {
         self.tenured_nursery_bytes
     }
-    pub(super) fn finalize(&mut self) {
-        self.seal_current_arena_run();
+    /// Transient heap bytes the arena membership index holds (fences, block
+    /// table, bitmaps, oversized-block start lists).
+    pub(super) fn arena_index_bytes(&self) -> usize {
+        self.arena_blocks.capacity() * std::mem::size_of::<CensusStartBlock>()
+            + self.arena_block_bases.capacity() * std::mem::size_of::<usize>()
+            + self.start_bits.capacity() * std::mem::size_of::<u64>()
+            + self.large_starts.capacity() * std::mem::size_of::<usize>()
     }
 
     #[inline(always)]
@@ -248,18 +321,6 @@ impl ValidPointerSet {
         if ptr > self.range_max {
             self.range_max = ptr;
         }
-    }
-
-    fn seal_current_arena_run(&mut self) {
-        if self.current_arena_run.is_empty() {
-            return;
-        }
-        let sealed = std::mem::take(&mut self.current_arena_run);
-        // Non-empty by the guard above, so the fence mirror stays index-aligned
-        // with `arena_runs` — `arena_run_firsts[i] == arena_runs[i][0]`.
-        self.arena_run_firsts.push(sealed[0]);
-        self.arena_runs.push(sealed);
-        self.arena_run_blocks.push(self.current_arena_run_block);
     }
 
     /// Cheap O(1) range-rejection prefilter. Most stack words and
@@ -292,11 +353,10 @@ impl ValidPointerSet {
             // censused address range.
             return false;
         }
-        // Exact lookup. Arena starts answer from the address-ordered census
-        // runs (a floor lookup that lands ON the query is membership); only
-        // malloc-tracked starts, which have no usable order, need the B-tree.
-        // Arena first because arena hits dominate every workload that reaches
-        // here — a malloc pointer pays one extra run-level binary search.
+        // Exact lookup. Arena starts answer from the per-block start bitmaps;
+        // only malloc-tracked starts, which have no usable order, need the
+        // B-tree. Arena first because arena hits dominate every workload that
+        // reaches here — a malloc pointer pays one extra fence search.
         let exact = self.arena_start_censused(*ptr)
             || (!self.malloc_lookup.is_empty() && self.malloc_lookup.contains(ptr));
         // #6179 differential verification (PERRY_GC_VERIFY_CLASSIFIER=1):
@@ -336,13 +396,14 @@ impl ValidPointerSet {
     /// iteration. Find the largest entry `<= query`, then validate via
     /// the GcHeader's size field.
     pub(crate) fn enclosing_object(&self, ptr: usize) -> Option<usize> {
-        let (candidate, run) = self.find_arena_floor_run(ptr)?;
+        let block = self.census_block_at(ptr)?;
+        let candidate = self.floor_start_in_block(block, ptr)?;
         unsafe {
             let header = (candidate as *const u8).sub(GC_HEADER_SIZE) as *const GcHeader;
             let total = (*header).size as usize;
             let payload_end = candidate + total.saturating_sub(GC_HEADER_SIZE);
             if ptr >= candidate && ptr < payload_end {
-                self.note_run_reached(run);
+                self.block_census.note_reached(block.block_idx);
                 Some(candidate)
             } else {
                 None
@@ -350,57 +411,85 @@ impl ValidPointerSet {
         }
     }
 
-    /// A census hit in run `run`: its block was reached by the trace (#10182).
-    /// See `block_skip`'s module doc for why every mark passes through here.
+    /// The census block whose base is the greatest one `<= ptr`, if any.
+    /// `ptr` may still lie past that block's walked extent.
     #[inline(always)]
-    fn note_run_reached(&self, run: usize) {
-        if let Some(&block_idx) = self.arena_run_blocks.get(run) {
-            self.block_census.note_reached(block_idx);
-        }
-    }
-
-    /// Exact arena membership: the census runs are address-ordered, so `ptr`
-    /// was censused iff its floor is itself.
-    ///
-    /// **Load-bearing ordering requirement, which the `BTreeSet` this replaced
-    /// did not have.** The B-tree was complete after every `push_arena`, so a
-    /// mid-build query merely saw fewer entries. The runs are only complete
-    /// once `finalize()` has sealed `current_arena_run` — up to
-    /// `VALID_POINTER_ARENA_RUN_CAPACITY` censused starts are invisible before
-    /// that. A membership query on an unsealed set is therefore a FALSE
-    /// NEGATIVE, and a false negative here is not a missed optimisation: the
-    /// conservative scan drops the root, the object is swept live, and the
-    /// failure surfaces cycles later as `TypeError: value is not a function`.
-    ///
-    /// The builder's phase machine guarantees this today (`Finalize` precedes
-    /// `Done`, and the set escapes only through `finish()`), so the assert is
-    /// free in release. It exists so that a phase added after `Finalize`, or a
-    /// caller that queries a partially-built set, fails a test instead of
-    /// corrupting the heap. Verified to fire: skipping the seal in `finalize`
-    /// trips it with "4 censused starts are invisible to this lookup".
-    #[inline]
-    fn arena_start_censused(&self, ptr: usize) -> bool {
-        debug_assert!(
-            self.current_arena_run.is_empty(),
-            "arena membership queried before finalize() sealed the open run: \
-             {} censused starts are invisible to this lookup",
-            self.current_arena_run.len()
-        );
-        match self.find_arena_floor_run(ptr) {
-            Some((floor, run)) if floor == ptr => {
-                self.note_run_reached(run);
-                true
-            }
-            _ => false,
-        }
-    }
-
-    fn find_arena_floor_run(&self, ptr: usize) -> Option<(usize, usize)> {
-        let idx = self.arena_run_firsts.partition_point(|&first| first <= ptr);
+    fn census_block_at(&self, ptr: usize) -> Option<&CensusStartBlock> {
+        let idx = self.arena_block_bases.partition_point(|&base| base <= ptr);
         if idx == 0 {
             return None;
         }
-        Self::find_floor(&self.arena_runs[idx - 1], ptr).map(|floor| (floor, idx - 1))
+        self.arena_blocks.get(idx - 1)
+    }
+
+    /// Exact arena membership: a census hit also records that the trace
+    /// reached the hit's block (#10182; see `block_skip`'s module doc for why
+    /// every mark passes through here).
+    #[inline]
+    fn arena_start_censused(&self, ptr: usize) -> bool {
+        let Some(block) = self.census_block_at(ptr) else {
+            return false;
+        };
+        let hit = if block.sorted {
+            self.large_starts[block.first..block.first + block.len]
+                .binary_search(&ptr)
+                .is_ok()
+        } else {
+            // Below `base + GC_HEADER_SIZE` the subtraction wraps past every
+            // extent, so one compare rejects both ends of the block.
+            let header_offset = ptr.wrapping_sub(block.base).wrapping_sub(GC_HEADER_SIZE);
+            if header_offset >= block.extent
+                || header_offset & ((1 << CENSUS_START_ALIGN_SHIFT) - 1) != 0
+            {
+                false
+            } else {
+                let bit = header_offset >> CENSUS_START_ALIGN_SHIFT;
+                #[cfg(test)]
+                let bit = start_bitmap_sabotage::shift_probe(bit);
+                self.start_bits
+                    .get(block.first + (bit >> 6))
+                    .is_some_and(|word| (word >> (bit & 63)) & 1 != 0)
+            }
+        };
+        if hit {
+            self.block_census.note_reached(block.block_idx);
+        }
+        hit
+    }
+
+    /// Greatest censused start (user pointer) in `block` that is `<= ptr`.
+    fn floor_start_in_block(&self, block: &CensusStartBlock, ptr: usize) -> Option<usize> {
+        if block.sorted {
+            let starts = &self.large_starts[block.first..block.first + block.len];
+            return Self::find_floor(starts, ptr);
+        }
+        if block.extent == 0 {
+            return None;
+        }
+        // A start `s <= ptr` has its header at `s - GC_HEADER_SIZE`, so the
+        // highest candidate header offset is `ptr - base - GC_HEADER_SIZE`,
+        // clamped to the last walked byte.
+        let header_offset = ptr.checked_sub(block.base)?.checked_sub(GC_HEADER_SIZE)?;
+        let bit = header_offset.min(block.extent - 1) >> CENSUS_START_ALIGN_SHIFT;
+        let mut word_idx = bit >> 6;
+        let top = bit & 63;
+        let keep = if top == 63 {
+            u64::MAX
+        } else {
+            (1u64 << (top + 1)) - 1
+        };
+        let mut word = self.start_bits[block.first + word_idx] & keep;
+        loop {
+            if word != 0 {
+                let floor_bit = word_idx * 64 + (63 - word.leading_zeros() as usize);
+                return Some(block.base + (floor_bit << CENSUS_START_ALIGN_SHIFT) + GC_HEADER_SIZE);
+            }
+            if word_idx == 0 {
+                return None;
+            }
+            word_idx -= 1;
+            word = self.start_bits[block.first + word_idx];
+        }
     }
 
     pub(super) fn find_floor(sorted: &[usize], ptr: usize) -> Option<usize> {
@@ -412,6 +501,42 @@ impl ValidPointerSet {
             return None;
         }
         Some(sorted[idx - 1])
+    }
+}
+
+/// Sabotage switch for the start-bitmap tests: shifts every bitmap probe by
+/// one alignment unit, so a test can show its membership oracle notices a
+/// bitmap that answers for the wrong address. Test builds only.
+#[cfg(test)]
+pub(crate) mod start_bitmap_sabotage {
+    use std::cell::Cell;
+
+    thread_local! {
+        static SHIFT_PROBE: Cell<bool> = const { Cell::new(false) };
+    }
+
+    #[inline]
+    pub(crate) fn shift_probe(bit: usize) -> usize {
+        if SHIFT_PROBE.with(Cell::get) {
+            bit + 1
+        } else {
+            bit
+        }
+    }
+
+    /// Arms the shifted probe until the guard drops.
+    pub(crate) struct Guard(bool);
+
+    impl Guard {
+        pub(crate) fn arm() -> Self {
+            Self(SHIFT_PROBE.with(|s| s.replace(true)))
+        }
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            SHIFT_PROBE.with(|s| s.set(self.0));
+        }
     }
 }
 
@@ -449,8 +574,7 @@ pub(super) enum ValidPointerSetBuildPhase {
 pub(super) struct ValidPointerSetBuilderSnapshot {
     pub(super) phase: ValidPointerSetBuildPhase,
     pub(super) arena_setup_blocks: usize,
-    pub(super) arena_run_count: usize,
-    pub(super) current_arena_run_len: usize,
+    pub(super) arena_block_count: usize,
     pub(super) lookup_count: usize,
     pub(super) malloc_index: usize,
 }
@@ -535,7 +659,6 @@ impl ValidPointerSetBuilder {
                         return false;
                     }
                     self.set.block_census.flush_block();
-                    self.set.finalize();
                     self.phase = ValidPointerSetBuildPhase::Done;
                     return true;
                 }
@@ -573,34 +696,38 @@ impl ValidPointerSetBuilder {
                 }
                 return false;
             };
-            if self.census_armed {
-                if block_idx != self.census_block_idx {
-                    self.census_block_idx = block_idx;
-                    if let Some((_, data, offset)) = self
-                        .arena_cursor
-                        .as_ref()
-                        .and_then(crate::arena::ArenaObjectCursor::current_block_extent)
-                    {
+            if block_idx != self.census_block_idx {
+                self.census_block_idx = block_idx;
+                if let Some((_, data, offset)) = self
+                    .arena_cursor
+                    .as_ref()
+                    .and_then(crate::arena::ArenaObjectCursor::current_block_extent)
+                {
+                    self.set.begin_arena_block(
+                        u32::try_from(block_idx).unwrap_or(u32::MAX),
+                        data,
+                        offset,
+                    );
+                    if self.census_armed {
                         self.set.block_census.begin_block(block_idx, data, offset);
                     }
                 }
+            }
+            if self.census_armed {
                 unsafe {
                     self.set
                         .block_census
                         .note_header(header_ptr as *const GcHeader);
                 }
             }
-            self.record_arena_header(header_ptr, block_idx);
+            self.record_arena_header(header_ptr);
         }
         false
     }
 
-    fn record_arena_header(&mut self, header_ptr: *mut u8, block_idx: usize) {
+    fn record_arena_header(&mut self, header_ptr: *mut u8) {
         let user_ptr = unsafe { header_ptr.add(GC_HEADER_SIZE) };
-        self.set.push_arena_in_block(
-            user_ptr as usize,
-            u32::try_from(block_idx).unwrap_or(u32::MAX),
-        );
+        self.set.push_arena(user_ptr as usize);
         unsafe {
             let header = header_ptr as *const GcHeader;
             let flags = (*header).gc_flags;
@@ -639,8 +766,7 @@ impl ValidPointerSetBuilder {
                 .arena_cursor_builder
                 .as_ref()
                 .map_or(0, crate::arena::ArenaObjectCursorBuilder::inspected_blocks),
-            arena_run_count: self.set.arena_runs.len(),
-            current_arena_run_len: self.set.current_arena_run.len(),
+            arena_block_count: self.set.arena_blocks.len(),
             lookup_count: self.set.lookup_count(),
             malloc_index: self.malloc_index,
         }
