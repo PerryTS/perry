@@ -232,6 +232,7 @@ fn next(iter: *mut ObjectHeader) -> Result<f64, EngineError> {
         &mut budget,
         &memory,
         &mut host::poll,
+        None,
     )?;
     let Some(found) = found else {
         complete(&iter);

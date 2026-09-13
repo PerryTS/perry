@@ -28,6 +28,8 @@ mod walk;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_batch_unregister;
+#[cfg(test)]
 mod tests_promoted_runs;
 
 // Cross-sibling shared types/thread-locals (used by sibling modules via
@@ -152,8 +154,8 @@ pub(crate) use page_meta::{
     old_page_account_swept_object, old_page_clear_dirty, old_page_mark_dirty,
     old_page_meta_snapshot, old_page_summary, old_pages_begin_gc_cycle,
     old_pages_reset_sweep_accounting, record_arena_object_start, unregister_old_object_pages,
-    HeapGeneration, HeapSpace, OldArenaPageObjectCursor, OldArenaSourceBlockSelection, OldPageMeta,
-    OldPageSummary,
+    unregister_old_objects_batch, HeapGeneration, HeapSpace, OldArenaPageObjectCursor,
+    OldArenaSourceBlockSelection, OldPageMeta, OldPageSummary,
 };
 
 #[cfg(test)]

@@ -60,6 +60,10 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // invariant and returns the proven class id (0 = no proof). O(n) on the
     // first visit, O(1) after — see `array/element_shape.rs`.
     module.declare_function("js_array_ensure_element_shape", I32, &[I64]);
+    // #10123: the shape-keyed sibling — establish-or-confirm for a class-0
+    // (plain-object) element array, returning the exact ordinary ShapeId every
+    // element carries, or 0.
+    module.declare_function("js_array_ensure_element_shape_ordinary", I32, &[I64]);
     module.declare_function("js_array_get_index_or_string", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_array_numeric_get_f64_unboxed", DOUBLE, &[I64, I32]);
     module.declare_function("js_array_set_f64", VOID, &[I64, I32, DOUBLE]);

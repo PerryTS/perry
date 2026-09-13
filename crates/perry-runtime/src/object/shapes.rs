@@ -863,6 +863,87 @@ pub extern "C" fn js_object_shape_id_for_keys(keys: u64, key_count: u32) -> u32 
     id
 }
 
+/// #10123: the inline slot a PLAIN ordinary shape assigns to `key`, or `-1`.
+///
+/// The element-shape loop clone's shape-keyed arm asks this once per tracked
+/// property, in the preheader, and the answer replaces the compile-time packed
+/// field index a class-keyed clone bakes in. `key_bits` is the whole NaN-boxed
+/// key as codegen loaded it from the string pool — NOT a masked
+/// `StringHeader*`, because a short property name ("id") reaches the pool as an
+/// SSO immediate whose masked low bits are packed characters, not an address.
+///
+/// **"Plain" is what makes slot k == key position k.** The four conjuncts
+/// below are that claim, and dropping any one of them turns this into a wrong
+/// offset rather than a missed optimization:
+///
+/// * `object_kind == Ordinary` — a class shape's slots are the class's
+///   layout, which this function knows nothing about;
+/// * `semantic_generation == 0` — a descriptor/prototype mutation minted this
+///   layout, so the keys array no longer describes the live slots;
+/// * `hole_count == 0` — an O(1) delete tombstones a key IN PLACE, so a later
+///   key's position in the keys array is no longer its slot;
+/// * `live_inline_slot_count == logical_key_count` — every key is inline; a
+///   shape with spilled keys would put later ones outside the inline block.
+///
+/// Allocation-free and side-effect-free: it reads the descriptor, walks the
+/// keys array, and returns. The walk is bounded by the physically present key
+/// slots (`length.min(capacity)`), which is why a corrupted or forwarded keys
+/// array costs a short scan and a `-1` rather than a spin.
+#[no_mangle]
+pub extern "C" fn js_shape_ordinary_inline_slot_for_key(shape_id: u32, key_bits: u64) -> i32 {
+    let Some(descriptor) = shape_descriptor_by_id(shape_id) else {
+        return -1;
+    };
+    if descriptor.object_kind != ShapeObjectKind::Ordinary
+        || descriptor.semantic_generation != 0
+        || descriptor.hole_count != 0
+        || descriptor.live_inline_slot_count != descriptor.logical_key_count
+    {
+        return -1;
+    }
+    let mut wanted_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let mut stored_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    unsafe {
+        let Some(wanted) = crate::string::js_string_key_bytes(
+            crate::JSValue::from_bits(key_bits),
+            &mut wanted_buf,
+        ) else {
+            return -1;
+        };
+        let (slots, slot_len) =
+            super::keys_array_dense_slots(descriptor.keys as usize as *const ArrayHeader);
+        if slots.is_null() {
+            return -1;
+        }
+        let bound = slot_len.min(descriptor.logical_key_count as usize);
+        for index in 0..bound {
+            let stored = crate::JSValue::from_bits((*slots.add(index)).to_bits());
+            // Identical bits is the overwhelmingly common answer for a pooled
+            // key against a canonical keys array (both interned), and it is
+            // correct for either representation — an SSO immediate and a heap
+            // pointer each compare equal to themselves. The byte compare below
+            // is what makes a MIXED pair (pool immediate vs heap key, or two
+            // separately allocated heap keys) still match.
+            if stored.bits() == key_bits {
+                return index as i32;
+            }
+            if crate::string::js_string_key_bytes(stored, &mut stored_buf) == Some(wanted) {
+                return index as i32;
+            }
+        }
+    }
+    -1
+}
+
+/// Keepalive anchor — `js_shape_ordinary_inline_slot_for_key` is a
+/// generated-code-only callee (the element-shape loop clone's shape-keyed
+/// preheader), so the auto-optimize whole-program build would otherwise
+/// dead-strip it (see the FFI-symbol-link-break class).
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_SHAPE_ORDINARY_INLINE_SLOT_FOR_KEY: extern "C" fn(u32, u64) -> i32 =
+    js_shape_ordinary_inline_slot_for_key;
+
 /// Mint a process-global ShapeId for a codegen-registered typed layout and
 /// install its structural descriptor in the current agent. Unlike
 /// [`shape_id_for_keys_ensure`], this deliberately does not canonicalise by

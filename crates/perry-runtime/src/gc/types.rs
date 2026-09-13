@@ -119,6 +119,97 @@ pub const LARGE_OBJECT_THRESHOLD_BYTES: usize = 16 * 1024;
 /// block.
 pub const LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES: usize = 128 * 1024;
 
+/// Birth-generation ceiling for JSON-constructed storage (#10123).
+///
+/// Three quarters of a nursery block. Wide-object storage needs only half
+/// (a 50,000-field document is 400 KB), but a record array sized once from the
+/// parser's `remaining / 96` estimate does not: a 7.1 MB document of 59,000 rows
+/// estimates 74,145 slots, 593 KB. Admitting that single allocation young is
+/// what lets a minor reclaim the array and its records together after the
+/// document dies. Still inside the 1 MiB `arena::BLOCK_SIZE` and
+/// `copying::MAX_YOUNG_MOVE_BYTES`, so anything admitted here stays movable.
+/// Past it storage is born old as before.
+pub const LARGE_OBJECT_STORAGE_YOUNG_BIRTH_CEILING_BYTES: usize = 768 * 1024;
+
+/// Object types a [`JsonWideBirthScope`] may keep young past the threshold.
+pub mod json_wide_birth {
+    /// Nothing (the scope is closed).
+    pub const NONE: u8 = 0;
+    /// A wide object's own property storage.
+    pub const OBJECTS: u8 = 1;
+    /// A parse shape-keys array.
+    pub const KEYS_ARRAY: u8 = 2;
+}
+
+crate::perry_thread_local! {
+    /// Read ONLY from the cold large-object branch of `arena_alloc_gc` (and its
+    /// `ConstructionBatch` twin), never from an allocation hot path.
+    static JSON_WIDE_BIRTH_MASK: std::cell::Cell<u8> =
+        const { std::cell::Cell::new(json_wide_birth::NONE) };
+}
+
+/// Keep a wide JSON document's own storage young past the birth threshold
+/// (#10123), for as long as the copier can still move it.
+///
+/// The threshold's rationale is that a large pointer-bearing object is stamped
+/// `GC_FLAG_TENURED` and a minor never sweeps old-gen, so its cost "is not its
+/// own bytes, it is every object it can reach, held live through the remembered
+/// set by a container nothing refers to any more". A wide document's property
+/// storage and its shape-keys array are exactly that container: above 16,384
+/// fields each crosses 128 KB, is born tenured, and then holds its whole field
+/// or key set live after the document itself is dead. Measured at 64 parses,
+/// retained shape-keys arrays / peak RSS: 16,300 fields -> 0 / 29 MiB,
+/// 16,500 -> 30 / 98 MiB, 50,000 -> 15 / 177 MiB -- the step landing exactly on
+/// the constant.
+///
+/// **Scoped, and type-masked, on purpose.** Raising the constant globally also
+/// moved ordinary ARRAY element storage into the nursery, which those rows do
+/// not need and which cost them RSS they could not afford (records_array_8m:scan
+/// 442 -> 643 MiB against Node 156 / Bun 166). Only a document's own object
+/// storage and its keys array are admitted here; array element storage keeps the
+/// flat threshold.
+pub struct JsonWideBirthScope(u8);
+
+impl JsonWideBirthScope {
+    /// Admit wide-object property storage for the duration of a parse.
+    pub fn objects() -> Self {
+        Self(JSON_WIDE_BIRTH_MASK.with(|c| c.replace(json_wide_birth::OBJECTS)))
+    }
+
+    /// Admit a parse shape-keys array around its single allocation site.
+    pub fn keys_array() -> Self {
+        Self(JSON_WIDE_BIRTH_MASK.with(|c| c.replace(json_wide_birth::KEYS_ARRAY)))
+    }
+
+    /// Admit a JSON-constructed array allocation: a record array sized once
+    /// from the parser's estimate (see `ConstructionArray::presized_records`).
+    pub fn arrays() -> Self {
+        Self(JSON_WIDE_BIRTH_MASK.with(|c| c.replace(json_wide_birth::KEYS_ARRAY)))
+    }
+}
+
+impl Drop for JsonWideBirthScope {
+    fn drop(&mut self) {
+        JSON_WIDE_BIRTH_MASK.with(|c| c.set(self.0));
+    }
+}
+
+/// May an already-oversized allocation still be born young?
+///
+/// Called ONLY once the size test has already said "large", so the thread-local
+/// read never touches the allocation hot path. The ceiling is the copier's own
+/// refusal point: past it a young object could not be moved, which is the one
+/// thing birth-young must not promise falsely.
+#[inline]
+pub fn json_wide_birth_permits(total_size: usize, obj_type: u8) -> bool {
+    if total_size > LARGE_OBJECT_STORAGE_YOUNG_BIRTH_CEILING_BYTES {
+        return false;
+    }
+    let mask = JSON_WIDE_BIRTH_MASK.with(|c| c.get());
+    (mask == json_wide_birth::OBJECTS && obj_type == GC_TYPE_OBJECT)
+        || (mask == json_wide_birth::KEYS_ARRAY && obj_type == GC_TYPE_ARRAY)
+}
+
 #[inline]
 pub fn is_large_object_total_size(total_size: usize) -> bool {
     total_size > LARGE_OBJECT_THRESHOLD_BYTES
@@ -137,6 +228,26 @@ pub fn large_object_threshold_for_type(obj_type: u8) -> usize {
     if obj_type == GC_TYPE_BUFFER {
         return LARGE_OBJECT_THRESHOLD_BYTES;
     }
+    // #10123 NOTE: the widening is SCOPED (see `JsonWideBirthScope`), not a
+    // blanket change to this constant. A WIDE OBJECT's property storage is the
+    // threshold's own rationale warns about -- "every object it can reach, held
+    // live through the remembered set by a container nothing refers to any
+    // more". Above 16,384 fields it crosses 128 KB, is born tenured, and then
+    // holds its whole field set live after the object itself is dead. Measured
+    // at 64 parses of one document, retained shape-keys arrays / peak RSS:
+    // 16,300 fields -> 0 / 29 MiB, 16,500 -> 30 / 98 MiB, 50,000 -> 15 / 177 MiB;
+    // the step lands exactly on the constant.
+    //
+    // Widened for OBJECT storage ONLY, not for arrays. That is not a guess: on
+    // this benchmark matrix `wide_1m` is the only row with a large
+    // GC_TYPE_OBJECT birth (400,024 B, once per parse), while every large birth
+    // on records_array_8m/20m is GC_TYPE_ARRAY element storage (131 KB - 2 MB).
+    // Widening those too bought RSS those rows did not need and cost it
+    // elsewhere: records_array_8m:scan 444 -> 710 MiB, 20m:parse 267 -> 314 MiB.
+    //
+    // Still inside the copier's structural ceilings (1 MB nursery block,
+    // `copying::MAX_YOUNG_MOVE_BYTES`), so an object admitted here is movable --
+    // the one thing birth-young must not promise falsely.
     match gc_type_info(obj_type) {
         Some(info) if !info.pointer_free => LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES,
         _ => LARGE_OBJECT_THRESHOLD_BYTES,
@@ -237,6 +348,10 @@ pub(crate) enum GcMoveHookKind {
     /// `GC_TYPE_REGEXP` is movable, and both tables use the payload address as
     /// their key.
     RegExpSideTables,
+    /// Rekey a lazy JSON array's tape registration. `json_tape_store` keys a
+    /// tape by its owner's address, which is precisely what kept
+    /// `GC_TYPE_LAZY_ARRAY` immovable and old-gen until this existed.
+    LazyArrayTape,
 }
 
 #[allow(dead_code)]
@@ -468,14 +583,22 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         true,
         GcRewriteDescriptorKind::LazyArray,
         GcLayoutSlotKind::None,
-        // NOT movable. `json_tape_store` keys a lazy array's tape by its
-        // header address, and every caller outside `json_tape` holds raw
-        // header pointers across allocations. The header is allocated old-gen
-        // and born tenured (`json_tape::alloc_lazy_header_bytes`), so nothing
-        // relocates it today; saying so here is what keeps old-page defrag
-        // from ever doing so. `true` was vacuous before #7539 anyway — the
-        // header was multi-megabyte and never left the old generation.
-        false,
+        // Movable since the tape registration learned to follow its owner
+        // (`GcMoveHookKind::LazyArrayTape`) and a header dying in a copying
+        // minor's from-space learned to give its tape back
+        // (`json_tape_store::finalize_dead_copied_minor_from_space_lazy_tapes`).
+        // Those two were the whole reason this was `false`: the registry keys
+        // a tape by its owner's address, and the flip runs no finalize hooks.
+        //
+        // Pinning was not free. A lazy cluster born old is never swept by a
+        // minor, so a DEAD one still holds its entire element graph live
+        // through the remembered set until a full collection — which on a
+        // parse-and-scan loop never arrives. Measured on
+        // `records_array_16k:scan`: every minor promoted essentially the whole
+        // nursery (`survival_permille=996`, `copied_objects=0`,
+        // `freed_bytes=0`) while `old_in_use` climbed past 48 MB, for 205 MiB
+        // peak RSS against Node's 62 MiB.
+        true,
         // #7539: the tape is a `json_tape_store` side allocation now, not
         // inline payload. Keeping it inline made the header ~2.4 MB on a
         // 10 k-record blob, which `arena_alloc_gc` routed into the old
@@ -485,7 +608,7 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         GcExternalBytePolicy::SideAllocation,
         GcLargeObjectPolicy::OldArenaWhenOverThreshold,
         false,
-        GcMoveHookKind::None,
+        GcMoveHookKind::LazyArrayTape,
         GcRewriteHookKind::None,
         GcFinalizeHookKind::LazyArrayTape,
     )),
@@ -821,6 +944,9 @@ pub(crate) fn gc_type_after_payload_move(obj_type: u8, old_user: usize, new_user
         GcMoveHookKind::RegExpSideTables => {
             crate::regex::regex_header_moved_for_gc(old_user, new_user);
         }
+        GcMoveHookKind::LazyArrayTape => {
+            crate::json_tape_store::owner_moved(old_user, new_user);
+        }
     }
 }
 
@@ -843,6 +969,13 @@ pub(crate) fn gc_type_clear_dead_payload_side_tables(obj_type: u8, user_ptr: usi
         }
         GcMoveHookKind::ErrorSideTables => {
             crate::node_submodules::diagnostics_gc::error_side_tables_clear_dead(user_ptr);
+        }
+        GcMoveHookKind::LazyArrayTape => {
+            // The tape is released by `GcFinalizeHookKind::LazyArrayTape` and,
+            // for a header that dies in a copying minor's from-space, by
+            // `finalize_dead_copied_minor_from_space_lazy_tapes`. Releasing it
+            // a third time here would be sound (the release is idempotent) but
+            // would hide which pass actually owns the reclaim.
         }
         GcMoveHookKind::RegExpSideTables => {
             crate::regex::regex_header_clear_dead_for_gc(user_ptr);

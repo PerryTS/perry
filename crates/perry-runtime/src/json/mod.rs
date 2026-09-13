@@ -29,6 +29,7 @@ mod parse_inline_object;
 mod parse_reuse;
 mod parse_scalar;
 mod parser;
+pub(crate) mod traversal_feedback;
 // `pub(crate)` so `gc::mod` can register `scan_raw_json_key_root_mut` (#7211):
 // the interned `"rawJSON"` key is a GC root.
 pub(crate) mod raw_json;
@@ -87,9 +88,8 @@ pub(crate) unsafe fn test_json_stringify_record_output(bits: u64) -> Option<JSVa
     stringify_record_output::try_object(bits)
 }
 pub(crate) use parse_reuse::{
-    cached_parse_source_is_direct, cached_parse_string, remember_parse_object_template,
-    remember_parse_string, try_reuse_parse_object_template, validate_cached_parse_source,
-    ParseStringReuse,
+    cached_parse_string, remember_parse_object_template, remember_parse_string,
+    try_reuse_parse_object_template, ParseStringReuse,
 };
 #[cfg(test)]
 pub(crate) use parse_reuse::{
@@ -539,6 +539,10 @@ unsafe fn allocate_parse_shape_keys_array(keys: &[*const StringHeader]) -> *mut 
     // construction helper publishes its pointer layout and, for large arrays
     // born in old generation, remembers young key strings before return.
     let _suppressed = crate::gc::GcSuppressScope::new();
+    // #10123: same reasoning as the object storage -- a wide document's keys
+    // array crosses the threshold, is born tenured, and then holds its whole
+    // key set live long after every instance has died.
+    let _wide = crate::gc::JsonWideBirthScope::keys_array();
     let mut batch = crate::arena::ConstructionBatch::new();
     let mut array = construction_array::ConstructionArray::new(&mut batch, keys.len() as u32);
     for &key_ptr in keys {

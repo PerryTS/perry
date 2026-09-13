@@ -375,12 +375,17 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                 return true;
             }
             // repsel #7480 step 3: inside an element-shape fast clone a tracked
-            // `arr[i].field` read is a GUARD-PROVEN raw double — the preheader
-            // pinned the element class and the per-element residual check
-            // requires `GC_OBJ_TYPED_LAYOUT_INTACT`, so the slot cannot hold a
-            // NaN-boxed value. This is a stronger proof than the declared-type
-            // answer below, and it is the ONLY one available for an
-            // object-literal element type, whose owner class
+            // `arr[i].field` read is a GUARD-PROVEN raw double. The class-keyed
+            // arm gets that from the residual check's
+            // `GC_OBJ_TYPED_LAYOUT_INTACT` conjunct, which says the slot holds
+            // a raw `double` rather than a NaN-boxed value; #10123's
+            // shape-keyed arm gets it from a Number-tag test on the loaded word
+            // that side-exits to the slow clone when it fails
+            // (`expr::element_shape_guard::emit_element_shape_field_load`).
+            // Either way the value this predicate licenses a consumer to treat
+            // as an f64 has been proven to be one. This is a stronger proof
+            // than the declared-type answer below, and it is the ONLY one
+            // available for an object-literal element type, whose owner class
             // `receiver_class_name` deliberately does not resolve.
             //
             // It is also load-bearing rather than a bonus: without it

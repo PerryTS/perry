@@ -11,6 +11,36 @@ pub(super) struct ConstructionArray {
 }
 
 impl ConstructionArray {
+    /// Allocate a record array ONCE at its estimated final size (#10123).
+    ///
+    /// The previous clamp of 16,384 slots is a 131,088-byte allocation -- 16
+    /// bytes over the 131,072-byte pointer-bearing birth threshold -- so every
+    /// large record array was born OLD on its very first allocation and then
+    /// doubled twice more in old-gen (131 -> 262 -> 524 KB for 59,000 rows).
+    /// An old array of young records keeps them alive through the remembered
+    /// set after the document dies, and no full is ever scheduled for it.
+    ///
+    /// Sizing to the estimate removes the doubling chain. Up to the JSON
+    /// young-birth ceiling the single allocation is kept in the nursery, so a
+    /// minor reclaims the array and its records together once the document is
+    /// dead; past it the array is still one old allocation rather than four.
+    pub(super) unsafe fn presized_records(
+        batch: &mut Option<crate::arena::ConstructionBatch>,
+        estimated_len: usize,
+    ) -> Self {
+        let slot = std::mem::size_of::<crate::value::JSValue>();
+        let header = std::mem::size_of::<ArrayHeader>() + crate::gc::GC_HEADER_SIZE;
+        let young_slots = (crate::gc::LARGE_OBJECT_STORAGE_YOUNG_BIRTH_CEILING_BYTES
+            .saturating_sub(header))
+            / slot;
+        let capacity = estimated_len.clamp(16, (u32::MAX / 2) as usize);
+        if capacity <= young_slots {
+            let _young = crate::gc::JsonWideBirthScope::arrays();
+            return Self::new(batch, capacity as u32);
+        }
+        Self::new(batch, capacity as u32)
+    }
+
     pub(super) unsafe fn new(
         batch: &mut Option<crate::arena::ConstructionBatch>,
         capacity: u32,
@@ -147,5 +177,52 @@ impl ConstructionArray {
     ) -> *mut ArrayHeader {
         self.finish_layout(batch);
         self.ptr
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #10123: a record array sized from the parser estimate is ONE allocation,
+    /// born young when it fits the JSON young-birth ceiling and old past it.
+    /// The previous 16,384-slot clamp was a 131,088-byte first allocation --
+    /// 16 bytes over the pointer-bearing threshold -- so every large record
+    /// array began life tenured and then doubled twice more in old-gen.
+    #[test]
+    fn presized_record_array_is_one_allocation_in_the_right_generation() {
+        let slot = std::mem::size_of::<crate::value::JSValue>();
+        let header = std::mem::size_of::<ArrayHeader>() + crate::gc::GC_HEADER_SIZE;
+        let young_slots =
+            (crate::gc::LARGE_OBJECT_STORAGE_YOUNG_BIRTH_CEILING_BYTES - header) / slot;
+        unsafe {
+            let _suppress = crate::gc::GcSuppressScope::new();
+
+            // records_*_8m shape: 7.1 MB / 96 -> 74,145 slots, 593 KB.
+            let mut batch = None;
+            let young = ConstructionArray::presized_records(&mut batch, 74_145);
+            assert!(74_145 <= young_slots, "fixture must sit under the ceiling");
+            assert!(
+                !crate::arena::pointer_in_old_gen(young.ptr as usize),
+                "an estimate under the young-birth ceiling must be born young"
+            );
+            assert!((*young.ptr).capacity >= 74_145);
+
+            // It must not need to grow for the rows it was sized for.
+            let mut young = young;
+            let before = young.ptr;
+            for i in 0..59_000 {
+                young.push(&mut batch, JSValue::number(i as f64));
+            }
+            assert_eq!(young.ptr, before, "a presized record array must not regrow");
+
+            // records_*_20m shape: past the ceiling the single allocation is old.
+            let mut batch = None;
+            let old = ConstructionArray::presized_records(&mut batch, young_slots + 1_000);
+            assert!(
+                crate::arena::pointer_in_old_gen(old.ptr as usize),
+                "an estimate past the ceiling keeps the old-gen birth"
+            );
+        }
     }
 }

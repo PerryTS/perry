@@ -97,6 +97,7 @@ pub(crate) fn call_one(
 /// RegExpExec with operation-owned limits. Lookup happens on every iteration;
 /// a callback may replace exec or recompile the receiver before the next one.
 /// Only the known builtin may omit materialization for a boolean test.
+/// `reuse` is consulted only on the builtin path, after the observable lookup.
 pub(crate) fn execute(
     receiver: &RuntimeHandle<'_>,
     input: &RuntimeHandle<'_>,
@@ -104,6 +105,7 @@ pub(crate) fn execute(
     budget: &mut Budget,
     memory: &MemoryBudget,
     poll: &mut impl FnMut() -> Result<(), EngineError>,
+    reuse: Option<&api::Reuse<'_, '_>>,
 ) -> Result<Option<ExecResult>, EngineError> {
     host::charge(budget, 1)?;
     if crate::object::regex_canonical::exec(receiver.get_nanbox_f64()) {
@@ -114,7 +116,7 @@ pub(crate) fn execute(
             crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as *mut RegExpHeader;
         return input
             .with_const_ptr(|input| {
-                api::execute_with_resources(re, input, materialize, budget, memory, poll)
+                api::execute_with_resources(re, input, materialize, budget, memory, poll, reuse)
             })
             .map(|result| result.map(ExecResult::Builtin));
     }
@@ -149,7 +151,7 @@ pub(crate) fn execute(
     // `execute_with_resources` roots both before it allocates.
     input
         .with_const_ptr::<StringHeader, _>(|input| {
-            api::execute_with_resources(re, input, materialize, budget, memory, poll)
+            api::execute_with_resources(re, input, materialize, budget, memory, poll, reuse)
         })
         .map(|result| result.map(ExecResult::Builtin))
 }
@@ -330,6 +332,7 @@ pub(crate) fn test_string(receiver: f64, input: *const StringHeader) -> Result<b
         &mut Budget::new(api::WORK),
         &MemoryBudget::new(api::SCRATCH_BYTES),
         &mut host::poll,
+        None,
     )
     .map(|result| result.is_some())
 }

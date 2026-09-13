@@ -369,9 +369,15 @@ fn assert_fast_clone_is_entered(ir: &str) {
 }
 
 /// The emitted text the fast clone owns: exactly the blocks named
-/// `for.element_shape_fast.*` and any `element_shape.load` blocks its
-/// runtime-guarded field reads branch into. A statically layout-proven clone
-/// keeps the field load directly in its body and owns no such side-exit block.
+/// `for.element_shape_fast.*`, any `element_shape.load` blocks its
+/// runtime-guarded field reads branch into, and (#10123) any
+/// `element_shape.number` blocks a shape-keyed read's tag test branches into.
+/// A statically layout-proven clone keeps the field load directly in its body
+/// and owns no such side-exit block.
+///
+/// Every block the clone can execute must be listed here, not just the ones a
+/// given assertion is about: the negatives below (call-free, no element-read
+/// tier) are only true of the clone if the slice really is the whole clone.
 ///
 /// #7480 step 3 — ANTI-VACUITY. This used to slice from the first *substring*
 /// occurrence of `for.element_shape_fast.cond`, which is the
@@ -402,7 +408,8 @@ fn fast_clone_slice(ir: &str) -> String {
         // belongs to whichever block was last opened.
         if !line.starts_with(char::is_whitespace) && trimmed.ends_with(':') {
             in_fast_block = trimmed.starts_with("for.element_shape_fast.")
-                || trimmed.starts_with("element_shape.load");
+                || trimmed.starts_with("element_shape.load")
+                || trimmed.starts_with("element_shape.number");
         }
         if in_fast_block {
             owned.push_str(line);
@@ -1609,3 +1616,12 @@ fn element_binding_form_through_a_parameter_gets_the_clone() {
     let ir = emit(&m);
     assert_clone_fires_call_free(&ir, "parameter binding form");
 }
+
+/// #10123's shape-keyed cases, split out because this file crosses the repo's
+/// 2000-line cap otherwise. A CHILD module rather than a sibling: every helper
+/// above — `emit`, `block_slice`, `fast_clone_slice`,
+/// `assert_clone_fires_call_free`, the class-arm module builders the
+/// "still takes the class arm" case compares against — is private to this
+/// module, and duplicating them is how two IR censuses drift apart.
+#[path = "element_shape_shape_keyed_tests.rs"]
+mod shape_keyed;

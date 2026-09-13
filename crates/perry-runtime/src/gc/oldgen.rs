@@ -1345,6 +1345,8 @@ impl IncrementalSweepState {
 
 struct ArenaSweepObjectsState {
     cursor: crate::arena::ArenaObjectCursor,
+    /// Dead old headers awaiting one batched page-index removal (see `sweep_batch`).
+    pending_old_unregister: sweep_batch::PendingOldUnregister,
     block_snapshots: Vec<crate::arena::ArenaBlockSnapshot>,
     block_has_live: Vec<bool>,
     resettable_general_n: usize,
@@ -1404,6 +1406,7 @@ impl ArenaSweepObjectsState {
         crate::arena::old_pages_reset_sweep_accounting();
         Self {
             cursor: crate::arena::ArenaObjectCursor::new(crate::arena::ArenaWalkOrder::BlockIndex),
+            pending_old_unregister: Default::default(),
             block_snapshots,
             block_has_live: vec![false; n_blocks],
             resettable_general_n: crate::arena::general_block_count(),
@@ -1445,14 +1448,18 @@ impl ArenaSweepObjectsState {
 
     fn step(&mut self, budget: usize) -> bool {
         let mut remaining = budget;
+        let mut done = false;
         while remaining > 0 {
             let Some((header_ptr, block_idx)) = self.cursor.next() else {
-                return true;
+                done = true;
+                break;
             };
             remaining -= 1;
             self.process_object(header_ptr as *mut GcHeader, block_idx);
         }
-        false
+        // Never leave a dead header in the page index across a step boundary.
+        self.pending_old_unregister.flush();
+        done
     }
 
     fn block_has_live(&self) -> &[bool] {
@@ -1624,7 +1631,7 @@ impl ArenaSweepObjectsState {
             gc_type_clear_dead_payload_side_tables((*header).obj_type, user_ptr as usize);
         }
         if self.reclaim_dead_old_blocks && dead_old {
-            invalidate_dead_old_arena_header(header, total_size);
+            self.pending_old_unregister.defer(header, total_size);
         } else {
             (*header).gc_flags = flags & !(GC_FLAG_FORWARDED | GC_FLAG_MARKED);
         }
@@ -1643,7 +1650,7 @@ impl ArenaSweepObjectsState {
         }
         finalize_dead_arena_payload(header, user_ptr, self.overflow_active);
         if self.reclaim_dead_old_blocks && dead_old {
-            invalidate_dead_old_arena_header(header, total_size);
+            self.pending_old_unregister.defer(header, total_size);
         }
     }
 }
@@ -1656,6 +1663,7 @@ enum ArenaSweepCleanupSubphase {
     Done,
 }
 
+mod sweep_batch;
 mod sweep_cleanup;
 use sweep_cleanup::*;
 

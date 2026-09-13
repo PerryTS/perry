@@ -1,0 +1,3 @@
+### GC: batch dead old-object page unregistration per sweep step
+
+Sweeping a dead old-generation object removed it from the page-object index one object at a time: two `Vec` allocations, a deferral flush, and a linear `position` search in the page's object list before `swap_remove`. A full collection that frees whole pages of small objects was quadratic in objects per page (15.8% of all samples on `records_array_8m:scan`). The sweep now invalidates each dead header immediately, as before, and queues its page-index removal; a step's worth (flushed at 4,096 entries and at every step boundary) is removed in one pass per page with a sorted binary-search `retain`, and page metadata is decremented and refreshed once per page.
