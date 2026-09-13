@@ -824,6 +824,12 @@
       "why": "#10165: #[cfg(test)] Cell<usize> counter of how many splits took the forward-search path, so tests can tell which path ran. It stores only a count and is absent from shipped binaries."
     },
     {
+      "file": "crates/perry-runtime/src/regex/perex_split.rs",
+      "name": "LAST_FORWARD_WORK",
+      "verdict": "test_only",
+      "why": "#10164: #[cfg(test)] Cell<usize> holding the Perex work units the last forward split charged, so tests can assert its cost scales linearly. A quantity, never an address, and absent from shipped binaries."
+    },
+    {
       "file": "crates/perry-runtime/src/regex/site_test.rs",
       "name": "DIRECT_G",
       "verdict": "test_only",
