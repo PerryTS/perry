@@ -49,6 +49,15 @@ fn global_loop(
     input: &RuntimeHandle<'_>,
     reuse: Option<&Reuse<'_, '_>>,
 ) -> (Vec<Vec<u8>>, usize) {
+    global_loop_collecting(receiver, input, reuse, true)
+}
+
+fn global_loop_collecting(
+    receiver: &RuntimeHandle<'_>,
+    input: &RuntimeHandle<'_>,
+    reuse: Option<&Reuse<'_, '_>>,
+    collect: bool,
+) -> (Vec<Vec<u8>>, usize) {
     let memory = MemoryBudget::new(api::SCRATCH_BYTES);
     let mut budget = Budget::new(api::WORK);
     let mut matches = Vec::new();
@@ -65,7 +74,9 @@ fn global_loop(
                     &mut budget,
                     &memory,
                     &mut || {
-                        gc_collect_minor();
+                        if collect {
+                            gc_collect_minor();
+                        }
                         Ok(())
                     },
                     reuse,
@@ -130,10 +141,15 @@ fn perex_reuse_serves_a_whole_global_loop_across_moving_collections() {
     let (fresh_matches, fresh_work) = global_loop(&fresh, &fresh_input, None);
     assert_eq!(fresh_matches, expected);
     // Six searches (five matches and the final miss). Binding per search charges
-    // program validation six times; reuse charged it once, in `setup`.
+    // program validation six times; reuse charged it once, in `setup`. Reuse
+    // also resumes each search from the previous one instead of seeking from
+    // an end of this non-ASCII subject, so it saves at least the validations.
     let validation = api::WORK - setup.remaining();
     assert!(validation > 0);
-    assert_eq!(fresh_work, reused_work + 6 * validation);
+    assert!(
+        fresh_work >= reused_work + 6 * validation,
+        "reuse must save at least six program validations: fresh {fresh_work}, reused {reused_work}, one validation {validation}"
+    );
 }
 
 #[test]
@@ -223,4 +239,86 @@ fn perex_reuse_binds_a_different_string_afresh() {
         .unwrap()
         .unwrap();
     assert_eq!(first_item(&scope, found.array), b"22");
+}
+
+/// Work a global loop over `repeats` copies of a non-ASCII record charges.
+fn non_ascii_loop_work(repeats: usize, reuse: bool) -> usize {
+    let local = RuntimeHandleScope::new();
+    let input = text(&local, "ä1 ö22 ".repeat(repeats).as_bytes());
+    let receiver = regex(&local, "[a-zäö]+\\d+", "gu");
+    let subject = BoundSubject::new(unsafe { HeapSubject::new(input) }.unwrap()).unwrap();
+    let mut setup = Budget::new(api::WORK);
+    let reused = Reuse::new(&local, &receiver, input, &subject, &mut setup);
+    let (matches, work) =
+        global_loop_collecting(&receiver, &input, reuse.then_some(&reused), false);
+    assert_eq!(matches.len(), 2 * repeats);
+    work
+}
+
+#[test]
+fn perex_reuse_positions_keep_a_non_ascii_global_loop_linear() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    super::perex_public::register_host_roots();
+    // Doubling the subject doubles the searches. Seeking each one from an end
+    // of the subject makes the total roughly quadruple (#10164); resuming from
+    // the previous search keeps it roughly double.
+    let fresh = non_ascii_loop_work(2_000, false) as f64 / non_ascii_loop_work(1_000, false) as f64;
+    let reused = non_ascii_loop_work(2_000, true) as f64 / non_ascii_loop_work(1_000, true) as f64;
+    assert!(
+        fresh > 3.0,
+        "the unpositioned loop must be quadratic here, got {fresh:.2}x"
+    );
+    assert!(
+        reused < 2.2,
+        "the positioned loop must be linear, got {reused:.2}x"
+    );
+}
+
+fn nanbox_text(scope: &RuntimeHandleScope, value: &str) -> f64 {
+    text(scope, value.as_bytes()).with_const_ptr::<StringHeader, _>(|p| js_nanbox_string(p as i64))
+}
+
+fn utf16_length(value: f64) -> u32 {
+    let string = crate::value::js_nanbox_get_pointer(value) as *const StringHeader;
+    unsafe { (*string).utf16_len }
+}
+
+#[test]
+fn perex_split_and_replace_no_longer_hit_the_work_limit_on_linear_inputs() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    super::perex_public::register_host_roots();
+    let scope = RuntimeHandleScope::new();
+
+    // The #10164 reduction: a 32,000-unit split threw RangeError("Regular
+    // expression work limit exceeded"); Node returns 6,001 pieces.
+    let subject = "ä中12，Ö漢345；ef6😀".repeat(2_000);
+    let input = nanbox_text(&scope, &subject);
+    let input = scope.root_nanbox_f64(input);
+    assert_eq!(utf16_length(input.get_nanbox_f64()), 32_000);
+    let re = regex(&scope, "[，；😀]+", "u");
+    let pieces = crate::regex::perex_split::regexp(
+        re.get_nanbox_f64(),
+        input.get_nanbox_f64(),
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+    )
+    .expect("a 32,000-unit split must not exhaust the work allowance");
+    let pieces = crate::value::js_nanbox_get_pointer(pieces) as *const ArrayHeader;
+    assert_eq!(unsafe { (*pieces).length }, 6_001);
+
+    // A 60,000-unit global replace threw the same error; Node's result wraps
+    // each of the 8,000 matches in brackets, 76,000 units in all.
+    let subject = "ä中😀12 Ö漢🦊345;".repeat(4_000);
+    let input = scope.root_nanbox_f64(nanbox_text(&scope, &subject));
+    assert_eq!(utf16_length(input.get_nanbox_f64()), 60_000);
+    let re = regex(&scope, "[ä中😀Ö漢🦊]+", "gu");
+    let template = scope.root_nanbox_f64(nanbox_text(&scope, "[$&]"));
+    let replaced = crate::regex::perex_replace::regexp(
+        re.get_nanbox_f64(),
+        input.get_nanbox_f64(),
+        template.get_nanbox_f64(),
+    )
+    .expect("a 60,000-unit global replace must not exhaust the work allowance");
+    assert_eq!(utf16_length(replaced), 76_000);
 }

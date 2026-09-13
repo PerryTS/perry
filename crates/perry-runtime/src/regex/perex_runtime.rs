@@ -14,6 +14,7 @@ use perex::executor::{
     ExecError, Frame, Progress, Scratch, ScratchOwner, ScratchRequirements, Search, SearchError,
     Undo,
 };
+use perex::input::Position;
 use perex::span::Span;
 use perex::Budget;
 
@@ -164,6 +165,31 @@ pub(crate) fn find<'mem, S: ImmutableSubject<Error = OwnerError>>(
     quantum: usize,
     poll: &mut impl FnMut() -> Result<(), EngineError>,
 ) -> Result<Option<Match<'mem>>, EngineError> {
+    find_near(
+        program, subject, start, None, mode, budget, memory, quantum, poll,
+    )
+    .map(|(found, _)| found)
+}
+
+/// `find`, seeking to `start` from `near` when that is closer than either end
+/// of the subject, and returning where the search stood: the match's end, or
+/// the start of its last attempt (#10164). On non-ASCII storage a search from
+/// an end costs up to half the subject, so a loop of them is quadratic.
+///
+/// `near` must come from a search or reader over this same binding. Another
+/// string with an identical layout cannot be detected and would give wrong
+/// answers, so callers keep a position only as long as the binding it came from.
+pub(crate) fn find_near<'mem, S: ImmutableSubject<Error = OwnerError>>(
+    program: &BoundProgram<GcProgram<'_>>,
+    subject: &BoundSubject<S>,
+    start: usize,
+    near: Option<Position>,
+    mode: CaptureMode,
+    budget: &mut Budget,
+    memory: &'mem MemoryBudget,
+    quantum: usize,
+    poll: &mut impl FnMut() -> Result<(), EngineError>,
+) -> Result<(Option<Match<'mem>>, Position), EngineError> {
     if quantum == 0 {
         return Err(EngineError::InvalidQuantum);
     }
@@ -178,14 +204,18 @@ pub(crate) fn find<'mem, S: ImmutableSubject<Error = OwnerError>>(
     };
     poll()?;
     let buffers = MatchBuffers::new(memory, size)?;
-    let mut search = Search::new(&resources, start, buffers, *budget).map_err(search_error)?;
+    let mut search = match near {
+        Some(near) => Search::new_near(&resources, start, near, buffers, *budget),
+        None => Search::new(&resources, start, buffers, *budget),
+    }
+    .map_err(search_error)?;
     loop {
         let result = search.advance(quantum);
         // Preserve consumed work even when the following poll cancels/throws,
         // allocation fails, or a scratch replacement cannot fit the cap.
         *budget = Budget::new(search.remaining_work());
         match result {
-            Ok(Progress::NoMatch) => return Ok(None),
+            Ok(Progress::NoMatch) => return Ok((None, search.position())),
             Ok(Progress::Matched) => {
                 let full = search
                     .capture(0)
@@ -202,7 +232,7 @@ pub(crate) fn find<'mem, S: ImmutableSubject<Error = OwnerError>>(
                         Some(output)
                     }
                 };
-                return Ok(Some(Match { full, captures }));
+                return Ok((Some(Match { full, captures }), search.position()));
             }
             Ok(Progress::Pending) => poll()?,
             Err(SearchError::Execution(ExecError::Frames | ExecError::Undo)) => {

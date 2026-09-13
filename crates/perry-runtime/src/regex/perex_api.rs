@@ -9,6 +9,7 @@ use crate::string::StringHeader;
 use perex::binding::{BoundProgram, BoundSubject};
 use perex::compiler::CompileError;
 use perex::executor::ExecError;
+use perex::input::Position;
 use perex::{span::Span, Budget};
 
 // One explicit host policy; no retained scratch cache or alternate engine.
@@ -123,10 +124,15 @@ pub(crate) fn program<'s>(
 /// the same string, and the same receiver still holding the same program cell.
 /// Anything else (an `exec` override, a recompiled receiver, another string)
 /// binds afresh for that search exactly as before.
+///
+/// `near` is where the previous search over the reused subject stood (#10164),
+/// so the next search seeks from there instead of from an end of the subject.
+/// It is only ever set from, and only ever used with, the reused binding.
 pub(crate) struct Reuse<'b, 's> {
     input: RuntimeHandle<'s>,
     subject: &'b BoundSubject<HeapSubject<'s>>,
     program: Option<ReusedProgram<'s>>,
+    near: std::cell::Cell<Option<Position>>,
 }
 
 struct ReusedProgram<'s> {
@@ -168,7 +174,13 @@ impl<'b, 's> Reuse<'b, 's> {
             input,
             subject,
             program,
+            near: std::cell::Cell::new(None),
         }
+    }
+
+    /// Where the last search over the reused subject stood, if any.
+    pub(crate) fn near(&self) -> Option<Position> {
+        self.near.get()
     }
 
     fn subject_for(&self, input: &RuntimeHandle<'_>) -> Option<&BoundSubject<HeapSubject<'s>>> {
@@ -319,7 +331,12 @@ pub(crate) fn execute_with_resources(
         }
     };
     let fresh_subject;
-    let subject = match reuse.and_then(|reuse| reuse.subject_for(&input)) {
+    let reused_subject = reuse.and_then(|reuse| reuse.subject_for(&input));
+    // A position is valid only on the binding it came from.
+    let near = reuse
+        .filter(|_| reused_subject.is_some())
+        .and_then(|reuse| reuse.near());
+    let subject = match reused_subject {
         Some(subject) => subject,
         None => {
             fresh_subject =
@@ -330,10 +347,11 @@ pub(crate) fn execute_with_resources(
             &fresh_subject
         }
     };
-    let found = host::find(
+    let (found, position) = host::find_near(
         program,
         subject,
         start,
+        near,
         if materialize {
             CaptureMode::All
         } else {
@@ -344,6 +362,9 @@ pub(crate) fn execute_with_resources(
         QUANTUM,
         poll,
     )?;
+    if let (Some(reuse), Some(_)) = (reuse, reused_subject) {
+        reuse.near.set(Some(position));
+    }
     if stateful {
         let next = found.as_ref().map_or(0, |m| m.full.end());
         caught(|| {
@@ -362,6 +383,8 @@ pub(crate) fn execute_with_resources(
                 subject,
                 program,
                 &found,
+                // From the search that just ran over this same binding.
+                Some(position),
                 has_indices,
                 budget,
                 poll,

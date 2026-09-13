@@ -223,9 +223,11 @@ fn matches(
         };
         let string = match result {
             dispatch::ExecResult::Builtin(found) => api::caught(|| {
-                super::perex_strings::copy_span(
+                super::perex_strings::copy_span_near(
                     &subject,
                     found.full,
+                    // `reuse` binds this same `subject`.
+                    reuse.near(),
                     budget,
                     api::OUTPUT_BYTES,
                     api::QUANTUM,

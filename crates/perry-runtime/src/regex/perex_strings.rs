@@ -8,6 +8,7 @@ use crate::gc::RuntimeHandleScope;
 use crate::string::{StringHeader, STRING_FLAG_HAS_LONE_SURROGATES};
 use perex::binding::{BoundProgram, BoundSubject};
 use perex::executor::ExecError;
+use perex::input::Position;
 use perex::span::{BoundSpan, ReadError, ReadProgress, Span};
 use perex::Budget;
 use std::mem::MaybeUninit;
@@ -127,10 +128,30 @@ pub(crate) fn copy_span(
     quantum: usize,
     poll: &mut impl FnMut() -> Result<(), EngineError>,
 ) -> Result<*mut StringHeader, EngineError> {
-    let mut readers = [
-        BoundSpan::new(subject, span).map_err(|e| read_error(e, |never| match never {}))?,
-        BoundSpan::new(subject, span).map_err(|e| read_error(e, |never| match never {}))?,
-    ];
+    copy_span_near(subject, span, None, budget, max_output_bytes, quantum, poll)
+}
+
+/// `copy_span`, with both reader passes seeking to the span from `near` when
+/// that is closer than either end. Materializing a match's captures from its
+/// search's position seeks back by at most the match length (#10164). `near`
+/// has the same same-binding requirement as `perex_runtime::find_near`.
+pub(crate) fn copy_span_near(
+    subject: &BoundSubject<HeapSubject<'_>>,
+    span: Span,
+    near: Option<Position>,
+    budget: &mut Budget,
+    max_output_bytes: usize,
+    quantum: usize,
+    poll: &mut impl FnMut() -> Result<(), EngineError>,
+) -> Result<*mut StringHeader, EngineError> {
+    let reader = || {
+        match near {
+            Some(near) => BoundSpan::new_near(subject, span, near),
+            None => BoundSpan::new(subject, span),
+        }
+        .map_err(|e| read_error(e, |never| match never {}))
+    };
+    let mut readers = [reader()?, reader()?];
     copy_units(
         Some(span.len()),
         budget,
