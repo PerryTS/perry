@@ -2104,6 +2104,12 @@ pub(crate) struct ClassFieldLoopFact {
 /// says nothing about, so each carries its OWN preheader obligation (see
 /// `expr::element_shape_guard::ElementShapeIndexBound`) and the fast clone
 /// still pays no per-read bounds test.
+///
+/// The counter arm's obligation is also DROPPED for the other two, and that is
+/// not an optimization: leaving it in made the whole shape-keyed arm dead on
+/// its own benchmark, because `for (i = 0; i < 1000000; i++) sum +=
+/// rows[7].id` over a 7,600-element array asks it to prove `length >=
+/// 1000000`. See the `trip_ok` comment in the guard emitter.
 #[derive(Debug, Clone)]
 pub(crate) enum ElementShapeIndex {
     /// `arr[j]` — the counter, read from its canonical i32 slot.
