@@ -1,3 +1,5 @@
+// #10153 requires live CJS value reads. The parity runner uses the companion
+// test-parity/expected file because Node snapshots CJS named imports.
 import { transform, value, late, update, reads } from "./cjs_getter_reexport/index.cjs";
 
 console.log(reads());
