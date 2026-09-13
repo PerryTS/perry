@@ -1660,29 +1660,24 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             );
                             return Ok(val);
                         }
-                        // #5093: build the guard operands once, up front, so both
-                        // the inline shape pre-check and the guard-call fallback
-                        // can reference them.
-                        let (obj_bits, obj_handle, key_raw) = {
+                        // #5093: build the guard operands once, up front, so
+                        // both the inline shape pre-check and the fast slot
+                        // load can reference them.
+                        let (obj_bits, obj_handle) = {
                             let blk = ctx.block();
                             let obj_bits = blk.bitcast_double_to_i64(&recv_box);
                             let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
-                            let key_box = blk.load(DOUBLE, &key_handle_global);
-                            let key_bits = blk.bitcast_double_to_i64(&key_box);
-                            let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-                            (obj_bits, obj_handle, key_raw)
+                            (obj_bits, obj_handle)
                         };
                         let fast_idx = ctx.new_block("class_field_get.fast");
-                        let fallback_idx = ctx.new_block("class_field_get.fallback");
                         let merge_idx = ctx.new_block("class_field_get.merge");
                         let fast_label = ctx.block_label(fast_idx);
-                        let fallback_label = ctx.block_label(fallback_idx);
                         let merge_label = ctx.block_label(merge_idx);
 
                         // #5093: inline shape pre-check. On a monomorphic hit it
                         // branches straight to the fast slot load, skipping the
                         // cross-crate guard call; on a miss it leaves the current
-                        // block at the guard-call path below (unchanged).
+                        // block at the single-exit IC call below.
                         let subclass_arms =
                             crate::expr::class_field_inline_guard::class_field_subclass_arms(
                                 ctx,
@@ -1703,9 +1698,48 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 &fast_label,
                                 &subclass_arms,
                             );
-                        let guard_ok = ctx.block().call(
-                            I32,
-                            "js_typed_feedback_class_field_get_guard",
+                        // ONE EXIT. Everything the pre-check could not prove —
+                        // the guard call, the guard-PASS slot load, the nullish
+                        // TypeError, the fallback record and the by-name lookup —
+                        // is the body of `js_class_field_get_ic`, the same helper
+                        // the #5391 path-2 full outline a few lines above already
+                        // calls. Emitting the four arms inline cost ~74 IR
+                        // instructions and 4 runtime call sites per monomorphic
+                        // `this.field` read; @babel/parser has 13,636 of them
+                        // (27 % of its IR), and each call site is a statepoint,
+                        // so `.perry_gcmap` scaled with them too.
+                        //
+                        // The pre-check and the fast slot load below are
+                        // unchanged, so a pre-check HIT costs exactly what it
+                        // cost before (no call at all) and a pre-check MISS costs
+                        // exactly one call — what the guard call alone already
+                        // cost. Arm for arm the helper reproduces the diamond:
+                        //   guard PASS -> reads the same slot at the same
+                        //                 header-relative offset;
+                        //   nullish    -> throws the same
+                        //                 `js_throw_type_error_property_access`
+                        //                 (#7153 added that check to the helper
+                        //                 for exactly this equivalence);
+                        //   guard FAIL -> records the fallback, then
+                        //                 `js_object_get_field_by_name_f64`.
+                        // A plain number is self-boxing under NaN-boxing, so a
+                        // `requires_raw_f64` site reads the helper's return the
+                        // same way the old phi read the by-name fallback's return
+                        // — neither arm converted, and neither does this one.
+                        //
+                        // The key handle is loaded HERE, in the cold miss block,
+                        // instead of in the entry block: the call is its only
+                        // consumer, so sinking it takes a load, a bitcast and a
+                        // mask off the inline hit path.
+                        let key_raw = {
+                            let blk = ctx.block();
+                            let key_box = blk.load(DOUBLE, &key_handle_global);
+                            let key_bits = blk.bitcast_double_to_i64(&key_box);
+                            blk.and(I64, &key_bits, POINTER_MASK_I64)
+                        };
+                        let val_ic = ctx.block().call(
+                            DOUBLE,
+                            "js_class_field_get_ic",
                             &[
                                 (I64, &site_id),
                                 (DOUBLE, &recv_box),
@@ -1716,9 +1750,57 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 (I32, requires_raw_f64_str),
                             ],
                         );
-                        let guard_pass = ctx.block().icmp_ne(I32, &guard_ok, "0");
-                        ctx.block()
-                            .cond_br(&guard_pass, &fast_label, &fallback_label);
+                        let ic_end_label = ctx.block().label.clone();
+                        ctx.block().br(&merge_label);
+                        if requires_raw_f64 {
+                            // The miss arm's value now arrives from the outlined
+                            // IC instead of the inline by-name call, so the
+                            // dynamic-fallback record follows it. Same contract
+                            // as before — a JS value, not a proven raw double,
+                            // with the raw-f64 layout rejected and invalidated by
+                            // a runtime API (`native_value/verify/raw_f64.rs`
+                            // enforces all three on this consumer).
+                            let fallback = LoweredValue {
+                                semantic: SemanticKind::JsValue,
+                                rep: NativeRep::JsValue,
+                                llvm_ty: DOUBLE,
+                                value: val_ic.clone(),
+                            };
+                            ctx.record_lowered_value_with_access_mode_and_facts(
+                                "ClassFieldGet",
+                                None,
+                                "js_class_field_get_ic",
+                                &fallback,
+                                Some(BoundsState::Unknown),
+                                None,
+                                Some(BufferAccessMode::DynamicFallback),
+                                Some(MaterializationReason::RuntimeApi),
+                                None,
+                                None,
+                                Vec::new(),
+                                vec![
+                                    raw_f64_layout_fact(
+                                        None,
+                                        "rejected",
+                                        "class_field_get_guard",
+                                        Some(MaterializationReason::RuntimeApi),
+                                    ),
+                                    raw_f64_layout_fact(
+                                        None,
+                                        "invalidated",
+                                        "runtime_api",
+                                        Some(MaterializationReason::RuntimeApi),
+                                    ),
+                                ],
+                                false,
+                                false,
+                                vec![
+                                    format!("class={}", class_name),
+                                    format!("field={}", property),
+                                    format!("field_index={}", field_idx_str),
+                                ],
+                            );
+                        }
 
                         ctx.current_block = fast_idx;
                         // arm64_32 watchOS: the object fields region begins at
@@ -1782,109 +1864,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             );
                         }
 
-                        ctx.current_block = fallback_idx;
-                        // #7153: the guard rejects a nullish receiver along with
-                        // every other shape miss, but a nullish field read must
-                        // throw TypeError per spec — the by-name lookup below
-                        // answers `undefined` and the program keeps running on a
-                        // silent wrong value. Mirror the generic path's check
-                        // (generic_dispatch.rs); the cost sits on the cold
-                        // fallback arm only.
-                        let (is_null, is_nullish) = {
-                            let blk = ctx.block();
-                            let is_undef =
-                                blk.icmp_eq(I64, &obj_bits, crate::nanbox::TAG_UNDEFINED_I64);
-                            let is_null = blk.icmp_eq(I64, &obj_bits, crate::nanbox::TAG_NULL_I64);
-                            let is_nullish = blk.or(I1, &is_undef, &is_null);
-                            (is_null, is_nullish)
-                        };
-                        let throw_idx = ctx.new_block("class_field_get.throw_nullish");
-                        let lookup_idx = ctx.new_block("class_field_get.fallback_lookup");
-                        let throw_label = ctx.block_label(throw_idx);
-                        let lookup_label = ctx.block_label(lookup_idx);
-                        ctx.block()
-                            .cond_br(&is_nullish, &throw_label, &lookup_label);
-
-                        ctx.current_block = throw_idx;
-                        let prop_entry = ctx.strings.entry(key_idx);
-                        let prop_bytes_global = format!("@{}", prop_entry.bytes_global);
-                        let prop_len_str = prop_entry.byte_len.to_string();
-                        let is_null_i32 = ctx.block().zext(I1, &is_null, I32);
-                        ctx.block().call_void(
-                            "js_throw_type_error_property_access",
-                            &[
-                                (I32, &is_null_i32),
-                                (PTR, &prop_bytes_global),
-                                (I64, &prop_len_str),
-                            ],
-                        );
-                        ctx.block().unreachable();
-
-                        ctx.current_block = lookup_idx;
-                        let blk = ctx.block();
-                        crate::expr::emit_typed_feedback_record_call(
-                            blk,
-                            "js_typed_feedback_record_fallback_call",
-                            &[(I64, &site_id)],
-                        );
-                        let val_fallback_js = blk.call(
-                            DOUBLE,
-                            "js_object_get_field_by_name_f64",
-                            &[(I64, &obj_bits), (I64, &key_raw)],
-                        );
-                        let val_fallback = val_fallback_js.clone();
-                        let fallback_end_label = blk.label.clone();
-                        blk.br(&merge_label);
-                        if requires_raw_f64 {
-                            let fallback = LoweredValue {
-                                semantic: SemanticKind::JsValue,
-                                rep: NativeRep::JsValue,
-                                llvm_ty: DOUBLE,
-                                value: val_fallback_js.clone(),
-                            };
-                            ctx.record_lowered_value_with_access_mode_and_facts(
-                                "ClassFieldGet",
-                                None,
-                                "js_object_get_field_by_name_f64",
-                                &fallback,
-                                Some(BoundsState::Unknown),
-                                None,
-                                Some(BufferAccessMode::DynamicFallback),
-                                Some(MaterializationReason::RuntimeApi),
-                                None,
-                                None,
-                                Vec::new(),
-                                vec![
-                                    raw_f64_layout_fact(
-                                        None,
-                                        "rejected",
-                                        "class_field_get_guard",
-                                        Some(MaterializationReason::RuntimeApi),
-                                    ),
-                                    raw_f64_layout_fact(
-                                        None,
-                                        "invalidated",
-                                        "runtime_api",
-                                        Some(MaterializationReason::RuntimeApi),
-                                    ),
-                                ],
-                                false,
-                                false,
-                                vec![
-                                    format!("class={}", class_name),
-                                    format!("field={}", property),
-                                    format!("field_index={}", field_idx_str),
-                                ],
-                            );
-                        }
-
                         ctx.current_block = merge_idx;
                         return Ok(ctx.block().phi(
                             DOUBLE,
-                            &[
-                                (&val_fast, &fast_end_label),
-                                (&val_fallback, &fallback_end_label),
-                            ],
+                            &[(&val_fast, &fast_end_label), (&val_ic, &ic_end_label)],
                         ));
                     }
                 }

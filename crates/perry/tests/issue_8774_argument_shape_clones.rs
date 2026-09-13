@@ -285,7 +285,8 @@ fn stable_argument_clones_are_direct_reported_and_moving_gc_safe() {
         );
         assert!(
             !clone_body.contains("shape_descriptor_by_id")
-                && !clone_body.contains("js_typed_feedback_class_field_get_guard"),
+                && !clone_body.contains("js_typed_feedback_class_field_get_guard")
+                && !clone_body.contains("js_class_field_get_ic"),
             "{clone} rebuilt a field IC diamond:\n{clone_body}"
         );
         assert!(ir.contains(&format!("call double @{clone}(")));

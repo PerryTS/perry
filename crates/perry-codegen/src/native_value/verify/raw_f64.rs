@@ -96,6 +96,13 @@ pub(crate) fn raw_f64_dynamic_fallback_record(record: &NativeRepRecord) -> bool 
             | ("PackedI32LoopGuard", "packed_i32_loop_fallback")
             | ("PackedU32LoopGuard", "packed_u32_loop_fallback")
             | ("ClassFieldGet", "js_object_get_field_by_name_f64")
+            // T3 one-exit class-field GET: the inline tower's miss arm is a
+            // single `js_class_field_get_ic` call instead of the nullish
+            // diamond + by-name lookup, so the dynamic-fallback record now
+            // names the IC. The by-name pair stays: it is still the contract
+            // asserted by `verify/tests.rs`, and dropping an entry rather
+            // than adding to it is exactly how #8858 silently lost one.
+            | ("ClassFieldGet", "js_class_field_get_ic")
             | ("ClassFieldSet", "js_object_set_field_by_name")
     )
 }

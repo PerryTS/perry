@@ -1488,6 +1488,7 @@ fn assert_clone_fires_call_free(ir: &str, what: &str) {
     assert!(
         !fast.contains("js_object_get_field_by_name_f64")
             && !fast.contains("js_typed_feedback_class_field_get_guard")
+            && !fast.contains("js_class_field_get_ic")
             && !fast.contains("js_number_coerce"),
         "{what}: the by-name field diamond must be gone from the fast clone"
     );
