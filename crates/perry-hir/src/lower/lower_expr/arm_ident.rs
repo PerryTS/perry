@@ -166,6 +166,22 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
         }
         Ok(Expr::LocalGet(id))
     } else if let Some(id) = ctx.lookup_func(&name) {
+        // #10222: inside a namespace body an EXPORTED namespace function is
+        // emitted as a static method of the namespace class, not as a module
+        // function. Calls are redirected to `StaticMethodCall` (expr_call), but
+        // a VALUE reference (`const f = g`, `call(g)`, `Effect.gen(g)`) still
+        // lowered to `FuncRef(id)` — a closure over a function that has no
+        // module-function body — and calling it returned garbage. Read the
+        // published namespace member instead, exactly as `NS.g` resolves from
+        // outside the namespace; this also keeps `g === NS.g`.
+        if let Some(ref ns_name) = ctx.current_namespace {
+            if ctx.has_static_method(ns_name, &name) {
+                return Ok(Expr::IndexGet {
+                    object: Box::new(Expr::ClassRef(ns_name.clone())),
+                    index: Box::new(Expr::String(name)),
+                });
+            }
+        }
         Ok(Expr::FuncRef(id))
     } else if ctx.lookup_native_module(&name).is_some() {
         Ok(native_module_binding_value(ctx, &name))
