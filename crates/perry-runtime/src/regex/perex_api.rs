@@ -106,7 +106,72 @@ pub(crate) fn program<'s>(
 ) -> Result<BoundProgram<GcProgram<'s>>, EngineError> {
     let owner = unsafe { GcProgram::from_receiver(scope, receiver) }
         .map_err(|e| EngineError::Subject(perex::binding::SubjectError::Resource(e)))?;
-    BoundProgram::new(owner, budget).map_err(|e| EngineError::Program(e.error))
+    bind_program(owner, budget)
+}
+
+/// Bind a program, in constant work when a binding validated this same cell
+/// before (#10166): the witness lives beside the words in the program cell, so
+/// it cannot describe other words. A witness that does not match falls back to
+/// validation, which records a fresh one. No allocation and nothing traced.
+pub(crate) fn bind_program<'s>(
+    owner: GcProgram<'s>,
+    budget: &mut Budget,
+) -> Result<BoundProgram<GcProgram<'s>>, EngineError> {
+    let root = owner.root();
+    let owner = match owner.witness() {
+        Some(witness) => match BoundProgram::new_witnessed(owner, witness) {
+            Ok(bound) => return Ok(bound),
+            Err(failed) => failed.storage,
+        },
+        None => owner,
+    };
+    let bound = BoundProgram::new(owner, budget).map_err(|e| EngineError::Program(e.error))?;
+    GcProgram::record_witness(&root, bound.witness());
+    Ok(bound)
+}
+
+/// Bind a whole heap string, in constant work when this header was validated
+/// before (#10166). The first binding decodes it; if that succeeds and its
+/// UTF-16 length matches the header, the header is marked
+/// `STRING_FLAG_WTF8_VALIDATED` and later bindings use `new_counted`.
+///
+/// Perry strings are not all valid WTF-8 (raw Buffer and FFI payloads reach
+/// here too), so validity is never assumed: a string that fails to validate is
+/// never marked and keeps failing exactly as before. `HeapSubject::new` has
+/// already marked the header shared, so a marked payload is never mutated in
+/// place, and the mark is never copied to another string (see the flag).
+pub(crate) fn bind_heap_subject(
+    input: RuntimeHandle<'_>,
+) -> Result<BoundSubject<HeapSubject<'_>>, EngineError> {
+    use crate::string::STRING_FLAG_WTF8_VALIDATED;
+    let (utf16_len, validated) = input.with_const_ptr::<StringHeader, _>(|s| unsafe {
+        (
+            (*s).utf16_len as usize,
+            (*s).flags & STRING_FLAG_WTF8_VALIDATED != 0,
+        )
+    });
+    let owner = unsafe { HeapSubject::new(input) }
+        .map_err(|e| EngineError::Subject(perex::binding::SubjectError::Resource(e)))?;
+    let owner = if validated {
+        match BoundSubject::new_counted(owner, utf16_len) {
+            Ok(bound) => return Ok(bound),
+            Err(failed) => failed.storage,
+        }
+    } else {
+        owner
+    };
+    let bound = BoundSubject::new(owner).map_err(|e| EngineError::Subject(e.error))?;
+    let decoded = bound
+        .with_view(|view| view.len_utf16())
+        .map_err(EngineError::Subject)?;
+    // An empty string has nothing to decode. `HeapSubject::new` already wrote
+    // this header's refcount, so it is writable.
+    if decoded == utf16_len && utf16_len > 0 {
+        input.with_const_ptr::<StringHeader, _>(|s| unsafe {
+            (*(s as *mut StringHeader)).flags |= STRING_FLAG_WTF8_VALIDATED;
+        });
+    }
+    Ok(bound)
 }
 
 /// Bindings one compound operation reuses across its searches (#10165).
@@ -162,7 +227,7 @@ impl<'b, 's> Reuse<'b, 's> {
                 let receiver = scope.root_raw_const_ptr(re);
                 let cell = scope.root_raw_const_ptr(unsafe { (*re).perex_program });
                 let owner = unsafe { GcProgram::from_receiver(scope, &receiver) }.ok()?;
-                let bound = BoundProgram::new(owner, budget).ok()?;
+                let bound = bind_program(owner, budget).ok()?;
                 Some(ReusedProgram {
                     receiver,
                     cell,
@@ -339,11 +404,7 @@ pub(crate) fn execute_with_resources(
     let subject = match reused_subject {
         Some(subject) => subject,
         None => {
-            fresh_subject =
-                BoundSubject::new(unsafe { HeapSubject::new(input) }.map_err(|e| {
-                    EngineError::Subject(perex::binding::SubjectError::Resource(e))
-                })?)
-                .map_err(|e| EngineError::Subject(e.error))?;
+            fresh_subject = bind_heap_subject(input)?;
             &fresh_subject
         }
     };

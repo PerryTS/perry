@@ -13,6 +13,12 @@ use perex::compiler::{CompileError, Prepared};
 #[repr(C)]
 struct ProgramCell {
     word_count: usize,
+    /// What validating these words established, so later bindings of this same
+    /// cell skip validation (#10166). Plain data beside the words it describes:
+    /// the words never change, and a recompile emits a new cell that starts
+    /// with none, so it cannot describe other words. Stored by the first
+    /// validating bind; the cell stays a pointer-free leaf.
+    witness: Option<perex::binding::ProgramWitness>,
     // Immediately followed by word_count initialized u32 words.
 }
 
@@ -74,7 +80,10 @@ impl<'scope> GcProgram<'scope> {
         // finalizer or a leaked external owner. No GC call occurs in this scope.
         unsafe {
             // GC_STORE_AUDIT(POINTER_FREE): the program cell is a leaf of u32 words; its prefix is a count.
-            cell.write(ProgramCell { word_count: words });
+            cell.write(ProgramCell {
+                word_count: words,
+                witness: None,
+            });
             let output = cell.add(1).cast::<u32>();
             output.write_bytes(0, words);
             let output = std::slice::from_raw_parts_mut(output, words);
@@ -106,6 +115,39 @@ impl<'scope> GcProgram<'scope> {
         });
     }
 
+    /// The witness stored beside this program's words, if a binding validated
+    /// them before (#10166).
+    pub(crate) fn witness(&self) -> Option<perex::binding::ProgramWitness> {
+        self.root
+            .with_const_ptr::<ProgramCell, _>(|cell| unsafe { (*cell).witness })
+    }
+
+    /// Record what validating this program established. `witness` must come
+    /// from a binding of this same cell.
+    pub(crate) fn record_witness(
+        root: &RuntimeHandle<'_>,
+        witness: perex::binding::ProgramWitness,
+    ) {
+        // The prefix lies outside the word slice, but the write still goes
+        // through the cell's own pointer and never under a live view of its
+        // words (a binding holds none between calls).
+        #[cfg(debug_assertions)]
+        debug_assert_eq!(
+            PROGRAM_VIEWS.with(std::cell::Cell::get),
+            0,
+            "a program cell's witness must not be written while a view of its words is live"
+        );
+        // A plain-data store into a pointer-free leaf: no allocation, no barrier.
+        root.with_const_ptr::<ProgramCell, _>(|cell| unsafe {
+            (*(cell as *mut ProgramCell)).witness = Some(witness);
+        });
+    }
+
+    /// This program's registered root, which survives consuming the owner.
+    pub(crate) fn root(&self) -> RuntimeHandle<'scope> {
+        self.root
+    }
+
     /// Establish a separate operation root, so reentrant receiver recompilation
     /// cannot replace the immutable program of an already-running operation.
     ///
@@ -124,6 +166,46 @@ impl<'scope> GcProgram<'scope> {
         Ok(Self {
             root: scope.root_raw_const_ptr(ptr),
         })
+    }
+}
+
+/// The witness stored in the program cell at `program` (a RegExp's
+/// `perex_program`), for tests.
+#[cfg(test)]
+pub(crate) unsafe fn cell_witness(program: *const u8) -> Option<perex::binding::ProgramWitness> {
+    unsafe { (*(program as *const ProgramCell)).witness }
+}
+
+/// Overwrite the witness stored in the program cell at `program`, for tests.
+#[cfg(test)]
+pub(crate) unsafe fn set_cell_witness(
+    program: *const u8,
+    witness: Option<perex::binding::ProgramWitness>,
+) {
+    unsafe { (*(program as *mut ProgramCell)).witness = witness };
+}
+
+// How many `with_words` views of any program cell are live on this thread, so
+// debug builds can prove a witness is never written under one (#10166).
+#[cfg(debug_assertions)]
+thread_local! {
+    static PROGRAM_VIEWS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+struct ProgramView;
+
+impl ProgramView {
+    fn open() -> Self {
+        #[cfg(debug_assertions)]
+        PROGRAM_VIEWS.with(|views| views.set(views.get() + 1));
+        ProgramView
+    }
+}
+
+impl Drop for ProgramView {
+    fn drop(&mut self) {
+        #[cfg(debug_assertions)]
+        PROGRAM_VIEWS.with(|views| views.set(views.get() - 1));
     }
 }
 
@@ -149,6 +231,7 @@ impl ImmutableProgram for GcProgram<'_> {
             // Only emit creates these cells; no mutable word access escapes.
             // Binding validation is separate, once per immutable owner. This
             // getter neither allocates nor polls and always reacquires the base.
+            let _view = ProgramView::open();
             Ok(f(std::slice::from_raw_parts(cell.add(1).cast(), count)))
         })
     }

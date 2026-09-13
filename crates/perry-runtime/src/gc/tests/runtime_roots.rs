@@ -19,6 +19,8 @@ mod old_defrag_contract;
 #[cfg(feature = "regex-engine")]
 mod perex_construction;
 #[cfg(feature = "regex-engine")]
+mod perex_cross_call;
+#[cfg(feature = "regex-engine")]
 mod perex_dispatch;
 #[cfg(feature = "regex-engine")]
 mod perex_execution;

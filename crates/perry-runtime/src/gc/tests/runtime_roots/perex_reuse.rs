@@ -140,15 +140,17 @@ fn perex_reuse_serves_a_whole_global_loop_across_moving_collections() {
     let fresh = regex(&scope, PATTERN, "gu");
     let (fresh_matches, fresh_work) = global_loop(&fresh, &fresh_input, None);
     assert_eq!(fresh_matches, expected);
-    // Six searches (five matches and the final miss). Binding per search charges
-    // program validation six times; reuse charged it once, in `setup`. Reuse
-    // also resumes each search from the previous one instead of seeking from
-    // an end of this non-ASCII subject, so it saves at least the validations.
+    // Both loops validate their program once: the witness in each program cell
+    // lets later searches bind it without validating (#10166). The reused loop
+    // paid its validation in `setup`, and additionally resumes each search from
+    // the previous one instead of seeking from an end of this non-ASCII subject,
+    // so it must charge strictly less than the fresh loop minus one validation.
+    // Without reuse the two differ by exactly that one validation.
     let validation = api::WORK - setup.remaining();
     assert!(validation > 0);
     assert!(
-        fresh_work >= reused_work + 6 * validation,
-        "reuse must save at least six program validations: fresh {fresh_work}, reused {reused_work}, one validation {validation}"
+        fresh_work > reused_work + validation,
+        "reuse must save its seeks as well as the validation: fresh {fresh_work}, reused {reused_work}, one validation {validation}"
     );
 }
 
