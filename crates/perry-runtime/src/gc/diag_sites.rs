@@ -59,7 +59,9 @@ pub(super) fn trigger_decision(site: &'static str, kind: &'static str) {
          from_space={from_space} nursery_cap={nursery_cap} old_in_use={old_in_use} old_free={old_free} \
          old_reclaimable={old_reclaimable} external_side={external} old_baseline={old_baseline} \
          old_band={old_band} old_threshold={old_threshold} old_pending={old_pending} retaining={retaining} \
-         malloc={malloc} next_malloc={next_malloc}"
+         malloc={malloc} next_malloc={next_malloc} promoted_since_full={} cohort_bound={}",
+        promoted_cohort::promoted_since_full(),
+        promoted_cohort::bound_bytes()
     );
 }
 
