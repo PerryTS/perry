@@ -630,6 +630,7 @@ dependencies conservatively retain the edge. This pass does not remove direct
 imports used by module code or individual declarations. An `import { x }; export { x }`
 pair is first normalized to a re-export only in barrels containing imports and
 export lists, whose entire static dependency tree has side-effect-free contracts.
+Imports with attributes, nonstandard phases, or package aliases retain their original resolution.
 Namespace and dynamic imports retain the
 complete exported surface, and existing dynamic initialization stays deferred.
 
