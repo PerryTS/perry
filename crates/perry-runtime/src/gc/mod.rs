@@ -199,6 +199,7 @@ mod tenuring;
 use tenuring::*;
 mod oldgen;
 use oldgen::*;
+pub(crate) mod heap_generation;
 mod oldgen_defrag;
 use oldgen_defrag::*;
 mod cycle;

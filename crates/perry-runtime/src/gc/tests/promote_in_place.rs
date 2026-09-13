@@ -862,6 +862,9 @@ fn first_cycle_rollback_preserves_young_side_table_roots_for_the_retry() {
 /// turns this red.
 #[test]
 fn old_page_relocation_expands_a_described_run_before_it_moves_anything() {
+    let _heap_change = crate::gc::heap_generation::HeapChange::begin(
+        crate::gc::heap_generation::HeapChangeKind::Compaction,
+    );
     let _isolation = copying_nursery_isolation_lock();
     reset_remembered_set();
     clear_marks();

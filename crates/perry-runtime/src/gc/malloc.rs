@@ -543,6 +543,9 @@ pub fn gc_realloc(old_user_ptr: *mut u8, new_payload_size: usize) -> *mut u8 {
         return gc_malloc(new_payload_size, GC_TYPE_STRING);
     }
 
+    let _heap_change = crate::gc::heap_generation::HeapChange::begin(
+        crate::gc::heap_generation::HeapChangeKind::Realloc,
+    );
     let old_header = unsafe { old_user_ptr.sub(GC_HEADER_SIZE) as *mut GcHeader };
 
     // Validate the pointer is in our tracked set before dereferencing the header.

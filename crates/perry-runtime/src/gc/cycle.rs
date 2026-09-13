@@ -772,8 +772,18 @@ impl GcCycleState {
             GcCyclePhase::MarkPropagation => self.step_mark_propagation(budget),
             GcCyclePhase::BlockPersistence => self.step_block_persistence(budget),
             GcCyclePhase::AtomicFinalize => self.step_atomic_finalize(budget),
-            GcCyclePhase::Sweep => self.step_sweep(budget),
-            GcCyclePhase::Reclaim => self.step_reclaim(budget),
+            GcCyclePhase::Sweep => {
+                let _heap_change = crate::gc::heap_generation::HeapChange::begin(
+                    crate::gc::heap_generation::HeapChangeKind::Sweep,
+                );
+                self.step_sweep(budget)
+            }
+            GcCyclePhase::Reclaim => {
+                let _heap_change = crate::gc::heap_generation::HeapChange::begin(
+                    crate::gc::heap_generation::HeapChangeKind::Reclaim,
+                );
+                self.step_reclaim(budget)
+            }
             GcCyclePhase::Complete => {}
         }
         self.active_step_start = None;
@@ -1370,6 +1380,9 @@ impl GcCycleState {
         let mut evacuation = EvacuationTraceStats::default();
         let mut evacuation_sticky = StickyRememberedSet::default();
         if minor.evacuation_policy.enabled {
+            let _heap_change = crate::gc::heap_generation::HeapChange::begin(
+                crate::gc::heap_generation::HeapChangeKind::Evacuation,
+            );
             let phase_start = trace_phase_start(&self.trace);
             let mut evacuated_new_headers = Vec::new();
             let mut evacuated_original_headers = Vec::new();
@@ -1378,11 +1391,16 @@ impl GcCycleState {
                 &mut evacuated_new_headers,
                 &mut evacuated_original_headers,
             );
-            let old_page_evacuation = evacuate_selected_old_pages_collecting(
-                &minor.old_page_selection.pages,
-                &mut evacuated_new_headers,
-                &mut evacuated_original_headers,
-            );
+            let old_page_evacuation = {
+                let _compaction = crate::gc::heap_generation::HeapChange::begin(
+                    crate::gc::heap_generation::HeapChangeKind::Compaction,
+                );
+                evacuate_selected_old_pages_collecting(
+                    &minor.old_page_selection.pages,
+                    &mut evacuated_new_headers,
+                    &mut evacuated_original_headers,
+                )
+            };
             evacuation.objects = evacuation
                 .objects
                 .saturating_add(old_page_evacuation.objects);

@@ -143,18 +143,33 @@ pub(crate) fn bind_program<'s>(
 pub(crate) fn bind_heap_subject(
     input: RuntimeHandle<'_>,
 ) -> Result<BoundSubject<HeapSubject<'_>>, EngineError> {
+    bind_heap_subject_observed(input).map(|(bound, _)| bound)
+}
+
+/// [`bind_heap_subject`], also returning the string's cross-call identity when
+/// it is non-ASCII (#10164), read from the same header access.
+pub(crate) fn bind_heap_subject_observed(
+    input: RuntimeHandle<'_>,
+) -> Result<
+    (
+        BoundSubject<HeapSubject<'_>>,
+        Option<super::perex_position_hint::StringIdentity>,
+    ),
+    EngineError,
+> {
     use crate::string::STRING_FLAG_WTF8_VALIDATED;
-    let (utf16_len, validated) = input.with_const_ptr::<StringHeader, _>(|s| unsafe {
+    let (utf16_len, validated, identity) = input.with_const_ptr::<StringHeader, _>(|s| unsafe {
         (
             (*s).utf16_len as usize,
             (*s).flags & STRING_FLAG_WTF8_VALIDATED != 0,
+            super::perex_position_hint::identity_of_header(s),
         )
     });
     let owner = unsafe { HeapSubject::new(input) }
         .map_err(|e| EngineError::Subject(perex::binding::SubjectError::Resource(e)))?;
     let owner = if validated {
         match BoundSubject::new_counted(owner, utf16_len) {
-            Ok(bound) => return Ok(bound),
+            Ok(bound) => return Ok((bound, identity)),
             Err(failed) => failed.storage,
         }
     } else {
@@ -171,7 +186,7 @@ pub(crate) fn bind_heap_subject(
             (*(s as *mut StringHeader)).flags |= STRING_FLAG_WTF8_VALIDATED;
         });
     }
-    Ok(bound)
+    Ok((bound, identity))
 }
 
 /// Bindings one compound operation reuses across its searches (#10165).
@@ -397,16 +412,22 @@ pub(crate) fn execute_with_resources(
     };
     let fresh_subject;
     let reused_subject = reuse.and_then(|reuse| reuse.subject_for(&input));
-    // A position is valid only on the binding it came from.
-    let near = reuse
-        .filter(|_| reused_subject.is_some())
-        .and_then(|reuse| reuse.near());
+    // A position from this operation's own binding, or else from the previous
+    // call's search on this same, unchanged string (#10164). Only a non-ASCII
+    // string has an identity; its lengths cannot change during the search.
+    let mut cross_call = None;
     let subject = match reused_subject {
         Some(subject) => subject,
         None => {
-            fresh_subject = bind_heap_subject(input)?;
+            let (bound, identity) = bind_heap_subject_observed(input)?;
+            fresh_subject = bound;
+            cross_call = identity;
             &fresh_subject
         }
+    };
+    let near = match reused_subject {
+        Some(_) => reuse.and_then(|reuse| reuse.near()),
+        None => cross_call.and_then(super::perex_position_hint::lookup),
     };
     let (found, position) = host::find_near(
         program,
@@ -425,6 +446,12 @@ pub(crate) fn execute_with_resources(
     )?;
     if let (Some(reuse), Some(_)) = (reuse, reused_subject) {
         reuse.near.set(Some(position));
+    } else if cross_call.is_some() {
+        // Re-read after the search: a collection during it may have moved the
+        // string, and the identity must be the one the next call will see.
+        if let Some(identity) = super::perex_position_hint::identity_of(&input) {
+            super::perex_position_hint::record(identity, position);
+        }
     }
     if stateful {
         let next = found.as_ref().map_or(0, |m| m.full.end());
