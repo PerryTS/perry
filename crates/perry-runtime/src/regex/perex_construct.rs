@@ -60,6 +60,30 @@ fn compile<'s>(
     )
 }
 
+/// A program for `re`'s own source and canonical flags with `y` removed,
+/// compiled from its internal slots, so no property of `re` is observed.
+/// Split's forward search uses it in place of the sticky splitter (#10165).
+pub(crate) fn nonsticky_program<'s>(
+    scope: &'s RuntimeHandleScope,
+    re: &RuntimeHandle<'_>,
+) -> Result<GcProgram<'s>, EngineError> {
+    let (source, flags) =
+        re.with_const_ptr::<RegExpHeader, _>(|re| unsafe { ((*re).pattern_ptr, (*re).flags_ptr) });
+    if source.is_null() || flags.is_null() {
+        return Err(EngineError::InvalidFlags);
+    }
+    let source = scope.root_string_ptr(source);
+    let flags = scope.root_string_ptr(flags);
+    let canonical = unsafe {
+        flags.with_string_bytes(|bytes| {
+            let without: Vec<u8> = bytes.iter().copied().filter(|&b| b != b'y').collect();
+            CanonicalFlags::parse(&without)
+        })
+    }
+    .ok_or(EngineError::InvalidFlags)?;
+    compile(scope, source, canonical)
+}
+
 unsafe fn publish(
     receiver: &RuntimeHandle<'_>,
     source: &RuntimeHandle<'_>,

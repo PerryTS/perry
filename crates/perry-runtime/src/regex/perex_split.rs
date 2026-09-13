@@ -4,14 +4,15 @@ use super::perex_api as api;
 use super::perex_dispatch as dispatch;
 use super::perex_match_search::subject;
 use super::perex_memory::MemoryBudget;
+use super::perex_owner::GcProgram;
 use super::perex_owner::HeapSubject;
 use super::perex_replace::{callable, index_property};
 use super::perex_replace_storage::{boxed, call, length, text, List, Pieces, Units};
-use super::perex_runtime::{self as host, EngineError};
+use super::perex_runtime::{self as host, CaptureMode, EngineError};
 use super::perex_strings::SpanCopies;
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 use crate::value::{js_nanbox_pointer, js_nanbox_string, TAG_NULL, TAG_UNDEFINED};
-use perex::binding::{BoundSubject, SubjectError};
+use perex::binding::{BoundProgram, BoundSubject, SubjectError};
 use perex::Budget;
 
 /// Literal String operations also accept Perry's raw Buffer/FFI payloads.
@@ -54,6 +55,51 @@ fn advance(
         return Ok(index + 2);
     }
     Ok(index + 1)
+}
+
+// Counts forward splits taken, so tests can tell which path ran.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static FORWARD_SPLITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The program for split's forward search, when it is admissible (#10165).
+///
+/// The specification tries a sticky match at every position `q`. A non-sticky
+/// search from `q` returns the leftmost position `s >= q` where the pattern
+/// matches, with the same match a sticky attempt at `s` finds, so the attempts
+/// at `q..s` can be skipped without changing any piece or capture, and empty
+/// matches and Unicode advancement line up. The skipped attempts are
+/// unobservable only when nothing can see a RegExpExec happen:
+/// - the splitter came from the intrinsic `RegExp` (absent or intrinsic
+///   species), so it is a fresh object no user code holds, and its skipped
+///   `lastIndex` writes cannot be seen;
+/// - its `exec` resolves, without running a getter, to the builtin data
+///   property, so the skipped `Get(exec)` calls cannot be seen either.
+///
+/// The program is compiled from the splitter's own internal source and flags
+/// without `y`. Anything else keeps the per-position sticky loop.
+fn forward_program<'s>(
+    scope: &'s RuntimeHandleScope,
+    constructor: Option<&RuntimeHandle<'_>>,
+    splitter: &RuntimeHandle<'_>,
+    budget: &mut Budget,
+) -> Option<BoundProgram<GcProgram<'s>>> {
+    if constructor.is_some_and(|c| {
+        !crate::object::regex_proto_thunks::is_intrinsic_regexp_constructor(c.get_nanbox_f64())
+    }) {
+        return None;
+    }
+    let value = splitter.get_nanbox_f64();
+    let re = crate::value::js_nanbox_get_pointer(value) as *const super::RegExpHeader;
+    if !super::is_valid_regex_ptr(re)
+        || !crate::object::regex_proto_thunks::regexp_view_uses_builtin(value)
+    {
+        return None;
+    }
+    let splitter = scope.root_raw_const_ptr(re);
+    let program = super::perex_construct::nonsticky_program(scope, &splitter).ok()?;
+    BoundProgram::new(program, budget).ok()
 }
 
 fn push_span(
@@ -141,6 +187,72 @@ pub(crate) fn regexp(receiver: f64, argument: f64, limit_value: f64) -> Result<f
     let mut units = Units::new(&bound)?;
     let mut copies = SpanCopies::new(&bound)?;
     let (mut p, mut q) = (0, 0);
+    if let Some(forward) = forward_program(&scope, constructor.as_ref(), &splitter, &mut budget) {
+        #[cfg(test)]
+        FORWARD_SPLITS.with(|n| n.set(n.get() + 1));
+        while q < size {
+            let local = RuntimeHandleScope::new();
+            let Some(found) = host::find(
+                &forward,
+                &bound,
+                q,
+                CaptureMode::All,
+                &mut budget,
+                &memory,
+                api::QUANTUM,
+                &mut host::poll,
+            )?
+            else {
+                break;
+            };
+            let start = found.full.start();
+            // The sticky loop never tries the end of the input.
+            if start >= size {
+                break;
+            }
+            let end = found.full.end().min(size);
+            if end == p {
+                // Only an empty match at `p` itself: step past it, as the
+                // sticky loop does.
+                q = advance(&mut units, start, size, unicode, &mut budget)?;
+                host::poll()?;
+                continue;
+            }
+            push_span(&mut output, &mut copies, p, start, &mut budget)?;
+            if output.len() == lim {
+                return Ok(output.value());
+            }
+            p = end;
+            let count = found.captures.as_ref().map_or(0, |captures| captures.len());
+            if count > 1 {
+                let (array, _) = api::caught(|| {
+                    super::perex_results::materialize(
+                        &input,
+                        &bound,
+                        &forward,
+                        &found,
+                        false,
+                        &mut budget,
+                        &mut host::poll,
+                    )
+                })??;
+                let array = local.root_raw_mut_ptr(array);
+                for capture in 1..count {
+                    let value = array.with_const_ptr::<crate::array::ArrayHeader, _>(|array| {
+                        crate::array::js_array_get_f64(array, capture as u32)
+                    });
+                    output.push(value, &mut budget)?;
+                    if output.len() == lim {
+                        return Ok(output.value());
+                    }
+                }
+            }
+            q = p;
+            host::poll()?;
+        }
+        push_span(&mut output, &mut copies, p, size, &mut budget)?;
+        return Ok(output.value());
+    }
     while q < size {
         let local = RuntimeHandleScope::new();
         dispatch::set_last_index(&splitter, q as f64)?;

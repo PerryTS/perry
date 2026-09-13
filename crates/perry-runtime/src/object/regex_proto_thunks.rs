@@ -491,6 +491,17 @@ pub(crate) fn regexp_prototype_test_is_canonical(value: f64) -> bool {
     })
 }
 
+#[cfg(feature = "regex-engine")]
+/// The intrinsic `RegExp` constructor, recognised the way the class registry
+/// recognises it: by its dedicated call thunk. A subclass, a bound function or
+/// a proxy has a different function pointer.
+pub(crate) fn is_intrinsic_regexp_constructor(value: f64) -> bool {
+    let closure =
+        crate::value::js_nanbox_get_pointer(value) as *const crate::closure::ClosureHeader;
+    crate::closure::get_valid_func_ptr(closure)
+        == super::global_this::regexp_constructor_call_thunk as *const u8
+}
+
 /// Non-observable admission for a substring view. An exec/test accessor or
 /// override must run once on the materialized JS argument, so never invoke
 /// one while deciding whether to take this optimization.

@@ -641,6 +641,7 @@ fn perex_split_species_order_zero_limit_and_empty_input() {
     let f = function(&scope, throwing as *const u8, 0);
     getter(&receiver, b"lastIndex", &f);
     getter(&matcher, b"lastIndex", &f);
+    let forward_before = forward_splits();
     for (number, expected, count) in [(0.0, 123456, 0.0), (1.0, 1234567, 1.0)] {
         ORDER.with(|o| o.set(0));
         put(&lim, b"number", number);
@@ -653,6 +654,11 @@ fn perex_split_species_order_zero_limit_and_empty_input() {
         assert_eq!(get(&out, b"length"), count);
         assert_eq!(bytes(get(&matcher, b"seenFlags")), b"vy");
     }
+    assert_eq!(
+        forward_splits(),
+        forward_before,
+        "a species factory must keep the per-position sticky loop"
+    );
 }
 
 extern "C" fn custom_exec(c: *const crate::closure::ClosureHeader, input: f64) -> f64 {
@@ -716,6 +722,7 @@ fn perex_split_custom_exec_capture_values_reentrancy_and_limit_short_circuit() {
     getter(&result, b"0", &throws);
     getter(&result, b"index", &throws);
     put(&capture, b"toString", throws.get_nanbox_f64());
+    let forward_before = forward_splits();
     let before = input.get_nanbox_f64().to_bits();
     let out = scope.root_nanbox_f64(api::finish(split::regexp(
         re.get_nanbox_f64(),
@@ -735,6 +742,11 @@ fn perex_split_custom_exec_capture_values_reentrancy_and_limit_short_circuit() {
         1.0,
     )));
     check(&out, &[Some(b"a")]);
+    assert_eq!(
+        forward_splits(),
+        forward_before,
+        "a custom exec must keep the per-position sticky loop"
+    );
 }
 
 extern "C" fn throwing_hook(_: *const crate::closure::ClosureHeader, _: f64, _: f64) -> f64 {
@@ -1140,4 +1152,138 @@ fn perex_numeric_arguments_reject_bigint_after_observable_primitive_conversion()
         dispatch::to_number(&array),
         Err(crate::regex::perex_runtime::EngineError::Type(_))
     ));
+}
+
+fn forward_splits() -> usize {
+    split::FORWARD_SPLITS.with(Cell::get)
+}
+
+/// Split's forward search (#10165) returns exactly the specification's
+/// per-position sticky result. Each expectation below was derived by running
+/// the sticky algorithm by hand, not by observing either implementation.
+#[test]
+fn perex_split_forward_search_matches_the_sticky_specification() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _scan = ConservativeScanDisabledGuard::new();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _force = ForcedEvacuationTestGuard::on();
+    super::perex_public::register_host_roots();
+    type Parts = &'static [Option<&'static [u8]>];
+    let cases: &[(&[u8], &str, &[u8], f64, Parts)] = &[
+        // A repeated group keeps its last iteration.
+        (
+            b"a1b22c",
+            r"(\d)+",
+            b"",
+            -1.0,
+            &[Some(b"a"), Some(b"1"), Some(b"b"), Some(b"2"), Some(b"c")],
+        ),
+        // An unmatched group is undefined, and a match at the end leaves "".
+        (b"ab", r"(x)?b", b"", -1.0, &[Some(b"a"), None, Some(b"")]),
+        // Empty matches everywhere: every position is stepped past once.
+        (
+            b"abc",
+            "x*",
+            b"",
+            -1.0,
+            &[Some(b"a"), Some(b"b"), Some(b"c")],
+        ),
+        // Empty at 0, a real match at 1, empty again at 2.
+        (b"abc", "b*", b"", -1.0, &[Some(b"a"), Some(b"c")]),
+        (b",a,", ",", b"", -1.0, &[Some(b""), Some(b"a"), Some(b"")]),
+        // `$` matches only at the end, which the sticky loop never tries.
+        (b"ab", "$", b"", -1.0, &[Some(b"ab")]),
+        (b"a,b,c", ",", b"", 2.0, &[Some(b"a"), Some(b"b")]),
+        // The limit can fall inside a match's captures.
+        (
+            b"a1b2c3",
+            r"(\d)",
+            b"",
+            3.0,
+            &[Some(b"a"), Some(b"1"), Some(b"b")],
+        ),
+        // Unicode mode advances an empty match by a whole code point.
+        (
+            "😀😀".as_bytes(),
+            "",
+            b"u",
+            -1.0,
+            &[Some(b"\xf0\x9f\x98\x80"), Some(b"\xf0\x9f\x98\x80")],
+        ),
+        (
+            "ä中12，Ö漢345；ef6😀".as_bytes(),
+            "[，；😀]+",
+            b"u",
+            -1.0,
+            &[
+                Some(b"\xc3\xa4\xe4\xb8\xad12"),
+                Some(b"\xc3\x96\xe6\xbc\xa2345"),
+                Some(b"ef6"),
+                Some(b""),
+            ],
+        ),
+    ];
+    for (index, (subject, pattern, flags, limit, expected)) in cases.iter().enumerate() {
+        let local = RuntimeHandleScope::new();
+        let input = text(&local, subject);
+        let separator = regex(&local, pattern.as_bytes(), flags);
+        let before = forward_splits();
+        let out = run(&local, &input, &separator, *limit);
+        assert_eq!(
+            forward_splits(),
+            before + 1,
+            "case {index} must take the forward search"
+        );
+        check(&out, expected);
+    }
+}
+
+/// A user species constructor that builds a genuine RegExp and keeps it where
+/// JavaScript can reach it afterwards, as any user factory could.
+extern "C" fn recording_regexp_species(
+    _: *const crate::closure::ClosureHeader,
+    receiver: f64,
+    flags: f64,
+) -> f64 {
+    let scope = RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
+    let flags = scope.root_nanbox_f64(flags);
+    let splitter = scope.root_nanbox_f64(js_nanbox_pointer(crate::regex::js_regexp_construct(
+        receiver.get_nanbox_f64(),
+        flags.get_nanbox_f64(),
+    ) as i64));
+    put(&receiver, b"splitter", splitter.get_nanbox_f64());
+    splitter.get_nanbox_f64()
+}
+
+/// The species condition is what keeps the forward search unobservable: a user
+/// species can return a real RegExp with the builtin exec, which passes every
+/// other admission check, and still hold the splitter and read what the
+/// per-position loop wrote to it.
+#[test]
+fn perex_split_user_species_regexp_keeps_the_observable_sticky_loop() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _scan = ConservativeScanDisabledGuard::new();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _force = ForcedEvacuationTestGuard::on();
+    super::perex_public::register_host_roots();
+    let scope = RuntimeHandleScope::new();
+    let re = regex(&scope, b",", b"");
+    let holder = object(&scope);
+    let species = function(&scope, recording_regexp_species as *const u8, 2);
+    symbol(&holder, "species", species.get_nanbox_f64());
+    put(&re, b"constructor", holder.get_nanbox_f64());
+    let input = text(&scope, b"a,");
+    let before = forward_splits();
+    let out = run(&scope, &input, &re, -1.0);
+    check(&out, &[Some(b"a"), Some(b"")]);
+    assert_eq!(
+        forward_splits(),
+        before,
+        "a user species must keep the per-position sticky loop"
+    );
+    // The sticky loop's last RegExpExec matched "," at 1 and left lastIndex at
+    // 2; a forward search would never have written it and left 0.
+    let splitter = scope.root_nanbox_f64(get(&re, b"splitter"));
+    assert_eq!(get(&splitter, b"lastIndex"), 2.0);
 }
