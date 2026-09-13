@@ -347,7 +347,9 @@ fn additive_property_callback_gets_a_cold_deopting_private_body() {
     );
     assert!(
         special.contains("pic.miss.call")
-            && special.contains("js_object_get_field_ic_miss")
+            // T1 renamed the property-GET slow path this cold arm reaches
+            // (`js_object_get_field_ic_miss_packed` -> the tower's object exit).
+            && special.contains("js_object_get_field_ic_slow")
             && special.contains("guarded_add.dynamic")
             && special.contains("versioned_callback.deopt.mark"),
         "both observable cold arms must poison the loop before fallback:\n{special}"

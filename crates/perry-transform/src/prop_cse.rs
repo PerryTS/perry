@@ -15,18 +15,18 @@
 //! ```
 //!
 //! Every one of those `n.kind` reads compiles to a **full generic
-//! property-get diamond** — `pget.recv_sso` / `pget.check_class_ref` /
-//! `pget.recv_ok` / the monomorphic-IC guard ladder / `pic.hit` / `pic.miss` /
-//! `pget.recv_merge` — about fifty instructions and six branches per site
+//! property-get tower** — `pget.recv_ok` / the monomorphic-IC guard ladder /
+//! `pic.hit` / `pic.miss` / the polymorphic ways / `pic.miss.call` /
+//! `pget.recv_merge` — about forty instructions and six branches per site
 //! (`expr/property_get/generic_dispatch.rs`). `gc-handoff/apps/interp.ts`'s
 //! `evalNode` has **53 such sites**, of which `n.kind` accounts for seven and
 //! `n.op` for seven more.
 //!
 //! LLVM `-O3` cannot remove them. GVN dedupes *instructions*, not congruent
 //! control-flow regions, and every arm of the diamond that is not the inline
-//! fast load ends in an opaque call (`js_object_get_field_ic_miss`,
-//! `js_object_get_field_by_name_f64`) whose memory effects license nothing. So
-//! the redundancy has to be removed before it becomes a diamond — here.
+//! fast load ends in an opaque call (`js_object_get_field_ic_slow`) whose
+//! memory effects license nothing. So
+//! the redundancy has to be removed before it becomes a tower — here.
 //!
 //! # The rewrite
 //!

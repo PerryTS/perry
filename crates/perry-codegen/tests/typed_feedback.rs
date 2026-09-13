@@ -581,8 +581,9 @@ fn a_default_build_emits_no_typed_feedback_recording_calls() {
     // empty string. The property boundaries themselves must still be here —
     // this test proves the RECORDING is gone, not the program.
     assert!(
-        ir.contains("js_object_get_field_by_name_f64")
-            || ir.contains("js_object_get_field_ic_miss"),
+        ir.contains("call double @js_object_get_field_ic_slow(")
+            || ir.contains("call double @js_object_get_field_by_name_f64(")
+            || ir.contains("call double @js_object_get_field_ic_miss"),
         "the property reads themselves must still be lowered; emitted:\n{ir}"
     );
     // And the helpers that DECIDE something, rather than merely counting, are
@@ -598,8 +599,15 @@ fn a_default_build_emits_no_typed_feedback_recording_calls() {
     // the two dispatchers this same fixture still emits -- the property GET
     // (the set dispatcher's twin) and the method call -- and as CALLS, since
     // the old symbol match was satisfied by the `declare` line alone.
+    // T1: the property GET's dispatching wrapper is one indirection further
+    // out. `js_typed_feedback_object_get_field_by_name_f64` is no longer
+    // emitted per site — it is the INT32 class-ref arm of
+    // `js_object_get_field_ic_nonptr`, which the site calls with the same
+    // `site_id`. The line this assertion draws is unchanged: a dispatcher that
+    // DECIDES something is emitted in a default build, a helper that merely
+    // counts is not (all six are asserted absent above).
     assert!(
-        ir.contains("call double @js_typed_feedback_object_get_field_by_name_f64("),
+        ir.contains("call double @js_object_get_field_ic_nonptr("),
         "dispatching feedback wrappers must still be emitted in a default build \
          (property get):\n{ir}"
     );

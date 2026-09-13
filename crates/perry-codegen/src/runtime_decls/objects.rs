@@ -366,6 +366,17 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // single call for oversized modules. Args: (obj_bits, key_handle, site_id,
     // per-site IC cache global) -> field value.
     module.declare_function("js_object_get_field_ic", DOUBLE, &[I64, I64, I64, PTR]);
+    // T1: the two exits of the inline generic-get tower. Every guard failure —
+    // SSO / INT32 class ref / nullish / non-object receiver / overflow slot /
+    // deleted slot / named prefix / miss+prime — branches to one of these
+    // instead of expanding its own arm and its own call.
+    //
+    // Non-pointer receiver (the emitted tag test failed): (obj_bits, key_handle,
+    // site_id) -> field value. No cache: none of its arms can prime one.
+    module.declare_function("js_object_get_field_ic_nonptr", DOUBLE, &[I64, I64, I64]);
+    // Heap-pointer receiver: (masked obj_handle, key_handle, per-site IC cache
+    // SLOT, per-site packed MRU word) -> field value.
+    module.declare_function("js_object_get_field_ic_slow", DOUBLE, &[I64, I64, PTR, PTR]);
     // Object rest destructuring: copy all properties from src except excluded keys.
     // Takes a src object ptr and an array of NaN-boxed strings (the excluded keys),
     // returns a new object pointer.

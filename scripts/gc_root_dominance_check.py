@@ -1261,6 +1261,16 @@ POLL_CAPABLE_RUNTIME = {
     # Same getter/Proxy-capable implementation as the retained three-arg ABI;
     # the fourth argument only adds a numeric packed cache publication.
     "js_object_get_field_ic_miss_packed",
+    # T1: the two slow exits of the inline generic-get tower, and now the ONLY
+    # property-GET symbols most emitted sites carry. `_slow` reaches
+    # `get_field_ic_miss_impl` (hence `js_object_get_field_by_name`, hence a
+    # user getter and `js_proxy_get`); `_nonptr` reaches
+    # `js_object_get_field_by_name_f64` on every arm. A register held across
+    # either is exactly as stale as one held across the entries they replaced.
+    # Omitting them would silently re-open the #7154 GET hole that this set
+    # exists to close, because the calls they replaced no longer appear at
+    # those sites.
+    "js_object_get_field_ic_slow", "js_object_get_field_ic_nonptr",
     "js_typed_feedback_object_get_field_by_name_f64",
     "js_array_sort_default", "js_array_sort_with_comparator",
     "js_array_map", "js_array_filter", "js_typed_array_for_each",
@@ -5057,6 +5067,8 @@ def self_test():
         _pget_family = {"js_object_get_field_by_name_f64",
                         "js_object_get_field_ic_miss",
                         "js_object_get_field_ic_miss_packed",
+                        "js_object_get_field_ic_slow",
+                        "js_object_get_field_ic_nonptr",
                         "js_typed_feedback_object_get_field_by_name_f64"}
         if not _pget_family <= POLL_CAPABLE_RUNTIME:
             print("self-test FAIL: the emitted property-GET dispatch "
@@ -5165,27 +5177,36 @@ def self_test():
                   "code shape rather than on the staleness.", file=sys.stderr)
             ok = False
 
-        # The packed entry is the name emitted by generic property reads now.
-        # Keeping only the old ABI above made --moving-only silently discard
-        # the same stale-slot hazard even though both call the same getter.
-        for label, source, want in (
-                ("stale", _SELFTEST_PROPERTY_GET_WINDOW, 1),
-                ("reloaded", _SELFTEST_PROPERTY_GET_RELOADED, 0)):
-            packed = os.path.join(td, f"property_get_packed_{label}.ll")
-            source = source.replace(
-                "@js_object_get_field_ic_miss(",
-                "@js_object_get_field_ic_miss_packed(").replace(
-                "ptr @perry_ic_1)",
-                "ptr @perry_ic_1, ptr @perry_ic_packed_1)")
-            with open(packed, "w") as fh:
-                fh.write(source)
-            for moving_only in (False, True):
-                found = _stale_kinds_probe(packed, moving_only=moving_only)
-                if found.get("slotload", 0) != want:
-                    print(f"self-test FAIL: packed GET {label}, "
-                          f"moving_only={moving_only}: expected {want} "
-                          f"slotload hazards, got {found!r}", file=sys.stderr)
-                    ok = False
+        # The packed entry is the name emitted by generic property reads now,
+        # and since T1 the SLOW entry is the only one most sites carry at all:
+        # the tower's six other calls collapsed into it, so a set that named
+        # only the older ABIs would classify almost every real property-GET
+        # window `MOVING: no` — the exact #7154 hole, reopened by a size
+        # optimisation rather than by a misspelling. Both are asserted in both
+        # directions against the same fixture.
+        for entry, extra_args in (
+                ("js_object_get_field_ic_miss_packed",
+                 "ptr @perry_ic_1, ptr @perry_ic_packed_1)"),
+                ("js_object_get_field_ic_slow",
+                 "ptr @perry_ic_1, ptr @perry_ic_packed_1)"),
+                ("js_object_get_field_ic_nonptr", "i64 4242)")):
+            for label, source, want in (
+                    ("stale", _SELFTEST_PROPERTY_GET_WINDOW, 1),
+                    ("reloaded", _SELFTEST_PROPERTY_GET_RELOADED, 0)):
+                packed = os.path.join(td, f"property_get_{entry}_{label}.ll")
+                source = source.replace(
+                    "@js_object_get_field_ic_miss(",
+                    "@%s(" % entry).replace(
+                    "ptr @perry_ic_1)", extra_args)
+                with open(packed, "w") as fh:
+                    fh.write(source)
+                for moving_only in (False, True):
+                    found = _stale_kinds_probe(packed, moving_only=moving_only)
+                    if found.get("slotload", 0) != want:
+                        print(f"self-test FAIL: {entry} GET {label}, "
+                              f"moving_only={moving_only}: expected {want} "
+                              f"slotload hazards, got {found!r}", file=sys.stderr)
+                        ok = False
         if (not is_collecting("js_string_compare_value")
                 or is_collecting("js_string_compare")):
             print("self-test FAIL: only the raw primitive string comparison "
