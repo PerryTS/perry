@@ -87,6 +87,24 @@ fn cjs_getter_reexport_survives_barrels_and_materialized_namespaces() {
 }
 
 #[test]
+fn dynamic_cjs_namespace_keeps_getter_reexports_live() {
+    let dir = tempfile::tempdir().unwrap();
+    fixtures(dir.path());
+    write(
+        dir.path(),
+        "main.mjs",
+        "const ns = await import('./index.cjs');\n\
+         const key = process.argv[2] || 'transform';\n\
+         console.log(ns.reads());\n\
+         console.log(Reflect.get(ns, key)(1));\n\
+         ns.update();\n\
+         console.log(Reflect.get(ns, key)(1));\n\
+         console.log(ns.reads());\n",
+    );
+    assert_eq!(compile_and_run(dir.path(), "main.mjs"), "0\n2\n12\n2\n");
+}
+
+#[test]
 fn ordinary_esm_property_export_keeps_its_snapshot() {
     let dir = tempfile::tempdir().unwrap();
     write(
