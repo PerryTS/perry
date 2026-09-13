@@ -27,65 +27,11 @@ pub(crate) fn lower_let(
     ty: &perry_hir::types::Type,
     mutable: bool,
 ) -> Result<()> {
-    // #7771: inside an element-shape fast clone, the tracked
-    // `const r = arr[j]` binding is VIRTUAL. The matcher admitted the body
-    // only because every use of `r` is a tracked `r.field` read, and each of
-    // those lowers through `element_shape_loop_fact_for_property_get` to a
-    // bare element load — so the binding itself emits nothing. Lowering the
-    // generic `IndexGet` here would put a runtime-call diamond inside the
-    // clone, fail its call-free admission scan, and DELETE the clone rather
-    // than slow it (#7690's lesson). Skipping is sound: nothing reads `r`
-    // bare inside the clone (matcher), the clone is call-free so no GC
-    // observes the slot mid-loop, `const` scoping means nothing after the
-    // loop can read it, and a residual-check side exit re-runs the current
-    // iteration in the slow clone, whose OWN `Let` binds the slot before any
-    // use. The fact is popped before the slow clone lowers, so this arm
-    // cannot fire there.
-    if ctx
-        .element_shape_loop_facts
-        .iter()
-        .any(|fact| fact.element_binding == Some(id))
-    {
-        return Ok(());
-    }
-    // #10123: the derived-index twin. Inside a shape-keyed element-shape fast
-    // clone, `const d = j % m` is not lowered generically — `%` on two
-    // possibly-untyped operands is a runtime call, and a call inside the clone
-    // DELETES it (#7690) rather than slowing it. The preheader already proved
-    // `m` is an integral `1..=i32::MAX` and materialized it as an i32, and the
-    // counter is a non-negative i32, so the whole statement is one `srem`.
-    //
-    // Sound for the same four reasons the element binding is: nothing reads
-    // `d` bare inside the clone (matcher), the clone is call-free so no GC
-    // observes the slot mid-loop, `const` scoping means nothing after the loop
-    // can read it, and a residual-check side exit re-runs the current
-    // iteration in the slow clone, whose OWN `Let` binds the real slot before
-    // any use. The fact is popped before the slow clone lowers, so this arm
-    // cannot fire there.
-    if let Some((counter_slot, modulus_i32, derived_slot)) =
-        ctx.element_shape_loop_facts.iter().rev().find_map(|fact| {
-            let crate::expr::ElementShapeIndex::DerivedMod {
-                local_id,
-                modulus_i32,
-                slot,
-            } = &fact.index
-            else {
-                return None;
-            };
-            if *local_id != id {
-                return None;
-            }
-            Some((
-                ctx.i32_counter_slots.get(&fact.index_local_id)?.clone(),
-                modulus_i32.clone(),
-                slot.clone(),
-            ))
-        })
-    {
-        let blk = ctx.block();
-        let counter = blk.load(I32, &counter_slot);
-        let derived = blk.srem(I32, &counter, &modulus_i32);
-        blk.store(I32, &derived, &derived_slot);
+    // #7771 / #10123: inside an element-shape fast clone the body's `const`
+    // binding is VIRTUAL — the element binding emits nothing and the derived
+    // index emits one `srem`. Both live with the clone, which is where their
+    // soundness arguments and the preheader that validated them are.
+    if super::element_shape_loop::lower_virtual_clone_binding(ctx, id) {
         return Ok(());
     }
     // `let C = SomeClass` aliases the local `C` to the class
