@@ -175,18 +175,25 @@ pub(super) fn optimize_and_emit(
     // register allocation. Use an O0 target machine only for final emission
     // of that unit; ordinary units keep `tm`, and the optimized IR is not
     // rebuilt or demoted.
+    //
+    // The selection is per function, the emission cannot be — a TargetMachine
+    // carries one optimization level for the whole module, and `optnone` does
+    // not reach LiveIntervals or the register allocator. Every ordinary
+    // function in the unit is demoted with the offender, which is why the
+    // budget sits above the measured population of extreme functions and why
+    // the log below names each of them.
     let fast_emit = if opt == '0' {
-        None
+        Vec::new()
     } else {
-        fast_emit_fallback(module, fast_emit_budget())
+        fast_emit_fallbacks(module, fast_emit_budget(effective_target))
     };
-    if let Some(fallback) = &fast_emit {
+    for fallback in &fast_emit {
         eprintln!("perry: {fallback}");
     }
     if let Some(stats) = stats.as_deref_mut() {
-        stats.fast_emit_fallback = fast_emit.clone();
+        stats.fast_emit_fallbacks = fast_emit.clone();
     }
-    let fast_tm = if fast_emit.is_some() {
+    let fast_tm = if !fast_emit.is_empty() {
         Some(
             target
                 .create_target_machine(
@@ -1014,27 +1021,47 @@ entry:
         );
     }
 
+    /// Spellings, on both an x86-64 and an arm64 target: only the default
+    /// differs between them, and an explicit setting wins on either.
     #[test]
     fn fast_emit_budget_spellings() {
-        assert_eq!(
-            parse_fast_emit_budget(None),
-            FastEmitBudget::Cap(DEFAULT_FAST_EMIT_MAX_INSTRS)
-        );
-        assert_eq!(
-            parse_fast_emit_budget(Some("")),
-            FastEmitBudget::Cap(DEFAULT_FAST_EMIT_MAX_INSTRS)
-        );
-        assert_eq!(parse_fast_emit_budget(Some("0")), FastEmitBudget::Off);
-        assert_eq!(parse_fast_emit_budget(Some("off")), FastEmitBudget::Off);
-        assert_eq!(parse_fast_emit_budget(Some("false")), FastEmitBudget::Off);
-        assert_eq!(
-            parse_fast_emit_budget(Some(" 250000 ")),
-            FastEmitBudget::Cap(250_000)
-        );
-        assert_eq!(
-            parse_fast_emit_budget(Some("lots")),
-            FastEmitBudget::Cap(DEFAULT_FAST_EMIT_MAX_INSTRS)
-        );
+        for (target, default) in [
+            ("x86_64-unknown-linux-gnu", 600_000),
+            ("arm64-apple-darwin", 100_000),
+        ] {
+            assert_eq!(
+                parse_fast_emit_budget(None, target),
+                FastEmitBudget::Cap(default),
+                "{target}"
+            );
+            assert_eq!(
+                parse_fast_emit_budget(Some(""), target),
+                FastEmitBudget::Cap(default),
+                "{target}"
+            );
+            assert_eq!(
+                parse_fast_emit_budget(Some("0"), target),
+                FastEmitBudget::Off
+            );
+            assert_eq!(
+                parse_fast_emit_budget(Some("off"), target),
+                FastEmitBudget::Off
+            );
+            assert_eq!(
+                parse_fast_emit_budget(Some("false"), target),
+                FastEmitBudget::Off
+            );
+            assert_eq!(
+                parse_fast_emit_budget(Some(" 250000 "), target),
+                FastEmitBudget::Cap(250_000),
+                "an explicit ceiling wins on every target"
+            );
+            assert_eq!(
+                parse_fast_emit_budget(Some("lots"), target),
+                FastEmitBudget::Cap(default),
+                "{target}"
+            );
+        }
     }
 
     /// Two functions: `wide` has 4 allocas across 9 instructions (estimate
@@ -1132,37 +1159,106 @@ entry:
     }
 
     /// Selection is per function, the boundary is inclusive, declarations do
-    /// not count, and the diagnostic names the widest violating function.
+    /// not count, every violator is reported (widest first) and the
+    /// diagnostic names the function and the size of the collateral.
     #[test]
     fn fast_emit_budget_selects_only_above_the_boundary() {
         let context = Context::create();
         let module = parse_ir_text(&context, alloca_walk_fixture(), "fast_emit_fixture")
             .expect("fixture parses");
-        assert!(fast_emit_fallback(&module, FastEmitBudget::Off).is_none());
-        assert!(fast_emit_fallback(&module, FastEmitBudget::Cap(9)).is_none());
+        assert!(fast_emit_fallbacks(&module, FastEmitBudget::Off).is_empty());
+        assert!(fast_emit_fallbacks(&module, FastEmitBudget::Cap(9)).is_empty());
 
-        let fallback = fast_emit_fallback(&module, FastEmitBudget::Cap(8))
-            .expect("wide is one instruction over the budget");
+        let fallbacks = fast_emit_fallbacks(&module, FastEmitBudget::Cap(8));
         assert_eq!(
-            fallback,
-            FastEmitFallback {
+            fallbacks,
+            vec![FastEmitFallback {
                 name: "wide".to_string(),
                 instructions: 9,
                 cap: 8,
-            }
+                // `narrow` is under the cap and `sink` is a declaration; both
+                // are still emitted by the demoted machine pipeline.
+                unit_functions: 2,
+            }],
+            "only the function over the budget is selected"
         );
-        let message = fallback.to_string();
+
+        // Every violator, widest first: one build names the whole set that
+        // has to shrink instead of re-reporting a new widest each time.
+        let both = fast_emit_fallbacks(&module, FastEmitBudget::Cap(2));
+        let named: Vec<(&str, usize)> = both
+            .iter()
+            .map(|f| (f.name.as_str(), f.instructions))
+            .collect();
+        assert_eq!(named, [("wide", 9), ("narrow", 3)]);
+
+        let message = fallbacks[0].to_string();
         for needle in [
             "`wide`",
             "9 instructions",
             "budget 8",
             "requested IR optimization",
             "O0 machine pipeline",
+            "all 2 of its defined functions",
             "PERRY_LL_FAST_EMIT_MAX_INSTRS",
         ] {
             assert!(
                 message.contains(needle),
                 "{needle:?} missing from:\n{message}"
+            );
+        }
+    }
+
+    /// The ceiling is a calibration, not a round number, and it is only as
+    /// wide as the target it was measured on. x86-64 must sit above the
+    /// measured population of extreme generated functions (OpenCode corpus:
+    /// 60 of the 61 functions past the old 100k ceiling are under 600k, and
+    /// the largest one measured end to end is `mime` `types/other.ts`'s
+    /// 522,756-instruction constructor, which emits through the optimized
+    /// machine pipeline in 704 s at 2.26 GB) and below the RS4GC
+    /// relocation-fan-out budget, which is the backstop that runs first and
+    /// re-lowers rather than demotes. Every unmeasured target — aarch64
+    /// above all, where both pathological observations were made — keeps
+    /// 100k. Raising one of those is a measurement, not an edit.
+    #[test]
+    fn fast_emit_budget_admits_the_measured_giant_population_on_measured_targets_only() {
+        assert_eq!(DEFAULT_FAST_EMIT_MAX_INSTRS_X86_64, 600_000);
+        assert!(
+            DEFAULT_FAST_EMIT_MAX_INSTRS_X86_64 > 522_756,
+            "the largest measured-affordable function must not be demoted"
+        );
+        assert!(
+            DEFAULT_FAST_EMIT_MAX_INSTRS_X86_64 < DEFAULT_RS4GC_MAX_INSTRS,
+            "a function this wide is handled by the RS4GC budget first"
+        );
+        assert_eq!(DEFAULT_FAST_EMIT_MAX_INSTRS_UNMEASURED, 100_000);
+
+        for target in [
+            "x86_64-unknown-linux-gnu",
+            "x86_64-apple-darwin",
+            "x86_64h-apple-darwin",
+        ] {
+            assert_eq!(
+                default_fast_emit_max_instrs(target),
+                600_000,
+                "{target} is measured"
+            );
+        }
+        // The host is irrelevant: a cross-compile runs the *target's* ISel and
+        // register allocator, so these keep the unmeasured ceiling even from an
+        // x86-64 box.
+        for target in [
+            "arm64-apple-darwin",
+            "aarch64-apple-darwin",
+            "aarch64-unknown-linux-gnu",
+            "arm64_32-apple-watchos",
+            "i686-unknown-linux-gnu",
+            "",
+        ] {
+            assert_eq!(
+                default_fast_emit_max_instrs(target),
+                100_000,
+                "{target:?} has not been measured"
             );
         }
     }
@@ -1269,7 +1365,7 @@ entry:
     /// A tiny test cap proves the shipped path records and successfully uses
     /// the second, O0 target machine only after running the requested Os IR
     /// pipeline. The production threshold is pinned by the parser test and
-    /// the real Claude-Code measurement in its constant's documentation.
+    /// the real measurements in its constant's documentation.
     #[test]
     fn fast_emit_budget_is_applied_by_the_shipped_pipeline() {
         global_init(&[]);
@@ -1290,8 +1386,10 @@ entry:
         .expect("the already-optimized module emits through the bounded target machine");
         assert!(!object.is_empty());
         let fallback = stats
-            .fast_emit_fallback
-            .expect("the shipped path must report the selected fallback");
+            .fast_emit_fallbacks
+            .first()
+            .expect("the shipped path must report the selected fallback")
+            .clone();
         assert_eq!(fallback.name, "wide");
         assert!(fallback.instructions > fallback.cap);
         assert_eq!(fallback.cap, 1);
@@ -1311,6 +1409,133 @@ entry:
             )
         })
         .expect("-O0 emits");
-        assert!(stats.fast_emit_fallback.is_none());
+        assert!(stats.fast_emit_fallbacks.is_empty());
+    }
+
+    /// One function over the budget, one ordinary function that is nowhere
+    /// near it, and one external callee so nothing folds away. `narrow`
+    /// holds three values across three calls, which is what makes its
+    /// machine code differ between the optimized and the O0 register
+    /// allocators.
+    fn sibling_cost_fixture(with_wide: bool) -> String {
+        let wide = r#"
+define i64 @wide(i64 %n) {
+entry:
+  %a = call i64 @src(i64 %n)
+  %b = call i64 @src(i64 %a)
+  %c = call i64 @src(i64 %b)
+  %d = call i64 @src(i64 %c)
+  %s = add i64 %a, %b
+  %t = add i64 %s, %c
+  %u = add i64 %t, %d
+  ret i64 %u
+}
+"#;
+        format!(
+            r#"
+declare i64 @src(i64)
+
+define i64 @narrow(i64 %x, i64 %y) {{
+entry:
+  %a = call i64 @src(i64 %x)
+  %b = call i64 @src(i64 %y)
+  %c = call i64 @src(i64 %a)
+  %s = add i64 %a, %b
+  %t = add i64 %s, %c
+  ret i64 %t
+}}
+{}"#,
+            if with_wide { wide } else { "" }
+        )
+    }
+
+    /// The assembly of one function, from its label to the end of its body.
+    /// Tolerates ELF (`narrow:` / `.size`) and Mach-O (`_narrow:`) spelling.
+    fn function_assembly(asm: &str, name: &str) -> String {
+        let label_elf = format!("{name}:");
+        let label_macho = format!("_{name}:");
+        let mut body: Vec<&str> = Vec::new();
+        let mut inside = false;
+        for line in asm.lines() {
+            let trimmed = line.trim();
+            if !inside {
+                inside = trimmed == label_elf || trimmed == label_macho;
+                continue;
+            }
+            let next_symbol = trimmed.ends_with(':')
+                && !trimmed.starts_with('.')
+                && !trimmed.starts_with('L')
+                && !trimmed.contains(' ');
+            if trimmed.starts_with(".size") || trimmed == ".cfi_endproc" || next_symbol {
+                break;
+            }
+            body.push(line);
+        }
+        assert!(
+            body.len() > 3,
+            "no body extracted for `{name}` — the assertion below would be vacuous:\n{asm}"
+        );
+        body.join("\n")
+    }
+
+    fn emit_assembly(ir: &str, module_name: &str, budget: FastEmitBudget) -> (String, Vec<String>) {
+        global_init(&[]);
+        let target = crate::codegen::default_target_triple();
+        let context = Context::create();
+        let module = parse_ir_text(&context, ir, module_name).expect("fixture parses");
+        let mut stats = UnitCodegenStats::default();
+        let asm = with_test_fast_emit_budget_value(budget, || {
+            optimize_and_emit_module_with_stats(
+                &module,
+                &target,
+                &["-Os".into(), "-S".into()],
+                false,
+                Some(&mut stats),
+            )
+        })
+        .expect("the fixture emits");
+        (
+            String::from_utf8(asm).expect("LLVM emits UTF-8 assembly"),
+            stats
+                .fast_emit_fallbacks
+                .iter()
+                .map(|f| f.name.clone())
+                .collect(),
+        )
+    }
+
+    /// What the budget actually costs, and why it is calibrated above the
+    /// measured population instead of below the smallest pathological case:
+    /// the demotion is a whole-unit act. An ordinary function emits the same
+    /// machine code whether or not an extreme function shares its unit — but
+    /// only while the unit keeps the optimized machine pipeline. Cross the
+    /// budget and that ordinary function's code changes too, without ever
+    /// having been over any budget itself.
+    #[test]
+    fn the_budget_is_what_makes_ordinary_siblings_pay() {
+        let with_wide = sibling_cost_fixture(true);
+        let alone = sibling_cost_fixture(false);
+
+        let (undemoted, none) = emit_assembly(&with_wide, "sibling_cost_ok", FastEmitBudget::Off);
+        assert!(none.is_empty(), "this arm must not demote: {none:?}");
+        let (solo, _) = emit_assembly(&alone, "sibling_cost_alone", FastEmitBudget::Off);
+        assert_eq!(
+            function_assembly(&undemoted, "narrow"),
+            function_assembly(&solo, "narrow"),
+            "an undemoted unit emits an ordinary function exactly as a unit without the \
+             extreme function does"
+        );
+
+        // Same module, same IR pipeline, budget crossed: `narrow` is not over
+        // it and is compiled differently anyway.
+        let (demoted, over) =
+            emit_assembly(&with_wide, "sibling_cost_demoted", FastEmitBudget::Cap(7));
+        assert_eq!(over, ["wide"], "only `wide` is over the budget");
+        assert_ne!(
+            function_assembly(&demoted, "narrow"),
+            function_assembly(&undemoted, "narrow"),
+            "if the demotion did not reach `narrow`, LLVM grew a per-function escape from the \
+             optimized machine pipeline and this budget can move back down"
+        );
     }
 }
