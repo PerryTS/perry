@@ -3,23 +3,13 @@
 use super::*;
 
 /// Check if we have the cross-compiled runtime libraries for a target.
-/// Uses the same search logic as compile.rs find_library().
+/// Use the compiler's lookup so prebuilt installs, compressed archives, and
+/// explicit library-directory overrides are available to `run` as well.
 pub fn can_compile_locally(target: Option<&str>) -> bool {
-    let triple = match rust_target_triple(target) {
-        Some(t) => t,
-        None => return true, // host build, always available
-    };
-    // Check CWD (running from source tree)
-    let cwd_path = format!("target/{triple}/release/libperry_runtime.a");
-    if Path::new(&cwd_path).exists() {
-        return true;
+    if rust_target_triple(target).is_none() {
+        return true; // host build, always available
     }
-    // Check original source tree (when cargo install'd)
-    let source_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target")
-        .join(triple)
-        .join("release/libperry_runtime.a");
-    source_path.exists()
+    crate::commands::compile::find_library("libperry_runtime.a", target).is_some()
 }
 
 /// Map perry target names to Rust target triples
@@ -274,7 +264,94 @@ pub fn resolve_target(
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_entry_file, rust_target_triple};
+    use super::{can_compile_locally, resolve_entry_file, rust_target_triple};
+
+    #[test]
+    fn local_runtime_discovery_uses_install_layouts() {
+        const CHILD_TARGET: &str = "PERRY_TEST_LOCAL_RUNTIME_TARGET";
+        const CHILD_EXPECTED: &str = "PERRY_TEST_LOCAL_RUNTIME_EXPECTED";
+        if let Ok(target) = std::env::var(CHILD_TARGET) {
+            let expected = std::env::var(CHILD_EXPECTED).unwrap() == "true";
+            // Check the fixture is visible to the linker before checking the
+            // run command's decision. No Android SDK or device is needed.
+            assert_eq!(
+                crate::commands::compile::find_library("libperry_runtime.a", Some(&target))
+                    .is_some(),
+                expected
+            );
+            assert_eq!(can_compile_locally(Some(&target)), expected);
+            return;
+        }
+
+        // Re-execute the test binary from a temporary install, with an empty
+        // project directory. This exercises current_exe() and isolates the
+        // environment overrides from other tests in this process.
+        let install = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let installed_exe = install.path().join(executable.file_name().unwrap());
+        std::fs::copy(&executable, &installed_exe).unwrap();
+        let run = |target: &str, expected: bool, override_dir: Option<(&str, &std::path::Path)>| {
+            let mut command = std::process::Command::new(&installed_exe);
+            command
+                .args([
+                    "--exact",
+                    "commands::run::entry::tests::local_runtime_discovery_uses_install_layouts",
+                    "--nocapture",
+                ])
+                .current_dir(project.path())
+                .env_remove("PERRY_RUNTIME_DIR")
+                .env_remove("PERRY_LIB_DIR")
+                .env("PERRY_LIB_CACHE_DIR", install.path().join("cache"))
+                .env(CHILD_TARGET, target)
+                .env(CHILD_EXPECTED, expected.to_string());
+            if let Some((name, dir)) = override_dir {
+                command.env(name, dir);
+            }
+            let output = command.output().unwrap();
+            assert!(
+                String::from_utf8_lossy(&output.stdout).contains("running 1 test"),
+                "the installed test binary must execute the discovery probe"
+            );
+            assert!(
+                output.status.success(),
+                "target={target}, expected={expected}:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+
+        let bundled = install.path().join("aarch64-linux-android/release");
+        std::fs::create_dir_all(&bundled).unwrap();
+        let runtime = bundled.join("libperry_runtime.a");
+        std::fs::write(&runtime, b"!<arch>\n").unwrap();
+        run("android", true, None);
+        run("wearos", true, None);
+        // A different architecture must not pick up the ARM64 archive.
+        run("android-x86_64", false, None);
+
+        std::fs::remove_file(&runtime).unwrap();
+        run("android", false, None);
+        // npm's compressed archive layout goes through the same discovery.
+        let compressed = zstd::stream::encode_all(&b"!<arch>\n"[..], 1).unwrap();
+        std::fs::write(runtime.with_extension("a.zst"), compressed).unwrap();
+        run("android", true, None);
+
+        let overrides = tempfile::tempdir().unwrap();
+        std::fs::write(overrides.path().join("libperry_runtime.a"), b"!<arch>\n").unwrap();
+        for name in ["PERRY_RUNTIME_DIR", "PERRY_LIB_DIR"] {
+            run("android-x86_64", true, Some((name, overrides.path())));
+        }
+
+        // Flat Apple bundles use target-suffixed archive names.
+        std::fs::write(
+            install.path().join("libperry_runtime_ios_sim.a"),
+            b"!<arch>\n",
+        )
+        .unwrap();
+        run("ios-simulator", true, None);
+        assert!(can_compile_locally(None));
+    }
 
     #[test]
     fn directory_input_resolves_default_entry() {
