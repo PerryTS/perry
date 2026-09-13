@@ -8,4 +8,5 @@
 - Avoid evaluating synthetic CommonJS property exports during initialization,
   preserving accessor side effects and exports assigned or replaced later.
   Regression coverage includes named imports, namespace calls, ESM barrels,
-  materialized namespaces, writable descriptors, and late assignments (#10153).
+  materialized and dynamic namespaces, writable descriptors, and late
+  assignments (#10153).
