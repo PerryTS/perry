@@ -53,6 +53,26 @@ bytes on each sweep's `[gc] blocks:` line.
 <!-- gc-symbol: a_dead_block_of_plain_objects_is_reclaimed_without_visiting_it in crates/perry-runtime/src/gc/tests/block_skip.rs -->
 <!-- gc-symbol: a_live_neighbour_keeps_its_block_on_the_per_object_path in crates/perry-runtime/src/gc/tests/block_skip.rs -->
 
+**Per-live-object cost of a synchronous full.** Three parts of a full scale
+with the live set, and each has a cheaper exact form:
+
+- *Membership.* The census answers "is this address an arena object start?"
+  from one object-start bitmap per censused block (one bit per 8-byte
+  alignment unit, allocated in 8 KiB chunks; oversized blocks keep a sorted
+  start list). A traced pointer field costs a search over the block fences and
+  one bit test.
+- *Remembered-set rebuild.* When no young object is marked or pinned after the
+  mark and the malloc registry is empty, the old→young rebuild could only
+  produce an empty set, so the full installs an empty set without walking the
+  old generation. `PERRY_GC_DIAG=1` prints `[gc-remembered-rebuild] full
+  skipped=young_generation_unmarked`.
+- *Sweep page accounting.* Consecutive single-page old objects are summed and
+  applied to their page's metadata once, before any page-index flush that
+  could zero it.
+<!-- gc-symbol: start_bitmap_membership_and_floors_match_an_independent_arena_walk in crates/perry-runtime/src/gc/tests/start_bitmap.rs -->
+<!-- gc-symbol: sabotaged_skip_loses_an_unbarriered_young_edge in crates/perry-runtime/src/gc/tests/full_rebuild_skip.rs -->
+<!-- gc-symbol: full_sweep_page_accounting_matches_the_planted_liveness in crates/perry-runtime/src/gc/tests/sweep_page_tally.rs -->
+
 `PERRY_GC_SCAVENGE` is on by default and lets nursery pressure route to the
 direct minor. `PERRY_GC_SCAVENGE_NURSERY_MB` tunes its base high-water cap,
 16 MiB by default
