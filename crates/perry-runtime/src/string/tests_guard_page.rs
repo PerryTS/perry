@@ -453,3 +453,29 @@ fn case_convert_rejects_the_aggregate_ascii_lie() {
         "É (C3 89) + A + the raw truncated lead byte — NOT the input echoed back unmapped"
     );
 }
+
+#[test]
+fn lowercase_final_sigma_keeps_truncated_tail_bounded() {
+    // Every payload is twelve bytes and ends exactly at the guard page. The
+    // scalar run before an incomplete lead still needs final-sigma context.
+    for (input, expected) in [
+        (
+            b"    ABCDE\xCE\xA3\xF0".as_slice(),
+            b"    abcde\xCF\x82\xF0".as_slice(),
+        ),
+        (
+            b"    ABCD\xCE\xA3\xE2\x82".as_slice(),
+            b"    abcd\xCF\x82\xE2\x82".as_slice(),
+        ),
+        (
+            b"    ABC\xCE\xA3\xF0\x9F\x98".as_slice(),
+            b"    abc\xCF\x82\xF0\x9F\x98".as_slice(),
+        ),
+    ] {
+        let guarded = GuardedString::new(input);
+        let result = js_string_to_lower_case(guarded.ptr());
+        let bytes =
+            unsafe { slice::from_raw_parts(string_data(result), (*result).byte_len as usize) };
+        assert_eq!(bytes, expected);
+    }
+}
