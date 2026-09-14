@@ -1,11 +1,11 @@
 //! Resolve standalone constructor ABIs once in each defining module's scope.
-//! The pipeline runs this after preparing every import route and before either
-//! object-cache lookup or LLVM emission (#10258).
+//! Collect only constructor edges, then resolve before object-cache lookup or
+//! LLVM emission. Per-module import metadata can be dropped immediately (#10265).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use super::ctor_arity::{context_free_ctor_param_count, UNRESOLVED_PARENT_FWD_ARITY};
-use super::opts::CompileOptions;
+use super::opts::{CompileOptions, ImportedClass};
 
 type Symbol = (String, String);
 
@@ -14,20 +14,28 @@ enum Contract {
     Parent(Symbol, usize),
 }
 
-/// Populate both producer signatures and consumer declarations from one graph
-/// of constructor contracts. Symbols use the canonical defining prefix/name;
-/// local aliases and namespace keys only participate in scope lookup.
-///
-/// Resolving imports first is essential: following a foreign class's bare
-/// `extends_name` in the consumer can select an unrelated same-named parent.
-/// A runtime heritage with no class binding keeps the existing 8-slot band;
-/// a real parent constructor keeps its exact arity, including zero.
-pub fn resolve_constructor_contracts<'a>(
-    modules: impl IntoIterator<Item = (String, &'a perry_hir::Module, &'a mut CompileOptions)>,
-) {
-    let mut modules: Vec<_> = modules.into_iter().collect();
-    let mut contracts = BTreeMap::new();
-    for (prefix, module, opts) in &modules {
+/// A compact graph of constructor edges in each defining module's scope.
+/// No HIR, class bodies, or per-module compile options are retained.
+#[derive(Default)]
+pub struct ConstructorContracts {
+    contracts: BTreeMap<Symbol, Contract>,
+}
+
+/// The only graph-wide constructor data needed during parallel codegen.
+pub struct ResolvedConstructorContracts {
+    arities: BTreeMap<Symbol, usize>,
+}
+
+impl ConstructorContracts {
+    /// Record a module after resolving its import routes. Aliases and namespace
+    /// keys participate only in scope lookup; edges use canonical prefix/name.
+    /// The caller can immediately discard the module's temporary import metadata.
+    pub fn record(
+        &mut self,
+        prefix: &str,
+        module: &perry_hir::Module,
+        imported_classes: &[ImportedClass],
+    ) {
         let mut locals: HashMap<_, _> = module
             .classes
             .iter()
@@ -39,7 +47,7 @@ pub fn resolve_constructor_contracts<'a>(
             }
         }
         let mut imports = HashMap::new();
-        for imported in &opts.imported_classes {
+        for imported in imported_classes {
             imports.entry(imported.effective_name()).or_insert(imported);
         }
         for class in &module.classes {
@@ -71,57 +79,67 @@ pub fn resolve_constructor_contracts<'a>(
                 }
                 contract
             };
-            contracts.insert((prefix.clone(), class.name.clone()), contract);
+            self.contracts
+                .insert((prefix.to_owned(), class.name.clone()), contract);
         }
     }
 
-    fn resolve(
-        symbol: &Symbol,
-        contracts: &BTreeMap<Symbol, Contract>,
-        resolved: &mut BTreeMap<Symbol, usize>,
-        visiting: &mut BTreeSet<Symbol>,
-    ) -> usize {
-        if let Some(count) = resolved.get(symbol) {
-            return *count;
+    /// Consume and drop the unresolved edges before any codegen options are built.
+    pub fn resolve(self) -> ResolvedConstructorContracts {
+        let mut resolved = BTreeMap::new();
+        for symbol in self.contracts.keys() {
+            resolve(symbol, &self.contracts, &mut resolved, &mut BTreeSet::new());
         }
-        if !visiting.insert(symbol.clone()) {
-            // Cyclic heritage has no constructor-bearing ancestor. Keep the
-            // standalone fallback and, crucially, the same ABI on every edge.
-            return UNRESOLVED_PARENT_FWD_ARITY;
-        }
-        let count = match &contracts[symbol] {
-            Contract::Params(count) => *count,
-            Contract::Parent(parent, fallback) => {
-                if contracts.contains_key(parent) {
-                    resolve(parent, contracts, resolved, visiting)
-                } else {
-                    // Synthetic/native capabilities have no HIR producer in
-                    // this graph and already carry their declared signature.
-                    *fallback
-                }
+        ResolvedConstructorContracts { arities: resolved }
+    }
+}
+
+fn resolve(
+    symbol: &Symbol,
+    contracts: &BTreeMap<Symbol, Contract>,
+    resolved: &mut BTreeMap<Symbol, usize>,
+    visiting: &mut BTreeSet<Symbol>,
+) -> usize {
+    if let Some(count) = resolved.get(symbol) {
+        return *count;
+    }
+    if !visiting.insert(symbol.clone()) {
+        // Cyclic heritage has no constructor-bearing ancestor. Keep the
+        // standalone fallback and, crucially, the same ABI on every edge.
+        return UNRESOLVED_PARENT_FWD_ARITY;
+    }
+    let count = match &contracts[symbol] {
+        Contract::Params(count) => *count,
+        Contract::Parent(parent, fallback) => {
+            if contracts.contains_key(parent) {
+                resolve(parent, contracts, resolved, visiting)
+            } else {
+                // Synthetic/native capabilities have no HIR producer in
+                // this graph and already carry their declared signature.
+                *fallback
             }
-        };
-        visiting.remove(symbol);
-        resolved.insert(symbol.clone(), count);
-        count
-    }
+        }
+    };
+    visiting.remove(symbol);
+    resolved.insert(symbol.clone(), count);
+    count
+}
 
-    let mut resolved = BTreeMap::new();
-    for symbol in contracts.keys() {
-        resolve(symbol, &contracts, &mut resolved, &mut BTreeSet::new());
-    }
-    for (prefix, module, opts) in &mut modules {
+impl ResolvedConstructorContracts {
+    /// Set producer and consumer signatures before object-cache hashing.
+    pub fn apply(&self, prefix: &str, module: &perry_hir::Module, opts: &mut CompileOptions) {
         opts.constructor_param_counts = module
             .classes
             .iter()
             .map(|class| {
-                let count = resolved[&(prefix.clone(), class.name.clone())];
+                let count = self.arities[&(prefix.to_owned(), class.name.clone())];
                 (class.name.clone(), count)
             })
             .collect();
         for imported in &mut opts.imported_classes {
-            if let Some(count) =
-                resolved.get(&(imported.source_prefix.clone(), imported.name.clone()))
+            if let Some(count) = self
+                .arities
+                .get(&(imported.source_prefix.clone(), imported.name.clone()))
             {
                 imported.constructor_param_count = *count;
             }
