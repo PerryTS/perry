@@ -254,9 +254,10 @@ fn a_due_nursery_cap_schedules_the_boundary_collection_below_the_in_use_guard() 
         !tiny_parse_pressure_due(in_use, 48 * MB),
         "fixture: the priced in-use guard must not be due, or this proves nothing"
     );
-    // #10262 added a third arm to the same predicate. Pin it quiet for the
-    // duration, so a side-allocation band that happened to be due could not
-    // make this test's negative half pass for the wrong reason.
+    // Medium-parse pacing (2026-09-14) added a third arm to the same
+    // predicate. Pin it quiet for the duration, so a side-allocation band that
+    // happened to be due could not make this test's negative half pass for the
+    // wrong reason.
     let _external_base = ExternalBaseGuard::set(
         crate::gc::policy::external_side_live_bytes() + gc_trigger_headroom_floor_bytes(),
     );
@@ -285,7 +286,7 @@ fn a_due_nursery_cap_schedules_the_boundary_collection_below_the_in_use_guard() 
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// #10262: the side-allocation arm.
+// Medium-parse pacing (2026-09-14): the side-allocation arm.
 //
 // Both pre-existing arms are denominated in ARENA bytes, and a lazily-parsed
 // document's bytes are not in the arena. The readings below are the measured
