@@ -22,6 +22,7 @@ mod class_field_loop_tests;
 mod counter_range;
 mod element_shape_carried;
 mod element_shape_loop;
+mod element_shape_native;
 #[cfg(test)]
 mod element_shape_loop_tests;
 mod if_stmt;
