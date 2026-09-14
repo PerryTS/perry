@@ -655,7 +655,7 @@ crate::perry_thread_local! {
     pub(super) static GC_LAST_COLLECTION_EXTERNAL_SIDE_BYTES: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
     /// Medium-parse pacing (2026-09-14): external side bytes that a
-    /// NON-full collection has released since the last full — see
+    /// collection or mutator operation has released since the last full — see
     /// [`external_side_old_reclaim_pressure_bytes`]. A byte COUNT, never an
     /// address.
     pub(super) static GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL: std::cell::Cell<usize> =
@@ -740,7 +740,7 @@ pub(crate) fn gc_note_external_side_alloc(bytes: usize) {
     }
 }
 
-/// Record that a Map/Set side buffer of `bytes` was freed (GC finalizer).
+/// Record released external side bytes, from either a collector or a mutator operation.
 pub(crate) fn gc_note_external_side_free(bytes: usize) {
     GC_EXTERNAL_SIDE_LIVE_BYTES.with(|c| c.set(c.get().saturating_sub(bytes)));
     GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL.with(|c| c.set(c.get().saturating_add(bytes)));
@@ -748,27 +748,21 @@ pub(crate) fn gc_note_external_side_free(bytes: usize) {
 
 /// The external side-buffer term of OLD-RECLAIM pressure.
 ///
-/// Live bytes PLUS whatever a non-full collection has already released since
-/// the last full. The sum is deliberately what `external_side_live_bytes()`
-/// alone read before the parse-boundary band existed, so old-reclaim keeps
-/// firing at exactly the program point it always did.
+/// Live bytes plus all reported releases since the last full baseline. The
+/// release hook also runs during JSON tape materialization, regex scratch
+/// teardown, native-addon adjustments and Map/Set buffer replacement; this
+/// accounting is broader than bytes freed by a minor collection.
 ///
-/// It has to. Only a FULL collection returns arena capacity — general blocks
-/// are released after two full observations (`gc::arena_right_size`) — and on a
-/// lazily-parsed record loop the external term was what pushed old-reclaim over
-/// its band, i.e. the side allocations were paying for the arena's block
-/// release as well as their own. Draining that term with cheap nursery
-/// collections and leaving the pressure test on the live reading removed those
-/// fulls: measured on `records_array_1m:sparse` (161 parses of a 7 600-record
-/// document), 12 minors and ONE full against `origin/main`'s seven, the arena's
-/// dirty pages 29 MB -> 55 MB, and peak RSS 63.5 -> 73.6 MiB even though live
-/// external bytes had HALVED. Keeping the drained bytes in the pressure term
-/// pins the full cadence to main's while the band holds the live reading down.
+/// Holding released bytes in this term keeps cheap collections from removing
+/// the pressure that pays for arena-capacity reclamation. On the measured
+/// `records_array_1m:sparse` loop, the live-only alternative reduced fulls from
+/// seven to one and raised peak RSS from 63.5 to 73.6 MiB despite freeing more
+/// tape. The cumulative term restored that workload's full-collection cadence.
 ///
-/// It can never make old-reclaim fire EARLIER than main: every drained byte is
-/// a byte main would still have been counting as live at the same point, so the
-/// sum is bounded above by main's reading and equals it when the same objects
-/// die.
+/// This is not a general guarantee of identical pacing: a mutator-side release
+/// lowers the previous live-only term but leaves this cumulative term unchanged,
+/// so other workloads can reach the full-collection threshold earlier. The full
+/// baseline resets the released-byte contribution before pricing the next band.
 pub(super) fn external_side_old_reclaim_pressure_bytes() -> usize {
     external_side_live_bytes().saturating_add(GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL.with(Cell::get))
 }
@@ -2176,7 +2170,7 @@ pub(super) fn finish_full_old_reclaim_baseline() {
     // Medium-parse pacing (2026-09-14): the full this baseline records is the
     // collection the drained bytes were being held for, so the debt is paid
     // here — before the baseline is read, or the baseline would carry it into
-    // the next band and the following full would fire a band too early.
+    // the next band incorrectly including already released bytes in the following growth band.
     GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL.with(|c| c.set(0));
     // Baseline includes external side-buffer bytes (#6010) so the growth
     // delta in `old_reclaim_pressure_due` stays unit-consistent.

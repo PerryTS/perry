@@ -28,15 +28,17 @@ cycle.
   behind. A futile collection (an old-owned cluster whose tape survives)
   re-bases the band at the surviving value, so repeats space out geometrically
   instead of livelocking.
-* The band's counterweight: what a *non-full* collection releases stays in the
+* The band's counterweight: all reported side-buffer releases stay in the
   old-reclaim pressure term until the next full
   (`external_side_old_reclaim_pressure_bytes`). Only a full returns arena
   capacity, and on these rows the external term was paying for that too;
   draining it with cheap minors alone took `records_array_1m:sparse` from seven
   fulls to one, the arena's dirty pages from 29 MB to 55 MB, and peak RSS from
-  63.5 to 73.6 MiB *even though live external bytes had halved*. The sum is
-  bounded above by what `main` read at the same point, so it can never fire
-  old-reclaim earlier.
+  63.5 to 73.6 MiB *even though live external bytes had halved*. The
+  cumulative term restores the full cadence on that measured workload. It
+  also includes mutator-side releases (tape materialization, regex scratch,
+  native-addon adjustments and buffer replacement), so it can trigger fulls
+  earlier than the previous live-only term on other workloads.
 
 **Measured** on the bench mini, 9 interleaved rounds, best of each, all 50 cells
 of the JSON matrix (peak RSS, MiB / CPU, ms):

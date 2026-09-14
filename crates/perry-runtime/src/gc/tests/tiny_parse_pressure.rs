@@ -532,8 +532,8 @@ fn a_drained_side_byte_still_pays_old_reclaim_until_the_next_full() {
     crate::gc::gc_note_external_side_alloc(BYTES);
     let charged = external_side_old_reclaim_pressure_bytes();
     assert_eq!(charged, live_before + BYTES);
-    // A NON-full collection releasing the buffer lowers the live reading but
-    // must leave old-reclaim pressure exactly where main would have read it.
+    // Reporting a release lowers the live reading while preserving the
+    // cumulative term, whether the release came from a collector or mutator.
     crate::gc::gc_note_external_side_free(BYTES);
     assert_eq!(
         external_side_live_bytes(),
