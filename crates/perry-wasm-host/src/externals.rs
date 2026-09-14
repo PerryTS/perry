@@ -155,18 +155,18 @@ fn table_from_handle(handle: *mut c_void) -> Option<Table> {
 }
 
 pub(crate) fn table_value_for_store(
-    store: &mut Store<()>,
+    mut store: impl AsContextMut<Data = ()>,
     table: Table,
     bits: u64,
     is_null: i32,
     external: *mut c_void,
 ) -> Option<Val> {
-    let element = table.ty(&*store).element();
+    let element = table.ty(&store).element();
     if is_null != 0 {
         return Some(Val::default(element));
     }
     match element {
-        ValType::ExternRef => Some(Val::from(ExternRef::new(store, bits))),
+        ValType::ExternRef => Some(Val::from(ExternRef::new(&mut store, bits))),
         ValType::FuncRef => match extern_from_handle(external) {
             Some(Extern::Func(function)) => Some(Val::FuncRef(Ref::Val(function))),
             _ => None,

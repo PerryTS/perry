@@ -19,8 +19,8 @@ use std::sync::{
 };
 
 use wasmi::{
-    Engine, Extern, ExternRef, ExternType, Func, Global, Linker, Memory, MemoryType, Module,
-    Mutability, Ref, Store, Table, TableType, Val, ValType,
+    AsContext, AsContextMut, Engine, Extern, ExternRef, ExternType, Func, Global, Linker, Memory,
+    MemoryType, Module, Mutability, Ref, Store, Table, TableType, Val, ValType,
 };
 
 mod host_runtime;
@@ -178,7 +178,7 @@ thread_local! {
     static ACTIVE_INSTANCE_TABLES: RefCell<Vec<ActiveInstanceTables>> = const { RefCell::new(Vec::new()) };
 }
 
-fn begin_instance_call(inst: &mut WasmInstanceHandle, store: &Store<()>) {
+fn begin_instance_call(inst: &mut WasmInstanceHandle, store: &impl AsContext<Data = ()>) {
     let instance_id = inst as *mut WasmInstanceHandle as usize;
     let mut lengths = HashMap::new();
     for export in inst.inner._module.0.module.exports() {
@@ -328,7 +328,7 @@ impl std::error::Error for WasmHostError {}
 /// Cheap byte-level magic check (`\0asm\01\0\0\0`). Mirrors `WebAssembly.validate`
 /// — for the MVP we delegate to wasmi's full module decode.
 pub fn validate(bytes: &[u8]) -> bool {
-    with_host_runtime(|runtime| Module::new(&runtime.engine, bytes).is_ok()).unwrap_or(false)
+    with_host_runtime(|runtime| Module::new(runtime.engine, bytes).is_ok()).unwrap_or(false)
 }
 
 /// Compile bytes to a module. No imports resolved at this stage.
@@ -478,6 +478,9 @@ fn instantiate_with_import_callbacks(
                             }
                         }
                         if numeric {
+                            // JavaScript may re-enter WebAssembly from here;
+                            // nested host access borrows through `caller`.
+                            let scope = host_runtime::ImportCallbackScope::enter(&mut caller);
                             let called = unsafe {
                                 callback(
                                     callback_context.load(Ordering::Relaxed),
@@ -493,6 +496,7 @@ fn instantiate_with_import_callbacks(
                                     result_bits.len(),
                                 )
                             };
+                            drop(scope);
                             if called != 0 {
                                 for ((result, kind), bits) in results
                                     .iter_mut()
@@ -527,7 +531,7 @@ fn instantiate_with_import_callbacks(
             .instantiate_and_start(&mut *store, &module.0.module)
             .map_err(|e| WasmHostError::Link(e.to_string()))?;
         let memory = instance.get_memory(&*store, "memory");
-        Ok((store as *mut Store<()>, instance, memory))
+        Ok((host_runtime::host_store_ptr(), instance, memory))
     })
     .unwrap_or_else(|| Err(WasmHostError::Link("host runtime is already in use".into())))?;
     trace_module(&module.0, "instantiated");
@@ -571,7 +575,7 @@ fn coerce_numeric_value(value: WasmVal, expected: ValType) -> Option<Val> {
 /// name.
 fn resolve_export(inst: &mut WasmInstanceHandle, name: &str) -> Option<usize> {
     with_host_runtime(|runtime| {
-        debug_assert_eq!(inst.inner.store, &mut runtime.store as *mut Store<()>);
+        debug_assert_eq!(inst.inner.store, host_runtime::host_store_ptr());
         if let Some(&index) = inst.inner.export_handles.get(name) {
             return Some(index);
         }
@@ -634,7 +638,7 @@ fn call_resolved_export(
         // Split the borrow: the call needs the store mutably while reading the
         // cached argument buffer and filling the cached result buffer, and all
         // three are disjoint fields of the same `InstanceInner`.
-        debug_assert_eq!(inst.inner.store, &mut runtime.store as *mut Store<()>);
+        debug_assert_eq!(inst.inner.store, host_runtime::host_store_ptr());
         let inner = &mut *inst.inner;
         let CachedExport {
             func, args, outs, ..
