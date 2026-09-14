@@ -60,6 +60,7 @@ fn ffi_indices_and_kind_checks_survive_growth_and_restore() {
 }
 
 #[test]
+#[cfg(not(any(target_os = "android", target_env = "ohos")))]
 fn handle_storage_teardown_clears_cache_before_late_scope_drop() {
     struct LateScope(RefCell<Option<RuntimeHandleScope>>);
     impl Drop for LateScope {
@@ -92,4 +93,31 @@ fn handle_storage_teardown_clears_cache_before_late_scope_drop() {
     })
     .join()
     .expect("handle teardown thread");
+}
+
+#[cfg(any(target_os = "android", target_env = "ohos"))]
+#[test]
+fn late_scope_drop_resolves_os_tls_without_retaining_its_address() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static DROPPED: AtomicBool = AtomicBool::new(false);
+    struct LateScope(RefCell<Option<RuntimeHandleScope>>);
+    impl Drop for LateScope {
+        fn drop(&mut self) {
+            drop(self.0.get_mut().take());
+            DROPPED.store(true, Ordering::SeqCst);
+        }
+    }
+    thread_local! {
+        static BEFORE_BUFFER: LateScope = const { LateScope(RefCell::new(None)) };
+    }
+    std::thread::spawn(|| {
+        BEFORE_BUFFER.with(|_| {});
+        let scope = RuntimeHandleScope::new();
+        let root = scope.root_nanbox_f64(7.0);
+        assert_eq!(root.get_nanbox_f64(), 7.0);
+        BEFORE_BUFFER.with(|late| *late.0.borrow_mut() = Some(scope));
+    })
+    .join()
+    .expect("late OS-TLS scope thread");
+    assert!(DROPPED.load(Ordering::SeqCst));
 }

@@ -535,10 +535,9 @@ pub(crate) fn hot_if_published() -> Option<&'static HotTls> {
 /// `SlotGuard`; the named fast path must preserve it (#9183).
 #[inline(always)]
 pub(crate) fn unpublish_runtime_handle_stack() {
-    // Teardown is cold. Use the non-dropping cache directly on every target,
-    // without filling it: non-Darwin targets also cache the named address even
-    // though hot_if_published() only exposes the Darwin direct-TSD shortcut.
-    HOT.with(|cell| unsafe {
+    // Teardown is cold. Clear the cache without filling it. Android's pooled
+    // cache may already be destroyed, which also makes it unpublished.
+    let _ = HOT.try_with(|cell| unsafe {
         (*cell.get()).runtime_handle_stack.set(std::ptr::null_mut());
     });
 }

@@ -1,15 +1,20 @@
 use super::*;
 
+#[cfg(not(any(target_os = "android", target_env = "ohos")))]
+mod stack;
+#[cfg(any(target_os = "android", target_env = "ohos"))]
+#[path = "runtime_handles/stack_os_tls.rs"]
 mod stack;
 #[cfg(test)]
 mod tests;
-use stack::RuntimeHandleStack;
+use stack::{RuntimeHandleStack, StackRef};
 
 struct RuntimeHandleStackHotGuard;
 
 impl Drop for RuntimeHandleStackHotGuard {
     fn drop(&mut self) {
         crate::tls_hot::unpublish_runtime_handle_stack();
+        #[cfg(not(any(target_os = "android", target_env = "ohos")))]
         RUNTIME_HANDLE_STACK.with(RuntimeHandleStack::release);
     }
 }
@@ -19,8 +24,9 @@ thread_local! {
     /// named `HotTls` slot. Going through `perry_thread_local!` here would call
     /// `hot()` while `HotTls::fill` is still resolving this address (#9183).
     static RUNTIME_HANDLE_STACK: RuntimeHandleStack = const { RuntimeHandleStack::new() };
-    /// Owns the buffer, registered before its first allocation or publication.
-    /// The metadata never drops; this guard unpublishes, empties, then frees it.
+    /// Unpublishes the cache at teardown. Native TLS registers this owner
+    /// before allocation and releases the manual buffer here; OS-backed TLS keeps
+    /// the original Vec owner in RUNTIME_HANDLE_STACK instead.
     static RUNTIME_HANDLE_STACK_HOT_GUARD: RuntimeHandleStackHotGuard = const { RuntimeHandleStackHotGuard };
 }
 
@@ -41,7 +47,8 @@ pub(crate) fn runtime_handle_stack_hot_addr() -> *mut u8 {
 /// uses the ordinary thread-local directly, so opening a handle scope cannot
 /// recursively initialize the cache (#9183).
 #[inline(always)]
-fn runtime_handle_stack() -> &'static RuntimeHandleStack {
+#[cfg(not(any(target_os = "android", target_env = "ohos")))]
+fn runtime_handle_stack() -> StackRef {
     if let Some(hot) = crate::tls_hot::hot_if_published() {
         let stack = hot.runtime_handle_stack.get();
         if !stack.is_null() {
@@ -58,6 +65,15 @@ fn runtime_handle_stack() -> &'static RuntimeHandleStack {
     })
 }
 
+// Rust's Android/HarmonyOS OS-TLS backend frees the metadata even when T has no Drop.
+// Keep the original scoped lookup there; a token never borrows TLS storage
+// across a callback or a later destructor.
+#[cfg(any(target_os = "android", target_env = "ohos"))]
+#[inline(always)]
+fn runtime_handle_stack() -> StackRef {
+    StackRef::new()
+}
+
 /// Scoped owner for transient runtime handles.
 ///
 /// Handles are mutable GC roots for values that live only in a runtime
@@ -65,7 +81,7 @@ fn runtime_handle_stack() -> &'static RuntimeHandleStack {
 /// scope removes every handle created from it.
 pub struct RuntimeHandleScope {
     pub(super) base: usize,
-    stack: &'static RuntimeHandleStack,
+    stack: StackRef,
 }
 
 impl RuntimeHandleScope {
@@ -222,7 +238,7 @@ impl Drop for RuntimeHandleScope {
 #[derive(Clone, Copy)]
 pub struct RuntimeHandle<'scope> {
     pub(super) index: usize,
-    stack: &'scope RuntimeHandleStack,
+    stack: StackRef,
     pub(super) _scope: PhantomData<&'scope RuntimeHandleScope>,
 }
 
@@ -474,11 +490,7 @@ impl<'scope> RuntimeHandle<'scope> {
 /// into the growable buffer crosses a visitor call; the legacy Copy visitor
 /// may invoke arbitrary callbacks. Non-rewriting visits must not overwrite a
 /// value changed by such a callback.
-fn visit_runtime_handle_slot(
-    stack: &RuntimeHandleStack,
-    index: usize,
-    visitor: &mut RuntimeRootVisitor<'_>,
-) {
+fn visit_runtime_handle_slot(stack: StackRef, index: usize, visitor: &mut RuntimeRootVisitor<'_>) {
     let Some(mut slot) = stack.get(index) else {
         return;
     };

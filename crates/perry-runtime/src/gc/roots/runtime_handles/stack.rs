@@ -13,6 +13,8 @@ pub(super) struct RuntimeHandleStack {
     capacity: Cell<usize>,
 }
 
+pub(super) type StackRef = &'static RuntimeHandleStack;
+
 impl RuntimeHandleStack {
     pub(super) const fn new() -> Self {
         Self {
@@ -77,7 +79,7 @@ impl RuntimeHandleStack {
         let capacity = old_capacity
             .checked_mul(2)
             .expect("runtime handle stack capacity overflow")
-            .max(64);
+            .max(4);
         let layout = Layout::array::<RuntimeHandleSlot>(capacity)
             .expect("runtime handle stack allocation overflow");
         // SAFETY: data belongs exclusively to this thread and was allocated

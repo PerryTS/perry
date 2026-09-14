@@ -62,18 +62,25 @@ and validation logs are also retained locally in
 
 The live prefix is still `[0, top)`. Handles remain indices so buffer growth
 does not invalidate them, and the scope lifetime and bounds/kind checks remain.
-Scopes and handles cache a reference to non-dropping, thread-local metadata;
-their `Cell`-containing referent prevents sending them between threads. Rust
-scopes and handles grow from one machine word to two, while each root slot
-shrinks from 24 to 16 bytes by encoding the raw tag in the variant discriminant.
-The first push allocates 64 slots (1 KiB), and later growth doubles capacity.
+On native TLS targets, scopes and handles cache a reference to non-dropping
+metadata; its `Cell` fields prevent sending them between threads. These scopes
+and handles grow from one machine word to two. Android and HarmonyOS retain scoped Vec
+access through a thread-bound token because its OS-backed TLS frees even
+non-dropping metadata at teardown. Each root slot shrinks from 24 to 16 bytes
+by encoding the raw tag in the variant discriminant. The merge train retains
+the original four-slot initial capacity (64 bytes with the smaller slots), then
+doubles it. The instruction measurements above used the PR's earlier 64-slot
+initial capacity; they do not measure the changed initial growth schedule.
 
 The existing named hot-TLS pointer and its offsets stay in place. The fallback
 metadata can be accessed without filling the hot cache, preserving #9183's
-initialization contract. A separate TLS guard owns the buffer, unpublishes its
-cache pointer on every target, and clears the live prefix before freeing it.
-Late scope destructors see empty metadata; a push after buffer destruction
-fails through the destroyed owner guard instead of resurrecting storage.
+initialization contract. On native TLS targets, a separate guard owns the buffer, unpublishes its
+cache pointer, and clears the live prefix before freeing it. Late scope
+destructors see empty metadata; a push after buffer destruction fails through
+the destroyed owner guard instead of resurrecting storage. On OS-backed TLS, the Vec owns
+its allocation and late scopes resolve the TLS key again instead of retaining
+an address after teardown. Cache unpublication tolerates an Android pool that
+has already been destroyed.
 
 Scanners visit local slot copies and commit relocations by index. This avoids
 references into reallocated storage, including a reentrant legacy Copy visitor;
