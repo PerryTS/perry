@@ -1994,8 +1994,8 @@ pub(super) fn credit_promoted_bytes_to_old_baseline(promoted_bytes: usize) {
     GC_LAST_OLD_RECLAIM_IN_USE_BYTES
         .with(|bytes| bytes.set(bytes.get().saturating_add(promoted_bytes)));
     // #10182: the credit hides these bytes from the growth band by design; the
-    // promoted-cohort bound is what still counts them.
-    super::promoted_cohort::note_promoted(promoted_bytes);
+    // promoted-cohort bound is what still counts the in-place-promoted share of
+    // them (`promoted_cohort::note_minor_promotion`, called by the minor).
 }
 
 /// Feed a copying minor's measured young-survival ratio to arena-growth pacing.

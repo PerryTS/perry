@@ -308,6 +308,9 @@ pub(super) struct CopyingNurseryTraceStats {
     /// row with `in_place_promotion=true` and zero here promoted nothing and
     /// proves nothing.
     pub(super) in_place_promoted_objects: usize,
+    /// Bytes promoted by that path — `promoted_bytes` minus what the same
+    /// cycle tenured by copy. The promoted cohort counts only these (#10241).
+    pub(super) in_place_promoted_bytes: usize,
     pub(super) in_place_promoted_blocks: usize,
     /// Bytes on the promoted blocks that were NOT live — the footprint this
     /// technique trades for the speed, retained until the next full.
