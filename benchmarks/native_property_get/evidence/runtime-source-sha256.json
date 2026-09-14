@@ -1,0 +1,9 @@
+{
+  "crates/perry-runtime/src/json/stringify.rs": "9ca55d9bb6ce1903a6fb53958601c6e42fc952ab093d5cbd598768212f4041bc",
+  "crates/perry-runtime/src/object/field_get_set/get_field_by_name.rs": "7fdde1279dcc2ab18ef17dd59b55d483a47e40d14d64cd94352cbf1ddc174067",
+  "crates/perry-runtime/src/object/mod.rs": "7c5950f1320cd07d3dfbceb4e27a81c3cfe994fce92b8e0eaa60e0a7c25d79c8",
+  "crates/perry-runtime/src/object/native_get.rs": "cf4e83f0e00ba10a51f759ccf487c1a5d3aec2d00dce836e80a00f7b11f19727",
+  "crates/perry-runtime/src/object/native_get/tests.rs": "d423834bdf4a2a054efc1003fca777bdf2f8fb89c4d93ec4fe3f809c81507e4d",
+  "crates/perry-runtime/src/proxy/reflect.rs": "32c75ac50727e3bab55c9433a603c7debce999732d1316f4288493457b2f6f45",
+  "crates/perry-runtime/src/value/dynamic_object.rs": "c27f4e02c6b498ce70299ba782a9dd31b8dc38ba4fa4dca3d2e18ee558c59f19"
+}

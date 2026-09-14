@@ -27,6 +27,9 @@ pub extern "C" fn js_object_get_field_by_name(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> JSValue {
+    if let Some(value) = unsafe { super::super::native_get::try_data_get_by_name(obj, key) } {
+        return value;
+    }
     // Guard hoisted to the call site: an ordinary key is rejected on a length
     // compare and one byte here, so the overwhelmingly common property read
     // makes no call into the private-member path at all.

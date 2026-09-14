@@ -17,6 +17,17 @@ use super::{
 /// as "use target".
 #[no_mangle]
 pub extern "C" fn js_reflect_get(target: f64, key: f64, receiver: f64) -> f64 {
+    // A data read has no observable receiver binding or key conversion. The
+    // classifier accepts only already-string keys and proves every traversed
+    // object ordinary before returning, so no handles are needed on a hit.
+    if let Some(value) = unsafe {
+        crate::object::native_get::try_data_get(
+            crate::value::JSValue::from_bits(target.to_bits()),
+            crate::value::JSValue::from_bits(key.to_bits()),
+        )
+    } {
+        return f64::from_bits(value.bits());
+    }
     if !reflect_value_is_object(target) {
         return reflect_non_object_typeerror("get");
     }

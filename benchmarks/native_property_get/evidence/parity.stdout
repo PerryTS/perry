@@ -1,0 +1,42 @@
+inherited data true
+shadowed data true
+deleted shadow true
+own undefined true
+frozen prototype true
+frozen own data true
+own getter result true
+own getter once true
+distinct receiver true
+distinct getter once true
+inherited getter receiver true
+inherited getter once true
+data shadows getter true
+shadow suppresses getter true
+setter only true
+proxy result true
+proxy once true
+proxy prototype true
+prototype proxy once true
+revoked proxy throws true
+coerced key result true
+coercion then getter once true
+symbol key true
+private-looking string true
+long key true
+inherited class static true
+private field true
+class expression static true
+closure expando true
+array expando true
+array length true
+typed array index true
+date constructor true
+regexp expando true
+regexp lastIndex true
+regexp accessor true
+regexp getter once true
+inherited toJSON getter receiver true
+toJSON getter once true
+toJSON method once true
+noncallable toJSON true
+native property Get parity passed

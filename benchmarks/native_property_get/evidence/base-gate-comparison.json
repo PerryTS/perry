@@ -1,0 +1,40 @@
+{
+  "base_commit": "9fda98df68d9fac3c08b2385fae007aa9f5278df",
+  "warnings": {
+    "base": [
+      "error: function `registered_extern_handle` is never used",
+      "error: function `wasm_memory_descriptor_maximum` is never used"
+    ],
+    "candidate": [
+      "error: function `registered_extern_handle` is never used",
+      "error: function `wasm_memory_descriptor_maximum` is never used"
+    ],
+    "base_test_warnings": [
+      "warning: value assigned to `cache` is never read",
+      "warning: function `register_extern_wrapper` is never used",
+      "warning: function `registered_extern_handle` is never used",
+      "warning: function `wasm_memory_descriptor_maximum` is never used"
+    ],
+    "candidate_test_warnings": [
+      "warning: value assigned to `cache` is never read",
+      "warning: function `register_extern_wrapper` is never used",
+      "warning: function `registered_extern_handle` is never used",
+      "warning: function `wasm_memory_descriptor_maximum` is never used"
+    ]
+  },
+  "api_manifest_source_identical": true,
+  "api_manifest_files": [
+    "crates/perry-api-manifest/Cargo.toml",
+    "crates/perry-api-manifest/src/emit.rs",
+    "crates/perry-api-manifest/src/entries.rs",
+    "crates/perry-api-manifest/src/entries/part_1.rs",
+    "crates/perry-api-manifest/src/entries/part_2.rs",
+    "crates/perry-api-manifest/src/entries/part_3.rs",
+    "crates/perry-api-manifest/src/entries/part_4.rs",
+    "crates/perry-api-manifest/src/lib.rs",
+    "crates/perry-api-manifest/src/native_abi.rs",
+    "crates/perry-api-manifest/tests/stub_inventory.rs"
+  ],
+  "api_docs_drift": "Generated docs add bun-pty from unchanged manifest; saved in api-docs-drift.patch.gz.",
+  "public_freshness_base": "public baseline error: public artifact benchmark inputs changed; regenerate it with ./benchmarks/run_public_baseline.sh"
+}

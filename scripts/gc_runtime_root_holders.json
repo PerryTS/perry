@@ -735,6 +735,12 @@
       "why": "#9754 remembered set: `YoungLog<u32>` = two `Vec<u32>` (live + recycled spare) holding transition-cache SLOT INDICES whose `key_ptr`/`next_keys` a minor may act on. Indices, not addresses — a `u32` cannot hold a 48-bit pointer. The pointer-bearing entries they index are visited by `scan_transition_cache_roots_mut`, which is registered."
     },
     {
+      "file": "crates/perry-runtime/src/object/native_get.rs",
+      "name": "FORCE_SLOW",
+      "verdict": "test_only",
+      "why": "#[cfg(test)] Cell<bool> selects the unchanged slow Get for differential tests. Holds only a boolean, never a GC address or JSValue, and is absent from shipped binaries."
+    },
+    {
       "file": "crates/perry-runtime/src/object/native_module.rs",
       "name": "TEST_BOUND_METHOD_MOVE",
       "verdict": "test_only",

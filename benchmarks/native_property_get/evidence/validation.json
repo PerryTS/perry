@@ -1,0 +1,31 @@
+{
+  "runtime_tests": {
+    "candidate": {
+      "passed": 3803,
+      "ignored": 4,
+      "failed": 0
+    },
+    "base": {
+      "passed": 3795,
+      "ignored": 4,
+      "failed": 0
+    }
+  },
+  "regex_off_check": "pass",
+  "fmt": "pass",
+  "clippy_new_diagnostics": 0,
+  "fault_mutations_killed": 3,
+  "node_parity_output_lines": 42,
+  "lint": {
+    "commands": 83,
+    "failed": 3,
+    "ci_only_skipped": 2,
+    "failures": [
+      "public benchmark freshness (reproduced on base)",
+      "workspace warnings (existing WebAssembly helpers and test cache assignment)",
+      "API docs drift (unchanged API manifest adds bun-pty)"
+    ]
+  },
+  "gc_ratchet": "same-host base comparison passes; 126 medians identical; old pinned baseline fails on both",
+  "gc_stress": "428 PASS, 167 UNVER, seven HTTP/2 failures reproduced exactly on base; all required arms live"
+}

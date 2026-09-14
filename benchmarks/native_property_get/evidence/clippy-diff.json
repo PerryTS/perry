@@ -1,0 +1,8 @@
+{
+  "comparison": "9fda98df68 vs candidate; cargo clippy -j4 -p perry-runtime --all-targets --message-format=json",
+  "normalization": "level, code, message, primary filenames; ignores shifted line numbers",
+  "baseline_diagnostics": 1987,
+  "candidate_diagnostics": 1987,
+  "new_diagnostics": [],
+  "removed_diagnostics": []
+}

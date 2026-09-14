@@ -135,6 +135,7 @@ pub(crate) mod iterator_prototypes;
 pub(crate) mod map_set_subclass;
 mod namespace_create;
 mod native_call_method;
+pub(crate) mod native_get;
 mod native_module;
 mod nm_namespace_hooks;
 pub(crate) use native_module::class_instance_has_member;

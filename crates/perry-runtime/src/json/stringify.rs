@@ -273,19 +273,17 @@ pub(crate) unsafe fn object_get_to_json(ptr: *const u8) -> Option<f64> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let recv_handle = scope.root_nanbox_f64(recv);
 
-    let key = js_string_from_bytes(b"toJSON".as_ptr(), 6);
+    let key = crate::string::canonical_key(b"toJSON");
     let key_handle = scope.root_string_ptr(key);
 
-    let obj_ptr = recv_handle.get_nanbox_f64();
-    let obj_ptr = (obj_ptr.to_bits() & POINTER_MASK) as *const crate::ObjectHeader;
     let method = key_handle.with_const_ptr(|key: *const crate::string::StringHeader| {
-        crate::object::js_object_get_field_by_name(obj_ptr, key)
+        crate::object::native_get::get_by_canonical_key(recv_handle.get_nanbox_f64(), key)
     });
 
     // Only treat it as toJSON if it actually resolved to a callable closure
     // (POINTER_TAG + closure). A plain object with no `toJSON`, or a `toJSON`
     // data field that isn't a function, returns `None` → serialize normally.
-    let method_bits = method.bits();
+    let method_bits = method.to_bits();
     if (method_bits & 0xFFFF_0000_0000_0000) != POINTER_TAG {
         return None;
     }
