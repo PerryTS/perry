@@ -45,6 +45,7 @@ pub(super) fn trigger_decision(site: &'static str, kind: &'static str) {
     let nursery_cap = tenuring::scavenge_nursery_cap_effective_bytes();
     let old_reclaimable = policy::old_gen_reclaimable_pressure_bytes();
     let external = policy::external_side_live_bytes();
+    let external_drained = policy::GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL.with(Cell::get);
     let old_baseline = policy::GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(Cell::get);
     let old_band = policy::gc_old_reclaim_growth_band_bytes(old_baseline);
     let old_threshold = gc_old_gen_reclaim_threshold_dyn_bytes();
@@ -57,7 +58,8 @@ pub(super) fn trigger_decision(site: &'static str, kind: &'static str) {
     eprintln!(
         "[gc-trigger] site={site} kind={kind} arena_total={arena_total} next_base={next_base} armed={armed} \
          from_space={from_space} nursery_cap={nursery_cap} old_in_use={old_in_use} old_free={old_free} \
-         old_reclaimable={old_reclaimable} external_side={external} old_baseline={old_baseline} \
+         old_reclaimable={old_reclaimable} external_side={external} \
+         external_drained={external_drained} old_baseline={old_baseline} \
          old_band={old_band} old_threshold={old_threshold} old_pending={old_pending} retaining={retaining} \
          malloc={malloc} next_malloc={next_malloc} promoted_since_full={} cohort_bound={}",
         promoted_cohort::promoted_since_full(),

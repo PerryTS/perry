@@ -654,6 +654,12 @@ crate::perry_thread_local! {
     /// address; written only from `note_collection_finished_arena_occupancy`.
     pub(super) static GC_LAST_COLLECTION_EXTERNAL_SIDE_BYTES: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
+    /// Medium-parse pacing (2026-09-14): external side bytes that a
+    /// NON-full collection has released since the last full — see
+    /// [`external_side_old_reclaim_pressure_bytes`]. A byte COUNT, never an
+    /// address.
+    pub(super) static GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
 }
 
 /// Live bytes currently held by external Map/Set side buffers on this thread.
@@ -737,6 +743,34 @@ pub(crate) fn gc_note_external_side_alloc(bytes: usize) {
 /// Record that a Map/Set side buffer of `bytes` was freed (GC finalizer).
 pub(crate) fn gc_note_external_side_free(bytes: usize) {
     GC_EXTERNAL_SIDE_LIVE_BYTES.with(|c| c.set(c.get().saturating_sub(bytes)));
+    GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL.with(|c| c.set(c.get().saturating_add(bytes)));
+}
+
+/// The external side-buffer term of OLD-RECLAIM pressure.
+///
+/// Live bytes PLUS whatever a non-full collection has already released since
+/// the last full. The sum is deliberately what `external_side_live_bytes()`
+/// alone read before the parse-boundary band existed, so old-reclaim keeps
+/// firing at exactly the program point it always did.
+///
+/// It has to. Only a FULL collection returns arena capacity — general blocks
+/// are released after two full observations (`gc::arena_right_size`) — and on a
+/// lazily-parsed record loop the external term was what pushed old-reclaim over
+/// its band, i.e. the side allocations were paying for the arena's block
+/// release as well as their own. Draining that term with cheap nursery
+/// collections and leaving the pressure test on the live reading removed those
+/// fulls: measured on `records_array_1m:sparse` (161 parses of a 7 600-record
+/// document), 12 minors and ONE full against `origin/main`'s seven, the arena's
+/// dirty pages 29 MB -> 55 MB, and peak RSS 63.5 -> 73.6 MiB even though live
+/// external bytes had HALVED. Keeping the drained bytes in the pressure term
+/// pins the full cadence to main's while the band holds the live reading down.
+///
+/// It can never make old-reclaim fire EARLIER than main: every drained byte is
+/// a byte main would still have been counting as live at the same point, so the
+/// sum is bounded above by main's reading and equals it when the same objects
+/// die.
+pub(super) fn external_side_old_reclaim_pressure_bytes() -> usize {
+    external_side_live_bytes().saturating_add(GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL.with(Cell::get))
 }
 
 #[inline]
@@ -2002,8 +2036,8 @@ pub(super) fn copied_minor_promotion_handoff_due(trigger_kind: GcTriggerKind) ->
         return false;
     }
     let promotable = copied_minor_promotable_active_survivor_bytes();
-    let old_in_use =
-        old_gen_reclaimable_pressure_bytes().saturating_add(external_side_live_bytes());
+    let old_in_use = old_gen_reclaimable_pressure_bytes()
+        .saturating_add(external_side_old_reclaim_pressure_bytes());
     let baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.get());
     copied_minor_promotion_handoff_pressure_due(promotable, old_in_use, baseline)
 }
@@ -2114,8 +2148,8 @@ pub(super) fn maybe_schedule_old_reclaim_after_copied_minor() {
     // a tenured-then-dead Map holds its multi-MB buffer until a full
     // reclaim's old-gen sweep finalizes it, so the buffer bytes must be
     // able to escalate that reclaim.
-    let old_in_use =
-        old_gen_reclaimable_pressure_bytes().saturating_add(external_side_live_bytes());
+    let old_in_use = old_gen_reclaimable_pressure_bytes()
+        .saturating_add(external_side_old_reclaim_pressure_bytes());
     let baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.get());
     if old_reclaim_pressure_due(old_in_use, baseline) {
         GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(true));
@@ -2139,10 +2173,15 @@ pub(super) fn request_old_reclaim_for_untraced_promotions(bytes: usize) {
 }
 
 pub(super) fn finish_full_old_reclaim_baseline() {
+    // Medium-parse pacing (2026-09-14): the full this baseline records is the
+    // collection the drained bytes were being held for, so the debt is paid
+    // here — before the baseline is read, or the baseline would carry it into
+    // the next band and the following full would fire a band too early.
+    GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL.with(|c| c.set(0));
     // Baseline includes external side-buffer bytes (#6010) so the growth
     // delta in `old_reclaim_pressure_due` stays unit-consistent.
-    let old_in_use =
-        old_gen_reclaimable_pressure_bytes().saturating_add(external_side_live_bytes());
+    let old_in_use = old_gen_reclaimable_pressure_bytes()
+        .saturating_add(external_side_old_reclaim_pressure_bytes());
     GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.set(old_in_use));
     // #10182: this full verified everything old; the promoted cohort starts over.
     super::promoted_cohort::note_full_finished(old_in_use);
@@ -3455,7 +3494,7 @@ pub(super) fn gc_budgeted_due_trigger_eval() -> (Option<BudgetedGcTrigger>, bool
     let old_pending = GC_OLD_RECLAIM_PENDING.with(Cell::get);
     // #6010: external Map/Set side-buffer bytes escalate to OldReclaim too.
     let old_reclaimable = old_gen_reclaimable_pressure_bytes();
-    let old_in_use = old_reclaimable.saturating_add(external_side_live_bytes());
+    let old_in_use = old_reclaimable.saturating_add(external_side_old_reclaim_pressure_bytes());
     let old_baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.get());
     if old_pending || old_reclaim_pressure_due(old_in_use, old_baseline) {
         return (Some(BudgetedGcTrigger::OldReclaim), true);
