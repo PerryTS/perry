@@ -867,6 +867,12 @@ impl GcCycleState {
             trace_phase_record(&mut self.trace, "build_valid_pointer_set", phase_start);
             return;
         }
+        // The census's frames just returned from the stack region the root
+        // scan's frames are about to occupy, and a conservative stack scan
+        // reads every word below its caller frames, uninitialized slots
+        // included. Zero that dead region so a heap address the census walk
+        // left behind cannot read as a root (#10182).
+        scrub_dead_stack_below();
         let builder = self
             .valid_builder
             .take()
@@ -1844,6 +1850,20 @@ impl Drop for GcCycleState {
         }
     }
 }
+
+/// Zero `DEAD_STACK_SCRUB_WORDS` words of the stack immediately below the
+/// caller's frame. The region is dead (below the stack pointer of every live
+/// frame), so writing it cannot change program state; it only erases what
+/// frames that already returned left there.
+#[inline(never)]
+pub(super) fn scrub_dead_stack_below() {
+    let mut words = [0u64; DEAD_STACK_SCRUB_WORDS];
+    // Force the zeros to be materialized in this frame.
+    std::hint::black_box(&mut words);
+}
+
+/// 16 KiB: deeper than the census walk's frames.
+const DEAD_STACK_SCRUB_WORDS: usize = 2048;
 
 mod alloc_flag;
 pub(super) use alloc_flag::restore_minor_in_alloc;
