@@ -220,7 +220,7 @@ unsafe fn process_dirty_slot_work(
     *changed |= *slot != before;
 }
 
-fn dirty_slot_ranges_for(
+pub(super) fn dirty_slot_ranges_for(
     range: HeapSlotRange,
     dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
     stats: &mut RememberedSetTraceStats,

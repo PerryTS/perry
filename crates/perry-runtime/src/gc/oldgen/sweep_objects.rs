@@ -135,7 +135,7 @@ impl ArenaSweepObjectsState {
         // Reached only from a synchronous full sweep, which is the one whose
         // marks are final and whose whole-block walk the probe reads.
         self.survival_probe =
-            !self.minor_sweep && super::super::promoted_cohort::survival_probe_armed();
+            !self.minor_sweep && super::super::promoted_cohort::survival::survival_probe_armed();
         if self.minor_sweep
             || !self.reclaim_dead_old_blocks
             || self.targeted_old_blocks.is_some()
@@ -201,7 +201,7 @@ impl ArenaSweepObjectsState {
             skip[block_idx] = true;
             any = true;
             if self.survival_probe {
-                super::super::promoted_cohort::note_probe_block_skipped(
+                super::super::promoted_cohort::survival::note_probe_block_skipped(
                     snapshot.data,
                     snapshot.offset,
                 );
@@ -287,7 +287,7 @@ impl ArenaSweepObjectsState {
                 // SAFETY: the block was snapshotted by this sweep's cursor.
                 unsafe { self.sweep_whole_block(block_idx, data, offset, size) };
                 if self.survival_probe {
-                    super::super::promoted_cohort::note_probe_block_swept(
+                    super::super::promoted_cohort::survival::note_probe_block_swept(
                         data,
                         offset,
                         self.arena_live_bytes - live_before,

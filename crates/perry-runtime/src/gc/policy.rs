@@ -3581,19 +3581,19 @@ pub(super) fn run_promoted_cohort_full_if_due() -> bool {
     let adopted_before = super::trace::adopt_census::adopted_blocks();
     // #10241: the full's sweep measures how much of what the minor at this
     // safepoint promoted is still reachable (`promoted_cohort::PromotedSurvival`).
-    super::promoted_cohort::arm_survival_probe(super::trace::adopt_census::ready_blocks());
+    super::promoted_cohort::survival::arm_survival_probe(super::trace::adopt_census::ready_blocks());
     super::trace::adopt_census::begin_adopting();
     // No `force_full_scan`: roots are precise at this safepoint.
     gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::OldGenBytes))
         .emit_after_current();
     super::trace::adopt_census::discard();
-    let survival = super::promoted_cohort::take_survival_probe();
+    let survival = super::promoted_cohort::survival::take_survival_probe();
     #[cfg(test)]
-    let feed = !super::promoted_cohort::survival_sabotage::unfed();
+    let feed = !super::promoted_cohort::survival::sabotage::unfed();
     #[cfg(not(test))]
     let feed = true;
     let survival_permille = survival.as_ref().and_then(|s| {
-        if feed {
+        if feed && s.minor_view == super::promoted_cohort::survival::MinorView::Exact {
             super::note_full_measured_promotion_survival(s.promoted_bytes, s.live_bytes)
         } else {
             s.permille()
@@ -3604,16 +3604,25 @@ pub(super) fn run_promoted_cohort_full_if_due() -> bool {
     let reclaimed = before.saturating_sub(after);
     let productive = super::promoted_cohort::record_full_yield(cohort, reclaimed);
     if super::gc_diag_enabled() {
-        let (blocks, promoted_by_minor, live_of_promoted) = survival
-            .as_ref()
-            .map_or((0, 0, 0), |s| (s.blocks, s.promoted_bytes, s.live_bytes));
+        let (blocks, promoted_by_minor, live_of_promoted, minor_view) =
+            survival.as_ref().map_or((0, 0, 0, "none"), |s| {
+                (
+                    s.blocks,
+                    s.promoted_bytes,
+                    s.live_bytes,
+                    s.minor_view.as_str(),
+                )
+            });
         eprintln!(
             "[gc-promoted-cohort] full cohort={cohort} bound={bound} reclaimed={reclaimed} \
              productive={productive} adopted_census_blocks={adopted} backoff_shift={} \
              promoted_blocks={blocks} promoted_by_minor={promoted_by_minor} \
-             live_of_promoted={live_of_promoted} survival_permille={}",
+             live_of_promoted={live_of_promoted} survival_permille={} minor_view={minor_view} \
+             predictor={}",
             super::promoted_cohort::backoff_shift(),
-            survival_permille.map_or_else(|| "none".to_string(), |p| p.to_string())
+            survival_permille.map_or_else(|| "none".to_string(), |p| p.to_string()),
+            super::last_young_survival_permille()
+                .map_or_else(|| "none".to_string(), |p| p.to_string())
         );
     }
     true

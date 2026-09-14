@@ -73,9 +73,12 @@ crate::perry_thread_local! {
 /// Record the census facts of the blocks the next promotion walk promotes.
 pub(crate) fn begin_recording() {
     STATE.with(|s| *s.borrow_mut() = State::Recording(crate::fast_hash::new_ptr_hash_map()));
+    // #10241: the minor about to run notes its own remembered set; nothing an
+    // earlier safepoint noted may reach this one's cohort full.
+    super::super::promoted_cohort::survival::clear_minor_remembered_parents();
 }
 
-fn recording() -> bool {
+pub(crate) fn recording() -> bool {
     STATE.with(|s| matches!(*s.borrow(), State::Recording(_)))
 }
 
@@ -104,6 +107,7 @@ pub(crate) fn begin_adopting() {
 /// Drop every record: the safepoint is returning to the mutator.
 pub(crate) fn discard() {
     STATE.with(|s| *s.borrow_mut() = State::Off);
+    super::super::promoted_cohort::survival::clear_minor_remembered_parents();
 }
 
 /// `(data, extent, bytes)` of every block the minor at this safepoint recorded
