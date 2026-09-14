@@ -214,6 +214,11 @@ pub(crate) fn string(
     replacement: f64,
 ) -> Result<f64, EngineError> {
     coercible(receiver)?;
+    if !all {
+        if let Some(result) = super::perex_remove::try_remove(receiver, search, replacement)? {
+            return Ok(result);
+        }
+    }
     let scope = RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
     let search = scope.root_nanbox_f64(search);

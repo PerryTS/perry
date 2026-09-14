@@ -1033,7 +1033,7 @@ fn test_copied_minor_promotable_census_filtered_walk_matches_unfiltered() {
 fn nursery_regexp_that_dies_young_is_finalized_by_the_copied_minor() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let dead = crate::regex::test_construct_regexp_and_exec_once("b(?:c)+d-die-young", "g");
-    let live = crate::regex::test_construct_regexp_and_exec_once("b(?:c)+d-die-young", "g");
+    let live = crate::regex::test_construct_regexp_and_exec_once("b(?:c)+d-stay-live", "g");
     let dead_addr = dead as usize;
     let live_addr = live as usize;
     // Premise: production construction is nursery-allocated now.
@@ -1059,10 +1059,13 @@ fn nursery_regexp_that_dies_young_is_finalized_by_the_copied_minor() {
     let live_program = crate::regex::test_regexp_program_address(live);
     assert_ne!(
         dead_program, live_program,
-        "constructors currently emit distinct GC programs"
+        "different patterns must have distinct GC programs"
     );
     let count_before = programs();
     assert!(count_before >= 2);
+
+    // Evict the shared-program roots so this witness isolates header lifetime.
+    crate::regex::perex_cache::clear_for_tests();
 
     // Only `live` is rooted; `dead` is garbage.
     js_shadow_slot_set(0, ptr_bits(live_addr));

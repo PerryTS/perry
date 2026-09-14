@@ -175,6 +175,9 @@ struct MatchBuffers<'a> {
 
 impl<'a> MatchBuffers<'a> {
     fn new(memory: &'a MemoryBudget, size: ScratchRequirements) -> Result<Self, StorageError> {
+        if crate::hot_diag::regex_on() {
+            crate::hot_diag::regex_with(|d| d.perex_scratch_allocs += 1);
+        }
         Ok(Self {
             registers: Slots::new(memory, size.registers)?,
             frames: Slots::new(memory, size.frames)?,
@@ -251,6 +254,9 @@ pub(crate) fn find_near<'mem, S: ImmutableSubject<Error = OwnerError>>(
     quantum: usize,
     poll: &mut impl FnMut() -> Result<(), EngineError>,
 ) -> Result<(Option<Match<'mem>>, Position), EngineError> {
+    if crate::hot_diag::regex_on() {
+        crate::hot_diag::regex_with(|d| d.perex_searches += 1);
+    }
     if quantum == 0 {
         return Err(EngineError::InvalidQuantum);
     }
@@ -297,6 +303,9 @@ pub(crate) fn find_near<'mem, S: ImmutableSubject<Error = OwnerError>>(
             }
             Ok(Progress::Pending) => poll()?,
             Err(SearchError::Execution(ExecError::Frames | ExecError::Undo)) => {
+                if crate::hot_diag::regex_on() {
+                    crate::hot_diag::regex_with(|d| d.perex_scratch_grows += 1);
+                }
                 let required = search.required_scratch();
                 if required.frames > size.frames {
                     size.frames = required

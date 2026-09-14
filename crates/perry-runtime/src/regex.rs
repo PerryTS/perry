@@ -28,6 +28,8 @@ pub(crate) mod match_all;
 #[cfg(feature = "regex-engine")]
 pub(crate) mod perex_api;
 #[cfg(feature = "regex-engine")]
+pub(crate) mod perex_cache;
+#[cfg(feature = "regex-engine")]
 mod perex_construct;
 #[cfg(feature = "regex-engine")]
 pub(crate) mod perex_dispatch;
@@ -47,6 +49,8 @@ pub(crate) mod perex_memory;
 pub(crate) mod perex_owner;
 #[cfg(feature = "regex-engine")]
 pub(crate) mod perex_position_hint;
+#[cfg(feature = "regex-engine")]
+mod perex_remove;
 #[cfg(feature = "regex-engine")]
 pub(crate) mod perex_replace;
 #[cfg(feature = "regex-engine")]
@@ -525,8 +529,11 @@ pub const REGEXP_MAGIC: u64 = 0x5845_4745_5259_5250;
 /// clamped to ≥ 0.
 #[cfg(feature = "regex-engine")]
 pub(crate) fn regex_last_index_offset(re: *const RegExpHeader) -> usize {
-    let scope = crate::gc::RuntimeHandleScope::new();
     let stored = f64::from_bits(unsafe { (*re).last_index });
+    if crate::value::JSValue::from_bits(stored.to_bits()).is_number() {
+        return stored.max(0.0).floor().min(9_007_199_254_740_991.0) as usize;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
     let stored = scope.root_nanbox_f64(stored);
     perex_api::finish(perex_dispatch::to_length(&stored)) as usize
 }

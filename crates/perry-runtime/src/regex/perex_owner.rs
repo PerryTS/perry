@@ -48,6 +48,24 @@ impl std::fmt::Debug for GcProgram<'_> {
 }
 
 impl<'scope> GcProgram<'scope> {
+    /// Root an immutable program retrieved from the construction cache.
+    ///
+    /// # Safety
+    /// `program` must be a live cell emitted here, with no collecting operation
+    /// between the cache lookup and establishing this independent root.
+    pub(crate) unsafe fn from_cached(
+        scope: &'scope RuntimeHandleScope,
+        program: *const u8,
+    ) -> Self {
+        Self {
+            root: scope.root_raw_const_ptr(program),
+        }
+    }
+
+    pub(crate) fn with_ptr<T>(&self, f: impl FnOnce(*const u8) -> T) -> T {
+        self.root.with_const_ptr(f)
+    }
+
     /// Consume a prepared compiler plan with no retained pattern/flag views.
     /// No host callback or collecting operation occurs during emission.
     pub(crate) fn emit(

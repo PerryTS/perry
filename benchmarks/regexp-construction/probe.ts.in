@@ -1,0 +1,33 @@
+// Issue #10179: original npm inputs. prepare.py resolves the isolated Bun install.
+import emojiRegex from "@NPM@/emoji-regex@10.6.0/node_modules/emoji-regex/index.js";
+import stripAnsi from "@NPM@/strip-ansi@7.1.2/node_modules/strip-ansi/index.js";
+import stringWidth from "@NPM@/string-width@7.2.0/node_modules/string-width/index.js";
+import { eastAsianWidth } from "@NPM@/get-east-asian-width@1.6.0/node_modules/get-east-asian-width/index.js";
+
+const mode = process.argv[2] || "all";
+const scale = Number(process.argv[3] || "1");
+if (!Number.isSafeInteger(scale) || scale < 1) throw new Error("scale must be a positive integer");
+let sink: any;
+let checksum = 0;
+function t(name: string, n: number, f: () => void) {
+    if (mode !== "all" && mode !== name) return;
+    n *= scale;
+    const t0 = performance.now();
+    for (let i = 0; i < n; i++) f();
+    console.log(name, ((performance.now() - t0) * 1000 / n).toFixed(3), "us/iter");
+}
+const line = "      --log-level   log level   [string] [choices: \"DEBUG\", \"INFO\"]";
+t("construct", 200, () => { sink = emojiRegex(); });
+const re = emojiRegex();
+t("test-ascii", 2000, () => { checksum += Number(re.test("a")); });
+t("test-emoji", 2000, () => { checksum += Number(re.test("🚀")); });
+t("stripAnsi", 2000, () => { checksum += stripAnsi(line).length; });
+t("stripAnsi-match", 2000, () => { checksum += stripAnsi("\u001b[31mred\u001b[39m").length; });
+const ignorable = /^\p{Default_Ignorable_Code_Point}$/u;
+t("ignorable", 2000, () => { checksum += Number(ignorable.test("a")); });
+const segmenter = new Intl.Segmenter();
+t("segment", 200, () => { for (const item of segmenter.segment(line)) checksum += item.segment.length; });
+t("eastAsianWidth", 2000, () => { checksum += eastAsianWidth(97); });
+t("stringWidth", 90, () => { checksum += stringWidth(line); });
+if (sink) console.log("constructed", sink.flags, sink.source.length);
+console.log("checksum", checksum);

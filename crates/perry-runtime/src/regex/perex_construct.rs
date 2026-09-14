@@ -43,6 +43,16 @@ fn compile<'s>(
     source: RuntimeHandle<'s>,
     flags: CanonicalFlags,
 ) -> Result<GcProgram<'s>, EngineError> {
+    super::perex_cache::get_or_compile(scope, &source, flags, || {
+        compile_uncached(scope, source, flags)
+    })
+}
+
+fn compile_uncached<'s>(
+    scope: &'s RuntimeHandleScope,
+    source: RuntimeHandle<'s>,
+    flags: CanonicalFlags,
+) -> Result<GcProgram<'s>, EngineError> {
     let source = BoundSubject::new(
         unsafe { HeapSubject::new(source) }
             .map_err(|e| EngineError::Subject(perex::binding::SubjectError::Resource(e)))?,

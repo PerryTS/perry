@@ -30,6 +30,9 @@ pub(super) fn register_host_roots() {
     gc_register_mutable_root_scanner(crate::object::scan_object_cache_roots_mut);
     gc_register_mutable_root_scanner(crate::object::scan_exotic_expando_roots_mut);
     gc_register_mutable_root_scanner(crate::regex::scan_last_exec_groups_root_mut);
+    gc_register_mutable_root_scanner(
+        crate::object::regex_proto_thunks::scan_canonical_test_site_roots_mut,
+    );
     gc_register_mutable_root_scanner(crate::object::scan_implicit_this_roots_mut);
     gc_register_mutable_root_scanner(crate::closure::scan_singleton_closure_roots_mut);
     gc_register_mutable_root_scanner(crate::closure::scan_closure_dynamic_props_roots_mut);

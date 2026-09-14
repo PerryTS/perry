@@ -115,6 +115,18 @@ pub(crate) fn execute(
     reuse: Option<&api::Reuse<'_, '_>>,
 ) -> Result<Option<ExecResult>, EngineError> {
     host::charge(budget, 1)?;
+    if crate::object::regex_canonical::exec(receiver.get_nanbox_f64()) {
+        if crate::hot_diag::regex_on() {
+            crate::hot_diag::regex_counters(|d| d.perex_canonical_execs += 1);
+        }
+        let re =
+            crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as *mut RegExpHeader;
+        return input
+            .with_const_ptr(|input| {
+                api::execute_with_resources(re, input, materialize, budget, memory, poll, reuse)
+            })
+            .map(|result| result.map(ExecResult::Builtin));
+    }
     require_object(receiver.get_nanbox_f64())?;
     input.with_mut_ptr::<StringHeader, _>(|input| crate::string::js_string_addref(input));
     let scope = RuntimeHandleScope::new();

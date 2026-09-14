@@ -126,6 +126,9 @@ pub(crate) fn bind_program<'s>(
         None => owner,
     };
     let bound = BoundProgram::new(owner, budget).map_err(|e| EngineError::Program(e.error))?;
+    if crate::hot_diag::regex_on() {
+        crate::hot_diag::regex_with(|d| d.perex_validations += 1);
+    }
     GcProgram::record_witness(&root, bound.witness());
     Ok(bound)
 }
@@ -429,7 +432,18 @@ pub(crate) fn execute_output(
     let scope = RuntimeHandleScope::new();
     let receiver = scope.root_raw_mut_ptr(receiver);
     let input = scope.root_string_ptr(input);
-    let last_index = caught(|| receiver.with_const_ptr(|p| super::regex_last_index_offset(p)))?;
+    let stored = receiver.with_const_ptr::<RegExpHeader, _>(|r| unsafe {
+        crate::value::JSValue::from_bits((*r).last_index)
+    });
+    let last_index = if stored.is_number() {
+        stored
+            .as_number()
+            .max(0.0)
+            .floor()
+            .min(9_007_199_254_740_991.0) as usize
+    } else {
+        caught(|| receiver.with_const_ptr(|p| super::regex_last_index_offset(p)))?
+    };
     let (stateful, has_indices) = receiver.with_const_ptr::<RegExpHeader, _>(|r| unsafe {
         ((*r).global || (*r).sticky, (*r).has_indices)
     });

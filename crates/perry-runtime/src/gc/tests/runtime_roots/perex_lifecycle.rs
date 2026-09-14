@@ -1,4 +1,4 @@
-//! Program lifetime after removing the native engine caches and Arc owners.
+//! GC program lifetime after bounded cache eviction releases its strong roots.
 use super::*;
 use crate::regex::RegExpHeader;
 
@@ -37,7 +37,27 @@ fn programs() -> usize {
 }
 
 #[test]
-fn perex_lifecycle_reclaims_programs_when_their_only_receivers_die() {
+fn regexp_cache_registers_roots_only_on_use_and_not_again_after_eviction() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    super::perex_public::register_host_roots();
+    let _ = crate::object::js_get_global_this();
+    let before = root_scanner_registry_counts().1;
+    crate::regex::perex_cache::census();
+    assert_eq!(root_scanner_registry_counts().1, before);
+    let scope = RuntimeHandleScope::new();
+    let re = regex(&scope, "registered-on-use", "");
+    assert_eq!(root_scanner_registry_counts().1, before + 1);
+    assert!(matches(&re, "registered-on-use"));
+    assert_eq!(root_scanner_registry_counts().1, before + 1);
+    crate::regex::perex_cache::clear_for_tests();
+    let re = regex(&scope, "registered-on-use", "");
+    assert!(matches(&re, "registered-on-use"));
+    assert_eq!(root_scanner_registry_counts().1, before + 1);
+}
+
+#[test]
+fn perex_lifecycle_reclaims_evicted_programs_when_their_only_receivers_die() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _scan = ConservativeScanDisabledGuard::new();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -64,11 +84,12 @@ fn perex_lifecycle_reclaims_programs_when_their_only_receivers_die() {
     };
     let survivor = survivor_scope.root_raw_mut_ptr(survivor);
     let old = survivor.with_const_ptr(|p| crate::regex::test_regexp_program_address(p));
+    crate::regex::perex_cache::clear_for_tests();
     gc_collect_minor();
     assert_eq!(
         programs(),
         before + 1,
-        "dead programs must not remain in a cache"
+        "evicted dead programs must be reclaimed"
     );
     assert_ne!(
         survivor.with_const_ptr(|p| crate::regex::test_regexp_program_address(p)),
@@ -90,7 +111,7 @@ fn perex_lifecycle_reclaims_programs_when_their_only_receivers_die() {
 }
 
 #[test]
-fn perex_lifecycle_unrelated_compilation_cannot_retain_programs_or_disarm_receivers() {
+fn perex_lifecycle_eviction_releases_programs_without_disarming_receivers() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _scan = ConservativeScanDisabledGuard::new();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -103,8 +124,9 @@ fn perex_lifecycle_unrelated_compilation_cannot_retain_programs_or_disarm_receiv
     let retained = programs();
     assert!(retained >= 3);
     let native = external_side_live_bytes();
-    // Exceed each former 512-entry cache capacity repeatedly. Collection
-    // must reclaim the temporary programs while the original owners survive.
+    // Releasing cached roots must let collection reclaim temporary programs
+    // while original receiver owners survive. The cache unit tests exercise
+    // actual LRU pressure separately.
     for i in 0..2078 {
         {
             let temporary = RuntimeHandleScope::new();
@@ -124,6 +146,7 @@ fn perex_lifecycle_unrelated_compilation_cannot_retain_programs_or_disarm_receiv
                 programs() > retained,
                 "the allocation pressure must be real"
             );
+            crate::regex::perex_cache::clear_for_tests();
             gc_collect_minor();
             assert_eq!(programs(), retained, "temporary programs must be reclaimed");
             assert_eq!(external_side_live_bytes(), native);
@@ -186,4 +209,94 @@ fn perex_lifecycle_literal_and_dynamic_construction_have_independent_state() {
     assert!(matches(&owners[2], "born8built"));
     let insensitive = regex(&scope, "born[0-9]+built", "i");
     assert!(matches(&insensitive, "BORN9BUILT"));
+}
+
+#[test]
+fn regexp_cache_is_the_only_root_and_rekeys_after_actual_movement() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _scan = ConservativeScanDisabledGuard::new();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _force = ForcedEvacuationTestGuard::on();
+    super::perex_public::register_host_roots();
+    let before = programs();
+    let old = {
+        let scope = RuntimeHandleScope::new();
+        let re = regex(&scope, "cache-only-root", "g");
+        assert!(matches(&re, "cache-only-root"));
+        re.with_const_ptr(|p| crate::regex::test_regexp_program_address(p))
+    };
+    let cycles = copying_minor_cycles();
+    gc_collect_minor();
+    assert!(copying_minor_cycles() > cycles);
+    assert_eq!(programs(), before + 1, "cache must retain the live program");
+    {
+        let scope = RuntimeHandleScope::new();
+        let re = regex(&scope, "cache-only-root", "g");
+        assert_ne!(
+            old,
+            re.with_const_ptr(|p| crate::regex::test_regexp_program_address(p))
+        );
+        assert_eq!(
+            programs(),
+            before + 1,
+            "post-move lookup must reuse the program"
+        );
+        assert!(matches(&re, "cache-only-root"));
+    }
+    crate::regex::perex_cache::clear_for_tests();
+    gc_collect_minor();
+    assert_eq!(
+        programs(),
+        before,
+        "eviction must release the construction cache's roots"
+    );
+}
+
+#[test]
+fn regexp_active_binding_survives_eviction_and_relocation() {
+    use crate::regex::perex_memory::MemoryBudget;
+    use crate::regex::{perex_api as api, perex_runtime as host};
+    use perex::{binding::BoundSubject, Budget};
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _scan = ConservativeScanDisabledGuard::new();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _force = ForcedEvacuationTestGuard::on();
+    super::perex_public::register_host_roots();
+    let before = programs();
+    let scope = RuntimeHandleScope::new();
+    let raw = {
+        let temporary = RuntimeHandleScope::new();
+        let re = regex(&temporary, "active-binding", "");
+        re.with_const_ptr::<RegExpHeader, _>(|re| unsafe { (*re).perex_program })
+    };
+    // No collecting operation between extracting the live cache entry and
+    // rooting it in the outer scope, after the temporary scope has ended.
+    let owner = unsafe { crate::regex::perex_owner::GcProgram::from_cached(&scope, raw) };
+    let program = api::bind_program(owner, &mut Budget::new(api::WORK)).unwrap();
+    let old = program.with_view(|p| p.words().as_ptr() as usize).unwrap();
+    crate::regex::perex_cache::clear_for_tests();
+    gc_collect_minor();
+    assert_eq!(programs(), before + 1);
+    assert_ne!(
+        program.with_view(|p| p.words().as_ptr() as usize).unwrap(),
+        old
+    );
+    let subject =
+        BoundSubject::new(crate::regex::perex_glob::NativeText("active-binding")).unwrap();
+    assert!(host::find(
+        &program,
+        &subject,
+        0,
+        host::CaptureMode::Full,
+        &mut Budget::new(api::WORK),
+        &MemoryBudget::new(api::SCRATCH_BYTES),
+        api::QUANTUM,
+        &mut host::poll
+    )
+    .unwrap()
+    .is_some());
+    drop(program);
+    drop(scope);
+    gc_collect_minor();
+    assert_eq!(programs(), before);
 }

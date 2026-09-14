@@ -124,6 +124,18 @@ pub(crate) fn expando_in_use() -> bool {
     crate::state::state().exotic_expando.in_use.get()
 }
 
+/// Plain assignments on exotic receivers can live here without an ObjectMeta.
+/// Builtin-operation guards must check this table as well as the header.
+pub(crate) fn has_expando_values(addr: usize) -> bool {
+    let tables = &crate::state::state().exotic_expando;
+    tables.in_use.get()
+        && tables
+            .entries
+            .borrow()
+            .get(&addr)
+            .is_some_and(|values| !values.is_empty())
+}
+
 fn expando_store(addr: usize, key: &str, bits: u64) {
     let tables = &crate::state::state().exotic_expando;
     tables.in_use.set(true);

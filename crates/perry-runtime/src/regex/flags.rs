@@ -6,7 +6,7 @@ use super::throw_regexp_syntax_error;
 
 /// The canonical flags held inline. Validation borrows only the original
 /// bytes; no heap allocation or JS throw occurs inside that borrowed view.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct CanonicalFlags {
     buf: [u8; 8],
     len: u8,
