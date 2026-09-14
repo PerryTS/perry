@@ -238,6 +238,8 @@ impl MatchedIndex {
 #[derive(Debug)]
 struct ElementShapeVersionedLoop {
     counter_id: u32,
+    /// The counter's integer-literal start, in `0..=i32::MAX`.
+    counter_start: i64,
     bound: ElementShapeLoopBound,
     array_id: u32,
     identity: ElementShapeIdentity,
@@ -1314,6 +1316,7 @@ fn match_element_shape_versioned_loop(
 
     Some(ElementShapeVersionedLoop {
         counter_id,
+        counter_start: start,
         bound,
         array_id,
         identity,
@@ -1711,6 +1714,18 @@ pub(super) fn lower_element_shape_versioned_for(
     let scope_id = ctx.next_loop_proof_scope_id();
     let fast_scan_start = ctx.func.num_blocks();
     ctx.current_block = fast_pre_idx;
+    // The accumulator as an f64 and the counter as an i32 for the clone's
+    // duration (`stmt/element_shape_native.rs`). Entered after
+    // `fast_scan_start`, so its side-exit trampoline is inside the block range
+    // the call-free scan below covers.
+    let native = super::element_shape_native::NativeLoopDomains::enter(
+        ctx,
+        matched.counter_id,
+        matched.counter_start,
+        matched.accumulator_id,
+        &accumulator,
+        &slow_pre_label,
+    );
     ctx.element_shape_loop_facts
         .push(crate::expr::ElementShapeLoopFact {
             array_local_id: matched.array_id,
@@ -1722,7 +1737,7 @@ pub(super) fn lower_element_shape_versioned_for(
             class_name: report_class,
             elements_base: guard.elements_base,
             expected_shape_id: guard.expected_shape_id,
-            side_exit_label: slow_pre_label.clone(),
+            side_exit_label: native.side_exit_label().to_string(),
             statically_layout_proven,
             fields,
             synthesized_body: matched.fast_body.is_some(),
@@ -1740,6 +1755,7 @@ pub(super) fn lower_element_shape_versioned_for(
     );
     ctx.element_shape_loop_facts
         .retain(|fact| fact.scope_id != scope_id);
+    native.finish(ctx, &merge_label);
     lowered?;
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_label);
