@@ -113,11 +113,10 @@ pub(in crate::gc) fn survival_permille(promoted_bytes: usize, live_bytes: usize)
 }
 
 /// The minor's remembered set, as page keys: nothing here is an address the
-/// full dereferences.
+/// full dereferences. Kept only when the remembered set names no parent by
+/// header, so its dirty pages are exactly its dirty old pages.
 pub(in crate::gc) struct RememberedParents {
     dirty_old_pages: crate::fast_hash::PtrHashSet<usize>,
-    dirty_pages: crate::fast_hash::PtrHashSet<usize>,
-    header_parents: usize,
 }
 
 struct SurvivalProbe {
@@ -150,12 +149,14 @@ pub(in crate::gc) fn note_minor_remembered_parents(snapshot: &RememberedDirtySna
     if !super::super::trace::adopt_census::recording() {
         return;
     }
-    let parents = RememberedParents {
+    // Parents named by header are not re-derivable from page keys: leave the
+    // record unset, and the view `Unverifiable`.
+    let parents = (snapshot.external_dirty_entries.is_empty()
+        && snapshot.fallback_headers.is_empty())
+    .then(|| RememberedParents {
         dirty_old_pages: snapshot.dirty_old_pages.clone(),
-        dirty_pages: snapshot.dirty_pages.clone(),
-        header_parents: snapshot.external_dirty_entries.len() + snapshot.fallback_headers.len(),
-    };
-    MINOR_REMEMBERED_PARENTS.with(|p| *p.borrow_mut() = Some(parents));
+    });
+    MINOR_REMEMBERED_PARENTS.with(|p| *p.borrow_mut() = parents);
 }
 
 pub(in crate::gc) fn clear_minor_remembered_parents() {
@@ -179,9 +180,10 @@ pub(in crate::gc) fn arm_survival_probe(blocks: Vec<(usize, usize, u64)>) {
         ranges.push((data, data.saturating_add(extent)));
     }
     ranges.sort_unstable();
-    let minor_view = match &parents {
-        Some(parents) if parents.header_parents == 0 => MinorView::Unchecked,
-        _ => MinorView::Unverifiable,
+    let minor_view = if parents.is_some() {
+        MinorView::Unchecked
+    } else {
+        MinorView::Unverifiable
     };
     let probe = SurvivalProbe {
         blocks: pending.len(),
@@ -224,13 +226,13 @@ pub(in crate::gc) fn check_minor_view_at_full_sweep_start() {
         }
         let ranges = &probe.ranges;
         let mut dead_parent = false;
-        crate::arena::old_arena_walk_objects_on_pages(&parents.dirty_old_pages, |header| {
+        let pages = &parents.dirty_old_pages;
+        crate::arena::old_arena_walk_objects_on_pages(pages, |header| {
             if !dead_parent {
                 // SAFETY: the old page index names headers of live arena
                 // allocations; the full has not swept anything yet.
-                dead_parent = unsafe {
-                    dead_parent_refers_into(header as *mut GcHeader, &parents.dirty_pages, ranges)
-                };
+                dead_parent =
+                    unsafe { dead_parent_refers_into(header as *mut GcHeader, pages, ranges) };
             }
         });
         probe.minor_view = if dead_parent {

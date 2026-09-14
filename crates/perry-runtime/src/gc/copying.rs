@@ -1354,8 +1354,11 @@ pub(super) fn run_copied_minor_attempt(
     let remembered_phase_start = PhaseDiag::start(&phase_diag);
     let snapshot = remembered_dirty_snapshot();
     // #10241: a cohort full at this safepoint asks whether a dead parent in
-    // this remembered set held what this minor promotes.
-    super::promoted_cohort::survival::note_minor_remembered_parents(&snapshot);
+    // this remembered set held what this minor promotes. Only a promoting
+    // minor records blocks for it to ask about.
+    if promoting_in_place {
+        super::promoted_cohort::survival::note_minor_remembered_parents(&snapshot);
+    }
     // #9754: objects whose every slot the dirty scan visited in-body — the
     // post-cycle coverage restore skips them (see `scan_dirty_object_slots`).
     // #9835: this set is rebuilt from EMPTY on every minor and reaches ~1,000
