@@ -8,6 +8,12 @@
   ],
   "sites": [
     {
+      "site": "crates/perry-runtime/src/array/named_props.rs::scan_full_array_named_property_roots_mut",
+      "table": "FULL_ARRAY_NAMED_PROPS",
+      "death": "dead_owner:prune_dead_full_array_named_property_owners",
+      "why": "#10166 brief 4: the fallback for arrays that were full at their first named property. Registered prune retains on !is_dead_owner over the array owner address (array/named_props.rs)."
+    },
+    {
       "site": "crates/perry-runtime/src/buffer/own_props.rs::scan_buffer_own_props_roots_mut",
       "table": "buffer_props()",
       "death": "self_pruned:clear_buffer_own_props",

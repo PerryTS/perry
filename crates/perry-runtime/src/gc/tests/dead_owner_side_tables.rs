@@ -38,6 +38,7 @@ pub(super) struct ArraySideTableTestGuard;
 
 impl ArraySideTableTestGuard {
     pub(super) fn new() -> Self {
+        crate::array::test_clear_full_array_named_property_roots();
         crate::map::test_clear_map_iterator_arrays();
         crate::set::test_clear_set_iterator_arrays();
         Self
@@ -46,6 +47,7 @@ impl ArraySideTableTestGuard {
 
 impl Drop for ArraySideTableTestGuard {
     fn drop(&mut self) {
+        crate::array::test_clear_full_array_named_property_roots();
         crate::map::test_clear_map_iterator_arrays();
         crate::set::test_clear_set_iterator_arrays();
     }

@@ -204,7 +204,10 @@ pub use self::iterator::{
 };
 pub use self::join::{js_array_join, js_array_join_value};
 #[cfg(test)]
-pub(crate) use self::named_props::test_named_props_state;
+pub(crate) use self::named_props::{
+    test_clear_full_array_named_property_roots, test_full_array_named_property_owner_exists,
+    test_named_props_inline_set, test_named_props_state,
+};
 pub use self::numeric_range::{
     js_array_fill_range_strided_tagged, js_array_numeric_range_add, js_array_numeric_range_add_len,
 };
@@ -293,15 +296,16 @@ pub(crate) use self::named_props::{
     array_has_named_properties_resolved, array_has_sparse_index_properties_resolved,
     array_named_property_delete, array_named_property_delete_by_name, array_named_property_get,
     array_named_property_get_by_name, array_named_property_has, array_named_property_names,
-    array_named_property_set, array_named_props_reserve, array_named_props_slot,
-    store_pairs_pointer,
+    array_named_property_set, array_named_props_reserve, carry_named_props_reserve,
+    prune_dead_full_array_named_property_owners, transfer_full_array_named_props_owner,
+    visit_array_named_props_slots,
 };
 
 // Sole caller is the regex-engine-gated `regex::perex_results`, so the helpers
 // and these re-exports are gated with it (same cross-gate shape as regex/utf16.rs).
 #[cfg(feature = "regex-engine")]
 pub(crate) use self::named_props::{
-    array_named_props_install_fresh, array_named_props_pairs_alloc, LiteralKey,
+    array_named_props_install_inline, inline_reserve_layout, InlineKeySet,
 };
 
 #[cfg(test)]

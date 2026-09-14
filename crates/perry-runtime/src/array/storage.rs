@@ -7,9 +7,9 @@
 //! metadata slot, header word, side table, or survivor copy is needed.
 //!
 //! The same slack carries an array's named properties (`named_props.rs`): a
-//! `GC_ARRAY_NAMED_PROPS` array permanently reserves physical slot 0, so its
-//! front offset is at least 1 and an empty-queue reset gives back everything
-//! but that one slot.
+//! `GC_ARRAY_NAMED_PROPS` array permanently reserves its first physical slots
+//! (one, or one per inline key plus a header word), so its front offset is at
+//! least that reserve and an empty-queue reset gives back everything else.
 //!
 //! GC layouts index the logical live range returned by `array_elements_ptr`.
 //! Removing the front invalidates indexed masks, but preserves pointer-free and

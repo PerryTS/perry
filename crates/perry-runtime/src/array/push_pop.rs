@@ -142,9 +142,9 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         // Double the capacity, or use min_capacity if larger
         let new_capacity = std::cmp::max(old_capacity * 2, min_capacity);
         // A named-property reserve (`named_props.rs`) travels with the array:
-        // the replacement allocation keeps one physical slot in front of
-        // logical element 0, so `capacity` excludes it on both sides and the
-        // element copy below is verbatim at the same byte offset.
+        // the replacement allocation keeps the same number of physical slots
+        // in front of logical element 0, so `capacity` excludes them on both
+        // sides and the element copy below is verbatim at the same byte offset.
         let reserve = crate::array::array_named_props_reserve(arr);
         let old_size = array_byte_size(old_capacity as usize + reserve);
         let new_size = array_byte_size(new_capacity as usize + reserve);
@@ -215,22 +215,16 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         (*new_header)._reserved = (*old_header)._reserved;
         crate::gc::layout_transfer(arr as *mut u8, new_ptr as *mut u8);
         if reserve != 0 {
-            // Array expandos and sparse numeric indices live in the pairs
-            // array the reserved slot points at. Growth is not a collector
-            // move, so carry that edge to the replacement head explicitly
-            // (barriered) before the old address becomes a forwarding stub
-            // (#9371, #9201).
-            let bits = *crate::array::array_named_props_slot(arr);
-            if bits & crate::value::TAG_MASK == crate::value::POINTER_TAG {
-                crate::array::store_pairs_pointer(
-                    new_ptr,
-                    (bits & crate::value::POINTER_MASK) as *mut ArrayHeader,
-                );
-            } else {
-                // GC_STORE_AUDIT(INIT): an empty reserve holds a non-pointer
-                // sentinel; nothing to record.
-                ptr::write(crate::array::array_named_props_slot(new_ptr), bits);
-            }
+            // Array expandos, sparse numeric indices and exec-result values
+            // live in the reserve slots. Growth is not a collector move, so
+            // carry them to the replacement head explicitly (barriered) before
+            // the old address becomes a forwarding stub (#9371, #9201).
+            crate::array::carry_named_props_reserve(arr, new_ptr, reserve);
+        } else {
+            // An array that was full at its first named property keeps them in
+            // the address-keyed fallback table; rekey it before the old
+            // address becomes a forwarding stub (#9371, #9201).
+            crate::array::transfer_full_array_named_props_owner(arr as usize, new_ptr as usize);
         }
         // `js_array_grow` is an allocation replacement outside the collector,
         // so GC's normal side-table rekey phase does not run. Preserve every

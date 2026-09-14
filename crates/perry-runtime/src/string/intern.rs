@@ -125,42 +125,13 @@ pub(crate) fn intern_dispatch_bytes(
     let hash = if static_dispatch_id != 0 {
         precomputed_hash
     } else {
-        fnv1a_bytes(input)
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        for &byte in input {
+            hash ^= byte as u64;
+            hash = hash.wrapping_mul(0x0100_0000_01b3);
+        }
+        hash
     };
-    intern_hashed(input, bytes, byte_len, hash, is_wtf8)
-}
-
-/// The intern table's content hash (FNV-1a over the bytes), `const` so a
-/// runtime-owned literal key can carry its hash from compile time.
-pub(crate) const fn fnv1a_bytes(input: &[u8]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    let mut i = 0;
-    while i < input.len() {
-        hash ^= input[i] as u64;
-        hash = hash.wrapping_mul(0x0100_0000_01b3);
-        i += 1;
-    }
-    hash
-}
-
-/// Intern an ASCII literal whose FNV-1a hash was computed at compile time
-/// ([`fnv1a_bytes`]): one direct-mapped slot probe and a content compare on a
-/// hit, with no per-call hashing. The result is the table's canonical pointer,
-/// which the table's own root scanner keeps marked and rewritten — callers
-/// must not cache it across an allocation.
-#[inline]
-pub(crate) fn intern_ascii_literal_hashed(bytes: &[u8], hash: u64) -> *const StringHeader {
-    debug_assert_eq!(hash, fnv1a_bytes(bytes));
-    intern_hashed(bytes, bytes.as_ptr(), bytes.len(), hash, false)
-}
-
-fn intern_hashed(
-    input: &[u8],
-    bytes: *const u8,
-    byte_len: usize,
-    hash: u64,
-    is_wtf8: bool,
-) -> *const StringHeader {
     let slot = (hash as usize) & INTERN_TABLE_MASK;
 
     let hit = with_intern_table(|table| unsafe {

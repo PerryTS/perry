@@ -340,6 +340,13 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         prune: crate::webassembly::prune_dead_wasm_memory_bindings,
         young_prune: None,
     },
+    // #10166 brief 4: arrays that were full at their first named property.
+    DeadKeyPrune {
+        table: "FULL_ARRAY_NAMED_PROPS",
+        owner: DeadKeyOwner::Any,
+        prune: crate::array::prune_dead_full_array_named_property_owners,
+        young_prune: None,
+    },
     // Re-keyed by the per-object move hook (`transfer_per_object_slot_mask` /
     // `transfer_per_object_descriptor`), not by a metadata visitor. Dropping
     // dead keys here is what lets `PERRY_YOUNG_LAYOUT_RECORDS` reach zero, so

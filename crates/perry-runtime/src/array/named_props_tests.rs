@@ -121,7 +121,7 @@ fn first_expando_on_an_array_with_slack_keeps_its_address() {
 }
 
 #[test]
-fn first_expando_on_a_full_array_grows_it_and_forwards_the_old_head() {
+fn a_full_array_keeps_its_address_and_uses_the_fallback_table() {
     let _global = crate::gc::global_side_table_test_lock();
     unsafe {
         let arr = js_array_alloc_with_length_exact(3);
@@ -135,22 +135,31 @@ fn first_expando_on_a_full_array_grows_it_and_forwards_the_old_head() {
         );
 
         let head = set(arr, "tag", 7.0);
-        assert_ne!(head, arr, "a full array must grow to take the reserve");
+        let head = set(head, "other", 8.0);
+        assert_eq!(head, arr, "a full array must not move to gain a property");
+        assert_eq!(array_front_offset(arr), 0, "no reserve was taken");
+        assert_eq!(test_named_props_state(arr), (false, 0, 0));
+        assert!(test_full_array_named_property_owner_exists(arr as usize));
+        assert!(array_has_named_properties_resolved(arr));
+        assert_elements(arr, &[1.0, 2.0, 3.0]);
+        assert_eq!(get(arr, "tag"), Some(7.0));
+        assert_eq!(names(arr), ["tag", "other"]);
+        assert!(array_named_property_delete_by_name(arr, "tag"));
+        assert_eq!(names(arr), ["other"]);
+
+        // Growth rekeys the fallback entry; the array never switches stores.
+        let grown = js_array_grow(arr, 64);
+        assert_ne!(grown, arr);
+        assert!(test_full_array_named_property_owner_exists(grown as usize));
+        assert!(!test_full_array_named_property_owner_exists(arr as usize));
+        let grown = set(grown, "late", 9.0);
         assert_eq!(
-            clean_arr_ptr(arr),
-            head.cast_const(),
-            "the old head is a forwarding stub that resolves to the live head"
+            test_named_props_state(grown),
+            (false, 0, 0),
+            "still no reserve"
         );
-        assert_eq!(array_front_offset(head), 1);
-        assert!((*head).capacity > 3);
-        assert_elements(head, &[1.0, 2.0, 3.0]);
-        assert_eq!(get(head, "tag"), Some(7.0));
-        assert_eq!(
-            get(arr, "tag"),
-            Some(7.0),
-            "a stale reference still reads through the stub"
-        );
-        assert_eq!(names(arr), ["tag"]);
+        assert_eq!(names(grown), ["other", "late"]);
+        test_clear_full_array_named_property_roots();
     }
 }
 
@@ -254,7 +263,9 @@ fn shift_to_empty_keeps_the_reserve_out_of_capacity() {
 fn sparse_indices_are_named_properties_and_return_the_live_head() {
     let _global = crate::gc::global_side_table_test_lock();
     unsafe {
-        let arr = js_array_alloc_with_length_exact(2);
+        // Slack in the allocation, so the sparse index takes the reserve path.
+        let arr = js_array_alloc_with_length_exact(3);
+        (*arr).length = 2;
         store_array_slot(arr, 0, 1.0f64.to_bits());
         store_array_slot(arr, 1, 2.0f64.to_bits());
         let head = js_array_set_f64_extend(arr, 5_000_000, 9.0);
@@ -288,5 +299,150 @@ fn a_moved_key_string_is_shared_not_rewritten_in_place() {
             "the pairs array shares the key: an append must copy"
         );
         assert_eq!(get(arr, "name"), Some(3.0));
+    }
+}
+
+#[cfg(feature = "regex-engine")]
+mod inline {
+    use super::*;
+    use crate::array::InlineKeySet;
+
+    unsafe fn exec_result(values: [f64; 3]) -> *mut ArrayHeader {
+        let arr = js_array_alloc_named_props_reserved(2, InlineKeySet::ExecResult);
+        (*arr).length = 2;
+        store_array_slot(arr, 0, 1.0f64.to_bits());
+        store_array_slot(arr, 1, 2.0f64.to_bits());
+        array_named_props_install_inline(arr, &values);
+        arr
+    }
+
+    #[test]
+    fn install_is_inline_and_reads_back_in_key_order() {
+        let _global = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let arr = exec_result([4.0, 5.0, 6.0]);
+            assert_eq!(
+                test_named_props_inline_set(arr),
+                Some(InlineKeySet::ExecResult)
+            );
+            assert_eq!(test_named_props_state(arr), (true, 0, 3), "no pairs array");
+            assert_eq!(array_front_offset(arr), 4, "header word + three values");
+            assert_elements(arr, &[1.0, 2.0]);
+            assert_eq!(names(arr), ["index", "input", "groups"]);
+            assert_eq!(get(arr, "index"), Some(4.0));
+            assert_eq!(get(arr, "groups"), Some(6.0));
+            assert_eq!(get(arr, "indices"), None, "not in this set");
+            assert!(array_named_property_has(arr, key("input")));
+            assert!(array_has_named_properties_resolved(arr));
+            assert!(!array_has_sparse_index_properties_resolved(arr));
+        }
+    }
+
+    #[test]
+    fn overwrite_stays_inline_and_delete_never_allocates() {
+        let _global = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let arr = exec_result([4.0, 5.0, 6.0]);
+            assert_eq!(set(arr, "index", 40.0), arr);
+            assert_eq!(
+                test_named_props_inline_set(arr),
+                Some(InlineKeySet::ExecResult)
+            );
+            assert_eq!(get(arr, "index"), Some(40.0));
+
+            assert!(array_named_property_delete_by_name(arr, "input"));
+            assert!(!array_named_property_delete_by_name(arr, "input"));
+            assert_eq!(
+                test_named_props_inline_set(arr),
+                Some(InlineKeySet::ExecResult)
+            );
+            assert_eq!(names(arr), ["index", "groups"]);
+            assert_eq!(get(arr, "input"), None);
+            assert_eq!(
+                array_named_props_reserve(arr),
+                4,
+                "the reserve size is unchanged"
+            );
+        }
+    }
+
+    #[test]
+    fn inline_results_keep_element_fast_paths_until_a_user_key_arrives() {
+        let _global = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let arr = exec_result([4.0, 5.0, 6.0]);
+            assert_eq!(
+                array_object_flags(arr) & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS,
+                0,
+                "an exec result must not set the index-descriptor gate"
+            );
+            assert!(!array_iteration_is_exotic(arr));
+            // Named-property readers do not depend on the gate.
+            assert_eq!(names(arr), ["index", "input", "groups"]);
+            assert!(array_has_named_properties_resolved(arr));
+            // Truncation keeps named properties (they are not indices).
+            js_array_set_length(arr, 0.0);
+            assert_eq!(js_array_length(arr), 0);
+            assert_eq!(get(arr, "groups"), Some(6.0));
+
+            let arr = set(arr, "user", 1.0);
+            assert_ne!(
+                array_object_flags(arr) & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS,
+                0,
+                "a key outside the inline set materializes and sets the gate"
+            );
+        }
+    }
+
+    #[test]
+    fn a_new_key_materializes_pairs_in_insertion_order() {
+        let _global = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let arr = exec_result([4.0, 5.0, 6.0]);
+            assert!(array_named_property_delete_by_name(arr, "index"));
+            let arr = set(arr, "extra", 9.0);
+            let arr = set(arr, "index", 41.0);
+            assert_eq!(test_named_props_inline_set(arr), None, "now pairs mode");
+            let (flagged, pairs, count) = test_named_props_state(arr);
+            assert!(flagged && pairs != 0);
+            assert_eq!(count, 4);
+            assert_eq!(
+                names(arr),
+                ["input", "groups", "extra", "index"],
+                "surviving inline keys, then keys in the order they were added"
+            );
+            assert_eq!(get(arr, "input"), Some(5.0));
+            assert_eq!(get(arr, "index"), Some(41.0));
+            assert_eq!(array_named_props_reserve(arr), 1);
+            assert_elements(arr, &[1.0, 2.0]);
+        }
+    }
+
+    #[test]
+    fn growth_carries_every_inline_slot() {
+        let _global = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let arr = exec_result([4.0, 5.0, 6.0]);
+            let grown = js_array_grow(arr, 200);
+            assert_ne!(grown, arr);
+            assert_eq!(array_front_offset(grown), 4);
+            assert_eq!(physical_capacity(grown), (*grown).capacity as usize + 4);
+            assert_eq!(names(grown), ["index", "input", "groups"]);
+            assert_eq!(get(grown, "groups"), Some(6.0));
+            assert_elements(grown, &[1.0, 2.0]);
+        }
+    }
+
+    #[test]
+    fn shift_to_empty_keeps_the_whole_inline_reserve() {
+        let _global = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let arr = exec_result([4.0, 5.0, 6.0]);
+            let physical = physical_capacity(arr);
+            assert_eq!(super::super::storage::shift_dense(arr), 1.0);
+            assert_eq!(super::super::storage::shift_dense(arr), 2.0);
+            assert_eq!((*arr).capacity as usize, physical - 4);
+            assert_eq!(get(arr, "input"), Some(5.0));
+        }
     }
 }

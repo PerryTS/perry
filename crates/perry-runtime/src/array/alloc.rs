@@ -65,31 +65,39 @@ pub extern "C" fn js_array_alloc(capacity: u32) -> *mut ArrayHeader {
     ptr
 }
 
-/// Allocate a fresh array born with the named-property reserve
-/// (`named_props.rs`): physical slot 0 is held back for the pairs pointer, so
-/// `capacity` logical slots follow it and `array_front_offset` is 1 from
-/// birth. Runtime producers that will decorate the array with named
-/// properties (regex exec results) use this so the first install never has
-/// to move an element. The layout starts `GC_LAYOUT_UNKNOWN` (tag-scanned),
-/// which is right for the pointer-bearing payloads those producers store.
+/// Allocate a fresh array born with an inline named-property reserve
+/// (`named_props.rs`): physical slots `0..=keys` are held back for the header
+/// word and the key set's values, so `capacity` logical slots follow them and
+/// `array_front_offset` equals the reserve from birth. Regex exec results use
+/// this so installing `index`/`input`/`groups` is a handful of slot stores
+/// with no allocation. Values start `undefined`, so a collection before the
+/// install sees only non-pointers. The element layout starts
+/// `GC_LAYOUT_UNKNOWN` (tag-scanned), which is right for the pointer-bearing
+/// payloads those producers store.
 #[cfg(feature = "regex-engine")]
-pub(crate) fn js_array_alloc_named_props_reserved(capacity: u32) -> *mut ArrayHeader {
+pub(crate) fn js_array_alloc_named_props_reserved(
+    capacity: u32,
+    set: crate::array::InlineKeySet,
+) -> *mut ArrayHeader {
+    let (header_word, reserve) = crate::array::inline_reserve_layout(set);
     let actual_capacity = capacity.max(MIN_ARRAY_CAPACITY);
     let ptr = arena_alloc_gc(
-        array_byte_size(actual_capacity as usize + 1),
+        array_byte_size(actual_capacity as usize + reserve),
         8,
         crate::gc::GC_TYPE_ARRAY,
     ) as *mut ArrayHeader;
     unsafe {
         (*ptr).length = 0;
         (*ptr).capacity = actual_capacity;
-        // GC_STORE_AUDIT(INIT): the reserved word and the whole capacity are
-        // hole-initialized on a just-allocated array nothing references yet;
-        // TAG_HOLE is a non-pointer sentinel, so no edge and no barrier.
-        std::ptr::write(
-            crate::array::array_named_props_slot(ptr),
-            crate::value::TAG_HOLE,
-        );
+        let front = ptr.add(1) as *mut u64;
+        // GC_STORE_AUDIT(INIT): the header word is an INT32 box on a
+        // just-allocated array nothing references yet; no edge, no barrier.
+        std::ptr::write(front, header_word);
+        for i in 1..reserve {
+            // GC_STORE_AUDIT(INIT): inline value slots start `undefined`, a
+            // non-pointer, on the still unpublished allocation.
+            std::ptr::write(front.add(i), crate::value::TAG_UNDEFINED);
+        }
         let elements_ptr = crate::array::array_elements_ptr(ptr);
         for i in 0..actual_capacity as usize {
             // GC_STORE_AUDIT(INIT): same hole-initialization of a still
@@ -98,7 +106,7 @@ pub(crate) fn js_array_alloc_named_props_reserved(capacity: u32) -> *mut ArrayHe
         }
         let header = crate::gc::header_from_trusted_user_ptr(ptr.cast()).cast_mut();
         (*header)._reserved |= crate::gc::GC_ARRAY_NAMED_PROPS;
-        debug_assert_eq!(crate::array::array_front_offset(ptr), 1);
+        debug_assert_eq!(crate::array::array_front_offset(ptr), reserve);
     }
     ptr
 }

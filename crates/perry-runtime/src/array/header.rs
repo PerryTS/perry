@@ -314,6 +314,9 @@ pub fn scan_template_raw_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
             }
         }
     });
+    // Named properties of arrays that were full when they gained their first
+    // one (`array/named_props.rs`, `FULL_ARRAY_NAMED_PROPS`).
+    super::named_props::scan_full_array_named_property_roots_mut(visitor);
 }
 
 /// The payload bytes of a heap string, or `None` for a null pointer.

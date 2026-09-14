@@ -446,8 +446,6 @@ pub(crate) fn intern_ascii_literal(bytes: &[u8]) -> *const StringHeader {
     intern::intern_dispatch_bytes(0, bytes.as_ptr(), bytes.len(), 0, false)
 }
 
-pub(crate) use intern::{fnv1a_bytes, intern_ascii_literal_hashed};
-
 /// Header for heap-allocated strings
 ///
 /// `utf16_len` is at offset 0 so codegen can inline `.length` as a single i32 load.
