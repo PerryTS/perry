@@ -101,6 +101,8 @@ pub(super) fn emit_sandbox_sidecar(
         }
         #[cfg(not(target_os = "macos"))]
         {
+            // The profile is written next to the binary only on macOS.
+            let _ = exe_path;
             if let OutputFormat::Text = format {
                 eprintln!(
                     "note: `--emit-sandbox` is macOS-only in this MVP; Linux seccomp + Windows AppContainer support tracked under #506."
