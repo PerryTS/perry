@@ -502,3 +502,75 @@ fn a_finished_collection_moves_the_external_base_to_the_post_collection_reading(
         "the base must be the POST-collection `external_side_live_bytes()` reading"
     );
 }
+
+/// The band's counterweight: the cheap collections it schedules must not hide
+/// pressure from the arm that pays for arena-capacity release.
+///
+/// Sabotage-proved (run 2026-09-14, each against the whole
+/// `tiny_parse_pressure` filter): reverting
+/// `external_side_old_reclaim_pressure_bytes` to the bare
+/// `external_side_live_bytes()` read fails BOTH tests below; deleting the reset
+/// from `finish_full_old_reclaim_baseline` fails
+/// `a_full_collection_clears_the_drained_debt` alone.
+#[test]
+fn a_drained_side_byte_still_pays_old_reclaim_until_the_next_full() {
+    use super::super::policy::{
+        external_side_live_bytes, external_side_old_reclaim_pressure_bytes,
+        GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL,
+    };
+    use super::support::*;
+    let _isolation = GcTestIsolationGuard::new();
+    let restore = GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL.with(|cell| cell.replace(0));
+    let live_before = external_side_live_bytes();
+    assert_eq!(
+        external_side_old_reclaim_pressure_bytes(),
+        live_before,
+        "fixture: with no drained debt the term is the live reading"
+    );
+
+    const BYTES: usize = 3 * MB;
+    crate::gc::gc_note_external_side_alloc(BYTES);
+    let charged = external_side_old_reclaim_pressure_bytes();
+    assert_eq!(charged, live_before + BYTES);
+    // A NON-full collection releasing the buffer lowers the live reading but
+    // must leave old-reclaim pressure exactly where main would have read it.
+    crate::gc::gc_note_external_side_free(BYTES);
+    assert_eq!(
+        external_side_live_bytes(),
+        live_before,
+        "the live reading must fall by what was released"
+    );
+    assert_eq!(
+        external_side_old_reclaim_pressure_bytes(),
+        charged,
+        "old-reclaim must still be charged for a byte a full has not yet paid for"
+    );
+    GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL.with(|cell| cell.set(restore));
+}
+
+#[test]
+fn a_full_collection_clears_the_drained_debt() {
+    use super::super::js_gc_collect;
+    use super::super::policy::{
+        external_side_live_bytes, external_side_old_reclaim_pressure_bytes,
+        GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL,
+    };
+    let restore = GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL.with(|cell| cell.replace(7 * MB));
+    assert_ne!(
+        external_side_old_reclaim_pressure_bytes(),
+        external_side_live_bytes(),
+        "fixture: the debt must be non-zero, or this proves nothing"
+    );
+    js_gc_collect();
+    assert_eq!(
+        GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL.with(std::cell::Cell::get),
+        0,
+        "the full that the debt was held for pays it"
+    );
+    assert_eq!(
+        external_side_old_reclaim_pressure_bytes(),
+        external_side_live_bytes(),
+        "with the debt paid the term is the live reading again"
+    );
+    GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL.with(|cell| cell.set(restore));
+}
