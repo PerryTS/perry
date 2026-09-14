@@ -78,7 +78,7 @@ pub(crate) fn weak_entry_extent(map: f64) -> u32 {
 
 #[test]
 fn empty_checkpoint_delivers_recorded_finalization_job() {
-    std::thread::spawn(|| {
+    let result = std::thread::spawn(|| {
         use super::*;
         use std::sync::atomic::{AtomicU64, Ordering};
         static DELIVERED: AtomicU64 = AtomicU64::new(0);
@@ -120,6 +120,9 @@ fn empty_checkpoint_delivers_recorded_finalization_job() {
         assert_eq!(DELIVERED.load(Ordering::Relaxed), 41.0f64.to_bits());
         assert_eq!(pending_finalization_jobs_count(), 0);
     })
-    .join()
-    .unwrap();
+    .join();
+    // `js_gc_init` disables the process-wide class-field inline gate in test
+    // builds; the spawned thread does not isolate that, so restore it.
+    crate::object::descriptor_state::test_reset_class_field_inline_guard();
+    result.unwrap();
 }

@@ -2825,6 +2825,10 @@ mod tests {
     /// stale typed-layout state must all reject.
     #[test]
     fn object_array_numeric_write_guard_requires_complete_uniform_proof() {
+        // This proof honours the process-wide class-field inline gate, and any
+        // earlier test that ran `js_gc_init` (typed feedback is always on in
+        // test builds) leaves that gate disabled. Establish the premise.
+        crate::object::descriptor_state::test_reset_class_field_inline_guard();
         let packed = b"a\0b\0c\0d\0";
         let keys = crate::object::js_build_class_keys_array(
             0x6809_01,
@@ -3114,6 +3118,10 @@ mod tests {
     /// probe and the objects it inspects (#7635).
     #[test]
     fn json_parse_receivers_are_admitted_to_the_whole_loop_write_clone() {
+        // This proof honours the process-wide class-field inline gate, and any
+        // earlier test that ran `js_gc_init` (typed feedback is always on in
+        // test builds) leaves that gate disabled. Establish the premise.
+        crate::object::descriptor_state::test_reset_class_field_inline_guard();
         let src = br#"{"x":0,"y":0}"#;
         let mut receivers = Vec::new();
         for _ in 0..4 {
