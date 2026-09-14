@@ -163,6 +163,7 @@ impl ReexportPruner {
 pub(super) fn record(
     ctx: &mut CompilationContext,
     from: &Path,
+    from_source: &Path,
     index: usize,
     export: &Export,
     target: &Path,
@@ -172,7 +173,8 @@ pub(super) fn record(
         return true;
     }
     let mut state = std::mem::take(&mut ctx.reexport_pruner);
-    let safe = state.scan.module_is_pure(from, ctx) && state.scan.can_drop_tree(source_path, ctx);
+    let safe =
+        state.scan.module_is_pure(from_source, ctx) && state.scan.can_drop_tree(source_path, ctx);
     let mut edge = Edge {
         from: from.to_owned(),
         index,

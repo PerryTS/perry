@@ -1934,6 +1934,7 @@ fn collect_module_one(
                         if reexport_prune::record(
                             ctx,
                             &canonical,
+                            entry_path,
                             export_index,
                             export,
                             &resolved_path,

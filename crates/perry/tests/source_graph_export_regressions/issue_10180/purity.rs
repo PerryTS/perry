@@ -44,6 +44,72 @@ fn inferred_purity_applies_to_first_party_forwarding_barrels() {
     assert_eq!(output, compile(dir.path(), true, false).1);
 }
 
+#[cfg(any(unix, windows))]
+#[test]
+fn inferred_purity_resolves_dependencies_from_the_source_visible_path() {
+    let dir = fixture(None);
+    write(
+        dir.path(),
+        "main.ts",
+        "import { used } from './visible/barrel/index.js'; console.log(used);",
+    );
+    write(
+        dir.path(),
+        "actual/barrel/index.js",
+        "export { used } from './used.js'; export { unused } from './unused.js';",
+    );
+    write(
+        dir.path(),
+        "actual/barrel/used.js",
+        "export const used = 42;",
+    );
+    write(
+        dir.path(),
+        "actual/barrel/unused.js",
+        "import '../effect.js'; export const unused = 99;",
+    );
+    write(dir.path(), "actual/effect.js", "export const inert = 0;");
+    write(dir.path(), "visible/effect.js", "console.log('visible');");
+    let actual = dir.path().join("actual/barrel");
+    let alias = dir.path().join("visible/barrel");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&actual, &alias).unwrap();
+    #[cfg(windows)]
+    {
+        // Directory junctions need no administrator/developer-mode privilege.
+        let output = Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(alias.to_string_lossy().replace('/', "\\"))
+            .arg(actual.to_string_lossy().replace('/', "\\"))
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{:?}", output);
+    }
+    let (on, output) = compile(dir.path(), false, false);
+    assert!(contains(&on, "/actual/barrel/unused.js"));
+    assert!(contains(&on, "/visible/effect.js"));
+    assert!(!contains(&on, "/actual/effect.js"));
+    assert_eq!(output, "visible\n42\n");
+    assert_eq!(output, compile(dir.path(), true, false).1);
+    // Perry deliberately uses the lexical import base through symlinks.
+    let node = Command::new("node")
+        .current_dir(dir.path())
+        .args([
+            "--preserve-symlinks",
+            "--experimental-strip-types",
+            "main.ts",
+        ])
+        .output()
+        .unwrap();
+    assert!(node.status.success(), "{:?}", node);
+    assert_eq!(
+        output,
+        String::from_utf8(node.stdout)
+            .unwrap()
+            .replace("\r\n", "\n")
+    );
+}
+
 #[test]
 fn mixed_forwarding_barrels_prune_unused_siblings_and_keep_bare_dependencies() {
     for contract in [None, Some(false.into())] {
