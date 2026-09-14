@@ -58,6 +58,11 @@ fn fixture(side_effects: Option<serde_json::Value>) -> tempfile::TempDir {
 fn compile(root: &Path, disabled: bool, collect_only: bool) -> (Vec<String>, String) {
     let cache = root.join(if disabled { "cache-off" } else { "cache-on" });
     let binary = root.join(if disabled { "main-off" } else { "main-on" });
+    // A collect-only invocation may follow a complete compile in this fixture.
+    // Its output assertion must observe this invocation, not the earlier binary.
+    if binary.exists() {
+        std::fs::remove_file(&binary).unwrap();
+    }
     let mut command = Command::new(perry_bin());
     command
         .current_dir(root)
