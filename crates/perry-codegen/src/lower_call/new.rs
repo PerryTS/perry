@@ -1153,6 +1153,7 @@ fn lower_new_impl_inner<'a>(
         crate::expr::root_inlined_ctor_pointer_locals(ctx, &ctor.params, &ctor.body);
     }
 
+    super::defer_dynamic_derived_fields(ctx, class);
     // A dynamic parent constructor owns the fields above its registered edge.
     // Every local class from the edge owner through the leaf is derived, so
     // their fields run only after that runtime `super(...args)` returns.
@@ -1503,6 +1504,9 @@ fn lower_new_impl_inner<'a>(
             .unwrap_or(false);
         if !found_inherited_ctor
             && !imported_ctor_has_body_or_fields
+            // A member such as Data.Error names a runtime parent, even when
+            // its final component looks like a builtin (#10258).
+            && !defer_to_dynamic_parent
             && super::new_error_init::emit_default_error_init(ctx, class, &lowered_args)
         {
             found_inherited_ctor = true; // skip the imported-ctor fallback below

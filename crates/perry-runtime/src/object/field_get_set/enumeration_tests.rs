@@ -2,6 +2,21 @@
 
 use super::enumeration::*;
 
+#[test]
+fn class_capture_storage_is_hidden_without_hiding_user_lookalikes() {
+    for name in ["__perry_cap_7", "__perry_cap_13mdeadbeefcafe"] {
+        assert!(is_internal_runtime_key(name), "{name}");
+    }
+    for name in [
+        "__perry_cap_",
+        "__perry_cap_user",
+        "__perry_cap_7mine",
+        "__perry_cap_7mdeadbeefcafeg",
+    ] {
+        assert!(!is_internal_runtime_key(name), "{name}");
+    }
+}
+
 #[cfg(test)]
 mod lazy_shadow_tests {
     use super::*;

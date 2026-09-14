@@ -595,6 +595,15 @@ fn compute_object_cache_key_with_env(
         h.field("namespace_member_origin_names", &s);
     }
 
+    // Producer contracts change the emitted signature even when local HIR is
+    // unchanged (e.g. a foreign ancestor gained a constructor parameter).
+    if !opts.constructor_param_counts.is_empty() {
+        h.field(
+            "constructor_param_counts",
+            &format!("{:?}", opts.constructor_param_counts),
+        );
+    }
+
     // Imported classes — sort by name. Serialize every field that codegen
     // reads so a changed constructor arity or new method on a re-exported
     // class invalidates consumers.

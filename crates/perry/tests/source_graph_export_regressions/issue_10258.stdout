@@ -1,0 +1,14 @@
+NotFound,FS,true NotFound,FS,true G:NotFound
+NotFound,FS,true FS NotFound,FS,true
+NotFound,FS,true NotFound,FS,true [1,2,3]
+member {"tag":"NotFound","module":"FS","keys":["_tag","module"]}
+getter {"tag":"NotFound","module":"FS","keys":["_tag","module"]} MH
+named {"tag":"NotFound","module":"FS","keys":["_tag","module"]}
+namespace {"tag":"NotFound","module":"FS","keys":["_tag","module"]}
+defining module {"tag":"NotFound","module":"FS","keys":["_tag","module"]} {"tag":"NotFound","module":"FS","keys":["_tag","module"]} {"tag":"NotFound","module":"FS","keys":["_tag","module"]}
+local runtime {"tag":"NotFound","module":"FS","keys":["_tag","module"]}
+local parent ["local",2] ["namespace",22]
+imported parent ["imported",3] ["member",33]
+barrel ["renamed",4]
+wrapped {"tag":"PlatformError","reasonTag":"NotFound","keys":["reason","_tag"],"cause":"c"}
+NotFound,FS,true {"tag":"NotFound","module":"FS","keys":["_tag","module"]} ["sub",5]

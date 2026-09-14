@@ -187,6 +187,8 @@ mod cjs_exports;
 mod clone_suffix_tests;
 mod closure;
 mod closure_collect;
+mod constructor_contracts;
+pub use constructor_contracts::resolve_constructor_contracts;
 mod ctor_arity;
 pub use ctor_arity::{context_free_ctor_param_count, UNRESOLVED_PARENT_FWD_ARITY};
 #[cfg(test)]
@@ -3628,6 +3630,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         hir,
         import_function_prefixes: &opts.import_function_prefixes,
         imported_classes: &opts.imported_classes,
+        constructor_param_counts: &opts.constructor_param_counts,
         is_entry_module: opts.is_entry_module,
         non_entry_module_prefixes: &opts.non_entry_module_prefixes,
         output_type: &opts.output_type,

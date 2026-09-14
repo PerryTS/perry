@@ -31,6 +31,7 @@ fn empty_opts() -> CompileOptions {
         namespace_imports: Vec::new(),
         namespace_member_nested: Vec::new(),
         imported_classes: Vec::new(),
+        constructor_param_counts: Default::default(),
         short_spread_method_candidates: std::sync::Arc::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
@@ -1151,4 +1152,21 @@ fn pinned_build_id_parses_hex_and_ignores_garbage() {
     assert_eq!(super::pinned_build_id(Some("not-hex".to_string())), None);
     assert_eq!(super::pinned_build_id(Some(String::new())), None);
     assert_eq!(super::pinned_build_id(None), None);
+}
+
+#[test]
+fn key_changes_with_defining_constructor_contract() {
+    let mut opts = empty_opts();
+    let previous = compute_object_cache_key(&opts, 123, "same-version");
+    opts.constructor_param_counts.insert("Child".into(), 2);
+    let resolved = compute_object_cache_key(&opts, 123, "same-version");
+    assert_ne!(
+        previous, resolved,
+        "invalidate objects predating the contract pass"
+    );
+    opts.constructor_param_counts.insert("Child".into(), 8);
+    assert_ne!(
+        resolved,
+        compute_object_cache_key(&opts, 123, "same-version")
+    );
 }

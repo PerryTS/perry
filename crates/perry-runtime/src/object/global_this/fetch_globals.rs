@@ -768,7 +768,14 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             } else {
                 undef
             };
-            crate::object::class_constructors::js_error_subclass_default_init(this_box, msg);
+            let options = if !args_ptr.is_null() && args_len >= 2 {
+                *args_ptr.add(1)
+            } else {
+                undef
+            };
+            crate::object::class_constructors::js_error_subclass_default_init_with_options(
+                this_box, msg, options,
+            );
             return undef;
         }
     }

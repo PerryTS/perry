@@ -1638,6 +1638,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             &[(I64, &this_handle), (I64, &key_raw), (DOUBLE, msg_val)],
                         );
                     }
+                    if let Some(options) = lowered_args.get(1) {
+                        let blk = ctx.block();
+                        let this_box = blk.load(DOUBLE, &this_slot);
+                        let bits = blk.bitcast_double_to_i64(&this_box);
+                        let handle = blk.and(I64, &bits, POINTER_MASK_I64);
+                        blk.call_void(
+                            "js_error_apply_cause_to_object",
+                            &[(I64, &handle), (DOUBLE, options)],
+                        );
+                    }
                 }
             } else if let Some(ctor) = ctx
                 .imported_class_ctors

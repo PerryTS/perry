@@ -1056,45 +1056,18 @@ unsafe fn default_error_init_for_implicit_chain(
     if !crate::object::extends_builtin_error(class_cid) {
         return;
     }
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let this_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(inst as i64));
-    // Read and root the forwarded value before stack capture can collect; the
-    // caller-owned argument slice itself is not a runtime handle.
-    let msg_h = if args_ptr.is_null() || args_len == 0 {
-        None
-    } else {
-        Some(scope.root_nanbox_f64(*args_ptr))
+    let arg = |index| {
+        if args_ptr.is_null() || index >= args_len {
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        } else {
+            *args_ptr.add(index)
+        }
     };
-    // #9410: the dynamic replay path is a construction site like any other,
-    // so the instance gets its own lazily-formatted `stack` here — before the
-    // message guard below, which returns early for `new X()` with no argument
-    // and would otherwise leave exactly those instances trace-less.
-    crate::error::js_error_subclass_capture_stack(this_h.get_nanbox_f64());
-    let Some(msg_h) = msg_h else {
-        return;
-    };
-    let msg = msg_h.get_nanbox_f64();
-    if msg.to_bits() == crate::value::TAG_UNDEFINED {
-        return;
-    }
-    let msg_str = crate::value::js_jsvalue_to_string(msg);
-    if msg_str.is_null() {
-        return;
-    }
-    let msg_str_h = scope.root_string_ptr(msg_str);
-    let key_h = scope.root_string_ptr(crate::string::js_string_from_bytes(
-        b"message".as_ptr(),
-        b"message".len() as u32,
-    ));
-    let inst = crate::value::js_nanbox_get_pointer(this_h.get_nanbox_f64()) as *mut ObjectHeader;
-    msg_str_h.with_const_ptr::<crate::StringHeader, _>(|msg_str| {
-        let boxed = f64::from_bits(
-            crate::value::STRING_TAG | (msg_str as u64 & crate::value::POINTER_MASK),
-        );
-        key_h.with_const_ptr::<crate::StringHeader, _>(|key| {
-            crate::object::js_object_set_field_by_name(inst, key, boxed);
-        });
-    });
+    js_error_subclass_default_init_with_options(
+        crate::value::js_nanbox_pointer(inst as i64),
+        arg(0),
+        arg(1),
+    );
 }
 
 /// #6469: spec default Error-init, called from the SYNTHESIZED standalone
@@ -1148,6 +1121,27 @@ pub unsafe extern "C" fn js_error_subclass_default_init(this_val: f64, msg: f64)
         }
     }
 }
+
+/// Default Error forwarding must preserve the options argument even when
+/// message is undefined (effect's YieldableError -> Data.Error chain).
+#[no_mangle]
+pub unsafe extern "C" fn js_error_subclass_default_init_with_options(
+    this_val: f64,
+    msg: f64,
+    options: f64,
+) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this_h = scope.root_nanbox_f64(this_val);
+    let options_h = scope.root_nanbox_f64(options);
+    js_error_subclass_default_init(this_val, msg);
+    let inst = crate::value::js_nanbox_get_pointer(this_h.get_nanbox_f64()) as *mut ObjectHeader;
+    crate::error::js_error_apply_cause_to_object(inst, options_h.get_nanbox_f64());
+}
+
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_ERROR_SUBCLASS_DEFAULT_INIT_WITH_OPTIONS: unsafe extern "C" fn(f64, f64, f64) =
+    js_error_subclass_default_init_with_options;
 
 /// Keepalive: generated code is the only caller (#6469).
 #[cfg(feature = "keepalive-anchors")]

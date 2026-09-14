@@ -34,6 +34,17 @@ pub(super) fn emit_default_error_init(
     let mut cur = class.extends_name.clone();
     let mut depth = 0usize;
     while let Some(pname) = cur {
+        // A foreign default constructor owns its entire super chain. In
+        // particular, `MemberSub extends ImportedSystemError` must invoke
+        // the imported forwarding constructor, not skip it because its stub
+        // eventually names `Error` (#10258).
+        if ctx
+            .imported_class_ctors
+            .get(&pname)
+            .is_some_and(|ctor| ctor.stops_constructor_walk())
+        {
+            return false;
+        }
         if matches!(
             pname.as_str(),
             "Error"

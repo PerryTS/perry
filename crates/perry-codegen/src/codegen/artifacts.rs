@@ -51,6 +51,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         hir,
         import_function_prefixes,
         imported_classes,
+        constructor_param_counts,
         is_entry_module,
         non_entry_module_prefixes,
         output_type,
@@ -91,6 +92,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     let opts = OptsView {
         import_function_prefixes,
         imported_classes,
+        constructor_param_counts,
         is_entry_module,
         non_entry_module_prefixes,
         output_type,
@@ -624,6 +626,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                     class_table,
                     imported_class_stubs,
                     opts.imported_classes,
+                    opts.constructor_param_counts,
                 );
                 let found_params: Vec<perry_hir::Param> = (0..n)
                     .map(|i| perry_hir::Param {
@@ -1931,6 +1934,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 class_table,
                 imported_class_stubs,
                 opts.imported_classes,
+                opts.constructor_param_counts,
             ) as u32;
             (name.clone(), n)
         })
