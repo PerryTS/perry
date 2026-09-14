@@ -16,6 +16,7 @@ use super::super::policy::{
     run_promoted_cohort_full_if_due, GC_LAST_OLD_RECLAIM_IN_USE_BYTES, GC_MAJOR_PACING_RETAINING,
 };
 use super::super::promoted_cohort as cohort;
+use super::super::promoted_cohort::survival;
 use super::super::*;
 use super::support::*;
 
@@ -193,8 +194,8 @@ fn below_the_bound_no_cohort_full_runs_and_the_dead_promoted_object_stays() {
 /// Outcome of one untraced promotion, a cohort full at the same safepoint, and
 /// the minor after it.
 struct SurvivalOutcome {
-    /// `(blocks, promoted bytes, live bytes)` the full measured.
-    measured: Option<(usize, usize, usize)>,
+    /// `(blocks, promoted bytes, live bytes, minor view)` the full measured.
+    measured: Option<(usize, usize, usize, survival::MinorView)>,
     predictor_after_full: Option<u64>,
     next_minor_in_place: bool,
     next_minor_untraced: bool,
@@ -248,12 +249,12 @@ fn promote_then_cohort_full_then_minor(live: bool, fed: bool) -> SurvivalOutcome
     }
     cohort::seed_for_tests(cohort::bound_bytes(), 0, 0);
     let ran = {
-        let _sabotage = (!fed).then(cohort::survival_sabotage::Guard::arm);
+        let _sabotage = (!fed).then(survival::sabotage::Guard::unfed);
         run_promoted_cohort_full_if_due()
     };
     adopt_census::discard();
     assert!(ran, "premise: the cohort full ran");
-    let measured = cohort::last_survival_for_tests();
+    let measured = survival::last_survival_for_tests();
     let predictor_after_full = super::super::last_young_survival_permille();
 
     rooted_young_strings(1, COUNT);
@@ -271,7 +272,7 @@ fn promote_then_cohort_full_then_minor(live: bool, fed: bool) -> SurvivalOutcome
     outcome
 }
 
-fn permille((_, promoted, live): (usize, usize, usize)) -> u64 {
+fn permille((_, promoted, live, _): (usize, usize, usize, survival::MinorView)) -> u64 {
     (live as u64 * 1000 / promoted as u64).min(1000)
 }
 
