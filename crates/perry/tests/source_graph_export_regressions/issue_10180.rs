@@ -7,6 +7,9 @@ use std::process::Command;
 
 use super::{perry_bin, runtime_dir};
 
+#[path = "issue_10180/purity.rs"]
+mod purity;
+
 fn write(root: &Path, path: &str, text: &str) {
     let path = root.join(path);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -455,7 +458,7 @@ fn forwarding_barrels_keep_effectful_dependencies_and_bare_imports() {
     );
     let (paths, output) = compile(dir.path(), false, false);
     assert_eq!(output, "42\n");
-    assert!(contains(&paths, "/fixture/unused.js"));
+    assert!(!contains(&paths, "/fixture/unused.js"));
     assert!(contains(&paths, "/fixture/bare.js"));
 
     write(
