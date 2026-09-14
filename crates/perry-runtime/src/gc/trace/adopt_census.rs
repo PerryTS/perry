@@ -84,13 +84,17 @@ pub(crate) fn recording() -> bool {
 
 /// The minor is over: keep what it recorded for a full at this safepoint.
 pub(crate) fn finish_recording() {
-    STATE.with(|s| {
+    let ready = STATE.with(|s| {
         let mut state = s.borrow_mut();
         *state = match std::mem::replace(&mut *state, State::Off) {
             State::Recording(map) if !map.is_empty() => State::Ready(map),
             _ => State::Off,
         };
+        matches!(*state, State::Ready(_))
     });
+    if !ready {
+        super::super::promoted_cohort::survival::clear_minor_remembered_parents();
+    }
 }
 
 /// The full about to start may adopt the records.
@@ -106,8 +110,17 @@ pub(crate) fn begin_adopting() {
 
 /// Drop every record: the safepoint is returning to the mutator.
 pub(crate) fn discard() {
-    STATE.with(|s| *s.borrow_mut() = State::Off);
-    super::super::promoted_cohort::survival::clear_minor_remembered_parents();
+    let was_off = STATE.with(|s| {
+        matches!(
+            std::mem::replace(&mut *s.borrow_mut(), State::Off),
+            State::Off
+        )
+    });
+    // Every nursery safepoint discards; only one that recorded can have noted
+    // a remembered set, so the common path leaves that thread-local untouched.
+    if !was_off {
+        super::super::promoted_cohort::survival::clear_minor_remembered_parents();
+    }
 }
 
 /// `(data, extent, bytes)` of every block the minor at this safepoint recorded
