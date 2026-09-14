@@ -66,9 +66,9 @@ same tree, base `9a05821b9e`:
 | `records_array_20m:roundtrip` | 105.0 / 260 | 117.2 / 231 | 162.1 / 261 |
 | `records_array_8m:scan` | 182.0 / 189 | 227.1 / 127 | 188.7 / 110 |
 
-- **Target rows.** All four now beat node/bun on RSS but are 1–3 % over the
-  best CPU. Each iteration promotes its dead predecessor's tree, so each row
-  runs three fulls of about 22 ms net against a lead of about 62 ms.
+- **Target rows.** All four now beat node/bun on RSS but are +0.8 to +3.0 %
+  over the best CPU. Each iteration promotes its dead predecessor's tree, so
+  each row runs three fulls of about 22 ms net against a lead of 58–64 ms.
 - **Other rows.** `records_array_8m:scan` loses its CPU lead (4 cohort fulls),
   and `records_array_20m:roundtrip` is +12 % CPU.
 - **Mechanism commits alone** (cohort trigger disabled locally): no row is
