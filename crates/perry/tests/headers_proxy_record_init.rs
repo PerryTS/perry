@@ -46,12 +46,11 @@ t("P15 descriptor/get order", () => { const order:string[]=[]; const o:any={"x-a
 
 const EXPECTED: &str = "P1 plain proxy [\"x-a=1\",\"x-b=2\"]\nP2 proxy with get trap [\"x-a=trapped\"]\nP3 proxy with ownKeys trap hiding a key [\"x-a=1\"]\nP4 proxy over empty object []\nP6 nested proxy [\"x-a=1\"]\nP8 plain object still works [\"x-a=1\"]\nP9 array still works [\"x-a=1\"]\nP10 map still works [\"x-a=1\"]\nP11 non-enumerable key [\"x-a=1\"]\nP12 missing descriptor []\nP13 enumerable symbol \"TypeError\"\nP14 hidden symbol []\nP15 descriptor/get order [[\"x-a=1\",\"x-b=2\"],[\"desc:x-a\",\"get:x-a\",\"desc:x-b\",\"get:x-b\"]]\n";
 
-#[test]
-fn headers_accepts_a_proxied_record_init() {
+fn compile_and_run(source: &str) -> String {
     let dir = tempfile::tempdir().expect("tempdir");
     let entry = dir.path().join("main.ts");
     let output = dir.path().join("main_bin");
-    std::fs::write(&entry, SOURCE).expect("write entry");
+    std::fs::write(&entry, source).expect("write entry");
     let compile = Command::new(perry_bin())
         .current_dir(dir.path())
         .arg("compile")
@@ -80,5 +79,24 @@ fn headers_accepts_a_proxied_record_init() {
         String::from_utf8_lossy(&run.stdout),
         String::from_utf8_lossy(&run.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&run.stdout), EXPECTED);
+    String::from_utf8(run.stdout).expect("UTF-8 output")
+}
+
+#[test]
+fn headers_accepts_a_proxied_record_init() {
+    assert_eq!(compile_and_run(SOURCE), EXPECTED);
+}
+
+#[test]
+fn rejected_headers_init_diagnostic_identifies_the_value() {
+    let source = r#"
+for (const value of [123, true]) {
+    try { new Headers(value as any); console.log("accepted"); }
+    catch (e: any) { console.log(e.name, e.message); }
+}
+"#;
+    assert_eq!(
+        compile_and_run(source),
+        "TypeError Headers constructor: init is not iterable (received 0x405ec00000000000)\nTypeError Headers constructor: init is not iterable (received 0x7ffc000000000004)\n"
+    );
 }

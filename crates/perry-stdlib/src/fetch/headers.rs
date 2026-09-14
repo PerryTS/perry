@@ -260,22 +260,24 @@ unsafe fn read_proxy_record_entries(
 }
 
 unsafe fn materialize_headers_init_iterable(
-    value: f64,
+    value: &perry_runtime::gc::RuntimeHandle<'_>,
     scope: &perry_runtime::gc::RuntimeHandleScope,
 ) -> *const perry_runtime::ArrayHeader {
-    if !is_headers_init_iterable(value) {
+    // Iterator lookup and conversion may invoke user code and move the init.
+    // Reuse the caller's root for conversion and the new error diagnostics.
+    if !is_headers_init_iterable(value.get_nanbox_f64()) {
         headers_init_type_error(&format!(
             "Headers constructor: init is not iterable (received {})",
-            describe_headers_init(value)
+            describe_headers_init(value.get_nanbox_f64())
         ));
     }
-    let arr_value = perry_runtime::array::js_for_of_to_array(value);
+    let arr_value = perry_runtime::array::js_for_of_to_array(value.get_nanbox_f64());
     let arr_handle = scope.root_nanbox_f64(arr_value);
     let raw = perry_runtime::js_nanbox_get_pointer(arr_handle.get_nanbox_f64());
     if raw == 0 {
         headers_init_type_error(&format!(
             "Headers constructor: init is not iterable (received {})",
-            describe_headers_init(value)
+            describe_headers_init(value.get_nanbox_f64())
         ));
     }
     raw as *const perry_runtime::ArrayHeader
@@ -383,7 +385,7 @@ pub unsafe extern "C" fn js_headers_init_from_value(handle: f64, init: f64) -> f
         return f64::from_bits(TAG_UNDEFINED);
     }
 
-    let arr = materialize_headers_init_iterable(init_now, &scope);
+    let arr = materialize_headers_init_iterable(&init_handle, &scope);
     let entries = read_headers_iterable_entries(arr, &scope);
     append_header_entries(target_id, entries);
     f64::from_bits(TAG_UNDEFINED)
