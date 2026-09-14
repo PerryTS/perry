@@ -76,11 +76,11 @@ pub mod unit_cache;
 
 pub use codegen::{
     compile_module, context_free_ctor_param_count, namespace_member_class_key,
-    namespace_member_func_key, namespace_member_var_key, resolve_constructor_contracts,
-    resolve_target_triple, short_spread_method_capabilities, user_function_symbol, AppMetadata,
-    CompileOptions, ExportedObjectLiteralCapability, FpContractMode, ImportedClass,
+    namespace_member_func_key, namespace_member_var_key, resolve_target_triple,
+    short_spread_method_capabilities, user_function_symbol, AppMetadata, CompileOptions,
+    ConstructorContracts, ExportedObjectLiteralCapability, FpContractMode, ImportedClass,
     ImportedObjectLiteral, ImportedObjectLiteralMethod, NamespaceEntry, NamespaceEntryKind,
-    ObjectLiteralMethodCandidate, ShortSpreadMethodCandidate,
+    ObjectLiteralMethodCandidate, ResolvedConstructorContracts, ShortSpreadMethodCandidate,
 };
 pub use collectors::CjsPreambleCensus;
 // #9843: the segment-view for-of matcher's counter. Exported so the
