@@ -701,11 +701,19 @@ pub extern "C" fn js_error_apply_cause_to_object(
     if !opts.is_pointer() {
         return;
     }
-    let key = js_string_from_bytes(b"cause".as_ptr(), 5);
-    let key_f64 = crate::value::js_nanbox_string(key as i64);
-    let cause = crate::value::js_dyn_index_get(options, key_f64);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_h = scope.root_raw_mut_ptr(obj);
+    let options_h = scope.root_nanbox_f64(options);
+    let key_h = scope.root_string_ptr(js_string_from_bytes(b"cause".as_ptr(), 5));
+    let key_f64 =
+        key_h.with_const_ptr(|key: *const StringHeader| crate::value::js_nanbox_string(key as i64));
+    let cause = crate::value::js_dyn_index_get(options_h.get_nanbox_f64(), key_f64);
     if cause.to_bits() != TAG_UNDEFINED_BITS {
-        crate::object::js_object_set_field_by_name_nonenum(obj, key as *const StringHeader, cause);
+        obj_h.with_mut_ptr(|obj| {
+            key_h.with_const_ptr(|key| {
+                crate::object::js_object_set_field_by_name_nonenum(obj, key, cause);
+            })
+        });
     }
 }
 

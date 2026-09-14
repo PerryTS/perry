@@ -13,6 +13,37 @@ use crate::expr::{lower_expr, FnCtx};
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::types::{DOUBLE, I32, I64, PTR};
 
+/// A runtime parent can create arbitrary properties before derived fields run.
+/// Retire the allocator's public-field placeholders before entering that parent,
+/// so DefineField later creates them in source order. Deletion revokes the old
+/// shape; subsequent stores use their existing guarded/by-name fallback. Keep
+/// capture/private slots intact: parent methods rely on their inherited layout.
+pub(crate) fn defer_dynamic_derived_fields(ctx: &mut FnCtx, class: &perry_hir::Class) {
+    if class.extends_expr.is_none() || !ctx.scalar_ctor_target.is_empty() {
+        return;
+    }
+    let Some(this_slot) = ctx.this_stack.last().cloned() else {
+        return;
+    };
+    for field in &class.fields {
+        if field.is_private || field.key_expr.is_some() || field.name.starts_with("__perry_cap_") {
+            continue;
+        }
+        let key_idx = ctx.strings.intern(&field.name);
+        let key_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+        let blk = ctx.block();
+        let key = blk.load(DOUBLE, &key_global);
+        // This is compiler-owned allocation state, before the user-visible
+        // derived-this binding becomes initialized at super().
+        let this = blk.load(DOUBLE, &this_slot);
+        blk.call(
+            I32,
+            "js_object_delete_dynamic_value",
+            &[(DOUBLE, &this), (DOUBLE, &key)],
+        );
+    }
+}
+
 /// The field name a constructor-prologue statement assigns from a plain
 /// parameter, or `None` if the statement is not of that shape.
 ///

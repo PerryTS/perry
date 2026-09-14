@@ -259,6 +259,10 @@ pub struct CompileOptions {
     /// carries the class HIR, the module prefix of its origin, and an
     /// optional local alias.
     pub imported_classes: Vec<ImportedClass>,
+    /// Defining-module constructor contracts, resolved across the prepared
+    /// source graph before cache lookup. Shared with all import declarations.
+    /// Empty for standalone codegen, which uses its local ancestor walk.
+    pub constructor_param_counts: std::collections::BTreeMap<String, usize>,
     /// Whole-program concrete method implementations eligible for the short
     /// trailing-spread direct-call lowering (#8772). Unlike `imported_classes`,
     /// this capability also flows from a consumer module back to a generic

@@ -153,7 +153,9 @@ pub(crate) use native::lower_native_method_call;
 // Re-export pub(crate) `new.rs` items consumed outside this module
 // (codegen.rs / expr.rs / stmt.rs) so `crate::lower_call::lower_new`
 // etc. keep resolving after the split.
-pub(crate) use field_init::{apply_field_initializers_recursive, FieldInitMode};
+pub(crate) use field_init::{
+    apply_field_initializers_recursive, defer_dynamic_derived_fields, FieldInitMode,
+};
 pub(crate) use new::{emit_class_capture_writeback, lower_new, lower_new_member_captured};
 pub(crate) use new_ctor_args::{
     bind_inline_constructor_params, restore_inline_constructor_scope, CaptureFill,

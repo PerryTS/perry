@@ -4,7 +4,7 @@
 //! Split out of `codegen/artifacts.rs` for the 2000-line file cap (#8204 took
 //! it to 2005). Pure code move — no logic change.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// Positional forwarding band for a synthesized default ctor whose parent arity
 /// cannot be resolved while compiling the defining module (see the tail of
@@ -13,12 +13,12 @@ pub const UNRESOLVED_PARENT_FWD_ARITY: usize = 8;
 
 /// The standalone-constructor arity of `class` when it can be decided from the
 /// class definition alone, without the defining module's class table or
-/// imports. Importers use this to describe a class they did not compile, so it
+/// imports. The source-graph constructor-contract resolver uses this, so it
 /// MUST agree with [`synthesized_ctor_param_count`] for every case it answers:
 /// an own constructor, a native parent, no heritage, and a heritage that is only
 /// a runtime value (`extends_expr` with no resolvable `extends_name`), which
 /// always synthesizes the fixed forwarding band. `None` means the arity depends
-/// on the ancestor walk and callers keep their existing behaviour (#10258).
+/// on the defining module's ancestor walk (#10258).
 pub fn context_free_ctor_param_count(class: &perry_hir::Class) -> Option<usize> {
     if let Some(c) = class.constructor.as_ref() {
         return Some(c.params.len());
@@ -53,7 +53,15 @@ pub(super) fn synthesized_ctor_param_count(
     class_table: &HashMap<String, &perry_hir::Class>,
     imported_class_stubs: &[perry_hir::Class],
     imported_classes: &[super::opts::ImportedClass],
+    resolved_arities: &BTreeMap<String, usize>,
 ) -> usize {
+    // Source-graph builds resolve once, in the defining module's scope, and
+    // copy this exact contract to every import before hashing either object.
+    // Standalone/auto-optimize callers keep the existing ancestor walk below.
+    if let Some(count) = resolved_arities.get(&class.name) {
+        return *count;
+    }
+
     if let Some(c) = class.constructor.as_ref() {
         return c.params.len();
     }

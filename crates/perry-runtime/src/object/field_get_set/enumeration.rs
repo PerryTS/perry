@@ -1634,6 +1634,7 @@ pub(crate) fn is_internal_runtime_key_bytes(b: &[u8]) -> bool {
         || b == crate::weakref::WEAK_ENTRIES_KEY
         || b == crate::object::parent_static::CLASS_OBJECT_PARENT_KEY.as_bytes()
         || b == b"__perry_ctor_caps"
+        || is_class_capture_key(b)
         || b.starts_with(crate::node_stream::NATIVE_BASE_SUPER_PREFIX)
         || b.starts_with(b"__perry_computed_field_key_")
         || b == b"#<perry:class-evaluation-prototype>"
@@ -1643,6 +1644,20 @@ pub(crate) fn is_internal_runtime_key_bytes(b: &[u8]) -> bool {
         || b.starts_with(b"#<perry:private-value:")
         || b.starts_with(b"#<perry:class-evaluation-method:")
         || b.starts_with(b"#<perry:static-private-method:")
+}
+
+// Match the compiler's salted capture spelling, and legacy cached HIR's
+// numeric spelling, without hiding ordinary __perry_cap_* user properties.
+fn is_class_capture_key(key: &[u8]) -> bool {
+    let Some(suffix) = key.strip_prefix(b"__perry_cap_") else {
+        return false;
+    };
+    let digits = suffix.iter().take_while(|b| b.is_ascii_digit()).count();
+    digits > 0
+        && (digits == suffix.len()
+            || (suffix.get(digits) == Some(&b'm')
+                && suffix.len() == digits + 13
+                && suffix[digits + 1..].iter().all(u8::is_ascii_hexdigit)))
 }
 
 /// `&str` form of [`is_internal_runtime_key_bytes`].

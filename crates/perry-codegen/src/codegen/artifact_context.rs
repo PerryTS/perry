@@ -13,6 +13,7 @@ use super::opts::CrossModuleCtx;
 /// references after the pipeline has moved other fields into `CrossModuleCtx`.
 pub(super) struct OptsView<'a> {
     pub(super) import_function_prefixes: &'a HashMap<String, String>,
+    pub(super) constructor_param_counts: &'a std::collections::BTreeMap<String, usize>,
     pub(super) imported_classes: &'a [super::opts::ImportedClass],
     pub(super) is_entry_module: bool,
     pub(super) non_entry_module_prefixes: &'a [String],
@@ -28,6 +29,7 @@ pub(super) struct ModuleArtifactsCtx<'a> {
     pub strings: &'a mut StringPool,
     pub hir: &'a HirModule,
     pub import_function_prefixes: &'a HashMap<String, String>,
+    pub constructor_param_counts: &'a std::collections::BTreeMap<String, usize>,
     pub imported_classes: &'a [super::opts::ImportedClass],
     pub is_entry_module: bool,
     pub non_entry_module_prefixes: &'a [String],
