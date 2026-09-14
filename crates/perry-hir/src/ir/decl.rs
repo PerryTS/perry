@@ -290,6 +290,59 @@ pub struct Class {
 }
 
 impl Class {
+    /// The shape-only class synthesized for a closed object literal. Check the
+    /// complete constructor rather than trusting its name: data materialization
+    /// may bypass this body only when it does exactly these positional stores.
+    pub fn is_literal_shape(&self) -> bool {
+        if !self.name.starts_with("__AnonShape_")
+            || self.extends.is_some()
+            || self.extends_name.is_some()
+            || self.extends_expr.is_some()
+            || self.native_extends.is_some()
+            || !self.methods.is_empty()
+            || !self.getters.is_empty()
+            || !self.setters.is_empty()
+            || !self.static_fields.is_empty()
+            || !self.static_methods.is_empty()
+            || !self.computed_members.is_empty()
+            || !self.decorators.is_empty()
+            || self.alloc_width_hint != 0
+        {
+            return false;
+        }
+        let Some(ctor) = &self.constructor else {
+            return false;
+        };
+        ctor.is_strict
+            && !ctor.is_async
+            && !ctor.is_generator
+            && ctor.captures.is_empty()
+            && ctor.decorators.is_empty()
+            && ctor.params.len() == self.fields.len()
+            && ctor.body.len() == self.fields.len()
+            && self
+                .fields
+                .iter()
+                .zip(&ctor.params)
+                .zip(&ctor.body)
+                .all(|((field, param), stmt)| {
+                    field.init.is_none()
+                        && field.key_expr.is_none()
+                        && !field.is_private
+                        && field.decorators.is_empty()
+                        && param.default.is_none()
+                        && !param.is_rest
+                        && param.arguments_object.is_none()
+                        && param.decorators.is_empty()
+                        && matches!(stmt,
+                            Stmt::Expr(Expr::PropertySet { object, property, value })
+                            if matches!(object.as_ref(), Expr::This)
+                                && property == &field.name
+                                && matches!(value.as_ref(), Expr::LocalGet(id) if *id == param.id)
+                        )
+                })
+    }
+
     /// True for the metadata-only stub `compile_module` synthesizes for a class
     /// IMPORTED from another module (`perry-codegen/src/codegen/mod.rs`, "Build
     /// a stub Class with the minimum fields the codegen needs").

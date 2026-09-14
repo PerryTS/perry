@@ -1,0 +1,414 @@
+{
+  "base_commit": "4a3c8ec9e2f449b39e6e6844ae1cdeab79fd918c",
+  "llvm": "22.1.8",
+  "platform": "Linux x86_64",
+  "baseline_note": "Only optimized-unit instruction-count diagnostic added to base; release compiler and matching runtime/stdlib archives built in this lane.",
+  "flags": [
+    "--no-auto-optimize",
+    "--no-link"
+  ],
+  "pins": {
+    "baseline": {
+      "libperry_runtime.a": "ab3044c50f23ab664d1fac6e6762dda2b3a740d6802dde8bdaa8e12bfc684ad4",
+      "libperry_stdlib.a": "7dad8063d877118f137ff928d3ce1863b4ba264b90bb2d1d7659e97525876c88",
+      "perry": "88db949d211fcef94e8f5d8e01a52eb3a219091b09cd9529d010c0d68e4bbea4"
+    },
+    "candidate": {
+      "libperry_runtime.a": "16317309c42dc6ef64c5aa6f738d9268243304b6c0e22c6eecdafa1bb650d322",
+      "libperry_stdlib.a": "ff51f8c394dd216edd2b1fbc56a9f26f0e81d2b3c26b8514d6f401842d533063",
+      "perry": "16697fa26381edb22c8acee7b8e6e52f7b1f97d7f6608d59b3e6acfca005d177"
+    }
+  },
+  "standalone": {
+    "records-400": {
+      "before": {
+        "source": "/root/claude-opencode/lanes/literal-results/probes/records-400.ts",
+        "compiler": "/root/claude-opencode/lanes/literal-results/baseline",
+        "status": 0,
+        "wall_seconds": 40.369,
+        "rss_kib": 1730844,
+        "text_bytes": 14342070,
+        "phase_evidence": [
+          "   31.568 [perry] codegen: `main` has 622076 instructions after IR optimization (unit total 624083, 5 functions, opt 26.201s)"
+        ]
+      },
+      "after": {
+        "source": "/root/claude-opencode/lanes/literal-results/probes/records-400.ts",
+        "compiler": "/root/claude-opencode/lanes/literal-results/candidate",
+        "status": 0,
+        "wall_seconds": 0.3,
+        "rss_kib": 200264,
+        "text_bytes": 5949,
+        "phase_evidence": [
+          "    0.110 [perry] codegen: `main` has 1087 instructions after IR optimization (unit total 1470, 5 functions, opt 0.023s)"
+        ]
+      }
+    },
+    "records-3200": {
+      "before": {
+        "source": "/root/claude-opencode/lanes/literal-results/probes/records-3200.ts",
+        "compiler": "/root/claude-opencode/lanes/literal-results/baseline",
+        "status": 0,
+        "wall_seconds": 95.49,
+        "rss_kib": 1474996,
+        "text_bytes": 6297159,
+        "phase_evidence": [
+          "    1.187 [perry] codegen: `perry_fn_records_3200_ts__u__5f__5f_perry_5f_entry_5f_chunk_5f_records_2d_3200_2e_ts_5f_1` has 960 instructions after IR optimization (unit total 1390, 8 functions, opt 0.022s)",
+          "    1.212 [perry] codegen: records_3200_ts: unit 3/3: 8 fns; pre-RS4GC 2391 instrs (widest perry_fn_records_3200_ts__u__5f__5f_perry_5f_entry_5f_chunk_5f_records_2d_3200_2e_ts_5f_1 1715); post-RS4GC 1676 instrs (x0.7; widest perry_fn_records_3200_ts__u__5f__5f_perry_5f_entry_5f_chunk_5f_records_2d_3200_2e_ts_5f_1 1055); rs4gc 0.0s, opt 0.0s, emit 0.0s",
+          "    1.214 [perry] codegen: `__perry_init_strings_records_3200_ts_chunk0` has 12865 instructions after IR optimization (unit total 12865, 1 functions, opt 0.033s)",
+          "    1.597 [perry] codegen: records_3200_ts: unit 2/3: 1 fns; pre-RS4GC 12865 instrs (widest __perry_init_strings_records_3200_ts_chunk0 12865); post-RS4GC 12865 instrs (x1.0; widest __perry_init_strings_records_3200_ts_chunk0 12865); rs4gc 0.0s, opt 0.0s, emit 0.4s",
+          "   90.934 [perry] codegen: `perry_fn_records_3200_ts__u__5f__5f_perry_5f_entry_5f_chunk_5f_records_2d_3200_2e_ts_5f_0` has 650941 instructions after IR optimization (unit total 650941, 1 functions, opt 88.272s)",
+          "   93.817 [perry] codegen: records_3200_ts: unit 1/3: 1 fns; pre-RS4GC 774396 instrs (widest perry_fn_records_3200_ts__u__5f__5f_perry_5f_entry_5f_chunk_5f_records_2d_3200_2e_ts_5f_0 774396); post-RS4GC 723186 instrs (x0.9; widest perry_fn_records_3200_ts__u__5f__5f_perry_5f_entry_5f_chunk_5f_records_2d_3200_2e_ts_5f_0 723186); rs4gc 0.7s, opt 88.2s, emit 2.8s"
+        ]
+      },
+      "after": {
+        "source": "/root/claude-opencode/lanes/literal-results/probes/records-3200.ts",
+        "compiler": "/root/claude-opencode/lanes/literal-results/candidate",
+        "status": 0,
+        "wall_seconds": 0.633,
+        "rss_kib": 243844,
+        "text_bytes": 6017,
+        "phase_evidence": [
+          "    0.437 [perry] codegen: `perry_fn_records_3200_ts__u__5f__5f_perry_5f_entry_5f_chunk_5f_records_2d_3200_2e_ts_5f_1` has 960 instructions after IR optimization (unit total 1435, 9 functions, opt 0.022s)"
+        ]
+      }
+    },
+    "mime-other": {
+      "before": {
+        "source": "/root/claude-opencode/opencode/node_modules/.bun/mime@4.1.0/node_modules/mime/types/other.ts",
+        "compiler": "/root/claude-opencode/lanes/literal-results/baseline",
+        "status": 0,
+        "wall_seconds": 674.625,
+        "rss_kib": 2377108,
+        "text_bytes": 13670794,
+        "phase_evidence": [
+          "  386.216 [perry] codegen: `other_ts____AnonShape_799e9b5d71a66990_constructor` has 522756 instructions after IR optimization (unit total 1037401, 7 functions, opt 364.792s)"
+        ]
+      },
+      "after": {
+        "source": "/root/claude-opencode/opencode/node_modules/.bun/mime@4.1.0/node_modules/mime/types/other.ts",
+        "compiler": "/root/claude-opencode/lanes/literal-results/candidate",
+        "status": 0,
+        "wall_seconds": 0.874,
+        "rss_kib": 236224,
+        "text_bytes": 2517,
+        "phase_evidence": [
+          "    0.699 [perry] codegen: `other_ts____AnonShape_799e9b5d71a66990_constructor` has 1370 instructions after IR optimization (unit total 1500, 7 functions, opt 0.059s)"
+        ]
+      }
+    },
+    "mime-standard": {
+      "before": {
+        "source": "/root/claude-opencode/opencode/node_modules/.bun/mime@4.1.0/node_modules/mime/types/standard.ts",
+        "compiler": "/root/claude-opencode/lanes/literal-results/baseline",
+        "status": 0,
+        "wall_seconds": 63.74,
+        "rss_kib": 856244,
+        "text_bytes": 3419680,
+        "phase_evidence": [
+          "   35.487 [perry] codegen: `standard_ts____AnonShape_88e425ef48475126_constructor` has 144416 instructions after IR optimization (unit total 277972, 7 functions, opt 33.181s)"
+        ]
+      },
+      "after": {
+        "source": "/root/claude-opencode/opencode/node_modules/.bun/mime@4.1.0/node_modules/mime/types/standard.ts",
+        "compiler": "/root/claude-opencode/lanes/literal-results/candidate",
+        "status": 0,
+        "wall_seconds": 0.834,
+        "rss_kib": 227604,
+        "text_bytes": 1637,
+        "phase_evidence": [
+          "    0.665 [perry] codegen: `standard_ts____AnonShape_88e425ef48475126_constructor` has 666 instructions after IR optimization (unit total 796, 7 functions, opt 0.028s)"
+        ]
+      }
+    },
+    "named-references": {
+      "before": {
+        "source": "/root/claude-opencode/opencode/node_modules/.bun/html-entities@2.3.3/node_modules/html-entities/lib/named-references.js",
+        "compiler": "/root/claude-opencode/lanes/literal-results/baseline",
+        "status": 0,
+        "wall_seconds": 263.806,
+        "rss_kib": 4159680,
+        "text_bytes": 5069754,
+        "phase_evidence": [
+          "   70.674 perry: `named_references_js____AnonShape_f9fef27cc00cd6ca_constructor` exceeded the post-RS4GC instruction budget (151112 -> 2426669 instructions; cap 1572864); retrying it with precise GC roots in a shadow frame at the requested optimization level (#8679)",
+          "   77.385 [perry] codegen: `named_references_js____AnonShape_f9fef27cc00cd6ca_constructor` has 116357 instructions after IR optimization (unit total 240457, 3 functions, opt 6.133s)",
+          "  106.732 [perry] codegen: named_references_js: unit 2/2: 3 fns; pre-RS4GC 282891 instrs (widest named_references_js____AnonShape_f9fef27cc00cd6ca_constructor 139033); post-RS4GC 283445 instrs (x1.0; widest named_references_js____AnonShape_f9fef27cc00cd6ca_constructor 137512); rs4gc 0.2s, opt 6.1s, emit 29.3s",
+          "  218.148 perry: `named_references_js____AnonShape_1397b18db6910348_constructor` exceeded the post-RS4GC instruction budget (223112 -> 5189309 instructions; cap 1572864); retrying it with precise GC roots in a shadow frame at the requested optimization level (#8679)",
+          "  230.937 [perry] codegen: `named_references_js____AnonShape_1397b18db6910348_constructor` has 171797 instructions after IR optimization (unit total 429153, 35 functions, opt 11.652s)",
+          "  262.524 [perry] codegen: named_references_js: unit 1/2: 35 fns; pre-RS4GC 328080 instrs (widest named_references_js____AnonShape_1397b18db6910348_constructor 205273); post-RS4GC 501232 instrs (x1.5; widest named_references_js____AnonShape_1397b18db6910348_constructor 203032); rs4gc 0.7s, opt 11.6s, emit 31.6s"
+        ]
+      },
+      "after": {
+        "source": "/root/claude-opencode/opencode/node_modules/.bun/html-entities@2.3.3/node_modules/html-entities/lib/named-references.js",
+        "compiler": "/root/claude-opencode/lanes/literal-results/candidate",
+        "status": 0,
+        "wall_seconds": 1.762,
+        "rss_kib": 308792,
+        "text_bytes": 70266,
+        "phase_evidence": [
+          "    1.304 [perry] codegen: `perry_closure_named_references_js__1` has 5023 instructions after IR optimization (unit total 20950, 36 functions, opt 0.513s)"
+        ]
+      }
+    }
+  },
+  "controls": {
+    "records-3200": {
+      "source": "/root/claude-opencode/lanes/literal-results/probes/records-3200.ts",
+      "compiler": "/root/claude-opencode/lanes/literal-results/baseline",
+      "status": 0,
+      "wall_seconds": 92.427,
+      "rss_kib": 1510916,
+      "text_bytes": 6297159,
+      "phase_evidence": [
+        "    1.656 [perry] codegen: `perry_fn_records_3200_ts__u__5f__5f_perry_5f_entry_5f_chunk_5f_records_2d_3200_2e_ts_5f_1` has 960 instructions after IR optimization (unit total 1390, 8 functions, opt 0.022s)",
+        "    1.681 [perry] codegen: `__perry_init_strings_records_3200_ts_chunk0` has 12865 instructions after IR optimization (unit total 12865, 1 functions, opt 0.033s)",
+        "    1.681 [perry] codegen: records_3200_ts: unit 3/3: 8 fns; pre-RS4GC 2391 instrs (widest perry_fn_records_3200_ts__u__5f__5f_perry_5f_entry_5f_chunk_5f_records_2d_3200_2e_ts_5f_1 1715); post-RS4GC 1676 instrs (x0.7; widest perry_fn_records_3200_ts__u__5f__5f_perry_5f_entry_5f_chunk_5f_records_2d_3200_2e_ts_5f_1 1055); rs4gc 0.0s, opt 0.0s, emit 0.0s",
+        "    2.033 [perry] codegen: records_3200_ts: unit 2/3: 1 fns; pre-RS4GC 12865 instrs (widest __perry_init_strings_records_3200_ts_chunk0 12865); post-RS4GC 12865 instrs (x1.0; widest __perry_init_strings_records_3200_ts_chunk0 12865); rs4gc 0.0s, opt 0.0s, emit 0.4s",
+        "   85.474 [perry] codegen: `perry_fn_records_3200_ts__u__5f__5f_perry_5f_entry_5f_chunk_5f_records_2d_3200_2e_ts_5f_0` has 650941 instructions after IR optimization (unit total 650941, 1 functions, opt 82.332s)",
+        "   88.238 [perry] codegen: records_3200_ts: unit 1/3: 1 fns; pre-RS4GC 774396 instrs (widest perry_fn_records_3200_ts__u__5f__5f_perry_5f_entry_5f_chunk_5f_records_2d_3200_2e_ts_5f_0 774396); post-RS4GC 723186 instrs (x0.9; widest perry_fn_records_3200_ts__u__5f__5f_perry_5f_entry_5f_chunk_5f_records_2d_3200_2e_ts_5f_0 723186); rs4gc 0.7s, opt 82.3s, emit 2.7s"
+      ]
+    },
+    "records-3200-optimized-emit": {
+      "source": "/root/claude-opencode/lanes/literal-results/probes/records-3200.ts",
+      "compiler": "/root/claude-opencode/lanes/literal-results/baseline",
+      "status": 0,
+      "wall_seconds": 126.21,
+      "rss_kib": 1951424,
+      "text_bytes": 3609143,
+      "phase_evidence": [
+        "    1.223 [perry] codegen: `perry_fn_records_3200_ts__u__5f__5f_perry_5f_entry_5f_chunk_5f_records_2d_3200_2e_ts_5f_1` has 960 instructions after IR optimization (unit total 1390, 8 functions, opt 0.022s)",
+        "    1.248 [perry] codegen: records_3200_ts: unit 3/3: 8 fns; pre-RS4GC 2391 instrs (widest perry_fn_records_3200_ts__u__5f__5f_perry_5f_entry_5f_chunk_5f_records_2d_3200_2e_ts_5f_1 1715); post-RS4GC 1676 instrs (x0.7; widest perry_fn_records_3200_ts__u__5f__5f_perry_5f_entry_5f_chunk_5f_records_2d_3200_2e_ts_5f_1 1055); rs4gc 0.0s, opt 0.0s, emit 0.0s",
+        "    1.249 [perry] codegen: `__perry_init_strings_records_3200_ts_chunk0` has 12865 instructions after IR optimization (unit total 12865, 1 functions, opt 0.035s)",
+        "    1.695 [perry] codegen: records_3200_ts: unit 2/3: 1 fns; pre-RS4GC 12865 instrs (widest __perry_init_strings_records_3200_ts_chunk0 12865); post-RS4GC 12865 instrs (x1.0; widest __perry_init_strings_records_3200_ts_chunk0 12865); rs4gc 0.0s, opt 0.0s, emit 0.4s",
+        "   91.288 [perry] codegen: `perry_fn_records_3200_ts__u__5f__5f_perry_5f_entry_5f_chunk_5f_records_2d_3200_2e_ts_5f_0` has 650941 instructions after IR optimization (unit total 650941, 1 functions, opt 88.438s)",
+        "  125.047 [perry] codegen: records_3200_ts: unit 1/3: 1 fns; pre-RS4GC 774396 instrs (widest perry_fn_records_3200_ts__u__5f__5f_perry_5f_entry_5f_chunk_5f_records_2d_3200_2e_ts_5f_0 774396); post-RS4GC 723186 instrs (x0.9; widest perry_fn_records_3200_ts__u__5f__5f_perry_5f_entry_5f_chunk_5f_records_2d_3200_2e_ts_5f_0 723186); rs4gc 0.7s, opt 88.4s, emit 33.8s"
+      ]
+    },
+    "mime-other": {
+      "source": "/root/claude-opencode/opencode/node_modules/.bun/mime@4.1.0/node_modules/mime/types/other.ts",
+      "compiler": "/root/claude-opencode/lanes/literal-results/baseline",
+      "status": 124,
+      "wall_seconds": 600.136,
+      "rss_kib": 2225916,
+      "phase_evidence": [
+        "  351.556 [perry] codegen: `other_ts____AnonShape_799e9b5d71a66990_constructor` has 522756 instructions after IR optimization (unit total 1037401, 7 functions, opt 339.134s)"
+      ]
+    }
+  },
+  "runtime": {
+    "cpu": 15,
+    "warmups_per_arm": 1,
+    "runs_per_arm": 5,
+    "fixtures": {
+      "hot": {
+        "checksums": [
+          "79042210000",
+          "2011000000"
+        ],
+        "runs": {
+          "before": [
+            {
+              "table_ms": 286,
+              "recs_ms": 277
+            },
+            {
+              "table_ms": 288,
+              "recs_ms": 273
+            },
+            {
+              "table_ms": 288,
+              "recs_ms": 275
+            },
+            {
+              "table_ms": 287,
+              "recs_ms": 275
+            },
+            {
+              "table_ms": 287,
+              "recs_ms": 277
+            }
+          ],
+          "after": [
+            {
+              "table_ms": 70,
+              "recs_ms": 169
+            },
+            {
+              "table_ms": 71,
+              "recs_ms": 169
+            },
+            {
+              "table_ms": 70,
+              "recs_ms": 168
+            },
+            {
+              "table_ms": 70,
+              "recs_ms": 169
+            },
+            {
+              "table_ms": 70,
+              "recs_ms": 169
+            }
+          ]
+        },
+        "medians_ms": {
+          "before": {
+            "table_ms": 287,
+            "recs_ms": 275
+          },
+          "after": {
+            "table_ms": 70,
+            "recs_ms": 169
+          }
+        }
+      },
+      "numbers": {
+        "checksums": [
+          "79042210000"
+        ],
+        "runs": {
+          "before": [
+            {
+              "table_ms": 70
+            },
+            {
+              "table_ms": 70
+            },
+            {
+              "table_ms": 70
+            },
+            {
+              "table_ms": 70
+            },
+            {
+              "table_ms": 70
+            }
+          ],
+          "after": [
+            {
+              "table_ms": 70
+            },
+            {
+              "table_ms": 70
+            },
+            {
+              "table_ms": 70
+            },
+            {
+              "table_ms": 70
+            },
+            {
+              "table_ms": 70
+            }
+          ]
+        },
+        "medians_ms": {
+          "before": {
+            "table_ms": 70
+          },
+          "after": {
+            "table_ms": 70
+          }
+        }
+      },
+      "records": {
+        "checksums": [
+          "2011000000"
+        ],
+        "runs": {
+          "before": [
+            {
+              "recs_ms": 273
+            },
+            {
+              "recs_ms": 273
+            },
+            {
+              "recs_ms": 273
+            },
+            {
+              "recs_ms": 273
+            },
+            {
+              "recs_ms": 273
+            }
+          ],
+          "after": [
+            {
+              "recs_ms": 150
+            },
+            {
+              "recs_ms": 151
+            },
+            {
+              "recs_ms": 150
+            },
+            {
+              "recs_ms": 150
+            },
+            {
+              "recs_ms": 150
+            }
+          ]
+        },
+        "medians_ms": {
+          "before": {
+            "recs_ms": 273
+          },
+          "after": {
+            "recs_ms": 150
+          }
+        }
+      },
+      "records-hot-3200": {
+        "checksums": [
+          "128088000000"
+        ],
+        "runs": {
+          "before": [
+            {
+              "recs_ms": 1242
+            },
+            {
+              "recs_ms": 1249
+            },
+            {
+              "recs_ms": 1246
+            },
+            {
+              "recs_ms": 1247
+            },
+            {
+              "recs_ms": 1242
+            }
+          ],
+          "after": [
+            {
+              "recs_ms": 1176
+            },
+            {
+              "recs_ms": 1177
+            },
+            {
+              "recs_ms": 1176
+            },
+            {
+              "recs_ms": 1175
+            },
+            {
+              "recs_ms": 1175
+            }
+          ]
+        },
+        "medians_ms": {
+          "before": {
+            "recs_ms": 1246
+          },
+          "after": {
+            "recs_ms": 1176
+          }
+        }
+      }
+    }
+  }
+}

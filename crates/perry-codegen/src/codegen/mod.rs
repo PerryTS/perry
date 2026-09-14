@@ -211,6 +211,7 @@ mod tdz_names;
 // `pub(crate)` so `crate::linker` can read the inline-hot-small policy
 // (`inline_hot_small_enabled` / `inline_hot_small_hint_threshold`).
 pub(crate) mod helpers;
+mod literal_constructor;
 mod method;
 mod method_registry;
 mod method_trampolines;

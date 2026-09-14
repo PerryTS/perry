@@ -1,5 +1,10 @@
 # Large JSON literal lowering (#10151 / #10161)
 
+The follow-up [#10173 audit](measurements-10173.md) measures the remaining
+ordinary-path cliff and its static-shape descriptor replacement. `measure.py`
+records fresh-cache standalone compile time, peak RSS, section sizes and phase
+logs; `alternate.py` checks five alternating runs of pinned before/after binaries.
+
 `generate.py` reproduces the typed record shape and 2,000-element numeric table
 from the #10161 performance audit. `hot.ts` runs 20,000 passes over each: numeric
 array indexing, then `q.w + q.tags.length + q.id` on 400 records. The separate

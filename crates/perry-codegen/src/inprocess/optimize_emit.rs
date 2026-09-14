@@ -168,6 +168,18 @@ pub(super) fn optimize_and_emit(
     if let Some(stats) = stats.as_deref_mut() {
         stats.optimize_secs = optimize_started.elapsed().as_secs_f64();
     }
+    // Include small units as well as budget offenders, so before/after size
+    // audits do not lose their subject when a fix brings it below the cap.
+    if std::env::var_os("PERRY_CODEGEN_UNIT_TIMINGS").is_some() {
+        let (functions, total, widest) = module_instruction_census(module);
+        if let Some((name, instructions)) = widest {
+            eprintln!(
+                "[perry] codegen: `{name}` has {instructions} instructions after IR optimization \
+                 (unit total {total}, {functions} functions, opt {:.3}s)",
+                optimize_started.elapsed().as_secs_f64(),
+            );
+        }
+    }
 
     // The IR pipeline above has already done the requested optimization. For
     // an extreme generated function, LLVM's optimized *machine* pipeline can
