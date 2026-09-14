@@ -67,6 +67,7 @@ mod roots;
 mod runtime_roots;
 mod scan_fallback;
 mod schedule;
+mod scrub_dead_stack;
 mod shadow_stack_ops;
 mod shape_descriptor_authority;
 mod shape_keys_descriptor_edge;
