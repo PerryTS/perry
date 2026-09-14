@@ -1,0 +1,297 @@
+{
+  "baseline": "4945fc1f7498debc76e9f861d7cf1517da5e67c9",
+  "semantics": "Combined manifest cleanup. Locked Cargo normal/build trees, no performance measurement.",
+  "graphs": [
+    {
+      "configuration": "CLI default",
+      "target": "x86_64-pc-windows-msvc",
+      "before": 352,
+      "after": 350,
+      "removed": [
+        "thiserror v1.0.69",
+        "thiserror-impl v1.0.69"
+      ],
+      "added": [],
+      "command": [
+        "cargo",
+        "tree",
+        "--locked",
+        "--offline",
+        "-p",
+        "perry",
+        "-e",
+        "normal,build",
+        "--target",
+        "x86_64-pc-windows-msvc",
+        "--prefix",
+        "none",
+        "--format",
+        "{p}"
+      ]
+    },
+    {
+      "configuration": "CLI dev",
+      "target": "x86_64-pc-windows-msvc",
+      "before": 350,
+      "after": 348,
+      "removed": [
+        "thiserror v1.0.69",
+        "thiserror-impl v1.0.69"
+      ],
+      "added": [],
+      "command": [
+        "cargo",
+        "tree",
+        "--locked",
+        "--offline",
+        "-p",
+        "perry",
+        "--no-default-features",
+        "--features",
+        "dev-cli",
+        "-e",
+        "normal,build",
+        "--target",
+        "x86_64-pc-windows-msvc",
+        "--prefix",
+        "none",
+        "--format",
+        "{p}"
+      ]
+    },
+    {
+      "configuration": "Runtime default",
+      "target": "x86_64-pc-windows-msvc",
+      "before": 218,
+      "after": 218,
+      "removed": [],
+      "added": [],
+      "command": [
+        "cargo",
+        "tree",
+        "--locked",
+        "--offline",
+        "-p",
+        "perry-runtime",
+        "-e",
+        "normal,build",
+        "--target",
+        "x86_64-pc-windows-msvc",
+        "--prefix",
+        "none",
+        "--format",
+        "{p}"
+      ]
+    },
+    {
+      "configuration": "Runtime minimal",
+      "target": "x86_64-pc-windows-msvc",
+      "before": 108,
+      "after": 105,
+      "removed": [
+        "anyhow v1.0.104",
+        "thiserror v1.0.69",
+        "thiserror-impl v1.0.69"
+      ],
+      "added": [],
+      "command": [
+        "cargo",
+        "tree",
+        "--locked",
+        "--offline",
+        "-p",
+        "perry-runtime",
+        "--no-default-features",
+        "-e",
+        "normal,build",
+        "--target",
+        "x86_64-pc-windows-msvc",
+        "--prefix",
+        "none",
+        "--format",
+        "{p}"
+      ]
+    },
+    {
+      "configuration": "Stdlib default",
+      "target": "x86_64-pc-windows-msvc",
+      "before": 556,
+      "after": 527,
+      "removed": [
+        "anstream v1.0.0",
+        "anstyle v1.0.14",
+        "anstyle-parse v1.0.0",
+        "anstyle-query v1.1.5",
+        "anstyle-wincon v3.0.11",
+        "chrono-tz v0.10.4",
+        "clap v4.6.6",
+        "clap_builder v4.6.6",
+        "clap_derive v4.6.4",
+        "clap_lex v1.1.0",
+        "colorchoice v1.0.5",
+        "croner v3.0.1",
+        "darling v0.20.11",
+        "darling_core v0.20.11",
+        "darling_macro v0.20.11",
+        "derive_builder v0.20.2",
+        "derive_builder_core v0.20.2",
+        "derive_builder_macro v0.20.2",
+        "heck v0.5.0",
+        "is_terminal_polyfill v1.70.2",
+        "once_cell_polyfill v1.70.2",
+        "phf v0.12.1",
+        "phf_shared v0.12.1",
+        "strum v0.27.2",
+        "strum_macros v0.27.2",
+        "thiserror v1.0.69",
+        "thiserror-impl v1.0.69",
+        "tokio-cron-scheduler v0.15.1",
+        "utf8parse v0.2.2"
+      ],
+      "added": [],
+      "command": [
+        "cargo",
+        "tree",
+        "--locked",
+        "--offline",
+        "-p",
+        "perry-stdlib",
+        "-e",
+        "normal,build",
+        "--target",
+        "x86_64-pc-windows-msvc",
+        "--prefix",
+        "none",
+        "--format",
+        "{p}"
+      ]
+    },
+    {
+      "configuration": "Stdlib minimal",
+      "target": "x86_64-pc-windows-msvc",
+      "before": 149,
+      "after": 132,
+      "removed": [
+        "anstream v1.0.0",
+        "anstyle v1.0.14",
+        "anstyle-parse v1.0.0",
+        "anstyle-query v1.1.5",
+        "anstyle-wincon v3.0.11",
+        "clap v4.6.6",
+        "clap_builder v4.6.6",
+        "clap_derive v4.6.4",
+        "clap_lex v1.1.0",
+        "colorchoice v1.0.5",
+        "heck v0.5.0",
+        "is_terminal_polyfill v1.70.2",
+        "once_cell_polyfill v1.70.2",
+        "strsim v0.11.1",
+        "thiserror v1.0.69",
+        "thiserror-impl v1.0.69",
+        "utf8parse v0.2.2"
+      ],
+      "added": [],
+      "command": [
+        "cargo",
+        "tree",
+        "--locked",
+        "--offline",
+        "-p",
+        "perry-stdlib",
+        "--no-default-features",
+        "-e",
+        "normal,build",
+        "--target",
+        "x86_64-pc-windows-msvc",
+        "--prefix",
+        "none",
+        "--format",
+        "{p}"
+      ]
+    },
+    {
+      "configuration": "Compose",
+      "target": "x86_64-pc-windows-msvc",
+      "before": 98,
+      "after": 91,
+      "removed": [
+        "anyhow v1.0.104",
+        "atty v0.2.14",
+        "crossbeam-utils v0.8.21",
+        "dashmap v6.2.1",
+        "dotenvy v0.15.7",
+        "hashbrown v0.14.5",
+        "winapi v0.3.9"
+      ],
+      "added": [],
+      "command": [
+        "cargo",
+        "tree",
+        "--locked",
+        "--offline",
+        "-p",
+        "perry-container-compose",
+        "-e",
+        "normal,build",
+        "--target",
+        "x86_64-pc-windows-msvc",
+        "--prefix",
+        "none",
+        "--format",
+        "{p}"
+      ]
+    }
+  ],
+  "removed_declarations": {
+    "Cargo.toml": [
+      "similar = \"2.4\""
+    ],
+    "crates/perry-codegen/Cargo.toml": [
+      "thiserror.workspace = true"
+    ],
+    "crates/perry-container-compose/Cargo.toml": [
+      "anyhow = { workspace = true }",
+      "dotenvy = { workspace = true }",
+      "dashmap.workspace = true",
+      "atty = \"0.2\""
+    ],
+    "crates/perry-ext-fastify/Cargo.toml": [
+      "lazy_static.workspace = true"
+    ],
+    "crates/perry-hir/Cargo.toml": [
+      "thiserror.workspace = true"
+    ],
+    "crates/perry-parser/Cargo.toml": [
+      "thiserror.workspace = true"
+    ],
+    "crates/perry-runtime/Cargo.toml": [
+      "thiserror.workspace = true",
+      "anyhow.workspace = true"
+    ],
+    "crates/perry-stdlib/Cargo.toml": [
+      "bundled-cron = [\"dep:cron\", \"dep:tokio-cron-scheduler\", \"async-runtime\"]",
+      "thiserror.workspace = true",
+      "anyhow.workspace = true",
+      "itoa.workspace = true",
+      "ryu.workspace = true",
+      "tokio-cron-scheduler = { version = \"0.15\", optional = true }",
+      "clap = { version = \"4.4\", features = [\"derive\"] }"
+    ],
+    "crates/perry-transform/Cargo.toml": [
+      "thiserror.workspace = true",
+      "anyhow.workspace = true"
+    ],
+    "crates/perry-ui-android/Cargo.toml": [
+      "serde_json.workspace = true",
+      "itoa.workspace = true",
+      "ryu.workspace = true"
+    ],
+    "crates/perry-ui-windows-winui/Cargo.toml": [
+      "base64.workspace = true",
+      "libc.workspace = true"
+    ],
+    "crates/perry-updater/Cargo.toml": [
+      "serde_json.workspace = true"
+    ]
+  }
+}

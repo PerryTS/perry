@@ -15,7 +15,6 @@ crate-type = ["rlib", "staticlib"]
 anyhow = "1.0"
 perry-runtime = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-serde_json.workspace = true
 semver.workspace = true
 sha2 = "0.11"
 hex.workspace = true

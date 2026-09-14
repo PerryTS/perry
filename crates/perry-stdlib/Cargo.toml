@@ -284,7 +284,7 @@ bundled-cheerio = ["dep:scraper"]
 # backwards-compat; v0.5.564's well-known flip toggles
 # `bundled-cron` instead.
 scheduler = ["bundled-cron"]
-bundled-cron = ["dep:cron", "dep:tokio-cron-scheduler", "async-runtime"]
+bundled-cron = ["dep:cron", "async-runtime"]
 
 # Rate limiting — `rate-limit` umbrella stays for backwards-compat;
 # v0.5.552's well-known flip toggles `bundled-ratelimit` instead.
@@ -332,14 +332,9 @@ perry-updater = { workspace = true }
 # in this crate's tests/.
 perry-container-compose = { path = "../perry-container-compose", optional = true }
 
-thiserror.workspace = true
-anyhow.workspace = true
-
 # Always needed
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-itoa.workspace = true
-ryu.workspace = true
 once_cell.workspace = true
 lazy_static.workspace = true
 chrono = { workspace = true, features = ["serde"] }
@@ -444,7 +439,6 @@ scraper = { version = "0.27", optional = true }
 
 # Scheduler
 cron = { version = "0.17", optional = true }
-tokio-cron-scheduler = { version = "0.15", optional = true }
 
 # Rate limiting
 governor = { version = "0.10", optional = true }
@@ -460,9 +454,6 @@ nanoid = { version = "0.5", optional = true }
 # strip the perry-stdlib copy when `import 'lru-cache'` resolves
 # to perry-ext-lru-cache instead.
 lru = { version = "0.18", optional = true }
-
-# CLI parsing (Commander)
-clap = { version = "4.4", features = ["derive"] }
 
 # Decimal math (Big.js / Decimal.js) — optional from v0.5.547 so
 # the well-known flip can strip perry-stdlib's copy when

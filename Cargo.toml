@@ -426,9 +426,6 @@ dialoguer = "0.12"
 walkdir = "2.4"
 notify = "6.1"
 
-# Diff generation
-similar = "2.4"
-
 # HTTP / WebSocket (for publish command)
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "multipart", "blocking"] }
 tokio = { version = "1", features = ["full"] }

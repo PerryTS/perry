@@ -306,8 +306,6 @@ dyn-eval = ["dep:perry-parser", "dep:perry-diagnostics"]
 # with perry-hir through perry-dispatch, so the runtime's property-read and
 # method-call paths and the HIR's import lowering cannot drift apart.
 perry-dispatch.workspace = true
-thiserror.workspace = true
-anyhow.workspace = true
 libc.workspace = true
 rustc-demangle = "0.1"
 # Owned single-phase unwinder (#7302 follow-up): decodes .eh_frame CFI for
