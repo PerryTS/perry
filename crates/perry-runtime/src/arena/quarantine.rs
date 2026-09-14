@@ -580,11 +580,12 @@ pub(crate) fn copying_quarantine_from_spaces_and_flip() -> ArenaResetStats {
     });
 
     with_survivor_arena_mut(active, |arena| {
-        arena.current = arena
+        let first_live = arena
             .blocks
             .iter()
             .position(|block| !block.data.is_null())
             .unwrap_or(0);
+        arena.set_current(first_live);
     });
     ACTIVE_SURVIVOR.with(|active_cell| active_cell.set(1 - active));
 
@@ -619,7 +620,7 @@ unsafe fn detach_used_blocks(arena: &mut Arena) -> Vec<(*mut u8, usize, usize)> 
         block.offset = 0;
         block.dead_cycles = 0;
     }
-    arena.current = 0;
+    arena.set_current(0);
     detached
 }
 
@@ -654,7 +655,7 @@ unsafe fn ensure_usable_current_block(arena: &mut Arena) {
         .iter()
         .position(|block| !block.data.is_null() && block.offset == 0)
     {
-        arena.current = idx;
+        arena.set_current(idx);
         return;
     }
     arena.install_fresh_block(BLOCK_SIZE);

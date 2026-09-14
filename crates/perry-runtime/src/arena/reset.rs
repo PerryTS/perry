@@ -22,7 +22,7 @@ pub fn arena_reset_all_blocks_to_zero() {
             block.clear_object_starts();
             block.offset = 0;
         }
-        arena.current = 0;
+        arena.set_current(0);
         // Free list is now invalid (all entries point into reset blocks).
         crate::gc::ARENA_FREE_LIST.with(|fl| fl.borrow_mut().clear());
         crate::gc::ARENA_FREE_LIST_NONEMPTY.with(|c| c.set(false));
@@ -110,7 +110,7 @@ fn reset_region_to_zero(arena: &mut Arena) -> (usize, usize) {
     if arena.generation == HeapGeneration::Old {
         old_gen_in_use_bytes_sub(reusable_bytes);
     }
-    arena.current = 0;
+    arena.set_current(0);
     (reset_blocks, reusable_bytes)
 }
 
@@ -129,18 +129,8 @@ pub(crate) fn copying_active_survivor_in_use_bytes() -> usize {
 }
 
 /// Bytes currently allocated in Eden plus the active survivor from-space.
-pub(crate) fn copying_from_space_in_use_bytes() -> usize {
-    sync_inline_arena_state();
-    let eden = ARENA.with(|arena| {
-        let arena = unsafe { &*arena.get() };
-        arena.blocks.iter().map(|b| b.offset).sum::<usize>()
-    });
-    let active = ACTIVE_SURVIVOR.with(|active| active.get());
-    let survivor = with_survivor_arena(active, |arena| {
-        arena.blocks.iter().map(|b| b.offset).sum::<usize>()
-    });
-    eden + survivor
-}
+/// O(1) between layout changes; see `arena/from_space.rs`.
+pub(crate) use super::from_space::copying_from_space_in_use_bytes;
 
 /// #7901: is `block_idx` inside the copying collector's from-space (Eden plus
 /// the ACTIVE survivor semispace)? The inactive semispace is to-space and is
@@ -501,7 +491,7 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) -> ArenaResetStats {
             // `arena.current` where it was — the next `Arena::alloc` slow
             // path will tombstone-reuse a slot and update `current` then.
             if !arena.blocks[new_current].data.is_null() {
-                arena.current = new_current;
+                arena.set_current(new_current);
             }
             let _ = (n_live, n_total);
             INLINE_STATE.with(|s| {
@@ -817,7 +807,7 @@ impl ArenaResetEmptyBlocksState {
                 .map(|block| !block.data.is_null())
                 .unwrap_or(false)
             {
-                arena.current = new_current;
+                arena.set_current(new_current);
             }
             INLINE_STATE.with(|s| {
                 let inline = &mut *s.get();
@@ -980,7 +970,7 @@ impl SurvivorArenaReclaimState {
                 .enumerate()
                 .find(|(_, block)| !block.data.is_null() && block.offset == 0)
             {
-                arena.current = idx;
+                arena.set_current(idx);
             } else if arena
                 .blocks
                 .get(arena.current)
@@ -993,7 +983,7 @@ impl SurvivorArenaReclaimState {
                     .enumerate()
                     .find(|(_, block)| !block.data.is_null())
                 {
-                    arena.current = idx;
+                    arena.set_current(idx);
                 }
             }
         });
@@ -1297,7 +1287,7 @@ impl OldArenaReclaimDeadBlocksState {
                 .enumerate()
                 .find(|(_, block)| !block.data.is_null() && block.offset == 0)
             {
-                arena.current = idx;
+                arena.set_current(idx);
             } else if arena
                 .blocks
                 .get(arena.current)
@@ -1310,7 +1300,7 @@ impl OldArenaReclaimDeadBlocksState {
                     .enumerate()
                     .find(|(_, block)| !block.data.is_null())
                 {
-                    arena.current = idx;
+                    arena.set_current(idx);
                 }
             }
         });
@@ -1382,7 +1372,7 @@ pub(crate) fn old_arena_reclaim_dead_blocks(block_has_live: &[bool]) -> ArenaRes
                 .enumerate()
                 .find(|(_, block)| !block.data.is_null() && block.offset == 0)
             {
-                arena.current = idx;
+                arena.set_current(idx);
             } else if arena
                 .blocks
                 .get(arena.current)
@@ -1395,7 +1385,7 @@ pub(crate) fn old_arena_reclaim_dead_blocks(block_has_live: &[bool]) -> ArenaRes
                     .enumerate()
                     .find(|(_, block)| !block.data.is_null())
                 {
-                    arena.current = idx;
+                    arena.set_current(idx);
                 }
             }
         }
@@ -1482,7 +1472,7 @@ pub(crate) fn old_arena_reclaim_selected_dead_blocks(
                 .enumerate()
                 .find(|(_, block)| !block.data.is_null() && block.offset == 0)
             {
-                arena.current = idx;
+                arena.set_current(idx);
             } else if arena
                 .blocks
                 .get(arena.current)
@@ -1495,7 +1485,7 @@ pub(crate) fn old_arena_reclaim_selected_dead_blocks(
                     .enumerate()
                     .find(|(_, block)| !block.data.is_null())
                 {
-                    arena.current = idx;
+                    arena.set_current(idx);
                 }
             }
         }
@@ -1579,7 +1569,7 @@ fn reclaim_dead_survivor_arena_blocks(
                 .enumerate()
                 .find(|(_, block)| !block.data.is_null() && block.offset == 0)
             {
-                arena.current = idx;
+                arena.set_current(idx);
             } else if arena
                 .blocks
                 .get(arena.current)
@@ -1592,7 +1582,7 @@ fn reclaim_dead_survivor_arena_blocks(
                     .enumerate()
                     .find(|(_, block)| !block.data.is_null())
                 {
-                    arena.current = idx;
+                    arena.set_current(idx);
                 }
             }
         }

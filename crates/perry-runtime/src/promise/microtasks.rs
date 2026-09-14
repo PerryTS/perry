@@ -302,7 +302,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     crate::exception::js_try_end();
     crate::node_submodules::diagnostics_channel_drain_uncaught();
 
-    let _ = crate::gc::gc_runtime_safepoint();
+    crate::gc::gc_runtime_safepoint_poll();
 
     // Phase 1 of the moving-GC project (see project_gc_one_great_moving_gc): at
     // the OUTERMOST microtask-pump boundary the JS stack has fully unwound, so

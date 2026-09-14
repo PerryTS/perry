@@ -56,7 +56,7 @@ impl From<StorageError> for EngineError {
 /// that requests cancellation or forces actual collection. No input/program
 /// view or scratch slice is live when any poll is invoked.
 pub(crate) fn poll() -> Result<(), EngineError> {
-    crate::gc::gc_runtime_safepoint();
+    crate::gc::gc_runtime_safepoint_poll();
     Ok(())
 }
 
