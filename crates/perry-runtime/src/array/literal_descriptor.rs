@@ -225,9 +225,9 @@ mod tests {
         assert_eq!(
             crate::value::js_jsvalue_equals(
                 f64::from_bits(actual_name.bits()),
-                crate::value::js_nanbox_string(
-                    expected_name.get_raw_const_ptr::<crate::StringHeader>() as i64
-                ),
+                expected_name.with_const_ptr::<crate::StringHeader, _>(|ptr| {
+                    crate::value::js_nanbox_string(ptr as i64)
+                }),
             ),
             1
         );

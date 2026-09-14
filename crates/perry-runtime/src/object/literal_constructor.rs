@@ -23,11 +23,17 @@ pub extern "C" fn js_literal_shape_initialize(
         .map(|value| scope.root_nanbox_f64(*value))
         .collect();
     for (i, value) in values.iter().enumerate() {
-        let keys_array = keys.get_raw_const_ptr::<crate::array::ArrayHeader>();
-        if keys_array.is_null() || i >= unsafe { (*keys_array).length } as usize {
-            return;
-        }
-        let key = unsafe { *crate::array::array_elements_ptr(keys_array).add(i) };
+        // Inspect the rooted key array without letting its raw pointer escape.
+        // The returned value stays owned by that array until js_put_value_set
+        // roots all three operands at entry; no allocation occurs in between.
+        let key = keys.with_const_ptr::<crate::array::ArrayHeader, _>(|keys_array| {
+            if keys_array.is_null() || i >= unsafe { (*keys_array).length } as usize {
+                None
+            } else {
+                Some(unsafe { *crate::array::array_elements_ptr(keys_array).add(i) })
+            }
+        });
+        let Some(key) = key else { return };
         let this = receiver.get_nanbox_f64();
         crate::proxy::js_put_value_set(this, f64::from_bits(key), value.get_nanbox_f64(), this, 1);
     }
@@ -61,7 +67,7 @@ mod tests {
         );
         let head_key = crate::js_string_from_bytes(b"head".as_ptr(), 4);
         crate::object::js_object_define_property(
-            crate::value::js_nanbox_pointer(receiver.get_raw_mut_ptr::<u8>() as i64),
+            receiver.with_mut_ptr::<u8, _>(|ptr| crate::value::js_nanbox_pointer(ptr as i64)),
             crate::value::js_nanbox_string(head_key as i64),
             crate::value::js_nanbox_pointer(descriptor as i64),
         );
@@ -73,18 +79,18 @@ mod tests {
         // The caller's plain buffer is deliberately NOT rooted. The helper
         // must transfer all values to handles before the first setter runs.
         let values = [1.0, crate::value::js_nanbox_string(string as i64), 42.0];
-        let before = receiver.get_raw_mut_ptr::<crate::ObjectHeader>();
+        let before = receiver.with_const_ptr::<crate::ObjectHeader, _>(|ptr| ptr as usize);
         let cycles = crate::gc::copying_minor_cycles();
-        js_literal_shape_initialize(
-            crate::value::js_nanbox_pointer(before as i64),
-            &keys,
-            values.as_ptr(),
-            3,
-        );
+        let (_, after) = receiver.across_const::<crate::ObjectHeader, _>(|| {
+            let boxed =
+                receiver.with_mut_ptr::<u8, _>(|ptr| crate::value::js_nanbox_pointer(ptr as i64));
+            js_literal_shape_initialize(boxed, &keys, values.as_ptr(), 3);
+        });
         assert!(crate::gc::copying_minor_cycles() > cycles);
-        assert_ne!(receiver.get_raw_mut_ptr::<crate::ObjectHeader>(), before);
+        assert_ne!(after as usize, before);
         let key = crate::js_string_from_bytes(b"text".as_ptr(), 4);
-        let actual = crate::object::js_object_get_field_by_name(receiver.get_raw_const_ptr(), key);
+        let actual =
+            receiver.with_const_ptr(|ptr| crate::object::js_object_get_field_by_name(ptr, key));
         let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
         let (bytes, len) =
             crate::string::str_bytes_from_jsvalue(f64::from_bits(actual.bits()), &mut scratch)
@@ -95,8 +101,9 @@ mod tests {
         );
         let key = crate::js_string_from_bytes(b"n".as_ptr(), 1);
         assert_eq!(
-            crate::object::js_object_get_field_by_name(receiver.get_raw_const_ptr(), key)
-                .as_number(),
+            receiver.with_const_ptr(|ptr| {
+                crate::object::js_object_get_field_by_name(ptr, key).as_number()
+            }),
             42.0
         );
     }
