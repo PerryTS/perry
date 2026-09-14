@@ -476,7 +476,11 @@ pub fn extract_exports_from_source(source: &str) -> Vec<String> {
     for cap in descriptor_re.captures_iter(source) {
         let call = cap.get(1).unwrap();
         // Ignore examples embedded in comments and strings.
-        if stripped[call.start()..].starts_with("Object") {
+        if stripped
+            .as_bytes()
+            .get(call.start()..)
+            .is_some_and(|rest| rest.starts_with(b"Object"))
+        {
             push_unique(&mut names, cap.get(2).unwrap().as_str());
         }
     }
