@@ -568,3 +568,100 @@ console.log(
   "own-named-fields-again:",
   ownNamedFields(ownNames, 12, ownNames.length),
 );
+
+// ---------------------------------------------------------------------------
+// 10. The accumulator as an f64 and the counter as an i32 inside the clone.
+//
+//     Both scalars now live in native storage for the clone's duration and are
+//     published to their real slots only at a side exit and at the loop's
+//     exit. Each case below observes one of those publications, or one of the
+//     IEEE edge cases the double-domain add must reproduce exactly.
+// ---------------------------------------------------------------------------
+
+// `repeat` from an arbitrary starting accumulator.
+function repeatFrom(rows: any, count: number, start: any): any {
+  let sum: any = start;
+  for (let i = 0; i < count; i++) sum += rows[7].id;
+  return sum;
+}
+
+const edgeRows: any = JSON.parse(
+  '[{"id":0},{"id":1},{"id":2},{"id":3},{"id":4},{"id":5},{"id":6},' +
+    '{"id":-0},{"id":1e308},{"id":-1e308},{"id":2.5}]',
+);
+// `-0 + -0` is `-0`; any `+0` in the chain makes it `+0`.
+const negZero = repeatFrom(edgeRows, 3, -0);
+console.log("repeat-negative-zero:", negZero, Object.is(negZero, -0));
+const posZero = repeatFrom(edgeRows, 3, 0);
+console.log("repeat-positive-zero:", posZero, Object.is(posZero, -0));
+// A non-Number entry value takes the slow clone and keeps concatenation.
+const sevenRows: any = JSON.parse(buildRecords(10, "p"));
+console.log("repeat-string-start:", repeatFrom(sevenRows, 3, "s"));
+
+// Overflow to Infinity, then Infinity + -Infinity = NaN, in source order.
+function sequentialFrom(rows: any, count: number, n: number, start: number): number {
+  let sum = start;
+  for (let i = 0; i < count; i++) {
+    const index = i % n;
+    sum += rows[index].id;
+  }
+  return sum;
+}
+const overflowRows: any = JSON.parse('[{"id":1e308},{"id":1e308},{"id":-1e308}]');
+console.log("overflow-to-infinity:", sequentialFrom(overflowRows, 2, 3, 0));
+console.log("overflow-then-back:", sequentialFrom(overflowRows, 3, 3, 0));
+const infRows: any = JSON.parse('[{"id":1e999},{"id":-1e999}]');
+console.log("infinity-minus-infinity:", sequentialFrom(infRows, 2, 2, 0));
+console.log("nan-start:", sequentialFrom(overflowRows, 3, 3, NaN));
+
+// A side exit on the FIRST iteration with a non-zero accumulator: the
+// trampoline must publish the entry value, not the untouched pre-loop slot.
+const stringAtSeven: any = JSON.parse(
+  '[{"id":0},{"id":1},{"id":2},{"id":3},{"id":4},{"id":5},{"id":6},{"id":"x"}]',
+);
+function repeatAfterPrefix(rows: any, count: number): any {
+  let sum: any = 0;
+  for (let i = 0; i < 4; i++) sum += rows[i].id;
+  for (let i = 0; i < count; i++) sum += rows[7].id;
+  return sum;
+}
+console.log("repeat-side-exit-after-prefix:", repeatAfterPrefix(stringAtSeven, 3));
+
+// A side exit MID-loop with the counter-indexed form: the published
+// accumulator is the numeric prefix, and the slow clone runs exactly the
+// remaining iterations — both visible in the concatenated result.
+const lateString: any = JSON.parse(
+  '[{"id":1.5},{"id":2},{"id":3},{"id":4},{"id":"five"},{"id":6},{"id":7}]',
+);
+console.log("scan-side-exit-mid-loop:", scanSum(lateString, lateString.length));
+console.log("sequential-side-exit-mid-loop:", sequentialFrom(lateString, 9, 7, 10));
+
+// The `repeat` counter against bounds the i32 materialization must refuse:
+// every one takes the slow clone and keeps JavaScript's trip count.
+console.log("repeat-fractional-count:", repeatFrom(sevenRows, 2.5, 0));
+console.log("repeat-nan-count:", repeatFrom(sevenRows, NaN, 0));
+console.log("repeat-negative-count:", repeatFrom(sevenRows, -3, 0));
+console.log("repeat-zero-count:", repeatFrom(sevenRows, 0, 1));
+console.log("repeat-string-count:", repeatFrom(sevenRows, "3" as any, 0));
+console.log("repeat-integral-count:", repeatFrom(sevenRows, 3, 0.5));
+
+// The `random` recurrence with a side exit well past the first iteration: the
+// published counter decides how many iterations the slow clone still runs.
+function randomCounted(rows: any, count: number, n: number): string {
+  let sum: any = 0;
+  let cursor = 0;
+  let seen = 0;
+  for (let i = 0; i < count; i++) {
+    cursor = (cursor * 17 + 7) % n;
+    sum += rows[cursor].id;
+  }
+  for (let i = 0; i < count; i++) seen++;
+  return String(sum) + "|" + String(cursor) + "|" + String(seen);
+}
+// `(17c + 7) % 13` walks 7 -> 9 -> 4 -> 10 -> 8 -> 0 from 0, so index 8 — the
+// string one — is read on the FIFTH iteration and every sixth after it.
+const randomLate: any = JSON.parse(
+  '[{"id":0},{"id":1},{"id":2},{"id":3},{"id":4},{"id":5},{"id":6},' +
+    '{"id":7},{"id":"eight"},{"id":9},{"id":10},{"id":11},{"id":12}]',
+);
+console.log("random-late-side-exit:", randomCounted(randomLate, 40, 13));
