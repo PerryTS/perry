@@ -121,6 +121,16 @@ fn read_headers_record_entries(
     if has_sync_iterator(value) {
         return None;
     }
+    // A Proxy wrapping a record (`new Headers(new Proxy(headers, {}))`) is a
+    // valid record init: the spec reads the init's own keys and values through
+    // the object's internal methods, which for a Proxy means its `ownKeys` and
+    // `get` traps. The pointer below is a proxy id, not a `GC_TYPE_OBJECT`
+    // heap object, so without this branch the record path bailed and the
+    // constructor reported "init is not iterable" for an ordinary header
+    // object (OpenCode's request path, tracker #10107).
+    if perry_runtime::proxy::js_proxy_is_proxy(value) != 0 {
+        return unsafe { read_proxy_record_entries(value, scope) };
+    }
     let raw = perry_runtime::js_nanbox_get_pointer(value);
     if gc_type_for_raw_ptr(raw) != Some(perry_runtime::gc::GC_TYPE_OBJECT) {
         return None;
@@ -153,6 +163,44 @@ fn read_headers_record_entries(
         }
         Some(entries)
     }
+}
+
+/// Own string-keyed properties of a Proxy init, read through its traps.
+/// Symbol keys are skipped (a header name is always a string). Enumerability
+/// is not re-queried per key: `ownKeys` on a plain wrapping Proxy already
+/// reports the target's own keys, and a trap that hides a key omits it there.
+unsafe fn read_proxy_record_entries(
+    value: f64,
+    scope: &perry_runtime::gc::RuntimeHandleScope,
+) -> Option<Vec<(String, String)>> {
+    let keys_value = perry_runtime::proxy::js_proxy_own_keys(value);
+    let keys_handle = scope.root_nanbox_f64(keys_value);
+    let proxy_handle = scope.root_nanbox_f64(value);
+    let keys_raw = perry_runtime::js_nanbox_get_pointer(keys_handle.get_nanbox_f64());
+    if keys_raw == 0 {
+        return Some(Vec::new());
+    }
+    let len = perry_runtime::js_array_length(keys_raw as *const perry_runtime::ArrayHeader);
+    let mut entries = Vec::with_capacity(len as usize);
+    for i in 0..len {
+        let keys_now = perry_runtime::js_nanbox_get_pointer(keys_handle.get_nanbox_f64());
+        let key_value = perry_runtime::array::js_array_get_f64(
+            keys_now as *const perry_runtime::ArrayHeader,
+            i,
+        );
+        if !JSValue::from_bits(key_value.to_bits()).is_any_string() {
+            continue;
+        }
+        let key_ptr = perry_runtime::builtins::js_string_coerce(key_value);
+        if key_ptr.is_null() {
+            continue;
+        }
+        let key = string_from_header(key_ptr as *const StringHeader).unwrap_or_default();
+        let val_value =
+            perry_runtime::proxy::js_proxy_get(proxy_handle.get_nanbox_f64(), key_value);
+        entries.push((key, header_init_string(val_value)));
+    }
+    Some(entries)
 }
 
 unsafe fn materialize_headers_init_iterable(
@@ -245,12 +293,20 @@ pub unsafe extern "C" fn js_headers_init_from_value(handle: f64, init: f64) -> f
         return f64::from_bits(TAG_UNDEFINED);
     }
 
+    // A Proxy value is not a Headers handle: its NaN-box would otherwise be
+    // masked into a registry id and could alias a live Headers entry, silently
+    // copying the wrong (or no) headers. Route it to the record path below.
+    let is_proxy_init = perry_runtime::proxy::js_proxy_is_proxy(init) != 0;
     let source_id = handle_id(init);
-    let cloned = HEADERS_REGISTRY
-        .lock()
-        .unwrap()
-        .get(&source_id)
-        .map(|store| store.entries.clone());
+    let cloned = if is_proxy_init {
+        None
+    } else {
+        HEADERS_REGISTRY
+            .lock()
+            .unwrap()
+            .get(&source_id)
+            .map(|store| store.entries.clone())
+    };
     if let Some(entries) = cloned {
         append_header_entries(target_id, entries);
         return f64::from_bits(TAG_UNDEFINED);
