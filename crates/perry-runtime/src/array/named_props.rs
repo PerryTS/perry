@@ -117,6 +117,7 @@ impl InlineKeySet {
     /// the same way: a `regex-engine`-off build has no caller.
     #[cfg(feature = "regex-engine")]
     #[inline]
+    #[cfg(feature = "regex-engine")]
     const fn header_word(self) -> u64 {
         let n = self.keys().len() as u64;
         INT32_TAG | (self as u64) | (((1u64 << n) - 1) << 8)

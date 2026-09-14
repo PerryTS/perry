@@ -251,3 +251,67 @@ fn desc_view_field_values_are_rooted() {
         assert_string_bytes(string_ptr_of(after_value), b"desc_view_payload");
     }
 }
+
+extern "C" fn moving_writable_getter(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    GETTER_COPIED_OBJECTS.with(|c| c.set(c.get() + trace.copying_nursery.copied_objects));
+    f64::from_bits(crate::value::TAG_TRUE)
+}
+
+#[test]
+fn array_named_property_attributes_follow_a_move_in_the_final_descriptor_probe() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    register_handle_scanner();
+    GETTER_COPIED_OBJECTS.with(|c| c.set(0));
+    unsafe {
+        let scope = RuntimeHandleScope::new();
+        let target = scope.root_raw_mut_ptr(crate::array::js_array_alloc(0));
+        let key = scope.root_nanbox_f64(string_value("tag"));
+        let bag = scope.root_nanbox_f64(object_value(crate::object::js_object_alloc(0, 0)));
+        let inner = scope.root_nanbox_f64(object_value(crate::object::js_object_alloc(0, 0)));
+        let getter = crate::closure::js_closure_alloc(moving_writable_getter as *const u8, 0);
+        let get_key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
+        crate::object::js_object_set_field_by_name(
+            addr_of(inner.get_nanbox_f64()) as *mut crate::object::ObjectHeader,
+            get_key,
+            f64::from_bits(ptr_bits(getter as usize)),
+        );
+        crate::object::js_object_define_property(
+            bag.get_nanbox_f64(),
+            string_value("writable"),
+            inner.get_nanbox_f64(),
+        );
+        let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
+        crate::object::js_object_set_field_by_name(
+            addr_of(bag.get_nanbox_f64()) as *mut crate::object::ObjectHeader,
+            value_key,
+            42.0,
+        );
+        let before = target.get_raw_mut_ptr::<crate::array::ArrayHeader>() as usize;
+        let applied = crate::object::define_array_property(
+            target.get_raw_mut_ptr::<crate::array::ArrayHeader>().cast(),
+            f64::from_bits(ptr_bits(before)),
+            string_ptr_of(key.get_nanbox_f64()),
+            Some("tag"),
+            bag.get_nanbox_f64(),
+        );
+        assert_eq!(applied, Some(true));
+        assert!(GETTER_COPIED_OBJECTS.with(|c| c.get()) > 0);
+        let live = target.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+        assert_ne!(
+            live as usize, before,
+            "the writable getter must move the receiver"
+        );
+        assert_eq!(
+            crate::array::array_named_property_get_by_name(live, "tag"),
+            Some(42.0)
+        );
+        let attrs = crate::object::descriptor_state::get_property_attrs(live as usize, "tag")
+            .expect("the attributes must be filed under the current array address");
+        assert!(attrs.writable());
+        assert!(!attrs.enumerable());
+        assert!(!attrs.configurable());
+        assert!(crate::object::descriptor_state::get_property_attrs(before, "tag").is_none());
+    }
+}

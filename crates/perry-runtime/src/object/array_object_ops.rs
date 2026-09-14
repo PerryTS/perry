@@ -871,26 +871,18 @@ pub(crate) unsafe fn define_array_property(
 
     // Write the value: an explicit `value` wins; a NEW property with no value
     // defaults to `undefined`; a redefine that omits `value` keeps the current.
-    // The first named property on a full array grows it (`named_props.rs`),
-    // so the attributes below are keyed by the RETURNED live head — an entry
-    // recorded under the old address would sit on a forwarding stub that
-    // `transfer_descriptor_owner` already migrated away from.
-    let live = if has_value {
-        crate::array::array_named_property_set(arr, key_str, value)
+    // Setting a new property can allocate its pairs array and relocate the
+    // receiver. The descriptor-field reads below can collect again, so reload
+    // the rooted receiver only after every probe has finished.
+    if has_value {
+        crate::array::array_named_property_set(arr, key_str, value);
     } else if !exists {
         crate::array::array_named_property_set(
             arr,
             key_str,
             f64::from_bits(crate::value::TAG_UNDEFINED),
-        )
-    } else {
-        arr
-    };
-    let owner = if live.is_null() {
-        obj as usize
-    } else {
-        live as usize
-    };
+        );
+    }
 
     let writable =
         read_bool(b"writable").unwrap_or_else(|| cur_attrs.map(|a| a.writable()).unwrap_or(false));
@@ -899,7 +891,7 @@ pub(crate) unsafe fn define_array_property(
     let configurable = read_bool(b"configurable")
         .unwrap_or_else(|| cur_attrs.map(|a| a.configurable()).unwrap_or(false));
     set_property_attrs(
-        owner,
+        current_arr() as usize,
         key_name.to_string(),
         PropertyAttrs::new(writable, enumerable, configurable),
     );

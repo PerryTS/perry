@@ -1,6 +1,6 @@
 //! #10166 (brief 4): an array's named properties live in a pairs array that
 //! its reserved front slot points at (`array/named_props.rs`). There is no
-//! address-keyed table any more, so the death story is the ordinary one — a
+//! address-keyed table for reserved arrays, so their death story is ordinary — a
 //! dead array's pairs die with it — and the value edge is a real child edge of
 //! the array: `gc/layout_slot_visit.rs` emits the reserved slot as a fixed
 //! child slot, and `store_pairs_pointer` is the one barriered store into it.
@@ -76,7 +76,7 @@ fn test_array_named_property_value_survives_full_gc_through_its_live_owner() {
 }
 
 #[test]
-fn test_array_named_dead_owner_cannot_leak_property_across_exact_eden_reuse() {
+fn test_array_named_dead_owner_cannot_leak_property_across_eden_page_reuse() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _side_tables = ArraySideTableTestGuard::new();
     register_array_side_table_scanners();
@@ -331,4 +331,34 @@ fn test_full_array_live_move_rekeys_owner_and_rewrites_object_value() {
     assert!(!crate::array::test_full_array_named_property_owner_exists(
         old_owner
     ));
+}
+
+#[test]
+fn test_full_array_dead_owner_cannot_leak_property_across_exact_eden_reuse() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _side_tables = ArraySideTableTestGuard::new();
+    register_array_side_table_scanners();
+    crate::arena::arena_reset_all_blocks_to_zero();
+
+    let dead = unsafe { alloc_nursery_test_array() };
+    let dead = unsafe {
+        set_array_named_property(dead, "inherited", f64::from_bits(crate::value::TAG_TRUE))
+    };
+    let dead_addr = dead as usize;
+    assert!(crate::array::test_full_array_named_property_owner_exists(
+        dead_addr
+    ));
+    let _ = gc_collect_minor();
+    let replacement = unsafe { alloc_nursery_test_array() };
+    assert_eq!(
+        replacement as usize, dead_addr,
+        "test premise: the Eden reset must reuse the exact fallback owner address"
+    );
+    assert!(!crate::array::test_full_array_named_property_owner_exists(
+        dead_addr
+    ));
+    assert!(
+        unsafe { crate::array::array_named_property_get_by_name(replacement, "inherited") }
+            .is_none()
+    );
 }
