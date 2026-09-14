@@ -163,3 +163,7 @@ pub extern "C" fn perry_system_keychain_delete(key_ptr: i64) {
         SecItemDelete(&*query as *const _ as *const std::ffi::c_void);
     }
 }
+
+/// Frame persistence only applies to repositionable desktop windows.
+#[no_mangle]
+pub extern "C" fn perry_ui_app_set_frame_autosave_name(_app_handle: i64, _value_ptr: i64) {}

@@ -6578,8 +6578,10 @@ dependencies = [
 name = "perry-ui"
 version = "0.5.1563"
 dependencies = [
+ "dirs",
  "perry-ffi",
  "perry-ui-model",
+ "tempfile",
 ]
 
 [[package]]

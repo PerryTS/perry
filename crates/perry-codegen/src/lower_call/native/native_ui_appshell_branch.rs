@@ -233,182 +233,205 @@
                  (see types/perry/ui/index.d.ts)."
             );
         };
-        let mut title_ptr: String = "0".to_string();
-        let mut width_d: String = "1024.0".to_string();
-        let mut height_d: String = "768.0".to_string();
-        let mut body_handle: String = "0".to_string();
-        let mut icon_ptr: Option<String> = None;
-        let mut window_state_ptr: Option<String> = None;
-        let mut frameless_val: Option<String> = None;
-        let mut level_ptr: Option<String> = None;
-        let mut transparent_val: Option<String> = None;
-        let mut vibrancy_ptr: Option<String> = None;
-        let mut activation_policy_ptr: Option<String> = None;
-        for (key, val) in &props {
-            match key.as_str() {
-                "title" => {
-                    let v = lower_expr(ctx, val)?;
-                    let blk = ctx.block();
-                    title_ptr = unbox_to_i64(blk, &v);
-                }
-                "width" => {
-                    width_d = lower_expr(ctx, val)?;
-                }
-                "height" => {
-                    height_d = lower_expr(ctx, val)?;
-                }
-                "body" => {
-                    let v = lower_expr(ctx, val)?;
-                    let blk = ctx.block();
-                    body_handle = unbox_to_i64(blk, &v);
-                }
-                "icon" => {
-                    let v = lower_expr(ctx, val)?;
-                    let blk = ctx.block();
-                    icon_ptr = Some(unbox_to_i64(blk, &v));
-                }
-                // Issue #1280 — `windowState: "normal" | "maximized" | "fullscreen"`.
-                // Forwarded to perry_ui_app_set_window_state; each platform
-                // backend applies the state at app_run time.
-                "windowState" => {
-                    let v = lower_expr(ctx, val)?;
-                    let blk = ctx.block();
-                    window_state_ptr = Some(unbox_to_i64(blk, &v));
-                }
-                // v0.4.11 launcher-style window options, lost in the Phase K
-                // Cranelift→LLVM cutover (2026-07-16 docs audit). `frameless`
-                // and `transparent` are forwarded as the raw NaN-boxed value —
-                // every platform backend only acts when the bits equal
-                // TAG_TRUE, exactly like the original Cranelift wiring.
-                "frameless" => {
-                    frameless_val = Some(lower_expr(ctx, val)?);
-                }
-                "transparent" => {
-                    transparent_val = Some(lower_expr(ctx, val)?);
-                }
-                // `level` / `vibrancy` / `activationPolicy` are strings. Route
-                // through the SSO-safe unbox (js_get_string_pointer_unified)
-                // rather than the raw pointer mask: short literals like
-                // "modal" or "menu" can arrive as inline SSO values whose low
-                // 48 bits are not a StringHeader pointer.
-                "level" => {
-                    let v = lower_expr(ctx, val)?;
-                    let blk = ctx.block();
-                    level_ptr = Some(crate::expr::unbox_str_handle(blk, &v));
-                }
-                "vibrancy" => {
-                    let v = lower_expr(ctx, val)?;
-                    let blk = ctx.block();
-                    vibrancy_ptr = Some(crate::expr::unbox_str_handle(blk, &v));
-                }
-                "activationPolicy" => {
-                    let v = lower_expr(ctx, val)?;
-                    let blk = ctx.block();
-                    activation_policy_ptr = Some(crate::expr::unbox_str_handle(blk, &v));
-                }
-                _ => {
-                    let _ = lower_expr(ctx, val)?;
+        return crate::rooting::with_rooted_group(ctx, 1, |ctx, frame_roots| {
+            let mut title_ptr: String = "0".to_string();
+            let mut width_d: String = "1024.0".to_string();
+            let mut height_d: String = "768.0".to_string();
+            let mut body_handle: String = "0".to_string();
+            let mut icon_ptr: Option<String> = None;
+            let mut window_state_ptr: Option<String> = None;
+            let mut frame_autosave_name_root: Option<usize> = None;
+            let mut frameless_val: Option<String> = None;
+            let mut level_ptr: Option<String> = None;
+            let mut transparent_val: Option<String> = None;
+            let mut vibrancy_ptr: Option<String> = None;
+            let mut activation_policy_ptr: Option<String> = None;
+            for (key, val) in &props {
+                match key.as_str() {
+                    "title" => {
+                        let v = lower_expr(ctx, val)?;
+                        let blk = ctx.block();
+                        title_ptr = unbox_to_i64(blk, &v);
+                    }
+                    "width" => {
+                        width_d = lower_expr(ctx, val)?;
+                    }
+                    "height" => {
+                        height_d = lower_expr(ctx, val)?;
+                    }
+                    "body" => {
+                        let v = lower_expr(ctx, val)?;
+                        let blk = ctx.block();
+                        body_handle = unbox_to_i64(blk, &v);
+                    }
+                    "icon" => {
+                        let v = lower_expr(ctx, val)?;
+                        let blk = ctx.block();
+                        icon_ptr = Some(unbox_to_i64(blk, &v));
+                    }
+                    // Issue #1280 — `windowState: "normal" | "maximized" | "fullscreen"`.
+                    // Forwarded to perry_ui_app_set_window_state; each platform
+                    // backend applies the state at app_run time.
+                    "windowState" => {
+                        let v = lower_expr(ctx, val)?;
+                        let blk = ctx.block();
+                        window_state_ptr = Some(unbox_to_i64(blk, &v));
+                    }
+                    "frameAutosaveName" => {
+                        // Later options (especially body builders) can collect.
+                        // Keep the JS string rooted until the backend copies it.
+                        frame_autosave_name_root = Some(frame_roots.lower(ctx, val, true)?);
+                    }
+                    // v0.4.11 launcher-style window options, lost in the Phase K
+                    // Cranelift→LLVM cutover (2026-07-16 docs audit). `frameless`
+                    // and `transparent` are forwarded as the raw NaN-boxed value —
+                    // every platform backend only acts when the bits equal
+                    // TAG_TRUE, exactly like the original Cranelift wiring.
+                    "frameless" => {
+                        frameless_val = Some(lower_expr(ctx, val)?);
+                    }
+                    "transparent" => {
+                        transparent_val = Some(lower_expr(ctx, val)?);
+                    }
+                    // `level` / `vibrancy` / `activationPolicy` are strings. Route
+                    // through the SSO-safe unbox (js_get_string_pointer_unified)
+                    // rather than the raw pointer mask: short literals like
+                    // "modal" or "menu" can arrive as inline SSO values whose low
+                    // 48 bits are not a StringHeader pointer.
+                    "level" => {
+                        let v = lower_expr(ctx, val)?;
+                        let blk = ctx.block();
+                        level_ptr = Some(crate::expr::unbox_str_handle(blk, &v));
+                    }
+                    "vibrancy" => {
+                        let v = lower_expr(ctx, val)?;
+                        let blk = ctx.block();
+                        vibrancy_ptr = Some(crate::expr::unbox_str_handle(blk, &v));
+                    }
+                    "activationPolicy" => {
+                        let v = lower_expr(ctx, val)?;
+                        let blk = ctx.block();
+                        activation_policy_ptr = Some(crate::expr::unbox_str_handle(blk, &v));
+                    }
+                    _ => {
+                        let _ = lower_expr(ctx, val)?;
+                    }
                 }
             }
-        }
-        ctx.pending_declares.push((
-            "perry_ui_app_create".to_string(),
-            I64,
-            vec![I64, DOUBLE, DOUBLE],
-        ));
-        ctx.pending_declares.push((
-            "perry_ui_app_set_icon".to_string(),
-            crate::types::VOID,
-            vec![I64],
-        ));
-        ctx.pending_declares.push((
-            "perry_ui_app_set_window_state".to_string(),
-            crate::types::VOID,
-            vec![I64, I64],
-        ));
-        ctx.pending_declares.push((
-            "perry_ui_app_set_frameless".to_string(),
-            crate::types::VOID,
-            vec![I64, DOUBLE],
-        ));
-        ctx.pending_declares.push((
-            "perry_ui_app_set_level".to_string(),
-            crate::types::VOID,
-            vec![I64, I64],
-        ));
-        ctx.pending_declares.push((
-            "perry_ui_app_set_transparent".to_string(),
-            crate::types::VOID,
-            vec![I64, DOUBLE],
-        ));
-        ctx.pending_declares.push((
-            "perry_ui_app_set_vibrancy".to_string(),
-            crate::types::VOID,
-            vec![I64, I64],
-        ));
-        ctx.pending_declares.push((
-            "perry_ui_app_set_activation_policy".to_string(),
-            crate::types::VOID,
-            vec![I64, I64],
-        ));
-        ctx.pending_declares.push((
-            "perry_ui_app_set_body".to_string(),
-            crate::types::VOID,
-            vec![I64, I64],
-        ));
-        ctx.pending_declares.push((
-            "perry_ui_app_run".to_string(),
-            crate::types::VOID,
-            vec![I64],
-        ));
-        let blk = ctx.block();
-        let app_handle = blk.call(
-            I64,
-            "perry_ui_app_create",
-            &[(I64, &title_ptr), (DOUBLE, &width_d), (DOUBLE, &height_d)],
-        );
-        if let Some(icon) = icon_ptr {
-            blk.call_void("perry_ui_app_set_icon", &[(I64, &icon)]);
-        }
-        if let Some(state_ptr) = window_state_ptr {
-            blk.call_void(
-                "perry_ui_app_set_window_state",
-                &[(I64, &app_handle), (I64, &state_ptr)],
+            ctx.pending_declares.push((
+                "perry_ui_app_create".to_string(),
+                I64,
+                vec![I64, DOUBLE, DOUBLE],
+            ));
+            ctx.pending_declares.push((
+                "perry_ui_app_set_icon".to_string(),
+                crate::types::VOID,
+                vec![I64],
+            ));
+            ctx.pending_declares.push((
+                "perry_ui_app_set_window_state".to_string(),
+                crate::types::VOID,
+                vec![I64, I64],
+            ));
+            ctx.pending_declares.push((
+                "perry_ui_app_set_frame_autosave_name".to_string(),
+                crate::types::VOID,
+                vec![I64, I64],
+            ));
+            ctx.pending_declares.push((
+                "perry_ui_app_set_frameless".to_string(),
+                crate::types::VOID,
+                vec![I64, DOUBLE],
+            ));
+            ctx.pending_declares.push((
+                "perry_ui_app_set_level".to_string(),
+                crate::types::VOID,
+                vec![I64, I64],
+            ));
+            ctx.pending_declares.push((
+                "perry_ui_app_set_transparent".to_string(),
+                crate::types::VOID,
+                vec![I64, DOUBLE],
+            ));
+            ctx.pending_declares.push((
+                "perry_ui_app_set_vibrancy".to_string(),
+                crate::types::VOID,
+                vec![I64, I64],
+            ));
+            ctx.pending_declares.push((
+                "perry_ui_app_set_activation_policy".to_string(),
+                crate::types::VOID,
+                vec![I64, I64],
+            ));
+            ctx.pending_declares.push((
+                "perry_ui_app_set_body".to_string(),
+                crate::types::VOID,
+                vec![I64, I64],
+            ));
+            ctx.pending_declares.push((
+                "perry_ui_app_run".to_string(),
+                crate::types::VOID,
+                vec![I64],
+            ));
+            let blk = ctx.block();
+            let app_handle = blk.call(
+                I64,
+                "perry_ui_app_create",
+                &[(I64, &title_ptr), (DOUBLE, &width_d), (DOUBLE, &height_d)],
             );
-        }
-        // Window properties are applied BEFORE the body so vibrancy /
-        // frameless can reconfigure the window (content view swap, style
-        // mask) before Auto Layout constraints are installed — same call
-        // order the Cranelift backend used (v0.4.11).
-        if let Some(v) = &frameless_val {
+            if let Some(icon) = icon_ptr {
+                blk.call_void("perry_ui_app_set_icon", &[(I64, &icon)]);
+            }
+            if let Some(state_ptr) = window_state_ptr {
+                blk.call_void(
+                    "perry_ui_app_set_window_state",
+                    &[(I64, &app_handle), (I64, &state_ptr)],
+                );
+            }
+            // Window properties are applied BEFORE the body so vibrancy /
+            // frameless can reconfigure the window (content view swap, style
+            // mask) before Auto Layout constraints are installed — same call
+            // order the Cranelift backend used (v0.4.11).
+            if let Some(v) = &frameless_val {
+                blk.call_void(
+                    "perry_ui_app_set_frameless",
+                    &[(I64, &app_handle), (DOUBLE, v)],
+                );
+            }
+            if let Some(p) = &level_ptr {
+                blk.call_void("perry_ui_app_set_level", &[(I64, &app_handle), (I64, p)]);
+            }
+            if let Some(v) = &transparent_val {
+                blk.call_void(
+                    "perry_ui_app_set_transparent",
+                    &[(I64, &app_handle), (DOUBLE, v)],
+                );
+            }
+            if let Some(p) = &vibrancy_ptr {
+                blk.call_void("perry_ui_app_set_vibrancy", &[(I64, &app_handle), (I64, p)]);
+            }
+            if let Some(p) = &activation_policy_ptr {
+                blk.call_void(
+                    "perry_ui_app_set_activation_policy",
+                    &[(I64, &app_handle), (I64, p)],
+                );
+            }
+            if let Some(root) = frame_autosave_name_root {
+                let value = frame_roots.reread(ctx, root)?;
+                let blk = ctx.block();
+                let name_ptr = crate::expr::unbox_str_handle(blk, &value);
+                blk.call_void(
+                    "perry_ui_app_set_frame_autosave_name",
+                    &[(I64, &app_handle), (I64, &name_ptr)],
+                );
+            }
+            let blk = ctx.block();
             blk.call_void(
-                "perry_ui_app_set_frameless",
-                &[(I64, &app_handle), (DOUBLE, v)],
+                "perry_ui_app_set_body",
+                &[(I64, &app_handle), (I64, &body_handle)],
             );
-        }
-        if let Some(p) = &level_ptr {
-            blk.call_void("perry_ui_app_set_level", &[(I64, &app_handle), (I64, p)]);
-        }
-        if let Some(v) = &transparent_val {
-            blk.call_void(
-                "perry_ui_app_set_transparent",
-                &[(I64, &app_handle), (DOUBLE, v)],
-            );
-        }
-        if let Some(p) = &vibrancy_ptr {
-            blk.call_void("perry_ui_app_set_vibrancy", &[(I64, &app_handle), (I64, p)]);
-        }
-        if let Some(p) = &activation_policy_ptr {
-            blk.call_void(
-                "perry_ui_app_set_activation_policy",
-                &[(I64, &app_handle), (I64, p)],
-            );
-        }
-        blk.call_void(
-            "perry_ui_app_set_body",
-            &[(I64, &app_handle), (I64, &body_handle)],
-        );
-        blk.call_void("perry_ui_app_run", &[(I64, &app_handle)]);
-        return Ok(double_literal(0.0));
+            blk.call_void("perry_ui_app_run", &[(I64, &app_handle)]);
+            Ok(double_literal(0.0))
+        });
     }
 }

@@ -73,6 +73,7 @@ struct AppEntry {
     activation_policy: Option<String>,
     /// Issue #1280 — "maximized" | "fullscreen" | None (= "normal").
     window_state: Option<String>,
+    frame_autosave_name: Option<String>,
 }
 
 extern "C" {
@@ -122,6 +123,7 @@ pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
             vibrancy: None,
             activation_policy: PENDING_ACTIVATION_POLICY.with(|p| p.borrow().clone()),
             window_state: None,
+            frame_autosave_name: None,
         });
         apps.len() as i64 // 1-based handle
     })
@@ -291,8 +293,12 @@ pub fn app_run(_app_handle: i64) {
                 // Issue #1280 — initial window state. GTK4 needs maximize() /
                 // fullscreen() called before `present()` so the window appears
                 // already in the requested state rather than flickering.
-                if let Some(ref state) = entry.window_state {
-                    match state.as_str() {
+                let restored_state = entry
+                    .frame_autosave_name
+                    .as_deref()
+                    .and_then(|name| crate::frame_persistence::install(&window, app, name));
+                if let Some(state) = restored_state.or(entry.window_state.as_deref()) {
+                    match state {
                         "maximized" => window.maximize(),
                         "fullscreen" => window.fullscreen(),
                         _ => {}
@@ -574,6 +580,19 @@ pub fn app_set_activation_policy(app_handle: i64, value_ptr: *const u8) {
         let idx = (app_handle - 1) as usize;
         if idx < apps.len() {
             apps[idx].activation_policy = Some(policy_str.to_string());
+        }
+    });
+}
+
+/// Record the stable name; restore after window setup and before presentation.
+pub fn app_set_frame_autosave_name(app_handle: i64, value_ptr: *const u8) {
+    let name = unsafe { str_from_header(value_ptr) };
+    APPS.with(|apps| {
+        if let Some(entry) = apps
+            .borrow_mut()
+            .get_mut(app_handle.saturating_sub(1) as usize)
+        {
+            entry.frame_autosave_name = (!name.is_empty()).then_some(name);
         }
     });
 }

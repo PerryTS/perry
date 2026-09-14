@@ -337,6 +337,7 @@ pub(crate) struct AppEntry {
     /// Issue #1280 — initial window state requested by App({ windowState }).
     /// Applied at app_run time; None / "normal" => SW_SHOW.
     window_state: Option<WindowState>,
+    frame_autosave_name: Option<String>,
     /// Activation policy ("regular" | "accessory" | "background"). For
     /// accessory/background apps the launch window is suppressed (the tray
     /// owns presentation), mirroring the macOS/GTK4 backends.
@@ -516,6 +517,7 @@ pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
                     min_size: None,
                     max_size: None,
                     window_state: None,
+                    frame_autosave_name: None,
                     activation_policy: PENDING_ACTIVATION_POLICY.with(|p| p.borrow().clone()),
                 });
                 apps.len() as i64
@@ -534,6 +536,7 @@ pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
                 min_size: None,
                 max_size: None,
                 window_state: None,
+                frame_autosave_name: None,
                 activation_policy: PENDING_ACTIVATION_POLICY.with(|p| p.borrow().clone()),
             });
             apps.len() as i64
@@ -629,71 +632,93 @@ pub fn app_run(app_handle: i64) {
 
     #[cfg(target_os = "windows")]
     {
-        APPS.with(|apps| {
+        // Native placement/show calls synchronously dispatch messages. Release
+        // the app table borrow first so callbacks can read or mutate app state.
+        let config = APPS.with(|apps| {
             let apps = apps.borrow();
-            let idx = (app_handle - 1) as usize;
-            if idx < apps.len() {
-                let hwnd = apps[idx].hwnd;
-                let state = apps[idx].window_state;
-                // Accessory/background apps stay window-less at launch (the
-                // tray owns presentation); open windows on demand instead.
-                // Mirrors the macOS/GTK4 backends.
-                let suppress_window = matches!(
-                    apps[idx].activation_policy.as_deref(),
-                    Some("accessory") | Some("background")
-                );
-                // Pre-App() `appSetActivationPolicy` couldn't apply the
-                // taskbar style (the hwnd didn't exist yet); do it here.
-                if suppress_window {
-                    unsafe {
-                        let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
-                        let new_style = (ex_style & !WS_EX_APPWINDOW.0) | WS_EX_TOOLWINDOW.0;
-                        SetWindowLongW(hwnd, GWL_EXSTYLE, new_style as i32);
-                    }
-                }
-                if !suppress_window {
-                    unsafe {
-                        // Issue #1280 — apply requested initial window state.
-                        // Fullscreen on Win32 = drop WS_OVERLAPPEDWINDOW frame and
-                        // resize to the monitor's full rect (not just the work
-                        // area, which excludes the taskbar). Maximized = standard
-                        // SW_SHOWMAXIMIZED which respects the taskbar.
-                        match state {
-                            Some(WindowState::Fullscreen) => {
-                                let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
-                                let new_style = style & !WS_OVERLAPPEDWINDOW.0;
-                                SetWindowLongW(hwnd, GWL_STYLE, new_style as i32);
-                                let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-                                let mut mi = MONITORINFO {
-                                    cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-                                    ..Default::default()
-                                };
-                                if GetMonitorInfoW(monitor, &mut mi).as_bool() {
-                                    let r = mi.rcMonitor;
-                                    let _ = SetWindowPos(
-                                        hwnd,
-                                        Some(HWND_TOP),
-                                        r.left,
-                                        r.top,
-                                        r.right - r.left,
-                                        r.bottom - r.top,
-                                        SWP_NOOWNERZORDER | SWP_FRAMECHANGED,
-                                    );
-                                }
-                                let _ = ShowWindow(hwnd, SW_SHOW);
-                            }
-                            Some(WindowState::Maximized) => {
-                                let _ = ShowWindow(hwnd, SW_SHOWMAXIMIZED);
-                            }
-                            None => {
-                                let _ = ShowWindow(hwnd, SW_SHOW);
-                            }
-                        }
-                        let _ = UpdateWindow(hwnd);
-                    }
+            let entry = apps.get(app_handle.saturating_sub(1) as usize)?;
+            Some((
+                entry.hwnd,
+                entry.window_state,
+                entry.activation_policy.clone(),
+                entry.frame_autosave_name.clone(),
+            ))
+        });
+        if let Some((hwnd, mut state, activation_policy, frame_autosave_name)) = config {
+            if let Some(store) = frame_autosave_name
+                .as_deref()
+                .and_then(crate::frame_persistence::FrameStore::new)
+            {
+                use crate::frame_persistence::WindowState as SavedState;
+                let fallback = match state {
+                    Some(WindowState::Maximized) => SavedState::Maximized,
+                    Some(WindowState::Fullscreen) => SavedState::Fullscreen,
+                    None => SavedState::Normal,
+                };
+                state = match crate::frame_persistence::install(hwnd, store, fallback) {
+                    SavedState::Maximized => Some(WindowState::Maximized),
+                    SavedState::Fullscreen => Some(WindowState::Fullscreen),
+                    SavedState::Normal => None,
+                };
+            }
+            // Accessory/background apps stay window-less at launch (the
+            // tray owns presentation); open windows on demand instead.
+            // Mirrors the macOS/GTK4 backends.
+            let suppress_window = matches!(
+                activation_policy.as_deref(),
+                Some("accessory") | Some("background")
+            );
+            // Pre-App() `appSetActivationPolicy` couldn't apply the
+            // taskbar style (the hwnd didn't exist yet); do it here.
+            if suppress_window {
+                unsafe {
+                    let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+                    let new_style = (ex_style & !WS_EX_APPWINDOW.0) | WS_EX_TOOLWINDOW.0;
+                    SetWindowLongW(hwnd, GWL_EXSTYLE, new_style as i32);
                 }
             }
-        });
+            if !suppress_window {
+                unsafe {
+                    // Issue #1280 — apply requested initial window state.
+                    // Fullscreen on Win32 = drop WS_OVERLAPPEDWINDOW frame and
+                    // resize to the monitor's full rect (not just the work
+                    // area, which excludes the taskbar). Maximized = standard
+                    // SW_SHOWMAXIMIZED which respects the taskbar.
+                    match state {
+                        Some(WindowState::Fullscreen) => {
+                            let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
+                            let new_style = style & !WS_OVERLAPPEDWINDOW.0;
+                            SetWindowLongW(hwnd, GWL_STYLE, new_style as i32);
+                            let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+                            let mut mi = MONITORINFO {
+                                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                                ..Default::default()
+                            };
+                            if GetMonitorInfoW(monitor, &mut mi).as_bool() {
+                                let r = mi.rcMonitor;
+                                let _ = SetWindowPos(
+                                    hwnd,
+                                    Some(HWND_TOP),
+                                    r.left,
+                                    r.top,
+                                    r.right - r.left,
+                                    r.bottom - r.top,
+                                    SWP_NOOWNERZORDER | SWP_FRAMECHANGED,
+                                );
+                            }
+                            let _ = ShowWindow(hwnd, SW_SHOW);
+                        }
+                        Some(WindowState::Maximized) => {
+                            let _ = ShowWindow(hwnd, SW_SHOWMAXIMIZED);
+                        }
+                        None => {
+                            let _ = ShowWindow(hwnd, SW_SHOW);
+                        }
+                    }
+                    let _ = UpdateWindow(hwnd);
+                }
+            }
+        }
 
         // PERRY_UI_TEST_MODE: schedule a one-shot exit timer so CI can verify
         // that the app launched without a human keeping it open.
@@ -1012,6 +1037,19 @@ pub fn set_max_size(app_handle: i64, w: f64, h: f64) {
         let idx = (app_handle - 1) as usize;
         if idx < apps.len() {
             apps[idx].max_size = Some((w, h));
+        }
+    });
+}
+
+/// Record the stable name; restore after window setup and before presentation.
+pub fn set_frame_autosave_name(app_handle: i64, value_ptr: *const u8) {
+    let name = unsafe { str_from_header(value_ptr) };
+    APPS.with(|apps| {
+        if let Some(entry) = apps
+            .borrow_mut()
+            .get_mut(app_handle.saturating_sub(1) as usize)
+        {
+            entry.frame_autosave_name = (!name.is_empty()).then_some(name);
         }
     });
 }

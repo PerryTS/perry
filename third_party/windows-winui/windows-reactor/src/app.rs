@@ -36,6 +36,7 @@ pub struct App {
     presenter: PresenterKind,
     backdrop: Option<Backdrop>,
     on_exit: Option<Box<dyn FnOnce() + Send>>,
+    on_window_created: Option<Box<dyn FnOnce(&ReactorHost) + Send>>,
 }
 
 impl Default for App {
@@ -54,6 +55,7 @@ impl App {
             presenter: PresenterKind::Default,
             backdrop: None,
             on_exit: None,
+            on_window_created: None,
         }
     }
 
@@ -101,6 +103,15 @@ impl App {
     /// Run a callback immediately before the main window closes.
     pub fn on_exit(mut self, callback: impl FnOnce() + Send + 'static) -> Self {
         self.on_exit = Some(Box::new(callback));
+        self
+    }
+
+    /// Configure native placement after layout setup and before activation.
+    pub fn on_window_created(
+        mut self,
+        callback: impl FnOnce(&ReactorHost) + Send + 'static,
+    ) -> Self {
+        self.on_window_created = Some(Box::new(callback));
         self
     }
 
@@ -156,6 +167,7 @@ impl App {
         let presenter = self.presenter;
         let backdrop = self.backdrop;
         let on_exit = Arc::new(Mutex::new(self.on_exit));
+        let on_window_created = Mutex::new(self.on_window_created);
         let factory = Mutex::new(Some(root_factory));
         let result_slot: Arc<Mutex<Result<()>>> = Arc::new(Mutex::new(Ok(())));
         let result_slot_cb = Arc::clone(&result_slot);
@@ -164,6 +176,7 @@ impl App {
                 let on_exit = Arc::clone(&on_exit);
                 let inner = || -> Result<()> {
                     let factory = factory.lock().unwrap().take().unwrap();
+                    let on_window_created = on_window_created.lock().unwrap().take();
 
                     let title = title.clone();
                     let on_launched: Box<dyn FnOnce() -> Result<()>> = Box::new(move || {
@@ -184,6 +197,9 @@ impl App {
                             host.set_presenter(presenter);
                             if let Some(bd) = backdrop {
                                 host.set_backdrop(bd);
+                            }
+                            if let Some(callback) = on_window_created {
+                                callback(&host);
                             }
                             host.activate()?;
                             // Exit the process on window close. Application.Exit()

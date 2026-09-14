@@ -52,6 +52,7 @@ pub(crate) struct AppEntry {
     /// Issue #1280 — initial window state applied on `app_run`. `zoom:` /
     /// `toggleFullScreen:` need the window to be key+ordered front first.
     pub(crate) window_state: Option<WindowState>,
+    frame_autosave_name: Option<String>,
 }
 
 /// Issue #1280 — initial window state for the main app window.
@@ -120,6 +121,7 @@ pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
                 window,
                 _root_widget: None,
                 window_state: None,
+                frame_autosave_name: None,
             });
             apps.len() as i64 // 1-based handle
         })
@@ -445,7 +447,17 @@ pub fn app_run(_app_handle: i64) {
     APPS.with(|a| {
         let apps = a.borrow();
         for entry in apps.iter() {
-            entry.window.center();
+            // Restore after body/style configuration and before showing. Centering
+            // unconditionally here used to discard the saved position (#10170).
+            let restored = entry.frame_autosave_name.as_ref().is_some_and(|name| {
+                let name = NSString::from_str(name);
+                let restored = entry.window.setFrameUsingName(&name);
+                let _ = entry.window.setFrameAutosaveName(&name);
+                restored
+            });
+            if !restored {
+                entry.window.center();
+            }
 
             // Validate window is on a visible screen — if the position was
             // restored from a previous session with a different display setup,
@@ -502,7 +514,7 @@ pub fn app_run(_app_handle: i64) {
             // toggleFullScreen: path enters native fullscreen on its own
             // Space. Both need the window to be key+ordered front, which is
             // why this runs here rather than in the setter.
-            if let Some(state) = entry.window_state {
+            if let Some(state) = entry.window_state.filter(|_| !restored) {
                 unsafe {
                     match state {
                         WindowState::Maximized => {
@@ -694,6 +706,20 @@ pub fn set_max_size(app_handle: i64, w: f64, h: f64) {
         let idx = (app_handle - 1) as usize;
         if idx < apps.len() {
             apps[idx].window.setMaxSize(CGSize::new(w, h));
+        }
+    });
+}
+
+/// Record the stable name; restore after window setup and before presentation.
+pub fn set_frame_autosave_name(app_handle: i64, value_ptr: *const u8) {
+    let name = unsafe { str_from_header(value_ptr) };
+    let key = perry_ui::frame::autosave_key(&name);
+    APPS.with(|apps| {
+        if let Some(entry) = apps
+            .borrow_mut()
+            .get_mut(app_handle.saturating_sub(1) as usize)
+        {
+            entry.frame_autosave_name = key;
         }
     });
 }
