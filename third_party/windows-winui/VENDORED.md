@@ -13,6 +13,8 @@ bootstrap DLL, its import library, and the XAML resource PRI in Perry's Cargo
 target directory. Perry also adds an application-exit callback hook so its
 existing lifecycle ABI can run termination handlers when the WinUI window
 closes.
+Perry also adds a window-created hook and native handle accessor so desktop
+frame persistence can restore placement before the window is activated.
 
 The upstream MIT and Apache-2.0 license files are preserved in every vendored
 crate directory.

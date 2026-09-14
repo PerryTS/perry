@@ -339,6 +339,16 @@ impl ReactorHost {
         &self.window
     }
 
+    /// Native handle for platform services such as window frame persistence.
+    pub fn window_handle(&self) -> windows_core::Result<isize> {
+        let native = self.window.cast::<IWindowNative>()?;
+        let mut hwnd = HWND::default();
+        unsafe {
+            native.get_WindowHandle(&mut hwnd)?;
+        }
+        Ok(hwnd as isize)
+    }
+
     pub fn stats(&self) -> RenderStats {
         self.render_host.stats()
     }

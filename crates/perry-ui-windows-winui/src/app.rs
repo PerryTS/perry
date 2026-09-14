@@ -3,6 +3,7 @@
 use std::cell::RefCell;
 use std::time::Duration;
 
+use perry_ui_windows::frame_persistence::{self, FrameStore, WindowState};
 use windows::Win32::Foundation::HWND;
 use windows_reactor::winui::host::PresenterKind;
 use windows_reactor::{App, Backdrop, DispatcherTimer, InnerConstraints};
@@ -27,6 +28,8 @@ struct AppState {
     min_size: Option<(f64, f64)>,
     max_size: Option<(f64, f64)>,
     presenter: PresenterKind,
+    maximized: bool,
+    frame_autosave_name: Option<String>,
 }
 
 thread_local! {
@@ -168,6 +171,39 @@ pub fn app_run(app_handle: i64) {
         .inner_constraints(constraints)
         .presenter(state.presenter)
         .backdrop(Backdrop::Mica);
+    let store = state
+        .frame_autosave_name
+        .as_deref()
+        .and_then(FrameStore::new);
+    if store.is_some() || state.maximized {
+        app = app.on_window_created(move |host| {
+            let Ok(handle) = host.window_handle() else {
+                return;
+            };
+            let hwnd = HWND(handle as *mut _);
+            let fallback = if state.presenter == PresenterKind::FullScreen {
+                WindowState::Fullscreen
+            } else if state.maximized {
+                WindowState::Maximized
+            } else {
+                WindowState::Normal
+            };
+            let restored = store.map_or(fallback, |store| {
+                frame_persistence::install(hwnd, store, fallback)
+            });
+            host.set_presenter(if restored == WindowState::Fullscreen {
+                PresenterKind::FullScreen
+            } else {
+                PresenterKind::Default
+            });
+            if restored == WindowState::Maximized {
+                use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_SHOWMAXIMIZED};
+                unsafe {
+                    let _ = ShowWindow(hwnd, SW_SHOWMAXIMIZED);
+                }
+            }
+        });
+    }
     if app_callback(&ON_TERMINATE) != 0 {
         app = app.on_exit(move || invoke_app_callback(&ON_TERMINATE));
     }
@@ -230,7 +266,21 @@ pub fn set_window_state(app_handle: i64, value_ptr: *const u8) {
     } else {
         PresenterKind::Default
     };
-    with_app_mut(app_handle, |app| app.presenter = presenter);
+    with_app_mut(app_handle, |app| {
+        app.presenter = presenter;
+        app.maximized = value.eq_ignore_ascii_case("maximized");
+    });
+}
+
+pub fn set_frame_autosave_name(app_handle: i64, value_ptr: *const u8) {
+    if !is_fluent() {
+        perry_ui_windows::app::set_frame_autosave_name(app_handle, value_ptr);
+        return;
+    }
+    let name = unsafe { perry_ffi::copy_string_from_raw(value_ptr) };
+    with_app_mut(app_handle, |app| {
+        app.frame_autosave_name = (!name.is_empty()).then_some(name);
+    });
 }
 
 pub fn set_timer(interval_ms: f64, callback: f64) {

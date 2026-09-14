@@ -151,12 +151,13 @@ fn compile_ir(name: &str, body: Vec<Stmt>) -> String {
     String::from_utf8(compile_module(&module(name, body), empty_opts()).unwrap()).unwrap()
 }
 
-const WINDOW_OPTION_SETTERS: [&str; 5] = [
+const WINDOW_OPTION_SETTERS: [&str; 6] = [
     "call void @perry_ui_app_set_frameless",
     "call void @perry_ui_app_set_level",
     "call void @perry_ui_app_set_transparent",
     "call void @perry_ui_app_set_vibrancy",
     "call void @perry_ui_app_set_activation_policy",
+    "call void @perry_ui_app_set_frame_autosave_name",
 ];
 
 #[test]
@@ -173,6 +174,7 @@ fn app_config_window_options_emit_ffi_calls() {
             ("transparent", Expr::Bool(true)),
             ("vibrancy", Expr::String("sidebar".to_string())),
             ("activationPolicy", Expr::String("accessory".to_string())),
+            ("frameAutosaveName", Expr::String("launcher".to_string())),
         ])],
     );
     for setter in WINDOW_OPTION_SETTERS {
@@ -190,6 +192,36 @@ fn app_config_window_options_emit_ffi_calls() {
         vibrancy_at < body_at,
         "perry_ui_app_set_vibrancy must be emitted before perry_ui_app_set_body"
     );
+}
+
+#[test]
+fn named_frame_persistence_is_sso_safe_and_configured_before_run() {
+    for name in ["main", "settings-window-with-a-long-name", ""] {
+        for name_first in [true, false] {
+            let name_field = ("frameAutosaveName", Expr::String(name.to_string()));
+            let state_field = ("windowState", Expr::String("fullscreen".to_string()));
+            let fields = if name_first {
+                vec![name_field, state_field]
+            } else {
+                vec![state_field, name_field]
+            };
+            let ir = compile_ir("app_frame_persistence", vec![app_call(fields)]);
+            let setter = "call void @perry_ui_app_set_frame_autosave_name";
+            assert_eq!(ir.matches(setter).count(), 1, "IR:\n{ir}");
+            assert!(
+                ir.contains("call i64 @js_get_string_pointer_unified"),
+                "IR:\n{ir}"
+            );
+            let create = ir.find("call i64 @perry_ui_app_create").unwrap();
+            let state = ir.find("call void @perry_ui_app_set_window_state").unwrap();
+            let autosave = ir.find(setter).unwrap();
+            let run = ir.find("call void @perry_ui_app_run").unwrap();
+            assert!(
+                create < state && state < autosave && autosave < run,
+                "IR:\n{ir}"
+            );
+        }
+    }
 }
 
 #[test]

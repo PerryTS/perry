@@ -690,3 +690,7 @@ pub extern "C" fn perry_ui_toolbar_add_item(
 
 #[no_mangle]
 pub extern "C" fn perry_ui_toolbar_attach(_toolbar: i64) {}
+
+/// Frame persistence only applies to repositionable desktop windows.
+#[no_mangle]
+pub extern "C" fn perry_ui_app_set_frame_autosave_name(_app_handle: i64, _value_ptr: i64) {}

@@ -532,3 +532,9 @@ pub extern "C" fn perry_ui_button_set_content_tint_color(
 pub extern "C" fn perry_ui_button_set_image_position(handle: i64, position: i64) {
     widgets::button::set_image_position(handle, position);
 }
+
+/// Opt in to desktop window frame persistence with an application-local key.
+#[no_mangle]
+pub extern "C" fn perry_ui_app_set_frame_autosave_name(app_handle: i64, value_ptr: i64) {
+    app::set_frame_autosave_name(app_handle, value_ptr as *const u8);
+}

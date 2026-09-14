@@ -240,6 +240,16 @@ export function App(config: {
      */
     windowState?: "normal" | "maximized" | "fullscreen";
     /**
+     * Remember the desktop window frame under this stable name. Omit or use
+     * an empty string to disable. Names are scoped to the executable path;
+     * use different names for independent windows. Saved geometry takes
+     * precedence over width/height/windowState; those remain first-run defaults.
+     * macOS restores position/size via AppKit. Windows (including WinUI) also
+     * restores maximized/fullscreen state. GTK4 restores size and state; the
+     * compositor controls position. Ignored on mobile, TV, watch, and visionOS.
+     */
+    frameAutosaveName?: string;
+    /**
      * Remove the window title bar and frame (borderless window, movable
      * by background). v0.4.11 launcher-style option.
      */

@@ -111,3 +111,9 @@ pub extern "C" fn perry_ui_window_set_size(window_handle: i64, width: f64, heigh
 pub extern "C" fn perry_ui_window_on_focus_lost(window_handle: i64, callback: f64) {
     window::on_focus_lost(window_handle, callback);
 }
+
+/// Opt in to desktop window frame persistence with an application-local key.
+#[no_mangle]
+pub extern "C" fn perry_ui_app_set_frame_autosave_name(app_handle: i64, value_ptr: i64) {
+    app::set_frame_autosave_name(app_handle, value_ptr as *const u8);
+}

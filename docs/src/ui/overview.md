@@ -52,6 +52,7 @@ Every Perry UI app starts with `App()`:
 | `body` | widget | Root widget |
 | `icon` | string | App icon file path (optional) |
 | `windowState` | string | Initial state: `"normal"`, `"maximized"`, `"fullscreen"` (optional) |
+| `frameAutosaveName` | string | Remember the desktop window frame under a stable name (optional; empty disables) |
 | `frameless` | boolean | Remove title bar (optional) |
 | `level` | string | Window z-order: `"floating"`, `"statusBar"`, `"modal"` (optional) |
 | `transparent` | boolean | Transparent background (optional) |
@@ -61,6 +62,29 @@ Every Perry UI app starts with `App()`:
 See [Multi-Window](multi-window.md#app-window-properties) for full
 documentation on window properties, including the native primitive each
 field maps to per platform.
+
+### Remembering the window frame
+
+Set `frameAutosaveName` to a stable name to reopen an app where the user left it:
+
+```typescript
+{{#include ../../examples/ui/overview/frame-persistence.ts}}
+```
+
+The saved frame takes precedence over `width`, `height`, and `windowState`.
+Missing or unreadable saved settings use those launch defaults. Omit the option
+or pass an empty string to disable persistence. Names are scoped to the executable
+path, so unrelated apps do not share frames; moving the executable starts fresh.
+Use a different name for each independent app window. Changing the title does not
+change the saved frame.
+
+macOS uses AppKit's native frame autosave for position and size; this option does
+not promise restoration of a fullscreen Space. Windows, including WinUI, saves
+normal placement and maximized/fullscreen state, and reopens minimized windows
+in their previous non-minimized state. GTK4 saves normal size and
+maximized/fullscreen state; the compositor controls window position because
+[GTK4 has no global positioning API](https://docs.gtk.org/gtk4/migrating-3to4.html).
+The option is ignored on mobile, TV, watch, and visionOS backends.
 
 ### Lifecycle Hooks
 

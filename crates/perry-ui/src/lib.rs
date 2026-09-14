@@ -1,3 +1,5 @@
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub mod frame;
 pub mod key_dispatch;
 pub mod keys;
 pub mod state;

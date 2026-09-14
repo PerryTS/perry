@@ -9,6 +9,7 @@ pub mod dpi_compat;
 pub mod drag_drop;
 #[cfg(target_os = "windows")]
 pub mod dwm;
+pub mod frame_persistence;
 // `pub` so the opt-in WinUI backend (`perry-ui-windows-winui`) can chain this
 // crate's scanner. On the Fluent path that crate shadows `app_create`, so
 // `app::app_create` below never runs and would otherwise never register it,
