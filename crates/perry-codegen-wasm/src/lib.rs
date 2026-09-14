@@ -123,3 +123,27 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod max_width_tests {
+    use super::*;
+    use perry_hir::{Expr, Stmt};
+
+    #[test]
+    fn max_width_uses_the_runtime_bridge() {
+        let mut module = Module::new("max_width");
+        module.init.push(Stmt::Expr(Expr::NativeMethodCall {
+            module: "perry/ui".into(),
+            class_name: None,
+            object: None,
+            method: "widgetSetMaxWidth".into(),
+            args: vec![Expr::Number(1.0), Expr::Number(640.0)],
+        }));
+        let modules = vec![("max_width".into(), module)];
+        let wasm = compile_modules_to_wasm(&modules).unwrap();
+        // UI calls use the generic bridge with the mapped runtime name in the
+        // data section (the separate FFI import list is for declare functions).
+        let symbol = b"perry_ui_widget_set_max_width";
+        assert!(wasm.windows(symbol.len()).any(|bytes| bytes == symbol));
+    }
+}

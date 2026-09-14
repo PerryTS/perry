@@ -473,6 +473,12 @@ pub extern "C" fn perry_ui_widget_set_width(handle: i64, width: f64) {
     widgets::set_width(handle, width);
 }
 
+/// Fill the available width up to a cap, centering the widget within it.
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_max_width(handle: i64, max_width: f64) {
+    widgets::set_max_width(handle, max_width);
+}
+
 /// Set a fixed height constraint on a widget.
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_height(handle: i64, height: f64) {

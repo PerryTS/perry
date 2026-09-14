@@ -50,7 +50,7 @@ pub fn create() -> i64 {
 pub fn add_child(parent_handle: i64, child_handle: i64) {
     if let (Some(parent), Some(child)) = (
         super::get_widget(parent_handle),
-        super::get_widget(child_handle),
+        super::get_layout_widget(child_handle),
     ) {
         unsafe {
             parent.addSubview(&child);

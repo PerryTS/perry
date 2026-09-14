@@ -286,6 +286,12 @@ pub const MATRIX: &[MatrixRow] = &[
     },
     MatrixRow {
         widget: "*",
+        prop: "max_width",
+        ffi: "perry_ui_widget_set_max_width",
+        statuses: [Wired, Stub, Stub, Stub, Stub, Stub, Stub, Stub, Wired],
+    },
+    MatrixRow {
+        widget: "*",
         prop: "height",
         ffi: "perry_ui_widget_set_height",
         statuses: W_ALL_NATIVE_WEB_TODO,

@@ -444,6 +444,7 @@ Every widget handle accepts these:
 | Helper | Description |
 |---|---|
 | `widgetSetWidth(w, n)` / `widgetSetHeight(w, n)` | Explicit size in points |
+| `widgetSetMaxWidth(w, n)` | Responsive centered width cap, including padding (macOS and Web; no-op elsewhere) |
 | `widgetSetBackgroundColor(w, r, g, b, a)` | RGBA in [0, 1] |
 | `setCornerRadius(w, r)` | Rounded corners in points |
 | `widgetSetOpacity(w, alpha)` | Opacity in [0, 1] |

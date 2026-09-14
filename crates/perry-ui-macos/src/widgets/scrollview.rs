@@ -77,7 +77,7 @@ pub fn create() -> i64 {
 pub fn set_child(scroll_handle: i64, child_handle: i64) {
     if let (Some(scroll_view), Some(child)) = (
         super::get_widget(scroll_handle),
-        super::get_widget(child_handle),
+        super::get_layout_widget(child_handle),
     ) {
         unsafe {
             let sv: &NSScrollView = &*(Retained::as_ptr(&scroll_view) as *const NSScrollView);
@@ -128,16 +128,17 @@ pub fn set_child(scroll_handle: i64, child_handle: i64) {
             let _: () = msg_send![&*c5, setActive: true];
 
             // If NSStackView, switch to GravityAreas, stretch children to fill width
+            let content = super::get_widget(child_handle).unwrap();
             let stack_cls = AnyClass::get(c"NSStackView");
             if let Some(cls) = stack_cls {
-                if (*child).isKindOfClass(cls) {
+                if (*content).isKindOfClass(cls) {
                     // GravityAreas: children use intrinsic height
-                    let _: () = msg_send![&*child, setDistribution: -1_isize];
+                    let _: () = msg_send![&*content, setDistribution: -1_isize];
                     // Change alignment from Leading to Width so children fill cross-axis
                     // NSLayoutAttribute: Leading=5, Width=7 (fills cross-axis)
-                    let _: () = msg_send![&*child, setAlignment: 7_isize];
+                    let _: () = msg_send![&*content, setAlignment: 7_isize];
 
-                    let arranged: Retained<AnyObject> = msg_send![&*child, arrangedSubviews];
+                    let arranged: Retained<AnyObject> = msg_send![&*content, arrangedSubviews];
                     let n: usize = msg_send![&*arranged, count];
                     for i in 0..n {
                         let subview: *mut AnyObject = msg_send![&*arranged, objectAtIndex: i];

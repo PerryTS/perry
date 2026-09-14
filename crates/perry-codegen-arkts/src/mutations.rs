@@ -624,6 +624,8 @@ pub(crate) fn collect_mutations_in_expr(
                 cond,
             );
         }
+        // Responsive max-width currently degrades to a no-op on HarmonyOS.
+        "widgetSetMaxWidth" => {}
         "widgetMatchParentWidth" => {
             push_mut(Mutation::Modifier(".width('100%')".to_string()), out, cond);
         }

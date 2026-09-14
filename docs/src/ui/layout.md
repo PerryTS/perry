@@ -161,6 +161,27 @@ Pin a child's edges to its parent container:
 
 - `widgetMatchParentWidth(widget)` — stretch to fill parent's width
 - `widgetMatchParentHeight(widget)` — stretch to fill parent's height
+- `widgetSetMaxWidth(widget, maxWidth)` — fill the available width up to a cap and center horizontally (macOS and Web)
+
+For a responsive content column, apply the cap to the column and put padding
+inside it. This keeps a 32-point content inset on narrow windows and grows the
+outside gutters on wide windows:
+
+```typescript
+import { App, VStack, Text, widgetSetMaxWidth, setPadding } from "perry/ui";
+
+const column = VStack(12, [Text("Responsive content")]);
+setPadding(column, 32);
+widgetSetMaxWidth(column, 720);
+App({ title: "Content", width: 1000, height: 600, body: VStack(0, [column]) });
+```
+
+The cap includes padding and can be set before or after adding the widget to a
+parent. Calling it again replaces the cap; it also replaces a previous fixed
+`widgetSetWidth`. Negative and non-finite values are ignored; zero is valid.
+macOS uses Auto Layout, and Web (JavaScript and WebAssembly) uses CSS `max-width`
+with automatic side margins. iOS, tvOS, visionOS, watchOS, Android, GTK4,
+Windows (including WinUI), and HarmonyOS currently accept this API as a no-op.
 
 ## Content Hugging
 

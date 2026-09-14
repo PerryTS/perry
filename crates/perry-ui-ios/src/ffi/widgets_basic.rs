@@ -841,3 +841,8 @@ pub extern "C" fn perry_ui_textfield_set_text_color(handle: i64, r: f64, g: f64,
 pub extern "C" fn perry_ui_widget_add_child_at(parent_handle: i64, child_handle: i64, index: f64) {
     widgets::add_child_at(parent_handle, child_handle, index as i64);
 }
+
+/// Responsive max-width is not implemented on this backend yet.
+/// Export the shared ABI so portable perry/ui code continues to compile.
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_max_width(_handle: i64, _max_width: f64) {}

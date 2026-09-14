@@ -889,6 +889,14 @@ export function widgetClearChildren(widget: Widget): void;
 export function widgetRemoveChild(parent: Widget, child: Widget): void;
 export function widgetReorderChild(widget: Widget, fromIndex: number, toIndex: number): void;
 export function widgetSetWidth(widget: Widget, width: number): void;
+/**
+ * Fill the available parent width up to maxWidth and center horizontally.
+ * The cap includes the widget's padding. May be set before or after insertion;
+ * repeated calls replace the cap. Replaces an explicit widgetSetWidth.
+ * Invalid (negative or non-finite) caps are ignored; zero is valid.
+ * Supported on macOS and Web (JS/Wasm). Currently a no-op on other backends.
+ */
+export function widgetSetMaxWidth(widget: Widget, maxWidth: number): void;
 export function widgetSetHeight(widget: Widget, height: number): void;
 export function widgetSetHugging(widget: Widget, priority: number): void;
 export function widgetSetHidden(widget: Widget, hidden: number): void;

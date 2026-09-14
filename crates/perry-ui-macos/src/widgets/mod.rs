@@ -19,6 +19,8 @@ pub mod image_gallery;
 pub mod keyboard;
 pub mod lazyvstack;
 pub mod map_view;
+mod max_width;
+pub use max_width::set_max_width;
 pub mod navstack;
 pub(crate) mod padding;
 pub mod pdf_view;
@@ -162,7 +164,8 @@ pub extern "C" fn perry_ui_query_widget_tree(out_len: *mut usize) -> *mut u8 {
     let json = WIDGETS.with(|w| {
         let widgets = w.borrow();
         let mut s = String::from("[");
-        for (i, view) in widgets.iter().enumerate() {
+        for (i, layout_view) in widgets.iter().enumerate() {
+            let view = max_width::content(layout_view.clone());
             let handle = (i + 1) as i64;
             if i > 0 { s.push(','); }
             unsafe {
@@ -251,6 +254,11 @@ pub fn register_external_nsview(nsview_ptr: i64) -> i64 {
 
 /// Retrieve the NSView for a given handle.
 pub fn get_widget(handle: i64) -> Option<Retained<NSView>> {
+    get_layout_widget(handle).map(max_width::content)
+}
+
+/// The view inserted into containers (including a max-width layout slot).
+pub(crate) fn get_layout_widget(handle: i64) -> Option<Retained<NSView>> {
     WIDGETS.with(|w| {
         let widgets = w.borrow();
         let idx = (handle - 1) as usize;
@@ -262,7 +270,11 @@ pub fn get_widget(handle: i64) -> Option<Retained<NSView>> {
 /// When unhiding a view that NSStackView detached (no superview), re-inserts it
 /// into its parent NSStackView at the original position.
 pub fn set_hidden(handle: i64, hidden: bool) {
-    if let Some(view) = get_widget(handle) {
+    if let Some(view) = get_layout_widget(handle) {
+        let content = max_width::content(view.clone());
+        if Retained::as_ptr(&content) != Retained::as_ptr(&view) {
+            content.setHidden(hidden);
+        }
         unsafe {
             let _: () = objc2::msg_send![&*view, setHidden: hidden];
         }
@@ -396,6 +408,14 @@ fn collect_subtree_handles(view: &NSView) -> Vec<i64> {
             }
         }
     }
+    if view.downcast_ref::<max_width::MaxWidthView>().is_some() {
+        for child in view.subviews() {
+            if let Some(h) = find_handle_for_view(&child) {
+                handles.push(h);
+            }
+            handles.extend(collect_subtree_handles(&child));
+        }
+    }
     handles
 }
 
@@ -463,6 +483,9 @@ pub fn clear_children(handle: i64) {
 
             // Phase 3: Batch deactivate constraints on all views
             for sv in &views {
+                if sv.downcast_ref::<max_width::MaxWidthView>().is_some() {
+                    continue;
+                }
                 unsafe {
                     let constraints: Retained<AnyObject> = objc2::msg_send![&**sv, constraints];
                     let c_count: usize = objc2::msg_send![&*constraints, count];
@@ -509,7 +532,9 @@ fn refresh_stack_parent_map(parent_handle: i64, stack: &NSStackView) {
 /// Insert or move a child at an index, retaining its own layout metadata.
 /// Perry stacks use the top/leading gravity area for both orientations.
 pub fn add_child_at(parent_handle: i64, child_handle: i64, index: i64) {
-    if let (Some(parent), Some(child)) = (get_widget(parent_handle), get_widget(child_handle)) {
+    if let (Some(parent), Some(child)) =
+        (get_widget(parent_handle), get_layout_widget(child_handle))
+    {
         let is_stack = AnyClass::get(c"NSStackView")
             .map(|class| parent.isKindOfClass(class))
             .unwrap_or(false);
@@ -542,7 +567,9 @@ pub fn add_child_at(parent_handle: i64, child_handle: i64, index: i64) {
 /// Add a child view to a parent view.
 /// If the parent is an NSStackView, uses addArrangedSubview for proper layout.
 pub fn add_child(parent_handle: i64, child_handle: i64) {
-    if let (Some(parent), Some(child)) = (get_widget(parent_handle), get_widget(child_handle)) {
+    if let (Some(parent), Some(child)) =
+        (get_widget(parent_handle), get_layout_widget(child_handle))
+    {
         // Check if parent is an NSStackView
         let is_stack = if let Some(cls) = AnyClass::get(c"NSStackView") {
             parent.isKindOfClass(cls)
@@ -568,7 +595,9 @@ pub fn add_child(parent_handle: i64, child_handle: i64) {
 /// If the parent is an NSStackView, removes from arranged subviews first.
 /// Also cleans up metadata maps for the removed child and its descendants.
 pub fn remove_child(parent_handle: i64, child_handle: i64) {
-    if let (Some(parent), Some(child)) = (get_widget(parent_handle), get_widget(child_handle)) {
+    if let (Some(parent), Some(child)) =
+        (get_widget(parent_handle), get_layout_widget(child_handle))
+    {
         let is_stack = if let Some(cls) = AnyClass::get(c"NSStackView") {
             parent.isKindOfClass(cls)
         } else {
@@ -599,7 +628,9 @@ pub fn remove_child(parent_handle: i64, child_handle: i64) {
 /// The overlay floats on top of the parent's stack layout.
 /// Caller must set frame via widgetSetOverlayFrame(child, x, y, w, h).
 pub fn add_overlay(parent_handle: i64, child_handle: i64) {
-    if let (Some(parent), Some(child)) = (get_widget(parent_handle), get_widget(child_handle)) {
+    if let (Some(parent), Some(child)) =
+        (get_widget(parent_handle), get_layout_widget(child_handle))
+    {
         // Always use plain addSubview (not addArrangedSubview) so it floats on top
         parent.addSubview(&child);
     }
@@ -883,6 +914,7 @@ pub fn set_corner_radius(handle: i64, radius: f64) {
 /// Set a fixed width constraint on a widget.
 /// Idempotent: deactivates any previous width constraint before creating a new one.
 pub fn set_width(handle: i64, width: f64) {
+    max_width::clear_cap(handle);
     if let Some(view) = get_widget(handle) {
         // Deactivate old width constraint if any
         WIDTH_CONSTRAINTS.with(|wc| {
@@ -956,7 +988,7 @@ pub fn set_hugging_priority(handle: i64, priority: f64) {
 /// the child's widthAnchor to that stack's widthAnchor. Useful for VStack
 /// children (especially embedded NSViews) that should stretch horizontally.
 pub fn match_stack_width(child_handle: i64) {
-    if let Some(child) = get_widget(child_handle) {
+    if let Some(child) = get_layout_widget(child_handle) {
         unsafe {
             // Walk up the superview chain to find the NSStackView.
             // NSStackView may wrap arranged subviews in intermediate views.
@@ -995,7 +1027,7 @@ pub fn match_stack_width(child_handle: i64) {
 /// fill the parent's height.  Useful for HStack children that should stretch
 /// vertically instead of being centered.
 pub fn match_parent_height(child_handle: i64) {
-    if let Some(child) = get_widget(child_handle) {
+    if let Some(child) = get_layout_widget(child_handle) {
         unsafe {
             let superview_ptr: *const NSView = msg_send![&*child, superview];
             if superview_ptr.is_null() {
@@ -1019,7 +1051,7 @@ pub fn match_parent_height(child_handle: i64) {
 /// Pin a child view's leading and trailing anchors to its superview, forcing it
 /// to fill the parent's width.
 pub fn match_parent_width(child_handle: i64) {
-    if let Some(child) = get_widget(child_handle) {
+    if let Some(child) = get_layout_widget(child_handle) {
         unsafe {
             let superview_ptr: *const NSView = msg_send![&*child, superview];
             if superview_ptr.is_null() {
