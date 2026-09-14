@@ -23,7 +23,7 @@ fn run_isolated(test: fn()) {
         test();
     })
     .join()
-    .expect("described-run sweep test thread must not panic");
+    .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
 }
 
 struct Planted {
@@ -204,7 +204,13 @@ fn a_dead_object_on_a_described_page_leaves_the_page_accounting_exact() {
     });
 }
 
+// Debug builds detect the deliberately stale run before the release-only
+// accounting observation below. Preserve and require that exact guard failure.
 #[test]
+#[cfg_attr(
+    debug_assertions,
+    should_panic(expected = "a promoted page run did not re-parse to the object count")
+)]
 fn sabotaged_expansion_order_keeps_counting_a_freed_object() {
     run_isolated(|| {
         let r = one_dead_on_the_page(true);
