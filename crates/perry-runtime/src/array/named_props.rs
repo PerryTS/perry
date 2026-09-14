@@ -389,24 +389,39 @@ unsafe fn resolve(arr: *const ArrayHeader) -> (*const ArrayHeader, Reserve) {
     }
 }
 
-/// Position of `name` among the PRESENT keys of an inline set.
+/// Position of the key with content `wanted` among the PRESENT keys of an
+/// inline set.
 #[inline]
-fn inline_position(set: InlineKeySet, present: u32, name: &str) -> Option<usize> {
+fn inline_position(set: InlineKeySet, present: u32, wanted: &[u8]) -> Option<usize> {
     set.keys()
         .iter()
-        .position(|key| *key == name)
+        .position(|key| key.as_bytes() == wanted)
         .filter(|&i| present & (1 << i) != 0)
 }
 
-/// Index of the key slot whose string content equals `name`, if any.
+/// Index of the key slot whose string content equals `wanted`, if any.
+/// Property-name strings from compiled code are interned, so the stored key is
+/// usually the very same `StringHeader` as `key_ptr`: that identity is tested
+/// before any byte comparison. `key_ptr` may be null when only content is known.
 ///
 /// # Safety
 /// `pairs` must be a live pairs array.
 #[inline]
-unsafe fn find_pair(pairs: *const ArrayHeader, name: &str) -> Option<usize> {
+unsafe fn find_pair(
+    pairs: *const ArrayHeader,
+    key_ptr: *const crate::StringHeader,
+    wanted: &[u8],
+) -> Option<usize> {
     let len = (*pairs).length as usize;
     let elems = array_elements_ptr(pairs);
-    let wanted = name.as_bytes();
+    let wanted_bits = crate::value::js_nanbox_string(key_ptr as i64).to_bits();
+    let mut i = 0;
+    while i + 1 < len {
+        if !key_ptr.is_null() && *elems.add(i) == wanted_bits {
+            return Some(i);
+        }
+        i += 2;
+    }
     let mut i = 0;
     while i + 1 < len {
         let key_bits = *elems.add(i);
@@ -419,6 +434,32 @@ unsafe fn find_pair(pairs: *const ArrayHeader, name: &str) -> Option<usize> {
         i += 2;
     }
     None
+}
+
+/// Shared body of the named-property reads: `key_ptr` (may be null) enables the
+/// identity fast path, `wanted` is the key content. No UTF-8 validation: a key
+/// that is not valid UTF-8 was never stored (every store validates), so its
+/// bytes cannot match.
+#[inline]
+unsafe fn lookup(
+    arr: *const ArrayHeader,
+    key_ptr: *const crate::StringHeader,
+    wanted: &[u8],
+) -> Option<f64> {
+    match resolve(arr) {
+        (arr, Reserve::Inline(set, present)) => inline_position(set, present, wanted)
+            .map(|i| f64::from_bits(*array_named_props_slot(arr).add(1 + i))),
+        (_, Reserve::Pairs(pairs)) if !pairs.is_null() => find_pair(pairs, key_ptr, wanted)
+            .map(|i| f64::from_bits(*array_elements_ptr(pairs).add(i + 1))),
+        (arr, Reserve::Fallback) => with_fallback(arr as usize, |props| {
+            props
+                .iter()
+                .find(|prop| prop.name.as_bytes() == wanted)
+                .map(|prop| prop.value)
+        })
+        .flatten(),
+        _ => None,
+    }
 }
 
 /// Store `pairs` into the header word of `arr`. The ONE barriered funnel for
@@ -623,18 +664,23 @@ pub(crate) unsafe fn array_named_property_set(
         return arr;
     }
     let flags = resolved_flags(arr);
-    let Some(name) = string_header_as_str(key) else {
+    let Some(wanted) = string_header_bytes(key) else {
         return arr;
     };
+    // A NEW key is stored only when it is valid UTF-8 (the enumeration and
+    // attribute tables are `str`-keyed); overwriting an existing key needs no
+    // check, because only valid keys were ever stored.
+    let new_key_name = || std::str::from_utf8(wanted).ok();
     let reserve = reserve_of(arr, flags);
     match reserve {
         Reserve::None => {
             let owner = arr as usize;
             if fallback_possible(flags)
                 && with_fallback(owner, |props| {
-                    if let Some(prop) = props.iter_mut().find(|prop| &*prop.name == name) {
+                    if let Some(prop) = props.iter_mut().find(|prop| prop.name.as_bytes() == wanted)
+                    {
                         prop.value = value;
-                    } else {
+                    } else if let Some(name) = new_key_name() {
                         props.push(FallbackProperty {
                             name: name.into(),
                             value,
@@ -646,6 +692,9 @@ pub(crate) unsafe fn array_named_property_set(
             {
                 return arr;
             }
+            let Some(name) = new_key_name() else {
+                return arr;
+            };
             let capacity = (*arr).capacity as usize;
             if array_front_offset(arr) == 0 && ((*arr).length as usize).min(capacity) >= capacity {
                 // Full: keep the address-keyed store rather than moving the
@@ -666,15 +715,18 @@ pub(crate) unsafe fn array_named_property_set(
         }
         Reserve::Inline(set, present) => {
             // Overwrite a present inline key in place.
-            if let Some(i) = inline_position(set, present, name) {
+            if let Some(i) = inline_position(set, present, wanted) {
                 store_inline_value(arr, i, value.to_bits());
                 return arr;
             }
         }
         Reserve::Pairs(pairs) if !pairs.is_null() => {
             // Overwrite in place: no allocation, no move.
-            if let Some(i) = find_pair(pairs, name) {
+            if let Some(i) = find_pair(pairs, key, wanted) {
                 write_slot(pairs, i + 1, value.to_bits());
+                return arr;
+            }
+            if new_key_name().is_none() {
                 return arr;
             }
             // Append into existing room: still no allocation.
@@ -688,6 +740,9 @@ pub(crate) unsafe fn array_named_property_set(
             }
         }
         _ => {}
+    }
+    if new_key_name().is_none() {
+        return arr;
     }
     // A new key that needs materialization, the reserve, a pairs array, or
     // pairs growth: those allocate, so root everything a collection could move.
@@ -844,47 +899,21 @@ pub(crate) unsafe fn array_named_property_get_by_name(
     arr: *const ArrayHeader,
     name: &str,
 ) -> Option<f64> {
-    match resolve(arr) {
-        (arr, Reserve::Inline(set, present)) => inline_position(set, present, name)
-            .map(|i| f64::from_bits(*array_named_props_slot(arr).add(1 + i))),
-        (_, Reserve::Pairs(pairs)) if !pairs.is_null() => {
-            find_pair(pairs, name).map(|i| f64::from_bits(*array_elements_ptr(pairs).add(i + 1)))
-        }
-        (arr, Reserve::Fallback) => with_fallback(arr as usize, |props| {
-            props
-                .iter()
-                .find(|prop| &*prop.name == name)
-                .map(|prop| prop.value)
-        })
-        .flatten(),
-        _ => None,
-    }
+    lookup(arr, std::ptr::null(), name.as_bytes())
 }
 
 pub(crate) unsafe fn array_named_property_get(
     arr: *const ArrayHeader,
     key: *const crate::StringHeader,
 ) -> Option<f64> {
-    let name = string_header_as_str(key)?;
-    array_named_property_get_by_name(arr, name)
+    lookup(arr, key, string_header_bytes(key)?)
 }
 
 pub(crate) unsafe fn array_named_property_has(
     arr: *const ArrayHeader,
     key: *const crate::StringHeader,
 ) -> bool {
-    let Some(name) = string_header_as_str(key) else {
-        return false;
-    };
-    match resolve(arr) {
-        (_, Reserve::Inline(set, present)) => inline_position(set, present, name).is_some(),
-        (_, Reserve::Pairs(pairs)) => !pairs.is_null() && find_pair(pairs, name).is_some(),
-        (arr, Reserve::Fallback) => with_fallback(arr as usize, |props| {
-            props.iter().any(|prop| &*prop.name == name)
-        })
-        .unwrap_or(false),
-        _ => false,
-    }
+    string_header_bytes(key).is_some_and(|wanted| lookup(arr, key, wanted).is_some())
 }
 
 /// Own named-property keys in insertion order (after the integer indices in
@@ -959,7 +988,7 @@ pub(crate) unsafe fn array_named_property_delete_by_name(
 ) -> bool {
     match resolve(arr) {
         (arr, Reserve::Inline(set, present)) => {
-            let Some(i) = inline_position(set, present, name) else {
+            let Some(i) = inline_position(set, present, name.as_bytes()) else {
                 return false;
             };
             let slot = array_named_props_slot(arr);
@@ -971,7 +1000,7 @@ pub(crate) unsafe fn array_named_property_delete_by_name(
             true
         }
         (_, Reserve::Pairs(pairs)) if !pairs.is_null() => {
-            let Some(i) = find_pair(pairs, name) else {
+            let Some(i) = find_pair(pairs, std::ptr::null(), name.as_bytes()) else {
                 return false;
             };
             let len = (*pairs).length as usize;
