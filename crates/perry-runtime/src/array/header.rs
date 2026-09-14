@@ -1363,9 +1363,16 @@ pub extern "C" fn js_array_refresh_local_head(value: f64) -> f64 {
     if !crate::value::addr_class::is_plausible_heap_addr(raw) {
         return value;
     }
+    // Cold arms only (loop-clone preheader, guarded read repair): see
+    // `traversal_feedback::note_compiled_materialization`.
+    let materializes_lazy =
+        unsafe { crate::json::traversal_feedback::lazy_array_unmaterialized(raw) };
     let cleaned = clean_arr_ptr(raw as *const ArrayHeader);
     if cleaned.is_null() || cleaned as usize == raw {
         return value;
+    }
+    if materializes_lazy {
+        crate::json::traversal_feedback::note_compiled_materialization();
     }
     f64::from_bits(crate::value::POINTER_TAG | (cleaned as u64 & crate::value::POINTER_MASK))
 }

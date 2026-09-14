@@ -24,10 +24,16 @@
 //! 1.11x -> 0.98x, records_array_8m:scan CPU 0.93x -> 0.77x and RSS 190 ->
 //! 163 MiB; every other cell unchanged.
 //!
-//! Only element-by-element reads in `lazy_get_rooted` count (the flip, or an
-//! in-order read of the last element). Stringify,
-//! revivers, array methods and mutation also force materialization, but none of
-//! them is evidence that a scan would have been cheaper eagerly.
+//! Two kinds of event count as traversal evidence: element-by-element reads in
+//! `lazy_get_rooted` (the flip, or an in-order read of the last element), and a
+//! compiled loop or indexed read materializing the whole array through
+//! `js_array_refresh_local_head` — the element-shape loop clone's preheader
+//! (#10171) and the guarded indexed-read repair both do that before a single
+//! element is read lazily, so without it a program whose scan loop is served by
+//! the clone never produced evidence and paid for the tape AND the eager
+//! materialization on every parse. Stringify, revivers, array methods and
+//! mutation also force materialization, but none of them is evidence that a
+//! scan would have been cheaper eagerly.
 
 use std::cell::Cell;
 
@@ -78,6 +84,35 @@ pub(crate) unsafe fn after_cold_read(
     }
 }
 
+/// A lazy array was materialized whole by compiled code refreshing its local
+/// head (`js_array_refresh_local_head`) — the element-shape loop clone's
+/// preheader or a guarded indexed read's repair. Every element is now eagerly
+/// built, so the tape this array was parsed onto was wasted: the same evidence
+/// as a flip.
+pub(crate) fn note_compiled_materialization() {
+    SCORE.with(|s| s.set(s.get().saturating_add(2).min(SCORE_MAX)));
+}
+
+/// Is `addr` a lazy JSON array whose elements have not been built yet? Read by
+/// `js_array_refresh_local_head` before it materializes, so evidence is noted
+/// once per array. Its emitters are cold arms that run about once per
+/// receiver, so the tracked-header probe costs nothing measurable.
+///
+/// # Safety
+///
+/// `addr` must be a plausible heap address; the tracked-header read validates
+/// ownership before anything is dereferenced.
+pub(crate) unsafe fn lazy_array_unmaterialized(addr: usize) -> bool {
+    let Some(header) = crate::value::addr_class::try_read_tracked_gc_header(addr) else {
+        return false;
+    };
+    if (*header.as_ptr()).obj_type != crate::gc::GC_TYPE_LAZY_ARRAY {
+        return false;
+    }
+    let lazy = addr as *const crate::json_tape::LazyArrayHeader;
+    (*lazy).magic == crate::json_tape::LAZY_ARRAY_MAGIC && (*lazy).materialized.is_null()
+}
+
 /// Should an otherwise tape-eligible parse go eagerly instead?
 pub(crate) fn prefer_eager() -> bool {
     if SCORE.with(Cell::get) < PREFER_EAGER_AT {
@@ -94,6 +129,11 @@ pub(crate) fn prefer_eager() -> bool {
             true
         }
     })
+}
+
+#[cfg(test)]
+pub(crate) fn score_for_tests() -> u8 {
+    SCORE.with(Cell::get)
 }
 
 #[cfg(test)]
