@@ -105,6 +105,16 @@ pub(super) fn next_arena_trigger_base() -> usize {
 /// (near-zero infant mortality), a saturated survivor space, and 1427
 /// collections for a run that allocates ~1.4 GB.
 pub(super) fn young_scavenge_cap_due() -> bool {
+    young_scavenge_cap_due_with_old_reclaimable(old_gen_reclaimable_pressure_bytes)
+}
+
+/// [`young_scavenge_cap_due`] with the old-gen reclaimable-pressure read
+/// supplied by the caller. `gc_budgeted_due_trigger` has already read that
+/// value for its old-reclaim arm, and nothing between that read and this one
+/// touches old-gen, so it passes a closure returning the value it holds rather
+/// than paying two more thread-local reads. The read happens where it always
+/// did: after the census seed, which changes only the young-side factor.
+fn young_scavenge_cap_due_with_old_reclaimable(old_reclaimable: impl FnOnce() -> usize) -> bool {
     if !nursery_cap_active() {
         return false;
     }
@@ -114,10 +124,16 @@ pub(super) fn young_scavenge_cap_due() -> bool {
     // process, halfway to the base cap). Not while a collection is in
     // progress or a budgeted cycle is active — the young generation is being
     // rewritten then and the walk would read forwarding stubs.
-    if GC_FLAGS.with(|f| f.get()) & GC_FLAG_IN_ALLOC == 0 && !gc_budgeted_cycle_active() {
+    //
+    // The seeded test comes first because the seed can happen only once: in
+    // steady state this is one thread-local read instead of three.
+    if !super::tenuring::object_census_seeded()
+        && GC_FLAGS.with(|f| f.get()) & GC_FLAG_IN_ALLOC == 0
+        && !gc_budgeted_cycle_active()
+    {
         super::tenuring::maybe_seed_object_census_from_allocation(from_space_in_use);
     }
-    from_space_in_use >= scavenge_nursery_cap_dueness_bytes()
+    from_space_in_use >= scavenge_nursery_cap_dueness_bytes_with(old_reclaimable)
 }
 
 /// #10169: does the young generation hold at least one BASE nursery cap of
@@ -142,11 +158,22 @@ pub(crate) fn young_generation_holds_a_nursery() -> bool {
 /// NOT feed `effective_next_arena_trigger`: this is about *dueness*, and a test
 /// that also moved the trigger clamp would be changing two things at once.
 fn scavenge_nursery_cap_dueness_bytes() -> usize {
+    scavenge_nursery_cap_dueness_bytes_with(old_gen_reclaimable_pressure_bytes)
+}
+
+fn scavenge_nursery_cap_dueness_bytes_with(old_reclaimable: impl FnOnce() -> usize) -> usize {
     #[cfg(test)]
     if let Some(bytes) = GC_NURSERY_CAP_TEST_DUE_BYTES.with(Cell::get) {
         return bytes;
     }
-    super::tenuring::scavenge_nursery_cap_effective_bytes()
+    let influx_driven = super::tenuring::influx_driven_nursery_cap_bytes();
+    let old_reclaimable = old_reclaimable();
+    debug_assert_eq!(
+        old_reclaimable,
+        old_gen_reclaimable_pressure_bytes(),
+        "the old-gen pressure a due check reuses must still be the current value"
+    );
+    super::tenuring::scavenge_nursery_cap_from(influx_driven, old_reclaimable)
 }
 
 #[cfg(test)]
@@ -2770,6 +2797,14 @@ pub fn gc_check_trigger() {
         return;
     }
 
+    // This function asks "what is due?" up to three times on the path where
+    // nothing is (the old-reclaim arm, the nursery arm, the assist gate). Every
+    // arm that acts returns, so the state each later question sees is the
+    // state the first one saw, and a repeatable answer can be reused. An
+    // answer from the #10169 flag branch is re-evaluated, exactly as before.
+    let mut due_memo = DueTriggerMemo::new();
+    let mut due = || due_memo.get(gc_budgeted_due_trigger_eval);
+
     // #5476: a workload that churns *large* temporaries (>16 KB, born directly
     // in the old arena) grows the old generation without ever exercising the
     // nursery. Old-gen reclaim pressure schedules a budgeted full cycle that
@@ -2824,10 +2859,7 @@ pub fn gc_check_trigger() {
     // on. Polls off ⇒ the precise path is reached less often ⇒ this arm fires
     // more often ⇒ the census counter rises. Inert, not unsound.
     if !gc_budgeted_cycle_active()
-        && matches!(
-            gc_budgeted_due_trigger(),
-            Some(BudgetedGcTrigger::OldReclaim)
-        )
+        && matches!(due(), Some(BudgetedGcTrigger::OldReclaim))
         && !GC_OLD_RECLAIM_IN_PROGRESS.with(Cell::get)
     {
         let _reentry = OldReclaimReentryGuard::enter();
@@ -2909,7 +2941,7 @@ pub fn gc_check_trigger() {
             || gc_moving_loop_polls_enabled()
             || super::roots::registered_root_scanners_block_budgeted_gc())
     {
-        let direct_kind = match gc_budgeted_due_trigger() {
+        let direct_kind = match due() {
             // #7909: `YoungScavengeCap` is a nursery-churn trigger exactly like
             // `ArenaBytes` here — this arm's whole job is to route nursery
             // pressure to a collection that can actually reclaim it, so the two
@@ -3054,7 +3086,7 @@ pub fn gc_check_trigger() {
         }
     }
 
-    if !gc_budgeted_cycle_active() && gc_budgeted_due_trigger().is_none() {
+    if !gc_budgeted_cycle_active() && due().is_none() {
         return;
     }
 
@@ -3255,6 +3287,45 @@ pub(crate) fn note_young_leaf_born_old() {
 }
 
 pub(super) fn gc_budgeted_due_trigger() -> Option<BudgetedGcTrigger> {
+    gc_budgeted_due_trigger_eval().0
+}
+
+/// Reuse of a repeatable [`gc_budgeted_due_trigger_eval`] answer across the
+/// questions one `gc_check_trigger` call asks. An unrepeatable answer is
+/// returned once and the next question evaluates again.
+pub(super) struct DueTriggerMemo(Option<Option<BudgetedGcTrigger>>);
+
+impl DueTriggerMemo {
+    pub(super) const fn new() -> Self {
+        Self(None)
+    }
+
+    pub(super) fn get(
+        &mut self,
+        eval: impl FnOnce() -> (Option<BudgetedGcTrigger>, bool),
+    ) -> Option<BudgetedGcTrigger> {
+        if let Some(due) = self.0 {
+            return due;
+        }
+        let (due, repeatable) = eval();
+        if repeatable {
+            self.0 = Some(due);
+        }
+        due
+    }
+}
+
+/// [`gc_budgeted_due_trigger`], plus whether evaluating it again with no state
+/// changed in between is guaranteed to give the same answer.
+///
+/// Only the #10169 flag branch below breaks that: it consumes the flag and
+/// returns early, so a second evaluation takes the ordinary path and may
+/// answer differently (for example `OldReclaim`). The #8122 census seed does
+/// not break it. The seed runs inside the young-cap arm before that arm's
+/// comparison, so the first evaluation already compared against the seeded
+/// cap; no earlier arm reads the census and the malloc arm after it does not
+/// either, and a second evaluation cannot seed again.
+pub(super) fn gc_budgeted_due_trigger_eval() -> (Option<BudgetedGcTrigger>, bool) {
     // #10169: a leaf born old under young pressure gives the nursery minor
     // ONE-TIME priority over old-reclaim, and only while the young generation
     // is still unmeasured. A young generation that a minor has already
@@ -3268,16 +3339,16 @@ pub(super) fn gc_budgeted_due_trigger() -> Option<BudgetedGcTrigger> {
     if GC_YOUNG_LEAF_BORN_OLD.with(Cell::get) {
         GC_YOUNG_LEAF_BORN_OLD.with(|flag| flag.set(false));
         if !super::young_generation_measured_retained() && young_scavenge_cap_due() {
-            return Some(BudgetedGcTrigger::YoungScavengeCap);
+            return (Some(BudgetedGcTrigger::YoungScavengeCap), false);
         }
     }
     let old_pending = GC_OLD_RECLAIM_PENDING.with(Cell::get);
     // #6010: external Map/Set side-buffer bytes escalate to OldReclaim too.
-    let old_in_use =
-        old_gen_reclaimable_pressure_bytes().saturating_add(external_side_live_bytes());
+    let old_reclaimable = old_gen_reclaimable_pressure_bytes();
+    let old_in_use = old_reclaimable.saturating_add(external_side_live_bytes());
     let old_baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.get());
     if old_pending || old_reclaim_pressure_due(old_in_use, old_baseline) {
-        return Some(BudgetedGcTrigger::OldReclaim);
+        return (Some(BudgetedGcTrigger::OldReclaim), true);
     }
 
     // Two separately-scoped arena arms (see `young_scavenge_cap_due` for why
@@ -3286,19 +3357,21 @@ pub(super) fn gc_budgeted_due_trigger() -> Option<BudgetedGcTrigger> {
     // only.
     let total = crate::arena::arena_total_bytes();
     if total >= next_arena_trigger_base() {
-        return Some(BudgetedGcTrigger::ArenaBytes);
+        return (Some(BudgetedGcTrigger::ArenaBytes), true);
     }
-    if young_scavenge_cap_due() {
-        return Some(BudgetedGcTrigger::YoungScavengeCap);
+    // Old-gen is untouched since the read above: the arms in between only
+    // read, and the census seed walks the young generation.
+    if young_scavenge_cap_due_with_old_reclaimable(|| old_reclaimable) {
+        return (Some(BudgetedGcTrigger::YoungScavengeCap), true);
     }
 
     let malloc_count = malloc_object_count();
     let next_malloc_trigger = GC_NEXT_MALLOC_TRIGGER.with(|c| c.get());
     if malloc_count >= next_malloc_trigger {
-        return Some(BudgetedGcTrigger::MallocCount);
+        return (Some(BudgetedGcTrigger::MallocCount), true);
     }
 
-    None
+    (None, true)
 }
 
 /// Phase 1 of the moving-GC project: run a copying (moving) minor at a
@@ -3876,6 +3949,47 @@ fn gc_start_budgeted_cycle_for_pressure(progress_kind: GcProgressKind) -> Option
     })
 }
 
+/// What one budgeted step decided, without the debt figures.
+///
+/// The step machinery returns this; only callers that hand a
+/// [`JsGcStepResult`] to someone attach the debt, through
+/// [`GcStepReport::with_debt`]. The runtime's own polls (regex quanta, the
+/// microtask pump, the event loop) discard the result, and a
+/// `GcDebtSnapshot` costs a second evaluation of the nursery cap, the arena
+/// trigger and the old-reclaim band on every poll that finds nothing due.
+///
+/// Attaching the debt after the step returns reads the same values it used to
+/// read inside the step: the snapshot was always the last thing a step
+/// computed, and the only work between that point and the caller is dropping
+/// `BudgetedGcStepGuard`, which clears a flag the snapshot does not read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GcStepReport {
+    pub(crate) status: u32,
+    phase: u32,
+    collection_kind: u32,
+    trigger_kind: u32,
+    active: bool,
+    completed: bool,
+}
+
+impl GcStepReport {
+    /// The FFI result, with the debt measured now.
+    pub(crate) fn with_debt(self) -> JsGcStepResult {
+        let debt = GcDebtSnapshot::current();
+        JsGcStepResult {
+            status: self.status,
+            phase: self.phase,
+            collection_kind: self.collection_kind,
+            trigger_kind: self.trigger_kind,
+            active: u32::from(self.active),
+            completed: u32::from(self.completed),
+            arena_debt_bytes: debt.arena_debt_bytes,
+            malloc_debt_objects: debt.malloc_debt_objects,
+            old_reclaim_debt_bytes: debt.old_reclaim_debt_bytes,
+        }
+    }
+}
+
 fn gc_step_result(
     status: u32,
     phase: u32,
@@ -3883,26 +3997,22 @@ fn gc_step_result(
     trigger_kind: u32,
     active: bool,
     completed: bool,
-) -> JsGcStepResult {
-    let debt = GcDebtSnapshot::current();
-    JsGcStepResult {
+) -> GcStepReport {
+    GcStepReport {
         status,
         phase,
         collection_kind,
         trigger_kind,
-        active: u32::from(active),
-        completed: u32::from(completed),
-        arena_debt_bytes: debt.arena_debt_bytes,
-        malloc_debt_objects: debt.malloc_debt_objects,
-        old_reclaim_debt_bytes: debt.old_reclaim_debt_bytes,
+        active,
+        completed,
     }
 }
 
-fn gc_idle_step_result() -> JsGcStepResult {
+fn gc_idle_step_result() -> GcStepReport {
     gc_step_result(JS_GC_STEP_STATUS_IDLE, 0, 0, 0, false, false)
 }
 
-fn gc_cycle_step_result(status: u32, cycle: &BudgetedGcCycle, completed: bool) -> JsGcStepResult {
+fn gc_cycle_step_result(status: u32, cycle: &BudgetedGcCycle, completed: bool) -> GcStepReport {
     gc_step_result(
         status,
         cycle.state.phase().ffi_code(),
@@ -3913,7 +4023,7 @@ fn gc_cycle_step_result(status: u32, cycle: &BudgetedGcCycle, completed: bool) -
     )
 }
 
-fn gc_budgeted_status_result() -> JsGcStepResult {
+fn gc_budgeted_status_result() -> GcStepReport {
     if !gc_budgeted_cycle_active() {
         return gc_idle_step_result();
     }
@@ -3932,7 +4042,7 @@ fn gc_budgeted_status_result() -> JsGcStepResult {
     }
 }
 
-fn gc_budgeted_skipped_result() -> JsGcStepResult {
+fn gc_budgeted_skipped_result() -> GcStepReport {
     if !gc_budgeted_cycle_active() {
         return gc_step_result(JS_GC_STEP_STATUS_SKIPPED, 0, 0, 0, false, false);
     }
@@ -3945,7 +4055,7 @@ fn gc_budgeted_skipped_result() -> JsGcStepResult {
     })
 }
 
-fn gc_finish_budgeted_cycle(mut cycle: BudgetedGcCycle) -> JsGcStepResult {
+fn gc_finish_budgeted_cycle(mut cycle: BudgetedGcCycle) -> GcStepReport {
     let outcome = cycle
         .state
         .take_outcome()
@@ -3981,7 +4091,7 @@ fn gc_finish_budgeted_cycle(mut cycle: BudgetedGcCycle) -> JsGcStepResult {
 }
 
 enum BudgetedStepOutcome {
-    Result(JsGcStepResult),
+    Result(GcStepReport),
     Completed(BudgetedGcCycle),
 }
 
@@ -4018,7 +4128,7 @@ pub(super) fn gc_drain_active_budgeted_cycle() {
     }
 }
 
-fn gc_budgeted_step_work_units_inner(work_units: usize) -> JsGcStepResult {
+fn gc_budgeted_step_work_units_inner(work_units: usize) -> GcStepReport {
     gc_budgeted_step_work_units_inner_with_progress(work_units, GcProgressKind::NormalIncremental)
 }
 
@@ -4056,7 +4166,7 @@ pub(super) fn gc_idle_reclaim_try_start() -> bool {
 /// cycle stops reporting `ACTIVE`. Never starts a cycle of its own — when none
 /// is active the stepper's pressure check runs exactly as it would at any host
 /// safepoint.
-pub(super) fn gc_idle_reclaim_step(budget_us: u64) -> JsGcStepResult {
+pub(super) fn gc_idle_reclaim_step(budget_us: u64) -> GcStepReport {
     let start = Instant::now();
     let mut result = gc_budgeted_step_work_units_inner(GC_NORMAL_INCREMENTAL_WORK_UNITS);
     while result.status == JS_GC_STEP_STATUS_ACTIVE
@@ -4083,7 +4193,7 @@ fn defer_nursery_cap_to_precise_safepoint() {
 fn gc_budgeted_step_work_units_inner_with_progress(
     work_units: usize,
     start_progress_kind: GcProgressKind,
-) -> JsGcStepResult {
+) -> GcStepReport {
     if work_units == 0 {
         return gc_budgeted_status_result();
     }
@@ -4095,13 +4205,34 @@ fn gc_budgeted_step_work_units_inner_with_progress(
         return gc_budgeted_skipped_result();
     };
 
-    if !gc_budgeted_cycle_active() {
+    // The common host poll: no cycle, nothing due. Everything past this point
+    // (starting and stepping a cycle) lives out of line, so that poll does not
+    // pay the multi-kilobyte frame the cycle machinery needs. `_guard` stays
+    // held across the call, exactly as when the code was inline.
+    let due = if gc_budgeted_cycle_active() {
+        None
+    } else {
         let Some(due) = gc_budgeted_due_trigger() else {
             super::instruments::note_budgeted_step_skip(
                 super::instruments::BudgetedStepSkip::NoTrigger,
             );
             return gc_idle_step_result();
         };
+        Some(due)
+    };
+    gc_budgeted_start_or_step(due, work_units, start_progress_kind)
+}
+
+/// The part of [`gc_budgeted_step_work_units_inner_with_progress`] that starts
+/// a cycle for `due` (when `Some`, i.e. no cycle was active and a trigger was
+/// due) and steps the active cycle. The caller holds `BudgetedGcStepGuard`.
+#[inline(never)]
+fn gc_budgeted_start_or_step(
+    due: Option<BudgetedGcTrigger>,
+    work_units: usize,
+    start_progress_kind: GcProgressKind,
+) -> GcStepReport {
+    if let Some(due) = due {
         if due == BudgetedGcTrigger::YoungScavengeCap && start_progress_kind.is_budgeted() {
             // ★ #7909. Starting a budgeted cycle here is strictly worse than
             // starting nothing, and it is self-sustaining.
@@ -4222,11 +4353,25 @@ fn gc_budgeted_step_work_units_inner_with_progress(
 fn gc_mutator_assist_step_work_units_inner_with_progress(
     work_units: usize,
     start_progress_kind: GcProgressKind,
-) -> JsGcStepResult {
+) -> GcStepReport {
     gc_budgeted_step_work_units_inner_with_progress(work_units, start_progress_kind)
 }
 
+/// A host safepoint that reports what it did, debt included. For callers
+/// that read the result: `js_gc_safepoint` and tests.
 pub(crate) fn gc_runtime_safepoint() -> JsGcStepResult {
+    gc_runtime_safepoint_report().with_debt()
+}
+
+/// The runtime's own safepoint poll (regex quanta, the microtask pump, the
+/// event loop). Makes exactly the decisions [`gc_runtime_safepoint`] makes and
+/// skips only the debt snapshot, which none of these callers reads.
+#[inline]
+pub(crate) fn gc_runtime_safepoint_poll() {
+    let _ = gc_runtime_safepoint_report();
+}
+
+fn gc_runtime_safepoint_report() -> GcStepReport {
     let budget = gc_progress_contract().budget_for(GcProgressKind::NormalIncremental);
     let Some(work_units) = budget.work_units else {
         return gc_budgeted_status_result();
@@ -4246,14 +4391,14 @@ fn write_gc_step_result(out: *mut JsGcStepResult, result: JsGcStepResult) -> u32
 #[no_mangle]
 pub extern "C" fn js_gc_step_work_units(work_units: u64, out: *mut JsGcStepResult) -> u32 {
     let work_units = usize::try_from(work_units).unwrap_or(usize::MAX);
-    let result = gc_budgeted_step_work_units_inner(work_units);
+    let result = gc_budgeted_step_work_units_inner(work_units).with_debt();
     write_gc_step_result(out, result)
 }
 
 #[no_mangle]
 pub extern "C" fn js_gc_step_us(budget_us: u64, out: *mut JsGcStepResult) -> u32 {
     if budget_us == 0 {
-        let result = gc_budgeted_status_result();
+        let result = gc_budgeted_status_result().with_debt();
         return write_gc_step_result(out, result);
     }
 
@@ -4264,12 +4409,12 @@ pub extern "C" fn js_gc_step_us(budget_us: u64, out: *mut JsGcStepResult) -> u32
     {
         result = gc_budgeted_step_work_units_inner(1);
     }
-    write_gc_step_result(out, result)
+    write_gc_step_result(out, result.with_debt())
 }
 
 #[no_mangle]
 pub extern "C" fn js_gc_step_status(out: *mut JsGcStepResult) -> u32 {
-    let result = gc_budgeted_status_result();
+    let result = gc_budgeted_status_result().with_debt();
     write_gc_step_result(out, result)
 }
 

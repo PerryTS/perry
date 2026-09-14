@@ -587,11 +587,12 @@ fn reset_young_after_promotion() {
         if arena.blocks.iter().all(|block| block.data.is_null()) {
             arena.install_fresh_block(BLOCK_SIZE);
         }
-        arena.current = arena
+        let first_live = arena
             .blocks
             .iter()
             .position(|block| !block.data.is_null())
             .unwrap_or(0);
+        arena.set_current(first_live);
         INLINE_STATE.with(|s| {
             let inline = &mut *s.get();
             if !inline.data.is_null() {
@@ -610,7 +611,7 @@ fn reset_young_after_promotion() {
                 block.offset = 0;
                 block.dead_cycles = 0;
             }
-            arena.current = 0;
+            arena.set_current(0);
         });
     }
     let active = ACTIVE_SURVIVOR.with(|active| active.get());

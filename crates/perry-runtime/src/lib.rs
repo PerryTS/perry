@@ -743,7 +743,7 @@ pub(crate) mod stdlib_pump {
         // #2532/#9696 — drain every initialized extension through the
         // registry; stdlib deliberately has no per-extension pump arms.
         run_aux_pumps();
-        let _ = crate::gc::gc_runtime_safepoint();
+        crate::gc::gc_runtime_safepoint_poll();
     }
 
     static STDLIB_HAS_ACTIVE_FN: AtomicPtr<()> = AtomicPtr::new(null_mut());

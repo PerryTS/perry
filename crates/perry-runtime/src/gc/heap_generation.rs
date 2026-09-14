@@ -69,7 +69,6 @@ crate::perry_thread_local! {
 
 /// This thread's current heap generation.
 #[inline]
-#[cfg_attr(not(feature = "regex-engine"), allow(dead_code))]
 pub(crate) fn heap_generation() -> u64 {
     HEAP_GENERATION.with(Cell::get)
 }
@@ -111,6 +110,14 @@ impl Drop for HeapChange {
         let _ = OPEN_HEAP_CHANGES.try_with(|n| n.set(n.get().saturating_sub(1)));
         advance();
     }
+}
+
+/// Is a [`HeapChange`] scope open on this thread? A cache keyed on the heap
+/// generation must not store while one is, because the generation does not
+/// advance inside a scope.
+#[inline]
+pub(crate) fn heap_change_open() -> bool {
+    OPEN_HEAP_CHANGES.try_with(Cell::get).unwrap_or(1) > 0
 }
 
 /// Called by every primitive that frees or moves heap memory.

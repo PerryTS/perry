@@ -12,6 +12,7 @@ pub(crate) mod alloc_sample;
 mod allocators;
 mod block;
 mod construction;
+mod from_space;
 pub(crate) use construction::ConstructionBatch;
 mod inline;
 mod page_meta;

@@ -488,6 +488,14 @@ pub(super) fn note_surviving_object_census(moved_bytes: usize, moved_objects: us
 ///
 /// Returns without walking when the base cap is not yet half full, when a
 /// census (either kind) already exists, or when the nursery is empty.
+/// Has the object denomination been seeded, by an allocation census or by a
+/// copying minor's survivor census? Once true it stays true for the process
+/// (tests reset it).
+#[inline]
+pub(super) fn object_census_seeded() -> bool {
+    OBJECT_CENSUS_SEEDED.with(Cell::get)
+}
+
 pub(super) fn maybe_seed_object_census_from_allocation(from_space_in_use_bytes: usize) {
     if OBJECT_CENSUS_SEEDED.with(Cell::get) {
         return;

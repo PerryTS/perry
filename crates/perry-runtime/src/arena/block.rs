@@ -576,6 +576,22 @@ impl Arena {
     /// Only used for the non-Eden regions — Eden must stay eager
     /// because `js_inline_arena_state` hands its current block to
     /// codegen's inline bump allocator at thread start.
+    /// Point allocation at `blocks[idx]`.
+    ///
+    /// Every move of `current` goes through here, because the cached young
+    /// occupancy (`arena/from_space.rs`) assumes that between two reads only
+    /// the current Eden block's offset changed unless the heap generation
+    /// moved. The allocator's block switches happen outside any `HeapChange`
+    /// scope, so they must retire that cache themselves; the cache key does not
+    /// include the block index. Invalidating for every arena, not just Eden,
+    /// keeps the rule free of a space test; a switch costs one thread-local
+    /// store and happens once per block.
+    #[inline]
+    pub(crate) fn set_current(&mut self, idx: usize) {
+        self.current = idx;
+        super::from_space::invalidate_sealed_young_bytes();
+    }
+
     fn new_lazy(generation: HeapGeneration, space: HeapSpace) -> Self {
         Arena {
             blocks: vec![ArenaBlock {
@@ -685,7 +701,7 @@ impl Arena {
                 self.blocks.len() - 1
             }
         };
-        self.current = new_idx;
+        self.set_current(new_idx);
         ARENA_TOTAL_BYTES.with(|t| t.set(t.get() + fresh_size));
     }
 
@@ -757,7 +773,7 @@ impl Arena {
                 continue;
             }
             if let Some(ptr) = self.try_block_alloc(i, size, align) {
-                self.current = i;
+                self.set_current(i);
                 // Resync inline state to the new current block.
                 self.resync_inline_to_current();
                 return Some(ptr);
@@ -797,7 +813,7 @@ impl Arena {
             }
             if let Some(ptr) = self.try_block_alloc_excluding_pages(i, size, align, excluded_pages)
             {
-                self.current = i;
+                self.set_current(i);
                 self.resync_inline_to_current();
                 return ptr;
             }
