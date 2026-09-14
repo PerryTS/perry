@@ -736,7 +736,6 @@ pub(crate) struct ShadowSavepoint {
     temp_roots: usize,
 }
 
-
 /// Capture the current shadow-stack depth so it can be restored after a
 /// non-local exit. Call at `js_try_push` time, before the protected
 /// region can push any callee frames.

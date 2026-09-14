@@ -3112,7 +3112,10 @@ function perry_ui_widget_set_max_width(h, maxWidth) {
     el.style.marginRight = "auto";
 }
 
-function perry_ui_widget_set_width(h, w) { const el = uiGet(h); if (el) { el.style.width = w + "px"; el.style.maxWidth = ""; } }
+function perry_ui_widget_set_width(h, w) {
+    const el = uiGet(h);
+    if (el) { el.style.width = w + "px"; el.style.minWidth = w + "px"; el.style.maxWidth = w + "px"; el.style.flexShrink = "0"; }
+}
 function perry_ui_widget_set_height(h, height) { const el = uiGet(h); if (el) el.style.height = height + "px"; }
 function perry_ui_widget_set_hugging(h) { const el = uiGet(h); if (el) el.style.flex = "0 0 auto"; }
 function perry_ui_widget_match_parent_width(h) { const el = uiGet(h); if (el) el.style.width = "100%"; }

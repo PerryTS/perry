@@ -168,12 +168,7 @@ inside it. This keeps a 32-point content inset on narrow windows and grows the
 outside gutters on wide windows:
 
 ```typescript
-import { App, VStack, Text, widgetSetMaxWidth, setPadding } from "perry/ui";
-
-const column = VStack(12, [Text("Responsive content")]);
-setPadding(column, 32);
-widgetSetMaxWidth(column, 720);
-App({ title: "Content", width: 1000, height: 600, body: VStack(0, [column]) });
+{{#include ../../examples/ui/layout/max-width.ts}}
 ```
 
 The cap includes padding and can be set before or after adding the widget to a
