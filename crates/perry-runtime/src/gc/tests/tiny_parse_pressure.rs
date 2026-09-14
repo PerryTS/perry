@@ -232,3 +232,43 @@ fn a_finished_collection_moves_the_base_to_the_post_collection_reading() {
         "the base must be the post-collection `arena_in_use_bytes()` reading"
     );
 }
+
+/// The nursery cap schedules a tiny-parse boundary collection on its own, well
+/// below the priced in-use guard, and only while the cap is actually due.
+#[test]
+fn a_due_nursery_cap_schedules_the_boundary_collection_below_the_in_use_guard() {
+    use super::super::policy::{
+        gc_schedule_parse_boundary_collection_if_pressure, ScavengeNurseryCapTestGuard,
+        GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING,
+    };
+    use super::support::*;
+    let _isolation = GcTestIsolationGuard::new();
+    let _pacing = crate::gc::policy::force_moving_gc_pacing();
+    let pending = || GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(std::cell::Cell::get);
+    GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|p| p.set(false));
+    let filler = [b'j'; 64];
+    crate::string::js_string_from_bytes(filler.as_ptr(), filler.len() as u32);
+    let in_use = crate::arena::arena_in_use_bytes();
+    assert!(
+        !tiny_parse_pressure_due(in_use, 48 * MB),
+        "fixture: the priced in-use guard must not be due, or this proves nothing"
+    );
+
+    {
+        let _cap = ScavengeNurseryCapTestGuard::due_at_bytes(usize::MAX);
+        gc_schedule_parse_boundary_collection_if_pressure();
+        assert!(
+            !pending(),
+            "neither the guard nor the cap is due: nothing scheduled"
+        );
+    }
+    {
+        let _cap = ScavengeNurseryCapTestGuard::due_at_bytes(1);
+        gc_schedule_parse_boundary_collection_if_pressure();
+        assert!(
+            pending(),
+            "a due nursery cap schedules the boundary collection"
+        );
+    }
+    GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|p| p.set(false));
+}

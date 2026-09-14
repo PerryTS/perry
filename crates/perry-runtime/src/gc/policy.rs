@@ -464,6 +464,24 @@ pub(super) fn tiny_parse_pressure_due_with(
         && in_use >= base.saturating_add(tiny_parse_pressure_headroom_bytes(step))
 }
 
+/// Should a tiny-parse boundary collect under the generational collector?
+///
+/// The priced in-use guard ([`tiny_parse_pressure_due`]) answers "has the
+/// arena grown enough to be worth a collection", on total in-use, which a
+/// collection cannot lower below the live set (#9831). It never asked the
+/// generational question: is the young generation at its scavenge cap? A loop
+/// of tiny `JSON.parse` calls allocates only under the parser's suppression
+/// window and at bounded inline-object births, so nothing else arms the
+/// nursery safepoint for it, and the young generation grew to the guard's
+/// 48 MB floor before its first minor: `small_record:parse` peaked at 80 MiB
+/// against Node's 59 with 0–9 ‰ of each collection surviving. The nursery cap
+/// is safe to consult where the absolute in-use guard was not: a minor lowers
+/// the quantity it tests to the survivors, so it cannot fire again until the
+/// cap has been refilled.
+pub(super) fn tiny_parse_generational_collection_due(in_use: usize, in_use_trigger: usize) -> bool {
+    tiny_parse_pressure_due(in_use, in_use_trigger) || young_scavenge_cap_due()
+}
+
 /// The live [`tiny_parse_pressure_due_with`]: current base and step.
 pub(super) fn tiny_parse_pressure_due(in_use: usize, in_use_trigger: usize) -> bool {
     #[cfg(test)]
@@ -1552,7 +1570,12 @@ fn gc_bump_malloc_trigger_inner(collect_now: bool) {
         // The guard now also requires the arena to have grown past the
         // productivity-priced headroom since the last collection ended.
         let in_use = crate::arena::arena_in_use_bytes();
-        if !tiny_parse_pressure_due(in_use, tiny_parse_in_use_trigger_for_mode()) {
+        let due = if use_gen_gc {
+            tiny_parse_generational_collection_due(in_use, tiny_parse_in_use_trigger_for_mode())
+        } else {
+            tiny_parse_pressure_due(in_use, tiny_parse_in_use_trigger_for_mode())
+        };
+        if !due {
             return;
         }
         if use_gen_gc {
@@ -1608,7 +1631,12 @@ fn gc_collect_pending_suppressed_parse_slow() {
     // boundary collection from stacking a second minor on top of it. A request
     // nothing has satisfied is still due and still collects.
     let in_use = crate::arena::arena_in_use_bytes();
-    if !tiny_parse_pressure_due(in_use, tiny_parse_in_use_trigger_for_mode()) {
+    let due = if gen_gc_enabled() {
+        tiny_parse_generational_collection_due(in_use, tiny_parse_in_use_trigger_for_mode())
+    } else {
+        tiny_parse_pressure_due(in_use, tiny_parse_in_use_trigger_for_mode())
+    };
+    if !due {
         return;
     }
     diag_tiny_parse_forced_collection("parse_boundary", in_use);
@@ -1636,8 +1664,8 @@ pub fn gc_schedule_parse_boundary_collection_if_pressure() {
         return;
     }
     // #9831: priced the same way as the post-parse guard above — see
-    // `tiny_parse_pressure_due_with`.
-    if !tiny_parse_pressure_due(
+    // `tiny_parse_pressure_due_with` — plus the young generation's own cap.
+    if !tiny_parse_generational_collection_due(
         crate::arena::arena_in_use_bytes(),
         gc_tiny_parse_in_use_trigger_dyn_bytes(),
     ) {
