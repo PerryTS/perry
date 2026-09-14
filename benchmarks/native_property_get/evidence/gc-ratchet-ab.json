@@ -1,0 +1,1016 @@
+{
+  "base_commit": "9fda98df68d9fac3c08b2385fae007aa9f5278df",
+  "profile": "shared_ci",
+  "correctness": "14/14 match Node on base and candidate",
+  "all_gated_medians_identical": true,
+  "rows": [
+    {
+      "probe": "01_nursery_churn",
+      "metric": "heap_used_bytes",
+      "base_median": 438744,
+      "candidate_median": 438744,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "01_nursery_churn",
+      "metric": "heap_total_bytes",
+      "base_median": 14680064,
+      "candidate_median": 14680064,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "01_nursery_churn",
+      "metric": "minor_cycles",
+      "base_median": 1,
+      "candidate_median": 1,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "01_nursery_churn",
+      "metric": "step_cycles",
+      "base_median": 1,
+      "candidate_median": 1,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "01_nursery_churn",
+      "metric": "copied_objects",
+      "base_median": 6690,
+      "candidate_median": 6690,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "01_nursery_churn",
+      "metric": "copied_bytes",
+      "base_median": 466392,
+      "candidate_median": 466392,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "01_nursery_churn",
+      "metric": "promoted_objects",
+      "base_median": 0,
+      "candidate_median": 0,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "01_nursery_churn",
+      "metric": "promoted_bytes",
+      "base_median": 0,
+      "candidate_median": 0,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "01_nursery_churn",
+      "metric": "freed_bytes",
+      "base_median": 11067816,
+      "candidate_median": 11067816,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "02_survivor_promotion",
+      "metric": "heap_used_bytes",
+      "base_median": 2562832,
+      "candidate_median": 2562832,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "02_survivor_promotion",
+      "metric": "heap_total_bytes",
+      "base_median": 15728640,
+      "candidate_median": 15728640,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "02_survivor_promotion",
+      "metric": "minor_cycles",
+      "base_median": 1,
+      "candidate_median": 1,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "02_survivor_promotion",
+      "metric": "step_cycles",
+      "base_median": 1,
+      "candidate_median": 1,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "02_survivor_promotion",
+      "metric": "copied_objects",
+      "base_median": 37366,
+      "candidate_median": 37366,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "02_survivor_promotion",
+      "metric": "copied_bytes",
+      "base_median": 1690264,
+      "candidate_median": 1690264,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "02_survivor_promotion",
+      "metric": "promoted_objects",
+      "base_median": 0,
+      "candidate_median": 0,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "02_survivor_promotion",
+      "metric": "promoted_bytes",
+      "base_median": 0,
+      "candidate_median": 0,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "02_survivor_promotion",
+      "metric": "freed_bytes",
+      "base_median": 8795408,
+      "candidate_median": 8795408,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "03_cross_gen_writes",
+      "metric": "heap_used_bytes",
+      "base_median": 528,
+      "candidate_median": 528,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "03_cross_gen_writes",
+      "metric": "heap_total_bytes",
+      "base_median": 12582912,
+      "candidate_median": 12582912,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "03_cross_gen_writes",
+      "metric": "minor_cycles",
+      "base_median": 1,
+      "candidate_median": 1,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "03_cross_gen_writes",
+      "metric": "step_cycles",
+      "base_median": 1,
+      "candidate_median": 1,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "03_cross_gen_writes",
+      "metric": "copied_objects",
+      "base_median": 4107,
+      "candidate_median": 4107,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "03_cross_gen_writes",
+      "metric": "copied_bytes",
+      "base_median": 197056,
+      "candidate_median": 197056,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "03_cross_gen_writes",
+      "metric": "promoted_objects",
+      "base_median": 0,
+      "candidate_median": 0,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "03_cross_gen_writes",
+      "metric": "promoted_bytes",
+      "base_median": 0,
+      "candidate_median": 0,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "03_cross_gen_writes",
+      "metric": "freed_bytes",
+      "base_median": 9240008,
+      "candidate_median": 9240008,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "04_dead_after_deep_stack",
+      "metric": "heap_used_bytes",
+      "base_median": 536,
+      "candidate_median": 536,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "04_dead_after_deep_stack",
+      "metric": "heap_total_bytes",
+      "base_median": 18874368,
+      "candidate_median": 18874368,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "04_dead_after_deep_stack",
+      "metric": "minor_cycles",
+      "base_median": 7,
+      "candidate_median": 7,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "04_dead_after_deep_stack",
+      "metric": "step_cycles",
+      "base_median": 7,
+      "candidate_median": 7,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "04_dead_after_deep_stack",
+      "metric": "copied_objects",
+      "base_median": 2666,
+      "candidate_median": 2666,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "04_dead_after_deep_stack",
+      "metric": "copied_bytes",
+      "base_median": 111336,
+      "candidate_median": 111336,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "04_dead_after_deep_stack",
+      "metric": "promoted_objects",
+      "base_median": 682,
+      "candidate_median": 682,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "04_dead_after_deep_stack",
+      "metric": "promoted_bytes",
+      "base_median": 27320,
+      "candidate_median": 27320,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "04_dead_after_deep_stack",
+      "metric": "freed_bytes",
+      "base_median": 76493952,
+      "candidate_median": 76493952,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "05_closure_capture",
+      "metric": "heap_used_bytes",
+      "base_median": 544,
+      "candidate_median": 544,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "05_closure_capture",
+      "metric": "heap_total_bytes",
+      "base_median": 14680064,
+      "candidate_median": 14680064,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "05_closure_capture",
+      "metric": "minor_cycles",
+      "base_median": 3,
+      "candidate_median": 3,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "05_closure_capture",
+      "metric": "step_cycles",
+      "base_median": 3,
+      "candidate_median": 3,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "05_closure_capture",
+      "metric": "copied_objects",
+      "base_median": 14285,
+      "candidate_median": 14285,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "05_closure_capture",
+      "metric": "copied_bytes",
+      "base_median": 534720,
+      "candidate_median": 534720,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "05_closure_capture",
+      "metric": "promoted_objects",
+      "base_median": 6154,
+      "candidate_median": 6154,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "05_closure_capture",
+      "metric": "promoted_bytes",
+      "base_median": 221624,
+      "candidate_median": 221624,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "05_closure_capture",
+      "metric": "freed_bytes",
+      "base_median": 27897872,
+      "candidate_median": 27897872,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "06_string_retention",
+      "metric": "heap_used_bytes",
+      "base_median": 1072,
+      "candidate_median": 1072,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "06_string_retention",
+      "metric": "heap_total_bytes",
+      "base_median": 22020096,
+      "candidate_median": 22020096,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "06_string_retention",
+      "metric": "minor_cycles",
+      "base_median": 4,
+      "candidate_median": 4,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "06_string_retention",
+      "metric": "step_cycles",
+      "base_median": 4,
+      "candidate_median": 4,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "06_string_retention",
+      "metric": "copied_objects",
+      "base_median": 270,
+      "candidate_median": 270,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "06_string_retention",
+      "metric": "copied_bytes",
+      "base_median": 70144,
+      "candidate_median": 70144,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "06_string_retention",
+      "metric": "promoted_objects",
+      "base_median": 14,
+      "candidate_median": 14,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "06_string_retention",
+      "metric": "promoted_bytes",
+      "base_median": 1072,
+      "candidate_median": 1072,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "06_string_retention",
+      "metric": "freed_bytes",
+      "base_median": 68136816,
+      "candidate_median": 68136816,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "07_array_grow_evacuate",
+      "metric": "heap_used_bytes",
+      "base_median": 1211232,
+      "candidate_median": 1211232,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "07_array_grow_evacuate",
+      "metric": "heap_total_bytes",
+      "base_median": 25165824,
+      "candidate_median": 25165824,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "07_array_grow_evacuate",
+      "metric": "minor_cycles",
+      "base_median": 5,
+      "candidate_median": 5,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "07_array_grow_evacuate",
+      "metric": "step_cycles",
+      "base_median": 5,
+      "candidate_median": 5,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "07_array_grow_evacuate",
+      "metric": "copied_objects",
+      "base_median": 6702,
+      "candidate_median": 6702,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "07_array_grow_evacuate",
+      "metric": "copied_bytes",
+      "base_median": 2636392,
+      "candidate_median": 2636392,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "07_array_grow_evacuate",
+      "metric": "promoted_objects",
+      "base_median": 6154,
+      "candidate_median": 6154,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "07_array_grow_evacuate",
+      "metric": "promoted_bytes",
+      "base_median": 841048,
+      "candidate_median": 841048,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "07_array_grow_evacuate",
+      "metric": "freed_bytes",
+      "base_median": 83570704,
+      "candidate_median": 83570704,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "08_map_set_sidetables",
+      "metric": "heap_used_bytes",
+      "base_median": 688,
+      "candidate_median": 688,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "08_map_set_sidetables",
+      "metric": "heap_total_bytes",
+      "base_median": 14680064,
+      "candidate_median": 14680064,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "08_map_set_sidetables",
+      "metric": "minor_cycles",
+      "base_median": 6,
+      "candidate_median": 6,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "08_map_set_sidetables",
+      "metric": "step_cycles",
+      "base_median": 6,
+      "candidate_median": 6,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "08_map_set_sidetables",
+      "metric": "copied_objects",
+      "base_median": 2461,
+      "candidate_median": 2461,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "08_map_set_sidetables",
+      "metric": "copied_bytes",
+      "base_median": 98472,
+      "candidate_median": 98472,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "08_map_set_sidetables",
+      "metric": "promoted_objects",
+      "base_median": 14,
+      "candidate_median": 14,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "08_map_set_sidetables",
+      "metric": "promoted_bytes",
+      "base_median": 592,
+      "candidate_median": 592,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "08_map_set_sidetables",
+      "metric": "freed_bytes",
+      "base_median": 56598904,
+      "candidate_median": 56598904,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "09_try_catch_roots",
+      "metric": "heap_used_bytes",
+      "base_median": 443520,
+      "candidate_median": 443520,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "09_try_catch_roots",
+      "metric": "heap_total_bytes",
+      "base_median": 14680064,
+      "candidate_median": 14680064,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "09_try_catch_roots",
+      "metric": "minor_cycles",
+      "base_median": 1,
+      "candidate_median": 1,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "09_try_catch_roots",
+      "metric": "step_cycles",
+      "base_median": 1,
+      "candidate_median": 1,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "09_try_catch_roots",
+      "metric": "copied_objects",
+      "base_median": 6673,
+      "candidate_median": 6673,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "09_try_catch_roots",
+      "metric": "copied_bytes",
+      "base_median": 462024,
+      "candidate_median": 462024,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "09_try_catch_roots",
+      "metric": "promoted_objects",
+      "base_median": 0,
+      "candidate_median": 0,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "09_try_catch_roots",
+      "metric": "promoted_bytes",
+      "base_median": 0,
+      "candidate_median": 0,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "09_try_catch_roots",
+      "metric": "freed_bytes",
+      "base_median": 10023568,
+      "candidate_median": 10023568,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "10_store_receiver_across_alloc",
+      "metric": "heap_used_bytes",
+      "base_median": 446776,
+      "candidate_median": 446776,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "10_store_receiver_across_alloc",
+      "metric": "heap_total_bytes",
+      "base_median": 22020096,
+      "candidate_median": 22020096,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "10_store_receiver_across_alloc",
+      "metric": "minor_cycles",
+      "base_median": 8,
+      "candidate_median": 8,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "10_store_receiver_across_alloc",
+      "metric": "step_cycles",
+      "base_median": 8,
+      "candidate_median": 8,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "10_store_receiver_across_alloc",
+      "metric": "copied_objects",
+      "base_median": 14625,
+      "candidate_median": 14625,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "10_store_receiver_across_alloc",
+      "metric": "copied_bytes",
+      "base_median": 787792,
+      "candidate_median": 787792,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "10_store_receiver_across_alloc",
+      "metric": "promoted_objects",
+      "base_median": 6107,
+      "candidate_median": 6107,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "10_store_receiver_across_alloc",
+      "metric": "promoted_bytes",
+      "base_median": 446368,
+      "candidate_median": 446368,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "10_store_receiver_across_alloc",
+      "metric": "freed_bytes",
+      "base_median": 88640584,
+      "candidate_median": 88640584,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "11_collect_at_depth",
+      "metric": "heap_used_bytes",
+      "base_median": 444720,
+      "candidate_median": 444720,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "11_collect_at_depth",
+      "metric": "heap_total_bytes",
+      "base_median": 12582912,
+      "candidate_median": 12582912,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "11_collect_at_depth",
+      "metric": "minor_cycles",
+      "base_median": 1,
+      "candidate_median": 1,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "11_collect_at_depth",
+      "metric": "step_cycles",
+      "base_median": 1,
+      "candidate_median": 1,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "11_collect_at_depth",
+      "metric": "copied_objects",
+      "base_median": 6686,
+      "candidate_median": 6686,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "11_collect_at_depth",
+      "metric": "copied_bytes",
+      "base_median": 462544,
+      "candidate_median": 462544,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "11_collect_at_depth",
+      "metric": "promoted_objects",
+      "base_median": 0,
+      "candidate_median": 0,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "11_collect_at_depth",
+      "metric": "promoted_bytes",
+      "base_median": 0,
+      "candidate_median": 0,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "11_collect_at_depth",
+      "metric": "freed_bytes",
+      "base_median": 8974576,
+      "candidate_median": 8974576,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "12_large_live_set",
+      "metric": "heap_used_bytes",
+      "base_median": 569448,
+      "candidate_median": 569448,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "12_large_live_set",
+      "metric": "heap_total_bytes",
+      "base_median": 74448896,
+      "candidate_median": 74448896,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "12_large_live_set",
+      "metric": "minor_cycles",
+      "base_median": 5,
+      "candidate_median": 5,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "12_large_live_set",
+      "metric": "step_cycles",
+      "base_median": 5,
+      "candidate_median": 5,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "12_large_live_set",
+      "metric": "copied_objects",
+      "base_median": 104050,
+      "candidate_median": 104050,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "12_large_live_set",
+      "metric": "copied_bytes",
+      "base_median": 4162008,
+      "candidate_median": 4162008,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "12_large_live_set",
+      "metric": "promoted_objects",
+      "base_median": 530030,
+      "candidate_median": 530030,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "12_large_live_set",
+      "metric": "promoted_bytes",
+      "base_median": 21201208,
+      "candidate_median": 21201208,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "12_large_live_set",
+      "metric": "freed_bytes",
+      "base_median": 63732784,
+      "candidate_median": 63732784,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "13_large_eden_survivors",
+      "metric": "heap_used_bytes",
+      "base_median": 444976,
+      "candidate_median": 444976,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "13_large_eden_survivors",
+      "metric": "heap_total_bytes",
+      "base_median": 61865984,
+      "candidate_median": 61865984,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "13_large_eden_survivors",
+      "metric": "minor_cycles",
+      "base_median": 3,
+      "candidate_median": 3,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "13_large_eden_survivors",
+      "metric": "step_cycles",
+      "base_median": 3,
+      "candidate_median": 3,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "13_large_eden_survivors",
+      "metric": "copied_objects",
+      "base_median": 382868,
+      "candidate_median": 382868,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "13_large_eden_survivors",
+      "metric": "copied_bytes",
+      "base_median": 21804904,
+      "candidate_median": 21804904,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "13_large_eden_survivors",
+      "metric": "promoted_objects",
+      "base_median": 387152,
+      "candidate_median": 387152,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "13_large_eden_survivors",
+      "metric": "promoted_bytes",
+      "base_median": 21975560,
+      "candidate_median": 21975560,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "13_large_eden_survivors",
+      "metric": "freed_bytes",
+      "base_median": 108045936,
+      "candidate_median": 108045936,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "14_grow_then_churn",
+      "metric": "heap_used_bytes",
+      "base_median": 429408,
+      "candidate_median": 429408,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "14_grow_then_churn",
+      "metric": "heap_total_bytes",
+      "base_median": 23068672,
+      "candidate_median": 23068672,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "14_grow_then_churn",
+      "metric": "minor_cycles",
+      "base_median": 22,
+      "candidate_median": 22,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "14_grow_then_churn",
+      "metric": "step_cycles",
+      "base_median": 23,
+      "candidate_median": 23,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "14_grow_then_churn",
+      "metric": "copied_objects",
+      "base_median": 330,
+      "candidate_median": 330,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "14_grow_then_churn",
+      "metric": "copied_bytes",
+      "base_median": 1277072,
+      "candidate_median": 1277072,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "14_grow_then_churn",
+      "metric": "promoted_objects",
+      "base_median": 405282,
+      "candidate_median": 405282,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "14_grow_then_churn",
+      "metric": "promoted_bytes",
+      "base_median": 147967848,
+      "candidate_median": 147967848,
+      "base_spread": 0,
+      "candidate_spread": 0
+    },
+    {
+      "probe": "14_grow_then_churn",
+      "metric": "freed_bytes",
+      "base_median": 119549744,
+      "candidate_median": 119549744,
+      "base_spread": 0,
+      "candidate_spread": 0
+    }
+  ]
+}

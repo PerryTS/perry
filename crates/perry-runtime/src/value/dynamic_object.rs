@@ -311,6 +311,15 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
     property_name_ptr: *const i8,
     property_name_len: usize,
 ) -> f64 {
+    if !property_name_ptr.is_null() && property_name_len != 0 {
+        let name = std::slice::from_raw_parts(property_name_ptr as *const u8, property_name_len);
+        if let Some(value) = crate::object::native_get::try_data_get_bytes(
+            JSValue::from_bits(obj_value.to_bits()),
+            name,
+        ) {
+            return f64::from_bits(value.bits());
+        }
+    }
     // A revocable Proxy value reaching this generic dynamic getter must go
     // through the Proxy's `get` trap. Proxy ids live at the TOP of the handle
     // band ([PROXY_ID_BAND_START, HANDLE_BAND_MAX)), so without this branch the

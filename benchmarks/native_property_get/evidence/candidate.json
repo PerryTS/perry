@@ -1,0 +1,280 @@
+{
+  "reflect_own": {
+    "iterations": 200000,
+    "instructions": [
+      143386174,
+      143385957,
+      143385319
+    ],
+    "median": 143385957,
+    "get_inclusive_percent": 97.2027972027972,
+    "get_leaf_percent_of_program": [
+      [
+        "perry_runtime::object::class_registry::class_meta::is_anon_shape_class_id",
+        44.40559440559441
+      ],
+      [
+        "perry_runtime::object::native_get::try_data_get_bytes",
+        36.01398601398601
+      ],
+      [
+        "perry_runtime::object::keys_lookup::keys_array_dense_slots",
+        6.643356643356643
+      ],
+      [
+        "core::str::converts::from_utf8",
+        4.195804195804196
+      ],
+      [
+        "perry_runtime::object::keys_lookup::keys_find_slot_by_bytes",
+        2.4475524475524475
+      ],
+      [
+        "perry_runtime::object::field_get_set::accessors::object_field_at_with_live",
+        2.097902097902098
+      ],
+      [
+        "js_reflect_get",
+        0.6993006993006993
+      ],
+      [
+        "<perry_runtime::process::env_misc::CACHED_ENV::{K#0}::{closure#1} as core::ops::function::FnOnce<(core::option::Option<&mut core::option::Option<core::cell::Cell<f64>>>,)>>::call_once",
+        0.6993006993006993
+      ]
+    ],
+    "sampled_instructions": 143000858,
+    "binary_sha256": "827154821308f72122097f731f94852b498ea02ca8579442536fef79a1d05e3b"
+  },
+  "reflect_proto": {
+    "iterations": 200000,
+    "instructions": [
+      305995648,
+      305995727,
+      305995519
+    ],
+    "median": 305995648,
+    "get_inclusive_percent": 99.34533551554829,
+    "get_leaf_percent_of_program": [
+      [
+        "perry_runtime::object::class_registry::state::class_decl_prototype_object",
+        31.42389525368249
+      ],
+      [
+        "perry_runtime::object::native_get::try_data_get_bytes",
+        24.713584288052374
+      ],
+      [
+        "perry_runtime::object::class_registry::class_meta::is_anon_shape_class_id",
+        11.129296235679215
+      ],
+      [
+        "perry_runtime::object::class_registry::prototype_objects::class_prototype_object",
+        8.51063829787234
+      ],
+      [
+        "<std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&i32>",
+        6.219312602291326
+      ],
+      [
+        "perry_runtime::object::arguments::is_arguments_object",
+        4.4189852700491
+      ],
+      [
+        "perry_runtime::object::keys_lookup::keys_array_dense_slots",
+        4.4189852700491
+      ],
+      [
+        "perry_runtime::object::keys_lookup::keys_find_slot_by_bytes",
+        2.618657937806874
+      ],
+      [
+        "core::str::converts::from_utf8",
+        2.127659574468085
+      ],
+      [
+        "<core::hash::sip::Hasher<core::hash::sip::Sip13Rounds> as core::hash::Hasher>::write",
+        1.4729950900163666
+      ],
+      [
+        "js_reflect_get",
+        1.309328968903437
+      ],
+      [
+        "<perry_runtime::process::env_misc::CACHED_ENV::{K#0}::{closure#1} as core::ops::function::FnOnce<(core::option::Option<&mut core::option::Option<core::cell::Cell<f64>>>,)>>::call_once",
+        0.8183306055646481
+      ],
+      [
+        "perry_runtime::object::field_get_set::accessors::object_field_at_with_live",
+        0.16366612111292964
+      ]
+    ],
+    "sampled_instructions": 305501833,
+    "binary_sha256": "b00e40d520ad8dad3928a2211df4dfee7d12a7d63f49a5fe8036792a50cc3f5b"
+  },
+  "iterator": {
+    "iterations": 200000,
+    "instructions": [
+      886162527,
+      886162328,
+      886163743
+    ],
+    "median": 886162527,
+    "get_inclusive_percent": 0.7900677200902935,
+    "get_leaf_percent_of_program": [
+      [
+        "perry_runtime::url::search_params::shape_is_url_search_params",
+        0.11286681715575621
+      ],
+      [
+        "<alloc::string::String>::from_utf8_lossy",
+        0.056433408577878104
+      ],
+      [
+        "perry_runtime::typedarray_props::typed_array_addr_from_value",
+        0.056433408577878104
+      ],
+      [
+        "perry_runtime::object::keys_lookup::keys_find_slot_by_bytes",
+        0.056433408577878104
+      ],
+      [
+        "perry_runtime::object::prototype_chain::meta_capable_object",
+        0.056433408577878104
+      ],
+      [
+        "perry_runtime::object::field_get_set::prototype_override::inherited_field_if_overridden",
+        0.056433408577878104
+      ],
+      [
+        "core::str::converts::from_utf8",
+        0.056433408577878104
+      ],
+      [
+        "perry_runtime::object::class_meta_registry::get_parent_class_id",
+        0.056433408577878104
+      ],
+      [
+        "perry_runtime::object::keys_lookup::keys_array_dense_slots",
+        0.056433408577878104
+      ],
+      [
+        "perry_runtime::buffer::header::is_registered_buffer",
+        0.056433408577878104
+      ],
+      [
+        "js_object_get_field_by_name",
+        0.056433408577878104
+      ],
+      [
+        "perry_runtime::object::prototype_chain::object_static_prototype",
+        0.056433408577878104
+      ],
+      [
+        "perry_runtime::object::field_get_set::accessors::prototype_property_value_with_guard",
+        0.056433408577878104
+      ]
+    ],
+    "sampled_instructions": 886005316,
+    "binary_sha256": "9a1a0d4c17406b127ddc54655ca55cb7d0af40faf98968c231da0bc927105931"
+  },
+  "thenable": {
+    "iterations": 20000,
+    "instructions": [
+      320438913,
+      320443434,
+      320441221
+    ],
+    "median": 320441221,
+    "get_inclusive_percent": 2.6604068857589986,
+    "get_leaf_percent_of_program": [
+      [
+        "perry_runtime::object::class_registry::class_meta::is_anon_shape_class_id",
+        1.5649452269170578
+      ],
+      [
+        "perry_runtime::object::native_get::try_data_get_bytes",
+        0.9389671361502347
+      ],
+      [
+        "perry_runtime::object::keys_lookup::keys_find_slot_by_bytes",
+        0.1564945226917058
+      ]
+    ],
+    "sampled_instructions": 319501917,
+    "binary_sha256": "abd61256d1ad0cf5d612c00a87e32e0d56ad833138e75afdcc728e2fa41fdfd9"
+  },
+  "tojson": {
+    "iterations": 100000,
+    "instructions": [
+      423858278,
+      423858072,
+      423858284
+    ],
+    "median": 423858278,
+    "get_inclusive_percent": 28.217237308146398,
+    "get_leaf_percent_of_program": [
+      [
+        "perry_runtime::object::class_registry::state::class_decl_prototype_object",
+        7.319952774498229
+      ],
+      [
+        "perry_runtime::object::native_get::try_data_get_bytes",
+        5.076741440377804
+      ],
+      [
+        "perry_runtime::object::class_registry::class_meta::is_anon_shape_class_id",
+        5.076741440377804
+      ],
+      [
+        "perry_runtime::object::class_registry::prototype_objects::class_prototype_object",
+        2.243211334120425
+      ],
+      [
+        "perry_runtime::perf_hooks::is_perf_entry_object",
+        2.125147579693034
+      ],
+      [
+        "core::str::converts::from_utf8",
+        2.0070838252656436
+      ],
+      [
+        "<std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&i32>",
+        1.770956316410862
+      ],
+      [
+        "js_reflect_get",
+        0.9445100354191264
+      ],
+      [
+        "perry_runtime::object::keys_lookup::keys_array_dense_slots",
+        0.5903187721369539
+      ],
+      [
+        "perry_runtime::object::keys_lookup::keys_find_slot_by_bytes",
+        0.2361275088547816
+      ],
+      [
+        "perry_runtime::object::field_get_set::accessors::object_field_at_with_live",
+        0.2361275088547816
+      ],
+      [
+        "<perry_runtime::process::env_misc::CACHED_ENV::{K#0}::{closure#1} as core::ops::function::FnOnce<(core::option::Option<&mut core::option::Option<core::cell::Cell<f64>>>,)>>::call_once",
+        0.2361275088547816
+      ],
+      [
+        "perry_runtime::object::arguments::is_arguments_object",
+        0.1180637544273908
+      ],
+      [
+        "__memcmp_evex_movbe",
+        0.1180637544273908
+      ],
+      [
+        "<core::hash::sip::Hasher<core::hash::sip::Sip13Rounds> as core::hash::Hasher>::write",
+        0.1180637544273908
+      ]
+    ],
+    "sampled_instructions": 423502541,
+    "binary_sha256": "8772b57dfb1695585556246aca33a17550b3051f7e679a947ae43b4bb22fc8d7"
+  }
+}

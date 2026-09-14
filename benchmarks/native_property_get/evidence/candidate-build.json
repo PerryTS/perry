@@ -1,0 +1,17 @@
+{
+  "commit": "9fda98df68d9fac3c08b2385fae007aa9f5278df",
+  "node": "v26.5.1",
+  "source_patch_sha256": "3311791400a786a77d4c0a612dfdeffe16834ddaad24abdd15ec9783563bbc8d",
+  "artifacts": {
+    "perry": "0a1de70b4120ca8a578495031cd47c23f368dd1af87ba740bee1e95422353641",
+    "libperry_runtime.a": "ee64fc51d1cf58565c79edd88e0c449888920df0fddf69048ae7e0e2e612e0d1",
+    "libperry_stdlib.a": "66b042e43daa18f116074ce891ddd93ac8cff8f4055dfb11bbb3a69291b665ed"
+  },
+  "probes": {
+    "reflect_own": "be47a8c4951b74b7eb1303afd1b02ed929b954f485cf7f0d10194968c1f29cba",
+    "reflect_proto": "45e82bd599efdcff78032103ec31d87ad087afdf7bdc7438b4abf91142b8b2c3",
+    "iterator": "da8ac63a3918d5aede6185b823e94d896dab89327a2b2718278a8355df1240a4",
+    "thenable": "f418d2de753b6baef4d2cad9fba2dd7d41d44e460f9da74fad84778b0c6374ec",
+    "tojson": "139928fda9c0e8f2c2d1a38feb4ac8f18ef14d8dad13114b325b06650e2155e0"
+  }
+}

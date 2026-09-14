@@ -1,0 +1,20 @@
+[
+  {
+    "mutation": "fast_path_removed",
+    "test": "object::native_get::tests::own_data_is_served_and_matches_forced_slow_for_all_value_kinds",
+    "exit_code": 101,
+    "assertion_failed": true
+  },
+  {
+    "mutation": "accessor_guard_removed",
+    "test": "object::native_get::tests::accessor_bloom_guard_preserves_own_and_inherited_getter_calls",
+    "exit_code": 101,
+    "assertion_failed": true
+  },
+  {
+    "mutation": "exotic_expando_ignored",
+    "test": "object::native_get::tests::regexp_expandos_and_accessors_remain_on_the_exotic_path",
+    "exit_code": 101,
+    "assertion_failed": true
+  }
+]

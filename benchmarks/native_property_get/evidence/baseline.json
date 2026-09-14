@@ -1,0 +1,428 @@
+{
+  "reflect_own": {
+    "iterations": 200000,
+    "instructions": [
+      498582567,
+      498582572,
+      498582459
+    ],
+    "median": 498582567,
+    "get_inclusive_percent": 98.79518072289157,
+    "get_leaf_percent_of_program": [
+      [
+        "js_reflect_get",
+        12.951807228915662
+      ],
+      [
+        "js_object_get_field_by_name",
+        10.943775100401606
+      ],
+      [
+        "perry_runtime::object::field_get_set::get_field_by_name_tail::get_field_by_name_object_tail",
+        9.337349397590362
+      ],
+      [
+        "perry_runtime::object::class_registry::parent_static::is_class_object_ptr",
+        9.337349397590362
+      ],
+      [
+        "js_to_primitive",
+        9.036144578313253
+      ],
+      [
+        "<perry_runtime::string::OwnedStringBytes>::copy_of_key",
+        4.216867469879518
+      ],
+      [
+        "perry_runtime::async_hooks::is_async_resource_handle",
+        4.116465863453815
+      ],
+      [
+        "core::str::converts::from_utf8",
+        3.6144578313253013
+      ],
+      [
+        "perry_runtime::closure::dynamic_props::is_closure_ptr",
+        2.8112449799196786
+      ],
+      [
+        "perry_runtime::object::arguments::is_arguments_object",
+        2.710843373493976
+      ],
+      [
+        "perry_runtime::proxy::target_get_property_key",
+        2.710843373493976
+      ],
+      [
+        "perry_runtime::object::shapes::shape_live_inline_slot_count_by_id",
+        2.710843373493976
+      ],
+      [
+        "perry_runtime::object::class_meta_registry::get_parent_class_id",
+        2.610441767068273
+      ],
+      [
+        "perry_runtime::buffer::header::is_registered_buffer",
+        2.108433734939759
+      ],
+      [
+        "perry_runtime::object::field_get_set::has_property::closure_dynamic_prop_by_key",
+        1.7068273092369477
+      ],
+      [
+        "perry_runtime::proxy::reflect_value_is_object",
+        1.7068273092369477
+      ],
+      [
+        "perry_runtime::temporal::is_temporal_cell_addr",
+        1.5060240963855422
+      ],
+      [
+        "perry_runtime::typedarray_props::typed_array_addr_from_value",
+        1.5060240963855422
+      ],
+      [
+        "perry_runtime::date::is_date_cell_addr",
+        1.5060240963855422
+      ],
+      [
+        "trunc",
+        1.104417670682731
+      ]
+    ],
+    "sampled_instructions": 498002988,
+    "binary_sha256": "e2c4b05f839d026a5c5f5bd3d49f5e647855b1f45a23a5c49d0f04fd179b9082"
+  },
+  "reflect_proto": {
+    "iterations": 200000,
+    "instructions": [
+      1369594500,
+      1369593934,
+      1369594468
+    ],
+    "median": 1369594468,
+    "get_inclusive_percent": 98.90470974808325,
+    "get_leaf_percent_of_program": [
+      [
+        "perry_runtime::object::class_meta_registry::get_parent_class_id",
+        16.502373128879153
+      ],
+      [
+        "js_object_get_field_by_name",
+        10.076670317634173
+      ],
+      [
+        "perry_runtime::object::class_registry::state::class_decl_prototype_object",
+        7.6305220883534135
+      ],
+      [
+        "perry_runtime::object::field_get_set::get_field_by_name_tail::get_field_by_name_object_tail",
+        7.484483388097846
+      ],
+      [
+        "js_reflect_get",
+        4.490690032858708
+      ],
+      [
+        "perry_runtime::object::class_registry::prototype_objects::resolve_proto_chain_field_inner",
+        4.417670682730924
+      ],
+      [
+        "core::str::converts::from_utf8",
+        3.833515881708653
+      ],
+      [
+        "perry_runtime::async_hooks::is_async_resource_handle",
+        3.687477181453085
+      ],
+      [
+        "perry_runtime::closure::dynamic_props::is_closure_ptr",
+        3.4684191310697337
+      ],
+      [
+        "trunc",
+        2.9937933552391383
+      ],
+      [
+        "perry_runtime::object::arguments::is_arguments_object",
+        2.8112449799196786
+      ],
+      [
+        "perry_runtime::object::class_registry::parent_static::is_class_object_ptr",
+        2.7747353048557866
+      ],
+      [
+        "perry_runtime::buffer::header::is_registered_buffer",
+        2.701715954728003
+      ],
+      [
+        "<perry_runtime::string::OwnedStringBytes>::copy_of_key",
+        2.701715954728003
+      ],
+      [
+        "perry_runtime::temporal::is_temporal_cell_addr",
+        2.701715954728003
+      ],
+      [
+        "js_to_primitive",
+        2.3366192040890836
+      ],
+      [
+        "perry_runtime::proxy::reflect_value_is_object",
+        1.8985031033223805
+      ],
+      [
+        "perry_runtime::object::class_registry::prototype_objects::class_prototype_object",
+        1.8619934282584885
+      ],
+      [
+        "perry_runtime::object::prototype_chain::meta_capable_object",
+        1.3508579773640015
+      ],
+      [
+        "perry_runtime::closure::dynamic_props::closure_get_dynamic_prop",
+        1.3143483023001095
+      ]
+    ],
+    "sampled_instructions": 1369508217,
+    "binary_sha256": "6defa98c303cff2f955b8611a71b528144ff0697d7c6d4f041cbd10f7f63025b"
+  },
+  "iterator": {
+    "iterations": 200000,
+    "instructions": [
+      886642572,
+      886643407,
+      886642216
+    ],
+    "median": 886642572,
+    "get_inclusive_percent": 0.676818950930626,
+    "get_leaf_percent_of_program": [
+      [
+        "perry_runtime::object::field_get_set::get_field_by_name_tail::get_field_by_name_object_tail",
+        0.11280315848843768
+      ],
+      [
+        "perry_runtime::object::prototype_chain::meta_capable_object",
+        0.11280315848843768
+      ],
+      [
+        "perry_runtime::object::class_registry::parent_static::is_class_object_ptr",
+        0.11280315848843768
+      ],
+      [
+        "mi_free",
+        0.05640157924421884
+      ],
+      [
+        "js_array_get_f64",
+        0.05640157924421884
+      ],
+      [
+        "js_object_get_field_by_name",
+        0.05640157924421884
+      ],
+      [
+        "perry_runtime::object::field_get_set::accessors::array_subclass_prototype_field",
+        0.05640157924421884
+      ],
+      [
+        "__memmove_avx512_unaligned_erms",
+        0.05640157924421884
+      ],
+      [
+        "<alloc::string::String>::from_utf8_lossy",
+        0.05640157924421884
+      ]
+    ],
+    "sampled_instructions": 886505319,
+    "binary_sha256": "46bc863ba75b118f1193d2a3fb4cfc22c1deb50ab23a56f58b573b217b62bb50"
+  },
+  "thenable": {
+    "iterations": 20000,
+    "instructions": [
+      365635735,
+      365634266,
+      365626025
+    ],
+    "median": 365634266,
+    "get_inclusive_percent": 15.500685871056241,
+    "get_leaf_percent_of_program": [
+      [
+        "perry_runtime::object::field_get_set::get_field_by_name_tail::get_field_by_name_object_tail",
+        1.7832647462277091
+      ],
+      [
+        "js_object_get_field_by_name",
+        1.7832647462277091
+      ],
+      [
+        "perry_runtime::object::object_ops::keys_array::own_key_present",
+        1.0973936899862826
+      ],
+      [
+        "js_dynamic_object_get_property",
+        0.9602194787379973
+      ],
+      [
+        "perry_runtime::object::class_meta_registry::get_parent_class_id",
+        0.823045267489712
+      ],
+      [
+        "core::str::converts::from_utf8",
+        0.6858710562414266
+      ],
+      [
+        "perry_runtime::buffer::header::is_registered_buffer",
+        0.411522633744856
+      ],
+      [
+        "perry_runtime::date::is_date_cell_addr",
+        0.411522633744856
+      ],
+      [
+        "<std::thread::local::LocalKey<core::cell::RefCell<alloc::vec::Vec<perry_runtime::gc::roots::RuntimeHandleSlot>>>>::with::<<perry_runtime::gc::roots::runtime_handles::RuntimeHandleScope as core::ops::drop::Drop>::drop::{closure#0}, ()>",
+        0.411522633744856
+      ],
+      [
+        "perry_runtime::object::class_registry::parent_static::is_class_object_ptr",
+        0.411522633744856
+      ],
+      [
+        "perry_runtime::object::field_get_set::has_property::closure_dynamic_prop_by_key",
+        0.411522633744856
+      ],
+      [
+        "perry_runtime::object::keys_lookup::keys_array_dense_slots",
+        0.411522633744856
+      ],
+      [
+        "perry_runtime::object::object_keys_array",
+        0.411522633744856
+      ],
+      [
+        "perry_runtime::temporal::is_temporal_cell_addr",
+        0.411522633744856
+      ],
+      [
+        "perry_runtime::map::is_registered_map",
+        0.27434842249657065
+      ],
+      [
+        "perry_runtime::object::field_get_set::enumeration::canonical_array_index",
+        0.27434842249657065
+      ],
+      [
+        "perry_runtime::object::field_get_set::get_field_by_name_async::async_resource_property",
+        0.27434842249657065
+      ],
+      [
+        "perry_runtime::arena::allocators::arena_alloc",
+        0.27434842249657065
+      ],
+      [
+        "<perry_runtime::object::class_image::ImageTable<std::sync::poison::rwlock::RwLock<core::option::Option<std::collections::hash::map::HashMap<u32, perry_runtime::object::class_registry::state::ClassVTable, perry_runtime::fast_hash::PtrHasher>>>>>::read",
+        0.27434842249657065
+      ],
+      [
+        "perry_runtime::async_hooks::is_async_resource_handle",
+        0.27434842249657065
+      ]
+    ],
+    "sampled_instructions": 364502187,
+    "binary_sha256": "d4fba118c00d48a015b0cd5b29238b10cc85306cdf7202f95f456e58c7366791"
+  },
+  "tojson": {
+    "iterations": 100000,
+    "instructions": [
+      742647158,
+      742646366,
+      742646720
+    ],
+    "median": 742646720,
+    "get_inclusive_percent": 50.707070707070706,
+    "get_leaf_percent_of_program": [
+      [
+        "perry_runtime::object::class_meta_registry::get_parent_class_id",
+        6.734006734006734
+      ],
+      [
+        "perry_runtime::object::field_get_set::get_field_by_name_tail::get_field_by_name_object_tail",
+        6.127946127946128
+      ],
+      [
+        "js_object_get_field_by_name",
+        5.3872053872053876
+      ],
+      [
+        "perry_runtime::object::class_registry::state::class_decl_prototype_object",
+        3.771043771043771
+      ],
+      [
+        "perry_runtime::closure::dynamic_props::is_closure_ptr",
+        3.2323232323232323
+      ],
+      [
+        "<perry_runtime::string::OwnedStringBytes>::copy_of_key",
+        3.0976430976430978
+      ],
+      [
+        "perry_runtime::async_hooks::is_async_resource_handle",
+        2.356902356902357
+      ],
+      [
+        "perry_runtime::object::class_registry::prototype_objects::resolve_proto_chain_field_inner",
+        2.2222222222222223
+      ],
+      [
+        "perry_runtime::object::class_registry::parent_static::is_class_object_ptr",
+        1.8181818181818181
+      ],
+      [
+        "core::str::converts::from_utf8",
+        1.6161616161616161
+      ],
+      [
+        "perry_runtime::buffer::header::is_registered_buffer",
+        1.5488215488215489
+      ],
+      [
+        "perry_runtime::temporal::is_temporal_cell_addr",
+        1.2794612794612794
+      ],
+      [
+        "perry_runtime::date::is_date_cell_addr",
+        1.2121212121212122
+      ],
+      [
+        "perry_runtime::object::arguments::is_arguments_object",
+        0.9427609427609428
+      ],
+      [
+        "<std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&i32>",
+        0.8754208754208754
+      ],
+      [
+        "perry_runtime::async_hooks::try_async_resource_property_dispatch",
+        0.8754208754208754
+      ],
+      [
+        "trunc",
+        0.8080808080808081
+      ],
+      [
+        "perry_runtime::object::object_keys_array",
+        0.8080808080808081
+      ],
+      [
+        "perry_runtime::typedarray_props::typed_array_addr_from_value",
+        0.8080808080808081
+      ],
+      [
+        "perry_runtime::object::field_get_set::has_property::closure_dynamic_prop_by_key",
+        0.8080808080808081
+      ]
+    ],
+    "sampled_instructions": 742504455,
+    "binary_sha256": "fbde7ea49d88679942de1296eadd260ba780e8b352e1794567d17d428f3de268"
+  }
+}
