@@ -149,25 +149,35 @@ pub struct ListenArgs {
 /// `listen(cb)` form (first and only arg is a function) is handled too.
 ///
 /// # Safety
-/// `args_array` must be `0`/null or a valid Perry-runtime `ArrayHeader`.
+/// `args_array` must be `0`/null or a live, forwarding-resolved, GC-managed
+/// Perry-runtime `ArrayHeader`. Borrowed values use `parse_listen_values`.
 pub unsafe fn parse_listen_args(args_array: i64) -> ListenArgs {
+    let arr_ptr = args_array as *const ArrayHeader;
+    if arr_ptr.is_null() {
+        return parse_listen_values(std::iter::empty());
+    }
+    // Codegen passes a clean raw pointer; reject a stray NaN-boxed value
+    // rather than dereferencing tag bits as an address.
+    if (args_array as u64) >> 48 != 0 {
+        return parse_listen_values(std::iter::empty());
+    }
+    let len = (*arr_ptr).length as usize;
+    parse_listen_values(
+        (0..len).map(|i| f64::from_bits(perry_ffi::js_array_get(arr_ptr, i as u32).bits())),
+    )
+}
+
+/// Resolve listen overloads from values, without requiring an array container.
+/// Dynamic handle dispatch already has a borrowed argument slice; it must not
+/// disguise stack storage as a managed `ArrayHeader` (#10137).
+pub(super) unsafe fn parse_listen_values(values: impl IntoIterator<Item = f64>) -> ListenArgs {
     let mut out = ListenArgs {
         opts: f64::from_bits(TAG_UNDEFINED),
         host: None,
         callback: 0,
     };
-    let arr_ptr = args_array as *const ArrayHeader;
-    if arr_ptr.is_null() {
-        return out;
-    }
-    // Codegen passes a clean raw pointer; reject a stray NaN-boxed value
-    // rather than dereferencing tag bits as an address.
-    if (args_array as u64) >> 48 != 0 {
-        return out;
-    }
-    let len = (*arr_ptr).length as usize;
-    for i in 0..len {
-        let bits = perry_ffi::js_array_get(arr_ptr, i as u32).bits();
+    for (i, value) in values.into_iter().enumerate() {
+        let bits = value.to_bits();
         let v = JsValue::from_bits(bits);
         // The completion callback is the (single) function argument — match it
         // by value type, not position, so it's picked up wherever it floats.
@@ -398,6 +408,62 @@ mod tests {
             parsed.callback, 0,
             "a host string must not be read as a callback"
         );
+    }
+
+    extern "C" fn listen_test_callback() -> f64 {
+        f64::from_bits(TAG_UNDEFINED)
+    }
+
+    #[test]
+    fn listen_borrowed_values_preserve_port_host_backlog_and_callback() {
+        let scope = perry_ffi::TransientRootScope::enter();
+        let callback = scope.root_nanbox(f64::from_bits(
+            JsValue::from_object_ptr(perry_runtime::closure::js_closure_alloc(
+                listen_test_callback as *const u8,
+                0,
+            ))
+            .bits(),
+        ));
+        let host = scope.root_nanbox(f64::from_bits(
+            JsValue::from_string_ptr(perry_ffi::alloc_string("127.0.0.1").as_raw()).bits(),
+        ));
+        unsafe {
+            // The dynamic dispatcher receives values with no array/GC header.
+            let parsed = parse_listen_values([0.0, host.get(), 128.0, callback.get()]);
+            assert_eq!(parsed.opts.to_bits(), 0.0f64.to_bits());
+            assert_eq!(extract_port(parsed.opts, 443), 0);
+            assert_eq!(parsed.host.as_deref(), Some("127.0.0.1"));
+            assert_eq!(parsed.callback as u64, callback.get().to_bits() & PTR_MASK);
+
+            let parsed = parse_listen_values([0.0, callback.get()]);
+            assert_eq!(extract_port(parsed.opts, 443), 0);
+            assert!(parsed.host.is_none());
+            assert_eq!(parsed.callback as u64, callback.get().to_bits() & PTR_MASK);
+
+            let parsed = parse_listen_values([callback.get()]);
+            assert_eq!(parsed.opts.to_bits(), TAG_UNDEFINED);
+            assert!(parsed.host.is_none());
+            assert_eq!(parsed.callback as u64, callback.get().to_bits() & PTR_MASK);
+        }
+    }
+
+    #[test]
+    fn listen_managed_array_keeps_shifted_element_storage() {
+        unsafe {
+            let args = make_args(&[
+                JsValue::from_number(999.0),
+                JsValue::from_number(0.0),
+                JsValue::from_string_ptr(perry_ffi::alloc_string("127.0.0.1").as_raw()),
+            ]);
+            let arr = args as *mut perry_runtime::array::ArrayHeader;
+            let capacity = (*arr).capacity;
+            assert_eq!(perry_runtime::array::js_array_shift_f64(arr), 999.0);
+            assert_eq!((*arr).capacity, capacity - 1, "queue offset must be live");
+            let parsed = parse_listen_args(args);
+            assert_eq!(extract_port(parsed.opts, 443), 0);
+            assert_eq!(parsed.host.as_deref(), Some("127.0.0.1"));
+            assert_eq!(parsed.callback, 0);
+        }
     }
 
     /// Encode `bytes` (len ≤ 5) as an inline SSO `SHORT_STRING_TAG`

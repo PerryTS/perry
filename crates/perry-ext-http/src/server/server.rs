@@ -777,10 +777,19 @@ fn spawn_rr_inject_loop(
 /// and the (single) function callback wherever it lands. Issue #2041.
 #[no_mangle]
 pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_array: i64) -> i64 {
+    listen_http_server(
+        server_handle,
+        crate::server::types::parse_listen_args(args_array),
+    )
+}
+
+pub(super) unsafe fn listen_http_server(
+    server_handle: i64,
+    parsed: crate::server::types::ListenArgs,
+) -> i64 {
     // Returns `server_handle` so `createServer(...).listen(...).on(...)` chains
     // correctly. Pre-#2129 this was `-> ()` and chained sites broke at runtime
     // with `undefined.on is not a function`.
-    let parsed = crate::server::types::parse_listen_args(args_array);
     let opts_f64 = parsed.opts;
     let port = extract_port(opts_f64, 3000);
     let host = parsed

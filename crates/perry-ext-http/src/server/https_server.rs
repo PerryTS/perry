@@ -420,8 +420,17 @@ pub(crate) fn set_ticket_keys(server_handle: i64, value: f64) {
 /// for the overload resolution. Issue #2041.
 #[no_mangle]
 pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_array: i64) -> i64 {
+    listen_https_server(
+        server_handle,
+        crate::server::types::parse_listen_args(args_array),
+    )
+}
+
+pub(super) unsafe fn listen_https_server(
+    server_handle: i64,
+    parsed: crate::server::types::ListenArgs,
+) -> i64 {
     // Returns `server_handle` for chainability (#2129).
-    let parsed = crate::server::types::parse_listen_args(args_array);
     let opts_f64 = parsed.opts;
     let port = extract_port(opts_f64, 443);
     let host = parsed
