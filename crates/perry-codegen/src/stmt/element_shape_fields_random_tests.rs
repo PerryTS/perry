@@ -208,10 +208,26 @@ fn fields_body() -> Vec<Stmt> {
 }
 
 /// How many side exits the clone can take per iteration — one branch per
-/// residual / tag test that leaves for the slow preheader.
+/// residual / tag test that leaves the clone.
+///
+/// A side exit targets the slow preheader directly, or — once the clone keeps
+/// its accumulator or counter in native storage (`stmt/element_shape_native.rs`)
+/// — the write-back trampoline that publishes them and then enters the slow
+/// preheader. Both spellings are one exit; counting only the first would make
+/// every assertion below read zero for a clone that exits through the second.
 fn side_exit_count(fast: &str) -> usize {
     fast.matches("label %element_shape.loop.slow.preheader")
         .count()
+        + fast.matches("label %element_shape.loop.side_exit").count()
+}
+
+/// The registers `block` defines with a `sitofp i32 … to double`.
+fn sitofp_results(block: &str) -> Vec<&str> {
+    block
+        .lines()
+        .filter(|l| l.contains(" = sitofp i32 "))
+        .filter_map(|l| l.trim_start().split(" = ").next())
+        .collect()
 }
 
 /// The LAST block in `fast` whose label starts with `prefix`, body only.
@@ -311,8 +327,21 @@ fn the_carried_write_back_follows_every_side_exit() {
          iteration, and every later index is silently wrong. \
          final block:\n{committed}\nfull clone:\n{fast}"
     );
+    // The accumulator's store is ALSO a `store double` in this block now that
+    // it lands in the clone's f64 alloca (`stmt/element_shape_native.rs`), so
+    // the publication is counted by what it stores: the carried i32 converted
+    // for its real slot.
+    let published = sitofp_results(committed);
     assert_eq!(
-        committed.matches("store double").count(),
+        published.len(),
+        1,
+        "the carried value must be converted for publication exactly once per \
+         iteration; final block:\n{committed}"
+    );
+    assert_eq!(
+        committed
+            .matches(&format!("store double {}, ", published[0]))
+            .count(),
         1,
         "the carried value must be published exactly once per iteration; \
          final block:\n{committed}"
@@ -652,3 +681,9 @@ fn a_class_typed_array_declines_the_string_length_read() {
         "the class-keyed arm reads raw doubles; there is no tag to test"
     );
 }
+
+/// The accumulator and counter in their native domains
+/// (`stmt/element_shape_native.rs`) — a child module so it reuses this file's
+/// `random`/`fields` fixtures and exit-counting helpers.
+#[path = "element_shape_native_tests.rs"]
+mod native_domains;
