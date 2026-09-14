@@ -111,6 +111,11 @@ impl InlineKeySet {
     }
 
     /// Header word for this set with every key present.
+    ///
+    /// Only the inline reserve builds one, and only the regex results path
+    /// installs an inline reserve (`inline_reserve_layout`), so this is gated
+    /// the same way: a `regex-engine`-off build has no caller.
+    #[cfg(feature = "regex-engine")]
     #[inline]
     const fn header_word(self) -> u64 {
         let n = self.keys().len() as u64;
