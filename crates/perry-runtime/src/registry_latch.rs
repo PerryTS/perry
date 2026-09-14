@@ -62,6 +62,7 @@
 //! is what ships.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Mutex, MutexGuard};
 
 /// A one-way "this feature has been registered at least once" flag.
 ///
@@ -297,6 +298,12 @@ impl RegistryAddrWindow {
 /// here is the one the measurements above were taken at, and is deliberately
 /// not raised on speculation.
 ///
+/// `WORDS` is a per-owner parameter, defaulting to 16. Issue #10110 measured
+/// 643–648 live canonical wrappers saturating this default on a separate
+/// campaign branch. That owner needs 256 words and [`RegistryAddrIndex`] to
+/// release retired addresses; increasing a monotone filter only postpones
+/// saturation. The canonical-wrapper subsystem has not landed on `main` yet.
+///
 /// **Bits accrue per ADMISSION, not per live entry.** Both tables this guards
 /// are re-keyed by the collector — a symbol or a prototype that is evacuated is
 /// admitted again at its new address, and the bits its old address set are
@@ -327,32 +334,36 @@ impl RegistryAddrWindow {
 /// pre-check would let a thread publish an address without ever acquiring
 /// another thread's bit-setting, so a reader synchronising only with this
 /// thread could miss it.
-pub struct RegistryAddrFilter {
-    words: [AtomicU64; Self::WORDS],
+pub struct RegistryAddrFilter<const WORDS: usize = 16> {
+    words: [AtomicU64; WORDS],
 }
 
-impl Default for RegistryAddrFilter {
+impl<const WORDS: usize> Default for RegistryAddrFilter<WORDS> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl std::fmt::Debug for RegistryAddrFilter {
+impl<const WORDS: usize> std::fmt::Debug for RegistryAddrFilter<WORDS> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RegistryAddrFilter")
+            .field("words", &WORDS)
             .field("bits_set", &self.bits_set())
             .finish()
     }
 }
 
-impl RegistryAddrFilter {
-    const WORDS: usize = 16;
-    const BITS: u64 = (Self::WORDS as u64) * 64;
+impl<const WORDS: usize> RegistryAddrFilter<WORDS> {
+    const BITS: u64 = (WORDS as u64) * 64;
+    const HASH_BITS: u32 = Self::BITS.ilog2();
 
     /// An empty filter: contains no address at all.
     pub const fn new() -> Self {
+        // Three disjoint slices must fit in the 64-bit hash. Power-of-two
+        // widths keep the hot probes division-free after constant folding.
+        assert!(WORDS.is_power_of_two() && WORDS <= (1 << 15));
         Self {
-            words: [const { AtomicU64::new(0) }; Self::WORDS],
+            words: [const { AtomicU64::new(0) }; WORDS],
         }
     }
 
@@ -368,9 +379,9 @@ impl RegistryAddrFilter {
     const fn bit_positions(addr: usize) -> (u64, u64, u64) {
         let h = ((addr as u64) >> 3).wrapping_mul(0x9E37_79B9_7F4A_7C15);
         (
-            (h >> 54) % Self::BITS,
-            (h >> 44) % Self::BITS,
-            (h >> 34) % Self::BITS,
+            (h >> (64 - Self::HASH_BITS)) % Self::BITS,
+            (h >> (64 - 2 * Self::HASH_BITS)) % Self::BITS,
+            (h >> (64 - 3 * Self::HASH_BITS)) % Self::BITS,
         )
     }
 
@@ -404,6 +415,34 @@ impl RegistryAddrFilter {
         }
     }
 
+    /// Replace every word with the bits of `live`.
+    ///
+    /// **Only [`RegistryAddrIndex`] may call this**, and only while holding the
+    /// guard that serializes this filter's admissions: the soundness argument
+    /// is written out on that type, and it depends on `live` being the complete
+    /// current population and on no `admit` running concurrently.
+    fn overwrite_from_live(&self, live: impl IntoIterator<Item = usize>) {
+        let mut fresh = [0u64; WORDS];
+        for addr in live {
+            let (a, b, c) = Self::bit_positions(addr);
+            for bit in [a, b, c] {
+                fresh[(bit / 64) as usize] |= 1u64 << (bit % 64);
+            }
+        }
+        // Release, so a reader that observes a word observes the set membership
+        // that produced it. Word-at-a-time publication is safe because every
+        // live address's bits are present in both the old and the new value.
+        for (word, value) in self.words.iter().zip(fresh.iter()) {
+            word.store(*value, Ordering::Release);
+        }
+    }
+
+    /// How many bits this filter has in total. Diagnostics and tests only:
+    /// an occupancy count means nothing without the capacity it is a share of.
+    pub fn capacity_bits(&self) -> u32 {
+        Self::BITS as u32
+    }
+
     /// How many bits are set. Diagnostics and tests only: a filter whose bits
     /// are nearly all set has stopped discriminating, and a test that wants to
     /// prove the fast path RAN needs to know the filter is not saturated.
@@ -422,8 +461,8 @@ impl RegistryAddrFilter {
     /// as unregistered. A test that calls this must restore what it cleared —
     /// see [`Self::restore_for_tests`].
     #[cfg(test)]
-    pub(crate) fn take_for_tests(&self) -> [u64; Self::WORDS] {
-        let mut previous = [0u64; Self::WORDS];
+    pub(crate) fn take_for_tests(&self) -> [u64; WORDS] {
+        let mut previous = [0u64; WORDS];
         for (slot, word) in previous.iter_mut().zip(self.words.iter()) {
             *slot = word.swap(0, Ordering::AcqRel);
         }
@@ -432,7 +471,7 @@ impl RegistryAddrFilter {
 
     /// Test hook: OR the saved bits back in.
     #[cfg(test)]
-    pub(crate) fn restore_for_tests(&self, saved: [u64; Self::WORDS]) {
+    pub(crate) fn restore_for_tests(&self, saved: [u64; WORDS]) {
         for (word, bits) in self.words.iter().zip(saved.iter()) {
             word.fetch_or(*bits, Ordering::AcqRel);
         }
@@ -440,8 +479,8 @@ impl RegistryAddrFilter {
 
     /// Test hook: the current bit words, as a plain value.
     #[cfg(test)]
-    pub(crate) fn snapshot_for_tests(&self) -> [u64; Self::WORDS] {
-        let mut words = [0u64; Self::WORDS];
+    pub(crate) fn snapshot_for_tests(&self) -> [u64; WORDS] {
+        let mut words = [0u64; WORDS];
         for (slot, word) in words.iter_mut().zip(self.words.iter()) {
             *slot = word.load(Ordering::Acquire);
         }
@@ -456,7 +495,7 @@ impl RegistryAddrFilter {
     /// filter already happened to accept" is only checkable against the filter
     /// as it stood BEFORE the move.
     #[cfg(test)]
-    pub(crate) fn snapshot_may_contain(words: &[u64; Self::WORDS], addr: usize) -> bool {
+    pub(crate) fn snapshot_may_contain(words: &[u64; WORDS], addr: usize) -> bool {
         let (a, b, c) = Self::bit_positions(addr);
         [a, b, c]
             .into_iter()
@@ -466,13 +505,387 @@ impl RegistryAddrFilter {
     /// The word count, so a caller can name the snapshot type.
     #[cfg(test)]
     pub(crate) const fn words() -> usize {
-        Self::WORDS
+        WORDS
+    }
+}
+
+/// The addresses an owner currently holds, sized from that population and
+/// narrowed when the population shrinks.
+///
+/// [`RegistryAddrFilter`] answers "was this address EVER admitted?", by default
+/// in 1,024 bits. Both halves of that sentence are what the #10110 census
+/// measured going wrong for the canonical-handle owner: 643–648 live addresses
+/// do not fit in 1,024 bits, and the 712–721 admissions a single command makes
+/// are never released, so even a filter sized for the live set would walk
+/// towards saturation over a session. This type fixes both without changing the
+/// hot side: `may_contain` is still the same three bit tests on a plain array of
+/// atomics, with no lock, no allocation and no pointer chase.
+///
+/// # What it adds
+///
+/// The owner's live addresses are kept in an exact set, mutated only when a
+/// wrapper is created or retired — 712–721 and 69–76 times per command
+/// respectively, against tens of millions of probes, so the mutex that guards it
+/// is never contended by the hot path. When enough has changed, the bit array is
+/// recomputed from that exact set, which is what releases retired addresses.
+/// Refreshes are paced by the live population, with no timer or workload knob.
+///
+/// # Why overwriting the bits is sound
+///
+/// [`RegistryAddrFilter`] deliberately has no `clear`, because clearing bits
+/// could make a live registered address read as unregistered — the one
+/// dangerous answer. The refresh here is not a clear:
+///
+/// * Every `admit` and every refresh for one index is serialized by the same
+///   mutex, so no admission's bit-set can be lost to a refresh's store. This is
+///   why `admit` takes the guard *before* setting the bits.
+/// * The new words are computed from the complete live set. For an address that
+///   is live, its three bits are therefore set in the new value; they are also
+///   set in the old value, because it was admitted under this same guard and
+///   every refresh published while it was live also included it. A reader may
+///   observe any mix of old and new words, and in every such mix all three of a
+///   live address's bits are set. **No reader can observe a false negative at
+///   any instant**, which is the same guarantee the monotone filter gives.
+/// * An address that is *not* live may start reading `false`. That is the point,
+///   and it is safe because the owner removes an address from the live set only
+///   after its authoritative registry no longer recognises it, and because the
+///   index is only ever a gate in front of that authoritative lookup: a stale
+///   `true` costs the lookup that was always there, exactly as a Bloom false
+///   positive does.
+///
+/// # The ordering rule (binding, inherited unchanged)
+///
+/// [`admit`](Self::admit) must run BEFORE the registry mutation it advertises,
+/// and [`retire`](Self::retire) AFTER the registry mutation that ends the
+/// address's registration. Retiring first would open a window in which the
+/// registry still recognises an address the index already denies.
+///
+/// This is a set, not a reference count: repeated admissions are idempotent.
+/// The owner must serialize an address's complete registration/retirement
+/// lifecycle, including reuse, so a delayed retirement cannot erase a newer
+/// admission. As with the monotone filter, publishing an address to another
+/// thread must establish a happens-before edge from its admission.
+pub struct RegistryAddrIndex<const WORDS: usize = 16> {
+    filter: RegistryAddrFilter<WORDS>,
+    live: Mutex<Option<LiveAddrs>>,
+}
+
+struct LiveAddrs {
+    addrs: crate::fast_hash::PtrHashSet<usize>,
+    /// Admissions plus retirements since the last refresh. Only ever touched
+    /// under the `live` guard.
+    changes_since_refresh: usize,
+}
+
+/// A refresh costs O(live), so it may not run more often than once per O(live)
+/// changes. This floor keeps a tiny population from refreshing on every single
+/// change; it is a lower bound on work, not a tuning knob for a workload.
+const REFRESH_CHANGE_FLOOR: usize = 64;
+
+impl<const WORDS: usize> Default for RegistryAddrIndex<WORDS> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<const WORDS: usize> std::fmt::Debug for RegistryAddrIndex<WORDS> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RegistryAddrIndex")
+            .field("words", &WORDS)
+            .field("bits_set", &self.bits_set())
+            .field("live", &self.live_count())
+            .finish()
+    }
+}
+
+impl<const WORDS: usize> RegistryAddrIndex<WORDS> {
+    /// An empty index: contains no address at all.
+    pub const fn new() -> Self {
+        Self {
+            filter: RegistryAddrFilter::new(),
+            live: Mutex::new(None),
+        }
+    }
+
+    /// `false` ⟹ `addr` is definitively not registered with this owner.
+    ///
+    /// The hot side, unchanged from [`RegistryAddrFilter::may_contain`]: three
+    /// bit tests, short-circuiting, no lock and no allocation.
+    #[inline(always)]
+    pub fn may_contain(&self, addr: usize) -> bool {
+        self.filter.may_contain(addr)
+    }
+
+    fn guard(&self) -> MutexGuard<'_, Option<LiveAddrs>> {
+        // A poisoned guard must not turn a classification into a panic: the
+        // live set is only an accelerator, and its worst state is stale.
+        self.live
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Add `addr`. MUST run before the registry mutation it advertises.
+    pub fn admit(&self, addr: usize) {
+        let mut guard = self.guard();
+        let state = guard.get_or_insert_with(|| LiveAddrs {
+            addrs: crate::fast_hash::new_ptr_hash_set(),
+            changes_since_refresh: 0,
+        });
+        // Under the guard, so a concurrent refresh cannot drop these bits.
+        self.filter.admit(addr);
+        if state.addrs.insert(addr) {
+            state.changes_since_refresh += 1;
+        }
+        self.refresh_if_warranted(state);
+    }
+
+    /// Drop `addr`. MUST run after the registry mutation that ends its
+    /// registration, so no window exists in which the registry recognises an
+    /// address this index already denies.
+    pub fn retire(&self, addr: usize) {
+        let mut guard = self.guard();
+        let Some(state) = guard.as_mut() else {
+            return;
+        };
+        if !state.addrs.remove(&addr) {
+            return;
+        }
+        state.changes_since_refresh += 1;
+        self.refresh_if_warranted(state);
+    }
+
+    fn refresh_if_warranted(&self, state: &mut LiveAddrs) {
+        if state.changes_since_refresh < REFRESH_CHANGE_FLOOR.max(state.addrs.len()) {
+            return;
+        }
+        state.changes_since_refresh = 0;
+        self.filter.overwrite_from_live(state.addrs.iter().copied());
+    }
+
+    /// Bits set in the underlying array, and its capacity. Diagnostics: an
+    /// occupancy count means nothing without the capacity it is a share of.
+    pub fn occupancy(&self) -> (u32, u32) {
+        (self.filter.bits_set(), self.filter.capacity_bits())
+    }
+
+    fn bits_set(&self) -> u32 {
+        self.filter.bits_set()
+    }
+
+    /// How many addresses the owner currently holds.
+    pub fn live_count(&self) -> usize {
+        self.guard().as_ref().map_or(0, |state| state.addrs.len())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Synthetic wrapper addresses: 8-byte aligned, above the handle band,
+    /// spread the way `gc_malloc` results are rather than densely packed.
+    fn wrapper_addrs(count: usize) -> Vec<usize> {
+        (0..count).map(|i| 0x7F00_0000_1000usize + i * 96).collect()
+    }
+
+    fn probe_addrs(count: usize) -> Vec<usize> {
+        (0..count).map(|i| 0x6100_0000_0008usize + i * 64).collect()
+    }
+
+    fn pass_rate<const WORDS: usize>(index: &RegistryAddrIndex<WORDS>, probes: &[usize]) -> f64 {
+        let passes = probes.iter().filter(|&&a| index.may_contain(a)).count();
+        passes as f64 / probes.len() as f64
+    }
+
+    #[test]
+    fn wider_filter_uses_the_full_width_for_each_probe() {
+        let mut high_half_seen = [false; 3];
+        for addr in wrapper_addrs(644) {
+            let (a, b, c) = RegistryAddrFilter::<256>::bit_positions(addr);
+            for (seen, bit) in high_half_seen.iter_mut().zip([a, b, c]) {
+                assert!(bit < 16_384);
+                *seen |= bit >= 8_192;
+            }
+        }
+        assert!(high_half_seen.into_iter().all(|seen| seen));
+    }
+
+    #[test]
+    fn index_supports_duplicate_admission_and_address_reuse() {
+        let index: RegistryAddrIndex<256> = RegistryAddrIndex::new();
+        let addr = wrapper_addrs(1)[0];
+        index.retire(addr);
+        assert_eq!(index.live_count(), 0);
+        assert!(!index.may_contain(addr));
+
+        for _ in 0..3 {
+            index.admit(addr);
+            index.admit(addr);
+            assert_eq!(index.live_count(), 1);
+            assert!(index.may_contain(addr));
+            index.retire(addr);
+            index.retire(addr);
+            assert_eq!(index.live_count(), 0);
+        }
+        index.admit(addr);
+        assert_eq!(index.live_count(), 1);
+        assert!(index.may_contain(addr));
+    }
+
+    #[test]
+    fn concurrent_refreshes_preserve_published_live_addresses() {
+        use std::sync::Barrier;
+
+        const WRITERS: usize = 4;
+        const RESIDENT: usize = 64;
+        let index: RegistryAddrIndex<256> = RegistryAddrIndex::new();
+        let resident = wrapper_addrs(RESIDENT);
+        for &addr in &resident {
+            index.admit(addr);
+        }
+        let start = Barrier::new(WRITERS + 1);
+        std::thread::scope(|scope| {
+            for writer in 0..WRITERS {
+                let (index, start, resident) = (&index, &start, &resident);
+                scope.spawn(move || {
+                    start.wait();
+                    for i in 0..2_000 {
+                        let addr = 0x6100_0000_0008 + (i * WRITERS + writer) * 64;
+                        index.admit(addr);
+                        assert!(index.may_contain(addr));
+                        for &live in resident {
+                            assert!(index.may_contain(live));
+                        }
+                        index.retire(addr);
+                    }
+                });
+            }
+            start.wait();
+            for _ in 0..2_000 {
+                for &addr in &resident {
+                    assert!(index.may_contain(addr));
+                }
+            }
+        });
+        assert_eq!(index.live_count(), RESIDENT);
+        for addr in resident {
+            assert!(index.may_contain(addr));
+        }
+        assert!(pass_rate(&index, &probe_addrs(20_000)) < 0.02);
+    }
+
+    /// The 644-address population reported in #10110 must fit in the proposed
+    /// canonical-owner width. The default width is a saturation witness.
+    #[test]
+    fn sized_index_holds_the_measured_live_population() {
+        const LIVE: usize = 644;
+        let live = wrapper_addrs(LIVE);
+        let probes = probe_addrs(20_000);
+
+        let sized: RegistryAddrIndex<256> = RegistryAddrIndex::new();
+        for &addr in &live {
+            sized.admit(addr);
+        }
+        assert_eq!(sized.live_count(), LIVE);
+        let sized_rate = pass_rate(&sized, &probes);
+        assert!(
+            sized_rate < 0.02,
+            "sized index admits {sized_rate} of non-members"
+        );
+        for &addr in &live {
+            assert!(sized.may_contain(addr), "sized index lost a live address");
+        }
+
+        let small: RegistryAddrIndex<16> = RegistryAddrIndex::new();
+        for &addr in &live {
+            small.admit(addr);
+        }
+        let small_rate = pass_rate(&small, &probes);
+        assert!(
+            small_rate > 0.30,
+            "the 1,024-bit witness should be saturated by this population, got {small_rate}"
+        );
+        assert!(
+            sized_rate * 10.0 < small_rate,
+            "{sized_rate} vs {small_rate}"
+        );
+    }
+
+    /// Retirement must actually narrow the index, and must never drop a live
+    /// address while doing it. A refresh that kept retired addresses would make
+    /// this type no better than the monotone filter.
+    #[test]
+    fn refresh_releases_retired_addresses_and_keeps_live_ones() {
+        let addrs = wrapper_addrs(600);
+        let index: RegistryAddrIndex<256> = RegistryAddrIndex::new();
+        for &addr in &addrs {
+            index.admit(addr);
+        }
+        let (occupied, capacity) = index.occupancy();
+        assert!(occupied > 0 && occupied < capacity);
+
+        let (live, retired) = addrs.split_at(50);
+        for &addr in retired {
+            index.retire(addr);
+        }
+        assert_eq!(index.live_count(), live.len());
+        let (after, _) = index.occupancy();
+        assert!(
+            after * 4 < occupied,
+            "occupancy {after} should collapse towards the live set from {occupied}"
+        );
+        for &addr in live {
+            assert!(
+                index.may_contain(addr),
+                "a live address was dropped by a refresh"
+            );
+        }
+        let still_admitted = retired.iter().filter(|&&a| index.may_contain(a)).count();
+        assert!(
+            still_admitted * 10 < retired.len(),
+            "{still_admitted} of {} retired addresses still pass",
+            retired.len()
+        );
+    }
+
+    /// The defect the census measured is a WALK: bits accrue per admission, so a
+    /// long session saturates even a filter sized for its live set. Churn a
+    /// population two orders of magnitude larger than what is ever live and
+    /// require that selectivity survives it.
+    #[test]
+    fn churn_does_not_walk_towards_saturation() {
+        const CHURN: usize = 20_000;
+        const RESIDENT: usize = 64;
+        let addrs = wrapper_addrs(CHURN);
+        let index: RegistryAddrIndex<256> = RegistryAddrIndex::new();
+        let monotone: RegistryAddrFilter<256> = RegistryAddrFilter::new();
+        for (i, &addr) in addrs.iter().enumerate() {
+            index.admit(addr);
+            monotone.admit(addr);
+            if i >= RESIDENT {
+                index.retire(addrs[i - RESIDENT]);
+            }
+        }
+        assert!(index.live_count() <= RESIDENT + 1, "{}", index.live_count());
+        let probes = probe_addrs(20_000);
+        let rate = pass_rate(&index, &probes);
+        assert!(
+            rate < 0.02,
+            "index admits {rate} of non-members after churn"
+        );
+        let monotone_passes = probes.iter().filter(|&&a| monotone.may_contain(a)).count();
+        let monotone_rate = monotone_passes as f64 / probes.len() as f64;
+        assert!(
+            monotone_rate > 0.50,
+            "the monotone witness of the same size should be saturated, got {monotone_rate}"
+        );
+        for i in (CHURN - RESIDENT)..CHURN {
+            assert!(
+                index.may_contain(addrs[i]),
+                "churn dropped a resident address"
+            );
+        }
+    }
 
     #[test]
     fn starts_idle_and_arms_once() {
@@ -570,7 +983,7 @@ mod tests {
 
     #[test]
     fn empty_filter_contains_nothing() {
-        let f = RegistryAddrFilter::new();
+        let f: RegistryAddrFilter = RegistryAddrFilter::new();
         assert_eq!(f.bits_set(), 0);
         for addr in [0usize, 8, 0x1000, 0x7fff_ffff_f000, usize::MAX] {
             assert!(
@@ -585,7 +998,7 @@ mod tests {
     /// was never given; it is never allowed to reject one it was.
     #[test]
     fn filter_never_rejects_an_admitted_address() {
-        let f = RegistryAddrFilter::new();
+        let f: RegistryAddrFilter = RegistryAddrFilter::new();
         let mut admitted = Vec::new();
         // A realistic spread: 8-byte-aligned addresses across a wide heap.
         for i in 0..256usize {
@@ -609,7 +1022,7 @@ mod tests {
     /// majority of addresses it was never given.
     #[test]
     fn filter_rejects_almost_everything_it_was_never_given() {
-        let f = RegistryAddrFilter::new();
+        let f: RegistryAddrFilter = RegistryAddrFilter::new();
         // 160 entries — the number of class prototypes `claude-code --help`
         // registers, i.e. the population this size was chosen for.
         for i in 0..160usize {
