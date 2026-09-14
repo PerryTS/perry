@@ -63,9 +63,8 @@ pub(super) struct ArenaSweepObjectsState {
     /// #10182: per block, the census parsed every header and none of them was
     /// invalidated, and the block has not changed since. Empty unless the
     /// block skip ran against an armed census.
+    /// Cleared for a block as soon as this sweep invalidates a header in it.
     census_hole_free: Vec<bool>,
-    /// #10182: per block, this sweep invalidated a dead header in it.
-    invalidated_in_block: Vec<bool>,
 }
 
 impl ArenaSweepObjectsState {
@@ -107,7 +106,6 @@ impl ArenaSweepObjectsState {
             block_skip_objects: 0,
             block_skip_bytes: 0,
             census_hole_free: Vec::new(),
-            invalidated_in_block: vec![false; n_blocks],
         }
     }
 
@@ -240,28 +238,23 @@ impl ArenaSweepObjectsState {
     /// re-parses the whole tree to find no hole.
     pub(super) fn push_live_block_holes(&mut self) {
         if self.reclaim_dead_old_blocks {
-            let mut parse = self.block_has_live.clone();
+            let old_block_start = self.old_block_start;
+            let block_has_live = &self.block_has_live;
+            let hole_free = &self.census_hole_free;
             let mut skipped = 0u64;
-            for (block_idx, live) in parse.iter_mut().enumerate() {
-                if block_idx >= self.old_block_start
-                    && *live
-                    && self
-                        .census_hole_free
-                        .get(block_idx)
-                        .copied()
-                        .unwrap_or(false)
-                    && !self
-                        .invalidated_in_block
-                        .get(block_idx)
-                        .copied()
-                        .unwrap_or(true)
+            super::old_free_rebuild_from_old_blocks(|block_idx| {
+                if block_idx < old_block_start
+                    || !block_has_live.get(block_idx).copied().unwrap_or(false)
                 {
-                    *live = false;
-                    skipped += 1;
+                    return false;
                 }
-            }
+                if hole_free.get(block_idx).copied().unwrap_or(false) {
+                    skipped += 1;
+                    return false;
+                }
+                true
+            });
             super::super::trace::block_skip::note_hole_rebuild_blocks_skipped(skipped);
-            super::old_free_rebuild_from_live_old_blocks(&parse, self.old_block_start);
             if crate::gc::gc_diag_enabled() {
                 eprintln!(
                     "[gc-old-free] reusable_bytes={} rebuild_skipped_blocks={skipped}",
@@ -634,8 +627,8 @@ impl ArenaSweepObjectsState {
 
     #[inline]
     fn note_invalidated(&mut self, block_idx: usize) {
-        if let Some(slot) = self.invalidated_in_block.get_mut(block_idx) {
-            *slot = true;
+        if let Some(slot) = self.census_hole_free.get_mut(block_idx) {
+            *slot = false;
         }
     }
 }
