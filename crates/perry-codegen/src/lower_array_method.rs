@@ -1140,8 +1140,9 @@ pub(crate) fn lower_array_method(
             // `arr.myFn = function(){…}; arr.myFn()`) or an inherited method. The
             // old catch-all returned `recv_box` unchanged, so any such call
             // silently evaluated to the array itself. Route through the runtime
-            // dispatch tower, which checks the ARRAY_NAMED_PROPS side table for a
-            // stored callable (invoking it with `this` = arr) before falling back.
+            // dispatch tower, which checks the array's own named properties
+            // (`array/named_props.rs`) for a stored callable (invoking it with
+            // `this` = arr) before falling back.
             _ => emit_native_method_dispatch(ctx, recv_box, property, arg_vals),
         }
     })

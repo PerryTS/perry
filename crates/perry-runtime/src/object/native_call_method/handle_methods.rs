@@ -203,7 +203,7 @@ pub(super) unsafe fn dispatch_handle(
                 // (`arr.getClass = Object.prototype.toString; arr.getClass()`,
                 // `arr.myFn = function(){...}; arr.myFn()`) must win over the
                 // built-in array method arms below. Array named properties live
-                // in the ARRAY_NAMED_PROPS side table, NOT in `keys_array`, so
+                // among the array's named properties, NOT in `keys_array`, so
                 // the generic own-field scan further down never finds them and
                 // `arr.<name>()` wrongly fell through to a built-in (e.g.
                 // `arr.toString()` shadowed by a stored `getClass` resolved as

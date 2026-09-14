@@ -638,7 +638,7 @@ fn forget_element_shape_removes_the_record_on_address_recycling() {
 #[test]
 fn pruning_dead_owners_removes_their_records() {
     // `gc::dead_owner::fan_out` calls this with the collection's liveness
-    // predicate, on the same hook that prunes `ARRAY_NAMED_PROPS`.
+    // predicate, on the dead-owner hook every address-keyed side table shares.
     let _serialized = test_serialize();
     let dead = built_from_pushes(CLASS_A, 2);
     let live = built_from_pushes(CLASS_A, 2);

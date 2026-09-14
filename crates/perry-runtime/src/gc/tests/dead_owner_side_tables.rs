@@ -29,16 +29,15 @@
 use super::super::*;
 use super::support::*;
 
-fn full_gc() {
+pub(super) fn full_gc() {
     let _ =
         gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
 }
 
-struct ArraySideTableTestGuard;
+pub(super) struct ArraySideTableTestGuard;
 
 impl ArraySideTableTestGuard {
-    fn new() -> Self {
-        crate::array::test_clear_array_named_property_roots();
+    pub(super) fn new() -> Self {
         crate::map::test_clear_map_iterator_arrays();
         crate::set::test_clear_set_iterator_arrays();
         Self
@@ -47,24 +46,34 @@ impl ArraySideTableTestGuard {
 
 impl Drop for ArraySideTableTestGuard {
     fn drop(&mut self) {
-        crate::array::test_clear_array_named_property_roots();
         crate::map::test_clear_map_iterator_arrays();
         crate::set::test_clear_set_iterator_arrays();
     }
 }
 
-fn register_array_side_table_scanners() {
+pub(super) fn register_array_side_table_scanners() {
     gc_register_mutable_root_scanner(crate::array::scan_template_raw_roots_mut);
     gc_register_mutable_root_scanner(crate::map::scan_map_iterator_array_roots_mut);
     gc_register_mutable_root_scanner(crate::set::scan_set_iterator_array_roots_mut);
 }
 
-unsafe fn set_array_named_property(arr: *mut crate::array::ArrayHeader, name: &str, value: f64) {
+/// Returns the live head: the first named property on a full fixture array
+/// grows it (`array/named_props.rs`).
+pub(super) unsafe fn set_array_named_property(
+    arr: *mut crate::array::ArrayHeader,
+    name: &str,
+    value: f64,
+) -> *mut crate::array::ArrayHeader {
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    crate::array::array_named_property_set(arr, key, value);
+    let head = crate::array::array_named_property_set(arr, key, value);
+    assert!(
+        !head.is_null(),
+        "test premise: the fixture array accepts an expando"
+    );
+    head
 }
 
-unsafe fn alloc_nursery_test_array() -> *mut crate::array::ArrayHeader {
+pub(super) unsafe fn alloc_nursery_test_array() -> *mut crate::array::ArrayHeader {
     let arr = crate::arena::arena_alloc_gc(
         std::mem::size_of::<crate::array::ArrayHeader>(),
         std::mem::align_of::<crate::array::ArrayHeader>(),
@@ -75,7 +84,7 @@ unsafe fn alloc_nursery_test_array() -> *mut crate::array::ArrayHeader {
     arr
 }
 
-unsafe fn alloc_malloc_test_object() -> *mut crate::object::ObjectHeader {
+pub(super) unsafe fn alloc_malloc_test_object() -> *mut crate::object::ObjectHeader {
     let obj = gc_malloc(
         std::mem::size_of::<crate::object::ObjectHeader>(),
         GC_TYPE_OBJECT,
@@ -106,7 +115,7 @@ unsafe fn alloc_malloc_test_object() -> *mut crate::object::ObjectHeader {
 ///
 /// Wrap the collection so the premise fails as a premise, before the subject
 /// assertion gets a chance to mis-name it.
-fn full_gc_with_no_block_persistence() {
+pub(super) fn full_gc_with_no_block_persistence() {
     let force_marks_before = crate::gc::block_persist_force_mark_count();
     full_gc();
     assert_eq!(
@@ -129,101 +138,6 @@ fn util_types_is_map_iterator(addr: usize) -> bool {
 fn util_types_is_set_iterator(addr: usize) -> bool {
     crate::object::js_util_types_is_set_iterator(f64::from_bits(ptr_bits(addr))).to_bits()
         == crate::value::TAG_TRUE
-}
-
-#[test]
-fn test_array_named_dead_owner_stops_rooting_value_after_full_gc() {
-    let _guard = CopyingNurseryTestGuard::new(0);
-    let _side_tables = ArraySideTableTestGuard::new();
-    register_array_side_table_scanners();
-    crate::arena::arena_reset_all_blocks_to_zero();
-
-    let value = unsafe { alloc_malloc_test_object() };
-    let owner = unsafe { alloc_nursery_test_array() };
-    unsafe {
-        set_array_named_property(owner, "payload", f64::from_bits(ptr_bits(value as usize)));
-    }
-
-    full_gc();
-    assert!(
-        !crate::array::test_array_named_property_owner_exists(owner as usize),
-        "the first full collection must prune the dead owner"
-    );
-    assert!(
-        malloc_user_ptr_tracked(value as *mut u8),
-        "the value was scanned before post-trace pruning and survives that cycle"
-    );
-
-    full_gc();
-    assert!(
-        !malloc_user_ptr_tracked(value as *mut u8),
-        "without the dead owner entry, the next full collection must reclaim the value"
-    );
-}
-
-#[test]
-fn test_array_named_dead_owner_cannot_leak_property_across_exact_eden_reuse() {
-    let _guard = CopyingNurseryTestGuard::new(0);
-    let _side_tables = ArraySideTableTestGuard::new();
-    register_array_side_table_scanners();
-    crate::arena::arena_reset_all_blocks_to_zero();
-
-    let dead = unsafe { alloc_nursery_test_array() };
-    unsafe {
-        set_array_named_property(dead, "inherited", f64::from_bits(crate::value::TAG_TRUE));
-    }
-    let dead_addr = dead as usize;
-
-    let _ = gc_collect_minor();
-    let replacement = unsafe { alloc_nursery_test_array() };
-    assert_eq!(
-        replacement as usize, dead_addr,
-        "test premise: the copied-minor Eden reset must reuse the exact owner address"
-    );
-    assert!(
-        unsafe { crate::array::array_named_property_get_by_name(replacement, "inherited") }
-            .is_none(),
-        "an ordinary replacement array must not inherit the dead array's expando"
-    );
-}
-
-#[test]
-fn test_array_named_live_move_rekeys_owner_and_rewrites_object_value() {
-    let _guard = CopyingNurseryTestGuard::new(1);
-    let _side_tables = ArraySideTableTestGuard::new();
-    register_array_side_table_scanners();
-    crate::arena::arena_reset_all_blocks_to_zero();
-
-    let arr = unsafe { alloc_nursery_test_array() };
-    let old_owner = arr as usize;
-    let (value, _) = unsafe { alloc_nursery_test_object(0) };
-    let old_value = value as usize;
-    unsafe {
-        set_array_named_property(arr, "kept", f64::from_bits(ptr_bits(old_value)));
-    }
-    js_shadow_slot_set(0, ptr_bits(old_owner));
-
-    let _ = gc_collect_minor();
-
-    let new_owner = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
-    assert_ne!(new_owner, old_owner, "test premise: the owner must move");
-    let new_value_bits = unsafe {
-        crate::array::array_named_property_get_by_name(
-            new_owner as *const crate::array::ArrayHeader,
-            "kept",
-        )
-    }
-    .expect("the moved owner must retain its expando")
-    .to_bits();
-    let new_value = (new_value_bits & POINTER_MASK) as usize;
-    assert_ne!(new_value, old_value, "the object value must be rewritten");
-    assert!(crate::arena::pointer_in_nursery(new_value));
-    assert!(crate::array::test_array_named_property_owner_exists(
-        new_owner
-    ));
-    assert!(!crate::array::test_array_named_property_owner_exists(
-        old_owner
-    ));
 }
 
 #[test]

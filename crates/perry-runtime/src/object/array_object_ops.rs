@@ -62,7 +62,8 @@ unsafe fn array_header_mut(obj: *mut ObjectHeader) -> *mut crate::array::ArrayHe
 /// Apply `Object.freeze` / `Object.seal` to an array's OWN index + named data
 /// properties. The generic `mark_all_keys` walks `crate::object::object_keys_array(obj)`, but an
 /// array's indices live in the dense element store and its named props in the
-/// `ARRAY_NAMED_PROPS` side table — neither appears in `keys_array` — so
+/// array's own named properties (`array/named_props.rs`) — neither appears in
+/// `keys_array` — so
 /// freeze/seal historically missed them, leaving a frozen array's elements
 /// writable/configurable. Returns `true` when `obj` is an array (handled here),
 /// `false` otherwise so the caller can fall back to the ordinary key walk.
@@ -870,15 +871,26 @@ pub(crate) unsafe fn define_array_property(
 
     // Write the value: an explicit `value` wins; a NEW property with no value
     // defaults to `undefined`; a redefine that omits `value` keeps the current.
-    if has_value {
-        crate::array::array_named_property_set(arr, key_str, value);
+    // The first named property on a full array grows it (`named_props.rs`),
+    // so the attributes below are keyed by the RETURNED live head — an entry
+    // recorded under the old address would sit on a forwarding stub that
+    // `transfer_descriptor_owner` already migrated away from.
+    let live = if has_value {
+        crate::array::array_named_property_set(arr, key_str, value)
     } else if !exists {
         crate::array::array_named_property_set(
             arr,
             key_str,
             f64::from_bits(crate::value::TAG_UNDEFINED),
-        );
-    }
+        )
+    } else {
+        arr
+    };
+    let owner = if live.is_null() {
+        obj as usize
+    } else {
+        live as usize
+    };
 
     let writable =
         read_bool(b"writable").unwrap_or_else(|| cur_attrs.map(|a| a.writable()).unwrap_or(false));
@@ -887,7 +899,7 @@ pub(crate) unsafe fn define_array_property(
     let configurable = read_bool(b"configurable")
         .unwrap_or_else(|| cur_attrs.map(|a| a.configurable()).unwrap_or(false));
     set_property_attrs(
-        obj as usize,
+        owner,
         key_name.to_string(),
         PropertyAttrs::new(writable, enumerable, configurable),
     );

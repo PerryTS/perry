@@ -8,12 +8,6 @@
   ],
   "sites": [
     {
-      "site": "crates/perry-runtime/src/array/header.rs::scan_array_named_property_roots_mut",
-      "table": "ARRAY_NAMED_PROPS",
-      "death": "dead_owner:prune_dead_array_named_property_owners",
-      "why": "Registered prune retains on !is_dead_owner over the array owner address (array/header.rs:352)."
-    },
-    {
       "site": "crates/perry-runtime/src/buffer/own_props.rs::scan_buffer_own_props_roots_mut",
       "table": "buffer_props()",
       "death": "self_pruned:clear_buffer_own_props",

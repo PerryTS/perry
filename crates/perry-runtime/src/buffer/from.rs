@@ -409,7 +409,7 @@ pub extern "C" fn js_buffer_from_array(arr_ptr: *const ArrayHeader) -> *mut Buff
         // `js_typed_array_new_from_array`). Per-element `js_array_get_f64`
         // rather than a raw slot walk: `clean_arr_ptr` admits sparse arrays
         // whose logical length exceeds dense capacity (far slots live in
-        // ARRAY_NAMED_PROPS), so walking `length` raw slots reads out of
+        // the named properties), so walking `length` raw slots reads out of
         // bounds; the getter bounds-checks and resolves far indices.
         let bytes: Vec<u8> = (0..len)
             .map(|i| buffer_byte_from_js_value(crate::array::js_array_get_f64(arr_ptr, i)))

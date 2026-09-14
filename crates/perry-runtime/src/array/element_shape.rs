@@ -55,7 +55,7 @@
 //! collector to mark or rewrite. The `class_id` is a registry index; the key
 //! is only ever compared, never dereferenced. Dead keys are dropped by
 //! [`prune_dead_element_shape_owners`] on the same collection hook that
-//! prunes `ARRAY_NAMED_PROPS` — a footprint concern only, since the bit on a
+//! prunes the other address-keyed records — a footprint concern only, since the bit on a
 //! recycled allocation's fresh `_reserved` is zero.
 //!
 //! ## Two counters, two different questions
@@ -154,7 +154,7 @@ pub(crate) struct ElementShapeProof {
 
 crate::perry_thread_local! {
     /// Address-keyed element-shape records. `PtrHashMap` for the same reason
-    /// `ARRAY_NAMED_PROPS` uses it (#6386): the key is already a
+    /// the former `ARRAY_NAMED_PROPS` did (#6386): the key is already a
     /// well-distributed address and SipHash dominates the probe.
     ///
     /// Thread-local because arenas are: an array address is only meaningful
@@ -750,7 +750,7 @@ pub(crate) fn transfer_element_shape(old_user: usize, new_user: usize) {
 }
 
 /// Drop records whose array owners are provably dead, on the same collection
-/// hook that prunes `ARRAY_NAMED_PROPS`. Footprint only — a stale record can
+/// hook that prunes the address-keyed side tables. Footprint only — a stale record can
 /// never be *read*, because a recycled allocation's fresh `_reserved` is
 /// zero.
 pub(crate) fn prune_dead_element_shape_owners(is_dead_owner: &dyn Fn(usize) -> bool) {

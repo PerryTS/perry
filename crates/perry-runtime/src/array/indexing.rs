@@ -1553,8 +1553,7 @@ unsafe fn js_array_set_f64_extend_resolved(
                     return arr;
                 }
                 let value = value_handle.get_nanbox_f64();
-                array_sparse_index_property_set(arr, index, value);
-                return arr;
+                return array_sparse_index_property_set(arr, index, value);
             }
             // GC_STORE_AUDIT(BARRIERED): the resolved store performs the
             // layout note and write barrier as part of the slot write.
@@ -1573,8 +1572,7 @@ unsafe fn js_array_set_f64_extend_resolved(
             && index - length > DENSE_ARRAY_GAP_LIMIT
         {
             let value = value_handle.get_nanbox_f64();
-            array_sparse_index_property_set(arr, index, value);
-            return arr;
+            return array_sparse_index_property_set(arr, index, value);
         }
         let arr = if new_length > (*arr).capacity {
             js_array_grow(arr, new_length)

@@ -25,18 +25,33 @@ pub(super) unsafe fn array_sparse_index_property_get(
     array_named_property_get_by_name(arr, &key)
 }
 
+/// Returns the live head: the first sparse index on a full array reserves the
+/// named-property slot by growing it (`named_props.rs`), exactly as a dense
+/// extension past capacity would.
 pub(super) unsafe fn array_sparse_index_property_set(
     arr: *mut ArrayHeader,
     index: u32,
     value: f64,
-) {
+) -> *mut ArrayHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_mut_ptr(arr);
+    let value_handle = scope.root_nanbox_f64(value);
     let key = index.to_string();
-    let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-    array_named_property_set(arr, key_ptr, value);
+    // #6935: the key build allocates, so the receiver is reloaded across it
+    // and the value re-read from its handle; the setter roots its own
+    // allocations before it can collect.
+    let (key_ptr, arr) = arr_handle.across_mut::<ArrayHeader, _>(|| {
+        crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32)
+    });
+    let arr = array_named_property_set(arr, key_ptr, value_handle.get_nanbox_f64());
+    if arr.is_null() {
+        return arr;
+    }
     let new_length = index + 1;
     if (*arr).length < new_length {
         (*arr).length = new_length;
     }
+    arr
 }
 
 /// Resolve a raw array head a generated loop re-read from its root after a

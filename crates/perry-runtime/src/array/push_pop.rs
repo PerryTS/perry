@@ -141,8 +141,13 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
 
         // Double the capacity, or use min_capacity if larger
         let new_capacity = std::cmp::max(old_capacity * 2, min_capacity);
-        let old_size = array_byte_size(old_capacity as usize);
-        let new_size = array_byte_size(new_capacity as usize);
+        // A named-property reserve (`named_props.rs`) travels with the array:
+        // the replacement allocation keeps one physical slot in front of
+        // logical element 0, so `capacity` excludes it on both sides and the
+        // element copy below is verbatim at the same byte offset.
+        let reserve = crate::array::array_named_props_reserve(arr);
+        let old_size = array_byte_size(old_capacity as usize + reserve);
+        let new_size = array_byte_size(new_capacity as usize + reserve);
 
         // A growth stub outlives the array operation: aliases can keep its
         // address and `clean_arr_ptr` follows it on a later access. Therefore
@@ -177,7 +182,7 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
             }
         } as *mut ArrayHeader;
         let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-        let shifted = array_front_offset(arr) != 0;
+        let shifted = array_front_offset(arr) != reserve;
         (*new_ptr).length = (*arr).length;
         (*new_ptr).capacity = new_capacity;
         // GC_STORE_AUDIT(BARRIERED): growth normalizes the logical backing
@@ -209,10 +214,24 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
             (new_ptr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
         (*new_header)._reserved = (*old_header)._reserved;
         crate::gc::layout_transfer(arr as *mut u8, new_ptr as *mut u8);
-        // Array expandos and sparse numeric indices live in an address-keyed
-        // side table. Growth is not a collector move, so rekey it explicitly
-        // before the old address becomes a forwarding stub (#9371, #9201).
-        transfer_array_named_property_owner(arr as usize, new_ptr as usize);
+        if reserve != 0 {
+            // Array expandos and sparse numeric indices live in the pairs
+            // array the reserved slot points at. Growth is not a collector
+            // move, so carry that edge to the replacement head explicitly
+            // (barriered) before the old address becomes a forwarding stub
+            // (#9371, #9201).
+            let bits = *crate::array::array_named_props_slot(arr);
+            if bits & crate::value::TAG_MASK == crate::value::POINTER_TAG {
+                crate::array::store_pairs_pointer(
+                    new_ptr,
+                    (bits & crate::value::POINTER_MASK) as *mut ArrayHeader,
+                );
+            } else {
+                // GC_STORE_AUDIT(INIT): an empty reserve holds a non-pointer
+                // sentinel; nothing to record.
+                ptr::write(crate::array::array_named_props_slot(new_ptr), bits);
+            }
+        }
         // `js_array_grow` is an allocation replacement outside the collector,
         // so GC's normal side-table rekey phase does not run. Preserve every
         // accessor/property descriptor already owned by the old array before

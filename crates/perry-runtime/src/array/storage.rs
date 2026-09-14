@@ -6,6 +6,11 @@
 //! bounds and sparse-index rules keep their usual meaning. No extra allocation,
 //! metadata slot, header word, side table, or survivor copy is needed.
 //!
+//! The same slack carries an array's named properties (`named_props.rs`): a
+//! `GC_ARRAY_NAMED_PROPS` array permanently reserves physical slot 0, so its
+//! front offset is at least 1 and an empty-queue reset gives back everything
+//! but that one slot.
+//!
 //! GC layouts index the logical live range returned by `array_elements_ptr`.
 //! Removing the front invalidates indexed masks, but preserves pointer-free and
 //! all-pointer proofs. Surviving slots stay at the same addresses, so their
@@ -49,7 +54,11 @@ pub(super) unsafe fn shift_dense(arr: *mut ArrayHeader) -> f64 {
     (*arr).length -= 1;
     super::element_shape::clear_element_shape(arr);
     if (*arr).length == 0 {
-        (*arr).capacity += front as u32;
+        // Return the consumed front to `capacity` — all of it except the
+        // named-property reserve, which stays in front of logical slot 0
+        // (`named_props.rs`).
+        let reserve = super::named_props::array_named_props_reserve(arr);
+        (*arr).capacity += (front - reserve) as u32;
         super::rebuild_array_layout(arr);
     } else {
         (*arr).capacity -= 1;

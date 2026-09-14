@@ -129,13 +129,11 @@ pub extern "C" fn js_array_set_string_key(
             return arr;
         }
     }
-    // Non-numeric string key — fall through to object-property set on the
-    // array's expando map. Arrays with named properties are rare but spec-
-    // legal.
-    unsafe {
-        array_named_property_set(arr, key, value);
-    }
-    arr
+    // Non-numeric string key — fall through to the array's own named
+    // properties (`named_props.rs`). Arrays with named properties are rare but
+    // spec-legal. The FIRST expando on a full array grows it, so hand the live
+    // head back exactly as the extending index store above does.
+    unsafe { array_named_property_set(arr, key, value) }
 }
 
 /// `arr[idx]` where `idx` may be a number or property-key value. This mirrors

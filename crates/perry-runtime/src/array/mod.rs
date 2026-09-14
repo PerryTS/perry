@@ -33,6 +33,10 @@ mod iter_object;
 mod iterator;
 mod join;
 mod jsvalue_api;
+/// Own named (non-index) properties stored with the array (#10166 brief 4).
+mod named_props;
+#[cfg(test)]
+mod named_props_tests;
 mod numeric_range;
 mod prototype_addr;
 mod push_pop;
@@ -138,8 +142,8 @@ pub(crate) use self::generic_object::{
 };
 pub(crate) use self::header::{
     array_has_arguments_object_flag, mark_array_as_arguments_object,
-    prune_dead_array_named_property_owners, rebuild_array_numeric_raw_f64_allow_holes,
-    rebuild_array_numeric_raw_f64_dense_window, rebuild_array_numeric_raw_f64_dense_window_i32,
+    rebuild_array_numeric_raw_f64_allow_holes, rebuild_array_numeric_raw_f64_dense_window,
+    rebuild_array_numeric_raw_f64_dense_window_i32,
 };
 pub use self::header::{
     js_array_clear_numeric_layout, js_array_declare_all_pointer_elements,
@@ -147,10 +151,6 @@ pub use self::header::{
     js_array_mark_numeric_f64_layout, js_array_note_numeric_write, js_tagged_template_get_or_init,
     js_tagged_template_register_raw, js_template_raw, scan_template_raw_roots,
     scan_template_raw_roots_mut, ArrayHeader,
-};
-#[cfg(test)]
-pub(crate) use self::header::{
-    test_array_named_property_owner_exists, test_clear_array_named_property_roots,
 };
 pub use self::immutable::{
     js_array_copy_within, js_array_copy_within_value, js_array_to_reversed,
@@ -203,6 +203,8 @@ pub use self::iterator::{
     js_array_spread_append, js_for_of_to_array, js_get_async_iterator, js_iterator_to_array,
 };
 pub use self::join::{js_array_join, js_array_join_value};
+#[cfg(test)]
+pub(crate) use self::named_props::test_named_props_state;
 pub use self::numeric_range::{
     js_array_fill_range_strided_tagged, js_array_numeric_range_add, js_array_numeric_range_add_len,
 };
@@ -269,31 +271,38 @@ pub use self::splice_slice::{
 };
 
 pub(crate) use self::alloc::array_length_from_property_value_or_throw;
+#[cfg(feature = "regex-engine")]
+pub(crate) use self::alloc::js_array_alloc_named_props_reserved;
 pub(crate) use self::alloc::{js_array_from_arraylike, js_array_from_string_codepoints};
 pub(crate) use self::flat_clone::{dense_spread_copy, dense_spread_source, flattenable_array_ptr};
 pub(crate) use self::header::{
-    array_byte_size, array_has_named_properties_resolved,
-    array_has_sparse_index_properties_resolved, array_is_frozen, array_is_sealed_or_no_extend,
+    array_byte_size, array_is_frozen, array_is_sealed_or_no_extend, array_numeric_raw_f64_get,
+    array_numeric_raw_f64_push_inbounds, array_numeric_raw_f64_set_inbounds, array_object_flags,
+    array_object_flags_from_tag, array_object_flags_resolved, array_ptr_as_proxy,
+    array_receiver_addr, array_receiver_gc_tag, buffer_receiver_as_uint8_typed_array,
+    canonicalize_array_numeric_store_value_from_flags, clean_arr_ptr, clean_arr_ptr_mut,
+    clear_array_numeric_layout, clear_array_numeric_layout_ptr, finish_array_dense_move_layout,
+    gc_element_slot_range, mark_array_layout_unknown, mark_array_raw_f64_holes_fresh,
+    normalize_array_receiver, note_array_slot, note_array_slot_layout_only,
+    note_array_slot_resolved_flags, rebuild_array_layout, rebuild_array_layout_exact,
+    refresh_array_numeric_layout, replay_array_growth_write_barriers, set_array_numeric_layout,
+    store_array_slot, store_array_slot_resolved, transfer_array_numeric_layout,
+    typed_array_receiver, value_bits_to_number, NumericArrayLayout, MIN_ARRAY_CAPACITY,
+};
+pub(crate) use self::named_props::{
+    array_has_named_properties_resolved, array_has_sparse_index_properties_resolved,
     array_named_property_delete, array_named_property_delete_by_name, array_named_property_get,
     array_named_property_get_by_name, array_named_property_has, array_named_property_names,
-    array_named_property_set, array_numeric_raw_f64_get, array_numeric_raw_f64_push_inbounds,
-    array_numeric_raw_f64_set_inbounds, array_object_flags, array_object_flags_from_tag,
-    array_object_flags_resolved, array_ptr_as_proxy, array_receiver_addr, array_receiver_gc_tag,
-    buffer_receiver_as_uint8_typed_array, canonicalize_array_numeric_store_value_from_flags,
-    clean_arr_ptr, clean_arr_ptr_mut, clear_array_numeric_layout, clear_array_numeric_layout_ptr,
-    finish_array_dense_move_layout, gc_element_slot_range, mark_array_layout_unknown,
-    mark_array_raw_f64_holes_fresh, normalize_array_receiver, note_array_slot,
-    note_array_slot_layout_only, note_array_slot_resolved_flags, rebuild_array_layout,
-    rebuild_array_layout_exact, refresh_array_numeric_layout, replay_array_growth_write_barriers,
-    set_array_numeric_layout, store_array_slot, store_array_slot_resolved,
-    transfer_array_named_property_owner, transfer_array_numeric_layout, typed_array_receiver,
-    value_bits_to_number, NumericArrayLayout, MIN_ARRAY_CAPACITY,
+    array_named_property_set, array_named_props_reserve, array_named_props_slot,
+    store_pairs_pointer,
 };
 
-// Sole caller is the regex-engine-gated `regex::exec_array`, so the helper and
-// this re-export are gated with it (same cross-gate shape as regex/utf16.rs).
+// Sole caller is the regex-engine-gated `regex::perex_results`, so the helpers
+// and these re-exports are gated with it (same cross-gate shape as regex/utf16.rs).
 #[cfg(feature = "regex-engine")]
-pub(crate) use self::header::array_named_props_install_fresh;
+pub(crate) use self::named_props::{
+    array_named_props_install_fresh, array_named_props_pairs_alloc, LiteralKey,
+};
 
 #[cfg(test)]
 pub(crate) use self::header::{test_seed_template_raw_roots, test_template_raw_roots};

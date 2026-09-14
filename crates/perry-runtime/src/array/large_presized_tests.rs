@@ -4,9 +4,10 @@
 
 use super::*;
 
-// #9201: named properties live in a side table keyed by the array allocation.
-// A grow replaces that allocation, so both the values and the owner key must
-// move before the old header becomes a forwarding stub.
+// #9201: named properties used to live in a side table keyed by the array
+// allocation, which growth had to rekey. They now travel WITH the array
+// (`named_props.rs`): growth re-reserves the front slot and carries the pairs
+// pointer, so the property must survive a grow without any rekey.
 #[test]
 fn growth_rekeys_named_property_owner() {
     let _global = crate::gc::global_side_table_test_lock();
@@ -23,12 +24,14 @@ fn growth_rekeys_named_property_owner() {
             (*header)._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS,
             0
         );
-        array_named_property_set(arr, key, 42.0);
+        let mut arr = array_named_property_set(arr, key, 42.0);
+        let header = crate::gc::header_from_trusted_user_ptr(arr.cast());
         assert_ne!(
             (*header)._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS,
             0
         );
         assert!(array_has_named_properties_resolved(arr));
+        let (_, pairs, _) = test_named_props_state(arr);
         let old_owner = arr as usize;
         let old_capacity = (*arr).capacity;
         assert_eq!(
@@ -51,10 +54,15 @@ fn growth_rekeys_named_property_owner() {
             Some(42.0),
             "#9201: growth must preserve the named property"
         );
-        assert!(test_array_named_property_owner_exists(arr as usize));
-        assert!(
-            !test_array_named_property_owner_exists(old_owner),
-            "the side table must no longer be keyed by the forwarding stub"
+        assert_eq!(
+            test_named_props_state(arr),
+            (true, pairs, 1),
+            "growth carries the reserve and the same pairs array"
+        );
+        assert_eq!(
+            array_named_property_get_by_name(old_owner as *const ArrayHeader, NAME),
+            Some(42.0),
+            "the forwarding stub still resolves to the live property"
         );
     }
 }

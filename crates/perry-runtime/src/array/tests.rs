@@ -1348,7 +1348,7 @@ fn dense_length_truncation_clears_slots_and_stale_named_indices() {
         );
     }
 
-    // A numeric property can live in ARRAY_NAMED_PROPS after a sparse index's
+    // A numeric property can live among the named properties after a sparse index's
     // backing later grows past it. The dense bulk path must decline whenever
     // that second representation is present, and the ordinary deletion walk
     // must clear both representations.

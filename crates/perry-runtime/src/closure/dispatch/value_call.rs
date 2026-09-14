@@ -739,7 +739,7 @@ pub unsafe extern "C" fn js_closure_call_apply_with_spread(
     let mut heap_buf: Vec<f64>;
     // Spread slots are read per element via `js_array_get_f64`, not a raw
     // memcpy: a sparse array (length > capacity, far slots in
-    // ARRAY_NAMED_PROPS) legally passes `clean_arr_ptr`, so copying `length`
+    // the named properties) legally passes `clean_arr_ptr`, so copying `length`
     // raw slots reads out of bounds (same rule as #6517's from-array
     // constructors). The accessor resolves far-index slots and reads holes
     // as undefined.

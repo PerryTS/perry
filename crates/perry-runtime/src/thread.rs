@@ -604,7 +604,7 @@ unsafe fn serialize_array(arr: *const crate::array::ArrayHeader) -> SerializedVa
     let len = (*arr).length as usize;
 
     // Element reads go through `js_array_get_f64`, not a raw pointer walk:
-    // a sparse array (length > capacity, far slots in ARRAY_NAMED_PROPS)
+    // a sparse array (length > capacity, far slots among its named properties)
     // legally passes `clean_arr_ptr`, so walking `length` raw slots reads
     // out of bounds (same rule as #6517's from-array constructors). The
     // accessor resolves far-index slots and reads holes as undefined.

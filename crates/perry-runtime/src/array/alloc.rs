@@ -65,6 +65,44 @@ pub extern "C" fn js_array_alloc(capacity: u32) -> *mut ArrayHeader {
     ptr
 }
 
+/// Allocate a fresh array born with the named-property reserve
+/// (`named_props.rs`): physical slot 0 is held back for the pairs pointer, so
+/// `capacity` logical slots follow it and `array_front_offset` is 1 from
+/// birth. Runtime producers that will decorate the array with named
+/// properties (regex exec results) use this so the first install never has
+/// to move an element. The layout starts `GC_LAYOUT_UNKNOWN` (tag-scanned),
+/// which is right for the pointer-bearing payloads those producers store.
+#[cfg(feature = "regex-engine")]
+pub(crate) fn js_array_alloc_named_props_reserved(capacity: u32) -> *mut ArrayHeader {
+    let actual_capacity = capacity.max(MIN_ARRAY_CAPACITY);
+    let ptr = arena_alloc_gc(
+        array_byte_size(actual_capacity as usize + 1),
+        8,
+        crate::gc::GC_TYPE_ARRAY,
+    ) as *mut ArrayHeader;
+    unsafe {
+        (*ptr).length = 0;
+        (*ptr).capacity = actual_capacity;
+        // GC_STORE_AUDIT(INIT): the reserved word and the whole capacity are
+        // hole-initialized on a just-allocated array nothing references yet;
+        // TAG_HOLE is a non-pointer sentinel, so no edge and no barrier.
+        std::ptr::write(
+            crate::array::array_named_props_slot(ptr),
+            crate::value::TAG_HOLE,
+        );
+        let elements_ptr = crate::array::array_elements_ptr(ptr);
+        for i in 0..actual_capacity as usize {
+            // GC_STORE_AUDIT(INIT): same hole-initialization of a still
+            // unpublished allocation as `js_array_alloc`; no edge, no barrier.
+            std::ptr::write(elements_ptr.add(i), crate::value::TAG_HOLE);
+        }
+        let header = crate::gc::header_from_trusted_user_ptr(ptr.cast()).cast_mut();
+        (*header)._reserved |= crate::gc::GC_ARRAY_NAMED_PROPS;
+        debug_assert_eq!(crate::array::array_front_offset(ptr), 1);
+    }
+    ptr
+}
+
 /// Allocate a fresh array whose initialized prefix is known to contain only
 /// heap pointers. Runtime producers such as `String.prototype.split` use this
 /// instead of starting as a raw-f64 array and immediately invalidating that

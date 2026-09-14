@@ -157,6 +157,18 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
     match gc_type_rewrite_descriptor_kind((*header).obj_type) {
         GcRewriteDescriptorKind::Array => {
             visit_gc_layout_slot_descriptors(header, &mut visit);
+            // #10166 (brief 4): an array's named properties live in a pairs
+            // array the reserved physical slot 0 points at
+            // (`array/named_props.rs`). That word sits in front of logical
+            // element 0, outside every layout range, so emit it as a fixed
+            // child slot: marking retains the pairs array, evacuation and
+            // compaction rewrite the edge, and the remembered-set scan finds
+            // it through the page the store barrier dirtied.
+            if (*header)._reserved & crate::gc::GC_ARRAY_NAMED_PROPS != 0 {
+                visit(fixed_slot(crate::array::array_named_props_slot(
+                    user_ptr as *const crate::array::ArrayHeader,
+                )));
+            }
             // #9304: unlike shaped objects, real arrays keep an explicit
             // [[Prototype]] in the residual side table. Treat that value as
             // the array's child edge so collection retains and rewrites a

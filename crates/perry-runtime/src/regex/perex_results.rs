@@ -28,7 +28,9 @@ pub(super) fn materialize(
 ) -> Result<(*mut ArrayHeader, *mut ObjectHeader), EngineError> {
     let captures = found.captures.as_ref().ok_or(EngineError::InvalidSpan)?;
     let scope = RuntimeHandleScope::new();
-    let result = crate::array::js_array_alloc(captures.len() as u32);
+    // Born with the named-property reserve: `index`/`input`/`groups` (and
+    // `indices`) are installed below without moving an element.
+    let result = crate::array::js_array_alloc_named_props_reserved(captures.len() as u32);
     let result = scope.root_raw_mut_ptr(result);
     result.with_mut_ptr::<ArrayHeader, _>(|result| unsafe {
         (*result).length = captures.len() as u32;
@@ -46,7 +48,7 @@ pub(super) fn materialize(
         });
     }
     let indices = if has_indices {
-        let array = crate::array::js_array_alloc(captures.len() as u32);
+        let array = crate::array::js_array_alloc_named_props_reserved(captures.len() as u32);
         let array = scope.root_raw_mut_ptr(array);
         array.with_mut_ptr::<ArrayHeader, _>(|array| unsafe {
             (*array).length = captures.len() as u32;
@@ -126,37 +128,66 @@ pub(super) fn materialize(
             }
         }
     }
+    // The pairs arrays are the last allocations: build them first (rooted),
+    // THEN read every value from its handle, so nothing between a read and
+    // its install can move the value (`array_named_props_install_fresh` does
+    // not allocate).
+    const RESULT_KEYS: [crate::array::LiteralKey; 4] = [
+        crate::array::LiteralKey::new("index"),
+        crate::array::LiteralKey::new("input"),
+        crate::array::LiteralKey::new("groups"),
+        crate::array::LiteralKey::new("indices"),
+    ];
+    let pairs = scope.root_raw_mut_ptr(unsafe {
+        crate::array::array_named_props_pairs_alloc(if has_indices {
+            &RESULT_KEYS[..4]
+        } else {
+            &RESULT_KEYS[..3]
+        })
+    });
+    let index_pairs = indices.as_ref().map(|_| {
+        scope.root_raw_mut_ptr(unsafe {
+            crate::array::array_named_props_pairs_alloc(&RESULT_KEYS[2..3])
+        })
+    });
     let groups_value = groups.as_ref().map_or(
         f64::from_bits(crate::value::TAG_UNDEFINED),
         RuntimeHandle::get_nanbox_f64,
     );
     // Nothing from here to the install allocates on the GC heap: the refcount
-    // bump and the named-property side table are Rust-owned, so the boxed input
-    // and the array address stay current.
+    // bump is Rust-owned and the pairs arrays already exist, so the boxed
+    // input and every array address stay current.
     let input_value = input
         .with_const_ptr::<StringHeader, _>(|input| crate::value::js_nanbox_string(input as i64));
     crate::string::js_string_addref_if_heap_string(input_value);
-    result.with_mut_ptr::<ArrayHeader, _>(|result| unsafe {
-        crate::array::array_named_props_install_fresh(
-            result,
-            &[
-                ("index", found.full.start() as f64),
-                ("input", input_value),
-                ("groups", groups_value),
-            ],
-        );
+    let mut values = [
+        found.full.start() as f64,
+        input_value,
+        groups_value,
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+    ];
+    if let Some(indices) = indices.as_ref() {
+        values[3] = indices.with_mut_ptr::<ArrayHeader, _>(|indices| {
+            crate::value::js_nanbox_pointer(indices as i64)
+        });
+    }
+    let value_count = if has_indices { 4 } else { 3 };
+    pairs.with_mut_ptr::<ArrayHeader, _>(|pairs| {
+        result.with_mut_ptr::<ArrayHeader, _>(|result| unsafe {
+            crate::array::array_named_props_install_fresh(result, pairs, &values[..value_count]);
+        });
     });
-    if let Some(indices) = indices {
+    if let (Some(indices), Some(index_pairs)) = (indices.as_ref(), index_pairs.as_ref()) {
         let groups_value = index_groups.as_ref().map_or(
             f64::from_bits(crate::value::TAG_UNDEFINED),
             RuntimeHandle::get_nanbox_f64,
         );
-        indices.with_mut_ptr::<ArrayHeader, _>(|indices| unsafe {
-            crate::array::array_named_props_install_fresh(indices, &[("groups", groups_value)]);
-            result.with_mut_ptr::<ArrayHeader, _>(|result| {
+        index_pairs.with_mut_ptr::<ArrayHeader, _>(|index_pairs| {
+            indices.with_mut_ptr::<ArrayHeader, _>(|indices| unsafe {
                 crate::array::array_named_props_install_fresh(
-                    result,
-                    &[("indices", crate::value::js_nanbox_pointer(indices as i64))],
+                    indices,
+                    index_pairs,
+                    &[groups_value],
                 );
             });
         });

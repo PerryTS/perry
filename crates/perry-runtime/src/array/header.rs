@@ -24,28 +24,6 @@ crate::perry_thread_local! {
     static TEMPLATE_OBJECT_CACHE: RefCell<HashMap<u64, (*mut ArrayHeader, *mut ArrayHeader)>> =
         RefCell::new(HashMap::new());
 
-    /// Own non-index properties for Array exotic objects.
-    ///
-    /// Perry's `ArrayHeader` intentionally stays compact: `length`,
-    /// `capacity`, then inline element slots. Treating that header as an
-    /// `ObjectHeader` corrupts reads of named keys, so array expandos live in
-    /// this side table keyed by the array allocation address. Numeric array
-    /// indices remain in element storage; canonical non-indices such as
-    /// `"4294967295"` are stored here per ECMA-262.
-    /// Address-keyed `PtrHashMap` (#6386): probed on every exec-array
-    /// decoration (regex match/exec) and every `ArraySpeciesCreate`
-    /// own-`constructor` check; SipHash dominated those probes.
-    static ARRAY_NAMED_PROPS: RefCell<crate::fast_hash::PtrHashMap<usize, Vec<ArrayNamedProperty>>> =
-        RefCell::new(crate::fast_hash::new_ptr_hash_map());
-}
-
-#[derive(Clone)]
-struct ArrayNamedProperty {
-    // `Cow` so the per-match exec-array keys (`index`/`input`/`groups`,
-    // #6386) borrow statically instead of allocating three `String`s per
-    // regex match; dynamically named expandos still own their key.
-    name: std::borrow::Cow<'static, str>,
-    value: f64,
 }
 
 #[repr(u8)]
@@ -190,22 +168,33 @@ unsafe fn register_template_raw_pair(cooked: *mut ArrayHeader, raw: *mut ArrayHe
     });
 }
 
+/// Returns the live cooked head: installing the first named property on a
+/// full literal array grows it (`array/named_props.rs`), so the caller must
+/// freeze, register and cache the RETURNED pointer, not the pre-install one.
 unsafe fn install_template_raw_property(
     cooked_handle: &crate::gc::RuntimeHandle<'_>,
     raw_handle: &crate::gc::RuntimeHandle<'_>,
-) {
+) -> *mut ArrayHeader {
     let raw_key = crate::string::js_string_from_bytes(b"raw".as_ptr(), 3);
     let cooked = cooked_handle.get_raw_mut_ptr::<ArrayHeader>();
     let raw = raw_handle.get_raw_mut_ptr::<ArrayHeader>();
     if cooked.is_null() || raw.is_null() {
-        return;
+        return cooked;
     }
-    array_named_property_set(cooked, raw_key, crate::value::js_nanbox_pointer(raw as i64));
+    let cooked = super::named_props::array_named_property_set(
+        cooked,
+        raw_key,
+        crate::value::js_nanbox_pointer(raw as i64),
+    );
+    if cooked.is_null() {
+        return cooked;
+    }
     crate::object::set_property_attrs(
         cooked as usize,
         "raw".to_string(),
         crate::object::PropertyAttrs::new(false, false, false),
     );
+    cooked
 }
 
 /// Register the (cooked, raw) pair for a tagged-template call. Returns
@@ -249,8 +238,14 @@ pub extern "C" fn js_tagged_template_get_or_init(
     let cooked_handle = scope.root_raw_mut_ptr(cooked);
     let raw_handle = scope.root_raw_mut_ptr(raw);
     unsafe {
-        install_template_raw_property(&cooked_handle, &raw_handle);
-        let cooked = cooked_handle.get_raw_mut_ptr::<ArrayHeader>();
+        let cooked = install_template_raw_property(&cooked_handle, &raw_handle);
+        if cooked.is_null() {
+            return cooked_handle.get_raw_mut_ptr::<ArrayHeader>();
+        }
+        // The install may have grown the literal into a new allocation: root
+        // the live head so the raw-pair registration, the freeze and the
+        // per-site cache all name the array `.raw` reads will resolve to.
+        let cooked_handle = scope.root_raw_mut_ptr(cooked);
         let raw = raw_handle.get_raw_mut_ptr::<ArrayHeader>();
         mark_template_array_frozen(raw);
         mark_template_array_frozen(cooked);
@@ -258,8 +253,8 @@ pub extern "C" fn js_tagged_template_get_or_init(
         TEMPLATE_OBJECT_CACHE.with(|m| {
             m.borrow_mut().insert(site_id, (cooked, raw));
         });
+        cooked_handle.get_raw_mut_ptr::<ArrayHeader>()
     }
-    cooked_handle.get_raw_mut_ptr::<ArrayHeader>()
 }
 
 #[cfg(feature = "keepalive-anchors")]
@@ -319,335 +314,29 @@ pub fn scan_template_raw_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
             }
         }
     });
-    scan_array_named_property_roots_mut(visitor);
 }
 
-fn barrier_array_named_props(owner: usize, props: &mut [ArrayNamedProperty]) {
-    for prop in props.iter_mut() {
-        crate::gc::runtime_write_barrier_external_slot(
-            owner,
-            &mut prop.value as *mut f64 as usize,
-            prop.value.to_bits(),
-        );
-    }
-}
-
-fn merge_array_named_props(
-    props: &mut crate::fast_hash::PtrHashMap<usize, Vec<ArrayNamedProperty>>,
-    owner: usize,
-    owner_props: Vec<ArrayNamedProperty>,
-) {
-    note_array_named_props_ever();
-    let entry = props.entry(owner).or_default();
-    for prop in owner_props {
-        if let Some(existing) = entry.iter_mut().find(|existing| existing.name == prop.name) {
-            existing.value = prop.value;
-        } else {
-            entry.push(prop);
-        }
-    }
-    barrier_array_named_props(owner, entry);
-}
-
-/// Rekey an array's named-property side table when `js_array_grow` replaces
-/// its inline allocation. GC moves do this through the mutable-root visitor;
-/// array growth is outside the collector and must perform the same ownership
-/// transfer explicitly before publishing the forwarding stub.
-pub(crate) fn transfer_array_named_property_owner(old_owner: usize, new_owner: usize) {
-    if old_owner == 0
-        || new_owner == 0
-        || old_owner == new_owner
-        || !ARRAY_NAMED_PROPS_EVER.load(std::sync::atomic::Ordering::Acquire)
-    {
-        return;
-    }
-    ARRAY_NAMED_PROPS.with(|m| {
-        let mut props = m.borrow_mut();
-        if let Some(old_props) = props.remove(&old_owner) {
-            merge_array_named_props(&mut props, new_owner, old_props);
-        }
-    });
-}
-
-pub(crate) fn scan_array_named_property_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    ARRAY_NAMED_PROPS.with(|m| {
-        let mut props = m.borrow_mut();
-        let mut moved = Vec::new();
-        for (&owner, owner_props) in props.iter_mut() {
-            let mut new_owner = owner;
-            if visitor.visit_metadata_usize_slot(&mut new_owner) {
-                moved.push((owner, new_owner));
-            }
-            for prop in owner_props.iter_mut() {
-                visitor.visit_nanbox_f64_slot(&mut prop.value);
-            }
-        }
-        for (old_owner, new_owner) in moved {
-            if let Some(old_props) = props.remove(&old_owner) {
-                merge_array_named_props(&mut props, new_owner, old_props);
-            }
-        }
-    });
-}
-
-/// Remove named-property entries whose array owners are provably dead under
-/// the centralized collection-specific liveness policy.
-pub(crate) fn prune_dead_array_named_property_owners(is_dead_owner: &dyn Fn(usize) -> bool) {
-    ARRAY_NAMED_PROPS.with(|m| {
-        m.borrow_mut().retain(|owner, _| !is_dead_owner(*owner));
-    });
-}
-
-#[cfg(test)]
-pub(crate) fn test_array_named_property_owner_exists(owner: usize) -> bool {
-    ARRAY_NAMED_PROPS.with(|m| m.borrow().contains_key(&owner))
-}
-
-#[cfg(test)]
-pub(crate) fn test_clear_array_named_property_roots() {
-    ARRAY_NAMED_PROPS.with(|m| m.borrow_mut().clear());
-}
-
-unsafe fn string_header_as_str<'a>(key: *const crate::StringHeader) -> Option<&'a str> {
+/// The payload bytes of a heap string, or `None` for a null pointer.
+///
+/// # Safety
+/// `key` must be null or a live `StringHeader`.
+#[inline]
+pub(super) unsafe fn string_header_bytes<'a>(key: *const crate::StringHeader) -> Option<&'a [u8]> {
     if key.is_null() {
         return None;
     }
     let len = (*key).byte_len as usize;
     let data = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-    let bytes = std::slice::from_raw_parts(data, len);
-    std::str::from_utf8(bytes).ok()
+    Some(std::slice::from_raw_parts(data, len))
 }
 
-/// Has ANY array on this process ever taken a named (non-index) property?
+/// The payload of a heap string as UTF-8, or `None` for null / non-UTF-8.
 ///
-/// `array_has_named_properties` is on the `length` shrink path of every
-/// `pooled.length = 0` an object pool performs; without the latch each of
-/// those paid a thread-local hash probe to learn that the table has always
-/// been empty. Monotone (never cleared), so a false answer is always safe.
-static ARRAY_NAMED_PROPS_EVER: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
+/// # Safety
+/// `key` must be null or a live `StringHeader`.
 #[inline]
-fn note_array_named_props_ever() {
-    ARRAY_NAMED_PROPS_EVER.store(true, std::sync::atomic::Ordering::Release);
-}
-
-#[inline]
-unsafe fn mark_array_named_properties(arr: *const ArrayHeader) {
-    note_array_named_props_ever();
-    let header = (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-    debug_assert_eq!((*header).obj_type, crate::gc::GC_TYPE_ARRAY);
-    // The existing special-property bit is deliberately conservative and
-    // monotone. Sharing it with named side-table entries gives callback-free
-    // array consumers an address-local absence proof without spending the
-    // final layout bit or probing the TLS map.
-    (*header)._reserved |= crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS;
-}
-
-pub(crate) unsafe fn array_named_property_set(
-    arr: *mut ArrayHeader,
-    key: *const crate::StringHeader,
-    value: f64,
-) {
-    let arr = clean_arr_ptr_mut(arr);
-    if arr.is_null() {
-        return;
-    }
-    let Some(name) = string_header_as_str(key) else {
-        return;
-    };
-    let owner = arr as usize;
-    mark_array_named_properties(arr);
-    ARRAY_NAMED_PROPS.with(|m| {
-        let mut map = m.borrow_mut();
-        let props = map.entry(owner).or_default();
-        if let Some(prop) = props.iter_mut().find(|prop| prop.name == name) {
-            prop.value = value;
-        } else {
-            props.push(ArrayNamedProperty {
-                name: std::borrow::Cow::Owned(name.to_string()),
-                value,
-            });
-        }
-        barrier_array_named_props(owner, props);
-    });
-}
-
-/// Batched named-prop install for a FRESHLY built array (#6386): one
-/// side-table probe for all entries and `&str` keys (no key `StringHeader`
-/// allocations). Callers must guarantee the array was allocated in the same
-/// runtime helper invocation — a fresh array has no accessor descriptors, no
-/// property attributes, and no freeze/seal state, which is what makes
-/// bypassing `js_array_set_string_key`'s guard ladder sound. Keys must not be
-/// numeric index strings or `"length"` (those live in element storage /
-/// the header, not this side table).
-#[cfg(feature = "regex-engine")]
-pub(crate) unsafe fn array_named_props_install_fresh(
-    arr: *mut ArrayHeader,
-    entries: &[(&'static str, f64)],
-) {
-    let arr = clean_arr_ptr_mut(arr);
-    if arr.is_null() {
-        return;
-    }
-    if !entries.is_empty() {
-        note_array_named_props_ever();
-    }
-    let owner = arr as usize;
-    mark_array_named_properties(arr);
-    ARRAY_NAMED_PROPS.with(|m| {
-        let mut map = m.borrow_mut();
-        let props = map.entry(owner).or_default();
-        for (name, value) in entries {
-            if let Some(prop) = props.iter_mut().find(|prop| prop.name == *name) {
-                prop.value = *value;
-            } else {
-                props.push(ArrayNamedProperty {
-                    name: std::borrow::Cow::Borrowed(*name),
-                    value: *value,
-                });
-            }
-        }
-        barrier_array_named_props(owner, props);
-    });
-}
-
-pub(crate) unsafe fn array_named_property_get_by_name(
-    arr: *const ArrayHeader,
-    name: &str,
-) -> Option<f64> {
-    let arr = clean_arr_ptr(arr);
-    if arr.is_null() {
-        return None;
-    }
-    ARRAY_NAMED_PROPS.with(|m| {
-        m.borrow().get(&(arr as usize)).and_then(|props| {
-            props
-                .iter()
-                .find(|prop| prop.name == name)
-                .map(|prop| prop.value)
-        })
-    })
-}
-
-/// Does this (already resolved) array head carry named properties in the
-/// side table? The exact lookup remains necessary to distinguish named
-/// properties from other kinds covered by `OBJ_FLAG_ARRAY_DESCRIPTORS`.
-#[inline]
-pub(crate) unsafe fn array_has_named_properties_resolved(arr: *const ArrayHeader) -> bool {
-    let header = (arr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*header)._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS == 0 {
-        return false;
-    }
-    ARRAY_NAMED_PROPS.with(|m| {
-        m.borrow()
-            .get(&(arr as usize))
-            .is_some_and(|props| !props.is_empty())
-    })
-}
-
-/// Whether an already-resolved array owns numeric indices in the named-property
-/// side table. Those indices live beyond the dense allocation. Growing the
-/// allocation across one without migrating it would hide the property because
-/// indexed reads consult the side table only at `index >= capacity`.
-#[inline]
-pub(crate) unsafe fn array_has_sparse_index_properties_resolved(arr: *const ArrayHeader) -> bool {
-    if !ARRAY_NAMED_PROPS_EVER.load(std::sync::atomic::Ordering::Acquire) {
-        return false;
-    }
-    ARRAY_NAMED_PROPS.with(|m| {
-        m.borrow().get(&(arr as usize)).is_some_and(|props| {
-            props
-                .iter()
-                .any(|prop| crate::object::canonical_array_index(&prop.name).is_some())
-        })
-    })
-}
-
-pub(crate) unsafe fn array_named_property_get(
-    arr: *const ArrayHeader,
-    key: *const crate::StringHeader,
-) -> Option<f64> {
-    let name = string_header_as_str(key)?;
-    array_named_property_get_by_name(arr, name)
-}
-
-pub(crate) unsafe fn array_named_property_has(
-    arr: *const ArrayHeader,
-    key: *const crate::StringHeader,
-) -> bool {
-    let Some(name) = string_header_as_str(key) else {
-        return false;
-    };
-    let arr = clean_arr_ptr(arr);
-    if arr.is_null() {
-        return false;
-    }
-    ARRAY_NAMED_PROPS.with(|m| {
-        m.borrow()
-            .get(&(arr as usize))
-            .map(|props| props.iter().any(|prop| prop.name == name))
-            .unwrap_or(false)
-    })
-}
-
-pub(crate) unsafe fn array_named_property_names(
-    arr: *const ArrayHeader,
-    enumerable_only: bool,
-) -> Vec<String> {
-    let arr = clean_arr_ptr(arr);
-    if arr.is_null() {
-        return Vec::new();
-    }
-    let owner = arr as usize;
-    ARRAY_NAMED_PROPS.with(|m| {
-        m.borrow()
-            .get(&owner)
-            .map(|props| {
-                props
-                    .iter()
-                    .filter(|prop| {
-                        !enumerable_only
-                            || crate::object::get_property_attrs(owner, &prop.name)
-                                .map(|attrs| attrs.enumerable())
-                                .unwrap_or(true)
-                    })
-                    .map(|prop| prop.name.to_string())
-                    .collect()
-            })
-            .unwrap_or_default()
-    })
-}
-
-pub(crate) unsafe fn array_named_property_delete(
-    arr: *const ArrayHeader,
-    key: *const crate::StringHeader,
-) -> bool {
-    let Some(name) = string_header_as_str(key) else {
-        return false;
-    };
-    array_named_property_delete_by_name(arr, name)
-}
-
-pub(crate) unsafe fn array_named_property_delete_by_name(
-    arr: *const ArrayHeader,
-    name: &str,
-) -> bool {
-    let arr = clean_arr_ptr(arr);
-    if arr.is_null() {
-        return false;
-    }
-    ARRAY_NAMED_PROPS.with(|m| {
-        let mut map = m.borrow_mut();
-        let Some(props) = map.get_mut(&(arr as usize)) else {
-            return false;
-        };
-        let Some(index) = props.iter().position(|prop| prop.name == name) else {
-            return false;
-        };
-        props.remove(index);
-        true
-    })
+pub(super) unsafe fn string_header_as_str<'a>(key: *const crate::StringHeader) -> Option<&'a str> {
+    std::str::from_utf8(string_header_bytes(key)?).ok()
 }
 
 #[cfg(test)]
@@ -844,7 +533,7 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
     // when a reused arena slot landed ASCII text at offsets 0/4). Sparse
     // arrays created by far-index writes are the one legal exception:
     // logical length can be huge while dense capacity stays small and the
-    // far slots live in ARRAY_NAMED_PROPS.
+    // far slots live in the array's named properties (`named_props.rs`).
     unsafe {
         let hdr = &*cleaned;
         if hdr.length > hdr.capacity || hdr.length > 100_000_000 {

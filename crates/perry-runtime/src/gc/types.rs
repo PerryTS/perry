@@ -1299,6 +1299,22 @@ pub(crate) const GC_ARRAY_RAW_F64_LAYOUT: u16 = 0x80;
 /// meaningful for `GC_TYPE_ARRAY`; it lets `util.types.isArgumentsObject`
 /// distinguish Perry's internal `arguments` arrays from user rest arrays.
 pub(crate) const GC_ARRAY_ARGUMENTS_OBJECT: u16 = 0x200;
+/// #10166 (brief 4): this `GC_TYPE_ARRAY` carries its own non-index ("named")
+/// properties WITH the allocation: the FIRST physical element slot (`arr + 1`)
+/// is reserved for a NaN-boxed pointer to a pairs array and `capacity` excludes
+/// it, so `array_front_offset(arr) >= 1` for every flagged array (see
+/// `array/named_props.rs`). The collector emits that slot as a fixed child edge
+/// in `gc::layout_slot_visit`'s Array arm, `js_array_grow` re-reserves it in the
+/// replacement allocation, and `storage::shift_dense`'s empty-queue reset keeps
+/// it out of `capacity`. Set-only for an allocation (the reserve cannot be
+/// returned without moving every element); the pairs array's length says
+/// whether any property is live.
+///
+/// Bit 8 is shared with `OBJ_FLAG_TYPED_ARRAY_PROTO`, which is meaningful only
+/// for `GC_TYPE_OBJECT`: every reader of that flag first requires
+/// `obj_type == GC_TYPE_OBJECT` (`proxy/put_value.rs`, `field_set_by_name.rs`,
+/// `delete_rest.rs`), the same disjointness bits 9/10/11/12 already rely on.
+pub(crate) const GC_ARRAY_NAMED_PROPS: u16 = 0x100;
 /// #8098: this `GC_TYPE_OBJECT` allocation is an ORDINARY plain object. It has
 /// no class, but it also carries none of the per-object `[[Set]]` semantics a
 /// class-less receiver may otherwise have — a `URL`'s `pathname`/`search`/…
