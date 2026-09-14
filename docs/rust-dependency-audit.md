@@ -1,6 +1,6 @@
 # Rust dependency audit and initial cleanup — 14 September 2026
 
-**Implemented in this PR:** remove 24 unused member dependency declarations and the unused `similar` workspace template, including stdlib's unused Clap and Tokio cron scheduler dependencies. The lockfile loses 15 external package versions, with no added packages, version upgrades or checksum changes to retained packages. Existing Tokio usage and all library implementations remain in place. ZIP feature trimming, Governor changes, version alignment and replacement projects below are recommendations for separate changes.
+**Implemented in this PR:** remove 22 unused member dependency declarations and the unused `similar` workspace template, including stdlib's unused Clap and Tokio cron scheduler dependencies. The lockfile loses 15 external package versions, with no added packages, version upgrades or checksum changes to retained packages. Existing Tokio usage and all library implementations remain in place. ZIP feature trimming, Governor changes, version alignment and replacement projects below are recommendations for separate changes.
 
 The dated census, decisions and graph experiments preserve the **pre-cleanup baseline** so the evidence remains independently reviewable. The removed declarations are listed below; the dependency decision table describes the baseline and is not a census of the post-cleanup tree.
 
@@ -82,12 +82,12 @@ Source searches covered each owner's Rust source, tests, examples, benches and b
 | `perry-updater` | `serde_json` | Keep its actual Serde, signature and hashing dependencies |
 | `perry-ext-fastify` | `lazy_static` | Other extension users still use it |
 | `perry-ui-android` | `itoa`, `ryu`, `serde_json` | Target-specific validation needed |
-| `perry-ui-windows-winui` | `base64`, `libc` | Target-specific validation needed |
 | Workspace template | `similar` | No member inherits it; deletion has zero graph effect |
 
-Three cases require a different verdict:
+These cases require a different verdict:
 
 - **Keep `windows-core`** in Windows UI. The `windows::core::implement` macro expands to absolute `::windows_core` paths. The manifest documents the build failure if the direct edge is removed.
+- **Keep `base64` and `libc` in WinUI**. Its `#[path]` modules compile the shared Windows backend's [system FFI](../crates/perry-ui-windows/src/ffi/system.rs), including Base64 encoding and allocation cleanup, in the WinUI crate. The census scans files inside each package and does not follow shared source paths; Windows compilation confirmed these declarations are required.
 - **Keep/review feature propagation for `icu_calendar` and `icu_time`**. Runtime enables their `compiled_data` under `intl-datetime`; re-exports hide lexical use. Removing an edge could change selected data even without an import.
 - **Review only the unused stdlib version/feature edges for `sha3` and `spki`**. Stdlib's `sha3 0.12` alias has no lexical use, while SHAKE uses `shake` and KMAC uses `sha3_010`. `spki` is directly used by node-forge and can activate PEM/alloc features elsewhere. Preserve the live crypto algorithms and re-export feature contracts.
 
@@ -152,4 +152,4 @@ cargo tree --locked -p perry -e normal,build --target x86_64-pc-windows-msvc
 cargo tree --locked --workspace --target all -d
 ```
 
-The first command inventories the current checkout and may download locked sources to Cargo's cache, but does not compile or modify the lockfile. Run it at the pinned baseline commit to reproduce the dated census; use a different output path after cleanup. Lexical use counts are deliberately review aids; the macro and feature-only exceptions above demonstrate why automated deletion based on them would be unsound.
+The first command inventories the current checkout and may download locked sources to Cargo's cache, but does not compile or modify the lockfile. Run it at the pinned baseline commit to reproduce the dated census; use a different output path after cleanup. Lexical use counts are deliberately review aids; the shared-source, macro and feature-only exceptions above demonstrate why automated deletion based on them would be unsound.

@@ -5,6 +5,8 @@ Run from the repository root with Python 3.11+ and Cargo. Metadata describes
 the cross-target lock graph, including optional dependencies; it is NOT a
 measurement of linked code. Use cargo tree for selected build configurations.
 Source references are lexical review aids, not proof that an edge is unused.
+Only files within each package are scanned; shared-source #[path] modules,
+macro expansion and feature-only dependencies need separate review.
 """
 
 import argparse
