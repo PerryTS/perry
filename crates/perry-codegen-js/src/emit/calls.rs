@@ -304,6 +304,7 @@ impl JsEmitter {
             "widgetReorderChild" => "perry_ui_widget_reorder_child",
             "widgetClearChildren" => "perry_ui_widget_remove_all_children",
             "widgetSetWidth" => "perry_ui_widget_set_width",
+            "widgetSetMaxWidth" => "perry_ui_widget_set_max_width",
             "widgetSetHeight" => "perry_ui_widget_set_height",
             "widgetSetHugging" => "perry_ui_widget_set_hugging",
             "widgetSetHidden" => "perry_ui_set_widget_hidden",

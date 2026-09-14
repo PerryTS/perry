@@ -136,7 +136,7 @@ pub fn app_set_body(app_handle: i64, root_handle: i64) {
         if idx < apps.len() {
             apps[idx]._root_widget = Some(root_handle);
 
-            if let Some(view) = widgets::get_widget(root_handle) {
+            if let Some(view) = widgets::get_layout_widget(root_handle) {
                 let window = &apps[idx].window;
 
                 // Check if the current content view is an NSVisualEffectView (set by vibrancy).

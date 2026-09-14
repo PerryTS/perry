@@ -1964,3 +1964,8 @@ pub extern "C" fn perry_ui_canvas_draw_image(
 /// Frame persistence only applies to repositionable desktop windows.
 #[no_mangle]
 pub extern "C" fn perry_ui_app_set_frame_autosave_name(_app_handle: i64, _value_ptr: i64) {}
+
+/// Responsive max-width is not implemented on this backend yet.
+/// Export the shared ABI so portable perry/ui code continues to compile.
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_max_width(_handle: i64, _max_width: f64) {}

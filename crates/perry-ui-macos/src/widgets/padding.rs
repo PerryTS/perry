@@ -239,6 +239,7 @@ pub(crate) fn set_edge_insets(view: &NSView, top: f64, left: f64, bottom: f64, r
         if let Some(cls) = AnyClass::get(c"NSStackView") {
             if view.isKindOfClass(cls) {
                 let _: () = msg_send![view, setEdgeInsets: insets];
+                super::max_width::refresh_children(view);
                 return;
             }
         }

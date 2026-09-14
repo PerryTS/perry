@@ -179,3 +179,8 @@ pub extern "C" fn perry_ui_stack_set_alignment(handle: i64, alignment: f64) {
         }
     }
 }
+
+/// Responsive max-width is not implemented on this backend yet.
+/// Export the shared ABI so portable perry/ui code continues to compile.
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_max_width(_handle: i64, _max_width: f64) {}

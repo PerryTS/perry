@@ -93,6 +93,7 @@ pub(super) fn map_ui_method(method: &str, class_name: Option<&str>) -> &'static 
         "setTooltip" | "set_tooltip" => "perry_ui_set_tooltip",
         "setControlSize" | "set_control_size" => "perry_ui_set_control_size",
         "widgetSetWidth" => "perry_ui_widget_set_width",
+        "widgetSetMaxWidth" => "perry_ui_widget_set_max_width",
         "widgetSetHeight" => "perry_ui_widget_set_height",
         "widgetSetHugging" => "perry_ui_widget_set_hugging",
         "widgetSetHidden" => "perry_ui_set_widget_hidden",

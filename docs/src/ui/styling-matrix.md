@@ -21,6 +21,7 @@ Legend: `✓` Wired (real native impl), `~` Stub (symbol exists, no-op), `✗` M
 | `control_size` | `perry_ui_widget_set_control_size` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `hugging` | `perry_ui_widget_set_hugging` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `width` | `perry_ui_widget_set_width` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `max_width` | `perry_ui_widget_set_max_width` | ✓ | ~ | ~ | ~ | ~ | ~ | ~ | ~ | ✓ |
 | `height` | `perry_ui_widget_set_height` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `match_parent_width` | `perry_ui_widget_match_parent_width` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `match_parent_height` | `perry_ui_widget_match_parent_height` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
@@ -85,13 +86,13 @@ Legend: `✓` Wired (real native impl), `~` Stub (symbol exists, no-op), `✗` M
 
 | Platform | Wired | Stub | Missing | Not applicable |
 |---|---|---|---|---|
-| macOS | 47 | 0 | 0 | 0 |
-| iOS | 47 | 0 | 0 | 0 |
-| tvOS | 47 | 0 | 0 | 0 |
-| visionOS | 47 | 0 | 0 | 0 |
-| watchOS | 47 | 0 | 0 | 0 |
-| Android | 47 | 0 | 0 | 0 |
-| GTK4 | 47 | 0 | 0 | 0 |
-| Windows | 47 | 0 | 0 | 0 |
-| Web | 47 | 0 | 0 | 0 |
+| macOS | 48 | 0 | 0 | 0 |
+| iOS | 47 | 1 | 0 | 0 |
+| tvOS | 47 | 1 | 0 | 0 |
+| visionOS | 47 | 1 | 0 | 0 |
+| watchOS | 47 | 1 | 0 | 0 |
+| Android | 47 | 1 | 0 | 0 |
+| GTK4 | 47 | 1 | 0 | 0 |
+| Windows | 47 | 1 | 0 | 0 |
+| Web | 48 | 0 | 0 | 0 |
 

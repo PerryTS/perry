@@ -1236,6 +1236,19 @@ function perry_ui_button_set_content_tint_color(h, r, g, b, a) {
     if (el) el.style.color = `rgba(${Math.round(r*255)},${Math.round(g*255)},${Math.round(b*255)},${a})`;
 }
 
+function perry_ui_widget_set_max_width(h, maxWidth) {
+    if (!Number.isFinite(maxWidth) || maxWidth < 0) return;
+    const el = getHandle(h);
+    if (!el) return;
+    el.style.boxSizing = "border-box";
+    el.style.width = "100%";
+    el.style.minWidth = "0";
+    el.style.maxWidth = maxWidth + "px";
+    el.style.flexShrink = "1";
+    el.style.marginLeft = "auto";
+    el.style.marginRight = "auto";
+}
+
 function perry_ui_widget_set_width(h, w) {
     const el = getHandle(h);
     if (el) { el.style.width = w + "px"; el.style.minWidth = w + "px"; el.style.maxWidth = w + "px"; el.style.flexShrink = "0"; }
@@ -3834,6 +3847,7 @@ window.__perry = {
     perry_ui_app_on_terminate,
     perry_ui_app_set_timer,
     // Widget layout
+    perry_ui_widget_set_max_width,
     perry_ui_widget_set_width,
     perry_ui_widget_set_height,
     perry_ui_widget_set_hugging,

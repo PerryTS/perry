@@ -213,3 +213,23 @@ fn html_escape(s: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
 }
+
+#[cfg(test)]
+mod max_width_tests {
+    use super::*;
+    use perry_hir::Expr;
+
+    #[test]
+    fn max_width_calls_the_web_runtime() {
+        let mut module = Module::new("max_width");
+        module.init.push(Stmt::Expr(Expr::NativeMethodCall {
+            module: "perry/ui".into(),
+            class_name: None,
+            object: None,
+            method: "widgetSetMaxWidth".into(),
+            args: vec![Expr::Number(1.0), Expr::Number(640.0)],
+        }));
+        let (js, _) = compile_module_to_js(&module, false);
+        assert!(js.contains("perry_ui_widget_set_max_width(1, 640)"), "{js}");
+    }
+}
