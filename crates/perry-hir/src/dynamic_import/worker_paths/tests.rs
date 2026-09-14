@@ -93,11 +93,10 @@ fn unsafe_helpers_stay_unresolved_with_reasons() {
     for body in [
         "console.log('effect'); return './worker.js';",
         "let x = './worker.js'; x = './other.js'; return x;",
-        "if (true) return './worker.js'; return './other.js';",
     ] {
         rejected(
             &format!("function entry() {{ {body} }} new Worker(entry());"),
-            "single return",
+            "no effects or mutation",
         );
     }
     rejected(
@@ -114,8 +113,8 @@ fn unsafe_helpers_stay_unresolved_with_reasons() {
         "exact list",
     );
     rejected(
-        "const entry = async () => './worker.js'; new Worker(entry());",
-        "async",
+        "function* entry() { return './worker.js'; } new Worker(entry());",
+        "generator",
     );
     rejected(
         "const entry = (x = './worker.js') => x; new Worker(entry());",
@@ -213,4 +212,70 @@ fn branching_helper_expansion_has_a_shared_work_budget() {
     }
     source.push_str("new Worker(h12());");
     rejected(&source, "work limit");
+}
+
+#[test]
+fn awaited_helpers_and_if_return_unions() {
+    paths(
+        r#"
+        const WORKER_PATH = '/source/worker.ts';
+        async function target() {
+            if (typeof WORKER_PATH !== 'undefined') return WORKER_PATH;
+            const dist = new URL('../x/worker.js', import.meta.url);
+            if (await exists(dist)) return dist;
+            return new URL('./worker.ts', import.meta.url);
+        }
+        const file = await target();
+        new Worker(file);
+        "#,
+        &["/source/worker.ts", "../x/worker.js", "./worker.ts"],
+    );
+    paths(
+        "async function entry() { return './worker.js'; } new Worker(await entry());",
+        &["./worker.js"],
+    );
+    paths(
+        "const entry = async () => './worker.js'; new Worker(await entry());",
+        &["./worker.js"],
+    );
+    paths("new Worker(await './worker.js');", &["./worker.js"]);
+    paths(
+        "function entry() { if (opaque()) return './a.js'; return './b.js'; } new Worker(entry());",
+        &["./a.js", "./b.js"],
+    );
+    paths("function entry(path) { const file = path + '.js'; if (opaque()) { return file; } else { return './b.js'; } } new Worker(entry('./a'));", &["./a.js", "./b.js"]);
+}
+
+#[test]
+fn return_union_rejections_and_limits() {
+    rejected("async function entry() { if (await opaque()) return './a.js'; return opaque(); } new Worker(await entry());", "opaque call");
+    rejected("async function entry() { if (true) return './a.js'; return await entry(); } new Worker(await entry());", "recursive");
+    rejected(
+        "function entry() { if (opaque()) return './a.js'; } new Worker(entry());",
+        "fall through",
+    );
+    rejected(
+        "function entry() { if (opaque()) return; return './a.js'; } new Worker(entry());",
+        "no effects or mutation",
+    );
+    rejected(
+        "function entry() { const ignored = opaque(); return './a.js'; } new Worker(entry());",
+        "opaque call",
+    );
+    rejected("function entry() { let path = './a.js'; if (path = './b.js') return './a.js'; return './b.js'; } new Worker(entry());", "no effects or mutation");
+    rejected("function entry() { if (obj.x = true) return './a.js'; return './b.js'; } new Worker(entry());", "mutation");
+    rejected("function entry() { const url = new URL('./a.js', import.meta.url); if (url.href = 'file:///b.js') return url; return './c.js'; } new Worker(entry());", "mutation");
+    rejected("function entry() { if (opaque()) return './a.js'; return new URL('./b.js', import.meta.url); } new Worker('./prefix' + entry());", "URL string coercion");
+    let branches = (0..=DYNAMIC_IMPORT_PATH_CAP)
+        .map(|n| format!("if (opaque()) return './w{n}.js';"))
+        .collect::<String>();
+    rejected(
+        &format!("function entry() {{ {branches} return './last.js'; }} new Worker(entry());"),
+        "candidate count",
+    );
+    let branches = "if (opaque()) return './w.js';".repeat(WORK_LIMIT);
+    rejected(
+        &format!("function entry() {{ {branches} return './last.js'; }} new Worker(entry());"),
+        "work limit",
+    );
 }

@@ -15,6 +15,8 @@ type Paths = Result<PathValues, String>;
 #[derive(Clone)]
 struct PathValues {
     paths: Vec<String>,
+    // True if ANY candidate is a URL. Mixed return unions may be consumed as
+    // Worker filenames, but must never be coerced to lexical relative strings.
     is_url: bool,
 }
 
@@ -92,6 +94,7 @@ impl<V: Borrow<Expr>> WorkerPaths<'_, V> {
     fn resolve(&mut self, expr: &Expr, depth: usize) -> Paths {
         self.tick(depth)?;
         match expr {
+            Expr::Await(value) => self.resolve(value, depth + 1),
             Expr::String(value) => bounded(vec![value.clone()], &mut self.work),
             Expr::StringCoerce(value) => self.strings(value, depth + 1).map(PathValues::strings),
             Expr::LocalGet(id) => {
@@ -295,7 +298,7 @@ impl<V: Borrow<Expr>> WorkerPaths<'_, V> {
                 .ok_or("call target is mutable or is not a module-local helper")?
                 .borrow();
         }
-        let (id, params, body, asynchronous) = match target {
+        let (id, params, body, generator) = match target {
             Expr::FuncRef(id) => {
                 let function = self
                     .module
@@ -303,25 +306,19 @@ impl<V: Borrow<Expr>> WorkerPaths<'_, V> {
                     .iter()
                     .find(|function| function.id == *id)
                     .ok_or("call target is not a module-local helper")?;
-                (
-                    *id,
-                    &function.params,
-                    &function.body,
-                    function.is_async || function.is_generator || function.was_plain_async,
-                )
+                (*id, &function.params, &function.body, function.is_generator)
             }
             Expr::Closure {
                 func_id,
                 params,
                 body,
-                is_async,
                 is_generator,
                 ..
-            } => (*func_id, params, body, *is_async || *is_generator),
+            } => (*func_id, params, body, *is_generator),
             _ => return Err("opaque call target is not a module-local helper".into()),
         };
-        if asynchronous {
-            return Err("async and generator helpers are not static path helpers".into());
+        if generator {
+            return Err("generator helpers are not static path helpers".into());
         }
         if params.len() != args.len()
             || params.iter().any(|p| {
@@ -335,9 +332,6 @@ impl<V: Borrow<Expr>> WorkerPaths<'_, V> {
                 "helper requires an exact list of simple static string/URL arguments".into(),
             );
         }
-        let [Stmt::Return(Some(value))] = body.as_slice() else {
-            return Err("helper body must contain only a single return (no effects, mutation or multiple returns)".into());
-        };
         // Resolve arguments before entering the callee so sibling/nested calls
         // such as identity(identity(path)) are not mistaken for recursion.
         let mut bindings = Vec::new();
@@ -351,7 +345,16 @@ impl<V: Borrow<Expr>> WorkerPaths<'_, V> {
             .into_iter()
             .map(|(id, paths)| (id, self.arguments.insert(id, paths)))
             .collect();
-        let result = self.resolve(value, depth + 1);
+        let mut values = PathValues::strings(Vec::new());
+        let result = self
+            .returns(body, &mut values, depth + 1)
+            .and_then(|returns| {
+                if returns {
+                    Ok(values)
+                } else {
+                    Err("helper may fall through without returning a path".into())
+                }
+            });
         for (id, previous) in saved {
             if let Some(previous) = previous {
                 self.arguments.insert(id, previous);
@@ -360,6 +363,102 @@ impl<V: Borrow<Expr>> WorkerPaths<'_, V> {
             }
         }
         self.calls.remove(&id);
+        result
+    }
+
+    // Discover edges, not control flow: conditions can contain opaque calls
+    // (including awaited filesystem probes). Every returned value and every
+    // const initializer must still belong to the bounded static path grammar.
+    fn returns(
+        &mut self,
+        body: &[Stmt],
+        values: &mut PathValues,
+        depth: usize,
+    ) -> Result<bool, String> {
+        self.tick(depth)?;
+        let mut always_returns = false;
+        for stmt in body {
+            self.tick(depth)?;
+            match stmt {
+                Stmt::Return(Some(value)) => {
+                    let returned = self.resolve(value, depth + 1)?;
+                    values.is_url |= returned.is_url;
+                    for path in returned.paths {
+                        push_path(&mut values.paths, path, &mut self.work)?;
+                    }
+                    always_returns = true;
+                }
+                Stmt::Let {
+                    id,
+                    mutable: false,
+                    init: Some(init),
+                    ..
+                } if self.consts.contains_key(id) => {
+                    self.resolve(init, depth + 1)?;
+                }
+                Stmt::If {
+                    condition,
+                    then_branch,
+                    else_branch,
+                } => {
+                    self.condition(condition, depth + 1)?;
+                    let then_returns = self.returns(then_branch, values, depth + 1)?;
+                    let else_returns = match else_branch {
+                        Some(branch) => self.returns(branch, values, depth + 1)?,
+                        None => false,
+                    };
+                    always_returns |= then_returns && else_returns;
+                }
+                _ => return Err(
+                    "helper body supports only const paths, if and return (no effects or mutation)"
+                        .into(),
+                ),
+            }
+        }
+        Ok(always_returns)
+    }
+
+    fn condition(&mut self, expr: &Expr, depth: usize) -> Result<(), String> {
+        self.tick(depth)?;
+        if matches!(
+            expr,
+            Expr::LocalSet(..)
+                | Expr::GlobalSet(..)
+                | Expr::Update { .. }
+                | Expr::PropertySet { .. }
+                | Expr::PropertyUpdate { .. }
+                | Expr::IndexSet { .. }
+                | Expr::IndexUpdate { .. }
+                | Expr::StaticFieldSet { .. }
+                | Expr::WithSet { .. }
+                | Expr::ClassStaticSymbolSet { .. }
+                | Expr::SuperPropertySet { .. }
+                | Expr::ObjectSuperPropertySet { .. }
+                | Expr::JsSetProperty { .. }
+                | Expr::PutValueSet { .. }
+                | Expr::ProxySet { .. }
+                | Expr::BufferIndexSet { .. }
+                | Expr::RegExpSetLastIndex { .. }
+                | Expr::ProcessSetTitle(..)
+                | Expr::UrlSetHref { .. }
+                | Expr::UrlSetPathname { .. }
+                | Expr::UrlSetSearch { .. }
+                | Expr::UrlSetHash { .. }
+                | Expr::UrlSetProtocol { .. }
+                | Expr::UrlSetHostname { .. }
+                | Expr::UrlSetPort { .. }
+                | Expr::UrlSetUsername { .. }
+                | Expr::UrlSetPassword { .. }
+                | Expr::Delete(..)
+        ) {
+            return Err("helper condition contains mutation".into());
+        }
+        let mut result = Ok(());
+        walk_expr_children(expr, &mut |child| {
+            if result.is_ok() {
+                result = self.condition(child, depth + 1);
+            }
+        });
         result
     }
 }
