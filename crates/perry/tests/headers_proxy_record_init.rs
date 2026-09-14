@@ -9,43 +9,21 @@
 
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Once;
 
 fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))
 }
 
-fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("canonicalize workspace root")
-}
-
 fn runtime_dir() -> PathBuf {
-    static BUILD_RUNTIME: Once = Once::new();
-    BUILD_RUNTIME.call_once(|| {
-        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-        let build = Command::new(cargo)
-            .current_dir(workspace_root())
-            .arg("build")
-            .arg("-p")
-            .arg("perry-runtime-static")
-            .arg("-p")
-            .arg("perry-stdlib-static")
-            .output()
-            .expect("build static runtime archives");
-        assert!(
-            build.status.success(),
-            "static runtime build failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&build.stdout),
-            String::from_utf8_lossy(&build.stderr)
-        );
-    });
-    let target = std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| workspace_root().join("target"));
-    target.join("debug")
+    if let Some(runtime) = std::env::var_os("PERRY_RUNTIME_DIR") {
+        return PathBuf::from(runtime);
+    }
+    // Use the same profile as this integration executable. Building archives
+    // here would change Cargo feature unification beneath the running suite.
+    perry_bin()
+        .parent()
+        .expect("compiler directory")
+        .to_path_buf()
 }
 
 const SOURCE: &str = r#"
@@ -59,9 +37,14 @@ t("P6 nested proxy", () => dump(new Headers(new Proxy(new Proxy({ "x-a": "1" }, 
 t("P8 plain object still works", () => dump(new Headers({ "x-a": "1" })))
 t("P9 array still works", () => dump(new Headers([["x-a", "1"]])))
 t("P10 map still works", () => dump(new Headers(new Map([["x-a", "1"]]) as any)))
+t("P11 non-enumerable key", () => { const o: any = {"x-a":"1"}; Object.defineProperty(o,"x-hidden",{value:"secret"}); return dump(new Headers(new Proxy(o,{}))) })
+t("P12 missing descriptor", () => dump(new Headers(new Proxy({}, {ownKeys:()=>["x-ghost"]}))))
+t("P13 enumerable symbol", () => { const o:any={}; o[Symbol("header")]="value"; try { new Headers(new Proxy(o,{})); return "no throw"; } catch(e:any) { return e.name; } })
+t("P14 hidden symbol", () => { const o:any={}; Object.defineProperty(o,Symbol("hidden"),{value:"secret",enumerable:false}); return dump(new Headers(new Proxy(o,{}))); })
+t("P15 descriptor/get order", () => { const order:string[]=[]; const o:any={"x-a":"1","x-b":"2"}; const h=new Headers(new Proxy(o,{getOwnPropertyDescriptor(t:any,k:any){order.push("desc:"+String(k));return Object.getOwnPropertyDescriptor(t,k);},get(t:any,k:any){if(typeof k==="string")order.push("get:"+k);return t[k];}})); return [dump(h),order]; })
 "#;
 
-const EXPECTED: &str = "P1 plain proxy [\"x-a=1\",\"x-b=2\"]\nP2 proxy with get trap [\"x-a=trapped\"]\nP3 proxy with ownKeys trap hiding a key [\"x-a=1\"]\nP4 proxy over empty object []\nP6 nested proxy [\"x-a=1\"]\nP8 plain object still works [\"x-a=1\"]\nP9 array still works [\"x-a=1\"]\nP10 map still works [\"x-a=1\"]\n";
+const EXPECTED: &str = "P1 plain proxy [\"x-a=1\",\"x-b=2\"]\nP2 proxy with get trap [\"x-a=trapped\"]\nP3 proxy with ownKeys trap hiding a key [\"x-a=1\"]\nP4 proxy over empty object []\nP6 nested proxy [\"x-a=1\"]\nP8 plain object still works [\"x-a=1\"]\nP9 array still works [\"x-a=1\"]\nP10 map still works [\"x-a=1\"]\nP11 non-enumerable key [\"x-a=1\"]\nP12 missing descriptor []\nP13 enumerable symbol \"TypeError\"\nP14 hidden symbol []\nP15 descriptor/get order [[\"x-a=1\",\"x-b=2\"],[\"desc:x-a\",\"get:x-a\",\"desc:x-b\",\"get:x-b\"]]\n";
 
 #[test]
 fn headers_accepts_a_proxied_record_init() {
@@ -76,6 +59,7 @@ fn headers_accepts_a_proxied_record_init() {
         .arg("-o")
         .arg(&output)
         .arg("--no-cache")
+        .arg("--no-codegen")
         .env("PERRY_NO_AUTO_OPTIMIZE", "1")
         .env("PERRY_RUNTIME_DIR", runtime_dir())
         .output()

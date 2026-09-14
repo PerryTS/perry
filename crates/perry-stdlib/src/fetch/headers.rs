@@ -165,40 +165,64 @@ fn read_headers_record_entries(
     }
 }
 
-/// Own string-keyed properties of a Proxy init, read through its traps.
-/// Symbol keys are skipped (a header name is always a string). Enumerability
-/// is not re-queried per key: `ownKeys` on a plain wrapping Proxy already
-/// reports the target's own keys, and a trap that hides a key omits it there.
+/// Web IDL record conversion queries each own descriptor before converting its
+/// key and reading its value. Both descriptor and get traps may collect.
 unsafe fn read_proxy_record_entries(
     value: f64,
     scope: &perry_runtime::gc::RuntimeHandleScope,
 ) -> Option<Vec<(String, String)>> {
-    let keys_value = perry_runtime::proxy::js_proxy_own_keys(value);
-    let keys_handle = scope.root_nanbox_f64(keys_value);
     let proxy_handle = scope.root_nanbox_f64(value);
+    let keys_value = perry_runtime::proxy::js_proxy_own_keys(proxy_handle.get_nanbox_f64());
+    let keys_handle = scope.root_nanbox_f64(keys_value);
     let keys_raw = perry_runtime::js_nanbox_get_pointer(keys_handle.get_nanbox_f64());
     if keys_raw == 0 {
         return Some(Vec::new());
     }
     let len = perry_runtime::js_array_length(keys_raw as *const perry_runtime::ArrayHeader);
+    let enumerable_key = scope.root_nanbox_f64(perry_runtime::value::js_nanbox_string(
+        perry_runtime::js_string_from_bytes(b"enumerable".as_ptr(), 10) as i64,
+    ));
     let mut entries = Vec::with_capacity(len as usize);
     for i in 0..len {
+        let entry_scope = perry_runtime::gc::RuntimeHandleScope::new();
         let keys_now = perry_runtime::js_nanbox_get_pointer(keys_handle.get_nanbox_f64());
-        let key_value = perry_runtime::array::js_array_get_f64(
+        let key = entry_scope.root_nanbox_f64(perry_runtime::array::js_array_get_f64(
             keys_now as *const perry_runtime::ArrayHeader,
             i,
+        ));
+        let descriptor = perry_runtime::proxy::js_reflect_get_own_property_descriptor(
+            proxy_handle.get_nanbox_f64(),
+            key.get_nanbox_f64(),
         );
-        if !JSValue::from_bits(key_value.to_bits()).is_any_string() {
+        if descriptor.to_bits() == TAG_UNDEFINED {
             continue;
         }
-        let key_ptr = perry_runtime::builtins::js_string_coerce(key_value);
+        let descriptor = entry_scope.root_nanbox_f64(descriptor);
+        // Coercing an inline string can allocate. Read the descriptor pointer
+        // only after that coercion, and reread the key before the get trap.
+        let enumerable_ptr =
+            perry_runtime::builtins::js_string_coerce(enumerable_key.get_nanbox_f64());
+        let descriptor_ptr = perry_runtime::js_nanbox_get_pointer(descriptor.get_nanbox_f64());
+        let enumerable = perry_runtime::js_object_get_field_by_name_f64(
+            descriptor_ptr as *const perry_runtime::ObjectHeader,
+            enumerable_ptr,
+        );
+        if perry_runtime::value::js_is_truthy(enumerable) == 0 {
+            continue;
+        }
+        if !JSValue::from_bits(key.get_nanbox_f64().to_bits()).is_any_string() {
+            headers_init_type_error(
+                "Headers constructor: symbol key cannot be converted to a ByteString",
+            );
+        }
+        let key_ptr = perry_runtime::builtins::js_string_coerce(key.get_nanbox_f64());
         if key_ptr.is_null() {
             continue;
         }
-        let key = string_from_header(key_ptr as *const StringHeader).unwrap_or_default();
-        let val_value =
-            perry_runtime::proxy::js_proxy_get(proxy_handle.get_nanbox_f64(), key_value);
-        entries.push((key, header_init_string(val_value)));
+        let name = string_from_header(key_ptr as *const StringHeader).unwrap_or_default();
+        let value =
+            perry_runtime::proxy::js_proxy_get(proxy_handle.get_nanbox_f64(), key.get_nanbox_f64());
+        entries.push((name, header_init_string(value)));
     }
     Some(entries)
 }
