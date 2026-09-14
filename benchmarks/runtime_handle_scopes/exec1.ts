@@ -1,0 +1,1 @@
+const vals: string[] = []; for (let i = 0; i < 1000000; i++) vals.push((i % 2 ? "record_" : "!bad_") + i); let c = 0; const re = /([a-z]+)_([0-9]+)/; for (let i = 0; i < vals.length; i++) { const m = re.exec(vals[i]); if (m !== null) c += m[2].length; } console.log(c);

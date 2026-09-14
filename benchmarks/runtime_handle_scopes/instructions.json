@@ -1,0 +1,31 @@
+{
+  "base": "9fda98df68d9fac3c08b2385fae007aa9f5278df",
+  "event": "instructions:u",
+  "repeats": 3,
+  "results": [
+    {
+      "workload": "promises",
+      "baseline_instructions": 1100168994.0,
+      "fix_instructions": 1050989735.0,
+      "reduction_percent": 4.470154973300399
+    },
+    {
+      "workload": "json",
+      "baseline_instructions": 3190619152.0,
+      "fix_instructions": 3132631719.0,
+      "reduction_percent": 1.8174351195645255
+    },
+    {
+      "workload": "hoist",
+      "baseline_instructions": 13773038016.0,
+      "fix_instructions": 13003278589.0,
+      "reduction_percent": 5.5888862435853115
+    },
+    {
+      "workload": "exec1",
+      "baseline_instructions": 31188918430.0,
+      "fix_instructions": 29854497805.0,
+      "reduction_percent": 4.278508817145921
+    }
+  ]
+}

@@ -1,10 +1,16 @@
 use super::*;
 
+mod stack;
+#[cfg(test)]
+mod tests;
+use stack::RuntimeHandleStack;
+
 struct RuntimeHandleStackHotGuard;
 
 impl Drop for RuntimeHandleStackHotGuard {
     fn drop(&mut self) {
         crate::tls_hot::unpublish_runtime_handle_stack();
+        RUNTIME_HANDLE_STACK.with(RuntimeHandleStack::release);
     }
 }
 
@@ -12,9 +18,9 @@ thread_local! {
     /// This stays a raw `thread_local!` as the initialization fallback for its
     /// named `HotTls` slot. Going through `perry_thread_local!` here would call
     /// `hot()` while `HotTls::fill` is still resolving this address (#9183).
-    static RUNTIME_HANDLE_STACK: RefCell<Vec<RuntimeHandleSlot>> = const { RefCell::new(Vec::new()) };
-    /// Registered after the stack itself, so reverse-order TLS destruction
-    /// clears the named cache pointer before the stack storage is destroyed.
+    static RUNTIME_HANDLE_STACK: RuntimeHandleStack = const { RuntimeHandleStack::new() };
+    /// Owns the buffer, registered before its first allocation or publication.
+    /// The metadata never drops; this guard unpublishes, empties, then frees it.
     static RUNTIME_HANDLE_STACK_HOT_GUARD: RuntimeHandleStackHotGuard = const { RuntimeHandleStackHotGuard };
 }
 
@@ -28,25 +34,28 @@ pub(crate) fn runtime_handle_stack_hot_addr() -> *mut u8 {
     addr
 }
 
-/// Borrow this thread's transient-handle stack.
+/// Resolve this thread's transient-handle metadata, without initializing HOT.
 ///
 /// On Apple aarch64 the steady-state path reads the address from an already
 /// published `HotTls`. During `HotTls::fill` (and on every other target) it
 /// uses the ordinary thread-local directly, so opening a handle scope cannot
 /// recursively initialize the cache (#9183).
 #[inline(always)]
-fn with_runtime_handle_stack<R>(f: impl FnOnce(&RefCell<Vec<RuntimeHandleSlot>>) -> R) -> R {
+fn runtime_handle_stack() -> &'static RuntimeHandleStack {
     if let Some(hot) = crate::tls_hot::hot_if_published() {
         let stack = hot.runtime_handle_stack.get();
-        if stack.is_null() {
-            return RUNTIME_HANDLE_STACK.with(f);
+        if !stack.is_null() {
+            // SAFETY: fill publishes this thread's non-dropping metadata.
+            // The buffer owner clears it before freeing the allocation.
+            return unsafe { &*(stack as *const RuntimeHandleStack) };
         }
-        // SAFETY: `fill` stores this thread's `RUNTIME_HANDLE_STACK` address
-        // before publishing the cache, and the address is stable for the
-        // lifetime of the thread.
-        return f(unsafe { &*(stack as *const RefCell<Vec<RuntimeHandleSlot>>) });
     }
-    RUNTIME_HANDLE_STACK.with(f)
+    RUNTIME_HANDLE_STACK.with(|stack| {
+        // SAFETY: the metadata is const-initialized and has no Drop. Its
+        // cells remain valid throughout thread teardown. Cell is !Sync, so
+        // scopes and handles carrying this reference cannot leave the thread.
+        unsafe { &*(stack as *const RuntimeHandleStack) }
+    })
 }
 
 /// Scoped owner for transient runtime handles.
@@ -56,26 +65,26 @@ fn with_runtime_handle_stack<R>(f: impl FnOnce(&RefCell<Vec<RuntimeHandleSlot>>)
 /// scope removes every handle created from it.
 pub struct RuntimeHandleScope {
     pub(super) base: usize,
+    stack: &'static RuntimeHandleStack,
 }
 
 impl RuntimeHandleScope {
     #[inline]
     pub fn new() -> Self {
-        let base = with_runtime_handle_stack(|stack| stack.borrow().len());
-        Self { base }
+        let stack = runtime_handle_stack();
+        Self {
+            base: stack.len(),
+            stack,
+        }
     }
 
     #[inline]
     pub(super) fn push<'scope>(&'scope self, slot: RuntimeHandleSlot) -> RuntimeHandle<'scope> {
         runtime_handle_slot_write_barrier(slot);
-        let index = with_runtime_handle_stack(|stack| {
-            let mut stack = stack.borrow_mut();
-            let index = stack.len();
-            stack.push(slot);
-            index
-        });
+        let index = self.stack.push(slot);
         RuntimeHandle {
             index,
+            stack: self.stack,
             _scope: PhantomData,
         }
     }
@@ -127,40 +136,33 @@ impl RuntimeHandleScope {
 
     #[inline]
     pub fn root_raw_mut_ptr<'scope, T>(&'scope self, ptr: *mut T) -> RuntimeHandle<'scope> {
-        self.push(RuntimeHandleSlot::RawTagged {
-            addr: ptr as usize,
-            tag: POINTER_TAG,
-        })
+        self.push(RuntimeHandleSlot::RawPointer(ptr as usize))
     }
 
     #[inline]
     pub fn root_raw_const_ptr<'scope, T>(&'scope self, ptr: *const T) -> RuntimeHandle<'scope> {
-        self.push(RuntimeHandleSlot::RawTagged {
-            addr: ptr as usize,
-            tag: POINTER_TAG,
-        })
+        self.push(RuntimeHandleSlot::RawPointer(ptr as usize))
     }
 
     pub fn root_string_ptr<'scope>(
         &'scope self,
         ptr: *const crate::StringHeader,
     ) -> RuntimeHandle<'scope> {
-        self.push(RuntimeHandleSlot::RawTagged {
-            addr: ptr as usize,
-            tag: STRING_TAG,
-        })
+        self.push(RuntimeHandleSlot::RawString(ptr as usize))
     }
 
     pub fn root_bigint_ptr<'scope, T>(&'scope self, ptr: *const T) -> RuntimeHandle<'scope> {
-        self.push(RuntimeHandleSlot::RawTagged {
-            addr: ptr as usize,
-            tag: BIGINT_TAG,
-        })
+        self.push(RuntimeHandleSlot::RawBigInt(ptr as usize))
     }
 
     #[cfg(test)]
     pub(crate) fn active_len_for_tests() -> usize {
-        with_runtime_handle_stack(|stack| stack.borrow().len())
+        runtime_handle_stack().len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn capacity_for_tests() -> usize {
+        runtime_handle_stack().capacity()
     }
 }
 
@@ -168,22 +170,37 @@ impl RuntimeHandleScope {
 /// Rust frames. `longjmp` skips `RuntimeHandleScope::drop`, so exception
 /// unwinding restores this depth explicitly.
 pub(crate) fn runtime_handle_stack_savepoint() -> usize {
-    with_runtime_handle_stack(|stack| stack.borrow().len())
+    runtime_handle_stack().len()
 }
 
 /// Discard transient roots owned by Rust frames skipped by a JS exception.
 pub(crate) fn runtime_handle_stack_restore(savepoint: usize) {
-    with_runtime_handle_stack(|stack| stack.borrow_mut().truncate(savepoint));
+    runtime_handle_stack().truncate(savepoint);
 }
 
-#[inline]
+#[inline(always)]
 fn runtime_handle_slot_write_barrier(slot: RuntimeHandleSlot) {
+    // Root stores shade only during incremental marking. Keep the idle test
+    // ahead of kind decoding and the out-of-line active barrier machinery.
+    if crate::gc::barrier::incremental_mark_barrier_globally_idle() {
+        return;
+    }
+    runtime_handle_slot_write_barrier_active(slot);
+}
+
+#[cold]
+#[inline(never)]
+fn runtime_handle_slot_write_barrier_active(slot: RuntimeHandleSlot) {
     match slot {
         RuntimeHandleSlot::Nanbox(bits) => runtime_write_barrier_root_nanbox(bits),
         RuntimeHandleSlot::HeapWord(bits) => runtime_write_barrier_root_heap_word(bits),
-        RuntimeHandleSlot::RawTagged { addr, tag } => {
+        RuntimeHandleSlot::RawPointer(addr)
+        | RuntimeHandleSlot::RawString(addr)
+        | RuntimeHandleSlot::RawBigInt(addr) => {
             if addr != 0 {
-                runtime_write_barrier_root_nanbox(tag | (addr as u64 & POINTER_MASK));
+                runtime_write_barrier_root_nanbox(
+                    raw_slot_tag(slot) | (addr as u64 & POINTER_MASK),
+                );
             }
         }
     }
@@ -198,15 +215,14 @@ impl Default for RuntimeHandleScope {
 impl Drop for RuntimeHandleScope {
     #[inline]
     fn drop(&mut self) {
-        with_runtime_handle_stack(|stack| {
-            stack.borrow_mut().truncate(self.base);
-        });
+        self.stack.truncate(self.base);
     }
 }
 
 #[derive(Clone, Copy)]
 pub struct RuntimeHandle<'scope> {
     pub(super) index: usize,
+    stack: &'scope RuntimeHandleStack,
     pub(super) _scope: PhantomData<&'scope RuntimeHandleScope>,
 }
 
@@ -228,29 +244,36 @@ fn handle_kind_mismatch(expected: &str) -> ! {
     panic!("runtime handle kind mismatch: expected {expected}");
 }
 
+#[inline]
+fn raw_slot_tag(slot: RuntimeHandleSlot) -> u64 {
+    match slot {
+        RuntimeHandleSlot::RawPointer(_) => POINTER_TAG,
+        RuntimeHandleSlot::RawString(_) => STRING_TAG,
+        RuntimeHandleSlot::RawBigInt(_) => BIGINT_TAG,
+        _ => handle_kind_mismatch("raw pointer"),
+    }
+}
+
+// Encode the three raw tags in the discriminant, rather than storing a
+// separate u64 tag alongside every payload (24 -> 16 bytes on 64-bit hosts).
+const _: () = assert!(std::mem::size_of::<RuntimeHandleSlot>() == 16);
+
 impl<'scope> RuntimeHandle<'scope> {
     #[inline]
     pub(super) fn with_slot<R>(&self, f: impl FnOnce(RuntimeHandleSlot) -> R) -> R {
-        with_runtime_handle_stack(|stack| {
-            let stack = stack.borrow();
-            let slot = match stack.get(self.index) {
-                Some(slot) => *slot,
-                None => handle_used_after_scope(),
-            };
-            f(slot)
-        })
+        let slot = match self.stack.get(self.index) {
+            Some(slot) => slot,
+            None => handle_used_after_scope(),
+        };
+        f(slot)
     }
 
     #[inline]
     pub(super) fn with_slot_mut<R>(&self, f: impl FnOnce(&mut RuntimeHandleSlot) -> R) -> R {
-        with_runtime_handle_stack(|stack| {
-            let mut stack = stack.borrow_mut();
-            let slot = match stack.get_mut(self.index) {
-                Some(slot) => slot,
-                None => handle_used_after_scope(),
-            };
-            f(slot)
-        })
+        let mut slot = self.with_slot(|slot| slot);
+        let result = f(&mut slot);
+        self.stack.set(self.index, slot);
+        result
     }
 
     /// Pass the handle's current mutable pointer to `f` without exposing a
@@ -296,9 +319,7 @@ impl<'scope> RuntimeHandle<'scope> {
     #[inline]
     pub unsafe fn with_string_bytes<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
         let ptr = self.with_slot(|slot| match slot {
-            RuntimeHandleSlot::RawTagged { addr, tag } if tag == STRING_TAG => {
-                addr as *const crate::StringHeader
-            }
+            RuntimeHandleSlot::RawString(addr) => addr as *const crate::StringHeader,
             _ => handle_kind_mismatch("rooted string pointer"),
         });
         let bytes = unsafe {
@@ -414,61 +435,70 @@ impl<'scope> RuntimeHandle<'scope> {
     #[inline]
     pub fn get_raw_mut_ptr<T>(&self) -> *mut T {
         self.with_slot(|slot| match slot {
-            RuntimeHandleSlot::RawTagged { addr, .. } => addr as *mut T,
+            RuntimeHandleSlot::RawPointer(addr)
+            | RuntimeHandleSlot::RawString(addr)
+            | RuntimeHandleSlot::RawBigInt(addr) => addr as *mut T,
             _ => handle_kind_mismatch("raw pointer"),
         })
     }
 
     pub fn set_raw_mut_ptr<T>(&self, ptr: *mut T) {
-        self.with_slot_mut(|slot| match slot {
-            RuntimeHandleSlot::RawTagged { addr, tag } => {
-                *addr = ptr as usize;
-                if !ptr.is_null() {
-                    runtime_write_barrier_root_nanbox(*tag | (ptr as u64 & POINTER_MASK));
-                }
-            }
-            _ => panic!("runtime handle kind mismatch: expected raw pointer"),
-        });
+        self.set_raw_const_ptr(ptr.cast_const());
     }
 
     #[inline]
     pub fn get_raw_const_ptr<T>(&self) -> *const T {
         self.with_slot(|slot| match slot {
-            RuntimeHandleSlot::RawTagged { addr, .. } => addr as *const T,
+            RuntimeHandleSlot::RawPointer(addr)
+            | RuntimeHandleSlot::RawString(addr)
+            | RuntimeHandleSlot::RawBigInt(addr) => addr as *const T,
             _ => handle_kind_mismatch("raw pointer"),
         })
     }
 
     pub fn set_raw_const_ptr<T>(&self, ptr: *const T) {
-        self.with_slot_mut(|slot| match slot {
-            RuntimeHandleSlot::RawTagged { addr, tag } => {
-                *addr = ptr as usize;
-                if !ptr.is_null() {
-                    runtime_write_barrier_root_nanbox(*tag | (ptr as u64 & POINTER_MASK));
-                }
+        let slot = self.with_slot_mut(|slot| {
+            match slot {
+                RuntimeHandleSlot::RawPointer(addr)
+                | RuntimeHandleSlot::RawString(addr)
+                | RuntimeHandleSlot::RawBigInt(addr) => *addr = ptr as usize,
+                _ => handle_kind_mismatch("raw pointer"),
             }
-            _ => panic!("runtime handle kind mismatch: expected raw pointer"),
+            *slot
         });
+        runtime_handle_slot_write_barrier(slot);
+    }
+}
+
+/// Visit a copy, then commit a relocation to its indexed slot. No reference
+/// into the growable buffer crosses a visitor call; the legacy Copy visitor
+/// may invoke arbitrary callbacks. Non-rewriting visits must not overwrite a
+/// value changed by such a callback.
+fn visit_runtime_handle_slot(
+    stack: &RuntimeHandleStack,
+    index: usize,
+    visitor: &mut RuntimeRootVisitor<'_>,
+) {
+    let Some(mut slot) = stack.get(index) else {
+        return;
+    };
+    let rewritten = match &mut slot {
+        RuntimeHandleSlot::Nanbox(bits) => visitor.visit_nanbox_u64_slot(bits),
+        RuntimeHandleSlot::RawPointer(addr) => visitor.visit_tagged_usize_slot(addr, POINTER_TAG),
+        RuntimeHandleSlot::RawString(addr) => visitor.visit_tagged_usize_slot(addr, STRING_TAG),
+        RuntimeHandleSlot::RawBigInt(addr) => visitor.visit_tagged_usize_slot(addr, BIGINT_TAG),
+        RuntimeHandleSlot::HeapWord(bits) => visitor.visit_heap_word_u64_slot(bits),
+    };
+    if rewritten {
+        stack.set(index, slot);
     }
 }
 
 pub(crate) fn scan_runtime_handle_roots_mut(visitor: &mut RuntimeRootVisitor<'_>) {
-    with_runtime_handle_stack(|stack| {
-        let mut stack = stack.borrow_mut();
-        for slot in stack.iter_mut() {
-            match slot {
-                RuntimeHandleSlot::Nanbox(bits) => {
-                    visitor.visit_nanbox_u64_slot(bits);
-                }
-                RuntimeHandleSlot::RawTagged { addr, tag } => {
-                    visitor.visit_tagged_usize_slot(addr, *tag);
-                }
-                RuntimeHandleSlot::HeapWord(bits) => {
-                    visitor.visit_heap_word_u64_slot(bits);
-                }
-            }
-        }
-    });
+    let stack = runtime_handle_stack();
+    for index in 0..stack.len() {
+        visit_runtime_handle_slot(stack, index, visitor);
+    }
 }
 
 #[derive(Default)]
@@ -488,25 +518,13 @@ pub(crate) fn scan_runtime_handle_roots_mut_step(
     let state = state
         .downcast_mut::<RuntimeHandleRootScanState>()
         .expect("runtime handle root scanner state type");
-    with_runtime_handle_stack(|stack| {
-        let mut stack = stack.borrow_mut();
-        while *remaining > 0 && state.cursor < stack.len() {
-            match &mut stack[state.cursor] {
-                RuntimeHandleSlot::Nanbox(bits) => {
-                    visitor.visit_nanbox_u64_slot(bits);
-                }
-                RuntimeHandleSlot::RawTagged { addr, tag } => {
-                    visitor.visit_tagged_usize_slot(addr, *tag);
-                }
-                RuntimeHandleSlot::HeapWord(bits) => {
-                    visitor.visit_heap_word_u64_slot(bits);
-                }
-            }
-            state.cursor += 1;
-            *remaining -= 1;
-        }
-        state.cursor >= stack.len()
-    })
+    let stack = runtime_handle_stack();
+    while *remaining > 0 && state.cursor < stack.len() {
+        visit_runtime_handle_slot(stack, state.cursor, visitor);
+        state.cursor += 1;
+        *remaining -= 1;
+    }
+    state.cursor >= stack.len()
 }
 
 // ---------------------------------------------------------------------------
@@ -526,7 +544,7 @@ pub(crate) fn scan_runtime_handle_roots_mut_step(
 
 #[no_mangle]
 pub extern "C" fn js_ffi_root_scope_enter() -> usize {
-    with_runtime_handle_stack(|stack| stack.borrow().len())
+    runtime_handle_stack().len()
 }
 
 /// Root a raw heap ADDRESS (e.g. an `i64` closure pointer from an ext
@@ -535,20 +553,15 @@ pub extern "C" fn js_ffi_root_scope_enter() -> usize {
 pub extern "C" fn js_ffi_root_push_heap_addr(addr: u64) -> usize {
     let slot = RuntimeHandleSlot::HeapWord(addr);
     runtime_handle_slot_write_barrier(slot);
-    with_runtime_handle_stack(|stack| {
-        let mut stack = stack.borrow_mut();
-        let index = stack.len();
-        stack.push(slot);
-        index
-    })
+    runtime_handle_stack().push(slot)
 }
 
 #[no_mangle]
 pub extern "C" fn js_ffi_root_get_heap_addr(index: usize) -> u64 {
-    with_runtime_handle_stack(|stack| match stack.borrow().get(index) {
-        Some(RuntimeHandleSlot::HeapWord(bits)) => *bits,
+    match runtime_handle_stack().get(index) {
+        Some(RuntimeHandleSlot::HeapWord(bits)) => bits,
         _ => 0,
-    })
+    }
 }
 
 /// Root a NaN-boxed VALUE (string/buffer/object handed to callbacks).
@@ -556,23 +569,18 @@ pub extern "C" fn js_ffi_root_get_heap_addr(index: usize) -> u64 {
 pub extern "C" fn js_ffi_root_push_nanbox(bits: u64) -> usize {
     let slot = RuntimeHandleSlot::Nanbox(bits);
     runtime_handle_slot_write_barrier(slot);
-    with_runtime_handle_stack(|stack| {
-        let mut stack = stack.borrow_mut();
-        let index = stack.len();
-        stack.push(slot);
-        index
-    })
+    runtime_handle_stack().push(slot)
 }
 
 #[no_mangle]
 pub extern "C" fn js_ffi_root_get_nanbox(index: usize) -> u64 {
-    with_runtime_handle_stack(|stack| match stack.borrow().get(index) {
-        Some(RuntimeHandleSlot::Nanbox(bits)) => *bits,
+    match runtime_handle_stack().get(index) {
+        Some(RuntimeHandleSlot::Nanbox(bits)) => bits,
         _ => 0,
-    })
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn js_ffi_root_scope_exit(base: usize) {
-    with_runtime_handle_stack(|stack| stack.borrow_mut().truncate(base));
+    runtime_handle_stack().truncate(base);
 }

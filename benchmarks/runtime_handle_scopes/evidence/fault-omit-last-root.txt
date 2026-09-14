@@ -1,0 +1,7 @@
+
+thread 'gc::tests::runtime_roots::handle_stack::handle_stack_growth_preserves_every_moving_root_including_last' (140172551) panicked at crates/perry-runtime/src/gc/tests/runtime_roots/handle_stack.rs:36:9:
+assertion `left != right` failed: root 256 was not relocated
+  left: 5193047556104
+ right: 5193047556104
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+failures:

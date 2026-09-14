@@ -1,0 +1,28 @@
+[
+  {
+    "mutation": "omit-last-root",
+    "test": "gc::tests::runtime_roots::handle_stack::handle_stack_growth_preserves_every_moving_root_including_last",
+    "exit_code": 101,
+    "detected": true
+  },
+  {
+    "mutation": "skip-throw-truncate",
+    "test": "gc::tests::runtime_roots::handle_stack::handle_stack_real_throw_restores_live_outer_scope_and_ffi_roots",
+    "exit_code": 101,
+    "detected": true
+  },
+  {
+    "mutation": "skip-marking-barrier",
+    "test": "gc::tests::runtime_roots::handle_stack::handle_stack_pushes_and_updates_shade_all_kinds_during_marking",
+    "exit_code": 101,
+    "detected": true
+  },
+  {
+    "mutation": "skip-cache-unpublish",
+    "test": "gc::roots::runtime_handles::tests::handle_storage_teardown_clears_cache_before_late_scope_drop",
+    "exit_code": 101,
+    "detected": true,
+    "evidence": "fault-skip-cache-unpublish-direct.log (same mutated test binary, --nocapture)",
+    "direct_exit_code": 133
+  }
+]

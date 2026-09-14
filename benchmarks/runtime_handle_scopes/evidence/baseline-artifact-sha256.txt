@@ -1,0 +1,3 @@
+640ea229e6db05f6fd866ab51fd9e639d7de0d8abd3386bf413b2f3e55ea578b  /root/runtime-handle-scopes-20260914/target/release/perry
+6ac20705316e387871b5b7e4188adeb9d76e3dcb30fc265e081b235b4c5766fe  /root/runtime-handle-scopes-20260914/target/release/libperry_runtime.a
+697f36b9c7821649e089877a43561ba22ce147aef7020d4e870ee7a090d06bd9  /root/runtime-handle-scopes-20260914/target/release/libperry_stdlib.a

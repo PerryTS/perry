@@ -1,0 +1,163 @@
+   Compiling perry-runtime v0.5.1563 (/Users/amlug/projects/perry/wt-runtime-handle-baseline/crates/perry-runtime)
+   Compiling aws-lc-rs v1.17.0
+    Checking aws-lc-sys v0.41.0
+    Checking rand_xorshift v0.4.0
+   Compiling phf_shared v0.13.1
+   Compiling rustls v0.23.43
+    Checking nom v8.0.0
+    Checking unarray v0.1.4
+   Compiling fastrand v2.4.1
+   Compiling phf_generator v0.13.1
+    Checking proptest v1.11.0
+    Checking rustls-webpki v0.103.13
+   Compiling ident_case v1.0.1
+   Compiling strsim v0.11.1
+    Checking crypto-bigint v0.7.5
+    Checking pkcs8 v0.11.0
+    Checking hashbrown v0.16.1
+    Checking concurrent-queue v2.5.0
+    Checking parking v2.2.1
+    Checking unicode-bidi v0.3.18
+    Checking unicode-properties v0.1.4
+    Checking tokio-rustls v0.26.4
+    Checking tungstenite v0.29.0
+    Checking hyper-rustls v0.27.9
+    Checking reqwest v0.12.28
+    Checking tokio-tungstenite v0.29.0
+    Checking stringprep v0.1.5
+    Checking event-listener v5.4.1
+   Compiling equator-macro v0.4.2
+   Compiling crunchy v0.2.4
+   Compiling tiny-keccak v2.0.2
+    Checking equator v0.4.2
+    Checking weezl v0.1.12
+    Checking hashlink v0.11.1
+    Checking aligned-vec v0.6.4
+   Compiling phf_codegen v0.13.1
+    Checking matchers v0.2.0
+    Checking sharded-slab v0.1.7
+    Checking console v0.15.11
+    Checking tracing-log v0.2.0
+    Checking thread_local v1.1.9
+   Compiling glob v0.3.3
+    Checking byteorder v1.5.0
+    Checking nu-ansi-term v0.50.3
+    Checking dialoguer v0.11.0
+    Checking tracing-subscriber v0.3.23
+   Compiling clang-sys v1.8.1
+    Checking v_frame v0.3.9
+    Checking crypto-primes v0.7.2
+    Checking pkcs1 v0.8.0-rc.4
+   Compiling getrandom v0.2.17
+    Checking num-rational v0.4.2
+    Checking as-slice v0.2.1
+    Checking atty v0.2.14
+    Checking which v8.0.6
+   Compiling paste v1.0.15
+   Compiling unicode-segmentation v1.13.3
+   Compiling once_cell v1.21.4
+   Compiling av-scenechange v0.14.1
+    Checking base64 v0.23.1
+   Compiling built v0.8.1
+    Checking rsa v0.10.0-rc.18
+   Compiling convert_case v0.10.0
+   Compiling rav1e v0.8.1
+   Compiling const-random-macro v0.1.16
+    Checking aligned v0.4.3
+   Compiling phf_macros v0.13.1
+    Checking no_std_io2 v0.9.4
+   Compiling profiling-procmacros v1.0.18
+   Compiling num-derive v0.4.2
+   Compiling arg_enum_proc_macro v0.3.4
+   Compiling regex-syntax v0.8.11
+    Checking quick-error v2.0.1
+   Compiling pastey v0.1.1
+    Checking imgref v1.12.3
+    Checking crc-catalog v2.5.0
+    Checking y4m v0.8.0
+    Checking alloc-no-stdlib v2.0.4
+   Compiling unicode-xid v0.2.6
+   Compiling minimal-lexical v0.2.1
+   Compiling derive_more-impl v2.1.1
+   Compiling nom v7.1.3
+    Checking alloc-stdlib v0.2.2
+   Compiling regex-automata v0.4.18
+    Checking crc v3.4.0
+    Checking phf v0.13.1
+    Checking profiling v1.0.18
+    Checking bitstream-io v4.10.0
+   Compiling const-random v0.1.18
+    Checking perry-container-compose v0.5.1563 (/Users/amlug/projects/perry/wt-runtime-handle-baseline/crates/perry-container-compose)
+    Checking av1-grain v0.2.5
+   Compiling string_cache_codegen v0.6.1
+    Checking rgb v0.8.53
+    Checking maybe-rayon v0.1.1
+    Checking miniz_oxide v0.8.9
+   Compiling libloading v0.8.9
+    Checking futures-intrusive v0.5.0
+    Checking tokio-stream v0.1.18
+    Checking crossbeam-queue v0.3.12
+    Checking itertools v0.14.0
+    Checking half v2.7.1
+   Compiling macro_magic_core_macros v0.5.1
+   Compiling derive-syn-parse v0.2.0
+   Compiling simd_helpers v0.1.0
+   Compiling fnv v1.0.7
+   Compiling either v1.16.0
+   Compiling noop_proc_macro v0.3.0
+    Checking zune-core v0.5.1
+   Compiling bindgen v0.72.1
+    Checking precomputed-hash v0.1.1
+    Checking zune-jpeg v0.5.15
+   Compiling itertools v0.12.1
+   Compiling darling_core v0.20.11
+   Compiling macro_magic_core v0.5.1
+    Checking sqlx-core v0.9.0
+   Compiling web_atoms v0.2.4
+   Compiling regex v1.13.1
+    Checking derive_more v2.1.1
+   Compiling cexpr v0.6.0
+    Checking brotli-decompressor v5.0.1
+    Checking loop9 v0.1.5
+   Compiling darling_core v0.23.0
+    Checking zune-inflate v0.2.54
+    Checking fdeflate v0.3.7
+    Checking core-foundation v0.10.1
+    Checking security-framework-sys v2.17.0
+    Checking avif-serialize v0.8.9
+   Compiling system-configuration-sys v0.6.0
+    Checking lebe v0.5.3
+   Compiling rustc-hash v2.1.2
+    Checking fax v0.2.7
+    Checking byteorder-lite v0.1.0
+   Compiling shlex v1.3.0
+    Checking color_quant v1.1.0
+    Checking pxfm v0.1.29
+   Compiling bitflags v2.12.1
+    Checking bit_field v0.10.3
+    Checking exr v1.74.0
+   Compiling darling_macro v0.23.0
+    Checking moxcms v0.8.1
+    Checking gif v0.14.2
+    Checking image-webp v0.2.4
+    Checking tiff v0.11.3
+error: function `registered_extern_handle` is never used
+   --> crates/perry-runtime/src/object/global_this_webassembly.rs:201:15
+    |
+201 | pub(crate) fn registered_extern_handle(wrapper: usize, expected_kind: &[u8]) -> Option<usize> {
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D dead-code` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: function `wasm_memory_descriptor_maximum` is never used
+   --> crates/perry-runtime/src/object/global_this_webassembly.rs:662:4
+    |
+662 | fn wasm_memory_descriptor_maximum(descriptor: f64) -> u32 {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    Checking ravif v0.13.0
+    Checking security-framework v3.7.0
+    Checking png v0.18.1
+error: could not compile `perry-runtime` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...

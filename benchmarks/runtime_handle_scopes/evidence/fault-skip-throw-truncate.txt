@@ -1,0 +1,6 @@
+
+thread 'gc::tests::runtime_roots::handle_stack::handle_stack_real_throw_restores_live_outer_scope_and_ffi_roots' (140196641) panicked at crates/perry-runtime/src/gc/tests/runtime_roots/handle_stack.rs:88:5:
+assertion `left == right` failed
+  left: 259
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

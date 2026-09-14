@@ -1,0 +1,7 @@
+
+thread 'gc::tests::runtime_roots::handle_stack::handle_stack_pushes_and_updates_shade_all_kinds_during_marking' (140202315) panicked at crates/perry-runtime/src/gc/tests/runtime_roots.rs:109:9:
+assertion `left != right` failed: new handle during marking should be marked
+  left: 0
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+failures:

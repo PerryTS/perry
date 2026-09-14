@@ -1,0 +1,5 @@
+test gc::roots::runtime_handles::tests::handle_storage_teardown_clears_cache_before_late_scope_drop ...
+thread '<unnamed>' (140212420) panicked at crates/perry-runtime/src/gc/roots/runtime_handles/tests.rs:69:13:
+assertion failed: crate::tls_hot::hot().runtime_handle_stack.get().is_null()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+fatal runtime error: thread local panicked on drop, aborting
