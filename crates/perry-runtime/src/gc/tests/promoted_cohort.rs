@@ -119,6 +119,7 @@ fn the_cohort_never_makes_old_reclaim_due() {
     GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|c| c.set(4 * MB));
     cohort::seed_for_tests(0, 0, 0);
     credit_promoted_bytes_to_old_baseline(270 * MB);
+    cohort::note_promoted(270 * MB);
     assert!(
         cohort::full_due(),
         "premise: the cohort is far past its bound"
@@ -190,6 +191,66 @@ fn below_the_bound_no_cohort_full_runs_and_the_dead_promoted_object_stays() {
     assert_eq!(
         dropped, GC_TYPE_STRING,
         "only a full can reclaim a promoted object"
+    );
+}
+
+/// #10241: rooted young strings survive evacuating minors until they tenure,
+/// with the cohort one byte short of its bound. Returns the bytes tenured, the
+/// cohort growth, and whether the cohort full then ran.
+fn tenure_into_a_cohort_one_byte_short(count_tenured: bool) -> (usize, usize, bool) {
+    let _guard = CopyingNurseryTestGuard::new(4);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _tenuring = crate::gc::tenuring::set_survivals_for_test(1);
+    let _sabotage = count_tenured.then(cohort::sabotage::CountTenuredGuard::arm);
+    rooted_young_strings(0, 4000);
+    let short = cohort::bound_bytes() - 1;
+    cohort::seed_for_tests(short, 0, 0);
+    let mut tenured = 0usize;
+    for _ in 0..3 {
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+        assert!(
+            !trace.copying_nursery.in_place_promotion,
+            "premise: evacuating minors, nothing promoted in place"
+        );
+        tenured +=
+            trace.copying_nursery.promoted_bytes - trace.copying_nursery.in_place_promoted_bytes;
+    }
+    let grown = cohort::promoted_since_full() - short;
+    let ran = run_promoted_cohort_full_if_due();
+    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+    cohort::seed_for_tests(0, 0, 0);
+    (tenured, grown, ran)
+}
+
+#[test]
+fn copy_tenured_bytes_do_not_bring_the_cohort_to_its_bound() {
+    let (tenured, grown, ran) = tenure_into_a_cohort_one_byte_short(false);
+    assert!(
+        tenured > 0,
+        "premise: the minors tenured the rooted strings"
+    );
+    assert_eq!(grown, 0, "the cohort counts in-place promotions only");
+    assert!(
+        !ran,
+        "tenured bytes survived a minor already: no full is scheduled for them \
+         (12_large_live_set's futile cohort full)"
+    );
+}
+
+#[test]
+fn sabotaged_tenured_accounting_schedules_a_full_for_live_survivors() {
+    let (tenured, grown, ran) = tenure_into_a_cohort_one_byte_short(true);
+    assert!(
+        tenured > 0,
+        "premise: the minors tenured the rooted strings"
+    );
+    assert_eq!(
+        grown, tenured,
+        "sabotaged, the cohort takes the tenured bytes"
+    );
+    assert!(
+        ran,
+        "and the byte short of the bound is made up by live survivors"
     );
 }
 

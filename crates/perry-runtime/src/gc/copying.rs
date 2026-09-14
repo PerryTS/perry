@@ -488,6 +488,7 @@ impl CopyingNurseryCollector {
             self.stats.promoted_objects += 1;
             self.stats.promoted_bytes += total;
             self.stats.in_place_promoted_objects += 1;
+            self.stats.in_place_promoted_bytes += total;
             self.live_from_bytes += total;
             // Survivor-influx accounting: an in-place promotion consumes the
             // whole young generation at once, so the split the adaptive
@@ -1662,6 +1663,7 @@ pub(super) fn run_copied_minor_attempt(
         collector.stats.promoted_objects = promotion_stats.objects;
         collector.stats.in_place_promoted_objects = promotion_stats.objects;
         collector.stats.promoted_bytes = promotion_stats.bytes;
+        collector.stats.in_place_promoted_bytes = promotion_stats.bytes;
         collector.stats.eden_live_bytes = promotion_stats.bytes;
         collector.live_from_bytes = promotion_stats.bytes;
     }
@@ -1809,6 +1811,12 @@ pub(super) fn run_copied_minor_attempt(
     // liveness claim, and withholding it pins that base at 0 on exactly the
     // workloads that reach this path.
     credit_promoted_bytes_to_old_baseline(collector.stats.promoted_bytes);
+    // #10241: the promoted cohort counts in-place promotions only; bytes this
+    // minor tenured by copy survived a minor already (`promoted_cohort`).
+    super::promoted_cohort::note_minor_promotion(
+        collector.stats.promoted_bytes,
+        collector.stats.in_place_promoted_bytes,
+    );
     // Everything outside from-space retains its pre-minor accounting. Remove
     // the from-space share of that accounting, then add back exactly the
     // objects that survived by copy or promotion. This also preserves objects

@@ -42,6 +42,20 @@
 //! * a cohort full that reclaims less than half the cohort doubles the bound
 //!   (up to `BACKOFF_SHIFT_MAX`), so a retaining heap pays a logarithmic number
 //!   of futile fulls, each O(live), and a productive full restores it.
+//!
+//! # Only in-place promotions count (#10241)
+//!
+//! A copying minor tenures an object only after it has already survived a
+//! minor, so tenured bytes are live by the one measurement a minor has, and a
+//! full scheduled for them is futile by the same measure. The blind spot above
+//! is the in-place promotion's alone: it moves a young generation wholesale,
+//! dead trees included. Measured: `12_large_live_set`'s only cohort full was
+//! reached by 21.2 MB of copy-tenured bytes over a 16 MB bound and reclaimed
+//! 8.3 MB (futile; wall 0.25 s → 0.28 s against base), and so was
+//! `14_grow_then_churn`'s first (2.1 MB tenured, reclaimed 0), while every
+//! cohort full on the JSON rows was reached by in-place promotions alone. The
+//! old-reclaim baseline credit is unchanged: it still takes every promoted
+//! byte.
 
 use std::cell::Cell;
 
@@ -67,9 +81,23 @@ crate::perry_thread_local! {
     static COHORT_FULLS: Cell<u64> = const { Cell::new(0) };
 }
 
-/// A minor moved `bytes` into old-gen.
+/// A minor moved `bytes` into old-gen by promoting its blocks in place.
 pub(super) fn note_promoted(bytes: usize) {
     PROMOTED_SINCE_FULL.with(|c| c.set(c.get().saturating_add(bytes)));
+}
+
+/// A copying minor promoted `promoted` bytes, `in_place` of them by promoting
+/// blocks in place and the rest by tenuring copies. The cohort takes the
+/// in-place share.
+pub(super) fn note_minor_promotion(promoted: usize, in_place: usize) {
+    #[cfg(test)]
+    let in_place = if sabotage::counting_tenured() {
+        promoted
+    } else {
+        in_place
+    };
+    let _ = promoted;
+    note_promoted(in_place);
 }
 
 /// A full collection finished and verified `old_live` bytes of old-gen.
@@ -144,10 +172,30 @@ pub(super) mod sabotage {
 
     thread_local! {
         static NEVER_BACK_OFF: Cell<bool> = const { Cell::new(false) };
+        static COUNT_TENURED: Cell<bool> = const { Cell::new(false) };
     }
 
     pub(super) fn never_back_off() -> bool {
         NEVER_BACK_OFF.with(Cell::get)
+    }
+
+    /// The cohort takes copy-tenured bytes too, as it did before #10241.
+    pub(super) fn counting_tenured() -> bool {
+        COUNT_TENURED.with(Cell::get)
+    }
+
+    pub(crate) struct CountTenuredGuard(bool);
+
+    impl CountTenuredGuard {
+        pub(crate) fn arm() -> Self {
+            Self(COUNT_TENURED.with(|s| s.replace(true)))
+        }
+    }
+
+    impl Drop for CountTenuredGuard {
+        fn drop(&mut self) {
+            COUNT_TENURED.with(|s| s.set(self.0));
+        }
     }
 
     pub(crate) struct Guard(bool);
