@@ -99,7 +99,10 @@ pub fn launch_native(exe_path: &Path, program_args: &[String], format: OutputFor
         println!();
     }
 
-    let status = Command::new(&exe)
+    // Execute inside the bundle so Foundation and AppKit see its application
+    // identity. Direct execution preserves argv, terminal I/O, and exit status.
+    let executable = native_executable_path(&exe)?;
+    let status = Command::new(&executable)
         .args(program_args)
         .status()
         .map_err(|e| anyhow!("Failed to launch {}: {}", exe.display(), e))?;
@@ -108,6 +111,113 @@ pub fn launch_native(exe_path: &Path, program_args: &[String], format: OutputFor
         std::process::exit(status.code().unwrap_or(1));
     }
     Ok(())
+}
+
+fn native_executable_path(output: &Path) -> Result<PathBuf> {
+    if !cfg!(target_os = "macos")
+        || !output.is_dir()
+        || output.extension().is_none_or(|ext| ext != "app")
+    {
+        return Ok(output.to_path_buf());
+    }
+    let plist = output.join("Contents/Info.plist");
+    let result = Command::new("/usr/bin/plutil")
+        .args(["-extract", "CFBundleExecutable", "raw", "-o", "-"])
+        .arg(&plist)
+        .output()
+        .with_context(|| format!("read application executable from {}", plist.display()))?;
+    if !result.status.success() {
+        bail!("Cannot read CFBundleExecutable from {}", plist.display());
+    }
+    let value =
+        String::from_utf8(result.stdout).context("application executable name is not UTF-8")?;
+    let name = value.strip_suffix('\n').unwrap_or(&value);
+    let mut components = Path::new(name).components();
+    if !matches!(components.next(), Some(std::path::Component::Normal(_)))
+        || components.next().is_some()
+    {
+        bail!("Invalid CFBundleExecutable in {}", plist.display());
+    }
+    let executable = output.join("Contents/MacOS").join(name);
+    if !executable.is_file() {
+        bail!("Application executable not found: {}", executable.display());
+    }
+    Ok(executable)
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_bundle_tests {
+    use super::*;
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Stdio;
+
+    #[test]
+    fn launch_uses_plist_executable_even_after_the_bundle_is_renamed() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = dir.path().join("Renamed Application.app");
+        std::fs::create_dir_all(bundle.join("Contents/MacOS")).unwrap();
+        let binary = bundle.join("Contents/MacOS/Original Engine");
+        std::fs::write(&binary, "executable witness").unwrap();
+        std::fs::write(
+            bundle.join("Contents/Info.plist"),
+            r#"<?xml version="1.0"?><plist version="1.0"><dict>
+            <key>CFBundleExecutable</key><string>Original Engine</string>
+            </dict></plist>"#,
+        )
+        .unwrap();
+        assert_eq!(native_executable_path(&bundle).unwrap(), binary);
+        assert_eq!(native_executable_path(&binary).unwrap(), binary);
+        std::fs::remove_file(&binary).unwrap();
+        assert!(native_executable_path(&bundle).is_err());
+    }
+
+    #[test]
+    fn launch_bundle_preserves_arguments_terminal_streams_and_exit_status() {
+        const CHILD: &str = "PERRY_TEST_BUNDLE_LAUNCH_CHILD";
+        if let Some(bundle) = std::env::var_os(CHILD) {
+            launch_native(
+                Path::new(&bundle),
+                &["argument with spaces".into()],
+                OutputFormat::Text,
+            )
+            .unwrap();
+            unreachable!("the launched witness exits with status 7");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = dir.path().join("Terminal Witness.app");
+        std::fs::create_dir_all(bundle.join("Contents/MacOS")).unwrap();
+        let binary = bundle.join("Contents/MacOS/engine");
+        std::fs::write(&binary, "#!/bin/sh\nread -r line\nprintf 'argv=%s input=%s\\n' \"$1\" \"$line\"\nprintf 'stderr witness\\n' >&2\nexit 7\n").unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(bundle.join("Contents/Info.plist"),
+            "<plist version=\"1.0\"><dict><key>CFBundleExecutable</key><string>engine</string></dict></plist>").unwrap();
+        let thread = std::thread::current();
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                thread.name().unwrap(),
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, &bundle)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"input witness\n")
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert_eq!(output.status.code(), Some(7));
+        assert!(String::from_utf8_lossy(&output.stdout)
+            .contains("argv=argument with spaces input=input witness\n"));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("stderr witness\n"));
+    }
 }
 
 /// Launch on iOS Simulator: install + launch

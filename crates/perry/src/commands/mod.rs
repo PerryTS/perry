@@ -38,6 +38,7 @@ pub mod run;
 pub mod sandbox_profile;
 pub mod sanitize;
 pub mod setup;
+mod sidecar;
 pub mod stdlib_features;
 pub mod typecheck;
 pub mod types;

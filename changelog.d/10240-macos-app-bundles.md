@@ -1,0 +1,1 @@
+- macOS UI builds now produce signed `.app` bundles with app metadata, assets, and localization resources, giving desktop launches a proper application identity (#10078). Explicit `-o Name.app` outputs and `perry run` support the bundle layout; standalone CLI builds keep their existing output. Sandbox and attestation sidecars stay outside the bundle seal.

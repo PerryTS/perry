@@ -69,6 +69,47 @@ pub(super) fn strip_final_binary(
     }
 }
 
+/// Emit the optional profile before an app bundle is signed.
+pub(super) fn emit_sandbox_sidecar(
+    ctx: &CompilationContext,
+    exe_path: &Path,
+    format: OutputFormat,
+) {
+    // #506 — emit `<binary>.sandbox` next to the binary when
+    // `--emit-sandbox` (or the equivalent env / package.json
+    // knob) is set. macOS only for the MVP; other platforms
+    // log a once-per-build note that the kernel-sandbox MVP
+    // is macOS-only and the matching seccomp / AppContainer /
+    // ... support lands as #506 follow-up.
+    if ctx.emit_sandbox {
+        #[cfg(target_os = "macos")]
+        {
+            match super::super::sandbox_profile::emit_macos_sandbox_profile(ctx, exe_path) {
+                Ok(path) => match format {
+                    OutputFormat::Text => {
+                        println!("Wrote sandbox profile: {}", path.display())
+                    }
+                    OutputFormat::Json => {}
+                },
+                Err(e) => match format {
+                    OutputFormat::Text => {
+                        eprintln!("warning: failed to emit sandbox profile: {}", e);
+                    }
+                    OutputFormat::Json => {}
+                },
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            if let OutputFormat::Text = format {
+                eprintln!(
+                    "note: `--emit-sandbox` is macOS-only in this MVP; Linux seccomp + Windows AppContainer support tracked under #506."
+                );
+            }
+        }
+    }
+}
+
 /// #504: emit `<binary>.attest.json` AFTER strip/codesign so the
 /// captured SHA-256 matches what users will actually download.
 /// Best-effort — errors log and continue.
