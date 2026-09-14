@@ -98,6 +98,14 @@ pub(super) fn old_free_rebuild_from_live_old_blocks(
     block_has_live: &[bool],
     old_block_start: usize,
 ) {
+    old_free_rebuild_from_old_blocks(|block_idx| {
+        block_idx >= old_block_start && block_has_live.get(block_idx).copied().unwrap_or(false)
+    });
+}
+
+/// [`old_free_rebuild_from_live_old_blocks`] over the old blocks `parse`
+/// selects (global block indices).
+pub(super) fn old_free_rebuild_from_old_blocks(parse: impl FnMut(usize) -> bool) {
     OLD_FREE_MAP.with(|m| m.borrow_mut().clear());
     OLD_FREE_BYTES.with(|c| c.set(0));
     OLD_FREE_NONEMPTY.with(|c| c.set(false));
@@ -105,20 +113,15 @@ pub(super) fn old_free_rebuild_from_live_old_blocks(
     // (`arena_walk_objects_filtered` and friends) step over invalidated
     // headers WITHOUT invoking the callback, so a rebuild written against
     // them silently records zero holes.
-    crate::arena::old_arena_walk_all_headers_filtered(
-        |block_idx| {
-            block_idx >= old_block_start && block_has_live.get(block_idx).copied().unwrap_or(false)
-        },
-        |header_ptr, _block_idx| {
-            let header = header_ptr as *mut GcHeader;
-            unsafe {
-                if (*header).obj_type == 0 {
-                    let total_size = (*header).size as usize;
-                    old_free_push(header as usize + GC_HEADER_SIZE, total_size);
-                }
+    crate::arena::old_arena_walk_all_headers_filtered(parse, |header_ptr, _block_idx| {
+        let header = header_ptr as *mut GcHeader;
+        unsafe {
+            if (*header).obj_type == 0 {
+                let total_size = (*header).size as usize;
+                old_free_push(header as usize + GC_HEADER_SIZE, total_size);
             }
-        },
-    );
+        }
+    });
 }
 
 /// Take a hole of exactly `total_size` bytes, if one exists. When
