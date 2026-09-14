@@ -222,10 +222,16 @@ impl Scanner {
             return *result;
         }
         let mut seen = HashSet::new();
-        let mut work = vec![path.to_owned()];
-        while let Some(path) = work.pop() {
+        let mut visiting = HashSet::new();
+        let mut work = vec![(path.to_owned(), false)];
+        while let Some((path, finished)) = work.pop() {
             let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
-            if !seen.insert(canonical.clone()) {
+            if finished {
+                visiting.remove(&canonical);
+                seen.insert(canonical);
+                continue;
+            }
+            if seen.contains(&canonical) {
                 continue;
             }
             match self.droppable.get(&canonical) {
@@ -236,6 +242,16 @@ impl Scanner {
                 }
                 None => {}
             }
+            if !visiting.insert(canonical.clone()) {
+                // Dropping a barrel edge can change the entry into a retained
+                // cycle and thus the values of exported `var` initializers.
+                // Package contracts permit omission, not cyclic reordering.
+                for ancestor in visiting {
+                    self.droppable.insert(ancestor, false);
+                }
+                self.droppable.insert(root, false);
+                return false;
+            }
             if !self.declared_pure(&canonical) {
                 self.droppable.insert(root, false);
                 return false;
@@ -245,7 +261,8 @@ impl Scanner {
                 self.droppable.insert(root, false);
                 return false;
             }
-            work.extend(summary.dependencies);
+            work.push((path, true));
+            work.extend(summary.dependencies.into_iter().map(|path| (path, false)));
         }
         // Only cache success for the whole explored set after checking all
         // branches. Caching a partially visited cycle could hide an effect.

@@ -287,7 +287,7 @@ fn collect_only_handles_star_cycles_and_unknown_globs_conservatively() {
         "export * from './index.js';",
     );
     let (paths, _) = compile(dir.path(), false, true);
-    assert!(!contains(&paths, "/fixture/unused.js"));
+    assert!(contains(&paths, "/fixture/unused.js"));
     write(
         dir.path(),
         "node_modules/fixture/package.json",
@@ -455,7 +455,7 @@ fn forwarding_barrels_keep_effectful_dependencies_and_bare_imports() {
     );
     let (paths, output) = compile(dir.path(), false, false);
     assert_eq!(output, "42\n");
-    assert!(!contains(&paths, "/fixture/unused.js"));
+    assert!(contains(&paths, "/fixture/unused.js"));
     assert!(contains(&paths, "/fixture/bare.js"));
 
     write(
@@ -477,5 +477,51 @@ fn forwarding_barrels_keep_effectful_dependencies_and_bare_imports() {
     assert_eq!(output, "effect\n42\n");
     assert!(contains(&paths, "/fixture/unused.js"));
     assert!(contains(&paths, "/external/index.js"));
+    assert_eq!(output, compile(dir.path(), true, false).1);
+}
+
+#[test]
+fn cyclic_initialization_order_survives_forwarding_and_pruning() {
+    let dir = fixture(Some(false.into()));
+    write(
+        dir.path(),
+        "node_modules/fixture/index.js",
+        "import { a } from './a.js'; import * as bns from './b.js'; export { a, bns };",
+    );
+    write(
+        dir.path(),
+        "node_modules/fixture/a.js",
+        "import { b } from './b.js'; export var a = (b ?? 0) + 1;",
+    );
+    write(
+        dir.path(),
+        "node_modules/fixture/b.js",
+        "import { a } from './a.js'; export var b = (a ?? 0) + 1;",
+    );
+    write(
+        dir.path(),
+        "main.ts",
+        "import { a, bns } from 'fixture'; console.log(a, bns.b);",
+    );
+    let (paths, output) = compile(dir.path(), false, false);
+    assert!(contains(&paths, "/fixture/a.js"));
+    assert!(contains(&paths, "/fixture/b.js"));
+    assert_eq!(output, "2 1\n");
+    assert_eq!(output, compile(dir.path(), true, false).1);
+
+    write(
+        dir.path(),
+        "node_modules/fixture/index.js",
+        "export { a } from './a.js'; export { b } from './b.js';",
+    );
+    write(
+        dir.path(),
+        "main.ts",
+        "import { b } from 'fixture'; console.log(b);",
+    );
+    let (paths, output) = compile(dir.path(), false, false);
+    assert!(contains(&paths, "/fixture/a.js"));
+    assert!(contains(&paths, "/fixture/b.js"));
+    assert_eq!(output, "1\n");
     assert_eq!(output, compile(dir.path(), true, false).1);
 }

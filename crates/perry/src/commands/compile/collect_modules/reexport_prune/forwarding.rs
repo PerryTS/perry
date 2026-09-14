@@ -1,8 +1,8 @@
 //! Published barrels (notably Remeda) spell re-exports as imports followed by
-//! `export { local as public }`. Normalize only modules containing imports,
-//! export lists and empty statements, with an entirely side-effect-free static
-//! dependency tree. No imported binding can then be used by module code, and
-//! reordering import/re-export groups cannot move an effectful dependency.
+//! `export { local as public }`. Normalize only modules whose runtime imports
+//! are named bindings forwarded through local export lists, with an entirely
+//! side-effect-free static dependency tree. Converting the complete import
+//! group preserves dependency order even when pure initializers form a cycle.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -93,6 +93,27 @@ pub(crate) fn normalize(
         })
         .collect();
     if candidates.is_empty() {
+        return None;
+    }
+
+    // Collection visits imports before re-exports. Moving only part of that
+    // group (or mixing it with existing re-exports) can reverse the entry into
+    // a cycle: even sideEffects:false modules can read each other's exported
+    // `var` initializers. Require the entire runtime group to move together.
+    if module.body.iter().any(|item| match item {
+        ast::ModuleItem::ModuleDecl(ast::ModuleDecl::Import(import)) if !import.type_only => {
+            import.specifiers.is_empty()
+                || import.specifiers.iter().any(|spec| match spec {
+                    ast::ImportSpecifier::Named(named) => {
+                        !named.is_type_only && !candidates.contains(named.local.sym.as_ref())
+                    }
+                    _ => true,
+                })
+        }
+        ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportNamed(export)) => export.src.is_some(),
+        ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportAll(_)) => true,
+        _ => false,
+    }) {
         return None;
     }
 

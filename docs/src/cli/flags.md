@@ -625,11 +625,15 @@ Collection prunes unused `export { name } from`, `export * from`, and namespace
 re-export edges by default when the exporting package declares the file free
 of side effects and every static dependency of the omitted target has the same
 guarantee. Perry honors `sideEffects: false` and arrays of `*`, `**`, and `?`
-globs. Unsupported patterns, missing contracts, CommonJS, and unresolved
-dependencies conservatively retain the edge. This pass does not remove direct
+globs. Unsupported patterns, missing contracts, CommonJS, unresolved dependencies,
+and cyclic static dependency trees conservatively retain the edge. Keeping cycles
+preserves initialization order even when exported variables read each other.
+This pass does not remove direct
 imports used by module code or individual declarations. An `import { x }; export { x }`
-pair is first normalized to a re-export only in barrels containing imports and
-export lists, whose entire static dependency tree has side-effect-free contracts.
+pair is first normalized to a re-export only in barrels whose runtime imports
+are all named bindings forwarded through local export lists, and whose entire
+static dependency tree has side-effect-free contracts. Moving the complete
+import group preserves dependency order in cycles. Mixed barrels retain their imports.
 Imports with attributes, nonstandard phases, or package aliases retain their original resolution.
 Namespace and dynamic imports retain the
 complete exported surface, and existing dynamic initialization stays deferred.
