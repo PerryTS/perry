@@ -390,6 +390,14 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
     // semantics. Fixes effect's `Predicate.hasProperty(classObj, TypeId)`
     // (`isSchema` → `dual` → `transformOrFail`) and `Sym in obj` generally.
     if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
+        // Presence must not call a symbol getter or confuse an existing
+        // undefined-valued property with an absent one.
+        if unsafe {
+            crate::symbol::has_own_symbol_property(obj, key)
+                || crate::symbol::has_declared_prototype_symbol_property(obj, key)
+        } {
+            return nanbox_true;
+        }
         let v = unsafe { crate::symbol::js_object_get_symbol_property(obj, key) };
         return if v.to_bits() != crate::value::TAG_UNDEFINED {
             nanbox_true

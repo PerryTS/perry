@@ -55,6 +55,7 @@ pub use properties::{
 };
 
 // Symbol-keyed property reads.
+pub(crate) use get::has_declared_prototype_symbol_property;
 pub(crate) use get::{has_own_symbol_property, inherited_symbol_property, own_symbol_property};
 pub use get::{
     js_object_get_symbol_property, js_object_get_symbol_property_ic_miss,
