@@ -89,6 +89,7 @@ impl Drop for PrototypeResolutionGuard {
     }
 }
 
+#[inline]
 pub(crate) fn resolution_stack_savepoint() -> usize {
     PROTOTYPE_RESOLUTION_STACK.with(|stack| stack.borrow().len())
 }

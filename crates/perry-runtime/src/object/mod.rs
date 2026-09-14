@@ -296,6 +296,8 @@ pub(crate) use field_get_set::{
     private_member_access_hints_restore, private_member_access_hints_savepoint,
     scan_private_lexical_brand_roots_mut,
 };
+#[cfg(test)]
+pub(crate) use this_binding::js_derived_super_scope_push;
 pub(crate) use this_binding::{
     derived_super_binding_stack_restore, derived_super_binding_stack_savepoint,
     scan_implicit_this_roots_mut, static_private_owner_current, static_private_owner_pop,
@@ -594,6 +596,8 @@ pub(crate) use keys_lookup::*;
 
 pub(crate) mod array_tail_transition;
 mod call_method_depth;
+#[cfg(test)]
+pub(crate) use call_method_depth::test_enter_catch_method;
 mod meta_accessors;
 use call_method_depth::CallMethodDepthGuard;
 pub(crate) use call_method_depth::{call_method_depth_restore, call_method_depth_savepoint};

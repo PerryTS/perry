@@ -1,0 +1,23 @@
+{
+  "generated_at": "2026-09-14T06:47:22Z",
+  "platform": "linux",
+  "summary": {
+    "parity_pass": 1,
+    "parity_fail": 0,
+    "compile_fail": 0,
+    "crash_fail": 0,
+    "node_fail": 0,
+    "skipped": 0,
+    "total_run": 1,
+    "parity_percentage": 100.0
+  },
+  "failures": {
+    "parity": [""]
+,
+    "compile": [""]
+,
+    "crash": [""]
+
+  },
+  "results": [{"id":"test_sock_write_map","status":"pass"}]
+}

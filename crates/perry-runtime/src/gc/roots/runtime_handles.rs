@@ -185,6 +185,7 @@ impl RuntimeHandleScope {
 /// Snapshot the transient-handle stack before a callback may throw across
 /// Rust frames. `longjmp` skips `RuntimeHandleScope::drop`, so exception
 /// unwinding restores this depth explicitly.
+#[inline]
 pub(crate) fn runtime_handle_stack_savepoint() -> usize {
     runtime_handle_stack().len()
 }

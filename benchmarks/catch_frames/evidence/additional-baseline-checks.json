@@ -1,0 +1,20 @@
+[
+  {
+    "test": "test_issue_4826_array_headers",
+    "baseline": "node_fail",
+    "candidate": "node_fail",
+    "detail": "Node oracle times out: server fixture never closes"
+  },
+  {
+    "test": "test_issue_4975_http_agent_keep_alive_connection_options",
+    "baseline": "crash",
+    "candidate": "crash",
+    "detail": "Perry prints true and 1250, then exceeds the 10-second shutdown deadline. Existing Linux allowlist entry cites #8841, which was closed when checked on 2026-09-14."
+  },
+  {
+    "test": "test_parity_stream_web",
+    "baseline": "crash",
+    "candidate": "crash",
+    "detail": "Both print the Web Streams constructor error and exceed the 10-second deadline. Existing module-inventory entry cites closed roadmap #793."
+  }
+]

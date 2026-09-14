@@ -1,0 +1,24 @@
+{
+  "baseline_commit": "eb13fa188d",
+  "platform": "darwin-arm64",
+  "probes": 14,
+  "repeats": 7,
+  "compared_medians": 126,
+  "changed_medians": [],
+  "pinned_profile": "shared_ci",
+  "baseline_pinned_check_exit": 1,
+  "candidate_pinned_check_exit": 1,
+  "pinned_failing_cells": 30,
+  "added_pinned_failures": [],
+  "removed_pinned_failures": [],
+  "candidate_artifacts": {
+    "perry": "37f3f494caac2742a17ab1122776bd54ffa889ff32d2cbc6c4dd9955a18558f8",
+    "libperry_runtime.a": "e0b5b127f5754c803192b2b744adde6095990f5a8d40a4f8eee00ad75463fc6d",
+    "libperry_stdlib.a": "d00b623797ab1b2bdd7722a4c5c14866bdf9aa320e4dadf45806cbb0ed5b75cf"
+  },
+  "baseline_artifacts": {
+    "perry": "955e2354482630b1df7643ef7005790d506e8cba0e0f3e4fdbaf35ba3359bea8",
+    "libperry_runtime.a": "d852c771df1faaa2f0c5d0288dddf3f7a48b63ff181756e093f71aee3db94f5d",
+    "libperry_stdlib.a": "ebd25d57c55ac9ae7c53aeb66751468faa6e5cfeb9dc803e796ff7f7d342f76e"
+  }
+}

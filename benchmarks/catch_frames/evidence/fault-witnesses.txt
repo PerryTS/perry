@@ -1,0 +1,132 @@
+Missing-restore fault injections, 2026-09-14, macOS arm64.
+Each excerpt is from a separate process; every exit was SIGABRT (-6).
+
+shadow
+running 1 test
+test exception::savepoints::restore_tests::shadow ...
+thread 'exception::savepoints::restore_tests::shadow' (140782386) panicked at crates/perry-runtime/src/exception/savepoints/tests.rs:51:9:
+assertion `left == right` failed: inner catch must preserve its enclosing scope
+  left: ShadowSavepoint { frame_top: 6, len: 9, temp_roots: 3 }
+ right: ShadowSavepoint { frame_top: 3, len: 5, temp_roots: 2 }
+
+runtime_handles
+running 1 test
+test exception::savepoints::restore_tests::runtime_handles ...
+thread 'exception::savepoints::restore_tests::runtime_handles' (140782392) panicked at crates/perry-runtime/src/exception/savepoints/tests.rs:51:9:
+assertion `left == right` failed: inner catch must preserve its enclosing scope
+  left: 3
+ right: 2
+
+call_method
+running 1 test
+test exception::savepoints::restore_tests::call_method ...
+thread 'exception::savepoints::restore_tests::call_method' (140782397) panicked at crates/perry-runtime/src/exception/savepoints/tests.rs:51:9:
+assertion `left == right` failed: inner catch must preserve its enclosing scope
+  left: 3
+ right: 2
+
+pump
+running 1 test
+test exception::savepoints::restore_tests::pump ...
+thread 'exception::savepoints::restore_tests::pump' (140782403) panicked at crates/perry-runtime/src/exception/savepoints/tests.rs:51:9:
+assertion `left == right` failed: inner catch must preserve its enclosing scope
+  left: 3
+ right: 2
+
+set_foreach
+running 1 test
+test exception::savepoints::restore_tests::set_foreach ...
+thread 'exception::savepoints::restore_tests::set_foreach' (140782408) panicked at crates/perry-runtime/src/exception/savepoints/tests.rs:51:9:
+assertion `left == right` failed: inner catch must preserve its enclosing scope
+  left: 3
+ right: 2
+
+map_foreach
+running 1 test
+test exception::savepoints::restore_tests::map_foreach ...
+thread 'exception::savepoints::restore_tests::map_foreach' (140782417) panicked at crates/perry-runtime/src/exception/savepoints/tests.rs:51:9:
+assertion `left == right` failed: inner catch must preserve its enclosing scope
+  left: 3
+ right: 2
+
+prototype_resolution
+running 1 test
+test exception::savepoints::restore_tests::prototype_resolution ...
+thread 'exception::savepoints::restore_tests::prototype_resolution' (140782423) panicked at crates/perry-runtime/src/exception/savepoints/tests.rs:51:9:
+assertion `left == right` failed: inner catch must preserve its enclosing scope
+  left: 3
+ right: 2
+
+static_private_owner
+running 1 test
+test exception::savepoints::restore_tests::static_private_owner ...
+thread 'exception::savepoints::restore_tests::static_private_owner' (140782428) panicked at crates/perry-runtime/src/exception/savepoints/tests.rs:51:9:
+assertion `left == right` failed: inner catch must preserve its enclosing scope
+  left: 3
+ right: 2
+
+private_lexical_brand
+running 1 test
+test exception::savepoints::restore_tests::private_lexical_brand ...
+thread 'exception::savepoints::restore_tests::private_lexical_brand' (140782432) panicked at crates/perry-runtime/src/exception/savepoints/tests.rs:51:9:
+assertion `left == right` failed: inner catch must preserve its enclosing scope
+  left: 3
+ right: 2
+
+derived_super_binding
+running 1 test
+test exception::savepoints::restore_tests::derived_super_binding ...
+thread 'exception::savepoints::restore_tests::derived_super_binding' (140782439) panicked at crates/perry-runtime/src/exception/savepoints/tests.rs:51:9:
+assertion `left == right` failed: inner catch must preserve its enclosing scope
+  left: 3
+ right: 2
+
+private_member_access_hints
+running 1 test
+test exception::savepoints::restore_tests::private_member_access_hints ...
+thread 'exception::savepoints::restore_tests::private_member_access_hints' (140782443) panicked at crates/perry-runtime/src/exception/savepoints/tests.rs:51:9:
+assertion `left == right` failed: inner catch must preserve its enclosing scope
+  left: 3
+ right: 2
+
+regex_factory
+running 1 test
+test exception::savepoints::restore_tests::regex_factory ...
+thread 'exception::savepoints::restore_tests::regex_factory' (140782449) panicked at crates/perry-runtime/src/exception/savepoints/tests.rs:51:9:
+assertion `left == right` failed: inner catch must preserve its enclosing scope
+  left: 3
+ right: 2
+
+dyn_eval
+running 1 test
+test exception::savepoints::restore_tests::dyn_eval ...
+thread 'exception::savepoints::restore_tests::dyn_eval' (140782452) panicked at crates/perry-runtime/src/exception/savepoints/tests.rs:51:9:
+assertion `left == right` failed: inner catch must preserve its enclosing scope
+  left: 3298534883331
+ right: 2199023255554
+
+Restored production source:
+
+running 20 tests
+test exception::savepoints::restore_tests::call_method ... ok
+test exception::savepoints::restore_tests::derived_super_binding ... ok
+test exception::savepoints::restore_tests::dyn_eval ... ok
+test exception::savepoints::restore_tests::map_foreach ... ok
+test exception::savepoints::restore_tests::private_lexical_brand ... ok
+test exception::savepoints::restore_tests::private_member_access_hints ... ok
+test exception::savepoints::restore_tests::prototype_resolution ... ok
+test exception::savepoints::restore_tests::pump ... ok
+test exception::savepoints::restore_tests::regex_factory ... ok
+test exception::savepoints::restore_tests::runtime_handles ... ok
+test exception::savepoints::restore_tests::set_foreach ... ok
+test exception::savepoints::restore_tests::shadow ... ok
+test exception::savepoints::restore_tests::static_private_owner ... ok
+test exception::tests::arm_trap_and_run_catches_a_real_throw ... ok
+test exception::tests::catch_js_throw_err_clears_exception ... ok
+test exception::tests::js_throw_path_restores_runtime_handles_across_unwound_frames ... ok
+test exception::tests::js_throw_path_restores_shadow_stack_across_unwound_frames ... ok
+test exception::tests::nested_trampoline_arms_unwind_innermost_first ... ok
+test exception::tests::the_uncaught_report_carries_the_error_code_and_the_frames ... ok
+test exception::tests::try_push_pop_beyond_old_limit_does_not_panic ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 3795 filtered out; finished in 0.03s

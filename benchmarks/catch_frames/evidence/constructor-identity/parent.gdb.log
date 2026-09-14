@@ -1,0 +1,17 @@
+Breakpoint 1 at 0x74739d: file crates/perry-runtime/src/object/class_registry/parent_static.rs, line 75.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+plain typeof addEventListener: function
+plain typeof removeEventListener: function
+plain typeof dispatchEvent: function
+plain listener fired
+plain dispatch returned: true
+Warning: the current language does not match this frame.
+register parent: class=1 bits=7ffd0200002742d8
+closure function=555555c36b00
+perry_runtime::object::global_this::fetch_globals::global_this_builtin_noop_thunk in section .text of /root/js-throw-evidence/eventtarget-triage/fix-debug
+sub typeof addEventListener: undefined
+sub typeof dispatchEvent: undefined
+TypeError: addEventListener is not a function
+    at makeLocal (<anonymous>)
+[Inferior 1 (process 782006) exited with code 01]

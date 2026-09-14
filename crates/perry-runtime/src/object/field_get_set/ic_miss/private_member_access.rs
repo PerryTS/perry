@@ -18,6 +18,7 @@ struct PrivateMemberAccessHint {
     is_write: bool,
 }
 
+#[inline]
 pub(crate) fn private_member_access_hints_savepoint() -> usize {
     PRIVATE_MEMBER_ACCESS_HINTS.with(|hints| hints.borrow().len())
 }
@@ -372,4 +373,17 @@ fn throw_private_type_error(msg: &str) -> ! {
     let err = s.with_mut_ptr::<crate::StringHeader, _>(|s| crate::error::js_typeerror_new(s));
     let v = crate::value::JSValue::pointer(err as *const u8).bits();
     crate::exception::js_throw(f64::from_bits(v))
+}
+
+#[cfg(test)]
+pub(crate) fn test_push_catch_private_hint(marker: u32) {
+    PRIVATE_MEMBER_ACCESS_HINTS.with(|hints| {
+        hints.borrow_mut().push(PrivateMemberAccessHint {
+            class_id: marker,
+            name: format!("catch-savepoint-{marker}"),
+            kind: 0,
+            is_static: false,
+            is_write: true,
+        });
+    });
 }

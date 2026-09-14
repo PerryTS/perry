@@ -42,6 +42,7 @@ fn set_foreach_leave(set: *const SetHeader) -> bool {
     })
 }
 
+#[inline]
 pub(crate) fn set_foreach_stack_savepoint() -> usize {
     SET_FOREACH_STACK.with(|stack| stack.borrow().len())
 }
@@ -3309,3 +3310,8 @@ mod ordered_delete_repair_tests {
 #[cfg(test)]
 #[path = "set_tombstone_tests.rs"]
 mod set_tombstone_tests;
+
+#[cfg(test)]
+pub(crate) fn test_enter_catch_foreach() {
+    set_foreach_enter(js_set_alloc(4));
+}

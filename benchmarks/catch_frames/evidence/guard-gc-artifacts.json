@@ -1,0 +1,7 @@
+{
+  "perry": "30410e4e815b93ffd1c7d4bc65aa2ff66111c5b79ff3ce18e466fb3d8a63fbc0",
+  "libperry_runtime.a": "2c0b05fbad66bb569241ccf742831504c9ef8c4819a31845c3d92c70d0efaa72",
+  "libperry_stdlib.a": "547c3758646fb5f0b33fd298e6954746b251e2d23dd4cd5c65403431616ac620",
+  "libperry_ext_net.a": "df818833d44021acd73b33c39c9b23a5b3b90d680c6f0b6af4c275a9abb8340b",
+  "libperry_ext_http.a": "c64f8d7ce7f9e53fdc09f3ded8f23db12d1a9e509876fa419ef9c5c496ce81ea"
+}

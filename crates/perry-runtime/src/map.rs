@@ -43,6 +43,7 @@ fn map_foreach_leave(map: *const MapHeader) -> bool {
     })
 }
 
+#[inline]
 pub(crate) fn map_foreach_stack_savepoint() -> usize {
     MAP_FOREACH_STACK.with(|stack| stack.borrow().len())
 }
@@ -4027,3 +4028,8 @@ mod tests {
 #[cfg(test)]
 #[path = "map_tombstone_tests.rs"]
 mod map_tombstone_tests;
+
+#[cfg(test)]
+pub(crate) fn test_enter_catch_foreach() {
+    map_foreach_enter(js_map_alloc(4));
+}

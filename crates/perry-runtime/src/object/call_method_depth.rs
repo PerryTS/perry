@@ -60,6 +60,7 @@ impl Drop for CallMethodDepthGuard {
 /// dispatching). System unwinding does run those drops; guards remember their
 /// entry depths so the eager restore makes their later cleanup a no-op instead
 /// of a second decrement. See `crate::exception::{js_try_push, js_throw}`.
+#[inline]
 pub(crate) fn call_method_depth_savepoint() -> u32 {
     CALL_METHOD_DEPTH.with(|d| d.get())
 }
@@ -69,4 +70,9 @@ pub(crate) fn call_method_depth_savepoint() -> u32 {
 /// frames the throw skips don't leak their depth increments (see above).
 pub(crate) fn call_method_depth_restore(depth: u32) {
     CALL_METHOD_DEPTH.with(|d| d.set(depth));
+}
+
+#[cfg(test)]
+pub(crate) fn test_enter_catch_method() {
+    std::mem::forget(CallMethodDepthGuard::enter("catch-savepoint").unwrap());
 }

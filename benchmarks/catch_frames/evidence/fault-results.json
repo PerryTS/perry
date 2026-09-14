@@ -1,0 +1,80 @@
+[
+  {
+    "restore": "shadow",
+    "test": "exception::savepoints::restore_tests::shadow",
+    "exit_code": -6,
+    "detected": true
+  },
+  {
+    "restore": "runtime_handles",
+    "test": "exception::savepoints::restore_tests::runtime_handles",
+    "exit_code": -6,
+    "detected": true
+  },
+  {
+    "restore": "call_method",
+    "test": "exception::savepoints::restore_tests::call_method",
+    "exit_code": -6,
+    "detected": true
+  },
+  {
+    "restore": "pump",
+    "test": "exception::savepoints::restore_tests::pump",
+    "exit_code": -6,
+    "detected": true
+  },
+  {
+    "restore": "set_foreach",
+    "test": "exception::savepoints::restore_tests::set_foreach",
+    "exit_code": -6,
+    "detected": true
+  },
+  {
+    "restore": "map_foreach",
+    "test": "exception::savepoints::restore_tests::map_foreach",
+    "exit_code": -6,
+    "detected": true
+  },
+  {
+    "restore": "prototype_resolution",
+    "test": "exception::savepoints::restore_tests::prototype_resolution",
+    "exit_code": -6,
+    "detected": true
+  },
+  {
+    "restore": "static_private_owner",
+    "test": "exception::savepoints::restore_tests::static_private_owner",
+    "exit_code": -6,
+    "detected": true
+  },
+  {
+    "restore": "private_lexical_brand",
+    "test": "exception::savepoints::restore_tests::private_lexical_brand",
+    "exit_code": -6,
+    "detected": true
+  },
+  {
+    "restore": "derived_super_binding",
+    "test": "exception::savepoints::restore_tests::derived_super_binding",
+    "exit_code": -6,
+    "detected": true
+  },
+  {
+    "restore": "private_member_access_hints",
+    "test": "exception::savepoints::restore_tests::private_member_access_hints",
+    "exit_code": -6,
+    "detected": true
+  },
+  {
+    "restore": "regex_factory",
+    "test": "exception::savepoints::restore_tests::regex_factory",
+    "exit_code": -6,
+    "detected": true
+  },
+  {
+    "restore": "dyn_eval",
+    "test": "exception::savepoints::restore_tests::dyn_eval",
+    "exit_code": -6,
+    "detected": true
+  }
+]

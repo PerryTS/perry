@@ -1,0 +1,16 @@
+{
+  "platform": "linux",
+  "unlisted_failures": [
+    "test_bun_plugin",
+    "test_dynamic_import_data_10104",
+    "test_gap_2899_2779_2777_static_helpers",
+    "test_gap_disposablestack_2875",
+    "test_gap_iterator_prototype_next_patch",
+    "test_issue_10155_textfield_singleline",
+    "test_issue_336_class_keys_collision",
+    "test_sock_write_map"
+  ],
+  "stale": [],
+  "schema": [],
+  "adjudicated": 116
+}

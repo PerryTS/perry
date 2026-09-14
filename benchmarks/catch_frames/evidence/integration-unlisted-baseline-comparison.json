@@ -1,0 +1,42 @@
+[
+  {
+    "test": "test_bun_plugin",
+    "baseline": "parity_fail",
+    "candidate": "parity_fail"
+  },
+  {
+    "test": "test_dynamic_import_data_10104",
+    "baseline": "parity_fail",
+    "candidate": "parity_fail"
+  },
+  {
+    "test": "test_gap_2899_2779_2777_static_helpers",
+    "baseline": "parity_fail",
+    "candidate": "parity_fail"
+  },
+  {
+    "test": "test_gap_disposablestack_2875",
+    "baseline": "parity_fail",
+    "candidate": "parity_fail"
+  },
+  {
+    "test": "test_gap_iterator_prototype_next_patch",
+    "baseline": "parity_fail",
+    "candidate": "parity_fail"
+  },
+  {
+    "test": "test_issue_10155_textfield_singleline",
+    "baseline": "compile_fail",
+    "candidate": "compile_fail"
+  },
+  {
+    "test": "test_issue_336_class_keys_collision",
+    "baseline": "parity_fail",
+    "candidate": "parity_fail"
+  },
+  {
+    "test": "test_sock_write_map",
+    "baseline": "pass",
+    "candidate": "parity_fail"
+  }
+]

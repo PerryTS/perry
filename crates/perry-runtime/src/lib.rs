@@ -468,10 +468,16 @@ pub(crate) mod stdlib_pump {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn test_enter_catch_pump() {
+        std::mem::forget(PumpDepthGuard::enter().0);
+    }
+
     /// Capture the re-entrant stdlib-pump depth at `try` entry. A caught JS
     /// throw can longjmp past `PumpDepthGuard::drop`; exception handling uses
     /// this savepoint to keep the next top-level pump recognizable as a new
     /// tick (and therefore run its lifecycle hooks).
+    #[inline]
     pub(crate) fn pump_depth_savepoint() -> u32 {
         PUMP_DEPTH.with(|depth| depth.get())
     }

@@ -1,0 +1,193 @@
+## GC ratchet
+
+- Profile: `shared_ci`
+- Baseline commit: `eb13fa188d`
+- Baseline captured: 2026-09-14T04:44:16+00:00 on `linux-x86_64`
+- Baseline host: x86_64, 16 cores, load at capture 10.89
+
+Only rows marked gating can fail the job. Non-gating rows are recorded so a
+drift that is real but unmeasurable on this runner is still visible.
+
+Probes pinned under a non-default collector configuration:
+
+- `13_large_eden_survivors` — `PERRY_GC_SCAVENGE_NURSERY_MB=64`
+- `14_grow_then_churn` — `PERRY_GC_MAJOR_PACING_FLOOR_MB=1 PERRY_GC_SCAVENGE_NURSERY_MB=1`
+
+| Probe | Metric | Baseline | Current | Δ | Allowance | Gating | Status |
+|-------|--------|---------:|--------:|---:|----------:|:------:|--------|
+| `01_nursery_churn` | heap_used_bytes | 438,744 | 438,744 | +0.00% | 65,536 | yes | ok |
+| `01_nursery_churn` | heap_total_bytes | 14,680,064 | 14,680,064 | +0.00% | 1,048,576 | yes | ok |
+| `01_nursery_churn` | minor_cycles | 1 | 1 | +0.00% | 1 | yes | ok |
+| `01_nursery_churn` | step_cycles | 1 | 1 | +0.00% | 1 | yes | ok |
+| `01_nursery_churn` | copied_objects | 6,690 | 6,690 | +0.00% | 334 | yes | ok |
+| `01_nursery_churn` | copied_bytes | 466,392 | 466,392 | +0.00% | 65,536 | yes | ok |
+| `01_nursery_churn` | promoted_objects | 0 | 0 | - | 16 | yes | ok |
+| `01_nursery_churn` | promoted_bytes | 0 | 0 | - | 65,536 | yes | ok |
+| `01_nursery_churn` | freed_bytes | 11,067,816 | 11,067,816 | +0.00% | 1,048,576 | yes | ok |
+| `01_nursery_churn` | rss_bytes | 59,191,296 | 60,506,112 | +2.22% | 8,878,694 | no | ok |
+| `01_nursery_churn` | peak_rss_bytes | 61,480,960 | 62,861,312 | +2.25% | 9,222,144 | no | ok |
+| `01_nursery_churn` | wall_ms | 57 | 69 | +20.64% | 100 | no | ok |
+| `02_survivor_promotion` | heap_used_bytes | 2,562,832 | 2,562,832 | +0.00% | 65,536 | yes | ok |
+| `02_survivor_promotion` | heap_total_bytes | 15,728,640 | 15,728,640 | +0.00% | 1,048,576 | yes | ok |
+| `02_survivor_promotion` | minor_cycles | 1 | 1 | +0.00% | 1 | yes | ok |
+| `02_survivor_promotion` | step_cycles | 1 | 1 | +0.00% | 1 | yes | ok |
+| `02_survivor_promotion` | copied_objects | 37,366 | 37,366 | +0.00% | 1,868 | yes | ok |
+| `02_survivor_promotion` | copied_bytes | 1,690,264 | 1,690,264 | +0.00% | 84,513 | yes | ok |
+| `02_survivor_promotion` | promoted_objects | 0 | 0 | - | 16 | yes | ok |
+| `02_survivor_promotion` | promoted_bytes | 0 | 0 | - | 65,536 | yes | ok |
+| `02_survivor_promotion` | freed_bytes | 8,795,408 | 8,795,408 | +0.00% | 1,048,576 | yes | ok |
+| `02_survivor_promotion` | rss_bytes | 59,736,064 | 61,808,640 | +3.47% | 8,960,410 | no | ok |
+| `02_survivor_promotion` | peak_rss_bytes | 72,052,736 | 69,627,904 | -3.37% | 10,807,910 | no | ok |
+| `02_survivor_promotion` | wall_ms | 69 | 87 | +26.70% | 100 | no | ok |
+| `03_cross_gen_writes` | heap_used_bytes | 528 | 528 | +0.00% | 65,536 | yes | ok |
+| `03_cross_gen_writes` | heap_total_bytes | 12,582,912 | 12,582,912 | +0.00% | 1,048,576 | yes | ok |
+| `03_cross_gen_writes` | minor_cycles | 1 | 1 | +0.00% | 1 | yes | ok |
+| `03_cross_gen_writes` | step_cycles | 1 | 1 | +0.00% | 1 | yes | ok |
+| `03_cross_gen_writes` | copied_objects | 4,107 | 4,107 | +0.00% | 205 | yes | ok |
+| `03_cross_gen_writes` | copied_bytes | 197,056 | 197,056 | +0.00% | 65,536 | yes | ok |
+| `03_cross_gen_writes` | promoted_objects | 0 | 0 | - | 16 | yes | ok |
+| `03_cross_gen_writes` | promoted_bytes | 0 | 0 | - | 65,536 | yes | ok |
+| `03_cross_gen_writes` | freed_bytes | 9,240,008 | 9,240,008 | +0.00% | 1,048,576 | yes | ok |
+| `03_cross_gen_writes` | rss_bytes | 49,836,032 | 41,787,392 | -16.15% | 8,388,608 | no | ok |
+| `03_cross_gen_writes` | peak_rss_bytes | 57,798,656 | 50,696,192 | -12.29% | 8,669,798 | no | ok |
+| `03_cross_gen_writes` | wall_ms | 36 | 54 | +50.53% | 100 | no | ok |
+| `04_dead_after_deep_stack` | heap_used_bytes | 536 | 536 | +0.00% | 65,536 | yes | ok |
+| `04_dead_after_deep_stack` | heap_total_bytes | 18,874,368 | 18,874,368 | +0.00% | 1,048,576 | yes | ok |
+| `04_dead_after_deep_stack` | minor_cycles | 7 | 7 | +0.00% | 1 | yes | ok |
+| `04_dead_after_deep_stack` | step_cycles | 7 | 7 | +0.00% | 1 | yes | ok |
+| `04_dead_after_deep_stack` | copied_objects | 2,666 | 2,666 | +0.00% | 133 | yes | ok |
+| `04_dead_after_deep_stack` | copied_bytes | 111,336 | 111,336 | +0.00% | 65,536 | yes | ok |
+| `04_dead_after_deep_stack` | promoted_objects | 682 | 682 | +0.00% | 34 | yes | ok |
+| `04_dead_after_deep_stack` | promoted_bytes | 27,320 | 27,320 | +0.00% | 65,536 | yes | ok |
+| `04_dead_after_deep_stack` | freed_bytes | 76,493,952 | 76,493,952 | +0.00% | 3,824,698 | yes | ok |
+| `04_dead_after_deep_stack` | rss_bytes | 56,668,160 | 58,011,648 | +2.37% | 8,500,224 | no | ok |
+| `04_dead_after_deep_stack` | peak_rss_bytes | 64,937,984 | 62,251,008 | -4.14% | 9,740,698 | no | ok |
+| `04_dead_after_deep_stack` | wall_ms | 50 | 67 | +34.21% | 100 | no | ok |
+| `05_closure_capture` | heap_used_bytes | 544 | 544 | +0.00% | 65,536 | yes | ok |
+| `05_closure_capture` | heap_total_bytes | 14,680,064 | 14,680,064 | +0.00% | 1,048,576 | yes | ok |
+| `05_closure_capture` | minor_cycles | 3 | 3 | +0.00% | 1 | yes | ok |
+| `05_closure_capture` | step_cycles | 3 | 3 | +0.00% | 1 | yes | ok |
+| `05_closure_capture` | copied_objects | 14,285 | 14,285 | +0.00% | 714 | yes | ok |
+| `05_closure_capture` | copied_bytes | 534,720 | 534,720 | +0.00% | 65,536 | yes | ok |
+| `05_closure_capture` | promoted_objects | 6,154 | 6,154 | +0.00% | 308 | yes | ok |
+| `05_closure_capture` | promoted_bytes | 221,624 | 221,624 | +0.00% | 65,536 | yes | ok |
+| `05_closure_capture` | freed_bytes | 27,897,872 | 27,897,872 | +0.00% | 1,394,894 | yes | ok |
+| `05_closure_capture` | rss_bytes | 52,531,200 | 52,678,656 | +0.28% | 8,388,608 | no | ok |
+| `05_closure_capture` | peak_rss_bytes | 60,334,080 | 61,431,808 | +1.82% | 9,050,112 | no | ok |
+| `05_closure_capture` | wall_ms | 70 | 77 | +8.58% | 100 | no | ok |
+| `06_string_retention` | heap_used_bytes | 1,072 | 1,072 | +0.00% | 65,536 | yes | ok |
+| `06_string_retention` | heap_total_bytes | 22,020,096 | 22,020,096 | +0.00% | 1,048,576 | yes | ok |
+| `06_string_retention` | minor_cycles | 4 | 4 | +0.00% | 1 | yes | ok |
+| `06_string_retention` | step_cycles | 4 | 4 | +0.00% | 1 | yes | ok |
+| `06_string_retention` | copied_objects | 270 | 270 | +0.00% | 16 | yes | ok |
+| `06_string_retention` | copied_bytes | 70,144 | 70,144 | +0.00% | 65,536 | yes | ok |
+| `06_string_retention` | promoted_objects | 14 | 14 | +0.00% | 16 | yes | ok |
+| `06_string_retention` | promoted_bytes | 1,072 | 1,072 | +0.00% | 65,536 | yes | ok |
+| `06_string_retention` | freed_bytes | 68,136,816 | 68,136,816 | +0.00% | 3,406,841 | yes | ok |
+| `06_string_retention` | rss_bytes | 59,215,872 | 50,757,632 | -14.28% | 8,882,381 | no | ok |
+| `06_string_retention` | peak_rss_bytes | 67,723,264 | 54,624,256 | -19.34% | 10,158,490 | no | improvement |
+| `06_string_retention` | wall_ms | 62 | 137 | +122.65% | 100 | no | ok |
+| `07_array_grow_evacuate` | heap_used_bytes | 1,211,232 | 1,211,232 | +0.00% | 65,536 | yes | ok |
+| `07_array_grow_evacuate` | heap_total_bytes | 25,165,824 | 25,165,824 | +0.00% | 1,048,576 | yes | ok |
+| `07_array_grow_evacuate` | minor_cycles | 5 | 5 | +0.00% | 1 | yes | ok |
+| `07_array_grow_evacuate` | step_cycles | 5 | 5 | +0.00% | 1 | yes | ok |
+| `07_array_grow_evacuate` | copied_objects | 6,702 | 6,702 | +0.00% | 335 | yes | ok |
+| `07_array_grow_evacuate` | copied_bytes | 2,636,392 | 2,636,392 | +0.00% | 131,820 | no | ok |
+| `07_array_grow_evacuate` | promoted_objects | 6,154 | 6,154 | +0.00% | 308 | yes | ok |
+| `07_array_grow_evacuate` | promoted_bytes | 841,048 | 841,048 | +0.00% | 65,536 | yes | ok |
+| `07_array_grow_evacuate` | freed_bytes | 83,570,704 | 83,570,704 | +0.00% | 4,178,535 | no | ok |
+| `07_array_grow_evacuate` | rss_bytes | 68,734,976 | 66,523,136 | -3.22% | 10,310,246 | no | ok |
+| `07_array_grow_evacuate` | peak_rss_bytes | 78,344,192 | 71,229,440 | -9.08% | 11,751,629 | no | ok |
+| `07_array_grow_evacuate` | wall_ms | 42 | 87 | +107.81% | 100 | no | ok |
+| `08_map_set_sidetables` | heap_used_bytes | 688 | 688 | +0.00% | 65,536 | yes | ok |
+| `08_map_set_sidetables` | heap_total_bytes | 14,680,064 | 14,680,064 | +0.00% | 1,048,576 | yes | ok |
+| `08_map_set_sidetables` | minor_cycles | 6 | 6 | +0.00% | 1 | yes | ok |
+| `08_map_set_sidetables` | step_cycles | 6 | 6 | +0.00% | 1 | yes | ok |
+| `08_map_set_sidetables` | copied_objects | 2,461 | 2,461 | +0.00% | 123 | yes | ok |
+| `08_map_set_sidetables` | copied_bytes | 98,472 | 98,472 | +0.00% | 65,536 | yes | ok |
+| `08_map_set_sidetables` | promoted_objects | 14 | 14 | +0.00% | 16 | yes | ok |
+| `08_map_set_sidetables` | promoted_bytes | 592 | 592 | +0.00% | 65,536 | yes | ok |
+| `08_map_set_sidetables` | freed_bytes | 56,598,904 | 56,598,904 | +0.00% | 2,829,945 | yes | ok |
+| `08_map_set_sidetables` | rss_bytes | 53,194,752 | 52,191,232 | -1.89% | 8,388,608 | no | ok |
+| `08_map_set_sidetables` | peak_rss_bytes | 63,270,912 | 62,234,624 | -1.64% | 9,490,637 | no | ok |
+| `08_map_set_sidetables` | wall_ms | 213 | 186 | -12.60% | 100 | no | ok |
+| `09_try_catch_roots` | heap_used_bytes | 443,520 | 443,520 | +0.00% | 65,536 | yes | ok |
+| `09_try_catch_roots` | heap_total_bytes | 14,680,064 | 14,680,064 | +0.00% | 1,048,576 | yes | ok |
+| `09_try_catch_roots` | minor_cycles | 1 | 1 | +0.00% | 1 | yes | ok |
+| `09_try_catch_roots` | step_cycles | 1 | 1 | +0.00% | 1 | yes | ok |
+| `09_try_catch_roots` | copied_objects | 6,673 | 6,673 | +0.00% | 334 | yes | ok |
+| `09_try_catch_roots` | copied_bytes | 462,024 | 462,024 | +0.00% | 65,536 | yes | ok |
+| `09_try_catch_roots` | promoted_objects | 0 | 0 | - | 16 | yes | ok |
+| `09_try_catch_roots` | promoted_bytes | 0 | 0 | - | 65,536 | yes | ok |
+| `09_try_catch_roots` | freed_bytes | 10,023,568 | 10,023,568 | +0.00% | 1,048,576 | yes | ok |
+| `09_try_catch_roots` | rss_bytes | 61,202,432 | 50,925,568 | -16.79% | 9,180,365 | no | improvement |
+| `09_try_catch_roots` | peak_rss_bytes | 63,582,208 | 51,298,304 | -19.32% | 9,537,331 | no | improvement |
+| `09_try_catch_roots` | wall_ms | 157 | 213 | +35.52% | 100 | no | ok |
+| `10_store_receiver_across_alloc` | heap_used_bytes | 446,776 | 446,776 | +0.00% | 65,536 | yes | ok |
+| `10_store_receiver_across_alloc` | heap_total_bytes | 22,020,096 | 22,020,096 | +0.00% | 1,048,576 | yes | ok |
+| `10_store_receiver_across_alloc` | minor_cycles | 8 | 8 | +0.00% | 1 | yes | ok |
+| `10_store_receiver_across_alloc` | step_cycles | 8 | 8 | +0.00% | 1 | yes | ok |
+| `10_store_receiver_across_alloc` | copied_objects | 14,625 | 14,625 | +0.00% | 731 | yes | ok |
+| `10_store_receiver_across_alloc` | copied_bytes | 787,792 | 787,792 | +0.00% | 65,536 | yes | ok |
+| `10_store_receiver_across_alloc` | promoted_objects | 6,107 | 6,107 | +0.00% | 305 | yes | ok |
+| `10_store_receiver_across_alloc` | promoted_bytes | 446,368 | 446,368 | +0.00% | 65,536 | yes | ok |
+| `10_store_receiver_across_alloc` | freed_bytes | 88,640,584 | 88,640,584 | +0.00% | 4,432,029 | yes | ok |
+| `10_store_receiver_across_alloc` | rss_bytes | 67,842,048 | 65,650,688 | -3.23% | 10,176,307 | no | ok |
+| `10_store_receiver_across_alloc` | peak_rss_bytes | 74,194,944 | 71,938,048 | -3.04% | 11,129,242 | no | ok |
+| `10_store_receiver_across_alloc` | wall_ms | 203 | 214 | +4.96% | 100 | no | ok |
+| `11_collect_at_depth` | heap_used_bytes | 444,720 | 444,720 | +0.00% | 65,536 | yes | ok |
+| `11_collect_at_depth` | heap_total_bytes | 12,582,912 | 12,582,912 | +0.00% | 1,048,576 | yes | ok |
+| `11_collect_at_depth` | minor_cycles | 1 | 1 | +0.00% | 1 | yes | ok |
+| `11_collect_at_depth` | step_cycles | 1 | 1 | +0.00% | 1 | yes | ok |
+| `11_collect_at_depth` | copied_objects | 6,686 | 6,686 | +0.00% | 334 | yes | ok |
+| `11_collect_at_depth` | copied_bytes | 462,544 | 462,544 | +0.00% | 65,536 | yes | ok |
+| `11_collect_at_depth` | promoted_objects | 0 | 0 | - | 16 | yes | ok |
+| `11_collect_at_depth` | promoted_bytes | 0 | 0 | - | 65,536 | yes | ok |
+| `11_collect_at_depth` | freed_bytes | 8,974,576 | 8,974,576 | +0.00% | 1,048,576 | yes | ok |
+| `11_collect_at_depth` | rss_bytes | 57,896,960 | 59,953,152 | +3.55% | 8,684,544 | no | ok |
+| `11_collect_at_depth` | peak_rss_bytes | 61,542,400 | 62,853,120 | +2.13% | 9,231,360 | no | ok |
+| `11_collect_at_depth` | wall_ms | 54 | 58 | +7.71% | 100 | no | ok |
+| `12_large_live_set` | heap_used_bytes | 569,448 | 569,448 | +0.00% | 65,536 | yes | ok |
+| `12_large_live_set` | heap_total_bytes | 74,448,896 | 74,448,896 | +0.00% | 1,488,978 | yes | ok |
+| `12_large_live_set` | minor_cycles | 5 | 5 | +0.00% | 1 | yes | ok |
+| `12_large_live_set` | step_cycles | 5 | 5 | +0.00% | 1 | yes | ok |
+| `12_large_live_set` | copied_objects | 104,050 | 104,050 | +0.00% | 5,202 | yes | ok |
+| `12_large_live_set` | copied_bytes | 4,162,008 | 4,162,008 | +0.00% | 208,100 | yes | ok |
+| `12_large_live_set` | promoted_objects | 530,030 | 530,030 | +0.00% | 26,502 | yes | ok |
+| `12_large_live_set` | promoted_bytes | 21,201,208 | 21,201,208 | +0.00% | 1,060,060 | yes | ok |
+| `12_large_live_set` | freed_bytes | 63,732,784 | 63,732,784 | +0.00% | 3,186,639 | yes | ok |
+| `12_large_live_set` | rss_bytes | 149,266,432 | 145,145,856 | -2.76% | 22,389,965 | no | ok |
+| `12_large_live_set` | peak_rss_bytes | 165,412,864 | 157,700,096 | -4.66% | 24,811,930 | no | ok |
+| `12_large_live_set` | wall_ms | 345 | 403 | +16.93% | 103 | no | ok |
+| `13_large_eden_survivors` | heap_used_bytes | 444,976 | 444,976 | +0.00% | 65,536 | yes | ok |
+| `13_large_eden_survivors` | heap_total_bytes | 61,865,984 | 61,865,984 | +0.00% | 1,237,320 | no | ok |
+| `13_large_eden_survivors` | minor_cycles | 3 | 3 | +0.00% | 1 | yes | ok |
+| `13_large_eden_survivors` | step_cycles | 3 | 3 | +0.00% | 1 | yes | ok |
+| `13_large_eden_survivors` | copied_objects | 382,868 | 382,868 | +0.00% | 19,143 | yes | ok |
+| `13_large_eden_survivors` | copied_bytes | 21,804,904 | 21,804,904 | +0.00% | 1,090,245 | yes | ok |
+| `13_large_eden_survivors` | promoted_objects | 387,152 | 387,152 | +0.00% | 19,358 | yes | ok |
+| `13_large_eden_survivors` | promoted_bytes | 21,975,560 | 21,975,560 | +0.00% | 1,098,778 | yes | ok |
+| `13_large_eden_survivors` | freed_bytes | 108,045,936 | 108,045,936 | +0.00% | 5,402,297 | yes | ok |
+| `13_large_eden_survivors` | rss_bytes | 161,558,528 | 156,545,024 | -3.10% | 24,233,779 | no | ok |
+| `13_large_eden_survivors` | peak_rss_bytes | 190,017,536 | 176,799,744 | -6.96% | 28,502,630 | no | ok |
+| `13_large_eden_survivors` | wall_ms | 978 | 1,148 | +17.37% | 294 | no | ok |
+| `14_grow_then_churn` | heap_used_bytes | 429,408 | 429,408 | +0.00% | 65,536 | yes | ok |
+| `14_grow_then_churn` | heap_total_bytes | 23,068,672 | 23,068,672 | +0.00% | 1,048,576 | yes | ok |
+| `14_grow_then_churn` | minor_cycles | 22 | 22 | +0.00% | 1 | yes | ok |
+| `14_grow_then_churn` | step_cycles | 23 | 23 | +0.00% | 1 | yes | ok |
+| `14_grow_then_churn` | copied_objects | 330 | 330 | +0.00% | 16 | yes | ok |
+| `14_grow_then_churn` | copied_bytes | 1,277,072 | 1,277,072 | +0.00% | 65,536 | yes | ok |
+| `14_grow_then_churn` | promoted_objects | 405,282 | 405,282 | +0.00% | 20,264 | yes | ok |
+| `14_grow_then_churn` | promoted_bytes | 147,967,848 | 147,967,848 | +0.00% | 7,398,392 | yes | ok |
+| `14_grow_then_churn` | freed_bytes | 119,549,744 | 119,549,744 | +0.00% | 5,977,487 | yes | ok |
+| `14_grow_then_churn` | rss_bytes | 154,632,192 | 154,738,688 | +0.07% | 23,194,829 | no | ok |
+| `14_grow_then_churn` | peak_rss_bytes | 376,299,520 | 361,336,832 | -3.98% | 56,444,928 | no | ok |
+| `14_grow_then_churn` | wall_ms | 464 | 997 | +115.05% | 139 | no | drift (informational) |
+
+### Cells excluded from the gating family by probe override
+
+- `07_array_grow_evacuate`.copied_bytes — NOT GATED ON THIS PROBE (#9790). Address-dependent promotion order changes old-block packing and the allocation boundary where nursery pressure is checked. The fifth minor observes a different live cohort: a completed 8,208-byte array or a new 144-byte array. Header-size sums and from-space reclamation account for the byte deltas; this is placement-dependent pacing, not an accounting discrepancy. Keep this cell visible; correctness, retention, cycle counts, object counts and promoted bytes remain gated. See evidence/9790-array-growth-pacing.json and the README investigation. (observed spread 8,064 over 21 runs, 2026-09-05, macOS arm64, Perry 0.5.1520; 21 executions of one unchanged binary. Compiler/runtime hashes and raw counters: benchmarks/gc_ratchet/evidence/9790-array-growth-pacing.json.; https://github.com/PerryTS/perry/issues/9790)
+- `07_array_grow_evacuate`.freed_bytes — NOT GATED ON THIS PROBE (#9790). Address-dependent promotion order changes old-block packing and the allocation boundary where nursery pressure is checked. The fifth minor observes a different live cohort: a completed 8,208-byte array or a new 144-byte array. Header-size sums and from-space reclamation account for the byte deltas; this is placement-dependent pacing, not an accounting discrepancy. Keep this cell visible; correctness, retention, cycle counts, object counts and promoted bytes remain gated. See evidence/9790-array-growth-pacing.json and the README investigation. (observed spread 8,208 over 21 runs, 2026-09-05, macOS arm64, Perry 0.5.1520; 21 executions of one unchanged binary. Compiler/runtime hashes and raw counters: benchmarks/gc_ratchet/evidence/9790-array-growth-pacing.json.; https://github.com/PerryTS/perry/issues/9790)
+- `13_large_eden_survivors`.heap_total_bytes — NOT GATED ON THIS PROBE (#9829). Total reserved arena capacity varies by 2 MiB across executions of one unchanged binary: 18/21 runs reserve 61865984 bytes and 3/21 reserve 63963136. All 21 report the same 227048 live bytes and identical seven GC counters (including three minors and 377569 copied objects), with Node-equivalent output. js_arena_stats sums reserved block sizes for heapTotal, separately from its exact live-object census for heapUsed. This is spare-capacity/placement variation, not changing live retention or GC work; the precise allocating block/order is not isolated. CI run 33989581881 independently contains the same two capacities. Keep the cell visible, while heapUsed, liveness, copying/promotion/reclamation, and all other probes remain gated. Raw 21-run evidence and binary/source hashes: evidence/9829-recovery.json. (observed spread 2,097,152 over 21 runs, 2026-09-06, linux-x86_64, clean main d36a1af0c compiler and matching runtime/stdlib archives. One unchanged probe binary, 21 traced executions with PERRY_GC_SCAVENGE_NURSERY_MB=64. See evidence/9829-recovery.json capacity_variance.; https://github.com/PerryTS/perry/issues/9829)
+
+gc-ratchet: OK

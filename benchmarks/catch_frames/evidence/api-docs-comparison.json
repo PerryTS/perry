@@ -1,0 +1,12 @@
+[
+  {
+    "path": "docs/src/api/reference.md",
+    "baseline_generated_equals_candidate_generated": true,
+    "baseline_generated_equals_committed": false
+  },
+  {
+    "path": "docs/api/perry.d.ts",
+    "baseline_generated_equals_candidate_generated": true,
+    "baseline_generated_equals_committed": false
+  }
+]

@@ -84,6 +84,7 @@ pub(crate) fn static_private_owner_current() -> Option<f64> {
     STATIC_PRIVATE_OWNER_STACK.with(|stack| stack.borrow().last().copied().map(f64::from_bits))
 }
 
+#[inline]
 pub(crate) fn static_private_owner_stack_savepoint() -> usize {
     STATIC_PRIVATE_OWNER_STACK.with(|stack| stack.borrow().len())
 }
@@ -327,6 +328,7 @@ pub extern "C" fn js_derived_super_scope_pop() {
     });
 }
 
+#[inline]
 pub(crate) fn derived_super_binding_stack_savepoint() -> usize {
     DERIVED_SUPER_BINDING_STACK.with(|stack| stack.borrow().len())
 }
