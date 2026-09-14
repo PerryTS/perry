@@ -83,12 +83,16 @@ this change does not address:
   accumulator, which JS double semantics for `sum` do not license here.
 * `fields` 16k 2.81 vs Node 2.77 — three serial IEEE adds = 9 cycles (measured
   9.02), the double-domain floor for the source-order fold.
-* `random` 4.86–5.39 vs 4.47–5.34 — the loop-carried chain is the recurrence's
-  division (15.6 cycles, unchanged); the i64 `srem` #10185 needs for exactness is
-  ~5 % slower than the int32 division a JIT emits (same-host C microbenchmark:
-  4.69 vs 4.46 ns), plus random-access cache misses on 1m/20m.
+* `random` 4.86/5.09/5.39 vs 4.63/4.47/4.64 — the loop-carried chain is the
+  recurrence's division (15.6 cycles, unchanged by this change); the i64 `srem`
+  #10185 needs for exactness is ~5 % slower than an int32 division (same-host C
+  microbenchmark: 4.69 vs 4.46 ns), which is the whole 16k gap. The larger 1m/20m
+  gap is not in the loop code: Perry's 27 instructions are identical across
+  sizes while its cycles rise 15.6 → 16.3 → 17.3, and Bun gets FASTER than its
+  own 16k number — a record-memory locality difference, not investigated here.
 * `sequential` 1m/20m 1.65/3.38 vs 1.32/2.02 — identical 22 instructions but
-  3.4 → 5.2 → 10.9 cycles from 16k to 20m: memory-bound record access.
+  3.4 → 5.2 → 10.9 cycles from 16k to 20m: memory-bound record access, the same
+  locality difference.
 
 **JSON matrix** (50 rows, 5 interleaved rounds, best-of, PR vs main): 48 rows
 within ±2 % CPU (the one element-shape consumer, `scan`, 0.5–1.1 % faster), no
