@@ -479,9 +479,10 @@ pub(super) fn tiny_parse_pressure_due_with(
 /// the quantity it tests to the survivors, so it cannot fire again until the
 /// cap has been refilled.
 ///
-/// #10262 adds the third arm for the same reason the second one exists, one
-/// currency over: both of the first two are denominated in ARENA bytes, and a
-/// lazily-parsed document's bytes are not in the arena at all. See
+/// Medium-parse pacing (2026-09-14) adds the third arm for the same reason the
+/// second one exists, one currency over: both of the first two are denominated
+/// in ARENA bytes, and a lazily-parsed document's bytes are not in the arena at
+/// all. See
 /// [`external_side_parse_pressure_due`].
 pub(super) fn tiny_parse_generational_collection_due(in_use: usize, in_use_trigger: usize) -> bool {
     tiny_parse_pressure_due(in_use, in_use_trigger)
@@ -529,9 +530,9 @@ fn diag_tiny_parse_forced_collection(site: &str, in_use: usize) {
     }
     let base = GC_TINY_PARSE_PRESSURE_BASE_BYTES.with(Cell::get);
     let step = GC_STEP_BYTES.with(Cell::get);
-    // #10262: the side-allocation arm's own inputs, so a diag reader can tell
-    // which of the three arms priced this collection rather than re-deriving
-    // it — the same "a gate must assert its subject was live" rule.
+    // Medium-parse pacing (2026-09-14): the side-allocation arm's own inputs,
+    // so a diag reader can tell which of the three arms priced this collection
+    // rather than re-deriving it — the same "assert the subject was live" rule.
     let external = external_side_live_bytes();
     let external_base = GC_LAST_COLLECTION_EXTERNAL_SIDE_BYTES.with(Cell::get);
     eprintln!(
@@ -647,8 +648,8 @@ const GC_EXTERNAL_SIDE_ALLOC_STEP: usize = 16 * 1024 * 1024;
 crate::perry_thread_local! {
     static GC_EXTERNAL_SIDE_ALLOC_PENDING: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static GC_EXTERNAL_SIDE_LIVE_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    /// #10262: [`external_side_live_bytes`] as the last collection ended — the
-    /// base of the parse-boundary growth band
+    /// Medium-parse pacing (2026-09-14): [`external_side_live_bytes`] as the
+    /// last collection ended — the base of the parse-boundary growth band
     /// ([`external_side_parse_pressure_due_with`]). A byte COUNT, never an
     /// address; written only from `note_collection_finished_arena_occupancy`.
     pub(super) static GC_LAST_COLLECTION_EXTERNAL_SIDE_BYTES: std::cell::Cell<usize> =
@@ -661,8 +662,9 @@ pub(super) fn external_side_live_bytes() -> usize {
     GC_EXTERNAL_SIDE_LIVE_BYTES.with(Cell::get)
 }
 
-/// #10262: how many bytes of external side allocation may accumulate past the
-/// last collection before a `JSON.parse` boundary is due.
+/// Medium-parse pacing (2026-09-14): how many bytes of external side allocation
+/// may accumulate past the last collection before a `JSON.parse` boundary is
+/// due.
 ///
 /// Deliberately the `max(floor, proportional)` shape of
 /// [`gc_old_reclaim_growth_band_bytes`], for the two reasons that shape exists:
@@ -685,8 +687,8 @@ pub(super) fn external_side_parse_pressure_due_with(live: usize, baseline: usize
     live >= baseline.saturating_add(external_side_parse_band_bytes(baseline))
 }
 
-/// #10262: has external side-allocation churn earned a parse-boundary
-/// collection?
+/// Medium-parse pacing (2026-09-14): has external side-allocation churn earned
+/// a parse-boundary collection?
 ///
 /// Every other pacing input a parse boundary reads is denominated in ARENA
 /// bytes, and a lazily-parsed document's memory is not in the arena: a 13 KB
@@ -2309,8 +2311,8 @@ pub(super) fn note_collection_finished_arena_occupancy(full: bool) {
     GC_LAST_COLLECTION_POST_IN_USE_BYTES.with(|cell| cell.set(bytes));
     // #9831: the same moment, in the units the tiny-parse guard reads.
     GC_TINY_PARSE_PRESSURE_BASE_BYTES.with(|cell| cell.set(crate::arena::arena_in_use_bytes()));
-    // #10262: and in the units the parse-boundary side-allocation band reads.
-    // This is the site that makes the band self-correcting: whatever the sweep
+    // Medium-parse pacing (2026-09-14): and in the units the parse-boundary
+    // side-allocation band reads. This is the site that makes the band self-correcting: whatever the sweep
     // and the from-space pass just released has already been subtracted from
     // `external_side_live_bytes`, so a collection that freed the tapes
     // re-bases at ~0 and one that could not re-bases at the surviving value.
