@@ -1292,10 +1292,18 @@ pub(crate) unsafe fn has_declared_prototype_symbol_property(receiver: f64, sym: 
         return false;
     }
     let ptr = value.as_pointer::<crate::object::ObjectHeader>();
-    if ptr.is_null() || !crate::object::is_valid_obj_ptr(ptr.cast()) {
+    // Pointer tags also carry handles and headerless storage. Require allocator
+    // ownership before reading a header, then admit only live object layouts.
+    let Some(header) = crate::value::addr_class::try_read_tracked_gc_header(ptr as usize) else {
+        return false;
+    };
+    let header = header.as_ref();
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+    {
         return false;
     }
-    let class_id = crate::object::js_object_get_class_id(ptr);
+    let class_id = (*ptr).class_id;
     class_id != 0 && declared_prototype_symbol_holder(receiver, sym, class_id).is_some()
 }
 
