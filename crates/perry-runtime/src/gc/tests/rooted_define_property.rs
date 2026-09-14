@@ -288,30 +288,35 @@ fn array_named_property_attributes_follow_a_move_in_the_final_descriptor_probe()
             value_key,
             42.0,
         );
-        let before = target.get_raw_mut_ptr::<crate::array::ArrayHeader>() as usize;
-        let applied = crate::object::define_array_property(
-            target.get_raw_mut_ptr::<crate::array::ArrayHeader>().cast(),
-            f64::from_bits(ptr_bits(before)),
-            string_ptr_of(key.get_nanbox_f64()),
-            Some("tag"),
-            bag.get_nanbox_f64(),
-        );
+        // Keep only an observation address across the move; never dereference it.
+        let before = target.with_mut_ptr(|ptr: *mut crate::array::ArrayHeader| ptr as usize);
+        let applied = target.with_mut_ptr(|ptr: *mut crate::array::ArrayHeader| {
+            // This runtime entry roots its receiver before probing the descriptor.
+            crate::object::define_array_property(
+                ptr.cast(),
+                f64::from_bits(ptr_bits(ptr as usize)),
+                string_ptr_of(key.get_nanbox_f64()),
+                Some("tag"),
+                bag.get_nanbox_f64(),
+            )
+        });
         assert_eq!(applied, Some(true));
         assert!(GETTER_COPIED_OBJECTS.with(|c| c.get()) > 0);
-        let live = target.get_raw_mut_ptr::<crate::array::ArrayHeader>();
-        assert_ne!(
-            live as usize, before,
-            "the writable getter must move the receiver"
-        );
-        assert_eq!(
-            crate::array::array_named_property_get_by_name(live, "tag"),
-            Some(42.0)
-        );
-        let attrs = crate::object::descriptor_state::get_property_attrs(live as usize, "tag")
-            .expect("the attributes must be filed under the current array address");
-        assert!(attrs.writable());
-        assert!(!attrs.enumerable());
-        assert!(!attrs.configurable());
+        target.with_mut_ptr(|live: *mut crate::array::ArrayHeader| {
+            assert_ne!(
+                live as usize, before,
+                "the writable getter must move the receiver"
+            );
+            assert_eq!(
+                crate::array::array_named_property_get_by_name(live, "tag"),
+                Some(42.0)
+            );
+            let attrs = crate::object::descriptor_state::get_property_attrs(live as usize, "tag")
+                .expect("the attributes must be filed under the current array address");
+            assert!(attrs.writable());
+            assert!(!attrs.enumerable());
+            assert!(!attrs.configurable());
+        });
         assert!(crate::object::descriptor_state::get_property_attrs(before, "tag").is_none());
     }
 }
