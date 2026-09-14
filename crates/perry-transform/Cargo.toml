@@ -10,6 +10,3 @@ workspace = true
 
 [dependencies]
 perry-hir.workspace = true
-
-thiserror.workspace = true
-anyhow.workspace = true

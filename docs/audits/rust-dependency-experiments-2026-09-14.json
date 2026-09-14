@@ -1,0 +1,200 @@
+{
+  "semantics": "Independent Cargo tree counterfactuals, normal+build edges, offline resolution. No compilation, no binary measurement, no correctness validation. All manifests and lock restored byte-for-byte.",
+  "experiments": [
+    {
+      "experiment": "zip-deflate-only",
+      "configuration": [
+        "-p",
+        "perry"
+      ],
+      "target": "x86_64-pc-windows-msvc",
+      "before_external_packages": 352,
+      "after_external_packages": 335,
+      "removed": [
+        "aes v0.9.1",
+        "bumpalo v3.20.3",
+        "bzip2 v0.6.1",
+        "cipher v0.5.2",
+        "cmov v0.5.4",
+        "constant_time_eq v0.4.2",
+        "cpubits v0.1.1",
+        "ctutils v0.4.2",
+        "deflate64 v0.1.12",
+        "hmac v0.13.0",
+        "inout v0.2.2",
+        "libbz2-rs-sys v0.2.5",
+        "lzma-rust2 v0.16.4",
+        "pbkdf2 v0.13.0",
+        "ppmd-rust v1.4.0",
+        "sha1 v0.11.0",
+        "zopfli v0.8.3"
+      ],
+      "added": [],
+      "manifest_edits": [
+        [
+          "Cargo.toml",
+          "zip = \"8\"",
+          "zip = { version = \"8\", default-features = false, features = [\"deflate-flate2-zlib-rs\"] }"
+        ]
+      ]
+    },
+    {
+      "experiment": "unused-cron-scheduler",
+      "configuration": [
+        "-p",
+        "perry-stdlib"
+      ],
+      "target": "x86_64-pc-windows-msvc",
+      "before_external_packages": 556,
+      "after_external_packages": 543,
+      "removed": [
+        "chrono-tz v0.10.4",
+        "croner v3.0.1",
+        "darling v0.20.11",
+        "darling_core v0.20.11",
+        "darling_macro v0.20.11",
+        "derive_builder v0.20.2",
+        "derive_builder_core v0.20.2",
+        "derive_builder_macro v0.20.2",
+        "phf v0.12.1",
+        "phf_shared v0.12.1",
+        "strum v0.27.2",
+        "strum_macros v0.27.2",
+        "tokio-cron-scheduler v0.15.1"
+      ],
+      "added": [],
+      "manifest_edits": [
+        [
+          "crates/perry-stdlib/Cargo.toml",
+          "tokio-cron-scheduler = { version = \"0.15\", optional = true }",
+          ""
+        ],
+        [
+          "crates/perry-stdlib/Cargo.toml",
+          "\"dep:tokio-cron-scheduler\", ",
+          ""
+        ]
+      ]
+    },
+    {
+      "experiment": "unused-stdlib-clap",
+      "configuration": [
+        "-p",
+        "perry-stdlib",
+        "--no-default-features"
+      ],
+      "target": "x86_64-pc-windows-msvc",
+      "before_external_packages": 149,
+      "after_external_packages": 134,
+      "removed": [
+        "anstream v1.0.0",
+        "anstyle v1.0.14",
+        "anstyle-parse v1.0.0",
+        "anstyle-query v1.1.5",
+        "anstyle-wincon v3.0.11",
+        "clap v4.6.6",
+        "clap_builder v4.6.6",
+        "clap_derive v4.6.4",
+        "clap_lex v1.1.0",
+        "colorchoice v1.0.5",
+        "heck v0.5.0",
+        "is_terminal_polyfill v1.70.2",
+        "once_cell_polyfill v1.70.2",
+        "strsim v0.11.1",
+        "utf8parse v0.2.2"
+      ],
+      "added": [],
+      "manifest_edits": [
+        [
+          "crates/perry-stdlib/Cargo.toml",
+          "clap = { version = \"4.4\", features = [\"derive\"] }",
+          ""
+        ]
+      ]
+    },
+    {
+      "experiment": "unused-atty",
+      "configuration": [
+        "-p",
+        "perry-container-compose"
+      ],
+      "target": "x86_64-pc-windows-msvc",
+      "before_external_packages": 98,
+      "after_external_packages": 96,
+      "removed": [
+        "atty v0.2.14",
+        "winapi v0.3.9"
+      ],
+      "added": [],
+      "manifest_edits": [
+        [
+          "crates/perry-container-compose/Cargo.toml",
+          "atty = \"0.2\"",
+          ""
+        ]
+      ]
+    },
+    {
+      "experiment": "align-dialoguer",
+      "configuration": [
+        "-p",
+        "perry-container-compose"
+      ],
+      "target": "x86_64-pc-windows-msvc",
+      "before_external_packages": 98,
+      "after_external_packages": 94,
+      "removed": [
+        "console v0.15.11",
+        "dialoguer v0.11.0",
+        "windows-sys v0.59.0",
+        "windows-targets v0.52.6",
+        "windows_x86_64_msvc v0.52.6"
+      ],
+      "added": [
+        "dialoguer v0.12.0"
+      ],
+      "manifest_edits": [
+        [
+          "crates/perry-container-compose/Cargo.toml",
+          "dialoguer = \"0.11\"",
+          "dialoguer.workspace = true"
+        ]
+      ]
+    },
+    {
+      "experiment": "governor-std-only",
+      "configuration": [
+        "-p",
+        "perry-ext-ratelimit"
+      ],
+      "target": "x86_64-pc-windows-msvc",
+      "before_external_packages": 37,
+      "after_external_packages": 27,
+      "removed": [
+        "bitflags v2.12.1",
+        "getrandom v0.3.4",
+        "ppv-lite86 v0.2.21",
+        "quanta v0.12.6",
+        "rand v0.9.4",
+        "rand_chacha v0.9.0",
+        "rand_core v0.9.5",
+        "raw-cpuid v11.6.0",
+        "winapi v0.3.9",
+        "zerocopy v0.8.50"
+      ],
+      "added": [],
+      "manifest_edits": [
+        [
+          "crates/perry-ext-ratelimit/Cargo.toml",
+          "governor = \"0.10\"",
+          "governor = { version = \"0.10\", default-features = false, features = [\"std\"] }"
+        ],
+        [
+          "crates/perry-stdlib/Cargo.toml",
+          "governor = { version = \"0.10\", optional = true }",
+          "governor = { version = \"0.10\", default-features = false, features = [\"std\"], optional = true }"
+        ]
+      ]
+    }
+  ]
+}

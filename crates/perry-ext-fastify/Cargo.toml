@@ -27,7 +27,6 @@ bytes.workspace = true
 tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }
 serde_json.workspace = true
-lazy_static.workspace = true
 
 # #cluster — SO_REUSEPORT bind for `cluster.fork()` workers (unix only),
 # mirroring perry-ext-http's cluster_bind. The
