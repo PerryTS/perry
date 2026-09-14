@@ -1261,7 +1261,7 @@ unsafe fn declared_prototype_symbol_holder(
     mut class_id: u32,
 ) -> Option<f64> {
     let receiver_addr = (receiver.to_bits() & crate::value::POINTER_MASK) as usize;
-    if crate::object::object_has_user_prototype_override(receiver_addr) {
+    if crate::object::prototype_chain::object_has_user_prototype_override(receiver_addr) {
         return None;
     }
     for _ in 0..32 {
@@ -1271,7 +1271,8 @@ unsafe fn declared_prototype_symbol_holder(
             if has_own_symbol_property(proto_value, sym) {
                 return Some(proto_value);
             }
-            if crate::object::object_has_user_prototype_override(declared as usize) {
+            if crate::object::prototype_chain::object_has_user_prototype_override(declared as usize)
+            {
                 return None;
             }
         }
