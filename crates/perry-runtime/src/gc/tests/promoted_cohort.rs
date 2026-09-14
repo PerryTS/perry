@@ -5,6 +5,11 @@
 //! arm (the two baseline tests #10204 broke keep their meaning), and one real
 //! collection: a promoting minor credits the cohort, and the cohort full that
 //! follows it reclaims a promoted object that died.
+//!
+//! #10241: the cohort full measures the survival of what the minor at its own
+//! safepoint promoted, and a dead same-safepoint cohort turns the next minor
+//! back into an evacuating one (with a sabotaged twin that does not feed the
+//! predictor, and a live cohort that leaves it alone).
 
 use super::super::policy::{
     credit_promoted_bytes_to_old_baseline, old_reclaim_pressure_due,
@@ -182,5 +187,158 @@ fn below_the_bound_no_cohort_full_runs_and_the_dead_promoted_object_stays() {
     assert_eq!(
         dropped, GC_TYPE_STRING,
         "only a full can reclaim a promoted object"
+    );
+}
+
+/// Outcome of one untraced promotion, a cohort full at the same safepoint, and
+/// the minor after it.
+struct SurvivalOutcome {
+    /// `(blocks, promoted bytes, live bytes)` the full measured.
+    measured: Option<(usize, usize, usize)>,
+    predictor_after_full: Option<u64>,
+    next_minor_in_place: bool,
+    next_minor_untraced: bool,
+}
+
+/// Root an array of `count` young strings in `slot`; returns the first string.
+fn rooted_young_strings(slot: u32, count: usize) -> usize {
+    let mut array = crate::array::js_array_alloc(count as u32);
+    let first = young_leaf();
+    array = crate::array::js_array_push_jsvalue(array, string_bits(first));
+    for _ in 1..count {
+        array = crate::array::js_array_push_jsvalue(array, string_bits(young_leaf()));
+    }
+    js_shadow_slot_set(slot, ptr_bits(array as usize));
+    first
+}
+
+/// A young population promoted whole and untraced by a minor that records its
+/// blocks, then the cohort full at the same safepoint — with that population
+/// still rooted (`live`) or dropped — then a minor over a fresh rooted
+/// population. `fed == false` arms the sabotage that keeps the full's
+/// measurement away from the predictor.
+fn promote_then_cohort_full_then_minor(live: bool, fed: bool) -> SurvivalOutcome {
+    use super::super::trace::adopt_census;
+    let _guard = CopyingNurseryTestGuard::new(4);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _promote = super::super::InPlacePromotionTestGuard::untraced();
+    cohort::seed_for_tests(0, 0, 0);
+
+    const COUNT: usize = 6000;
+    let probe_leaf = rooted_young_strings(0, COUNT);
+    assert!(
+        crate::arena::pointer_in_nursery(probe_leaf),
+        "premise: young population"
+    );
+    let untraced_before = untraced_promotion_cycles();
+    adopt_census::begin_recording();
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    adopt_census::finish_recording();
+    assert!(
+        trace.copying_nursery.in_place_promotion,
+        "premise: the minor promoted in place"
+    );
+    assert_eq!(
+        untraced_promotion_cycles() - untraced_before,
+        1,
+        "premise: the promotion skipped the trace"
+    );
+    if !live {
+        js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+    }
+    cohort::seed_for_tests(cohort::bound_bytes(), 0, 0);
+    let ran = {
+        let _sabotage = (!fed).then(cohort::survival_sabotage::Guard::arm);
+        run_promoted_cohort_full_if_due()
+    };
+    adopt_census::discard();
+    assert!(ran, "premise: the cohort full ran");
+    let measured = cohort::last_survival_for_tests();
+    let predictor_after_full = super::super::last_young_survival_permille();
+
+    rooted_young_strings(1, COUNT);
+    let untraced_before = untraced_promotion_cycles();
+    let next = collect_minor_trace(GcTriggerKind::Direct);
+    let outcome = SurvivalOutcome {
+        measured,
+        predictor_after_full,
+        next_minor_in_place: next.copying_nursery.in_place_promotion,
+        next_minor_untraced: untraced_promotion_cycles() - untraced_before == 1,
+    };
+    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+    js_shadow_slot_set(1, crate::value::TAG_UNDEFINED);
+    cohort::seed_for_tests(0, 0, 0);
+    outcome
+}
+
+fn permille((_, promoted, live): (usize, usize, usize)) -> u64 {
+    (live as u64 * 1000 / promoted as u64).min(1000)
+}
+
+#[test]
+fn a_dead_same_safepoint_cohort_turns_the_next_minor_into_an_evacuation() {
+    let outcome = promote_then_cohort_full_then_minor(false, true);
+    let measured = outcome
+        .measured
+        .expect("the full's sweep accounted every recorded block");
+    assert!(
+        measured.0 >= 1 && measured.1 > 0,
+        "the probe measured the promoted blocks: {measured:?}"
+    );
+    let survival = permille(measured);
+    assert!(
+        survival < super::super::PROMOTE_SURVIVAL_THRESHOLD_PERMILLE,
+        "the dropped cohort is dead by the full: {survival} permille ({measured:?})"
+    );
+    assert_eq!(
+        outcome.predictor_after_full,
+        Some(survival),
+        "the full's measurement replaces the ratio the promotion was admitted on"
+    );
+    assert!(
+        !outcome.next_minor_in_place && !outcome.next_minor_untraced,
+        "the next minor evacuates and measures instead of promoting on faith"
+    );
+}
+
+#[test]
+fn sabotaged_unfed_predictor_promotes_the_next_minor_untraced() {
+    let outcome = promote_then_cohort_full_then_minor(false, false);
+    let measured = outcome.measured.expect("premise: the probe still measured");
+    assert!(
+        permille(measured) < super::super::PROMOTE_SURVIVAL_THRESHOLD_PERMILLE,
+        "premise: the cohort is dead by the full ({measured:?})"
+    );
+    assert_eq!(
+        outcome.predictor_after_full,
+        Some(1000),
+        "unfed, the predictor keeps the ratio the dead cohort was promoted on"
+    );
+    assert!(
+        outcome.next_minor_in_place && outcome.next_minor_untraced,
+        "without the feed the next minor promotes untraced again — the \
+         14_grow_then_churn regime, where no minor ever measures the churn"
+    );
+}
+
+#[test]
+fn a_live_same_safepoint_cohort_leaves_the_predictor_at_retained() {
+    let outcome = promote_then_cohort_full_then_minor(true, true);
+    let measured = outcome
+        .measured
+        .expect("the full's sweep accounted every recorded block");
+    let survival = permille(measured);
+    assert!(
+        survival >= super::super::PROMOTE_SURVIVAL_THRESHOLD_PERMILLE,
+        "the rooted cohort survives the full: {survival} permille ({measured:?})"
+    );
+    assert_eq!(
+        outcome.predictor_after_full,
+        Some(1000),
+        "a confirming measurement leaves the predictor alone"
+    );
+    assert!(
+        outcome.next_minor_in_place && outcome.next_minor_untraced,
+        "a retained cohort keeps the next minor on the untraced promotion"
     );
 }

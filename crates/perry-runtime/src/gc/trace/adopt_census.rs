@@ -106,6 +106,19 @@ pub(crate) fn discard() {
     STATE.with(|s| *s.borrow_mut() = State::Off);
 }
 
+/// `(data, extent, bytes)` of every block the minor at this safepoint recorded
+/// and a full has not started adopting yet. Read before `begin_adopting`: the
+/// census removes a record as it adopts it.
+pub(crate) fn ready_blocks() -> Vec<(usize, usize, u64)> {
+    STATE.with(|s| match &*s.borrow() {
+        State::Ready(map) => map
+            .iter()
+            .map(|(&data, block)| (data, block.extent, block.bytes))
+            .collect(),
+        _ => Vec::new(),
+    })
+}
+
 /// Take the record of the block at `data`, if the census may adopt one.
 fn take(data: usize) -> Option<AdoptableBlock> {
     STATE.with(|s| match &mut *s.borrow_mut() {
