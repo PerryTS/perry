@@ -65,6 +65,9 @@ pub(super) struct ArenaSweepObjectsState {
     /// block skip ran against an armed census.
     /// Cleared for a block as soon as this sweep invalidates a header in it.
     census_hole_free: Vec<bool>,
+    /// #10241: a promoted-cohort full armed `promoted_cohort`'s survival
+    /// probe, and this is the synchronous full sweep that answers it.
+    survival_probe: bool,
 }
 
 impl ArenaSweepObjectsState {
@@ -106,6 +109,7 @@ impl ArenaSweepObjectsState {
             block_skip_objects: 0,
             block_skip_bytes: 0,
             census_hole_free: Vec::new(),
+            survival_probe: false,
         }
     }
 
@@ -128,6 +132,10 @@ impl ArenaSweepObjectsState {
     /// A skipped block contributes nothing to `block_has_live`, which is the
     /// only liveness the cleanup reads.
     pub(super) fn apply_block_skip(&mut self, census: &super::super::trace::BlockCensus) {
+        // Reached only from a synchronous full sweep, which is the one whose
+        // marks are final and whose whole-block walk the probe reads.
+        self.survival_probe =
+            !self.minor_sweep && super::super::promoted_cohort::survival_probe_armed();
         if self.minor_sweep
             || !self.reclaim_dead_old_blocks
             || self.targeted_old_blocks.is_some()
@@ -192,6 +200,12 @@ impl ArenaSweepObjectsState {
             }
             skip[block_idx] = true;
             any = true;
+            if self.survival_probe {
+                super::super::promoted_cohort::note_probe_block_skipped(
+                    snapshot.data,
+                    snapshot.offset,
+                );
+            }
             self.freed_bytes = self.freed_bytes.saturating_add(block.bytes);
             if block_idx < self.resettable_general_n {
                 self.eden_dead_bytes = self.eden_dead_bytes.saturating_add(block.bytes);
@@ -269,8 +283,16 @@ impl ArenaSweepObjectsState {
         let mut done = false;
         if budget == usize::MAX && self.cursor.at_block_boundary() {
             while let Some((block_idx, data, offset, size)) = self.cursor.next_whole_block() {
+                let live_before = self.arena_live_bytes;
                 // SAFETY: the block was snapshotted by this sweep's cursor.
                 unsafe { self.sweep_whole_block(block_idx, data, offset, size) };
+                if self.survival_probe {
+                    super::super::promoted_cohort::note_probe_block_swept(
+                        data,
+                        offset,
+                        self.arena_live_bytes - live_before,
+                    );
+                }
             }
             remaining = 0;
             done = true;
