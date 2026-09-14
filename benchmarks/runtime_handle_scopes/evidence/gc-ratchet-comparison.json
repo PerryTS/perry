@@ -1,0 +1,12 @@
+{
+  "baseline_sha": "9fda98df68d9fac3c08b2385fae007aa9f5278df",
+  "platform": "darwin-arm64",
+  "all_stdout_match_node": true,
+  "identical_cells": 126,
+  "excluded_metrics": [
+    "peak_rss_bytes",
+    "rss_bytes",
+    "wall_ms"
+  ],
+  "differing_cells": []
+}

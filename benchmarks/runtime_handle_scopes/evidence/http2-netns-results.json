@@ -1,0 +1,14 @@
+[
+  {
+    "kind": "baseline",
+    "exit_code": 124,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "kind": "fix",
+    "exit_code": 124,
+    "stdout": "",
+    "stderr": ""
+  }
+]

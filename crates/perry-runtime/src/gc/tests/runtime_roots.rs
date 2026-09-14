@@ -6,6 +6,7 @@ mod bound_method_builder;
 mod callback_scanners;
 mod fs_options_object;
 mod generator_attach_prototype;
+mod handle_stack;
 mod hook_dispatch_handles;
 mod interned_string_caches;
 mod iter_result_keys;

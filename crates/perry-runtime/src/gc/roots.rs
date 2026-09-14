@@ -103,8 +103,10 @@ pub(super) struct MutableRootScannerEntry {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum RuntimeHandleSlot {
     Nanbox(u64),
-    RawTagged { addr: usize, tag: u64 },
     HeapWord(u64),
+    RawPointer(usize),
+    RawString(usize),
+    RawBigInt(usize),
 }
 
 crate::perry_thread_local! {

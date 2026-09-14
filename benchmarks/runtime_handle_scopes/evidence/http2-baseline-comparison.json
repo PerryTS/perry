@@ -1,0 +1,20 @@
+{
+  "baseline_sha": "9fda98df68d9fac3c08b2385fae007aa9f5278df",
+  "host": "perrymaster.skelpo.net",
+  "test": "test_gap_gc_http2_pending_event_callback_rooting",
+  "baseline_worktree": "/root/runtime-handle-baseline-20260914",
+  "node_stdout": "settings cb fired\nping cb fired\nclose cb fired\n",
+  "baseline_stdout": "",
+  "changed_stdout": "",
+  "baseline_stderr": "[node:http2] bind 0.0.0.0:443 failed: Address already in use (os error 98)\n",
+  "changed_stderr": "[node:http2] bind 0.0.0.0:443 failed: Address already in use (os error 98)\n",
+  "baseline_exit_code": 0,
+  "changed_exit_code": 0,
+  "baseline_build_packages": [
+    "perry",
+    "perry-runtime-static",
+    "perry-stdlib-static",
+    "perry-ext-net",
+    "perry-ext-http"
+  ]
+}

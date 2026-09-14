@@ -1,0 +1,70 @@
+== compiling fixture with PERRY_GC_MOVING_LOOP_POLLS=1 (the schedule needs the polls) ==
+perry: in-process LLVM backend active (LLVM 22.1.8)
+[perry] codegen: modules finished 1/1 (100%; 0.0 min elapsed; ETA ~0.0 min)
+== arm 1: instruments OFF (baseline correctness) ==
+  [off] correct output, exit 0, quarantine retirements=0
+== arm 2: PROTECT_FROMSPACE=1, no schedule (pressure-only) ==
+  [protect] correct output, exit 0, quarantine retirements=0
+== arm 3: PROTECT_FROMSPACE=1 + SCHEDULE_RATE=1 (the investigation pairing) ==
+  [protect+rate1] correct output, exit 0, quarantine retirements=1236
+== arm 4: PROTECT_FROMSPACE=1 + SCHEDULE_SEED (the tunable middle) ==
+  [protect+schedule] correct output, exit 0, quarantine retirements=287
+== arm 5: the same seed again (the reproducer property) ==
+  [protect+schedule-repeat] correct output, exit 0, quarantine retirements=287
+== arm 6: a different seed (the sweep must explore something) ==
+  [protect+schedule-other] correct output, exit 0, quarantine retirements=302
+
+  [seeded schedule] pressure-only=0 < seeded(0.25)=287 < rate-1=1236
+  [seeded schedule] same seed twice: 287 == 287 (reproducible)
+
+== arm 7: quarantine over the gc_ratchet probes (allocation-point route) ==
+perry: in-process LLVM backend active (LLVM 22.1.8)
+[perry] codegen: modules finished 1/1 (100%; 0.0 min elapsed; ETA ~0.0 min)
+perry: in-process LLVM backend active (LLVM 22.1.8)
+[perry] codegen: modules finished 1/1 (100%; 0.0 min elapsed; ETA ~0.0 min)
+perry: in-process LLVM backend active (LLVM 22.1.8)
+[perry] codegen: modules finished 1/1 (100%; 0.0 min elapsed; ETA ~0.0 min)
+perry: in-process LLVM backend active (LLVM 22.1.8)
+[perry] codegen: modules finished 1/1 (100%; 0.0 min elapsed; ETA ~0.0 min)
+perry: in-process LLVM backend active (LLVM 22.1.8)
+[perry] codegen: modules finished 1/1 (100%; 0.0 min elapsed; ETA ~0.0 min)
+perry: in-process LLVM backend active (LLVM 22.1.8)
+[perry] codegen: modules finished 1/1 (100%; 0.0 min elapsed; ETA ~0.0 min)
+perry: in-process LLVM backend active (LLVM 22.1.8)
+[perry] codegen: modules finished 1/1 (100%; 0.0 min elapsed; ETA ~0.0 min)
+perry: in-process LLVM backend active (LLVM 22.1.8)
+[perry] codegen: modules finished 1/1 (100%; 0.0 min elapsed; ETA ~0.0 min)
+perry: in-process LLVM backend active (LLVM 22.1.8)
+[perry] codegen: modules finished 1/1 (100%; 0.0 min elapsed; ETA ~0.0 min)
+perry: in-process LLVM backend active (LLVM 22.1.8)
+[perry] codegen: modules finished 1/1 (100%; 0.0 min elapsed; ETA ~0.0 min)
+perry: in-process LLVM backend active (LLVM 22.1.8)
+[perry] codegen: modules finished 1/1 (100%; 0.0 min elapsed; ETA ~0.0 min)
+perry: in-process LLVM backend active (LLVM 22.1.8)
+[perry] codegen: modules finished 1/1 (100%; 0.0 min elapsed; ETA ~0.0 min)
+perry: in-process LLVM backend active (LLVM 22.1.8)
+[perry] codegen: modules finished 1/1 (100%; 0.0 min elapsed; ETA ~0.0 min)
+perry: in-process LLVM backend active (LLVM 22.1.8)
+[perry] codegen: modules finished 1/1 (100%; 0.0 min elapsed; ETA ~0.0 min)
+  14/14 probes clean over from-space quarantine
+
+== arm 5: PERRY_GC_SCHEDULE_RATE=1 + PERRY_GC_VERIFY_EVACUATION (#7254's pairing) ==
+-- 5a: the pairing on known-good code must stay clean, and must be LIVE --
+  correct output, exit 0, 3869 objects copied under the verifier (live, no false positive)
+-- 5b: #7254's retained-growth workload must be correct under the pairing, and LIVE --
+[perry] codegen: modules finished 1/1 (100%; 0.0 min elapsed; ETA ~0.0 min)
+  correct output vs node, exit 0, 12532 objects copied under the verifier (live retained-growth coverage)
+
+== arm 6: the schedule terminates at the DEFAULT stride, on a realistic poll count ==
+perry: in-process LLVM backend active (LLVM 22.1.8)
+[perry] codegen: modules finished 1/1 (100%; 0.0 min elapsed; ETA ~0.0 min)
+  correct output in 0s (budget 90s), [gc-schedule] forced_collections=2332 copying_minors=2332 moved_objects=149070 loop_polls=400065
+
+PASS: instruments inert when off (0 retirements), live when on
+      (pressure-only=0, rate-1=1236 retirements), program correct in all arms.
+      Quarantine clean over 14 real probes (allocation-point route).
+      RATE=1+VERIFY_EVACUATION pairing live and correct on known-good code,
+      and validates #7254's retained-growth workload against Node with relocation live.
+      The schedule terminates at the shipped default on a realistic poll count
+      (0s of a 90s budget) while still forcing
+      2332 collections that moved 149070 objects.
