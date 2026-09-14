@@ -302,6 +302,41 @@ fn a_moved_key_string_is_shared_not_rewritten_in_place() {
     }
 }
 
+#[test]
+fn named_property_arrays_keep_the_array_prototype() {
+    let _global = crate::gc::global_side_table_test_lock();
+    let array_proto = crate::object::builtin_prototype_value("Array");
+    assert!(
+        crate::value::JSValue::from_bits(array_proto.to_bits()).is_pointer(),
+        "test premise: the realm has an Array.prototype"
+    );
+    let proto_of = |arr: *mut ArrayHeader| {
+        crate::object::js_object_get_prototype_of(crate::value::js_nanbox_pointer(arr as i64))
+            .to_bits()
+    };
+    unsafe {
+        // Pairs reserve (spare capacity), fallback table (full), shifted queue.
+        let pairs = set(pushed(&[1.0]), "tag", 1.0);
+        assert_eq!(
+            test_named_props_state(pairs).0,
+            true,
+            "premise: reserve taken"
+        );
+        assert_eq!(proto_of(pairs), array_proto.to_bits());
+
+        let full = js_array_alloc_with_length_exact(1);
+        store_array_slot(full, 0, 1.0f64.to_bits());
+        let full = set(full, "tag", 1.0);
+        assert_eq!(proto_of(full), array_proto.to_bits());
+
+        let queue = pushed(&[1.0, 2.0]);
+        js_array_shift_f64(queue);
+        let queue = set(queue, "tag", 1.0);
+        assert_eq!(proto_of(queue), array_proto.to_bits());
+        test_clear_full_array_named_property_roots();
+    }
+}
+
 #[cfg(feature = "regex-engine")]
 mod inline {
     use super::*;
@@ -363,6 +398,19 @@ mod inline {
                 4,
                 "the reserve size is unchanged"
             );
+        }
+    }
+
+    #[test]
+    fn inline_results_keep_the_array_prototype() {
+        let _global = crate::gc::global_side_table_test_lock();
+        let array_proto = crate::object::builtin_prototype_value("Array");
+        unsafe {
+            let arr = exec_result([4.0, 5.0, 6.0]);
+            let proto = crate::object::js_object_get_prototype_of(crate::value::js_nanbox_pointer(
+                arr as i64,
+            ));
+            assert_eq!(proto.to_bits(), array_proto.to_bits());
         }
     }
 

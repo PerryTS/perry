@@ -1311,9 +1311,14 @@ pub(crate) const GC_ARRAY_ARGUMENTS_OBJECT: u16 = 0x200;
 /// whether any property is live.
 ///
 /// Bit 8 is shared with `OBJ_FLAG_TYPED_ARRAY_PROTO`, which is meaningful only
-/// for `GC_TYPE_OBJECT`: every reader of that flag first requires
-/// `obj_type == GC_TYPE_OBJECT` (`proxy/put_value.rs`, `field_set_by_name.rs`,
-/// `delete_rest.rs`), the same disjointness bits 9/10/11/12 already rely on.
+/// for `GC_TYPE_OBJECT`, the same disjointness bits 9/10/11/12 already rely on.
+/// Every reader of that flag must require `obj_type == GC_TYPE_OBJECT` first.
+/// Two prototype readers in `object/object_ops/prototype.rs` did not, and
+/// reported the TypedArray prototype for arrays carrying named properties;
+/// `array::named_props_tests::named_property_arrays_keep_the_array_prototype`
+/// pins that. The readers that only use the bit to DECLINE an object fast path
+/// (`proxy/put_value.rs`, `field_set_by_name*`, `delete_rest.rs`,
+/// `read_stub.rs`, `then_probe.rs`) are type-guarded as well.
 pub(crate) const GC_ARRAY_NAMED_PROPS: u16 = 0x100;
 /// #8098: this `GC_TYPE_OBJECT` allocation is an ORDINARY plain object. It has
 /// no class, but it also carries none of the per-object `[[Set]]` semantics a
