@@ -303,6 +303,30 @@ fn a_moved_key_string_is_shared_not_rewritten_in_place() {
 }
 
 #[test]
+fn a_long_array_with_slack_does_not_shift_its_elements() {
+    let _global = crate::gc::global_side_table_test_lock();
+    unsafe {
+        let mut arr = js_array_alloc(256);
+        for i in 0..200 {
+            arr = js_array_push_f64(arr, i as f64);
+        }
+        assert!(
+            (*arr).capacity > (*arr).length,
+            "test premise: spare capacity"
+        );
+        let elems = array_elements_ptr(arr);
+        let head = set(arr, "tag", 1.0);
+        assert_eq!(head, arr);
+        assert_eq!(array_elements_ptr(arr), elems, "no element moved");
+        assert_eq!(array_front_offset(arr), 0, "no in-place reserve was opened");
+        assert!(test_full_array_named_property_owner_exists(arr as usize));
+        assert_eq!(get(arr, "tag"), Some(1.0));
+        assert_eq!(js_array_get_f64(arr, 199), 199.0);
+        test_clear_full_array_named_property_roots();
+    }
+}
+
+#[test]
 fn named_property_arrays_keep_the_array_prototype() {
     let _global = crate::gc::global_side_table_test_lock();
     let array_proto = crate::object::builtin_prototype_value("Array");

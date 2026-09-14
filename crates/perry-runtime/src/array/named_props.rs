@@ -120,7 +120,8 @@ impl InlineKeySet {
 
 crate::perry_thread_local! {
     /// Named properties of arrays that were FULL (no front slack, dense prefix
-    /// at capacity) when they gained their first one — typically an exact-size
+    /// at capacity), or longer than `RESERVE_IN_PLACE_MOVE_LIMIT`, when they
+    /// gained their first one — typically an exact-size
     /// literal such as `const t = [a, b]; t.tag = x`. Reserving a slot for such
     /// an array means growing it, which moves it and leaves the program's own
     /// variable pointing at a forwarding stub that every later access has to
@@ -142,6 +143,12 @@ crate::perry_thread_local! {
         crate::fast_hash::PtrHashMap<usize, Vec<FallbackProperty>>,
     > = std::cell::RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
+
+/// Longest dense prefix the first named property may shift up by one slot to
+/// open a reserve in place. Beyond it the array uses the fallback table, so
+/// tagging `hugeArray.foo = 1` stays O(1) instead of moving every element
+/// (and replaying their barriers) once.
+const RESERVE_IN_PLACE_MOVE_LIMIT: usize = 64;
 
 /// Has any array on this process ever used [`FULL_ARRAY_NAMED_PROPS`]?
 /// Monotone, so a false answer always proves the table empty.
@@ -696,9 +703,13 @@ pub(crate) unsafe fn array_named_property_set(
                 return arr;
             };
             let capacity = (*arr).capacity as usize;
-            if array_front_offset(arr) == 0 && ((*arr).length as usize).min(capacity) >= capacity {
-                // Full: keep the address-keyed store rather than moving the
-                // array (see `FULL_ARRAY_NAMED_PROPS`).
+            let dense = ((*arr).length as usize).min(capacity);
+            if array_front_offset(arr) == 0
+                && (dense >= capacity || dense > RESERVE_IN_PLACE_MOVE_LIMIT)
+            {
+                // Full, or too long to shift in place: keep the address-keyed
+                // store rather than moving the array or its elements (see
+                // `FULL_ARRAY_NAMED_PROPS`).
                 FULL_ARRAY_NAMED_PROPS_EVER.store(true, std::sync::atomic::Ordering::Release);
                 FULL_ARRAY_NAMED_PROPS.with(|m| {
                     let mut table = m.borrow_mut();
@@ -763,7 +774,11 @@ pub(crate) unsafe fn array_named_property_set(
         // is not added, exactly as the guard ladder above this call decided.
         return clean_arr_ptr_mut(base);
     }
-    let arr_handle = scope.root_raw_mut_ptr(arr);
+    // Reuse the base handle for the (possibly materialized) live head instead
+    // of pushing another root: handle pushes are a measurable part of this
+    // path (#10166 brief 3).
+    base_handle.set_raw_mut_ptr(arr);
+    let arr_handle = &base_handle;
     let mut pairs = match reserve_of(arr, array_object_flags_resolved(arr)) {
         Reserve::Pairs(pairs) => pairs,
         _ => std::ptr::null_mut(),
