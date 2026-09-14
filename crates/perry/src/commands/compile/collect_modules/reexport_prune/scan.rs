@@ -33,8 +33,9 @@ pub(super) struct Scanner {
 
 impl Scanner {
     pub(super) fn module_is_pure(&mut self, path: &Path, ctx: &mut CompilationContext) -> bool {
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_owned());
         self.contracts
-            .is_pure(path)
+            .is_pure(&canonical)
             .unwrap_or_else(|| self.summary(path, ctx).pure)
     }
 
@@ -260,7 +261,9 @@ impl Scanner {
                 self.droppable.insert(root, false);
                 return false;
             }
-            if !self.module_is_pure(&canonical, ctx) {
+            // Preserve the source-visible base while inference fills the AST
+            // summary, just as ordinary collection resolves relative imports.
+            if !self.module_is_pure(&path, ctx) {
                 self.droppable.insert(root, false);
                 return false;
             }
