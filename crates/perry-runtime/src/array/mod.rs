@@ -64,6 +64,8 @@ mod index_get_exit_tests;
 #[cfg(test)]
 mod push_pop_tests;
 #[cfg(test)]
+mod refresh_traversal_evidence_tests;
+#[cfg(test)]
 mod spread_dense_tests;
 #[cfg(test)]
 mod strict_store_tests;
