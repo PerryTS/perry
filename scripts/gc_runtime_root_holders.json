@@ -454,7 +454,7 @@
       "file": "crates/perry-runtime/src/gc/promoted_cohort/survival.rs",
       "name": "MINOR_REMEMBERED_PARENTS",
       "verdict": "not_a_gc_pointer",
-      "why": "#10241: the remembered set of the copying minor recording for a cohort full at the same safepoint, as generation PAGE KEYS (`addr >> 12`, two `PtrHashSet<usize>`) plus a count of header-named entries. Page keys are not addresses of any object and are never dereferenced; the cohort full re-derives the objects on those pages from the old page index after its own mark. Cleared by `adopt_census::begin_recording`/`discard` and consumed by `arm_survival_probe`, so it never outlives the safepoint."
+      "why": "#10241: the remembered set of the copying minor recording for a cohort full at the same safepoint, as generation PAGE KEYS (`addr >> 12`, one `PtrHashSet<usize>` of dirty old pages), kept only for a minor that promotes in place and whose remembered set names no parent by header. Page keys are not addresses of any object and are never dereferenced; the cohort full re-derives the objects on those pages from the old page index after its own mark. Cleared by `adopt_census::begin_recording`/`discard` and consumed by `arm_survival_probe`, so it never outlives the safepoint."
     },
     {
       "file": "crates/perry-runtime/src/gc/promoted_cohort/survival.rs",
