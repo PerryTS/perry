@@ -24,8 +24,7 @@
 //!    such move goes through [`Arena::set_current`], which invalidates the
 //!    cache. Comparing the index alone would not do: `current` can leave
 //!    block 3 for block 5 and come back to block 3 once block 5 is full.
-//! 3. **The active survivor space changes.** That is a flip, so it is case 1,
-//!    and the index is part of the key anyway.
+//! 3. **The active survivor space changes.** That is a flip, so it is case 1.
 //!
 //! Survivor allocation fills the *inactive* space, which is not from-space
 //! until the flip, and the flip happens inside the copying minor's scope.

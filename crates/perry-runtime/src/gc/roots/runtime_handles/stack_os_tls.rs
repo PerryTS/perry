@@ -1,5 +1,5 @@
 //! Android and HarmonyOS use OS-backed TLS: even a non-Drop value's allocation is freed
-//! during teardown. Preserve the original scoped Vec access on this platform.
+//! during teardown. Preserve the original scoped Vec access on these targets.
 //! Scopes and handles carry a thread-bound token, never an escaped TLS address.
 
 use super::{handle_used_after_scope, RuntimeHandleSlot, RUNTIME_HANDLE_STACK};

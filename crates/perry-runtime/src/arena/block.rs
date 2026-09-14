@@ -565,17 +565,6 @@ impl Arena {
         }
     }
 
-    /// Lazy variant of `new`: starts with a single tombstone block
-    /// (`data = null, size = 0`) instead of an eagerly-mapped 1 MB
-    /// block, so JS-touching threads that never allocate in this
-    /// region (spawn workers, tokio callers) don't pay the block.
-    /// The tombstone shape is exactly the one C4b-δ block release leaves
-    /// behind, so every walker/reset/alloc path already handles it:
-    /// the first `alloc` misses the tombstone, and the slow path's
-    /// `install_fresh_block` replaces the tombstone slot in place.
-    /// Only used for the non-Eden regions — Eden must stay eager
-    /// because `js_inline_arena_state` hands its current block to
-    /// codegen's inline bump allocator at thread start.
     /// Point allocation at `blocks[idx]`.
     ///
     /// Every move of `current` goes through here, because the cached young
@@ -592,6 +581,17 @@ impl Arena {
         super::from_space::invalidate_sealed_young_bytes();
     }
 
+    /// Lazy variant of `new`: starts with a single tombstone block
+    /// (`data = null, size = 0`) instead of an eagerly-mapped 1 MB
+    /// block, so JS-touching threads that never allocate in this
+    /// region (spawn workers, tokio callers) don't pay the block.
+    /// The tombstone shape is exactly the one C4b-δ block release leaves
+    /// behind, so every walker/reset/alloc path already handles it:
+    /// the first `alloc` misses the tombstone, and the slow path's
+    /// `install_fresh_block` replaces the tombstone slot in place.
+    /// Only used for the non-Eden regions — Eden must stay eager
+    /// because `js_inline_arena_state` hands its current block to
+    /// codegen's inline bump allocator at thread start.
     fn new_lazy(generation: HeapGeneration, space: HeapSpace) -> Self {
         Arena {
             blocks: vec![ArenaBlock {
