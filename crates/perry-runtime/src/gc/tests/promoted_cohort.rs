@@ -7,9 +7,11 @@
 //! follows it reclaims a promoted object that died.
 //!
 //! #10241: the cohort full measures the survival of what the minor at its own
-//! safepoint promoted, and a dead same-safepoint cohort turns the next minor
-//! back into an evacuating one (with a sabotaged twin that does not feed the
-//! predictor, and a live cohort that leaves it alone).
+//! safepoint promoted. A dead same-safepoint cohort turns the next minor back
+//! into an evacuating one (sabotaged twin: the predictor is not fed), a live
+//! one leaves the predictor alone, and a dead remembered parent referring into
+//! the cohort — the parse-loop shape, where a minor would have measured the
+//! cohort live — feeds nothing (sabotaged twin: the parent check is skipped).
 
 use super::super::policy::{
     credit_promoted_bytes_to_old_baseline, old_reclaim_pressure_due,
@@ -191,6 +193,27 @@ fn below_the_bound_no_cohort_full_runs_and_the_dead_promoted_object_stays() {
     );
 }
 
+/// What the young population promoted at the cohort's safepoint looks like at
+/// the full.
+#[derive(Clone, Copy, PartialEq)]
+enum CohortShape {
+    /// Still rooted.
+    Live,
+    /// Dropped; a rooted old parent keeps one young string on a dirty page, so
+    /// the full checks a remembered parent and finds it live.
+    DeadWithLiveParent,
+    /// Dropped; an unrooted old parent keeps young strings on a dirty page —
+    /// the born-old array of a parsed tree that died.
+    DeadWithDeadParent,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Sabotage {
+    None,
+    Unfed,
+    SkipParentCheck,
+}
+
 /// Outcome of one untraced promotion, a cohort full at the same safepoint, and
 /// the minor after it.
 struct SurvivalOutcome {
@@ -213,12 +236,24 @@ fn rooted_young_strings(slot: u32, count: usize) -> usize {
     first
 }
 
+/// An old object whose `fields` young strings are stored through the runtime
+/// barrier, so its page is in the remembered set the next minor snapshots.
+fn old_parent_of_young_strings(fields: u32) -> usize {
+    let (parent, slots) = unsafe { alloc_old_test_object(fields) };
+    for i in 0..fields as usize {
+        let bits = string_bits(young_leaf());
+        unsafe {
+            *slots.add(i) = bits;
+        }
+        runtime_write_barrier_slot(parent as usize, unsafe { slots.add(i) } as usize, bits);
+    }
+    parent as usize
+}
+
 /// A young population promoted whole and untraced by a minor that records its
-/// blocks, then the cohort full at the same safepoint — with that population
-/// still rooted (`live`) or dropped — then a minor over a fresh rooted
-/// population. `fed == false` arms the sabotage that keeps the full's
-/// measurement away from the predictor.
-fn promote_then_cohort_full_then_minor(live: bool, fed: bool) -> SurvivalOutcome {
+/// blocks, then the cohort full at the same safepoint in `shape`, then a minor
+/// over a fresh rooted population.
+fn promote_then_cohort_full_then_minor(shape: CohortShape, sabotage: Sabotage) -> SurvivalOutcome {
     use super::super::trace::adopt_census;
     let _guard = CopyingNurseryTestGuard::new(4);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -231,6 +266,21 @@ fn promote_then_cohort_full_then_minor(live: bool, fed: bool) -> SurvivalOutcome
         crate::arena::pointer_in_nursery(probe_leaf),
         "premise: young population"
     );
+    match shape {
+        CohortShape::Live => {}
+        CohortShape::DeadWithLiveParent => {
+            js_shadow_slot_set(2, ptr_bits(old_parent_of_young_strings(1)));
+        }
+        CohortShape::DeadWithDeadParent => {
+            old_parent_of_young_strings(64);
+        }
+    }
+    if shape != CohortShape::Live {
+        assert!(
+            super::super::barrier::remembered_dirty_page_count() > 0,
+            "premise: the old parent's page is remembered"
+        );
+    }
     let untraced_before = untraced_promotion_cycles();
     adopt_census::begin_recording();
     let trace = collect_minor_trace(GcTriggerKind::Direct);
@@ -244,12 +294,16 @@ fn promote_then_cohort_full_then_minor(live: bool, fed: bool) -> SurvivalOutcome
         1,
         "premise: the promotion skipped the trace"
     );
-    if !live {
+    if shape != CohortShape::Live {
         js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
     }
     cohort::seed_for_tests(cohort::bound_bytes(), 0, 0);
     let ran = {
-        let _sabotage = (!fed).then(survival::sabotage::Guard::unfed);
+        let _sabotage = match sabotage {
+            Sabotage::None => None,
+            Sabotage::Unfed => Some(survival::sabotage::Guard::unfed()),
+            Sabotage::SkipParentCheck => Some(survival::sabotage::Guard::skip_parent_check()),
+        };
         run_promoted_cohort_full_if_due()
     };
     adopt_census::discard();
@@ -266,8 +320,9 @@ fn promote_then_cohort_full_then_minor(live: bool, fed: bool) -> SurvivalOutcome
         next_minor_in_place: next.copying_nursery.in_place_promotion,
         next_minor_untraced: untraced_promotion_cycles() - untraced_before == 1,
     };
-    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
-    js_shadow_slot_set(1, crate::value::TAG_UNDEFINED);
+    for slot in 0..3 {
+        js_shadow_slot_set(slot, crate::value::TAG_UNDEFINED);
+    }
     cohort::seed_for_tests(0, 0, 0);
     outcome
 }
@@ -276,9 +331,9 @@ fn permille((_, promoted, live, _): (usize, usize, usize, survival::MinorView)) 
     (live as u64 * 1000 / promoted as u64).min(1000)
 }
 
-#[test]
-fn a_dead_same_safepoint_cohort_turns_the_next_minor_into_an_evacuation() {
-    let outcome = promote_then_cohort_full_then_minor(false, true);
+fn dead_cohort_measurement(
+    outcome: &SurvivalOutcome,
+) -> (usize, usize, usize, survival::MinorView) {
     let measured = outcome
         .measured
         .expect("the full's sweep accounted every recorded block");
@@ -286,14 +341,26 @@ fn a_dead_same_safepoint_cohort_turns_the_next_minor_into_an_evacuation() {
         measured.0 >= 1 && measured.1 > 0,
         "the probe measured the promoted blocks: {measured:?}"
     );
-    let survival = permille(measured);
     assert!(
-        survival < super::super::PROMOTE_SURVIVAL_THRESHOLD_PERMILLE,
-        "the dropped cohort is dead by the full: {survival} permille ({measured:?})"
+        permille(measured) < super::super::PROMOTE_SURVIVAL_THRESHOLD_PERMILLE,
+        "the dropped cohort is dead by the full: {measured:?}"
+    );
+    measured
+}
+
+#[test]
+fn a_dead_same_safepoint_cohort_turns_the_next_minor_into_an_evacuation() {
+    let outcome =
+        promote_then_cohort_full_then_minor(CohortShape::DeadWithLiveParent, Sabotage::None);
+    let measured = dead_cohort_measurement(&outcome);
+    assert_eq!(
+        measured.3,
+        survival::MinorView::Exact,
+        "the only remembered parent is live, so a minor measures what the full did"
     );
     assert_eq!(
         outcome.predictor_after_full,
-        Some(survival),
+        Some(permille(measured)),
         "the full's measurement replaces the ratio the promotion was admitted on"
     );
     assert!(
@@ -304,11 +371,13 @@ fn a_dead_same_safepoint_cohort_turns_the_next_minor_into_an_evacuation() {
 
 #[test]
 fn sabotaged_unfed_predictor_promotes_the_next_minor_untraced() {
-    let outcome = promote_then_cohort_full_then_minor(false, false);
-    let measured = outcome.measured.expect("premise: the probe still measured");
-    assert!(
-        permille(measured) < super::super::PROMOTE_SURVIVAL_THRESHOLD_PERMILLE,
-        "premise: the cohort is dead by the full ({measured:?})"
+    let outcome =
+        promote_then_cohort_full_then_minor(CohortShape::DeadWithLiveParent, Sabotage::Unfed);
+    let measured = dead_cohort_measurement(&outcome);
+    assert_eq!(
+        measured.3,
+        survival::MinorView::Exact,
+        "premise: exact view"
     );
     assert_eq!(
         outcome.predictor_after_full,
@@ -324,14 +393,13 @@ fn sabotaged_unfed_predictor_promotes_the_next_minor_untraced() {
 
 #[test]
 fn a_live_same_safepoint_cohort_leaves_the_predictor_at_retained() {
-    let outcome = promote_then_cohort_full_then_minor(true, true);
+    let outcome = promote_then_cohort_full_then_minor(CohortShape::Live, Sabotage::None);
     let measured = outcome
         .measured
         .expect("the full's sweep accounted every recorded block");
-    let survival = permille(measured);
     assert!(
-        survival >= super::super::PROMOTE_SURVIVAL_THRESHOLD_PERMILLE,
-        "the rooted cohort survives the full: {survival} permille ({measured:?})"
+        permille(measured) >= super::super::PROMOTE_SURVIVAL_THRESHOLD_PERMILLE,
+        "the rooted cohort survives the full: {measured:?}"
     );
     assert_eq!(
         outcome.predictor_after_full,
@@ -341,5 +409,47 @@ fn a_live_same_safepoint_cohort_leaves_the_predictor_at_retained() {
     assert!(
         outcome.next_minor_in_place && outcome.next_minor_untraced,
         "a retained cohort keeps the next minor on the untraced promotion"
+    );
+}
+
+#[test]
+fn a_dead_remembered_parent_keeps_a_dead_cohort_from_feeding_the_predictor() {
+    let outcome =
+        promote_then_cohort_full_then_minor(CohortShape::DeadWithDeadParent, Sabotage::None);
+    let measured = dead_cohort_measurement(&outcome);
+    assert_eq!(
+        measured.3,
+        survival::MinorView::DeadParent,
+        "the dead old parent refers into the promoted blocks: a minor would have \
+         measured them live"
+    );
+    assert_eq!(
+        outcome.predictor_after_full,
+        Some(1000),
+        "a survival no minor would measure is not fed"
+    );
+    assert!(
+        outcome.next_minor_in_place && outcome.next_minor_untraced,
+        "the next minor keeps the untraced promotion (records_array_20m:parse)"
+    );
+}
+
+#[test]
+fn sabotaged_parent_check_feeds_a_parse_loop_cohort_into_an_evacuation() {
+    let outcome = promote_then_cohort_full_then_minor(
+        CohortShape::DeadWithDeadParent,
+        Sabotage::SkipParentCheck,
+    );
+    let measured = dead_cohort_measurement(&outcome);
+    assert_eq!(
+        measured.3,
+        survival::MinorView::Exact,
+        "premise: check skipped"
+    );
+    assert!(
+        !outcome.next_minor_in_place && !outcome.next_minor_untraced,
+        "without the parent check the dead-parent cohort is fed and the next \
+         minor evacuates — the traced minor that cost records_array_20m:parse \
+         ~95 ms per cohort full"
     );
 }
