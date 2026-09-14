@@ -11,6 +11,10 @@ use crate::nanbox::double_literal;
 use crate::native_value::LoweredValue;
 use crate::types::{DOUBLE, I1, I16, I32, I64, I8};
 
+#[cfg(test)]
+#[path = "generic_overhead_tests.rs"]
+mod generic_overhead_tests;
+
 /// `GC_LAYOUT_STATE_MASK | GC_OBJ_TYPED_LAYOUT_INTACT` (`0xD000`) as a signed
 /// i16 — the emitted IR is textual, so the constant is written the way LLVM
 /// parses an i16 literal (mirrors `class_field_inline_guard`'s convention).
@@ -327,6 +331,24 @@ pub(crate) fn emit_write_barrier_slot_value_and_generation_tested(
         blk.br(&done_label);
     }
     ctx.current_block = done_idx;
+}
+
+/// Use the same construction proof as precise local roots. A scalar cannot
+/// introduce a new heap edge during incremental marking; the registered root
+/// slot still receives the store, including overwrites of old heap values.
+/// TypeScript annotations alone do not satisfy this proof.
+pub(crate) fn emit_root_nanbox_store_for_expr(
+    ctx: &mut FnCtx<'_>,
+    value: &str,
+    root_slot: &str,
+    expr: &Expr,
+) {
+    if super::expr_is_known_non_pointer_shadow_value(ctx, expr) {
+        // GC_STORE_AUDIT(ROOT): proven scalar in a registered mutable root.
+        ctx.block().store(DOUBLE, value, root_slot);
+    } else {
+        emit_root_nanbox_store_on_block(ctx.block(), value, root_slot);
+    }
 }
 
 pub(crate) fn emit_root_nanbox_store_on_block(blk: &mut LlBlock, value: &str, root_slot: &str) {

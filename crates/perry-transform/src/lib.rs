@@ -16,6 +16,7 @@ pub mod finally_inline;
 pub mod generator;
 pub mod i18n;
 pub mod inline;
+mod local_copies;
 pub mod module_const_fold;
 pub mod prop_cse;
 mod source_spans;
@@ -56,4 +57,7 @@ pub fn post_inline_cleanups(module: &mut perry_hir::Module) {
     closure_local_inline::run(module);
     field_push_local_bind::run(module);
     prop_cse::run(module);
+    // Let the shape-specific passes consume their bindings first, then remove
+    // plain copies before codegen attaches string-sharing and root barriers.
+    local_copies::run(module);
 }

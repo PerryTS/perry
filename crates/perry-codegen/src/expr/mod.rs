@@ -136,12 +136,12 @@ pub(crate) use write_barrier::{
     emit_jsvalue_slot_store_pointer_tested, emit_jsvalue_slot_store_scalar_aware_on_block,
     emit_jsvalue_slot_store_with_flags_on_block, emit_jsvalue_slot_store_with_value_bits_on_block,
     emit_layout_note_slot_on_block, emit_may_carry_heap_pointer_check,
-    emit_root_heap_word_store_on_block, emit_root_nanbox_store_on_block,
-    emit_scalar_aware_store_gated_on_pointerness, emit_write_barrier,
-    emit_write_barrier_slot_generation_tested, emit_write_barrier_slot_on_block,
-    emit_write_barrier_slot_value_and_generation_tested, lower_array_super_init,
-    lower_event_emitter_async_resource_subclass_init, lower_event_emitter_subclass_init,
-    lower_node_stream_super_init, lower_stream_super_init,
+    emit_root_heap_word_store_on_block, emit_root_nanbox_store_for_expr,
+    emit_root_nanbox_store_on_block, emit_scalar_aware_store_gated_on_pointerness,
+    emit_write_barrier, emit_write_barrier_slot_generation_tested,
+    emit_write_barrier_slot_on_block, emit_write_barrier_slot_value_and_generation_tested,
+    lower_array_super_init, lower_event_emitter_async_resource_subclass_init,
+    lower_event_emitter_subclass_init, lower_node_stream_super_init, lower_stream_super_init,
 };
 
 // Issue #1098 phase 3: the `FnCtx` definition stays in this trunk, but its
