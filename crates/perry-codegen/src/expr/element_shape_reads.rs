@@ -33,14 +33,9 @@
 //! count in `StringHeader::utf16_len`, the leading `u32` — the identical load
 //! the inline `.length` fast path in `property_get/generic_dispatch.rs` emits.
 //! An SSO immediate (`SHORT_STRING_TAG`, up to five bytes packed into the
-//! NaN-box) keeps its BYTE length in bits 40..=47, and this reads it the same
-//! way the runtime's own SSO `.length` arms do
-//! (`string/char_ops.rs::string_property_get_miss`,
-//! `property_get/generic_dispatch.rs`). That convention is byte length, not
-//! code-unit length, so a non-ASCII SSO string reports its UTF-8 size — a
-//! PRE-EXISTING Perry-wide answer, reproduced here deliberately: the clone must
-//! agree with the path it is a clone of, and diverging from it would be a
-//! miscompile even where the shared answer is itself wrong.
+//! NaN-box) keeps its byte length in bits 40..=47. The shared SSO length
+//! lowering returns that count for ASCII and counts UTF-16 units inline for
+//! non-ASCII payloads, matching heap strings without adding a call (#10191).
 //!
 //! **The ternary.** JS truthiness of an arbitrary value is a runtime question
 //! (`""`, `0`, `NaN`, `null`, every object). The clone does not guess it: only
@@ -58,8 +53,6 @@ use crate::types::{DOUBLE, I1, I32, I64};
 const STRING_TAG_TOP16: &str = crate::nanbox::STRING_TAG_TOP16_I64;
 /// `SHORT_STRING_TAG >> 48` — an SSO immediate.
 const SHORT_STRING_TAG_TOP16: &str = crate::nanbox::SHORT_STRING_TAG_TOP16_I64;
-/// `SHORT_STRING_LEN_SHIFT` — the length byte sits at bits 40..=47.
-const SHORT_STRING_LEN_SHIFT: &str = "40";
 
 /// `TAG_TRUE` (`0x7FFC_0000_0000_0004`) as a decimal i64 literal.
 const TAG_TRUE_I64: &str = "9222246136947933188";
@@ -212,9 +205,7 @@ pub(crate) fn lower_cloned_string_length(
     ctx.block().br(&done_label);
 
     ctx.current_block = sso_idx;
-    let sso_shifted = ctx.block().lshr(I64, &bits, SHORT_STRING_LEN_SHIFT);
-    let sso_len_byte = ctx.block().and(I64, &sso_shifted, "255");
-    let sso_len = ctx.block().uitofp(I64, &sso_len_byte, DOUBLE);
+    let sso_len = super::string_length::lower_sso_length(ctx, &bits);
     let sso_end = ctx.block().label.clone();
     ctx.block().br(&done_label);
 
@@ -311,7 +302,6 @@ mod tests {
     fn string_tag_literals_match_the_runtime() {
         assert_eq!(STRING_TAG_TOP16, (0x7FFFu64).to_string());
         assert_eq!(SHORT_STRING_TAG_TOP16, (0x7FF9u64).to_string());
-        assert_eq!(SHORT_STRING_LEN_SHIFT, "40");
     }
 
     #[test]

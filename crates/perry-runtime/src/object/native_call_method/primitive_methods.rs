@@ -359,6 +359,45 @@ pub(super) unsafe fn dispatch_primitive(
                 ));
             }
         }
+        // #10210: the name may resolve where the static-method vtable cannot
+        // see it — a static ACCESSOR whose getter returns a function
+        // (`static get layer()`), a static of a per-evaluation parent class
+        // object, or the swapped prototype of a FUNCTION-valued ancestor
+        // (effect v4 `Context.Service<..>()(id)` is `function KeyClass(){}`
+        // + `Object.setPrototypeOf(KeyClass, ServiceProto)`, and a static
+        // getter on a subclass calls `this.of(x)` with `this` = this class
+        // object). The read path already resolves all of these, so mirror
+        // the class-ref arm (#5437): read the property exactly as
+        // `const f = C.of; f.call(C, x)` would, then call it with `this`
+        // bound to the receiver. Only a closure is dispatched here; anything
+        // else keeps falling through to the generic scan and the normal
+        // not-a-function error.
+        if class_id != 0 && !method_name_ptr.is_null() && method_name_len > 0 {
+            let key = crate::string::js_string_from_bytes(
+                method_name_ptr as *const u8,
+                method_name_len as u32,
+            );
+            let receiver = JSValue::from_bits(object_handle.get_nanbox_f64().to_bits())
+                .as_pointer::<ObjectHeader>();
+            let method = js_object_get_field_by_name(receiver, key);
+            if method.is_pointer()
+                && crate::closure::is_closure_ptr(crate::value::js_nanbox_get_pointer(
+                    f64::from_bits(method.bits()),
+                ) as usize)
+            {
+                let method = root_scope.root_nanbox_u64(method.bits());
+                let receiver = object_handle.get_nanbox_f64();
+                let bound =
+                    crate::closure::clone_closure_rebind_this(method.get_nanbox_u64(), receiver);
+                let _this = ImplicitThisScope::bind(receiver);
+                let args = refreshed_args();
+                return Some(crate::closure::js_native_call_value(
+                    f64::from_bits(bound),
+                    args.as_ptr(),
+                    args.len(),
+                ));
+            }
+        }
     }
 
     // #5142: a promise can carry user-attached own expando methods.

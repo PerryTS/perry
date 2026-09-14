@@ -154,6 +154,15 @@ pub(crate) fn block_in_copying_from_space(
     block_idx < general_n || active_survivor.contains(&block_idx)
 }
 
+/// Global block indices of both survivor arenas (the region between the
+/// general arena and the longlived arena).
+pub(crate) fn survivor_block_index_range() -> std::ops::Range<usize> {
+    let general_n = ARENA.with(|a| unsafe { (*a.get()).blocks.len() });
+    let survivor0_n = SURVIVOR_ARENA_0.with(|a| unsafe { (*a.get()).blocks.len() });
+    let survivor1_n = SURVIVOR_ARENA_1.with(|a| unsafe { (*a.get()).blocks.len() });
+    general_n..general_n + survivor0_n + survivor1_n
+}
+
 pub(crate) fn active_survivor_block_index_range() -> std::ops::Range<usize> {
     let general_n = ARENA.with(|a| unsafe { (*a.get()).blocks.len() });
     let survivor0_n = SURVIVOR_ARENA_0.with(|a| unsafe { (*a.get()).blocks.len() });

@@ -306,13 +306,9 @@ pub(crate) fn lower_generic_property_get(
         let is_sso = ctx.block().icmp_eq(I64, &obj_tag, "32761"); // 0x7FF9
         ctx.block().cond_br(&is_sso, &sso_label, &nonptr_label);
 
-        // `.length` of an SSO string is the length byte in bits 40..47 of the
-        // NaN-box itself — the same extract `js_object_get_field_by_name_f64`
-        // performs, minus the call and the key decode.
+        // SSO stores a byte count; JavaScript observes UTF-16 code units.
         ctx.current_block = sso_idx;
-        let len_shifted = ctx.block().lshr(I64, &obj_bits, "40");
-        let len_byte = ctx.block().and(I64, &len_shifted, "255");
-        let sso_val = ctx.block().uitofp(I64, &len_byte, DOUBLE);
+        let sso_val = super::super::string_length::lower_sso_length(ctx, &obj_bits);
         let sso_end_label = ctx.block().label.clone();
         ctx.block().br(&merge_label);
         ctx.current_block = nonptr_idx;

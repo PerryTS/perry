@@ -104,7 +104,7 @@ pub(crate) fn canonicalize_surrogate_pairs(ptr: *mut StringHeader) -> *mut Strin
 
 /// True when the `len` bytes at `data` are all ASCII (`< 0x80`), or the slice
 /// is empty/null. Used to decide whether a concat result may be stored inline
-/// as an SSO value (whose length tag doubles as the JS `.length`).
+/// through the concat helpers' ASCII SSO fast path.
 #[inline]
 fn bytes_all_ascii(data: *const u8, len: u32) -> bool {
     if data.is_null() || len == 0 {
@@ -489,11 +489,8 @@ pub(crate) fn test_clear_concat_memo() {
 fn concat_byte_parts(l: (*const u8, u32), r: (*const u8, u32)) -> f64 {
     let total_blen = l.1 + r.1;
 
-    // SSO encodes its length tag as the JS `.length`, so it is only sound for
-    // ASCII operands (byte length == UTF-16 length). A non-ASCII operand —
-    // multi-byte UTF-8 or a WTF-8 lone surrogate — must take the heap path so
-    // the result's `utf16_len` is computed, not assumed equal to `byte_len`
-    // (#4793: `("é"+"x").length` was 3, `("\uD800"+"x").length` was 4).
+    // Keep the existing ASCII-only concat fast path. Non-ASCII results use
+    // the heap path, which also handles WTF-8 surrogate-pair boundaries.
     let both_ascii = bytes_all_ascii(l.0, l.1) && bytes_all_ascii(r.0, r.1);
 
     // SSO fast path — assemble the result inline when it fits (≤ 5

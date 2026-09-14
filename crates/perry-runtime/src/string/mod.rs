@@ -125,6 +125,8 @@ pub(crate) mod trim_cache;
 mod utf16_count;
 
 #[cfg(test)]
+mod case_tests;
+#[cfg(test)]
 mod slice_tests;
 #[cfg(test)]
 mod tests;
@@ -1088,8 +1090,7 @@ pub(crate) fn string_data(s: *const StringHeader) -> *const u8 {
 
 /// The SSO immediate bits a heap string's CONTENT would encode as, or `None`
 /// when it doesn't fit the inline form (> `SHORT_STRING_MAX_LEN` bytes, or
-/// any non-ASCII byte — SSO's length tag doubles as the JS `.length`, so a
-/// multi-byte sequence must not take this form).
+/// any non-ASCII byte — this cache-folding helper is deliberately ASCII-only).
 ///
 /// This is the representation-folding half of SSO: the same short string can
 /// reach a cache as an immediate or as a heap pointer depending on what the

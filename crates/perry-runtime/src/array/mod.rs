@@ -56,7 +56,11 @@ mod collection_tag_tests;
 #[cfg(test)]
 mod dense_move_tests;
 #[cfg(test)]
+mod dynamic_numeric_key_tests;
+#[cfg(test)]
 mod forwarding_tests;
+#[cfg(test)]
+mod index_get_exit_tests;
 #[cfg(test)]
 mod push_pop_tests;
 #[cfg(test)]
@@ -98,7 +102,9 @@ pub use self::element_shape::{
     js_array_element_shape_version, js_array_ensure_element_shape,
 };
 #[cfg(test)]
-pub(crate) use self::element_shape::{test_element_shape_record_exists, test_serialize};
+pub(crate) use self::element_shape::{
+    test_element_shape_record_exists, test_seed_element_shape_record, test_serialize,
+};
 pub use self::flat_clone::{
     js_array_clone, js_array_clone_for_spread, js_array_entries, js_array_flat,
     js_array_flat_depth, js_array_keys, js_array_values, js_arraylike_flat,

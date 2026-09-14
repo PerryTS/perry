@@ -21,7 +21,8 @@ use super::*;
 mod global_this_webassembly;
 pub(crate) use global_this_webassembly::{
     clear_module_wrapper_for_dead_ptr, is_registered_wasm_module, module_wrapper_owner_moved,
-    webassembly_error_ctor_instanceof, webassembly_value_ctor_instanceof,
+    module_wrapper_registry_ever_used, webassembly_error_ctor_instanceof,
+    webassembly_value_ctor_instanceof,
 };
 // Only the `wasm-host` engine constructs real modules (via
 // `webassembly::make_module_object`), so registration and trusted-handle

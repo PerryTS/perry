@@ -92,10 +92,9 @@ pub extern "C" fn js_string_materialize_to_heap(value: f64) -> *mut StringHeader
 pub extern "C" fn js_string_new_sso(data: *const u8, len: u32) -> f64 {
     unsafe {
         let ulen = len as usize;
-        // SSO stores its length tag as the JS `.length`, which is only valid
-        // when byte length == UTF-16 length — i.e. pure ASCII. Non-ASCII (incl.
-        // WTF-8 lone surrogates) must take the heap path so `compute_utf16_len`
-        // records the correct code-unit count (#4793).
+        // This constructor keeps its ASCII-only fast path. Other producers
+        // (notably JSON.parse) also create non-ASCII SSO values; their length
+        // readers count UTF-16 units separately from the stored byte count.
         if ulen <= crate::value::SHORT_STRING_MAX_LEN && (ulen == 0 || !data.is_null()) {
             let bytes = std::slice::from_raw_parts(data, ulen);
             if bytes.iter().all(|&b| b < 0x80) {

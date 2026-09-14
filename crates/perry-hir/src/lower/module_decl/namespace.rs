@@ -24,6 +24,34 @@ fn nested_namespace_name(ts_module: &ast::TsModuleDecl) -> Option<String> {
     }
 }
 
+/// Publish a namespace export at its declaration position. An initializer in
+/// the field metadata prevents codegen's uninitialized-class-field pass from
+/// creating every property before the namespace body executes. The inline set
+/// below is authoritative, so the late initializer fallback skips this field.
+fn publish_namespace_member(
+    module: &mut Module,
+    fields: &mut Vec<crate::ir::ClassField>,
+    ns_name: &str,
+    name: String,
+    value: Expr,
+    is_readonly: bool,
+) {
+    fields.push(crate::ir::ClassField {
+        name: name.clone(),
+        key_expr: None,
+        ty: Type::Any,
+        init: Some(value.clone()),
+        is_private: false,
+        is_readonly,
+        decorators: Vec::new(),
+    });
+    module.init.push(Stmt::Expr(Expr::StaticFieldSet {
+        class_name: ns_name.to_string(),
+        field_name: name,
+        value: Box::new(value),
+    }));
+}
+
 /// #5130: lower a namespace nested inside another (`namespace Outer { export
 /// namespace Inner { ... } }`). The inner namespace becomes its own synthetic
 /// class registered under the qualified name `Outer.Inner`, and the outer
@@ -50,20 +78,14 @@ fn lower_nested_namespace(
 
     // Surface the inner namespace as a static field of the outer one, set to a
     // ClassRef to the inner class. Mirrors the const-member wiring above.
-    ns_static_fields.push(crate::ir::ClassField {
-        name: inner_name.clone(),
-        key_expr: None,
-        ty: Type::Any,
-        init: None,
-        is_private: false,
-        is_readonly: true,
-        decorators: Vec::new(),
-    });
-    module.init.push(Stmt::Expr(Expr::StaticFieldSet {
-        class_name: outer_ns_name.to_string(),
-        field_name: inner_name,
-        value: Box::new(Expr::ClassRef(qualified)),
-    }));
+    publish_namespace_member(
+        module,
+        ns_static_fields,
+        outer_ns_name,
+        inner_name,
+        Expr::ClassRef(qualified),
+        true,
+    );
     Ok(())
 }
 
@@ -124,7 +146,7 @@ pub(crate) fn lower_namespace_as_class(
     // `G.Nested` resolves to the inner namespace and `G.Nested.value` /
     // `G.Nested.f()` read its statics. Registered as static fields up-front so
     // `has_static_field` routes `G.Nested` to `StaticFieldGet`.
-    let mut nested_ns_names: Vec<String> = Vec::new();
+    let mut ns_static_names: Vec<String> = Vec::new();
     // Namespace `export const` members surfaced as static fields so `Ns.member`
     // resolves CROSS-MODULE (the per-module `namespace_vars` local is invisible
     // to importers; only namespace FUNCTIONS — lowered as static methods —
@@ -133,6 +155,36 @@ pub(crate) fn lower_namespace_as_class(
     // own `Let`, so it is evaluated exactly once and in the right order. zod's
     // `util` namespace (`util.objectKeys`, …) is imported this way.
     let mut ns_static_fields: Vec<crate::ir::ClassField> = Vec::new();
+
+    // Namespace classes have lexical names, even though their definitions live
+    // in the module's class table. Qualify the registration keys so unrelated
+    // namespaces can each declare (for example) Service, and pre-register them
+    // before lowering sibling functions that reference a later declaration.
+    let saved_class_renames = ctx.class_renames.clone();
+    let mut saved_class_bindings = Vec::new();
+    for item in items {
+        let decl = match item {
+            ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(export)) => &export.decl,
+            ast::ModuleItem::Stmt(ast::Stmt::Decl(decl)) => decl,
+            _ => continue,
+        };
+        if let ast::Decl::Class(class_decl) = decl {
+            let name = class_decl.ident.sym.to_string();
+            let qualified = format!("{ns_name}.{name}");
+            if ctx.lookup_class(&qualified).is_none() {
+                let id = ctx.fresh_class();
+                ctx.register_class(qualified.clone(), id);
+            }
+            // Binding probes such as `typeof C` look up the source spelling
+            // before lowering the value through `class_renames`. Give them a
+            // scope-local alias to the same class-table entry as well.
+            let index = ctx.classes_index[&qualified];
+            saved_class_bindings
+                .push((name.clone(), ctx.classes_index.insert(name.clone(), index)));
+            ctx.class_renames
+                .insert(name, (qualified, class_decl.span().lo.0));
+        }
+    }
 
     // First pass: collect exported function names, pre-register all functions and variables
     // (so namespace members can reference each other regardless of declaration order)
@@ -164,10 +216,13 @@ pub(crate) fn lower_namespace_as_class(
                             }
                         }
                     }
+                    ast::Decl::Class(class_decl) => {
+                        ns_static_names.push(class_decl.ident.sym.to_string());
+                    }
                     // #5130: nested `export namespace Inner { ... }`.
                     ast::Decl::TsModule(ts_module) if !ts_module.declare => {
                         if let Some(name) = nested_namespace_name(ts_module) {
-                            nested_ns_names.push(name);
+                            ns_static_names.push(name);
                         }
                     }
                     _ => {}
@@ -178,7 +233,7 @@ pub(crate) fn lower_namespace_as_class(
                 if !ts_module.declare =>
             {
                 if let Some(name) = nested_namespace_name(ts_module) {
-                    nested_ns_names.push(name);
+                    ns_static_names.push(name);
                 }
             }
             // Pre-register non-exported functions (hoisted like JS)
@@ -220,7 +275,7 @@ pub(crate) fn lower_namespace_as_class(
     // resolves via `has_static_field` → `StaticFieldGet` (#5130).
     ctx.register_class_statics(
         ns_name.to_string(),
-        nested_ns_names.clone(),
+        ns_static_names,
         static_method_names.clone(),
     );
 
@@ -268,7 +323,22 @@ pub(crate) fn lower_namespace_as_class(
                                 class.to_string(),
                             ));
                         }
+                        // Keep direct static-method dispatch, and also publish
+                        // its function value as an enumerable namespace member
+                        // alongside classes and variables in source order.
+                        let name = func.name.clone();
                         static_methods.push(func);
+                        publish_namespace_member(
+                            module,
+                            &mut ns_static_fields,
+                            ns_name,
+                            name.clone(),
+                            Expr::IndexGet {
+                                object: Box::new(Expr::ClassRef(ns_name.to_string())),
+                                index: Box::new(Expr::String(name)),
+                            },
+                            false,
+                        );
                     }
                     ast::Decl::Var(var_decl) => {
                         // Lower exported namespace variables as module-level locals
@@ -334,24 +404,16 @@ pub(crate) fn lower_namespace_as_class(
                                 // Surface as a static field of the namespace class
                                 // and copy the const's value into it (after the Let
                                 // above), so `Ns.member` resolves cross-module via
-                                // the static-field global. The field carries no
-                                // initializer of its own — the value is set once,
-                                // here, from the already-evaluated local.
+                                // the static-field global without re-evaluation.
                                 if is_exported {
-                                    ns_static_fields.push(crate::ir::ClassField {
-                                        name: name.clone(),
-                                        key_expr: None,
-                                        ty: Type::Any,
-                                        init: None,
-                                        is_private: false,
-                                        is_readonly: !mutable,
-                                        decorators: Vec::new(),
-                                    });
-                                    module.init.push(Stmt::Expr(Expr::StaticFieldSet {
-                                        class_name: ns_name.to_string(),
-                                        field_name: name.clone(),
-                                        value: Box::new(Expr::LocalGet(id)),
-                                    }));
+                                    publish_namespace_member(
+                                        module,
+                                        &mut ns_static_fields,
+                                        ns_name,
+                                        name.clone(),
+                                        Expr::LocalGet(id),
+                                        !mutable,
+                                    );
                                 }
                                 // Export the variable for cross-module access
                                 if is_exported {
@@ -366,7 +428,51 @@ pub(crate) fn lower_namespace_as_class(
                     }
                     ast::Decl::Class(class_decl) => {
                         let class = lower_class_decl(ctx, class_decl, is_exported)?;
+                        let class_name = class.name.clone();
+                        // A declaration evaluates heritage and computed keys
+                        // before static fields/blocks and legacy decorators,
+                        // just like the module-level class declaration path.
+                        if let Some(extends_expr) = &class.extends_expr {
+                            module
+                                .init
+                                .push(Stmt::Expr(Expr::RegisterClassParentDynamic {
+                                    class_name: class_name.clone(),
+                                    parent_expr: extends_expr.clone(),
+                                }));
+                        }
+                        let (computed_name_evaluations, _) =
+                            crate::lower_decl::prepare_ordered_class_computed_names(
+                                &class_decl.class.body,
+                                &class,
+                                &class_name,
+                            );
+                        module
+                            .init
+                            .extend(computed_name_evaluations.into_iter().map(Stmt::Expr));
+                        module.init.extend(
+                            crate::lower_decl::build_interleaved_static_init_stmts_after_computed_names(
+                                &class_decl.class.body,
+                                &class_name,
+                                &class.fields,
+                                &class.static_fields,
+                                &class.static_methods,
+                            ),
+                        );
+                        append_legacy_decorator_init_for_class(ctx, &mut module.init, &class);
                         push_class_dedup(module, class);
+
+                        // `export` here publishes on the namespace regardless
+                        // of whether the namespace itself is a module export.
+                        // Append the field at its source position to preserve
+                        // enumeration order alongside exported variables.
+                        publish_namespace_member(
+                            module,
+                            &mut ns_static_fields,
+                            ns_name,
+                            class_decl.ident.sym.to_string(),
+                            Expr::ClassRef(class_name),
+                            false,
+                        );
                     }
                     // #5130: nested `export namespace Inner { ... }`.
                     ast::Decl::TsModule(ts_module) => {
@@ -387,6 +493,14 @@ pub(crate) fn lower_namespace_as_class(
 
     // Restore previous namespace context
     ctx.current_namespace = prev_namespace;
+    ctx.class_renames = saved_class_renames;
+    for (name, previous) in saved_class_bindings.into_iter().rev() {
+        if let Some(index) = previous {
+            ctx.classes_index.insert(name, index);
+        } else {
+            ctx.classes_index.remove(&name);
+        }
+    }
 
     Ok(Class {
         id: class_id,

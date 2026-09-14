@@ -294,11 +294,20 @@ impl JSValue {
         len
     }
 
-    /// Return the length of an SSO string (0..=5).
+    /// Return the byte length of an SSO string (0..=5).
     #[inline]
     pub fn short_string_len(&self) -> usize {
         debug_assert!(self.is_short_string());
         ((self.bits & SHORT_STRING_LEN_MASK) >> SHORT_STRING_LEN_SHIFT) as usize
+    }
+
+    /// JavaScript-visible UTF-16 length, without materializing a heap string.
+    /// Keep the byte-length accessor for storage, hashing, and byte copying.
+    #[inline]
+    pub fn short_string_utf16_len(&self) -> u32 {
+        let mut bytes = [0; SHORT_STRING_MAX_LEN];
+        let len = self.short_string_to_buf(&mut bytes);
+        crate::string::compute_utf16_len_wtf8(&bytes[..len])
     }
 
     /// Get string pointer (panics if not a string)

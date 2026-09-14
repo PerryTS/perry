@@ -870,6 +870,24 @@ impl LlBlock {
         r
     }
 
+    /// Reinterpret a 32-bit integer lane as an IEEE-754 single.
+    ///
+    /// The dynamic `obj[i]` typed-array arm loads a 4-byte lane ONCE and
+    /// resolves `Int32Array` / `Uint32Array` / `Float32Array` from it with
+    /// `select`s instead of three loads behind three branches, so the
+    /// `Float32Array` form needs this reinterpretation of the same register.
+    pub fn bitcast_i32_to_float(&mut self, val: &str) -> String {
+        let r = self.reg();
+        self.push_inst(crate::inst::LlInst::Cast {
+            dst: r.clone(),
+            op: "bitcast",
+            from: "i32",
+            v: val.to_string(),
+            to: "float",
+        });
+        r
+    }
+
     pub fn sitofp(&mut self, from_ty: LlvmType, val: &str, to_ty: LlvmType) -> String {
         let r = self.reg();
         self.push_inst(crate::inst::LlInst::Cast {

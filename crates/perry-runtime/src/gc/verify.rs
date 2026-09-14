@@ -521,12 +521,23 @@ pub(super) struct OldToYoungRememberedRebuildState {
 
 impl OldToYoungRememberedRebuildState {
     pub(super) fn new(require_marked: bool) -> Self {
+        Self::new_skipping(require_marked, None)
+    }
+
+    /// #10182: a `require_marked` rebuild that never enters `skip`'s blocks —
+    /// blocks the synchronous full's census proved hold no marked or pinned
+    /// object (`BlockCensus::unmarked_blocks`), whose every object this walk
+    /// would reject anyway.
+    pub(super) fn new_skipping(require_marked: bool, skip: Option<Vec<bool>>) -> Self {
+        let mut arena_cursor =
+            crate::arena::ArenaObjectCursor::new(crate::arena::ArenaWalkOrder::BlockIndex);
+        if let Some(skip) = skip.filter(|_| require_marked) {
+            arena_cursor.set_skip_blocks(skip);
+        }
         Self {
             require_marked,
             sticky: StickyRememberedSet::default(),
-            arena_cursor: Some(crate::arena::ArenaObjectCursor::new(
-                crate::arena::ArenaWalkOrder::BlockIndex,
-            )),
+            arena_cursor: Some(arena_cursor),
             arena_done: false,
             malloc_index: 0,
             objects_scanned: 0,

@@ -327,14 +327,12 @@ pub extern "C" fn js_string_trim_end(s: *const StringHeader) -> *mut StringHeade
 
 /// Unicode case conversion over the raw payload (#6085).
 ///
-/// `str::to_lowercase`/`to_uppercase` iterate `chars()`, which reads
-/// continuation bytes past an exact-sized payload ending in a truncated
-/// multi-byte lead. Decode with the bounded `wtf8_step` instead: sequences that
-/// form a real Unicode scalar get the full `char` case mapping (identical
-/// output for well-formed input, including multi-char expansions like `ß`→`SS`),
-/// while a lone surrogate or a truncated/invalid sequence is copied through
-/// VERBATIM — which also preserves the WTF-8 round-trip (#4793) that the old
-/// `from_utf8_unchecked` path only got by accident.
+/// Whole-string lowercasing handles context-dependent Greek sigma (#10116).
+/// Only validated UTF-8 may enter Rust's string iterators: unchecked views
+/// could read past an exact-sized payload ending in a truncated lead (#6085).
+/// For WTF-8, the bounded decoder builds scalar runs for lowercasing; lone
+/// surrogates and undecodable bytes are copied verbatim and end the context.
+/// Uppercasing remains context-free, including expansions such as `ß`→`SS`.
 fn case_convert(s: *const StringHeader, upper: bool) -> *mut StringHeader {
     if !is_valid_string_ptr(s) {
         return js_string_from_bytes(ptr::null(), 0);
@@ -365,7 +363,15 @@ fn case_convert(s: *const StringHeader, upper: bool) -> *mut StringHeader {
         return js_string_from_bytes_known_utf16(out.as_ptr(), len, len, 0);
     }
 
+    if !upper {
+        if let Ok(text) = std::str::from_utf8(bytes) {
+            let out = text.to_lowercase();
+            return js_string_from_bytes(out.as_ptr(), out.len() as u32);
+        }
+    }
+
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut lowercase_run = String::new();
     let mut has_lone_surrogate = false;
     let mut buf = [0u8; 4];
     let mut i = 0usize;
@@ -387,12 +393,16 @@ fn case_convert(s: *const StringHeader, upper: bool) -> *mut StringHeader {
                         out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
                     }
                 } else {
-                    for c in ch.to_lowercase() {
-                        out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
-                    }
+                    // Keep the original scalars together so Unicode's Cased
+                    // and Case_Ignorable context is available on both sides.
+                    lowercase_run.push(ch);
                 }
             }
             None => {
+                if !lowercase_run.is_empty() {
+                    out.extend_from_slice(lowercase_run.to_lowercase().as_bytes());
+                    lowercase_run.clear();
+                }
                 // Lone surrogate / truncated / stray continuation byte: copy the
                 // raw bytes so the payload round-trips unchanged.
                 if (0xD800..=0xDFFF).contains(&cp) {
@@ -402,6 +412,9 @@ fn case_convert(s: *const StringHeader, upper: bool) -> *mut StringHeader {
             }
         }
         i = end;
+    }
+    if !lowercase_run.is_empty() {
+        out.extend_from_slice(lowercase_run.to_lowercase().as_bytes());
     }
     if has_lone_surrogate || unsafe { (*s).flags } & STRING_FLAG_HAS_LONE_SURROGATES != 0 {
         return js_string_from_wtf8_bytes(out.as_ptr(), out.len() as u32);

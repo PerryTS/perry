@@ -16,7 +16,7 @@ use crate::value::JSValue;
 use std::cell::Cell;
 
 mod cached_read;
-pub use cached_read::lazy_get;
+pub use cached_read::{js_lazy_array_index_probe, lazy_get};
 mod iterative;
 pub(crate) use iterative::materialize_iterative;
 mod mutation;

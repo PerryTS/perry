@@ -166,6 +166,7 @@ impl LoweringContext {
             catch_param_scopes: Vec::new(),
             annexb_block_fn_var_ids: HashMap::new(),
             annexb_block_fn_names_all: HashSet::new(),
+            block_fn_decl_bindings: HashMap::new(),
             lexical_forward_decls: HashMap::new(),
             nested_forward_scope_ids: HashSet::new(),
             functions_index: HashMap::new(),

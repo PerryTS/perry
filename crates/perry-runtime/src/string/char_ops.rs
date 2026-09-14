@@ -166,8 +166,7 @@ fn string_property_get_miss(value: f64, key: f64) -> f64 {
         if name == "length" {
             let bits = value.to_bits();
             if crate::value::JSValue::from_bits(bits).is_short_string() {
-                return ((bits & crate::value::SHORT_STRING_LEN_MASK)
-                    >> crate::value::SHORT_STRING_LEN_SHIFT) as f64;
+                return crate::value::JSValue::from_bits(bits).short_string_utf16_len() as f64;
             }
             let string = (bits & crate::value::POINTER_MASK) as *const StringHeader;
             return unsafe { (*string).utf16_len as f64 };
