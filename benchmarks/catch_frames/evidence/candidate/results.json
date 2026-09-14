@@ -1,0 +1,51 @@
+{
+  "promises": {
+    "instructions": 1077465852.0,
+    "samples": 1077,
+    "capture_samples": 4,
+    "transport_leaf_samples": 0,
+    "capture_percent": 0.3714020427112349
+  },
+  "json": {
+    "instructions": 3171165684.0,
+    "samples": 3168,
+    "capture_samples": 0,
+    "transport_leaf_samples": 0,
+    "capture_percent": 0.0
+  },
+  "hoist": {
+    "instructions": 13266297479.0,
+    "samples": 13263,
+    "capture_samples": 447,
+    "transport_leaf_samples": 483,
+    "capture_percent": 3.3702782175978285
+  },
+  "exec1": {
+    "instructions": 30183325430.0,
+    "samples": 30182,
+    "capture_samples": 999,
+    "transport_leaf_samples": 1080,
+    "capture_percent": 3.309919819760122
+  },
+  "plain": {
+    "instructions": 27068989.0,
+    "samples": 26,
+    "capture_samples": 0,
+    "transport_leaf_samples": 0,
+    "capture_percent": 0.0
+  },
+  "catch": {
+    "instructions": 351152420.0,
+    "samples": 351,
+    "capture_samples": 6,
+    "transport_leaf_samples": 43,
+    "capture_percent": 1.7094017094017093
+  },
+  "unwind": {
+    "instructions": 244175238.0,
+    "samples": 244,
+    "capture_samples": 129,
+    "transport_leaf_samples": 0,
+    "capture_percent": 52.868852459016395
+  }
+}

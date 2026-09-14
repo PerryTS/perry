@@ -295,6 +295,7 @@ impl Drop for ActiveFactoryGuard {
     }
 }
 
+#[inline]
 pub(crate) fn active_factory_stack_savepoint() -> usize {
     ACTIVE_FACTORY_SITES.with(|stack| stack.borrow().len())
 }
@@ -536,6 +537,11 @@ pub(super) fn test_reset() {
 #[cfg(test)]
 pub(super) fn test_header(site_key: usize) -> Option<usize> {
     lookup(site_key).map(|(header, _)| header as usize)
+}
+
+#[cfg(test)]
+pub(crate) fn test_enter_catch_factory(marker: u32) {
+    std::mem::forget(ActiveFactoryGuard::push(marker as usize, usize::MAX));
 }
 
 #[cfg(test)]

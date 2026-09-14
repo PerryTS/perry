@@ -1,0 +1,167 @@
+{
+  "date": "2026-09-14",
+  "baseline_commit": "eb13fa188d",
+  "instruction_event": "instructions:u",
+  "stat_repeats": 3,
+  "record_period": 1000003,
+  "record_call_graph": "dwarf",
+  "perf_script_inline_expansion": false,
+  "node_version": "26.5.1",
+  "workloads": {
+    "catch": {
+      "baseline": {
+        "instructions": 472151423.0,
+        "samples": 472,
+        "capture_samples": 15,
+        "transport_leaf_samples": 112,
+        "capture_percent": 3.1779661016949152
+      },
+      "candidate": {
+        "instructions": 351152420.0,
+        "samples": 351,
+        "capture_samples": 6,
+        "transport_leaf_samples": 43,
+        "capture_percent": 1.7094017094017093
+      },
+      "instruction_change_percent": -25.627160505243253,
+      "net_instructions_per_iteration": {
+        "baseline": 445.083186,
+        "candidate": 324.083431,
+        "change_percent": -27.18587419296491
+      }
+    },
+    "exec1": {
+      "baseline": {
+        "instructions": 31217404185.0,
+        "samples": 31217,
+        "capture_samples": 1559,
+        "transport_leaf_samples": 1162,
+        "capture_percent": 4.994073741871416
+      },
+      "candidate": {
+        "instructions": 30183325430.0,
+        "samples": 30182,
+        "capture_samples": 999,
+        "transport_leaf_samples": 1080,
+        "capture_percent": 3.309919819760122
+      },
+      "instruction_change_percent": -3.3125071798790873
+    },
+    "hoist": {
+      "baseline": {
+        "instructions": 13816754889.0,
+        "samples": 13816,
+        "capture_samples": 1342,
+        "transport_leaf_samples": 422,
+        "capture_percent": 9.713375796178344
+      },
+      "candidate": {
+        "instructions": 13266297479.0,
+        "samples": 13263,
+        "capture_samples": 447,
+        "transport_leaf_samples": 483,
+        "capture_percent": 3.3702782175978285
+      },
+      "instruction_change_percent": -3.9839847664825956,
+      "baseline_frame_pushes": 3500011
+    },
+    "json": {
+      "baseline": {
+        "instructions": 3182841469.0,
+        "samples": 3182,
+        "capture_samples": 0,
+        "transport_leaf_samples": 0,
+        "capture_percent": 0.0
+      },
+      "candidate": {
+        "instructions": 3171165684.0,
+        "samples": 3168,
+        "capture_samples": 0,
+        "transport_leaf_samples": 0,
+        "capture_percent": 0.0
+      },
+      "instruction_change_percent": -0.3668352669688013,
+      "baseline_frame_pushes": 6
+    },
+    "plain": {
+      "baseline": {
+        "instructions": 27068237.0,
+        "samples": 27,
+        "capture_samples": 0,
+        "transport_leaf_samples": 0,
+        "capture_percent": 0.0
+      },
+      "candidate": {
+        "instructions": 27068989.0,
+        "samples": 26,
+        "capture_samples": 0,
+        "transport_leaf_samples": 0,
+        "capture_percent": 0.0
+      },
+      "instruction_change_percent": 0.0027781639417412407
+    },
+    "promises": {
+      "baseline": {
+        "instructions": 1098667245.0,
+        "samples": 1098,
+        "capture_samples": 29,
+        "transport_leaf_samples": 3,
+        "capture_percent": 2.6411657559198543
+      },
+      "candidate": {
+        "instructions": 1077465852.0,
+        "samples": 1077,
+        "capture_samples": 4,
+        "transport_leaf_samples": 0,
+        "capture_percent": 0.3714020427112349
+      },
+      "instruction_change_percent": -1.929737424728628,
+      "baseline_frame_pushes": 100007
+    },
+    "unwind": {
+      "baseline": {
+        "instructions": 366173508.0,
+        "samples": 364,
+        "capture_samples": 99,
+        "transport_leaf_samples": 0,
+        "capture_percent": 27.197802197802197
+      },
+      "candidate": {
+        "instructions": 244175238.0,
+        "samples": 244,
+        "capture_samples": 129,
+        "transport_leaf_samples": 0,
+        "capture_percent": 52.868852459016395
+      },
+      "instruction_change_percent": -33.317066181641955,
+      "net_instructions_per_iteration": {
+        "baseline": 339.105271,
+        "candidate": 217.106249,
+        "change_percent": -35.97674009614554
+      }
+    }
+  },
+  "artifacts": {
+    "baseline": {
+      "libperry_runtime.a": "66f3bcedf157f483a14bbb7023a0edec65f7ee91b520f20910f0b404266a4d33",
+      "libperry_stdlib.a": "4b1898b5fff251ec3244a11adce07893cd86dd28d6d352c6fd2b80c811e4d8d9",
+      "perry": "46cea1d5ccc54556d0d301641567cf6879a794d2707ee01ba25fa8f60cbf48ab"
+    },
+    "candidate": {
+      "perry": "08a1aff537958e855fbdf5b9f25ccd22deb3cc3fc1a97c2f3063ed98dd2cbd9d",
+      "libperry_runtime.a": "2c0b05fbad66bb569241ccf742831504c9ef8c4819a31845c3d92c70d0efaa72",
+      "libperry_stdlib.a": "86ffd21fcd187c748661fd85015d6824998a43f70610b98b98cb7e8fd86a0206"
+    }
+  },
+  "folded_stack_format": "semicolon-delimited frames, space, sample count",
+  "host": {
+    "cpu": "AMD Ryzen 7 7700X 8-Core Processor",
+    "logical_cpus": 16,
+    "kernel": "Linux 6.17.0-23-generic",
+    "perf": "6.17.13",
+    "rustc": "1.100.0-nightly (f7d782a3b 2026-08-19)",
+    "llvm": 22
+  },
+  "source_provenance_note": "Final measurements and full integration use the same frozen three-package compiler/archive build, including the constructor identity guard. Extra GC extension builds were made only after freezing these artifacts.",
+  "reviewed_crates_patch_sha256": "1f75da852b8a0f725da2977548ff194ca7833f2e76504d3c389d25bcbc6d43b6"
+}

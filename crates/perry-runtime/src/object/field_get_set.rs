@@ -291,8 +291,6 @@ pub(crate) use has_property::{
     wide_key_index_lookup, wide_key_index_note_hit, WIDE_KEY_INDEX_MIN_KEYS,
 };
 pub use has_property::{js_in_operator, js_object_has_property};
-#[cfg(test)]
-pub(crate) use ic_miss::primitive_proto_method_name_static;
 pub(crate) use ic_miss::{
     bind_primitive_proto_method_static, cannot_be_private_member_name,
     current_private_lexical_brand_value, is_array_method_value_name,
@@ -309,6 +307,8 @@ pub use ic_miss::{
     js_object_set_field_by_property_id, js_private_brand_add, js_private_brand_check,
     js_private_field_add, js_private_guard, PicCache, PicCacheSlot, PIC_CACHE_WORDS,
 };
+#[cfg(test)]
+pub(crate) use ic_miss::{primitive_proto_method_name_static, test_push_catch_private_hint};
 /// The one slow exit of the emitted generic property-get tower. Declared here
 /// rather than inside `ic_miss.rs` only because that file sits at the
 /// 2000-line cap; the source lives next to its sibling entries.

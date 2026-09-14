@@ -1,0 +1,16 @@
+6   moved-objects 27/86   copy-minor 27/86
+
+byte-exact vs node 26.5.1: 602/602 cells (the parity property)
+summary: PASS=431 UNVER=171 XFAIL=0 FAIL=0
+  (pressure=8MB, node 26.5.1, target/release/perry)
+  UNVER = output matched but the arm was inert here; see #6942 / #6946 / #6950.
+json: /root/js-throw-evidence/guard-gc-stress.json
+
+liveness gate (#7255): every arm must have exercised what it claims
+  default                  requires=scavenge  live 48/86   counter=2501055      live
+  safepoint_minor          requires=scavenge  live 48/86   counter=2499989      live
+  evac_minor               requires=move      live 62/86   counter=2568821      live
+  verify_evac              requires=scavenge  live 53/86   counter=2861200      live
+  force_verify             requires=move      live 86/86   counter=3726742      live
+  cons_scan_off            requires=scavenge  live 48/86   counter=2534812      live
+  shipped_default          requires=none      live  0/86   counter=0            n/a

@@ -1,0 +1,11 @@
+{
+  "baseline_commit": "eb13fa188d",
+  "probes": 14,
+  "repeats": 7,
+  "heap_and_collector_medians_compared": 126,
+  "changed_medians": [],
+  "ratchet_profile": "shared_ci",
+  "ratchet_result": "pass",
+  "baseline_kind": "fresh same-host main; does not replace the committed artifact",
+  "candidate_scope": "final guarded three-package artifacts"
+}

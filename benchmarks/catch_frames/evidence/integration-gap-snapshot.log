@@ -1,0 +1,9 @@
+
+REGRESSIONS — these were expected to pass:
+  - test_gap_2899_2779_2777_static_helpers: pass -> parity_fail
+  - test_gap_disposablestack_2875: pass -> parity_fail
+  - test_gap_iterator_prototype_next_patch: pass -> parity_fail
+
+Fix the regressions, then accept the rest with:
+  UPDATE_SNAPSHOT=1 ./scripts/run_gap_tests.sh
+and commit test-parity/gap_snapshot.json.

@@ -1,0 +1,18 @@
+[
+  {
+    "check": "runtime-tests",
+    "exit": 0
+  },
+  {
+    "check": "regex-off",
+    "exit": 0
+  },
+  {
+    "check": "clippy",
+    "exit": 101
+  },
+  {
+    "check": "lint",
+    "exit": 1
+  }
+]

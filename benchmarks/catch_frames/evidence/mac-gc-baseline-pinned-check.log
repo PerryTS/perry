@@ -1,0 +1,235 @@
+gc-ratchet: FAILED
+  - 01_nursery_churn: heap_used_bytes 212,168 -> 438,744 (+106.79%), allowance 65,536 [increase]
+  - 01_nursery_churn: copied_objects 4,977 -> 6,690 (+34.42%), allowance 249 [either]
+  - 01_nursery_churn: copied_bytes 234,536 -> 466,392 (+98.86%), allowance 65,536 [either]
+  - 02_survivor_promotion: copied_objects 34,550 -> 37,366 (+8.15%), allowance 1,728 [either]
+  - 02_survivor_promotion: copied_bytes 1,450,992 -> 1,690,264 (+16.49%), allowance 72,550 [either]
+  - 04_dead_after_deep_stack: copied_objects 3,622 -> 2,666 (-26.39%), allowance 181 [either]
+  - 05_closure_capture: copied_objects 20,079 -> 14,285 (-28.86%), allowance 1,004 [either]
+  - 05_closure_capture: copied_bytes 743,384 -> 534,720 (-28.07%), allowance 65,536 [either]
+  - 05_closure_capture: promoted_objects 3,390 -> 6,154 (+81.53%), allowance 170 [either]
+  - 05_closure_capture: promoted_bytes 122,120 -> 221,624 (+81.48%), allowance 65,536 [either]
+  - 06_string_retention: copied_objects 298 -> 270 (-9.40%), allowance 16 [either]
+  - 07_array_grow_evacuate: heap_used_bytes 1,072,456 -> 1,211,232 (+12.94%), allowance 65,536 [increase]
+  - 07_array_grow_evacuate: copied_objects 4,991 -> 6,702 (+34.28%), allowance 250 [either]
+  - 07_array_grow_evacuate: promoted_objects 4,879 -> 6,154 (+26.13%), allowance 244 [either]
+  - 07_array_grow_evacuate: promoted_bytes 615,696 -> 841,048 (+36.60%), allowance 65,536 [either]
+  - 09_try_catch_roots: heap_used_bytes 212,168 -> 443,520 (+109.04%), allowance 65,536 [increase]
+  - 09_try_catch_roots: copied_objects 4,962 -> 6,673 (+34.48%), allowance 248 [either]
+  - 09_try_catch_roots: copied_bytes 230,352 -> 462,024 (+100.57%), allowance 65,536 [either]
+  - 09_try_catch_roots: freed_bytes 11,112,472 -> 10,023,568 (-9.80%), allowance 1,048,576 [either]
+  - 10_store_receiver_across_alloc: heap_used_bytes 220,384 -> 446,776 (+102.73%), allowance 65,536 [increase]
+  - 10_store_receiver_across_alloc: heap_total_bytes 16,777,216 -> 22,020,096 (+31.25%), allowance 1,048,576 [increase]
+  - 10_store_receiver_across_alloc: copied_objects 18,660 -> 14,625 (-21.62%), allowance 933 [either]
+  - 10_store_receiver_across_alloc: promoted_objects 4,722 -> 6,107 (+29.33%), allowance 236 [either]
+  - 10_store_receiver_across_alloc: promoted_bytes 228,440 -> 446,368 (+95.40%), allowance 65,536 [either]
+  - 11_collect_at_depth: heap_used_bytes 212,168 -> 444,720 (+109.61%), allowance 65,536 [increase]
+  - 11_collect_at_depth: copied_objects 4,975 -> 6,686 (+34.39%), allowance 249 [either]
+  - 11_collect_at_depth: copied_bytes 230,872 -> 462,544 (+100.35%), allowance 65,536 [either]
+  - 11_collect_at_depth: freed_bytes 10,062,936 -> 8,974,576 (-10.82%), allowance 1,048,576 [either]
+  - 12_large_live_set: copied_objects 59,405 -> 104,050 (+75.15%), allowance 2,970 [either]
+  - 12_large_live_set: copied_bytes 2,327,008 -> 4,162,008 (+78.86%), allowance 116,350 [either]
+## GC ratchet
+
+- Profile: `shared_ci`
+- Baseline commit: `f2ab19447194eeaa3cb47d968877745614024451`
+- Baseline captured: 2026-08-16T09:38:07+00:00 on `darwin-arm64`
+- Baseline host: Apple M1, 8 cores, load at capture 2.18
+
+Only rows marked gating can fail the job. Non-gating rows are recorded so a
+drift that is real but unmeasurable on this runner is still visible.
+
+Probes pinned under a non-default collector configuration:
+
+- `13_large_eden_survivors` — `PERRY_GC_SCAVENGE_NURSERY_MB=64`
+- `14_grow_then_churn` — `PERRY_GC_MAJOR_PACING_FLOOR_MB=1 PERRY_GC_SCAVENGE_NURSERY_MB=1`
+
+Accepted deterministic baseline deltas:
+
+- `46` cells measured at `3e3e652e007ac853bf934daa86fa36c870b0e3e2` (2026-09-06T04:12:57+00:00)
+- `06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b` / PR #8657 — measured: array growth targets keep their generation
+- `22c07ac5b44c5ff6a988257067110c7451da0223` / PR #9833 — measured: included receiver-store workload repair
+- `5196d830fd0689937db94598d94662d531d4ee92` / PR #9706 — bracketed: Sep-4 shape storage and array packing
+- `aa8d2ade03970ac7eb2065f3eb0e18bb4d2df1c7` / PR #9628 — bracketed: Sep-3 liveness and retention repair
+- `b3e88f1fb3378fe30b065ed328b73ea0527ab18a` / PR #8806 — measured: cache exact shape transitions
+- `d923b8dcf08f2afed71777c33423362411039cf0` / PR #9373 — measured: short-concat memo changes large-Eden occupancy
+- `e18b24c420c7c2f389607537618699ffc6aa9d1d` / PR #8900 — measured: weak shape-transition target edges
+- `e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140` / PR #8313 — measured: smaller common objects
+- `fc8c9e9a15902f889df2b1aeb280ca6223f6948a` / PR #8887 — bracketed: Aug-27/28 allocation and rooting specializations
+
+| Probe | Metric | Baseline | Current | Δ | Allowance | Gating | Status |
+|-------|--------|---------:|--------:|---:|----------:|:------:|--------|
+| `01_nursery_churn` | heap_used_bytes | 212,168 | 438,744 | +106.79% | 65,536 | yes | REGRESSION |
+| `01_nursery_churn` | heap_total_bytes | 16,777,216 | 14,680,064 | -12.50% | 1,048,576 | yes | improvement |
+| `01_nursery_churn` | minor_cycles | 1 | 1 | +0.00% | 1 | yes | ok |
+| `01_nursery_churn` | step_cycles | 1 | 1 | +0.00% | 1 | yes | ok |
+| `01_nursery_churn` | copied_objects | 4,977 | 6,690 | +34.42% | 249 | yes | REGRESSION |
+| `01_nursery_churn` | copied_bytes | 234,536 | 466,392 | +98.86% | 65,536 | yes | REGRESSION |
+| `01_nursery_churn` | promoted_objects | 0 | 0 | - | 16 | yes | ok |
+| `01_nursery_churn` | promoted_bytes | 0 | 0 | - | 65,536 | yes | ok |
+| `01_nursery_churn` | freed_bytes | 11,299,648 | 11,067,816 | -2.05% | 1,048,576 | yes | ok |
+| `01_nursery_churn` | rss_bytes | 28,950,528 | 28,508,160 | -1.53% | 8,388,608 | no | ok |
+| `01_nursery_churn` | peak_rss_bytes | 29,491,200 | 29,114,368 | -1.28% | 8,388,608 | no | ok |
+| `01_nursery_churn` | wall_ms | 54 | 43 | -20.11% | 100 | no | ok |
+| `02_survivor_promotion` | heap_used_bytes | 2,656,440 | 2,562,832 | -3.52% | 65,536 | yes | improvement |
+| `02_survivor_promotion` | heap_total_bytes | 16,777,216 | 15,728,640 | -6.25% | 1,048,576 | yes | ok |
+| `02_survivor_promotion` | minor_cycles | 1 | 1 | +0.00% | 1 | yes | ok |
+| `02_survivor_promotion` | step_cycles | 1 | 1 | +0.00% | 1 | yes | ok |
+| `02_survivor_promotion` | copied_objects | 34,550 | 37,366 | +8.15% | 1,728 | yes | REGRESSION |
+| `02_survivor_promotion` | copied_bytes | 1,450,992 | 1,690,264 | +16.49% | 72,550 | yes | REGRESSION |
+| `02_survivor_promotion` | promoted_objects | 0 | 0 | - | 16 | yes | ok |
+| `02_survivor_promotion` | promoted_bytes | 0 | 0 | - | 65,536 | yes | ok |
+| `02_survivor_promotion` | freed_bytes | 9,754,128 | 8,795,408 | -9.83% | 1,048,576 | yes | ok |
+| `02_survivor_promotion` | rss_bytes | 32,522,240 | 31,358,976 | -3.58% | 8,388,608 | no | ok |
+| `02_survivor_promotion` | peak_rss_bytes | 33,095,680 | 31,932,416 | -3.51% | 8,388,608 | no | ok |
+| `02_survivor_promotion` | wall_ms | 57 | 48 | -15.94% | 100 | no | ok |
+| `03_cross_gen_writes` | heap_used_bytes | 528 | 528 | +0.00% | 65,536 | yes | ok |
+| `03_cross_gen_writes` | heap_total_bytes | 14,680,064 | 12,582,912 | -14.29% | 1,048,576 | yes | improvement |
+| `03_cross_gen_writes` | minor_cycles | 1 | 1 | +0.00% | 1 | yes | ok |
+| `03_cross_gen_writes` | step_cycles | 1 | 1 | +0.00% | 1 | yes | ok |
+| `03_cross_gen_writes` | copied_objects | 4,107 | 4,107 | +0.00% | 205 | yes | ok |
+| `03_cross_gen_writes` | copied_bytes | 229,824 | 197,056 | -14.26% | 65,536 | yes | ok |
+| `03_cross_gen_writes` | promoted_objects | 0 | 0 | - | 16 | yes | ok |
+| `03_cross_gen_writes` | promoted_bytes | 0 | 0 | - | 65,536 | yes | ok |
+| `03_cross_gen_writes` | freed_bytes | 9,240,008 | 9,240,008 | +0.00% | 1,048,576 | yes | ok |
+| `03_cross_gen_writes` | rss_bytes | 21,708,800 | 22,888,448 | +5.43% | 8,388,608 | no | ok |
+| `03_cross_gen_writes` | peak_rss_bytes | 26,542,080 | 26,968,064 | +1.60% | 8,388,608 | no | ok |
+| `03_cross_gen_writes` | wall_ms | 37 | 29 | -21.51% | 100 | no | ok |
+| `04_dead_after_deep_stack` | heap_used_bytes | 536 | 536 | +0.00% | 65,536 | yes | ok |
+| `04_dead_after_deep_stack` | heap_total_bytes | 20,971,520 | 18,874,368 | -10.00% | 1,048,576 | yes | improvement |
+| `04_dead_after_deep_stack` | minor_cycles | 6 | 7 | +16.67% | 1 | yes | ok |
+| `04_dead_after_deep_stack` | step_cycles | 6 | 7 | +16.67% | 1 | yes | ok |
+| `04_dead_after_deep_stack` | copied_objects | 3,622 | 2,666 | -26.39% | 181 | yes | REGRESSION |
+| `04_dead_after_deep_stack` | copied_bytes | 149,400 | 111,336 | -25.48% | 65,536 | yes | ok |
+| `04_dead_after_deep_stack` | promoted_objects | 682 | 682 | +0.00% | 34 | yes | ok |
+| `04_dead_after_deep_stack` | promoted_bytes | 440 | 27,320 | +6109.09% | 65,536 | yes | ok |
+| `04_dead_after_deep_stack` | freed_bytes | 73,346,416 | 76,493,952 | +4.29% | 3,667,321 | yes | ok |
+| `04_dead_after_deep_stack` | rss_bytes | 24,100,864 | 25,100,288 | +4.15% | 8,388,608 | no | ok |
+| `04_dead_after_deep_stack` | peak_rss_bytes | 28,950,528 | 29,130,752 | +0.62% | 8,388,608 | no | ok |
+| `04_dead_after_deep_stack` | wall_ms | 69 | 38 | -44.42% | 100 | no | ok |
+| `05_closure_capture` | heap_used_bytes | 5,664 | 544 | -90.40% | 65,536 | yes | ok |
+| `05_closure_capture` | heap_total_bytes | 14,680,064 | 14,680,064 | +0.00% | 1,048,576 | yes | ok |
+| `05_closure_capture` | minor_cycles | 3 | 3 | +0.00% | 1 | yes | ok |
+| `05_closure_capture` | step_cycles | 3 | 3 | +0.00% | 1 | yes | ok |
+| `05_closure_capture` | copied_objects | 20,079 | 14,285 | -28.86% | 1,004 | yes | REGRESSION |
+| `05_closure_capture` | copied_bytes | 743,384 | 534,720 | -28.07% | 65,536 | yes | REGRESSION |
+| `05_closure_capture` | promoted_objects | 3,390 | 6,154 | +81.53% | 170 | yes | REGRESSION |
+| `05_closure_capture` | promoted_bytes | 122,120 | 221,624 | +81.48% | 65,536 | yes | REGRESSION |
+| `05_closure_capture` | freed_bytes | 26,862,320 | 27,897,872 | +3.86% | 1,343,116 | yes | ok |
+| `05_closure_capture` | rss_bytes | 19,169,280 | 23,265,280 | +21.37% | 8,388,608 | no | ok |
+| `05_closure_capture` | peak_rss_bytes | 24,248,320 | 26,853,376 | +10.74% | 8,388,608 | no | ok |
+| `05_closure_capture` | wall_ms | 68 | 50 | -26.11% | 100 | no | ok |
+| `06_string_retention` | heap_used_bytes | 212,640 | 1,072 | -99.50% | 65,536 | yes | improvement |
+| `06_string_retention` | heap_total_bytes | 23,068,672 | 22,020,096 | -4.55% | 1,048,576 | yes | ok |
+| `06_string_retention` | minor_cycles | 5 | 4 | -20.00% | 1 | yes | ok |
+| `06_string_retention` | step_cycles | 5 | 4 | -20.00% | 1 | yes | ok |
+| `06_string_retention` | copied_objects | 298 | 270 | -9.40% | 16 | yes | REGRESSION |
+| `06_string_retention` | copied_bytes | 72,288 | 70,144 | -2.97% | 65,536 | yes | ok |
+| `06_string_retention` | promoted_objects | 14 | 14 | +0.00% | 16 | yes | ok |
+| `06_string_retention` | promoted_bytes | 1,072 | 1,072 | +0.00% | 65,536 | yes | ok |
+| `06_string_retention` | freed_bytes | 68,136,816 | 68,136,816 | +0.00% | 3,406,841 | yes | ok |
+| `06_string_retention` | rss_bytes | 32,964,608 | 28,459,008 | -13.67% | 8,388,608 | no | ok |
+| `06_string_retention` | peak_rss_bytes | 33,488,896 | 33,030,144 | -1.37% | 8,388,608 | no | ok |
+| `06_string_retention` | wall_ms | 76 | 46 | -39.42% | 100 | no | ok |
+| `07_array_grow_evacuate` | heap_used_bytes | 1,072,456 | 1,211,232 | +12.94% | 65,536 | yes | REGRESSION |
+| `07_array_grow_evacuate` | heap_total_bytes | 25,165,824 | 25,165,824 | +0.00% | 1,048,576 | yes | ok |
+| `07_array_grow_evacuate` | minor_cycles | 5 | 5 | +0.00% | 1 | yes | ok |
+| `07_array_grow_evacuate` | step_cycles | 5 | 5 | +0.00% | 1 | yes | ok |
+| `07_array_grow_evacuate` | copied_objects | 4,991 | 6,702 | +34.28% | 250 | yes | REGRESSION |
+| `07_array_grow_evacuate` | copied_bytes | 2,671,936 | 2,636,392 | -1.33% | 133,597 | no | ok |
+| `07_array_grow_evacuate` | promoted_objects | 4,879 | 6,154 | +26.13% | 244 | yes | REGRESSION |
+| `07_array_grow_evacuate` | promoted_bytes | 615,696 | 841,048 | +36.60% | 65,536 | yes | REGRESSION |
+| `07_array_grow_evacuate` | freed_bytes | 83,727,056 | 83,570,704 | -0.19% | 4,186,353 | no | ok |
+| `07_array_grow_evacuate` | rss_bytes | 34,029,568 | 37,879,808 | +11.31% | 8,388,608 | no | ok |
+| `07_array_grow_evacuate` | peak_rss_bytes | 34,553,856 | 38,486,016 | +11.38% | 8,388,608 | no | ok |
+| `07_array_grow_evacuate` | wall_ms | 144 | 50 | -65.05% | 100 | no | ok |
+| `08_map_set_sidetables` | heap_used_bytes | 672 | 688 | +2.38% | 65,536 | yes | ok |
+| `08_map_set_sidetables` | heap_total_bytes | 16,777,216 | 14,680,064 | -12.50% | 1,048,576 | yes | improvement |
+| `08_map_set_sidetables` | minor_cycles | 5 | 6 | +20.00% | 1 | yes | ok |
+| `08_map_set_sidetables` | step_cycles | 5 | 6 | +20.00% | 1 | yes | ok |
+| `08_map_set_sidetables` | copied_objects | 2,489 | 2,461 | -1.12% | 124 | yes | ok |
+| `08_map_set_sidetables` | copied_bytes | 144,384 | 98,472 | -31.80% | 65,536 | yes | ok |
+| `08_map_set_sidetables` | promoted_objects | 15 | 14 | -6.67% | 16 | yes | ok |
+| `08_map_set_sidetables` | promoted_bytes | 576 | 592 | +2.78% | 65,536 | yes | ok |
+| `08_map_set_sidetables` | freed_bytes | 57,655,296 | 56,598,904 | -1.83% | 2,882,765 | yes | ok |
+| `08_map_set_sidetables` | rss_bytes | 21,037,056 | 19,906,560 | -5.37% | 8,388,608 | no | ok |
+| `08_map_set_sidetables` | peak_rss_bytes | 25,329,664 | 24,608,768 | -2.85% | 8,388,608 | no | ok |
+| `08_map_set_sidetables` | wall_ms | 171 | 176 | +3.17% | 100 | no | ok |
+| `09_try_catch_roots` | heap_used_bytes | 212,168 | 443,520 | +109.04% | 65,536 | yes | REGRESSION |
+| `09_try_catch_roots` | heap_total_bytes | 14,680,064 | 14,680,064 | +0.00% | 1,048,576 | yes | ok |
+| `09_try_catch_roots` | minor_cycles | 1 | 1 | +0.00% | 1 | yes | ok |
+| `09_try_catch_roots` | step_cycles | 1 | 1 | +0.00% | 1 | yes | ok |
+| `09_try_catch_roots` | copied_objects | 4,962 | 6,673 | +34.48% | 248 | yes | REGRESSION |
+| `09_try_catch_roots` | copied_bytes | 230,352 | 462,024 | +100.57% | 65,536 | yes | REGRESSION |
+| `09_try_catch_roots` | promoted_objects | 0 | 0 | - | 16 | yes | ok |
+| `09_try_catch_roots` | promoted_bytes | 0 | 0 | - | 65,536 | yes | ok |
+| `09_try_catch_roots` | freed_bytes | 11,112,472 | 10,023,568 | -9.80% | 1,048,576 | yes | REGRESSION |
+| `09_try_catch_roots` | rss_bytes | 30,015,488 | 30,261,248 | +0.82% | 8,388,608 | no | ok |
+| `09_try_catch_roots` | peak_rss_bytes | 30,457,856 | 30,736,384 | +0.91% | 8,388,608 | no | ok |
+| `09_try_catch_roots` | wall_ms | 744 | 106 | -85.79% | 223 | no | improvement |
+| `10_store_receiver_across_alloc` | heap_used_bytes | 220,384 | 446,776 | +102.73% | 65,536 | yes | REGRESSION |
+| `10_store_receiver_across_alloc` | heap_total_bytes | 16,777,216 | 22,020,096 | +31.25% | 1,048,576 | yes | REGRESSION |
+| `10_store_receiver_across_alloc` | minor_cycles | 9 | 8 | -11.11% | 1 | yes | ok |
+| `10_store_receiver_across_alloc` | step_cycles | 9 | 8 | -11.11% | 1 | yes | ok |
+| `10_store_receiver_across_alloc` | copied_objects | 18,660 | 14,625 | -21.62% | 933 | yes | REGRESSION |
+| `10_store_receiver_across_alloc` | copied_bytes | 825,520 | 787,792 | -4.57% | 65,536 | yes | ok |
+| `10_store_receiver_across_alloc` | promoted_objects | 4,722 | 6,107 | +29.33% | 236 | yes | REGRESSION |
+| `10_store_receiver_across_alloc` | promoted_bytes | 228,440 | 446,368 | +95.40% | 65,536 | yes | REGRESSION |
+| `10_store_receiver_across_alloc` | freed_bytes | 88,858,544 | 88,640,584 | -0.25% | 4,442,927 | yes | ok |
+| `10_store_receiver_across_alloc` | rss_bytes | 24,756,224 | 35,045,376 | +41.56% | 8,388,608 | no | drift (informational) |
+| `10_store_receiver_across_alloc` | peak_rss_bytes | 25,296,896 | 35,569,664 | +40.61% | 8,388,608 | no | drift (informational) |
+| `10_store_receiver_across_alloc` | wall_ms | 43 | 159 | +268.47% | 100 | no | drift (informational) |
+| `11_collect_at_depth` | heap_used_bytes | 212,168 | 444,720 | +109.61% | 65,536 | yes | REGRESSION |
+| `11_collect_at_depth` | heap_total_bytes | 13,631,488 | 12,582,912 | -7.69% | 1,048,576 | yes | ok |
+| `11_collect_at_depth` | minor_cycles | 1 | 1 | +0.00% | 1 | yes | ok |
+| `11_collect_at_depth` | step_cycles | 1 | 1 | +0.00% | 1 | yes | ok |
+| `11_collect_at_depth` | copied_objects | 4,975 | 6,686 | +34.39% | 249 | yes | REGRESSION |
+| `11_collect_at_depth` | copied_bytes | 230,872 | 462,544 | +100.35% | 65,536 | yes | REGRESSION |
+| `11_collect_at_depth` | promoted_objects | 0 | 0 | - | 16 | yes | ok |
+| `11_collect_at_depth` | promoted_bytes | 0 | 0 | - | 65,536 | yes | ok |
+| `11_collect_at_depth` | freed_bytes | 10,062,936 | 8,974,576 | -10.82% | 1,048,576 | yes | REGRESSION |
+| `11_collect_at_depth` | rss_bytes | 26,525,696 | 26,656,768 | +0.49% | 8,388,608 | no | ok |
+| `11_collect_at_depth` | peak_rss_bytes | 26,984,448 | 27,295,744 | +1.15% | 8,388,608 | no | ok |
+| `11_collect_at_depth` | wall_ms | 48 | 46 | -4.41% | 100 | no | ok |
+| `12_large_live_set` | heap_used_bytes | 1,104,848 | 569,448 | -48.46% | 65,536 | yes | improvement |
+| `12_large_live_set` | heap_total_bytes | 82,837,504 | 74,448,896 | -10.13% | 1,656,750 | yes | improvement |
+| `12_large_live_set` | minor_cycles | 5 | 5 | +0.00% | 1 | yes | ok |
+| `12_large_live_set` | step_cycles | 5 | 5 | +0.00% | 1 | yes | ok |
+| `12_large_live_set` | copied_objects | 59,405 | 104,050 | +75.15% | 2,970 | yes | REGRESSION |
+| `12_large_live_set` | copied_bytes | 2,327,008 | 4,162,008 | +78.86% | 116,350 | yes | REGRESSION |
+| `12_large_live_set` | promoted_objects | 529,075 | 530,030 | +0.18% | 26,454 | yes | ok |
+| `12_large_live_set` | promoted_bytes | 21,201,208 | 21,201,208 | +0.00% | 1,060,060 | yes | ok |
+| `12_large_live_set` | freed_bytes | 63,732,784 | 63,732,784 | +0.00% | 3,186,639 | yes | ok |
+| `12_large_live_set` | rss_bytes | 122,044,416 | 117,211,136 | -3.96% | 18,306,662 | no | ok |
+| `12_large_live_set` | peak_rss_bytes | 124,665,856 | 120,307,712 | -3.50% | 18,699,878 | no | ok |
+| `12_large_live_set` | wall_ms | 1,955 | 287 | -85.33% | 586 | no | improvement |
+| `13_large_eden_survivors` | heap_used_bytes | 499,576 | 444,976 | -10.93% | 65,536 | yes | ok |
+| `13_large_eden_survivors` | heap_total_bytes | 59,768,832 | 61,865,984 | +3.51% | 1,195,377 | no | drift (informational) |
+| `13_large_eden_survivors` | minor_cycles | 3 | 3 | +0.00% | 1 | yes | ok |
+| `13_large_eden_survivors` | step_cycles | 3 | 3 | +0.00% | 1 | yes | ok |
+| `13_large_eden_survivors` | copied_objects | 377,569 | 382,868 | +1.40% | 18,878 | yes | ok |
+| `13_large_eden_survivors` | copied_bytes | 21,429,712 | 21,804,904 | +1.75% | 1,071,486 | yes | ok |
+| `13_large_eden_survivors` | promoted_objects | 386,271 | 387,152 | +0.23% | 19,314 | yes | ok |
+| `13_large_eden_survivors` | promoted_bytes | 21,777,792 | 21,975,560 | +0.91% | 1,088,890 | yes | ok |
+| `13_large_eden_survivors` | freed_bytes | 108,243,696 | 108,045,936 | -0.18% | 5,412,185 | yes | ok |
+| `13_large_eden_survivors` | rss_bytes | 145,522,688 | 143,179,776 | -1.61% | 21,828,403 | no | ok |
+| `13_large_eden_survivors` | peak_rss_bytes | 145,850,368 | 143,687,680 | -1.48% | 21,877,555 | no | ok |
+| `13_large_eden_survivors` | wall_ms | 965 | 873 | -9.58% | 290 | no | ok |
+| `14_grow_then_churn` | heap_used_bytes | 402,968 | 429,408 | +6.56% | 65,536 | yes | ok |
+| `14_grow_then_churn` | heap_total_bytes | 23,068,672 | 23,068,672 | +0.00% | 1,048,576 | yes | ok |
+| `14_grow_then_churn` | minor_cycles | 21 | 22 | +4.76% | 1 | yes | ok |
+| `14_grow_then_churn` | step_cycles | 22 | 23 | +4.55% | 1 | yes | ok |
+| `14_grow_then_churn` | copied_objects | 330 | 330 | +0.00% | 16 | yes | ok |
+| `14_grow_then_churn` | copied_bytes | 1,222,176 | 1,277,072 | +4.49% | 65,536 | yes | ok |
+| `14_grow_then_churn` | promoted_objects | 404,022 | 405,282 | +0.31% | 20,201 | yes | ok |
+| `14_grow_then_churn` | promoted_bytes | 147,516,064 | 147,967,848 | +0.31% | 7,375,803 | yes | ok |
+| `14_grow_then_churn` | freed_bytes | 118,903,288 | 119,549,744 | +0.54% | 5,945,164 | yes | ok |
+| `14_grow_then_churn` | rss_bytes | 286,490,624 | 297,271,296 | +3.76% | 42,973,594 | no | ok |
+| `14_grow_then_churn` | peak_rss_bytes | 286,834,688 | 297,779,200 | +3.82% | 43,025,203 | no | ok |
+| `14_grow_then_churn` | wall_ms | 403 | 575 | +42.59% | 121 | no | drift (informational) |
+
+### Cells excluded from the gating family by probe override
+
+- `07_array_grow_evacuate`.copied_bytes — NOT GATED ON THIS PROBE (#9790). Address-dependent promotion order changes old-block packing and the allocation boundary where nursery pressure is checked. The fifth minor observes a different live cohort: a completed 8,208-byte array or a new 144-byte array. Header-size sums and from-space reclamation account for the byte deltas; this is placement-dependent pacing, not an accounting discrepancy. Keep this cell visible; correctness, retention, cycle counts, object counts and promoted bytes remain gated. See evidence/9790-array-growth-pacing.json and the README investigation. (observed spread 8,064 over 21 runs, 2026-09-05, macOS arm64, Perry 0.5.1520; 21 executions of one unchanged binary. Compiler/runtime hashes and raw counters: benchmarks/gc_ratchet/evidence/9790-array-growth-pacing.json.; https://github.com/PerryTS/perry/issues/9790)
+- `07_array_grow_evacuate`.freed_bytes — NOT GATED ON THIS PROBE (#9790). Address-dependent promotion order changes old-block packing and the allocation boundary where nursery pressure is checked. The fifth minor observes a different live cohort: a completed 8,208-byte array or a new 144-byte array. Header-size sums and from-space reclamation account for the byte deltas; this is placement-dependent pacing, not an accounting discrepancy. Keep this cell visible; correctness, retention, cycle counts, object counts and promoted bytes remain gated. See evidence/9790-array-growth-pacing.json and the README investigation. (observed spread 8,208 over 21 runs, 2026-09-05, macOS arm64, Perry 0.5.1520; 21 executions of one unchanged binary. Compiler/runtime hashes and raw counters: benchmarks/gc_ratchet/evidence/9790-array-growth-pacing.json.; https://github.com/PerryTS/perry/issues/9790)
+- `13_large_eden_survivors`.heap_total_bytes — NOT GATED ON THIS PROBE (#9829). Total reserved arena capacity varies by 2 MiB across executions of one unchanged binary: 18/21 runs reserve 61865984 bytes and 3/21 reserve 63963136. All 21 report the same 227048 live bytes and identical seven GC counters (including three minors and 377569 copied objects), with Node-equivalent output. js_arena_stats sums reserved block sizes for heapTotal, separately from its exact live-object census for heapUsed. This is spare-capacity/placement variation, not changing live retention or GC work; the precise allocating block/order is not isolated. CI run 33989581881 independently contains the same two capacities. Keep the cell visible, while heapUsed, liveness, copying/promotion/reclamation, and all other probes remain gated. Raw 21-run evidence and binary/source hashes: evidence/9829-recovery.json. (observed spread 2,097,152 over 21 runs, 2026-09-06, linux-x86_64, clean main d36a1af0c compiler and matching runtime/stdlib archives. One unchanged probe binary, 21 traced executions with PERRY_GC_SCAVENGE_NURSERY_MB=64. See evidence/9829-recovery.json capacity_variance.; https://github.com/PerryTS/perry/issues/9829)

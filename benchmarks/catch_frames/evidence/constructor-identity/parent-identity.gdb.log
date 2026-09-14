@@ -1,0 +1,67 @@
+Breakpoint 1 at 0x74739d: file crates/perry-runtime/src/object/class_registry/parent_static.rs, line 75.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+plain typeof addEventListener: function
+plain typeof removeEventListener: function
+plain typeof dispatchEvent: function
+plain listener fired
+plain dispatch returned: true
+Warning: the current language does not match this frame.
+register parent: class=1 bits=7ffd0200002742d8
+closure function=555555c36b00
+perry_runtime::object::global_this::fetch_globals::global_this_builtin_noop_thunk in section .text of /root/js-throw-evidence/eventtarget-triage/fix-debug
+replaced only the duplicated noop identity with the comparison target
+sub typeof addEventListener: function
+sub typeof dispatchEvent: function
+sub listener fired: go
+sub dispatch returned: true
+register parent: class=2 bits=7ffd0200002742d8
+closure function=555555971e30
+perry_runtime::node_stream::pipeline::collected_pipeline_error_noop in section .text of /root/js-throw-evidence/eventtarget-triage/fix-debug
+two-level typeof dispatchEvent: function
+two-level listener fired
+register parent: class=4 bits=7ffd0200002742d8
+closure function=555555971e30
+perry_runtime::node_stream::pipeline::collected_pipeline_error_noop in section .text of /root/js-throw-evidence/eventtarget-triage/fix-debug
+ctor-subclass listener fired, detail.count: 7
+ctor-subclass field survived super(): 7
+bound-read listener fired
+removed listener did not fire
+busB has no busA listener
+busA listener fired
+register parent: class=5 bits=7ffd0200002742d8
+closure function=555555971e30
+perry_runtime::node_stream::pipeline::collected_pipeline_error_noop in section .text of /root/js-throw-evidence/eventtarget-triage/fix-debug
+override-subclass inherits addEventListener: function
+override ran for: x
+override returned: true
+once listener call count: 1
+plain instanceof EventTarget: true
+sub instanceof EventTarget: true
+two-level instanceof EventTarget: true
+plain object instanceof EventTarget: false
+register parent: class=6 bits=7ffd0200002742d8
+closure function=555555971e30
+perry_runtime::node_stream::pipeline::collected_pipeline_error_noop in section .text of /root/js-throw-evidence/eventtarget-triage/fix-debug
+empty-ctor subclass: function function
+dynamic-new subclass: function
+Reflect.construct subclass: function
+register parent: class=12 bits=7ffd0200002742d8
+closure function=555555971e30
+perry_runtime::node_stream::pipeline::collected_pipeline_error_noop in section .text of /root/js-throw-evidence/eventtarget-triage/fix-debug
+class-expression subclass: function
+class-expression listener fired
+register parent: class=13 bits=7ffd0200002742d8
+closure function=555555971e30
+perry_runtime::node_stream::pipeline::collected_pipeline_error_noop in section .text of /root/js-throw-evidence/eventtarget-triage/fix-debug
+fn-local subclass: function
+fn-local listener fired
+register parent: class=7 bits=7ffd0200002742d8
+closure function=555555971e30
+perry_runtime::node_stream::pipeline::collected_pipeline_error_noop in section .text of /root/js-throw-evidence/eventtarget-triage/fix-debug
+deleted-own-prop subclass: function function
+deleted-own-prop listener fired
+frozen subclass: function function
+event type: basic cancelable: false
+custom event type: custom detail.n: 42
+[Inferior 1 (process 812179) exited normally]

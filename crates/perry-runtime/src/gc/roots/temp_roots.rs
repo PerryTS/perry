@@ -176,6 +176,7 @@ pub extern "C" fn js_array_push_f64_temp_rooted(idx: u32, value: f64) {
 }
 
 /// Current depth — the value a savepoint records.
+#[inline]
 pub(crate) fn temp_root_depth() -> usize {
     unsafe { (*hot_temp_roots()).len() }
 }

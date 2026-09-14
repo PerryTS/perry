@@ -1274,6 +1274,7 @@ pub(crate) fn private_lexical_brand_pop() {
     });
 }
 
+#[inline]
 pub(crate) fn private_lexical_brand_stack_savepoint() -> usize {
     PRIVATE_LEXICAL_BRAND_STACK.with(|stack| stack.borrow().len())
 }

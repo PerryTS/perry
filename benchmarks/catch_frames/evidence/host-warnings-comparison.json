@@ -1,0 +1,20 @@
+[
+  {
+    "side": "baseline",
+    "exit_code": 101,
+    "errors": [
+      "error: function `registered_extern_handle` is never used",
+      "error: function `wasm_memory_descriptor_maximum` is never used",
+      "error: could not compile `perry-runtime` (lib) due to 2 previous errors"
+    ]
+  },
+  {
+    "side": "fix",
+    "exit_code": 101,
+    "errors": [
+      "error: function `registered_extern_handle` is never used",
+      "error: function `wasm_memory_descriptor_maximum` is never used",
+      "error: could not compile `perry-runtime` (lib) due to 2 previous errors"
+    ]
+  }
+]

@@ -1,0 +1,23 @@
+...........................gc-ratchet error: 01_probe: heap_used_bytes summary is inconsistent with its samples
+.....gc-ratchet: UNFIT PINNED CELL `01_probe.heap_used_bytes` — spread 6768 when pinned, but its band is justified by bit-identity, not by a noise allowance. Either re-pin on a quiet host, or take this one cell out of the gating family with a probe_overrides entry that records the evidence.
+gc-ratchet: 1 unfit cell(s) deferred to `check` (--scope structural); they will fail the job there, after the probes run
+gc-ratchet: UNFIT PINNED CELL `01_probe.heap_used_bytes` — spread 6768 when pinned, but its band is justified by bit-identity, not by a noise allowance. Either re-pin on a quiet host, or take this one cell out of the gating family with a probe_overrides entry that records the evidence.
+gc-ratchet: /var/folders/8v/09vl257j2_v70v2k77gh01n00000gn/T/tmpnp401gxv/artifact.json has 1 unfit cell(s); re-pin them or record a probe_overrides entry
+gc-ratchet: UNFIT PINNED PROBE `01_probe` — baseline was pinned without a passing Node oracle diff (status='unchecked'), so this probe's rows are not evidence about the collector
+gc-ratchet: 1 unfit cell(s) deferred to `check` (--scope structural); they will fail the job there, after the probes run
+gc-ratchet: UNFIT PINNED PROBE `01_probe` — baseline was pinned without a passing Node oracle diff (status='unchecked'), so this probe's rows are not evidence about the collector
+gc-ratchet: /var/folders/8v/09vl257j2_v70v2k77gh01n00000gn/T/tmpoa3t5n78/artifact.json has 1 unfit cell(s); re-pin them or record a probe_overrides entry
+gc-ratchet: UNFIT PINNED PROBE `01_probe` — baseline pinned a probe that ran no minor collection, so there is no evacuating-minor behaviour here to ratchet against
+gc-ratchet: 1 unfit cell(s) deferred to `check` (--scope structural); they will fail the job there, after the probes run
+gc-ratchet: UNFIT PINNED PROBE `01_probe` — baseline pinned a probe that ran no minor collection, so there is no evacuating-minor behaviour here to ratchet against
+gc-ratchet: /var/folders/8v/09vl257j2_v70v2k77gh01n00000gn/T/tmpmkazs2vz/artifact.json has 1 unfit cell(s); re-pin them or record a probe_overrides entry
+..gc-ratchet: UNFIT PINNED CELL `01_probe.heap_used_bytes` — spread 6768 when pinned, but its band is justified by bit-identity, not by a noise allowance. Either re-pin on a quiet host, or take this one cell out of the gating family with a probe_overrides entry that records the evidence.
+gc-ratchet: /var/folders/8v/09vl257j2_v70v2k77gh01n00000gn/T/tmpnpoq5boi/artifact.json has 1 unfit cell(s); re-pin them or record a probe_overrides entry
+.................................................................................
+----------------------------------------------------------------------
+Ran 115 tests in 8.432s
+
+OK
+gc-ratchet: /var/folders/8v/09vl257j2_v70v2k77gh01n00000gn/T/tmpnp401gxv/artifact.json is structurally valid
+gc-ratchet: /var/folders/8v/09vl257j2_v70v2k77gh01n00000gn/T/tmpoa3t5n78/artifact.json is structurally valid
+gc-ratchet: /var/folders/8v/09vl257j2_v70v2k77gh01n00000gn/T/tmpmkazs2vz/artifact.json is structurally valid

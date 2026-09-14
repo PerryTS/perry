@@ -271,6 +271,7 @@ pub(crate) fn root_set(idx: usize, value: f64) {
     ROOTS.with(|r| r.borrow_mut()[idx] = value.to_bits());
 }
 
+#[inline]
 pub(crate) fn roots_len() -> usize {
     ROOTS.with(|r| r.borrow().len())
 }
@@ -292,6 +293,7 @@ pub(crate) fn roots_truncate(len: usize) {
 /// epilogues, so `js_throw` restores both from the savepoint of the catching
 /// `try` — exactly like the shadow-stack savepoint (#1830) and the
 /// method-depth savepoint (#5591).
+#[inline]
 pub(crate) fn interp_savepoint() -> u64 {
     let len = roots_len() as u64;
     let depth = CALL_DEPTH.with(|c| c.get()) as u64;

@@ -1,0 +1,77 @@
+[
+  {
+    "check": "merge",
+    "command": [
+      "python3",
+      "scripts/parity_report_merge.py",
+      "--expect",
+      "4",
+      "--output",
+      "/root/js-throw-evidence/final-integration/parity.json",
+      "/root/js-throw-evidence/full-parity-1.json",
+      "/root/js-throw-evidence/full-parity-2.json",
+      "/root/js-throw-evidence/full-parity-3.json",
+      "/root/js-throw-evidence/full-parity-4.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "check": "known-failures",
+    "command": [
+      "python3",
+      "scripts/parity_known_failures.py",
+      "--report",
+      "/root/js-throw-evidence/final-integration/parity.json",
+      "--platform",
+      "linux"
+    ],
+    "exit_code": 1
+  },
+  {
+    "check": "gap-snapshot",
+    "command": [
+      "python3",
+      "scripts/gap_snapshot.py",
+      "check",
+      "--report",
+      "/root/js-throw-evidence/final-integration/gap.json",
+      "--snapshot",
+      "test-parity/gap_snapshot.json"
+    ],
+    "exit_code": 1
+  },
+  {
+    "check": "threshold",
+    "command": [
+      "python3",
+      "scripts/parity_threshold_gate.py",
+      "--check",
+      "--report",
+      "/root/js-throw-evidence/final-integration/parity.json",
+      "--output-json",
+      "/root/js-throw-evidence/final-integration/threshold.json",
+      "--output-md",
+      "/root/js-throw-evidence/final-integration/threshold.md"
+    ],
+    "exit_code": 0
+  },
+  {
+    "check": "matrix-trend",
+    "command": [
+      "python3",
+      "scripts/parity_matrix_trend.py",
+      "--check",
+      "--report",
+      "/root/js-throw-evidence/final-integration/parity.json",
+      "--platform",
+      "linux",
+      "--output-dir",
+      "/root/js-throw-evidence/final-integration/output",
+      "--output-json",
+      "/root/js-throw-evidence/final-integration/matrix-trend.json",
+      "--output-md",
+      "/root/js-throw-evidence/final-integration/matrix-trend.md"
+    ],
+    "exit_code": 0
+  }
+]
