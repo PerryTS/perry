@@ -20,6 +20,7 @@ struct Summary {
     dependencies: Vec<PathBuf>,
     unknown_exports: bool,
     unknown_dependencies: bool,
+    pure: bool,
 }
 
 #[derive(Default)]
@@ -31,8 +32,10 @@ pub(super) struct Scanner {
 }
 
 impl Scanner {
-    pub(super) fn declared_pure(&mut self, path: &Path) -> bool {
-        self.contracts.is_pure(path)
+    pub(super) fn module_is_pure(&mut self, path: &Path, ctx: &mut CompilationContext) -> bool {
+        self.contracts
+            .is_pure(path)
+            .unwrap_or_else(|| self.summary(path, ctx).pure)
     }
 
     fn summary(&mut self, path: &Path, ctx: &mut CompilationContext) -> Summary {
@@ -54,6 +57,7 @@ impl Scanner {
         if let Some(module) = parsed {
             let defined = ctx.parsed_defines.apply(&module);
             let module = defined.as_ref().unwrap_or(&module);
+            result.pure = super::purity::module_is_pure(module);
             let mut opaque = OpaqueLoads::default();
             module.visit_with(&mut opaque);
             result.unknown_dependencies = opaque.0;
@@ -65,6 +69,8 @@ impl Scanner {
                 let mut star = false;
                 match decl {
                     ast::ModuleDecl::Import(import) if !import.type_only => {
+                        result.unknown_dependencies |=
+                            import.with.is_some() || import.phase != ast::ImportPhase::Evaluation;
                         if import.specifiers.is_empty()
                             || import.specifiers.iter().any(
                                 |s| !matches!(s, ast::ImportSpecifier::Named(n) if n.is_type_only),
@@ -74,10 +80,12 @@ impl Scanner {
                         }
                     }
                     ast::ModuleDecl::ExportAll(export) if !export.type_only => {
+                        result.unknown_dependencies |= export.with.is_some();
                         dependency = Some(&export.src);
                         star = true;
                     }
                     ast::ModuleDecl::ExportNamed(export) if !export.type_only => {
+                        result.unknown_dependencies |= export.with.is_some();
                         let mut runtime = export.specifiers.is_empty();
                         for spec in &export.specifiers {
                             let name = match spec {
@@ -252,7 +260,7 @@ impl Scanner {
                 self.droppable.insert(root, false);
                 return false;
             }
-            if !self.declared_pure(&canonical) {
+            if !self.module_is_pure(&canonical, ctx) {
                 self.droppable.insert(root, false);
                 return false;
             }

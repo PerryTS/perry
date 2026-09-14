@@ -3,12 +3,14 @@ use std::path::{Path, PathBuf};
 
 #[derive(Default)]
 pub(super) struct Contracts {
-    files: HashMap<PathBuf, bool>,
+    files: HashMap<PathBuf, Option<bool>>,
     manifests: HashMap<PathBuf, Option<serde_json::Value>>,
 }
 
 impl Contracts {
-    pub(super) fn is_pure(&mut self, path: &Path) -> bool {
+    /// None permits AST inference. An explicit effectful/unknown contract
+    /// vetoes omission even when the current source looks inert.
+    pub(super) fn is_pure(&mut self, path: &Path) -> Option<bool> {
         if let Some(pure) = self.files.get(path) {
             return *pure;
         }
@@ -17,7 +19,7 @@ impl Contracts {
         pure
     }
 
-    fn lookup(&mut self, path: &Path) -> bool {
+    fn lookup(&mut self, path: &Path) -> Option<bool> {
         // Stop at the owning package, never inherit a parent's contract across
         // nested node_modules. Type-only package.json files inside dist/ may
         // omit sideEffects; the owning package's declaration still applies.
@@ -28,21 +30,18 @@ impl Contracts {
             prefix.push(component);
             if component.as_os_str() == "node_modules" {
                 let Some(name) = components.next() else {
-                    return false;
+                    return Some(false);
                 };
                 prefix.push(name);
                 if name.as_os_str().to_string_lossy().starts_with('@') {
                     let Some(name) = components.next() else {
-                        return false;
+                        return Some(false);
                     };
                     prefix.push(name);
                 }
                 package_root = Some(prefix.clone());
             }
         }
-        let Some(root) = package_root else {
-            return false;
-        };
         for dir in path.parent().into_iter().flat_map(Path::ancestors) {
             let manifest = self.manifests.entry(dir.to_owned()).or_insert_with(|| {
                 std::fs::read(dir.join("package.json"))
@@ -50,14 +49,14 @@ impl Contracts {
                     .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             });
             if manifest.is_none() && dir.join("package.json").exists() {
-                return false;
+                return Some(false);
             }
             if let Some(value) = manifest.as_ref().and_then(|v| v.get("sideEffects")) {
-                return match value {
+                return Some(match value {
                     serde_json::Value::Bool(false) => true,
                     serde_json::Value::Array(patterns) => {
                         let Ok(relative) = path.strip_prefix(dir) else {
-                            return false;
+                            return Some(false);
                         };
                         let relative = relative.to_string_lossy().replace('\\', "/");
                         patterns.iter().all(|pattern| {
@@ -67,13 +66,25 @@ impl Contracts {
                         })
                     }
                     _ => false,
-                };
+                });
             }
-            if dir == root {
+            // Canonical workspace-package paths may live outside node_modules.
+            // Type-only dist manifests do not hide their owning contract.
+            let boundary = package_root.as_deref().map_or_else(
+                || {
+                    manifest.as_ref().is_some_and(|value| {
+                        !value
+                            .as_object()
+                            .is_some_and(|object| object.len() == 1 && object.contains_key("type"))
+                    })
+                },
+                |root| dir == root,
+            );
+            if boundary {
                 break;
             }
         }
-        false
+        None
     }
 }
 
@@ -144,6 +155,54 @@ fn segment(pattern: &[u8], text: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_contracts_allow_inference_but_explicit_contracts_override_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let package = dir.path().join("node_modules/fixture");
+        std::fs::create_dir_all(package.join("dist")).unwrap();
+        let module = package.join("dist/index.js");
+        for (manifest, expected) in [
+            (r#"{"name":"fixture"}"#, None),
+            (r#"{"sideEffects":false}"#, Some(true)),
+            (r#"{"sideEffects":true}"#, Some(false)),
+            (r#"{"sideEffects":["**/*.js"]}"#, Some(false)),
+            (r#"{"sideEffects":["**/*.css"]}"#, Some(true)),
+            (r#"{"sideEffects":["[ab].js"]}"#, Some(false)),
+            ("invalid json", Some(false)),
+        ] {
+            std::fs::write(package.join("package.json"), manifest).unwrap();
+            assert_eq!(
+                Contracts::default().is_pure(&module),
+                expected,
+                "{manifest}"
+            );
+        }
+    }
+
+    #[test]
+    fn contracts_respect_workspace_and_nested_package_boundaries() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("package.json"), r#"{"sideEffects":false}"#).unwrap();
+        let nested = dir.path().join("node_modules/fixture/dist");
+        std::fs::create_dir_all(&nested).unwrap();
+        let mut contracts = Contracts::default();
+        assert_eq!(contracts.is_pure(&dir.path().join("source.js")), Some(true));
+        assert_eq!(contracts.is_pure(&nested.join("index.js")), None);
+        std::fs::write(nested.join("package.json"), r#"{"sideEffects":true}"#).unwrap();
+        assert_eq!(
+            Contracts::default().is_pure(&nested.join("index.js")),
+            Some(false)
+        );
+
+        let dist = dir.path().join("dist/esm");
+        std::fs::create_dir_all(&dist).unwrap();
+        std::fs::write(dist.join("package.json"), r#"{"type":"module"}"#).unwrap();
+        assert_eq!(
+            Contracts::default().is_pure(&dist.join("index.js")),
+            Some(true)
+        );
+    }
 
     #[test]
     fn glob_contracts_fail_closed() {

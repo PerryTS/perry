@@ -1,7 +1,8 @@
 //! Collection-time, monotone export demand. Ordinary imports are retained. An
 //! unused re-export is postponed only when its entire static dependency tree
-//! is covered by package sideEffects contracts. Later importers can reactivate
-//! it; HIR edges are removed only after every collection root has settled.
+//! is covered by package sideEffects contracts or inert-initialization proofs.
+//! Later importers can reactivate it; HIR edges are removed only after every
+//! collection root has settled.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -11,6 +12,7 @@ use perry_hir::{Export, Import, ImportSpecifier};
 use super::super::CompilationContext;
 
 mod forwarding;
+mod purity;
 mod scan;
 mod side_effects;
 pub(super) use forwarding::normalize as normalize_forwarding_barrel;
@@ -170,7 +172,7 @@ pub(super) fn record(
         return true;
     }
     let mut state = std::mem::take(&mut ctx.reexport_pruner);
-    let safe = state.scan.declared_pure(from) && state.scan.can_drop_tree(source_path, ctx);
+    let safe = state.scan.module_is_pure(from, ctx) && state.scan.can_drop_tree(source_path, ctx);
     let mut edge = Edge {
         from: from.to_owned(),
         index,
