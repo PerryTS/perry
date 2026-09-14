@@ -188,6 +188,7 @@ mod clone_suffix_tests;
 mod closure;
 mod closure_collect;
 mod ctor_arity;
+pub use ctor_arity::{context_free_ctor_param_count, UNRESOLVED_PARENT_FWD_ARITY};
 #[cfg(test)]
 mod declared_string_add_tests;
 #[cfg(test)]

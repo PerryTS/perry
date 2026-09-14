@@ -6,6 +6,33 @@
 
 use std::collections::HashMap;
 
+/// Positional forwarding band for a synthesized default ctor whose parent arity
+/// cannot be resolved while compiling the defining module (see the tail of
+/// [`synthesized_ctor_param_count`]).
+pub const UNRESOLVED_PARENT_FWD_ARITY: usize = 8;
+
+/// The standalone-constructor arity of `class` when it can be decided from the
+/// class definition alone, without the defining module's class table or
+/// imports. Importers use this to describe a class they did not compile, so it
+/// MUST agree with [`synthesized_ctor_param_count`] for every case it answers:
+/// an own constructor, a native parent, no heritage, and a heritage that is only
+/// a runtime value (`extends_expr` with no resolvable `extends_name`), which
+/// always synthesizes the fixed forwarding band. `None` means the arity depends
+/// on the ancestor walk and callers keep their existing behaviour (#10258).
+pub fn context_free_ctor_param_count(class: &perry_hir::Class) -> Option<usize> {
+    if let Some(c) = class.constructor.as_ref() {
+        return Some(c.params.len());
+    }
+    if class.native_extends.is_some() {
+        return Some(0);
+    }
+    match (&class.extends_name, &class.extends_expr) {
+        (None, None) => Some(0),
+        (None, Some(_)) => Some(UNRESOLVED_PARENT_FWD_ARITY),
+        _ => None,
+    }
+}
+
 /// The standalone-constructor arity Perry emits for `class`, accounting for the
 /// JS spec default ctor `constructor(...args) { super(...args) }` that a class
 /// with NO own constructor but WITH heritage inherits. Walks the ancestor chain
@@ -78,6 +105,5 @@ pub(super) fn synthesized_ctor_param_count(
     // positional params: the `new` site pads missing slots with `undefined`,
     // and a parent ctor reading fewer params ignores the trailing `undefined`s,
     // so over-declaring is correct for any (non-native) parent up to this band.
-    const UNRESOLVED_PARENT_FWD_ARITY: usize = 8;
     UNRESOLVED_PARENT_FWD_ARITY
 }
