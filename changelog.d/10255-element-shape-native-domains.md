@@ -90,9 +90,11 @@ this change does not address:
 * `sequential` 1m/20m 1.65/3.38 vs 1.32/2.02 — identical 22 instructions but
   3.4 → 5.2 → 10.9 cycles from 16k to 20m: memory-bound record access.
 
-**JSON matrix** (50 rows, 5 interleaved rounds, PR vs main): 49 rows within
-±2 % CPU (the one element-shape consumer, `scan`, 0.5–1.1 % faster), peak RSS
-identical. `escaped_1m:stringify` read +10 % (160.8 → 177.3 ms); its hot function
+**JSON matrix** (50 rows, 5 interleaved rounds, best-of, PR vs main): 48 rows
+within ±2 % CPU (the one element-shape consumer, `scan`, 0.5–1.1 % faster), no
+row's peak RSS higher. Two runtime-only rows moved further, one each way:
+`long_string_1m:stringify` −4.4 % and `escaped_1m:stringify` +10.3 % (160.8 →
+177.3 ms). Neither runs a clone; the latter's hot function
 `json::stringify_flat::emit_piece` is identical runtime code shifted 128 bytes
 by the smaller worker module, and appending unused functions to main's own
 worker moves the same row to 149.0–149.4 ms — layout, not this change.
