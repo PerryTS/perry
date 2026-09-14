@@ -6627,6 +6627,8 @@ dependencies = [
 name = "perry-ui-windows-winui"
 version = "0.5.1569"
 dependencies = [
+ "base64 0.22.1",
+ "libc",
  "perry-ffi",
  "perry-runtime",
  "perry-ui-windows",

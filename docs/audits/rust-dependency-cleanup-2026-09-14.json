@@ -286,10 +286,6 @@
       "itoa.workspace = true",
       "ryu.workspace = true"
     ],
-    "crates/perry-ui-windows-winui/Cargo.toml": [
-      "base64.workspace = true",
-      "libc.workspace = true"
-    ],
     "crates/perry-updater/Cargo.toml": [
       "serde_json.workspace = true"
     ]
