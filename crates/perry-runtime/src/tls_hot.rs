@@ -100,6 +100,13 @@
 //! every thread falls back to `_tlv_get_addr`, permanently and silently
 //! correctly. It cannot degrade into reading a wrong address.
 
+// Android uses pooled storage with the same try_with failure semantics. Other
+// platforms keep std's storage and exact AccessError type.
+#[cfg(target_os = "android")]
+pub use crate::tls_os_pool::AccessError;
+#[cfg(not(target_os = "android"))]
+pub use std::thread::AccessError;
+
 use std::cell::{Cell, UnsafeCell};
 
 /// How many generic [`HotKey`] slots one thread's cache can hold.
@@ -263,6 +270,7 @@ impl HotTls {
     };
 }
 
+#[cfg(not(target_os = "android"))]
 thread_local! {
     /// `const`-initialised on purpose: a lazily-initialised `thread_local!`
     /// pays a "has this been initialised / has this been dropped" check on
@@ -271,6 +279,12 @@ thread_local! {
     /// form reduces the one remaining resolution to the bare thunk call.
     static HOT: UnsafeCell<HotTls> = const { UnsafeCell::new(HotTls::EMPTY) };
 }
+
+// Keep the cache in the pool too. It must outlive pooled value destructors,
+// whose SlotGuard clears cached addresses while the pool is being torn down.
+#[cfg(target_os = "android")]
+static HOT: crate::tls_os_pool::LocalKey<UnsafeCell<HotTls>> =
+    crate::tls_os_pool::LocalKey::new(|| UnsafeCell::new(HotTls::EMPTY));
 
 /// Resolve every cached address for this thread. Cold: runs once per thread.
 ///
@@ -794,15 +808,15 @@ impl Drop for SlotGuard {
 
 /// A thread-local whose address is cached in this thread's [`HotTls`].
 ///
-/// Drop-in for `std::thread::LocalKey` at the call site: `with` and `try_with`
-/// keep the same signatures, so converting a declaration converts every one of
-/// its uses.
+/// `with` and `try_with` accept the same closures as `std::thread::LocalKey`.
+/// Android uses the pooled backend's [`AccessError`]; other platforms retain
+/// std's exact error type.
 pub struct HotKey<T: 'static> {
     slot: &'static SlotId,
     /// Resolves the owning `thread_local!` the ordinary way and returns the
     /// address of its *value*. Cold path only — never called once the slot is
     /// populated, so the indirect call never appears on a hot path.
-    resolve: fn() -> Result<*mut u8, std::thread::AccessError>,
+    resolve: fn() -> Result<*mut u8, AccessError>,
     /// Records the claimed index in this thread's teardown guard, if the value
     /// has one. Generated alongside the storage, so it knows the `GUARD` that
     /// `HotKey` deliberately does not.
@@ -819,7 +833,7 @@ impl<T: 'static> HotKey<T> {
     #[doc(hidden)]
     pub const fn new(
         slot: &'static SlotId,
-        resolve: fn() -> Result<*mut u8, std::thread::AccessError>,
+        resolve: fn() -> Result<*mut u8, AccessError>,
         arm_guard: fn(u32),
     ) -> Self {
         Self {
@@ -847,10 +861,14 @@ impl<T: 'static> HotKey<T> {
     /// As [`HotKey::with`], but reports rather than panics when this thread's
     /// value is being or has been destroyed.
     #[inline(always)]
-    pub fn try_with<F, R>(&'static self, f: F) -> Result<R, std::thread::AccessError>
+    pub fn try_with<F, R>(&'static self, f: F) -> Result<R, AccessError>
     where
         F: FnOnce(&T) -> R,
     {
+        #[cfg(target_os = "android")]
+        if crate::tls_os_pool::is_destroyed() {
+            return Err(AccessError);
+        }
         let idx = self.slot.raw();
         if (idx as usize) < HOT_SLOT_CAPACITY {
             let cell = hot().slot(idx);
@@ -915,7 +933,7 @@ impl<T: 'static> HotKey<T> {
     /// resolve through the real `thread_local!` and publish it for this thread.
     #[cold]
     #[inline(never)]
-    fn resolve_and_cache(&'static self) -> Result<*mut u8, std::thread::AccessError> {
+    fn resolve_and_cache(&'static self) -> Result<*mut u8, AccessError> {
         // Claim before resolving storage: another provider can already have
         // published this declaration in the shared cache. Do not construct or
         // overwrite a second copy. The claim lock is released before any TLS
@@ -1013,7 +1031,7 @@ macro_rules! __perry_thread_local_one {
             // a cached address could otherwise outlive the value.
             type Storage = $crate::tls_hot::HotCell<$t, { ::core::mem::needs_drop::<$t>() as usize }>;
             $crate::__perry_thread_local_storage!(Storage, $($init)+);
-            fn resolve() -> ::core::result::Result<*mut u8, ::std::thread::AccessError> {
+            fn resolve() -> ::core::result::Result<*mut u8, $crate::tls_hot::AccessError> {
                 STORAGE.try_with(|cell| cell.value_addr())
             }
             fn arm_guard(idx: u32) {
@@ -1028,14 +1046,22 @@ macro_rules! __perry_thread_local_one {
 #[macro_export]
 macro_rules! __perry_thread_local_storage {
     ($storage:ty, const $init:block) => {
+        #[cfg(not(target_os = "android"))]
         ::std::thread_local! {
             static STORAGE: $storage = const { <$storage>::new($init) };
         }
+        #[cfg(target_os = "android")]
+        static STORAGE: $crate::tls_os_pool::LocalKey<$storage> =
+            $crate::tls_os_pool::LocalKey::new(|| <$storage>::new($init));
     };
     ($storage:ty, expr ($init:expr)) => {
+        #[cfg(not(target_os = "android"))]
         ::std::thread_local! {
             static STORAGE: $storage = <$storage>::new($init);
         }
+        #[cfg(target_os = "android")]
+        static STORAGE: $crate::tls_os_pool::LocalKey<$storage> =
+            $crate::tls_os_pool::LocalKey::new(|| <$storage>::new($init));
     };
 }
 

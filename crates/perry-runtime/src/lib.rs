@@ -198,6 +198,9 @@ pub mod timer;
 /// #7469: one `_tlv_get_addr` for the whole allocation hot path.
 #[doc(hidden)]
 pub mod tls_hot;
+#[cfg(any(target_os = "android", all(test, unix)))]
+#[doc(hidden)]
+pub mod tls_os_pool;
 pub mod typed_feedback;
 pub mod typedarray;
 pub mod typedarray_half;
