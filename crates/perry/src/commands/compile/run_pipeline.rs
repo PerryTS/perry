@@ -2893,6 +2893,12 @@ pub fn run_with_parse_cache(
         HashMap::new();
     for (path, hir_module) in &ctx.native_modules {
         let mut local_map: HashMap<String, String> = HashMap::new();
+        let mut worker_paths = HashSet::new();
+        perry_hir::for_each_worker_new(hir_module, &mut |expr| {
+            if let perry_hir::Expr::WorkerNew { paths, .. } = expr {
+                worker_paths.extend(paths.iter().cloned());
+            }
+        });
         for import in &hir_module.imports {
             if !(import.is_dynamic || import.is_dynamic_target) {
                 continue;
@@ -2939,6 +2945,25 @@ pub fn run_with_parse_cache(
                 None => continue,
             };
             let target_prefix = sanitize_module_name(&target_name);
+            if worker_paths.contains(&import.source) {
+                // Preserve the lexical URL spelling, including .js -> .ts
+                // resolution and Bun virtual roots. Canonicalizing here would
+                // lose the href produced by new URL(path, import.meta.url).
+                let file_url = if Path::new(&import.source).is_absolute() {
+                    url::Url::from_file_path(&import.source).ok()
+                } else {
+                    url::Url::from_file_path(path)
+                        .ok()
+                        .and_then(|base| base.join(&import.source).ok())
+                };
+                if let Some(url) = file_url {
+                    if let Ok(path) = url.to_file_path() {
+                        local_map
+                            .insert(path.to_string_lossy().into_owned(), target_prefix.clone());
+                    }
+                    local_map.insert(url.to_string(), target_prefix.clone());
+                }
+            }
             local_map.insert(import.source.clone(), target_prefix);
         }
         if !local_map.is_empty() {

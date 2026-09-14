@@ -47,6 +47,7 @@ mod static_require_transform;
 mod tests;
 mod walk;
 mod wasm_asset;
+mod worker;
 
 use binding_faithfulness::audit_native_binding_choice;
 pub(super) use discovery::is_nextjs_runtime_module;
@@ -1008,7 +1009,7 @@ fn collect_module_one(
                         ));
                         return;
                     }
-                    if set.len() != 1 {
+                    if eval_mode && set.len() != 1 {
                         dyn_errors.push(format!(
                             "worker_threads Worker in module {}: filename must resolve to exactly one path for now, got {}",
                             module_name,
@@ -1034,28 +1035,28 @@ fn collect_module_one(
                                 return;
                             }
                         }
-                    } else if set[0].starts_with("file:") {
-                        // Helper-returned URLs carry a URL spelling, while the
-                        // module resolver (including --bunfs-root) consumes a
-                        // filesystem spelling. Decode through the URL parser
-                        // before recording both the import edge and Worker path.
-                        match url::Url::parse(&set[0])
-                            .ok()
-                            .and_then(|url| url.to_file_path().ok())
-                        {
-                            Some(path) => set[0] = path.to_string_lossy().into_owned(),
-                            None => {
-                                dyn_errors.push(format!(
-                                    "worker_threads Worker in module {}: invalid file URL {:?}",
-                                    module_name, set[0]
-                                ));
+                    }
+                    let imports = if eval_mode {
+                        set.clone()
+                    } else {
+                        match worker::resolve_candidates(
+                            &mut set,
+                            entry_path,
+                            &canonical,
+                            &module_name,
+                            ctx,
+                            format,
+                        ) {
+                            Ok(imports) => imports,
+                            Err(error) => {
+                                dyn_errors.push(error);
                                 return;
                             }
                         }
-                    }
-                    for p in &set {
-                        if !new_dyn_imports.contains(p) {
-                            new_dyn_imports.push(p.clone());
+                    };
+                    for path in imports {
+                        if !new_dyn_imports.contains(&path) {
+                            new_dyn_imports.push(path);
                         }
                     }
                     worker_path_sets.push(set);

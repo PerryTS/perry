@@ -1,0 +1,3 @@
+Worker filename discovery now follows awaited synchronous or async helpers whose bodies contain const path bindings and if/return chains. It collects the union of returned paths without evaluating branch conditions, including opaque awaited filesystem probes, while retaining rejection of unsupported return values, mutation, generators, recursion, and bounded expansion limits.
+
+Missing worker candidates are skipped with a warning and aliases compile as a single worker entry. Multiple existing candidates dispatch using the runtime filename, including URL values; selecting a missing candidate throws instead of starting another worker. This supports OpenCode's TUI worker selector with its compile-time worker-path define and missing distribution-layout fallback.

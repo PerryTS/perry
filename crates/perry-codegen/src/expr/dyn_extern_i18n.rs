@@ -17,6 +17,9 @@ use super::{
     nanbox_pointer_inline, nanbox_string_inline, unbox_to_i64, FnCtx, I18nLowerCtx,
 };
 
+#[path = "worker_new.rs"]
+mod worker_new;
+
 /// Build the namespace value for a resolved dynamic-import/require target prefix
 /// on the current block: a native submodule (`__node_submod__<key>`), a native
 /// builtin (`__native_mod__<name>`), or a compiled module (`<prefix>__init` +
@@ -488,6 +491,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             options,
             is_eval: _,
         } => {
+            if paths.len() > 1 {
+                return worker_new::lower_candidates(ctx, paths, filename, options.as_deref());
+            }
             let _ = lower_expr(ctx, filename)?;
             if ctx.block().is_terminated() {
                 return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
