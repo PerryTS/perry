@@ -655,8 +655,11 @@ static KEEP_TEXT_DECODER_IGNORE_BOM: extern "C" fn(f64) -> f64 = js_text_decoder
 /// `text_handle_property` no longer TAKES the caller's pointer at all, so the
 /// bug is not merely fixed here, it is unwritable.
 pub(crate) fn text_decoder_method_name_static(key: &[u8]) -> Option<&'static [u8]> {
+    // A named static has one identity across codegen units. Anonymous byte
+    // literals may be duplicated by thin LTO even within this lookup.
+    static DECODE: [u8; 6] = *b"decode";
     match key {
-        b"decode" => Some(b"decode"),
+        b"decode" => Some(&DECODE),
         _ => None,
     }
 }
@@ -664,9 +667,11 @@ pub(crate) fn text_decoder_method_name_static(key: &[u8]) -> Option<&'static [u8
 /// A `TextEncoder.prototype` method key, as a `'static` byte string. See
 /// [`text_decoder_method_name_static`].
 pub(crate) fn text_encoder_method_name_static(key: &[u8]) -> Option<&'static [u8]> {
+    static ENCODE: [u8; 6] = *b"encode";
+    static ENCODE_INTO: [u8; 10] = *b"encodeInto";
     match key {
-        b"encode" => Some(b"encode"),
-        b"encodeInto" => Some(b"encodeInto"),
+        b"encode" => Some(&ENCODE),
+        b"encodeInto" => Some(&ENCODE_INTO),
         _ => None,
     }
 }
