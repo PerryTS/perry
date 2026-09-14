@@ -54,6 +54,46 @@ less than base's: 42 ms against 47 ms.
 On a real cohort full in `records_array_20m:parse` the pause is 30–32 ms, down
 from the 62–68 ms #10220 measured.
 
+**Cohort survival feed** (`gc/promoted_cohort/survival.rs`):
+
+- **Defect.** Every full resets the untraced-promotion budget, so a cohort
+  full every ~live bytes kept `14_grow_then_churn` promoting its churn
+  untraced for good. No minor measured again: 13 cohort fulls, 0 copied
+  objects, wall 429 → 594 ms against #10220.
+- **Measurement.** A cohort full's sweep measures how much of what the minor
+  at its own safepoint promoted is still live. Blocks walked whole report their
+  live bytes; dead blocks reclaimed unwalked count as 0.
+- **When it is fed.** The figure replaces the young-survival predictor (below
+  950‰) only when it equals what a minor would measure. After the mark, the
+  unmarked objects on the minor's dirty old pages have their dirty slots read.
+  A slot pointing into the promoted blocks means a dead remembered parent
+  held them, and then nothing is fed.
+- **Why the gate.** The JSON rows measure 500‰ (8m scan: 333‰), because each
+  minor promotes the dead previous tree along with the live one. Their tree
+  arrays are exactly such dead parents. Fed unconditionally, the next minor
+  evacuates both trees: `records_array_20m:parse` +20.0 % CPU / +54.9 MiB,
+  `records_array_8m:scan` +14.1 % / +31.2 MiB (mini, best of 3).
+- **Diagnostics.** `[gc-promoted-cohort]` adds `promoted_by_minor=`,
+  `live_of_promoted=`, `survival_permille=`, `minor_view=` and `predictor=`.
+
+**Only in-place promotions fill the cohort.** A copying minor tenures an object
+only after it survived a minor, so a full scheduled for tenured bytes is
+futile. `12_large_live_set`'s one cohort full was reached by 21.2 MB of tenured
+bytes over a 16 MB bound and reclaimed 8.3 MB; every cohort full on the JSON
+rows was reached by in-place promotions alone. The old-reclaim baseline credit
+still takes every promoted byte.
+
+Laptop, interleaved, 7 rounds (median wall / peak RSS):
+
+| probe | #10220 | before these two changes | now |
+|---|---|---|---|
+| `14_grow_then_churn` | 0.44 s / 284.6 MiB | 0.63 s / 131.1 MiB | 0.29 s / 65.1 MiB |
+| `12_large_live_set` | 0.26 s / 109.1 MiB | 0.28 s / 115.6 MiB | 0.24 s / 109.0 MiB |
+
+On the mini, every JSON row's collection schedule (minors, fulls, cohort
+sizes, bounds and reclaimed bytes) is identical before and after both changes,
+and CPU stays within ±1.0 %, so the table below stands.
+
 **This does not meet #10182's acceptance bar.** Interleaved best-of-3 on the
 same tree, base `9a05821b9e`:
 
