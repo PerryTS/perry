@@ -100,6 +100,11 @@ pub extern "C" fn perry_ui_widget_set_width(handle: i64, width: f64) {
 }
 
 #[no_mangle]
+pub extern "C" fn perry_ui_widget_set_max_width(handle: i64, max_width: f64) {
+    widgets::set_max_width(handle, max_width);
+}
+
+#[no_mangle]
 pub extern "C" fn perry_ui_widget_set_height(handle: i64, height: f64) {
     widgets::set_height(handle, height);
 }

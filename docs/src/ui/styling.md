@@ -93,6 +93,7 @@ If you're coming from web, the conceptual mapping is:
 | `display: flex; flex-direction: column` | `VStack(spacing, [...])` |
 | `display: flex; flex-direction: row` | `HStack(spacing, [...])` |
 | `width: 100%` | `widgetMatchParentWidth(widget)` |
+| `max-width: 480px; margin: 0 auto` | `widgetSetMaxWidth(widget, 480)` |
 | `padding: 10px 20px` | `padding: { top: 10, right: 20, bottom: 10, left: 20 }` |
 | `gap: 16px` | `VStack(16, [...])` — first argument is the gap |
 | CSS variables / design tokens | [`perry-styling`](theming.md) package |
@@ -173,6 +174,21 @@ Development builds print a diagnostic when a native view has no padding support.
 
 ```typescript
 {{#include ../../examples/ui/styling/snippets.ts:sizing}}
+```
+
+### Max width
+
+`widgetSetMaxWidth(widget, maxWidth)` is the CSS `max-width` + `margin: auto`
+pattern for a centered content column: below the cap the widget fills the
+available width (its padding keeps a fixed inset from the edge); at and above
+the cap it stops at `maxWidth` and centers, so the side gutters grow with the
+window. On macOS/iOS/tvOS/visionOS this is three Auto Layout constraints
+(`width <= maxWidth` required, `width == parent` at lower priority,
+`centerX == parent.centerX`); on web it maps to `max-width` + `margin: auto`.
+The widget must already be added to a parent when you call it.
+
+```typescript
+{{#include ../../examples/ui/styling/snippets.ts:max-width}}
 ```
 
 ### Opacity

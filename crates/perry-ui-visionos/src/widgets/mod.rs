@@ -51,6 +51,10 @@ thread_local! {
     static WIDGETS: RefCell<Vec<Retained<UIView>>> = RefCell::new(Vec::new());
     /// Stored height constraints per widget handle, so set_height can update instead of duplicate.
     static HEIGHT_CONSTRAINTS: RefCell<std::collections::HashMap<i64, Retained<AnyObject>>> = RefCell::new(std::collections::HashMap::new());
+    /// Stored max-width constraint sets per widget handle. set_max_width installs three
+    /// constraints (the <= cap, the low-priority ==parent grow, and the centerX), so it
+    /// keeps a Vec per handle to deactivate the whole set before re-applying.
+    static MAX_WIDTH_CONSTRAINTS: RefCell<std::collections::HashMap<i64, Vec<Retained<AnyObject>>>> = RefCell::new(std::collections::HashMap::new());
 }
 
 /// Store a UIView and return its handle (1-based i64).
@@ -519,6 +523,48 @@ pub fn set_width(handle: i64, width: f64) {
             ];
             let _: () = objc2::msg_send![&*constraint, setActive: true];
         }
+    }
+}
+
+/// Cap a widget's width at max_width while letting it grow to the parent, centered —
+/// the CSS `max-width` pattern via three constraints: a `<=` cap, a low-priority
+/// `==parent` grow, and a centerX pin. Idempotent: deactivates any previous set first.
+pub fn set_max_width(handle: i64, max_width: f64) {
+    let Some(view) = get_widget(handle) else {
+        return;
+    };
+    let superview_ptr: *const UIView = unsafe { objc2::msg_send![&*view, superview] };
+    if superview_ptr.is_null() {
+        eprintln!("set_max_width: view has no superview");
+        return;
+    }
+    MAX_WIDTH_CONSTRAINTS.with(|mc| {
+        if let Some(old_set) = mc.borrow_mut().remove(&handle) {
+            for old in old_set {
+                unsafe {
+                    let _: () = objc2::msg_send![&*old, setActive: false];
+                }
+            }
+        }
+    });
+    unsafe {
+        let width_anchor: Retained<AnyObject> = objc2::msg_send![&*view, widthAnchor];
+        let center_x_anchor: Retained<AnyObject> = objc2::msg_send![&*view, centerXAnchor];
+        let parent_width: Retained<AnyObject> = objc2::msg_send![superview_ptr, widthAnchor];
+        let parent_center_x: Retained<AnyObject> = objc2::msg_send![superview_ptr, centerXAnchor];
+        let cap: Retained<AnyObject> =
+            objc2::msg_send![&*width_anchor, constraintLessThanOrEqualToConstant: max_width];
+        let _: () = objc2::msg_send![&*cap, setActive: true];
+        let grow: Retained<AnyObject> =
+            objc2::msg_send![&*width_anchor, constraintEqualToAnchor: &*parent_width];
+        let _: () = objc2::msg_send![&*grow, setPriority: 999.0_f32];
+        let _: () = objc2::msg_send![&*grow, setActive: true];
+        let center: Retained<AnyObject> =
+            objc2::msg_send![&*center_x_anchor, constraintEqualToAnchor: &*parent_center_x];
+        let _: () = objc2::msg_send![&*center, setActive: true];
+        MAX_WIDTH_CONSTRAINTS.with(|mc| {
+            mc.borrow_mut().insert(handle, vec![cap, grow, center]);
+        });
     }
 }
 

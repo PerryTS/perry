@@ -15,6 +15,7 @@ pub mod image;
 pub mod image_gallery;
 pub mod lazyvstack;
 pub mod map_view;
+pub mod max_width_bin;
 pub mod navstack;
 pub mod picker;
 pub mod progressview;
@@ -689,6 +690,47 @@ pub fn match_parent_width(handle: i64) {
     if let Some(widget) = get_widget(handle) {
         widget.set_hexpand(true);
         widget.set_halign(gtk4::Align::Fill);
+    }
+}
+
+/// Cap a widget's width at `max_width`, filling the parent below the cap and
+/// centering at or above it — the CSS `max-width` + `margin: auto` behaviour.
+///
+/// GTK4 has no max-width property (CSS honours only `min-width`, and
+/// `set_size_request` sets a minimum), so the child is wrapped in a
+/// [`max_width_bin::MaxWidthBin`] — a one-child widget that measures and
+/// allocates the child itself: below the cap the child fills, at/above it the
+/// child holds at `max_width` centered. The bin is inserted in the child's place
+/// inside its parent `GtkBox`. A re-call updates the existing bin's cap.
+pub fn set_max_width(handle: i64, max_width: f64) {
+    let Some(child) = get_widget(handle) else {
+        return;
+    };
+    let cap = max_width as i32;
+
+    // Already wrapped (a re-call): just update the cap on the existing bin.
+    if let Some(parent) = child.parent() {
+        if let Some(bin) = parent.downcast_ref::<max_width_bin::MaxWidthBin>() {
+            bin.set_max(cap);
+            return;
+        }
+    }
+
+    // Only a GtkBox parent (VStack/HStack) supports positional re-insertion; for
+    // any other container leave the child as-is rather than detach it wrongly.
+    let Some(parent) = child.parent() else {
+        return;
+    };
+    let Ok(box_parent) = parent.downcast::<gtk4::Box>() else {
+        return;
+    };
+
+    let prev = child.prev_sibling();
+    box_parent.remove(&child);
+    let bin = max_width_bin::MaxWidthBin::wrap(&child, cap);
+    match prev {
+        Some(sibling) => box_parent.insert_child_after(&bin, Some(&sibling)),
+        None => box_parent.prepend(&bin),
     }
 }
 

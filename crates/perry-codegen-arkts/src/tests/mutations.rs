@@ -593,6 +593,38 @@ fn issue_408_match_parent_size_emits_100pct_modifiers() {
 }
 
 #[test]
+fn widget_set_max_width_emits_constraint_size_and_center() {
+    let mut m = empty_module();
+    let id: LocalId = 81;
+    m.init.push(let_widget(
+        id,
+        "w",
+        nmc("VStack", vec![Expr::Array(vec![])]),
+    ));
+    m.init.push(mutator_stmt(
+        "widgetSetMaxWidth",
+        vec![Expr::LocalGet(id), Expr::Number(600.0)],
+    ));
+    m.init.push(app_with_body(Expr::LocalGet(id)));
+    let r = emit_index_ets(&mut m).unwrap().unwrap();
+    assert!(
+        r.ets_source.contains(".width('100%')"),
+        "missing width 100%:\n{}",
+        r.ets_source
+    );
+    assert!(
+        r.ets_source.contains(".constraintSize({ maxWidth: 600 })"),
+        "missing maxWidth constraint:\n{}",
+        r.ets_source
+    );
+    assert!(
+        r.ets_source.contains(".alignSelf(ItemAlign.Center)"),
+        "missing center alignment:\n{}",
+        r.ets_source
+    );
+}
+
+#[test]
 fn issue_408_stack_distribution_and_alignment_emit_flexalign_modifiers() {
     // Uses HStack, so post-#413 the alignment enum is VerticalAlign
     // (Row's cross-axis is vertical). Pre-#413 this test asserted

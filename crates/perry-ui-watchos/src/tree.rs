@@ -47,6 +47,7 @@ pub struct NodeData {
     pub bg_color: Option<(f64, f64, f64, f64)>,
     pub padding: Option<f64>,
     pub frame_width: Option<f64>,
+    pub frame_max_width: Option<f64>,
     pub frame_height: Option<f64>,
     pub corner_radius: Option<f64>,
     pub opacity: f64,
@@ -129,6 +130,7 @@ impl NodeData {
             bg_color: None,
             padding: None,
             frame_width: None,
+            frame_max_width: None,
             frame_height: None,
             corner_radius: None,
             opacity: 1.0,
@@ -414,6 +416,11 @@ pub extern "C" fn perry_watchos_node_corner_radius(id: i64) -> f64 {
 #[no_mangle]
 pub extern "C" fn perry_watchos_node_frame_width(id: i64) -> f64 {
     with_node(id, |n| n.frame_width.unwrap_or(-1.0)).unwrap_or(-1.0)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_watchos_node_frame_max_width(id: i64) -> f64 {
+    with_node(id, |n| n.frame_max_width.unwrap_or(-1.0)).unwrap_or(-1.0)
 }
 
 #[no_mangle]

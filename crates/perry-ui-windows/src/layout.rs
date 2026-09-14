@@ -197,7 +197,17 @@ fn layout_stack(handle: i64, width: i32, height: i32, vertical: bool) {
                     available_cross
                 };
                 let (x, y, w, h) = if vertical {
-                    (inset_left, pos, cross, size)
+                    // Honour a max-width cap on the cross axis: fill the parent
+                    // up to `max_width`, then center by growing the side gutters.
+                    let mut cw = cross;
+                    let mut cx = inset_left;
+                    if let Some(mw) = ci_info.as_ref().and_then(|ci| ci.max_width) {
+                        if cw > mw {
+                            cx = inset_left + (cross - mw) / 2;
+                            cw = mw;
+                        }
+                    }
+                    (cx, pos, cw, size)
                 } else {
                     (pos, inset_top, size, cross)
                 };

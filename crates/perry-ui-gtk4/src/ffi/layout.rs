@@ -72,6 +72,13 @@ pub extern "C" fn perry_ui_widget_match_parent_width(handle: i64) {
     widgets::match_parent_width(handle);
 }
 
+/// Cap a widget's width like CSS `max-width`: fill the parent up to `max_width`,
+/// then center.
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_max_width(handle: i64, max_width: f64) {
+    widgets::set_max_width(handle, max_width);
+}
+
 /// Make a widget expand to fill its parent's height.
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_match_parent_height(handle: i64) {

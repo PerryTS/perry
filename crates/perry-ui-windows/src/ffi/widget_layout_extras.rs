@@ -26,6 +26,14 @@ pub extern "C" fn perry_ui_widget_set_width(handle: i64, width: f64) {
     widgets::set_fixed_width(handle, scaled);
 }
 
+/// Cap widget width like CSS `max-width` (DPI-scaled): fill the parent up to
+/// `max_width`, then center. Honoured at layout time.
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_max_width(handle: i64, max_width: f64) {
+    let scaled = (max_width * app::get_dpi_scale()) as i32;
+    widgets::set_max_width(handle, scaled);
+}
+
 /// Set widget hugging priority.
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_hugging(handle: i64, priority: f64) {

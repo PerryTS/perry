@@ -785,6 +785,16 @@ pub extern "C" fn perry_system_get_app_icon(_path: i64) -> i64 {
 pub extern "C" fn perry_ui_widget_set_hugging(_handle: i64, _priority: f64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_match_parent_width(_handle: i64) {}
+/// No-op: WatchKit has no Auto Layout, so a max-width cap cannot be expressed.
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_max_width(handle: i64, max_width: f64) {
+    // Stored on the introspection node; the SwiftUI host applies
+    // `.frame(maxWidth:, alignment: .center)`, which fills up to the cap and
+    // centers — the CSS max-width behaviour.
+    tree::with_node_mut(handle, |node| {
+        node.frame_max_width = Some(max_width);
+    });
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_match_parent_height(_handle: i64) {}
 #[no_mangle]

@@ -57,6 +57,10 @@ thread_local! {
     static WIDGETS: RefCell<Vec<Retained<NSView>>> = const { RefCell::new(Vec::new()) };
     /// Stored width constraints per widget handle, so set_width can update instead of duplicate.
     static WIDTH_CONSTRAINTS: RefCell<std::collections::HashMap<i64, Retained<AnyObject>>> = RefCell::new(std::collections::HashMap::new());
+    /// Stored max-width constraint sets per widget handle. set_max_width installs three
+    /// constraints (the <= cap, the low-priority ==parent grow, and the centerX), so it
+    /// keeps a Vec per handle to deactivate the whole set before re-applying.
+    static MAX_WIDTH_CONSTRAINTS: RefCell<std::collections::HashMap<i64, Vec<Retained<AnyObject>>>> = RefCell::new(std::collections::HashMap::new());
     /// Stored height constraints per widget handle, so set_height can update instead of duplicate.
     static HEIGHT_CONSTRAINTS: RefCell<std::collections::HashMap<i64, Retained<AnyObject>>> = RefCell::new(std::collections::HashMap::new());
     /// Parent tracking: child_handle -> (parent_handle, insertion_index)
@@ -904,6 +908,65 @@ pub fn set_width(handle: i64, width: f64) {
                 wc.borrow_mut().insert(handle, constraint);
             });
         }
+    }
+}
+
+/// Cap a widget's width at `max_width`, growing to fill the parent below the cap
+/// and centering above it — the CSS `max-width` + `margin: auto` behaviour.
+///
+/// Three Auto Layout constraints on the view's `widthAnchor`/`centerXAnchor`:
+///   - `width <= max_width` at required priority, so it never exceeds the cap;
+///   - `width == superview.width` at 999 (below required), so it grows to fill
+///     the parent until the cap binds and then yields;
+///   - `centerX == superview.centerX` at required, so the gutters split evenly
+///     once the cap is reached.
+///
+/// Idempotent: deactivates any previous max-width set before installing a new one.
+pub fn set_max_width(handle: i64, max_width: f64) {
+    let Some(view) = get_widget(handle) else {
+        return;
+    };
+    let superview_ptr: *const NSView = unsafe { msg_send![&*view, superview] };
+    if superview_ptr.is_null() {
+        eprintln!("set_max_width: view has no superview");
+        return;
+    }
+    // Deactivate any prior max-width set for this handle.
+    MAX_WIDTH_CONSTRAINTS.with(|mc| {
+        if let Some(old_set) = mc.borrow_mut().remove(&handle) {
+            for old in old_set {
+                unsafe {
+                    let _: () = msg_send![&*old, setActive: false];
+                }
+            }
+        }
+    });
+    unsafe {
+        let width_anchor: Retained<AnyObject> = msg_send![&*view, widthAnchor];
+        let center_x_anchor: Retained<AnyObject> = msg_send![&*view, centerXAnchor];
+        let parent_width: Retained<AnyObject> = msg_send![superview_ptr, widthAnchor];
+        let parent_center_x: Retained<AnyObject> = msg_send![superview_ptr, centerXAnchor];
+
+        // width <= max_width, required.
+        let cap: Retained<AnyObject> =
+            msg_send![&*width_anchor, constraintLessThanOrEqualToConstant: max_width];
+        let _: () = msg_send![&*cap, setActive: true];
+
+        // width == superview.width, below required so the cap can break it.
+        let grow: Retained<AnyObject> =
+            msg_send![&*width_anchor, constraintEqualToAnchor: &*parent_width];
+        // NSLayoutPriorityRequired is 1000; 999 lets the cap win once it binds.
+        let _: () = msg_send![&*grow, setPriority: 999.0_f32];
+        let _: () = msg_send![&*grow, setActive: true];
+
+        // centerX == superview.centerX, required, so gutters split evenly.
+        let center: Retained<AnyObject> =
+            msg_send![&*center_x_anchor, constraintEqualToAnchor: &*parent_center_x];
+        let _: () = msg_send![&*center, setActive: true];
+
+        MAX_WIDTH_CONSTRAINTS.with(|mc| {
+            mc.borrow_mut().insert(handle, vec![cap, grow, center]);
+        });
     }
 }
 

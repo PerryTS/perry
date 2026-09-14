@@ -34,6 +34,7 @@ struct Common {
     hidden: bool,
     enabled: bool,
     width: Option<f64>,
+    max_width: Option<f64>,
     height: Option<f64>,
     match_parent_width: bool,
     match_parent_height: bool,
@@ -352,11 +353,15 @@ pub(crate) fn render_root(cx: &mut RenderCx) -> Element {
 
 fn apply_common(modifiers: &mut Modifiers, handle: i64, common: &Common) {
     modifiers.width = common.width;
+    modifiers.max_width = common.max_width;
     modifiers.height = common.height;
     modifiers.opacity = common.opacity;
     modifiers.background = common.background.map(Brush::Solid);
     modifiers.foreground = common.foreground.map(Brush::Solid);
-    if common.match_parent_width || common.fills_remaining {
+    // A max-width cap fills the parent up to the cap, then centers. XAML
+    // realizes exactly that from Stretch + MaxWidth: it stretches to the
+    // available width but no wider than MaxWidth, centering the surplus.
+    if common.match_parent_width || common.fills_remaining || common.max_width.is_some() {
         modifiers.horizontal_alignment = Some(HorizontalAlignment::Stretch);
     }
     if common.match_parent_height || common.fills_remaining {
@@ -632,6 +637,14 @@ pub fn set_fixed_width(handle: i64, width: i32) {
         return;
     }
     with_node_mut(handle, |node| node.common.width = Some(width as f64));
+}
+
+pub fn set_max_width(handle: i64, width: i32) {
+    if !is_fluent() {
+        perry_ui_windows::widgets::set_max_width(handle, width);
+        return;
+    }
+    with_node_mut(handle, |node| node.common.max_width = Some(width as f64));
 }
 
 pub fn set_fixed_height(handle: i64, height: i32) {
