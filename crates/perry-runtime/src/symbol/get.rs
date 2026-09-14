@@ -1202,6 +1202,20 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
                 if let Some(v) = crate::object::resolve_proto_chain_symbol(cid, sym_f64) {
                     return v;
                 }
+                // A symbol-keyed property added to a DECLARED class's
+                // `.prototype` after the declaration — `C.prototype[S] = f`,
+                // `Object.defineProperty(C.prototype, S, ...)`, or
+                // `Object.assign(C.prototype, { [Symbol.iterator]() {} })` —
+                // is stored on the declared prototype object, which the
+                // CLASS_PROTOTYPE_OBJECTS walk above never visits (that table
+                // holds `Object.create` / class-expression parents). String
+                // keys already resolve there; symbol keys returned undefined,
+                // so drizzle-orm's `applyEffectWrapper` (effect's
+                // `Effectable.Prototype` assigned onto query classes) left
+                // `yield* query` with no iterator ("next is not a function").
+                if let Some(v) = declared_prototype_chain_symbol(obj_f64, sym_f64, cid) {
+                    return v;
+                }
                 // #1838: a class can define a computed well-known-symbol METHOD
                 // (`[Symbol.iterator]() {}`) — class lowering names it
                 // `@@iterator` in the vtable (class_members.rs), NOT as a symbol
@@ -1224,6 +1238,31 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
         }
     }
     f64::from_bits(TAG_UNDEFINED)
+}
+
+/// Walk the declared class prototype objects (`C.prototype` for `C` and each
+/// ancestor) for a symbol-keyed property written after the class declaration.
+/// Accessors run with the original receiver; data properties are returned as
+/// stored. Nearest class first, so a subclass's prototype write shadows a
+/// base class's.
+unsafe fn declared_prototype_chain_symbol(receiver: f64, sym: f64, mut class_id: u32) -> Option<f64> {
+    for _ in 0..32 {
+        let declared = crate::object::class_decl_prototype_object(class_id);
+        if !declared.is_null() {
+            let proto_value = crate::value::js_nanbox_pointer(declared as i64);
+            if let Some(acc) = accessors::symbol_accessor_property(proto_value, sym) {
+                return Some(accessors::invoke_symbol_accessor_getter(acc.get, receiver));
+            }
+            if let Some(value) = own_symbol_property(proto_value, sym) {
+                return Some(value);
+            }
+        }
+        match crate::object::get_parent_class_id(class_id) {
+            Some(parent) if parent != 0 && parent != class_id => class_id = parent,
+            _ => break,
+        }
+    }
+    None
 }
 
 /// #1838: map a well-known symbol value to the synthetic `@@<name>` vtable key
