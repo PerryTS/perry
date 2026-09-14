@@ -82,6 +82,38 @@ fn has_sync_iterator(value: f64) -> bool {
     raw != 0 && perry_runtime::closure::is_closure_ptr(raw as usize)
 }
 
+/// A short description of a rejected `Headers` init, so the thrown message
+/// names what was passed instead of only saying it is not iterable. Kept cheap:
+/// it runs only on the error path.
+fn describe_headers_init(value: f64) -> String {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if jsval.is_any_string() {
+        return "string".to_string();
+    }
+    if perry_runtime::proxy::js_proxy_is_proxy(value) != 0 {
+        return "Proxy".to_string();
+    }
+    if perry_runtime::js_array_is_array(value).to_bits() == TAG_TRUE {
+        return "array".to_string();
+    }
+    let raw = perry_runtime::js_nanbox_get_pointer(value);
+    if raw == 0 {
+        return format!("{:#018x}", value.to_bits());
+    }
+    let addr = raw as usize;
+    if perry_runtime::map::is_registered_map(addr) {
+        return "Map".to_string();
+    }
+    if perry_runtime::set::is_registered_set(addr) {
+        return "Set".to_string();
+    }
+    match gc_type_for_raw_ptr(raw) {
+        Some(t) if t == perry_runtime::gc::GC_TYPE_OBJECT => "object".to_string(),
+        Some(t) => format!("gc type {t}"),
+        None => format!("non-heap {:#018x}", value.to_bits()),
+    }
+}
+
 fn is_headers_init_iterable(value: f64) -> bool {
     let jsval = JSValue::from_bits(value.to_bits());
     if jsval.is_any_string() {
@@ -208,13 +240,19 @@ unsafe fn materialize_headers_init_iterable(
     scope: &perry_runtime::gc::RuntimeHandleScope,
 ) -> *const perry_runtime::ArrayHeader {
     if !is_headers_init_iterable(value) {
-        headers_init_type_error("Headers constructor: init is not iterable");
+        headers_init_type_error(&format!(
+            "Headers constructor: init is not iterable (received {})",
+            describe_headers_init(value)
+        ));
     }
     let arr_value = perry_runtime::array::js_for_of_to_array(value);
     let arr_handle = scope.root_nanbox_f64(arr_value);
     let raw = perry_runtime::js_nanbox_get_pointer(arr_handle.get_nanbox_f64());
     if raw == 0 {
-        headers_init_type_error("Headers constructor: init is not iterable");
+        headers_init_type_error(&format!(
+            "Headers constructor: init is not iterable (received {})",
+            describe_headers_init(value)
+        ));
     }
     raw as *const perry_runtime::ArrayHeader
 }
