@@ -34,6 +34,7 @@ use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR};
 mod array_literal;
 mod bitset_test;
 pub(crate) mod hot_tls;
+mod literal_descriptor;
 #[cfg(test)]
 mod map_entry_at_tests;
 pub(crate) use bitset_test::is_u32_bitset_test;

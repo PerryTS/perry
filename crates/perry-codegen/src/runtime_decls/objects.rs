@@ -23,6 +23,11 @@ use super::*;
 /// The inline bump allocator now handles most object allocation directly;
 /// `js_object_alloc(0, N)` is the fallback for dynamic cases.
 pub fn declare_phase_b_objects(module: &mut LlModule) {
+    module.declare_function(
+        "js_literal_shape_initialize",
+        VOID,
+        &[DOUBLE, PTR, PTR, I32],
+    );
     // #5093: sticky runtime flag (i8, 0 = enabled) gating the codegen-inlined
     // class-field shape-guard fast path. The inline guard loads this directly
     // and falls back to the full `js_typed_feedback_class_field_*_guard` call

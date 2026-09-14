@@ -125,6 +125,24 @@ pub(super) fn compile_method(
                 if name == super::arguments::SYNTHETIC_ARGUMENTS_LENGTH_TYPE
         )
     });
+    if typed_public_trampoline.is_none()
+        && !force_generic_body
+        && proven_this.is_none()
+        && nonnegative_index_params.is_none()
+        && !fast_array_handle_clone
+        && !ptr_array_cache_clone
+        && !guarded_undefined_clone
+        && !pshape_arg_clone
+        && super::literal_constructor::try_compile(
+            llmod,
+            class,
+            method,
+            &public_llvm_name,
+            cross_module.class_keys_globals.get(&class.name),
+        )
+    {
+        return Ok(());
+    }
     // Representation-selection Phase 5a: the proven-`this` clone is a SECOND,
     // additive body compiled from the same HIR through the same statement
     // lowerer. It never replaces the public symbol and never participates in

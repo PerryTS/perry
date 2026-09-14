@@ -15,6 +15,8 @@ fn make_ctx() -> LoweringContext {
     LoweringContext::new("test.ts")
 }
 
+mod literal_shape;
+
 #[test]
 fn static_source_import_is_visible_before_its_declaration() {
     let source = r#"

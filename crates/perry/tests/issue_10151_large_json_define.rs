@@ -226,3 +226,52 @@ console.log(JSON.stringify(value.nested));
         "z,a,1e-7,nested,padding\n2 true 255\n[true,null,\"quote\\\"\\n\\\\☃\"]\n"
     );
 }
+
+#[test]
+fn mid_size_record_literal_keeps_shapes_without_the_compile_cliff() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join("perry.json"), "{}\n").unwrap();
+    // 22,401 value nodes: below the record JSON.parse cutoff, but the old
+    // ordinary path took over five minutes. The shared 60-second timeout is
+    // intentionally well above the seconds this case should need in CI.
+    let records = (0..3200)
+        .map(|i| {
+            format!(
+                r#"{{id:{i},name:"n{i}",tags:["a","b{}"],w:{}}}"#,
+                i % 5,
+                i as f64 / 4.0,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    std::fs::write(
+        root.join("main.ts"),
+        format!(
+            r#"
+type Rec = {{id:number,name:string,tags:string[],w:number}};
+function read(): Rec[] {{ return [{records}]; }}
+const a = read();
+gc();
+const b = read();
+let sum = 0;
+for (let i = 0; i < a.length; i++) {{
+    const q = a[i];
+    sum += q.w + q.tags.length + q.id;
+}}
+console.log(a.length, sum, Object.keys(a[0]).join(","));
+a[0].tags[0] = "changed";
+a[0].w = 99;
+console.log(b[0].tags[0], b[0].w, a === b, a[0] === b[0]);
+"#,
+        ),
+    )
+    .unwrap();
+    let hir = compile(root, &["--print-hir"]);
+    assert!(hir.contains("__AnonShape_"), "record shapes must survive");
+    assert!(
+        !hir.contains("JsonParse("),
+        "this is the ordinary-path case"
+    );
+    assert_eq!(run(root), "3200 6404400 id,name,tags,w\na 0 false false\n");
+}

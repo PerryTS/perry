@@ -20,6 +20,7 @@ mod keys_len_cap_tests;
 /// #9371: lazy dense growth for large pre-sized holey arrays.
 #[cfg(test)]
 mod large_presized_tests;
+mod literal_descriptor;
 /// Test-only strict-dense store helpers, split out of `indexing.rs` for the
 /// 2000-line cap.
 #[cfg(test)]

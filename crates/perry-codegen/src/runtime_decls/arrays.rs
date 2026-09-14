@@ -41,6 +41,11 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // from a static rodata descriptor blob in ONE call — (descriptor_ptr,
     // blob_len). Returns the nanboxed JS value (a fresh, mutable array).
     module.declare_function("js_value_from_const_descriptor", DOUBLE, &[PTR, I32]);
+    module.declare_function(
+        "js_value_from_literal_descriptor",
+        DOUBLE,
+        &[PTR, I32, PTR, I32],
+    );
     module.declare_function("js_array_push_f64", I64, &[I64, DOUBLE]);
     module.declare_function("js_array_push_u31_with_length", I64, &[I64, I32, PTR]);
     module.declare_function("js_array_push_f64_spec", I64, &[I64, DOUBLE]);

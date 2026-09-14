@@ -52,6 +52,10 @@ def main():
                   + HOT_LOOP.split("const t1 = performance.now();", 1)[1].split("console.log(")[0]
                   + 'console.log("recs_ms", Math.round(t2 - t1), w);\n')
     (root / "records.ts").write_text(record_hot)
+    # Same 20,000 passes with eight times as many records. Compare runtime
+    # divided by eight with records.ts; compare checksums between compilers.
+    scaled_hot = record_hot.replace(json.dumps(records(400)), json.dumps(records(3200)), 1)
+    (root / "records-hot-3200.ts").write_text(scaled_hot)
     for count in [400, 1600, 3200, 4800, 6400, 12800]:
         data = records(count)
         literal = json.dumps(data)
