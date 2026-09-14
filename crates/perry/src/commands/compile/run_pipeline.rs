@@ -6483,6 +6483,23 @@ pub fn run_with_parse_cache(
         // file this link is about to write (#5740).
         None => output_path::default_output_path(is_dylib, is_staticlib, target.as_deref(), stem),
     };
+    let macos_bundle_layout = bundle_macos::layout_for_compile(
+        ctx.needs_ui,
+        &args.output_type,
+        target.as_deref(),
+        &exe_path,
+    )?;
+    // An explicit `-o Name.app` is a directory destination. Other output
+    // names keep the linked binary and also produce the sibling app bundle.
+    let exe_path = if let Some(layout) = macos_bundle_layout
+        .as_ref()
+        .filter(|l| l.app_dir == exe_path)
+    {
+        fs::create_dir_all(layout.executable.parent().unwrap())?;
+        layout.executable.clone()
+    } else {
+        exe_path
+    };
 
     if !failed_modules.is_empty() {
         // The loud failure summary + abort already ran earlier (right
@@ -7342,7 +7359,23 @@ pub fn run_with_parse_cache(
         }
     }
 
-    // Track iOS bundle info for CompileResult
+    // Finish editing the executable before copying/sealing an app bundle.
+    // The link-cache fingerprint is written below, after bundle signing.
+    if link_cache_status.stats().linked {
+        strip_final_binary(
+            &ctx,
+            &exe_path,
+            target.as_deref(),
+            is_dylib,
+            is_ios,
+            is_visionos,
+            is_tvos,
+            is_watchos,
+            is_harmonyos,
+        );
+    }
+
+    // Track Apple bundle info for CompileResult
     let mut result_bundle_id: Option<String> = None;
     let mut result_app_dir: Option<PathBuf> = None;
 
@@ -7399,6 +7432,22 @@ pub fn run_with_parse_cache(
         )?;
         result_bundle_id = Some(bundle_id);
         result_app_dir = Some(app_dir);
+    } else if let Some(layout) = macos_bundle_layout.as_ref() {
+        if exe_path != layout.executable {
+            post_link::emit_sandbox_sidecar(&ctx, &exe_path, format);
+        }
+        let (app_dir, bundle_id) = bundle_macos::bundle_for_macos(
+            layout,
+            &exe_path,
+            &args.input,
+            &ctx,
+            target.as_deref(),
+            i18n_table.as_ref(),
+            i18n_config.as_ref(),
+            format,
+        )?;
+        result_bundle_id = Some(bundle_id);
+        result_app_dir = Some(app_dir);
     } else {
         // For Windows/Linux (non-bundle targets), copy asset directories next to the exe
         // so that resolve_asset_path can find them relative to the executable.
@@ -7451,39 +7500,7 @@ pub fn run_with_parse_cache(
             }
         }
 
-        // #506 — emit `<binary>.sandbox` next to the binary when
-        // `--emit-sandbox` (or the equivalent env / package.json
-        // knob) is set. macOS only for the MVP; other platforms
-        // log a once-per-build note that the kernel-sandbox MVP
-        // is macOS-only and the matching seccomp / AppContainer /
-        // ... support lands as #506 follow-up.
-        if ctx.emit_sandbox {
-            #[cfg(target_os = "macos")]
-            {
-                match super::super::sandbox_profile::emit_macos_sandbox_profile(&ctx, &exe_path) {
-                    Ok(path) => match format {
-                        OutputFormat::Text => {
-                            println!("Wrote sandbox profile: {}", path.display())
-                        }
-                        OutputFormat::Json => {}
-                    },
-                    Err(e) => match format {
-                        OutputFormat::Text => {
-                            eprintln!("warning: failed to emit sandbox profile: {}", e);
-                        }
-                        OutputFormat::Json => {}
-                    },
-                }
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                if let OutputFormat::Text = format {
-                    eprintln!(
-                        "note: `--emit-sandbox` is macOS-only in this MVP; Linux seccomp + Windows AppContainer support tracked under #506."
-                    );
-                }
-            }
-        }
+        post_link::emit_sandbox_sidecar(&ctx, &exe_path, format);
     }
 
     emit_android_i18n_resources(
@@ -7495,17 +7512,6 @@ pub fn run_with_parse_cache(
     );
 
     if link_cache_status.stats().linked {
-        strip_final_binary(
-            &ctx,
-            &exe_path,
-            target.as_deref(),
-            is_dylib,
-            is_ios,
-            is_visionos,
-            is_tvos,
-            is_watchos,
-            is_harmonyos,
-        );
         write_link_cache_manifest(&link_cache_status, &exe_path);
     }
 
@@ -7531,6 +7537,11 @@ pub fn run_with_parse_cache(
     );
 
     emit_attestation_sidecar(&ctx, &exe_path, format);
+    if let Some(layout) = macos_bundle_layout.as_ref() {
+        if exe_path != layout.executable {
+            emit_attestation_sidecar(&ctx, &layout.executable, format);
+        }
+    }
 
     print_binary_size(format, &exe_path);
 

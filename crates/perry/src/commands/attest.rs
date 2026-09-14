@@ -124,13 +124,13 @@ pub fn build_attestation(binary_path: &Path, project_root: &Path) -> Result<Atte
     })
 }
 
-/// Write the manifest to `<binary>.attest.json` alongside the
-/// binary. Returns the resolved sidecar path.
+/// Write the manifest beside the binary, or beside its enclosing `.app`
+/// bundle. Returns the resolved sidecar path.
 pub fn write_attestation(
     binary_path: &Path,
     manifest: &AttestationManifest,
 ) -> Result<std::path::PathBuf> {
-    let out = binary_path.with_extension("attest.json");
+    let out = super::sidecar::path_for_binary(binary_path, "attest.json");
     let body = serde_json::to_string_pretty(manifest)
         .context("failed to serialize attestation manifest")?;
     std::fs::write(&out, body).with_context(|| format!("failed to write {}", out.display()))?;
@@ -142,7 +142,7 @@ pub fn write_attestation(
 /// manifest on success; bails with an actionable diagnostic on
 /// mismatch or missing sidecar.
 pub fn verify_against_sidecar(binary_path: &Path) -> Result<AttestationManifest> {
-    let sidecar = binary_path.with_extension("attest.json");
+    let sidecar = super::sidecar::path_for_binary(binary_path, "attest.json");
     if !sidecar.exists() {
         bail!(
             "no attestation sidecar at {}.\n\
@@ -230,6 +230,25 @@ mod tests {
         write_attestation(&path, &m).unwrap();
         let read_back = verify_against_sidecar(&path).expect("verify must pass");
         assert_eq!(read_back, m);
+    }
+
+    #[test]
+    fn bundle_attestation_lives_outside_the_seal_and_verifies_the_inner_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = dir.path().join("My App.v2.app");
+        let binary = app.join("Contents/MacOS/Engine");
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        std::fs::write(&binary, b"signed executable").unwrap();
+        let manifest = build_attestation(&binary, dir.path()).unwrap();
+        let written = write_attestation(&binary, &manifest).unwrap();
+        assert_eq!(written, dir.path().join("My App.v2.app.attest.json"));
+        assert!(!binary.with_extension("attest.json").exists());
+        assert_eq!(verify_against_sidecar(&binary).unwrap(), manifest);
+        std::fs::write(&binary, b"modified executable").unwrap();
+        assert!(verify_against_sidecar(&binary)
+            .unwrap_err()
+            .to_string()
+            .contains("MISMATCH"));
     }
 
     #[test]

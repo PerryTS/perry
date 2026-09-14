@@ -42,7 +42,7 @@ pub fn emit_macos_sandbox_profile(
     ctx: &CompilationContext,
     binary_path: &Path,
 ) -> std::io::Result<std::path::PathBuf> {
-    let out = binary_path.with_extension("sandbox");
+    let out = super::sidecar::path_for_binary(binary_path, "sandbox");
     let body = build_macos_profile(ctx);
     let mut f = std::fs::File::create(&out)?;
     f.write_all(body.as_bytes())?;

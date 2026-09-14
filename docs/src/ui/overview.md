@@ -9,8 +9,21 @@ Perry's `perry/ui` module lets you build native desktop and mobile apps with dec
 ```
 
 ```bash
-perry app.ts -o app && ./app
+perry run app.ts
 ```
+
+On macOS, UI builds produce an `.app` bundle so the system recognizes the
+application's bundle identity. To compile and
+launch separately, use `perry app.ts -o app && open app.app`. The linked
+`app` executable is also kept; launch the bundle for desktop use. An explicit
+`-o MyApp.app` writes the executable directly inside that bundle.
+
+The bundle includes project assets, localization resources, and the configured
+app identity and version. `perry run` launches its executable with the supplied
+arguments and terminal input/output. Command-line programs that do not use
+`perry/ui` keep their standalone executable output. Optional `--emit-attest`
+and `--emit-sandbox` sidecars are written beside the `.app`; the attestation
+covers its signed executable in `Contents/MacOS`.
 
 ## Mental Model
 

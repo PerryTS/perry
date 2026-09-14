@@ -1793,8 +1793,8 @@ pub(crate) fn build_and_run_link(
 
     // macOS privacy APIs (including camera/microphone requests made by
     // WKWebView) consult the process Info.plist for usage-description keys.
-    // Perry's direct desktop output is a Mach-O executable, not a .app bundle,
-    // so embed a minimal Info.plist section when linking native macOS UI apps.
+    // Keep the linked binary's embedded metadata identical to its macOS app
+    // bundle metadata; the standalone executable remains available as well.
     // Without this, WKWebView media capture can be denied by the platform even
     // when WKUIDelegate grants the web-origin permission.
     let is_macos_executable =
@@ -1805,35 +1805,7 @@ pub(crate) fn build_and_run_link(
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("perry-app");
-        let bundle_id = format!(
-            "dev.perry.{}",
-            exe_stem
-                .chars()
-                .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-                .collect::<String>()
-                .trim_matches('-')
-        );
-        let info_plist = format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleIdentifier</key>
-    <string>{bundle_id}</string>
-    <key>CFBundleName</key>
-    <string>{exe_stem}</string>
-    <key>CFBundleExecutable</key>
-    <string>{exe_stem}</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>NSCameraUsageDescription</key>
-    <string>This app uses the camera for WebView video calls.</string>
-    <key>NSMicrophoneUsageDescription</key>
-    <string>This app uses the microphone for WebView video calls.</string>
-</dict>
-</plist>
-"#
-        );
+        let info_plist = super::super::bundle_macos::info_plist(ctx, args_input, exe_path);
         let plist_path = std::env::temp_dir().join(format!(
             "perry-embedded-info-{}-{}.plist",
             std::process::id(),
