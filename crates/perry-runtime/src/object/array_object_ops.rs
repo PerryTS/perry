@@ -890,8 +890,13 @@ pub(crate) unsafe fn define_array_property(
         .unwrap_or_else(|| cur_attrs.map(|a| a.enumerable()).unwrap_or(false));
     let configurable = read_bool(b"configurable")
         .unwrap_or_else(|| cur_attrs.map(|a| a.configurable()).unwrap_or(false));
+    // Named descriptor readers use the caller's owner identity, which can be
+    // a pre-growth forwarding alias. Preserve that identity while reloading
+    // the handle after every allocating probe: GC moves update the handle,
+    // whereas resolving array growth here alone would strand the attributes
+    // from getOwnPropertyDescriptor's existing lookup.
     set_property_attrs(
-        current_arr() as usize,
+        current_obj() as usize,
         key_name.to_string(),
         PropertyAttrs::new(writable, enumerable, configurable),
     );
