@@ -115,7 +115,10 @@ fn exported_namespace_functions_are_first_class_inside_the_namespace() {
         String::from_utf8_lossy(&compile.stdout),
         String::from_utf8_lossy(&compile.stderr)
     );
-    let run = Command::new(&output).current_dir(dir.path()).output().expect("run compiled binary");
+    let run = Command::new(&output)
+        .current_dir(dir.path())
+        .output()
+        .expect("run compiled binary");
     assert!(
         run.status.success(),
         "compiled binary failed\nstdout:\n{}\nstderr:\n{}",
