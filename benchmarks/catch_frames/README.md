@@ -8,10 +8,18 @@ same snapshot capture, although its exception transport uses the system unwinder
 
 ## Design and correctness
 
-`exception::TryFrame` stores the jump buffer, handler kind and `CatchSavepoint`
-in one fixed, heap-allocated slab. A depth indexes one allocation instead of
-separate boxed arrays. The slab never grows, so jump-buffer addresses remain
-stable. The 1,024-handler limit and try-depth accounting are unchanged.
+`ExceptionState` keeps fixed jump-buffer and handler-kind slabs alongside one
+slab of per-depth `CatchSavepoint` records. Grouping the captured fields removes
+their separate savepoint arrays. Keeping jump buffers separately aligned avoids
+the submitted all-in-one record's 15 KiB of padding per thread on the default
+64-bit build. The slabs never grow, so jump-buffer addresses remain stable.
+The 1,024-handler limit and try-depth accounting are unchanged.
+
+Snapshot slots use `MaybeUninit`: a push writes every field before incrementing
+`try_depth`, and restoration reads only a published handler's initialized slot.
+Inactive snapshots are neither read nor scanned. This also avoids eagerly
+writing the nonzero shadow-stack sentinel throughout unused snapshot pages.
+The record is `Copy`, so no owned resources need destruction in inactive slots.
 
 `exception/savepoints.rs` declares each snapshot field together with its
 capture provider, restore provider and required real-throw witness. The macro
@@ -42,6 +50,11 @@ test filter does not count as detection. The script restores and rebuilds the
 original source in `finally`, then requires the exception suite to pass.
 
 ## Instruction measurements, 2026-09-14
+
+The historical numbers below describe the submitted all-in-one record layout.
+The landing train remeasures the adjusted storage against its merged baseline
+with the same package selection and records CPU/instruction and RSS results
+separately; these historical numbers are not measurements of that adjustment.
 
 Baseline: main `eb13fa188d` (0.5.1564), which already includes the #10215
 large-array corruption fix. Host: perrymaster, AMD Ryzen 7 7700X, Linux

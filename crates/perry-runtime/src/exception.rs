@@ -49,9 +49,9 @@ extern "C" {
     fn longjmp(env: *mut i32, val: i32) -> !;
 }
 
-// Maximum nesting depth for try blocks. All per-depth state lives in one
-// fixed heap slab per thread. The slab keeps jump-buffer addresses stable and
-// avoids ld64's 64KB inline initialized-TLS limit on arm64_32. Raised from 128
+// Maximum nesting depth for try blocks. Per-depth state lives in fixed heap
+// slabs per thread. They keep jump-buffer addresses stable and
+// avoid ld64's 64KB inline initialized-TLS limit on arm64_32. Raised from 128
 // (#5065): legal recursion through try/catch must reach 1024 open handlers.
 const MAX_TRY_DEPTH: usize = 1024;
 
@@ -74,25 +74,13 @@ enum HandlerKind {
     Unwind,
 }
 
-/// One depth indexes one allocation and one bounds check. The jump buffer
-/// stays in a fixed slab, so its address remains valid while a trap is armed.
-#[derive(Clone, Copy)]
-struct TryFrame {
-    jump_buffer: JmpBuf,
-    kind: HandlerKind,
-    savepoint: CatchSavepoint,
-}
-
-impl TryFrame {
-    const EMPTY: Self = Self {
-        jump_buffer: JmpBuf::new(),
-        kind: HandlerKind::Setjmp,
-        savepoint: CatchSavepoint::EMPTY,
-    };
-}
-
 struct ExceptionState {
-    frames: Box<[TryFrame]>,
+    // Group captured fields per depth, but keep jump buffers separately aligned.
+    // Putting their 16-byte alignment and a one-byte kind into every record
+    // adds 15 KiB of padding per thread in the default 64-bit configuration.
+    jump_buffers: Box<[JmpBuf]>,
+    handler_kinds: Box<[HandlerKind]>,
+    savepoints: Box<[std::mem::MaybeUninit<CatchSavepoint>]>,
     try_depth: usize,
     current_exception: f64,
     has_exception: bool,
@@ -102,9 +90,14 @@ struct ExceptionState {
 impl ExceptionState {
     fn new() -> Self {
         Self {
-            // Build directly on the heap; a slab this large must never be an
-            // inline TLS initializer or a native-stack temporary (arm64_32).
-            frames: vec![TryFrame::EMPTY; MAX_TRY_DEPTH].into_boxed_slice(),
+            // Build the fixed slabs directly on the heap, without large TLS
+            // initializers or native-stack temporaries (arm64_32).
+            jump_buffers: vec![JmpBuf::new(); MAX_TRY_DEPTH].into_boxed_slice(),
+            handler_kinds: vec![HandlerKind::Setjmp; MAX_TRY_DEPTH].into_boxed_slice(),
+            // Each push writes a complete snapshot before incrementing try_depth.
+            // Inactive slots are never read or scanned. Avoid touching every
+            // page with the shadow-stack sentinel at thread initialization.
+            savepoints: Box::<[CatchSavepoint]>::new_uninit_slice(MAX_TRY_DEPTH),
             try_depth: 0,
             current_exception: 0.0,
             has_exception: false,
@@ -158,11 +151,10 @@ fn try_push_with_kind(kind: HandlerKind) -> *mut i32 {
         }
         let depth = (*s).try_depth;
         let savepoint = CatchSavepoint::capture();
-        let frame = &mut (*s).frames[depth];
-        frame.kind = kind;
-        frame.savepoint = savepoint;
+        (*s).handler_kinds[depth] = kind;
+        (*s).savepoints[depth].write(savepoint);
         (*s).try_depth += 1;
-        frame.jump_buffer.as_mut_ptr()
+        (*s).jump_buffers[depth].as_mut_ptr()
     })
 }
 
@@ -362,13 +354,14 @@ pub extern "C-unwind" fn js_throw(value: f64) -> ! {
         // Restore every subsystem before transporting the exception. The
         // registration generates capture and restore together, including the
         // feature-gated entries; the test replay uses this exact path too.
-        (*s).frames[depth].savepoint.restore();
+        // depth names a published handler, whose push initialized this slot.
+        (*s).savepoints[depth].assume_init_read().restore();
         // The savepoint restores above are transport-independent: the unwind
         // path skips Rust cleanups exactly like longjmp does (the runtime is
         // built panic=abort; see crate::eh), so restoring at throw time is
         // correct for both.
-        match (*s).frames[depth].kind {
-            HandlerKind::Setjmp => (*s).frames[depth].jump_buffer.as_mut_ptr(),
+        match (*s).handler_kinds[depth] {
+            HandlerKind::Setjmp => (*s).jump_buffers[depth].as_mut_ptr(),
             HandlerKind::Unwind => std::ptr::null_mut(),
         }
     });
@@ -712,7 +705,9 @@ pub(crate) fn test_try_depth() -> usize {
 pub(crate) fn test_unwind_innermost_shadow_restore() {
     with_exception_state(|s| unsafe {
         assert!((*s).try_depth > 0, "no open try to unwind");
-        (*s).frames[(*s).try_depth - 1].savepoint.restore();
+        (*s).savepoints[(*s).try_depth - 1]
+            .assume_init_read()
+            .restore();
     });
 }
 

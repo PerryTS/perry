@@ -736,15 +736,6 @@ pub(crate) struct ShadowSavepoint {
     temp_roots: usize,
 }
 
-impl ShadowSavepoint {
-    /// Identity savepoint for an empty shadow stack — used to
-    /// zero-initialize the per-try-depth savepoint table.
-    pub(crate) const EMPTY: ShadowSavepoint = ShadowSavepoint {
-        frame_top: usize::MAX,
-        len: 0,
-        temp_roots: 0,
-    };
-}
 
 /// Capture the current shadow-stack depth so it can be restored after a
 /// non-local exit. Call at `js_try_push` time, before the protected

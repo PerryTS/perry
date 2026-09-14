@@ -30,7 +30,7 @@ def main():
     original = path.read_text()
     needle = "$($(#[$attr])* $restore(self.$name);)*"
     assert original.count(needle) == 1
-    names = re.findall(r"^    (\w+): [^\n]+ = ", original, flags=re.MULTILINE)
+    names = re.findall(r"^    (\w+): [^\n]+,\n    capture: ", original, flags=re.MULTILINE)
     captures = re.findall(r"^    capture: ", original, flags=re.MULTILINE)
     assert names and len(names) == len(set(names)) == len(captures), names
     mutant = original.replace(needle, '''$($(#[$attr])* {
