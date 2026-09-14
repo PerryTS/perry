@@ -331,7 +331,7 @@
           "crates/perry-runtime/src/gc/census.rs": "5c151725460ffb92a55a6bee781123ef5159263b4ce5958d16570f78216e0d67",
           "crates/perry-runtime/src/gc/cycle.rs": "b035dcb44df029358cbab0afaa526e8e506765f5178034663257e18ceefaf9df",
           "crates/perry-runtime/src/gc/mod.rs": "9fedd2790f48154aaeceefb4805d3fbaa2fdf3c407529b326425fde86c2bf9a5",
-          "crates/perry-runtime/src/gc/policy.rs": "1c17b1c7b05556a26c874cfde46633190746d70bcd1eec4a22a05770667b43ba",
+          "crates/perry-runtime/src/gc/policy.rs": "895c6f4bd1a6e491adf348ecfa89985b03e354fcee7cf73826bb590f9ace9163",
           "crates/perry-runtime/src/gc/progress.rs": "a5ad3971bbe4047229ca57325234780daa85921dbc778e1c08dff4ad07ccfb96"
         }
       }
