@@ -13,7 +13,7 @@ use crate::rooting::{
 };
 use crate::types::{DOUBLE, I32, I64, PTR};
 
-use super::{emit_root_nanbox_store_on_block, lower_expr, nanbox_pointer_inline, FnCtx};
+use super::{emit_root_nanbox_store_for_expr, lower_expr, nanbox_pointer_inline, FnCtx};
 
 /// The compiled symbols for `template`'s `static { … }` blocks, in declaration
 /// order (#685).
@@ -73,7 +73,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // (register_module_globals_as_gc_roots walks ctx.static_field_globals since the
                 // 2026-07-02 audit fix; before that this comment was aspirational and the slot
                 // was unrooted).
-                emit_root_nanbox_store_on_block(ctx.block(), &v, &g_ref);
+                emit_root_nanbox_store_for_expr(ctx, &v, &g_ref, value);
             }
             // v0.5.747: also register the static field in the runtime
             // CLASS_DYNAMIC_PROPS side-table so dynamic-dispatch reads

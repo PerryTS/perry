@@ -350,7 +350,7 @@ pub(super) fn init_static_fields_late(
                 }
                 let v = v?;
                 let g_ref = format!("@{}", global_name);
-                crate::expr::emit_root_nanbox_store_on_block(ctx.block(), &v, &g_ref);
+                crate::expr::emit_root_nanbox_store_for_expr(ctx, &v, &g_ref, init_expr);
                 emit_static_field_registration(ctx, &v);
             }
             // Uninitialized non-computed static fields are now registered in

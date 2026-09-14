@@ -17,9 +17,9 @@ use crate::type_analysis::{is_map_expr, is_set_expr, receiver_class_name};
 use crate::types::{DOUBLE, I32, I64};
 
 use super::{
-    can_lower_expr_as_i32_in_current_region, emit_root_nanbox_store_on_block,
-    emit_shadow_slot_clear, emit_shadow_slot_update_for_expr, emit_write_barrier,
-    is_global_this_builtin_function_name, lower_expr, lower_expr_as_i32,
+    can_lower_expr_as_i32_in_current_region, emit_root_nanbox_store_for_expr,
+    emit_root_nanbox_store_on_block, emit_shadow_slot_clear, emit_shadow_slot_update_for_expr,
+    emit_write_barrier, is_global_this_builtin_function_name, lower_expr, lower_expr_as_i32,
     lower_pod_local_reassignment, materialize_pod_value_copy, nanbox_string_inline, FnCtx,
     TrustedBoxCapturePtr,
 };
@@ -772,7 +772,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     } else if let Some(global_name) = ctx.module_globals.get(id).cloned() {
                         let g_ref = format!("@{}", global_name);
                         // GC_STORE_AUDIT(ROOT): module global slot is registered as a mutable GC root.
-                        emit_root_nanbox_store_on_block(ctx.block(), &v_dbl, &g_ref);
+                        emit_root_nanbox_store_for_expr(ctx, &v_dbl, &g_ref, value);
                     }
                     if !is_canonical {
                         if let Some(slot_idx) = ctx.shadow_slot_map.get(id).copied() {
@@ -879,7 +879,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else if let Some(global_name) = ctx.module_globals.get(id).cloned() {
                 let g_ref = format!("@{}", global_name);
                 // GC_STORE_AUDIT(ROOT): module global slot is registered as a mutable GC root.
-                emit_root_nanbox_store_on_block(ctx.block(), &v, &g_ref);
+                emit_root_nanbox_store_for_expr(ctx, &v, &g_ref, value);
             }
             super::record_native_arena_owner_assignment(ctx, *id, value.as_ref());
             if ctx.receiver_descriptors.contains_buffer_view(id)
