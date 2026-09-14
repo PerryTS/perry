@@ -17,8 +17,8 @@
 //! feature, which `optimized_libs.rs` already auto-activates whenever
 //! `node:http` / `node:https` / `node:http2` is imported) calls
 //! `js_ext_http_server_is_handle`; on a hit it forwards to
-//! `js_ext_http_server_dispatch_method`, which routes to the same
-//! `js_node_http_server_*` externs that the static native_table path uses.
+//! `js_ext_http_server_dispatch_method`, which routes to the same server
+//! implementations that the static native_table path uses.
 //!
 //! Issue #2153.
 
@@ -40,7 +40,6 @@ struct ErrorHeader {
 }
 
 extern "C" {
-    fn js_node_http_server_listen(server_handle: i64, args_array: i64);
     fn js_node_http_server_close(server_handle: i64, callback: i64);
     fn js_node_http_server_close_all_connections(handle: i64);
     fn js_node_http_server_close_idle_connections(handle: i64);
@@ -62,7 +61,6 @@ extern "C" {
     fn js_node_http_server_set_timeout_method(handle: i64, msecs: f64, callback: i64) -> i64;
     fn js_node_http_server_ref(handle: i64) -> i64;
     fn js_node_http_server_unref(handle: i64) -> i64;
-    fn js_node_https_server_listen(server_handle: i64, args_array: i64) -> i64;
     fn js_node_https_server_close(server_handle: i64, callback: i64);
     fn js_node_https_server_close_all_connections(handle: i64);
     fn js_node_https_server_close_idle_connections(handle: i64);
@@ -75,7 +73,6 @@ extern "C" {
     fn js_node_https_server_set_timeout_method(handle: i64, msecs: f64, callback: i64) -> i64;
     fn js_node_https_server_ref(handle: i64) -> i64;
     fn js_node_https_server_unref(handle: i64) -> i64;
-    fn js_node_http2_server_listen(server_handle: i64, args_array: i64) -> i64;
     fn js_node_http2_server_close(server_handle: i64, callback: i64);
     fn js_node_http2_server_address_json(handle: i64) -> *mut StringHeader;
     fn js_node_http2_server_on(
@@ -234,19 +231,6 @@ fn http_server_method_bytes(name: &str) -> Option<&'static [u8]> {
     }
 }
 
-/// Build a transient `ArrayHeader`-shaped buffer carrying NaN-boxed args.
-/// `js_node_http_server_listen` reads its `args_array` arg as a raw
-/// `*const ArrayHeader`; the codegen's `NA_VARARGS` path packs one for the
-/// direct dispatch, so we mimic that layout here. The buffer lives only
-/// for the duration of the call.
-#[repr(C)]
-struct InlineArgsHeader {
-    length: u32,
-    capacity: u32,
-    // up to 8 packed u64 args follow inline
-    args: [u64; 8],
-}
-
 /// Dispatch a method on a registered `HttpServer` handle. Method name is a
 /// UTF-8 ptr+len; args are NaN-boxed f64s (the perry-runtime
 /// `js_native_call_method` shape). Returns NaN-boxed undefined for methods
@@ -281,22 +265,13 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
 
     match method.as_str() {
         "listen" => {
-            let n = args.len().min(8);
-            let mut inline = InlineArgsHeader {
-                length: n as u32,
-                capacity: n as u32,
-                args: [0; 8],
-            };
-            for i in 0..n {
-                inline.args[i] = args[i].to_bits();
-            }
-            let args_array = &inline as *const _ as i64;
+            let parsed = crate::server::types::parse_listen_values(args.iter().take(8).copied());
             if is_h2 {
-                js_node_http2_server_listen(handle, args_array);
+                crate::server::http2_server::listen_http2_server(handle, parsed);
             } else if is_https {
-                js_node_https_server_listen(handle, args_array);
+                crate::server::https_server::listen_https_server(handle, parsed);
             } else {
-                js_node_http_server_listen(handle, args_array);
+                crate::server::server::listen_http_server(handle, parsed);
             }
             // Node returns the server for chaining (`createServer(...).listen(p).address()`).
             self_ref

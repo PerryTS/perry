@@ -125,13 +125,6 @@ lazy_static! {
         Mutex::new(HashMap::new());
 }
 
-#[repr(C)]
-struct InlineArgsHeader {
-    length: u32,
-    capacity: u32,
-    args: [u64; 1],
-}
-
 struct ClosureCallResult {
     value: f64,
     thrown: Option<f64>,
@@ -286,12 +279,8 @@ pub unsafe extern "C" fn js_bun_serve(options: f64) -> i64 {
 
     crate::server::ensure_gc_scanner_registered();
     let handle = register_handle(server);
-    let args = InlineArgsHeader {
-        length: 1,
-        capacity: 1,
-        args: [options.get().to_bits()],
-    };
-    crate::server::server::js_node_http_server_listen(handle, &args as *const _ as i64);
+    let parsed = crate::server::types::parse_listen_values(std::iter::once(options.get()));
+    crate::server::server::listen_http_server(handle, parsed);
     if !get_handle::<HttpServer>(handle)
         .map(|server| server.listening)
         .unwrap_or(false)
