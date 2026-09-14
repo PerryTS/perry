@@ -126,6 +126,7 @@ pub(crate) fn expando_in_use() -> bool {
 
 /// Plain assignments on exotic receivers can live here without an ObjectMeta.
 /// Builtin-operation guards must check this table as well as the header.
+#[cfg(feature = "regex-engine")]
 pub(crate) fn has_expando_values(addr: usize) -> bool {
     let tables = &crate::state::state().exotic_expando;
     tables.in_use.get()
