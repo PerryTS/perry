@@ -293,11 +293,20 @@ fn imported_class_from_hir(
         local_alias,
         namespace: None,
         source_prefix,
-        constructor_param_count: class
-            .constructor
-            .as_ref()
-            .map(|ctor| ctor.params.len())
-            .unwrap_or(0),
+        // #10258: must match the arity of the standalone constructor the
+        // defining module emits. A class with no own constructor whose parent
+        // is only a runtime value synthesizes a fixed forwarding band; counting
+        // just the (absent) own constructor declared it as 0 params here, so
+        // `new ImportedClass(args)` passed only `this` and the parent ran
+        // without its arguments.
+        constructor_param_count: perry_codegen::context_free_ctor_param_count(class)
+            .unwrap_or_else(|| {
+                class
+                    .constructor
+                    .as_ref()
+                    .map(|ctor| ctor.params.len())
+                    .unwrap_or(0)
+            }),
         has_own_constructor: class.constructor.is_some(),
         constructor_has_rest: class
             .constructor
