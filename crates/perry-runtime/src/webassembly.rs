@@ -169,6 +169,18 @@ fn wasm_type_error_value(message: &str) -> f64 {
     crate::value::js_nanbox_pointer(error as i64)
 }
 
+fn resolved_promise_value(value: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    let promise = scope.root_raw_mut_ptr(crate::promise::js_promise_new());
+    promise.with_mut_ptr(|promise: *mut crate::promise::Promise| {
+        crate::promise::js_promise_resolve(promise, value.get_nanbox_f64())
+    });
+    promise.with_mut_ptr(|promise: *mut crate::promise::Promise| {
+        crate::value::js_nanbox_pointer(promise as i64)
+    })
+}
+
 fn rejected_promise_value(reason: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let reason = scope.root_nanbox_f64(reason);
@@ -1056,8 +1068,9 @@ fn make_export_function(
         closure_ptr,
         std::str::from_utf8(name).unwrap_or("wasm"),
     );
-    let closure_ptr = closure.get_raw_mut_ptr::<crate::closure::ClosureHeader>();
-    crate::value::js_nanbox_pointer(closure_ptr as i64)
+    closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
+        crate::value::js_nanbox_pointer(closure as i64)
+    })
 }
 
 fn table_method_context<'scope>(
@@ -1871,20 +1884,12 @@ pub extern "C" fn js_webassembly_instantiate(bytes_jsval: f64, imports_jsval: f6
                 "WebAssembly.instantiate(): instantiation failed",
             ));
         }
-        let instance = scope.root_nanbox_f64(make_instance_value(
+        return resolved_promise_value(make_instance_value(
             module,
             inst,
             imports.get_nanbox_f64(),
             nanbox_undefined(),
         ));
-        let promise = scope.root_raw_mut_ptr(crate::promise::js_promise_new());
-        crate::promise::js_promise_resolve(
-            promise.get_raw_mut_ptr::<crate::promise::Promise>(),
-            instance.get_nanbox_f64(),
-        );
-        return crate::value::js_nanbox_pointer(
-            promise.get_raw_mut_ptr::<crate::promise::Promise>() as i64,
-        );
     }
     let Some((ptr, len)) = extract_bytes(bytes_jsval) else {
         return rejected_promise_value(wasm_type_error_value(
