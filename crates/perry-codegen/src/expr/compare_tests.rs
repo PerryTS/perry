@@ -401,13 +401,31 @@ fn strict_eq_against_a_string_literal_emits_the_inline_dispatch_and_no_js_eq_cal
     );
 }
 
+/// 4..=16-byte literals are settled by two overlapping word compares against
+/// compile-time constants after the length check; `js_string_equals` used to
+/// re-check pointer, length and bytes for every same-length heap string.
+#[test]
+fn medium_string_literal_compares_words_inline() {
+    for lit in ["dest", "destroy", "hello-world", "sixteen-bytes-ok"] {
+        let ir = cmp_ir(
+            "streq_medium_lit",
+            CompareOp::Eq,
+            Expr::LocalGet(X),
+            Expr::String(lit.to_string()),
+        );
+        assert!(ir.contains("streqlit.words"), "{lit}:\n{ir}");
+        assert!(!ir.contains("call i32 @js_string_equals("), "{lit}:\n{ir}");
+        assert!(!ir.contains("streqlit.slow"), "{lit}:\n{ir}");
+    }
+}
+
 #[test]
 fn longer_string_literal_keeps_the_full_content_fallback() {
     let ir = cmp_ir(
         "streq_long_lit",
         CompareOp::Eq,
         Expr::LocalGet(X),
-        Expr::String("destroy".to_string()),
+        Expr::String("seventeen-bytes!!".to_string()),
     );
     assert!(ir.contains("streqlit.slow"), "{ir}");
     assert!(ir.contains("call i32 @js_string_equals("), "{ir}");

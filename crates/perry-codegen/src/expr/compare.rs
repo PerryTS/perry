@@ -191,9 +191,10 @@ pub(super) fn i8_literal(b: u8) -> String {
 /// can never be `===` a string (a boxed `new String("x")` is `POINTER_TAG`, and
 /// correctly unequal), and a heap string whose `byte_len` or whose first / last
 /// byte differs from the literal's is unequal without reading a byte the length
-/// check has not already proved the header owns. Only a same-length,
-/// same-endpoints heap string reaches `js_string_equals`, except that a
-/// three-byte literal is settled by checking its one remaining middle byte.
+/// check has not already proved the header owns. A three-byte literal is
+/// settled by its one remaining middle byte, and a 4..=16-byte literal by two
+/// overlapping word compares against compile-time constants; only a
+/// same-length heap string of a longer literal reaches `js_string_equals`.
 ///
 /// Returns an `i1` that is true iff the two operands are `===`.
 pub(crate) fn lower_string_literal_strict_eq(
@@ -211,13 +212,17 @@ pub(crate) fn lower_string_literal_strict_eq(
     // Blocks, in the order control flows through them. Only the ones this
     // literal's length needs are created — an empty block would have no
     // terminator and fail the LLVM verifier.
+    // Literals of 4..=16 bytes are compared as two overlapping little-endian
+    // words that together cover every byte the length check proved present.
+    let words = (4..=16).contains(&n);
     let sso_idx = sso_immediate(&bytes).map(|_| ctx.new_block("streqlit.sso"));
     let tag_idx = ctx.new_block("streqlit.tag");
     let len_idx = ctx.new_block("streqlit.len");
-    let b0_idx = (n >= 1).then(|| ctx.new_block("streqlit.b0"));
-    let bl_idx = (n >= 2).then(|| ctx.new_block("streqlit.bl"));
+    let words_idx = words.then(|| ctx.new_block("streqlit.words"));
+    let b0_idx = (n >= 1 && !words).then(|| ctx.new_block("streqlit.b0"));
+    let bl_idx = (n >= 2 && !words).then(|| ctx.new_block("streqlit.bl"));
     let bm_idx = (n == 3).then(|| ctx.new_block("streqlit.bm"));
-    let slow_idx = (n >= 4).then(|| ctx.new_block("streqlit.slow"));
+    let slow_idx = (n > 16).then(|| ctx.new_block("streqlit.slow"));
     let true_idx = ctx.new_block("streqlit.true");
     let false_idx = ctx.new_block("streqlit.false");
     let merge_idx = ctx.new_block("streqlit.merge");
@@ -273,8 +278,41 @@ pub(crate) fn lower_string_literal_strict_eq(
         .gep_inbounds(I8, &hdr_ptr, &[(I64, STRING_HEADER_BYTE_LEN_OFFSET)]);
     let blen = ctx.block().load(I32, &blen_ptr);
     let len_ok = ctx.block().icmp_eq(I32, &blen, &n.to_string());
-    let after_len = b0_l.clone().unwrap_or_else(|| true_l.clone());
+    let words_l = words_idx.map(|i| ctx.block_label(i));
+    let after_len = words_l
+        .clone()
+        .or_else(|| b0_l.clone())
+        .unwrap_or_else(|| true_l.clone());
     ctx.block().cond_br(&len_ok, &after_len, &false_l);
+
+    // 4..=16 bytes: the first and last word (4 or 8 bytes each, overlapping
+    // when `n` is not a multiple) are compile-time constants. Equal words
+    // cover every byte, so this decides the comparison without
+    // `js_string_equals`.
+    if let Some(idx) = words_idx {
+        ctx.current_block = idx;
+        let (ty, width) = if n >= 8 { (I64, 8) } else { (I32, 4) };
+        let word = |at: usize| -> String {
+            let mut buf = [0u8; 8];
+            buf[..width].copy_from_slice(&bytes[at..at + width]);
+            if width == 8 {
+                (u64::from_le_bytes(buf) as i64).to_string()
+            } else {
+                (u32::from_le_bytes(buf[..4].try_into().unwrap()) as i32).to_string()
+            }
+        };
+        let head_p =
+            ctx.block()
+                .gep_inbounds(I8, &hdr_ptr, &[(I64, &STRING_HEADER_SIZE.to_string())]);
+        let head = ctx.block().load_aligned(ty, &head_p, 1);
+        let head_ok = ctx.block().icmp_eq(ty, &head, &word(0));
+        let tail_off = (STRING_HEADER_SIZE + n - width).to_string();
+        let tail_p = ctx.block().gep_inbounds(I8, &hdr_ptr, &[(I64, &tail_off)]);
+        let tail = ctx.block().load_aligned(ty, &tail_p, 1);
+        let tail_ok = ctx.block().icmp_eq(ty, &tail, &word(n - width));
+        let ok = ctx.block().and(I1, &head_ok, &tail_ok);
+        ctx.block().cond_br(&ok, &true_l, &false_l);
+    }
 
     // First and last byte. Both sit inside the `n` bytes the length check just
     // proved this header owns, so the loads need no further guard. For n <= 2
