@@ -837,6 +837,10 @@ pub(super) fn compile_function(
                 .collect()
         })
         .unwrap_or_default();
+    let spec_bool_params: HashSet<u32> = spec_param_proofs
+        .iter()
+        .filter_map(|(id, ty)| matches!(ty, perry_hir::types::Type::Boolean).then_some(*id))
+        .collect();
     let spec_numeric_params: HashSet<u32> = spec_param_proofs
         .iter()
         .filter_map(|(id, ty)| {
@@ -1130,6 +1134,7 @@ pub(super) fn compile_function(
         spec_ta_bindings: &cross_module.spec_ta_bindings,
         spec_ta_ready: std::collections::HashSet::new(),
         spec_i32_params: spec_i32_params.clone(),
+        spec_bool_params,
         i1_local_slots: HashMap::new(),
         index_used_locals: native_facts.index_used_locals(),
         strictly_i32_bounded_locals: native_facts.strictly_i32_bounded_locals(),
