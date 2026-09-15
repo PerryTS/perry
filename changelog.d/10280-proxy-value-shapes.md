@@ -17,3 +17,8 @@ Fix Proxy values in `Array.from` and dynamic `RequestInit.headers` (#10270,
 Read a Proxy source’s iterator method once before constructing the result, and
 cache the iterator’s next method. Keep the method, iterator, intermediate values,
 and pending mapping errors rooted across user callbacks and iterator closing.
+
+Pass an existing Headers handle straight to the Request constructor, which
+already clones its entries, instead of copying it into a temporary Headers
+store first. Records, iterables, Proxies, `undefined` and `null` still take the
+full conversion path.

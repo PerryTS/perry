@@ -970,6 +970,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_response_body_init_ptr", I64, &[DOUBLE]);
     // new Headers() -> f64
     module.declare_function("js_headers_new", DOUBLE, &[]);
+    module.declare_function("js_headers_from_value", DOUBLE, &[DOUBLE]);
     // headers.set(handle_f64, key_ptr, val_ptr) -> f64 (undefined-tag)
     module.declare_function("js_headers_set", DOUBLE, &[DOUBLE, I64, I64]);
     // headers.append(handle_f64, key_ptr, val_ptr) -> f64 (undefined-tag)

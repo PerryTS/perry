@@ -21,6 +21,31 @@ pub extern "C" fn js_headers_new() -> f64 {
     handle_to_f64(alloc_headers(HeadersStore::default()))
 }
 
+/// Normalize a runtime `HeadersInit` value to a Headers handle.
+///
+/// A genuine Headers handle is already in the representation consumed by the
+/// Request constructor, which clones its entries into the Request record. Keep
+/// that handle instead of allocating and filling a redundant intermediate
+/// store. Records, iterables, and Proxies still take the full constructor path.
+#[no_mangle]
+pub extern "C" fn js_headers_from_value(init: f64) -> f64 {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let init = scope.root_nanbox_f64(init);
+    let current = init.get_nanbox_f64();
+    if perry_runtime::proxy::js_proxy_is_proxy(current) == 0 {
+        let id = handle_id(current);
+        if HEADERS_REGISTRY.lock().unwrap().contains_key(&id) {
+            return current;
+        }
+    }
+
+    let handle = js_headers_new();
+    unsafe {
+        js_headers_init_from_value(handle, init.get_nanbox_f64());
+    }
+    handle
+}
+
 unsafe fn header_init_string(value: f64) -> String {
     let ptr = perry_runtime::value::js_jsvalue_to_string(value);
     string_from_header(ptr as *const StringHeader).unwrap_or_default()

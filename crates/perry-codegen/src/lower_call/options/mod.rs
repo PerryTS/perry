@@ -75,15 +75,11 @@ pub(in crate::lower_call) fn build_headers_from_value(
     init: &Expr,
 ) -> Result<String> {
     with_rooted_group(ctx, 1, |ctx, group| {
-        let h = ctx.block().call(DOUBLE, "js_headers_new", &[]);
-        let h_root = group.adopt_emitted(ctx, Repr::Boxed, &h, true);
         let value = lower_expr(ctx, init)?;
-        let h = group.reread_emitted(ctx, h_root);
-        ctx.block().call(
-            DOUBLE,
-            "js_headers_init_from_value",
-            &[(DOUBLE, &h), (DOUBLE, &value)],
-        );
+        let h = ctx
+            .block()
+            .call(DOUBLE, "js_headers_from_value", &[(DOUBLE, &value)]);
+        let h_root = group.adopt_emitted(ctx, Repr::Boxed, &h, true);
         Ok(group.reread_emitted(ctx, h_root))
     })
 }

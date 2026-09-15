@@ -194,6 +194,13 @@ pub extern "C" fn js_headers_new() -> f64 {
 
 #[cfg(not(feature = "external-fetch-symbols"))]
 #[no_mangle]
+pub extern "C" fn js_headers_from_value(_init: f64) -> f64 {
+    perry_stub_warn("js_headers_from_value", FETCH_REASON, None);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+#[cfg(not(feature = "external-fetch-symbols"))]
+#[no_mangle]
 pub extern "C" fn js_headers_init_from_value(_handle: f64, _init: f64) -> f64 {
     perry_stub_warn("js_headers_init_from_value", FETCH_REASON, None);
     f64::from_bits(crate::value::TAG_UNDEFINED)

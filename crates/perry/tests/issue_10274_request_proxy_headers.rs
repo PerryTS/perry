@@ -20,6 +20,13 @@ console.log("record", JSON.stringify(dump(make({ "x-a": "1" }))))
 console.log("pairs", JSON.stringify(dump(make([["x-a", "1"], ["x-a", "2"]]))))
 console.log("handle", JSON.stringify(dump(make(new Headers({ "x-a": "1" })))))
 console.log("literal", JSON.stringify(dump(new Request("https://x.dev", { headers: { "x-a": "1" } }).headers)))
+const source = new Headers({ "x-a": "1" })
+const copied = make(source)
+source.set("x-b", "2")
+copied.set("x-c", "3")
+console.log("independent", JSON.stringify(dump(source)), JSON.stringify(dump(copied)), copied !== source)
+console.log("absent", JSON.stringify(dump(make(undefined))))
+try { make(null); console.log("null accepted") } catch (e) { console.log("null", e instanceof TypeError) }
 "#;
 
 #[test]
@@ -36,6 +43,9 @@ fn request_converts_dynamic_headers_init() {
             "pairs [\"x-a=1, 2\"]\n",
             "handle [\"x-a=1\"]\n",
             "literal [\"x-a=1\"]\n",
+            "independent [\"x-a=1\",\"x-b=2\"] [\"x-a=1\",\"x-c=3\"] true\n",
+            "absent []\n",
+            "null true\n",
         )
     );
 }
