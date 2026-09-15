@@ -2991,6 +2991,8 @@ mod dyn_extern_i18n;
 mod dynamic_add_tree_tests;
 mod env_clones;
 mod fs_await;
+#[cfg(test)]
+mod hit_path_tests;
 mod index_get;
 #[cfg(test)]
 mod index_get_claim_tests;
