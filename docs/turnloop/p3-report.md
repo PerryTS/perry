@@ -228,7 +228,7 @@ there shows up as a harness timeout rather than a diff.
 
 ### Runtime unit tests
 
-`crates/perry-runtime/src/timer/store_tests.rs` — 20 tests over the structure
+`crates/perry-runtime/src/timer/store_tests.rs` — 14 tests over the structure
 itself, each asserting its subject was populated (an empty store would satisfy
 most ordering assertions vacuously): deadline-then-creation drain order, the
 phase snapshot boundary, immediate cancellation with the heap left ordered, the
@@ -244,6 +244,72 @@ the arming: that an armed deadline does **not** answer `Loop::alive()` (the
 sabotage check for the `set_ref(false)`), that an expiry arrives as a real
 `OpResult::Timer` completion after a real OS wait, and that the armed deadline
 and Perry's own `next_timer_deadline()` are the same instant.
+
+### The gap suite, against a baseline built from this branch's own base
+
+Both arms ran the same 8-shard fast tier (`PERRY_SKIP_BUILD=1`, which implies
+`PERRY_NO_AUTO_OPTIMIZE=1`) against the pinned oracle on the same box. The
+baseline is `c6f185d6e8` — this branch's base — because the committed snapshot
+already disagrees with it: three tests are non-passing on the base that the
+snapshot expects to pass, and crediting P3 with those would be exactly the
+mistake P1 avoided by building its own baseline.
+
+| | base `c6f185d6e8` | P3 |
+|---|---|---|
+| tests | 796 | 799 (the three new P3 fixtures) |
+| pass | 787 | 787 + 3 |
+| parity_fail | **9** | **9 — the same nine** |
+| compile_fail | 0 | 25, all environmental (below) |
+
+The nine parity failures are identical in both arms and none is P3's:
+`test_gap_2159_defineproperty_class_prototype`,
+`test_gap_2514_settracesigint`, `test_gap_2899_2779_2777_static_helpers`,
+`test_gap_disposablestack_2875`, `test_gap_iterator_prototype_next_patch`,
+`test_gap_json_lazy_defineproperty_index`,
+`test_gap_perfhooks_3088_3008_3010_3011`,
+`test_gap_prop_plan_cache_invalidation`, `test_gap_v8_2_3680plus`. Six are in
+the committed snapshot as known failures; the other three
+(`…_static_helpers`, `disposablestack_2875`, `iterator_prototype_next_patch`)
+are pre-existing regressions on the base commit, not P3's.
+
+**The 25 compile failures are a test-harness artifact, not a code result.**
+They are exactly the ext-routed set — `http`, `http2`, `net`, `ws`, `zlib`,
+`events`, the WebAssembly fixture and the native-base fixtures — i.e. every test
+whose link needs a `perry-ext-*` archive. The gap tier does not prebuild those,
+so each such test shells out to `cargo build -p perry-ext-…`, and eight shards
+plus a concurrent `cargo test` serialised on one cargo lock until the per-test
+compile timed out. Re-run one at a time with the ext archives built coherently
+alongside the runtime and stdlib (the invocation `run_parity_tests.sh` itself
+prescribes), on an otherwise idle tree, all 25 pass.
+
+### The workspace unit tests
+
+`RUST_TEST_THREADS=1 cargo test --release -p perry-runtime --lib` on this box:
+
+| arm | result |
+|---|---|
+| base `c6f185d6e8` | FAILED. 3965 passed; **2 failed** |
+| P3 | FAILED. 3972 passed; **2 failed** |
+
+The two failures are the same on both arms and neither is P3's:
+`gc::tests::heap_generation::a_free_or_move_outside_every_scope_is_caught_in_debug_builds`
+(the name says it — the funnel assertion it waits for is a `debug_assert`, and
+this is a release test build; it passes in debug) and
+`native_stack::tests::stack_top_respects_custom_thread_stack_sizes` (fails in
+debug too, on this box).
+
+`cargo test -p perry-codegen --lib`: **1543 passed, 0 failed**, including the
+event-loop entry tests rewritten for the phase order. Linking that test binary
+on this box needs `LIBRARY_PATH` pointing at a `libzstd.so` symlink — the box
+has `libzstd.so.1` but no dev symlink, which is environmental and unrelated.
+
+Four `promise::microtasks::empty` tests needed updating, and the change is not a
+weakening: two of them used `js_promise_run_microtasks_event_loop()` as a
+stand-in for one event-loop turn, which it no longer is, so they now drive the
+same phases the generated loop emits. Their subjects — beforeExit must not
+consume a pending timer and the next turn must; buffered stdin must be delivered
+without any timer — are unchanged. (The other two failed only because the second
+of those leaks process-global stdin state when it fails.)
 
 ### GC stress with pending timers
 
