@@ -73,11 +73,11 @@ Three rules hold it together:
    request is *queued*, and the existing main-thread pump dispatches it on its
    own tick, exactly where hyper's `mpsc` delivered it. The event-loop phase
    order the gap suite pins does not move.
-2. **One request in flight per connection.** The decoder is `reset()` only once
+3. **One request in flight per connection.** The decoder is `reset()` only once
    the response has been written, so a pipelined request stays in the
    connection's input buffer and `res` is never ambiguous. That is Node's
    per-connection serialization.
-3. **No JS value and no heap pointer reaches the driver.** Reads land in
+4. **No JS value and no heap pointer reaches the driver.** Reads land in
    turnloop's pooled buffers and are copied out inside the dispatch call; writes
    are owned `Vec<u8>`s. P1's rule, unchanged, which is why this module
    registers no GC root scanner.
@@ -219,11 +219,144 @@ Named precisely, because each is a hole rather than a preference:
 * **The bundled stdlib server** (`perry-stdlib/src/framework/server.rs`) is
   untouched, like P1 left the bundled stdlib `net`.
 
+## Test evidence
+
+Every command as run, on the shared Linux box, against Node **26.5.1**.
+
+### The wire, byte-for-byte against Node
+
+Two new gap tests, both compared with `diff` against
+`node --experimental-strip-types` on the same file:
+
+```
+target/release/perry test-files/test_gap_turnloop_http_server.ts  -o /tmp/e_http.bin
+target/release/perry test-files/test_gap_turnloop_https_server.ts -o /tmp/e_https.bin
+```
+
+| test | result |
+|---|---|
+| `test_gap_turnloop_http_server.ts` | **byte-identical** |
+| `test_gap_turnloop_https_server.ts` | **byte-identical** |
+
+They assert the wire rather than an HTTP client's view, through a raw
+`net.Socket`: the status line, the framing decision, the `Connection` /
+`Keep-Alive` pair and connection reuse are what changed transport, and a client
+would hide all four. Between them they cover a plain GET; a POST read through
+`'data'`/`'end'`; a chunked upload; a streamed response (head flushed by the
+first `write`, chunked body); 204; HEAD; a custom reason phrase; two requests
+on one connection; `Connection: close`; HTTP/1.0; `keepAliveTimeout = 0`; and,
+over TLS, a 40 000-byte body that spans several TLS records.
+
+Reaching byte-identity took four Node-fidelity fixes the first run exposed,
+all of them the *wire* rather than the transport: `Transfer-Encoding: chunked`
+spelled the way Node spells it rather than the way `Encoder::start`
+synthesizes it, and a Content-Length Perry *synthesized* dropped where Node
+sends none — on 204/304/1xx, on a HEAD response, and on a close-delimited
+HTTP/1.0 body. A length the handler set is kept, as Node keeps it.
+
+One difference is deliberately **not** in these tests, because it predates P5
+and hyper framed it the same way: `res.writeHead(...)` followed by
+`res.end(body)` is chunked by Node and length-framed by Perry. Node only
+computes a `Content-Length` while the header block is still open at `end()`
+time. The tests use `setHeader` + `end`, and `statusMessage` where a custom
+reason phrase is wanted, so the file asserts P5's behaviour rather than that
+one.
+
+### An external client
+
+`curl` against a Perry server, on the same build:
+
+- `GET` and `POST` answer with `Content-Length` and `Connection: keep-alive` /
+  `Keep-Alive: timeout=5`;
+- `res.write()`×2 + `res.end()` arrives as `1\r\na … 0\r\n\r\n` — real chunked framing;
+- **connection reuse**: `curl url1 url2 -w '%{http_code} %{num_connects}'` →
+  `200 1` then `200 0`. The second request opened **no** connection;
+- `--http1.0` answers `Connection: close` and a close-delimited body;
+- a request with a control byte in a header value answers
+  `HTTP/1.1 400 Bad Request` + `Connection: close`.
+
+### `socket.upgradeToTLS` — the P5 acceptance case
+
+`test-files/test_net_upgrade_tls.ts` against its Python `SSLRequest` companion:
+
+```
+plain connect ok
+server negotiation byte: S
+upgrading to TLS...
+tls upgrade ok
+echo over TLS: hello-after-upgrade
+OK
+[perry-loop] driver=turnloop turns=14 os_waits=7 zero_event_waits=3 native_ticks=0 turn_errors=0 completions=17
+```
+
+The same test on the base commit produces the same six lines with
+`native_ticks=4` and `tokio_ticks=4`: the socket was on tokio there and is on
+turnloop here.
+
+It also found two real defects, both now fixed. `socket.end()` followed by the
+peer's FIN shut the write side down twice — once from `end()`, once from the
+`allowHalfOpen: false` close on `'end'` — and the second `shutdown(2)` answers
+`ENOTCONN`, which reached JS as a spurious `'error'`. That is latent on a plain
+turnloop socket with the same ordering; TLS makes the ordering certain. And a
+rustls failure *after* the application has asked to close is teardown noise on
+a socket nobody is reading, which Node does not report either.
+
+### `server.on('upgrade')`
+
+A probe that issues a plain request and then an upgrade on the same server,
+with a trailing byte in the upgrade packet so `head` is non-empty:
+
+| | Perry | Node |
+|---|---|---|
+| plain request still served | `HTTP/1.1 200 OK`, body correct | same |
+| `req.url` in the listener | `/ws` | `/ws` |
+| `req.headers.upgrade` | `echo` | `echo` |
+| `head.length` | **2** | **2** |
+
+So the `turnloop_net::transfer` handoff loses nothing: the id, the outstanding
+multishot read and the bytes that followed the head all survive.
+
+**Writing to that socket does not work — on either transport.**
+`socket.write(...)` from the `'upgrade'` listener returns `undefined` and
+nothing reaches the wire, *identically on the base commit's hyper path*, so the
+raw-upgrade response path is a pre-existing Perry gap rather than anything P5
+changed (`net`'s composite handle dispatch has no `write` row, and the listener
+reaches the socket as an untyped value). Worth its own issue; the migration
+reproduces the existing behaviour exactly.
+
+### `PERRY_LOOP_STATS` and thread count, before and after
+
+A server answering 20 requests from an in-process client, reporting its own
+`/proc/self/status` `Threads:`:
+
+| | P0 (recorded in its report) | P5 |
+|---|---|---|
+| `driver` | turnloop | turnloop |
+| `turns` | **0** | **101** |
+| `completions` | — | **282** |
+| `native_ticks` (tokio ticks inside the park) | every park | **0** |
+| `tokio_ticks` | > 0 | **0** |
+| threads at start / while serving | — | **1 / 1** |
+
+P0 measured that a Perry server made **zero** turnloop turns, because the hyper
+accept loop pinned a tokio task and the park always chose the tokio tick. The
+same workload now turns the loop 101 times, dispatches 282 completions, and
+makes **no tokio tick at all** — nothing in the process holds a tokio task. The
+thread count is the same number from the other side: one thread serves the
+whole workload.
+
 ## turnloop gaps found
 
 Reported here in the shape #34, #35 and #38 were.
 
-1. **`LocalExecutor` silently drops completions it did not issue.**
+1. **`http1::Decoder` never raises `Event::Upgrade` on the request side.**
+   `State::Upgrade` is only reachable in `Mode::Response` (a client reading a
+   101), so a *server* decodes `GET / HTTP/1.1` + `Connection: upgrade` as an
+   ordinary head with no body and has to recognize the upgrade itself. That is
+   defensible sans-I/O design — the server decides — but the asymmetry is not
+   documented, and taking the enum at face value silently served every upgrade
+   request as a normal request.
+2. **`LocalExecutor` silently drops completions it did not issue.**
    `Shared::dispatch` returns early unless the token carries its tag bit, so a
    host that owns the loop *and* submits its own operations cannot use the
    executor at all — and the failure mode is a socket that stops delivering, with
@@ -231,19 +364,19 @@ Reported here in the shape #34, #35 and #38 were.
    let the host pass a fallback sink) would make `turnloop_http::asynchronous`,
    `turnloop_tls::asynchronous` and `turnloop_websocket::asynchronous` adoptable
    by a host like Perry.
-2. **`http1::Encoder` cannot emit a custom reason phrase.** `Encoder::start`
+3. **`http1::Encoder` cannot emit a custom reason phrase.** `Encoder::start`
    always writes the IANA canonical reason for the status, and
    `res.writeHead(404, 'Nope')` is observable on the wire in Node. Worked around
    by patching the status line after encoding.
-3. **`http1::BodyLength` cannot express a close-delimited body.** An HTTP/1.0
+4. **`http1::BodyLength` cannot express a close-delimited body.** An HTTP/1.0
    response with neither `Content-Length` nor chunked framing ends at EOF, and
    there is no variant for it; such a head is written by hand.
-4. **A body-forbidden response has no framing of its own.** A HEAD response
+5. **A body-forbidden response has no framing of its own.** A HEAD response
    advertises the `Content-Length` it *would* have sent and emits no body, which
    `Encoder::start(…, Known(0))` rejects as a conflict and `Known(n)` then
    refuses to `finish`. Handled here by writing the head verbatim; a
    `BodyLength::None` (or a `head_response` flag) would belong in the crate.
-5. **`turnloop_tls::{ClientConfig, ServerConfig}` cannot wrap an existing
+6. **`turnloop_tls::{ClientConfig, ServerConfig}` cannot wrap an existing
    `rustls` config.** Their fields are private and `new()` takes chain + key +
    ALPN, so a host that already builds rustls configs from Node's option surface
    (SNI, client-cert auth, custom verifiers, session tickets, protocol-version
@@ -251,7 +384,7 @@ Reported here in the shape #34, #35 and #38 were.
    directly and uses the crate's re-exported `rustls`, `ConnectionState` and
    `node_error_code` instead — which works, but means the config wrapper is dead
    weight for this consumer.
-6. **`ListenOpts` has no `reuse_port` reachable through Perry's binding**, which
+7. **`ListenOpts` has no `reuse_port` reachable through Perry's binding**, which
    is one of the two reasons a cluster worker keeps the hyper path.
-7. **`setNoDelay` on an accepted connection** is still unreachable (P1's finding,
+8. **`setNoDelay` on an accepted connection** is still unreachable (P1's finding,
    unchanged).
