@@ -591,6 +591,25 @@ pub(crate) fn note_data_descriptor_target(obj: usize, key: &str, attrs: Property
     note_descriptor_target_keyed(obj, Some((key.as_bytes(), attrs.bits)));
 }
 
+/// [`note_descriptor_target`] for an ACCESSOR install (#10287).
+///
+/// Keyed on the descriptor's SHAPE — which halves are present — never on the
+/// getter/setter identities, which differ per receiver (zod binds a fresh
+/// closure per schema). That is sound for the same reason the data form is:
+/// the closures live in the per-object accessor table, and every cache that
+/// could serve this key refuses a receiver carrying
+/// `OBJ_FLAG_HAS_DESCRIPTORS` — the emitted read IC's `data_only` test, the
+/// write PIC's blocking mask, the runtime read stub, and the per-key gates
+/// here, which report an accessor key as covered. Without this, one lazily
+/// installed accessor (zod's `defineLazy`) put every receiver on a private
+/// lineage: +41% instructions on a 2,000-receiver fixture.
+///
+/// The high bit keeps this encoding disjoint from [`PropertyAttrs`]' three.
+pub(crate) fn note_accessor_descriptor_target(obj: usize, key: &str, acc: &AccessorDescriptor) {
+    let shape = 0x80u8 | u8::from(acc.get != 0) | (u8::from(acc.set != 0) << 1);
+    note_descriptor_target_keyed(obj, Some((key.as_bytes(), shape)));
+}
+
 fn note_descriptor_target_keyed(obj: usize, data_install: Option<(&[u8], u8)>) {
     if crate::value::addr_class::is_handle_band(obj) {
         HANDLE_HAS_DESCRIPTORS.store(true, Ordering::Relaxed);
@@ -807,6 +826,17 @@ fn note_meta_descriptor_key(owner: usize, key: &str, accessor: bool) {
             } else {
                 (*meta).attr_key_bits |= bit;
             }
+            // #10287: exact identity while this owner has descriptors for a
+            // single key, so per-key probes need no table lookup at all.
+            let hash = super::key_bytes_hash(key.as_ptr(), key.len());
+            match (*meta).descriptor_key_count {
+                0 => {
+                    (*meta).descriptor_key_hash = hash;
+                    (*meta).descriptor_key_count = 1;
+                }
+                1 if (*meta).descriptor_key_hash == hash => {}
+                _ => (*meta).descriptor_key_count = 2,
+            }
         }
     }
 }
@@ -892,7 +922,9 @@ unsafe fn own_descriptor_may_cover_key(addr: usize, key: f64) -> bool {
                 return false;
             }
             let bit = descriptor_key_bit_bytes(kb);
-            ((*meta).attr_key_bits | (*meta).accessor_key_bits) & bit != 0
+            let covered = ((*meta).attr_key_bits | (*meta).accessor_key_bits) & bit != 0;
+            if covered {}
+            covered
         }
         None => true,
     }
@@ -922,7 +954,32 @@ pub(crate) unsafe fn own_descriptors_skip_key(addr: usize, key: f64) -> bool {
     if bytes.first().is_some_and(u8::is_ascii_digit) {
         return false;
     }
-    !own_descriptor_may_cover_key(addr, key)
+    // Exact when this owner carries descriptors for one key only (zod's
+    // `_zod`): a full-width hash compare, no Bloom, no table probe.
+    if let Some(meta) = descriptor_summary_meta(addr) {
+        if !meta.is_null() && (*meta).descriptor_key_count == 1 {
+            return super::key_bytes_hash(bytes.as_ptr(), bytes.len())
+                != (*meta).descriptor_key_hash;
+        }
+    }
+    if !own_descriptor_may_cover_key(addr, key) {
+        // Clear summary bits are authoritative: no entry can exist.
+        return true;
+    }
+    // A SET bit is a maybe — the summary is 64 bits wide, so roughly one key
+    // in 64 collides with a descriptor key. Confirm against the tables rather
+    // than surrendering the fast path.
+    //
+    // This matters far more than the collision rate suggests: a store that
+    // takes the slow path appends to a PRIVATE keys array, which takes the
+    // receiver off the shared transition chain for good. Every later store on
+    // it then misses the lane too. With one descriptor (`_zod`) and keys
+    // `p0..p39`, `p17` collides — so every receiver derailed at the same
+    // store and lost the chain for its remaining 23 properties.
+    let Ok(name) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    get_accessor_descriptor(addr, name).is_none() && get_property_attrs(addr, name).is_none()
 }
 
 /// Can anything on the prototype chain of a CLASS-LESS receiver whose
@@ -1105,7 +1162,19 @@ pub(crate) unsafe fn plain_data_write_may_intercept(addr: usize, class_id: u32, 
     // string-keyed entry covers THIS key (an own symbol-keyed descriptor
     // cannot intercept a string-keyed write); prototype-level interception
     // is still vetted below.
-    if object_has_descriptors(addr) && own_descriptor_may_cover_key(addr, key) {
+    // The summary is 64 bits wide, so a SET bit is only a maybe: roughly one
+    // key in 64 collides with a descriptor key that is actually present.
+    // `own_descriptors_skip_key` confirms a positive against the descriptor
+    // tables (and stays conservative for keys it cannot decode).
+    //
+    // Confirming matters out of all proportion to the collision rate. A store
+    // sent down the slow path appends to a PRIVATE keys array, which takes the
+    // receiver off the shared transition chain permanently, so every LATER
+    // store on that object misses the lane too. With zod's single `_zod`
+    // descriptor and keys `p0..p39`, `p17` collided — so all 2000 receivers
+    // forked at the same store and ran their remaining 22 properties on
+    // per-object shapes.
+    if object_has_descriptors(addr) && !own_descriptors_skip_key(addr, key) {
         return true;
     }
 
@@ -1196,7 +1265,11 @@ pub(crate) fn clear_property_attrs(obj: usize, key: &str) {
     unsafe {
         let object = obj as *mut crate::object::ObjectHeader;
         if crate::object::object_is_shaped(object) {
-            crate::object::shapes::transition_object_shape_semantics(object);
+            crate::object::shapes::transition_object_shape_semantics_for_descriptor_removal(
+                object,
+                key.as_bytes(),
+                false,
+            );
         }
     }
 }
@@ -1387,7 +1460,7 @@ fn note_accessor_descriptor_key(key: &str) {
 /// Store an accessor descriptor for (obj, key).
 pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDescriptor) {
     super::prop_plan::prop_plan_epoch_bump();
-    note_descriptor_target(obj);
+    note_accessor_descriptor_target(obj, &key, &acc);
     let st = state();
     st.descriptors.accessors_in_use.set(true);
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
@@ -1456,7 +1529,10 @@ pub(crate) fn install_fresh_accessor_property(
     attrs: PropertyAttrs,
 ) {
     super::prop_plan::prop_plan_epoch_bump();
-    note_descriptor_target(obj);
+    // #10287: one keyed transition covers the pair, exactly as the two-call
+    // sequence this folds would have produced (the accessor half runs last
+    // there, so its encoding is the one that survives).
+    note_accessor_descriptor_target(obj, &key, &acc);
     let st = state();
     st.descriptors.accessors_in_use.set(true);
     st.descriptors.property_attrs_in_use.set(true);
@@ -1545,7 +1621,11 @@ pub(crate) fn clear_accessor_descriptor(obj: usize, key: &str) {
     unsafe {
         let object = obj as *mut crate::object::ObjectHeader;
         if crate::object::object_is_shaped(object) {
-            crate::object::shapes::transition_object_shape_semantics(object);
+            crate::object::shapes::transition_object_shape_semantics_for_descriptor_removal(
+                object,
+                key.as_bytes(),
+                true,
+            );
         }
     }
 }

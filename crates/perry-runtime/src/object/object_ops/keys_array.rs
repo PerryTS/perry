@@ -47,7 +47,8 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
             // object has any key at all), and the `[[Set]]` tail already
             // learns these keyless→one-key edges. Try the shared edge before
             // minting a private array, and teach it otherwise.
-            let prev_shape_id = if define_append_transition_eligible(obj, keys) {
+            let transition_eligible_first = define_append_transition_eligible(obj, keys);
+            let prev_shape_id = if transition_eligible_first {
                 super::super::shapes::object_shape_stamp(obj)
             } else {
                 0
@@ -62,7 +63,6 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
             if let Some(handle) = interned.as_ref() {
                 let interned_key = handle.get_raw_const_ptr::<crate::StringHeader>();
                 let probe = super::super::transition_cache_lookup(prev_shape_id, interned_key);
-                if probe.is_none() {}
                 if let Some((next_keys, slot_idx, target_shape_id)) = probe {
                     let live = crate::object::object_live_slot_count(obj);
                     let alloc_limit = std::cmp::max(live, crate::object::INLINE_SLOT_FLOOR as u32);
@@ -189,7 +189,6 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
     if let (Some(handle), true) = (interned_handle.as_ref(), prev_shape_id != 0) {
         let interned = handle.get_raw_const_ptr::<crate::StringHeader>();
         let probe = super::super::transition_cache_lookup(prev_shape_id, interned);
-        if probe.is_none() {}
         if let Some((next_keys, slot_idx, target_shape_id)) = probe {
             let live = crate::object::object_live_slot_count(obj);
             let alloc_limit = std::cmp::max(live, crate::object::INLINE_SLOT_FLOOR as u32);

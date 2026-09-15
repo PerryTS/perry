@@ -1577,6 +1577,28 @@ pub struct ObjectMeta {
     /// Installed by `js_array_subclass_init` under
     /// `array_subclass_elements_enabled()`; never present otherwise.
     pub elements: u64,
+    /// #10287 exact identity for the overwhelmingly common case of an object
+    /// carrying descriptors for exactly ONE key. `descriptor_key_count` is 0
+    /// (none recorded), 1 (`descriptor_key_hash` is the full
+    /// `key_bytes_hash` of that single key) or 2 (more than one distinct key
+    /// — consult the Bloom summaries and then the tables).
+    ///
+    /// The 64-bit Bloom above answers "maybe" for about one key in 64, and a
+    /// maybe costs far more than a table probe: the store it rejects takes
+    /// the slow path, which appends to a PRIVATE keys array and drops the
+    /// receiver off the shared transition chain for the rest of its life.
+    /// zod installs exactly one descriptor per schema (`_zod`), so a single
+    /// full-width compare here answers every store on those objects exactly,
+    /// with no table probe and no string rebuild.
+    ///
+    /// Maintained by the same writer as the Bloom bits
+    /// (`note_meta_descriptor_key`), so it inherits that function's
+    /// invariant: every descriptor-table insert for a meta-capable owner
+    /// records its key here first.
+    pub descriptor_key_hash: u64,
+    /// Distinct descriptor-key count, saturating at 2. See
+    /// [`ObjectMeta::descriptor_key_hash`].
+    pub descriptor_key_count: u64,
 }
 
 pub(crate) const OBJECT_META_FLAG_PROTO_DIVERGED: u64 = 1;
