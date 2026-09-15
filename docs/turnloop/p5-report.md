@@ -154,6 +154,11 @@ in `response_tests.rs`), and the idle close is armed as a real turnloop deadline
 at `keepAliveTimeout + keepAliveTimeoutBuffer`, with zero arming nothing
 (`server::idle_close_ms`, pinned in `turnloop_serve/tests.rs`).
 
+The header half applies to **both** transports — the hyper path calls the same
+`apply_default_connection_headers`, so a server that declines the turnloop path
+gets the corrected headers too. The idle close is turnloop-only, because it is
+armed as a turnloop deadline.
+
 Note what that second half required: **under hyper, Perry armed no idle timeout
 at all.** `http1::Builder` was configured with neither `keep_alive` timeouts nor
 `header_read_timeout`, so an idle keep-alive connection was held forever
