@@ -337,7 +337,8 @@ after threads: 13 | threads_bcrypt_ x1, tokio-rt-worker x12
 ```
 
 Twelve concurrent hashes cost **twelve tokio threads**, one per job, and they
-persist after the work finishes.
+persist after the work finishes. The P4 arm of the same probe is in the next
+section, after the loop-stats table it shares its run with.
 
 ### GC stress with pool work in flight
 
@@ -381,6 +382,79 @@ A run with zero copying minors quarantines nothing and would pass vacuously;
 detached, poisoned and `mprotect`ed, and 14,647 moved objects say survivors
 really were copied — while sixteen pool jobs were outstanding. No SIGSEGV from
 the quarantine reporter: no stale from-space pointer was dereferenced.
+
+### Thread counts, continued — the tokio pool on the P4 arm
+
+Same probe, same host, one compiler apart:
+
+| | base `14803019fc` | **P4** |
+|---|---|---|
+| idle | 1 | 1 |
+| 12 hashes in flight | 13 — `tokio-rt-worker x12` | **5** — `turnloop-blocki x4` |
+| after | 13 | 5 |
+| `native_ticks` | 6 | **0** |
+| pool | — | `pool_submitted=15 completed=15 cancelled=0 failed=0 refused=0` |
+
+Twelve concurrent hashes cost twelve tokio threads on the base arm, one per
+job, and those threads persisted after the work finished. On P4 the same
+workload runs on turnloop's four shared workers, which is the bound and does
+not grow with the job count, and `native_ticks=0` says the loop never had to
+drive the legacy tokio tick at all for it — the whole workload is turnloop's.
+
+Fifteen jobs for twelve hashes is the right number: 8 `bcrypt.hash` +
+4 `argon2.hash` + 2 `bcrypt.compare` + 1 `argon2.verify`.
+
+### The gap suite, against a baseline built from this branch's own base
+
+Both arms ran the same 8-shard fast tier (`PERRY_SKIP_BUILD=1`, which implies
+`PERRY_NO_AUTO_OPTIMIZE=1`) against the pinned oracle on the same box, from
+their own `target/release`. The baseline is `14803019fc` — this branch's base —
+because the committed snapshot cannot be assumed to agree with it.
+
+| | base `14803019fc` | P4 (`4bc3e877f9`) |
+|---|---|---|
+| tests | 800 | **801** (the new P4 fixture) |
+| pass | 786 | **787** |
+| parity_fail | **14** | **14 — the same fourteen** |
+| compile_fail / crash | 0 | 0 |
+| **status changes vs base** | — | **0** |
+
+Not one test changed status in either direction, and the new fixture passes.
+That is the verdict: moving seven subsystems off the JS thread — argon2, both
+KDFs, `crypto.argon2`, the zlib one-shots, bcrypt, sharp and N-API async work —
+and rerouting every `perry_ffi` blocking submission cost the existing suite
+nothing.
+
+The fourteen are identical in both arms and none is P4's. Nine are P3's known
+set (`…_defineproperty_class_prototype`, `…_settracesigint`,
+`…_static_helpers`, `disposablestack_2875`, `iterator_prototype_next_patch`,
+`json_lazy_defineproperty_index`, `perfhooks_3088_3008_3010_3011`,
+`prop_plan_cache_invalidation`, `v8_2_3680plus`); the other five
+(`backoff_options`, `cron_cronjob`, `dayjs_factory_arg`, `moment_methods`,
+`ratelimiter_memory`) are ext-routed tests that shell out to
+`cargo build -p perry-ext-…` and were failing on both arms on a box running
+sixteen users' builds at load 33 — P3's report documents the same shape. They
+are the same five in both arms, so they cancel out of the comparison; anyone
+re-running this on a quiet box should expect them to pass.
+
+### Targeted parity for the modules this phase touched
+
+Same tier, same oracle:
+
+| filter | tests | pass |
+|---|---|---|
+| `test_gap_turnloop_p4_pool` | 1 | 1 |
+| `test_parity_argon2` (expected-output) | 1 | 1 |
+| `test_parity_zlib` | 1 | 1 |
+| `test_gap_zlib_` | 3 | 3 |
+| `test_gap_crypto_` (incl. `crypto_scrypt_options`) | 3 | 3 |
+| `test_gap_webcrypto_` (the threadpool contract) | 1 | 1 |
+| `test_zlib_` | 2 | 2 |
+
+`test_gap_webcrypto_async_threadpool` is worth naming: it is the *existing*
+fixture that pins "async crypto crosses at least one macrotask", written for
+the same class of divergence this phase fixes from the other end, and it is
+unchanged by the migration.
 
 ## The turnloop API this phase wants next
 
