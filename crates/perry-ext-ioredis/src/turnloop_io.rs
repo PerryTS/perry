@@ -410,6 +410,17 @@ pub(crate) fn enabled() -> bool {
     REGISTRY.with(|reg| reg.enabled(sink))
 }
 
+/// Install the sink and report whether the runtime accepted it.
+///
+/// Separate from [`enabled`] so a test can assert the part that is a property
+/// of the build — the completion-layout digest check — without also asserting
+/// that the thread it happens to run on owns a loop. `cargo test` puts each
+/// test on its own thread and only some of them do.
+#[cfg(test)]
+fn register_only() -> bool {
+    REGISTRY.with(|reg| reg.register(sink))
+}
+
 /// The protocol config for one client, and the endpoint to reach it at.
 ///
 /// Reads the same four environment variables the previous binding did, so a
@@ -600,7 +611,10 @@ mod tests {
         // legacy transport. On an agent with no loop — a `worker_threads`
         // Worker, or the `tokio-wait-driver` arm — this is false and that
         // fallback is the correct behaviour.
-        assert!(enabled(), "a false here is an ABI layout mismatch");
+        assert!(
+            register_only(),
+            "a false here is an ABI layout mismatch between perry-ffi and perry-runtime"
+        );
         assert!(perry_ffi::turnloop_net::sink_installed(SUBSYSTEM));
     }
 

@@ -238,11 +238,43 @@ impl<C: DbCore> Registry<C> {
     /// [`tl::available`] false and keeps every connection on the old path
     /// rather than submitting work nothing can deliver.
     pub fn enabled(&self, sink: tl::SinkFn) -> bool {
-        if !self.registered.get() {
-            tl::register_sink(self.subsystem, sink, never_accepts);
-            self.registered.set(true);
+        self.register(sink) && tl::available(self.subsystem)
+    }
+
+    /// Install this binding's sink, once. Returns whether the runtime accepted
+    /// it — false means the completion layout digests disagree, which is the
+    /// drift check `perry-ffi` performs before any submission can happen.
+    ///
+    /// Separate from [`Self::enabled`] because the two answer different
+    /// questions: this one is a property of the *build* and is deterministic;
+    /// `available` is a property of the calling *agent* and is not.
+    pub fn register(&self, sink: tl::SinkFn) -> bool {
+        if self.registered.get() {
+            return true;
         }
-        tl::available(self.subsystem)
+        let ok = tl::register_sink(self.subsystem, sink, never_accepts);
+        self.registered.set(ok);
+        ok
+    }
+
+    /// Insert a connection with no transport behind it, for tests of the
+    /// settlement contract that must not depend on whether the running thread
+    /// happens to own a loop. `cargo test` puts each test on its own thread and
+    /// only some of them do, which made the driver's own tests flaky before
+    /// this existed.
+    #[cfg(test)]
+    fn insert_detached(&self, id: i64, core: C, tag: u64) {
+        self.entries.borrow_mut().insert(
+            id,
+            Entry {
+                core,
+                connected: false,
+                timer_armed: false,
+                closing: false,
+                tag,
+            },
+        );
+        self.connects.set(self.connects.get() + 1);
     }
 
     /// Open a connection. Returns its driver id; the core's handshake runs when
@@ -455,11 +487,49 @@ impl<C: DbCore> Registry<C> {
             let _ = tl::timer_cancel(id);
         }
         // `close` is exactly-once in the driver and answers with `NET_CLOSED`,
-        // which is where the entry is retired. If the handle is already gone
-        // (a close that raced the peer's reset, or a second close) no
-        // completion can arrive, so the entry is retired here instead.
+        // which is where the entry is normally retired. If the handle is
+        // already gone — a close that raced the peer's reset, or a second
+        // close — **no completion can arrive**, so the entry has to be retired
+        // here instead. Retiring it without settling is the bug this branch
+        // exists to avoid: dropping the entry drops the core, and with it every
+        // promise the core still owes, leaving them pending forever.
         if tl::close(id).is_err() {
-            self.entries.borrow_mut().remove(&id);
+            self.retire(id);
+        }
+    }
+
+    /// Settle whatever the core still owes and drop the entry.
+    ///
+    /// The two callers are the driver's terminal `NET_CLOSED` completion and
+    /// the `close`-already-gone path above. Both must settle before removing:
+    /// a `JsPromise` that is dropped rather than settled is a promise that
+    /// never resolves and never rejects, which is the one outcome a caller
+    /// cannot recover from.
+    fn retire(&self, id: i64) {
+        {
+            let mut map = self.entries.borrow_mut();
+            let Some(entry) = map.get_mut(&id) else {
+                return;
+            };
+            if entry.core.has_pending_work() {
+                entry.core.fail("Connection closed");
+                // The core's own terminal events settle what it can; `fail` is
+                // required to settle the rest.
+                let _ = entry.core.drain();
+            }
+            map.remove(&id);
+        }
+        if diag() {
+            eprintln!(
+                "[perry-db] subsystem={} closed id={} connects={} reads={} writes={} timer_arms={} live={}",
+                self.subsystem,
+                id,
+                self.connects.get(),
+                self.reads.get(),
+                self.writes.get(),
+                self.timers.get(),
+                self.entries.borrow().len()
+            );
         }
     }
 
@@ -541,29 +611,8 @@ impl<C: DbCore> Registry<C> {
                 self.abort(id, &message);
             }
             tl::NET_CLOSED => {
-                // The driver says the handle is really gone. Settle anything
-                // the core still owes, then retire the entry.
-                let mut map = self.entries.borrow_mut();
-                if let Some(entry) = map.get_mut(&id) {
-                    if entry.core.has_pending_work() {
-                        entry.core.fail("Connection closed");
-                        let _ = entry.core.drain();
-                    }
-                }
-                map.remove(&id);
-                drop(map);
-                if diag() {
-                    eprintln!(
-                        "[perry-db] subsystem={} closed id={} connects={} reads={} writes={} timer_arms={} live={}",
-                        self.subsystem,
-                        id,
-                        self.connects.get(),
-                        self.reads.get(),
-                        self.writes.get(),
-                        self.timers.get(),
-                        self.entries.borrow().len()
-                    );
-                }
+                // The driver says the handle is really gone.
+                self.retire(id);
             }
             // A write completion carries no information this transport needs:
             // `flush` acknowledged the bytes when turnloop took ownership, and

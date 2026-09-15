@@ -151,10 +151,14 @@ fn registration_passes_the_abi_layout_check_and_claims_only_its_own_slot() {
     // the two declarations is the failure mode P1 built that check for — this
     // asserts it still passes, and that registering one binding installs a sink
     // for its own slot and for no other.
+    //
+    // Deliberately `register` and not `enabled`: whether the *running thread*
+    // owns a loop is not a property of the build, and `cargo test` puts each
+    // test on its own thread.
     let reg = registry();
     assert!(
-        reg.enabled(unused_sink),
-        "the runtime is linked in this test build: a false here is an ABI layout mismatch"
+        reg.register(unused_sink),
+        "a false here is an ABI layout mismatch between perry-ffi and perry-runtime"
     );
     assert!(perry_ffi::turnloop_net::sink_installed(subsystem::REDIS));
     for other in [subsystem::PG, subsystem::MYSQL, subsystem::MONGODB] {
@@ -174,12 +178,8 @@ fn a_connection_that_fails_settles_its_core_rather_than_stranding_it() {
     // outcome a caller cannot recover from.
     let log = Rc::new(RefCell::new(Log::default()));
     let reg = registry();
-    assert!(reg.enabled(unused_sink));
-    // Port 1 is reserved and nothing listens there; the connect is still
-    // submitted, because turnloop reports the refusal as a completion.
-    let id = reg
-        .connect("127.0.0.1", 1, FakeCore::new(log.clone()), 7)
-        .expect("submitting a connect must not fail synchronously");
+    let id = 4242;
+    reg.insert_detached(id, FakeCore::new(log.clone()), 7);
     assert_eq!(reg.live_connections(), 1);
     assert_eq!(reg.counters().0, 1, "the connect counter must move");
     assert_eq!(reg.tag(id), Some(7), "the binding's tag must survive");
@@ -199,6 +199,60 @@ fn a_connection_that_fails_settles_its_core_rather_than_stranding_it() {
     // promises once would reject them again, and a `JsPromise` settles once.
     reg.abort(id, "a second time");
     assert_eq!(log.borrow().failed.len(), 1);
+}
+
+#[test]
+fn retiring_a_connection_settles_what_its_core_still_owes() {
+    // Both retirement paths — the driver's terminal `NET_CLOSED` and the
+    // `close`-already-gone branch in `finish` — drop the entry, and with it the
+    // core and every promise the core still owes. Dropping without settling
+    // leaves those promises pending forever. Two reviewers found this hole
+    // independently in the first version of this driver, which is why it has a
+    // test rather than a comment.
+    let log = Rc::new(RefCell::new(Log::default()));
+    let reg = registry();
+    let id = 7373;
+    let mut core = FakeCore::new(log.clone());
+    core.pending = true; // the core owes an answer
+    reg.insert_detached(id, core, 0);
+
+    let closed = NetCompletion {
+        kind: tl::NET_CLOSED,
+        errno: 0,
+        terminal: 1,
+        _reserved: 0,
+        id,
+        conn: 0,
+        user: 0,
+        len: 0,
+        queued: 0,
+        data: std::ptr::null(),
+        code: std::ptr::null(),
+        code_len: 0,
+        syscall: std::ptr::null(),
+        syscall_len: 0,
+    };
+    reg.dispatch(&closed);
+    assert_eq!(
+        log.borrow().failed,
+        vec!["Connection closed".to_string()],
+        "a retired core with work outstanding must be failed before it is dropped"
+    );
+    assert_eq!(reg.live_connections(), 0, "the entry must not leak");
+
+    // A core that owes nothing is not failed — a spurious rejection on a clean
+    // close would be just as wrong in the other direction.
+    let quiet = Rc::new(RefCell::new(Log::default()));
+    let id2 = 7474;
+    reg.insert_detached(id2, FakeCore::new(quiet.clone()), 0);
+    let mut closed2 = closed;
+    closed2.id = id2;
+    reg.dispatch(&closed2);
+    assert!(
+        quiet.borrow().failed.is_empty(),
+        "a clean close must not invent a rejection"
+    );
+    assert_eq!(reg.live_connections(), 0);
 }
 
 #[test]
