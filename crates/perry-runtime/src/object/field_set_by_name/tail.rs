@@ -501,7 +501,12 @@ pub(crate) fn set_field_by_name_object_tail(
         if !key.is_null()
             && !is_frozen
             && !is_sealed_or_no_extend
-            && !has_own_descriptors
+            // #10287: per-KEY, not per receiver — see `own_descriptors_skip_key`.
+            && (!has_own_descriptors
+                || crate::object::own_descriptors_skip_key(
+                    obj as usize,
+                    f64::from_bits(JSValue::string_ptr(key as *mut _).bits()),
+                ))
             && (plan_fast
                 || !super::plain_data_write_may_intercept(
                     obj as usize,
