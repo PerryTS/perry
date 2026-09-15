@@ -555,6 +555,70 @@ unsafe fn prepare_symbols(
 }
 
 /// `dlopen(path, symbolTable)` → `{ symbols: { <name>: fn }, close(): void }`.
+
+/// #10293 follow-up: `dlopen` on an embedded asset path.
+///
+/// `import lib from "./libfoo.so" with { type: "file" }` lowers to a
+/// `$perryfs/<name>` virtual path, and OpenTUI's renderer is loaded exactly
+/// that way: the bun-compiled binary embeds `libopentui.so` and hands the path
+/// to `dlopen`. The dynamic loader only accepts a real filesystem path, so the
+/// virtual one fails with "cannot open shared object file".
+///
+/// Materialize the embedded bytes into a temp file once per virtual path and
+/// open that instead. The map keeps one file per path for the life of the
+/// process, so repeated `dlopen` of the same embedded library reuses it rather
+/// than writing a new copy each call.
+fn materialize_virtual_library(path: &str) -> Result<String, String> {
+    use std::io::Write;
+    static MATERIALIZED: std::sync::OnceLock<std::sync::Mutex<
+        std::collections::HashMap<String, String>,
+    >> = std::sync::OnceLock::new();
+    let cache = MATERIALIZED.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    if let Some(existing) = cache.lock().unwrap().get(path) {
+        return Ok(existing.clone());
+    }
+    let Some(bytes) = crate::embedded::lookup(path) else {
+        return Err(format!("embedded library {path} is not in this binary"));
+    };
+    let stem = path.rsplit('/').next().unwrap_or("embedded.so");
+    let mut dir = std::env::temp_dir();
+    dir.push(format!("perry-ffi-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+    let mut target = dir.clone();
+    target.push(stem);
+    {
+        let mut file = std::fs::File::create(&target)
+            .map_err(|e| format!("create {}: {e}", target.display()))?;
+        file.write_all(bytes)
+            .map_err(|e| format!("write {}: {e}", target.display()))?;
+        file.flush()
+            .map_err(|e| format!("flush {}: {e}", target.display()))?;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // The loader refuses a mapping it cannot execute.
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("chmod {}: {e}", target.display()))?;
+    }
+    let resolved = target.to_string_lossy().into_owned();
+    cache
+        .lock()
+        .unwrap()
+        .insert(path.to_string(), resolved.clone());
+    Ok(resolved)
+}
+
+/// Translate an embedded `$perryfs/...` path to a real one; pass anything else
+/// through untouched.
+fn resolve_library_path(path: &str) -> Result<std::borrow::Cow<'_, str>, String> {
+    if crate::embedded::is_virtual_path(path) {
+        materialize_virtual_library(path).map(std::borrow::Cow::Owned)
+    } else {
+        Ok(std::borrow::Cow::Borrowed(path))
+    }
+}
+
 pub(crate) unsafe fn dlopen_value(path_arg: f64, table_arg: f64) -> f64 {
     if !call::platform_supported() {
         crate::fs::validate::throw_error_with_code(
@@ -576,6 +640,10 @@ pub(crate) unsafe fn dlopen_value(path_arg: f64, table_arg: f64) -> f64 {
         );
     };
 
+    let path = match resolve_library_path(&path) {
+        Ok(resolved) => resolved.into_owned(),
+        Err(msg) => throw_dlopen_failed(&path, &msg),
+    };
     let handle = match open_library(Some(&path)) {
         Ok(h) => h,
         Err(msg) => throw_dlopen_failed(&path, &msg),
