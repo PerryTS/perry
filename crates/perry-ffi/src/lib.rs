@@ -53,6 +53,8 @@ pub use async_runtime::{
     PERRY_NATIVE_ASYNC_THREAD_MAIN, PERRY_NATIVE_ASYNC_WRONG_THREAD,
 };
 
+pub mod turnloop_net;
+
 mod tls_environment;
 pub use tls_environment::{node_tls_client_environment, NodeTlsClientEnvironment};
 

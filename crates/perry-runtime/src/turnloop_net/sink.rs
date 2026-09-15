@@ -71,6 +71,14 @@ pub struct NetCompletion {
     pub kind: i32,
     /// Node's `err.errno` (negated OS code), zero when not an error.
     pub errno: i32,
+    /// Nonzero when the operation that produced this will produce no more.
+    /// A multishot accept or read that reports a *transient* failure is not
+    /// terminal, and Node does not tear the server down for one — the tokio
+    /// accept loop deliberately did not break on an accept error either.
+    pub terminal: i32,
+    /// Padding, so the struct's layout is identical on both sides of the ABI
+    /// without depending on how the compiler packs two trailing i32s.
+    pub _reserved: i32,
     /// The Perry-side id of the socket or listener this concerns.
     pub id: i64,
     /// For [`NET_ACCEPT`], the newly allocated connection id; else zero.
@@ -98,6 +106,8 @@ impl NetCompletion {
         Self {
             kind,
             errno: 0,
+            terminal: 0,
+            _reserved: 0,
             id,
             conn: 0,
             user: 0,
@@ -154,8 +164,9 @@ impl NetCompletion {
         Self::blank(NET_CLOSED, id)
     }
 
-    pub(super) fn error(id: i64, user: u64, queued: usize, err: NodeError) -> Self {
+    pub(super) fn error(id: i64, user: u64, queued: usize, err: NodeError, terminal: bool) -> Self {
         let mut c = Self::blank(NET_ERROR, id);
+        c.terminal = i32::from(terminal);
         c.user = user;
         c.queued = queued;
         c.errno = err.errno;

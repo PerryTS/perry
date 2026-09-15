@@ -41,8 +41,8 @@ unsafe fn emit_tls_secure_connect(handle: i64) {
         }
         drop(frame);
         lifecycle::drain_once_listeners(handle, "error");
-        if let Some(socket) = statics::sockets().lock().unwrap().get(&handle) {
-            let _ = socket.cmd_tx.send(SocketCommand::Destroy);
+        if let Some(socket) = statics::sockets().lock().unwrap().get_mut(&handle) {
+            let _ = socket.command(handle, SocketCommand::Destroy);
         }
         return;
     }
@@ -234,6 +234,14 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 }
                 drop(frame);
                 lifecycle::drain_once_listeners(id, "end");
+                // P1: a turnloop socket has no task to run the post-EOF
+                // shutdown, so it happens here — AFTER the `'end'` listeners
+                // ran, which is what gives a synchronous `socket.write()`
+                // inside an `'end'` handler the same chance the tokio task's
+                // post-EOF command drain gave it. Node's default
+                // (`allowHalfOpen: false`) ends the writable side once the
+                // readable side has ended, then closes.
+                crate::turnloop_io::finish_read_end(id);
             }
             PendingNetEvent::WriteComplete(_, completion, error)
             | PendingNetEvent::ShutdownComplete(_, completion, error) => {

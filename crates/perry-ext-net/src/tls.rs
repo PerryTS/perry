@@ -56,12 +56,19 @@ pub(crate) fn begin_tls_upgrade(
     verify: bool,
     config: TlsClientConfigData,
 ) -> Result<(), String> {
-    let cmd_tx = crate::statics::sockets()
-        .lock()
-        .unwrap()
-        .get(&handle)
-        .map(|socket| socket.cmd_tx.clone())
-        .ok_or_else(|| "socket is closed".to_string())?;
+    let cmd_tx = {
+        let sockets = crate::statics::sockets().lock().unwrap();
+        let socket = sockets
+            .get(&handle)
+            .ok_or_else(|| "socket is closed".to_string())?;
+        if socket.turnloop {
+            // See `js_net_socket_upgrade_tls`: a turnloop socket owns no
+            // exposable descriptor, and P1 keeps every TLS-upgradable class on
+            // tokio so only a local socket can reach this.
+            return Err("TLS upgrade is unsupported for IPC sockets".to_string());
+        }
+        socket.cmd_tx.clone()
+    };
     let (reply, _reply_rx) = tokio::sync::oneshot::channel();
     cmd_tx
         .send(crate::SocketCommand::UpgradeTls {

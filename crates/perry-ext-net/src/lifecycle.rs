@@ -354,26 +354,27 @@ pub unsafe extern "C" fn js_ext_net_socket_write(handle: i64, chunk_bits: i64) {
 
 fn enqueue_socket_write(handle: i64, bytes: Vec<u8>, completion: u64) {
     let mut sockets = statics::sockets().lock().unwrap();
-    let failure = if let Some(s) = sockets.get_mut(&handle) {
-        let byte_len = bytes.len() as u64;
-        if s.cmd_tx
-            .send(crate::SocketCommand::Write(bytes, completion))
-            .is_err()
-        {
-            Some("Socket write failed")
-        } else {
-            s.bytes_queued = s.bytes_queued.saturating_add(byte_len);
-            None
-        }
-    } else {
-        Some("Socket is closed")
+    let (failure, turnloop) = match sockets.get_mut(&handle) {
+        Some(s) => (
+            s.command(handle, crate::SocketCommand::Write(bytes, completion))
+                .err(),
+            s.turnloop,
+        ),
+        None => (Some("Socket is closed".to_string()), false),
     };
     drop(sockets);
+    let Some(message) = failure else {
+        return;
+    };
+    if turnloop {
+        // The driver refused the submission: report it the way the tokio
+        // task's write-failure arm did, including the 'error' + teardown.
+        crate::turnloop_io::submission_failed(handle, completion, message);
+        return;
+    }
     if completion != 0 {
-        if let Some(message) = failure {
-            unsafe {
-                dispatch_socket_completion(completion, Some(message.to_string()));
-            }
+        unsafe {
+            dispatch_socket_completion(completion, Some(message));
         }
     }
 }
@@ -507,13 +508,10 @@ pub unsafe extern "C" fn js_ext_net_socket_end(handle: i64, chunk_bits: i64) {
     if let Some(s) = sockets.get_mut(&handle) {
         if let Some(bytes) = final_bytes {
             if !bytes.is_empty() {
-                let byte_len = bytes.len() as u64;
-                if s.cmd_tx.send(crate::SocketCommand::Write(bytes, 0)).is_ok() {
-                    s.bytes_queued = s.bytes_queued.saturating_add(byte_len);
-                }
+                let _ = s.command(handle, crate::SocketCommand::Write(bytes, 0));
             }
         }
-        let _ = s.cmd_tx.send(crate::SocketCommand::End(0));
+        let _ = s.command(handle, crate::SocketCommand::End(0));
     }
 }
 
@@ -561,18 +559,10 @@ pub unsafe extern "C" fn js_ext_net_socket_end3(
     let mut sockets = statics::sockets().lock().unwrap();
     if let Some(socket) = sockets.get_mut(&handle) {
         if let Some(bytes) = final_bytes.filter(|bytes| !bytes.is_empty()) {
-            let byte_len = bytes.len() as u64;
-            if socket
-                .cmd_tx
-                .send(crate::SocketCommand::Write(bytes, 0))
-                .is_ok()
-            {
-                socket.bytes_queued = socket.bytes_queued.saturating_add(byte_len);
-            }
+            let _ = socket.command(handle, crate::SocketCommand::Write(bytes, 0));
         }
         if socket
-            .cmd_tx
-            .send(crate::SocketCommand::End(completion))
+            .command(handle, crate::SocketCommand::End(completion))
             .is_err()
             && completion != 0
         {
@@ -613,7 +603,7 @@ pub extern "C" fn js_ext_net_destroy_socket(handle: i64) {
     if let Some(s) = sockets.get_mut(&handle) {
         s.destroyed = true;
         s.is_open = false;
-        let _ = s.cmd_tx.send(crate::SocketCommand::Destroy);
+        let _ = s.command(handle, crate::SocketCommand::Destroy);
     }
 }
 

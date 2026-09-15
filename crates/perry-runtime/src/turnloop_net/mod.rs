@@ -669,7 +669,10 @@ pub(crate) fn dispatch(completion: Completion) {
                 // Absorbed into the next address attempt.
                 return;
             }
-            sink::emit(subsystem, NetCompletion::error(id, user, queued, mapped));
+            sink::emit(
+                subsystem,
+                NetCompletion::error(id, user, queued, mapped, terminal),
+            );
         }
         OpResult::Cancelled | OpResult::Stopped => {
             clear_op(id, op_class);
@@ -719,7 +722,7 @@ fn resolve_completed(subsystem: u8, id: i64, result: OpResult) {
             // ENOTFOUND whatever the resolver's own errno was, and Node's own
             // tests match on that string.
             mapped.code = "ENOTFOUND";
-            sink::emit(subsystem, NetCompletion::error(id, 0, 0, mapped));
+            sink::emit(subsystem, NetCompletion::error(id, 0, 0, mapped, true));
         }
         OpResult::Cancelled | OpResult::Stopped => {
             NET.with(|net| net.borrow_mut().plans.remove(&id));
@@ -749,7 +752,7 @@ fn attempt_next_address(id: i64) {
             errno: 0,
             syscall: "connect",
         });
-        sink::emit(subsystem, NetCompletion::error(id, 0, 0, err));
+        sink::emit(subsystem, NetCompletion::error(id, 0, 0, err, true));
         return;
     };
     if let Err(err) = tcp_connect(id, subsystem, addr, nodelay) {

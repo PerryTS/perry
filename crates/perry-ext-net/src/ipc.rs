@@ -52,6 +52,7 @@ fn allocate_socket() -> (i64, mpsc::UnboundedReceiver<SocketCommand>) {
             server_id: None,
             server_connection_active: false,
             tls: TlsSocketMetadata::default(),
+            turnloop: false,
         },
     );
     statics::listeners()
@@ -124,6 +125,7 @@ pub(crate) fn register_accepted_transport(
             server_id: Some(server_id),
             server_connection_active: false,
             tls: TlsSocketMetadata::default(),
+            turnloop: false,
         },
     );
     statics::listeners()
@@ -167,6 +169,34 @@ pub(crate) fn connect_existing(handle: i64, path: String) {
 
 fn spawn_connect(id: i64, path: String, mut rx: mpsc::UnboundedReceiver<SocketCommand>) {
     let local_server = server_state::begin_local_path_connect(&path);
+    // P1: a local socket connects on the loop. Unlike an outbound TCP socket
+    // it can never be TLS-upgraded (`upgradeToTLS` already reports
+    // "unsupported for IPC sockets"), so its transport is safe to fix here.
+    if crate::turnloop_io::enabled() {
+        crate::turnloop_io::note_local_connect(id, local_server);
+        match crate::turnloop_io::connect_pipe(id, &path) {
+            Ok(()) => {
+                if let Ok(mut sockets) = statics::sockets().lock() {
+                    if let Some(socket) = sockets.get_mut(&id) {
+                        socket.turnloop = true;
+                    }
+                }
+                return;
+            }
+            Err(error) if !error.no_loop => {
+                server_state::cancel_local_connect(local_server);
+                push_event(PendingNetEvent::Error(
+                    id,
+                    format!("connect {path}: {}", error.message()),
+                ));
+                push_event(PendingNetEvent::Close(id));
+                mark_closed(id);
+                return;
+            }
+            // Lost the loop between the check and the submission: use tokio.
+            Err(_) => {}
+        }
+    }
     crate::spawn_socket_runner(move || {
         Box::pin(async move {
             let stream = match connect_path(&path).await {

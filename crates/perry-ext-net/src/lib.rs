@@ -129,6 +129,8 @@ use crate::tls::{do_tls_handshake, record_tls_handshake, TlsClientConfigData};
 // `pub(crate)` re-export keeps `crate::Transport` resolving unchanged for
 // the `adopt` / `nodelay_tests` siblings and for this file.
 mod transport;
+/// `node:net` on turnloop handles — the P1 transport (`turnloop_io.rs`).
+mod turnloop_io;
 pub(crate) use transport::Transport;
 
 // ─── Handle storage ──────────────────────────────────────────────────────────
@@ -277,6 +279,92 @@ pub(crate) struct SocketState {
     pub(crate) server_id: Option<i64>,
     pub(crate) server_connection_active: bool,
     pub(crate) tls: TlsSocketMetadata,
+    /// P1: this socket lives on the agent's turnloop loop, not on a tokio
+    /// task, so `cmd_tx` has no receiver and every command is submitted to the
+    /// driver instead. Decided once at creation and never changed — turnloop
+    /// owns its descriptor without exposing it, so there is no handover.
+    pub(crate) turnloop: bool,
+}
+
+impl SocketState {
+    /// Deliver one socket command to whichever transport owns this socket.
+    ///
+    /// The single choke point for the P1 split: every `socket.write` /
+    /// `.end()` / `.destroy()` / `.setNoDelay()` call site goes through here,
+    /// so neither transport can be reached by accident.
+    ///
+    /// Callers hold the socket registry lock, so this updates `bytes_queued`
+    /// itself and returns the failure message instead of emitting it — the
+    /// caller drops the lock first and then reports through
+    /// [`turnloop_io::submission_failed`] or its own path.
+    pub(crate) fn command(&mut self, id: i64, cmd: SocketCommand) -> Result<(), String> {
+        if self.turnloop {
+            let mut queued = None;
+            let result = turnloop_io::command(id, cmd, &mut queued);
+            if let Some(queued) = queued {
+                self.bytes_queued = queued;
+            }
+            return result;
+        }
+        let bytes = match &cmd {
+            SocketCommand::Write(bytes, _) => bytes.len() as u64,
+            _ => 0,
+        };
+        match self.cmd_tx.send(cmd) {
+            Ok(()) => {
+                self.bytes_queued = self.bytes_queued.saturating_add(bytes);
+                Ok(())
+            }
+            Err(_) => Err("Socket write failed".to_string()),
+        }
+    }
+}
+
+/// Publish a connection turnloop accepted as a normal `net.Socket`.
+///
+/// The turnloop twin of `ipc::register_accepted_transport`: same registries,
+/// same `'connection'` event, no task and no command channel.
+pub(crate) fn register_turnloop_socket(
+    server_id: i64,
+    socket_id: i64,
+    local_addr: Option<SocketAddr>,
+    remote_addr: Option<SocketAddr>,
+) {
+    ensure_gc_scanner_registered();
+    dispatch::ensure_runtime_dispatch_registered();
+    // The sender exists only so `SocketState` keeps one shape across both
+    // transports; nothing ever reads from this channel.
+    let (tx, _rx) = mpsc::unbounded_channel::<SocketCommand>();
+    statics::sockets().lock().unwrap().insert(
+        socket_id,
+        SocketState {
+            tcp_async_id: 0,
+            connect_async_id: 0,
+            shutdown_async_id: 0,
+            cmd_tx: tx,
+            pending_rx: None,
+            is_open: true,
+            raw_fd: None,
+            refed: true,
+            local_addr,
+            remote_addr,
+            raw: None,
+            destroyed: false,
+            bytes_read: 0,
+            bytes_written: 0,
+            bytes_queued: 0,
+            timeout: None,
+            type_of_service: 0,
+            server_id: Some(server_id),
+            server_connection_active: false,
+            tls: TlsSocketMetadata::default(),
+            turnloop: true,
+        },
+    );
+    statics::listeners()
+        .lock()
+        .unwrap()
+        .insert(socket_id, Default::default());
 }
 
 #[cfg(test)]
@@ -305,6 +393,7 @@ impl SocketState {
             server_id: None,
             server_connection_active: false,
             tls: TlsSocketMetadata::default(),
+            turnloop: false,
         }
     }
 }
@@ -559,6 +648,7 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
             server_id: None,
             server_connection_active: false,
             tls: TlsSocketMetadata::default(),
+            turnloop: false,
         },
     );
     statics::listeners()
@@ -719,6 +809,44 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
     let host_for_spawn = host.clone();
     let server_id = handle;
 
+    // P1: bind and accept on the agent's turnloop loop. `tcp_listen` binds
+    // synchronously, so an EADDRINUSE is known here — but it still reaches JS
+    // through the pending-event queue, so `'error'` stays asynchronous exactly
+    // as it was when a tokio task did the bind.
+    if turnloop_io::enabled() {
+        if let Some(path) = path.clone() {
+            match turnloop_io::listen_pipe(server_id, &path, 511) {
+                Ok(()) => {
+                    push_event(PendingNetEvent::ServerListening(server_id));
+                    return;
+                }
+                Err(err) if !err.no_loop => {
+                    fail_listen(server_id, format!("bind {}: {}", path, err.message()));
+                    return;
+                }
+                // `no_loop` means this thread lost its loop between the
+                // `enabled()` check and the bind: fall through to tokio.
+                Err(_) => {}
+            }
+        } else {
+            match turnloop_io::listen_tcp(server_id, &host_for_spawn, port_u16, 511) {
+                Ok(()) => {
+                    publish_bound_address(server_id);
+                    push_event(PendingNetEvent::ServerListening(server_id));
+                    return;
+                }
+                Err(err) if !err.no_loop => {
+                    fail_listen(
+                        server_id,
+                        format!("bind {}:{}: {}", host_for_spawn, port_u16, err.message()),
+                    );
+                    return;
+                }
+                Err(_) => {}
+            }
+        }
+    }
+
     if let Some(path) = path {
         ipc::spawn_listener(server_id, path, shutdown_rx);
         return;
@@ -828,6 +956,43 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
     });
 }
 
+/// Record the address the kernel actually bound, before `'listening'` fires.
+///
+/// `server.listen(0, () => client.connect(server.address().port))` is the
+/// dominant pattern in Node's own net tests; reporting the requested port (0)
+/// instead of the real one makes every such test connect to port 0.
+fn publish_bound_address(server_id: i64) {
+    let Some(local) = turnloop_io::local_endpoint(server_id) else {
+        return;
+    };
+    if let Ok(mut servers) = statics::servers().lock() {
+        if let Some(s) = servers.get_mut(&server_id) {
+            s.bound_port = local.port;
+            s.bound_host = local.address.clone();
+        }
+    }
+    unsafe {
+        perry_cluster_worker_listening(
+            local.address.as_ptr(),
+            local.address.len() as u32,
+            local.port as i32,
+            local.family,
+        );
+    }
+}
+
+/// A bind that failed: Node emits `'error'` then `'close'`, and the server is
+/// no longer listening.
+fn fail_listen(server_id: i64, message: String) {
+    push_event(PendingNetEvent::ServerError(server_id, message));
+    push_event(PendingNetEvent::ServerClose(server_id));
+    if let Ok(mut servers) = statics::servers().lock() {
+        if let Some(s) = servers.get_mut(&server_id) {
+            s.listening = false;
+        }
+    }
+}
+
 /// `server.close(callback?)` — break the accept loop and fire the
 /// optional callback once it exits. The actual `'close'` listener
 /// dispatch happens in the main-thread pump when the accept-loop
@@ -849,6 +1014,13 @@ pub unsafe extern "C" fn js_net_server_close(handle: i64, callback_i64: i64) {
                 .or_default()
                 .push(callback_i64);
         }
+    }
+    // P1: closing the listener cancels its multishot accept and delivers a
+    // terminal `Closed`, which is what pushes `'close'`. There is no loop to
+    // break and no shutdown channel.
+    if turnloop_io::owns(handle) {
+        turnloop_io::close_server(handle);
+        return;
     }
     // Drop the shutdown sender — the accept loop's `tokio::select!`
     // wakes immediately on the receiver side and exits its loop.
@@ -1090,6 +1262,7 @@ where
             server_id: None,
             server_connection_active: false,
             tls: TlsSocketMetadata::default(),
+            turnloop: false,
         },
     );
     statics::listeners()
@@ -1098,6 +1271,20 @@ where
         .insert(id, HashMap::new());
     initialize(id);
 
+    // P1 does NOT move the outbound TCP client here, and the reason is
+    // `socket.upgradeToTLS`: it hands a live `TcpStream` to `tokio_rustls`
+    // mid-stream (Postgres' SSLRequest flow, `test_net_upgrade_tls.ts`), and
+    // turnloop owns its descriptor without exposing it — `Detached` has no fd
+    // accessor in 0.1.0-alpha.2 or alpha.3. A socket's transport is fixed at
+    // creation, and whether this one will be upgraded is not knowable then, so
+    // the whole class stays on tokio rather than breaking the upgrade.
+    //
+    // Every socket that *cannot* be upgraded does move: listeners, accepted
+    // connections, and both ends of a local (UDS / named pipe) connection,
+    // for which the upgrade already reports "unsupported for IPC sockets".
+    // Finishing this class needs one turnloop addition — a way to take a
+    // connected transport back out of the loop (`Detached::into_fd`) or TLS on
+    // turnloop (P5); either closes it.
     spawn_socket_runner(move || {
         Box::pin(async move {
             let mut rx = rx;
@@ -1506,6 +1693,16 @@ pub unsafe extern "C" fn js_net_socket_upgrade_tls(
     let cmd_tx = {
         let sockets = statics::sockets().lock().unwrap();
         match sockets.get(&handle) {
+            // A turnloop-backed socket cannot be upgraded: `tokio_rustls`
+            // needs to own the `TcpStream` and turnloop owns its descriptor
+            // without exposing it. P1 keeps every upgradable socket class on
+            // tokio precisely so this branch is unreachable for TCP clients;
+            // it is reachable for a local (UDS / named-pipe) socket, where
+            // the tokio path already refused the same upgrade.
+            Some(s) if s.turnloop => {
+                promise.reject_string("TLS upgrade is unsupported for IPC sockets");
+                return promise_raw;
+            }
             Some(s) => s.cmd_tx.clone(),
             None => {
                 promise.reject_string(&format!("socket {} not found", handle));

@@ -70,6 +70,9 @@ pub fn adopt_upgraded_tcp_stream(stream: tokio::net::TcpStream) -> i64 {
             server_id: None,
             server_connection_active: false,
             tls: Default::default(),
+            // An adopted tokio `TcpStream` (an HTTP upgrade handing its
+            // connection to `net`) keeps the tokio transport by construction.
+            turnloop: false,
         },
     );
     statics::listeners()

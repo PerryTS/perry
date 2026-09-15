@@ -87,6 +87,31 @@ unsafe fn str_arg<'a>(ptr: *const u8, len: usize) -> &'a str {
     std::str::from_utf8(bytes).unwrap_or("")
 }
 
+/// Revision of this ABI. Bumped whenever a signature or a struct field
+/// changes; a binding compiled against a different revision is refused rather
+/// than allowed to misread a completion.
+pub const PERRY_NET_ABI_VERSION: u8 = 2;
+
+/// A digest of [`NetCompletion`]'s layout plus [`PERRY_NET_ABI_VERSION`].
+///
+/// A binding declares its own `#[repr(C)]` copy of the completion struct — it
+/// has no Cargo edge to this crate — so the two definitions can drift apart
+/// silently, and the failure mode is reading a byte count out of a pointer
+/// field. Both sides compute this from their own definition and compare once,
+/// at registration, which turns that class of drift into a refused
+/// registration instead of a corrupt read.
+#[no_mangle]
+pub extern "C" fn js_perry_net_abi_layout() -> u64 {
+    use std::mem::{align_of, offset_of, size_of};
+    (size_of::<NetCompletion>() as u64) << 48
+        | (offset_of!(NetCompletion, id) as u64) << 40
+        | (offset_of!(NetCompletion, data) as u64) << 32
+        | (offset_of!(NetCompletion, code) as u64) << 24
+        | (offset_of!(NetCompletion, syscall) as u64) << 16
+        | (align_of::<NetCompletion>() as u64) << 8
+        | PERRY_NET_ABI_VERSION as u64
+}
+
 /// Nonzero when this thread can take the turnloop net path.
 #[no_mangle]
 pub extern "C" fn js_perry_net_available() -> i32 {
