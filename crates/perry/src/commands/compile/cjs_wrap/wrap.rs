@@ -467,8 +467,13 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
                             cyclic_missing_property_names(source, source_path, spec, target)
                                 .into_iter()
                                 .map(|property| {
+                                    // #10178: this scan only nominates possible
+                                    // misses. __export helpers and class statics
+                                    // can already be present on a replacement
+                                    // module.exports. Check the returned value
+                                    // without invoking the exported getter.
                                     format!(
-                                        "if (childBefore && childBefore.loaded === false) globalThis.process?.emitWarning?.(\"Accessing non-existent property '{property}' of module exports inside circular dependency\"); "
+                                        "if (childBefore && childBefore.loaded === false && required != null && (typeof required === 'object' || typeof required === 'function') && !('{property}' in required)) globalThis.process?.emitWarning?.(\"Accessing non-existent property '{property}' of module exports inside circular dependency\"); "
                                     )
                                 })
                                 .collect::<String>()
@@ -476,7 +481,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
                             String::new()
                         };
                         format!(
-                            "const childBefore = require.cache[{path:?}]; {warnings}globalThis.__perry_cjs_pending_parent = module; let required; try {{ required = __perry_require_path_module({path:?}); }} finally {{ globalThis.__perry_cjs_pending_parent = undefined; }} {link_child}return required;",
+                            "const childBefore = require.cache[{path:?}]; globalThis.__perry_cjs_pending_parent = module; let required; try {{ required = __perry_require_path_module({path:?}); }} finally {{ globalThis.__perry_cjs_pending_parent = undefined; }} {warnings}{link_child}return required;",
                             path = target.to_string_lossy(),
                         )
                     })
@@ -979,10 +984,12 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     // Node populates `module.parent` before the body evaluates, so link it
     // here rather than at the tail's registry publication.
     __perry_link_path_module_parent(__cjs_module);
-    // Publish the initial exports before user code. The runtime exposes them
-    // only to same-thread recursive loads; concurrent first callers wait for
-    // the final record registration at the bottom of this wrapper.
-    __perry_register_path_module_partial({module_path_literal}, __cjs_module.exports);
+    // Publish the record before user code, just as at final publication.
+    // #10178: esbuild replaces module.exports before requiring its peer.
+    // Holding the initial empty object loses that replacement at re-entry;
+    // the runtime's existing record unwrap reads the current exports instead.
+    // This needs no getter enumeration, copying, or extra publication calls.
+    __perry_register_path_module_partial({module_path_literal}, __cjs_module);
     var module = __cjs_module;
     var exports = __cjs_module.exports;
     const __perry_cjs_base_require = __perry_cjs_create_require({module_filename_literal});

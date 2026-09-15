@@ -440,10 +440,9 @@ fn registered_path_module_value(path: &str) -> Option<f64> {
         .map(f64::from_bits)
 }
 
-/// The registry holds whatever the CommonJS wrapper published: the module
-/// RECORD once the wrapper reaches its tail, or bare partial exports while a
-/// cycle is still initializing. Generated `require` sites want the exports in
-/// both cases.
+/// Generated wrappers publish the module RECORD at both the partial and final
+/// boundaries. Read its current exports so replacements made before a cycle
+/// re-entry are visible. Bare values remain supported for other publishers.
 fn path_module_exports(bits: u64) -> f64 {
     let value = f64::from_bits(bits);
     cjs_record_exports(value).unwrap_or(value)
@@ -863,7 +862,7 @@ pub unsafe extern "C" fn js_register_path_init(path_ptr: *const u8, path_len: i6
     }
 }
 
-/// Codegen FFI: publish a CommonJS module's initial `exports` object before
+/// Codegen FFI: publish a CommonJS module's record before
 /// executing its body. This is visible only to recursive loads by the owning
 /// thread; concurrent callers wait for [`js_register_path_module`] and the
 /// generated initializer to complete.
