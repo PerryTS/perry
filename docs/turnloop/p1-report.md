@@ -133,10 +133,9 @@ All commands as run.
 ### Runtime unit tests — real sockets, on the real driver
 
 ```
-CARGO_TARGET_DIR=$PWD/target RUST_TEST_THREADS=1 \
-  cargo test --locked --profile perry-dev -p perry-runtime turnloop_net
+RUST_TEST_THREADS=1 cargo test --locked --profile perry-dev -p perry-runtime turnloop_net
 ```
-→ **15 passed**. They are loopback tests against the actual `Loop`, not mocks:
+→ **15 passed**, on macOS arm64 (kqueue) and on Linux x86_64 (epoll). They are loopback tests against the actual `Loop`, not mocks:
 a full TCP exchange in both directions with byte assertions; half-close, with
 the queued write proven to precede the FIN and the reader proven to survive its
 own half-close; three writes submitted before a single turn, asserted to
@@ -171,10 +170,92 @@ Unix-domain sockets had **no** end-to-end coverage in the repository before this
 half is in the same test rather than waiting for its own.
 
 ```
-PATH=/opt/node-v26.5.1-linux-x64/bin:$PATH PERRY_SKIP_BUILD=1 \
-  ./run_parity_tests.sh --filter test_gap_turnloop_net
+export PATH=/opt/node-v26.5.1-linux-x64/bin:$PATH
+export PERRY_SKIP_BUILD=1 PERRY_RUNTIME_DIR=$PWD/target/release
+./run_parity_tests.sh --filter test_gap_turnloop_net
 ```
-→ **Parity Pass 1, Fail 0, Crashed 0 (100 %)**, byte-identical to the oracle.
+→ **Parity Pass 1, Fail 0, Crashed 0**, byte-identical to the oracle.
+
+`PERRY_RUNTIME_DIR` is not optional on that host: `/etc/profile.d/perry.sh`
+exports it pointing at a *different* checkout, so a run that does not override
+it links someone else's archives. The first sweep here did exactly that and its
+results were discarded.
+
+The same command over every other net and IPC test in `test-files/`:
+
+| filter | pass | fail | compile-fail | crash |
+|---|---|---|---|---|
+| `test_gap_turnloop_net` | 1 | 0 | 0 | 0 |
+| `test_gap_net` | 2 | 0 | 0 | 0 |
+| `test_gap_gc_net` | 1 | 0 | 0 | 0 |
+| `test_net_` (incl. `test_net_upgrade_tls`) | 4 | 0 | 0 | 0 |
+| `test_issue_1852` (net lifecycle) | 1 | 0 | 0 | 0 |
+| `test_issue_2131` (net lifecycle edge) | 1 | 0 | 0 | 0 |
+| `test_issue_422` (socket connect) | 1 | 0 | 0 | 0 |
+| `test_issue_1123` (createServer / listen) | 2 | 0 | 0 | 0 |
+| `test_issue_1131` (socket.write types) | 1 | 0 | 0 | 0 |
+| `test_issue_5021` (write from a data handler) | 1 | 0 | 0 | 0 |
+| `test_issue_647` (await socket event) | 1 | 0 | 0 | 0 |
+| `test_parity_net` | 1 | 0 | 0 | 0 |
+| `test_issue_1933` (fork IPC) | 1 | 0 | 0 | 0 |
+| `test_sock_write` | 1 | 0 | 0 | 0 |
+
+### node-suite `net` — the 47-fixture behavioural corpus
+
+This is the real gate for this change, and it was run **against a baseline built
+from this branch's own pre-migration commit** (`956384fc14`: the P1 core exists,
+nothing uses it), because a corpus that is partly red at baseline cannot be read
+from one arm.
+
+```
+export PATH=/opt/node-v26.5.1-linux-x64/bin:$PATH PERRY_SKIP_BUILD=1
+PERRY_RUNTIME_DIR=<tree>/target/release ./run_parity_tests.sh --suite node-suite --module net
+```
+
+| | pass | parity-fail | crash | total |
+|---|---|---|---|---|
+| baseline `956384fc14` | 16 | 27 | 4 | 47 |
+| P1 | **17** | 26 | 4 | 47 |
+
+Per-test, **exactly one row changed**: `net/connection/data-roundtrip` went
+`parity_fail` → `pass`. The four crashes are the same four fixtures in both arms
+(`connection/address-metadata`, `exports/class-prototypes`,
+`method-values/server-async-dispose`, `server/get-connections`), and every other
+fixture kept its status. The committed floor for this module is pass ≥ 16 of 47
+(`test-parity/node_suite_baseline.json`), so this is one above it.
+
+One of those crashes was investigated far enough to attribute it:
+`connection/address-metadata` fails because `socket.localAddress` /
+`remoteAddress` / `localPort` are `undefined` on an **accepted** socket. That is
+**pre-existing** — the same probe returns the same `undefined` on the baseline
+build, where the accepted socket is a tokio socket whose `SocketState` does get
+its endpoints from `TcpStream::local_addr()`. The turnloop path records the same
+endpoints (asserted directly in the runtime unit tests, on both macOS and
+Linux), so the loss is somewhere in the accepted-socket property dispatch and
+predates this work. Worth its own issue.
+
+### GC stress with I/O pending
+
+```
+PERRY_GC_DIAG=1 PERRY_GC_SCHEDULE_SEED=7 PERRY_GC_SCHEDULE_RATE=1 \
+PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=64 \
+PERRY_GC_SCHEDULE_ALLOC_KB=0 PERRY_LOOP_STATS=1 ./gapnet
+```
+
+Clean, with the full 15 lines of output, and the instruments prove they were
+armed rather than merely quiet:
+
+- **486** `[gc-fromspace-protect] retired_set=#N` lines, so copying minors
+  really ran and their from-space really was quarantined and `mprotect`ed — a
+  run with zero copying minors protects nothing and would have passed vacuously;
+- 17,157 `[gc…]` diagnostic lines over the run;
+- `completions=99` on the same run, so those collections landed while socket
+  operations were in flight;
+- no SIGSEGV from the quarantine reporter: no stale from-space pointer was
+  dereferenced.
+
+Seeds 1, 7 and 12345 all pass at `RATE=1` (a collection at every handled
+safepoint) with `ALLOC_KB=0` (every loop poll a candidate).
 
 ## `PERRY_LOOP_STATS` for a net workload
 
@@ -243,6 +324,12 @@ entirely and with it this branch.
   Code reads this through Node's private shape before the read-only `Bun.ant`
   peer-credential hooks.
 - **One extra 16 KiB copy per read** (see GC decisions).
+- **The P0 branch does not build on Linux.** turnloop alpha.2's exact `libc
+  =0.2.175` pin predates `backtrace_symbols_fd`, which
+  `arena/quarantine.rs` and `exception.rs` both call, so `perry-runtime` fails
+  to compile there. Found while building the baseline; the alpha.3 bump in this
+  branch fixes it by restoring libc 0.2.189. Worth knowing before anyone tries
+  to bisect across P0 on a Linux runner.
 - The bundled stdlib `net` (`crates/perry-stdlib/src/net/`) is untouched. It is
   compiled **out** of default builds by the well-known flip
   (`crates/perry/src/commands/compile/optimized_libs/driver.rs` strips

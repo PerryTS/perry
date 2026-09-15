@@ -196,6 +196,18 @@ fn a_full_loopback_exchange_moves_real_bytes_both_ways() {
         3,
         "listener + client + accepted connection"
     );
+    // `socket.localAddress` / `remoteAddress` on an accepted connection read
+    // these, and a binding that got `None` here would report `undefined` for
+    // every accepted socket — which is exactly what the first draft did.
+    let conn_local = super::local_addr(conn).expect("accepted socket has a local endpoint");
+    let conn_peer = super::peer_addr(conn).expect("accepted socket has a peer endpoint");
+    assert_eq!(conn_local.port(), local.port(), "accepted on the bound port");
+    assert!(conn_peer.ip().is_loopback(), "peer is the loopback client");
+    assert_eq!(
+        super::peer_addr(client).map(|a| a.port()),
+        Some(local.port()),
+        "the client's peer is the listener"
+    );
 
     super::read_start(client).expect("client read");
     super::read_start(conn).expect("server read");
