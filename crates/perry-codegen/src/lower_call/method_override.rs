@@ -1552,21 +1552,11 @@ pub(super) fn emit_guarded_direct_method_call(
             ctx.current_block = typed_idx;
             let mut typed_args_storage: Vec<String> = Vec::with_capacity(formal_args.len());
             for (value, rep) in formal_args.iter().zip(typed_param_reps.iter()) {
-                typed_args_storage.push(match rep {
-                    crate::codegen::TypedParamRep::F64 => {
-                        crate::codegen::emit_typed_arg_to_raw(ctx.block(), *rep, value)
-                    }
-                    crate::codegen::TypedParamRep::I32 => {
-                        ctx.block().call(I32, rep.unbox_fn(), &[(DOUBLE, *value)])
-                    }
-                    crate::codegen::TypedParamRep::I1 => {
-                        let raw_i32 = ctx.block().call(I32, rep.unbox_fn(), &[(DOUBLE, *value)]);
-                        ctx.block().icmp_ne(I32, &raw_i32, "0")
-                    }
-                    crate::codegen::TypedParamRep::StringRef => {
-                        ctx.block().call(I64, rep.unbox_fn(), &[(DOUBLE, *value)])
-                    }
-                });
+                typed_args_storage.push(crate::codegen::emit_typed_arg_to_raw(
+                    ctx.block(),
+                    *rep,
+                    value,
+                ));
             }
             let typed_args: Vec<(crate::types::LlvmType, &str)> = typed_args_storage
                 .iter()

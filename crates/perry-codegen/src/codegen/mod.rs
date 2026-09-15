@@ -241,6 +241,7 @@ mod testing_feature_gate_tests;
 mod trusted_box_callback_tests;
 mod typed_abi;
 mod typed_abi_opt_report;
+mod typed_entry;
 #[cfg(test)]
 mod unknown_func_tests;
 

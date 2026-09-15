@@ -666,17 +666,20 @@ fn nonsuspending_async_function_needs_no_direct_call_site_for_its_guarded_clone(
     // same predicate, none of the interpretive validator's per-call cost.
     // The interpretive validator must not appear for a string/number tuple.
     assert!(!public.contains("call i32 @js_param_type_guard("));
-    assert_eq!(
-        public
-            .matches("call i32 @js_typed_string_arg_guard(")
-            .count(),
-        1
+    // Both legs are inline predicates now: the String leg tests the two
+    // string tags, the Number leg admits plain doubles with one signed compare
+    // (int32 boxes are converted on a second tier). No runtime guard call.
+    assert!(!public.contains("call i32 @js_typed_string_arg_guard("));
+    assert!(
+        public.contains(", 32767"),
+        "heap string tag test:\n{public}"
     );
-    // The Number leg is the inline `is_number || is_int32` predicate now
-    // (`emit_typed_f64_guard`): one band test against the Perry tag range,
-    // no runtime call.
     assert!(!public.contains("call i32 @js_typed_f64_arg_guard("));
-    assert_eq!(public.matches(", 32761").count(), 1, "{public}");
+    assert_eq!(
+        public.matches(", 9221401712017801215").count(),
+        1,
+        "{public}"
+    );
     assert!(public.contains("$spec_b_b("));
     assert!(public.contains("$generic("));
     let specialized = function_ir(&ir, "renderAsync$spec_b_b(");

@@ -340,8 +340,9 @@ fn derived_recursive_number_argument_re_enters_the_guarded_clone() {
     // Keep both halves of the subject live: this must be the ordinary boxed
     // clone selected by the public Number guard, not the raw-i32 Tier-A path.
     assert!(
-        public.contains(", 32761") && !public.contains("call i32 @js_typed_f64_arg_guard("),
-        "the public Number guard is the inline band test:\n{public}"
+        public.contains(", 9221401712017801215")
+            && !public.contains("call i32 @js_typed_f64_arg_guard("),
+        "the public Number guard is the inline plain-double test:\n{public}"
     );
     assert!(
         clone.starts_with("define internal")
@@ -380,8 +381,9 @@ fn bigint_capable_recursive_argument_keeps_the_public_guard() {
     let clone = function_ir(&ir, "$spec_b_b(");
 
     assert!(
-        public.contains(", 32761") && !public.contains("call i32 @js_typed_f64_arg_guard("),
-        "the public Number guard is the inline band test:\n{public}"
+        public.contains(", 9221401712017801215")
+            && !public.contains("call i32 @js_typed_f64_arg_guard("),
+        "the public Number guard is the inline plain-double test:\n{public}"
     );
     assert!(
         clone.starts_with("define internal")

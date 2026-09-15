@@ -47,15 +47,6 @@ impl TypedParamRep {
         }
     }
 
-    pub(crate) fn guard_fn(self) -> &'static str {
-        match self {
-            Self::F64 => "js_typed_f64_arg_guard",
-            Self::I32 => "js_typed_i32_arg_guard",
-            Self::I1 => "js_typed_i1_arg_guard",
-            Self::StringRef => "js_typed_string_arg_guard",
-        }
-    }
-
     pub(crate) fn unbox_fn(self) -> &'static str {
         match self {
             Self::F64 => "js_typed_f64_arg_to_raw",
@@ -237,20 +228,44 @@ pub(crate) fn typed_string_closure_capture_reps(
     typed_closure_capture_reps(expr, module_local_types)
 }
 
+/// Inline predicate for one typed-parameter representation.
+///
+/// Every arm is the exact contract of the matching runtime
+/// `js_typed_*_arg_guard` helper (`perry-runtime/src/native_abi.rs`). They used
+/// to be out-of-line calls, which cost a call per guarded argument and forced a
+/// frame on public entries whose fast arm is otherwise a leaf.
 pub(crate) fn emit_typed_arg_guard(
     blk: &mut crate::block::LlBlock,
     rep: TypedParamRep,
     arg: &str,
 ) -> String {
-    if rep == TypedParamRep::F64 {
-        return emit_typed_f64_guard(blk, arg);
+    match rep {
+        TypedParamRep::F64 => emit_typed_f64_guard(blk, arg),
+        TypedParamRep::I32 => emit_typed_i32_guard_and_raw(blk, arg).0,
+        TypedParamRep::I1 => emit_typed_i1_guard(blk, arg),
+        TypedParamRep::StringRef => emit_typed_string_guard(blk, arg),
     }
-    let raw = blk.call(
-        crate::types::I32,
-        rep.guard_fn(),
-        &[(crate::types::DOUBLE, arg)],
-    );
-    blk.icmp_ne(crate::types::I32, &raw, "0")
+}
+
+/// `js_typed_i1_arg_guard`: exactly `TAG_TRUE | TAG_FALSE`. The two tags are
+/// adjacent (`TAG_FALSE + 1 == TAG_TRUE`), so one unsigned range test decides.
+pub(crate) fn emit_typed_i1_guard(blk: &mut crate::block::LlBlock, arg: &str) -> String {
+    use crate::types::I64;
+    debug_assert_eq!(crate::nanbox::TAG_FALSE + 1, crate::nanbox::TAG_TRUE);
+    let bits = blk.bitcast_double_to_i64(arg);
+    let offset = blk.sub(I64, &bits, crate::nanbox::TAG_FALSE_I64);
+    blk.icmp_ult(I64, &offset, "2")
+}
+
+/// `js_typed_string_arg_guard`: a heap `STRING_TAG` or inline
+/// `SHORT_STRING_TAG` value, decided by the top 16 bits alone.
+pub(crate) fn emit_typed_string_guard(blk: &mut crate::block::LlBlock, arg: &str) -> String {
+    use crate::types::{I1, I64};
+    let bits = blk.bitcast_double_to_i64(arg);
+    let top16 = blk.lshr(I64, &bits, "48");
+    let heap = blk.icmp_eq(I64, &top16, crate::nanbox::STRING_TAG_TOP16_I64);
+    let short = blk.icmp_eq(I64, &top16, crate::nanbox::SHORT_STRING_TAG_TOP16_I64);
+    blk.or(I1, &heap, &short)
 }
 
 /// Inline the exact contract of runtime `js_typed_f64_arg_guard`
@@ -300,19 +315,15 @@ pub(crate) fn emit_typed_arg_to_raw(
 ) -> String {
     match rep {
         TypedParamRep::F64 => emit_typed_f64_to_raw_guarded(blk, arg),
-        TypedParamRep::I32 => blk.call(
-            crate::types::I32,
-            rep.unbox_fn(),
-            &[(crate::types::DOUBLE, arg)],
-        ),
+        TypedParamRep::I32 => emit_typed_i32_raw_assuming_guarded(blk, arg),
+        // `js_typed_i1_arg_to_raw`: the guard admitted only the two boolean
+        // tags, so the raw bit is plain tag identity.
         TypedParamRep::I1 => {
-            let raw_i32 = blk.call(
-                crate::types::I32,
-                rep.unbox_fn(),
-                &[(crate::types::DOUBLE, arg)],
-            );
-            blk.icmp_ne(crate::types::I32, &raw_i32, "0")
+            let bits = blk.bitcast_double_to_i64(arg);
+            blk.icmp_eq(crate::types::I64, &bits, crate::nanbox::TAG_TRUE_I64)
         }
+        // Stays a call: a short string must be materialized into a heap
+        // `StringHeader`, which needs the runtime allocator.
         TypedParamRep::StringRef => blk.call(
             crate::types::I64,
             rep.unbox_fn(),
@@ -337,7 +348,7 @@ pub(crate) fn typed_param_reps_match_args(
 ///
 /// Runtime-derived facts admit the route directly. A local's erased source
 /// type may also nominate a route because every caller of this predicate emits
-/// `rep.guard_fn()` over the live JSValue and takes the generic body on guard
+/// the rep's entry guard over the live JSValue and takes the generic body on guard
 /// failure. The hint never authorizes raw lowering on its own.
 pub(crate) fn typed_arg_is_guard_candidate(
     ctx: &crate::expr::FnCtx<'_>,
