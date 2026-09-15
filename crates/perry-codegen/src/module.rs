@@ -337,6 +337,11 @@ impl LlModule {
         self.functions.last_mut().unwrap()
     }
 
+    /// A defined function by symbol name.
+    pub(crate) fn function_named(&self, name: &str) -> Option<&LlFunction> {
+        self.functions.iter().find(|f| f.name == name)
+    }
+
     pub fn function_mut(&mut self, idx: usize) -> Option<&mut LlFunction> {
         self.functions.get_mut(idx)
     }

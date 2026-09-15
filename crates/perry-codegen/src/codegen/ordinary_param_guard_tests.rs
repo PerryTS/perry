@@ -112,10 +112,19 @@ fn public_guard_routes_to_proof_clone_and_conservative_fallback() {
     let specialized = function_ir(&ir, "$spec_b(");
     let generic = function_ir(&ir, "$generic(");
 
-    assert!(public.lines().next().unwrap().contains(" noinline "));
-    assert!(public.contains("call i32 @js_param_type_guard("));
-    assert!(public.contains("$spec_b("));
-    assert!(public.contains("$generic("));
+    // Here the declaration-seeded generic body already lowers `payload.label`
+    // exactly like the clone (see the #8033 note below), so the clone consumes
+    // nothing the guard establishes. The public entry therefore forwards to
+    // the generic body without paying `js_param_type_guard` per call; the
+    // guard-kept contract is pinned by
+    // `a_class_parameter_is_guarded_by_identity_and_declared_fields`, whose
+    // clone and generic body differ.
+    assert!(
+        !public.contains("call i32 @js_param_type_guard("),
+        "{public}"
+    );
+    assert!(!public.contains("$spec_b("), "{public}");
+    assert!(public.contains("$generic("), "{public}");
     assert!(!generic.contains("js_param_type_guard"));
     assert!(!specialized.contains("js_param_type_guard"));
     assert!(
