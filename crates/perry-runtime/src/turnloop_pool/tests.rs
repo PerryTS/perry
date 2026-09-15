@@ -79,7 +79,7 @@ fn read_js_string(bits: u64) -> String {
     let ptr = crate::value::js_get_string_pointer_unified(f64::from_bits(bits))
         as *const crate::StringHeader;
     assert!(
-        !ptr.is_null() && (ptr as usize) >= 0x1000,
+        crate::value::addr_class::is_plausible_heap_addr(ptr as usize),
         "live string pointer"
     );
     unsafe {
