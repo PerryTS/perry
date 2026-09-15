@@ -18,6 +18,11 @@ use std::time::{Duration, Instant};
 
 use super::agent_loop;
 
+/// How long the transitional tokio tick may block while turnloop also has
+/// outstanding work. One millisecond is the legacy loop's own floor, so a
+/// program with both transports live is no coarser than Perry was before P0.
+const MIXED_TRANSPORT_SLICE_MS: u64 = 1;
+
 /// stdlib's O(1) "tokio owns native work in flight" predicate.
 static NATIVE_INFLIGHT: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 
@@ -104,14 +109,40 @@ pub(super) fn park() -> bool {
         // P0-transitional: tokio still owns in-flight native work, and it only
         // advances inside its own tick. Drive that tick exactly as the legacy
         // driver did. P8 deletes this branch.
-        let ms = deadline
-            .saturating_duration_since(Instant::now())
-            .as_millis() as u64;
+        //
+        // P1 added a second transport, and with it the case P0 could not have:
+        // tokio-owned work AND turnloop-owned sockets live at once (a
+        // `net.connect` client, which stays on tokio so `upgradeToTLS` keeps
+        // working, talking to a turnloop-backed server in the same process).
+        // The tick blocks inside tokio and nothing there knows about turnloop's
+        // poller, so a full-budget tick would never return to collect a socket
+        // completion — not a delay but a hang, since the completion is what
+        // would have produced the notify that ends the tick.
+        //
+        // While both are live the tick therefore takes a bounded slice and the
+        // loop is turned right after it, so neither transport waits on the
+        // other for more than that slice. It costs a wakeup per slice on a
+        // program that is idle in both, which is the price of running two event
+        // loops at once; P2-P7 remove the second one, and the proper bridge
+        // before then is to register turnloop's `Integration::Fd` /
+        // `Integration::Event` inside the tick so it ends on turnloop readiness
+        // instead of on a timer.
+        let loop_work = agent_loop::has_outstanding_work();
+        let ms = if loop_work {
+            MIXED_TRANSPORT_SLICE_MS
+        } else {
+            deadline
+                .saturating_duration_since(Instant::now())
+                .as_millis() as u64
+        };
         if super::wait_driver_sleep(ms) {
             if crate::promise::mt_profile_enabled() {
                 super::PROFILE_WAIT_DRIVER_COUNT.fetch_add(1, Ordering::Relaxed);
             }
             agent_loop::note_native_tick();
+            if loop_work {
+                agent_loop::fast_turn();
+            }
             super::spin_streak_reset();
             return true;
         }

@@ -387,6 +387,20 @@ pub(super) fn reset_for_test() {
     STATE.with(|s| s.set(LoopState::Unset));
 }
 
+/// Whether the loop has referenced handles, operations or queued results —
+/// `Loop::alive()`, O(1). Used to decide whether a park must service turnloop
+/// as well as the transitional tokio tick.
+pub(super) fn has_outstanding_work() -> bool {
+    if STATE.with(Cell::get) != LoopState::Owner {
+        return false;
+    }
+    AGENT_LOOP.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .is_some_and(|agent| agent.driver.alive())
+    })
+}
+
 /// Whether this thread can own the primary agent's loop at all.
 ///
 /// Answers without creating one: a caller asking "may I use turnloop?" on a
