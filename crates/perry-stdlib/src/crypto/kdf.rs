@@ -376,10 +376,13 @@ unsafe fn parse_node_argon2_params(params_bits: f64) -> NodeArgon2Params {
     }
 }
 
-unsafe fn node_argon2_key(
+/// Read and validate the arguments, and return everything the derivation needs
+/// as owned data. Validation throws, so it stays on the calling thread; the
+/// derivation itself is [`node_argon2_derive`] and may run anywhere.
+unsafe fn node_argon2_plan(
     algorithm_ptr: i64,
     params_bits: f64,
-) -> *mut perry_runtime::buffer::BufferHeader {
+) -> (argon2::Argon2<'static>, NodeArgon2Params) {
     use argon2::{Algorithm, Argon2, Params, Version};
 
     let algorithm = String::from_utf8_lossy(&bytes_from_ptr(algorithm_ptr)).to_string();
@@ -405,15 +408,32 @@ unsafe fn node_argon2_key(
             params.memory as u64,
         )
     });
-    let argon = Argon2::new(algorithm_kind, Version::V0x13, argon_params);
+    (
+        Argon2::new(algorithm_kind, Version::V0x13, argon_params),
+        params,
+    )
+}
+
+/// The derivation itself: owned data in, owned bytes out, no JS heap. An empty
+/// result is Node's "the derivation failed", which the callers turn into an
+/// empty Buffer exactly as before.
+fn node_argon2_derive(argon: argon2::Argon2<'static>, params: &NodeArgon2Params) -> Vec<u8> {
     let mut out = vec![0u8; params.tag_length];
     if argon
         .hash_password_into(&params.message, &params.nonce, &mut out)
         .is_err()
     {
-        return alloc_buffer_from_slice(&[]);
+        return Vec::new();
     }
-    alloc_buffer_from_slice(&out)
+    out
+}
+
+unsafe fn node_argon2_key(
+    algorithm_ptr: i64,
+    params_bits: f64,
+) -> *mut perry_runtime::buffer::BufferHeader {
+    let (argon, params) = node_argon2_plan(algorithm_ptr, params_bits);
+    alloc_buffer_from_slice(&node_argon2_derive(argon, &params))
 }
 
 #[no_mangle]
@@ -430,17 +450,20 @@ pub unsafe extern "C" fn js_crypto_argon2_async(
     params_bits: f64,
     callback_bits: f64,
 ) -> f64 {
-    let buf = node_argon2_key(algorithm_ptr, params_bits);
-    let value = if buf.is_null() {
-        f64::from_bits(JSValue::undefined().bits())
-    } else {
-        f64::from_bits(JSValue::pointer(buf as *const u8).bits())
-    };
-    schedule_node_style_callback2(
-        callback_bits,
-        f64::from_bits(JSValue::null().bits()),
-        value,
-        "ARGON2REQUEST",
+    // turnloop P4: argon2 is memory-hard by design, so it is the most expensive
+    // thing in this file to run on the thread that owns the JS heap. Argument
+    // validation throws and stays here; the derivation goes to the pool.
+    let (argon, params) = node_argon2_plan(algorithm_ptr, params_bits);
+    perry_runtime::turnloop_pool::submit_or_run_inline_rooted(
+        vec![callback_bits.to_bits()],
+        move || node_argon2_derive(argon, &params),
+        move |delivery, roots| {
+            let callback = roots
+                .first()
+                .map(|bits| f64::from_bits(*bits))
+                .unwrap_or(0.0);
+            deliver_kdf_callback(delivery, callback, "ARGON2REQUEST");
+        },
     );
     f64::from_bits(JSValue::undefined().bits())
 }
