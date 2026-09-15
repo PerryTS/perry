@@ -5792,6 +5792,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "perry-db-turnloop"
+version = "0.5.1576"
+dependencies = [
+ "perry-ffi",
+]
+
+[[package]]
 name = "perry-diagnostics"
 version = "0.5.1576"
 dependencies = [
@@ -6011,9 +6018,12 @@ name = "perry-ext-ioredis"
 version = "0.5.1576"
 dependencies = [
  "lazy_static",
+ "perry-db-turnloop",
  "perry-ffi",
+ "perry-runtime",
  "redis",
  "tokio",
+ "turnloop-redis",
 ]
 
 [[package]]
@@ -9828,6 +9838,12 @@ dependencies = [
  "url",
  "zstd",
 ]
+
+[[package]]
+name = "turnloop-redis"
+version = "0.1.0-alpha.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f6bb87efe9a3e7ab4c17b6a5b81ce0708d1f6e4bb586483dfc072a0dfdf43ce"
 
 [[package]]
 name = "turnloop-tls"

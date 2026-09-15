@@ -24,11 +24,17 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 
 use super::NodeError;
 
-/// How many net bindings can be linked at once. Two are real (`perry-ext-net`
-/// and the bundled stdlib `net`, which are alternatives rather than peers);
-/// the rest are headroom for P2/P5's own transports. A fixed array keeps
-/// routing to one relaxed load.
-pub const MAX_SUBSYSTEMS: usize = 4;
+/// How many net bindings can be linked at once.
+///
+/// The slots are claimed, not merely reserved: 0 is `perry-ext-net` (P1), 1 is
+/// `perry-ext-http` (P5), 3 is this module's own test slot, and 2/4/5/6 are
+/// P7's four database bindings (`perry-db-turnloop::subsystem`). A binding is a
+/// separately linked `staticlib` with its own sink function, so four database
+/// bindings really do need four slots even though they share one transport
+/// module. 7 is the remaining headroom. A fixed array keeps routing to one
+/// relaxed load, and `register_sink` refuses an out-of-range slot rather than
+/// letting a binding write past the end.
+pub const MAX_SUBSYSTEMS: usize = 8;
 
 /// A completion sink: called on the loop-owning thread, once per completion.
 pub type SinkFn = extern "C" fn(*const NetCompletion);

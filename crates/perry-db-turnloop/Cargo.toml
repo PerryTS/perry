@@ -1,0 +1,18 @@
+[package]
+name = "perry-db-turnloop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The loop-driven transport shared by Perry's database bindings (P7): drives a sans-I/O protocol core over a turnloop socket, so a connection is loop state rather than a parked OS thread."
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+perry-ffi.workspace = true
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }

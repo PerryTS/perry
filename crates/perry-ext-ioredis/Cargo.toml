@@ -3,7 +3,7 @@ name = "perry-ext-ioredis"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Native bindings for npm `ioredis` — uses only `perry-ffi`. Async Redis client (lazy connection) via the `redis` crate. spawn_blocking + JsPromise + tokio::Handle::current().block_on bridge."
+description = "Native bindings for npm `ioredis` — uses only `perry-ffi` and `perry-db-turnloop`. Loop-driven: one turnloop socket plus a `turnloop-redis` sans-I/O core, with the legacy `redis`-crate + spawn_blocking bridge kept for clients that decline (no loop, or TLS)."
 
 [lints]
 workspace = true
@@ -13,9 +13,14 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 perry-ffi.workspace = true
+perry-db-turnloop.workspace = true
+turnloop-redis.workspace = true
 redis = { version = "1.2", features = ["tokio-comp", "connection-manager"] }
 tokio = { workspace = true }
 lazy_static.workspace = true
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }
+# Standalone extension tests need the runtime half of the test-only async FFI
+# shims; production code still depends on perry-ffi only.
+perry-runtime = { workspace = true, features = ["default", "stdlib"] }
