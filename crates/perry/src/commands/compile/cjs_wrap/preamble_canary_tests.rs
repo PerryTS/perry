@@ -204,6 +204,13 @@ fn path_module_wrap_publishes_partial_then_final_exports_and_tracks_undefined() 
         .rfind("__perry_register_path_module(")
         .expect("CJS wrapper must publish its final module.exports value");
     assert!(partial < body && body < final_publish, "{wrapped}");
+    assert!(
+        wrapped.contains(&format!(
+            "__perry_register_path_module_partial({:?}, __cjs_module);",
+            path.to_string_lossy()
+        )),
+        "cycle readers must follow module.exports replacements\n{wrapped}"
+    );
     // #8040: both the value lookup and the presence probe must consult the
     // SAME resolved specifier. A computed relative request is joined against
     // the module's directory before either call (`__perry_path_spec`), so a

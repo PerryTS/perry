@@ -183,7 +183,8 @@ impl PathModuleRegistry {
         true
     }
 
-    /// Publish the initial CommonJS `exports` object before the wrapper body.
+    /// Publish the CommonJS module record before the wrapper body. The exports
+    /// adapter unwraps its current `.exports` on each read, including cycles.
     /// Only same-thread recursive loads may observe it; unrelated waiters stay
     /// parked while the status is `Initializing`.
     pub(super) fn register_partial_exports(&self, key: String, exports: u64) -> bool {

@@ -9,6 +9,9 @@ use std::sync::Once;
 #[path = "source_graph_export_regressions/issue_10153.rs"]
 mod issue_10153;
 
+#[path = "source_graph_export_regressions/issue_10178.rs"]
+mod issue_10178;
+
 const GC_ENV_OVERRIDES: &[&str] = &[
     "PERRY_GEN_GC",
     "PERRY_GC_SCAVENGE",
@@ -90,6 +93,10 @@ fn write(dir: &Path, name: &str, source: &str) {
 }
 
 fn compile_and_run(dir: &Path, entry: &str) -> String {
+    String::from_utf8_lossy(&compile_and_run_output(dir, entry).stdout).into_owned()
+}
+
+fn compile_and_run_output(dir: &Path, entry: &str) -> std::process::Output {
     let output = dir.join("main_bin");
     let compile = Command::new(perry_bin())
         .current_dir(dir)
@@ -119,7 +126,7 @@ fn compile_and_run(dir: &Path, entry: &str) -> String {
         String::from_utf8_lossy(&run.stdout),
         String::from_utf8_lossy(&run.stderr)
     );
-    String::from_utf8_lossy(&run.stdout).into_owned()
+    run
 }
 
 fn compile_and_run_with_llvm_trace(dir: &Path, entry: &str) -> (String, String) {
