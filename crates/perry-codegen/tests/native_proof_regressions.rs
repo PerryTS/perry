@@ -8,12 +8,22 @@
 // `NativeRootsPin::native()` because their module-wide "no inbounds GEP" proxy
 // collides with the shadow lowering's inline slot addressing (see that file's
 // header).
-// The typed-f64 guard/unbox are inline since `emit_typed_f64_guard`: a
-// public entry proves `is_number || is_int32` with a band test whose
-// SHORT_STRING top-16 bound (`, 32761`) is its signature, and unboxes an
-// INT32 lane with `sitofp i32 %` behind a select. Assertions below pin those
-// markers where they used to pin `call i32 @js_typed_f64_arg_guard(` and
-// `call double @js_typed_f64_arg_to_raw`.
+// EVERY typed-entry guard and unbox is now inline, and the Number lane is
+// two-tiered (`codegen::typed_entry`): tier 1 admits plain doubles with one
+// signed compare, tier 2 converts an INT32 box, and the clone is called from a
+// single phi-joined site. The `guards_*_arg` / `unboxes_*_arg` predicates below
+// pin each lane's inline contract where assertions used to pin
+// `call i32 @js_typed_<rep>_arg_guard` / `call .. @js_typed_<rep>_arg_to_raw`
+// (and, for the Number lane, the earlier one-tier band test's `, 32761`).
+// They are line-precise on purpose: a bare substring such as `, 32761` also
+// appears in the string-tag and i32-range tests, so matching the opcode and its
+// operand on ONE line is what keeps these as strict as the calls they replaced.
+// `js_typed_string_arg_to_raw` is deliberately NOT here: materializing a short
+// string needs the runtime allocator, so that one is still a call.
+//
+// Unrelated emitters keep their runtime helpers and their original assertions:
+// the Map/Set number-key guards (`key_guard=js_typed_f64_arg_guard`) are
+// call-site key specialization, not a typed public entry.
 use perry_codegen::testing::NativeRootsPin;
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::{ObjectType, PropertyInfo, Type, TypeParam};
@@ -1147,6 +1157,127 @@ fn native_pod_view_specialization_module() -> Module {
     module
 }
 
+/// Whether ONE line of `ir` carries every needle — an opcode together with its
+/// operand, so a constant that also appears in an unrelated test cannot satisfy
+/// a guard assertion on its own.
+fn ir_line_with(ir: impl AsRef<str>, needles: &[&str]) -> bool {
+    ir.as_ref()
+        .lines()
+        .any(|line| needles.iter().all(|needle| line.contains(needle)))
+}
+
+/// Number lane, tier 1 (`emit_plain_number_test`): `bits <=s 0x7FF8_FFFF_FFFF_FFFF`.
+/// Replaces the one-tier band test's `, 32761`, and before that
+/// `call i32 @js_typed_f64_arg_guard(`.
+fn guards_number_arg(ir: impl AsRef<str>) -> bool {
+    ir_line_with(ir, &["icmp sle i64 %", ", 9221401712017801215"])
+}
+
+/// The one-tier Number guard (`emit_typed_f64_guard`): `is_number || is_int32`
+/// decided by the tag band plus the INT32 identity. Two-tiering is a PUBLIC
+/// ENTRY transform, so a direct call site still proves its arguments this way;
+/// this is the `, 32761` those assertions used to pin, with the neighbouring
+/// opcode so the constant alone cannot satisfy it.
+fn guards_number_arg_banded(ir: impl AsRef<str>) -> bool {
+    let ir = ir.as_ref();
+    ir_line_with(ir, &["icmp ult i64 %", ", 32761"])
+        && ir_line_with(ir, &["icmp ugt i64 %", ", 32767"])
+        && ir_line_with(ir, &["icmp eq i64 %", ", 9222809086901354496"])
+}
+
+/// Number lane, tier 2: the INT32 identity test and the `sitofp` that converts
+/// the box to the double the clone wants. Replaces
+/// `call double @js_typed_f64_arg_to_raw`.
+fn unboxes_number_arg(ir: impl AsRef<str>) -> bool {
+    let ir = ir.as_ref();
+    ir_line_with(ir, &["icmp eq i64 %", ", 9222809086901354496"]) && ir.contains("sitofp i32 %")
+}
+
+/// Boolean lane (`emit_typed_i1_guard`): `bits - TAG_FALSE <u 2`, the adjacent
+/// pair of boolean tags. Replaces `call i32 @js_typed_i1_arg_guard`.
+fn guards_bool_arg(ir: impl AsRef<str>) -> bool {
+    let ir = ir.as_ref();
+    ir_line_with(ir, &["sub i64 %", ", 9222246136947933187"])
+        && ir_line_with(ir, &["icmp ult i64 %", ", 2"])
+}
+
+/// Boolean unbox: tag identity against TAG_TRUE. Replaces
+/// `call i32 @js_typed_i1_arg_to_raw`. The result-boxing `select` carries the
+/// same constant but no `icmp`, so this stays specific to the unbox.
+fn unboxes_bool_arg(ir: impl AsRef<str>) -> bool {
+    ir_line_with(ir, &["icmp eq i64 %", ", 9222246136947933188"])
+}
+
+/// Int32 lane (`emit_typed_i32_guard_and_raw`): the INT32 identity test plus
+/// the plain-double range bounds that admit an integral double.
+/// Replaces `call i32 @js_typed_i32_arg_guard`.
+fn guards_i32_arg(ir: impl AsRef<str>) -> bool {
+    let ir = ir.as_ref();
+    ir_line_with(ir, &["icmp eq i64 %", ", 9222809086901354496"])
+        && ir_line_with(ir, &["fcmp oge double %", "-2147483648.0"])
+        && ir_line_with(ir, &["fcmp ole double %", "2147483647.0"])
+}
+
+/// Int32 unbox: the tagged low lane and the converted double, selected into one
+/// raw `i32`. Replaces `call i32 @js_typed_i32_arg_to_raw`.
+fn unboxes_i32_arg(ir: impl AsRef<str>) -> bool {
+    let ir = ir.as_ref();
+    ir_line_with(ir, &["fptosi double %", " to i32"])
+        && ir_line_with(ir, &["trunc i64 %", " to i32"])
+        && ir_line_with(ir, &["select i1 %", ", i32 %"])
+}
+
+/// String lane (`emit_typed_string_guard`): heap STRING_TAG or inline
+/// SHORT_STRING_TAG, decided on the top 16 bits.
+/// Replaces `call i32 @js_typed_string_arg_guard`.
+fn guards_string_arg(ir: impl AsRef<str>) -> bool {
+    let ir = ir.as_ref();
+    ir_line_with(ir, &["lshr i64 %", ", 48"])
+        && ir_line_with(ir, &["icmp eq i64 %", ", 32767"])
+        && ir_line_with(ir, &["icmp eq i64 %", ", 32761"])
+}
+
+/// The guard predicates above replaced `call i32 @js_typed_*_arg_guard`
+/// assertions, and a substring predicate is exactly the kind that rots into a
+/// tautology. Pin that each one REJECTS the IR it must reject: an unguarded
+/// entry, and the neighbouring lane's markers. Without this, an emitter change
+/// that dropped a guard would leave every assertion above still green.
+#[test]
+fn inline_typed_guard_predicates_reject_unguarded_and_neighbouring_lanes() {
+    let unguarded = "define double @f(double %arg1) {\nentry.0:\n  ret double %arg1\n}\n";
+    for (name, matched) in [
+        ("number", guards_number_arg(unguarded)),
+        ("number_banded", guards_number_arg_banded(unguarded)),
+        ("number_unbox", unboxes_number_arg(unguarded)),
+        ("bool", guards_bool_arg(unguarded)),
+        ("bool_unbox", unboxes_bool_arg(unguarded)),
+        ("i32", guards_i32_arg(unguarded)),
+        ("i32_unbox", unboxes_i32_arg(unguarded)),
+        ("string", guards_string_arg(unguarded)),
+    ] {
+        assert!(!matched, "{name} predicate accepted an unguarded entry");
+    }
+
+    // The boolean lane's tags and the Number tier-1 bound are distinct
+    // constants; neither lane may satisfy the other's predicate.
+    let bool_guard = "  %r2 = sub i64 %r1, 9222246136947933187\n  %r3 = icmp ult i64 %r2, 2\n";
+    assert!(guards_bool_arg(bool_guard));
+    assert!(!guards_number_arg(bool_guard));
+    assert!(!guards_i32_arg(bool_guard));
+    assert!(!guards_string_arg(bool_guard));
+
+    let number_tier1 = "  %r2 = icmp sle i64 %r1, 9221401712017801215\n";
+    assert!(guards_number_arg(number_tier1));
+    // Tier 1 is a public-entry shape; a direct call site keeps the band guard,
+    // so the two must not be interchangeable.
+    assert!(!guards_number_arg_banded(number_tier1));
+    assert!(!guards_bool_arg(number_tier1));
+
+    // The constant alone must not satisfy a guard: the opcode has to match too.
+    let constant_only = "  %r2 = add i64 %r1, 9221401712017801215\n";
+    assert!(!guards_number_arg(constant_only));
+}
+
 fn function_ir_section<'a>(ir: &'a str, symbol: &str) -> &'a str {
     let needle = format!("define double @{}(", symbol);
     let start = ir
@@ -1204,12 +1335,22 @@ fn assert_only_guarded_generic_splits(ir: &str, case: &str) {
             "{case}: `{base}` was split onto a non-guarded ABI:\n{ir}"
         );
         let entry = function_ir_section(ir, base);
+        // The negative this stands for is "no clone is reached UNGUARDED". An
+        // entry that reaches no clone at all — the forwarder emitted when a
+        // clone consumes no proof, which is the whole point of dropping that
+        // clone's guard — claims no proof and satisfies it trivially.
+        let reaches_clone =
+            entry.contains(&format!("@{base}$spec_")) || entry.contains(&format!("@{base}$typed_"));
         assert!(
-            entry.contains("call i32 @js_param_type_guard(")
+            !reaches_clone
+                || entry.contains("call i32 @js_param_type_guard(")
                 || entry.contains("_arg_guard(double ")
-                // The f64 guard is the inline `is_number || is_int32` band test
-                // (`emit_typed_f64_guard`): its SHORT_STRING top-16 bound.
-                || entry.contains(", 32761"),
+                // Inline lane guards; each is the exact predicate its removed
+                // `js_typed_<rep>_arg_guard` call ran.
+                || guards_number_arg(&entry)
+                || guards_bool_arg(&entry)
+                || guards_i32_arg(&entry)
+                || guards_string_arg(&entry),
             "{case}: `{base}`'s public entry reaches a clone without guarding:\n{entry}"
         );
     }
@@ -3902,7 +4043,7 @@ fn map_string_int32_param_without_native_i32_proof_uses_f64_helper() {
     );
     let entry_ir = function_ir_section(&ir, symbol);
     assert!(
-        entry_ir.contains("call i32 @js_typed_i32_arg_guard")
+        guards_i32_arg(&entry_ir)
             && entry_ir.contains(&format!("@{symbol}$spec_i32(i32 "))
             && entry_ir.contains(&format!("@{symbol}$generic(double ")),
         "the public entry must guard before the clone and keep the generic fallback:\n{entry_ir}"
@@ -5401,7 +5542,7 @@ fn set_int32_param_without_native_i32_proof_uses_generic_helpers() {
     }
     let entry_ir = function_ir_section(&ir, symbol);
     assert!(
-        entry_ir.contains("call i32 @js_typed_i32_arg_guard")
+        guards_i32_arg(&entry_ir)
             && entry_ir.contains(&format!("@{symbol}$spec_i32(i32 "))
             && entry_ir.contains(&format!("@{symbol}$generic(double ")),
         "the public entry must guard before the clone and keep the generic fallback:\n{entry_ir}"
@@ -8023,7 +8164,7 @@ fn compiler_private_async_iter_result_annotated_numeric_payload_stays_generic() 
     // per-call cost. The invariant is unchanged: the raw-f64 clone is only
     // reachable through the entry guard, with the generic body as fallback.
     assert!(
-        entry.contains(", 32761")
+        guards_number_arg(&entry)
             && !entry.contains("call i32 @js_param_type_guard(")
             && entry.contains(&format!("@{symbol}$generic(")),
         "the raw-f64 clone must be reachable only through the entry guard, with the generic body as fallback:\n{entry}"
@@ -8095,7 +8236,7 @@ fn compiler_private_async_iter_result_annotated_i32_payload_stays_generic() {
     );
     let entry = function_ir_section(&ir, symbol);
     assert!(
-        entry.contains("call i32 @js_typed_i32_arg_guard")
+        guards_i32_arg(&entry)
             && entry.contains(&format!("@{symbol}$generic(double ")),
         "the raw-i32 clone must be reachable only through the entry guard, with the generic body as fallback:\n{entry}"
     );
@@ -11044,8 +11185,11 @@ fn typed_f64_function_clone_emits_internal_clone_and_guarded_call() {
         ir.contains(&format!("define internal double @{generic_body}")),
         "{ir}"
     );
-    assert!(ir.contains(", 32761"), "{ir}");
-    assert!(ir.contains("sitofp i32 %"), "{ir}");
+    // Whole-module: at least one public entry guards a Number argument and
+    // converts an INT32 box. `, 32761` alone no longer says that — the string
+    // and i32 lanes carry the same constant.
+    assert!(guards_number_arg(&ir), "{ir}");
+    assert!(unboxes_number_arg(&ir), "{ir}");
     assert!(ir.contains(&format!("call double @{typed}")), "{ir}");
     assert!(
         ir.contains(&format!("call double @{generic_body}(")),
@@ -11069,7 +11213,7 @@ fn typed_f64_public_trampoline_dispatches_before_generic_body() {
         "typed function should keep a separate generic body:\n{ir}"
     );
     assert!(
-        wrapper_ir.contains(", 32761") && wrapper_ir.contains("sitofp i32 %"),
+        guards_number_arg(&wrapper_ir) && unboxes_number_arg(&wrapper_ir),
         "public wrapper should guard and unbox numeric JSValue args:\n{wrapper_ir}"
     );
     let typed_call = wrapper_ir
@@ -11166,7 +11310,7 @@ fn typed_string_function_clone_emits_internal_clone_and_guarded_wrapper() {
         "generic JSValue ABI body must remain emitted separately:\n{ir}"
     );
     assert!(
-        wrapper_ir.contains("call i32 @js_typed_string_arg_guard"),
+        guards_string_arg(&wrapper_ir),
         "public wrapper should guard string JSValue args:\n{wrapper_ir}"
     );
     assert!(
@@ -11188,7 +11332,7 @@ fn typed_string_function_clone_emits_internal_clone_and_guarded_wrapper() {
     assert!(
         caller_ir.contains("typed_string_call.fast")
             && caller_ir.contains("typed_string_call.fallback")
-            && caller_ir.contains("call i32 @js_typed_string_arg_guard")
+            && guards_string_arg(&caller_ir)
             && caller_ir.contains("call i64 @js_typed_string_arg_to_raw")
             && caller_ir.contains(&format!("call i64 @{typed}(i64 "))
             && caller_ir.contains("call double @js_nanbox_string(i64 "),
@@ -11289,22 +11433,22 @@ fn typed_f64_function_clone_accepts_mixed_raw_signature_and_direct_call() {
     assert!(
         typed_ir.contains("sitofp i32 %arg2 to double")
             && typed_ir.contains("fadd double")
-            && !typed_ir.contains("js_typed_f64_arg_to_raw")
+            && !unboxes_number_arg(&typed_ir)
             && !typed_ir.contains("js_nanbox"),
         "typed clone body should avoid JSValue traffic on the hot path:\n{typed_ir}"
     );
     assert!(
-        wrapper_ir.contains(", 32761")
-            && wrapper_ir.contains("call i32 @js_typed_i32_arg_guard")
-            && wrapper_ir.contains("call i32 @js_typed_i1_arg_guard")
+        guards_number_arg(&wrapper_ir)
+            && guards_i32_arg(&wrapper_ir)
+            && guards_bool_arg(&wrapper_ir)
             && wrapper_ir.contains(&format!("call double @{typed}(double %"))
             && wrapper_ir.contains(&format!("call double @{generic_body}(")),
         "public wrapper should guard mixed JSValue args and keep generic fallback:\n{wrapper_ir}"
     );
     assert!(
         caller_ir.contains("typed_f64_call.fast")
-            && caller_ir.contains("call i32 @js_typed_i32_arg_to_raw")
-            && caller_ir.contains("call i32 @js_typed_i1_arg_to_raw")
+            && unboxes_i32_arg(&caller_ir)
+            && unboxes_bool_arg(&caller_ir)
             && caller_ir.contains(&format!("call double @{typed}(double "))
             && caller_ir.contains(&format!("call double @{generic_body}("))
             && !caller_ir.contains(&format!("call double @{public}(")),
@@ -11357,21 +11501,21 @@ fn typed_f64_function_clone_keeps_i32_locals_raw_until_f64_use() {
         typed_ir.contains(" or i32 %arg2, 1")
             && typed_ir.contains("sitofp i32 ")
             && typed_ir.contains(" fadd double")
-            && !typed_ir.contains("js_typed_i32_arg_to_raw")
+            && !unboxes_i32_arg(&typed_ir)
             && !typed_ir.contains("js_nanbox"),
         "typed f64 clone should keep the Int32 local raw until it flows into f64 arithmetic:\n{typed_ir}"
     );
     assert!(
-        wrapper_ir.contains("call i32 @js_typed_i32_arg_guard")
-            && wrapper_ir.contains("call i32 @js_typed_i32_arg_to_raw")
+        guards_i32_arg(&wrapper_ir)
+            && unboxes_i32_arg(&wrapper_ir)
             && wrapper_ir.contains(&format!("call double @{typed}(double "))
             && wrapper_ir.contains(&format!("call double @{generic_body}(")),
         "public wrapper should guard/unbox the Int32 ABI arg and keep the generic fallback:\n{wrapper_ir}"
     );
     assert!(
         caller_ir.contains("typed_f64_call.fast")
-            && caller_ir.contains("call i32 @js_typed_i32_arg_guard")
-            && caller_ir.contains("call i32 @js_typed_i32_arg_to_raw")
+            && guards_i32_arg(&caller_ir)
+            && unboxes_i32_arg(&caller_ir)
             && caller_ir.contains(&format!("call double @{typed}(double "))
             && caller_ir.contains(&format!("call double @{generic_body}("))
             && !caller_ir.contains(&format!("call double @{public}(")),
@@ -11605,8 +11749,8 @@ fn typed_i1_function_clone_emits_internal_clone_and_guarded_call() {
         )),
         "generic JSValue ABI body must remain emitted separately:\n{ir}"
     );
-    assert!(ir.contains("call i32 @js_typed_i1_arg_guard"), "{ir}");
-    assert!(ir.contains("call i32 @js_typed_i1_arg_to_raw"), "{ir}");
+    assert!(guards_bool_arg(&ir), "{ir}");
+    assert!(unboxes_bool_arg(&ir), "{ir}");
     assert!(
         ir.contains(&format!("call i1 @{typed}(i1 ")),
         "direct bool call should target the typed-i1 clone:\n{ir}"
@@ -11640,8 +11784,7 @@ fn typed_i1_public_trampoline_dispatches_before_generic_body() {
         "typed-i1 function should keep a separate generic body:\n{ir}"
     );
     assert!(
-        wrapper_ir.contains("call i32 @js_typed_i1_arg_guard")
-            && wrapper_ir.contains("call i32 @js_typed_i1_arg_to_raw"),
+        guards_bool_arg(&wrapper_ir) && unboxes_bool_arg(&wrapper_ir),
         "public wrapper should guard and unbox boolean JSValue args:\n{wrapper_ir}"
     );
     let typed_call = wrapper_ir
@@ -11752,7 +11895,7 @@ fn typed_i1_function_clone_rejects_mixed_direct_call_inputs() {
         "call site with any/mixed inputs must not use the typed-i1 clone:\n{ir}"
     );
     assert!(
-        !caller_ir.contains("call i32 @js_typed_i1_arg_guard"),
+        !guards_bool_arg(&caller_ir),
         "call site with any/mixed inputs should stay on the generic call path:\n{ir}"
     );
     assert!(
@@ -11786,8 +11929,8 @@ fn typed_i1_numeric_predicate_function_uses_f64_params_and_public_wrapper() {
         "numeric predicate body should stay in native f64/i1 SSA:\n{typed_ir}"
     );
     assert!(
-        wrapper_ir.contains(", 32761")
-            && wrapper_ir.contains("sitofp i32 %")
+        guards_number_arg(&wrapper_ir)
+            && unboxes_number_arg(&wrapper_ir)
             && wrapper_ir.contains(&format!("call i1 @{typed}(double ")),
         "public wrapper should guard/unbox f64 args before the i1 clone:\n{wrapper_ir}"
     );
@@ -11796,8 +11939,7 @@ fn typed_i1_numeric_predicate_function_uses_f64_params_and_public_wrapper() {
         "public wrapper should retain a generic JSValue fallback:\n{wrapper_ir}"
     );
     assert!(
-        caller_ir.contains(", 32761")
-            && caller_ir.contains("sitofp i32 %")
+        guards_number_arg_banded(&caller_ir) && unboxes_number_arg(&caller_ir)
             && caller_ir.contains(&format!("call i1 @{typed}(double ")),
         "direct FuncRef lowering should use the mixed-signature typed-i1 clone after f64 guards:\n{caller_ir}"
     );
@@ -11858,8 +12000,8 @@ fn typed_i1_i32_predicate_function_uses_i32_params_and_public_wrapper() {
         "Int32 predicate body should stay in native i32/i1 SSA:\n{typed_ir}"
     );
     assert!(
-        wrapper_ir.contains("call i32 @js_typed_i32_arg_guard")
-            && wrapper_ir.contains("call i32 @js_typed_i32_arg_to_raw")
+        guards_i32_arg(&wrapper_ir)
+            && unboxes_i32_arg(&wrapper_ir)
             && wrapper_ir.contains(&format!("call i1 @{typed}(i32 ")),
         "public wrapper should guard/unbox Int32 args before the i1 clone:\n{wrapper_ir}"
     );
@@ -11868,8 +12010,8 @@ fn typed_i1_i32_predicate_function_uses_i32_params_and_public_wrapper() {
         "public wrapper should retain a generic JSValue fallback:\n{wrapper_ir}"
     );
     assert!(
-        caller_ir.contains("call i32 @js_typed_i32_arg_guard")
-            && caller_ir.contains("call i32 @js_typed_i32_arg_to_raw")
+        guards_i32_arg(&caller_ir)
+            && unboxes_i32_arg(&caller_ir)
             && caller_ir.contains(&format!("call i1 @{typed}(i32 ")),
         "direct FuncRef lowering should use the i32 typed-i1 clone after Int32 guards:\n{caller_ir}"
     );
@@ -11931,8 +12073,8 @@ fn typed_i32_return_function_uses_i32_params_return_and_public_wrapper() {
         "typed-i32 body should stay in native i32 SSA:\n{typed_ir}"
     );
     assert!(
-        wrapper_ir.contains("call i32 @js_typed_i32_arg_guard")
-            && wrapper_ir.contains("call i32 @js_typed_i32_arg_to_raw")
+        guards_i32_arg(&wrapper_ir)
+            && unboxes_i32_arg(&wrapper_ir)
             && wrapper_ir.contains(&format!("call i32 @{typed}(i32 "))
             && wrapper_ir.contains(INT32_TAG_I64),
         "public wrapper should guard/unbox Int32 args and box raw i32 at the ABI edge:\n{wrapper_ir}"
@@ -11944,8 +12086,8 @@ fn typed_i32_return_function_uses_i32_params_return_and_public_wrapper() {
     assert!(
         caller_ir.contains("typed_i32_call.fast")
             && caller_ir.contains("typed_i32_call.fallback")
-            && caller_ir.contains("call i32 @js_typed_i32_arg_guard")
-            && caller_ir.contains("call i32 @js_typed_i32_arg_to_raw")
+            && guards_i32_arg(&caller_ir)
+            && unboxes_i32_arg(&caller_ir)
             && caller_ir.contains(&format!("call i32 @{typed}(i32 "))
             && caller_ir.contains(INT32_TAG_I64),
         "direct FuncRef lowering should use the raw i32 clone after guards and box at the call boundary:\n{caller_ir}"
@@ -12073,8 +12215,8 @@ fn typed_i32_method_clone_emits_internal_clone_and_guarded_direct_call() {
         "typed-i32 method should expose a public JSValue wrapper and keep an internal generic body:\n{ir}"
     );
     assert!(
-        wrapper_ir.contains("call i32 @js_typed_i32_arg_guard")
-            && wrapper_ir.contains("call i32 @js_typed_i32_arg_to_raw")
+        guards_i32_arg(&wrapper_ir)
+            && unboxes_i32_arg(&wrapper_ir)
             && wrapper_ir.contains(&format!("call i32 @{typed}(i32 "))
             && wrapper_ir.contains(INT32_TAG_I64),
         "public method wrapper should guard/unbox Int32 args and box raw i32 at the ABI edge:\n{wrapper_ir}"
@@ -12083,8 +12225,8 @@ fn typed_i32_method_clone_emits_internal_clone_and_guarded_direct_call() {
         contains_inline_direct_method_shape_guard(caller_ir)
             && caller_ir.contains("typed_i32_method.fast")
             && caller_ir.contains("typed_i32_method.generic")
-            && caller_ir.contains("call i32 @js_typed_i32_arg_guard")
-            && caller_ir.contains("call i32 @js_typed_i32_arg_to_raw")
+            && guards_i32_arg(&caller_ir)
+            && unboxes_i32_arg(&caller_ir)
             && caller_ir.contains(&format!("call i32 @{typed}(i32 "))
             && caller_ir.contains(INT32_TAG_I64),
         "exact direct method call should guard receiver/method identity, then guard/unbox Int32 args and call the clone:\n{caller_ir}"
@@ -12132,8 +12274,7 @@ fn typed_i32_method_public_trampoline_dispatches_before_generic_body() {
         "public method wrapper should dispatch to typed clone before generic fallback:\n{wrapper_ir}"
     );
     assert!(
-        wrapper_ir.contains("call i32 @js_typed_i32_arg_guard")
-            && wrapper_ir.contains("call i32 @js_typed_i32_arg_to_raw"),
+        guards_i32_arg(&wrapper_ir) && unboxes_i32_arg(&wrapper_ir),
         "public method wrapper should guard and unbox Int32 JSValue args:\n{wrapper_ir}"
     );
     assert!(
@@ -12214,13 +12355,13 @@ fn typed_f64_method_clone_keeps_i32_locals_raw_until_f64_use() {
         typed_ir.contains(" or i32 %arg22, 1")
             && typed_ir.contains("sitofp i32 ")
             && typed_ir.contains(" fadd double")
-            && !typed_ir.contains("js_typed_i32_arg_to_raw")
+            && !unboxes_i32_arg(&typed_ir)
             && !typed_ir.contains("js_nanbox"),
         "typed f64 method clone should keep the Int32 local raw until f64 arithmetic:\n{typed_ir}"
     );
     assert!(
-        wrapper_ir.contains("call i32 @js_typed_i32_arg_guard")
-            && wrapper_ir.contains("call i32 @js_typed_i32_arg_to_raw")
+        guards_i32_arg(&wrapper_ir)
+            && unboxes_i32_arg(&wrapper_ir)
             && wrapper_ir.contains(&format!("call double @{typed}(double "))
             && wrapper_ir.contains(&format!("call double @{generic_body}(")),
         "public method wrapper should guard/unbox the Int32 ABI arg and keep fallback:\n{wrapper_ir}"
@@ -12228,8 +12369,8 @@ fn typed_f64_method_clone_keeps_i32_locals_raw_until_f64_use() {
     assert!(
         caller_ir.contains("typed_f64_method.fast")
             && caller_ir.contains("typed_f64_method.generic")
-            && caller_ir.contains("call i32 @js_typed_i32_arg_guard")
-            && caller_ir.contains("call i32 @js_typed_i32_arg_to_raw")
+            && guards_i32_arg(&caller_ir)
+            && unboxes_i32_arg(&caller_ir)
             && caller_ir.contains(&format!("call double @{typed}(double "))
             && caller_ir.contains(&format!("call double @{generic_body}(")),
         "exact direct method call should use the raw clone with generic-body fallback:\n{caller_ir}"
@@ -12262,7 +12403,7 @@ fn typed_string_method_clone_emits_internal_clone_and_guarded_direct_call() {
         "typed-string method should expose a public JSValue wrapper and keep an internal generic body:\n{ir}"
     );
     assert!(
-        wrapper_ir.contains("call i32 @js_typed_string_arg_guard")
+        guards_string_arg(&wrapper_ir)
             && wrapper_ir.contains("call i64 @js_typed_string_arg_to_raw")
             && wrapper_ir.contains(&format!("call i64 @{typed}(i64 "))
             && wrapper_ir.contains("call double @js_nanbox_string(i64 ")
@@ -12273,7 +12414,7 @@ fn typed_string_method_clone_emits_internal_clone_and_guarded_direct_call() {
         contains_inline_direct_method_shape_guard(caller_ir)
             && caller_ir.contains("typed_string_method.fast")
             && caller_ir.contains("typed_string_method.generic")
-            && caller_ir.contains("call i32 @js_typed_string_arg_guard")
+            && guards_string_arg(&caller_ir)
             && caller_ir.contains("call i64 @js_typed_string_arg_to_raw")
             && caller_ir.contains(&format!("call i64 @{typed}(i64 "))
             && caller_ir.contains("call double @js_nanbox_string(i64 "),
@@ -12432,8 +12573,8 @@ fn typed_i1_method_clone_emits_internal_clone_and_guarded_direct_call() {
         "generic method ABI body must remain emitted separately:\n{ir}"
     );
     assert!(contains_inline_direct_method_shape_guard(&ir), "{ir}");
-    assert!(ir.contains("call i32 @js_typed_i1_arg_guard"), "{ir}");
-    assert!(ir.contains("call i32 @js_typed_i1_arg_to_raw"), "{ir}");
+    assert!(guards_bool_arg(&ir), "{ir}");
+    assert!(unboxes_bool_arg(&ir), "{ir}");
     assert!(
         ir.contains(&format!("call i1 @{typed}(i1 ")),
         "typed direct call should target the clone:\n{ir}"
@@ -12478,8 +12619,7 @@ fn typed_i1_method_public_trampoline_dispatches_before_generic_body() {
     let wrapper_ir = function_ir_section(&ir, public);
 
     assert!(
-        wrapper_ir.contains("call i32 @js_typed_i1_arg_guard")
-            && wrapper_ir.contains("call i32 @js_typed_i1_arg_to_raw"),
+        guards_bool_arg(&wrapper_ir) && unboxes_bool_arg(&wrapper_ir),
         "public method wrapper should guard and unbox boolean JSValue args:\n{wrapper_ir}"
     );
     let typed_call = wrapper_ir
@@ -12568,15 +12708,14 @@ fn typed_i1_numeric_predicate_method_uses_f64_params_and_guarded_direct_call() {
         "numeric predicate method body should stay in native f64/i1 SSA:\n{typed_ir}"
     );
     assert!(
-        wrapper_ir.contains(", 32761")
-            && wrapper_ir.contains("sitofp i32 %")
+        guards_number_arg(&wrapper_ir)
+            && unboxes_number_arg(&wrapper_ir)
             && wrapper_ir.contains(&format!("call i1 @{typed}(double ")),
         "public method wrapper should guard/unbox f64 args before the i1 clone:\n{wrapper_ir}"
     );
     assert!(
         contains_inline_direct_method_shape_guard(caller_ir)
-            && caller_ir.contains(", 32761")
-            && caller_ir.contains("sitofp i32 %")
+            && guards_number_arg_banded(&caller_ir) && unboxes_number_arg(&caller_ir)
             && caller_ir.contains(&format!("call i1 @{typed}(double ")),
         "exact direct method call should use the mixed-signature typed-i1 clone after f64 guards:\n{caller_ir}"
     );
@@ -12690,8 +12829,11 @@ fn typed_f64_method_clone_emits_internal_clone_and_guarded_direct_call() {
         "generic method ABI body must remain emitted separately:\n{ir}"
     );
     assert!(contains_inline_direct_method_shape_guard(&ir), "{ir}");
-    assert!(ir.contains(", 32761"), "{ir}");
-    assert!(ir.contains("sitofp i32 %"), "{ir}");
+    // Whole-module: at least one public entry guards a Number argument and
+    // converts an INT32 box. `, 32761` alone no longer says that — the string
+    // and i32 lanes carry the same constant.
+    assert!(guards_number_arg(&ir), "{ir}");
+    assert!(unboxes_number_arg(&ir), "{ir}");
     assert!(
         ir.contains(&format!("call double @{typed}(double ")),
         "typed direct call should target the clone:\n{ir}"
@@ -12727,7 +12869,7 @@ fn typed_f64_method_public_trampoline_dispatches_before_generic_body() {
     let wrapper_ir = function_ir_section(&ir, public);
 
     assert!(
-        wrapper_ir.contains(", 32761") && wrapper_ir.contains("sitofp i32 %"),
+        guards_number_arg(&wrapper_ir) && unboxes_number_arg(&wrapper_ir),
         "public method wrapper should guard and unbox numeric JSValue args:\n{wrapper_ir}"
     );
     let typed_call = wrapper_ir
@@ -13075,7 +13217,7 @@ fn typed_f64_closure_clone_emits_internal_clone_and_guarded_direct_call() {
         "{ir}"
     );
     assert!(
-        wrapper_ir.contains(", 32761") && wrapper_ir.contains("sitofp i32 %"),
+        guards_number_arg(&wrapper_ir) && unboxes_number_arg(&wrapper_ir),
         "public closure wrapper should guard and unbox numeric JSValue args:\n{wrapper_ir}"
     );
     assert!(
@@ -13137,18 +13279,18 @@ fn typed_f64_closure_clone_accepts_immutable_numeric_capture() {
     assert!(
         typed_ir.contains("call i64 @js_closure_get_capture_bits(i64 %this_closure, i32 0)")
             && typed_ir.contains("bitcast i64")
-            && typed_ir.contains("call double @js_typed_f64_arg_to_raw"),
+            && unboxes_number_arg(&typed_ir),
         "typed-f64 captured closure should load immutable numeric capture as JSValue bits through the closure handle:\n{typed_ir}"
     );
     assert!(
         wrapper_ir.contains("call i64 @js_closure_get_capture_bits(i64 %this_closure, i32 0)")
-            && wrapper_ir.contains(", 32761"),
+            && guards_number_arg(&wrapper_ir),
         "public typed-f64 wrapper must validate capture bits before entering the raw clone:\n{wrapper_ir}"
     );
     assert!(
         caller_ir.contains("closure_direct.typed_f64")
             && caller_ir.contains("call i64 @js_closure_get_capture_bits")
-            && caller_ir.contains(", 32761")
+            && guards_number_arg_banded(&caller_ir)
             && caller_ir.contains(&format!("call double @{generic_body}(i64 ")),
         "direct typed-f64 calls must guard captures and retain their generic branch:\n{caller_ir}"
     );
@@ -13200,8 +13342,8 @@ fn typed_i32_closure_clone_emits_internal_clone_and_guarded_direct_call() {
         "closure allocation must keep storing the public wrapper pointer:\n{ir}"
     );
     assert!(
-        wrapper_ir.contains("call i32 @js_typed_i32_arg_guard")
-            && wrapper_ir.contains("call i32 @js_typed_i32_arg_to_raw")
+        guards_i32_arg(&wrapper_ir)
+            && unboxes_i32_arg(&wrapper_ir)
             && wrapper_ir.contains(&format!("call i32 @{typed}(i64 %this_closure")),
         "public closure wrapper should guard/unbox Int32 JSValue args and call the typed clone:\n{wrapper_ir}"
     );
@@ -13211,8 +13353,8 @@ fn typed_i32_closure_clone_emits_internal_clone_and_guarded_direct_call() {
     );
     assert!(
         ir.contains("closure_direct.typed_i32")
-            && ir.contains("call i32 @js_typed_i32_arg_guard")
-            && ir.contains("call i32 @js_typed_i32_arg_to_raw")
+            && guards_i32_arg(&ir)
+            && unboxes_i32_arg(&ir)
             && ir.contains(&format!("call i32 @{typed}(i64 ")),
         "direct local closure call should guard/unbox Int32 args and call the raw clone:\n{ir}"
     );
@@ -13279,18 +13421,18 @@ fn typed_i32_closure_clone_accepts_immutable_i32_capture() {
     assert!(
         typed_ir.contains("call i64 @js_closure_get_capture_bits(i64 %this_closure, i32 0)")
             && typed_ir.contains("bitcast i64")
-            && typed_ir.contains("call i32 @js_typed_i32_arg_to_raw"),
+            && unboxes_i32_arg(&typed_ir),
         "typed-i32 captured closure should load immutable Int32 capture through the closure handle:\n{typed_ir}"
     );
     assert!(
         wrapper_ir.contains("call i64 @js_closure_get_capture_bits(i64 %this_closure, i32 0)")
-            && wrapper_ir.contains("call i32 @js_typed_i32_arg_guard"),
+            && guards_i32_arg(&wrapper_ir),
         "public typed-i32 wrapper must validate capture bits before entering the raw clone:\n{wrapper_ir}"
     );
     assert!(
         caller_ir.contains("closure_direct.typed_i32")
             && caller_ir.contains("call i64 @js_closure_get_capture_bits")
-            && caller_ir.contains("call i32 @js_typed_i32_arg_guard")
+            && guards_i32_arg(&caller_ir)
             && caller_ir.contains(&format!("call double @{generic_body}(i64 ")),
         "direct typed-i32 calls must guard captures and retain their generic branch:\n{caller_ir}"
     );
@@ -13353,12 +13495,11 @@ fn typed_i32_closure_clone_rejects_dynamic_callee_call_site() {
         "eligible closure should still have an internal typed-i32 clone:\n{ir}"
     );
     assert!(
-        !caller_ir.contains(&format!("call i32 @{typed}("))
-            && !caller_ir.contains("call i32 @js_typed_i32_arg_guard"),
+        !caller_ir.contains(&format!("call i32 @{typed}(")) && !guards_i32_arg(&caller_ir),
         "dynamic closure callee must not direct-call the typed-i32 clone:\n{caller_ir}"
     );
     assert!(
-        wrapper_ir.contains("call i32 @js_typed_i32_arg_guard")
+        guards_i32_arg(&wrapper_ir)
             && wrapper_ir.contains(&format!("call i32 @{typed}("))
             && wrapper_ir.contains(&format!("call double @{generic_body}(")),
         "dynamic runtime dispatch should enter the public closure wrapper, which owns typed-i32 guards:\n{wrapper_ir}"
@@ -13401,8 +13542,7 @@ fn typed_i1_closure_clone_emits_internal_clone_and_guarded_direct_call() {
         "{ir}"
     );
     assert!(
-        wrapper_ir.contains("call i32 @js_typed_i1_arg_guard")
-            && wrapper_ir.contains("call i32 @js_typed_i1_arg_to_raw"),
+        guards_bool_arg(&wrapper_ir) && unboxes_bool_arg(&wrapper_ir),
         "public closure wrapper should guard and unbox boolean JSValue args:\n{wrapper_ir}"
     );
     assert!(
@@ -13485,8 +13625,7 @@ fn typed_i1_numeric_predicate_closure_uses_f64_params_and_guarded_direct_call() 
         "numeric-predicate typed closure clone should use f64 params and i1 return:\n{ir}"
     );
     assert!(
-        wrapper_ir.contains(", 32761")
-            && wrapper_ir.contains("sitofp i32 %")
+        guards_number_arg(&wrapper_ir) && unboxes_number_arg(&wrapper_ir)
             && wrapper_ir.contains(&format!("call i1 @{typed}(i64 %this_closure")),
         "public closure wrapper should guard/unbox numeric JSValue args and call the typed clone:\n{wrapper_ir}"
     );
@@ -13496,8 +13635,8 @@ fn typed_i1_numeric_predicate_closure_uses_f64_params_and_guarded_direct_call() 
     );
     assert!(
         ir.contains(&format!("call i1 @{typed}(i64 "))
-            && ir.contains(", 32761")
-            && ir.contains("sitofp i32 %"),
+            && guards_number_arg_banded(&ir)
+            && unboxes_number_arg(&ir),
         "direct local closure call should guard/unbox numeric args and call the typed clone:\n{ir}"
     );
     assert!(
@@ -13552,18 +13691,18 @@ fn typed_i1_closure_clone_accepts_immutable_boolean_capture() {
     assert!(
         typed_ir.contains("call i64 @js_closure_get_capture_bits(i64 %this_closure, i32 0)")
             && typed_ir.contains("bitcast i64")
-            && typed_ir.contains("call i32 @js_typed_i1_arg_to_raw"),
+            && unboxes_bool_arg(&typed_ir),
         "typed-i1 captured closure should load immutable boolean capture as JSValue bits through the closure handle:\n{typed_ir}"
     );
     assert!(
         wrapper_ir.contains("call i64 @js_closure_get_capture_bits(i64 %this_closure, i32 0)")
-            && wrapper_ir.contains("call i32 @js_typed_i1_arg_guard"),
+            && guards_bool_arg(&wrapper_ir),
         "public typed-i1 wrapper must validate capture bits before entering the raw clone:\n{wrapper_ir}"
     );
     assert!(
         caller_ir.contains("closure_direct.typed_i1")
             && caller_ir.contains("call i64 @js_closure_get_capture_bits")
-            && caller_ir.contains("call i32 @js_typed_i1_arg_guard")
+            && guards_bool_arg(&caller_ir)
             && caller_ir.contains(&format!("call double @{generic_body}(i64 ")),
         "direct typed-i1 calls must guard captures and retain their generic branch:\n{caller_ir}"
     );
@@ -13604,12 +13743,11 @@ fn typed_i1_closure_clone_rejects_dynamic_callee_call_site() {
         "eligible closure should still have an internal typed-i1 clone:\n{ir}"
     );
     assert!(
-        !caller_ir.contains(&format!("call i1 @{typed}("))
-            && !caller_ir.contains("call i32 @js_typed_i1_arg_guard"),
+        !caller_ir.contains(&format!("call i1 @{typed}(")) && !guards_bool_arg(&caller_ir),
         "dynamic closure callee must not direct-call the typed-i1 clone:\n{caller_ir}"
     );
     assert!(
-        wrapper_ir.contains("call i32 @js_typed_i1_arg_guard")
+        guards_bool_arg(&wrapper_ir)
             && wrapper_ir.contains(&format!("call i1 @{typed}("))
             && wrapper_ir.contains(&format!("call double @{generic_body}(")),
         "dynamic runtime dispatch should enter the public closure wrapper, which owns typed guards:\n{wrapper_ir}"
@@ -13648,7 +13786,7 @@ fn typed_string_closure_clone_emits_internal_clone_and_guarded_direct_call() {
         "closure allocation must keep storing the public wrapper pointer:\n{ir}"
     );
     assert!(
-        wrapper_ir.contains("call i32 @js_typed_string_arg_guard")
+        guards_string_arg(&wrapper_ir)
             && wrapper_ir.contains("call i64 @js_typed_string_arg_to_raw")
             && wrapper_ir.contains(&format!("call i64 @{typed}(i64 %this_closure"))
             && wrapper_ir.contains("call double @js_nanbox_string"),
@@ -13660,7 +13798,7 @@ fn typed_string_closure_clone_emits_internal_clone_and_guarded_direct_call() {
     );
     assert!(
         ir.contains("closure_direct.typed_string")
-            && ir.contains("call i32 @js_typed_string_arg_guard")
+            && guards_string_arg(&ir)
             && ir.contains("call i64 @js_typed_string_arg_to_raw")
             && ir.contains(&format!("call i64 @{typed}(i64 "))
             && ir.contains("call double @js_nanbox_string"),
@@ -13699,13 +13837,13 @@ fn typed_string_closure_clone_accepts_immutable_string_capture() {
     );
     assert!(
         wrapper_ir.contains("call i64 @js_closure_get_capture_bits(i64 %this_closure, i32 0)")
-            && wrapper_ir.contains("call i32 @js_typed_string_arg_guard"),
+            && guards_string_arg(&wrapper_ir),
         "public typed-string closure wrapper should guard immutable string captures before entering the raw clone:\n{wrapper_ir}"
     );
     assert!(
         ir.contains("closure_direct.typed_string")
             && ir.contains("call i64 @js_closure_get_capture_bits")
-            && ir.contains("call i32 @js_typed_string_arg_guard")
+            && guards_string_arg(&ir)
             && ir.contains(&format!("call i64 @{typed}(i64 "))
             && ir.contains(&format!("call double @{generic_body}(i64 ")),
         "direct local call should guard string captures, call the raw clone on success, and keep a generic fallback:\n{ir}"
@@ -13776,12 +13914,11 @@ fn typed_string_closure_clone_rejects_dynamic_callee_call_site() {
         "eligible closure should still have an internal typed-string clone:\n{ir}"
     );
     assert!(
-        !caller_ir.contains(&format!("call i64 @{typed}("))
-            && !caller_ir.contains("call i32 @js_typed_string_arg_guard"),
+        !caller_ir.contains(&format!("call i64 @{typed}(")) && !guards_string_arg(&caller_ir),
         "dynamic closure callee must not direct-call the typed-string clone:\n{caller_ir}"
     );
     assert!(
-        wrapper_ir.contains("call i32 @js_typed_string_arg_guard")
+        guards_string_arg(&wrapper_ir)
             && wrapper_ir.contains(&format!("call i64 @{typed}("))
             && wrapper_ir.contains("call double @js_nanbox_string")
             && wrapper_ir.contains(&format!("call double @{generic_body}(")),
