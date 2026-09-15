@@ -231,4 +231,5 @@ pub(crate) fn declare_utilities(module: &mut LlModule) {
     module.declare_function("js_lru_cache_peek", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_lru_cache_set", I64, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_lru_cache_size", DOUBLE, &[I64]);
+    module.declare_function("js_lru_cache_subclass_init", DOUBLE, &[DOUBLE, DOUBLE]);
 }
