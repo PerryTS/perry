@@ -101,6 +101,42 @@ pub(crate) fn framing_for(
     }
 }
 
+/// Bring the shape's headers into line with the framing that was chosen, the
+/// way Node writes them.
+///
+/// Two adjustments, both observable on the wire:
+///
+/// * **`Transfer-Encoding: chunked` in Node's casing.** `Encoder::start`
+///   synthesizes the header itself when the framing is chunked and no header
+///   says so — in lowercase, because that is how the crate spells its own
+///   output. Node writes `Transfer-Encoding`. Adding it here means the encoder
+///   finds one and emits ours.
+/// * **No synthesized `Content-Length` on a response that carries no body.**
+///   Node sends none on 204, 304, 1xx *or a HEAD response* — `_hasBody` is
+///   false for all four, so it never computes one — while Perry's
+///   `ensure_content_length` adds a length to every buffered response before it
+///   knows the status or the method mattered. A length the *handler* set is
+///   left alone, which Node also keeps.
+/// * **No synthesized `Content-Length` on a close-delimited body.** An HTTP/1.0
+///   response that will close the connection ends at EOF in Node, with no
+///   length header at all.
+pub(crate) fn align_headers(
+    headers: &mut Vec<(String, String)>,
+    framing: Framing,
+    auto_content_length: bool,
+) {
+    if framing == Framing::Chunked
+        && !headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("transfer-encoding"))
+    {
+        headers.push(("Transfer-Encoding".to_string(), "chunked".to_string()));
+    }
+    if auto_content_length && matches!(framing, Framing::NoBody | Framing::UntilClose) {
+        headers.retain(|(k, _)| !k.eq_ignore_ascii_case("content-length"));
+    }
+}
+
 /// Serialize the status line and headers, and open the body encoder.
 ///
 /// `headers` is emitted verbatim, in order, with the case the handler used —
@@ -282,6 +318,46 @@ mod tests {
         let encoded = encode_head(204, None, &[], Framing::NoBody).expect("head");
         let text = String::from_utf8(encoded.bytes).expect("utf8");
         assert_eq!(text, "HTTP/1.1 204 No Content\r\n\r\n", "{text:?}");
+    }
+
+    #[test]
+    fn align_headers_drops_a_synthesized_length_where_node_sends_none() {
+        // 204 / 304 / 1xx and a HEAD response all reach `NoBody`.
+        let mut synthesized = vec![("Content-Length".to_string(), "0".to_string())];
+        align_headers(&mut synthesized, Framing::NoBody, true);
+        assert!(synthesized.is_empty(), "{synthesized:?}");
+
+        let mut head = vec![("Content-Length".to_string(), "5".to_string())];
+        align_headers(&mut head, Framing::NoBody, true);
+        assert!(head.is_empty(), "a HEAD response synthesizes none either");
+
+        // A close-delimited HTTP/1.0 body ends at EOF, with no length.
+        let mut eof = vec![("Content-Length".to_string(), "5".to_string())];
+        align_headers(&mut eof, Framing::UntilClose, true);
+        assert!(eof.is_empty(), "{eof:?}");
+
+        let mut explicit = vec![("Content-Length".to_string(), "0".to_string())];
+        align_headers(&mut explicit, Framing::NoBody, false);
+        assert_eq!(explicit.len(), 1, "a handler-set length survives");
+
+        let mut ok = vec![("Content-Length".to_string(), "5".to_string())];
+        align_headers(&mut ok, Framing::Sized(5), true);
+        assert_eq!(ok.len(), 1, "a 200 keeps its length");
+    }
+
+    #[test]
+    fn align_headers_spells_transfer_encoding_the_way_node_does() {
+        let mut headers: Vec<(String, String)> = Vec::new();
+        align_headers(&mut headers, Framing::Chunked, false);
+        assert_eq!(
+            headers,
+            vec![("Transfer-Encoding".to_string(), "chunked".to_string())]
+        );
+        // The encoder must then find ours rather than synthesize a lowercase one.
+        let encoded = encode_head(200, None, &headers, Framing::Chunked).expect("head");
+        let text = String::from_utf8(encoded.bytes).expect("utf8");
+        assert!(text.contains("Transfer-Encoding: chunked\r\n"), "{text:?}");
+        assert!(!text.contains("transfer-encoding:"), "{text:?}");
     }
 
     #[test]

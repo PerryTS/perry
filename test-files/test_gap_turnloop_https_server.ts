@@ -99,12 +99,14 @@ function scrub(raw: string): string {
 async function main() {
   const server = https.createServer({ key: KEY, cert: CERT }, (req, res) => {
     if (req.url === '/big') {
-      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.setHeader('Content-Type', 'text/plain');
       // Larger than one TLS record, so the record layer has to split it.
       res.end('x'.repeat(40000));
       return;
     }
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    // `setHeader` + `end(body)`, not `writeHead`: see the HTTP/1.1 sibling for
+    // why the two differ in Node's framing choice.
+    res.setHeader('Content-Type', 'text/plain');
     res.end('secure:' + req.url);
   });
 

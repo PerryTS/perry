@@ -81,6 +81,13 @@ struct Aux {
     /// `PendingNetEvent::Close` has been pushed. Node emits `'close'` AFTER
     /// `'error'`, so this guards double-emission — never emission itself.
     closed_emitted: bool,
+    /// `socket.end()` has already shut the write side down. Node's
+    /// `allowHalfOpen: false` close on `'end'` must then *close* rather than
+    /// shut down again: a second `shutdown(2)` on a socket whose peer has gone
+    /// returns `ENOTCONN`, which reached JS as a spurious `'error'` — visible
+    /// on the TLS upgrade path, where `end()` always precedes the peer's FIN,
+    /// and latent on a plain socket with the same ordering.
+    write_ended: bool,
     /// The readable EOF has been delivered. A TLS socket can reach it twice —
     /// the peer's `close_notify` and then the TCP FIN — and Node emits
     /// `'end'` exactly once.
@@ -172,9 +179,13 @@ pub(crate) fn command(
         // behind it so the peer sees an orderly shutdown rather than a
         // truncation attack.
         SocketCommand::End(completion) if secure => {
+            with_aux(id, |a| a.write_ended = true);
             crate::turnloop_tls_io::shutdown(id, completion)
         }
-        SocketCommand::End(completion) => tl::shutdown(id, completion).map_err(|e| e.message()),
+        SocketCommand::End(completion) => {
+            with_aux(id, |a| a.write_ended = true);
+            tl::shutdown(id, completion).map_err(|e| e.message())
+        }
         SocketCommand::Destroy => tl::close(id).map_err(|e| e.message()),
         // TCP_NODELAY is settable on a turnloop socket only at creation
         // (`TcpOpts`), which covers the paths P1 moves. An accepted connection
@@ -261,6 +272,12 @@ pub(crate) fn start_reading(id: i64) {
 /// command drain.
 pub(crate) fn finish_read_end(id: i64) {
     if !with_aux(id, |a| std::mem::replace(&mut a.read_ended, false)) {
+        return;
+    }
+    // The application already ended the writable side: there is nothing to
+    // shut down, and asking again once the peer has gone answers `ENOTCONN`.
+    if with_aux(id, |a| a.write_ended) {
+        destroy(id);
         return;
     }
     // Queue the shutdown BEHIND whatever the `'end'` handler just wrote, and

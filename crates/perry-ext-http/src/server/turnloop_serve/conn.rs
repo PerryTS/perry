@@ -35,6 +35,15 @@ struct Building {
     /// The request's own `Connection` header value, needed to compute the
     /// response's default `Connection` / `Keep-Alive` pair.
     connection: Option<String>,
+    /// `Connection: upgrade` with an `Upgrade` header — Node dispatches this
+    /// to `'upgrade'` rather than `'request'`, *if* a listener exists.
+    ///
+    /// The decoder does not raise `Event::Upgrade` for it:
+    /// `turnloop_http::http1`'s `State::Upgrade` is only reachable in
+    /// `Mode::Response` (a client reading a 101), so on the request side an
+    /// upgrade is an ordinary head with no body and the server is the one that
+    /// has to recognize it.
+    upgrade: bool,
 }
 
 /// The request currently being answered.
@@ -292,6 +301,16 @@ fn decode(id: i64) {
                 Some(http1::Event::Trailers(_)) => outcome = Step::Again,
                 Some(http1::Event::End) => {
                     outcome = match c.building.take() {
+                        // Node dispatches an upgrade request to `'upgrade'`
+                        // instead of `'request'` — but only when a listener
+                        // exists; with none it is served as an ordinary
+                        // request, which is #4973's rule.
+                        Some(building)
+                            if building.upgrade && has_upgrade_listener(c.server_handle) =>
+                        {
+                            c.paused = true;
+                            Step::Upgrade(building)
+                        }
                         Some(building) => {
                             c.requests += 1;
                             c.seq += 1;
@@ -302,6 +321,9 @@ fn decode(id: i64) {
                         None => Step::Again,
                     };
                 }
+                // Unreachable on the request side (see `Building::upgrade`),
+                // and handled above when it is; kept so a later decoder that
+                // does raise it cannot fall through to "needs more input".
                 Some(http1::Event::Upgrade) => {
                     outcome = match c.building.take() {
                         Some(building) => Step::Upgrade(building),
@@ -343,6 +365,16 @@ fn decode(id: i64) {
     }
 }
 
+fn has_upgrade_listener(server_handle: i64) -> bool {
+    with_base_server(server_handle, |server| {
+        server
+            .listeners
+            .get("upgrade")
+            .is_some_and(|l| !l.is_empty())
+    })
+    .unwrap_or(false)
+}
+
 fn building_from(head: &http1::Head) -> Building {
     let mut headers_lower = HashMap::new();
     let mut raw_headers = Vec::with_capacity(head.headers.len());
@@ -359,6 +391,12 @@ fn building_from(head: &http1::Head) -> Building {
         raw_headers.push((header.name.clone(), value.to_string()));
     }
     let connection = headers_lower.get("connection").cloned();
+    let upgrade = headers_lower.contains_key("upgrade")
+        && connection.as_deref().is_some_and(|v| {
+            v.to_ascii_lowercase()
+                .split(',')
+                .any(|t| t.trim() == "upgrade")
+        });
     let expects_continue = headers_lower
         .get("expect")
         .is_some_and(|v| v.to_ascii_lowercase().contains("100-continue"));
@@ -371,6 +409,7 @@ fn building_from(head: &http1::Head) -> Building {
         version: head.version,
         expects_continue,
         connection,
+        upgrade,
     }
 }
 
@@ -479,20 +518,26 @@ pub(crate) fn send_response(conn_id: i64, seq: u64, mut shape: HyperResponseShap
         if !owns(c, seq) {
             return None;
         }
-        prepare_headers(c, &mut shape);
+        let keep_alive = prepare_headers(c, &mut shape);
         let (method, version) = {
             let a = c.active.as_ref().expect("an active request");
             (a.method.clone(), a.version)
         };
         let body = wire::shape_body_bytes(&shape.body).unwrap_or(&[]).to_vec();
+        // An HTTP/1.0 response that will close the connection is close-delimited
+        // in Node, with no length header — but only when the length was Perry's
+        // own synthesis; a handler that set `Content-Length` keeps it.
+        let eof_framed = wire::shape_is_eof_framed(&shape)
+            || (version == 0 && !keep_alive && shape.auto_content_length);
         let framing = wire::framing_for(
             &shape.headers,
             shape.status,
             &method,
             version,
             Some(body.len() as u64),
-            wire::shape_is_eof_framed(&shape),
+            eof_framed,
         );
+        wire::align_headers(&mut shape.headers, framing, shape.auto_content_length);
         let head = match wire::encode_head(
             shape.status,
             shape.status_message.as_deref(),
@@ -579,6 +624,7 @@ pub(crate) fn begin_stream(conn_id: i64, seq: u64, mut shape: HyperResponseShape
             None,
             wire::shape_is_eof_framed(&shape),
         );
+        wire::align_headers(&mut shape.headers, framing, shape.auto_content_length);
         let head = match wire::encode_head(
             shape.status,
             shape.status_message.as_deref(),

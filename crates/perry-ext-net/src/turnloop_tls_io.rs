@@ -66,6 +66,11 @@ struct Layer {
     /// shutdown runs once `close_notify` has been encrypted.
     pending_shutdown: Option<u64>,
     secure_emitted: bool,
+    /// The application asked to close, or the peer already did. A rustls
+    /// failure *after* that is teardown noise — the records that follow a
+    /// `close_notify` on a socket nobody is reading any more — and Node emits
+    /// no `'error'` for it. Before it, a failure is the real thing.
+    closing: bool,
 }
 
 fn layers() -> &'static Mutex<HashMap<i64, Layer>> {
@@ -154,6 +159,7 @@ pub(crate) fn begin_client_upgrade(
             pending: VecDeque::new(),
             pending_shutdown: None,
             secure_emitted: false,
+            closing: false,
         },
     );
     // Produce and send the ClientHello.
@@ -186,6 +192,7 @@ pub fn install_server_session(
             pending: VecDeque::new(),
             pending_shutdown: None,
             secure_emitted: false,
+            closing: false,
         },
     );
     Ok(())
@@ -249,6 +256,7 @@ pub fn shutdown(id: i64, user: u64) -> Result<(), String> {
     let known = with_layer(id, |l| {
         l.session.close_notify();
         l.pending_shutdown = Some(user);
+        l.closing = true;
     })
     .is_some();
     if !known {
@@ -293,6 +301,7 @@ fn drive(id: i64) -> Driven {
     let mut failure: Option<String> = None;
     let mut ciphertext = Vec::new();
     let mut shutdown_user: Option<u64> = None;
+    let mut closing = false;
 
     let present = with_layer(id, |l| {
         let progress = l.session.pump();
@@ -313,6 +322,10 @@ fn drive(id: i64) -> Driven {
         if l.session.close_sent() {
             shutdown_user = l.pending_shutdown.take();
         }
+        if out.peer_closed {
+            l.closing = true;
+        }
+        closing = l.closing;
     })
     .is_some();
     if !present {
@@ -324,7 +337,7 @@ fn drive(id: i64) -> Driven {
         // Application callbacks are driven by the ciphertext acknowledgement
         // accounting in `wrote`, not by this submission's own completion.
         if let Err(err) = tl::write(id, &ciphertext, 0) {
-            fail(id, err.message());
+            fail(id, err.message(), closing);
             return out;
         }
     }
@@ -332,12 +345,12 @@ fn drive(id: i64) -> Driven {
         // turnloop orders a handle's writes ahead of its shutdown, so the
         // queued close_notify is on the wire before the FIN.
         if let Err(err) = tl::shutdown(id, user) {
-            fail(id, err.message());
+            fail(id, err.message(), closing);
             return out;
         }
     }
     if let Some(message) = failure {
-        fail(id, message);
+        fail(id, message, closing);
         return out;
     }
     if handshake_done {
@@ -378,7 +391,14 @@ fn finish_handshake(id: i64) {
     push_event(PendingNetEvent::SecureConnect(id));
 }
 
-fn fail(id: i64, message: String) {
+/// Report a TLS failure and tear the socket down.
+///
+/// `closing` suppresses the JS `'error'`: once the application has asked to
+/// close — or the peer has sent `close_notify` — a rustls failure is teardown
+/// noise on a socket nobody is reading, and Node emits nothing for it. The
+/// pending upgrade promise is still settled, because a caller awaiting it must
+/// not be left hanging by a close that raced the handshake.
+fn fail(id: i64, message: String, closing: bool) {
     let token = {
         let mut map = layers().lock().unwrap_or_else(|e| e.into_inner());
         map.get_mut(&id).and_then(|l| l.token.take())
@@ -386,6 +406,8 @@ fn fail(id: i64, message: String) {
     if let Some(token) = token {
         token.reject_string(&message);
     }
-    push_event(PendingNetEvent::Error(id, message));
+    if !closing {
+        push_event(PendingNetEvent::Error(id, message));
+    }
     crate::turnloop_io::destroy(id);
 }

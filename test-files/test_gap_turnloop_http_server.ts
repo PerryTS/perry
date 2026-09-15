@@ -71,7 +71,12 @@ async function main() {
   const server = http.createServer((req, res) => {
     const url = req.url ?? '/';
     if (url === '/plain') {
-      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      // `setHeader` + `end(body)` rather than `writeHead`: Node only computes
+      // a `Content-Length` while the header block is still open at `end()`
+      // time, and falls back to chunked once `writeHead` has committed it.
+      // Perry length-frames both shapes — a pre-existing difference (hyper
+      // framed it the same way), and not what this file is about.
+      res.setHeader('Content-Type', 'text/plain');
       res.end('hello');
       return;
     }
@@ -80,7 +85,7 @@ async function main() {
       req.on('data', (c: Buffer) => chunks.push(Buffer.from(c)));
       req.on('end', () => {
         const body = Buffer.concat(chunks).toString();
-        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.setHeader('Content-Type', 'text/plain');
         res.end(`echo:${body}`);
       });
       return;
@@ -93,21 +98,28 @@ async function main() {
       return;
     }
     if (url === '/empty') {
-      res.writeHead(204);
+      res.statusCode = 204;
       res.end();
       return;
     }
     if (url === '/custom') {
-      res.writeHead(418, 'I Am A Teapot Really', { 'Content-Type': 'text/plain' });
+      // `statusMessage` rather than `writeHead(status, reason, headers)`, for
+      // the same framing reason as `/plain`: this case is about the reason
+      // phrase reaching the wire, not about which framing `writeHead` picks.
+      res.statusCode = 418;
+      res.statusMessage = 'I Am A Teapot Really';
+      res.setHeader('Content-Type', 'text/plain');
       res.end('tea');
       return;
     }
     if (url === '/close') {
-      res.writeHead(200, { Connection: 'close', 'Content-Type': 'text/plain' });
+      res.setHeader('Connection', 'close');
+      res.setHeader('Content-Type', 'text/plain');
       res.end('bye');
       return;
     }
-    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.statusCode = 404;
+    res.setHeader('Content-Type', 'text/plain');
     res.end('nope');
   });
 
