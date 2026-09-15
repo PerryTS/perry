@@ -505,10 +505,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
             let check_gc_idx = ctx.new_block("plen.check_gc");
             let fast_idx = ctx.new_block("plen.fast");
+            let typed_array_idx = ctx.new_block("plen.typed_array");
             let slow_idx = ctx.new_block("plen.slow");
             let merge_idx = ctx.new_block("plen.merge");
             let check_gc_label = ctx.block_label(check_gc_idx);
             let fast_label = ctx.block_label(fast_idx);
+            let typed_array_label = ctx.block_label(typed_array_idx);
             let slow_label = ctx.block_label(slow_idx);
             let merge_label = ctx.block_label(merge_idx);
             ctx.block()
@@ -534,7 +536,25 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let fwd_bits = ctx.block().and(I8, &gc_flags, "128"); // GC_FLAG_FORWARDED = 0x80
             let not_forwarded = ctx.block().icmp_eq(I8, &fwd_bits, "0");
             let take_fast = ctx.block().and(I1, &has_length, &not_forwarded);
-            ctx.block().cond_br(&take_fast, &fast_label, &slow_label);
+            ctx.block()
+                .cond_br(&take_fast, &fast_label, &typed_array_label);
+
+            // An owning `TypedArrayHeader` also stores `length: u32` at payload
+            // offset 0. The slow path used to resolve it by NAME — heap-copying
+            // "length" and parsing it as a numeric index on every read. The
+            // header is authoritative while no live view exists
+            // (`PERRY_TA_VIEW_GUARD`) and no typed array has an own named
+            // property that could shadow the prototype getter.
+            ctx.current_block = typed_array_idx;
+            let is_typed_array = ctx.block().icmp_eq(I8, &gc_type, "11"); // GC_TYPE_TYPED_ARRAY
+            let ta_header_ok = ctx.block().and(I1, &is_typed_array, &not_forwarded);
+            let view_guard = ctx.block().load(I64, "@PERRY_TA_VIEW_GUARD");
+            let no_views = ctx.block().icmp_eq(I64, &view_guard, "0");
+            let own_props = ctx.block().load(I8, "@PERRY_TA_OWN_PROPS_PRESENT");
+            let no_own_props = ctx.block().icmp_eq(I8, &own_props, "0");
+            let ta_ok = ctx.block().and(I1, &ta_header_ok, &no_views);
+            let ta_ok = ctx.block().and(I1, &ta_ok, &no_own_props);
+            ctx.block().cond_br(&ta_ok, &fast_label, &slow_label);
 
             ctx.current_block = fast_idx;
             let fast_len_i32 = ctx.block().safe_load_i32_from_ptr(&recv_handle);

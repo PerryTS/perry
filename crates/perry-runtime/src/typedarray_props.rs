@@ -264,6 +264,14 @@ fn barrier_typed_array_own_props(owner: usize, props: &mut [TypedArrayOwnProp]) 
     }
 }
 
+/// Sticky: `1` once any `TypedArrayHeader` receiver has carried an own ordinary
+/// (named) property. Generated `.length` reads load `length` straight from a
+/// typed array's header only while this reads `0`, because an own `length`
+/// data or accessor property shadows the prototype getter.
+#[no_mangle]
+pub static PERRY_TA_OWN_PROPS_PRESENT: std::sync::atomic::AtomicU8 =
+    std::sync::atomic::AtomicU8::new(0);
+
 fn upsert_typed_array_own_prop(owner: usize, key: String, value: f64, is_data: bool) {
     // A constructor-created Uint8Array uses BufferHeader rather than
     // TypedArrayHeader. Store its ordinary properties in the existing GC-traced
@@ -276,6 +284,9 @@ fn upsert_typed_array_own_prop(owner: usize, key: String, value: f64, is_data: b
         crate::buffer::buffer_define_own_data_prop(owner, &key, value);
         return;
     }
+    // Before the entry is visible: a reader that sees no flag must also see no
+    // property.
+    PERRY_TA_OWN_PROPS_PRESENT.store(1, std::sync::atomic::Ordering::Relaxed);
     TYPED_ARRAY_OWN_PROPS.with(|m| {
         let mut map = m.borrow_mut();
         let props = map.entry(owner).or_default();
