@@ -1844,7 +1844,7 @@ mod keys;
 use keys::*;
 
 #[path = "node_stream_dispatch.rs"]
-mod dispatch;
+pub(crate) mod dispatch;
 pub(crate) use dispatch::*;
 
 #[path = "node_stream_iter_helpers.rs"]

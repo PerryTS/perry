@@ -93,6 +93,7 @@ pub mod color_parse;
 pub mod date;
 #[cfg(feature = "mod-dgram")]
 pub mod dgram;
+pub mod lru_subclass;
 #[cfg(feature = "mod-dgram")]
 pub mod dgram_reactor;
 pub mod disposable;

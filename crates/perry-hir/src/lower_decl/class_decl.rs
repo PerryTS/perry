@@ -201,6 +201,11 @@ pub fn lower_class_decl(
                 }
                 "AsyncResource" => Some(("async_hooks".to_string(), "AsyncResource".to_string())),
                 "WebSocketServer" => Some(("ws".to_string(), "WebSocketServer".to_string())),
+                // #10293: lru-cache's LRUCache is a compile-time lowering with
+                // no runtime value; recognising it here routes `extends` to the
+                // subclass-init path instead of the dynamic parent registration
+                // that throws "Class extends value is not a constructor".
+                "LRUCache" => Some(("lru-cache".to_string(), "LRUCache".to_string())),
                 // Issue #562: user classes extending the Web Streams
                 // base classes get a runtime-side subclass-init shim
                 // wired through `Expr::SuperCall` (codegen). The
@@ -1278,6 +1283,11 @@ pub fn lower_class_from_ast(
                 }
                 "AsyncResource" => Some(("async_hooks".to_string(), "AsyncResource".to_string())),
                 "WebSocketServer" => Some(("ws".to_string(), "WebSocketServer".to_string())),
+                // #10293: lru-cache's LRUCache is a compile-time lowering with
+                // no runtime value; recognising it here routes `extends` to the
+                // subclass-init path instead of the dynamic parent registration
+                // that throws "Class extends value is not a constructor".
+                "LRUCache" => Some(("lru-cache".to_string(), "LRUCache".to_string())),
                 // Issue #562: keep in lockstep with the parallel arm in
                 // `lower_class_decl` above.
                 "ReadableStream" => {
