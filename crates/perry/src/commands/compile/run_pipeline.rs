@@ -4582,8 +4582,25 @@ pub fn run_with_parse_cache(
                         .map(|k| exported_var_names.contains(k))
                         .unwrap_or(false)
                 {
-                    imported_vars.insert(exported_name.clone());
-                    if local_name != exported_name {
+                    // #10286: key this set by the LOCAL name only, exactly as
+                    // `import_function_prefixes` above already does. Codegen
+                    // asks `ctx.imported_vars.contains(name)` with the name an
+                    // `ExternFuncRef` carries, and in the aliased case that is
+                    // the LOCAL name. Inserting the ORIGIN module's
+                    // `exported_name` too claims an identifier this module may
+                    // bind to something else entirely: minifiers reuse short
+                    // aliases across import statements, so
+                    // `import { t as e } from "./a"; import { extend as t } from "./b"`
+                    // put "t" in this set on behalf of module a, which made the
+                    // call `t(...)` compile as a var read of a not-yet-published
+                    // slot instead of a call to b's function — undefined during
+                    // module init, correct afterwards. Local names cannot
+                    // collide with each other inside one module (each binding
+                    // needs a distinct identifier), but exported names from
+                    // different source modules can and do.
+                    if local_name == exported_name {
+                        imported_vars.insert(exported_name.clone());
+                    } else {
                         imported_vars.insert(local_name.clone());
                     }
 
