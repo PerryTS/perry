@@ -1332,6 +1332,10 @@ mod tests {
         }
     }
 
+    // Only `async_members_reject_with_compile_error` calls this, and that test
+    // is `cfg(not(wasm-host))`: without the same gate the helper is dead code
+    // in a wasm-host test build.
+    #[cfg(not(feature = "wasm-host"))]
     fn assert_rejected_with_compile_error(promise_value: f64, api_fragment: &str) {
         let ptr = value_heap_ptr(promise_value).expect("promise pointer");
         let promise = ptr as *const crate::promise::Promise;
