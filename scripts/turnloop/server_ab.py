@@ -678,6 +678,10 @@ def measure_idle(arm, binary, count, hold, logdir):
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
         )
         opened = json.loads(client.stdout.readline() or "{}")
+        # RSS with the connections open, BEFORE the hold: the per-connection
+        # cost exists even if the server later reaps the sockets, and a
+        # zero-survivor run must still report a number rather than a blank.
+        rss_open = rss_kb(server.pid)
         before = proc_sample(server.pid)
         time.sleep(hold)
         after = proc_sample(server.pid)
@@ -690,8 +694,10 @@ def measure_idle(arm, binary, count, hold, logdir):
             "requested": count, "opened": opened.get("open"), "open_after_hold": open_now,
             "failed": opened.get("failed"), "open_secs": opened.get("secs"),
             "client_nofile": opened.get("nofile"),
-            "rss_before_kb": rss_before, "rss_after_kb": rss_after,
-            "bytes_per_conn": ((rss_after - rss_before) * 1024 / open_now)
+            "rss_before_kb": rss_before, "rss_open_kb": rss_open, "rss_after_kb": rss_after,
+            "bytes_per_conn": ((rss_open - rss_before) * 1024 / (opened.get("open") or 0))
+            if (opened.get("open") and rss_before is not None and rss_open is not None) else None,
+            "bytes_per_conn_after_hold": ((rss_after - rss_before) * 1024 / open_now)
             if (open_now and rss_before is not None and rss_after is not None) else None,
             "idle_hold_s": hold,
         })
@@ -865,8 +871,11 @@ LOAD_METRICS = [
     ("ivcsw", "involuntary ctx switches, lifetime"), ("binary_bytes", "binary size (bytes)"),
 ]
 IDLE_METRICS = [
-    ("open_after_hold", "connections open after hold"), ("rss_before_kb", "RSS before (KiB)"),
-    ("rss_after_kb", "RSS with idle conns (KiB)"), ("bytes_per_conn", "bytes per connection"),
+    ("opened", "connections opened"), ("open_after_hold", "connections open after hold"),
+    ("open_secs", "time to open them (s)"), ("rss_before_kb", "RSS before (KiB)"),
+    ("rss_open_kb", "RSS with idle conns (KiB)"), ("rss_after_kb", "RSS after the hold (KiB)"),
+    ("bytes_per_conn", "bytes per connection"),
+    ("bytes_per_conn_after_hold", "bytes per surviving connection"),
     ("idle_cpu_ms", "CPU during hold (ms)"), ("idle_vcsw", "voluntary ctx switches during hold"),
     ("rss_peak_kb", "RSS peak (KiB)"), ("threads", "threads"),
 ]

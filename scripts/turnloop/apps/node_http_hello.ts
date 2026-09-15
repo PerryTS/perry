@@ -4,8 +4,13 @@
 // this node:http app (served by perry-ext-http).
 //
 // - PORT selects the port (default 18080).
-// - keepAliveTimeout = 0 keeps idle keep-alive sockets open for the
-//   idle-connection capacity test (Node's default reaps them after 5 s).
+// - keepAliveTimeout is set LARGE, not 0, so idle keep-alive sockets survive the
+//   capacity test. Node reads 0 as "never time out"; Perry's node:http reads it
+//   as "no keep-alive" and answers `Connection: close`, which closed every
+//   connection the moment it was opened and made the idle test measure nothing.
+//   Measured 2026-09-15: with the setter dropped or set to 600000 the response
+//   carries `Connection: keep-alive` and the socket is still reusable after 4 s;
+//   with `= 0` it carries `Connection: close`.
 // - SIGTERM exits through process.exit, so the runtime's exit funnel prints the
 //   PERRY_LOOP_STATS lines the harness collects.
 import http from "node:http";
@@ -20,7 +25,7 @@ const server = http.createServer((_req, res) => {
   });
   res.end(body);
 });
-server.keepAliveTimeout = 0;
+server.keepAliveTimeout = 600_000;
 
 process.on("SIGTERM", () => process.exit(0));
 
