@@ -331,6 +331,9 @@ dir, `CARGO_BUILD_JOBS=6`.
 | `cargo fmt --all -- --check`, `scripts/check_file_size.sh` | PASS |
 | `python3 scripts/gc_runtime_root_holders.py` | PASS (the new statics are integer atomics, so no new holder verdict is owed) |
 | `python3 scripts/turnloop/server_ab.py all --dry-run --work /tmp/turnloop-ab-dry` | PASS (plan printed; the summary/markdown path is driven over generated samples and self-checked) |
+| `RUST_TEST_THREADS=1 cargo test --locked -p perry-runtime --lib -- --test-threads=1` (whole suite) | PASS — 3970 passed, 0 failed, 4 ignored, in 175.85 s |
+| `python3 scripts/turnloop_p0_loop_stats.py --perry /tmp/tlab/target-turnloop/perry` | PASS, 7/7 (the P0 probes are unaffected by the new line) |
+| `server_ab.py build --work /tmp/tlab --skip-cargo` then `run … --load-tool ab` | PASS — both arms verified, arms-differ gate satisfied, 12/12 samples valid |
 
 Which test covers which counter:
 
