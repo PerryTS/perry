@@ -122,6 +122,59 @@ pub unsafe fn js_promise_new_for_native_resolution() -> *mut perry_runtime::Prom
 /// returning undefined.
 pub static EXT_BLOCKING_TASKS_INFLIGHT: AtomicUsize = AtomicUsize::new(0);
 
+/// Owns exactly one `EXT_BLOCKING_TASKS_INFLIGHT` increment, released on drop.
+///
+/// Create it BEFORE spawning and move it into the task: the decrement then runs
+/// on completion, on error, when the task panics (tokio drops the future while
+/// unwinding) and when the task is dropped before its first poll (runtime
+/// shutdown). The hand-written `fetch_add` / `fetch_sub` pairs it replaces
+/// leaked an increment on the last two paths, which pinned the event loop alive
+/// forever. Drop also notifies the main thread so the loop re-evaluates its
+/// keep-alive predicate.
+pub(crate) struct InflightGuard(());
+
+impl InflightGuard {
+    pub(crate) fn new() -> Self {
+        EXT_BLOCKING_TASKS_INFLIGHT.fetch_add(1, Ordering::AcqRel);
+        Self(())
+    }
+}
+
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        let previous = EXT_BLOCKING_TASKS_INFLIGHT.fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(previous > 0, "EXT_BLOCKING_TASKS_INFLIGHT underflow");
+        perry_runtime::event_pump::js_notify_main_thread();
+    }
+}
+
+/// Spawn onto the shared runtime, then tell the primary agent that tokio-owned
+/// native work now exists (turnloop P0-transitional). A primary agent parked in
+/// a turnloop turn re-selects its wait so the tokio tick runs the new task;
+/// otherwise the hint is one atomic load. Needed for a spawn from a thread that
+/// is not the primary agent's (a `worker_threads` Worker, a blocking-pool
+/// closure), which tokio's own unpark cannot deliver to a turnloop wait.
+pub(crate) fn spawn_native<F>(future: F)
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    RUNTIME.spawn(future);
+    perry_runtime::event_pump::js_native_work_submitted();
+}
+
+/// turnloop P0-transitional predicate registered with
+/// `js_register_native_inflight`: nonzero while tokio owns native work that only
+/// advances inside its own tick. O(1): the in-flight counter above plus tokio's
+/// alive-task count (an atomic read). Every task on the shared current-thread
+/// runtime counts — fetch/net/ws/db connections, server accept loops — so the
+/// primary agent drives the legacy tick exactly while any of it exists and
+/// parks in its turnloop loop otherwise. P8 deletes this with tokio.
+#[cfg(not(feature = "tokio-wait-driver"))]
+extern "C" fn native_work_inflight() -> i32 {
+    let tasks = Lazy::get(&RUNTIME).is_some_and(|rt| rt.metrics().num_alive_tasks() != 0);
+    i32::from(tasks || EXT_BLOCKING_TASKS_INFLIGHT.load(Ordering::Acquire) != 0)
+}
+
 /// Global tokio runtime for all async stdlib operations.
 ///
 /// Unified single-thread async model: a CURRENT-THREAD runtime, driven one
@@ -154,6 +207,12 @@ static PENDING_RESOLUTIONS: Lazy<Mutex<Vec<PendingResolution>>> =
 /// that runs on the main thread to create JSValues safely
 static PENDING_DEFERRED: Lazy<Mutex<Vec<DeferredResolution>>> =
     Lazy::new(|| Mutex::new(Vec::new()));
+
+/// turnloop P0: the two queues' lengths, republished under their locks after
+/// every push and drain, so `js_stdlib_has_active_handles` — asked on every
+/// event-loop turn — reads two atomics instead of taking both queue locks.
+static PENDING_RESOLUTIONS_LEN: AtomicUsize = AtomicUsize::new(0);
+static PENDING_DEFERRED_LEN: AtomicUsize = AtomicUsize::new(0);
 
 thread_local! {
     static GC_SCANNER_REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -261,14 +320,13 @@ where
     F: Future<Output = ()> + Send + 'static,
 {
     ensure_pump_registered();
-    EXT_BLOCKING_TASKS_INFLIGHT.fetch_add(1, Ordering::AcqRel);
-    RUNTIME.spawn(async move {
+    let inflight = InflightGuard::new();
+    spawn_native(async move {
         future.await;
-        EXT_BLOCKING_TASKS_INFLIGHT.fetch_sub(1, Ordering::AcqRel);
-        // Notify in case the future resolved without going through
-        // `queue_promise_resolution` — flip the active-handle gate
-        // so the loop re-evaluates.
-        perry_runtime::event_pump::js_notify_main_thread();
+        // Dropping the guard notifies in case the future resolved without
+        // going through `queue_promise_resolution` — flip the active-handle
+        // gate so the loop re-evaluates.
+        drop(inflight);
     });
 }
 
@@ -412,6 +470,7 @@ pub fn queue_promise_resolution(promise_ptr: usize, is_success: bool, result_bit
             is_success,
             result_bits,
         });
+        PENDING_RESOLUTIONS_LEN.store(pending.len(), Ordering::Release);
     }
     // Issue #84: wake the main-thread event loop / await busy-wait the
     // instant we enqueue, instead of waiting up to ~10 ms for the next
@@ -440,6 +499,7 @@ where
             is_success,
             converter: Box::new(converter),
         });
+        PENDING_DEFERRED_LEN.store(pending.len(), Ordering::Release);
     }
     // Issue #84: same as queue_promise_resolution — wake the main thread
     // immediately so the awaiter doesn't pay the old hard-sleep latency.
@@ -478,6 +538,10 @@ pub fn ensure_pump_registered() {
             Some(stdlib_wait_wake),
         );
         Lazy::force(&RUNTIME);
+        // turnloop P0: the primary agent parks in its own loop and drives the
+        // tick above only while tokio owns native work (P0-transitional).
+        #[cfg(not(feature = "tokio-wait-driver"))]
+        perry_runtime::event_pump::js_register_native_inflight(Some(native_work_inflight));
         unsafe {
             js_register_stdlib_pump(js_stdlib_process_pending);
             js_register_stdlib_has_active(js_stdlib_has_active_handles);
@@ -507,6 +571,7 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
         let mut pending = PENDING_RESOLUTIONS.lock().unwrap();
         let n = pending.len();
         count += n as i32;
+        PENDING_RESOLUTIONS_LEN.store(0, Ordering::Release);
         pending.drain(..).collect()
     };
     for resolution in simple_resolutions {
@@ -543,6 +608,7 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
         let mut pending = PENDING_DEFERRED.lock().unwrap();
         let n = pending.len();
         count += n as i32;
+        PENDING_DEFERRED_LEN.store(0, Ordering::Release);
         pending.drain(..).collect()
     };
 
@@ -648,18 +714,11 @@ pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
     if EXT_BLOCKING_TASKS_INFLIGHT.load(Ordering::Acquire) != 0 {
         return 1;
     }
-    // Check for pending stdlib resolutions
+    // Check for pending stdlib resolutions (turnloop P0: O(1) length mirrors).
+    if PENDING_RESOLUTIONS_LEN.load(Ordering::Acquire) != 0
+        || PENDING_DEFERRED_LEN.load(Ordering::Acquire) != 0
     {
-        let pending = PENDING_RESOLUTIONS.lock().unwrap();
-        if !pending.is_empty() {
-            return 1;
-        }
-    }
-    {
-        let pending = PENDING_DEFERRED.lock().unwrap();
-        if !pending.is_empty() {
-            return 1;
-        }
+        return 1;
     }
     // Check for active WebSocket servers/connections
     #[cfg(feature = "websocket")]
@@ -762,8 +821,8 @@ where
     // `spawn()` above — bump INFLIGHT for the lifetime of the
     // future so the event loop's `js_stdlib_has_active_handles`
     // check stays truthy until the resolution is queued.
-    EXT_BLOCKING_TASKS_INFLIGHT.fetch_add(1, Ordering::AcqRel);
-    RUNTIME.spawn(async move {
+    let inflight = InflightGuard::new();
+    spawn_native(async move {
         match future.await {
             Ok(result_bits) => {
                 queue_promise_resolution(ptr, true, result_bits);
@@ -780,8 +839,7 @@ where
                 });
             }
         }
-        EXT_BLOCKING_TASKS_INFLIGHT.fetch_sub(1, Ordering::AcqRel);
-        perry_runtime::event_pump::js_notify_main_thread();
+        drop(inflight);
     });
 }
 
@@ -817,8 +875,8 @@ where
 
     // Issue #921: same race-window mitigation as `spawn_for_promise`
     // above — bump INFLIGHT for the lifetime of the future.
-    EXT_BLOCKING_TASKS_INFLIGHT.fetch_add(1, Ordering::AcqRel);
-    RUNTIME.spawn(async move {
+    let inflight = InflightGuard::new();
+    spawn_native(async move {
         match future.await {
             Ok(data) => {
                 // Queue deferred resolution with the converter
@@ -836,8 +894,7 @@ where
                 });
             }
         }
-        EXT_BLOCKING_TASKS_INFLIGHT.fetch_sub(1, Ordering::AcqRel);
-        perry_runtime::event_pump::js_notify_main_thread();
+        drop(inflight);
     });
 }
 
@@ -868,14 +925,13 @@ pub unsafe fn spawn_for_promise_deferred_with_error<T, E, F, C, R>(
     let ptr = promise_ptr as usize;
     pin_promise_for_native_resolution(ptr);
 
-    EXT_BLOCKING_TASKS_INFLIGHT.fetch_add(1, Ordering::AcqRel);
-    RUNTIME.spawn(async move {
+    let inflight = InflightGuard::new();
+    spawn_native(async move {
         match future.await {
             Ok(data) => queue_deferred_resolution(ptr, true, move || converter(data)),
             Err(error) => queue_deferred_resolution(ptr, false, move || reject_converter(error)),
         }
-        EXT_BLOCKING_TASKS_INFLIGHT.fetch_sub(1, Ordering::AcqRel);
-        perry_runtime::event_pump::js_notify_main_thread();
+        drop(inflight);
     });
 }
 
@@ -883,9 +939,69 @@ pub unsafe fn spawn_for_promise_deferred_with_error<T, E, F, C, R>(
 mod tests {
     use super::*;
 
+    /// turnloop P0: one in-flight reference per spawned native task, released
+    /// on success, error, panic and cancellation before first poll. Uses a
+    /// private runtime so the shared one's other tasks cannot interfere; each
+    /// step proves its task ran (or was cancelled) before checking the count.
+    #[test]
+    fn inflight_guard_balances_success_error_panic_and_cancel() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let count = || EXT_BLOCKING_TASKS_INFLIGHT.load(Ordering::Acquire);
+        let baseline = count();
+        for fail in [false, true] {
+            let guard = InflightGuard::new();
+            assert_eq!(count(), baseline + 1);
+            let task = runtime.spawn(async move {
+                let _guard = guard;
+                if fail {
+                    Err(())
+                } else {
+                    Ok(())
+                }
+            });
+            assert_eq!(runtime.block_on(task).unwrap().is_err(), fail);
+            assert_eq!(count(), baseline, "fail={fail} leaked a reference");
+        }
+        let guard = InflightGuard::new();
+        let panicked = runtime.spawn(async move {
+            let _guard = guard;
+            panic!("native task panicked");
+        });
+        assert!(runtime.block_on(panicked).unwrap_err().is_panic());
+        assert_eq!(count(), baseline, "a panicking task leaked a reference");
+        let guard = InflightGuard::new();
+        let cancelled = runtime.spawn(async move {
+            let _guard = guard;
+            std::future::pending::<()>().await;
+        });
+        assert_eq!(count(), baseline + 1);
+        cancelled.abort();
+        assert!(runtime.block_on(cancelled).unwrap_err().is_cancelled());
+        assert_eq!(count(), baseline, "a cancelled task leaked a reference");
+        let guard = InflightGuard::new();
+        let never_polled = runtime.spawn(async move {
+            let _guard = guard;
+        });
+        drop(runtime);
+        drop(never_polled);
+        assert_eq!(
+            count(),
+            baseline,
+            "a task dropped unpolled leaked a reference"
+        );
+    }
+
     fn clear_pending() {
-        PENDING_RESOLUTIONS.lock().unwrap().clear();
-        PENDING_DEFERRED.lock().unwrap().clear();
+        let mut resolutions = PENDING_RESOLUTIONS.lock().unwrap();
+        resolutions.clear();
+        PENDING_RESOLUTIONS_LEN.store(0, Ordering::Release);
+        drop(resolutions);
+        let mut deferred = PENDING_DEFERRED.lock().unwrap();
+        deferred.clear();
+        PENDING_DEFERRED_LEN.store(0, Ordering::Release);
     }
 
     #[test]

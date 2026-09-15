@@ -73,7 +73,7 @@ pub unsafe extern "C" fn js_http_server_create(port: f64) -> Handle {
 
     // Spawn the server task
     let request_tx_clone = request_tx.clone();
-    RUNTIME.spawn(async move {
+    crate::common::async_bridge::spawn_native(async move {
         let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
         let listener = match TcpListener::bind(addr).await {

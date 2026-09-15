@@ -56,6 +56,7 @@ pub(crate) fn test_seed_timer_scanner_roots(
         async_id: 0,
         trigger_async_id: 0,
         cleared: false,
+        refed: true,
     });
     INTERVAL_TIMERS.lock().unwrap().push(IntervalTimer {
         // #6185: test scaffolding runs on the primary agent.
@@ -69,7 +70,18 @@ pub(crate) fn test_seed_timer_scanner_roots(
         async_id: 0,
         trigger_async_id: 0,
         cleared: false,
+        refed: true,
     });
+    resync_timer_liveness_for_test();
+}
+
+/// Seeds below push/clear the queues directly; re-derive the O(1) keep-alive
+/// counts so the debug consistency check sees a paired state.
+#[cfg(test)]
+fn resync_timer_liveness_for_test() {
+    TIMER_QUEUE.resync_for_test();
+    CALLBACK_TIMERS.resync_for_test();
+    INTERVAL_TIMERS.resync_for_test();
 }
 
 #[cfg(test)]
@@ -87,6 +99,8 @@ pub(crate) fn test_seed_many_timeout_roots(values: &[f64]) {
             has_ref: true,
         });
     }
+    drop(q);
+    resync_timer_liveness_for_test();
 }
 
 #[cfg(test)]
@@ -94,6 +108,7 @@ pub(crate) fn test_clear_all_timer_scanner_roots() {
     TIMER_QUEUE.lock().unwrap().clear();
     CALLBACK_TIMERS.lock().unwrap().clear();
     INTERVAL_TIMERS.lock().unwrap().clear();
+    resync_timer_liveness_for_test();
 }
 
 #[cfg(test)]
@@ -160,6 +175,7 @@ pub(crate) fn test_clear_timer_scanner_roots(promise_before: usize, promise_afte
         .lock()
         .unwrap()
         .retain(|timer| timer.id != TEST_INTERVAL_TIMER_ID);
+    resync_timer_liveness_for_test();
 }
 
 #[cfg(test)]
@@ -184,6 +200,7 @@ mod expired_batch_order_tests {
             async_id: 0,
             trigger_async_id: 0,
             cleared: false,
+            refed: true,
         }
     }
 

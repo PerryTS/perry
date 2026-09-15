@@ -398,7 +398,7 @@ mod ext_pump {
 pub(crate) mod stdlib_pump {
     use std::cell::Cell;
     use std::ptr::null_mut;
-    use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
+    use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicUsize, Ordering};
     use std::sync::Mutex;
 
     static STDLIB_PUMP_FN: AtomicPtr<()> = AtomicPtr::new(null_mut());
@@ -577,6 +577,10 @@ pub(crate) mod stdlib_pump {
     static AUX_TICK_BEGIN_HOOKS: Mutex<Vec<extern "C" fn()>> = Mutex::new(Vec::new());
     static AUX_PUMPS: Mutex<Vec<extern "C" fn() -> i32>> = Mutex::new(Vec::new());
     static AUX_HAS_ACTIVE: Mutex<Vec<extern "C" fn() -> i32>> = Mutex::new(Vec::new());
+    /// turnloop P0: `AUX_HAS_ACTIVE.len()`. The registry only grows, so a zero
+    /// here is an exact "no extension contributes"; the per-turn keep-alive
+    /// check then skips the lock and the callback-list clone entirely.
+    static AUX_HAS_ACTIVE_LEN: AtomicUsize = AtomicUsize::new(0);
 
     /// Register an auxiliary pump callback (a `perry-ext-*` crate's
     /// `*_process_pending`). Idempotent — registering the same function
@@ -641,6 +645,7 @@ pub(crate) mod stdlib_pump {
         if let Ok(mut fns) = AUX_HAS_ACTIVE.lock() {
             if !fns.contains(&f) {
                 fns.push(f);
+                AUX_HAS_ACTIVE_LEN.store(fns.len(), Ordering::Release);
             }
         }
     }
@@ -660,6 +665,9 @@ pub(crate) mod stdlib_pump {
 
     /// True if any registered auxiliary has-active callback reports live work.
     fn aux_has_active() -> bool {
+        if AUX_HAS_ACTIVE_LEN.load(Ordering::Acquire) == 0 {
+            return false;
+        }
         let fns: Vec<extern "C" fn() -> i32> = match AUX_HAS_ACTIVE.lock() {
             Ok(g) => g.clone(),
             Err(_) => return false,
@@ -686,6 +694,11 @@ pub(crate) mod stdlib_pump {
     /// Register the stdlib's nearest-deadline provider. This lets native
     /// one-shots participate in `js_wait_for_event` without manufacturing a JS
     /// timer callback or relying on the one-second idle heartbeat.
+    ///
+    /// Contract (turnloop P0): the callback returns the remaining time in
+    /// *fractional* milliseconds (`-1` for none). The primary agent's park
+    /// converts it to an exact `Instant`, so a provider must not round — the
+    /// legacy whole-millisecond park truncates on its own side.
     #[no_mangle]
     pub extern "C" fn js_register_stdlib_next_wake(f: extern "C" fn() -> f64) {
         STDLIB_NEXT_WAKE_FN.store(f as *mut (), Ordering::Release);

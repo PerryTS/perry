@@ -183,6 +183,10 @@ struct EventListener {
 static NEXT_WORKER_ID: AtomicU64 = AtomicU64::new(1);
 static WORKERS: LazyLock<Mutex<HashMap<u64, WorkerRecord>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+/// turnloop P0: `#{WorkerRecord : alive && refed}`, maintained under the
+/// `WORKERS` lock by `WorkerRecord::set_liveness` (records are never removed,
+/// only marked dead), so the per-turn keep-alive check is an atomic load.
+static LIVE_REFED_WORKERS: AtomicU64 = AtomicU64::new(0);
 static PARENT_EVENTS: LazyLock<Mutex<VecDeque<WorkerEvent>>> =
     LazyLock::new(|| Mutex::new(VecDeque::new()));
 
@@ -210,6 +214,26 @@ struct WorkerRecord {
     terminate_promise: Option<usize>,
     async_resources: [perry_runtime::async_hooks::AsyncResourceIds; 3],
     async_resource_bits: [u64; 3],
+}
+
+impl WorkerRecord {
+    /// Change `alive`/`refed` and move `LIVE_REFED_WORKERS` with them. Call with
+    /// the `WORKERS` lock held; a fresh record enters the count at insert.
+    fn set_liveness(&mut self, alive: bool, refed: bool) {
+        let before = self.alive && self.refed;
+        self.alive = alive;
+        self.refed = refed;
+        match (before, alive && refed) {
+            (false, true) => {
+                LIVE_REFED_WORKERS.fetch_add(1, Ordering::AcqRel);
+            }
+            (true, false) => {
+                let previous = LIVE_REFED_WORKERS.fetch_sub(1, Ordering::AcqRel);
+                debug_assert!(previous > 0, "live worker count underflow");
+            }
+            _ => {}
+        }
+    }
 }
 
 struct WorkerListener {
@@ -926,7 +950,8 @@ extern "C" fn worker_ref(closure: *const ClosureHeader) -> f64 {
 
 fn worker_ref_by_id(worker_id: u64) -> f64 {
     if let Some(worker) = WORKERS.lock().unwrap().get_mut(&worker_id) {
-        worker.refed = true;
+        let alive = worker.alive;
+        worker.set_liveness(alive, true);
     }
     js_undefined()
 }
@@ -937,7 +962,8 @@ extern "C" fn worker_unref(closure: *const ClosureHeader) -> f64 {
 
 fn worker_unref_by_id(worker_id: u64) -> f64 {
     if let Some(worker) = WORKERS.lock().unwrap().get_mut(&worker_id) {
-        worker.refed = false;
+        let alive = worker.alive;
+        worker.set_liveness(alive, false);
     }
     js_undefined()
 }
@@ -1223,19 +1249,20 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
         resource_handles[1].get_nanbox_f64().to_bits(),
         resource_handles[2].get_nanbox_f64().to_bits(),
     ];
-    WORKERS.lock().unwrap().insert(
-        worker_id,
-        WorkerRecord {
-            sender: tx,
-            object_bits: object_value(worker_obj).to_bits(),
-            listeners: HashMap::new(),
-            alive: true,
-            refed: true,
-            terminate_promise: None,
-            async_resources,
-            async_resource_bits,
-        },
-    );
+    let mut record = WorkerRecord {
+        sender: tx,
+        object_bits: object_value(worker_obj).to_bits(),
+        listeners: HashMap::new(),
+        alive: false,
+        refed: false,
+        terminate_promise: None,
+        async_resources,
+        async_resource_bits,
+    };
+    let mut workers = WORKERS.lock().unwrap();
+    record.set_liveness(true, true);
+    workers.insert(worker_id, record);
+    drop(workers);
 
     let thread_options = options_state.clone();
     // #8546: the Worker re-runs its module bodies on its own thread, but it is

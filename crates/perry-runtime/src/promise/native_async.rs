@@ -104,6 +104,19 @@ struct NativeAsyncRegistry {
 
 static REGISTRY: OnceLock<Mutex<NativeAsyncRegistry>> = OnceLock::new();
 
+/// turnloop P0: `tokens.len() + pending.len()`, republished under the registry
+/// lock after every mutation, so the event loop's per-turn keep-alive check is
+/// one atomic load instead of the GC root-registry lock.
+static ACTIVE_ENTRIES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Call with the registry lock held, after mutating `tokens` or `pending`.
+fn publish_active_entries(registry: &NativeAsyncRegistry) {
+    ACTIVE_ENTRIES.store(
+        registry.tokens.len() + registry.pending.len(),
+        std::sync::atomic::Ordering::Release,
+    );
+}
+
 fn registry() -> &'static Mutex<NativeAsyncRegistry> {
     REGISTRY.get_or_init(|| Mutex::new(NativeAsyncRegistry::default()))
 }
@@ -165,6 +178,7 @@ fn enqueue_payload(
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         slots.payload = Some(payload);
         registry.pending.push_back(token_ptr as usize);
+        publish_active_entries(&registry);
     }
     crate::event_pump::js_notify_main_thread();
     return_status
@@ -248,6 +262,7 @@ fn remove_token_from_registry(token_ptr: usize, promise: usize) {
     let mut registry = crate::gc::lock_gc_root_registry(registry());
     registry.tokens.retain(|&candidate| candidate != token_ptr);
     registry.pending.retain(|&candidate| candidate != token_ptr);
+    publish_active_entries(&registry);
     if promise != 0 {
         registry.by_promise.remove(&promise);
     }
@@ -278,6 +293,7 @@ fn make_token_for_promise(
     {
         let mut registry = crate::gc::lock_gc_root_registry(registry());
         registry.tokens.push(token_ptr as usize);
+        publish_active_entries(&registry);
         if register_by_promise && !promise.is_null() {
             registry
                 .by_promise
@@ -476,7 +492,9 @@ pub extern "C" fn js_native_async_process_pending() -> i32 {
         let mut registry = crate::gc::lock_gc_root_registry(registry());
         #[cfg(not(test))]
         {
-            registry.pending.drain(..).collect()
+            let drained = registry.pending.drain(..).collect();
+            publish_active_entries(&registry);
+            drained
         }
         #[cfg(test)]
         {
@@ -495,6 +513,7 @@ pub extern "C" fn js_native_async_process_pending() -> i32 {
                 }
             }
             registry.pending = foreign;
+            publish_active_entries(&registry);
             owned
         }
     };
@@ -598,9 +617,22 @@ pub extern "C" fn js_native_async_drop_promise_token(promise: *mut Promise) {
 /// Return 1 while there are live or queued native async completions.
 #[no_mangle]
 pub extern "C" fn js_native_async_has_active() -> i32 {
-    let registry = crate::gc::lock_gc_root_registry(registry());
     #[cfg(not(test))]
-    let has_active = !registry.tokens.is_empty() || !registry.pending.is_empty();
+    let has_active = {
+        let active = ACTIVE_ENTRIES.load(std::sync::atomic::Ordering::Acquire) != 0;
+        #[cfg(debug_assertions)]
+        if let Some(registry) = REGISTRY.get() {
+            let registry = crate::gc::lock_gc_root_registry(registry);
+            debug_assert_eq!(
+                ACTIVE_ENTRIES.load(std::sync::atomic::Ordering::Acquire),
+                registry.tokens.len() + registry.pending.len(),
+                "native async keep-alive mirror drifted from its registry"
+            );
+        }
+        active
+    };
+    #[cfg(test)]
+    let registry = crate::gc::lock_gc_root_registry(registry());
     #[cfg(test)]
     let has_active = {
         let thread_id = current_thread_id();

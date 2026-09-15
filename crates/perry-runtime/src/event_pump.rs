@@ -27,6 +27,16 @@ use std::sync::atomic::{AtomicBool, AtomicI64, AtomicPtr, Ordering};
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::Duration;
 
+// turnloop P0: the primary agent parks in its own `turnloop::Loop` on exact
+// `Instant` deadlines. Native targets only; the `tokio-wait-driver` A/B arm
+// (forwarded from perry-stdlib) compiles the legacy park instead.
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+mod agent_loop;
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+mod precise_wait;
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+pub use agent_loop::{loop_statistics, LoopStats};
+
 use crate::timer::{
     js_callback_timer_next_deadline, js_interval_timer_next_deadline, js_timer_next_deadline,
 };
@@ -109,6 +119,14 @@ fn invoke_host_wake_callback() {
 //
 // Both are installed together; a null `sleep` slot reverts to the condvar park
 // (non-async embedders pay a single atomic load).
+//
+// turnloop P0: these millisecond hooks are no longer the primary agent's park.
+// The primary agent turns its own `turnloop::Loop` on exact `Instant` deadlines
+// (`event_pump/precise_wait.rs`) and drives the registered tick only while the
+// `js_register_native_inflight` predicate reports tokio-owned native work in
+// flight (P0-transitional; P8 deletes it). Worker agents, which have no loop
+// until P3/P4, and the perry-stdlib `tokio-wait-driver` A/B arm use the hooks
+// exactly as described above.
 // ============================================================================
 static WAIT_DRIVER_SLEEP: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 static WAIT_DRIVER_WAKE: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
@@ -141,6 +159,57 @@ pub extern "C" fn js_register_wait_driver(
     WAIT_DRIVER_FAST.store(fast_ptr, Ordering::Release);
     let sleep_ptr = sleep.map(|f| f as *mut ()).unwrap_or(std::ptr::null_mut());
     WAIT_DRIVER_SLEEP.store(sleep_ptr, Ordering::Release);
+}
+
+/// turnloop P0-transitional: register stdlib's O(1) "tokio owns native work in
+/// flight" predicate (nonzero = in flight). While it reports work, the primary
+/// agent drives the registered millisecond tick instead of a turnloop turn,
+/// because tokio tasks only advance inside that tick. Passing `None` clears it.
+/// A no-op in the `tokio-wait-driver` A/B arm and on wasm, which have no agent
+/// loop. P8 deletes this hook with tokio.
+#[no_mangle]
+pub extern "C" fn js_register_native_inflight(f: Option<extern "C" fn() -> i32>) {
+    #[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+    precise_wait::register_native_inflight(f);
+    #[cfg(any(target_arch = "wasm32", feature = "tokio-wait-driver"))]
+    let _ = f;
+}
+
+/// turnloop P0-transitional: a producer made tokio-owned native work visible to
+/// the `js_register_native_inflight` predicate (spawned a task, took an
+/// in-flight reference) without `js_notify_main_thread`. If the primary agent is
+/// parked in a turnloop turn it goes back around the loop and selects the tokio
+/// tick, which is the only thing that runs that work; otherwise this is one
+/// atomic load. Needed for spawns from threads other than the primary agent's,
+/// which tokio's own driver unpark cannot deliver to a turnloop wait. A no-op in
+/// the `tokio-wait-driver` A/B arm and on wasm. P8 deletes it.
+#[no_mangle]
+pub extern "C" fn js_native_work_submitted() {
+    #[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+    agent_loop::wake_primary();
+}
+
+/// Destroy the calling thread's agent loop at the process-exit funnel and, with
+/// `PERRY_LOOP_STATS=1`, print its counters once (a diagnostic, not a behaviour
+/// knob). Idempotent; a park after this uses the legacy path.
+pub fn shutdown_wait_driver() {
+    #[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+    agent_loop::shutdown_current_thread();
+    #[cfg(any(target_arch = "wasm32", feature = "tokio-wait-driver"))]
+    {
+        // Marks the arm so an A/B run can prove which driver it measured.
+        static PRINTED: AtomicBool = AtomicBool::new(false);
+        if std::env::var("PERRY_LOOP_STATS").as_deref() == Ok("1")
+            && !PRINTED.swap(true, Ordering::AcqRel)
+        {
+            let driver = if cfg!(feature = "tokio-wait-driver") {
+                "tokio-wait-driver"
+            } else {
+                "legacy"
+            };
+            eprintln!("[perry-loop] driver={driver}");
+        }
+    }
 }
 
 /// Run one bounded tick of the registered wait-driver. Returns `true` if a
@@ -366,6 +435,10 @@ pub extern "C" fn js_notify_main_thread() {
     // wake primitive coalesces (a notify with no tick in progress leaves a
     // permit consumed on the next tick), so there is no lost wake.
     invoke_wait_driver_wake();
+    // turnloop P0: wake the primary agent's loop if it is inside a turn. One
+    // atomic load otherwise; must follow the `NOTIFIED` store above.
+    #[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+    agent_loop::wake_primary();
     // Hot path: no consumer is currently in `cvar.wait_timeout`, so
     // we don't need to take the mutex or signal the cvar — the next
     // call to `js_wait_for_event` will see `NOTIFIED == true` on the
@@ -579,6 +652,16 @@ pub extern "C" fn js_wait_for_event() {
             PROFILE_WAIT_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
         }
         invoke_wait_driver_fast();
+        #[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+        agent_loop::fast_turn();
+        return;
+    }
+
+    // turnloop P0: the primary agent parks on exact `Instant` deadlines in its
+    // own loop. Worker agents (no loop until P3/P4), a second thread acting for
+    // the primary agent, and the A/B arm fall through to the legacy park below.
+    #[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+    if agent_loop::eligible() && precise_wait::park() {
         return;
     }
 
@@ -597,31 +680,7 @@ pub extern "C" fn js_wait_for_event() {
     }
 
     if budget_ms == 0 {
-        if crate::promise::mt_profile_enabled() {
-            PROFILE_WAIT_ZERO_COUNT.fetch_add(1, Ordering::Relaxed);
-        }
-        // A timer reads as due now — don't block. Transient hits stay
-        // zero-latency; only a *sustained* budget-0 spin (the #1114
-        // wedge) gets throttled so it can't peg a core and starve the
-        // request pump. See `SPIN_THROTTLE_AFTER`.
-        if spin_throttle_enabled() {
-            let streak = SPIN_STREAK.with(|s| {
-                let n = s.get().saturating_add(1);
-                s.set(n);
-                n
-            });
-            if streak > SPIN_THROTTLE_AFTER {
-                std::thread::sleep(SPIN_THROTTLE_SLEEP);
-            }
-        }
-        // A due timer pins the budget at 0, but native work (a fetch's reqwest
-        // `send`, sibling fetches, net/ws round-trips) still only advances inside
-        // the wait-driver tick. A hot timer loop would otherwise take this branch
-        // every iteration and starve that work — the same starvation the
-        // notified/microtask path above guards against. Give it the same brief
-        // driven turn. No-op (atomic loads) when no driver is registered or
-        // nothing native is in flight. #1114: this path does NOT reset the streak.
-        invoke_wait_driver_fast();
+        zero_budget_return();
         return;
     }
     // About to park: nothing notified, no microtask queued, no timer due. That
@@ -651,6 +710,53 @@ pub extern "C" fn js_wait_for_event() {
     }
     // Fallback (no async runtime registered — non-async programs / embedders):
     // the original condvar park (#84).
+    condvar_park(Duration::from_millis(budget_ms));
+}
+
+/// The "a deadline is due now" return shared by the legacy and precise parks.
+///
+/// #1114: kept under turnloop P0. With exact `Instant` deadlines this branch no
+/// longer fires for a deadline that is merely sub-millisecond away, which was
+/// the common spin. It still fires, legitimately and transiently, when a
+/// timer is due. A *sustained* run of it needs a deadline source that reports a
+/// due deadline its pump never consumes (the original #1114 wedge: a deadline
+/// pinned in the past). Nothing in P0 rules that out structurally — every
+/// deadline source is still Perry's own queue scan until P3 moves timers into
+/// the loop — so the throttle remains as the safety net, not as a latency
+/// mechanism.
+fn zero_budget_return() {
+    if crate::promise::mt_profile_enabled() {
+        PROFILE_WAIT_ZERO_COUNT.fetch_add(1, Ordering::Relaxed);
+    }
+    // A timer reads as due now — don't block. Transient hits stay
+    // zero-latency; only a *sustained* budget-0 spin (the #1114
+    // wedge) gets throttled so it can't peg a core and starve the
+    // request pump. See `SPIN_THROTTLE_AFTER`.
+    if spin_throttle_enabled() {
+        let streak = SPIN_STREAK.with(|s| {
+            let n = s.get().saturating_add(1);
+            s.set(n);
+            n
+        });
+        if streak > SPIN_THROTTLE_AFTER {
+            std::thread::sleep(SPIN_THROTTLE_SLEEP);
+        }
+    }
+    // A due timer pins the budget at 0, but native work (a fetch's reqwest
+    // `send`, sibling fetches, net/ws round-trips) still only advances inside
+    // the wait-driver tick. A hot timer loop would otherwise take this branch
+    // every iteration and starve that work — the same starvation the
+    // notified/microtask path above guards against. Give it the same brief
+    // driven turn. No-op (atomic loads) when no driver is registered or
+    // nothing native is in flight. #1114: this path does NOT reset the streak.
+    invoke_wait_driver_fast();
+    #[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+    agent_loop::fast_turn();
+}
+
+/// The condvar park (#84) for `budget`, shared by the legacy path and the
+/// precise path's turn-failure fallback.
+fn condvar_park(budget: Duration) {
     // Slow path: take the cvar mutex and sleep on it. Mark ourselves
     // as a waiter first so concurrent notifiers go through the
     // mutex+cvar path (they won't see our wait if we registered after
@@ -671,10 +777,7 @@ pub extern "C" fn js_wait_for_event() {
         WAITER_COUNT.fetch_sub(1, Ordering::Release);
         return;
     }
-    let (mut new_flag, _) = PUMP
-        .cvar
-        .wait_timeout(flag, Duration::from_millis(budget_ms))
-        .unwrap();
+    let (mut new_flag, _) = PUMP.cvar.wait_timeout(flag, budget).unwrap();
     *new_flag = false;
     WAITER_COUNT.fetch_sub(1, Ordering::Release);
     NOTIFIED.store(false, Ordering::Release);
@@ -689,6 +792,7 @@ pub extern "C" fn js_wait_for_event() {
 #[no_mangle]
 pub extern "C" fn js_unsettled_top_level_await_exit() {
     const MESSAGE: &[u8] = b"Warning: Detected unsettled top-level await\n";
+    shutdown_wait_driver();
 
     #[cfg(unix)]
     unsafe {
@@ -730,7 +834,7 @@ mod tests {
     /// transiently-due timer from one can't change another's wait
     /// budget. (`js_wait_for_event`'s budget is computed from global
     /// timer state — there is no per-thread injection point.)
-    static SERIAL: StdMutex<()> = StdMutex::new(());
+    pub(in crate::event_pump) static SERIAL: StdMutex<()> = StdMutex::new(());
 
     /// A promise settled while promise jobs are already draining must not
     /// leave a redundant event-loop wake behind. The active runner consumes

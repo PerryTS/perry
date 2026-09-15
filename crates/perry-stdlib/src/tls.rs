@@ -30,6 +30,9 @@ const TLS_DISPATCH_MISSING_BITS: u64 = TAG_UNDEFINED_BITS;
 mod client_verifier;
 mod dispatch;
 mod event_pump;
+mod liveness;
+#[cfg(test)]
+mod liveness_tests;
 mod module_api;
 mod socket_api;
 // Re-export the handle-dispatch and module-level entry points so
@@ -431,7 +434,7 @@ fn tls_server_connection_started(server_id: i64) -> bool {
     if server.closing || server.close_event_queued {
         return false;
     }
-    server.active_connections += 1;
+    liveness::update_server(server, |server| server.active_connections += 1);
     true
 }
 
@@ -441,7 +444,9 @@ fn tls_server_connection_finished(server_id: i64) {
         let Some(server) = all.get_mut(&server_id) else {
             return;
         };
-        server.active_connections = server.active_connections.saturating_sub(1);
+        liveness::update_server(server, |server| {
+            server.active_connections = server.active_connections.saturating_sub(1);
+        });
         let emit = server.closing && server.active_connections == 0 && !server.close_event_queued;
         if emit {
             server.close_event_queued = true;
@@ -459,8 +464,10 @@ fn tls_server_begin_close(server_id: i64) {
         let Some(server) = all.get_mut(&server_id) else {
             return;
         };
-        server.listening = false;
-        server.closing = true;
+        liveness::update_server(server, |server| {
+            server.listening = false;
+            server.closing = true;
+        });
         let emit = server.active_connections == 0 && !server.close_event_queued;
         if emit {
             server.close_event_queued = true;
@@ -1206,7 +1213,9 @@ pub unsafe extern "C" fn js_tls_client_preflight(
         );
         perry_runtime::object::js_implicit_this_set(previous_this);
         let selected = value_to_string(selected).map(String::into_bytes);
-        sockets().lock().unwrap().remove(&socket_id);
+        if let Some(socket) = sockets().lock().unwrap().remove(&socket_id) {
+            liveness::step(liveness::socket_keeps_alive(&socket), false);
+        }
         listeners().lock().unwrap().remove(&socket_id);
         if selected
             .as_ref()
@@ -1480,10 +1489,12 @@ pub unsafe extern "C" fn js_tls_server_listen(
         server.shutdown_tx = Some(shutdown_tx);
         server.bound_port = port;
         server.bound_host = host.clone();
-        server.listening = true;
-        server.active_connections = 0;
-        server.closing = false;
-        server.close_event_queued = false;
+        liveness::update_server(server, |server| {
+            server.listening = true;
+            server.active_connections = 0;
+            server.closing = false;
+            server.close_event_queued = false;
+        });
         let cb = pointer_addr(f64_from_raw_bits(callback_bits)).unwrap_or(0) as i64;
         if cb != 0 {
             register_listener(handle, "listening".to_string(), cb, true);
@@ -1508,7 +1519,7 @@ pub unsafe extern "C" fn js_tls_server_listen(
                 ));
                 push_tls_event(PendingTlsEvent::ServerClose(server_id));
                 if let Some(server) = servers().lock().unwrap().get_mut(&server_id) {
-                    server.listening = false;
+                    liveness::update_server(server, |server| server.listening = false);
                 }
                 return;
             }
@@ -1560,27 +1571,33 @@ pub unsafe extern "C" fn js_tls_server_listen(
                                         let authorized = !peer_certificate.is_empty();
                                         let socket_id = next_tls_handle_id();
                                         let (tx, rx) = mpsc::unbounded_channel::<TlsSocketCommand>();
-                                        sockets().lock().unwrap().insert(
-                                            socket_id,
-                                            TlsSocketState {
-                                                cmd_tx: Some(tx),
-                                                local_addr,
-                                                peer_addr,
-                                                authorized,
-                                                server_side: true,
-                                                max_send_fragment: 16 * 1024,
-                                                allow_half_open,
-                                                locally_constructed: false,
-                                                authorization_error: (!authorized)
-                                                    .then(|| "UNABLE_TO_GET_ISSUER_CERT".to_string()),
-                                                protocol,
-                                                alpn_protocol,
-                                                servername,
-                                                peer_certificate,
-                                                own_certificate,
-                                                server_handle: Some(server_id),
-                                            },
-                                        );
+                                        {
+                                            let mut registry = sockets().lock().unwrap();
+                                            // A server-side socket with a command
+                                            // channel keeps the loop alive.
+                                            liveness::step(false, true);
+                                            registry.insert(
+                                                socket_id,
+                                                TlsSocketState {
+                                                    cmd_tx: Some(tx),
+                                                    local_addr,
+                                                    peer_addr,
+                                                    authorized,
+                                                    server_side: true,
+                                                    max_send_fragment: 16 * 1024,
+                                                    allow_half_open,
+                                                    locally_constructed: false,
+                                                    authorization_error: (!authorized)
+                                                        .then(|| "UNABLE_TO_GET_ISSUER_CERT".to_string()),
+                                                    protocol,
+                                                    alpn_protocol,
+                                                    servername,
+                                                    peer_certificate,
+                                                    own_certificate,
+                                                    server_handle: Some(server_id),
+                                                },
+                                            );
+                                        }
                                         listeners().lock().unwrap().insert(socket_id, HashMap::new());
                                         push_tls_event(PendingTlsEvent::ServerSecureConnection(
                                             server_id,

@@ -45,7 +45,9 @@ struct Timer {
 unsafe impl Send for Timer {}
 
 // Global timer queues (Mutex-protected for cross-thread access)
-per_test_global!(static TIMER_QUEUE: Mutex<Vec<Timer>> = Mutex::new(Vec::new()));
+// turnloop P0: each queue carries its O(1) primary-agent keep-alive count
+// (`timer/liveness.rs`); `TimerQueue` derefs to the queue mutex.
+per_test_global!(static TIMER_QUEUE: TimerQueue<Timer> = TimerQueue::new());
 static START_TIME: Mutex<Option<Instant>> = Mutex::new(None);
 
 // Opt-in event-path counters printed with `PERRY_MT_PROFILE=1`. Keeping these
@@ -109,25 +111,19 @@ fn schedule_promise_timer(delay_ms: f64, value: f64, has_ref: bool) -> *mut Prom
     let delay = Duration::from_millis(normalize_timer_delay(delay_ms));
     let deadline = Instant::now() + delay;
 
-    TIMER_QUEUE.lock().unwrap().push(Timer {
+    let mut queue = TIMER_QUEUE.lock().unwrap();
+    let timer = Timer {
         // #6185: tag with the scheduling agent — only it may fire this.
         owner: crate::agent::current_agent(),
         deadline,
         promise,
         value,
         has_ref,
-    });
+    };
+    TIMER_QUEUE.push_counted(&mut queue, timer);
+    drop(queue);
 
     promise
-}
-
-fn timer_has_ref_state(id: i64) -> bool {
-    TIMER_REF_STATES
-        .lock()
-        .unwrap()
-        .as_ref()
-        .and_then(|s| s.states.get(&id).copied())
-        .unwrap_or(true)
 }
 
 fn other_event_sources_keep_loop_alive() -> bool {
@@ -214,7 +210,7 @@ pub extern "C" fn js_timer_tick() -> i32 {
     // `drain_expired_timers`).
     let mut expired: Vec<Timer> = {
         let mut queue = TIMER_QUEUE.lock().unwrap();
-        drain_expired_timers(
+        let expired = drain_expired_timers(
             &mut queue,
             |_| false,
             // #6185: never fire another agent's timer — its promise and value are
@@ -226,7 +222,11 @@ pub extern "C" fn js_timer_tick() -> i32 {
                     && timer.deadline <= now
                     && (timer.has_ref || allow_unref)
             },
-        )
+        );
+        for timer in &expired {
+            TIMER_QUEUE.note_removed(timer);
+        }
+        expired
     };
     // #6287: fire the batch in deadline order, not creation order — a 5 ms
     // timer created after a 10 ms one must still fire first. The sort is
@@ -273,22 +273,7 @@ pub extern "C" fn js_timer_tick_if_refed() -> i32 {
 #[no_mangle]
 pub extern "C" fn js_timer_next_deadline() -> f64 {
     let now = Instant::now();
-    let allow_unref = should_run_unref_promise_timers();
-
-    TIMER_QUEUE
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|t| (t.has_ref || allow_unref) && crate::agent::owns(t.owner))
-        .map(|t| {
-            if t.deadline <= now {
-                0.0
-            } else {
-                (t.deadline - now).as_millis() as f64
-            }
-        })
-        .min_by(|a, b| a.partial_cmp(b).unwrap())
-        .unwrap_or(-1.0)
+    whole_ms_until(promise_timer_deadline(), now)
 }
 
 /// Sleep for the specified number of milliseconds
@@ -333,6 +318,10 @@ struct CallbackTimer {
     trigger_async_id: u64,
     /// Whether this timer has been cleared
     cleared: bool,
+    /// Current ref state (`ref()`/`unref()`), cached on the entry so liveness
+    /// and the tick read it without the `hasRef()` registry lock. Kept in step
+    /// with that registry by `set_timer_ref_state`.
+    refed: bool,
     /// #6185: agent whose heap `callback` (and any pointer-valued `args`) live
     /// in. Only that agent — or a pump acting for it, e.g. Android's UI thread
     /// for the primary agent — may fire it.
@@ -395,7 +384,7 @@ static MOCK_TIMERS: Mutex<MockTimersState> = Mutex::new(MockTimersState {
     intervals: Vec::new(),
 });
 
-per_test_global!(static CALLBACK_TIMERS: Mutex<Vec<CallbackTimer>> = Mutex::new(Vec::new()));
+per_test_global!(static CALLBACK_TIMERS: TimerQueue<CallbackTimer> = TimerQueue::new());
 // Shared id counter across callback timers AND intervals so a handle id is
 // globally unique. Node treats Timeout/Interval as the same internal Timer
 // type, so `clearTimeout(intervalHandle)` and `clearInterval(timeoutHandle)`
@@ -406,7 +395,14 @@ static NEXT_TIMER_ID: Mutex<i64> = Mutex::new(1);
 
 // #6084: the bounded ref-state registry lives in a submodule to keep this file
 // under the 2000-line lint cap.
+mod deadline;
+use deadline::whole_ms_until;
+pub(crate) use deadline::{
+    callback_timer_deadline, interval_timer_deadline, promise_timer_deadline,
+};
 mod gc_scan;
+mod liveness;
+use liveness::{KeepsPrimaryAlive, TimerQueue};
 mod ownership;
 mod ref_states;
 #[cfg(test)] // #7680: not re-exported; reach via `crate::timer::test_shared_queues::`
@@ -607,7 +603,17 @@ fn normalize_timer_delay(delay_value: f64) -> u64 {
     }
 }
 
+/// `ref()`/`unref()` on a timer handle: record the state for `hasRef()` and
+/// apply it to the entry if the timer is still queued (turnloop P0: the queue
+/// entry's cached `refed` and its queue's keep-alive count move together).
 fn set_timer_ref_state(id: i64, has_ref: bool) {
+    record_timer_ref_state(id, has_ref);
+    liveness::apply_ref_state_to_queues(id, has_ref);
+}
+
+/// Record `id`'s ref state in the `hasRef()` registry only. For callers that
+/// hold a timer lock or have already set the queued entry's `refed` directly.
+fn record_timer_ref_state(id: i64, has_ref: bool) {
     ref_states::TIMER_IDS_NONEMPTY.arm();
     let mut slot = TIMER_REF_STATES.lock().unwrap();
     slot.get_or_insert_with(TimerRefStates::default)
@@ -775,7 +781,7 @@ fn schedule_mock_callback_timer(
         context: crate::async_context::capture_context(),
         cleared: false,
     });
-    set_timer_ref_state(id, true);
+    record_timer_ref_state(id, true);
     Some(id)
 }
 
@@ -801,7 +807,7 @@ fn schedule_mock_interval_timer(callback: i64, interval_ms: f64, args: Vec<f64>)
         context: crate::async_context::capture_context(),
         cleared: false,
     });
-    set_timer_ref_state(id, true);
+    record_timer_ref_state(id, true);
     Some(id)
 }
 
@@ -932,18 +938,24 @@ pub extern "C" fn js_timer_refresh(timer_id: i64) {
     {
         let mut timers = CALLBACK_TIMERS.lock().unwrap();
         if let Some(timer) = timers.iter_mut().find(|t| t.id == timer_id) {
+            let before = timer.keeps_primary_alive();
             timer.deadline = now + Duration::from_millis(timer.delay_ms);
             timer.cleared = false;
-            set_timer_ref_state(timer_id, true);
+            timer.refed = true;
+            CALLBACK_TIMERS.note_changed(before, timer);
+            record_timer_ref_state(timer_id, true);
             return;
         }
     }
 
     let mut intervals = INTERVAL_TIMERS.lock().unwrap();
     if let Some(timer) = intervals.iter_mut().find(|t| t.id == timer_id) {
+        let before = timer.keeps_primary_alive();
         timer.next_deadline = now + Duration::from_millis(timer.interval_ms);
         timer.cleared = false;
-        set_timer_ref_state(timer_id, true);
+        timer.refed = true;
+        INTERVAL_TIMERS.note_changed(before, timer);
+        record_timer_ref_state(timer_id, true);
     }
 }
 
@@ -1105,7 +1117,7 @@ fn schedule_callback_timer(
         );
     crate::async_context::refresh_snapshot_from_roots(&mut context, &context_roots);
 
-    CALLBACK_TIMERS.lock().unwrap().push(CallbackTimer {
+    let timer = CallbackTimer {
         id,
         kind,
         deadline,
@@ -1116,10 +1128,14 @@ fn schedule_callback_timer(
         async_id: ids.async_id,
         trigger_async_id: ids.trigger_async_id,
         cleared: false,
+        refed: true,
         // #6185: the scheduling agent owns the callback closure + args.
         owner: crate::agent::current_agent(),
-    });
-    set_timer_ref_state(id, true);
+    };
+    let mut queue = CALLBACK_TIMERS.lock().unwrap();
+    CALLBACK_TIMERS.push_counted(&mut queue, timer);
+    drop(queue);
+    record_timer_ref_state(id, true);
 
     id
 }
@@ -1252,20 +1268,29 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
     // see `drain_expired_timers`; cleared timers are discarded).
     let mut expired: Vec<CallbackTimer> = {
         let mut queue = CALLBACK_TIMERS.lock().unwrap();
-        drain_expired_timers(
+        let expired = drain_expired_timers(
             &mut queue,
             // Dropping a cleared timer is safe regardless of owner: nothing here
             // dereferences its callback, we just release the entry.
-            |timer| timer.cleared,
+            |timer| {
+                if timer.cleared {
+                    CALLBACK_TIMERS.note_removed(timer);
+                }
+                timer.cleared
+            },
             // #6185: only ever call back into OUR OWN agent's heap. Firing a
             // foreign agent's closure here would run main-heap JS on a worker (or
             // vice versa) and allocate the results in the wrong arena.
             |timer| {
                 crate::agent::owns(timer.owner)
                     && timer.deadline <= now
-                    && (timer_has_ref_state(timer.id) || allow_unref)
+                    && (timer.refed || allow_unref)
             },
-        )
+        );
+        for timer in &expired {
+            CALLBACK_TIMERS.note_removed(timer);
+        }
+        expired
     };
     // #6287: timers phase (by deadline) before check phase (FIFO immediates).
     order_expired_callback_batch(&mut expired);
@@ -1437,24 +1462,7 @@ pub fn active_timeout_resource_count() -> usize {
 #[no_mangle]
 pub extern "C" fn js_callback_timer_next_deadline() -> f64 {
     let now = Instant::now();
-    let allow_unref = should_run_unref_callback_interval_timers();
-
-    CALLBACK_TIMERS
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|t| {
-            !t.cleared && crate::agent::owns(t.owner) && (timer_has_ref_state(t.id) || allow_unref)
-        })
-        .map(|t| {
-            if t.deadline <= now {
-                0.0
-            } else {
-                (t.deadline - now).as_millis() as f64
-            }
-        })
-        .min_by(|a, b| a.partial_cmp(b).unwrap())
-        .unwrap_or(-1.0)
+    whole_ms_until(callback_timer_deadline(), now)
 }
 
 /// Clear a Timeout by ID. Also clears the interval queue so Node's
@@ -1469,7 +1477,9 @@ pub extern "C" fn clearTimeout(timer_id: i64) {
             .iter()
             .find(|timer| timer.id == timer_id && timer.kind == CallbackTimerKind::Timeout)
             .map(|timer| timer.async_id);
-        timers.retain(|timer| timer.id != timer_id || timer.kind != CallbackTimerKind::Timeout);
+        CALLBACK_TIMERS.retain_counted(&mut timers, |timer| {
+            timer.id != timer_id || timer.kind != CallbackTimerKind::Timeout
+        });
         async_id
     };
     let interval_async_id = {
@@ -1478,7 +1488,7 @@ pub extern "C" fn clearTimeout(timer_id: i64) {
             .iter()
             .find(|timer| timer.id == timer_id)
             .map(|timer| timer.async_id);
-        intervals.retain(|timer| timer.id != timer_id);
+        INTERVAL_TIMERS.retain_counted(&mut intervals, |timer| timer.id != timer_id);
         async_id
     };
     enqueue_destroy_ids([callback_async_id, interval_async_id]);
@@ -1495,7 +1505,9 @@ pub extern "C" fn clearImmediate(timer_id: i64) {
             .iter()
             .find(|timer| timer.id == timer_id && timer.kind == CallbackTimerKind::Immediate)
             .map(|timer| timer.async_id);
-        timers.retain(|timer| timer.id != timer_id || timer.kind != CallbackTimerKind::Immediate);
+        CALLBACK_TIMERS.retain_counted(&mut timers, |timer| {
+            timer.id != timer_id || timer.kind != CallbackTimerKind::Immediate
+        });
         async_id
     };
     enqueue_destroy_ids([async_id, None]);
@@ -1571,6 +1583,8 @@ struct IntervalTimer {
     trigger_async_id: u64,
     /// Whether this interval has been cleared
     cleared: bool,
+    /// Cached ref state; see `CallbackTimer::refed`.
+    refed: bool,
     /// #6185: agent that owns `callback` / `args`. See `CallbackTimer::owner`.
     owner: crate::agent::AgentId,
 }
@@ -1579,7 +1593,7 @@ struct IntervalTimer {
 // what makes the cross-thread pointers here sound.
 unsafe impl Send for IntervalTimer {}
 
-per_test_global!(static INTERVAL_TIMERS: Mutex<Vec<IntervalTimer>> = Mutex::new(Vec::new()));
+per_test_global!(static INTERVAL_TIMERS: TimerQueue<IntervalTimer> = TimerQueue::new());
 
 /// JS-style setInterval that takes a callback function and interval
 /// The callback is a closure pointer that will be called repeatedly
@@ -1611,7 +1625,7 @@ fn schedule_interval_timer(callback: i64, interval_ms: f64, args: Vec<f64>) -> i
     let ids = crate::async_hooks::init_resource("Timeout", timer_handle_value(id), true);
     crate::async_context::refresh_snapshot_from_roots(&mut context, &context_roots);
 
-    INTERVAL_TIMERS.lock().unwrap().push(IntervalTimer {
+    let timer = IntervalTimer {
         id,
         callback: callback_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>() as i64,
         interval_ms: interval,
@@ -1621,10 +1635,14 @@ fn schedule_interval_timer(callback: i64, interval_ms: f64, args: Vec<f64>) -> i
         async_id: ids.async_id,
         trigger_async_id: ids.trigger_async_id,
         cleared: false,
+        refed: true,
         // #6185: the scheduling agent owns the callback closure + args.
         owner: crate::agent::current_agent(),
-    });
-    set_timer_ref_state(id, true);
+    };
+    let mut queue = INTERVAL_TIMERS.lock().unwrap();
+    INTERVAL_TIMERS.push_counted(&mut queue, timer);
+    drop(queue);
+    record_timer_ref_state(id, true);
 
     id
 }
@@ -1656,7 +1674,7 @@ pub extern "C" fn clearInterval(interval_id: i64) {
             .iter()
             .find(|timer| timer.id == interval_id)
             .map(|timer| timer.async_id);
-        timers.retain(|timer| timer.id != interval_id);
+        INTERVAL_TIMERS.retain_counted(&mut timers, |timer| timer.id != interval_id);
         async_id
     };
     let callback_async_id = {
@@ -1665,8 +1683,9 @@ pub extern "C" fn clearInterval(interval_id: i64) {
             .iter()
             .find(|timer| timer.id == interval_id && timer.kind == CallbackTimerKind::Timeout)
             .map(|timer| timer.async_id);
-        callbacks
-            .retain(|timer| timer.id != interval_id || timer.kind != CallbackTimerKind::Timeout);
+        CALLBACK_TIMERS.retain_counted(&mut callbacks, |timer| {
+            timer.id != interval_id || timer.kind != CallbackTimerKind::Timeout
+        });
         async_id
     };
     enqueue_destroy_ids([interval_async_id, callback_async_id]);
@@ -1700,7 +1719,7 @@ pub extern "C" fn js_interval_timer_tick() -> i32 {
             if !timer.cleared
                 && crate::agent::owns(timer.owner)
                 && timer.next_deadline <= now
-                && (timer_has_ref_state(timer.id) || allow_unref)
+                && (timer.refed || allow_unref)
             {
                 callbacks.push((
                     timer.id,
@@ -1714,7 +1733,7 @@ pub extern "C" fn js_interval_timer_tick() -> i32 {
             }
         }
 
-        timers.retain(|t| !t.cleared);
+        INTERVAL_TIMERS.retain_counted(&mut timers, |t| !t.cleared);
 
         callbacks
     };
@@ -1781,24 +1800,7 @@ pub extern "C" fn js_interval_timer_has_pending() -> i32 {
 #[no_mangle]
 pub extern "C" fn js_interval_timer_next_deadline() -> f64 {
     let now = Instant::now();
-    let allow_unref = should_run_unref_callback_interval_timers();
-
-    INTERVAL_TIMERS
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|t| {
-            !t.cleared && crate::agent::owns(t.owner) && (timer_has_ref_state(t.id) || allow_unref)
-        })
-        .map(|t| {
-            if t.next_deadline <= now {
-                0.0
-            } else {
-                (t.next_deadline - now).as_millis() as f64
-            }
-        })
-        .min_by(|a, b| a.partial_cmp(b).unwrap())
-        .unwrap_or(-1.0)
+    whole_ms_until(interval_timer_deadline(), now)
 }
 
 /// GC root scanner: mark all values reachable from timer queues

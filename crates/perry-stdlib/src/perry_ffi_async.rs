@@ -236,18 +236,17 @@ pub extern "C" fn perry_ffi_spawn_blocking(ctx: *mut c_void, invoke: extern "C" 
     let ctx_addr = ctx as usize;
     // #591: keep the event loop alive until the spawned closure has
     // queued its Promise resolution. See `EXT_BLOCKING_TASKS_INFLIGHT`.
-    use std::sync::atomic::Ordering;
-    async_bridge::EXT_BLOCKING_TASKS_INFLIGHT.fetch_add(1, Ordering::AcqRel);
+    let inflight = async_bridge::InflightGuard::new();
     async_bridge::runtime().spawn_blocking(move || {
         invoke(ctx_addr as *mut c_void);
-        async_bridge::EXT_BLOCKING_TASKS_INFLIGHT.fetch_sub(1, Ordering::AcqRel);
-        // Wake the main thread: well-formed wrappers will have
-        // queued a Promise resolution from inside `invoke`, which
-        // already notified — but a wrapper that resolves without
+        // Dropping the guard wakes the main thread: well-formed wrappers
+        // will have queued a Promise resolution from inside `invoke`,
+        // which already notified — but a wrapper that resolves without
         // going through queue_* still needs the active-handle gate
         // to flip and re-evaluate.
-        perry_runtime::event_pump::js_notify_main_thread();
+        drop(inflight);
     });
+    perry_runtime::event_pump::js_native_work_submitted();
 }
 
 /// `perry_ffi_spawn_blocking_with_reactor(ctx, invoke)` — like
@@ -286,17 +285,15 @@ pub extern "C" fn perry_ffi_spawn_blocking_with_reactor(
     async_bridge::ensure_pump_registered();
     let ctx_addr = ctx as usize;
     // #591: same active-handle gate as the plain variant.
-    use std::sync::atomic::Ordering;
-    async_bridge::EXT_BLOCKING_TASKS_INFLIGHT.fetch_add(1, Ordering::AcqRel);
+    let inflight = async_bridge::InflightGuard::new();
     // Spawn directly on the multi-thread runtime so the closure
     // body runs on a worker thread that has full I/O reactor +
     // handle access. Inside the spawned task, `tokio::spawn(fut)`
     // and `Handle::current().spawn(fut)` both work for fan-out
     // I/O work.
-    async_bridge::runtime().spawn(async move {
+    async_bridge::spawn_native(async move {
         invoke(ctx_addr as *mut c_void);
-        async_bridge::EXT_BLOCKING_TASKS_INFLIGHT.fetch_sub(1, Ordering::AcqRel);
-        perry_runtime::event_pump::js_notify_main_thread();
+        drop(inflight);
     });
 }
 
@@ -334,7 +331,7 @@ pub unsafe extern "C" fn perry_ffi_spawn_async(ctx: *mut c_void) {
     // SAFETY: `ctx` came from perry-ffi's `spawn_async` (Box::into_raw
     // of `Box<BoxFuture>`); reconstruct + own it once.
     let future: BoxFuture = *unsafe { Box::from_raw(ctx as *mut BoxFuture) };
-    async_bridge::runtime().spawn(future);
+    async_bridge::spawn_native(future);
 }
 
 /// `perry_ffi_run_pending(budget_ms)` — drive the shared current-thread runtime

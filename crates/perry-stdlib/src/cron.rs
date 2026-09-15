@@ -23,7 +23,7 @@
 //! never fired in user code.
 
 use crate::common::{
-    get_handle, register_handle, string_from_header_lossy as string_from_header, Handle, RUNTIME,
+    get_handle, register_handle, string_from_header_lossy as string_from_header, Handle,
 };
 use cron::Schedule;
 use perry_runtime::closure::{js_closure_call0, ClosureHeader};
@@ -521,7 +521,7 @@ pub extern "C" fn js_cron_set_interval(_callback_id: f64, interval_ms: f64) -> H
     let running_clone = running.clone();
     let interval = interval_ms as u64;
 
-    RUNTIME.spawn(async move {
+    crate::common::async_bridge::spawn_native(async move {
         while running_clone.load(Ordering::SeqCst) {
             tokio::time::sleep(tokio::time::Duration::from_millis(interval)).await;
             if running_clone.load(Ordering::SeqCst) {
@@ -560,7 +560,7 @@ pub extern "C" fn js_cron_set_timeout(_callback_id: f64, timeout_ms: f64) -> Han
     let cancelled_clone = cancelled.clone();
     let timeout = timeout_ms as u64;
 
-    RUNTIME.spawn(async move {
+    crate::common::async_bridge::spawn_native(async move {
         tokio::time::sleep(tokio::time::Duration::from_millis(timeout)).await;
         if !cancelled_clone.load(Ordering::SeqCst) {
             // Invoke callback (in real impl: js_callback_invoke(callback_id))

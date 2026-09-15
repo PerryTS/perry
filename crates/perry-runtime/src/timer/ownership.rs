@@ -8,7 +8,7 @@
 //! ownership: per-agent event-loop liveness, and what happens to an agent's
 //! timers when the agent itself goes away.
 
-use super::{timer_has_ref_state, CALLBACK_TIMERS, INTERVAL_TIMERS, TIMER_QUEUE};
+use super::{CALLBACK_TIMERS, INTERVAL_TIMERS, TIMER_QUEUE};
 
 /// Any entry needs the ordinary timer phase, including unref timers and
 /// cleared entries whose cleanup has not run. Foreign entries conservatively
@@ -30,23 +30,22 @@ pub(crate) fn timer_phase_work_pending() -> bool {
 // timer on the process-global queues, so one agent's pending work kept every
 // other agent's loop alive.
 
+// turnloop P0: O(1) for the primary agent (`timer/liveness.rs`); other agents
+// keep the exact scan below.
+
 pub(super) fn has_refed_promise_timer() -> bool {
-    TIMER_QUEUE
-        .lock()
-        .unwrap()
-        .iter()
-        .any(|timer| timer.has_ref && crate::agent::owns(timer.owner))
+    TIMER_QUEUE.has_live_for_current_agent(|timer| timer.has_ref && crate::agent::owns(timer.owner))
 }
 
 pub(super) fn has_refed_callback_timer() -> bool {
-    CALLBACK_TIMERS.lock().unwrap().iter().any(|timer| {
-        !timer.cleared && crate::agent::owns(timer.owner) && timer_has_ref_state(timer.id)
+    CALLBACK_TIMERS.has_live_for_current_agent(|timer| {
+        !timer.cleared && crate::agent::owns(timer.owner) && timer.refed
     })
 }
 
 pub(super) fn has_refed_interval_timer() -> bool {
-    INTERVAL_TIMERS.lock().unwrap().iter().any(|timer| {
-        !timer.cleared && crate::agent::owns(timer.owner) && timer_has_ref_state(timer.id)
+    INTERVAL_TIMERS.has_live_for_current_agent(|timer| {
+        !timer.cleared && crate::agent::owns(timer.owner) && timer.refed
     })
 }
 
@@ -64,7 +63,7 @@ pub(super) fn has_refed_interval_timer() -> bool {
 /// is safe precisely because nothing else can own these entries — no other
 /// thread may dereference pointers into this agent's arena.
 pub(crate) fn purge_agent_timers(agent: crate::agent::AgentId) {
-    TIMER_QUEUE.lock().unwrap().retain(|t| t.owner != agent);
-    CALLBACK_TIMERS.lock().unwrap().retain(|t| t.owner != agent);
-    INTERVAL_TIMERS.lock().unwrap().retain(|t| t.owner != agent);
+    TIMER_QUEUE.retain_counted(&mut TIMER_QUEUE.lock().unwrap(), |t| t.owner != agent);
+    CALLBACK_TIMERS.retain_counted(&mut CALLBACK_TIMERS.lock().unwrap(), |t| t.owner != agent);
+    INTERVAL_TIMERS.retain_counted(&mut INTERVAL_TIMERS.lock().unwrap(), |t| t.owner != agent);
 }
