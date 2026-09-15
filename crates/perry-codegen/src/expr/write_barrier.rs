@@ -347,8 +347,20 @@ pub(crate) fn emit_root_nanbox_store_for_expr(
         // GC_STORE_AUDIT(ROOT): proven scalar in a registered mutable root.
         ctx.block().store(DOUBLE, value, root_slot);
     } else {
-        emit_root_nanbox_store_on_block(ctx.block(), value, root_slot);
+        emit_gated_root_nanbox_store(ctx, value, root_slot);
     }
+}
+
+/// [`emit_root_nanbox_store_on_block`] with the runtime's own idle test
+/// inlined: `js_write_barrier_root_nanbox` returns immediately while
+/// `PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT` is zero, so the call is taken
+/// only while some thread is incrementally marking.
+pub(crate) fn emit_gated_root_nanbox_store(ctx: &mut FnCtx<'_>, value: &str, root_slot: &str) {
+    // GC_STORE_AUDIT(ROOT): module-global slot registered as a mutable GC
+    // root; the gated root barrier below covers incremental marking.
+    ctx.block().store(DOUBLE, value, root_slot);
+    let value_bits = ctx.block().bitcast_double_to_i64(value);
+    super::emit_persistent_shadow_root_barrier(ctx, &value_bits);
 }
 
 pub(crate) fn emit_root_nanbox_store_on_block(blk: &mut LlBlock, value: &str, root_slot: &str) {

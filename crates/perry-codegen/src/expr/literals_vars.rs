@@ -17,11 +17,11 @@ use crate::type_analysis::{is_map_expr, is_set_expr, receiver_class_name};
 use crate::types::{DOUBLE, I32, I64};
 
 use super::{
-    can_lower_expr_as_i32_in_current_region, emit_root_nanbox_store_for_expr,
-    emit_root_nanbox_store_on_block, emit_shadow_slot_clear, emit_shadow_slot_update_for_expr,
-    emit_write_barrier, is_global_this_builtin_function_name, lower_expr, lower_expr_as_i32,
-    lower_pod_local_reassignment, materialize_pod_value_copy, nanbox_string_inline, FnCtx,
-    TrustedBoxCapturePtr,
+    can_lower_expr_as_i32_in_current_region, emit_gated_root_nanbox_store,
+    emit_root_nanbox_store_for_expr, emit_root_nanbox_store_on_block, emit_shadow_slot_clear,
+    emit_shadow_slot_update_for_expr, emit_write_barrier, is_global_this_builtin_function_name,
+    lower_expr, lower_expr_as_i32, lower_pod_local_reassignment, materialize_pod_value_copy,
+    nanbox_string_inline, FnCtx, TrustedBoxCapturePtr,
 };
 
 /// Only TDZ-capable source bindings need a named accessor. Ordinary boxes
@@ -1002,19 +1002,68 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // Soft fallback: silently increment a throwaway value.
                 return Ok(double_literal(0.0));
             };
-            let blk = ctx.block();
-            let old = blk.load(DOUBLE, &storage);
-            let old = coerce_old(blk, &old);
-            let new = step_new(blk, &old);
-            if storage_is_root {
-                // Module globals are registered mutable GC roots and route
-                // through the root helper; the raw store below is stack-only.
-                emit_root_nanbox_store_on_block(blk, &new, &storage);
+            let raw_old = ctx.block().load(DOUBLE, &storage);
+            let (old, new) = if needs_numeric_coerce {
+                // A plain double already is its own ToNumeric, and its step is
+                // `± 1.0`: decide that inline and keep `js_to_numeric` /
+                // `js_numeric_step` (BigInt, int32 boxes, objects with
+                // `valueOf`) for tagged values only. The fast result is a
+                // double, so its root store needs no barrier.
+                let plain = crate::codegen::emit_plain_number_test(ctx.block(), &raw_old);
+                let fast_idx = ctx.new_block("update.num.fast");
+                let slow_idx = ctx.new_block("update.num.slow");
+                let merge_idx = ctx.new_block("update.num.merge");
+                let fast_label = ctx.block_label(fast_idx);
+                let slow_label = ctx.block_label(slow_idx);
+                let merge_label = ctx.block_label(merge_idx);
+                ctx.block().cond_br(&plain, &fast_label, &slow_label);
+
+                ctx.current_block = fast_idx;
+                let fast_new = match op {
+                    UpdateOp::Increment => ctx.block().fadd(&raw_old, "1.0"),
+                    UpdateOp::Decrement => ctx.block().fsub(&raw_old, "1.0"),
+                };
+                // GC_STORE_AUDIT(ROOT): a plain double in a registered mutable
+                // root (or a function-local alloca) never needs shading.
+                ctx.block().store(DOUBLE, &fast_new, &storage);
+                let fast_end = ctx.block().label.clone();
+                ctx.block().br(&merge_label);
+
+                ctx.current_block = slow_idx;
+                let slow_old = coerce_old(ctx.block(), &raw_old);
+                let slow_new = step_new(ctx.block(), &slow_old);
+                if storage_is_root {
+                    emit_gated_root_nanbox_store(ctx, &slow_new, &storage);
+                } else {
+                    // GC_STORE_AUDIT(STACK): update writes a function-local
+                    // alloca; module globals use the root helper.
+                    ctx.block().store(DOUBLE, &slow_new, &storage);
+                }
+                let slow_end = ctx.block().label.clone();
+                ctx.block().br(&merge_label);
+
+                ctx.current_block = merge_idx;
+                let old = ctx
+                    .block()
+                    .phi(DOUBLE, &[(&raw_old, &fast_end), (&slow_old, &slow_end)]);
+                let new = ctx
+                    .block()
+                    .phi(DOUBLE, &[(&fast_new, &fast_end), (&slow_new, &slow_end)]);
+                (old, new)
             } else {
-                // GC_STORE_AUDIT(STACK): update writes a function-local alloca;
-                // module globals use the root helper.
-                blk.store(DOUBLE, &new, &storage);
-            }
+                let blk = ctx.block();
+                let new = step_new(blk, &raw_old);
+                if storage_is_root {
+                    // Module globals are registered mutable GC roots and route
+                    // through the root helper; the raw store below is stack-only.
+                    emit_root_nanbox_store_on_block(blk, &new, &storage);
+                } else {
+                    // GC_STORE_AUDIT(STACK): update writes a function-local alloca;
+                    // module globals use the root helper.
+                    blk.store(DOUBLE, &new, &storage);
+                }
+                (raw_old, new)
+            };
             // Keep the parallel i32 counter slot in sync (if active).
             // This costs one `add i32, 1` per iteration but saves a
             // `fptosi double → i32` on every IndexGet/IndexSet use.
