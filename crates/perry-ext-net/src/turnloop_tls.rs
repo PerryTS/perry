@@ -33,7 +33,7 @@ use std::sync::Arc;
 
 use turnloop_tls::rustls::{
     self,
-    unbuffered::{ConnectionState, UnbufferedStatus},
+    unbuffered::{ConnectionState, EncodeError, UnbufferedStatus},
 };
 
 /// Retained ciphertext scratch. One TLS record is at most ~16 KiB plus
@@ -45,6 +45,9 @@ const INPUT_LIMIT: usize = 1024 * 1024;
 /// Hard cap on decrypted plaintext the caller has not taken yet. The caller
 /// drains it inside the same dispatch, so this only bounds a pathological turn.
 const PLAINTEXT_LIMIT: usize = 8 * 1024 * 1024;
+/// Ceiling on growing the scratch for one oversized handshake flight. A
+/// certificate chain larger than this is not a chain worth completing.
+const SCRATCH_LIMIT: usize = 4 * 1024 * 1024;
 
 /// What the caller must know after [`TlsSession::pump`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -69,6 +72,10 @@ struct Buffers {
     want_close: bool,
     close_sent: bool,
     peer_closed: bool,
+    /// rustls asked for a larger output buffer than `scratch` has (a big
+    /// certificate chain). Applied before the next `process`, which then hands
+    /// back the same `EncodeTlsData` state and succeeds.
+    grow_scratch: Option<usize>,
     failed: Option<String>,
 }
 
@@ -165,6 +172,7 @@ impl TlsSession {
                 want_close: false,
                 close_sent: false,
                 peer_closed: false,
+                grow_scratch: None,
                 failed: None,
             },
             handshaking: true,
@@ -304,6 +312,12 @@ impl TlsSession {
 }
 
 fn step<E: Endpoint>(tls: &mut E, b: &mut Buffers) -> Action {
+    if let Some(required) = b.grow_scratch.take() {
+        // Applied here rather than inside the arm below, where `b` is already
+        // borrowed by the rustls state.
+        flush_scratch(b);
+        b.scratch.resize(required, 0);
+    }
     let UnbufferedStatus { discard, state } = tls.process(&mut b.input);
     let mut discard = discard;
     let action = match state {
@@ -316,6 +330,18 @@ fn step<E: Endpoint>(tls: &mut E, b: &mut Buffers) -> Action {
                 Ok(n) => {
                     b.scratch_len += n;
                     Action::Progress
+                }
+                // A handshake flight bigger than the retained scratch — a large
+                // certificate chain. Ask for the size rustls named and retry;
+                // failing here instead would refuse the connection outright.
+                Err(EncodeError::InsufficientSize(required)) => {
+                    if required.required_size > SCRATCH_LIMIT {
+                        b.failed = Some("ERR_SSL_PROTOCOL_ERROR: TLS output limit".to_string());
+                        Action::Blocked
+                    } else {
+                        b.grow_scratch = Some(required.required_size);
+                        Action::Progress
+                    }
                 }
                 Err(e) => {
                     b.failed = Some(format!("ERR_SSL_PROTOCOL_ERROR: {e:?}"));
