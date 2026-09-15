@@ -207,6 +207,12 @@ pub mod typedarray;
 pub mod typedarray_half;
 pub(crate) mod typedarray_props;
 pub mod typedarray_view;
+// turnloop P1: Perry's stream networking on turnloop handles
+// (`turnloop_net/mod.rs`). Native targets only, matching the turnloop
+// dependency itself; the web/WASI targets keep their host integration until
+// their backends are wired per agent.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod turnloop_net;
 pub mod url;
 pub mod v8;
 pub mod validators;

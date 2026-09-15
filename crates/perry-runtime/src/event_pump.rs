@@ -199,6 +199,58 @@ pub extern "C" fn js_native_work_submitted() {
     }
 }
 
+/// turnloop P1: run `f` against this agent's driver, creating or upgrading the
+/// loop to the net profile first.
+///
+/// `None` means this thread has no loop — a worker agent before P3/P4, the
+/// `tokio-wait-driver` A/B arm, or a host where loop creation failed — and the
+/// caller must keep its legacy transport. That is the whole coexistence rule:
+/// a socket is either turnloop's or tokio's for its entire life, never both.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn with_net_driver<R>(f: impl FnOnce(&mut turnloop::Loop) -> R) -> Option<R> {
+    #[cfg(not(feature = "tokio-wait-driver"))]
+    {
+        agent_loop::with_net_driver(f)
+    }
+    #[cfg(feature = "tokio-wait-driver")]
+    {
+        let _ = f;
+        None
+    }
+}
+
+/// Test-only: install an unrouted net-profile loop on this thread.
+#[cfg(all(test, not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+pub(crate) fn install_net_loop_for_test() -> bool {
+    agent_loop::install_unrouted_for_test(agent_loop::Profile::Net)
+}
+
+/// Test-only: one bounded turn plus completion dispatch.
+#[cfg(all(test, not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+pub(crate) fn pump_net_for_test(budget: std::time::Duration) {
+    agent_loop::turn_for_test(budget);
+}
+
+/// Test-only: drop this thread's loop and all P1 net state.
+#[cfg(all(test, not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+pub(crate) fn reset_net_loop_for_test() {
+    agent_loop::reset_for_test();
+}
+
+/// turnloop P1: whether this thread can take the turnloop net path, asked
+/// without creating a loop.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn net_loop_available() -> bool {
+    #[cfg(not(feature = "tokio-wait-driver"))]
+    {
+        agent_loop::net_available()
+    }
+    #[cfg(feature = "tokio-wait-driver")]
+    {
+        false
+    }
+}
+
 /// Destroy the calling thread's agent loop at the process-exit funnel and, with
 /// `PERRY_LOOP_STATS=1`, print its counters once (a diagnostic, not a behaviour
 /// knob). Idempotent; a park after this uses the legacy path.

@@ -1,0 +1,524 @@
+//! P1 acceptance: real bytes over real sockets, on the real driver.
+//!
+//! Every test here asserts its *subject* ran, not merely that nothing threw
+//! (DESIGN §11, and the "four ways a gate can be unable to fail" rule in
+//! CLAUDE.md): a byte assertion is paired with a completion-kind assertion, and
+//! the loopback tests check `live_handles()` so a run in which no socket was
+//! ever created cannot pass.
+
+use std::cell::RefCell;
+use std::net::SocketAddr;
+use std::time::{Duration, Instant};
+
+use super::sink::{
+    NetCompletion, NET_ACCEPT, NET_CLOSED, NET_CONNECT, NET_DATA, NET_EOF, NET_ERROR, NET_SHUTDOWN,
+    NET_WROTE,
+};
+use super::*;
+
+/// One recorded completion, owned (the ABI struct borrows its payload).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Event {
+    kind: i32,
+    id: i64,
+    conn: i64,
+    user: u64,
+    len: usize,
+    queued: usize,
+    errno: i32,
+    data: Vec<u8>,
+    code: Option<String>,
+    syscall: Option<String>,
+}
+
+thread_local! {
+    static EVENTS: RefCell<Vec<Event>> = const { RefCell::new(Vec::new()) };
+    static NEXT_ID: std::cell::Cell<i64> = const { std::cell::Cell::new(1000) };
+}
+
+extern "C" fn test_sink(completion: *const NetCompletion) {
+    // SAFETY: `dispatch` passes a live completion for the duration of the call.
+    let c = unsafe { &*completion };
+    // SAFETY: same call, and the payload pointers are valid for it.
+    let (data, code, syscall) = unsafe {
+        (
+            c.bytes().to_vec(),
+            c.code_str().map(str::to_string),
+            c.syscall_str().map(str::to_string),
+        )
+    };
+    EVENTS.with(|events| {
+        events.borrow_mut().push(Event {
+            kind: c.kind,
+            id: c.id,
+            conn: c.conn,
+            user: c.user,
+            len: c.len,
+            queued: c.queued,
+            errno: c.errno,
+            data,
+            code,
+            syscall,
+        })
+    });
+}
+
+extern "C" fn test_alloc_id() -> i64 {
+    NEXT_ID.with(|n| {
+        let id = n.get() + 1;
+        n.set(id);
+        id
+    })
+}
+
+const SUBSYSTEM: u8 = 3;
+
+struct Fixture;
+
+impl Fixture {
+    fn start() -> Self {
+        assert!(
+            crate::event_pump::install_net_loop_for_test(),
+            "the host must provide a turnloop loop for the P1 tests"
+        );
+        assert!(
+            super::register_sink(SUBSYSTEM, test_sink, test_alloc_id),
+            "sink registration must succeed, or every assertion below is vacuous"
+        );
+        EVENTS.with(|events| events.borrow_mut().clear());
+        Fixture
+    }
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        crate::event_pump::reset_net_loop_for_test();
+        EVENTS.with(|events| events.borrow_mut().clear());
+    }
+}
+
+fn pump() {
+    crate::event_pump::pump_net_for_test(Duration::from_millis(5));
+}
+
+/// Pump until `want` is satisfied or the budget runs out. Returns whether it
+/// was satisfied, so a test can assert on it rather than time out silently.
+fn pump_until(want: impl Fn(&[Event]) -> bool) -> bool {
+    let limit = Instant::now() + Duration::from_secs(5);
+    loop {
+        if EVENTS.with(|events| want(&events.borrow())) {
+            return true;
+        }
+        if Instant::now() >= limit {
+            return false;
+        }
+        pump();
+    }
+}
+
+fn events() -> Vec<Event> {
+    EVENTS.with(|events| events.borrow().clone())
+}
+
+fn count(kind: i32, id: i64) -> usize {
+    events()
+        .iter()
+        .filter(|e| e.kind == kind && e.id == id)
+        .count()
+}
+
+fn payload(kind: i32, id: i64) -> Vec<u8> {
+    events()
+        .iter()
+        .filter(|e| e.kind == kind && e.id == id)
+        .flat_map(|e| e.data.clone())
+        .collect()
+}
+
+fn accepted_id(server: i64) -> Option<i64> {
+    events()
+        .iter()
+        .find(|e| e.kind == NET_ACCEPT && e.id == server)
+        .map(|e| e.conn)
+}
+
+fn listen_local() -> (i64, SocketAddr) {
+    let server = 1;
+    let local = super::tcp_listen(
+        server,
+        SUBSYSTEM,
+        "127.0.0.1:0".parse().unwrap(),
+        128,
+        false,
+    )
+    .expect("bind an ephemeral loopback port");
+    assert_ne!(local.port(), 0, "listen(0) must report its real port");
+    super::accept_start(server).expect("multishot accept");
+    (server, local)
+}
+
+#[test]
+fn tokens_round_trip_operation_class_and_id() {
+    for id in [1i64, 2, 4095, (1i64 << 40) - 1, (1i64 << 56) - 1] {
+        for op in [
+            OP_ACCEPT,
+            OP_READ,
+            OP_WRITE,
+            OP_SHUTDOWN,
+            OP_CONNECT,
+            OP_CLOSE,
+        ] {
+            let (back_op, back_id) = token_parts(token(op, id));
+            assert_eq!((back_op, back_id), (op, id), "token({op}, {id})");
+        }
+    }
+}
+
+#[test]
+fn a_full_loopback_exchange_moves_real_bytes_both_ways() {
+    let _fixture = Fixture::start();
+    let (server, local) = listen_local();
+    assert_eq!(super::live_handles(), 1, "the listener is on the loop");
+
+    let client = 2;
+    super::tcp_connect(client, SUBSYSTEM, local, true).expect("connect");
+    assert!(
+        pump_until(
+            |e| e.iter().any(|e| e.kind == NET_CONNECT && e.id == client)
+                && e.iter().any(|e| e.kind == NET_ACCEPT && e.id == server)
+        ),
+        "connect and accept must both complete: {:?}",
+        events()
+    );
+    let conn = accepted_id(server).expect("accept reported a connection id");
+    assert_eq!(
+        super::live_handles(),
+        3,
+        "listener + client + accepted connection"
+    );
+
+    super::read_start(client).expect("client read");
+    super::read_start(conn).expect("server read");
+
+    // Client → server.
+    let queued = super::write(client, b"ping".to_vec(), 7).expect("client write");
+    assert_eq!(queued, 4, "the write is queued until the driver reports it");
+    assert!(
+        pump_until(|e| e.iter().any(|e| e.kind == NET_DATA && e.id == conn)),
+        "the server side must receive the bytes: {:?}",
+        events()
+    );
+    assert_eq!(payload(NET_DATA, conn), b"ping");
+
+    let wrote = events()
+        .into_iter()
+        .find(|e| e.kind == NET_WROTE && e.id == client)
+        .expect("the write completed");
+    assert_eq!(
+        wrote.user, 7,
+        "the caller's completion token is echoed back"
+    );
+    assert_eq!(wrote.len, 4);
+    assert_eq!(wrote.queued, 0, "the write drained");
+    assert_eq!(super::queued_bytes(client), 0);
+
+    // Server → client.
+    super::write(conn, b"pong".to_vec(), 0).expect("server write");
+    assert!(
+        pump_until(|e| e.iter().any(|e| e.kind == NET_DATA && e.id == client)),
+        "the client must receive the reply: {:?}",
+        events()
+    );
+    assert_eq!(payload(NET_DATA, client), b"pong");
+
+    super::close(client).expect("close client");
+    super::close(conn).expect("close connection");
+    super::close(server).expect("close listener");
+    assert!(
+        pump_until(|e| e.iter().filter(|e| e.kind == NET_CLOSED).count() == 3),
+        "every handle must report its terminal Closed: {:?}",
+        events()
+    );
+    assert_eq!(
+        super::live_handles(),
+        0,
+        "the entry is released on Closed, not before"
+    );
+}
+
+#[test]
+fn half_close_ends_the_write_side_and_the_peer_sees_eof() {
+    let _fixture = Fixture::start();
+    let (server, local) = listen_local();
+    let client = 2;
+    super::tcp_connect(client, SUBSYSTEM, local, true).expect("connect");
+    assert!(pump_until(|e| e.iter().any(|e| e.kind == NET_ACCEPT)));
+    let conn = accepted_id(server).expect("connection id");
+    super::read_start(conn).expect("server read");
+    super::read_start(client).expect("client read");
+
+    // A queued write followed by end(): turnloop orders the shutdown after the
+    // write, so the peer must see the bytes AND THEN the EOF, never a
+    // truncated stream.
+    super::write(client, b"last".to_vec(), 0).expect("write");
+    super::shutdown(client, 42).expect("end");
+
+    assert!(
+        pump_until(|e| e.iter().any(|e| e.kind == NET_EOF && e.id == conn)),
+        "the peer must observe the half-close: {:?}",
+        events()
+    );
+    assert_eq!(
+        payload(NET_DATA, conn),
+        b"last",
+        "the queued write must precede the FIN"
+    );
+    let shutdown = events()
+        .into_iter()
+        .find(|e| e.kind == NET_SHUTDOWN && e.id == client)
+        .expect("the shutdown completed");
+    assert_eq!(shutdown.user, 42, "end()'s callback token is echoed back");
+
+    // Half-close is half: the read side of the client still works.
+    super::write(conn, b"reply".to_vec(), 0).expect("server can still write");
+    assert!(
+        pump_until(|e| e.iter().any(|e| e.kind == NET_DATA && e.id == client)),
+        "the client's read side survives its own half-close: {:?}",
+        events()
+    );
+    assert_eq!(payload(NET_DATA, client), b"reply");
+
+    for id in [client, conn, server] {
+        let _ = super::close(id);
+    }
+    pump_until(|e| e.iter().filter(|e| e.kind == NET_CLOSED).count() == 3);
+}
+
+#[test]
+fn queued_writes_report_backpressure_and_drain_in_order() {
+    let _fixture = Fixture::start();
+    let (server, local) = listen_local();
+    let client = 2;
+    super::tcp_connect(client, SUBSYSTEM, local, true).expect("connect");
+    assert!(pump_until(|e| e.iter().any(|e| e.kind == NET_CONNECT)));
+    let conn = accepted_id(server).expect("connection id");
+    super::read_start(conn).expect("server read");
+
+    // Submit several writes before turning once, so they are genuinely queued
+    // rather than completing one at a time.
+    let mut queued = 0;
+    for (i, chunk) in [b"aaa".as_slice(), b"bb", b"c"].iter().enumerate() {
+        queued = super::write(client, chunk.to_vec(), i as u64 + 1).expect("write");
+    }
+    assert_eq!(queued, 6, "every queued byte counts toward writableLength");
+    assert_eq!(super::queued_bytes(client), 6);
+
+    assert!(
+        pump_until(|e| e.iter().filter(|e| e.kind == NET_WROTE).count() == 3),
+        "all three writes must complete: {:?}",
+        events()
+    );
+    let tokens: Vec<u64> = events()
+        .iter()
+        .filter(|e| e.kind == NET_WROTE)
+        .map(|e| e.user)
+        .collect();
+    assert_eq!(
+        tokens,
+        vec![1, 2, 3],
+        "write completions are reported in submission order"
+    );
+    assert_eq!(super::queued_bytes(client), 0, "the queue drained");
+
+    assert!(pump_until(|e| e
+        .iter()
+        .any(|e| e.kind == NET_DATA && e.id == conn)));
+    let received = payload(NET_DATA, conn);
+    assert_eq!(
+        received, b"aaabbc",
+        "ordered writes arrive as one ordered stream"
+    );
+
+    for id in [client, conn, server] {
+        let _ = super::close(id);
+    }
+    pump_until(|e| e.iter().filter(|e| e.kind == NET_CLOSED).count() == 3);
+}
+
+#[test]
+fn a_refused_connect_reports_nodes_code_errno_and_syscall() {
+    let _fixture = Fixture::start();
+    // Bind and immediately close, so the port is almost certainly unused.
+    let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("probe bind");
+    let dead: SocketAddr = probe.local_addr().expect("probe addr");
+    drop(probe);
+
+    let client = 5;
+    super::tcp_connect(client, SUBSYSTEM, dead, false).expect("submit connect");
+    assert!(
+        pump_until(|e| e.iter().any(|e| e.kind == NET_ERROR && e.id == client)),
+        "a connect to a dead port must fail: {:?}",
+        events()
+    );
+    let err = events()
+        .into_iter()
+        .find(|e| e.kind == NET_ERROR && e.id == client)
+        .expect("the error completion");
+    assert_eq!(err.syscall.as_deref(), Some("connect"));
+    assert_eq!(
+        err.code.as_deref(),
+        Some("ECONNREFUSED"),
+        "Node reports the OS code, not a portable category"
+    );
+    assert!(err.errno < 0, "libuv reports errno negated: {}", err.errno);
+    let _ = super::close(client);
+    pump();
+}
+
+/// `net.connect(port, 'localhost')` against an IPv4-only listener.
+///
+/// On a dual-stack host `localhost` resolves to `::1` *and* `127.0.0.1`, and
+/// the resolver usually returns the v6 address first — so this only passes if
+/// a refused first attempt falls through to the next address (Node's
+/// `autoSelectFamily`). Written as a regression: the single-address version
+/// of this code failed here with ECONNREFUSED, and it is the single most
+/// common connect form in the net corpus.
+#[test]
+fn a_hostname_connect_resolves_and_falls_through_to_a_reachable_family() {
+    let _fixture = Fixture::start();
+    let (server, local) = listen_local();
+    let client = 2;
+    // "localhost" is not an IP literal, so this goes through Loop::resolve.
+    super::tcp_connect_host(client, SUBSYSTEM, "localhost", local.port(), false)
+        .expect("submit resolve+connect");
+    assert!(
+        pump_until(|e| e.iter().any(|e| e.kind == NET_CONNECT && e.id == client)),
+        "a name must resolve and connect: {:?}",
+        events()
+    );
+    assert!(
+        super::peer_addr(client).is_some(),
+        "the resolved peer is recorded"
+    );
+    assert_eq!(
+        events().iter().filter(|e| e.kind == NET_ERROR).count(),
+        0,
+        "an abandoned address attempt must not reach the binding: {:?}",
+        events()
+    );
+    assert_eq!(
+        events().iter().filter(|e| e.kind == NET_CLOSED).count(),
+        0,
+        "nor must the close that retires it: {:?}",
+        events()
+    );
+    for id in [client, server] {
+        let _ = super::close(id);
+    }
+    pump_until(|e| e.iter().filter(|e| e.kind == NET_CLOSED).count() == 2);
+}
+
+#[test]
+fn an_unresolvable_hostname_reports_enotfound_on_getaddrinfo() {
+    let _fixture = Fixture::start();
+    let client = 9;
+    super::tcp_connect_host(client, SUBSYSTEM, "perry-turnloop-p1.invalid", 80, false)
+        .expect("submit resolve");
+    assert!(
+        pump_until(|e| e.iter().any(|e| e.kind == NET_ERROR && e.id == client)),
+        "a bogus name must fail: {:?}",
+        events()
+    );
+    let err = events()
+        .into_iter()
+        .find(|e| e.kind == NET_ERROR && e.id == client)
+        .expect("the error completion");
+    assert_eq!(err.code.as_deref(), Some("ENOTFOUND"));
+    assert_eq!(err.syscall.as_deref(), Some("getaddrinfo"));
+    assert_eq!(
+        super::live_handles(),
+        0,
+        "a failed resolve leaves no pending connect behind"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn unix_domain_sockets_carry_the_same_lifecycle() {
+    let _fixture = Fixture::start();
+    let dir = std::env::temp_dir().join(format!(
+        "perry-p1-uds-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("s.sock");
+    let _ = std::fs::remove_file(&path);
+
+    let server = 1;
+    super::pipe_listen(server, SUBSYSTEM, &path, 128).expect("bind the socket path");
+    super::accept_start(server).expect("accept");
+
+    let client = 2;
+    super::pipe_connect(client, SUBSYSTEM, &path).expect("connect");
+    assert!(
+        pump_until(|e| e.iter().any(|e| e.kind == NET_ACCEPT && e.id == server)
+            && e.iter().any(|e| e.kind == NET_CONNECT && e.id == client)),
+        "a UDS connection must establish: {:?}",
+        events()
+    );
+    let conn = accepted_id(server).expect("connection id");
+    super::read_start(conn).expect("read");
+    super::write(client, b"unix".to_vec(), 0).expect("write");
+    assert!(
+        pump_until(|e| e.iter().any(|e| e.kind == NET_DATA && e.id == conn)),
+        "bytes must cross the UDS: {:?}",
+        events()
+    );
+    assert_eq!(payload(NET_DATA, conn), b"unix");
+
+    for id in [client, conn, server] {
+        let _ = super::close(id);
+    }
+    pump_until(|e| e.iter().filter(|e| e.kind == NET_CLOSED).count() == 3);
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_dir(&dir);
+}
+
+#[test]
+fn closing_a_socket_with_queued_writes_clears_its_write_accounting() {
+    let _fixture = Fixture::start();
+    let (server, local) = listen_local();
+    let client = 2;
+    super::tcp_connect(client, SUBSYSTEM, local, true).expect("connect");
+    assert!(pump_until(|e| e.iter().any(|e| e.kind == NET_CONNECT)));
+
+    super::write(client, vec![0u8; 8], 1).expect("write");
+    super::close(client).expect("close");
+    // The close cancels the write; the entry must still disappear exactly once,
+    // on Closed, with no leaked queued-byte accounting behind it.
+    assert!(
+        pump_until(|e| e.iter().any(|e| e.kind == NET_CLOSED && e.id == client)),
+        "close must terminate: {:?}",
+        events()
+    );
+    assert_eq!(count(NET_CLOSED, client), 1, "Closed arrives exactly once");
+    assert_eq!(super::queued_bytes(client), 0);
+    assert!(!super::is_live(client));
+
+    let conn = accepted_id(server);
+    for id in conn.into_iter().chain([server]) {
+        let _ = super::close(id);
+    }
+    pump();
+}
+
+#[test]
+fn submissions_for_an_unknown_id_are_rejected_not_ignored() {
+    let _fixture = Fixture::start();
+    let err = super::write(4242, b"x".to_vec(), 0).expect_err("no such socket");
+    assert_eq!(err.code, "ENOENT");
+    assert_eq!(err.syscall, "write");
+    assert!(super::read_start(4242).is_err());
+    assert!(super::close(4242).is_err());
+}

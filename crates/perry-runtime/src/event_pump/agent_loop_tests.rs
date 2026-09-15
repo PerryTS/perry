@@ -14,7 +14,7 @@ fn serial() -> std::sync::MutexGuard<'static, ()> {
 /// Give this test thread a loop WITHOUT the process-wide route, so a test that
 /// only exercises the turn cannot race another thread for route ownership.
 fn install_unrouted() {
-    let agent = AgentLoop::new().expect("create agent loop");
+    let agent = AgentLoop::new(Profile::Wait).expect("create agent loop");
     AGENT_LOOP.with(|slot| *slot.borrow_mut() = Some(agent));
     STATE.with(|s| s.set(LoopState::Owner));
 }
