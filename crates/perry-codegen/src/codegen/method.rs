@@ -1234,6 +1234,59 @@ pub(super) fn compile_method(
                 }
             }
 
+            // #10300: a no-own-ctor class whose chain reaches one of the native
+            // bases perry stamps onto the INSTANCE (`EventEmitter`, `Map`/`Set`,
+            // `Event`/`CustomEvent`, `AsyncLocalStorage`, ...) gets that surface
+            // from the inline `new` lowering
+            // (`native_instance_base_in_chain` in lower_call/new.rs). This
+            // STANDALONE `<class>_constructor` symbol never emitted it — and it
+            // is the body every CROSS-MODULE `new` and every dynamic construct
+            // replay runs. So `export class KeyHandler extends EventEmitter {}`
+            // constructed from another module came back bare and
+            // `handler.on("keypress", ...)` threw "on is not a function"
+            // (@opentui/core's `InternalKeyHandler`, reached from opencode's
+            // TUI). Same walk, same helper, same spec position: after the
+            // implicit `super(...args)`, before this class's own field
+            // initializers.
+            //
+            // No double-init: the inline path only routes a class through this
+            // symbol when it has its OWN constructor (`force_ctor_call`), and
+            // the walk stops at any ancestor that owns construction, so exactly
+            // one emitter of the base init exists per construction.
+            //
+            // `Array` is deliberately excluded: its base init reads the
+            // forwarded value as a LENGTH, and this synthesized symbol's
+            // params are compiler-generated `__forward_arg<i>` slots padded by
+            // the caller — nothing a `new Sub()` site actually wrote. Feeding
+            // them to `js_array_subclass_init_args` turned `new Sub()` into a
+            // 9-element array. The inline `new` path keeps owning Array.
+            if let Some(base) = crate::lower_call::native_instance_base_in_chain(&ctx, class)
+                .filter(|base| !matches!(base, crate::lower_call::NativeInstanceBase::Array))
+            {
+                let undef_lit =
+                    crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                let this_box = match ctx.this_stack.last().cloned() {
+                    Some(slot) => ctx.block().load(DOUBLE, &slot),
+                    None => undef_lit.clone(),
+                };
+                // The implicit derived ctor is `constructor(...args) {
+                // super(...args) }`, so forward this synthesized symbol's params
+                // just as the inline path forwards the call site's arguments.
+                let mut forwarded: Vec<String> = Vec::with_capacity(method.params.len());
+                for fp in &method.params {
+                    match ctx.locals.get(&fp.id).cloned() {
+                        Some(slot) => {
+                            let loaded = ctx.block().load(DOUBLE, &slot);
+                            forwarded.push(loaded);
+                        }
+                        None => forwarded.push(undef_lit.clone()),
+                    }
+                }
+                crate::lower_call::emit_native_instance_base_init(
+                    &mut ctx, base, &this_box, &forwarded,
+                );
+            }
+
             // The synthesized default derived constructor has now completed
             // its implicit `super(...arguments)` path.  Publish that fact to
             // both this standalone function and any arrow closures before

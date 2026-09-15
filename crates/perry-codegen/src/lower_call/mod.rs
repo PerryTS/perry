@@ -174,7 +174,9 @@ pub(crate) use new_helpers::{
 // (no-own-ctor) `new` path in `new.rs` and the explicit-`super()` arm in
 // `expr/this_super_call.rs`, which are the two places a derived constructor can
 // reach the base.
-pub(crate) use new_helpers::{emit_native_instance_base_init, native_instance_base_in_chain};
+pub(crate) use new_helpers::{
+    emit_native_instance_base_init, native_instance_base_in_chain, NativeInstanceBase,
+};
 // `extract_options_fields` is consumed by `expr.rs` as
 // `crate::lower_call::extract_options_fields` — keep that path stable.
 pub(crate) use options::extract_options_fields;
