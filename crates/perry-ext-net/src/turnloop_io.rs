@@ -37,7 +37,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-use bytes::BufMut;
 use perry_ffi::turnloop_net as tl;
 
 use crate::{
@@ -66,8 +65,13 @@ struct Aux {
     /// so writes issued from the `'end'` handler are not cancelled by the
     /// close (turnloop's `close` cancels every outstanding operation).
     close_after_shutdown: bool,
-    /// A terminal event has been pushed; later completions must not double it.
-    terminal: bool,
+    /// An `'error'` has been reported for this socket. The tokio task broke
+    /// its loop after the first one; this keeps that "one error, then the
+    /// terminal pair" shape when several operations fail in the same turn.
+    errored: bool,
+    /// `PendingNetEvent::Close` has been pushed. Node emits `'close'` AFTER
+    /// `'error'`, so this guards double-emission — never emission itself.
+    closed_emitted: bool,
 }
 
 fn aux() -> &'static Mutex<std::collections::HashMap<i64, Aux>> {
@@ -167,7 +171,9 @@ pub(crate) fn submission_failed(id: i64, completion: u64, message: String) {
             Some(message.clone()),
         ));
     }
-    if !raw_bridge::mark_terminal(id, Some(message.clone())) {
+    if !with_aux(id, |a| std::mem::replace(&mut a.errored, true))
+        && !raw_bridge::mark_terminal(id, Some(message.clone()))
+    {
         push_event(PendingNetEvent::Error(id, message));
     }
     destroy(id);
@@ -176,16 +182,26 @@ pub(crate) fn submission_failed(id: i64, completion: u64, message: String) {
 /// `socket.destroy()` on a turnloop socket. The `'close'` event is pushed when
 /// the driver reports the handle really gone, never before.
 pub(crate) fn destroy(id: i64) {
-    if tl::close(id).is_err() && !with_aux(id, |a| std::mem::replace(&mut a.terminal, true)) {
-        // The handle is already gone (a close that raced the peer's reset):
-        // emit the terminal pair the caller is waiting for rather than
-        // stranding the socket.
-        if !raw_bridge::mark_terminal(id, None) {
-            push_event(PendingNetEvent::Close(id));
-        }
-        mark_closed(id);
-        forget_aux(id);
+    if tl::close(id).is_ok() {
+        // The driver will deliver `Closed`, and that is what emits `'close'`.
+        return;
     }
+    // The handle is already gone (a destroy that raced the peer's reset, or a
+    // second `destroy()`): emit the terminal event the caller is waiting for
+    // rather than stranding the socket.
+    emit_close_once(id);
+}
+
+/// Push `'close'` and retire the socket, at most once per socket.
+fn emit_close_once(id: i64) {
+    if with_aux(id, |a| std::mem::replace(&mut a.closed_emitted, true)) {
+        return;
+    }
+    if !raw_bridge::mark_terminal(id, None) {
+        push_event(PendingNetEvent::Close(id));
+    }
+    mark_closed(id);
+    forget_aux(id);
 }
 
 /// Start the readable side. Called once the socket is connected or accepted.
@@ -345,7 +361,7 @@ fn on_data(id: i64, bytes: &[u8]) {
     // the `Bytes` handed to the pump has the same ownership and lifetime the
     // tokio path gave it and the lease can go straight back.
     let mut buf = buffer_pool::checkout();
-    buf.put_slice(bytes);
+    buf.extend_from_slice(bytes);
     let chunk = buf.split_to(bytes.len()).freeze();
     buffer_pool::checkin(buf);
     if !raw_bridge::route_data(id, &chunk) {
@@ -354,7 +370,7 @@ fn on_data(id: i64, bytes: &[u8]) {
 }
 
 fn on_eof(id: i64) {
-    if with_aux(id, |a| a.terminal) {
+    if with_aux(id, |a| a.closed_emitted || a.errored) {
         return;
     }
     if raw_bridge::mark_terminal(id, None) {
@@ -392,8 +408,8 @@ fn on_closed(id: i64) {
         .lock()
         .map(|servers| servers.contains_key(&id))
         .unwrap_or(false);
-    let aux = forget_aux(id);
     if is_server {
+        forget_aux(id);
         if let Ok(mut servers) = statics::servers().lock() {
             if let Some(server) = servers.get_mut(&id) {
                 server.listening = false;
@@ -402,13 +418,7 @@ fn on_closed(id: i64) {
         push_event(PendingNetEvent::ServerClose(id));
         return;
     }
-    if aux.terminal {
-        return;
-    }
-    if !raw_bridge::mark_terminal(id, None) {
-        push_event(PendingNetEvent::Close(id));
-    }
-    mark_closed(id);
+    emit_close_once(id);
 }
 
 fn on_error(id: i64, user: u64, code: Option<&str>, syscall: Option<&str>, terminal: bool) {
@@ -438,19 +448,15 @@ fn on_error(id: i64, user: u64, code: Option<&str>, syscall: Option<&str>, termi
             Some(message.clone()),
         ));
     }
-    if with_aux(id, |a| std::mem::replace(&mut a.terminal, true)) {
-        return;
-    }
-    if !raw_bridge::mark_terminal(id, Some(message.clone())) {
+    // One `'error'` per socket, as the tokio task gave by breaking its loop.
+    // `'close'` is NOT suppressed with it: Node emits close after error, and
+    // it arrives from the driver's own terminal `Closed`.
+    if !with_aux(id, |a| std::mem::replace(&mut a.errored, true))
+        && !raw_bridge::mark_terminal(id, Some(message.clone()))
+    {
         push_event(PendingNetEvent::Error(id, message));
     }
-    // The socket is finished either way; its `'close'` follows the driver's
-    // own terminal completion.
-    if tl::close(id).is_err() {
-        push_event(PendingNetEvent::Close(id));
-        mark_closed(id);
-        forget_aux(id);
-    }
+    destroy(id);
 }
 
 #[cfg(test)]
