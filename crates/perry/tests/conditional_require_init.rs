@@ -345,3 +345,33 @@ console.log('done');
         "entry\ndep\ncycle-runtime:object function\ndone\n"
     );
 }
+
+/// A `do…while` test runs only if the body falls through, so a `require` in
+/// either half is conditional. Node never evaluates the dependency below.
+#[test]
+fn do_while_require_stays_at_its_call_site() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join("dep.cjs"), "console.log('dependency');\nmodule.exports = 7;").unwrap();
+    std::fs::write(
+        root.join("entry.cjs"),
+        r#"
+console.log('entry');
+if (!process.argv.includes('--load')) {
+    do { break; } while (require('./dep.cjs'));
+} else {
+    let seen = 0;
+    do { seen += require('./dep.cjs'); } while (false);
+    console.log('sum', seen);
+}
+console.log('done');
+"#,
+    )
+    .unwrap();
+    let binary = compile(root, "entry.cjs");
+    assert_eq!(run(&binary, &[]), "entry\ndone\n");
+    assert_eq!(
+        run(&binary, &["--load"]),
+        "entry\ndependency\nsum 7\ndone\n"
+    );
+}
