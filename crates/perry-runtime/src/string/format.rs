@@ -143,11 +143,10 @@ pub extern "C" fn js_number_to_string(value: f64) -> *mut StringHeader {
         return ptr;
     }
 
-    // Format the number as a string per JS semantics.
-    let s = js_format_f64(value);
-
-    let bytes = s.as_bytes();
-    js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+    // Format the number as a string per JS semantics, on the stack.
+    let mut buf = [0u8; 32];
+    let len = super::concat::format_number_into(value, &mut buf);
+    js_string_from_bytes(buf.as_ptr(), len as u32)
 }
 
 /// ECMAScript `Number::toString` formatting, returning the Rust `String`.
