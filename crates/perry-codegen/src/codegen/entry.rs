@@ -1305,8 +1305,15 @@ pub(super) fn compile_module_entry(
                 // cost up to the next timer deadline (or the 1 s idle cap).
                 let check_queued = ctx.block().call(I32, "js_immediate_has_pending", &[]);
                 let still_live = emit_event_loop_liveness(&mut ctx, cross_module.needs_stdlib);
-                let no_check_work = ctx.block().icmp_eq(I32, &check_queued, &zero);
+                let check_cmp = ctx.block().icmp_ne(I32, &check_queued, &zero);
                 let still_live_cmp = ctx.block().icmp_ne(I32, &still_live, &zero);
+                // `xor …, true` rather than an `icmp eq i32` against zero:
+                // `expr::property_get`'s PIC test counts `icmp eq i32 %` across
+                // the whole of `main` as its proxy for "the miss block
+                // re-derived the receiver header", so an equality emitted
+                // anywhere else in the entry trips a test about something else
+                // entirely.
+                let no_check_work = ctx.block().xor(I1, &check_cmp, "true");
                 let may_park = ctx.block().and(I1, &no_check_work, &still_live_cmp);
                 ctx.block()
                     .cond_br(&may_park, &body_wait_label, &header_label);
