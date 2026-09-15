@@ -661,13 +661,38 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
 pub(crate) fn lower_math_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     let raw = lower_expr(ctx, expr)?;
-    if is_numeric_expr(ctx, expr)
-        && !crate::type_analysis::expr_may_return_boxed_value_from_raw_f64_fallback(ctx, expr)
-    {
+    if math_operand_is_proven_number(ctx, expr) {
         Ok(raw)
     } else {
-        Ok(ctx
-            .block()
-            .call(DOUBLE, "js_math_to_number", &[(DOUBLE, &raw)]))
+        Ok(emit_math_to_number(ctx, &raw))
     }
+}
+
+/// The operand lowers to a plain double by construction.
+pub(crate) fn math_operand_is_proven_number(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+    is_numeric_expr(ctx, expr)
+        && !crate::type_analysis::expr_may_return_boxed_value_from_raw_f64_fallback(ctx, expr)
+}
+
+/// `js_math_to_number(value)` with the plain-double case decided inline: a
+/// value outside Perry's tag band already is the Number the call would
+/// return, so only tagged values (int32 boxes, strings, objects, …) take the
+/// coercing call.
+pub(crate) fn emit_math_to_number(ctx: &mut FnCtx<'_>, raw: &str) -> String {
+    let plain = crate::codegen::emit_plain_number_test(ctx.block(), raw);
+    let entry_label = ctx.block().label.clone();
+    let slow_idx = ctx.new_block("math.tonum.slow");
+    let merge_idx = ctx.new_block("math.tonum.merge");
+    let slow_label = ctx.block_label(slow_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    ctx.block().cond_br(&plain, &merge_label, &slow_label);
+    ctx.current_block = slow_idx;
+    let coerced = ctx
+        .block()
+        .call(DOUBLE, "js_math_to_number", &[(DOUBLE, raw)]);
+    let slow_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+    ctx.current_block = merge_idx;
+    ctx.block()
+        .phi(DOUBLE, &[(raw, &entry_label), (&coerced, &slow_end)])
 }
