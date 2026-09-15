@@ -112,6 +112,59 @@ pub extern "C" fn js_perry_net_abi_layout() -> u64 {
         | PERRY_NET_ABI_VERSION as u64
 }
 
+/// Map an OS error code onto Node's `code`/`errno`/`syscall` triple.
+///
+/// Exists for the transports this phase did NOT move: they hold a
+/// `std::io::Error` and still have to report the same triple, and duplicating
+/// the table in a binding is how `code` and `errno` end up describing
+/// different failures on different platforms.
+///
+/// # Safety
+/// `syscall`/`syscall_len` must describe a readable UTF-8 range (`syscall` may
+/// be null with length zero); `out` must be null or writable.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_error_from_os(
+    os: i32,
+    syscall: *const u8,
+    syscall_len: usize,
+    out: *mut PerryNetError,
+) -> i32 {
+    // SAFETY: forwarded contract from this function's own safety note.
+    let name = unsafe { str_arg(syscall, syscall_len) };
+    // The syscall name must outlive the call, and the caller owns the bytes it
+    // passed in, so echo their pointer back rather than a borrowed local.
+    let error = turnloop::Error {
+        kind: turnloop::ErrorKind::Other,
+        os: (os != 0).then_some(os),
+    };
+    let mapped = super::map_error(error, "");
+    if !out.is_null() {
+        let value = PerryNetError {
+            code: mapped.code.as_ptr(),
+            code_len: mapped.code.len(),
+            syscall,
+            syscall_len,
+            errno: mapped.errno,
+        };
+        // SAFETY: the caller supplies a writable `PerryNetError`.
+        unsafe { std::ptr::write(out, value) };
+    }
+    let _ = name;
+    PERRY_NET_OK
+}
+
+/// The host OS code for a Node error name, negated the way libuv reports
+/// `err.errno`. Zero when the name is unknown to the table.
+///
+/// # Safety
+/// `code`/`code_len` must describe a readable UTF-8 range.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_errno_for_code(code: *const u8, code_len: usize) -> i32 {
+    // SAFETY: forwarded contract from this function's own safety note.
+    let name = unsafe { str_arg(code, code_len) };
+    super::errors::os_code_for_name(name).map_or(0, |os| -os)
+}
+
 /// Nonzero when this thread can take the turnloop net path.
 #[no_mangle]
 pub extern "C" fn js_perry_net_available() -> i32 {

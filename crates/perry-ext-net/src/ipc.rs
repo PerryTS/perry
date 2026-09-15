@@ -185,9 +185,11 @@ fn spawn_connect(id: i64, path: String, mut rx: mpsc::UnboundedReceiver<SocketCo
             }
             Err(error) if !error.no_loop => {
                 server_state::cancel_local_connect(local_server);
+                // libuv's shape (`connect ENOENT /tmp/x.sock`), which is what
+                // `build_error_object` parses into code/errno/syscall.
                 push_event(PendingNetEvent::Error(
                     id,
-                    format!("connect {path}: {}", error.message()),
+                    format!("{} {path}", error.message()),
                 ));
                 push_event(PendingNetEvent::Close(id));
                 mark_closed(id);
@@ -203,9 +205,11 @@ fn spawn_connect(id: i64, path: String, mut rx: mpsc::UnboundedReceiver<SocketCo
                 Ok(stream) => stream,
                 Err(error) => {
                     server_state::cancel_local_connect(local_server);
+                    let mapped =
+                        perry_ffi::turnloop_net::error_from_os(error.raw_os_error(), "connect");
                     push_event(PendingNetEvent::Error(
                         id,
-                        format!("connect {path}: {error}"),
+                        format!("connect {} {path}", mapped.code),
                     ));
                     push_event(PendingNetEvent::Close(id));
                     mark_closed(id);

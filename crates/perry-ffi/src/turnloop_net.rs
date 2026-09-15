@@ -202,6 +202,13 @@ extern "C" {
     fn js_perry_net_abi_layout() -> u64;
     fn js_perry_net_register_sink(subsystem: i32, sink: SinkFn, alloc: AllocFn) -> i32;
     fn js_perry_net_sink_installed(subsystem: i32) -> i32;
+    fn js_perry_net_error_from_os(
+        os: i32,
+        syscall: *const u8,
+        syscall_len: usize,
+        out: *mut RawNetError,
+    ) -> i32;
+    fn js_perry_net_errno_for_code(code: *const u8, code_len: usize) -> i32;
     fn js_perry_net_tcp_listen(
         id: i64,
         subsystem: i32,
@@ -637,6 +644,54 @@ pub fn live_handles() -> usize {
             unsafe { js_perry_net_live_handles() }
         },
         { 0 }
+    )
+}
+
+/// Map an OS error code onto Node's `code`/`errno`/`syscall` triple.
+///
+/// For the transports P1 did not move: they hold a `std::io::Error` and still
+/// have to report the same triple, and a second copy of the table in a binding
+/// is how `code` and `errno` come to describe different failures on different
+/// platforms.
+pub fn error_from_os(os: Option<i32>, syscall: &str) -> NetError {
+    runtime_call!(
+        {
+            let mut raw = RawNetError::blank();
+            // SAFETY: `syscall` is a live UTF-8 slice; `raw` is writable.
+            unsafe {
+                js_perry_net_error_from_os(
+                    os.unwrap_or(0),
+                    syscall.as_ptr(),
+                    syscall.len(),
+                    &mut raw,
+                )
+            };
+            NetError::from_raw(raw, false)
+        },
+        {
+            let _ = (os, syscall);
+            NetError {
+                code: "UNKNOWN".to_string(),
+                syscall: syscall.to_string(),
+                errno: 0,
+                no_loop: false,
+            }
+        }
+    )
+}
+
+/// The host OS code for a Node error name, negated the way libuv reports
+/// `err.errno`. Zero when the name is not one this table knows.
+pub fn errno_for_code(code: &str) -> i32 {
+    runtime_call!(
+        {
+            // SAFETY: `code` is a live UTF-8 slice.
+            unsafe { js_perry_net_errno_for_code(code.as_ptr(), code.len()) }
+        },
+        {
+            let _ = code;
+            0
+        }
     )
 }
 

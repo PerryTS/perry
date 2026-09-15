@@ -192,6 +192,16 @@ pub fn map_error(err: Error, syscall: &'static str) -> NodeError {
     }
 }
 
+/// The host OS code for a Node error name, for the reverse direction: a
+/// caller that already has the `code` string (because it parsed libuv's
+/// message shape) still has to report `err.errno`, and that number is
+/// platform-specific.
+pub fn os_code_for_name(name: &str) -> Option<i32> {
+    os_table()
+        .iter()
+        .find_map(|(value, code)| (*code == name).then_some(*value))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,6 +245,29 @@ mod tests {
             "write",
         );
         assert_eq!(mapped.code, "EPIPE");
+    }
+
+    #[test]
+    fn the_name_lookup_is_the_inverse_of_the_value_lookup() {
+        // The two directions read the same table, so a name that maps to a
+        // value must map back — otherwise `err.code` and `err.errno` on one
+        // error object would describe different failures.
+        for (value, name) in os_table() {
+            let back = os_code_for_name(name).expect("name resolves");
+            assert_eq!(
+                map_error(
+                    Error {
+                        kind: ErrorKind::Other,
+                        os: Some(back)
+                    },
+                    ""
+                )
+                .code,
+                *name,
+                "OS code {value} / name {name} round trip"
+            );
+        }
+        assert_eq!(os_code_for_name("NOT_A_CODE"), None);
     }
 
     #[test]

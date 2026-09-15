@@ -62,7 +62,7 @@ use turnloop::{
 };
 
 pub mod abi;
-mod errors;
+pub(crate) mod errors;
 mod sink;
 
 #[cfg(test)]

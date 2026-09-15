@@ -291,11 +291,36 @@ pub(crate) unsafe fn get_object_bool_field(obj_f64: f64, field_name: &str) -> Op
 /// read `err.message` from the `'error'` listener — Node emits Error
 /// instances, not raw strings. Returns a NaN-boxed `f64` pointing at
 /// the object. Issue #770.
+/// Split libuv's socket-error message shape, `"<syscall> <CODE>"`, into its
+/// two halves.
+///
+/// Node's `err.message` for a socket failure starts with the syscall and the
+/// code (`connect ECONNREFUSED 127.0.0.1:1`), and `err.syscall` / `err.code` /
+/// `err.errno` are that same information as properties. Parsing the message we
+/// already produce keeps one source of truth instead of threading three more
+/// fields through every event.
+fn libuv_message_parts(msg: &str) -> Option<(&str, &str)> {
+    let mut parts = msg.split(' ');
+    let syscall = parts.next()?;
+    let code = parts.next()?;
+    let is_code = code.len() >= 2
+        && code.starts_with('E')
+        && code
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+    let is_syscall = !syscall.is_empty()
+        && syscall
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+    (is_code && is_syscall).then_some((syscall, code))
+}
+
 pub(crate) unsafe fn build_error_object(msg: &str) -> f64 {
-    let keys: [&str; 3] = ["message", "code", "name"];
+    let parts = libuv_message_parts(msg);
+    let keys: [&str; 5] = ["message", "code", "name", "errno", "syscall"];
     let (packed, shape_id) = build_object_shape(&keys);
     let obj: *mut ObjectHeader =
-        js_object_alloc_with_shape(shape_id, 3, packed.as_ptr(), packed.len() as u32);
+        js_object_alloc_with_shape(shape_id, 5, packed.as_ptr(), packed.len() as u32);
     if obj.is_null() {
         // Fall back to the bare string so the listener still receives
         // *something* if the object alloc failed.
@@ -309,7 +334,9 @@ pub(crate) unsafe fn build_error_object(msg: &str) -> f64 {
     let s = alloc_string(msg);
     let v = JsValue::from_string_ptr(s.as_raw());
     js_object_set_field(unbox_pointer(object.get()) as *mut ObjectHeader, 0, v);
-    let code = if msg.starts_with("ERR_") {
+    let code = if let Some((_, code)) = parts {
+        Some(code)
+    } else if msg.starts_with("ERR_") {
         Some(msg)
     } else if msg.contains("UnknownIssuer")
         || msg.contains("unknown issuer")
@@ -342,6 +369,29 @@ pub(crate) unsafe fn build_error_object(msg: &str) -> f64 {
         2,
         JsValue::from_bits(name.get().to_bits()),
     );
+    // `errno` and `syscall` only exist on an error that really came from a
+    // syscall; leaving them undefined otherwise is what Node does, and is why
+    // they are set from the parsed message rather than unconditionally. The
+    // number is looked up in the runtime's own table so `code` and `errno`
+    // cannot disagree across platforms.
+    if let Some((syscall, code)) = parts {
+        let errno = perry_ffi::turnloop_net::errno_for_code(code);
+        if errno != 0 {
+            js_object_set_field(
+                unbox_pointer(object.get()) as *mut ObjectHeader,
+                3,
+                JsValue::from_number(errno as f64),
+            );
+        }
+        let syscall = roots.root_nanbox(f64::from_bits(nanbox_string_bits(
+            alloc_string(syscall).as_raw(),
+        )));
+        js_object_set_field(
+            unbox_pointer(object.get()) as *mut ObjectHeader,
+            4,
+            JsValue::from_bits(syscall.get().to_bits()),
+        );
+    }
     object.get()
 }
 

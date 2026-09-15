@@ -1293,7 +1293,17 @@ where
                 Ok(s) => s,
                 Err(e) => {
                     server_state::cancel_local_connect(local_server);
-                    push_event(PendingNetEvent::Error(id, format!("{}", e)));
+                    // libuv's shape, which is also Node's `err.message` and
+                    // the only place `err.code`/`errno`/`syscall` come from
+                    // (`build_error_object` parses it). The raw
+                    // `std::io::Error` Display ("Connection refused (os error
+                    // 111)") carried none of that.
+                    let mapped =
+                        perry_ffi::turnloop_net::error_from_os(e.raw_os_error(), "connect");
+                    push_event(PendingNetEvent::Error(
+                        id,
+                        format!("connect {} {}", mapped.code, addr),
+                    ));
                     push_event(PendingNetEvent::Close(id));
                     mark_closed(id);
                     return;
