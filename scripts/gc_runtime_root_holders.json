@@ -47,12 +47,6 @@
       "why": "Declared in lib.rs, scanned from the gc.rs submodule (split out for the 2,000-line gate): every RequestRecord.signal slot is visited and rewritten."
     },
     {
-      "file": "crates/perry-ext-http/src/lib.rs",
-      "name": "HTTP_PENDING_EVENTS",
-      "verdict": "not_a_gc_pointer",
-      "why": "Client-side pending-event queue. Every variant carries a perry-ffi registry Handle, strings, Bytes, or an errno i64 (rule S fired on TransportError.errno) — no NaN-boxed value. The closures the drain fires live in ClientRequestHandle (response_callback/end_callback/pending_write_callbacks/listeners), which scan_http_roots visits."
-    },
-    {
       "file": "crates/perry-ext-http/src/server/https_server.rs",
       "name": "PENDING_TLS_CLIENT_ERRORS",
       "verdict": "not_a_gc_pointer",
@@ -111,6 +105,12 @@
       "name": "SCRATCH",
       "verdict": "not_a_gc_pointer",
       "why": "Drain-side reusable Vec<PendingNetEvent> inside js_ext_net_drain_pending; same payload as P (ids/Bytes/strings), emptied within the drain call. No JS values."
+    },
+    {
+      "file": "crates/perry-ext-net/src/turnloop_io.rs",
+      "name": "AUX",
+      "verdict": "not_a_gc_pointer",
+      "why": "HashMap<i64 socket HANDLE, Aux> holding the per-socket state the turnloop transport needs and SocketState has no field for: whether the peer's FIN arrived before the 'connection' callback, whether the post-EOF shutdown should be followed by a close, and whether an 'error' and a 'close' have been emitted -- plus the server_state::begin_local_connect reservation, a server HANDLE and a bool. Rule S fires on those i64s; every one is a handle-band id used to look a record up in crate::statics::sockets() or servers(), never a heap address and never dereferenced. No JS value reaches this map: read bytes are copied into a Bytes before the sink returns and write bytes were already owned Vecs. forget_aux removes the entry on the terminal close."
     },
     {
       "file": "crates/perry-ext-net/src/tls.rs",

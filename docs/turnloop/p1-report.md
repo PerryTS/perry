@@ -362,6 +362,29 @@ alpha.3 also widened `ErrorKind` with filesystem categories for its typed file
 operations; the Node mapper covers them explicitly rather than folding them into
 `UNKNOWN`, so P2's pipes and P4's file jobs inherit a real code.
 
+## One gate artifact the integrator should look at
+
+`scripts/gc_runtime_root_holders.py` changes verdict on a holder in a crate this
+work never touched: `perry-ext-http`'s `HTTP_PENDING_EVENTS` flips from
+UNCOVERED to COVERED, which makes its inventory entry stale, and a stale entry
+fails the gate — so the entry is deleted here.
+
+The cause is name resolution, not a new scanner. Adding
+`crates/perry-ext-net/src/turnloop_io.rs` (confirmed by removing just that file
+and re-running: the verdict flips back) puts another reachable body in a
+registering crate that calls `push_event`. `push_event` is also the name of a
+function in `perry-ext-http/src/lib.rs`, and the walk resolves names across
+crates, so ext-http's `push_event` body joins its own file's reachable text —
+and that body is the one that mentions `HTTP_PENDING_EVENTS`.
+
+Nothing about the holder changed: its recorded verdict was already
+`not_a_gc_pointer` ("no NaN-boxed value"; the closures live in
+`ClientRequestHandle`, which `scan_http_roots` visits), and that still holds.
+What is lost is the *record* of that reasoning, because the gate has no way to
+keep an entry for a holder it now considers covered. If the walk were resolved
+per crate — a scanner only calls within its own crate or into perry-ffi, which
+the script's own comment already says — this class of coincidence would go away.
+
 ## For the integrator
 
 - Full gap suite (fast and auto-optimize tiers) and `cargo test --workspace`.
@@ -376,3 +399,9 @@ operations; the Node mapper covers them explicitly rather than folding them into
   every socket back on tokio.
 - A Windows arm. Named pipes, `ListenOpts`, and the Windows half of the error
   table have not been exercised.
+- The baseline tree is still on the build box at `/root/claude-turnloop-p1-base`
+  (commit `956384fc14`, its own `target/`), next to the working tree at
+  `/root/claude-turnloop-p1`. Delete both when the A/B is done. Both need
+  `PERRY_RUNTIME_DIR` overridden per the note above, and Node 26.5.1 was
+  installed at `/opt/node-v26.5.1-linux-x64` because the box only carried
+  26.8.1.
