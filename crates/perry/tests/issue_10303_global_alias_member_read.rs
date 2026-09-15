@@ -146,7 +146,10 @@ fn global_alias_reads_see_user_installed_properties() {
         "a property written through one spelling of the global object must be \
          readable through every other; stdout:\n{stdout}"
     );
-    assert_eq!(stdout, ALIAS_EXPECTED, "byte-for-byte what node and bun print");
+    assert_eq!(
+        stdout, ALIAS_EXPECTED,
+        "byte-for-byte what node and bun print"
+    );
 }
 
 #[test]

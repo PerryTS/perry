@@ -579,14 +579,17 @@ unsafe fn prepare_symbols(
 /// than writing a new copy each call.
 fn materialize_virtual_library(path: &str) -> Result<String, String> {
     use std::io::Write;
-    static MATERIALIZED: std::sync::OnceLock<std::sync::Mutex<
-        std::collections::HashMap<String, String>,
-    >> = std::sync::OnceLock::new();
-    let cache = MATERIALIZED.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    static MATERIALIZED: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, String>>,
+    > = std::sync::OnceLock::new();
+    let cache =
+        MATERIALIZED.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
     // Hold the lock across the whole materialization: two threads that both
     // miss would otherwise both try to create the file, and the second would
     // fail the exclusive create below. Once per library, never hot.
-    let mut cache = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(existing) = cache.get(path) {
         return Ok(existing.clone());
     }
