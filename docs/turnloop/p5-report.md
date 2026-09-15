@@ -426,3 +426,75 @@ Reported here in the shape #34, #35 and #38 were.
    is one of the two reasons a cluster worker keeps the hyper path.
 8. **`setNoDelay` on an accepted connection** is still unreachable (P1's finding,
    unchanged).
+
+## Perry-side defects this work found (not P5 regressions)
+
+Each was reproduced on the base commit's hyper/tokio path too, so they are
+pre-existing and worth their own issues rather than being folded into this
+change:
+
+1. **A `net.Socket` handed to an `'upgrade'` listener cannot be written to.**
+   `socket.write(...)` returns `undefined` and nothing reaches the wire, on
+   both transports. The listener receives the socket as an untyped value, so
+   the call goes through the composite handle dispatch — and `net`'s
+   `socket_method_name` table has no `write` row (it is normally reached through
+   the statically resolved `js_ext_net_socket_write3`). The `'upgrade'` event
+   itself is correct on both, arguments included.
+2. **`res.writeHead(...)` followed by `res.end(body)` is framed differently
+   from Node.** Node only computes a `Content-Length` while the header block is
+   still open at `end()` time and falls back to chunked once `writeHead` has
+   committed it; Perry length-frames both shapes. Hyper framed it the same way,
+   so this predates P5.
+3. **`socket.remoteAddress` is `undefined` on an accepted socket** — P1 recorded
+   this and it is unchanged; the `'upgrade'` probe sees it too.
+
+## Environment notes for whoever runs this next
+
+- **Build both trees with the harness's DEFAULT package set and NO
+  `external-*-pump` features.** A stdlib built with `external-zlib-pump`
+  references `js_ext_zlib_*` from `js_handle_method_dispatch`, so every test
+  that pulls that object without linking `libperry_ext_zlib.a` fails to LINK
+  and is reported as COMPILE_FAIL — indistinguishable from a real regression.
+  The ext wrappers still get linked per-import through the compiler's
+  well-known routing, and `perry-ext-http` registers its own pump and dispatch
+  extensions at first use rather than needing the stdlib feature. This cost one
+  full baseline gap run, whose fetch-test COMPILE_FAILs were entirely that.
+  (`run_parity_tests.sh`'s own #7629 comment says the same thing.)
+- **Auto-optimize needs the lockfile to already carry the new crates.** It runs
+  a plain `cargo build`, without `CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE`, so
+  while `turnloop-http` / `turnloop-tls` are inside the 7-day
+  `global-min-publish-age` window it fails to resolve and silently falls back to
+  prebuilt archives that do not match. With the committed `Cargo.lock` there is
+  nothing to resolve and it succeeds.
+- **The box is shared with the P4 lane, which runs its own sharded gap suite.**
+  The shard command lines do not name their tree, so a
+  `pkill -f 'run_parity_tests.sh --filter'` matches theirs too — it did once
+  here, killing three of their shards (they auto-resumed). Resolve
+  `/proc/PID/cwd` and kill only your own.
+- **Do not rsync a source mirror with `--delete` while a gap suite is running
+  in it.** `test-parity/output/` is created by the harness at startup and
+  written per test; deleting it under a live suite fails every remaining test
+  with "No such file or directory".
+
+## For the integrator
+
+- Full gap suite in both tiers, and `cargo test --workspace`. The per-crate
+  results here are: `perry-ext-net --lib` 36 passed; `perry-runtime turnloop_net`
+  15 passed; `perry-ext-http --lib` 109 passed with one failure,
+  `tls_client::tests::needs_custom_client_logic`, whose subject
+  (`perry_ffi::node_tls_client_environment`) this change does not touch —
+  confirm against the base commit before reading it as P5's.
+- `./run_parity_tests.sh --suite node-suite --module http|https|net` — the
+  behavioural corpora, far broader than the gap tests, with committed floors of
+  22/53, 6/47 and 16/47.
+- **A Windows arm.** Nothing here was run on Windows. The TLS session and the
+  HTTP codec are platform-independent, but the accept path, `ListenOpts` and
+  the error table are not.
+- **An instruction A/B at cgu=1 with a control probe**, on a server-only
+  workload. The tokio arm is `--features perry-stdlib/tokio-wait-driver`.
+  Nothing here was benchmarked: the shared box was running another lane's gap
+  suite throughout.
+- The two trees are on the build box at `/root/claude-turnloop-p5/{base,perry}`
+  (base at `14803019fc`), each with its own `target/`. Delete both when the A/B
+  is done. `PERRY_RUNTIME_DIR` must be overridden per tree —
+  `/etc/profile.d/perry.sh` points it at a different checkout.
