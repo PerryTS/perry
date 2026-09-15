@@ -64,6 +64,21 @@ general:
   at dispatch time, so the next byte reaches `net` with no gap, no resubmission
   and no descriptor moving.
 
+**Node-fidelity fixes the migration exposed**, each measured against the
+oracle rather than argued: `Transfer-Encoding: chunked` is spelled the way Node
+spells it rather than the way the encoder synthesizes it; a Content-Length
+Perry *synthesized* is dropped where Node sends none (204/304/1xx, a HEAD
+response, a close-delimited HTTP/1.0 body) while one the handler set is kept;
+the trailer block after a chunked body now reaches the wire, which the hyper
+path dropped; `res.writeContinue()` and `res.writeProcessing()` reach the wire
+instead of being no-ops that relied on hyper; and `req` emits Node's
+`'aborted'` when the peer vanishes mid-request, which neither path did. Two
+defects in the socket layer went with them: `socket.end()` followed by the
+peer's FIN shut the write side down twice, and the second `shutdown(2)`
+answered `ENOTCONN` as a spurious JS `'error'` (latent on a plain turnloop
+socket, certain on the TLS path); and a rustls failure after the application
+has asked to close is teardown noise Node does not report either.
+
 **Still on hyper, and why.** The hyper accept loop is narrowed, not deleted —
 the same shape P1 left the tokio socket task in. A server declines the turnloop
 path, per listen, when the agent has no loop (a `worker_threads` agent, before
