@@ -189,7 +189,10 @@ pub(crate) fn emit_native_instance_base_init(
             // Unlike the emitter, the options bag IS load-bearing (`{ max }` is
             // required by the binding), so forward the first argument — what a
             // written `super(opts)` would have passed.
-            let options = lowered_args.first().cloned().unwrap_or_else(|| undef.clone());
+            let options = lowered_args
+                .first()
+                .cloned()
+                .unwrap_or_else(|| undef.clone());
             crate::expr::lower_lru_cache_subclass_init(ctx, this_box, &options);
         }
         NativeInstanceBase::Array => {

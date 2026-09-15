@@ -15,8 +15,7 @@ use crate::types::{DOUBLE, I1, I32, I64, PTR};
 use super::{
     lower_array_super_init, lower_event_emitter_async_resource_subclass_init,
     lower_event_emitter_subclass_init, lower_expr, lower_lru_cache_subclass_init,
-    lower_node_stream_super_init,
-    lower_stream_super_init, nanbox_pointer_inline, FnCtx,
+    lower_node_stream_super_init, lower_stream_super_init, nanbox_pointer_inline, FnCtx,
 };
 
 /// Enter one derived constructor's `super()` binding scope.
