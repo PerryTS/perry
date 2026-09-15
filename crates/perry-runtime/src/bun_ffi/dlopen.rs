@@ -24,6 +24,15 @@ use std::sync::Mutex;
 
 #[cfg(unix)]
 unsafe fn open_library(path: Option<&str>) -> Result<usize, String> {
+    // #10293 follow-up: an embedded asset library has no filesystem identity.
+    // Translate here rather than at the call sites — `dlopen_value` and
+    // `node_dlopen_value` both land in this function, and patching only one of
+    // them left OpenTUI's loader still failing.
+    let materialized = match path {
+        Some(p) if crate::embedded::is_virtual_path(p) => Some(materialize_virtual_library(p)?),
+        _ => None,
+    };
+    let path = materialized.as_deref().or(path);
     let c_path = match path.map(std::ffi::CString::new).transpose() {
         Ok(p) => p,
         Err(_) => return Err("path contains a NUL byte".to_string()),
@@ -609,16 +618,6 @@ fn materialize_virtual_library(path: &str) -> Result<String, String> {
     Ok(resolved)
 }
 
-/// Translate an embedded `$perryfs/...` path to a real one; pass anything else
-/// through untouched.
-fn resolve_library_path(path: &str) -> Result<std::borrow::Cow<'_, str>, String> {
-    if crate::embedded::is_virtual_path(path) {
-        materialize_virtual_library(path).map(std::borrow::Cow::Owned)
-    } else {
-        Ok(std::borrow::Cow::Borrowed(path))
-    }
-}
-
 pub(crate) unsafe fn dlopen_value(path_arg: f64, table_arg: f64) -> f64 {
     if !call::platform_supported() {
         crate::fs::validate::throw_error_with_code(
@@ -640,10 +639,6 @@ pub(crate) unsafe fn dlopen_value(path_arg: f64, table_arg: f64) -> f64 {
         );
     };
 
-    let path = match resolve_library_path(&path) {
-        Ok(resolved) => resolved.into_owned(),
-        Err(msg) => throw_dlopen_failed(&path, &msg),
-    };
     let handle = match open_library(Some(&path)) {
         Ok(h) => h,
         Err(msg) => throw_dlopen_failed(&path, &msg),
