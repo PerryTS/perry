@@ -156,7 +156,6 @@ macro_rules! catch_savepoints {
 
         #[cfg(test)]
         mod idle_tests {
-            use super::*;
             $($(#[$attr])*
                 /// The idle constant must be exactly what a thread that never
                 /// touched the subsystem captures, or skipping the read is wrong.
