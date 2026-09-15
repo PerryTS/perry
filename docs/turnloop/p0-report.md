@@ -469,6 +469,70 @@ A P0 server never reaches the turnloop park, because its accept loop keeps a
 tokio task alive for the life of the process; the gain for servers arrives with
 P1/P5, and this line is how that will be shown rather than argued.
 
+### Harness smoke run (macOS — a shakedown, NOT a measurement)
+
+`scripts/turnloop/server_ab.py` was run end to end locally so the integrator
+inherits a harness that has actually executed, not one that only parses. Treat
+the numbers as evidence the plumbing works and nothing else: the host is a
+shared laptop at load average 30–60, the build is `--profile perry-dev`
+(opt-level 1), the load tool is `ab` (millisecond latency resolution, no p999,
+single-threaded), `/proc` is absent so the per-window CPU and context-switch
+columns are empty, `perf` is unavailable so there is no syscall rate, and there
+were 2 rounds instead of 5. Nothing here attributes a difference to either arm.
+
+```bash
+# arms prepared into one target tree and copied out (the --skip-cargo shape)
+cargo build --locked --profile perry-dev -p perry -p perry-runtime-static \
+  -p perry-stdlib-static -p perry-ext-http -p perry-ext-net -p perry-ext-ws \
+  --features perry-stdlib/external-http-server-pump,perry-stdlib/external-http-client-pump
+cp target/perry-dev/{perry,libperry_runtime.a,libperry_stdlib.a,libperry_ext_http.a,libperry_ext_net.a,libperry_ext_ws.a} /tmp/tlab/target-turnloop/
+# …same again with ,perry-stdlib/tokio-wait-driver → /tmp/tlab/target-tokio/
+
+python3 scripts/turnloop/server_ab.py build --work /tmp/tlab --skip-cargo
+python3 scripts/turnloop/server_ab.py run --work /tmp/tlab --rounds 2 \
+  --concurrency 16 --duration 4 --warmup 1 --idle 2000 --idle-hold 3 --load-tool ab
+```
+
+What the run proved about the harness itself:
+
+- both arms verified before any measurement —
+  `verified turnloop: [perry-loop] driver=turnloop turns=0 os_waits=0 zero_event_waits=0 native_ticks=1 turn_errors=0`
+  and `verified tokio: [perry-loop] driver=tokio-wait-driver`;
+- `arms differ: runtime, stdlib and the linked server are distinct builds`
+  (`libperry_ext_http.a` is deliberately identical — it links perry-ffi, not the
+  feature);
+- 12 of 12 samples valid across the first (3-scenario, 2-round) run; the
+  markdown and JSON reports were produced from `results.json`;
+- the server exits through `SIGTERM` → `process.exit(0)` → the exit funnel, so
+  every sample carries a full `[perry-loop-waits]` line.
+
+And what it says about P0 on a server, which is the substantive part:
+
+| | turnloop arm | `tokio-wait-driver` arm |
+|---|---|---|
+| turnloop turns (load, c=16) | **0** | 0 |
+| tokio ticks | 164 | 202 |
+| time in tokio ticks | 292 ms | 372 ms |
+| fast drives | 15 552 | 16 786 |
+| zero-budget returns / throttle sleeps | 0 / 0 | 0 / 0 |
+| idle 2 000 keep-alive conns: opened / surviving a 3 s hold | 2 000 / 2 000 | 2 000 / 2 000 |
+| RSS per idle connection | 30 880 B | 30 872 B |
+
+**The turnloop arm makes zero turnloop turns on a server.** That is not a
+regression, it is the P0 design stated in *Transitional coexistence* — the
+accept loop keeps a tokio task alive for the life of the process, so
+`native_inflight()` is permanently true and every park goes to the tokio tick.
+Until P0 the only way to say that was to read the code; now the line says it.
+It also fixes what a server A/B can mean before P1/P5: the two arms are running
+**the same wait**, so any difference between them is noise or link layout, not
+driver choice. The wait metrics are what will show P1 landing — turns rising off
+zero and tick time falling.
+
+Per-connection memory is the other number worth carrying forward: ~30.9 KB of
+RSS per idle keep-alive connection, identical in both arms (it is
+perry-ext-http's per-socket cost, which P0 does not touch). At the brief's 100k
+target that is ~3 GB, which is the figure P1/P5 has to move.
+
 ## Commands for the integrator
 
 Build both arms from the same commit, in separate target dirs, with the same
@@ -601,6 +665,17 @@ done
   program with no timers as the control.
 
 **Windows.** The PR's Windows CI arm. Locally, see below.
+
+## Node divergence found while building the harness
+
+`server.keepAliveTimeout = 0` (`node:http`): **Node reads 0 as "never time
+out"; Perry reads it as "no keep-alive"** and answers `Connection: close`,
+closing the socket after the first response. Measured 2026-09-15 on macOS with
+the arm-A compiler: with `= 0` the response carries `Connection: close` and the
+socket is unusable after 0.3 s; with the setter dropped, or set to `600000`, it
+carries `Connection: keep-alive` and is still reusable after 4 s. It is not
+turnloop-related (both arms behave identically) and is not fixed here — the
+harness app just stops relying on the Node meaning. Worth its own issue.
 
 ## Open issues for P1–P4
 
