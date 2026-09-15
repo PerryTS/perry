@@ -302,15 +302,15 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         }
         true
     };
-    // Next.js lazy-require: specifiers whose every `require('S')` call site is
-    // inside a function body (lazy in Node). Computed up front because it also
+    // Specifiers whose every `require('S')` call site is conditional or inside
+    // a function body. Computed up front because it also
     // suppresses alias ADOPTION below — a function-local `const dep =
     // require('S')` is a function-scoped const, not a module binding, and
     // adopting it would hoist `import dep from 'S'` to module scope (eager). We
     // instead keep the synthetic binding and rename it `_lazyreq_N` so the
     // target stays `Deferred` and inits only when the shim's
     // `return _lazyreq_N` runs (i.e. when the function actually calls require).
-    let mut lazy_specs = function_local_specs(source);
+    let mut lazy_specs = deferred_require_specs(source);
     let cyclic_specs = cyclic_require_specs(source, source_path);
     let parent_sensitive_specs = parent_sensitive_require_specs(source, source_path);
     lazy_specs.extend(cyclic_specs.iter().cloned());
@@ -457,8 +457,11 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
                     )
                 })
                 .unwrap_or_default();
-            let needs_runtime_record =
-                cyclic_specs.contains(spec) || parent_sensitive_specs.contains(spec);
+            // Deferred targets must initialize even when they have no default
+            // export getter (for example, a side-effect-only module). The path
+            // registry owns initialization and cached exports independently of
+            // the target's export shape, and preserves thrown exceptions here.
+            let needs_runtime_record = lazy_specs.contains(spec);
             let runtime_require = if needs_runtime_record {
                 resolved_target
                     .as_ref()
@@ -510,7 +513,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
                 // `typeof {local} === 'boolean'` sentinel guard does not apply
                 // (builtins are never the pruned-build TRUE sentinel).
                 format!("        if (specifier === '{spec}') {{ {required_value} }}")
-            } else if require_site_in_try(source, spec) {
+            } else if require_site_in_try(source, spec) && runtime_require.is_none() {
                 format!(
                     "        if (specifier === '{spec}') {{ if (typeof {local} === 'boolean') \
                      throw __perry_cjs_require_error('error', 'MODULE_NOT_FOUND', \
@@ -727,7 +730,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
             .iter()
             .filter_map(|(name, spec)| {
                 let n = require_specs.iter().position(|s| s == spec)?;
-                if builtin_requires.contains(spec) {
+                if builtin_requires.contains(spec) || lazy_specs.contains(spec) {
                     // #8343 followup: built-in specs no longer hoist a static
                     // `import _req_N` (the codegen doesn't initialize
                     // native-module import bindings in CJS-wrapped modules),
@@ -736,7 +739,10 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
                     // `exports.name = require("<builtin>")` resolves through
                     // the synthetic require's `createRequire` arm and populates
                     // `_cjs.name`, so back the re-export with that — the same
-                    // surface `named_export_decls` uses below.
+                    // surface `named_export_decls` uses below. Conditional
+                    // requires also need the actual CJS property: forwarding
+                    // their import binding would bypass the branch and expose
+                    // a dependency that the module never required.
                     Some(format!("export const {name} = _cjs.{name};"))
                 } else {
                     Some(format!(
@@ -833,6 +839,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
             // from the blanking filter below) and resolves through the synthetic
             // require's `createRequire` arm at runtime.
             .filter(|(_, spec, _)| !builtin_requires.contains(spec))
+            .filter(|(_, spec, _)| !lazy_specs.contains(spec))
             .filter_map(|(alias, spec, _range)| {
                 let idx = require_specs.iter().position(|s| s == spec)?;
                 // When the alias is already the spec's import local name
@@ -851,6 +858,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         let ranges = aliases
             .into_iter()
             .filter(|(_, spec, _)| require_specs.iter().any(|s| s == spec))
+            .filter(|(_, spec, _)| !lazy_specs.contains(spec))
             .filter(|(alias, _, _)| !identifier_is_reassigned(source, alias))
             // #sdxgen: Don't blank alias declarations for Node.js built-in
             // modules — let them stay in the IIFE body and resolve through
