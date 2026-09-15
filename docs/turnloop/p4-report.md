@@ -276,6 +276,29 @@ thread" alone cannot tell the pool from the old thread-per-work-item fallback �
 both satisfy every other assertion in that test — so a run that fell back now
 says so instead of passing quietly.
 
+### The whole runtime suite, both arms
+
+`RUST_TEST_THREADS=1 cargo test --release -p perry-runtime --lib`, same host:
+
+| arm | passed | failed |
+|---|---|---|
+| base `14803019fc` | 3981 | **2** |
+| **P4** | **3991** | **2** |
+
+Ten more passes, which is exactly this phase's ten pool tests, and the same two
+failures in both arms — neither is P4's:
+`gc::tests::heap_generation::a_free_or_move_outside_every_scope_is_caught_in_debug_builds`
+(the funnel assertion it waits for is a `debug_assert`, and this is a release
+test build) and `native_stack::tests::stack_top_respects_custom_thread_stack_sizes`
+(fails in debug too, on this box). P2 and P3 both recorded the same pair.
+
+```
+RUST_TEST_THREADS=1 cargo test --release -p perry-ffi
+```
+→ **43 passed** (39 before this phase; the four new ones are `perry_ffi::pool`'s
+outcome-mapping tests, which are the part of the ABI with no `extern` in it and
+therefore the part a unit-test binary with no perry-stdlib archive can check).
+
 ### The gap fixture, against the pinned oracle
 
 `test-files/test_gap_turnloop_p4_pool.ts` was validated against Node **26.5.1**
