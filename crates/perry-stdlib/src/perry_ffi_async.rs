@@ -343,14 +343,21 @@ pub unsafe extern "C" fn perry_ffi_spawn_async(ctx: *mut c_void) {
 /// not be called from inside a spawned runtime task.
 ///
 /// turnloop P4 (DESIGN §9, "`run_pending` becomes a bounded `turn`"): this is
-/// now a **v1 shim over v2**. It takes one bounded turnloop turn *first*, so a
-/// caller polling for a blocking-pool result actually collects it — a turn is
-/// the only thing that does — and then drives whatever tokio work is left. The
-/// tokio half goes away with tokio in P8; the signature does not change.
+/// now a **v1 shim over v2**. It takes a turnloop turn *first*, so a caller
+/// polling for a blocking-pool result actually collects it — a turn is the only
+/// thing that does — and then drives whatever tokio work is left. The tokio
+/// half goes away with tokio in P8; the signature does not change.
+///
+/// The turn is deliberately **non-blocking** rather than given the caller's
+/// budget: this shim's callers are waiting for something *tokio* will deliver
+/// (`js_ws_wait_for_message`), and spending their budget parked in turnloop
+/// would add a poll's worth of latency to every one of them. A caller that is
+/// waiting for a pool result specifically asks for a blocking turn through the
+/// v2 [`perry_ffi_pool_turn`].
 #[no_mangle]
 pub extern "C" fn perry_ffi_run_pending(budget_ms: u64) {
     async_bridge::ensure_pump_registered();
-    pool_turn(budget_ms);
+    pool_turn(0);
     async_bridge::drive_pending(budget_ms);
 }
 
