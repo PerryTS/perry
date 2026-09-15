@@ -16,6 +16,8 @@
 //      an unref'd timeout still fires when something else holds the loop open
 //      past its deadline; `hasRef()` tracks the calls.
 //   4. **`Timeout.refresh()`** re-arms with the original delay.
+//   5. **Exit liveness.** A lone `setImmediate` keeps the loop alive for one
+//      more turn; an unref'd 60 s timeout does not hold the process open.
 
 const log: string[] = [];
 
@@ -88,9 +90,23 @@ function unrefLiveness(next: () => void): void {
   }, 40);
 }
 
+function exitLiveness(): void {
+  // A lone `setImmediate` keeps the loop alive for exactly one more turn, so
+  // the report below runs even though nothing else is scheduled.
+  setImmediate(() => {
+    log.push("lone immediate ran");
+    report();
+  });
+  // An unref'd long timeout must not hold the process open. If it did, this
+  // program would sit for a minute instead of exiting after the report — the
+  // harness would time out rather than diff.
+  const forever = setTimeout(() => log.push("unref'd 60s timeout MUST NOT FIRE"), 60_000);
+  forever.unref();
+}
+
 function report(): void {
   console.log("results:");
   for (const line of log) console.log("  " + line);
 }
 
-crossClassOrder(() => intervalDoesNotCatchUp(() => unrefLiveness(report)));
+crossClassOrder(() => intervalDoesNotCatchUp(() => unrefLiveness(exitLiveness)));
