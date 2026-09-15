@@ -16,7 +16,7 @@
 //!   the longer total key (Node's `patternKeyCompare`).
 //! - Targets may be strings, arrays (first entry that resolves wins), or
 //!   conditional objects. Conditions are matched in the fixed **priority
-//!   order** of [`DEFAULT_CONDITIONS`]
+//!   order** of [`default_conditions`]
 //!   (`perry`/`node`/`import`/`module`/`default`/`require`) — the same model
 //!   (and the same `node`-above-`default` ranking) as perry's package-`exports`
 //!   resolver `resolve_exports`; the two resolvers must agree (a `{ node,
@@ -62,8 +62,9 @@ const NODE_CONDITIONS: &[&str] = &["perry", "node", "import", "module", "default
 /// must resolve its bun entry or the program runs a different backend than the
 /// bun binary it is meant to match. `bun` stays BELOW `perry` so an explicit
 /// perry entry still wins, and above `node` only for this target.
-const BUN_CONDITIONS: &[&str] =
-    &["perry", "bun", "node", "import", "module", "default", "require"];
+const BUN_CONDITIONS: &[&str] = &[
+    "perry", "bun", "node", "import", "module", "default", "require",
+];
 
 /// Whether this compile targets `--platform bun`. Set once from
 /// `CompilationContext::bun_platform` before module collection; a compile is a
@@ -153,7 +154,7 @@ impl std::error::Error for SubpathImportError {}
 ///
 /// `importer_path` is the file containing the import; the package scope is
 /// found by walking up from its directory. `conditions` is the active
-/// condition set (callers normally pass [`DEFAULT_CONDITIONS`]).
+/// condition set (callers normally pass [`default_conditions`]).
 pub(crate) fn resolve_subpath_import(
     specifier: &str,
     importer_path: &Path,
@@ -333,7 +334,7 @@ fn resolve_target(
         }
         // Conditional object: try the active conditions in priority order
         // (the same model as `resolve_exports_with_conditions` — see the
-        // [`DEFAULT_CONDITIONS`] doc for why key order is not used). A branch
+        // [`default_conditions`] doc for why key order is not used). A branch
         // that fails to resolve falls through to the next condition.
         serde_json::Value::Object(map) => {
             for cond in conditions {
@@ -530,8 +531,9 @@ mod tests {
             r##"{ "#config": "./src/config.ts" }"##,
             &["src/config.ts"],
         );
-        let resolved =
-            expect_file(resolve_subpath_import("#config", &importer, DEFAULT_CONDITIONS).unwrap());
+        let resolved = expect_file(
+            resolve_subpath_import("#config", &importer, default_conditions()).unwrap(),
+        );
         assert!(resolved.ends_with("src/config.ts"));
     }
 
@@ -544,8 +546,9 @@ mod tests {
             r##"{ "#lib/*": "./src/lib/*" }"##,
             &["src/lib/foo.ts"],
         );
-        let resolved =
-            expect_file(resolve_subpath_import("#lib/foo", &importer, DEFAULT_CONDITIONS).unwrap());
+        let resolved = expect_file(
+            resolve_subpath_import("#lib/foo", &importer, default_conditions()).unwrap(),
+        );
         assert!(resolved.ends_with("src/lib/foo.ts"));
     }
 
@@ -558,7 +561,7 @@ mod tests {
             &["src/lib/deep/util.ts", "src/deep/util.ts"],
         );
         let resolved = expect_file(
-            resolve_subpath_import("#lib/deep/util", &importer, DEFAULT_CONDITIONS).unwrap(),
+            resolve_subpath_import("#lib/deep/util", &importer, default_conditions()).unwrap(),
         );
         // `#lib/deep/*` (longer non-wildcard prefix) must beat `#lib/*`.
         assert!(resolved.ends_with("src/deep/util.ts"), "{resolved:?}");
@@ -573,7 +576,7 @@ mod tests {
             &["src/special.ts", "src/lib/special.ts"],
         );
         let resolved = expect_file(
-            resolve_subpath_import("#lib/special", &importer, DEFAULT_CONDITIONS).unwrap(),
+            resolve_subpath_import("#lib/special", &importer, default_conditions()).unwrap(),
         );
         assert!(resolved.ends_with("src/special.ts"), "{resolved:?}");
     }
@@ -588,7 +591,7 @@ mod tests {
         );
         // `*` captures `helper`; the `.js` target probes the `.ts` source.
         let resolved = expect_file(
-            resolve_subpath_import("#internal/helper.js", &importer, DEFAULT_CONDITIONS).unwrap(),
+            resolve_subpath_import("#internal/helper.js", &importer, default_conditions()).unwrap(),
         );
         assert!(resolved.ends_with("src/internal/helper.ts"), "{resolved:?}");
     }
@@ -602,7 +605,7 @@ mod tests {
             &["src/env.node.ts", "src/env.default.ts"],
         );
         let resolved =
-            expect_file(resolve_subpath_import("#env", &importer, DEFAULT_CONDITIONS).unwrap());
+            expect_file(resolve_subpath_import("#env", &importer, default_conditions()).unwrap());
         assert!(resolved.ends_with("src/env.node.ts"), "{resolved:?}");
     }
 
@@ -616,7 +619,7 @@ mod tests {
         );
         // `browser` is not in the active condition set → `default` wins.
         let resolved =
-            expect_file(resolve_subpath_import("#env", &importer, DEFAULT_CONDITIONS).unwrap());
+            expect_file(resolve_subpath_import("#env", &importer, default_conditions()).unwrap());
         assert!(resolved.ends_with("src/env.default.ts"), "{resolved:?}");
     }
 
@@ -629,7 +632,7 @@ mod tests {
             &["src/env.mjs.ts", "src/env.cjs.ts"],
         );
         let resolved =
-            expect_file(resolve_subpath_import("#env", &importer, DEFAULT_CONDITIONS).unwrap());
+            expect_file(resolve_subpath_import("#env", &importer, default_conditions()).unwrap());
         assert!(resolved.ends_with("src/env.mjs.ts"), "{resolved:?}");
     }
 
@@ -642,7 +645,7 @@ mod tests {
             &["src/env.ts"], // dist/env.js intentionally absent
         );
         let resolved =
-            expect_file(resolve_subpath_import("#env", &importer, DEFAULT_CONDITIONS).unwrap());
+            expect_file(resolve_subpath_import("#env", &importer, default_conditions()).unwrap());
         assert!(resolved.ends_with("src/env.ts"), "{resolved:?}");
     }
 
@@ -655,7 +658,7 @@ mod tests {
             &["src/dep.ts"],
         );
         let resolved =
-            expect_file(resolve_subpath_import("#dep", &importer, DEFAULT_CONDITIONS).unwrap());
+            expect_file(resolve_subpath_import("#dep", &importer, default_conditions()).unwrap());
         assert!(resolved.ends_with("src/dep.ts"), "{resolved:?}");
     }
 
@@ -663,7 +666,7 @@ mod tests {
     fn array_of_only_invalid_targets_propagates_error() {
         let dir = tempfile::tempdir().unwrap();
         let importer = fixture(dir.path(), r##"{ "#dep": ["../out.ts", "/abs.ts"] }"##, &[]);
-        let err = resolve_subpath_import("#dep", &importer, DEFAULT_CONDITIONS).unwrap_err();
+        let err = resolve_subpath_import("#dep", &importer, default_conditions()).unwrap_err();
         assert!(matches!(err, SubpathImportError::InvalidTarget { .. }));
     }
 
@@ -671,7 +674,7 @@ mod tests {
     fn bare_package_target_returns_external() {
         let dir = tempfile::tempdir().unwrap();
         let importer = fixture(dir.path(), r##"{ "#dep": "some-pkg" }"##, &[]);
-        let outcome = resolve_subpath_import("#dep", &importer, DEFAULT_CONDITIONS).unwrap();
+        let outcome = resolve_subpath_import("#dep", &importer, default_conditions()).unwrap();
         assert_eq!(
             outcome,
             SubpathImportOutcome::External("some-pkg".to_string())
@@ -687,7 +690,7 @@ mod tests {
             &[],
         );
         let outcome =
-            resolve_subpath_import("#vendored/util", &importer, DEFAULT_CONDITIONS).unwrap();
+            resolve_subpath_import("#vendored/util", &importer, default_conditions()).unwrap();
         assert_eq!(
             outcome,
             SubpathImportOutcome::External("@scope/vendored/util".to_string())
@@ -702,9 +705,12 @@ mod tests {
             r##"{ "#vendored/*": "@scope/vendored/*" }"##,
             &[],
         );
-        let err =
-            resolve_subpath_import("#vendored/../../etc/passwd", &importer, DEFAULT_CONDITIONS)
-                .unwrap_err();
+        let err = resolve_subpath_import(
+            "#vendored/../../etc/passwd",
+            &importer,
+            default_conditions(),
+        )
+        .unwrap_err();
         assert!(
             matches!(err, SubpathImportError::InvalidSpecifier { .. }),
             "{err}"
@@ -715,7 +721,7 @@ mod tests {
     fn node_builtin_target_returns_external() {
         let dir = tempfile::tempdir().unwrap();
         let importer = fixture(dir.path(), r##"{ "#fs": "node:fs" }"##, &[]);
-        let outcome = resolve_subpath_import("#fs", &importer, DEFAULT_CONDITIONS).unwrap();
+        let outcome = resolve_subpath_import("#fs", &importer, default_conditions()).unwrap();
         assert_eq!(
             outcome,
             SubpathImportOutcome::External("node:fs".to_string())
@@ -726,7 +732,7 @@ mod tests {
     fn parent_dir_target_is_rejected() {
         let dir = tempfile::tempdir().unwrap();
         let importer = fixture(dir.path(), r##"{ "#escape": "../outside.ts" }"##, &[]);
-        let err = resolve_subpath_import("#escape", &importer, DEFAULT_CONDITIONS).unwrap_err();
+        let err = resolve_subpath_import("#escape", &importer, default_conditions()).unwrap_err();
         assert!(
             matches!(err, SubpathImportError::InvalidTarget { .. }),
             "{err}"
@@ -741,7 +747,7 @@ mod tests {
             r##"{ "#escape": "./src/../../outside.ts" }"##,
             &[],
         );
-        let err = resolve_subpath_import("#escape", &importer, DEFAULT_CONDITIONS).unwrap_err();
+        let err = resolve_subpath_import("#escape", &importer, default_conditions()).unwrap_err();
         assert!(
             matches!(err, SubpathImportError::InvalidTarget { .. }),
             "{err}"
@@ -756,8 +762,9 @@ mod tests {
             r##"{ "#lib/*": "./src/lib/*" }"##,
             &["src/lib/foo.ts"],
         );
-        let err = resolve_subpath_import("#lib/../../../etc/passwd", &importer, DEFAULT_CONDITIONS)
-            .unwrap_err();
+        let err =
+            resolve_subpath_import("#lib/../../../etc/passwd", &importer, default_conditions())
+                .unwrap_err();
         assert!(
             matches!(err, SubpathImportError::InvalidSpecifier { .. }),
             "{err}"
@@ -769,7 +776,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let importer = fixture(dir.path(), r##"{ "#lib/*": "./src/lib/*" }"##, &[]);
         for bad in ["#", "#/", "#/foo", "#lib/"] {
-            let err = resolve_subpath_import(bad, &importer, DEFAULT_CONDITIONS).unwrap_err();
+            let err = resolve_subpath_import(bad, &importer, default_conditions()).unwrap_err();
             assert!(
                 matches!(err, SubpathImportError::InvalidSpecifier { .. }),
                 "{bad} should be invalid, got {err}"
@@ -792,7 +799,7 @@ mod tests {
             &["lib/util.ts"],
         );
         let resolved = expect_file(
-            resolve_subpath_import("#util", &nested_importer, DEFAULT_CONDITIONS).unwrap(),
+            resolve_subpath_import("#util", &nested_importer, default_conditions()).unwrap(),
         );
         assert!(
             resolved.ends_with("packages/inner/lib/util.ts"),
@@ -812,7 +819,7 @@ mod tests {
         let importer = sub.join("main.ts");
         std::fs::write(&importer, "// importer\n").unwrap();
         let resolved =
-            expect_file(resolve_subpath_import("#util", &importer, DEFAULT_CONDITIONS).unwrap());
+            expect_file(resolve_subpath_import("#util", &importer, default_conditions()).unwrap());
         assert!(resolved.ends_with("src/util.ts"), "{resolved:?}");
     }
 
@@ -825,7 +832,7 @@ mod tests {
         let importer = root.join("src/main.ts");
         std::fs::write(&importer, "// importer\n").unwrap();
         assert_eq!(
-            resolve_subpath_import("#lib/foo", &importer, DEFAULT_CONDITIONS).unwrap(),
+            resolve_subpath_import("#lib/foo", &importer, default_conditions()).unwrap(),
             SubpathImportOutcome::NotDefined
         );
     }
@@ -839,7 +846,7 @@ mod tests {
             &["src/lib/foo.ts"],
         );
         assert_eq!(
-            resolve_subpath_import("#other", &importer, DEFAULT_CONDITIONS).unwrap(),
+            resolve_subpath_import("#other", &importer, default_conditions()).unwrap(),
             SubpathImportOutcome::NotDefined
         );
     }
@@ -849,7 +856,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let importer = fixture(dir.path(), r##"{ "#blocked": null }"##, &[]);
         assert_eq!(
-            resolve_subpath_import("#blocked", &importer, DEFAULT_CONDITIONS).unwrap(),
+            resolve_subpath_import("#blocked", &importer, default_conditions()).unwrap(),
             SubpathImportOutcome::NotDefined
         );
     }
@@ -867,7 +874,7 @@ mod tests {
         let importer = dep.join("index.ts");
         std::fs::write(&importer, "// importer\n").unwrap();
         assert_eq!(
-            resolve_subpath_import("#util", &importer, DEFAULT_CONDITIONS).unwrap(),
+            resolve_subpath_import("#util", &importer, default_conditions()).unwrap(),
             SubpathImportOutcome::NotDefined
         );
     }
