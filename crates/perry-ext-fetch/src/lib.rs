@@ -979,9 +979,20 @@ pub extern "C" fn js_fetch_stream_close(handle: f64) -> f64 {
 
 // ── Headers ───────────────────────────────────────────────────────
 
+/// `new Headers()` — a NaN-boxed POINTER_TAG handle, the encoding contract
+/// perry-stdlib's twin documents and every `handle_id` here already accepts.
+///
+/// Returning the bare id as a double made the value a JS NUMBER: `typeof` was
+/// "number", `instanceof Headers` false, `String(h)` "1", and any DYNAMIC
+/// dispatch threw `(number).delete is not a function`. Statically-typed call
+/// sites hid it, because they lower to native calls that take the id directly.
+/// This crate wins the link whenever `node-fetch` — or its bare-`fetch` alias —
+/// routes here, so that broke the global `Headers` for any program using fetch.
+/// See #10310.
 #[no_mangle]
 pub extern "C" fn js_headers_new() -> f64 {
-    store_headers(HeadersStore::default()) as f64
+    ensure_headers_dispatch_registered();
+    nanbox_headers_handle(store_headers(HeadersStore::default()))
 }
 
 /// # Safety
@@ -1777,3 +1788,242 @@ fn _ensure_handle_imports() -> Option<()> {
 
 #[cfg(test)]
 mod tests;
+
+
+// ── #10310: this crate's Headers handles must be first-class JS values ──────
+//
+// Two halves, and BOTH are required — boxing alone turns a loud
+// `(number).delete is not a function` into silent wrong answers, because the
+// runtime's handle tower routes Headers to perry-stdlib's
+// `dispatch_headers_method`, which reads perry-stdlib's registry while the
+// handle lives in this crate's `HEADERS_HANDLES`.
+//
+// `js_register_handle_method_dispatch_extension` is the documented mechanism
+// for exactly this — "External native crates use this when their handles must
+// coexist with the default stdlib dispatcher" — and perry-ext-net, -ws, -http
+// and -mysql2 all use it. Registration is lazy from `js_headers_new`, the one
+// place a handle of ours can first exist.
+
+const EXT_POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+const EXT_POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+const EXT_TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+const EXT_TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
+
+extern "C" {
+    fn js_get_string_pointer_unified(value: f64) -> i64;
+    fn js_json_stringify(value: f64, type_hint: u32) -> *mut StringHeader;
+    fn js_register_handle_method_dispatch_extension(
+        f: unsafe extern "C" fn(i64, *const u8, usize, *const f64, usize, *mut f64) -> i32,
+    );
+}
+
+fn nanbox_headers_handle(id: usize) -> f64 {
+    f64::from_bits(EXT_POINTER_TAG | (id as u64 & EXT_POINTER_MASK))
+}
+
+pub(crate) fn ensure_headers_dispatch_registered() {
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| unsafe {
+        js_register_handle_method_dispatch_extension(ext_fetch_headers_method_dispatch);
+    });
+}
+
+/// Serve this crate's Headers handles from the runtime's dynamic handle tower.
+///
+/// Returns 0 for any id this crate never issued, so another subsystem's handle
+/// falls through untouched — registry membership is the gate, the same one
+/// perry-stdlib's `dispatch_headers_method` and perry-ext-net's extension use.
+/// The method set mirrors perry-stdlib's dispatcher exactly, including its two
+/// non-obvious cases: `get` answers `null` (not `""`) for an absent header, and
+/// `Symbol.iterator` is a synonym for `entries`.
+unsafe extern "C" fn ext_fetch_headers_method_dispatch(
+    handle: i64,
+    method_name_ptr: *const u8,
+    method_name_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+    out: *mut f64,
+) -> i32 {
+    if out.is_null() || method_name_ptr.is_null() || handle <= 0 {
+        return 0;
+    }
+    let id = handle as usize;
+    match HEADERS_HANDLES.lock() {
+        Ok(guard) => {
+            if !guard.contains_key(&id) {
+                return 0;
+            }
+        }
+        Err(_) => return 0,
+    }
+    let Ok(method) =
+        std::str::from_utf8(std::slice::from_raw_parts(method_name_ptr, method_name_len))
+    else {
+        return 0;
+    };
+    let boxed = nanbox_headers_handle(id);
+    let str_arg = |i: usize| -> *const StringHeader {
+        if i < args_len && !args_ptr.is_null() {
+            js_get_string_pointer_unified(*args_ptr.add(i)) as *const StringHeader
+        } else {
+            std::ptr::null()
+        }
+    };
+    let value = match method {
+        "get" => {
+            let p = js_headers_get(boxed, str_arg(0));
+            if p.is_null() {
+                f64::from_bits(EXT_TAG_NULL)
+            } else {
+                f64::from_bits(JsValue::from_string_ptr(p).bits())
+            }
+        }
+        "set" => js_headers_set(boxed, str_arg(0), str_arg(1)),
+        "append" => js_headers_append(boxed, str_arg(0), str_arg(1)),
+        "has" => js_headers_has(boxed, str_arg(0)),
+        "delete" => js_headers_delete(boxed, str_arg(0)),
+        "getSetCookie" => js_headers_get_set_cookie(boxed),
+        "forEach" => {
+            let cb = if args_len > 0 && !args_ptr.is_null() {
+                *args_ptr
+            } else {
+                f64::from_bits(EXT_TAG_UNDEFINED)
+            };
+            js_headers_for_each(boxed, cb)
+        }
+        "keys" => js_headers_keys(boxed),
+        "values" => js_headers_values(boxed),
+        "entries" | "Symbol.iterator" | "@@iterator" => js_headers_entries(boxed),
+        _ => return 0,
+    };
+    *out = value;
+    1
+}
+
+/// `new Headers(init)` for an init the codegen could not flatten into literal
+/// `js_headers_set` calls.
+///
+/// perry-stdlib exports this symbol; this crate did NOT, so a `Headers` built
+/// here was populated by a function reading perry-stdlib's registry — it found
+/// nothing and reported the init (itself one of our handles) as non-iterable:
+/// `Headers constructor: init is not iterable (received 0x4014000000000000)`,
+/// that hex being the double `5`. Owning the symbol keeps one store in play.
+///
+/// The init forms that reach here are another `Headers`, a record, or an
+/// iterable of pairs. Records and pair-arrays are read through
+/// `js_json_stringify` rather than by walking JS objects directly: it invokes
+/// the same coercions the spec requires for header values and keeps this out
+/// of the business of rooting a live object graph across allocations.
+#[no_mangle]
+pub unsafe extern "C" fn js_headers_init_from_value(handle: f64, init: f64) -> f64 {
+    let undefined = f64::from_bits(EXT_TAG_UNDEFINED);
+    if init.to_bits() == EXT_TAG_UNDEFINED {
+        return undefined;
+    }
+    if init.to_bits() == EXT_TAG_NULL {
+        throw_type_error("Headers constructor: init must not be null");
+    }
+    let target = handle_id(handle);
+    {
+        let guard = match HEADERS_HANDLES.lock() {
+            Ok(guard) => guard,
+            Err(_) => return undefined,
+        };
+        if !guard.contains_key(&target) {
+            return undefined;
+        }
+    }
+
+    // Another Headers: copy its entries verbatim, preserving order and repeats
+    // (Set-Cookie depends on both).
+    let source = handle_id(init);
+    let cloned = if source != 0 && source != target {
+        HEADERS_HANDLES
+            .lock()
+            .ok()
+            .and_then(|guard| guard.get(&source).cloned())
+    } else {
+        None
+    };
+    if let Some(source_store) = cloned {
+        if let Ok(mut guard) = HEADERS_HANDLES.lock() {
+            if let Some(store) = guard.get_mut(&target) {
+                for (key, value) in &source_store.entries {
+                    store.append(key, value);
+                }
+            }
+        }
+        return undefined;
+    }
+
+    let json_ptr = js_json_stringify(init, 0);
+    let Some(text) = read_str(json_ptr) else {
+        throw_type_error(&format!(
+            "Headers constructor: init is not iterable (received {init:?})"
+        ));
+    };
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) else {
+        throw_type_error(&format!(
+            "Headers constructor: init is not iterable (received {text})"
+        ));
+    };
+
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    match parsed {
+        // `{ "content-type": "application/json" }`
+        serde_json::Value::Object(map) => {
+            for (key, value) in map {
+                match value {
+                    // A record whose value is an array means repeated headers.
+                    serde_json::Value::Array(items) => {
+                        for item in items {
+                            pairs.push((key.clone(), json_scalar_to_header_value(&item)));
+                        }
+                    }
+                    other => pairs.push((key, json_scalar_to_header_value(&other))),
+                }
+            }
+        }
+        // `[["content-type", "application/json"], …]`
+        serde_json::Value::Array(items) => {
+            for item in items {
+                let serde_json::Value::Array(pair) = item else {
+                    throw_type_error(
+                        "Headers constructor: init sequence element is not a name/value pair",
+                    );
+                };
+                if pair.len() != 2 {
+                    throw_type_error(
+                        "Headers constructor: init sequence element is not a name/value pair",
+                    );
+                }
+                pairs.push((
+                    json_scalar_to_header_value(&pair[0]),
+                    json_scalar_to_header_value(&pair[1]),
+                ));
+            }
+        }
+        _ => throw_type_error(&format!(
+            "Headers constructor: init is not iterable (received {text})"
+        )),
+    }
+
+    if let Ok(mut guard) = HEADERS_HANDLES.lock() {
+        if let Some(store) = guard.get_mut(&target) {
+            for (key, value) in pairs {
+                store.append(&key, &value);
+            }
+        }
+    }
+    undefined
+}
+
+/// Header values are strings; JSON scalars stringify the way `String(v)` does
+/// rather than keeping their JSON spelling (no quotes around a string).
+fn json_scalar_to_header_value(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(text) => text.clone(),
+        serde_json::Value::Null => "null".to_string(),
+        other => other.to_string(),
+    }
+}
