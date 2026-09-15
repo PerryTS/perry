@@ -348,17 +348,36 @@ mod tests {
         assert_eq!((OUTCOME_DONE, OUTCOME_CANCELLED, OUTCOME_FAILED), (0, 1, 2));
     }
 
+    // Named fn items rather than closures: the trampolines are generic over
+    // `D`, and nothing in a `*mut c_void` ties that parameter down, so a
+    // closure would leave it uninferable.
+    type Work = fn() -> u8;
+
+    fn expect_failed(outcome: Outcome<u8>) {
+        assert!(matches!(outcome, Outcome::Failed));
+    }
+
+    fn expect_cancelled(outcome: Outcome<u8>) {
+        assert!(matches!(outcome, Outcome::Cancelled));
+    }
+
+    fn panicking_delivery(_outcome: Outcome<u8>) {
+        panic!("binding delivery panicked");
+    }
+
+    fn ctx_for(out: Option<u8>, panicked: bool, deliver: fn(Outcome<u8>)) -> *mut c_void {
+        Box::into_raw(Box::new(Ctx::<u8, Work, fn(Outcome<u8>)> {
+            work: None,
+            deliver: Some(deliver),
+            out,
+            panicked,
+        })) as *mut c_void
+    }
+
     #[test]
     fn a_delivery_reports_failed_when_the_pool_side_panicked() {
-        let ctx = Box::into_raw(Box::new(Ctx {
-            work: None::<fn() -> u8>,
-            deliver: Some(|outcome: Outcome<u8>| {
-                assert!(matches!(outcome, Outcome::Failed));
-            }),
-            out: None,
-            panicked: true,
-        })) as *mut c_void;
-        deliver_on_owner::<u8, fn() -> u8, _>(ctx, OUTCOME_DONE);
+        let ctx = ctx_for(None, true, expect_failed);
+        deliver_on_owner::<u8, Work, fn(Outcome<u8>)>(ctx, OUTCOME_DONE);
     }
 
     #[test]
@@ -366,26 +385,14 @@ mod tests {
         // The runtime is the authority on whether the job ran: a cancel that
         // raced a finishing job must still read as Cancelled, or a binding
         // would settle a promise it had already rejected.
-        let ctx = Box::into_raw(Box::new(Ctx {
-            work: None::<fn() -> u8>,
-            deliver: Some(|outcome: Outcome<u8>| {
-                assert!(matches!(outcome, Outcome::Cancelled));
-            }),
-            out: Some(9u8),
-            panicked: false,
-        })) as *mut c_void;
-        deliver_on_owner::<u8, fn() -> u8, _>(ctx, OUTCOME_CANCELLED);
+        let ctx = ctx_for(Some(9), false, expect_cancelled);
+        deliver_on_owner::<u8, Work, fn(Outcome<u8>)>(ctx, OUTCOME_CANCELLED);
     }
 
     #[test]
     fn a_panicking_delivery_does_not_unwind_into_the_runtime() {
-        let ctx = Box::into_raw(Box::new(Ctx {
-            work: None::<fn() -> u8>,
-            deliver: Some(|_: Outcome<u8>| panic!("binding delivery panicked")),
-            out: Some(1u8),
-            panicked: false,
-        })) as *mut c_void;
+        let ctx = ctx_for(Some(1), false, panicking_delivery);
         // Must return normally: the panic is contained inside the trampoline.
-        deliver_on_owner::<u8, fn() -> u8, _>(ctx, OUTCOME_DONE);
+        deliver_on_owner::<u8, Work, fn(Outcome<u8>)>(ctx, OUTCOME_DONE);
     }
 }
