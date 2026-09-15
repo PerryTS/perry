@@ -255,13 +255,16 @@ struct Job {
 struct PoolState {
     jobs: HashMap<u64, Job>,
     next_id: u64,
-    scanner_registered: bool,
 }
 
 crate::perry_thread_local! {
     /// Per agent, like the loop itself. A job belongs to the thread that
     /// submitted it; there is no cross-thread map to race on.
     static POOL: RefCell<PoolState> = RefCell::new(PoolState::default());
+    /// Outside [`PoolState`] on purpose: registering a scanner pushes onto the
+    /// scanner registry, and doing that while holding the table's borrow would
+    /// be one more thing that has to be proven not to re-enter.
+    static SCANNER_REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Visit every JS value parked with an outstanding job on this thread.
@@ -273,11 +276,15 @@ crate::perry_thread_local! {
 fn scan_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     POOL.with(|state| {
         let Ok(mut state) = state.try_borrow_mut() else {
-            // A collection from inside a `deliver` closure. That job's entry
-            // has already been taken out of the table and its roots moved into
-            // the closure's own frame, which the collector reaches through the
-            // ordinary stack scan; every other entry is untouched by that
-            // borrow. Skipping is correct, not a missed root.
+            // The only borrow a collection can land inside is a `deliver`
+            // closure's: it runs JS, so it can allocate and collect. That job's
+            // entry is already out of the table and its roots have moved into
+            // the closure's own frame, which the ordinary stack scan reaches;
+            // every other entry is untouched. The table's other borrows —
+            // submit, cancel, the take in `deliver` — hold it across nothing
+            // but `HashMap` operations, which allocate from the system
+            // allocator and never reach a collection point. Skipping is
+            // therefore correct, not a missed root.
             return;
         };
         for job in state.jobs.values_mut() {
@@ -288,12 +295,14 @@ fn scan_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     });
 }
 
-fn ensure_scanner_registered(state: &mut PoolState) {
-    if state.scanner_registered {
-        return;
-    }
-    crate::gc::gc_register_mutable_root_scanner_named("runtime:turnloop_pool", scan_roots_mut);
-    state.scanner_registered = true;
+fn ensure_scanner_registered() {
+    SCANNER_REGISTERED.with(|registered| {
+        if registered.get() {
+            return;
+        }
+        crate::gc::gc_register_mutable_root_scanner_named("runtime:turnloop_pool", scan_roots_mut);
+        registered.set(true);
+    });
 }
 
 // ── Submission ──────────────────────────────────────────────────────────────
@@ -330,11 +339,11 @@ where
     W: FnOnce() -> T + Send + 'static,
     D: FnOnce(Delivery<T>, Vec<u64>) + 'static,
 {
+    if !roots.is_empty() {
+        ensure_scanner_registered();
+    }
     let id = POOL.with(|state| {
         let mut state = state.borrow_mut();
-        if !roots.is_empty() {
-            ensure_scanner_registered(&mut state);
-        }
         state.next_id += 1;
         state.next_id
     });
@@ -563,11 +572,12 @@ impl Drop for OutstandingGuard {
 /// contract on the one path where it matters least to the program and most to
 /// the accounting. Called from `event_pump::agent_loop::shutdown_current_thread`.
 pub fn shutdown_current_thread() {
-    loop {
-        let next = POOL.with(|state| state.borrow().jobs.keys().copied().next());
-        let Some(id) = next else {
-            return;
-        };
+    // Snapshot first: a `deliver` closure may legitimately submit another job
+    // (a settlement that kicks off follow-up work), and draining "whatever is
+    // in the table now" would then never terminate. Anything submitted during
+    // the drain is left for the loop's own teardown, which is about to free it.
+    let ids: Vec<u64> = POOL.with(|state| state.borrow().jobs.keys().copied().collect());
+    for id in ids {
         deliver(id, Delivery::Cancelled);
     }
 }
