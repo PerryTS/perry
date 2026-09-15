@@ -72,7 +72,7 @@ counters decide whether the loop lives. `PERRY_LOOP_STATS` gained `timer_arms=`
 and `timer_expiries=`, so a timer workload whose expiries never reached the loop
 says so rather than looking green.
 
-Tests: `crates/perry-runtime/src/timer/store_tests.rs` (20 unit tests over the
+Tests: `crates/perry-runtime/src/timer/store_tests.rs` (14 unit tests over the
 heap, the id index, the snapshot boundaries, the poll staging and the counters),
 and three gap fixtures —
 `test-files/test_gap_turnloop_p3_phase_order.ts`,
