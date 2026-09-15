@@ -1181,6 +1181,7 @@ pub(super) fn compile_closure(
         spec_ta_bindings: &cross_module.spec_ta_bindings,
         spec_ta_ready: std::collections::HashSet::new(),
         spec_i32_params: std::collections::HashSet::new(),
+        spec_bool_params: std::collections::HashSet::new(),
         i1_local_slots: HashMap::new(),
         index_used_locals: native_facts.index_used_locals(),
         strictly_i32_bounded_locals: native_facts.strictly_i32_bounded_locals(),

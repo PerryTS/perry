@@ -1256,6 +1256,11 @@ pub(crate) struct FnCtx<'a> {
     /// a (typically self-recursive) call back into the same entry. Empty in
     /// the generic body, in module init, and in every closure.
     pub spec_i32_params: std::collections::HashSet<u32>,
+    /// Parameters of THIS specialized body whose public entry admitted only the
+    /// two boolean tags (a Boolean descriptor guard). While such a parameter
+    /// is never written, its truthiness is tag identity. Empty in the generic
+    /// body, in module init, in methods and in every closure.
+    pub spec_bool_params: std::collections::HashSet<u32>,
 
     /// Parallel `i1` slots for ordinary boolean locals that have stayed inside
     /// the representation-first subset. The generic `double` slot remains as a

@@ -354,6 +354,14 @@
       "reason": "Restore bookkeeping for a ternary's branch-scoped narrowing: the snapshot is written back after each arm and is never read as a type fact."
     },
     {
+      "path": "crates/perry-codegen/src/lower_conditional.rs",
+      "function": "lower_truthy",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "Tag-identity truthiness is taken only for a parameter in spec_bool_params, whose sole entry is the public wrapper's inline TAG_TRUE|TAG_FALSE guard; the proof API also rejects any binding written anywhere in the body, so the slot still holds the guarded boolean."
+    },
+    {
       "path": "crates/perry-codegen/src/rooting/temp_root.rs",
       "function": "local_is_inert_primitive",
       "access": "stable_local_type_proof",
