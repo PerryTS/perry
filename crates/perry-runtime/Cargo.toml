@@ -494,3 +494,10 @@ encoding_rs = "0.8"
 # binaries for launch time; `watch_fsevents.rs` binds FSEvents via dlopen.
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 notify.workspace = true
+
+# turnloop P0 (docs/turnloop/p0-report.md): each native JS agent's event-loop
+# wait driver (`event_pump/agent_loop.rs`). Native blocking hosts only; the web
+# and WASI targets keep their existing host integration until their backends
+# are wired per agent (P3/P4).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+turnloop.workspace = true
