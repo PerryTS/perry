@@ -66,8 +66,11 @@ crate::perry_thread_local! {
     /// Lexical ClassDefinitionEvaluation owner for static method/accessor
     /// dispatch. Unlike IMPLICIT_THIS, this is not replaced by `.call`'s
     /// visible receiver. A stack makes nested dispatch frame-local.
-    static STATIC_PRIVATE_OWNER_STACK: RefCell<Vec<u64>> =
-        const { RefCell::new(Vec::new()) };
+    static STATIC_PRIVATE_OWNER_STACK: RefCell<crate::exception::CatchStack<u64>> = const {
+        RefCell::new(crate::exception::CatchStack::new(
+            crate::exception::catch_subsystem::STATIC_PRIVATE_OWNER,
+        ))
+    };
 }
 
 pub(crate) fn static_private_owner_push(value: f64) {
@@ -312,8 +315,11 @@ crate::perry_thread_local! {
     /// name the outer function's alloca directly; this stack gives it the
     /// exact live binding cell without turning the state into a process-global
     /// boolean.
-    static DERIVED_SUPER_BINDING_STACK: std::cell::RefCell<Vec<usize>> =
-        const { std::cell::RefCell::new(Vec::new()) };
+    static DERIVED_SUPER_BINDING_STACK: std::cell::RefCell<crate::exception::CatchStack<usize>> = const {
+        std::cell::RefCell::new(crate::exception::CatchStack::new(
+            crate::exception::catch_subsystem::DERIVED_SUPER_BINDING,
+        ))
+    };
 }
 
 #[no_mangle]

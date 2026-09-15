@@ -17,7 +17,8 @@ crate::perry_thread_local! {
     /// Deletes may leave holes but must not compact them while a cursor still
     /// names the old raw layout (#9082). Nested walks are kept as a stack so
     /// exception savepoints can discard precisely the frames a throw skips.
-    static SET_FOREACH_STACK: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+    static SET_FOREACH_STACK: RefCell<crate::exception::CatchStack<usize>> =
+        const { RefCell::new(crate::exception::CatchStack::new(crate::exception::catch_subsystem::SET_FOREACH)) };
 }
 
 #[inline]

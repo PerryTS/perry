@@ -18,7 +18,8 @@ crate::perry_thread_local! {
     static MAP_ITERATOR_ARRAYS: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
     /// Backing Maps whose `forEach` raw-entry walk is currently active. A
     /// compaction would move entries behind those cursors (#9082).
-    static MAP_FOREACH_STACK: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+    static MAP_FOREACH_STACK: RefCell<crate::exception::CatchStack<usize>> =
+        const { RefCell::new(crate::exception::CatchStack::new(crate::exception::catch_subsystem::MAP_FOREACH)) };
 }
 
 #[inline]
