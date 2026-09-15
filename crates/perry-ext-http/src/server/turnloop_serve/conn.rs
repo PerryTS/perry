@@ -856,6 +856,16 @@ fn on_eof(id: i64) {
     if already {
         return;
     }
+    if answering {
+        // The peer stopped sending before its response was written. Node's
+        // server socket is `allowHalfOpen: false`, so its own EOF closes the
+        // socket and `abortIncoming` raises `'aborted'` on every request whose
+        // response never completed — which is this one. Noting it here rather
+        // than at the terminal `Closed` is what makes it observable at all:
+        // this connection stays open until the handler answers, and by then
+        // the request has been retired.
+        note_aborted(id);
+    }
     if partial {
         // A half-sent request: Node destroys the socket without answering.
         destroy_connection(id);

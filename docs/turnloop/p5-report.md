@@ -479,11 +479,29 @@ Both trees built identically (the harness's default package set plus the
 
 | | base `14803019fc` | P5 |
 |---|---|---|
-| parity pass | 791 | *(filled below)* |
-| parity fail | 9 | |
-| compile fail | 0 | |
-| crash | 0 | |
+| parity pass | 791 | 793 |
+| parity fail | 9 | 10 |
+| compile fail | 0 | 0 |
+| crash | 0 | 0 |
 | total | 800 | 803 (+3 new tests) |
+| parity rate | 98.8 % | 98.7 % |
+
+**Per-test, the failure sets are identical except for one**, and that one was a
+real regression this sweep caught: `test_gap_turnloop_net_sockets` — P1's own
+net test — lost the body of its TCP echo. The `allowHalfOpen: false` close on
+`'end'` had started calling `destroy()` outright whenever the application had
+already ended the writable side, and `Loop::close` cancels outstanding
+operations, so it cancelled exactly the writes the `'end'` handler had just
+queued. That is P1's own third behaviour note, re-broken from the other
+direction by this branch's ENOTCONN fix. Fixed by separating the two questions
+— whether to submit a shutdown (no, one is in flight) from whether the socket
+may close yet (only once that shutdown completes) — and the test is
+byte-identical to Node again.
+
+The three new tests all pass inside the sweep
+(`turnloop_http_server`, `turnloop_https_server`, `turnloop_keepalive_timeout`);
+`turnloop_http_lifecycle` was added after the sweep started and is verified
+against the oracle separately.
 
 The base's nine, none of them touched by this work:
 `2159_defineproperty_class_prototype`, `2514_settracesigint`,
