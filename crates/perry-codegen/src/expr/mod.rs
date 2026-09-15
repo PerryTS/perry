@@ -162,6 +162,8 @@ mod class_field_barrier_tests;
 mod class_field_get_shape_tests;
 mod dispatch;
 #[cfg(test)]
+mod hit_path_access_tests;
+#[cfg(test)]
 mod index_set_barrier_tests;
 mod record_value;
 mod repsel_gates;
