@@ -513,6 +513,22 @@ The base's nine, none of them touched by this work:
 gate is red on the base commit before P5 changes anything — which is exactly
 why this comparison is against the base rather than against the snapshot.
 
+### Targeted parity filters, at HEAD
+
+Re-run after the two socket-ordering fixes the sweep exposed, so these are the
+numbers for the final tree rather than for the commit the sweep measured. Every
+filter: **0 failures, 0 compile failures, 0 crashes**.
+
+| filter | pass |
+|---|---|
+| `test_gap_turnloop` (P1's net test + P5's four) | 10 |
+| `test_gap_net` / `test_gap_gc_net` / `test_net_` / `test_parity_net` | 2 / 1 / 4 / 1 |
+| `test_gap_http` / `test_parity_http` / `test_parity_https` | 5 / 3 / 1 |
+| `test_sock_write`, `test_issue_1852`, `2131`, `422`, `1123`, `1131`, `5021`, `647`, `1933` | 1,1,1,1,2,1,1,1,1 |
+
+`test_gap_ws` matches no files; Perry's WebSocket coverage is elsewhere, and
+P5 did not migrate that path.
+
 ## Perry-side defects this work found (not P5 regressions)
 
 Each was reproduced on the base commit's hyper/tokio path too, so they are
