@@ -641,3 +641,63 @@ fn imported_length_only_arguments_capability_uses_scalar_direct_abi() {
         "the imported direct path should not allocate an argument bundle:\n{ir}"
     );
 }
+
+/// A module's string pool can run before the defining module of a class it
+/// imports has initialized (the entry module, an import cycle), so only the
+/// runtime knows when that class's typed ShapeId exists. The imported stub must
+/// hand the runtime its keys, ShapeId and header-image globals right after
+/// storing them — and must not do so from an image that can be unloaded,
+/// because the runtime keeps the addresses.
+#[test]
+fn imported_stub_registers_its_shape_slots_for_the_defining_modules_typed_id() {
+    let module = || {
+        let mut module = Module::new("imported_shape_slots.ts");
+        module.init = vec![Stmt::Let {
+            id: 20,
+            name: "instance".to_string(),
+            ty: Type::Named("Remote".to_string()),
+            mutable: false,
+            init: Some(Expr::New {
+                class_name: "Remote".to_string(),
+                args: vec![Expr::Null],
+                type_args: Vec::new(),
+                byte_offset: 0,
+                cap_args_appended: 0,
+            }),
+        }];
+        module
+    };
+    const REGISTER: &str = "call void @js_register_imported_class_shape_slot(";
+
+    let mut opts = ir_opts();
+    opts.imported_classes.push(imported_remote());
+    let ir = String::from_utf8(compile_module(&module(), opts).unwrap())
+        .expect("LLVM IR should be UTF-8");
+    let register_at = ir
+        .find(REGISTER)
+        .unwrap_or_else(|| panic!("the imported stub must register its shape slots:\n{ir}"));
+    let call = ir[register_at..].lines().next().unwrap();
+    assert!(
+        call.contains("@perry_class_keys_")
+            && call.contains("@perry_class_shape_id_")
+            && call.contains("i32 55,"),
+        "registration must name the stub's keys and ShapeId globals and its class id:\n{call}"
+    );
+    let shape_store = ir[..register_at]
+        .rfind("store i32 ")
+        .expect("the stub's own ShapeId store");
+    assert!(
+        ir[shape_store..register_at].contains("@perry_class_shape_id_"),
+        "the slot is registered after this module stored its own id:\n{ir}"
+    );
+
+    let mut dylib = ir_opts();
+    dylib.output_type = "dylib".to_string();
+    dylib.imported_classes.push(imported_remote());
+    let dylib_ir = String::from_utf8(compile_module(&module(), dylib).unwrap())
+        .expect("LLVM IR should be UTF-8");
+    assert!(
+        !dylib_ir.contains(REGISTER),
+        "an unloadable image must not lend global addresses to the registry:\n{dylib_ir}"
+    );
+}
