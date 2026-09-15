@@ -534,6 +534,10 @@ pub(crate) fn pump() {
     if LIVE_COUNT.load(Ordering::Relaxed) == 0 {
         return;
     }
+    // A datagram exists on the queue only once the loop has been turned; a
+    // caller that drives this pump without parking must not spin against a
+    // queue nothing can fill (see `turnloop_proc::drain_pending`).
+    crate::turnloop_proc::drain_pending();
     let datagrams = std::mem::take(&mut *queue_lock());
     for datagram in datagrams {
         // The socket may have been closed between recv and pump; skip if gone.

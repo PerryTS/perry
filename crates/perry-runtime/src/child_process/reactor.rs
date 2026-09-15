@@ -1359,6 +1359,11 @@ pub(crate) fn cp_reactor_pump() {
     if CP_PUMPING.with(|p| p.replace(true)) {
         return; // already pumping (re-entrant await inside a handler)
     }
+    // turnloop P2: a child's pipes are loop operations now, so their bytes
+    // exist only once the loop has been turned. A caller that drives this pump
+    // without parking — the `await` poll loop, and the lifecycle tests below —
+    // would otherwise spin against a queue nothing can fill.
+    crate::turnloop_proc::drain_pending();
     cp_reactor_pump_inner();
     CP_PUMPING.with(|p| p.set(false));
 }

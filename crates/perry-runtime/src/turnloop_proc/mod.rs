@@ -454,6 +454,26 @@ pub(crate) fn close(id: u64) {
     }
 }
 
+/// Collect whatever the driver has ready for this thread, without blocking.
+///
+/// A subsystem's pump used to be self-sufficient: a thread had already pushed
+/// the bytes onto the queue, so draining the queue was the whole job. A
+/// completion-shaped transport is not like that — the bytes exist only once
+/// the loop has been turned. A caller that drives a pump in a loop *without*
+/// parking (the `await` poll loop, and the child-process lifecycle tests,
+/// which is where this was caught) would otherwise spin against a queue
+/// nothing can fill.
+///
+/// Costs nothing at all when this thread has adopted no descriptor: one
+/// thread-local length read, no syscall.
+#[inline]
+pub(crate) fn drain_pending() {
+    if PROC.with(|state| state.borrow().entries.is_empty()) {
+        return;
+    }
+    crate::event_pump::settle_loop_once();
+}
+
 /// Close a descriptor and drive the loop until the driver has acknowledged it.
 ///
 /// [`close`] alone is asynchronous, which is right for everything whose release
