@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2093 entries across 137 modules
+// Coverage: 2095 entries across 138 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -414,6 +414,14 @@ declare module "bun" {
   export function zstdDecompress(...args: any[]): any;
   /** stdlib */
   export function zstdDecompressSync(...args: any[]): any;
+}
+
+declare module "bun-pty" {
+  /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
+  export function spawn(...args: any[]): any;
 }
 
 declare module "bun:ffi" {

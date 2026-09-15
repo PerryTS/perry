@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 3052 entries across 139 modules.
+Total: 3054 entries across 140 modules.
 
 ## Modules
 
@@ -28,6 +28,7 @@ Total: 3052 entries across 139 modules.
 - [`bignumber.js`](#bignumberjs)
 - [`buffer`](#buffer)
 - [`bun`](#bun)
+- [`bun-pty`](#bun-pty)
 - [`bun:ffi`](#bunffi)
 - [`bun:jsc`](#bunjsc)
 - [`bun:sqlite`](#bunsqlite)
@@ -467,6 +468,16 @@ Total: 3052 entries across 139 modules.
 - `stdin`
 - `stdout`
 - `version`
+
+## `bun-pty`
+
+### Methods
+
+- `spawn` — module
+
+### Properties
+
+- `default`
 
 ## `bun:ffi`
 
