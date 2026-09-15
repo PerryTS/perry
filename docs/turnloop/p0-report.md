@@ -125,6 +125,7 @@ structurally.
 | `perry_next_wake_ms` (embedder API) | still the min of the above plus the stdlib provider, so its stdlib component can now be fractional |
 | `js_register_wait_driver` | unchanged; now the primary agent's transitional tick, the workers' park and the A/B arm |
 | `perry_runtime::event_pump::{shutdown_wait_driver, loop_statistics, LoopStats}` | new Rust API |
+| `perry_runtime::event_pump::loop_stats::{snapshot, LoopWaitStats, format_line, begin_fast_drive, end_fast_drive, …}` | new Rust API (wait metrics). Deliberately **not** `extern "C"`: perry-stdlib links perry-runtime as an rlib, so the hooks add no FFI symbol and no contract to keep |
 
 ### Wait metrics (`PERRY_LOOP_STATS=1`, `event_pump/loop_stats.rs`)
 
@@ -433,6 +434,41 @@ Wall times printed by the stats script include macOS first-exec validation of
 a freshly linked binary (~0.3–1.5 s). Re-running the same binary: idle probe
 0.21 s on both arms.
 
+### Measured wait metrics (macOS, `--profile perry-dev`)
+
+Both arms built from `fa5bb1b40a` in the worktree target dir with the harness's
+package and feature set, then copied out to `/tmp/tlab/target-{turnloop,tokio}`
+(one target tree, two archive directories — the `--skip-cargo` shape). The
+`node:http` app was compiled by each arm's own compiler with
+`PERRY_RUNTIME_DIR` pointing at its own archives and `PERRY_NO_AUTO_OPTIMIZE=1`.
+
+`scripts/turnloop_p0_loop_stats.py --perry /tmp/tlab/target-turnloop/perry`:
+PASS, 7/7 probes, unchanged by the wait metrics (the new line is
+`[perry-loop-waits]`, which its `[perry-loop] ` regex does not match).
+
+A **timer-only** program (`test_turnloop_p0_idle.ts`, one 200 ms timeout) —
+the shape P0 is actually about:
+
+```
+[perry-loop] driver=turnloop turns=1 os_waits=1 zero_event_waits=1 native_ticks=0 turn_errors=0
+[perry-loop-waits] arm=turnloop turnloop_waits=1 turnloop_wait_ns=200737250 turnloop_wait_max_ns=200737250 …
+  … tokio_ticks=0 … fast_drives=0 … zero_budget=0 throttle_sleeps=0 wake_samples=0 … wake_max_ns=0
+```
+
+One turnloop wait of 200.74 ms for a 200 ms deadline (0.74 ms of overshoot,
+scheduler included), no tokio tick, no fast drive, no zero-budget return, and
+no wake sample — the wait ended on its own deadline, not on a notify. That is
+the whole claim of the P0 park, now a measurement rather than an inference.
+
+A **server** (the harness's `node:http` app, two `curl` requests, then
+`SIGTERM`) is the opposite shape, and the metrics say so plainly — see the
+`[perry-loop-waits]` example under *Wait metrics* above: three parks, **all
+three in tokio** (60.4 ms total, 27.3 ms in the longest), zero turnloop turns,
+three fast drives (5.3 ms), and three wakes all under 50 µs (max 31.4 µs).
+A P0 server never reaches the turnloop park, because its accept loop keeps a
+tokio task alive for the life of the process; the gain for servers arrives with
+P1/P5, and this line is how that will be shown rather than argued.
+
 ## Commands for the integrator
 
 Build both arms from the same commit, in separate target dirs, with the same
@@ -617,3 +653,9 @@ done
    instead of combining them.
 7. **`Completions` default capacity 256** allocates per loop; there is no
    const or empty constructor for a host that expects no completions.
+8. **`turn()` does not separate OS-wait time from completion-dispatch time.**
+   A host that wants to publish "time parked" has to bracket the whole call, so
+   from P1 on — when turns start carrying completions — `turnloop_wait_ns` will
+   silently include dispatch. A `TurnInfo::waited` (or a pair of timestamps
+   around the OS wait) would keep that number meaning what it says. In P0 the
+   two are equal, because P0 submits no operation.
