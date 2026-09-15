@@ -1808,6 +1808,8 @@ const EXT_POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const EXT_POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 const EXT_TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 const EXT_TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
+const EXT_TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+const EXT_TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 
 extern "C" {
     fn js_get_string_pointer_unified(value: f64) -> i64;
@@ -1815,6 +1817,20 @@ extern "C" {
     fn js_register_handle_method_dispatch_extension(
         f: unsafe extern "C" fn(i64, *const u8, usize, *const f64, usize, *mut f64) -> i32,
     );
+}
+
+/// Normalise a predicate result to a JS boolean, passing a real boolean
+/// through untouched.
+fn ext_bool_value(value: f64) -> f64 {
+    let bits = value.to_bits();
+    if bits == EXT_TAG_TRUE || bits == EXT_TAG_FALSE {
+        return value;
+    }
+    f64::from_bits(if !value.is_nan() && value != 0.0 {
+        EXT_TAG_TRUE
+    } else {
+        EXT_TAG_FALSE
+    })
 }
 
 fn nanbox_headers_handle(id: usize) -> f64 {
@@ -1880,7 +1896,12 @@ unsafe extern "C" fn ext_fetch_headers_method_dispatch(
         }
         "set" => js_headers_set(boxed, str_arg(0), str_arg(1)),
         "append" => js_headers_append(boxed, str_arg(0), str_arg(1)),
-        "has" => js_headers_has(boxed, str_arg(0)),
+        // `js_headers_has` here answers 1.0/0.0 while perry-stdlib's twin answers
+        // a NaN-boxed boolean, and the STATIC lowering consumes the numeric
+        // form — so normalise on the way out of the dynamic tower only. Without
+        // this, `opts.headers.has(k)` read through an any-typed field returned
+        // `1` where bun returns `true`.
+        "has" => ext_bool_value(js_headers_has(boxed, str_arg(0))),
         "delete" => js_headers_delete(boxed, str_arg(0)),
         "getSetCookie" => js_headers_get_set_cookie(boxed),
         "forEach" => {
