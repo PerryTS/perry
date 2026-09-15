@@ -250,6 +250,19 @@ pub unsafe extern "C" fn napi_delete_async_work(env: NapiEnv, handle: NapiAsyncW
 }
 
 pub(crate) fn drain_async_completions() -> i32 {
+    // turnloop P4, and the rule P2 established: a pump has to turn the loop
+    // before it drains its queue. A thread-backed work item had already pushed
+    // its completion by the time anything looked; a pool-backed one exists only
+    // once the loop has been turned, so a caller that drives this pump without
+    // parking — an addon's own poll loop, and this module's unit tests — would
+    // otherwise spin against a queue nothing can fill.
+    //
+    // Costs a thread-local read and no syscall when this process has queued no
+    // pool job.
+    #[cfg(not(target_arch = "wasm32"))]
+    if crate::turnloop_pool::has_pending_jobs() {
+        crate::event_pump::js_loop_turn_bounded(0);
+    }
     let current = std::thread::current().id();
     let ready = {
         let Ok(mut queue) = COMPLETIONS.lock() else {
