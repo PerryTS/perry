@@ -346,8 +346,12 @@ pub extern "C" fn js_closure_alloc_init(
             crate::gc::layout_init_from_slots(ptr as *mut u8, slots as *const u64, actual_count);
         // Pointer-free births (numbers, booleans, SSO strings) have nothing
         // for a barrier to remember or shade; the classification above
-        // already proved it.
-        if any_pointer {
+        // already proved it. A pointer-bearing birth from the no-collect
+        // nursery path owes the remembered set nothing either (its header is
+        // not TENURED) and needs no shading while no incremental cycle is live
+        // anywhere — the runtime twin of codegen's #7511 parent gate, read from
+        // the live header, so a cycle or a promotion still takes the barrier.
+        if any_pointer && crate::gc::newborn_parent_needs_barrier(ptr as usize) {
             crate::gc::runtime_write_barrier_newborn_slots(
                 ptr as usize,
                 slots as *const u64,
