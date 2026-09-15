@@ -43,6 +43,11 @@ export class Bare extends EventEmitter {}
 export class KeyHandler extends EventEmitter {}
 export class InternalKeyHandler extends KeyHandler {
   renderableHandlers = new Map();
+  pings = 0;
+  // A field initializer that USES the inherited surface. `new Map()` alone
+  // would still construct if the base init ran after the fields; calling
+  // `this.on(...)` here cannot, so this pins the ORDER as well as the install.
+  armed = (this.on(\"ping\", () => { this.pings++; }), true);
 }
 export class Seeded extends EventEmitter {
   hits = 0;
@@ -72,7 +77,8 @@ const k = new InternalKeyHandler();
 let keyHits = 0;
 k.on(\"keypress\", () => { keyHits++; });
 k.emit(\"keypress\");
-console.log(\"internal\", typeof k.on, keyHits, k.renderableHandlers.size);
+k.emit(\"ping\");
+console.log(\"internal\", typeof k.on, keyHits, k.renderableHandlers.size, k.armed, k.pings);
 
 const d = new DerivedOfSeeded();
 d.emit(\"ping\");
@@ -87,7 +93,7 @@ console.log(\"control\", typeof madeInModule.on);
 /// Byte-for-byte what bun and node print for `ENTRY`.
 const EXPECTED: &str = "\
 bare function 1
-internal function 1 0
+internal function 1 0 true 1
 derived function 1
 map 1 9
 control function
