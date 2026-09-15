@@ -333,6 +333,157 @@ fn emit_public_typed_function_trampoline(
     );
 }
 
+/// Upper 32 bits of this module's typed-feedback site ids (see
+/// `FnCtx::typed_feedback_site_id`), which differ between two otherwise
+/// identical bodies only by their local site counter.
+fn spec_site_hash(module_prefix: &str) -> u64 {
+    let mut h = 0x811c9dc5u32;
+    for b in module_prefix.bytes() {
+        h ^= b as u32;
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    (h & 0x7fff_ffff) as u64
+}
+
+/// Whether a declaration-guarded clone lowered to the same code as the generic
+/// body, i.e. no parameter proof its public guard establishes was consumed.
+///
+/// Such a guard is pure cost: `js_param_type_guard` re-parses its descriptor
+/// and walks the value on every call (O(elements) for arrays), then routes to
+/// one of two identical bodies. Only all-boxed plans are compared — a raw
+/// representation changes the ABI and is a use of the proof by itself. The
+/// comparison is textual after renaming what necessarily differs between two
+/// separately lowered copies: the symbol name and define attributes, inline
+/// cache globals and feedback site ids (renumbered in order of appearance).
+fn spec_clone_consumes_no_proof(
+    llmod: &LlModule,
+    public_name: &str,
+    generic_name: &str,
+    plan: &SpecFnPlan,
+    site_hash: &u64,
+) -> bool {
+    if !plan
+        .reps
+        .iter()
+        .all(|rep| matches!(rep, crate::collectors::SpecParamRep::Boxed))
+    {
+        return false;
+    }
+    let spec_name = spec_function_name(public_name, &plan.reps);
+    let (Some(spec), Some(generic)) = (
+        llmod.function_named(&spec_name),
+        llmod.function_named(generic_name),
+    ) else {
+        return false;
+    };
+    let spec_ir = normalize_clone_ir(&spec.to_ir(), *site_hash);
+    let generic_ir = normalize_clone_ir(&generic.to_ir(), *site_hash);
+    spec_ir == generic_ir
+}
+
+/// Per-site global families: each lowered copy of a body mints its own
+/// instance, so two identical bodies differ only in these names.
+const PER_SITE_GLOBAL_PREFIXES: &[&str] = &[
+    "@perry_ic_",
+    "@perry_concat_site_",
+    "@perry_regexp_site_",
+    "@perry_typed_feedback_",
+    "@perry_literal_",
+    "@perry_const_arr_",
+    "@perry_typed_obj_shape_",
+    "@perry_typed_parse_keys_",
+    "@perry_typed_shape_mask_",
+];
+
+/// Canonical text for [`spec_clone_consumes_no_proof`]: drop the `define`
+/// header line, rename per-site globals and feedback site ids by first
+/// appearance. Every other token — callees, module globals, constants, block
+/// labels — must match exactly.
+fn normalize_clone_ir(ir: &str, site_hash: u64) -> String {
+    let mut out = String::with_capacity(ir.len());
+    let mut names: HashMap<String, usize> = HashMap::new();
+    for line in ir.lines().skip(1) {
+        let mut rest = line;
+        loop {
+            let next = PER_SITE_GLOBAL_PREFIXES
+                .iter()
+                .filter_map(|prefix| rest.find(prefix))
+                .min();
+            let Some(pos) = next else {
+                out.push_str(rest);
+                break;
+            };
+            out.push_str(&rest[..pos]);
+            let tail = &rest[pos..];
+            let end = tail[1..]
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '$' || c == '.'))
+                .map_or(tail.len(), |e| e + 1);
+            let fresh = names.len();
+            let id = *names.entry(tail[..end].to_string()).or_insert(fresh);
+            out.push_str(&format!("@SITEGLOBAL{id}"));
+            rest = &tail[end..];
+        }
+        out.push('\n');
+    }
+    // Site ids are the only integer literals carrying this module's hash in
+    // their upper 32 bits.
+    let mut site_ids: HashMap<u64, usize> = HashMap::new();
+    let mut normalized = String::with_capacity(out.len());
+    let bytes = out.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let prev_is_word = i > 0
+            && (bytes[i - 1].is_ascii_alphanumeric()
+                || matches!(bytes[i - 1], b'%' | b'_' | b'.' | b'@' | b'$'));
+        if bytes[i].is_ascii_digit() && !prev_is_word {
+            let mut j = i;
+            while j < bytes.len() && bytes[j].is_ascii_digit() {
+                j += 1;
+            }
+            let digits = &out[i..j];
+            match digits.parse::<u64>() {
+                Ok(value) if site_hash != 0 && value >> 32 == site_hash => {
+                    let fresh = site_ids.len();
+                    let id = *site_ids.entry(value).or_insert(fresh);
+                    normalized.push_str(&format!("SITE{id}"));
+                }
+                _ => normalized.push_str(digits),
+            }
+            i = j;
+        } else {
+            let ch_len = out[i..].chars().next().map_or(1, char::len_utf8);
+            normalized.push_str(&out[i..i + ch_len]);
+            i += ch_len;
+        }
+    }
+    normalized
+}
+
+/// Public entry that forwards every call to the generic body.
+fn emit_public_forwarder(
+    llmod: &mut LlModule,
+    f: &Function,
+    public_name: &str,
+    generic_body_name: &str,
+) {
+    let params: Vec<(LlvmType, String)> = f
+        .params
+        .iter()
+        .map(|p| (DOUBLE, format!("%arg{}", p.id)))
+        .collect();
+    let wf = llmod.define_function(public_name, DOUBLE, params);
+    let _ = wf.create_block("entry");
+    let args: Vec<(LlvmType, String)> = f
+        .params
+        .iter()
+        .map(|p| (DOUBLE, format!("%arg{}", p.id)))
+        .collect();
+    let call_args: Vec<(LlvmType, &str)> = args.iter().map(|(ty, a)| (*ty, a.as_str())).collect();
+    let blk = wf.block_mut(0).unwrap();
+    let value = blk.call(DOUBLE, generic_body_name, &call_args);
+    blk.ret(DOUBLE, &value);
+}
+
 /// Public JSValue entry for a declaration-guarded full-body clone. Unknown
 /// and indirect callers always land here; the unchanged generic body is a
 /// separate internal fallback. Proven same-module call sites bypass this
@@ -1406,6 +1557,7 @@ pub(super) fn compile_function(
             ctx.block().ret(DOUBLE, &undef);
         }
     }
+    let site_hash = spec_site_hash(ctx.strings.module_prefix());
     let ic_globals = std::mem::take(&mut ctx.ic_globals);
     let typed_parse_rodata = std::mem::take(&mut ctx.typed_parse_rodata);
     let ic_end = ctx.ic_site_counter;
@@ -1428,7 +1580,13 @@ pub(super) fn compile_function(
     if let Some(kind) = typed_public_trampoline {
         emit_public_typed_function_trampoline(llmod, f, &public_llvm_name, &llvm_name, kind);
     } else if let Some(plan) = guarded_public_plan.as_ref() {
-        emit_public_spec_function_trampoline(llmod, f, &public_llvm_name, &llvm_name, plan);
+        if spec_clone_consumes_no_proof(llmod, &public_llvm_name, &llvm_name, plan, &site_hash) {
+            // The guard would decide between two identical bodies: take the
+            // generic body unconditionally and skip the per-call validation.
+            emit_public_forwarder(llmod, f, &public_llvm_name, &llvm_name);
+        } else {
+            emit_public_spec_function_trampoline(llmod, f, &public_llvm_name, &llvm_name, plan);
+        }
     } else if arena_threaded {
         emit_public_arena_threaded_wrapper(llmod, f, &public_llvm_name, &llvm_name);
     }
