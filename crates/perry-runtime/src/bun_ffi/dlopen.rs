@@ -583,39 +583,123 @@ fn materialize_virtual_library(path: &str) -> Result<String, String> {
         std::collections::HashMap<String, String>,
     >> = std::sync::OnceLock::new();
     let cache = MATERIALIZED.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
-    if let Some(existing) = cache.lock().unwrap().get(path) {
+    // Hold the lock across the whole materialization: two threads that both
+    // miss would otherwise both try to create the file, and the second would
+    // fail the exclusive create below. Once per library, never hot.
+    let mut cache = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(existing) = cache.get(path) {
         return Ok(existing.clone());
     }
     let Some(bytes) = crate::embedded::lookup(path) else {
         return Err(format!("embedded library {path} is not in this binary"));
     };
-    let stem = path.rsplit('/').next().unwrap_or("embedded.so");
-    let mut dir = std::env::temp_dir();
-    dir.push(format!("perry-ffi-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
-    let mut target = dir.clone();
-    target.push(stem);
+    let dir = materialized_library_dir()?;
+    // Key the FILE by the full virtual path, not by its basename. Two embedded
+    // libraries can share a basename under different `$perryfs/` prefixes
+    // (`$perryfs/a/libfoo.so` vs `$perryfs/b/libfoo.so`); naming the file after
+    // the stem alone let the second materialization overwrite the first, and a
+    // later load would then map the wrong library's bytes.
+    let digest = {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        path.hash(&mut hasher);
+        hasher.finish()
+    };
+    let stem: String = path
+        .rsplit('/')
+        .next()
+        .unwrap_or("embedded.so")
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let mut target = dir.to_path_buf();
+    target.push(format!("{digest:016x}-{stem}"));
     {
-        let mut file = std::fs::File::create(&target)
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            // `create_new` is O_CREAT|O_EXCL, so an existing file or symlink at
+            // this name is refused rather than followed, and the mode is set at
+            // creation so the file is never briefly readable by anyone else.
+            // Owner-execute is all the loader needs.
+            options.mode(0o700);
+        }
+        let mut file = options
+            .open(&target)
             .map_err(|e| format!("create {}: {e}", target.display()))?;
         file.write_all(bytes)
             .map_err(|e| format!("write {}: {e}", target.display()))?;
         file.flush()
             .map_err(|e| format!("flush {}: {e}", target.display()))?;
     }
+    let resolved = target.to_string_lossy().into_owned();
+    cache.insert(path.to_string(), resolved.clone());
+    Ok(resolved)
+}
+
+/// The private, process-owned directory materialized libraries live in.
+///
+/// Created EXCLUSIVELY (`create_dir`, never `create_dir_all`) under an
+/// unpredictable name with mode 0700. A shared `/tmp` plus a guessable
+/// `perry-ffi-<pid>` would let a local user pre-create the directory and plant
+/// a symlink at the library's name, and the victim would `dlopen` whatever the
+/// symlink pointed at (CWE-59). With the directory owned exclusively by this
+/// process and every file created `O_CREAT|O_EXCL`, there is no window in
+/// which another user can substitute the bytes the loader maps.
+fn materialized_library_dir() -> Result<&'static std::path::Path, String> {
+    static DIR: std::sync::OnceLock<Result<std::path::PathBuf, String>> =
+        std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "perry-ffi-{}-{:016x}",
+            std::process::id(),
+            unpredictable_suffix()
+        ));
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder
+            .create(&dir)
+            .map_err(|e| format!("create {}: {e}", dir.display()))?;
+        Ok(dir)
+    })
+    .as_ref()
+    .map(std::path::PathBuf::as_path)
+    .map_err(String::clone)
+}
+
+/// 64 bits a local attacker cannot guess ahead of the directory being created.
+/// `/dev/urandom` when it is readable; otherwise clock + pid + an
+/// ASLR-dependent address, which is weaker but still not a bare pid.
+fn unpredictable_suffix() -> u64 {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        // The loader refuses a mapping it cannot execute.
-        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))
-            .map_err(|e| format!("chmod {}: {e}", target.display()))?;
+        use std::io::Read;
+        if let Ok(mut source) = std::fs::File::open("/dev/urandom") {
+            let mut buf = [0u8; 8];
+            if source.read_exact(&mut buf).is_ok() {
+                return u64::from_ne_bytes(buf);
+            }
+        }
     }
-    let resolved = target.to_string_lossy().into_owned();
-    cache
-        .lock()
-        .unwrap()
-        .insert(path.to_string(), resolved.clone());
-    Ok(resolved)
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos() as u64)
+        .unwrap_or(0);
+    let stack = &nanos as *const u64 as u64;
+    nanos ^ stack.rotate_left(17) ^ ((std::process::id() as u64) << 32)
 }
 
 pub(crate) unsafe fn dlopen_value(path_arg: f64, table_arg: f64) -> f64 {

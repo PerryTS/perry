@@ -37,6 +37,10 @@ fn runtime_dir() -> PathBuf {
 
 const LIB_C: &str = "int perry_embedded_answer(void) { return 4242; }\n";
 
+fn lib_c_returning(value: i32) -> String {
+    format!("int perry_embedded_answer(void) {{ return {value}; }}\n")
+}
+
 fn lib_file_name() -> &'static str {
     if cfg!(target_os = "macos") {
         "libperryembed.dylib"
@@ -160,4 +164,64 @@ fn real_path_control() {
         "the control must load the same dylib by its real path\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
     assert_eq!(stdout, "answer: 4242\n", "control output");
+}
+
+/// Two embedded libraries that share a BASENAME under different `$perryfs/`
+/// prefixes must materialize to different files. Naming the temp file after the
+/// stem alone made the second overwrite the first, and the second `dlopen`
+/// then mapped — or re-mapped — the wrong library's bytes.
+#[test]
+fn same_basename_under_different_prefixes_do_not_collide() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    if build_fixture(root).is_none() {
+        return; // no cc on this runner
+    }
+
+    // Same file name, two directories, two different answers.
+    for (sub, value) in [("a", 111), ("b", 222)] {
+        let sub_dir = root.join(sub);
+        std::fs::create_dir_all(&sub_dir).expect("mkdir");
+        let c_path = sub_dir.join("perryembed.c");
+        std::fs::write(&c_path, lib_c_returning(value)).expect("write C fixture");
+        let out = Command::new("cc")
+            .current_dir(&sub_dir)
+            .arg("-shared")
+            .arg("-fPIC")
+            .arg("-o")
+            .arg(sub_dir.join(lib_file_name()))
+            .arg(&c_path)
+            .output()
+            .expect("run cc");
+        assert!(
+            out.status.success(),
+            "cc failed for {sub}:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    let source = format!(
+        r#"import libA from "./a/{lib}" with {{ type: "file" }}
+import libB from "./b/{lib}" with {{ type: "file" }}
+import {{ dlopen, FFIType }} from "bun:ffi"
+
+const a = dlopen(libA, {{ perry_embedded_answer: {{ args: [], returns: FFIType.i32 }} }})
+const b = dlopen(libB, {{ perry_embedded_answer: {{ args: [], returns: FFIType.i32 }} }})
+console.log("a:", a.symbols.perry_embedded_answer())
+console.log("b:", b.symbols.perry_embedded_answer())
+// Re-read A after B materialized, so a clobbered file shows up here too.
+console.log("a again:", a.symbols.perry_embedded_answer())
+"#,
+        lib = lib_file_name()
+    );
+
+    let (ok, stdout, stderr) = compile_and_run(root, &source);
+    assert!(
+        ok,
+        "both embedded libraries must load\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout, "a: 111\nb: 222\na again: 111\n",
+        "each virtual path must materialize to its own file"
+    );
 }
