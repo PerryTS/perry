@@ -293,7 +293,13 @@ unsafe fn materialize_header_pair(
     if !is_headers_init_iterable(pair_value) {
         headers_init_type_error("Headers constructor: expected name/value pair");
     }
-    let pair_array_value = if perry_runtime::js_array_is_array(pair_value).to_bits() == TAG_TRUE {
+    // IsArray also accepts proxy ids and object-backed Array subclasses; only
+    // a real array header may bypass iterable materialization (#10270).
+    let raw = perry_runtime::js_nanbox_get_pointer(pair_value);
+    let pair_array_value = if matches!(
+        gc_type_for_raw_ptr(raw),
+        Some(perry_runtime::gc::GC_TYPE_ARRAY | perry_runtime::gc::GC_TYPE_LAZY_ARRAY)
+    ) {
         pair_value
     } else {
         perry_runtime::array::js_for_of_to_array(pair_value)

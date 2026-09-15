@@ -555,6 +555,25 @@ enum IterSourceKind {
 /// class id (so a direct symbol read returns `undefined`) but which still
 /// drive `.next()`. Mirrors the iterable detection in `js_array_clone`.
 fn items_is_iterable(items: f64) -> bool {
+    if let Some(proxy) = crate::array::array_ptr_as_proxy(
+        crate::value::js_nanbox_get_pointer(items) as *const ArrayHeader,
+    ) {
+        // A proxy can replace or remove @@iterator even when IsArray is true,
+        // or add it to a record. Array.from falls back to indexed reads only
+        // when GetMethod is nullish; a non-callable method must still throw.
+        let symbol = crate::symbol::well_known_symbol("iterator");
+        let method = unsafe {
+            crate::symbol::js_object_get_symbol_property(
+                proxy,
+                crate::value::js_nanbox_pointer(symbol as i64),
+            )
+        };
+        if matches!(method.to_bits(), TAG_UNDEFINED | TAG_NULL) {
+            return false;
+        }
+        resolve_callable(method);
+        return true;
+    }
     if crate::collection_iter::is_iterable(items) {
         return true;
     }
@@ -579,6 +598,15 @@ fn items_is_iterable(items: f64) -> bool {
 }
 
 fn classify_iter_source(items: f64) -> IterSourceKind {
+    // IsArray unwraps proxies; LiveArray would read the id as an ArrayHeader
+    // and skip a trapped @@iterator. The band test excludes ordinary arrays.
+    if crate::array::array_ptr_as_proxy(
+        crate::value::js_nanbox_get_pointer(items) as *const ArrayHeader
+    )
+    .is_some()
+    {
+        return IterSourceKind::Generic;
+    }
     if jsv_is_array(items) {
         return IterSourceKind::LiveArray;
     }
@@ -1037,8 +1065,10 @@ unsafe fn try_append_spread_array_dense(
     src: *const ArrayHeader,
 ) -> Option<*mut ArrayHeader> {
     // A masked proxy id is not a dereferenceable ArrayHeader.
-    if crate::array::array_ptr_as_proxy(src).is_some() {
-        return None;
+    if let Some(proxy) = crate::array::array_ptr_as_proxy(src) {
+        // Concat uses HasProperty/Get, never @@iterator. Resolve this inside
+        // the existing proxy guard so the ordinary bulk-copy path is unchanged.
+        return Some(append_concat_proxy(result, proxy));
     }
     let src = clean_arr_ptr(src);
     if src.is_null() {
@@ -1129,6 +1159,30 @@ unsafe fn try_append_spread_array_dense(
     (*result).length = new_len;
     crate::array::rebuild_array_layout_exact(result);
     Some(result)
+}
+
+/// Indexed concat of a proxy, preserving holes and observing its traps.
+unsafe fn append_concat_proxy(result: *mut ArrayHeader, proxy: f64) -> *mut ArrayHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let result = scope.root_raw_mut_ptr(result);
+    let proxy = scope.root_nanbox_f64(proxy);
+    let len = array_like_length(proxy.get_nanbox_f64());
+    for index in 0..len {
+        let entry_scope = crate::gc::RuntimeHandleScope::new();
+        let name = index.to_string();
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let key = entry_scope.root_nanbox_f64(crate::value::js_nanbox_string(key as i64));
+        let present =
+            crate::object::js_object_has_property(proxy.get_nanbox_f64(), key.get_nanbox_f64());
+        let value = if crate::value::js_is_truthy(present) != 0 {
+            crate::proxy::js_proxy_get(proxy.get_nanbox_f64(), key.get_nanbox_f64())
+        } else {
+            f64::from_bits(crate::value::TAG_HOLE)
+        };
+        let grown = js_array_push_f64(result.get_raw_mut_ptr(), value);
+        result.set_raw_mut_ptr(grown);
+    }
+    result.get_raw_mut_ptr()
 }
 
 /// Append every element of the (already-materializable) source array `src`

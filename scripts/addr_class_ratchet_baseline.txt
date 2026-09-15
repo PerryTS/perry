@@ -29,7 +29,7 @@ handle-floor | crates/perry-ext-http/src/agent.rs | 3
 handle-floor | crates/perry-ext-http/src/lib.rs | 2
 handle-floor | crates/perry-runtime/src/array/alloc.rs | 2
 handle-floor | crates/perry-runtime/src/array/concat_reverse.rs | 1
-handle-floor | crates/perry-runtime/src/array/flat_clone.rs | 4
+handle-floor | crates/perry-runtime/src/array/flat_clone.rs | 3
 handle-floor | crates/perry-runtime/src/array/generic.rs | 4
 handle-floor | crates/perry-runtime/src/array/header.rs | 3
 handle-floor | crates/perry-runtime/src/array/indexing.rs | 2

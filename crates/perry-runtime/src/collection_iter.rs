@@ -254,6 +254,13 @@ pub(crate) fn constructor_iter(value: f64) -> ConstructorIter {
     let jsv = JSValue::from_bits(value.to_bits());
     let is_array = crate::array::js_array_is_array(value).to_bits() == crate::value::TAG_TRUE;
     if is_array {
+        if crate::array::array_ptr_as_proxy(
+            js_nanbox_get_pointer(value) as *const crate::array::ArrayHeader
+        )
+        .is_some()
+        {
+            return ConstructorIter::Iterator(crate::symbol::js_get_iterator(value));
+        }
         return ConstructorIter::Array(value);
     }
     if jsv.is_any_string() {

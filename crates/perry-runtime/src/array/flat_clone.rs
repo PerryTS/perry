@@ -458,7 +458,7 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
         let top16 = (src as u64) >> 48;
         if top16 == 0x7FFF {
             true
-        } else if raw_addr >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+        } else if crate::value::addr_class::is_above_handle_band(raw_addr) {
             unsafe {
                 let hdr = (raw_addr as *const u8).sub(crate::gc::GC_HEADER_SIZE)
                     as *const crate::gc::GcHeader;
@@ -478,6 +478,15 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
     // helper after codegen strips the tag, so ask the generic iterator resolver
     // before treating the id as a non-array and returning [].
     if crate::value::addr_class::is_small_handle(raw_addr) {
+        // #10270: a Proxy id has no GC/ArrayHeader. Only the existing handle
+        // arm probes the registry; plain arrays keep their classification and
+        // copy path. Array.from permits array-like proxies as well as iterables.
+        if let Some(proxy) = array_ptr_as_proxy(raw_addr as *const ArrayHeader) {
+            let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+            let result =
+                super::from_concat::array_from_full(undefined, proxy, undefined, undefined);
+            return crate::value::js_nanbox_get_pointer(result) as *mut ArrayHeader;
+        }
         if let Some(dispatch) = crate::object::handle_property_dispatch() {
             let method = b"@@iterator";
             let iter_fn = unsafe { dispatch(raw_addr as i64, method.as_ptr(), method.len()) };

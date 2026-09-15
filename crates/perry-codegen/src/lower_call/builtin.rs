@@ -1374,7 +1374,8 @@ pub(super) fn lower_builtin_new<'a>(
                                 if let Some(hprops) = extract_options_fields(ctx, vexpr) {
                                     headers_handle = build_headers_from_object(ctx, &hprops)?;
                                 } else {
-                                    headers_handle = lower_expr(ctx, vexpr)?;
+                                    headers_handle =
+                                        super::options::build_headers_from_value(ctx, vexpr)?;
                                 }
                             }
                             "referrer" => {

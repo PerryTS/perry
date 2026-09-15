@@ -102,6 +102,13 @@ pub extern "C" fn js_for_of_to_array(val_f64: f64) -> f64 {
         throw_not_iterable(val_f64);
     }
 
+    // Proxy ids are not heap headers. Use the same trapped iterator as spread.
+    if let Some(proxy) = array_ptr_as_proxy(raw_ptr as *const ArrayHeader) {
+        return js_nanbox_pointer(
+            js_iterator_to_array(crate::symbol::js_get_iterator(proxy)) as i64
+        );
+    }
+
     // Inspect the GC header's object kind to dispatch Array / Map / Set
     // without consulting any static type.
     let obj_type = unsafe {
