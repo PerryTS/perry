@@ -81,13 +81,18 @@ struct Aux {
     /// `PendingNetEvent::Close` has been pushed. Node emits `'close'` AFTER
     /// `'error'`, so this guards double-emission — never emission itself.
     closed_emitted: bool,
-    /// `socket.end()` has already shut the write side down. Node's
-    /// `allowHalfOpen: false` close on `'end'` must then *close* rather than
-    /// shut down again: a second `shutdown(2)` on a socket whose peer has gone
-    /// returns `ENOTCONN`, which reached JS as a spurious `'error'` — visible
-    /// on the TLS upgrade path, where `end()` always precedes the peer's FIN,
-    /// and latent on a plain socket with the same ordering.
+    /// `socket.end()` has already submitted the write-side shutdown. Node's
+    /// `allowHalfOpen: false` close on `'end'` must NOT submit a second one: a
+    /// second `shutdown(2)` on a socket whose peer has gone answers `ENOTCONN`,
+    /// which reached JS as a spurious `'error'` — visible on the TLS upgrade
+    /// path, where `end()` always precedes the peer's FIN, and latent on a
+    /// plain socket with the same ordering.
     write_ended: bool,
+    /// That shutdown has completed, which means every write queued ahead of it
+    /// has left. Until then the socket must not be closed: `Loop::close`
+    /// cancels outstanding operations, so closing here would cancel exactly
+    /// the writes an `'end'` handler just issued (P1's third behaviour note).
+    shutdown_done: bool,
     /// The readable EOF has been delivered. A TLS socket can reach it twice —
     /// the peer's `close_notify` and then the TCP FIN — and Node emits
     /// `'end'` exactly once.
@@ -274,10 +279,18 @@ pub(crate) fn finish_read_end(id: i64) {
     if !with_aux(id, |a| std::mem::replace(&mut a.read_ended, false)) {
         return;
     }
-    // The application already ended the writable side: there is nothing to
-    // shut down, and asking again once the peer has gone answers `ENOTCONN`.
+    // The application already ended the writable side inside its `'end'`
+    // handler, so the shutdown is submitted and there is nothing to ask for
+    // again (a second `shutdown(2)` answers `ENOTCONN`). Whether the socket may
+    // close *now* is the whole question: closing while that shutdown is still
+    // outstanding cancels the writes queued ahead of it, which is how a
+    // `socket.write()` from an `'end'` handler went missing.
     if with_aux(id, |a| a.write_ended) {
-        destroy(id);
+        if with_aux(id, |a| a.shutdown_done) {
+            destroy(id);
+        } else {
+            with_aux(id, |a| a.close_after_shutdown = true);
+        }
         return;
     }
     // Queue the shutdown BEHIND whatever the `'end'` handler just wrote, and
@@ -530,6 +543,9 @@ fn release_deferred_eof(id: i64) {
 }
 
 fn on_shutdown(id: i64, user: u64) {
+    // Every byte queued ahead of the shutdown has left: turnloop orders a
+    // handle's writes before its shutdown.
+    with_aux(id, |a| a.shutdown_done = true);
     push_event(PendingNetEvent::ShutdownComplete(id, user, None));
     if with_aux(id, |a| {
         std::mem::replace(&mut a.close_after_shutdown, false)
