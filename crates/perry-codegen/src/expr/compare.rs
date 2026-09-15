@@ -38,19 +38,23 @@ fn typeof_literal_tag(literal: &str) -> Option<u32> {
     }
 }
 
-/// Recognize the safe, high-value subset of literal `typeof` comparisons.
+/// Recognize literal `typeof` comparisons that can use the integer classifier.
 ///
-/// Restricting the operand to a local is intentional. `Expr::TypeOf` has
-/// compile-time representation corrections for namespace/class/native-module
-/// expressions in `literals_vars.rs`; intercepting those before ordinary
-/// lowering would bypass those corrections. A local already takes the runtime
-/// classifier today, so replacing its returned string with the same
+/// `Expr::TypeOf` folds some operand shapes to a compile-time answer (see
+/// `literals_vars::typeof_compile_time_answer`) because their runtime
+/// representation collides with another tag; those keep the string route.
+/// Every other operand is lowered exactly as `typeof` lowers it and then
+/// classified at runtime, so replacing the returned string with the same
 /// classifier's integer tag changes no semantic route.
-fn local_typeof_literal_pair<'a>(left: &'a Expr, right: &'a Expr) -> Option<(&'a Expr, u32)> {
+fn typeof_literal_pair<'a>(
+    ctx: &FnCtx<'_>,
+    left: &'a Expr,
+    right: &'a Expr,
+) -> Option<(&'a Expr, u32)> {
     match (left, right) {
         (Expr::TypeOf(operand), Expr::String(literal))
         | (Expr::String(literal), Expr::TypeOf(operand))
-            if matches!(operand.as_ref(), Expr::LocalGet(_)) =>
+            if super::literals_vars::typeof_compile_time_answer(ctx, operand).is_none() =>
         {
             typeof_literal_tag(literal).map(|tag| (operand.as_ref(), tag))
         }
@@ -1065,32 +1069,76 @@ fn lower_typeof_number_inline(ctx: &mut FnCtx<'_>, value: &str, negate: bool) ->
         .phi(I1, &[(fast_bit, &fast_end), (&slow_bit, &slow_end)])
 }
 
+/// `typeof value === <literal>` as an `i1`.
+///
+/// The classifier (`classify_value_typeof` in `perry-runtime/src/builtins/
+/// arithmetic.rs`) decides `undefined` (including the hole sentinel), the two
+/// booleans and both string tags with exact bit tests before any registry or
+/// heap lookup, so `"undefined"`, `"boolean"` and `"string"` never need the
+/// call, and `"number"` keeps its inline definitely-a-Number arm. `"object"`,
+/// `"function"`, `"symbol"` and `"bigint"` are usually asked of heap values the
+/// classifier must inspect anyway, so they keep the direct call: an inline
+/// primitive pre-test would only add instructions to that common case.
+fn lower_typeof_literal_inline(
+    ctx: &mut FnCtx<'_>,
+    value: &str,
+    expected_tag: u32,
+    negate: bool,
+) -> String {
+    let exact = {
+        let blk = ctx.block();
+        match expected_tag {
+            0 => {
+                let bits = blk.bitcast_double_to_i64(value);
+                let undefined = blk.icmp_eq(I64, &bits, crate::nanbox::TAG_UNDEFINED_I64);
+                let hole = blk.icmp_eq(I64, &bits, crate::nanbox::TAG_HOLE_I64);
+                Some(blk.or(I1, &undefined, &hole))
+            }
+            2 => Some(crate::codegen::emit_typed_i1_guard(blk, value)),
+            4 => Some(crate::codegen::emit_typed_string_guard(blk, value)),
+            _ => None,
+        }
+    };
+    if let Some(bit) = exact {
+        return if negate {
+            ctx.block().xor(I1, &bit, "true")
+        } else {
+            bit
+        };
+    }
+    if expected_tag == 3 {
+        return lower_typeof_number_inline(ctx, value, negate);
+    }
+    let tag = ctx
+        .block()
+        .call(I32, "js_value_typeof_tag", &[(crate::types::DOUBLE, value)]);
+    let expected = expected_tag.to_string();
+    if negate {
+        ctx.block().icmp_ne(I32, &tag, &expected)
+    } else {
+        ctx.block().icmp_eq(I32, &tag, &expected)
+    }
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::Compare { op, left, right } => {
-            if matches!(op, CompareOp::Eq | CompareOp::Ne) {
+            // `typeof` always yields a string, so loose and strict equality
+            // against a string literal are the same comparison.
+            if matches!(
+                op,
+                CompareOp::Eq | CompareOp::Ne | CompareOp::LooseEq | CompareOp::LooseNe
+            ) {
                 if let Some((operand, expected_tag)) =
-                    local_typeof_literal_pair(left.as_ref(), right.as_ref())
+                    typeof_literal_pair(ctx, left.as_ref(), right.as_ref())
                 {
                     // The literal has no evaluation side effects. Lower the
-                    // local operand exactly once, then compare the shared
+                    // operand exactly once, then compare the shared
                     // classifier's integer result instead of materializing a
                     // heap string and entering string equality.
+                    let negate = matches!(op, CompareOp::Ne | CompareOp::LooseNe);
                     let value = lower_expr(ctx, operand)?;
-                    let bit = if expected_tag == 3 {
-                        lower_typeof_number_inline(ctx, &value, matches!(op, CompareOp::Ne))
-                    } else {
-                        let tag = ctx.block().call(
-                            I32,
-                            "js_value_typeof_tag",
-                            &[(crate::types::DOUBLE, &value)],
-                        );
-                        if matches!(op, CompareOp::Ne) {
-                            ctx.block().icmp_ne(I32, &tag, &expected_tag.to_string())
-                        } else {
-                            ctx.block().icmp_eq(I32, &tag, &expected_tag.to_string())
-                        }
-                    };
+                    let bit = lower_typeof_literal_inline(ctx, &value, expected_tag, negate);
                     let tagged = ctx.block().select(
                         I1,
                         &bit,
