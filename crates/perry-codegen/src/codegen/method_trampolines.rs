@@ -6,9 +6,13 @@ use crate::module::LlModule;
 use crate::types::{LlvmType, DOUBLE, I1, I32, I64};
 
 use super::typed_abi::{
-    emit_typed_arg_guard, emit_typed_arg_to_raw, typed_f64_method_name, typed_i1_method_name,
-    typed_i32_method_name, typed_param_reps_for_params, typed_string_method_name,
-    TypedFunctionTrampolineKind, TypedParamRep,
+    typed_f64_method_name, typed_i1_method_name, typed_i32_method_name,
+    typed_param_reps_for_params, typed_string_method_name, TypedFunctionTrampolineKind,
+    TypedParamRep,
+};
+use super::typed_entry::{
+    emit_tiered_entry_dispatch, emit_typed_arg_to_raw_after_entry_tier, typed_entry_arg_guard,
+    EntryArgGuard,
 };
 
 fn emit_typed_fast_value(
@@ -23,7 +27,7 @@ fn emit_typed_fast_value(
             let raw_args: Vec<String> = arg_names
                 .iter()
                 .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
+                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
                 .collect();
             let typed_args: Vec<(LlvmType, &str)> = raw_args
                 .iter()
@@ -36,7 +40,7 @@ fn emit_typed_fast_value(
             let raw_args: Vec<String> = arg_names
                 .iter()
                 .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
+                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
                 .collect();
             let typed_args: Vec<(LlvmType, &str)> = raw_args
                 .iter()
@@ -50,7 +54,7 @@ fn emit_typed_fast_value(
             let raw_args: Vec<String> = arg_names
                 .iter()
                 .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
+                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
                 .collect();
             let typed_args: Vec<(LlvmType, &str)> = raw_args
                 .iter()
@@ -65,7 +69,7 @@ fn emit_typed_fast_value(
             let raw_args: Vec<String> = arg_names
                 .iter()
                 .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
+                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
                 .collect();
             let typed_args: Vec<(LlvmType, &str)> = raw_args
                 .iter()
@@ -114,62 +118,30 @@ pub(super) fn emit_public_typed(
     let wf = llmod.define_function(public_name, DOUBLE, params);
     let _ = wf.create_block("entry");
 
-    let mut guard: Option<String> = None;
-    {
+    let guards: Vec<EntryArgGuard> = {
         let blk = wf.block_mut(0).unwrap();
-        for (arg, rep) in arg_names.iter().zip(arg_reps.iter()) {
-            let ok = emit_typed_arg_guard(blk, *rep, arg);
-            guard = Some(match guard {
-                Some(prev) => blk.and(I1, &prev, &ok),
-                None => ok,
-            });
-        }
-    }
-
-    let Some(guard) = guard else {
-        let value = emit_typed_fast_value(
-            wf.block_mut(0).unwrap(),
-            kind,
-            &typed_name,
-            &arg_names,
-            &arg_reps,
-        );
-        wf.block_mut(0).unwrap().ret(DOUBLE, &value);
-        return;
+        arg_names
+            .iter()
+            .zip(arg_reps.iter())
+            .map(|(arg, rep)| typed_entry_arg_guard(blk, *rep, arg))
+            .collect()
     };
-
-    let fast_idx = wf.num_blocks();
-    let fast_label = wf.create_block("typed_method_public.fast").label.clone();
-    let fallback_idx = wf.num_blocks();
-    let fallback_label = wf
-        .create_block("typed_method_public.fallback")
-        .label
-        .clone();
-    wf.block_mut(0)
-        .unwrap()
-        .cond_br(&guard, &fast_label, &fallback_label);
-
-    let fast_value = emit_typed_fast_value(
-        wf.block_mut(fast_idx).unwrap(),
-        kind,
-        &typed_name,
+    emit_tiered_entry_dispatch(
+        wf,
+        "typed_method_public",
         &arg_names,
-        &arg_reps,
+        &guards,
+        None,
+        &mut |blk, values| emit_typed_fast_value(blk, kind, &typed_name, values, &arg_reps),
+        &mut |blk| {
+            let mut call_args: Vec<(LlvmType, &str)> = Vec::with_capacity(arg_names.len() + 1);
+            call_args.push((DOUBLE, "%this_arg"));
+            for arg in &arg_names {
+                call_args.push((DOUBLE, arg.as_str()));
+            }
+            blk.call(DOUBLE, generic_body_name, &call_args)
+        },
     );
-    wf.block_mut(fast_idx).unwrap().ret(DOUBLE, &fast_value);
-
-    let mut call_args: Vec<(LlvmType, &str)> = Vec::with_capacity(arg_names.len() + 1);
-    call_args.push((DOUBLE, "%this_arg"));
-    for arg in &arg_names {
-        call_args.push((DOUBLE, arg.as_str()));
-    }
-    let fallback_value =
-        wf.block_mut(fallback_idx)
-            .unwrap()
-            .call(DOUBLE, generic_body_name, &call_args);
-    wf.block_mut(fallback_idx)
-        .unwrap()
-        .ret(DOUBLE, &fallback_value);
 }
 
 pub(super) fn emit_public_generic(

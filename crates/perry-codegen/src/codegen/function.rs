@@ -29,6 +29,10 @@ use super::typed_abi::{
     typed_i1_function_name, typed_i32_function_name, typed_param_reps_for_params,
     typed_string_function_name, TypedFunctionTrampolineKind, TypedParamRep,
 };
+use super::typed_entry::{
+    emit_tiered_entry_dispatch, emit_typed_arg_to_raw_after_entry_tier, typed_entry_arg_guard,
+    EntryArgGuard,
+};
 
 /// Internal body name for a self-recursive allocator whose arena-state pointer
 /// is threaded through recursive calls (#8591).
@@ -215,7 +219,7 @@ fn emit_typed_public_trampoline_fast_value(
             let raw_args: Vec<String> = arg_names
                 .iter()
                 .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
+                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
                 .collect();
             let typed_args: Vec<(LlvmType, &str)> = raw_args
                 .iter()
@@ -228,7 +232,7 @@ fn emit_typed_public_trampoline_fast_value(
             let raw_args: Vec<String> = arg_names
                 .iter()
                 .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
+                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
                 .collect();
             let typed_args: Vec<(LlvmType, &str)> = raw_args
                 .iter()
@@ -242,7 +246,7 @@ fn emit_typed_public_trampoline_fast_value(
             let raw_args: Vec<String> = arg_names
                 .iter()
                 .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
+                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
                 .collect();
             let typed_args: Vec<(LlvmType, &str)> = raw_args
                 .iter()
@@ -257,7 +261,7 @@ fn emit_typed_public_trampoline_fast_value(
             let raw_args: Vec<String> = arg_names
                 .iter()
                 .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
+                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
                 .collect();
             let typed_args: Vec<(LlvmType, &str)> = raw_args
                 .iter()
@@ -302,56 +306,31 @@ fn emit_public_typed_function_trampoline(
     let wf = llmod.define_function(public_name, DOUBLE, params);
     let _ = wf.create_block("entry");
 
-    let mut guard: Option<String> = None;
-    {
+    let guards: Vec<EntryArgGuard> = {
         let blk = wf.block_mut(0).unwrap();
-        for (arg, rep) in arg_names.iter().zip(arg_reps.iter()) {
-            let ok = emit_typed_arg_guard(blk, *rep, arg);
-            guard = Some(match guard {
-                Some(prev) => blk.and(I1, &prev, &ok),
-                None => ok,
-            });
-        }
-    }
-
-    let Some(guard) = guard else {
-        let value = emit_typed_public_trampoline_fast_value(
-            wf.block_mut(0).unwrap(),
-            kind,
-            &typed_name,
-            &arg_names,
-            &arg_reps,
-        );
-        wf.block_mut(0).unwrap().ret(DOUBLE, &value);
-        return;
+        arg_names
+            .iter()
+            .zip(arg_reps.iter())
+            .map(|(arg, rep)| typed_entry_arg_guard(blk, *rep, arg))
+            .collect()
     };
-
-    let fast_idx = wf.num_blocks();
-    let fast_label = wf.create_block("typed_public.fast").label.clone();
-    let fallback_idx = wf.num_blocks();
-    let fallback_label = wf.create_block("typed_public.fallback").label.clone();
-    wf.block_mut(0)
-        .unwrap()
-        .cond_br(&guard, &fast_label, &fallback_label);
-
-    let fast_value = emit_typed_public_trampoline_fast_value(
-        wf.block_mut(fast_idx).unwrap(),
-        kind,
-        &typed_name,
+    let call_args: Vec<(LlvmType, String)> =
+        arg_names.iter().map(|arg| (DOUBLE, arg.clone())).collect();
+    emit_tiered_entry_dispatch(
+        wf,
+        "typed_public",
         &arg_names,
-        &arg_reps,
+        &guards,
+        None,
+        &mut |blk, values| {
+            emit_typed_public_trampoline_fast_value(blk, kind, &typed_name, values, &arg_reps)
+        },
+        &mut |blk| {
+            let args: Vec<(LlvmType, &str)> =
+                call_args.iter().map(|(ty, a)| (*ty, a.as_str())).collect();
+            blk.call(DOUBLE, generic_body_name, &args)
+        },
     );
-    wf.block_mut(fast_idx).unwrap().ret(DOUBLE, &fast_value);
-
-    let call_args: Vec<(LlvmType, &str)> =
-        arg_names.iter().map(|arg| (DOUBLE, arg.as_str())).collect();
-    let fallback_value =
-        wf.block_mut(fallback_idx)
-            .unwrap()
-            .call(DOUBLE, generic_body_name, &call_args);
-    wf.block_mut(fallback_idx)
-        .unwrap()
-        .ret(DOUBLE, &fallback_value);
 }
 
 /// Public JSValue entry for a declaration-guarded full-body clone. Unknown
@@ -379,123 +358,97 @@ fn emit_public_spec_function_trampoline(
     wf.no_inline = true;
     let _ = wf.create_block("entry");
 
-    let mut guard: Option<String> = None;
-    {
+    let guards: Vec<EntryArgGuard> = {
         let blk = wf.block_mut(0).unwrap();
-        for ((arg, rep), descriptor) in arg_names
+        arg_names
             .iter()
             .zip(plan.reps.iter())
             .zip(plan.guards.iter())
-        {
-            let rep_guard = match rep {
-                crate::collectors::SpecParamRep::I32 => {
-                    Some(emit_typed_arg_guard(blk, TypedParamRep::I32, arg))
+            .map(|((arg, rep), descriptor)| {
+                let mut guard = EntryArgGuard::default();
+                let mut exact: Vec<String> = Vec::new();
+                match rep {
+                    crate::collectors::SpecParamRep::I32 => {
+                        exact.push(emit_typed_arg_guard(blk, TypedParamRep::I32, arg))
+                    }
+                    crate::collectors::SpecParamRep::F64 => guard.number = true,
+                    crate::collectors::SpecParamRep::Boxed
+                    | crate::collectors::SpecParamRep::NumberArray => {}
+                    // Guarded plans never carry TaPtr: its raw pointer contract is
+                    // admitted only by construction at a direct call site.
+                    crate::collectors::SpecParamRep::TaPtr { .. } => {
+                        exact.push("false".to_string())
+                    }
                 }
-                crate::collectors::SpecParamRep::F64 => {
-                    Some(emit_typed_arg_guard(blk, TypedParamRep::F64, arg))
+                if let Some(descriptor) = descriptor {
+                    match super::param_guard::scalar_descriptor_rep(&descriptor.descriptor) {
+                        // A Number proof: plain doubles in tier 1; an int32 box
+                        // reaches the clone converted to the equal double, so a
+                        // body that consumes the proof never sees a tagged box.
+                        Some(TypedParamRep::F64) => guard.number = true,
+                        // (#8079) Scalar proof: the typed-abi leaf guard decides
+                        // the exact same predicate without the interpretive
+                        // validator's per-call descriptor parse + state init.
+                        Some(rep) => exact.push(emit_typed_arg_guard(blk, rep, arg)),
+                        None => {
+                            let raw = blk.call(
+                                I32,
+                                "js_param_type_guard",
+                                &[
+                                    (DOUBLE, arg.as_str()),
+                                    (PTR, &format!("@{}", descriptor.descriptor_name)),
+                                    (I32, &descriptor.descriptor.len().to_string()),
+                                ],
+                            );
+                            exact.push(blk.icmp_ne(I32, &raw, "0"));
+                        }
+                    }
                 }
-                crate::collectors::SpecParamRep::Boxed
-                | crate::collectors::SpecParamRep::NumberArray => None,
-                // Guarded plans never carry TaPtr: its raw pointer contract is
-                // admitted only by construction at a direct call site.
-                crate::collectors::SpecParamRep::TaPtr { .. } => Some("false".to_string()),
-            };
-            if let Some(ok) = rep_guard {
-                guard = Some(match guard {
-                    Some(prev) => blk.and(I1, &prev, &ok),
-                    None => ok,
-                });
-            }
-            if let Some(descriptor) = descriptor {
-                let ok = if let Some(rep) =
-                    super::param_guard::scalar_descriptor_rep(&descriptor.descriptor)
-                {
-                    // (#8079) Scalar proof: the typed-abi leaf guard decides
-                    // the exact same predicate without the interpretive
-                    // validator's per-call descriptor parse + state init.
-                    emit_typed_arg_guard(blk, rep, arg)
-                } else {
-                    let raw = blk.call(
-                        I32,
-                        "js_param_type_guard",
-                        &[
-                            (DOUBLE, arg.as_str()),
-                            (PTR, &format!("@{}", descriptor.descriptor_name)),
-                            (I32, &descriptor.descriptor.len().to_string()),
-                        ],
-                    );
-                    blk.icmp_ne(I32, &raw, "0")
-                };
-                guard = Some(match guard {
-                    Some(prev) => blk.and(I1, &prev, &ok),
-                    None => ok,
-                });
-            }
-        }
-    }
-
-    let Some(guard) = guard else {
-        // Plan construction requires either a raw scalar guard or an ordinary
-        // descriptor. Stay conservative if that invariant is ever weakened.
-        let call_args: Vec<(LlvmType, &str)> =
-            arg_names.iter().map(|arg| (DOUBLE, arg.as_str())).collect();
-        let value = wf
-            .block_mut(0)
-            .unwrap()
-            .call(DOUBLE, generic_body_name, &call_args);
-        wf.block_mut(0).unwrap().ret(DOUBLE, &value);
-        return;
+                guard.exact = exact.into_iter().reduce(|prev, ok| blk.and(I1, &prev, &ok));
+                guard
+            })
+            .collect()
     };
 
-    let fast_idx = wf.num_blocks();
-    let fast_label = wf.create_block("spec_public.fast").label.clone();
-    let fallback_idx = wf.num_blocks();
-    let fallback_label = wf.create_block("spec_public.fallback").label.clone();
-    wf.block_mut(0)
-        .unwrap()
-        .cond_br(&guard, &fast_label, &fallback_label);
-
-    let mut raw_args: Vec<(LlvmType, String)> = Vec::with_capacity(arg_names.len());
-    {
-        let blk = wf.block_mut(fast_idx).unwrap();
-        for (arg, rep) in arg_names.iter().zip(plan.reps.iter()) {
-            match rep {
-                crate::collectors::SpecParamRep::Boxed
-                | crate::collectors::SpecParamRep::NumberArray => {
-                    raw_args.push((DOUBLE, arg.clone()));
-                }
-                crate::collectors::SpecParamRep::I32 => {
-                    raw_args.push((I32, emit_typed_arg_to_raw(blk, TypedParamRep::I32, arg)))
-                }
-                crate::collectors::SpecParamRep::F64 => {
-                    raw_args.push((DOUBLE, emit_typed_arg_to_raw(blk, TypedParamRep::F64, arg)))
-                }
-                crate::collectors::SpecParamRep::TaPtr { .. } => {
-                    let bits = blk.bitcast_double_to_i64(arg);
-                    raw_args.push((I64, blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64)));
-                }
-            }
-        }
-    }
-    let fast_args: Vec<(LlvmType, &str)> = raw_args
-        .iter()
-        .map(|(ty, arg)| (*ty, arg.as_str()))
-        .collect();
-    let fast_value = wf
-        .block_mut(fast_idx)
-        .unwrap()
-        .call(DOUBLE, &spec_name, &fast_args);
-    wf.block_mut(fast_idx).unwrap().ret(DOUBLE, &fast_value);
-
-    let fallback_args: Vec<(LlvmType, &str)> =
-        arg_names.iter().map(|arg| (DOUBLE, arg.as_str())).collect();
-    let fallback_value =
-        wf.block_mut(fallback_idx)
-            .unwrap()
-            .call(DOUBLE, generic_body_name, &fallback_args);
-    wf.block_mut(fallback_idx)
-        .unwrap()
-        .ret(DOUBLE, &fallback_value);
+    let fallback_args: Vec<String> = arg_names.clone();
+    let reps = plan.reps.clone();
+    emit_tiered_entry_dispatch(
+        wf,
+        "spec_public",
+        &arg_names,
+        &guards,
+        None,
+        &mut |blk, values| {
+            let raw_args: Vec<(LlvmType, String)> = values
+                .iter()
+                .zip(reps.iter())
+                .map(|(value, rep)| match rep {
+                    crate::collectors::SpecParamRep::Boxed
+                    | crate::collectors::SpecParamRep::NumberArray
+                    | crate::collectors::SpecParamRep::F64 => (DOUBLE, value.clone()),
+                    crate::collectors::SpecParamRep::I32 => {
+                        (I32, emit_typed_arg_to_raw(blk, TypedParamRep::I32, value))
+                    }
+                    crate::collectors::SpecParamRep::TaPtr { .. } => {
+                        let bits = blk.bitcast_double_to_i64(value);
+                        (I64, blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64))
+                    }
+                })
+                .collect();
+            let fast_args: Vec<(LlvmType, &str)> = raw_args
+                .iter()
+                .map(|(ty, arg)| (*ty, arg.as_str()))
+                .collect();
+            blk.call(DOUBLE, &spec_name, &fast_args)
+        },
+        &mut |blk| {
+            let args: Vec<(LlvmType, &str)> = fallback_args
+                .iter()
+                .map(|arg| (DOUBLE, arg.as_str()))
+                .collect();
+            blk.call(DOUBLE, generic_body_name, &args)
+        },
+    );
 }
 
 /// Compile a single user function into the module.
