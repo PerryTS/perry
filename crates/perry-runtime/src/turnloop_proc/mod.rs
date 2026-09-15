@@ -358,11 +358,21 @@ pub(crate) fn send_to(
     .unwrap_or_else(|| Err(no_loop()))
 }
 
-/// Subscribe this agent's loop to an OS signal. `id` is the caller's own key;
-/// the completion carries it back so the signal number never has to be
-/// recovered from the payload.
-pub(crate) fn signal_start(id: u64, signal: turnloop::Signal, owner: Owner) -> ProcResult<()> {
+/// Subscribe this agent's loop to an OS signal. Returns the entry id the
+/// caller stores and later passes to [`signal_stop`].
+///
+/// The id comes from the same monotonic allocator adopted descriptors use, and
+/// deliberately *not* from the signal number: an `off()` immediately followed
+/// by an `on()` for the same signal would otherwise reuse the id while the
+/// first subscription's terminal completion is still in flight, and that
+/// completion would then release the new entry instead of the old one.
+pub(crate) fn signal_start(signal: turnloop::Signal, owner: Owner) -> ProcResult<u64> {
     with_driver(|driver| {
+        let id = PROC.with(|state| {
+            let mut state = state.borrow_mut();
+            state.next_id += 1;
+            state.next_id
+        });
         let handle = driver
             .signal_start(signal, token(OP_SIGNAL, id))
             .map_err(|e| map_error(e, "sigaction"))?;
@@ -372,7 +382,8 @@ pub(crate) fn signal_start(id: u64, signal: turnloop::Signal, owner: Owner) -> P
                 .entries
                 .insert(id, Entry::new(handle, owner))
         });
-        Ok(())
+        ADOPTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(id)
     })
     .unwrap_or_else(|| Err(no_loop()))
 }

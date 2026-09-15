@@ -386,6 +386,31 @@ fn turnloop_signal_for(number: libc::c_int) -> Option<turnloop::Signal> {
 #[cfg(unix)]
 static TURNLOOP_SIGNALS: AtomicUsize = AtomicUsize::new(0);
 
+/// The live loop-entry id per slot, so uninstall names the subscription it is
+/// actually unwinding. Zero means "none". Kept next to the bitmask rather than
+/// derived from the signal number, because an `off()`/`on()` pair for the same
+/// signal produces two entries whose lifetimes overlap.
+#[cfg(unix)]
+static TURNLOOP_SIGNAL_IDS: [AtomicUsize; 9] = [
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+];
+
+// A slot added above without a matching id cell would silently index out of
+// bounds at runtime; say so at compile time instead.
+#[cfg(unix)]
+const _: () = assert!(
+    TURNLOOP_SIGNAL_IDS.len() == PROCESS_SIGNAL_SLOTS.len(),
+    "one turnloop id cell per process-signal slot"
+);
+
 #[cfg(unix)]
 fn slot_index(slot: &'static ProcessSignalSlot) -> usize {
     PROCESS_SIGNAL_SLOTS
@@ -431,18 +456,15 @@ fn install_signal_on_loop(slot: &'static ProcessSignalSlot) -> bool {
     if !crate::turnloop_proc::available() {
         return false;
     }
-    let id = slot.number as u64;
-    if crate::turnloop_proc::signal_start(
-        id,
+    let Ok(id) = crate::turnloop_proc::signal_start(
         signal,
         crate::turnloop_proc::Owner::ProcessSignal {
             signum: slot.number,
         },
-    )
-    .is_err()
-    {
+    ) else {
         return false;
-    }
+    };
+    TURNLOOP_SIGNAL_IDS[slot_index(slot)].store(id as usize, Ordering::Release);
     // A registered listener is ref-NEUTRAL (see `has_active_process_signal_listeners`
     // and `crates/perry/tests/issue_signal_listener_ref_neutral.rs`): it must
     // not by itself keep the process alive. Unreffing the subscription encodes
@@ -474,11 +496,11 @@ pub(crate) fn on_signal_completion(signum: i32, event: crate::turnloop_proc::Str
             }
             crate::event_pump::js_notify_main_thread();
         }
-        StreamEvent::Closed => {
-            if let Some(slot) = slot_by_number(signum) {
-                mark_on_turnloop(slot, false);
-            }
-        }
+        // The terminal completion of a subscription that has already been
+        // unwound. `uninstall_process_signal_handler` cleared the bit and the
+        // id, so there is nothing left to release; it is named here only to
+        // make the exhaustive match say so.
+        StreamEvent::Closed => {}
         _ => {}
     }
 }
@@ -530,7 +552,13 @@ fn uninstall_process_signal_handler(slot: &'static ProcessSignalSlot) {
         // ends; the bit is cleared by the terminal completion, not here, so
         // the unwind stays exactly-once (DESIGN D4).
         #[cfg(not(target_arch = "wasm32"))]
-        crate::turnloop_proc::signal_stop(slot.number as u64);
+        {
+            let id = TURNLOOP_SIGNAL_IDS[slot_index(slot)].swap(0, Ordering::AcqRel);
+            if id != 0 {
+                crate::turnloop_proc::signal_stop(id as u64);
+            }
+        }
+        mark_on_turnloop(slot, false);
     } else {
         unsafe {
             let mut sa: libc::sigaction = std::mem::zeroed();
