@@ -7,7 +7,7 @@ use super::class_field_barrier_tests::block_body;
 use crate::testing::root_slots::function_slice;
 use crate::{compile_module, CompileOptions};
 use perry_hir::types::Type;
-use perry_hir::{Expr, Function, Module, Param, Stmt};
+use perry_hir::{Class, ClassField, Expr, Function, Module, Param, Stmt};
 
 fn param(id: u32, ty: Type) -> Param {
     Param {
@@ -229,5 +229,73 @@ fn plain_double_array_literal_skips_notes_and_marking() {
     assert!(
         noted.contains("@js_array_mark_numeric_f64_layout("),
         "a boxed element must keep the marking walk:\n{noted}"
+    );
+}
+
+fn point_class() -> Class {
+    Class {
+        id: 101,
+        name: "Point".to_string(),
+        type_params: Vec::new(),
+        extends: None,
+        extends_name: None,
+        native_extends: None,
+        extends_expr: None,
+        heritage_lexically_shadowed: false,
+        fields: vec![ClassField {
+            name: "x".to_string(),
+            key_expr: None,
+            ty: Type::Number,
+            init: None,
+            is_private: false,
+            is_readonly: false,
+            decorators: Vec::new(),
+        }],
+        constructor: None,
+        methods: Vec::new(),
+        getters: Vec::new(),
+        setters: Vec::new(),
+        static_accessor_names: Vec::new(),
+        static_accessor_fn_ids: Vec::new(),
+        computed_members: Vec::new(),
+        static_fields: Vec::new(),
+        static_methods: Vec::new(),
+        decorators: Vec::new(),
+        is_exported: false,
+        aliases: Vec::new(),
+        is_nested: false,
+        alloc_width_hint: 0,
+        specialized_from: None,
+    }
+}
+
+/// `probe(p: Point) { return p.x }` — the inline class-field guard tests the
+/// GcHeader with one masked 32-bit compare and the class/shape identity with
+/// one 64-bit compare, instead of five separate header loads.
+#[test]
+fn class_field_inline_guard_uses_two_fused_loads() {
+    let mut m = module(
+        "class_field_fused",
+        vec![param(1, named("Point"))],
+        vec![Stmt::Return(Some(Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(1)),
+            property: "x".into(),
+            byte_offset: 0,
+        }))],
+    );
+    m.classes = vec![point_class()];
+    let ir = probe_ir(&m);
+    let deref = block_body(&ir, "class_field_inline.deref")
+        .unwrap_or_else(|| panic!("no inline guard:\n{ir}"));
+    let loads: Vec<&str> = deref.lines().filter(|l| l.contains(" = load ")).collect();
+    assert_eq!(
+        loads.len(),
+        2,
+        "the guard must load the header word and the identity word only:\n{deref}"
+    );
+    assert!(
+        loads.iter().any(|l| l.contains("load i32"))
+            && loads.iter().any(|l| l.contains("load i64")),
+        "one 32-bit header word and one 64-bit identity word:\n{deref}"
     );
 }
