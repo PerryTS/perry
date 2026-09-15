@@ -145,9 +145,9 @@ impl DependencyResolver {
         // spec resolver the compiler uses (see resolve/subpath_imports.rs).
         if import_source.starts_with('#') {
             use super::compile::resolve::subpath_imports::{
-                resolve_subpath_import, SubpathImportOutcome, DEFAULT_CONDITIONS,
+                default_conditions, resolve_subpath_import, SubpathImportOutcome,
             };
-            match resolve_subpath_import(import_source, importing_file, DEFAULT_CONDITIONS) {
+            match resolve_subpath_import(import_source, importing_file, default_conditions()) {
                 // Maps to a real file inside the package: resolved.
                 Ok(SubpathImportOutcome::File(_)) => return,
                 // Maps to a bare package specifier: verify THAT package the

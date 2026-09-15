@@ -989,11 +989,7 @@ fn resolve_exports_with_conditions(
 // documented single-result entry point (mirrors `resolve_subpath_import`).
 #[allow(dead_code)]
 pub(super) fn resolve_exports(exports: &serde_json::Value, subpath: &str) -> Option<String> {
-    resolve_exports_with_conditions(
-        exports,
-        subpath,
-        &["perry", "node", "import", "module", "default", "require"],
-    )
+    resolve_exports_with_conditions(exports, subpath, subpath_imports::default_conditions())
 }
 
 /// Like [`resolve_exports`], but returns EVERY condition branch's resolution
@@ -1012,7 +1008,7 @@ pub(super) fn resolve_exports_candidates(
     // traversePathUp only in `./node.js`; resolving `./default.js` left them
     // undefined → npm-run-path → execa LINK failure.) Mirrors `resolve_exports`
     // / `resolve_subpath_import`.
-    const CONDITIONS: &[&str] = &["perry", "node", "import", "module", "default", "require"];
+
     fn collect(value: &serde_json::Value, subpath: &str, out: &mut Vec<String>) {
         match value {
             serde_json::Value::String(s) if !out.contains(s) => {
@@ -1060,7 +1056,7 @@ pub(super) fn resolve_exports_candidates(
                         }
                     }
                 }
-                for condition in CONDITIONS {
+                for condition in subpath_imports::default_conditions() {
                     if let Some(entry) = map.get(*condition) {
                         collect(entry, subpath, out);
                     }
@@ -1447,7 +1443,7 @@ pub(super) fn resolve_import_with_bunfs(
         match subpath_imports::resolve_subpath_import(
             import_source,
             importer_path,
-            subpath_imports::DEFAULT_CONDITIONS,
+            subpath_imports::default_conditions(),
         ) {
             Ok(SubpathImportOutcome::File(canonical)) => Some(canonical),
             // Bare-package target: re-enter resolution with the mapped
