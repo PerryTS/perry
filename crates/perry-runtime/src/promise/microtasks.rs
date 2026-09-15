@@ -109,6 +109,12 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
 /// same synchronous stretch has simply not run yet.
 #[no_mangle]
 pub extern "C" fn js_promise_run_microtasks_event_loop() -> i32 {
+    // `nodeTiming.loopStart` stops being the "not started" sentinel at the
+    // first event-loop turn. The callback-timer tick used to stamp it, which
+    // this pump reached through its timer phase; turnloop P3 moved that phase
+    // into the generated loop, so the pump stamps it directly rather than
+    // depending on which phase happens to run first.
+    crate::perf_hooks::note_event_loop_start();
     run_microtasks(MicrotaskDrainMode::EventLoop)
 }
 
