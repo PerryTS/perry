@@ -157,6 +157,15 @@ fn kind_code(kind: ErrorKind) -> &'static str {
         ErrorKind::ConnectionReset => "ECONNRESET",
         ErrorKind::BrokenPipe => "EPIPE",
         ErrorKind::ResourceLimit => "ENOMEM",
+        // Filesystem categories turnloop 0.1.0-alpha.3 added for its typed
+        // file operations. A stream socket does not produce them, but they are
+        // mapped rather than folded into UNKNOWN so a future caller of this
+        // helper (P2's pipes, P4's file jobs) gets Node's real code.
+        ErrorKind::PermissionDenied => "EACCES",
+        ErrorKind::AlreadyExists => "EEXIST",
+        ErrorKind::NotADirectory => "ENOTDIR",
+        ErrorKind::IsADirectory => "EISDIR",
+        ErrorKind::DirectoryNotEmpty => "ENOTEMPTY",
         ErrorKind::Other => "UNKNOWN",
     }
 }

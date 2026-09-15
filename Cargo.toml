@@ -400,9 +400,15 @@ regex = "1.12"
 aho-corasick = "1.1"
 # The single regular-expression engine, through crates/perry-perex.
 perex = "0.1.4"
-# turnloop P0: the per-agent event-loop wait driver (docs/turnloop/p0-report.md).
-# Exact pin; locked once with the owner-approved one-time publish-age override.
-turnloop = "=0.1.0-alpha.2"
+# turnloop P0/P1: the per-agent event-loop wait driver and, since P1, Perry's
+# stream sockets (docs/turnloop/p0-report.md, crates/perry-runtime/src/turnloop_net).
+# 0.1.0-alpha.3 switched turnloop's own dependency requirements from exact pins
+# to carets, which is what lifts the forced downgrades alpha.2 imposed on libc,
+# tokio, redis and wasm-bindgen across this workspace. A caret here for the same
+# reason; the exact version is pinned by Cargo.lock, locked once with the
+# owner-approved one-time publish-age override (published 2026-09-15T09:37:32Z,
+# sha256 c3370511f37b90dc5ba694566cb941f0e89c205c84b798277f17a05f13e4a8ab).
+turnloop = "0.1.0-alpha.3"
 hex = "0.4"
 tempfile = "3"
 itoa = "1.0"
