@@ -43,14 +43,19 @@ pub(super) fn native_inflight() -> bool {
     f() != 0
 }
 
-/// The earliest wake across Perry's timer queues, the stdlib deadline
+/// The earliest wake across this agent's timer heap, the stdlib deadline
 /// provider, the agent loop's own deadlines, and the idle cap.
+///
+/// P3: the JS timer component is now one heap root (`next_timer_deadline`)
+/// instead of a scan of three queues, and the loop's own `next_deadline()` also
+/// carries it once armed — the two agree by construction (a unit test asserts
+/// it). Keeping Perry's own read as well is what covers the threads that have
+/// no loop: a worker agent, and the pump thread acting for the primary agent on
+/// Android.
 pub(super) fn next_deadline(now: Instant) -> Instant {
     let mut deadline = now + Duration::from_millis(super::IDLE_CAP_MS);
     for at in [
-        crate::timer::promise_timer_deadline(),
-        crate::timer::callback_timer_deadline(),
-        crate::timer::interval_timer_deadline(),
+        crate::timer::next_timer_deadline(),
         agent_loop::loop_deadline(),
     ]
     .into_iter()
@@ -75,6 +80,20 @@ pub(super) fn next_deadline(now: Instant) -> Instant {
 /// Park the primary agent. Returns `false` only when this thread could not
 /// get a loop and nothing has happened yet, so the caller runs the legacy park.
 pub(super) fn park() -> bool {
+    // Node computes a zero poll timeout whenever the immediate queue is
+    // non-empty, so a `setImmediate` queued by a check callback — or a native
+    // completion callback awaiting its poll phase — runs on the very next turn
+    // rather than after a park. The generated loop branches past its park for
+    // the same reason; this covers every other caller of `js_wait_for_event`.
+    //
+    // It routes through the shared zero-budget return rather than returning
+    // bare, so the #1114 throttle still bounds a caller that spins on
+    // `js_wait_for_event` without ever running the check phase that would drain
+    // the queue. That is the same safety net a due timer takes.
+    if crate::timer::js_immediate_has_pending() != 0 {
+        super::zero_budget_return();
+        return true;
+    }
     let now = Instant::now();
     #[allow(unused_mut)]
     let mut deadline = next_deadline(now);

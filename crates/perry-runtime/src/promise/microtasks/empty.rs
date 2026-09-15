@@ -191,7 +191,15 @@ mod tests {
             crate::os::stdin_push_bytes(b"input");
             assert!(!crate::timer::timer_phase_work_pending());
             assert!(!can_skip_callback_phases());
+            // turnloop P3: buffered stdin is dispatched at the same
+            // event-loop point it always was — with the check phase, which the
+            // generated loop now emits itself instead of reaching it through
+            // the microtask pump's timer tick. One iteration is the pump plus
+            // the phases, so that is what an "event-loop turn" means here.
             js_promise_run_microtasks_event_loop();
+            crate::timer::js_event_loop_timers_phase();
+            crate::timer::js_event_loop_poll_callbacks();
+            crate::timer::js_event_loop_check_phase();
             assert_eq!(CALLED.load(Ordering::Relaxed), 1);
             assert!(!crate::os::process_stdin_needs_pump());
             crate::os::test_set_stdin_data_listener(None);
@@ -211,7 +219,13 @@ mod tests {
                 0
             );
             assert_eq!(crate::timer::js_timer_has_pending(), 1);
-            assert!(js_promise_run_microtasks_event_loop() > 0);
+            // turnloop P3: the microtask checkpoint no longer fires timers —
+            // the generated loop runs the timers phase after it, so that the
+            // check phase can come after the poll phase. The subject of this
+            // test is unchanged: beforeExit must not consume the timer, and the
+            // NEXT turn must.
+            assert_eq!(js_promise_run_microtasks_event_loop(), 0);
+            assert!(crate::timer::js_event_loop_timers_phase() > 0);
             assert_eq!(
                 crate::promise::js_promise_value(rooted_promise(&promise)),
                 47.0

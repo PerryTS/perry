@@ -119,6 +119,12 @@
       "why": "HashSet<i64> of pending TLS abort handles. Each i64 is a socket HANDLE -- the key used to look the socket up in crate::statics::sockets() and the payload of PendingNetEvent::AbortError/Close -- i.e. an index into the handle side table, stable across collection, not a heap address. The set holds no other field, so there is nothing for a scanner to visit."
     },
     {
+      "file": "crates/perry-runtime/src/agent.rs",
+      "name": "CURRENT_AGENT",
+      "verdict": "not_a_gc_pointer",
+      "why": "The calling thread's JS-agent id, an integer (Cell<Option<AgentId>>, AgentId = u64) set once at worker entry and never cleared (agent.rs:75). It names a heap; it never holds a pointer into one. It stopped being reached incidentally by a registered scanner when turnloop P3 moved the timer root walk behind timer::store::with_current, whose generic closure the call-graph walk does not follow -- the holder itself did not change."
+    },
+    {
       "file": "crates/perry-ext-parcel-watcher/src/lib.rs",
       "name": "PENDING",
       "verdict": "not_a_gc_pointer",

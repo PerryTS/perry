@@ -444,3 +444,131 @@ fn native_work_in_flight_is_counted_as_a_tokio_tick_not_a_turn() {
     assert_eq!(turns_ran, 0, "the loop turned while tokio owned the wait");
     super::super::NOTIFIED.store(false, Ordering::SeqCst);
 }
+
+/// turnloop P3: the armed JS-timer deadline must NOT keep the loop alive.
+///
+/// A timer operation on a referenced handle counts toward turnloop's `refs`, so
+/// without the `set_ref(handle, false)` in `arm_timer` an armed deadline would
+/// make `Loop::alive()` true on its own and take the keep-alive decision away
+/// from Perry's own counters. This is the sabotage check for that one line: it
+/// fails if the `set_ref` is dropped.
+#[test]
+fn an_armed_timer_deadline_does_not_keep_the_loop_alive() {
+    let _g = serial();
+    std::thread::spawn(|| {
+        install_unrouted();
+        assert!(
+            !AGENT_LOOP.with(|slot| slot.borrow().as_ref().unwrap().driver.alive()),
+            "the loop must start with nothing keeping it alive"
+        );
+
+        let at = Instant::now() + Duration::from_secs(3600);
+        arm_timer(Some(at));
+
+        let armed = AGENT_LOOP.with(|slot| slot.borrow().as_ref().unwrap().timer);
+        assert!(armed.is_some(), "the subject was never armed");
+        assert_eq!(armed.map(|(_, at)| at), Some(at));
+        assert_eq!(
+            loop_deadline(),
+            Some(at),
+            "the loop's own deadline must carry the JS timer deadline"
+        );
+        assert!(
+            !AGENT_LOOP.with(|slot| slot.borrow().as_ref().unwrap().driver.alive()),
+            "an armed JS timer deadline must not answer alive() by itself"
+        );
+        assert_eq!(stats().timer_arms, 1);
+
+        // Moving an armed deadline reuses the handle rather than churning it.
+        let later = at + Duration::from_secs(1);
+        arm_timer(Some(later));
+        assert_eq!(
+            AGENT_LOOP.with(|slot| slot.borrow().as_ref().unwrap().timer.map(|(h, _)| h.key())),
+            armed.map(|(h, _)| h.key()),
+            "a deadline move must reset the handle, not replace it"
+        );
+        assert_eq!(loop_deadline(), Some(later));
+
+        // Re-arming at the same instant is a no-op, not another submission.
+        let arms = stats().timer_arms;
+        arm_timer(Some(later));
+        assert_eq!(stats().timer_arms, arms, "an unchanged deadline re-armed");
+
+        arm_timer(None);
+        assert_eq!(loop_deadline(), None, "disarming left a deadline behind");
+        shutdown_current_thread();
+    })
+    .join()
+    .expect("timer arming test thread");
+}
+
+/// turnloop P3: a JS timer's expiry arrives as a real `OpResult::Timer`
+/// completion, and the loop parks on it rather than returning early.
+#[test]
+fn an_armed_timer_expiry_is_a_turnloop_completion() {
+    let _g = serial();
+    std::thread::spawn(|| {
+        install_unrouted();
+        let before = stats();
+        let at = Instant::now() + Duration::from_millis(5);
+        arm_timer(Some(at));
+
+        // One turn with a generous cap: the wait must end at the deadline.
+        turn_for_test(Duration::from_millis(500));
+
+        let after = stats();
+        assert!(
+            Instant::now() >= at,
+            "the turn returned before the armed deadline"
+        );
+        assert_eq!(
+            after.timer_expiries - before.timer_expiries,
+            1,
+            "the armed deadline did not arrive as a turnloop timer completion"
+        );
+        assert!(
+            after.os_waits - before.os_waits >= 1,
+            "the park did not reach an OS wait"
+        );
+        assert_eq!(
+            loop_deadline(),
+            None,
+            "an expired one-shot timer must not leave a deadline armed"
+        );
+        shutdown_current_thread();
+    })
+    .join()
+    .expect("timer expiry test thread");
+}
+
+/// turnloop P3: the deadline the loop is armed at and the deadline Perry
+/// computes for its own park are the same instant. They are two reads of one
+/// heap root, and a park that used only one of them must be exact — the
+/// arming covers the loop-owning thread, Perry's own read covers a worker or
+/// an Android pump thread that has no loop.
+#[test]
+fn the_armed_deadline_and_perrys_own_deadline_agree() {
+    let _g = serial();
+    std::thread::spawn(|| {
+        install_unrouted();
+        let id = crate::timer::js_set_timeout_callback(0, 50_000.0);
+        assert!(id > 0, "the subject timer was never scheduled");
+        let heap = crate::timer::next_timer_deadline();
+        assert!(heap.is_some(), "the timer heap has no deadline to compare");
+        assert_eq!(
+            loop_deadline(),
+            heap,
+            "the armed deadline drifted from the heap root"
+        );
+        crate::timer::clearTimeout(id);
+        assert_eq!(crate::timer::next_timer_deadline(), None);
+        assert_eq!(
+            loop_deadline(),
+            None,
+            "a cleared timer left a deadline armed"
+        );
+        shutdown_current_thread();
+    })
+    .join()
+    .expect("deadline agreement test thread");
+}

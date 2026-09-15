@@ -777,6 +777,11 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_timer_tick_if_refed", I32, &[]);
     module.declare_function("js_callback_timer_tick", I32, &[]);
     module.declare_function("js_interval_timer_tick", I32, &[]);
+    // turnloop P3: the generated event loop's Node-ordered phases.
+    module.declare_function("js_event_loop_timers_phase", I32, &[]);
+    module.declare_function("js_event_loop_poll_callbacks", I32, &[]);
+    module.declare_function("js_event_loop_check_phase", I32, &[]);
+    module.declare_function("js_immediate_has_pending", I32, &[]);
     // Timer has-pending checks — called from the main event loop to
     // decide whether to keep ticking or exit.
     module.declare_function("js_timer_has_pending", I32, &[]);

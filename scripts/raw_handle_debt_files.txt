@@ -135,7 +135,7 @@
 7 crates/perry-runtime/src/string/split.rs
 2 crates/perry-runtime/src/symbol/iterator.rs
 27 crates/perry-runtime/src/thread.rs
-7 crates/perry-runtime/src/timer.rs
+2 crates/perry-runtime/src/timer.rs
 1 crates/perry-runtime/src/typed_feedback.rs
 1 crates/perry-runtime/src/typedarray/construct.rs
 2 crates/perry-runtime/src/typedarray/transform.rs

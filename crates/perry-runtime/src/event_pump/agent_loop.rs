@@ -38,7 +38,14 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::Instant;
 
-use turnloop::{Completions, Config, Loop, Notifier, Timeout};
+use turnloop::{Completions, Config, Handle, Loop, Notifier, Timeout, Token};
+
+/// The token of the single timer this agent arms for its JS timer heap.
+///
+/// `turnloop_net` builds its tokens as `(op_class << 56) | id` with op classes
+/// 1..=7 and a debug-asserted non-zero id below `ID_MASK`, so `u64::MAX`
+/// (op class 255) can never collide with one.
+pub(crate) const TIMER_TOKEN: Token = Token(u64::MAX);
 
 /// Cross-thread route to the primary agent's loop.
 struct PrimaryRoute {
@@ -128,6 +135,12 @@ pub struct LoopStats {
     /// Completions dispatched to a P1 net subsystem. Zero means turnloop
     /// carried no I/O for this process, whatever the turn count says.
     pub completions: u64,
+    /// JS timer deadlines that expired as a turnloop timer completion (P3).
+    /// Zero on a program with timers means the heap's deadline never reached
+    /// the loop — the arming is decorative and the stats line says so.
+    pub timer_expiries: u64,
+    /// Times the armed deadline was created, moved or cancelled.
+    pub timer_arms: u64,
 }
 
 pub(super) struct AgentLoop {
@@ -136,6 +149,9 @@ pub(super) struct AgentLoop {
     driver: Loop,
     completions: Completions,
     stats: LoopStats,
+    /// The single timer handle carrying this agent's JS timer deadline, and the
+    /// deadline it currently holds.
+    timer: Option<(Handle, Instant)>,
 }
 
 impl AgentLoop {
@@ -149,6 +165,7 @@ impl AgentLoop {
             driver,
             completions: Completions::with_capacity(capacity),
             stats: LoopStats::default(),
+            timer: None,
         })
     }
 
@@ -221,9 +238,19 @@ fn dispatch_staged() {
         return;
     }
     for completion in batch.drain(..) {
-        // One router, two token spaces. P1's classes are 1..=7 and P2's are
-        // 0x10..=0x1F, so `owns` is a range test and neither module can be
-        // handed the other's completion (`turnloop_proc`'s module note).
+        if completion.token == TIMER_TOKEN {
+            // The JS timer heap's deadline. Nothing to deliver: the expiry IS
+            // the wake, and the timers phase reads the heap. Counted so a
+            // `PERRY_LOOP_STATS` line can say the arming was live.
+            if matches!(completion.result, turnloop::OpResult::Timer) {
+                note_timer_expiry();
+            }
+            continue;
+        }
+        // One router, three token spaces. P1's classes are 1..=7, P2's are
+        // 0x10..=0x1F and P3 owns TIMER_TOKEN above, so `owns` is a range test
+        // and no module can be handed another's completion
+        // (`turnloop_proc`'s module note).
         if crate::turnloop_proc::owns(completion.token) {
             crate::turnloop_proc::dispatch(completion);
         } else {
@@ -338,6 +365,9 @@ fn upgrade_profile(profile: Profile) -> bool {
     *route = Some((agent.id, agent.driver.notifier()));
     drop(route);
     AGENT_LOOP.with(|slot| *slot.borrow_mut() = Some(agent));
+    // The replaced loop took its timer handle with it; re-arm on the new one
+    // from the store, outside the borrow above.
+    crate::timer::resync_loop_timer();
     true
 }
 
@@ -475,9 +505,81 @@ fn park_turn(deadline: Instant) -> Park {
     })
 }
 
+/// Count one expiry of the armed JS-timer deadline.
+fn note_timer_expiry() {
+    AGENT_LOOP.with(|slot| {
+        if let Ok(mut slot) = slot.try_borrow_mut() {
+            if let Some(agent) = slot.as_mut() {
+                agent.stats.timer_expiries += 1;
+                // A one-shot timer's expiry is terminal: its operation retired,
+                // so the handle can no longer be reset and must be closed
+                // before the next deadline is armed.
+                if let Some((handle, _)) = agent.timer.take() {
+                    let _ = agent.driver.close(handle, TIMER_TOKEN);
+                }
+            }
+        }
+    });
+}
+
+/// Arm — or move, or cancel — this agent's single JS-timer deadline.
+///
+/// turnloop P3 (DESIGN §9): the JS timer heap's earliest deadline becomes a
+/// real turnloop timer, so a park that ends at a timer ends on an
+/// `OpResult::Timer` completion rather than on a timeout Perry computed for
+/// itself, and `Loop::next_deadline()` answers for Perry's timers too.
+///
+/// The handle is deliberately **unreferenced**: Perry's own keep-alive counters
+/// decide whether the loop lives, and an armed deadline must never make
+/// `Loop::alive()` true by itself. A referenced timer operation counts toward
+/// `refs`, so the `set_ref(false)` below is load-bearing, not hygiene — there is
+/// a unit test that arms a timer and asserts `alive()` stays false.
+pub(crate) fn arm_timer(at: Option<Instant>) {
+    if STATE.with(Cell::get) != LoopState::Owner {
+        return;
+    }
+    AGENT_LOOP.with(|slot| {
+        // `try_borrow_mut` fails only under re-entry from a completion sink
+        // that is already inside this module; that pass re-arms on its way out.
+        let Ok(mut slot) = slot.try_borrow_mut() else {
+            return;
+        };
+        let Some(agent) = slot.as_mut() else {
+            return;
+        };
+        match (agent.timer, at) {
+            (Some((_, armed)), Some(at)) if armed == at => {}
+            (Some((handle, _)), Some(at)) if agent.driver.timer_reset(handle, at) => {
+                agent.timer = Some((handle, at));
+                agent.stats.timer_arms += 1;
+            }
+            (previous, at) => {
+                if let Some((handle, _)) = previous {
+                    let _ = agent.driver.close(handle, TIMER_TOKEN);
+                    agent.timer = None;
+                }
+                if let Some(at) = at {
+                    match agent.driver.timer(at, None, TIMER_TOKEN) {
+                        Ok(handle) => {
+                            // Must not hold the loop alive on its own.
+                            let _ = agent.driver.set_ref(handle, false);
+                            agent.timer = Some((handle, at));
+                            agent.stats.timer_arms += 1;
+                        }
+                        // Resource limit or a closing loop: the park still has
+                        // Perry's own deadline, so this costs precision in the
+                        // stats line, not correctness.
+                        Err(_) => agent.timer = None,
+                    }
+                }
+            }
+        }
+    });
+}
+
 /// The loop's own earliest deadline (DESIGN §9: the deadline provider becomes
-/// `next_deadline()` where the loop owns deadlines). P0 arms no turnloop timer,
-/// so this is `None` until P3 moves JS timers into the loop's heap.
+/// `next_deadline()` where the loop owns deadlines). Since P3 this includes the
+/// armed JS timer deadline.
 pub(super) fn loop_deadline() -> Option<Instant> {
     if STATE.with(Cell::get) != LoopState::Owner {
         return None;
@@ -620,13 +722,15 @@ fn stats_enabled() -> bool {
 
 fn print_stats(stats: LoopStats) {
     eprintln!(
-        "[perry-loop] driver=turnloop turns={} os_waits={} zero_event_waits={} native_ticks={} turn_errors={} completions={}",
+        "[perry-loop] driver=turnloop turns={} os_waits={} zero_event_waits={} native_ticks={} turn_errors={} completions={} timer_arms={} timer_expiries={}",
         stats.turns,
         stats.os_waits,
         stats.zero_event_waits,
         stats.native_ticks,
         stats.turn_errors,
-        stats.completions
+        stats.completions,
+        stats.timer_arms,
+        stats.timer_expiries
     );
     // P2's own "the subject ran" line. `completions` above cannot distinguish
     // a socket P1 carried from a child pipe P2 carried, and every live count
