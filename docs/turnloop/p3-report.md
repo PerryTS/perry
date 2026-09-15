@@ -273,9 +273,15 @@ mistake P1 avoided by building its own baseline.
 | | base `c6f185d6e8` | P3 |
 |---|---|---|
 | tests | 796 | 799 (the three new P3 fixtures) |
-| pass | 787 | 787 + 3 |
+| pass | 787 | **790** |
 | parity_fail | **9** | **9 — the same nine** |
-| compile_fail | 0 | 25, all environmental (below) |
+| compile_fail | 0 | 0 |
+| status changes vs base | — | **0** |
+
+Not one test changed status in either direction, and the three new fixtures
+pass. That is the whole verdict: the phase reorder, the unified heap, the
+one-at-a-time dispatch, the poll staging and the two cancel/refresh semantics
+changes cost the existing suite nothing.
 
 The nine parity failures are identical in both arms and none is P3's:
 `test_gap_2159_defineproperty_class_prototype`,
@@ -288,15 +294,19 @@ the committed snapshot as known failures; the other three
 (`…_static_helpers`, `disposablestack_2875`, `iterator_prototype_next_patch`)
 are pre-existing regressions on the base commit, not P3's.
 
-**The 25 compile failures are a harness artifact, not a code result.** They are
-exactly the ext-routed set — every test whose link needs a `perry-ext-*` archive
-(`http`, `http2`, `net`, `ws`, `zlib`, `events`, plus the WebAssembly and
-native-base fixtures). The gap tier does not prebuild those, so each such test
-shells out to `cargo build -p perry-ext-…`; eight shards and a concurrent
-`cargo test` in the same tree serialised on one cargo lock until the per-test
-compile timed out. Re-run on a tree where nothing else holds that lock, the
-whole suite matches the baseline exactly — see the row above, which is from the
-clean re-run.
+The first P3 run of the suite did report 25 compile failures, and they were a
+harness artifact rather than a code result: they were exactly the ext-routed set
+— every test whose link needs a `perry-ext-*` archive (`http`, `http2`, `net`,
+`ws`, `zlib`, `events`, plus the WebAssembly and native-base fixtures). The gap
+tier does not prebuild those, so each such test shells out to
+`cargo build -p perry-ext-…`, and eight shards plus a `cargo test` running in
+the same tree serialised on one cargo lock until the per-test compile timed out.
+The table above is the re-run with nothing else holding that lock; all 25 pass.
+Worth knowing for anyone repeating this: **do not prebuild the ext archives with
+`--features perry-stdlib/external-*-pump` to avoid the fallback.** Those
+features make `libperry_stdlib.a` reference `js_ext_http_*`, which then fails to
+link for every test that does *not* import `http` — the gap tier wants the plain
+archives.
 
 ### The workspace unit tests
 
