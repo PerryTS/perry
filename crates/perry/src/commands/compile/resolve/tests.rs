@@ -1973,3 +1973,7 @@ mod ancestor_node_modules_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "tests/bun_export_condition_tests.rs"]
+mod bun_export_condition_tests;
