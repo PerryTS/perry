@@ -12,6 +12,8 @@ use super::{
 use crate::closure::ClosureHeader;
 use crate::value::JSValue;
 
+mod proxy_from;
+
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 
@@ -555,25 +557,6 @@ enum IterSourceKind {
 /// class id (so a direct symbol read returns `undefined`) but which still
 /// drive `.next()`. Mirrors the iterable detection in `js_array_clone`.
 fn items_is_iterable(items: f64) -> bool {
-    if let Some(proxy) = crate::array::array_ptr_as_proxy(
-        crate::value::js_nanbox_get_pointer(items) as *const ArrayHeader,
-    ) {
-        // A proxy can replace or remove @@iterator even when IsArray is true,
-        // or add it to a record. Array.from falls back to indexed reads only
-        // when GetMethod is nullish; a non-callable method must still throw.
-        let symbol = crate::symbol::well_known_symbol("iterator");
-        let method = unsafe {
-            crate::symbol::js_object_get_symbol_property(
-                proxy,
-                crate::value::js_nanbox_pointer(symbol as i64),
-            )
-        };
-        if matches!(method.to_bits(), TAG_UNDEFINED | TAG_NULL) {
-            return false;
-        }
-        resolve_callable(method);
-        return true;
-    }
     if crate::collection_iter::is_iterable(items) {
         return true;
     }
@@ -598,15 +581,6 @@ fn items_is_iterable(items: f64) -> bool {
 }
 
 fn classify_iter_source(items: f64) -> IterSourceKind {
-    // IsArray unwraps proxies; LiveArray would read the id as an ArrayHeader
-    // and skip a trapped @@iterator. The band test excludes ordinary arrays.
-    if crate::array::array_ptr_as_proxy(
-        crate::value::js_nanbox_get_pointer(items) as *const ArrayHeader
-    )
-    .is_some()
-    {
-        return IterSourceKind::Generic;
-    }
     if jsv_is_array(items) {
         return IterSourceKind::LiveArray;
     }
@@ -748,6 +722,13 @@ pub fn array_from_full(c: f64, items: f64, mapfn: f64, this_arg: f64) -> f64 {
         throw_not_iterable("object null");
     }
 
+    // Proxy GetMethod is observable. Resolve it once, retain it across
+    // construction, and root iterator state across callbacks that can collect.
+    if let Some(proxy) = crate::array::array_ptr_as_proxy(
+        crate::value::js_nanbox_get_pointer(items) as *const ArrayHeader,
+    ) {
+        return proxy_from::array_from_proxy(c, proxy, mapfn, this_arg, mapping);
+    }
     let is_ctor = is_constructor_value(c);
 
     if items_is_iterable(items) {

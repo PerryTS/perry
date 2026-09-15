@@ -13,3 +13,7 @@ Fix Proxy values in `Array.from` and dynamic `RequestInit.headers` (#10270,
   Array.from checks only within its existing small-handle branch.
 - Add compiled regression probes for both issue reproductions, nested proxies,
   get/ownKeys traps, custom iterators, mapped conversion, and sibling consumers.
+
+Read a Proxy source’s iterator method once before constructing the result, and
+cache the iterator’s next method. Keep the method, iterator, intermediate values,
+and pending mapping errors rooted across user callbacks and iterator closing.
