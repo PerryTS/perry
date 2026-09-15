@@ -201,3 +201,33 @@ fn inline_typed_array_store_rejects_boxed_values_and_wraps_exactly() {
         "integer kinds must not use the |v| < 2^63-only conversion:\n{store}"
     );
 }
+
+/// `probe(a: number, b: number) { return [a, b, 3] }` — plain doubles are
+/// stored raw under a header that already carries the raw-f64 flag; the noted
+/// path and the marking walk remain only for a NaN-boxed element.
+#[test]
+fn plain_double_array_literal_skips_notes_and_marking() {
+    let ir = probe_ir(&module(
+        "numeric_literal",
+        vec![param(1, Type::Number), param(2, Type::Number)],
+        vec![Stmt::Return(Some(Expr::Array(vec![
+            Expr::LocalGet(1),
+            Expr::LocalGet(2),
+            Expr::Number(3.0),
+        ])))],
+    ));
+    let plain = block_body(&ir, "arrlit.plain_numbers")
+        .unwrap_or_else(|| panic!("no plain-number arm:\n{ir}"));
+    // `call i64 asm ""` is the RS4GC root-reload launder, not a runtime call.
+    assert!(
+        !plain
+            .lines()
+            .any(|line| line.contains("call ") && !line.contains("asm \"\"")),
+        "the plain arm stores raw with no runtime calls:\n{plain}"
+    );
+    let noted = block_body(&ir, "arrlit.noted").unwrap_or_else(|| panic!("no noted arm:\n{ir}"));
+    assert!(
+        noted.contains("@js_array_mark_numeric_f64_layout("),
+        "a boxed element must keep the marking walk:\n{noted}"
+    );
+}

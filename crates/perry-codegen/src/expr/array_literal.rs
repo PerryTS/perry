@@ -31,7 +31,7 @@ use super::{
 };
 use crate::rooting;
 use crate::type_analysis::is_numeric_expr;
-use crate::types::{DOUBLE, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 /// Lower an array literal `[a, b, c, …]`.
 ///
@@ -91,6 +91,10 @@ pub(crate) fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Res
     // allocations inside element expressions don't see a half-initialized
     // outer array. Each evaluated value is kept in a temp root until the last
     // element has been lowered (#6951).
+    let canonical_raw_f64: Vec<bool> = elements
+        .iter()
+        .map(|e| crate::type_analysis::expr_produces_canonical_raw_f64(ctx, e))
+        .collect();
     let mut layout_notes_needed = Vec::with_capacity(n);
     for value_expr in elements {
         layout_notes_needed.push(!expr_produces_non_pointer_bits_by_construction(
@@ -201,8 +205,47 @@ pub(crate) fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Res
                 | (GC_FLAG_ARENA << 8)
                 | (GC_LAYOUT_POINTER_FREE << 16)
                 | (total_size << 32);
+            // A literal whose elements are statically numbers is usually all
+            // plain doubles at runtime. Then the array is born exactly as
+            // `js_array_mark_numeric_f64_layout` would leave it — pointer-free
+            // with the dense raw-f64 flag — so decide that with one signed
+            // compare per element and skip every per-slot note and the
+            // marking walk. Any NaN-boxed element (an int32 box, or a value
+            // whose annotation lied) takes the unchanged noted path.
+            let all_plain_numbers = if all_numeric_elements {
+                let mut all_plain: Option<String> = None;
+                for (i, v) in vals.iter().enumerate() {
+                    if canonical_raw_f64[i] {
+                        continue;
+                    }
+                    let bits = blk.bitcast_double_to_i64(v);
+                    // 0x7FF9 << 48: the lowest NaN-box tag.
+                    let plain = blk.icmp_slt(I64, &bits, "9221401712017801216");
+                    all_plain = Some(match all_plain {
+                        None => plain,
+                        Some(acc) => blk.and(I1, &acc, &plain),
+                    });
+                }
+                Some(all_plain.unwrap_or_else(|| "true".to_string()))
+            } else {
+                None
+            };
+            let header_word = match &all_plain_numbers {
+                Some(all_plain) => {
+                    // GC_ARRAY_RAW_F64_LAYOUT (0x80) in `_reserved`.
+                    let flagged = gc_packed | (0x80u64 << 16);
+                    blk.select(
+                        I1,
+                        all_plain,
+                        I64,
+                        &flagged.to_string(),
+                        &gc_packed.to_string(),
+                    )
+                }
+                None => gc_packed.to_string(),
+            };
             // GC_STORE_AUDIT(INIT): freshly allocated array header starts pointer-free until slot notes below.
-            blk.store(I64, &gc_packed.to_string(), &raw);
+            blk.store(I64, &header_word, &raw);
 
             // Packed ArrayHeader at raw+8 (length low 32 / capacity high 32).
             let arr_header_addr = blk.gep(I8, &raw, &[(I64, "8")]);
@@ -216,7 +259,61 @@ pub(crate) fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Res
             let user_ptr = blk.gep(I8, &raw, &[(I64, "8")]);
             let user_ptr_as_i64 = blk.ptrtoint(&user_ptr, I64);
 
+            if let Some(all_plain) = all_plain_numbers {
+                let plain_idx = ctx.new_block("arrlit.plain_numbers");
+                let noted_idx = ctx.new_block("arrlit.noted");
+                let done_idx = ctx.new_block("arrlit.done");
+                let plain_label = ctx.block_label(plain_idx);
+                let noted_label = ctx.block_label(noted_idx);
+                let done_label = ctx.block_label(done_idx);
+                ctx.block().cond_br(&all_plain, &plain_label, &noted_label);
+
+                ctx.current_block = plain_idx;
+                {
+                    let blk = ctx.block();
+                    for (i, v) in vals.iter().enumerate() {
+                        let offset = (16 + i * 8).to_string();
+                        let elem_ptr = blk.gep_inbounds(I8, &raw, &[(I64, &offset)]);
+                        // GC_STORE_AUDIT(POINTER_FREE): every element was just
+                        // tested to be a plain double; the header already says
+                        // pointer-free raw-f64.
+                        blk.store(DOUBLE, v, &elem_ptr);
+                    }
+                    blk.br(&done_label);
+                }
+
+                ctx.current_block = noted_idx;
+                {
+                    let blk = ctx.block();
+                    for (i, v) in vals.iter().enumerate() {
+                        let offset = (16 + i * 8).to_string();
+                        let elem_ptr = blk.gep_inbounds(I8, &raw, &[(I64, &offset)]);
+                        let slot_index = i.to_string();
+                        emit_jsvalue_slot_store_on_block(
+                            blk,
+                            &elem_ptr,
+                            v,
+                            &user_ptr_as_i64,
+                            &slot_index,
+                            layout_notes_needed[i],
+                            &user_ptr_as_i64,
+                            "0",
+                            false,
+                        );
+                    }
+                    blk.call(
+                        I32,
+                        "js_array_mark_numeric_f64_layout",
+                        &[(I64, &user_ptr_as_i64)],
+                    );
+                    blk.br(&done_label);
+                }
+                ctx.current_block = done_idx;
+                return Ok(nanbox_pointer_inline(ctx.block(), &user_ptr_as_i64));
+            }
+
             // Elements at raw+16 + i*8.
+            let blk = ctx.block();
             for (i, v) in vals.iter().enumerate() {
                 let offset = (16 + i * 8).to_string();
                 let elem_ptr = blk.gep_inbounds(I8, &raw, &[(I64, &offset)]);
@@ -231,14 +328,6 @@ pub(crate) fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Res
                     &user_ptr_as_i64,
                     "0",
                     false,
-                );
-            }
-
-            if all_numeric_elements {
-                blk.call(
-                    I32,
-                    "js_array_mark_numeric_f64_layout",
-                    &[(I64, &user_ptr_as_i64)],
                 );
             }
 
