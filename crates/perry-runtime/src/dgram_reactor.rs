@@ -246,6 +246,15 @@ fn spawn_recv(
 pub(crate) fn on_completion(id: u64, event: StreamEvent) {
     match event {
         StreamEvent::Datagram { bytes, from } => {
+            // A datagram the driver had already received when `close()` ran.
+            // Node delivers nothing after `'close'`.
+            if live_lock()
+                .as_ref()
+                .and_then(|map| map.get(&id))
+                .is_none_or(is_closing)
+            {
+                return;
+            }
             queue_lock().push(Datagram {
                 id,
                 data: bytes,
@@ -407,8 +416,20 @@ pub(crate) fn unregister(id: u64) {
         // Stop keeping the loop alive immediately — `close()` must not hold
         // the process open for the length of its own teardown — but leave the
         // entry in place for the completion.
+        //
+        // Marking it closing is not bookkeeping: the entry now outlives
+        // `close()` by however long the driver takes to acknowledge, and the
+        // pre-P2 code relied on the entry *vanishing* here to stop delivery.
+        // Without this flag a datagram queued before `close()` would reach
+        // `pump` afterwards and emit `'message'` on a socket JS has already
+        // seen `'close'` for.
+        mark_closing(id);
         release_refcount(id);
-        crate::turnloop_proc::close(proc_id);
+        // Settled, not merely submitted: Node's `close()` releases the port,
+        // and `node-suite/dgram/multicast/reuse-address-cleanup` binds a fresh
+        // socket to it on the next statement. An asynchronous release turns
+        // that into EADDRINUSE.
+        crate::turnloop_proc::close_and_settle(proc_id);
         return;
     }
     let removed = {
@@ -426,6 +447,19 @@ pub(crate) fn unregister(id: u64) {
             REFED_COUNT.fetch_sub(1, Ordering::SeqCst);
         }
     }
+}
+
+/// Mark a socket as closing so [`pump`] stops delivering for it, matching the
+/// pre-P2 behaviour where `close()` removed the registry entry outright.
+fn mark_closing(id: u64) {
+    let guard = live_lock();
+    if let Some(ls) = guard.as_ref().and_then(|map| map.get(&id)) {
+        ls.closing.store(true, Ordering::Release);
+    }
+}
+
+fn is_closing(ls: &LiveSocket) -> bool {
+    ls.closing.load(Ordering::Acquire)
 }
 
 /// Stop a closing socket from holding the loop open, without removing it.
@@ -507,6 +541,7 @@ pub(crate) fn pump() {
             let guard = live_lock();
             guard.as_ref().and_then(|map| {
                 map.get(&datagram.id)
+                    .filter(|ls| !is_closing(ls))
                     .map(|ls| (ls.socket_bits, ls.context.clone()))
             })
         };

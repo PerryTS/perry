@@ -237,6 +237,17 @@ pub(crate) fn reset_net_loop_for_test() {
     agent_loop::reset_for_test();
 }
 
+/// turnloop P2: one nonblocking turn plus dispatch, for a caller that has just
+/// submitted work whose completion the *next statement* depends on. See
+/// `turnloop_proc::close_and_settle`.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn settle_loop_once() {
+    #[cfg(not(feature = "tokio-wait-driver"))]
+    {
+        agent_loop::settle_turn();
+    }
+}
+
 /// turnloop P1: whether this thread can take the turnloop net path, asked
 /// without creating a loop.
 #[cfg(not(target_arch = "wasm32"))]

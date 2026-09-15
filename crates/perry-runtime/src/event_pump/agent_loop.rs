@@ -518,6 +518,37 @@ pub(super) fn fast_turn() {
     }
 }
 
+/// One nonblocking turn plus its dispatch, *without* the `alive()` gate.
+///
+/// [`fast_turn`] deliberately skips a loop with no outstanding work, which is
+/// right on the hot promise path. A close that must be observable by the next
+/// statement is the opposite case: the caller has just submitted a `close` and
+/// needs its terminal completion now, and the handle may already be unref'd
+/// (an `unref()`'d socket being closed), so `alive()` would say there is
+/// nothing to do and the descriptor would stay open.
+pub(super) fn settle_turn() {
+    if STATE.with(Cell::get) != LoopState::Owner {
+        return;
+    }
+    let turned = AGENT_LOOP.with(|slot| {
+        let Ok(mut slot) = slot.try_borrow_mut() else {
+            // Re-entry from inside a dispatch pass: that pass turns again on
+            // its way out, so skipping is correct rather than a lost wake.
+            return false;
+        };
+        let Some(agent) = slot.as_mut() else {
+            return false;
+        };
+        if let Ok(info) = agent.driver.turn(Timeout::Now, &mut agent.completions) {
+            agent.record(&info);
+        }
+        true
+    });
+    if turned {
+        dispatch_staged();
+    }
+}
+
 /// Count a transitional tokio tick taken instead of a turn.
 pub(super) fn note_native_tick() {
     AGENT_LOOP.with(|slot| {

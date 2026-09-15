@@ -454,6 +454,28 @@ pub(crate) fn close(id: u64) {
     }
 }
 
+/// Close a descriptor and drive the loop until the driver has acknowledged it.
+///
+/// [`close`] alone is asynchronous, which is right for everything whose release
+/// nothing observes — a child's pipe has already delivered EOF by the time it
+/// is closed. A dgram socket is not that: `socket.close()` must leave the port
+/// free, because the very next statement may bind it. The descriptor is
+/// released only when the final `Closed` lands, so the close is driven to
+/// completion here rather than left for whenever the loop next turns.
+///
+/// Bounded, and deliberately so: a turn that cannot run — re-entry from inside
+/// a dispatch pass, or a thread with no loop — must not spin, and a completion
+/// that never arrives must not hang a `close()`.
+pub(crate) fn close_and_settle(id: u64) {
+    close(id);
+    for _ in 0..64 {
+        if !PROC.with(|state| state.borrow().entries.contains_key(&id)) {
+            return;
+        }
+        crate::event_pump::settle_loop_once();
+    }
+}
+
 // ── Dispatch ────────────────────────────────────────────────────────────────
 
 /// Route one completion to the subsystem that submitted it.
