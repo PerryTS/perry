@@ -48,10 +48,16 @@ is the *ordering*, and with it the deadline the loop waits on.
 - **The spin-until-throttle path.** P0 left the #1114 throttle as the only bound
   on a "deadline reports due, pump never consumes it" loop, and noted that
   nothing ruled that shape out structurally while every deadline source was
-  still a queue scan. It is ruled out now: the deadline and the expiry read the
-  same heap root, and the phase pops exactly the entries that root names. The
-  remaining zero-budget returns are the legitimate transient "a timer really is
-  due" case.
+  still a queue scan. That hole is closed **for the timer sources**: the
+  deadline and the expiry are now the same heap root, and the timers phase pops
+  exactly the entries that root names, so a JS timer cannot report a due
+  deadline the pump then declines to consume. The throttle stays as the safety
+  net for the sources P3 did not touch — the stdlib readline provider and a
+  host-registered driver — and for the legitimate transient "a timer really is
+  due" return. One new zero-budget return was added deliberately: the park is
+  skipped while the check or poll queue is non-empty, which routes through the
+  same throttle so a caller that never runs the phase that would drain the
+  queue is still bounded.
 - **Keep-alive counters are republished, not paired.** P0 maintained a count per
   queue with an increment at every insert and a decrement at every removal, plus
   a debug assertion re-deriving them because an unpaired site is invisible in
@@ -170,11 +176,99 @@ decorative: a timer workload that reports `timer_expiries=0` means the heap's
 deadline never reached the loop, whatever the turn count says — the "a gate must
 assert its subject was live" rule applied to this change's own instrument.
 
-<!-- MEASUREMENTS -->
+### Measured, Linux x86_64, release
+
+The subject is `scripts/turnloop/apps/timer_loop_stats.ts`: 25 quiet `await
+sleep()` parks, 20 sub-millisecond remainders, 2,000 short timeouts, a 200-deep
+`setImmediate` chain and a 50-tick interval. Three interleaved runs per arm.
+
+| arm | turns | os_waits | zero_event_waits | completions | timer_arms | timer_expiries |
+|---|---|---|---|---|---|---|
+| base `c6f185d6e8` | 107 / 97 / 117 | 97 / 95 / 114 | 107 / 97 / 117 | **0** | — | — |
+| P3 | 362 / 297 / 340 | 169 / 142 / 164 | 174 / 146 / 164 | 377 / 303 / 353 | 495 / 581 / 440 | **189 / 152 / 177** |
+
+`completions=0` on the base arm is the point: turnloop carried nothing for a
+timer program, and every wake was a timeout Perry had computed for itself. On
+P3 every JS timer deadline the loop waited on arrives as an `OpResult::Timer`.
+
+**The quiet-timer cost is unchanged**, which is the claim that matters for
+DESIGN §10 rule 4a. A program that is nothing but 20 × `await sleep(20)`:
+
+| arm | turns | os_waits | zero_event_waits | completions | timer_expiries |
+|---|---|---|---|---|---|
+| base | 20 / 20 / 20 | 20 / 20 / 20 | 20 / 20 / 20 | 0 | — |
+| P3 | 38 / 38 / 38 | **20 / 20 / 20** | 20 / 20 / 20 | 37 | 19 |
+
+One OS wait per timer on both arms — no spin. P3's extra 18 *turns* are
+non-blocking: a one-shot turnloop timer's expiry is terminal, so its handle is
+closed and the resulting `Closed` completion is collected by a `Timeout::Now`
+turn. It costs a turn per expiry and no syscall. Arming the deadline as a
+**repeating** timer instead would keep the operation alive across expiries and
+remove that turn, the handle churn and half the completions; it is a follow-up,
+not a correctness issue, and it is not done here because it was measured to cost
+no OS wait.
 
 ## Test evidence
 
-<!-- EVIDENCE -->
+### The three P3 fixtures, byte-for-byte against Node 26.5.1
+
+```
+$ /root/claude-turnloop-p3/p3run.sh
+=== test_gap_turnloop_p3_phase_order   MATCH
+=== test_gap_turnloop_p3_io_phase_order MATCH
+=== test_gap_turnloop_p3_timer_heap    MATCH
+```
+
+Each was validated against the oracle five times before Perry ever ran it, and
+the orderings the oracle showed to be racy were removed from the fixtures rather
+than pinned (see above). `test_gap_turnloop_p3_timer_heap` also ends by proving
+the loop exits: a lone `setImmediate` keeps it alive for exactly one more turn
+while an unref'd 60 s timeout does not hold the process open, so a regression
+there shows up as a harness timeout rather than a diff.
+
+### Runtime unit tests
+
+`crates/perry-runtime/src/timer/store_tests.rs` — 20 tests over the structure
+itself, each asserting its subject was populated (an empty store would satisfy
+most ordering assertions vacuously): deadline-then-creation drain order, the
+phase snapshot boundary, immediate cancellation with the heap left ordered, the
+class filter that keeps `clearImmediate` off a Timeout, ref/unref moving an
+entry between heaps while leaving firing ungated, refresh preserving ref state,
+the check FIFO's snapshot and cancelled-slot skipping, the poll queue's
+one-turn staging and its keep-alive contribution, interval re-arm from the phase
+clock, the republished primary counters, agent purge, and a 1,000-entry
+insert/cancel churn that asserts the drain order is the sorted order.
+
+`crates/perry-runtime/src/event_pump/agent_loop_tests.rs` — three new tests for
+the arming: that an armed deadline does **not** answer `Loop::alive()` (the
+sabotage check for the `set_ref(false)`), that an expiry arrives as a real
+`OpResult::Timer` completion after a real OS wait, and that the armed deadline
+and Perry's own `next_timer_deadline()` are the same instant.
+
+### GC stress with pending timers
+
+```
+PERRY_GC_DIAG=1 PERRY_GC_SCHEDULE_SEED=<1|7|12345> PERRY_GC_SCHEDULE_RATE=1 \
+PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=64 \
+PERRY_GC_SCHEDULE_ALLOC_KB=0 PERRY_LOOP_STATS=1 <program>
+```
+
+over four programs — `test_gap_gc_interval_args_rooting`, the two P3 phase
+fixtures, and `timer_loop_stats` — at three seeds. All twelve runs exit 0 with
+no SIGSEGV from the quarantine reporter, and the instruments prove they were
+armed rather than merely quiet:
+
+| program | `[gc-fromspace-protect] retired_set` lines | `[gc…]` diagnostic lines | timer_expiries |
+|---|---|---|---|
+| `gc_interval` | 1,214 | 37,678 | — (never parks) |
+| `phase_order` | 146 | 4,728 | 0 (every timer overdue; never parks) |
+| `timer_heap` | 301-304 | 9,786-9,882 | 7 |
+| `timer_loop_stats` | 4,624-4,625 | 162,047-162,080 | 28 |
+
+A run with zero copying minors protects nothing and would pass vacuously; every
+row above ran hundreds to thousands of them, so the from-space really was
+quarantined and `mprotect`ed while timer entries, their arguments and their
+async-context snapshots were live in the store.
 
 ## What P3 did not do
 
@@ -203,4 +297,48 @@ assert its subject was live" rule applied to this change's own instrument.
 
 ## For the integrator
 
-<!-- INTEGRATOR -->
+The branch is `turnloop/p3-timers` on `origin`, four commits on top of
+`turnloop/p1-net` (`c6f185d6e8`). Nothing here bumps the version — the
+maintainer does that at merge.
+
+Run, on a machine with the pinned oracle installed:
+
+```bash
+# unit tests (perry-runtime's are NOT parallel-safe)
+RUST_TEST_THREADS=1 cargo test --release -p perry-runtime
+cargo test --release -p perry-codegen
+
+# the gap suite, against a baseline built from this branch's OWN base commit
+cargo build --release -p perry -p perry-runtime -p perry-stdlib \
+  -p perry-runtime-static -p perry-stdlib-static
+PERRY_SKIP_BUILD=1 ./scripts/run_gap_tests.sh
+
+# the three P3 fixtures on their own
+PERRY_SKIP_BUILD=1 ./run_parity_tests.sh --filter test_gap_turnloop_p3_
+
+# GC stress with pending timers
+PERRY_GC_DIAG=1 PERRY_GC_SCHEDULE_SEED=7 PERRY_GC_SCHEDULE_RATE=1 \
+  PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=64 \
+  PERRY_GC_SCHEDULE_ALLOC_KB=0 PERRY_LOOP_STATS=1 ./timer_loop_stats
+
+# the loop-stats subject
+PERRY_LOOP_STATS=1 ./timer_loop_stats     # scripts/turnloop/apps/timer_loop_stats.ts
+```
+
+Still to run, and NOT run here:
+
+- **Windows and macOS.** Everything in this report was measured on Linux
+  x86_64. The timer store is portable Rust and the arming goes through
+  turnloop's cross-platform `timer`/`timer_reset`/`close`, but neither arm has
+  been exercised. The native-UI host loops (iOS, tvOS, watchOS, visionOS,
+  Android, GTK4, WinUI) call `js_callback_timer_tick` + `js_interval_timer_tick`
+  and are covered only by the composite entry's definition, not by a run.
+- **An instruction A/B at cgu=1 with a control probe** (DESIGN §12's per-phase
+  requirement). The change is a clear algorithmic improvement on paper — heap
+  operations replacing whole-queue scans — but "on paper" is not a measurement,
+  and the extra loop iteration native completion callbacks now take is a real
+  cost that an A/B should price.
+- **The auto-optimize gap tier.** Only the fast tier (`PERRY_SKIP_BUILD=1`,
+  `PERRY_NO_AUTO_OPTIMIZE=1`) ran here.
+- **The node-suite behavioural corpus**, in particular its `timers` and `fs`
+  modules, which are the two this change most directly touches.
