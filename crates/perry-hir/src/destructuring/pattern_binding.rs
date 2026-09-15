@@ -284,6 +284,19 @@ fn lower_array_pattern_binding(
         "iteratorCloseIfNotDone",
         vec![Expr::LocalGet(iter_id), Expr::LocalGet(done_id)],
     )));
+    if !array_pattern_body_can_complete_abruptly(arr_pat) {
+        // Every element is a hole or a plain binding identifier (possibly as
+        // the rest target). The only abrupt completions left in the body come
+        // from IteratorStep/IteratorValue themselves (`next()`, or the result's
+        // `done`/`value` getters, throwing), and the spec marks the iterator
+        // `[[Done]]` on exactly those, so IteratorBindingInitialization's
+        // IteratorClose never runs for them. Binding an identifier cannot
+        // throw. The `try` therefore guards nothing — and entering one costs a
+        // runtime savepoint capture on every destructuring.
+        result.extend(body);
+        result.push(close_stmt);
+        return Ok(());
+    }
     let (exc_id, exc_name) = fresh_destruct_local(ctx, Type::Any);
     result.push(Stmt::Try {
         body,
@@ -306,6 +319,20 @@ fn lower_array_pattern_binding(
     result.push(close_stmt);
 
     Ok(())
+}
+
+/// Whether evaluating an array binding pattern's element bindings can complete
+/// abruptly OTHER than through the iterator's own step/value operations — the
+/// completions that require `IteratorClose`. A default initializer runs user
+/// code, and a nested pattern reads properties or opens another iterator;
+/// holes and plain identifiers (including a rest identifier) bind without
+/// evaluating anything.
+fn array_pattern_body_can_complete_abruptly(arr_pat: &ast::ArrayPat) -> bool {
+    arr_pat.elems.iter().any(|elem| match elem {
+        None | Some(ast::Pat::Ident(_)) => false,
+        Some(ast::Pat::Rest(rest)) => !matches!(rest.arg.as_ref(), ast::Pat::Ident(_)),
+        Some(_) => true,
+    })
 }
 
 /// Recursively lower a binding pattern against a source expression, producing
