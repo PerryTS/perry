@@ -53,8 +53,39 @@ use super::{normalize_path_lexically, resolve_with_extensions};
 /// (`resolve_exports` / `resolve_exports_candidates`) exactly — including
 /// ranking `node` above `default`, so a `{ node, default: browser }`
 /// conditional pair picks the node build for native compilation.
-pub(crate) const DEFAULT_CONDITIONS: &[&str] =
-    &["perry", "node", "import", "module", "default", "require"];
+const NODE_CONDITIONS: &[&str] = &["perry", "node", "import", "module", "default", "require"];
+
+/// The same order with `bun` ranked directly after `perry`, used when the
+/// compile targets `--platform bun` (#10281). Bun resolves with `["bun",
+/// "node", ...]`, so a package that ships both — `@opentui/core` offers
+/// `{ bun: ./index.bun.js, node: ./index.node.js, import: ./index.node.js }` —
+/// must resolve its bun entry or the program runs a different backend than the
+/// bun binary it is meant to match. `bun` stays BELOW `perry` so an explicit
+/// perry entry still wins, and above `node` only for this target.
+const BUN_CONDITIONS: &[&str] =
+    &["perry", "bun", "node", "import", "module", "default", "require"];
+
+/// Whether this compile targets `--platform bun`. Set once from
+/// `CompilationContext::bun_platform` before module collection; a compile is a
+/// single process with a single target, so a process-wide flag is the whole
+/// state. Read on the already cold resolution path.
+static BUN_PLATFORM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Record the target platform for export/import condition resolution.
+pub(crate) fn set_bun_platform(on: bool) {
+    BUN_PLATFORM.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Conditions accepted when matching conditional targets, in priority order.
+/// `resolve_exports`, `resolve_exports_candidates` and `resolve_subpath_import`
+/// must all use this one source so the three resolvers cannot disagree.
+pub(crate) fn default_conditions() -> &'static [&'static str] {
+    if BUN_PLATFORM.load(std::sync::atomic::Ordering::Relaxed) {
+        BUN_CONDITIONS
+    } else {
+        NODE_CONDITIONS
+    }
+}
 
 /// Successful outcome of resolving a `#` subpath-import specifier.
 #[derive(Debug, Clone, PartialEq, Eq)]

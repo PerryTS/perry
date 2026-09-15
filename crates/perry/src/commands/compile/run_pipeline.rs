@@ -764,6 +764,10 @@ pub fn run_with_parse_cache(
 
     let mut ctx = CompilationContext::new(project_root.clone());
     ctx.bun_platform = args.platform == JavaScriptPlatform::Bun;
+    // #10281: the package `exports` / `imports` resolvers rank `bun` above
+    // `node` for this target, so a package shipping both entries resolves the
+    // one the bun binary would run.
+    resolve::subpath_imports::set_bun_platform(ctx.bun_platform);
     ctx.cache_root = object_cache_project_root(&args.input, &project_root);
     ctx.bunfs_root = match args.bunfs_root.as_deref() {
         Some(root) => {
