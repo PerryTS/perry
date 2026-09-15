@@ -61,7 +61,9 @@ show("direct   query", () => db.query("select * from t"))
 show("indirect query", () => ind.query("select * from t"))
 show("indirect prepare", () => ind.prepare("select * from t"))
 show("indirect run", () => ind.run("insert into t values (2,'y')"))
-show("indirect transaction", () => typeof ind.transaction)
+// Reading the property only exercises property dispatch; the gate under
+// test is the METHOD path, so call the wrapper `transaction(fn)` returns.
+show("indirect transaction", () => ind.transaction(() => "committed")())
 console.log("rows", JSON.stringify(ind.query("select * from t").all()))
 "#;
 
@@ -72,7 +74,7 @@ direct   query object
 indirect query object
 indirect prepare object
 indirect run object
-indirect transaction \"function\"
+indirect transaction \"committed\"
 rows [{\"a\":1,\"b\":\"x\"},{\"a\":2,\"b\":\"y\"}]
 ";
 
