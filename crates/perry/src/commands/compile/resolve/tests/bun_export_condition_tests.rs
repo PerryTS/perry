@@ -30,6 +30,27 @@ fn opentui_core_exports() -> serde_json::Value {
 
 #[test]
 fn bun_platform_prefers_the_bun_entry_and_node_target_is_unchanged() {
+    // Other resolver tests also consult this process-wide flag. Exercise the
+    // two targets in an isolated test process so parallel tests cannot observe
+    // the temporary Bun setting, and assert that the selected test ran.
+    const CHILD: &str = "PERRY_TEST_BUN_CONDITIONS_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let module = module_path!().split_once("::").unwrap().1;
+        let name =
+            format!("{module}::bun_platform_prefers_the_bun_entry_and_node_target_is_unchanged");
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &name, "--test-threads=1", "--nocapture"])
+            .env(CHILD, "1")
+            .output()
+            .expect("run isolated Bun condition test");
+        assert!(
+            child.status.success() && String::from_utf8_lossy(&child.stdout).contains("1 passed;"),
+            "isolated condition test failed or did not run\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr)
+        );
+        return;
+    }
     // Default (node target): the node entry wins, exactly as before.
     set_bun_platform(false);
     assert_eq!(
