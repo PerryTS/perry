@@ -597,6 +597,28 @@ fn print_stats(stats: LoopStats) {
         stats.turn_errors,
         stats.completions
     );
+    // P2's own "the subject ran" line. `completions` above cannot distinguish
+    // a socket P1 carried from a child pipe P2 carried, and every live count
+    // is zero by the time a process exits — so the lifetime adoption count is
+    // what an A/B or an acceptance test reads to know the threads really were
+    // replaced rather than merely not used.
+    eprintln!(
+        "[perry-loop] p2 adopted={} live={} dgram_sockets={} signals={}",
+        crate::turnloop_proc::adopted_total(),
+        crate::turnloop_proc::live_handles(),
+        dgram_sockets_on_turnloop(),
+        crate::os::signal::signals_on_turnloop(),
+    );
+}
+
+#[cfg(feature = "mod-dgram")]
+fn dgram_sockets_on_turnloop() -> u64 {
+    crate::dgram_reactor::turnloop_sockets()
+}
+
+#[cfg(not(feature = "mod-dgram"))]
+fn dgram_sockets_on_turnloop() -> u64 {
+    0
 }
 
 #[cfg(test)]

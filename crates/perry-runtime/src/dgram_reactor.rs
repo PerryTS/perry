@@ -359,6 +359,13 @@ pub(crate) fn udp_for(id: u64) -> Option<Arc<UdpSocket>> {
         .and_then(|map| map.get(&id).map(|ls| ls.udp.clone()))
 }
 
+/// Number of dgram sockets currently receiving on turnloop rather than on a
+/// thread. The "subject ran" counter for a dgram claim, reported on the
+/// `PERRY_LOOP_STATS=1` exit line.
+pub fn turnloop_sockets() -> u64 {
+    TURNLOOP_COUNT.load(Ordering::Relaxed)
+}
+
 /// Close + deregister a socket.
 ///
 /// On the turnloop path the close is submitted and the registry entry survives

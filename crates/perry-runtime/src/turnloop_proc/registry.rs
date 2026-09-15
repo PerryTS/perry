@@ -21,6 +21,9 @@ pub(crate) enum Owner {
     Dgram { socket: u64 },
     /// A process-wide OS signal subscription, keyed by signal number.
     ProcessSignal { signum: i32 },
+    /// A child's readable pipe: stdout (`fd == 1`), stderr (`fd == 2`), or an
+    /// extra `stdio` descriptor.
+    ChildStream { child: u64, fd: usize },
     /// The acceptance tests' own owner. It exists so the tests exercise the
     /// real registry, the real token space and the real dispatch path rather
     /// than a parallel mock of them.
@@ -79,6 +82,9 @@ pub(crate) fn deliver(owner: Owner, id: u64, event: StreamEvent) {
         #[cfg(not(unix))]
         Owner::ProcessSignal { .. } => {
             let _ = event;
+        }
+        Owner::ChildStream { child, fd } => {
+            crate::child_process::reactor::on_stream_completion(child, fd, event)
         }
         #[cfg(test)]
         Owner::Test => super::tests::record(id, event),

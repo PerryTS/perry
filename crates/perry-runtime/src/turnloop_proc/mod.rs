@@ -248,7 +248,21 @@ pub(crate) fn adopt_stream(transport: adopt::Transport, owner: Owner) -> ProcRes
     Ok(id)
 }
 
+/// Descriptors this process has adopted onto a loop, over its whole life.
+///
+/// The "subject ran" counter (DESIGN §11): a live count answers "is turnloop
+/// carrying anything *now*", which is zero by the time a program exits, so a
+/// claim that a workload ran on turnloop needs the lifetime number instead.
+/// It is reported on the `PERRY_LOOP_STATS=1` exit line.
+static ADOPTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Total descriptors adopted onto a loop since process start.
+pub fn adopted_total() -> u64 {
+    ADOPTED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 fn insert(handle: Handle, owner: Owner) -> u64 {
+    ADOPTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     PROC.with(|state| {
         let mut state = state.borrow_mut();
         state.next_id += 1;
