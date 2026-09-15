@@ -262,6 +262,28 @@ time. The tests use `setHeader` + `end`, and `statusMessage` where a custom
 reason phrase is wanted, so the file asserts P5's behaviour rather than that
 one.
 
+### The lifecycle edges
+
+`test-files/test_gap_turnloop_http_lifecycle.ts` covers what is easy to get
+wrong once the accept loop, the codec and the handler stop being three
+different tasks. Run on Perry, on Node, **and on the base commit**:
+
+| case | Node | P5 | base (hyper) |
+|---|---|---|---|
+| trailers after a chunked body | `X-Checksum: abc123` in the trailer block | same | **missing** |
+| `Expect: 100-continue` → `'checkContinue'` → `res.writeContinue()` | interim `100 Continue`, then the 200 | same | same |
+| a client that vanishes mid-request | `req` emits `'aborted'`; the late `res.end()` does not throw; the server keeps serving | same | **no `'aborted'`** |
+| `server.close()` with a request in flight | the in-flight request completes, then `'close'`; a new connection is refused | same | same |
+
+Two of those started out as differences. The trailer block was already right on
+turnloop and wrong under hyper — the migration fixed it — and `'aborted'` was
+missing on both until this change added it (the sink queues the
+`IncomingMessage` because it may not run JS; the pump fires the listeners).
+With both in place the file is byte-identical to Node except for one header
+this test deliberately does not print: Perry answers `Connection: close` on a
+response issued after `server.close()` where Node keeps `keep-alive`, which the
+hyper path did too.
+
 ### An external client
 
 `curl` against a Perry server, on the same build:

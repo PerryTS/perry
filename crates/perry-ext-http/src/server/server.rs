@@ -1595,21 +1595,8 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
     }
 
     // P5: a connection that died before its response completed raises Node's
-    // `'aborted'` on the request. The completion sink queues the handle
-    // because it may not run JS; firing them here is the same tick the rest of
-    // the server's events use.
-    for request_handle in crate::server::turnloop_serve::take_aborted() {
-        let listeners = get_handle_mut::<crate::server::request::IncomingMessage>(request_handle)
-            .map(|im| {
-                im.aborted = true;
-                im.listeners.get("aborted").cloned().unwrap_or_default()
-            })
-            .unwrap_or_default();
-        if !listeners.is_empty() {
-            crate::server::request::emit_no_arg_to_listeners(&listeners);
-            count += 1;
-        }
-    }
+    // `'aborted'` on the request; the sink queued it because it may not run JS.
+    count += turnloop_listen::drain_aborted_requests();
 
     // Snapshot handle ids first so we can mutate handle state
     // (drain channels, free per-request handles) without the

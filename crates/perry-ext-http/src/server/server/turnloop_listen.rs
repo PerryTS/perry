@@ -8,6 +8,29 @@ use perry_ffi::{get_handle, get_handle_mut};
 
 use super::{HttpPendingUpgrade, HttpServer, PENDING_CONNECTION_EVENTS, TURNLOOP_UPGRADES};
 
+/// Fire Node's `'aborted'` on every request whose connection died before its
+/// response completed (P5), and report how many listeners ran.
+///
+/// The completion sink queues the `IncomingMessage` handle rather than firing
+/// there: it runs inside `dispatch_staged`, after a turn, and must not run JS.
+/// This is the same tick every other server event is dispatched on.
+pub(crate) fn drain_aborted_requests() -> i32 {
+    let mut fired = 0;
+    for request_handle in crate::server::turnloop_serve::take_aborted() {
+        let listeners = get_handle_mut::<crate::server::request::IncomingMessage>(request_handle)
+            .map(|im| {
+                im.aborted = true;
+                im.listeners.get("aborted").cloned().unwrap_or_default()
+            })
+            .unwrap_or_default();
+        if !listeners.is_empty() {
+            crate::server::request::emit_no_arg_to_listeners(&listeners);
+            fired += 1;
+        }
+    }
+    fired
+}
+
 /// Queue the `'connection'` event for a turnloop-accepted connection (P5).
 ///
 /// Shares `PENDING_CONNECTION_EVENTS` with the hyper accept loop, so the
