@@ -498,15 +498,16 @@ pub(crate) fn set_field_by_name_object_tail(
         // this object's `OBJ_FLAG_HAS_DESCRIPTORS`, and only prototype-level
         // interceptors need a chain walk.
         let has_own_descriptors = obj_flags & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0;
+        let desc_gate_ok = !has_own_descriptors
+            || crate::object::own_descriptors_skip_key(
+                obj as usize,
+                f64::from_bits(JSValue::string_ptr(key as *mut _).bits()),
+            );
         if !key.is_null()
             && !is_frozen
             && !is_sealed_or_no_extend
             // #10287: per-KEY, not per receiver — see `own_descriptors_skip_key`.
-            && (!has_own_descriptors
-                || crate::object::own_descriptors_skip_key(
-                    obj as usize,
-                    f64::from_bits(JSValue::string_ptr(key as *mut _).bits()),
-                ))
+            && desc_gate_ok
             && (plan_fast
                 || !super::plain_data_write_may_intercept(
                     obj as usize,
@@ -528,9 +529,8 @@ pub(crate) fn set_field_by_name_object_tail(
             if !plan_fast && record_plan_eligible {
                 super::prop_plan::store_plan_record(obj_class_id, interned_key as usize);
             }
-            if let Some((next_keys, slot_idx, target_shape_id)) =
-                transition_cache_lookup(prev_shape_id, interned_key)
-            {
+            let lane_probe = transition_cache_lookup(prev_shape_id, interned_key);
+            if let Some((next_keys, slot_idx, target_shape_id)) = lane_probe {
                 // Defensive: strip a raw-null POINTER_TAG value the same
                 // way the slow overflow path below does, so a bogus
                 // 0x7FFD_0000_0000_0000 store doesn't leak into an

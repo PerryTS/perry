@@ -1611,78 +1611,66 @@ pub(crate) unsafe fn transition_object_shape_semantics(
 /// state identical by induction. Accessor installs keep minting unique
 /// generations: their getter/setter identities differ per receiver, and nothing
 /// in the shape records which closure a key resolves to.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-struct SemanticGenerationKey {
-    keys: u64,
-    logical_key_count: u32,
-    live_inline_slot_count: u32,
-    semantic_generation: u64,
-    object_kind: ShapeObjectKind,
-    hole_count: u32,
-    attrs: u8,
-    key_hash: u64,
-}
-
-/// Bound on the deterministic-generation table. Reaching it clears the table:
-/// every generation already handed out stays valid (it lives in the shapes
-/// those receivers carry), and later installs simply mint fresh ones.
+/// Semantic generation for a descriptor transition, as a PURE function of the
+/// transition itself: the predecessor shape, the key, and what is being
+/// installed or removed. Two receivers that perform the same descriptor
+/// operation over the same predecessor therefore land on the SAME successor
+/// shape, which is what lets them keep sharing a transition chain.
 ///
-/// Sized for the population that BENEFITS — one entry per distinct
-/// `(predecessor, key, attributes)` a program repeats — rather than for one
-/// that cannot. A workload whose receivers never converge on a shared shape
-/// (each install from a private predecessor) would otherwise retain one entry
-/// per install for no reuse; 8,192 keeps that bounded at a few hundred KB.
-const SEMANTIC_GENERATION_TABLE_CAP: usize = 1 << 13;
-
-crate::perry_thread_local! {
-    static SEMANTIC_GENERATIONS: RefCell<
-        std::collections::HashMap<SemanticGenerationKey, Vec<(Box<[u8]>, u64)>>,
-    > = RefCell::new(std::collections::HashMap::new());
-}
-
-/// The generation for installing `attrs` on `key_bytes` over `current`, minted
-/// once and reused for every receiver that repeats that exact install.
+/// This replaced a per-thread memo table (#10287). The table was correct but
+/// capacity-bound: it cleared wholesale at 8192 live entries, and a real zod
+/// workload cleared it seven times, re-minting ~57k generations that had
+/// already been agreed on and re-forking every receiver that depended on them.
+/// A pure mix has no capacity, so an agreement reached once holds for the life
+/// of the process.
+///
+/// Bit 63 is set so these can never alias a counter-allocated generation from
+/// [`transition_object_shape_semantics`] (that counter starts at 1 and aborts
+/// long before it could reach 2^63). Distinct transitions collide only on a
+/// full 64-bit hash collision, and a collision is only observable at all when
+/// the structural facts (keys array, key count, live slots, kind) are also
+/// identical.
 fn deterministic_semantic_generation(
-    current: &ShapeDescriptor,
+    prev_shape_id: u32,
     key_bytes: &[u8],
     attrs: u8,
 ) -> Option<u64> {
-    let entry_key = SemanticGenerationKey {
-        keys: current.keys,
-        logical_key_count: current.logical_key_count,
-        live_inline_slot_count: current.live_inline_slot_count,
-        semantic_generation: current.semantic_generation,
-        object_kind: current.object_kind,
-        hole_count: current.hole_count,
-        attrs,
-        key_hash: crate::object::key_bytes_hash(key_bytes.as_ptr(), key_bytes.len()),
-    };
-    SEMANTIC_GENERATIONS
-        .try_with(|table| {
-            let mut table = table.borrow_mut();
-            if table.len() >= SEMANTIC_GENERATION_TABLE_CAP {
-                table.clear();
-            }
-            let bucket = table.entry(entry_key).or_default();
-            // The hash is a summary; the bytes decide, so a collision costs a
-            // second entry rather than a shared generation for two keys.
-            if let Some((_, generation)) = bucket.iter().find(|(bytes, _)| &**bytes == key_bytes) {
-                return Some(*generation);
-            }
-            let generation = SHAPE_SEMANTIC_NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            if generation == 0 {
-                return None;
-            }
-            bucket.push((key_bytes.to_vec().into_boxed_slice(), generation));
-            Some(generation)
-        })
-        .ok()
-        .flatten()
+    if prev_shape_id == 0 {
+        // No predecessor identity to key on: keep the unique generation.
+        return None;
+    }
+    let key_hash = crate::object::key_bytes_hash(key_bytes.as_ptr(), key_bytes.len());
+    // SplitMix64 finalizer over the three components, so nearby shape ids and
+    // one-byte key differences land far apart.
+    let mut x = key_hash
+        ^ (u64::from(prev_shape_id) << 32 | u64::from(prev_shape_id))
+        ^ (u64::from(attrs) << 24);
+    x ^= x >> 30;
+    x = x.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x ^= x >> 27;
+    x = x.wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^= x >> 31;
+    Some(x | (1 << 63))
 }
 
 /// [`transition_object_shape_semantics`] for a DATA-descriptor install, whose
 /// successor is shared by every receiver that performs the same install over
 /// the same predecessor facts (#10287).
+/// [`transition_object_shape_semantics`] for a descriptor REMOVAL. A removal is
+/// as repeatable as an install — every receiver that drops the same key from
+/// the same predecessor reaches the same descriptor state — so it earns a
+/// shared successor for the same reason (#10287). `attrs` is a tag here, not a
+/// descriptor: `0xFE` for an attribute entry, `0xFF` for an accessor entry, so
+/// a removal can never alias an install of the same key.
+pub(crate) unsafe fn transition_object_shape_semantics_for_descriptor_removal(
+    obj: *mut crate::object::ObjectHeader,
+    key_bytes: &[u8],
+    accessor: bool,
+) -> u32 {
+    let tag = if accessor { 0xFFu8 } else { 0xFEu8 };
+    transition_object_shape_semantics_for_data_descriptor(obj, key_bytes, tag)
+}
+
 pub(crate) unsafe fn transition_object_shape_semantics_for_data_descriptor(
     obj: *mut crate::object::ObjectHeader,
     key_bytes: &[u8],
@@ -1696,7 +1684,9 @@ pub(crate) unsafe fn transition_object_shape_semantics_for_data_descriptor(
         synchronize_object_shape_descriptor(obj);
         object_shape_descriptor(obj).expect("shape synchronization must publish a descriptor")
     });
-    let Some(generation) = deterministic_semantic_generation(&current, key_bytes, attrs) else {
+    let Some(generation) =
+        deterministic_semantic_generation(object_shape_stamp(obj), key_bytes, attrs)
+    else {
         // Table unavailable (teardown) or the counter wrapped: fall back to the
         // unique-generation transition, which is always correct.
         return transition_object_shape_semantics(obj);
