@@ -65,6 +65,15 @@ struct Aux {
     /// so writes issued from the `'end'` handler are not cancelled by the
     /// close (turnloop's `close` cancels every outstanding operation).
     close_after_shutdown: bool,
+    /// The peer's FIN arrived before this accepted socket's `'connection'`
+    /// callback had run, so `'end'` is held until it does. The event queue
+    /// alone cannot order these: `server_state` may defer a loopback
+    /// `ServerConnection` across a pump boundary, and turnloop can deliver the
+    /// whole request plus its FIN inside the very first turn — so an `'end'`
+    /// pushed at EOF time would be dispatched to a socket that has no
+    /// listeners yet and be lost. The tokio task had the same hazard and
+    /// solved it by blocking its post-EOF drain on the same marker.
+    deferred_eof: bool,
     /// An `'error'` has been reported for this socket. The tokio task broke
     /// its loop after the first one; this keeps that "one error, then the
     /// terminal pair" shape when several operations fail in the same turn.
@@ -148,10 +157,12 @@ pub(crate) fn command(
         // the call keeps Node's chainable semantics — the flag is not
         // observable from JS. Needs a turnloop socket-option API to finish.
         SocketCommand::SetNoDelay(_) => Ok(()),
-        // The tokio task used this to know when a deferred `'connection'`
-        // callback had run before deciding how long to wait for writes after
-        // EOF. Nothing defers here: submissions go straight to the driver.
-        SocketCommand::ServerConnectionReady => Ok(()),
+        // The accepted socket's `'connection'` callback has returned, so its
+        // listeners exist: release an EOF that arrived before them.
+        SocketCommand::ServerConnectionReady => {
+            release_deferred_eof(id);
+            Ok(())
+        }
         // Only `UpgradeTls` (and the test-only probe) reach this, and a
         // turnloop socket is never TLS-upgradable.
         _ => Err("TLS upgrade is unsupported on a turnloop socket".to_string()),
@@ -378,8 +389,36 @@ fn on_eof(id: i64) {
         destroy(id);
         return;
     }
+    if awaiting_connection_callback(id) {
+        with_aux(id, |a| a.deferred_eof = true);
+        return;
+    }
     with_aux(id, |a| a.read_ended = true);
     push_event(PendingNetEvent::End(id));
+}
+
+/// Whether this is an accepted socket whose `'connection'` callback has not
+/// been dispatched yet.
+fn awaiting_connection_callback(id: i64) -> bool {
+    statics::sockets()
+        .lock()
+        .map(|sockets| {
+            sockets
+                .get(&id)
+                .is_some_and(|s| s.server_id.is_some() && !s.server_connection_active)
+        })
+        .unwrap_or(false)
+}
+
+/// Deliver an `'end'` that was held for the `'connection'` callback.
+///
+/// Called from `release_connection_callback`, which holds the socket registry
+/// lock — so this must not take it.
+fn release_deferred_eof(id: i64) {
+    if with_aux(id, |a| std::mem::replace(&mut a.deferred_eof, false)) {
+        with_aux(id, |a| a.read_ended = true);
+        push_event(PendingNetEvent::End(id));
+    }
 }
 
 fn on_shutdown(id: i64, user: u64) {
