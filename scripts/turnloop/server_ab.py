@@ -7,8 +7,11 @@ compiles the same node:http server with each, then measures each arm in
 interleaved fresh-process rounds:
 
   * load scenarios at fixed concurrency (default 1, 64, 1024 connections):
-    throughput, p50/p99/p999 latency, CPU user/sys, wall, voluntary and
-    involuntary context switches, syscalls/s, peak RSS;
+    throughput and p50/p99/p999 latency; `perf stat` over the same window for
+    RETIRED instructions, cycles, IPC, task-clock, context switches, CPU
+    migrations, page faults and the syscall tracepoint, each also normalised
+    PER REQUEST so a throughput win cannot hide a per-request regression; CPU
+    user/sys, wall, context switches, peak RSS;
   * idle-connection capacity (default 10k and 100k keep-alive connections):
     server RSS before/after, bytes per connection, idle CPU, connections
     still open after the hold;
@@ -21,12 +24,33 @@ Output: <work>/results/results.json (every raw sample), summary.json and
 summary.md (one comparison table: per scenario and metric, median [min–max]
 for each arm and the delta of medians).
 
-Usage (Linux x86_64, e.g. perrymaster):
+Two different instruction counts, never conflated:
+
+  * the load table's `instructions` is `perf stat` — instructions RETIRED on the
+    real CPU during the measured window, with cache, branch and SMT effects.
+    That is cost under load, and it moves with concurrency;
+  * the `callgrind` subcommand is Valgrind `Ir` — instructions EXECUTED under a
+    serialising simulator with no cache or branch model. Deterministic and
+    load-independent BY CONSTRUCTION, which makes it a good exact A/B of one
+    code path and no statement at all about cost under load. It gets its own
+    section and its own caveat, and covers the microbenchmarks only (see
+    `CALLGRIND_NOTE` for why the server workload is not run under it).
+
+Hosts. The harness prints the host it ran on and decides per sample whether
+TIMING may be quoted: above `--max-loadavg`, or on a host that looks like a
+shared build box (or with `--shared-host`), throughput and latency are marked
+ADVISORY in the table instead of being presented as authoritative. Counters are
+per-process and stay valid on a busy host, so the perf group is not downgraded.
+Run counters on the Linux box; run timing on the quiet machine.
+
+Usage (Linux x86_64):
   scripts/turnloop/server_ab.py all --work /root/turnloop-ab
   scripts/turnloop/server_ab.py build --work DIR [--profile release] [--skip-cargo]
   scripts/turnloop/server_ab.py run --work DIR [--rounds 5] [--concurrency 1,64,1024]
       [--duration 15] [--warmup 3] [--idle 10000,100000] [--idle-hold 10]
-      [--load-tool auto|oha|wrk|ab] [--syscalls auto|perf|strace|off]
+      [--load-tool auto|oha|wrk|ab] [--perf auto|perf|strace|off]
+      [--max-loadavg 1.5] [--shared-host]
+  scripts/turnloop/server_ab.py callgrind --work DIR [--probes a,b] [--valgrind PATH]
   scripts/turnloop/server_ab.py report --work DIR
   scripts/turnloop/server_ab.py <any> --dry-run   # macOS-safe: plan + synthetic report
 
@@ -83,6 +107,13 @@ ARCHIVES = [
     "libperry_ext_http.a", "libperry_ext_net.a", "libperry_ext_ws.a",
 ]
 IS_LINUX = sys.platform.startswith("linux")
+HOSTNAME = socket.gethostname()
+# Hosts whose TIMING is never authoritative, whatever the loadavg says at the
+# moment we look: shared build boxes. Their counters are still fine — retired
+# instructions, syscalls and page faults are per-process.
+SHARED_HOST_PATTERNS = ("perrybuilder", "builder", "buildbox", "ci-")
+# Hosts that ARE the timing machine of record.
+QUIET_HOST_PATTERNS = ("perry-macos", "perry-mini")
 WAITS_RE = re.compile(r"^\[perry-loop-waits\] (.*)$", re.M)
 CLK_TCK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
 
@@ -91,6 +122,23 @@ No HTTP load generator found. Install one of:
   oha (preferred): cargo install oha --locked     # or: apt install oha / brew install oha
   wrk:             apt install wrk                # or: brew install wrk
 Then re-run, or pass --load-tool with an explicit path via --oha/--wrk."""
+
+
+def host_role():
+    """('shared'|'quiet'|'unknown', hint) from the hostname alone."""
+    lower = HOSTNAME.lower()
+    for pattern in SHARED_HOST_PATTERNS:
+        if pattern in lower:
+            return "shared", f"hostname {HOSTNAME!r} matches {pattern!r}"
+    for pattern in QUIET_HOST_PATTERNS:
+        if pattern in lower:
+            return "quiet", f"hostname {HOSTNAME!r} matches {pattern!r}"
+    return "unknown", ""
+
+
+HOST_ROLE, SHARED_HOST_HINT = host_role()
+if HOST_ROLE != "shared":
+    SHARED_HOST_HINT = ""
 
 
 def log(msg):
@@ -515,43 +563,200 @@ def ms(seconds):
     return None if seconds is None else seconds * 1000.0
 
 
-class SyscallCounter:
-    """`perf stat -e raw_syscalls:sys_enter` attached for the measured window."""
+# `perf stat` events collected over the measured window, in report order.
+# `instructions` and `cycles` are HARDWARE counters: instructions RETIRED on the
+# real machine, with cache, branch-prediction and SMT effects included. They are
+# not Callgrind's Ir (see `callgrind` below and the report) and the two must
+# never be added up or compared.
+PERF_EVENTS = [
+    ("instructions", "retired instructions"),
+    ("cycles", "CPU cycles"),
+    ("task-clock", "CPU time on task (ms)"),
+    ("context-switches", "context switches"),
+    ("cpu-migrations", "CPU migrations"),
+    ("page-faults", "page faults"),
+    ("raw_syscalls:sys_enter", "syscalls"),
+]
+PERF_KEY = {
+    "instructions": "instructions", "cycles": "cycles", "task-clock": "task_clock_ms",
+    "context-switches": "perf_ctx_switches", "cpu-migrations": "cpu_migrations",
+    "page-faults": "page_faults", "raw_syscalls:sys_enter": "syscalls",
+}
+PARANOID = "/proc/sys/kernel/perf_event_paranoid"
 
-    def __init__(self, mode):
+
+def perf_paranoid():
+    try:
+        return int(Path(PARANOID).read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def perf_probe(perf_path):
+    """Which of PERF_EVENTS this host actually lets us count.
+
+    Returns (usable, dropped). A denied or unsupported event is NAMED with its
+    reason; it is never silently left out of the report. Probed once against
+    `true`, because a single `perf stat` with one denied event fails as a whole
+    and would take every other counter down with it.
+    """
+    usable, dropped = [], {}
+    for event, _ in PERF_EVENTS:
+        proc = subprocess.run(
+            [perf_path, "stat", "-x", ",", "-e", event, "--", "true"],
+            capture_output=True, text=True)
+        text = proc.stdout + proc.stderr
+        if proc.returncode != 0:
+            lower = text.lower()
+            if "permission" in lower or "access" in lower or "not permitted" in lower:
+                reason = f"permission denied (perf_event_paranoid={perf_paranoid()})"
+            elif "perf list" in lower or "unknown event" in lower or "invalid event" in lower:
+                reason = "unknown or unsupported event on this kernel/PMU"
+            else:
+                reason = (text.strip().splitlines() or ["perf stat failed"])[-1][:120]
+            dropped[event] = reason
+        elif "<not supported>" in text:
+            dropped[event] = "not supported by this PMU (virtualised host?)"
+        elif "<not counted>" in text:
+            dropped[event] = "not counted (multiplexing or permission)"
+        else:
+            usable.append(event)
+    return usable, dropped
+
+
+class PerfStat:
+    """`perf stat -p <server pid> -- sleep <duration>` over the measured window.
+
+    Collects retired instructions, cycles, task-clock, context switches, CPU
+    migrations, page faults and the syscall tracepoint in ONE attachment, so
+    every counter covers exactly the same window as the load run.
+    """
+
+    def __init__(self, mode, perf_path, events, dropped):
         self.mode = mode
+        self.perf_path = perf_path
+        self.events = events
+        self.dropped = dropped
         self.proc = None
+        self.duration = None
         self.note = None
 
     @staticmethod
     def resolve(mode):
+        """(mode, perf_path, events, dropped, status).
+
+        The status string is never empty and never a bare "off": whatever the
+        outcome, the report states which counters this run has and why it does
+        not have the rest.
+        """
         if not IS_LINUX:
-            return "off"
-        if mode == "auto":
-            if shutil.which("perf"):
-                return "perf"
-            return "strace" if shutil.which("strace") else "off"
-        return mode
+            return "off", None, [], {}, f"perf is Linux-only; this host is {sys.platform}"
+        paranoid = perf_paranoid()
+        if mode == "off":
+            return "off", None, [], {}, "disabled with --perf off: no hardware counters in this run"
+        if mode == "strace":
+            if shutil.which("strace"):
+                return "strace", None, [], {}, ("--perf strace: syscall counts only, from a separate "
+                                                "perturbed server process; no hardware counters")
+            return "off", None, [], {}, "--perf strace requested but strace is not on PATH"
+
+        perf_path = shutil.which("perf")
+        reason = None
+        if perf_path:
+            events, dropped = perf_probe(perf_path)
+            if events:
+                status = f"perf ok ({len(events)}/{len(PERF_EVENTS)} events, perf_event_paranoid={paranoid})"
+                if dropped:
+                    status += "; dropped " + ", ".join(f"{e} ({r})" for e, r in dropped.items())
+                return "perf", perf_path, events, dropped, status
+            reason = (f"perf is installed but counts nothing here (perf_event_paranoid={paranoid}): "
+                      + "; ".join(f"{e}: {r}" for e, r in dropped.items()))
+            if mode == "perf":
+                return "off", None, [], dropped, reason
+        else:
+            reason = f"perf is not on PATH (perf_event_paranoid={paranoid})"
+            if mode == "perf":
+                return "off", None, [], {}, "--perf perf requested but perf is not on PATH"
+        if shutil.which("strace"):
+            return "strace", None, [], {}, (reason + "; falling back to strace -c -f "
+                                            "(syscalls only, perturbing, separate process)")
+        return "off", None, [], {}, reason + "; no strace either, so this run has no hardware counters"
 
     def start(self, pid, duration):
         if self.mode != "perf":
             return
         self.duration = duration
         self.proc = subprocess.Popen(
-            ["perf", "stat", "-x", ",", "-e", "raw_syscalls:sys_enter", "-p", str(pid), "--", "sleep", str(duration)],
+            [self.perf_path, "stat", "-x", ",", "-e", ",".join(self.events),
+             "-p", str(pid), "--", "sleep", str(duration)],
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
         )
 
     def finish(self):
+        """{metric: value} for the window; {} when perf did not run.
+
+        `perf stat -x,` emits `count,unit,event,run_ns,enabled_pct,...`. The unit
+        field is EMPTY on mainline perf and `task-clock` then arrives in
+        NANOSECONDS, not milliseconds — reading it as ms silently inflated
+        CPU-utilisation by a factor of a million, which is why the unit is
+        honoured explicitly here rather than assumed.
+        """
         if self.proc is None:
-            return None
+            return {}
         _, err = self.proc.communicate()
+        out = {}
         for line in err.splitlines():
             parts = line.split(",")
-            if len(parts) > 2 and "raw_syscalls:sys_enter" in line and parts[0].strip().isdigit():
-                return int(parts[0]) / self.duration
-        self.note = f"perf failed: {err.strip()[-200:]}"
-        return None
+            if len(parts) < 3:
+                continue
+            value, unit, event = parts[0].strip(), parts[1].strip().lower(), parts[2].strip()
+            key = PERF_KEY.get(event)
+            if key is None:
+                continue
+            try:
+                number = float(value)
+            except ValueError:
+                self.note = (self.note or "") + f"{event}={value} "
+                continue
+            if key == "task_clock_ms" and not unit.startswith("msec"):
+                number /= 1e6  # raw counter is nanoseconds
+            out[key] = number
+            # A counter that was time-sliced is an estimate; say so rather than
+            # quoting it as if it had been counted for the whole window.
+            if len(parts) > 4:
+                try:
+                    if float(parts[4]) < 99.0:
+                        self.note = (self.note or "") + f"{event} multiplexed at {parts[4]}% "
+                except ValueError:
+                    pass
+        if not out:
+            self.note = f"perf produced no counters: {err.strip()[-200:]}"
+        return out
+
+
+def derive_perf(sample, counters, duration, requests):
+    """Attach the counters plus the ratios a totals-only table would hide.
+
+    A throughput win that costs more work per request looks like an improvement
+    in `instructions` alone; instructions-per-request is what says otherwise.
+    """
+    for key, value in counters.items():
+        sample[key] = int(value) if key != "task_clock_ms" else round(value, 1)
+    inst, cycles = counters.get("instructions"), counters.get("cycles")
+    if inst and cycles:
+        sample["ipc"] = round(inst / cycles, 3)
+    if counters.get("task_clock_ms") and duration:
+        sample["cpu_utilisation"] = round(counters["task_clock_ms"] / (duration * 1000.0), 3)
+    if counters.get("syscalls") and duration:
+        sample["syscalls_per_s"] = round(counters["syscalls"] / duration, 1)
+        sample["syscalls_source"] = "perf stat -e raw_syscalls:sys_enter (measured window)"
+    if not requests:
+        return
+    for src, dst in (("instructions", "instructions_per_req"), ("cycles", "cycles_per_req"),
+                     ("syscalls", "syscalls_per_req"), ("perf_ctx_switches", "ctx_switches_per_req"),
+                     ("page_faults", "page_faults_per_req")):
+        if counters.get(src) is not None:
+            sample[dst] = round(counters[src] / requests, 3)
 
 
 def strace_sample(binary, port_tool, conc, seconds, logdir):
@@ -746,43 +951,68 @@ def measure_idle(arm, binary, count, hold, logdir):
 # ─── load scenario ──────────────────────────────────────────────────────────
 
 
-def measure_load(arm, binary, conc, args, tool, logdir, syscall_mode):
+def measure_load(arm, binary, conc, args, tool, logdir, perf):
     server = Server(binary, free_port(), logdir)
     server.start_or_kill()
     sample = {"scenario": f"load-c{conc}", "arm": arm, "concurrency": conc}
     try:
         if args.warmup:
             run_load(tool[0], tool[1], server.port, conc, args.warmup)
-        counter = SyscallCounter(syscall_mode)
+        counter = PerfStat(perf["mode"], perf["path"], perf["events"], perf["dropped"])
         before = proc_sample(server.pid)
         load_before = os.getloadavg()[0]
         started = time.monotonic()
         counter.start(server.pid, args.duration)
         result = run_load(tool[0], tool[1], server.port, conc, args.duration)
         wall = time.monotonic() - started
-        syscalls = counter.finish()
+        counters = counter.finish()
         after = proc_sample(server.pid)
         sample["loadavg_after"] = os.getloadavg()[0]
         sample.update(result)
         sample.update(window_delta(before, after))
         sample["load_wall_s"] = round(wall, 3)
         sample["loadavg_before"] = load_before
-        if syscalls is not None:
-            sample["syscalls_per_s"] = round(syscalls, 1)
-            sample["syscalls_source"] = "perf raw_syscalls:sys_enter (measured window)"
-        elif counter.note:
-            sample["syscalls_note"] = counter.note
+        sample["perf_mode"] = perf["mode"]
+        derive_perf(sample, counters, args.duration, result.get("requests"))
+        if counter.note:
+            sample["perf_note"] = counter.note.strip()
         if before and after and result.get("requests"):
             cpu = sum(sample[k] for k in ("win_cpu_user_s", "win_cpu_sys_s"))
             sample["cpu_us_per_req"] = round(cpu * 1e6 / result["requests"], 2)
+        timing_verdict(sample, args, load_before)
     finally:
         server.stop()
-    if syscall_mode == "strace":
+    if perf["mode"] == "strace":
         rate = strace_sample(binary, tool, conc, args.strace_seconds, logdir)
         sample["syscalls_per_s"] = rate
         sample["syscalls_source"] = "strace -c -f (separate process; perturbed)"
+        if rate is not None and sample.get("requests"):
+            sample["syscalls_per_req"] = round(rate * args.strace_seconds / sample["requests"], 3)
     finish_sample(sample, arm, server)
     return sample
+
+
+def timing_verdict(sample, args, load_before):
+    """Decide whether this sample's TIMING may be quoted as authoritative.
+
+    Counters (instructions, syscalls, page faults) are per-process and survive a
+    busy host. Throughput and latency do not. A shared box can produce a clean
+    `perf` table and a latency column that is pure scheduling noise, so the two
+    are judged separately and the verdict travels with the sample.
+    """
+    reasons = []
+    if args.shared_host:
+        reasons.append("--shared-host: this box is shared, timing is not its job")
+    elif SHARED_HOST_HINT:
+        reasons.append(f"host looks like a shared build box ({SHARED_HOST_HINT})")
+    if load_before > args.max_loadavg:
+        reasons.append(f"loadavg {load_before:.2f} > --max-loadavg {args.max_loadavg}")
+    after = sample.get("loadavg_after")
+    expected = sample.get("concurrency", 0) + 1
+    if after is not None and after > args.max_loadavg + expected:
+        reasons.append(f"loadavg rose to {after:.2f}, beyond this run's own {expected}")
+    sample["timing_authoritative"] = not reasons
+    sample["timing_reasons"] = reasons
 
 
 def finish_sample(sample, arm, server):
@@ -811,9 +1041,17 @@ def finish_sample(sample, arm, server):
 
 
 def host_info():
-    info = {"platform": platform.platform(), "python": platform.python_version(),
-            "cpus": os.cpu_count(), "nofile_soft": resource.getrlimit(resource.RLIMIT_NOFILE)[0]}
+    info = {"hostname": HOSTNAME, "host_role": HOST_ROLE,
+            "platform": platform.platform(), "python": platform.python_version(),
+            "cpus": os.cpu_count(), "loadavg": [round(v, 2) for v in os.getloadavg()],
+            "nofile_soft": resource.getrlimit(resource.RLIMIT_NOFILE)[0]}
     if IS_LINUX:
+        try:
+            model = [l.split(":", 1)[1].strip() for l in Path("/proc/cpuinfo").read_text().splitlines()
+                     if l.startswith("model name")]
+            info["cpu_model"] = model[0] if model else None
+        except OSError:
+            pass
         for path in ("/proc/sys/kernel/perf_event_paranoid", "/proc/sys/net/ipv4/ip_local_port_range",
                      "/proc/sys/net/core/somaxconn"):
             try:
@@ -826,7 +1064,8 @@ def host_info():
 def run(args):
     work = Path(args.work).resolve()
     tool = pick_load_tool(args)
-    syscall_mode = SyscallCounter.resolve(args.syscalls)
+    mode, perf_path, events, dropped, perf_status = PerfStat.resolve(args.perf)
+    perf = {"mode": mode, "path": perf_path, "events": events, "dropped": dropped, "status": perf_status}
     concurrency = [int(c) for c in args.concurrency.split(",") if c]
     idle = [int(n) for n in args.idle.split(",") if n]
     if tool[0] is None:
@@ -835,7 +1074,9 @@ def run(args):
             raise SystemExit(2)
     if args.dry_run:
         log(f"dry-run plan: rounds={args.rounds} arms={ARMS} concurrency={concurrency} idle={idle}")
-        log(f"load tool: {tool[0] or 'NONE'} ({tool[1]}); syscalls: {syscall_mode}")
+        log(f"host: {HOSTNAME} (role {HOST_ROLE}), loadavg {os.getloadavg()[0]:.2f}")
+        log(f"load tool: {tool[0] or 'NONE'} ({tool[1]})")
+        log(f"perf: {perf_status}")
         for rnd in range(1, args.rounds + 1):
             order = ARMS if rnd % 2 else tuple(reversed(ARMS))
             for arm in order:
@@ -856,16 +1097,19 @@ def run(args):
     results_dir.mkdir(parents=True, exist_ok=True)
     logdir = results_dir / "logs"
     logdir.mkdir(exist_ok=True)
-    doc = {"build": build_meta, "host": host_info(), "tool": tool[0], "syscalls": syscall_mode,
+    log(f"host: {HOSTNAME} (role {HOST_ROLE}); perf: {perf_status}")
+    doc = {"build": build_meta, "host": host_info(), "tool": tool[0],
+           "perf": {"mode": mode, "status": perf_status, "events": events, "dropped": dropped},
            "config": {"rounds": args.rounds, "concurrency": concurrency, "duration": args.duration,
-                      "warmup": args.warmup, "idle": idle, "idle_hold": args.idle_hold},
+                      "warmup": args.warmup, "idle": idle, "idle_hold": args.idle_hold,
+                      "max_loadavg": args.max_loadavg, "shared_host": bool(args.shared_host)},
            "started": datetime.datetime.now().isoformat(), "samples": []}
     out = results_dir / "results.json"
     for rnd in range(1, args.rounds + 1):
         order = ARMS if rnd % 2 else tuple(reversed(ARMS))
         for arm in order:
             binary = build_meta["arms"][arm]["server_binary"]
-            jobs = [(f"load-c{c}", lambda c=c: measure_load(arm, binary, c, args, tool, logdir, syscall_mode))
+            jobs = [(f"load-c{c}", lambda c=c: measure_load(arm, binary, c, args, tool, logdir, perf))
                     for c in concurrency]
             jobs += [(f"idle-{n}", lambda n=n: measure_idle(arm, binary, n, args.idle_hold, logdir)) for n in idle]
             for scenario, job in jobs:
@@ -876,20 +1120,52 @@ def run(args):
                     sample = {"scenario": scenario, "arm": arm, "valid": False,
                               "problems": [f"exception: {error!r}"[:300]]}
                     log(f"  FAILED: {error!r}")
+                if sample.get("timing_reasons"):
+                    log(f"  timing ADVISORY: {'; '.join(sample['timing_reasons'])}")
                 sample.update({"round": rnd, "binary_bytes": build_meta["arms"][arm]["server_binary_bytes"]})
                 doc["samples"].append(sample)
                 out.write_text(json.dumps(doc, indent=2))
     doc["finished"] = datetime.datetime.now().isoformat()
     out.write_text(json.dumps(doc, indent=2))
+    callgrind_json = results_dir / "callgrind.json"
+    if callgrind_json.is_file():
+        doc["callgrind"] = json.loads(callgrind_json.read_text())
     report_from(doc, results_dir)
+    advisory = sorted({r for s in doc["samples"] for r in s.get("timing_reasons", [])})
+    if advisory:
+        log("VERDICT: throughput and latency in this run are ADVISORY — " + "; ".join(advisory))
+        log(f"         the perf counters are per-process and stand. Host was {HOSTNAME} "
+            f"(role {HOST_ROLE}); re-run timing on the quiet timing host.")
+    else:
+        log(f"VERDICT: timing is authoritative for this run (host {HOSTNAME}, role {HOST_ROLE}).")
 
 
-LOAD_METRICS = [
+# Timing: load-sensitive, and only quotable from a quiet host.
+TIMING_METRICS = [
     ("rps", "throughput (req/s)"), ("p50_ms", "p50 latency (ms)"), ("p99_ms", "p99 latency (ms)"),
-    ("p999_ms", "p999 latency (ms)"), ("win_cpu_user_s", "CPU user, window (s)"),
+    ("p999_ms", "p999 latency (ms)"), ("load_wall_s", "load wall (s)"),
+]
+# `perf stat` over the measured window. ALWAYS rendered, even when perf could
+# not run: a missing hardware column must say why, not disappear.
+PERF_METRICS = [
+    ("instructions", "retired instructions (perf)"),
+    ("instructions_per_req", "retired instructions / request"),
+    ("cycles", "cycles (perf)"), ("cycles_per_req", "cycles / request"),
+    ("ipc", "IPC (instructions/cycle)"),
+    ("task_clock_ms", "task-clock (ms)"), ("cpu_utilisation", "CPU utilisation (task-clock/wall)"),
+    ("syscalls", "syscalls (perf tracepoint)"), ("syscalls_per_req", "syscalls / request"),
+    ("syscalls_per_s", "syscalls/s"),
+    ("perf_ctx_switches", "context switches (perf)"),
+    ("ctx_switches_per_req", "context switches / request"),
+    ("cpu_migrations", "CPU migrations (perf)"),
+    ("page_faults", "page faults (perf)"), ("page_faults_per_req", "page faults / request"),
+]
+LOAD_METRICS = [
+    ("win_cpu_user_s", "CPU user, window (s)"),
     ("win_cpu_sys_s", "CPU sys, window (s)"), ("cpu_us_per_req", "CPU per request (µs)"),
-    ("load_wall_s", "load wall (s)"), ("win_vcsw", "voluntary ctx switches, window"),
-    ("win_ivcsw", "involuntary ctx switches, window"), ("syscalls_per_s", "syscalls/s"),
+    ("requests", "requests completed"),
+    ("win_vcsw", "voluntary ctx switches, window"),
+    ("win_ivcsw", "involuntary ctx switches, window"),
     ("rss_peak_kb", "RSS peak (KiB)"), ("cpu_user_s", "CPU user, lifetime (s)"),
     ("cpu_sys_s", "CPU sys, lifetime (s)"), ("vcsw", "voluntary ctx switches, lifetime"),
     ("ivcsw", "involuntary ctx switches, lifetime"), ("binary_bytes", "binary size (bytes)"),
@@ -932,23 +1208,32 @@ def summarize(doc):
         scenarios.setdefault(sample["scenario"], []).append(sample)
     summary = {}
     for scenario, samples in sorted(scenarios.items(), key=lambda kv: scenario_key(kv[0])):
-        metrics = (LOAD_METRICS if scenario.startswith("load") else IDLE_METRICS) + WAIT_METRICS
-        rows = {}
-        for key, label in metrics:
-            row = {"label": label}
-            for arm in ARMS:
-                values = [v for s in samples if s["arm"] == arm and (v := value_of(s, key)) is not None]
-                row[arm] = ({"median": statistics.median(values), "min": min(values), "max": max(values),
-                             "n": len(values)} if values else None)
-            if row["turnloop"] and row["tokio"] and row["tokio"]["median"]:
-                row["delta_pct"] = (row["turnloop"]["median"] / row["tokio"]["median"] - 1) * 100
-            else:
-                row["delta_pct"] = None
-            rows[key] = row
-        summary[scenario] = rows
+        is_load = scenario.startswith("load")
+        groups = ([("timing", TIMING_METRICS), ("perf", PERF_METRICS), ("resources", LOAD_METRICS)]
+                  if is_load else [("resources", IDLE_METRICS)]) + [("waits", WAIT_METRICS)]
+        rows, group_of = {}, {}
+        for group, metrics in groups:
+            for key, label in metrics:
+                row = {"label": label, "group": group}
+                for arm in ARMS:
+                    values = [v for s in samples if s["arm"] == arm and (v := value_of(s, key)) is not None]
+                    row[arm] = ({"median": statistics.median(values), "min": min(values), "max": max(values),
+                                 "n": len(values)} if values else None)
+                if row["turnloop"] and row["tokio"] and row["tokio"]["median"]:
+                    row["delta_pct"] = (row["turnloop"]["median"] / row["tokio"]["median"] - 1) * 100
+                else:
+                    row["delta_pct"] = None
+                rows[key] = row
+                group_of[key] = group
+        # Timing is authoritative only if EVERY contributing sample said so.
+        advisory = sorted({r for s in samples for r in s.get("timing_reasons", [])})
+        summary[scenario] = {"rows": rows,
+                             "timing_authoritative": not advisory,
+                             "timing_advisory_reasons": advisory}
     invalid = [s for s in doc["samples"] if not s.get("valid")]
     return {"scenarios": summary, "invalid_samples": len(invalid),
-            "invalid_reasons": sorted({p for s in invalid for p in s.get("problems", [])})}
+            "invalid_reasons": sorted({p for s in invalid for p in s.get("problems", [])}),
+            "perf": doc.get("perf", {}), "host": doc.get("host", {})}
 
 
 def scenario_key(name):
@@ -967,28 +1252,188 @@ def fmt(cell):
     return f"{num(cell['median'])} [{num(cell['min'])}–{num(cell['max'])}]"
 
 
+GROUP_HEADINGS = {
+    "timing": "Timing (load-sensitive — quotable only from the quiet timing host)",
+    "perf": "`perf stat` over the measured window — RETIRED instructions on real hardware",
+    "resources": "Resources",
+    "waits": "`PERRY_LOOP_STATS` waits",
+}
+MEASUREMENT_NOTE = """\
+**What these numbers are.** The `perf stat` group counts instructions *retired*
+on the real CPU during the measured window, with cache misses, branch
+mispredictions, SMT and interrupts all included — that is cost *under load*, and
+it moves with concurrency. Callgrind's `Ir` (the separate `callgrind` section,
+if present) counts instructions *executed* under Valgrind's serialising
+simulator with no cache or branch model, which is deterministic and
+load-independent *by construction* — useful for an exact A/B of the same code
+path, useless as a statement about cost under load. The two are different
+quantities: never add them, never compare them, and never quote one where the
+other was asked for."""
+
+
 def markdown(summary, doc):
     build = doc.get("build", {})
+    host = doc.get("host", {})
+    perf = doc.get("perf", {})
     lines = [
         "# turnloop server A/B", "",
         f"- commit `{build.get('commit', '?')}` (dirty={build.get('dirty')}), profile `{build.get('profile')}`",
-        f"- host: {doc.get('host', {}).get('platform')}, cpus={doc.get('host', {}).get('cpus')}",
-        f"- load tool: {doc.get('tool')}; syscalls: {doc.get('syscalls')}; config: {json.dumps(doc.get('config'))}",
+        f"- **host: `{host.get('hostname')}` (role {host.get('host_role')})** — "
+        f"{host.get('platform')}, cpus={host.get('cpus')}, loadavg at start {host.get('loadavg')}"
+        + (f", {host.get('cpu_model')}" if host.get("cpu_model") else ""),
+        f"- load tool: {doc.get('tool')}; config: {json.dumps(doc.get('config'))}",
+        f"- perf: {perf.get('status', 'not recorded')}",
         f"- invalid samples: {summary['invalid_samples']} {summary['invalid_reasons']}",
     ]
     for arm, meta in build.get("arms", {}).items():
         mt = {k: v.get("mtime_iso") for k, v in meta.get("archives", {}).items()}
         lines.append(f"- {arm}: marker `{meta.get('marker')}`, binary {meta.get('server_binary_bytes')} B, archives {mt}")
-    lines += ["", "Median [min–max] over valid rounds; Δ = turnloop median vs tokio-wait-driver median.", ""]
-    for scenario, rows in summary["scenarios"].items():
-        lines += [f"## {scenario}", "", "| metric | turnloop | tokio-wait-driver | Δ % |", "|---|---|---|---|"]
-        for key, row in rows.items():
-            if not row["turnloop"] and not row["tokio"]:
+    lines += ["", MEASUREMENT_NOTE, "",
+              "Median [min–max] over valid rounds; Δ = turnloop median vs tokio-wait-driver median.", ""]
+    for scenario, block in summary["scenarios"].items():
+        rows = block["rows"] if isinstance(block, dict) and "rows" in block else block
+        lines += [f"## {scenario}", ""]
+        if isinstance(block, dict) and not block.get("timing_authoritative", True):
+            lines += [f"> **Timing below is ADVISORY, not authoritative** (host "
+                      f"`{host.get('hostname')}`, role {host.get('host_role')}). "
+                      f"{'; '.join(block.get('timing_advisory_reasons', []))}. "
+                      f"Re-run throughput and latency on the quiet timing host; the "
+                      f"`perf` counters are per-process and stay valid here.", ""]
+        seen = set()
+        for group in ("timing", "perf", "resources", "waits"):
+            group_rows = [(k, r) for k, r in rows.items() if r.get("group", "resources") == group]
+            if not group_rows:
                 continue
-            delta = "–" if row["delta_pct"] is None else f"{row['delta_pct']:+.1f}"
-            lines.append(f"| {row['label']} | {fmt(row['turnloop'])} | {fmt(row['tokio'])} | {delta} |")
-        lines.append("")
+            title = GROUP_HEADINGS[group]
+            if group == "timing" and isinstance(block, dict) and not block.get("timing_authoritative", True):
+                title += " — ADVISORY"
+            lines += [f"### {title}", "", "| metric | turnloop | tokio-wait-driver | Δ % |", "|---|---|---|---|"]
+            for key, row in group_rows:
+                if key in seen:
+                    continue
+                seen.add(key)
+                empty = not row["turnloop"] and not row["tokio"]
+                # A perf row is NEVER dropped for being empty: a missing hardware
+                # counter has to say why, not vanish from the table.
+                if empty and group != "perf":
+                    continue
+                if empty:
+                    reason = (perf.get("dropped") or {}).get(key) or perf.get("status") or "not collected"
+                    lines.append(f"| {row['label']} | n/a | n/a | not collected: {reason} |")
+                    continue
+                delta = "–" if row["delta_pct"] is None else f"{row['delta_pct']:+.1f}"
+                lines.append(f"| {row['label']} | {fmt(row['turnloop'])} | {fmt(row['tokio'])} | {delta} |")
+            if group == "perf" and perf.get("mode") != "perf":
+                lines.append("")
+                lines.append(f"*No hardware counters in this run: {perf.get('status', 'perf did not run')}.*")
+            lines.append("")
+    if doc.get("callgrind"):
+        lines += callgrind_markdown(doc["callgrind"])
     return "\n".join(lines)
+
+
+# ─── callgrind: instructions EXECUTED, deterministic, microbenchmarks only ───
+
+CALLGRIND_PROBES = sorted((ROOT / "test-files").glob("test_turnloop_p0_*.ts"))
+IR_RE = re.compile(r"I\s+refs:\s+([\d,]+)")
+
+CALLGRIND_NOTE = """\
+Callgrind `Ir` = instructions **executed** under Valgrind's serialising
+simulator. No cache model, no branch predictor, no SMT, no interrupts, one
+thread at a time — so it is deterministic and **load-independent by
+construction**. That is exactly what makes it a good A/B of the same code path
+and a bad statement about cost under load. It is NOT the `instructions` counter
+in the load table, which is instructions *retired* on real hardware under real
+concurrency. Do not add them and do not substitute one for the other.
+
+**Server workload: not run under Callgrind, deliberately.** Valgrind costs
+roughly 50-100x, so a load generator's connections time out and the event loop's
+time moves almost entirely into waits that scale with wall-clock rather than
+with request handling. The resulting `Ir` would describe an artificial wait
+pattern, not the server. Callgrind here covers the timer/promise
+microbenchmarks, where the measured code path is the park itself and the run is
+short enough to simulate honestly."""
+
+
+def callgrind_run(arm, perry, runtime_dir, probe, work, valgrind):
+    """One probe under callgrind for one arm. Returns a row (never raises)."""
+    binary = work / f"cg-{arm}-{probe.stem}"
+    env = dict(os.environ, PERRY_RUNTIME_DIR=str(runtime_dir), PERRY_NO_AUTO_OPTIMIZE="1")
+    compile_proc = subprocess.run([str(perry), str(probe), "--no-cache", "-o", str(binary)],
+                                  cwd=ROOT, env=env, capture_output=True, text=True)
+    if compile_proc.returncode != 0:
+        return {"arm": arm, "probe": probe.stem, "error": (compile_proc.stdout + compile_proc.stderr)[-300:]}
+    out = work / f"cg-{arm}-{probe.stem}.callgrind"
+    proc = subprocess.run(
+        [valgrind, "--tool=callgrind", "--callgrind-out-file=" + str(out), str(binary)],
+        capture_output=True, text=True, env=dict(os.environ, PERRY_LOOP_STATS="1"))
+    match = IR_RE.search(proc.stderr)
+    row = {"arm": arm, "probe": probe.stem, "exit": proc.returncode}
+    if match:
+        row["ir"] = int(match.group(1).replace(",", ""))
+    else:
+        row["error"] = (proc.stderr or proc.stdout)[-300:]
+    return row
+
+
+def callgrind(args):
+    work = Path(args.work).resolve()
+    valgrind = args.valgrind or shutil.which("valgrind")
+    probes = [p for p in CALLGRIND_PROBES
+              if not args.probes or p.stem in args.probes.split(",")]
+    if args.dry_run:
+        log(f"dry-run: callgrind on {len(probes)} probe(s) x {len(ARMS)} arms; "
+            f"valgrind={valgrind or 'NOT FOUND'}")
+        for probe in probes:
+            log(f"  {valgrind or 'valgrind'} --tool=callgrind <arm compiler output of {probe.name}>")
+        print(CALLGRIND_NOTE)
+        return
+    if not valgrind:
+        raise SystemExit(
+            "valgrind is not installed (and does not exist for arm64 macOS).\n"
+            "Run this on the Linux box: apt install valgrind. "
+            "The load table's perf counters are the load-dependent measurement; "
+            "this arm is the deterministic one and is optional.")
+    build_meta = json.loads((work / "build.json").read_text())
+    rows = []
+    for probe in probes:
+        for arm in ARMS:
+            meta = build_meta["arms"][arm]
+            out_dir = Path(meta["target_dir"])
+            log(f"callgrind {arm}: {probe.name}")
+            rows.append(callgrind_run(arm, out_dir / "perry", out_dir, probe, work, valgrind))
+    doc = {"tool": "callgrind", "valgrind": valgrind, "host": host_info(),
+           "commit": build_meta.get("commit"), "rows": rows,
+           "when": datetime.datetime.now().isoformat()}
+    results_dir = work / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    (results_dir / "callgrind.json").write_text(json.dumps(doc, indent=2))
+    text = "\n".join(callgrind_markdown(doc))
+    (results_dir / "callgrind.md").write_text(text)
+    log(f"wrote {results_dir / 'callgrind.md'}")
+    print(text)
+
+
+def callgrind_markdown(doc):
+    lines = ["## Callgrind arm — instructions EXECUTED (Valgrind `Ir`), NOT retired", "",
+             CALLGRIND_NOTE, "",
+             f"- valgrind: `{doc.get('valgrind')}`, host `{doc.get('host', {}).get('hostname')}`, "
+             f"commit `{doc.get('commit')}`", "",
+             "| probe | turnloop Ir | tokio-wait-driver Ir | Δ % |", "|---|---|---|---|"]
+    by_probe = {}
+    for row in doc.get("rows", []):
+        by_probe.setdefault(row["probe"], {})[row["arm"]] = row
+    for probe, arms in sorted(by_probe.items()):
+        a, b = arms.get("turnloop", {}), arms.get("tokio", {})
+        if "ir" in a and "ir" in b and b["ir"]:
+            delta = f"{(a['ir'] / b['ir'] - 1) * 100:+.2f}"
+        else:
+            delta = "–"
+        def cell(row):
+            return f"{row['ir']:,}" if "ir" in row else f"FAILED ({row.get('error', '?')[:60]})"
+        lines.append(f"| {probe} | {cell(a)} | {cell(b)} | {delta} |")
+    lines.append("")
+    return lines
 
 
 def report_from(doc, results_dir):
@@ -1001,38 +1446,87 @@ def report_from(doc, results_dir):
 
 def report(args):
     results_dir = Path(args.work).resolve() / "results"
-    report_from(json.loads((results_dir / "results.json").read_text()), results_dir)
+    doc = json.loads((results_dir / "results.json").read_text())
+    # Fold in a Callgrind run if one exists. It stays its OWN section with its
+    # own caveat; it is never merged into the perf numbers.
+    callgrind_json = results_dir / "callgrind.json"
+    if callgrind_json.is_file():
+        doc["callgrind"] = json.loads(callgrind_json.read_text())
+        log("including the separate Callgrind (instructions executed) section")
+    report_from(doc, results_dir)
 
 
-def synthetic_report(args):
-    """Dry-run: drive the summary/markdown code on generated samples."""
+def synthetic_report(args, perf_status="synthetic"):
+    """Dry-run: drive the summary/markdown code on generated samples.
+
+    Covers both halves of the perf column deliberately: `load-c64` has full
+    counters, `load-c1` has none, so the "an absent hardware counter must say
+    why instead of vanishing" path is exercised on macOS where perf cannot run.
+    """
     doc = {"build": {"commit": git("rev-parse", "HEAD"), "dirty": False, "profile": args.profile, "arms": {}},
-           "host": host_info(), "tool": "synthetic", "syscalls": "synthetic", "config": {}, "samples": []}
+           "host": host_info(),
+           "tool": "synthetic",
+           "perf": {"mode": "perf", "status": perf_status,
+                    "dropped": {"raw_syscalls:sys_enter": "permission denied"}},
+           "config": {}, "samples": []}
     for rnd in range(1, 4):
         for arm in ARMS:
             base = 1.0 if arm == "turnloop" else 1.1
             waits = {"arm": ARM_WAITS[arm], "tokio_ticks": 1000 * rnd, "tokio_tick_ns": 5_000_000 * rnd,
                      "turnloop_waits": 10 if arm == "turnloop" else 0, "wake_samples": 900, "wake_lt50us": 800,
                      "wake_lt200us": 90, "wake_lt1ms": 10, "wake_lt5ms": 0, "wake_ge5ms": 0}
-            doc["samples"].append({
+            requests = int(750000 / base)
+            counters = {"instructions": 3.0e11 * base, "cycles": 1.5e11 * base, "task_clock_ms": 14000.0,
+                        "perf_ctx_switches": 12000, "cpu_migrations": 40, "page_faults": 9000,
+                        "syscalls": 3.0e6 * base}
+            load = {
                 "scenario": "load-c64", "arm": arm, "round": rnd, "valid": True, "rps": 50000 / base + rnd,
+                "requests": requests,
                 "p50_ms": 0.5 * base, "p99_ms": 2.0 * base, "p999_ms": 5.0 * base, "win_cpu_user_s": 10.0 * base,
                 "win_cpu_sys_s": 3.0, "cpu_us_per_req": 17.0 * base, "load_wall_s": 15.0, "win_vcsw": 1000,
-                "win_ivcsw": 10, "syscalls_per_s": 200000.0, "rss_peak_kb": 20000, "cpu_user_s": 11.0,
-                "cpu_sys_s": 3.2, "vcsw": 1200, "ivcsw": 12, "binary_bytes": 10_000_000, "waits": waits})
+                "win_ivcsw": 10, "rss_peak_kb": 20000, "cpu_user_s": 11.0,
+                "cpu_sys_s": 3.2, "vcsw": 1200, "ivcsw": 12, "binary_bytes": 10_000_000,
+                "timing_authoritative": True, "timing_reasons": [], "waits": waits}
+            derive_perf(load, counters, 15.0, requests)
+            doc["samples"].append(load)
+            # A second scenario with NO perf counters and a busy host: proves the
+            # advisory banner and the "n/a, and here is why" perf rows render.
+            doc["samples"].append({
+                "scenario": "load-c1", "arm": arm, "round": rnd, "valid": True, "rps": 9000 / base,
+                "requests": int(135000 / base), "p50_ms": 0.1 * base, "p99_ms": 0.4 * base,
+                "load_wall_s": 15.0, "rss_peak_kb": 19000, "binary_bytes": 10_000_000,
+                "timing_authoritative": False,
+                "timing_reasons": ["loadavg 9.10 > --max-loadavg 1.5"], "waits": waits})
             doc["samples"].append({
                 "scenario": "idle-10000", "arm": arm, "round": rnd, "valid": True, "open_after_hold": 10000,
                 "rss_before_kb": 8000, "rss_after_kb": 48000, "bytes_per_conn": 4096.0 * base,
                 "idle_cpu_ms": 2.0, "idle_vcsw": 20, "rss_peak_kb": 50000, "threads": 4, "waits": waits})
     doc["samples"].append({"scenario": "load-c64", "arm": "tokio", "round": 9, "valid": False,
                            "problems": ["arm marker missing or wrong"]})
+    doc["callgrind"] = {
+        "valgrind": "/usr/bin/valgrind", "host": host_info(), "commit": "synthetic",
+        "rows": [{"arm": "turnloop", "probe": "test_turnloop_p0_idle", "ir": 41_000_000},
+                 {"arm": "tokio", "probe": "test_turnloop_p0_idle", "ir": 41_500_000}],
+    }
     summary = summarize(doc)
     text = markdown(summary, doc)
     assert summary["invalid_samples"] == 1
-    assert summary["scenarios"]["load-c64"]["rps"]["turnloop"]["n"] == 3
+    assert summary["scenarios"]["load-c64"]["rows"]["rps"]["turnloop"]["n"] == 3
+    assert summary["scenarios"]["load-c64"]["timing_authoritative"] is True
+    assert summary["scenarios"]["load-c1"]["timing_authoritative"] is False
     assert "| throughput (req/s) |" in text and "## idle-10000" in text
-    log("dry-run: synthetic summary OK; first lines:")
-    print("\n".join(text.splitlines()[:16]))
+    # per-request normalisation, both directions
+    assert "| retired instructions / request |" in text and "| syscalls / request |" in text
+    assert "| IPC (instructions/cycle) |" in text
+    # a perf row with no data must still appear, with its reason
+    assert "| retired instructions (perf) | n/a | n/a |" in text
+    # the advisory banner and the Callgrind separation
+    assert "Timing below is ADVISORY" in text
+    assert "instructions EXECUTED (Valgrind `Ir`), NOT retired" in text
+    assert "RETIRED instructions" in text
+    log("dry-run: synthetic summary OK (perf rows, per-request rows, advisory banner, "
+        "callgrind section all rendered); first lines:")
+    print("\n".join(text.splitlines()[:18]))
 
 
 # ─── cli ────────────────────────────────────────────────────────────────────
@@ -1058,8 +1552,18 @@ def main():
         p.add_argument("--oha")
         p.add_argument("--wrk")
         p.add_argument("--ab")
-        p.add_argument("--syscalls", choices=["auto", "perf", "strace", "off"], default="auto")
+        p.add_argument("--perf", choices=["auto", "perf", "strace", "off"], default="auto",
+                       help="hardware counters over the measured window (default auto: perf, "
+                            "else strace for syscalls only, else nothing — always stated in the report)")
         p.add_argument("--strace-seconds", type=int, default=5)
+        p.add_argument("--max-loadavg", type=float, default=2.0,
+                       help="above this 1-minute loadavg at the start of a window, that sample's "
+                            "THROUGHPUT and LATENCY are marked advisory (counters stay valid). "
+                            "The default leaves room for a host's own daemons; measure your "
+                            "timing host at rest and set it just above that")
+        p.add_argument("--shared-host", action="store_true",
+                       help="this box is shared: never quote its timing as authoritative "
+                            "(auto-detected for hosts named like a build box)")
 
     p_build = sub.add_parser("build")
     common(p_build)
@@ -1077,6 +1581,12 @@ def main():
     p_all.add_argument("--skip-cargo", action="store_true")
     p_report = sub.add_parser("report")
     common(p_report)
+    p_cg = sub.add_parser("callgrind", help="deterministic instructions EXECUTED (Valgrind Ir) "
+                                            "for the timer/promise microbenchmarks; Linux only")
+    common(p_cg)
+    p_cg.add_argument("--probes", default="",
+                      help="comma-separated probe stems (default: every test_turnloop_p0_*.ts)")
+    p_cg.add_argument("--valgrind")
     p_idle = sub.add_parser("idle-client")
     p_idle.add_argument("--port", type=int, required=True)
     p_idle.add_argument("--count", type=int, required=True)
@@ -1093,6 +1603,8 @@ def main():
         run(args)
     elif args.command == "report":
         report(args)
+    elif args.command == "callgrind":
+        callgrind(args)
     elif args.command == "all":
         build(args)
         run(args)

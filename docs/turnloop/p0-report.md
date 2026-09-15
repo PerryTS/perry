@@ -335,6 +335,37 @@ dir, `CARGO_BUILD_JOBS=6`.
 | `python3 scripts/turnloop_p0_loop_stats.py --perry /tmp/tlab/target-turnloop/perry` | PASS, 7/7 (the P0 probes are unaffected by the new line) |
 | `server_ab.py build --work /tmp/tlab --skip-cargo` then `run … --load-tool ab` | PASS — both arms verified, arms-differ gate satisfied, 12/12 samples valid |
 
+**Hardware-counter collection (`root@84.32.71.237`, `perrybuilder`, Linux 6.17
+x86_64, 64 cores, `perf_event_paranoid=-1`).** Counter collection only — no
+benchmarking was done there, and the box sat at loadavg 4.5–10 throughout, which
+is exactly why the harness refuses to call its timing authoritative.
+
+| Check | Result |
+|---|---|
+| `PerfStat.resolve("auto")` | `perf ok (7/7 events, perf_event_paranoid=-1)` — instructions, cycles, task-clock, context-switches, cpu-migrations, page-faults, `raw_syscalls:sys_enter` |
+| real attach to a busy-loop process, 2 s | 26 930 731 857 retired instructions, 7 588 745 567 cycles, IPC 3.549, task-clock 1999.1 ms, CPU utilisation 1.00 |
+| `perf_probe` with a deliberately bogus event | the bogus event is NAMED as dropped (`unknown or unsupported event on this kernel/PMU`); the other 7 still usable — a denied counter is reported, never silently omitted |
+| `--perf off` / `--perf strace` | each returns its own explicit status string, not a bare "off" |
+| `timing_verdict` on that host | `timing_authoritative=False`, reasons: shared build box by hostname, **and** loadavg above `--max-loadavg` |
+| `measure_load` end to end (stub server honouring the same stderr/SIGTERM contract, stub `ab`) | PASS — sample valid, marker and `arm=` matched, real counters: 233 617 488 instructions, 419 678 268 cycles, IPC 0.557, 9 821 syscalls, and every per-request figure derived (714 427 instructions/req, 30.0 syscalls/req, 5.05 ctx switches/req, 1.02 page faults/req) |
+
+That last row used a stub server rather than a compiled Perry, because building
+Perry on that shared box is not something to do for a plumbing check: it
+exercises the whole `measure_load` path — perf attach, CSV parse, unit
+normalisation, derivation, timing verdict, marker validation — with genuine
+hardware counters.
+
+**Caught by that run:** `perf stat -x,` leaves the unit field EMPTY on mainline
+perf and reports `task-clock` in **nanoseconds**. Reading it as milliseconds
+made CPU utilisation come out as 998 998 instead of 1.00. The parser now honours
+the unit field explicitly and treats a unitless `task-clock` as nanoseconds, and
+flags any event perf multiplexed below 99 % as an estimate.
+
+**Host-role detection**, checked on both machines of record: `perrybuilder` →
+role `shared` (timing never authoritative); `perry-macos` → role `quiet`
+(authoritative while quiet — it idles at loadavg ≈ 1.45, which is why
+`--max-loadavg` defaults to 2.0).
+
 Which test covers which counter:
 
 | Counter | Test |
@@ -573,7 +604,7 @@ PERRY_SKIP_BUILD=1 PERRY_BIN=$PWD/target-b/release/perry ./run_parity_tests.sh -
 **Full auto-optimize tier (arm A).** `./scripts/run_gap_tests.sh` or the
 documented CI dispatch.
 
-**Server A/B (`scripts/turnloop/server_ab.py`, Linux x86_64 — perrymaster).**
+**Server A/B (`scripts/turnloop/server_ab.py`, Linux x86_64).**
 This is the measurement the wait metrics exist for. One command does everything:
 
 ```bash
@@ -636,6 +667,70 @@ needed `SIGKILL`, or whose load tool errored — is marked invalid, excluded fro
 the medians and reported by reason, rather than averaged in. Output:
 `<work>/results/results.json` (every raw sample), `summary.json` and
 `summary.md` (median [min–max] per arm, plus the delta of medians).
+
+### Two instruction counts, and what each one is not
+
+**`perf stat` `instructions` = instructions RETIRED** on the real CPU during the
+measured window, with cache misses, branch mispredictions, SMT contention and
+interrupts all included. It is a statement about **cost under load**, it moves
+with concurrency, and it is what the load table reports (with `cycles`, `IPC`,
+`task-clock`, context switches, CPU migrations, page faults and the syscall
+tracepoint alongside it).
+
+**Callgrind `Ir` = instructions EXECUTED** under Valgrind's serialising
+simulator: no cache model, no branch predictor, one thread at a time. It is
+deterministic and **load-independent by construction** — which is exactly what
+makes it a good exact A/B of one code path, and no statement at all about cost
+under load. A figure like "2.5k instructions per turn" is an `Ir` figure; it
+cannot answer "what does this cost a server at c=1024". The two quantities are
+never added, never compared, and never substituted for one another; the harness
+keeps them in separate sections, each carrying this caveat.
+
+**Per-request normalisation.** Totals alone let a throughput win hide a
+per-request regression, so the table reports `instructions / request`,
+`cycles / request`, `syscalls / request`, `context switches / request` and
+`page faults / request` next to the totals.
+
+**Callgrind and the server workload.** Not run, deliberately. Valgrind costs
+roughly 50–100×, so the load generator's connections time out and the loop's
+time moves almost entirely into waits that scale with wall-clock rather than
+with request handling; the resulting `Ir` would describe an artificial wait
+pattern, not the server. The `callgrind` subcommand therefore covers the
+timer/promise **microbenchmarks** (`test-files/test_turnloop_p0_*.ts`), where
+the measured code path is the park itself and the run is short enough to
+simulate honestly.
+
+```bash
+scripts/turnloop/server_ab.py callgrind --work DIR [--probes stem,stem] [--valgrind PATH]
+```
+
+### Hosts of record, and when timing is only advisory
+
+The harness prints the host it ran on and decides, **per sample**, whether the
+timing may be quoted:
+
+| | counters (`perf`, syscalls, page faults) | timing (throughput, latency, wall) |
+|---|---|---|
+| Linux build box (shared, e.g. `perrybuilder`) | valid — they are per-process | **advisory**, automatically |
+| quiet timing host (the Mac mini) | not available (perf is Linux-only) | authoritative while loadavg ≤ `--max-loadavg` |
+
+A host whose name looks like a build box, or `--shared-host`, or a 1-minute
+loadavg above `--max-loadavg` (default 2.0) at the start of a window, marks that
+sample's timing advisory. The markdown then carries a blockquote naming the
+host, its role and every reason, the timing section is headed `— ADVISORY`, and
+`run` prints a closing `VERDICT:` line. Counters are never downgraded for
+this — they are per-process and survive a busy box. Measure your timing host at
+rest and set `--max-loadavg` just above that: the mini idles near 1.45.
+
+**When `perf` cannot run, the column is not dropped.** Every `perf` row is
+still rendered, as `n/a` with the reason in the delta cell (`perf is Linux-only;
+this host is darwin`, `permission denied (perf_event_paranoid=2)`, `unknown or
+unsupported event on this kernel/PMU`, …), and the reason is repeated under the
+table and in the header. `--perf auto` falls back to `strace -c -f` for syscall
+counts only (in a separate, perturbed process, and labelled as such); `--perf
+perf` refuses to fall back; `--perf off` disables it and says so. Each event is
+probed individually against `true` first, because one denied event in a single
+`perf stat` takes every other counter down with it.
 
 Host preparation for the 100k idle test (the harness warns and records the
 limits it found): `ulimit -n 1048576`, `fs.nr_open`,
