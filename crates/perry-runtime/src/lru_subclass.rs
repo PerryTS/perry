@@ -56,6 +56,23 @@ fn bool_value(v: bool) -> f64 {
     f64::from_bits(JSValue::bool(v).bits())
 }
 
+/// Normalise a predicate result to a JS boolean.
+///
+/// TWO `js_lru_cache_has`/`js_lru_cache_delete` symbols exist: perry-stdlib's
+/// legacy pair answers a NUMBER (`1.0`/`0.0`) and perry-ext-lru-cache's answers
+/// a NaN-boxed boolean. Which one these thunks bind to depends on the archive
+/// set, while the DIRECT `cache.has(k)` lowering always reaches the ext one —
+/// so without this a subclass diverged from its own base in the same program:
+/// `base.has(k)` was `true` and `sub.has(k)` was `1`. Pass a real boolean
+/// through untouched and convert a numeric answer.
+fn as_bool_value(v: f64) -> f64 {
+    let bits = v.to_bits();
+    if bits == JSValue::bool(true).bits() || bits == JSValue::bool(false).bits() {
+        return v;
+    }
+    bool_value(!v.is_nan() && v != 0.0)
+}
+
 fn hidden_key(bytes: &[u8]) -> *mut crate::StringHeader {
     crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
 }
@@ -128,7 +145,7 @@ extern "C" fn lru_m_has(closure: *const ClosureHeader, key: f64) -> f64 {
     if handle == 0 {
         return bool_value(false);
     }
-    unsafe { js_lru_cache_has(handle, key) }
+    as_bool_value(unsafe { js_lru_cache_has(handle, key) })
 }
 
 extern "C" fn lru_m_delete(closure: *const ClosureHeader, key: f64) -> f64 {
@@ -136,7 +153,7 @@ extern "C" fn lru_m_delete(closure: *const ClosureHeader, key: f64) -> f64 {
     if handle == 0 {
         return bool_value(false);
     }
-    unsafe { js_lru_cache_delete(handle, key) }
+    as_bool_value(unsafe { js_lru_cache_delete(handle, key) })
 }
 
 extern "C" fn lru_m_peek(closure: *const ClosureHeader, key: f64) -> f64 {
