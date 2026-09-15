@@ -174,7 +174,15 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
     } else {
         obj_handle as u64
     };
-    if raw < 0x1000 {
+    // Array.from's array-like fallback can receive a Proxy record. Its id is
+    // not a heap header; route it inside the existing low-address guard so
+    // ordinary heap receivers do not perform a proxy registry lookup.
+    if crate::value::addr_class::is_handle_band(raw as usize) {
+        if let Some(proxy) =
+            crate::array::array_ptr_as_proxy(raw as *const crate::array::ArrayHeader)
+        {
+            return crate::proxy::js_proxy_get(proxy, idx);
+        }
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     // Symbols share GC_TYPE_STRING storage for tracing, but they are primitive

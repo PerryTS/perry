@@ -717,7 +717,9 @@ pub extern "C" fn js_array_like_to_array(value: f64) -> *mut ArrayHeader {
         // sticky flag that is false until user code writes the prototype slot,
         // so the fast path is untouched in every ordinary program.
         if crate::array::js_array_is_array(value).to_bits() == crate::value::TAG_TRUE {
-            if crate::array::array_proto_iterator_modified() {
+            if crate::array::array_proto_iterator_modified()
+                || crate::array::array_ptr_as_proxy(raw as *const ArrayHeader).is_some()
+            {
                 return crate::array::js_array_clone_for_spread(value);
             }
             return crate::array::clean_arr_ptr(raw as *const ArrayHeader) as *mut ArrayHeader;
