@@ -202,6 +202,13 @@ pub(super) struct AgentTimers {
     check: VecDeque<usize>,
     /// Ref'd entries currently in `check`.
     refed_check: usize,
+    /// Live (not cancelled) entries in `check`, and in the two poll queues.
+    /// Counted rather than derived: `check_pending` is asked on every schedule
+    /// and every cancel — it is what keeps the loop's park decision and its
+    /// armed deadline in step — and a scan there would make a program that
+    /// queues n callbacks cost O(n^2).
+    check_live: usize,
+    poll_live: usize,
     /// Native completion callbacks waiting for the poll phase that will run
     /// them, and the ones still waiting to become eligible. See
     /// [`AgentTimers::promote_pending`].
@@ -383,6 +390,7 @@ impl AgentTimers {
         let index = self.alloc(entry);
         self.check.push_back(index);
         self.refed_check += usize::from(refed);
+        self.check_live += 1;
         index
     }
 
@@ -469,6 +477,7 @@ impl AgentTimers {
                     let refed = entry.refed;
                     self.check.pop_front();
                     self.refed_check -= usize::from(refed);
+                    self.check_live -= 1;
                     return self.take(index);
                 }
             }
@@ -492,6 +501,7 @@ impl AgentTimers {
         debug_assert_eq!(entry.class, Class::Pending);
         let index = self.alloc(entry);
         self.poll_staged.push_back(index);
+        self.poll_live += 1;
         index
     }
 
@@ -506,6 +516,7 @@ impl AgentTimers {
                 }
                 Some(_) => {
                     self.poll_ready.pop_front();
+                    self.poll_live -= 1;
                     return self.take(index);
                 }
             }
@@ -521,10 +532,16 @@ impl AgentTimers {
 
     /// Native completion callbacks queued but not yet run, in either queue.
     pub(super) fn poll_pending(&self) -> bool {
-        self.poll_ready
-            .iter()
-            .chain(self.poll_staged.iter())
-            .any(|&i| self.slab.get(i).is_some_and(Option::is_some))
+        debug_assert_eq!(
+            self.poll_live,
+            self.poll_ready
+                .iter()
+                .chain(self.poll_staged.iter())
+                .filter(|&&i| self.slab.get(i).is_some_and(Option::is_some))
+                .count(),
+            "poll_live drifted from the poll queues"
+        );
+        self.poll_live != 0
     }
 
     /// The sequence number the next scheduled entry will get — the check
@@ -548,11 +565,13 @@ impl AgentTimers {
             self.heap_detach(index);
         } else if class == Class::Pending {
             // Leave the queue placeholder; `pop_poll` skips an emptied slot.
+            self.poll_live -= 1;
         } else {
             // Leave the queue placeholder: `pop_check` skips an emptied slot.
             // Removing it here would be O(n) in the queue length for no gain.
             let refed = self.slab[index].as_ref().expect("live entry").refed;
             self.refed_check -= usize::from(refed);
+            self.check_live -= 1;
         }
         self.take(index)
     }
@@ -637,10 +656,15 @@ impl AgentTimers {
     /// when the immediate queue is non-empty) or a native completion callback
     /// waiting for its poll phase.
     pub(super) fn check_pending(&self) -> bool {
-        self.check
-            .iter()
-            .any(|&i| self.slab.get(i).is_some_and(Option::is_some))
-            || self.poll_pending()
+        debug_assert_eq!(
+            self.check_live,
+            self.check
+                .iter()
+                .filter(|&&i| self.slab.get(i).is_some_and(Option::is_some))
+                .count(),
+            "check_live drifted from the check queue"
+        );
+        self.check_live != 0 || self.poll_pending()
     }
 
     /// Any entry at all, including unref'd ones: the "is a timer phase worth
@@ -694,6 +718,8 @@ impl AgentTimers {
         self.poll_ready.clear();
         self.poll_staged.clear();
         self.refed_check = 0;
+        self.check_live = 0;
+        self.poll_live = 0;
         self.by_id.clear();
     }
 
