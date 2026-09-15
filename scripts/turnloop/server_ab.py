@@ -225,12 +225,14 @@ def compile_app(arm, out, work, dry_run):
 
 
 def verify_marker(arm, binary):
-    server = Server(binary, free_port(), Path(tempfile.mkdtemp(prefix="server-ab-verify-")))
-    server.start()
+    logdir = Path(tempfile.mkdtemp(prefix="server-ab-verify-"))
+    server = Server(binary, free_port(), logdir)
+    server.start_or_kill()
     try:
         http_get(server.port)
     finally:
         server.stop()
+        shutil.rmtree(logdir, ignore_errors=True)
     if ARM_MARKER[arm] not in server.stderr_text:
         raise SystemExit(f"{arm}: marker {ARM_MARKER[arm]!r} missing; stderr={server.stderr_text!r}")
     waits = server.waits()
@@ -272,6 +274,23 @@ class Server:
         self.stderr_text = ""
         self.forced_kill = False
 
+    def start_or_kill(self, timeout=30.0):
+        """`start`, but never leave a running server behind on failure.
+
+        The health check can time out with the process alive and holding its
+        port; every caller starts the server BEFORE its try/finally, so an
+        un-cleaned failure leaks an orphan for the rest of the run — and a
+        contended host is exactly where the check times out.
+        """
+        try:
+            self.start(timeout=timeout)
+        except BaseException:
+            try:
+                self.stop(timeout=5.0)
+            except BaseException:
+                pass
+            raise
+
     def start(self, timeout=30.0):
         env = dict(os.environ, PORT=str(self.port), PERRY_LOOP_STATS="1")
         self.stdout_path = self.logdir / f"server-{self.port}.out"
@@ -312,8 +331,13 @@ class Server:
                 break
             if time.monotonic() > deadline:
                 self.forced_kill = True
-                os.kill(self.pid, signal.SIGKILL)
-                pid, status, rusage = os.wait4(self.pid, 0)
+                try:
+                    os.kill(self.pid, signal.SIGKILL)
+                    pid, status, rusage = os.wait4(self.pid, 0)
+                except (ProcessLookupError, ChildProcessError):
+                    self.exit_status = self.proc.returncode
+                    self.stderr_text = self.stderr_path.read_text(errors="replace")
+                    return
                 break
             time.sleep(0.02)
         self.proc.returncode = os.waitstatus_to_exitcode(status)
@@ -425,7 +449,7 @@ def run_load(tool, path, port, conc, duration):
         base = [path, "-z", f"{duration}s", "-c", str(conc), "-r", "0", "--no-tui"]
         # `--output-format json` on current oha, `-j` on older builds. Try the
         # new spelling and fall back rather than silently reporting nothing.
-        data, error = {}, ""
+        data, errors = {}, []
         for json_flag in (["--output-format", "json"], ["-j"]):
             proc = subprocess.run(base + json_flag + [url], capture_output=True, text=True)
             try:
@@ -434,9 +458,9 @@ def run_load(tool, path, port, conc, duration):
                 data = {}
             if data:
                 break
-            error = (proc.stdout + proc.stderr)[-400:]
+            errors.append(f"{' '.join(json_flag)}: {(proc.stdout + proc.stderr)[-200:]}")
         if not data:
-            return {"tool": "oha", "error": error}
+            return {"tool": "oha", "error": " | ".join(errors)}
         summary = data.get("summary", {})
         pct = data.get("latencyPercentiles", {})
         codes = data.get("statusCodeDistribution", {}) or {}
@@ -535,7 +559,7 @@ def strace_sample(binary, port_tool, conc, seconds, logdir):
     perturbs the server, so its throughput is discarded)."""
     tool, path = port_tool
     server = Server(binary, free_port(), logdir)
-    server.start()
+    server.start_or_kill()
     out = logdir / f"strace-{server.port}.txt"
     tracer = subprocess.Popen(["strace", "-c", "-f", "-p", str(server.pid), "-o", str(out)],
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -666,7 +690,7 @@ def idle_sources(count):
 
 def measure_idle(arm, binary, count, hold, logdir):
     server = Server(binary, free_port(), logdir)
-    server.start()
+    server.start_or_kill()
     sample = {"scenario": f"idle-{count}", "arm": arm}
     client = None
     try:
@@ -724,7 +748,7 @@ def measure_idle(arm, binary, count, hold, logdir):
 
 def measure_load(arm, binary, conc, args, tool, logdir, syscall_mode):
     server = Server(binary, free_port(), logdir)
-    server.start()
+    server.start_or_kill()
     sample = {"scenario": f"load-c{conc}", "arm": arm, "concurrency": conc}
     try:
         if args.warmup:

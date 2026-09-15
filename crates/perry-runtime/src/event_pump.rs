@@ -187,8 +187,16 @@ pub extern "C" fn js_register_native_inflight(f: Option<extern "C" fn() -> i32>)
 /// the `tokio-wait-driver` A/B arm and on wasm. P8 deletes it.
 #[no_mangle]
 pub extern "C" fn js_native_work_submitted() {
+    // PERRY_LOOP_STATS: this is a wake producer in its own right — it is the
+    // ONLY way a cross-thread native submission reaches a parked turn — so it
+    // stamps the wake-latency clock like `js_notify_main_thread` does. Without
+    // this the turnloop arm's histogram silently omits exactly the wakes the
+    // A/B is about. One relaxed load when stats are off.
     #[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
-    agent_loop::wake_primary();
+    {
+        loop_stats::note_notify();
+        agent_loop::wake_primary();
+    }
 }
 
 /// Destroy the calling thread's agent loop at the process-exit funnel and, with

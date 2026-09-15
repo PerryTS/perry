@@ -183,6 +183,64 @@ fn another_thread_wakes_a_parked_turn_through_js_notify_main_thread() {
     super::super::NOTIFIED.store(false, Ordering::SeqCst);
 }
 
+/// `js_native_work_submitted` is a wake producer of its own — it is how a
+/// cross-thread native submission reaches a parked turn, and it does NOT go
+/// through `js_notify_main_thread`. It must therefore produce a wake-latency
+/// sample too, or the turnloop arm's histogram silently omits exactly the wakes
+/// the A/B is about.
+#[test]
+fn a_cross_thread_native_submission_wakes_a_turn_and_is_one_wake_sample() {
+    let _g = serial();
+    super::super::loop_stats::force_enable_for_test();
+    let before = super::super::loop_stats::snapshot();
+    let (parked_tx, parked_rx) = mpsc::channel();
+    let owner = std::thread::spawn(move || {
+        claim_route();
+        super::super::NOTIFIED.store(false, Ordering::SeqCst);
+        parked_tx.send(()).unwrap();
+        let start = Instant::now();
+        let park = park_until(start + Duration::from_secs(30));
+        let waited = start.elapsed();
+        shutdown_current_thread();
+        (park, waited)
+    });
+    parked_rx.recv().unwrap();
+    let limit = Instant::now() + Duration::from_secs(10);
+    loop {
+        let parked = PRIMARY_ROUTE.in_turn.load(Ordering::SeqCst)
+            && PRIMARY_ROUTE
+                .notifier
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .as_ref()
+                .is_some_and(|(_, notifier)| notifier.is_parked());
+        if parked {
+            break;
+        }
+        assert!(Instant::now() < limit, "owner never parked in its turn");
+        std::thread::yield_now();
+    }
+    super::super::js_native_work_submitted();
+    let (park, waited) = owner.join().unwrap();
+    assert_eq!(park, Park::Waited);
+    assert!(
+        waited < Duration::from_secs(10),
+        "the native-submission wake was lost: waited {waited:?}"
+    );
+    let after = super::super::loop_stats::snapshot();
+    assert_eq!(
+        after.turnloop.count - before.turnloop.count,
+        1,
+        "the turn is the subject and it did not run"
+    );
+    assert_eq!(
+        after.wake_samples() - before.wake_samples(),
+        1,
+        "a cross-thread native submission must produce one wake-latency sample"
+    );
+    super::super::NOTIFIED.store(false, Ordering::SeqCst);
+}
+
 /// Install on first use, idempotent shutdown, no reinstall afterwards, and the
 /// route is released both by shutdown and by plain thread exit.
 #[test]

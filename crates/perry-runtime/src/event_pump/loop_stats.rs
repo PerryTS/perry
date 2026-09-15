@@ -37,6 +37,12 @@
 //! histogram — it only, very rarely, omits one. Closing it would need the
 //! stamp inside the same critical section as the park, which is a behaviour
 //! change for a diagnostic.
+//!
+//! The direction that would matter — a stamp from wait *N* landing on wait
+//! *N+1*, where the latency is computed from before that wait began — **is**
+//! closed: [`end_wait`] rejects any stamp older than the wait it is ending. The
+//! bias is therefore one-sided by construction: this module can under-report
+//! wakes, never invent or inflate one.
 
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::OnceLock;
@@ -221,7 +227,13 @@ fn end_wait_recorded(kind: WaitKind, started: u64) {
         WaitKind::Condvar => &CONDVAR,
     };
     slot.add(now.saturating_sub(started));
-    if notified_at != 0 {
+    // `notified_at >= started` rejects a stamp that belongs to an EARLIER wait:
+    // a producer preempted between reading its clock and its compare-exchange
+    // can land that stamp on the next wait, where the latency would be computed
+    // from a moment before the wait even began. A rejected stamp costs one
+    // sample; an accepted stale one would invent a multi-millisecond wake.
+    // (`started` is never 0, so this also covers "no stamp".)
+    if notified_at >= started {
         record_wake_latency(now.saturating_sub(notified_at));
     }
 }
