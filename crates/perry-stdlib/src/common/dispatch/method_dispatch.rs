@@ -250,6 +250,20 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
             | "enableLoadExtension"
             | "loadExtension"
             | "location"
+            // #10290: `query`/`run`/`transaction` are the bun:sqlite `Database`
+            // surface. `dispatch_node_sqlite_database_method` has always
+            // implemented all three (the same registry backs both bindings),
+            // but they were missing from THIS gate, so they never reached it.
+            // Codegen's static NATIVE_MODULE_TABLE entry covers `db.query(...)`
+            // only while the receiver's class is provable; the moment the
+            // database reaches a call site through any indirection — a field,
+            // an interface-typed parameter, a generator return, Drizzle's
+            // driver object — the call falls to this dynamic tower and
+            // silently returned `undefined`. `db.query(sql)` answering
+            // `undefined` is how `opencode models` dies.
+            | "query"
+            | "run"
+            | "transaction"
             | "__perry_dispose__"
             | "@@__perry_wk_dispose"
     ) {
