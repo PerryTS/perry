@@ -126,6 +126,8 @@ def git(*args):
 
 def build(args):
     work = Path(args.work).resolve()
+    if not args.dry_run:
+        work.mkdir(parents=True, exist_ok=True)
     commit = git("rev-parse", "HEAD")
     dirty = bool(git("status", "--porcelain", "--untracked-files=no"))
     commit_time = int(git("log", "-1", "--format=%ct") or 0)
@@ -166,7 +168,11 @@ def build(args):
                     "older_than_commit": st.st_mtime < commit_time,
                 }
                 if st.st_mtime < commit_time:
-                    log(f"WARNING {arm}: {name} is older than HEAD's commit time (stale archive?)")
+                    # Recorded, not fatal: cargo legitimately skips a crate whose
+                    # inputs did not change. It is fatal when EVERY archive and
+                    # the binary match the other arm — see `assert_arms_differ`.
+                    log(f"NOTE {arm}: {name} predates HEAD's commit time "
+                        "(cargo cache hit, or a stale archive — check the arm diff below)")
             binary = compile_app(arm, out, work, dry_run=False)
             arm_meta["server_binary"] = str(binary)
             arm_meta["server_binary_bytes"] = binary.stat().st_size
@@ -177,10 +183,33 @@ def build(args):
     if args.dry_run:
         log("dry-run: skipped cargo, compile and marker verification")
         return meta
+    assert_arms_differ(meta)
     (work / "results").mkdir(parents=True, exist_ok=True)
     (work / "build.json").write_text(json.dumps(meta, indent=2))
     log(f"wrote {work / 'build.json'}")
     return meta
+
+
+def assert_arms_differ(meta):
+    """The arms must not be byte-identical, or the A/B is vacuous.
+
+    `tokio-wait-driver` changes perry-stdlib and perry-runtime, so both archives
+    and the linked server must differ. Two identical arms is the failure mode
+    CLAUDE.md warns about — a stale `.a`, or a feature that never reached the
+    build — and it reads as "no regressions" instead of as "nothing measured".
+    """
+    a, b = (meta["arms"][arm] for arm in ARMS)
+    same = [name for name in ("libperry_runtime.a", "libperry_stdlib.a")
+            if a["archives"][name]["sha256"] == b["archives"][name]["sha256"]]
+    if same:
+        raise SystemExit(
+            f"the two arms share identical {', '.join(same)}: the "
+            "tokio-wait-driver feature did not reach the build, so any "
+            "comparison would be vacuous")
+    if a["server_binary_bytes"] == b["server_binary_bytes"] and sha256(
+            Path(a["server_binary"])) == sha256(Path(b["server_binary"])):
+        raise SystemExit("the two arms produced an identical server binary")
+    log("arms differ: runtime, stdlib and the linked server are distinct builds")
 
 
 def compile_app(arm, out, work, dry_run):
@@ -273,7 +302,12 @@ class Server:
             pass
         deadline = time.monotonic() + timeout
         while True:
-            pid, status, rusage = os.wait4(self.pid, os.WNOHANG)
+            try:
+                pid, status, rusage = os.wait4(self.pid, os.WNOHANG)
+            except ChildProcessError:  # already reaped: no rusage to report
+                self.exit_status = self.proc.returncode
+                self.stderr_text = self.stderr_path.read_text(errors="replace")
+                return
             if pid == self.pid:
                 break
             if time.monotonic() > deadline:
@@ -289,6 +323,8 @@ class Server:
 
     def lifetime(self):
         ru = self.rusage
+        if ru is None:
+            return {"rusage_missing": True}
         maxrss_kb = ru.ru_maxrss if IS_LINUX else ru.ru_maxrss // 1024
         return {
             "cpu_user_s": ru.ru_utime, "cpu_sys_s": ru.ru_stime, "rss_peak_kb": maxrss_kb,
@@ -386,9 +422,21 @@ end
 def run_load(tool, path, port, conc, duration):
     url = f"http://127.0.0.1:{port}/"
     if tool == "oha":
-        cmd = [path, "-z", f"{duration}s", "-c", str(conc), "-r", "0", "--no-tui", "--output-format", "json", url]
-        proc = subprocess.run(cmd, capture_output=True, text=True)
-        data = json.loads(proc.stdout or "{}")
+        base = [path, "-z", f"{duration}s", "-c", str(conc), "-r", "0", "--no-tui"]
+        # `--output-format json` on current oha, `-j` on older builds. Try the
+        # new spelling and fall back rather than silently reporting nothing.
+        data, error = {}, ""
+        for json_flag in (["--output-format", "json"], ["-j"]):
+            proc = subprocess.run(base + json_flag + [url], capture_output=True, text=True)
+            try:
+                data = json.loads(proc.stdout or "{}")
+            except json.JSONDecodeError:
+                data = {}
+            if data:
+                break
+            error = (proc.stdout + proc.stderr)[-400:]
+        if not data:
+            return {"tool": "oha", "error": error}
         summary = data.get("summary", {})
         pct = data.get("latencyPercentiles", {})
         codes = data.get("statusCodeDistribution", {}) or {}
@@ -721,6 +769,8 @@ def finish_sample(sample, arm, server):
         problems.append("wait metrics missing or wrong arm")
     if server.forced_kill:
         problems.append("server needed SIGKILL")
+    if sample.get("rusage_missing"):
+        problems.append("server was reaped before rusage could be read")
     if "error" in sample:
         problems.append("load tool error")
     sample["valid"] = not problems

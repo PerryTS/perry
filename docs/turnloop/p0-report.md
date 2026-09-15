@@ -13,7 +13,9 @@ Linux or Windows.
 | `0df1f6eecc` | Revert of the checkpoint (reasons in the commit message) |
 | `55d55221df` | `turnloop =0.1.0-alpha.2` dependency and lockfile |
 | `74989142c6` | Wait driver, Instant deadlines, coexistence bridge, A/B feature, O(1) keep-alive, unit tests |
-| (this commit) | Probes, statistics scripts, gap test, changelog fragment, this report |
+| `a03042441f` | Probes, statistics scripts, gap test, changelog fragment, this report |
+| `907ea0a73c` | `PERRY_LOOP_STATS` wait metrics (`event_pump/loop_stats.rs`) and their tests |
+| `cf04ec1ca7` | Server A/B harness (`scripts/turnloop/server_ab.py`) and its `node:http` subject |
 
 The checkpoint was reverted rather than amended. Its `Cargo.lock` was
 hand-spliced, its turnloop wake took a process-wide mutex on every
@@ -123,6 +125,65 @@ structurally.
 | `perry_next_wake_ms` (embedder API) | still the min of the above plus the stdlib provider, so its stdlib component can now be fractional |
 | `js_register_wait_driver` | unchanged; now the primary agent's transitional tick, the workers' park and the A/B arm |
 | `perry_runtime::event_pump::{shutdown_wait_driver, loop_statistics, LoopStats}` | new Rust API |
+
+### Wait metrics (`PERRY_LOOP_STATS=1`, `event_pump/loop_stats.rs`)
+
+Turns and OS waits say how *often* the loop waited, not where the time went.
+Instruction count and RSS can stay flat while the waits between Perry and tokio
+decide a server's latency and CPU, so `PERRY_LOOP_STATS=1` also prints one
+`[perry-loop-waits]` line at the process-exit funnel:
+
+```
+$ PORT=18231 PERRY_LOOP_STATS=1 ./server-turnloop   # two curl requests, then SIGTERM
+[perry-loop] driver=turnloop turns=0 os_waits=0 zero_event_waits=0 native_ticks=3 turn_errors=0
+[perry-loop-waits] arm=turnloop turnloop_waits=0 turnloop_wait_ns=0 turnloop_wait_max_ns=0
+  tokio_ticks=3 tokio_tick_ns=60384792 tokio_tick_max_ns=27291625
+  condvar_waits=0 condvar_wait_ns=0 condvar_wait_max_ns=0
+  fast_drives=3 fast_drive_ns=5349167 fast_drive_max_ns=2577583
+  zero_budget=0 throttle_sleeps=0
+  wake_samples=3 wake_lt50us=3 wake_lt200us=0 wake_lt1ms=0 wake_lt5ms=0 wake_ge5ms=0 wake_max_ns=31375
+```
+
+(one line in reality; wrapped here. That run is the P0 server story in one
+line: the server parked three times, every one of them in tokio — 60.4 ms
+total, 27.3 ms in the longest — and never once in turnloop, because the
+accept loop keeps a tokio task alive. The three wakes that ended those parks
+took at most 31 µs.)
+
+| Field group | What it measures |
+|---|---|
+| `turnloop_waits` / `_ns` / `_max_ns` | `Loop::turn(Timeout::Until(deadline))` — the pure turnloop wait |
+| `tokio_ticks` / `_ns` / `_max_ns` | the P0-transitional registered tick (`run_one_tick`), taken whenever tokio owns in-flight native work — and the *only* wait the `tokio-wait-driver` arm has |
+| `condvar_waits` / `_ns` / `_max_ns` | the legacy condvar park: runtime-only binaries, declined threads, a turn-failure fallback |
+| `fast_drives` / `_ns` / `_max_ns` | the stdlib's brief tokio drive on the notified path, counted only when it actually drove |
+| `zero_budget`, `throttle_sleeps` | zero-budget returns (a deadline read as due) and how many of them hit the #1114 throttle sleep |
+| `wake_samples`, `wake_lt50us` … `wake_ge5ms`, `wake_max_ns` | wake latency: notify → the parked wait returning |
+
+`arm=` names the build (`turnloop` / `tokio-wait-driver` / `legacy`), so a
+measurement can prove which driver produced it. The A/B comparison is like with
+like: **every counter is recorded in both arms**, through the same call sites.
+The tokio tick is instrumented in `wait_driver_sleep`, which both arms reach —
+the turnloop arm through `precise_wait`'s native-in-flight branch, the
+`tokio-wait-driver` arm as its whole park.
+
+**Wake latency.** The waiter clears the stamp slot, publishes which wait kind it
+is parked in, and waits; a producer that sees a parked waiter stamps the
+monotonic clock (earliest notify wins); the waiter takes the stamp when the wait
+returns. Every producer is covered because they all fan out through
+`js_notify_main_thread` — a cross-thread producer (blocking pool, Worker,
+child-process reactor) and an in-thread native completion alike
+(`perry_ffi::notify_main_thread` from ext-http/net/ws, and the stdlib's own
+resolution sites). One notify into one parked wait is exactly one sample; a
+notify outside a wait is none. The one uncovered window — a notify published
+between the waiter's last `NOTIFIED` re-check and its parked-flag store — can
+only *omit* a sample, never invent one, and the wait itself is still counted.
+
+**Cost and scope.** Diagnostic only. With the variable unset every hook is one
+relaxed load of a lazily resolved state byte; nothing allocates and nothing
+locks on any wait path. Recording is limited to the primary agent, so a worker's
+legacy park cannot blur the comparison. The stats are process-global atomics, so
+they survive the agent loop being destroyed at exit — which is why the line can
+be printed after `shutdown_current_thread()`.
 
 ### A/B switch
 
@@ -249,6 +310,34 @@ unless stated otherwise.
 | `cargo check --target x86_64-pc-windows-msvc -p perry-runtime` | see "Windows" below |
 | gap test ext-routed (`net`, `http`, `ws`) and full suites | UNRUN (auto-optimize rebuilds; integrator) |
 
+**Wait metrics and harness (this lane).** All on macOS arm64, worktree target
+dir, `CARGO_BUILD_JOBS=6`.
+
+| Command | Result |
+|---|---|
+| `cargo check --locked --tests -p perry-runtime -p perry-stdlib` | PASS |
+| …`--features perry-stdlib/tokio-wait-driver` | PASS (the wait-metric module and its tests compile in both arms) |
+| `RUST_TEST_THREADS=1 cargo test --locked -p perry-runtime --lib -- event_pump:: --test-threads=1` | PASS — 21/21 (turnloop arm) |
+| `RUST_TEST_THREADS=1 cargo test --locked -p perry-stdlib --lib -- common::async_bridge --test-threads=1` | PASS — 6/6 (turnloop arm) |
+| same two, `--features perry-stdlib/tokio-wait-driver` | PASS — 13/13 and 6/6 (the turnloop-only `agent_loop` tests are not compiled in that arm) |
+| `cargo fmt --all -- --check`, `scripts/check_file_size.sh` | PASS |
+| `python3 scripts/gc_runtime_root_holders.py` | PASS (the new statics are integer atomics, so no new holder verdict is owed) |
+| `python3 scripts/turnloop/server_ab.py all --dry-run --work /tmp/turnloop-ab-dry` | PASS (plan printed; the summary/markdown path is driven over generated samples and self-checked) |
+
+Which test covers which counter:
+
+| Counter | Test |
+|---|---|
+| `tokio_ticks` (+ `_ns`), and that a tick is **not** miscounted as a turn | `agent_loop::tests::native_work_in_flight_is_counted_as_a_tokio_tick_not_a_turn` (registered predicate + tick); `async_bridge::tests::a_live_tokio_task_parks_the_main_loop_in_a_counted_tokio_tick` (the real shared tokio runtime, asserting the task ran and the park lasted ≥ 15 ms) |
+| `turnloop_waits` | `agent_loop::tests::another_thread_wakes_a_parked_turn_through_js_notify_main_thread` (exactly one turn, one wake sample) |
+| `condvar_waits` (+ `_ns`, `_max_ns`) | `loop_stats::tests::one_cross_thread_notify_into_a_condvar_park_is_one_wake_sample`, `…a_timed_out_wait_and_an_unparked_notify_add_no_wake_sample` |
+| `wake_samples`, exactly one per notify | the three tests above, one per wait kind |
+| no sample for a timeout, or a notify outside a wait | `…a_timed_out_wait_and_an_unparked_notify_add_no_wake_sample` |
+| bucket edges 50 µs / 200 µs / 1 ms / 5 ms | `loop_stats::tests::wake_latency_buckets_split_at_50us_200us_1ms_5ms` |
+| `fast_drives` (+ `_ns`), `zero_budget`, `throttle_sleeps` | `loop_stats::tests::fast_drives_and_zero_budget_returns_are_counted`; `…js_wait_for_event_zero_budget_path_is_counted` drives the real entry point |
+| worker agents are not recorded; the line names every field | `loop_stats::tests::workers_are_not_recorded_and_the_line_names_every_metric` |
+
+
 ### Lint gates
 
 `BASE_SHA=1cd160f3d1 SKIP_COMPILE_GATES=1 scripts/run_lint_gates.sh`: 76 of 77
@@ -294,6 +383,22 @@ afterwards (`git diff` empty):
 2. Only `agent_loop::wake_primary()` removed from `js_notify_main_thread`:
    `another_thread_wakes_a_parked_turn_through_js_notify_main_thread` FAILED
    ("wake was lost: waited 30.00s").
+
+Two more for the wait metrics, each reverted (`git diff` empty afterwards):
+
+3. `loop_stats::note_notify()` removed from `js_notify_main_thread`: the three
+   wake-sample tests FAILED, each "left: 0, right: 1" —
+   `another_thread_wakes_a_parked_turn_through_js_notify_main_thread`,
+   `one_cross_thread_notify_into_a_condvar_park_is_one_wake_sample`,
+   `one_notify_into_a_registered_tick_is_one_wake_sample`. The other 12 passed,
+   so the failure is specific to the removed hook.
+4. The `begin_wait`/`end_wait` pair removed from `wait_driver_sleep` (the tick is
+   still driven, just not measured):
+   `native_work_in_flight_is_counted_as_a_tokio_tick_not_a_turn` FAILED ("the
+   tick was not counted as a tokio tick", left 0 right 1) and
+   `one_notify_into_a_registered_tick_is_one_wake_sample` FAILED. The
+   condvar and turnloop wake tests still passed, so the arms are measured
+   independently.
 
 ### Measured loop counters (turnloop arm, macOS, `PERRY_LOOP_STATS=1`)
 
@@ -353,6 +458,84 @@ PERRY_SKIP_BUILD=1 PERRY_BIN=$PWD/target-b/release/perry ./run_parity_tests.sh -
 
 **Full auto-optimize tier (arm A).** `./scripts/run_gap_tests.sh` or the
 documented CI dispatch.
+
+**Server A/B (`scripts/turnloop/server_ab.py`, Linux x86_64 — perrymaster).**
+This is the measurement the wait metrics exist for. One command does everything:
+
+```bash
+# oha first (the harness prints this if it is missing):
+cargo install oha --locked        # or: apt install oha
+
+scripts/turnloop/server_ab.py all --work /root/turnloop-ab --jobs "$(nproc)"
+```
+
+`all` = `build` then `run`. Split them when the build and the measurement should
+not share a window:
+
+```bash
+scripts/turnloop/server_ab.py build --work /root/turnloop-ab [--profile release] [--jobs N]
+scripts/turnloop/server_ab.py run   --work /root/turnloop-ab \
+    [--rounds 5] [--concurrency 1,64,1024] [--duration 15] [--warmup 3] \
+    [--idle 10000,100000] [--idle-hold 10] \
+    [--load-tool auto|oha|wrk|ab] [--oha PATH] [--wrk PATH] \
+    [--syscalls auto|perf|strace|off]
+scripts/turnloop/server_ab.py report --work /root/turnloop-ab      # re-render from results.json
+scripts/turnloop/server_ab.py all --dry-run                        # plan + reporting self-check, macOS-safe
+```
+
+What `build` does, and why each part is there:
+
+- one `cargo build` per arm into `<work>/target-{turnloop,tokio}`, same commit,
+  same package set (`perry`, the two `-static` wrappers, ext-http/net/ws) and
+  the same `external-http-{server,client}-pump` features that
+  `run_parity_tests.sh` uses for no-auto-optimize http. Only the
+  `perry-stdlib/tokio-wait-driver` feature differs;
+- it records every archive's **mtime**, size and SHA-256, and warns when one
+  predates HEAD's commit time — the stale-`.a` failure mode from CLAUDE.md,
+  where both arms would behave identically and report a vacuous "no difference";
+- it compiles the same app with each arm's compiler under
+  `PERRY_NO_AUTO_OPTIMIZE=1` and `PERRY_RUNTIME_DIR=<arm out dir>` (auto-optimize
+  drops the A/B feature — arm B is only valid with prebuilt archives);
+- it then *runs* each server once and refuses to continue unless the
+  `[perry-loop] driver=…` marker and the `arm=` field of the
+  `[perry-loop-waits]` line match the arm it just built.
+
+`--skip-cargo` takes arms that are already built: build each arm in turn into one
+target tree, copy `perry` and the five archives into `<work>/target-turnloop` and
+`<work>/target-tokio`, and `build` records and verifies them without invoking
+cargo. That is for a host with room for only one cargo target tree.
+
+What `run` collects, per sample (one fresh server process each):
+
+| Group | Metrics |
+|---|---|
+| load (`oha`, else `wrk`; `ab` only on request) | throughput, p50/p99/p999, success rate |
+| CPU and scheduling | user/sys for the measured window *and* the process lifetime, wall, voluntary and involuntary context switches, threads, CPU µs per request |
+| syscalls | `perf stat -e raw_syscalls:sys_enter -p <pid>` over the measured window; else `strace -c -f` in a **separate** server process (perturbing, and labelled as such in the output) |
+| memory and size | peak RSS (`rusage`), RSS before/after the idle connections, bytes per idle connection, server binary size |
+| idle capacity | 10 000 and 100 000 keep-alive connections: how many opened, how many survive the hold, time to open, CPU and context switches during the hold |
+| waits | the whole `[perry-loop-waits]` line — tokio ticks vs turnloop turns, time and max per kind, fast drives, the wake-latency histogram, zero-budget and throttle hits |
+
+Arms alternate order every round (`rounds` defaults to 5). A sample whose marker
+or `arm=` does not match the arm it was meant to measure — or whose server
+needed `SIGKILL`, or whose load tool errored — is marked invalid, excluded from
+the medians and reported by reason, rather than averaged in. Output:
+`<work>/results/results.json` (every raw sample), `summary.json` and
+`summary.md` (median [min–max] per arm, plus the delta of medians).
+
+Host preparation for the 100k idle test (the harness warns and records the
+limits it found): `ulimit -n 1048576`, `fs.nr_open`,
+`net.ipv4.ip_local_port_range` — the client spreads connections over
+`127.0.0.1…127.0.0.N` (one source per 25 000) to get past the ephemeral-port
+ceiling. `perf` needs `kernel.perf_event_paranoid <= 1`.
+
+The subject is `scripts/turnloop/apps/node_http_hello.ts` (a `node:http`
+server), not an existing fastify/hono app: those need auto-optimize or
+`compilePackages`, and arm B does not survive auto-optimize. It sets
+`keepAliveTimeout = 0` so idle sockets are not reaped during the capacity test,
+and exits through `process.exit` on `SIGTERM` so the exit funnel prints the
+stats lines the harness reads.
+
 
 **Loop statistics and bridge probes, per arm.**
 
