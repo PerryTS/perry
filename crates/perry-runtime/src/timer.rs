@@ -25,6 +25,7 @@ extern "C" {
 
 /// A scheduled timer
 struct Timer {
+    _liveness: liveness::Membership,
     /// #6185: agent whose heap `promise` lives in; only it (or a pump acting for
     /// it — see `crate::agent`) may fire this timer.
     owner: crate::agent::AgentId,
@@ -110,6 +111,7 @@ fn schedule_promise_timer(delay_ms: f64, value: f64, has_ref: bool) -> *mut Prom
     let deadline = Instant::now() + delay;
 
     TIMER_QUEUE.lock().unwrap().push(Timer {
+        _liveness: liveness::Membership::new(0, None, has_ref),
         // #6185: tag with the scheduling agent — only it may fire this.
         owner: crate::agent::current_agent(),
         deadline,
@@ -231,6 +233,9 @@ pub extern "C" fn js_timer_tick() -> i32 {
     // #6287: fire the batch in deadline order, not creation order — a 5 ms
     // timer created after a 10 ms one must still fire first. The sort is
     // stable, so same-deadline timers keep firing in creation order.
+    for timer in &expired {
+        timer._liveness.retire();
+    }
     expired.sort_by_key(|timer| timer.deadline);
 
     // Resolve the expired timers' promises
@@ -272,7 +277,15 @@ pub extern "C" fn js_timer_tick_if_refed() -> i32 {
 /// Get the time until the next timer fires (in ms), or -1 if no timers
 #[no_mangle]
 pub extern "C" fn js_timer_next_deadline() -> f64 {
-    let now = Instant::now();
+    js_timer_deadline()
+        .map(|at| at.saturating_duration_since(Instant::now()).as_secs_f64() * 1000.0)
+        .unwrap_or(-1.0)
+}
+
+pub(crate) fn js_timer_deadline() -> Option<Instant> {
+    if !liveness::has_any(0) {
+        return None;
+    }
     let allow_unref = should_run_unref_promise_timers();
 
     TIMER_QUEUE
@@ -280,15 +293,8 @@ pub extern "C" fn js_timer_next_deadline() -> f64 {
         .unwrap()
         .iter()
         .filter(|t| (t.has_ref || allow_unref) && crate::agent::owns(t.owner))
-        .map(|t| {
-            if t.deadline <= now {
-                0.0
-            } else {
-                (t.deadline - now).as_millis() as f64
-            }
-        })
-        .min_by(|a, b| a.partial_cmp(b).unwrap())
-        .unwrap_or(-1.0)
+        .map(|t| t.deadline)
+        .min()
 }
 
 /// Sleep for the specified number of milliseconds
@@ -308,6 +314,7 @@ enum CallbackTimerKind {
 }
 
 struct CallbackTimer {
+    _liveness: liveness::Membership,
     /// Unique ID for this timer
     id: i64,
     /// Whether this callback came from `setTimeout` or `setImmediate`.
@@ -407,6 +414,7 @@ static NEXT_TIMER_ID: Mutex<i64> = Mutex::new(1);
 // #6084: the bounded ref-state registry lives in a submodule to keep this file
 // under the 2000-line lint cap.
 mod gc_scan;
+mod liveness;
 mod ownership;
 mod ref_states;
 #[cfg(test)] // #7680: not re-exported; reach via `crate::timer::test_shared_queues::`
@@ -603,11 +611,14 @@ fn normalize_timer_delay(delay_value: f64) -> u64 {
         }
         1
     } else {
-        delay_ms.max(0.0) as u64
+        // Node clamps timeout/interval delays below 1 ms at registration.
+        // This is JS API normalization, never an OS wait floor.
+        delay_ms.max(1.0) as u64
     }
 }
 
 fn set_timer_ref_state(id: i64, has_ref: bool) {
+    liveness::set_ref(id, has_ref);
     ref_states::TIMER_IDS_NONEMPTY.arm();
     let mut slot = TIMER_REF_STATES.lock().unwrap();
     slot.get_or_insert_with(TimerRefStates::default)
@@ -762,7 +773,11 @@ fn schedule_mock_callback_timer(
     let callback_handle =
         scope.root_raw_const_ptr(callback as *const crate::closure::ClosureHeader);
     let arg_handles = scope.root_nanbox_f64_slice(&args);
-    let delay = normalize_timer_delay(delay_ms);
+    let delay = if kind == CallbackTimerKind::Immediate {
+        0
+    } else {
+        normalize_timer_delay(delay_ms)
+    };
     let id = next_timer_id();
     record_timer_handle_kind(id, kind);
     let due_ms = state.current_ms + delay as f64;
@@ -1083,7 +1098,11 @@ fn schedule_callback_timer(
     let callback_handle =
         scope.root_raw_const_ptr(callback as *const crate::closure::ClosureHeader);
     let arg_handles = scope.root_nanbox_f64_slice(&args);
-    let delay_ms = normalize_timer_delay(delay_ms);
+    let delay_ms = if kind == CallbackTimerKind::Immediate {
+        0
+    } else {
+        normalize_timer_delay(delay_ms)
+    };
     let deadline = Instant::now() + Duration::from_millis(delay_ms);
 
     let id = next_timer_id();
@@ -1106,6 +1125,7 @@ fn schedule_callback_timer(
     crate::async_context::refresh_snapshot_from_roots(&mut context, &context_roots);
 
     CALLBACK_TIMERS.lock().unwrap().push(CallbackTimer {
+        _liveness: liveness::Membership::new(1, Some(id), true),
         id,
         kind,
         deadline,
@@ -1268,6 +1288,9 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
         )
     };
     // #6287: timers phase (by deadline) before check phase (FIFO immediates).
+    for timer in &expired {
+        timer._liveness.retire();
+    }
     order_expired_callback_batch(&mut expired);
 
     // #8036: draining removes the WHOLE expired batch from CALLBACK_TIMERS
@@ -1436,7 +1459,15 @@ pub fn active_timeout_resource_count() -> usize {
 /// (the most common `setTimeout(r, N)` used inside `new Promise(...)`).
 #[no_mangle]
 pub extern "C" fn js_callback_timer_next_deadline() -> f64 {
-    let now = Instant::now();
+    js_callback_timer_deadline()
+        .map(|at| at.saturating_duration_since(Instant::now()).as_secs_f64() * 1000.0)
+        .unwrap_or(-1.0)
+}
+
+pub(crate) fn js_callback_timer_deadline() -> Option<Instant> {
+    if !liveness::has_any(1) {
+        return None;
+    }
     let allow_unref = should_run_unref_callback_interval_timers();
 
     CALLBACK_TIMERS
@@ -1446,15 +1477,8 @@ pub extern "C" fn js_callback_timer_next_deadline() -> f64 {
         .filter(|t| {
             !t.cleared && crate::agent::owns(t.owner) && (timer_has_ref_state(t.id) || allow_unref)
         })
-        .map(|t| {
-            if t.deadline <= now {
-                0.0
-            } else {
-                (t.deadline - now).as_millis() as f64
-            }
-        })
-        .min_by(|a, b| a.partial_cmp(b).unwrap())
-        .unwrap_or(-1.0)
+        .map(|t| t.deadline)
+        .min()
 }
 
 /// Clear a Timeout by ID. Also clears the interval queue so Node's
@@ -1555,6 +1579,7 @@ pub extern "C" fn js_clear_immediate_value(arg: f64) {
 
 /// An interval timer that fires repeatedly
 struct IntervalTimer {
+    _liveness: liveness::Membership,
     /// Unique ID for this interval
     id: i64,
     /// The closure pointer to call
@@ -1612,6 +1637,7 @@ fn schedule_interval_timer(callback: i64, interval_ms: f64, args: Vec<f64>) -> i
     crate::async_context::refresh_snapshot_from_roots(&mut context, &context_roots);
 
     INTERVAL_TIMERS.lock().unwrap().push(IntervalTimer {
+        _liveness: liveness::Membership::new(2, Some(id), true),
         id,
         callback: callback_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>() as i64,
         interval_ms: interval,
@@ -1780,7 +1806,15 @@ pub extern "C" fn js_interval_timer_has_pending() -> i32 {
 /// Get the time until the next interval timer fires (in ms), or -1 if no timers
 #[no_mangle]
 pub extern "C" fn js_interval_timer_next_deadline() -> f64 {
-    let now = Instant::now();
+    js_interval_timer_deadline()
+        .map(|at| at.saturating_duration_since(Instant::now()).as_secs_f64() * 1000.0)
+        .unwrap_or(-1.0)
+}
+
+pub(crate) fn js_interval_timer_deadline() -> Option<Instant> {
+    if !liveness::has_any(2) {
+        return None;
+    }
     let allow_unref = should_run_unref_callback_interval_timers();
 
     INTERVAL_TIMERS
@@ -1790,15 +1824,8 @@ pub extern "C" fn js_interval_timer_next_deadline() -> f64 {
         .filter(|t| {
             !t.cleared && crate::agent::owns(t.owner) && (timer_has_ref_state(t.id) || allow_unref)
         })
-        .map(|t| {
-            if t.next_deadline <= now {
-                0.0
-            } else {
-                (t.next_deadline - now).as_millis() as f64
-            }
-        })
-        .min_by(|a, b| a.partial_cmp(b).unwrap())
-        .unwrap_or(-1.0)
+        .map(|t| t.next_deadline)
+        .min()
 }
 
 /// GC root scanner: mark all values reachable from timer queues

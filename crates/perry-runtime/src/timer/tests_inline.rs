@@ -36,6 +36,7 @@ pub(crate) fn test_seed_timer_scanner_roots(
     let context = crate::async_context::test_snapshot_with_store(context_store);
     let deadline = Instant::now() + Duration::from_secs(86_400);
     TIMER_QUEUE.lock().unwrap().push(Timer {
+        _liveness: crate::timer::liveness::Membership::new(0, None, true),
         // #6185: test scaffolding runs on the primary agent.
         owner: crate::agent::current_agent(),
         deadline,
@@ -44,6 +45,7 @@ pub(crate) fn test_seed_timer_scanner_roots(
         has_ref: true,
     });
     CALLBACK_TIMERS.lock().unwrap().push(CallbackTimer {
+        _liveness: crate::timer::liveness::Membership::new(1, Some(TEST_CALLBACK_TIMER_ID), true),
         // #6185: test scaffolding runs on the primary agent.
         owner: crate::agent::current_agent(),
         id: TEST_CALLBACK_TIMER_ID,
@@ -58,6 +60,7 @@ pub(crate) fn test_seed_timer_scanner_roots(
         cleared: false,
     });
     INTERVAL_TIMERS.lock().unwrap().push(IntervalTimer {
+        _liveness: crate::timer::liveness::Membership::new(2, Some(TEST_INTERVAL_TIMER_ID), true),
         // #6185: test scaffolding runs on the primary agent.
         owner: crate::agent::current_agent(),
         id: TEST_INTERVAL_TIMER_ID,
@@ -79,6 +82,7 @@ pub(crate) fn test_seed_many_timeout_roots(values: &[f64]) {
     q.clear();
     for &value in values {
         q.push(Timer {
+            _liveness: crate::timer::liveness::Membership::new(0, None, true),
             // #6185: test scaffolding runs on the primary agent.
             owner: crate::agent::current_agent(),
             deadline,
@@ -172,6 +176,7 @@ mod expired_batch_order_tests {
 
     fn timer(id: i64, kind: CallbackTimerKind, base: Instant, delay_ms: u64) -> CallbackTimer {
         CallbackTimer {
+            _liveness: crate::timer::liveness::Membership::new(1, Some(id), true),
             // #6185: test scaffolding runs on the primary agent.
             owner: crate::agent::current_agent(),
             id,

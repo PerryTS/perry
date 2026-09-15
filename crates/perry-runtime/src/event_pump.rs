@@ -25,7 +25,21 @@
 use std::os::raw::c_void;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicPtr, Ordering};
 use std::sync::{Condvar, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+#[cfg(not(target_arch = "wasm32"))]
+mod driver_loop;
+#[cfg(target_arch = "wasm32")]
+#[path = "event_pump/driver_loop_wasm.rs"]
+mod driver_loop;
+mod precise;
+pub use driver_loop::{
+    install_turnloop_driver, loop_statistics, register_native_wait_bridge,
+    wake as wake_turnloop_driver,
+};
+pub use precise::{
+    register_precise_wait_driver, register_stdlib_deadline_provider, shutdown_wait_driver,
+};
 
 use crate::timer::{
     js_callback_timer_next_deadline, js_interval_timer_next_deadline, js_timer_next_deadline,
@@ -176,6 +190,9 @@ fn invoke_wait_driver_wake() {
 /// registered; the driver itself no-ops when nothing native is in flight.
 #[inline]
 fn invoke_wait_driver_fast() {
+    if precise::fast() {
+        return;
+    }
     let p = WAIT_DRIVER_FAST.load(Ordering::Acquire);
     if p.is_null() {
         return;
@@ -467,9 +484,9 @@ pub extern "C" fn perry_has_work() -> i32 {
     if pending_microtasks > 0 {
         return 1;
     }
-    let has_timer = js_timer_next_deadline() >= 0.0
-        || js_callback_timer_next_deadline() >= 0.0
-        || js_interval_timer_next_deadline() >= 0.0;
+    let has_timer = crate::timer::js_timer_has_pending() != 0
+        || crate::timer::js_callback_timer_has_pending() != 0
+        || crate::timer::js_interval_timer_has_pending() != 0;
     if has_timer {
         return 1;
     }
@@ -542,6 +559,11 @@ pub extern "C" fn js_event_loop_host_driven() -> i32 {
 /// `await` busy-wait.
 #[no_mangle]
 pub extern "C" fn js_wait_for_event() {
+    // Runtime-only timer/promise programs also get a main-agent loop. A stdlib
+    // A/B driver already registered here retains its historical implementation.
+    if !precise::installed() && WAIT_DRIVER_SLEEP.load(Ordering::Acquire).is_null() {
+        install_turnloop_driver();
+    }
     // `PERRY_GC_CENSUS`: one relaxed atomic load; services a pending SIGUSR2
     // census request on the main thread before parking.
     crate::gc::census_poll_signal();
@@ -582,21 +604,21 @@ pub extern "C" fn js_wait_for_event() {
         return;
     }
 
-    let mut budget_ms: u64 = IDLE_CAP_MS;
-    for d in next_wake_sources_ms() {
-        if d >= 0.0 {
-            let d_ms = d as u64;
-            if d_ms < budget_ms {
-                budget_ms = d_ms;
-            }
-        }
+    // Preserve absolute deadlines through GC idle work and the driver call.
+    let now = Instant::now();
+    let deadline = precise::next_deadline(now);
+    let precise_driver = precise::installed();
+    let mut budget = deadline.saturating_duration_since(now);
+    // The compile-time A/B driver retains its historical millisecond budget.
+    if !precise_driver && !WAIT_DRIVER_SLEEP.load(Ordering::Acquire).is_null() {
+        budget = Duration::from_millis(budget.as_millis() as u64);
     }
     #[cfg(test)]
     if TEST_FORCE_ZERO_BUDGET.load(Ordering::Acquire) {
-        budget_ms = 0;
+        budget = Duration::ZERO;
     }
 
-    if budget_ms == 0 {
+    if budget.is_zero() {
         if crate::promise::mt_profile_enabled() {
             PROFILE_WAIT_ZERO_COUNT.fetch_add(1, Ordering::Relaxed);
         }
@@ -631,10 +653,19 @@ pub extern "C" fn js_wait_for_event() {
     // hook steps in wake-checked slices; when it did work or a wake arrived
     // the timer budget computed above is stale, so go back around the loop
     // rather than parking on it. Otherwise park for whatever it left.
-    let budget_ms = match crate::gc::idle_reclaim_park_hook(budget_ms) {
+    // GC's millisecond budget controls GC slices only. Never use its rounded
+    // return value as the OS wait budget; retain the original Instant.
+    match crate::gc::idle_reclaim_park_hook(budget.as_millis() as u64) {
         crate::gc::ParkVerdict::Resume => return,
-        crate::gc::ParkVerdict::Park(remaining_ms) => remaining_ms,
-    };
+        crate::gc::ParkVerdict::Park(_) => {}
+    }
+    if precise::sleep(deadline) {
+        spin_streak_reset();
+        return;
+    }
+    let budget = deadline
+        .saturating_duration_since(Instant::now())
+        .min(budget);
     // Unified single-thread async model: when perry-stdlib has installed a
     // wait-driver (i.e. async work exists), drive ONE bounded tick of the
     // current-thread tokio runtime here instead of parking on the condvar. The
@@ -642,7 +673,7 @@ pub extern "C" fn js_wait_for_event() {
     // completion is observed in-thread and queued with no cross-thread wake to
     // lose; `perry_poll` drains it on the next loop turn. A real tick yielded
     // the core, so it counts as progress for the #1114 spin throttle.
-    if wait_driver_sleep(budget_ms) {
+    if wait_driver_sleep(budget.as_millis() as u64) {
         if crate::promise::mt_profile_enabled() {
             PROFILE_WAIT_DRIVER_COUNT.fetch_add(1, Ordering::Relaxed);
         }
@@ -671,10 +702,7 @@ pub extern "C" fn js_wait_for_event() {
         WAITER_COUNT.fetch_sub(1, Ordering::Release);
         return;
     }
-    let (mut new_flag, _) = PUMP
-        .cvar
-        .wait_timeout(flag, Duration::from_millis(budget_ms))
-        .unwrap();
+    let (mut new_flag, _) = PUMP.cvar.wait_timeout(flag, budget).unwrap();
     *new_flag = false;
     WAITER_COUNT.fetch_sub(1, Ordering::Release);
     NOTIFIED.store(false, Ordering::Release);
@@ -689,6 +717,7 @@ pub extern "C" fn js_wait_for_event() {
 #[no_mangle]
 pub extern "C" fn js_unsettled_top_level_await_exit() {
     const MESSAGE: &[u8] = b"Warning: Detected unsettled top-level await\n";
+    shutdown_wait_driver();
 
     #[cfg(unix)]
     unsafe {

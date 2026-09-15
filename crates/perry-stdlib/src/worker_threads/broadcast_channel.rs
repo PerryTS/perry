@@ -27,6 +27,7 @@ extern "C" fn broadcast_post_message(closure: *const ClosureHeader, value: f64) 
         for (id, state) in channels.borrow_mut().iter_mut() {
             if *id != channel_id && !state.closed && state.name == channel_name {
                 state.inbox.push_back(serialized.clone());
+                state.refresh_activity();
             }
         }
     });
@@ -41,6 +42,7 @@ extern "C" fn broadcast_close(closure: *const ClosureHeader) -> f64 {
             state.closed = true;
             state.inbox.clear();
             state.message_event_cbs.clear();
+            state.refresh_activity();
         }
     });
     js_undefined()
@@ -78,6 +80,7 @@ extern "C" fn broadcast_add_event_listener(
                     callback_bits: cb_bits,
                     once: listener_once(options),
                 });
+                state.refresh_activity();
             }
         }
     });
@@ -100,6 +103,7 @@ extern "C" fn broadcast_remove_event_listener(
                 state
                     .message_event_cbs
                     .retain(|listener| listener.callback_bits != cb_bits);
+                state.refresh_activity();
             }
         }
     });
@@ -121,7 +125,6 @@ pub extern "C" fn js_worker_threads_broadcast_channel_new(name: f64) -> f64 {
     let name_string = string_value_to_string(name_value).unwrap_or_default();
     let obj = perry_runtime::object::js_object_alloc(0, 0);
     set_object_prototype(obj, constructor_prototype("BroadcastChannel"));
-    let object_bits = object_value(obj).to_bits();
     set_object_field(
         obj,
         "constructor",
@@ -157,10 +160,11 @@ pub extern "C" fn js_worker_threads_broadcast_channel_new(name: f64) -> f64 {
         "removeEventListener",
         port_bound_closure(broadcast_remove_event_listener as *const u8, 2, id),
     );
-    set_object_field(obj, "onmessage", js_null());
     set_object_field(obj, "onmessageerror", js_null());
     set_object_field(obj, "name", name_value);
     set_object_field(obj, "__perryBroadcastChannelId", f64::from_bits(id));
+    let obj = super::channel_activity::install_handler(obj, id, true);
+    let object_bits = object_value(obj).to_bits();
     BROADCAST_CHANNELS.with(|channels| {
         channels.borrow_mut().insert(
             id,

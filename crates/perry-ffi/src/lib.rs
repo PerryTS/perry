@@ -369,3 +369,6 @@ mod tests {
         assert_eq!(read_string(null_handle), None);
     }
 }
+
+/// Native event-loop membership counters for binding implementations.
+pub mod activity;

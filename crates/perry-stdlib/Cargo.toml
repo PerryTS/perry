@@ -16,6 +16,8 @@ workspace = true
 crate-type = ["rlib"]
 
 [features]
+# P0 measurement control; P8 removes this along with the transitional bridge.
+tokio-wait-driver = []
 # Default: include everything for backwards compatibility
 default = ["full"]
 
@@ -478,3 +480,7 @@ windows-sys = { version = "0.61", features = [
 # at the test-file level via `#[cfg(feature = "container")]`).
 proptest = "1"
 serde_yaml = "0.9"
+
+# Native P0 wait driver; web/WASI retain their existing host integration.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+turnloop = "=0.1.0-alpha.2"

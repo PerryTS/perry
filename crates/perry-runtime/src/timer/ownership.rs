@@ -8,7 +8,7 @@
 //! ownership: per-agent event-loop liveness, and what happens to an agent's
 //! timers when the agent itself goes away.
 
-use super::{timer_has_ref_state, CALLBACK_TIMERS, INTERVAL_TIMERS, TIMER_QUEUE};
+use super::{CALLBACK_TIMERS, INTERVAL_TIMERS, TIMER_QUEUE};
 
 /// Any entry needs the ordinary timer phase, including unref timers and
 /// cleared entries whose cleanup has not run. Foreign entries conservatively
@@ -31,23 +31,15 @@ pub(crate) fn timer_phase_work_pending() -> bool {
 // other agent's loop alive.
 
 pub(super) fn has_refed_promise_timer() -> bool {
-    TIMER_QUEUE
-        .lock()
-        .unwrap()
-        .iter()
-        .any(|timer| timer.has_ref && crate::agent::owns(timer.owner))
+    super::liveness::has_refed(0)
 }
 
 pub(super) fn has_refed_callback_timer() -> bool {
-    CALLBACK_TIMERS.lock().unwrap().iter().any(|timer| {
-        !timer.cleared && crate::agent::owns(timer.owner) && timer_has_ref_state(timer.id)
-    })
+    super::liveness::has_refed(1)
 }
 
 pub(super) fn has_refed_interval_timer() -> bool {
-    INTERVAL_TIMERS.lock().unwrap().iter().any(|timer| {
-        !timer.cleared && crate::agent::owns(timer.owner) && timer_has_ref_state(timer.id)
-    })
+    super::liveness::has_refed(2)
 }
 
 /// Drop every timer owned by `agent`. Called from `crate::agent::retire_agent`

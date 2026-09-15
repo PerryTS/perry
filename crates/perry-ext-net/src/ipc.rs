@@ -32,6 +32,7 @@ fn allocate_socket() -> (i64, mpsc::UnboundedReceiver<SocketCommand>) {
     statics::sockets().lock().unwrap().insert(
         id,
         SocketState {
+            activity: perry_ffi::activity::Reference::new(&crate::ACTIVE_HANDLES, true),
             tcp_async_id: 0,
             connect_async_id: 0,
             shutdown_async_id: 0,
@@ -104,6 +105,7 @@ pub(crate) fn register_accepted_transport(
     statics::sockets().lock().unwrap().insert(
         socket_id,
         SocketState {
+            activity: perry_ffi::activity::Reference::new(&crate::ACTIVE_HANDLES, true),
             tcp_async_id: 0,
             connect_async_id: 0,
             shutdown_async_id: 0,
@@ -150,7 +152,7 @@ pub(crate) fn connect_existing(handle: i64, path: String) {
         let mut sockets = statics::sockets().lock().unwrap();
         match sockets
             .get_mut(&handle)
-            .and_then(|socket| socket.pending_rx.take())
+            .and_then(|socket| socket.take_pending_rx())
         {
             Some(rx) => rx,
             None => {
@@ -187,6 +189,7 @@ fn spawn_connect(id: i64, path: String, mut rx: mpsc::UnboundedReceiver<SocketCo
             let raw_fd = transport.raw_fd();
             if let Some(socket) = statics::sockets().lock().unwrap().get_mut(&id) {
                 socket.is_open = true;
+                socket.refresh_activity();
                 socket.raw_fd = raw_fd;
             }
             tokio::task::yield_now().await;
@@ -208,6 +211,7 @@ pub(crate) fn spawn_listener(server_id: i64, path: String, shutdown_rx: oneshot:
         if let Ok(mut servers) = statics::servers().lock() {
             if let Some(server) = servers.get_mut(&server_id) {
                 server.listening = false;
+                server.refresh_activity();
             }
         }
     });

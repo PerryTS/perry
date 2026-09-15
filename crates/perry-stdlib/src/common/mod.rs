@@ -2,7 +2,9 @@
 
 use perry_runtime::{string::str_bytes_from_jsvalue, value::JSValue, StringHeader};
 
+pub(crate) mod activity;
 pub mod handle;
+pub(crate) mod wait_driver;
 // Tokio-backed promise/runtime bridge — only needed when an async feature
 // (http-server/client, websocket, databases, email, scheduler, rate-limit,
 // crypto's bcrypt path, …) pulls in `async-runtime`. Always-on code that

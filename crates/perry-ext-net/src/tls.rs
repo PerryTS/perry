@@ -42,6 +42,7 @@ unsafe fn schedule_tls_abort(handle: i64) {
     // until its deferred Close event removes it from the registry.
     if let Some(socket) = crate::statics::sockets().lock().unwrap().get_mut(&handle) {
         socket.is_open = true;
+        socket.refresh_activity();
     }
     pending_tls_aborts().lock().unwrap().insert(handle);
     perry_ffi::spawn_async(async move {

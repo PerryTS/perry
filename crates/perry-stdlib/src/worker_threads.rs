@@ -24,6 +24,7 @@ use perry_runtime::value::JSValue;
 // #7764: async-bridge entry points that exist in both feature configurations.
 mod async_shim;
 mod broadcast_channel;
+mod channel_activity;
 mod channel_pump;
 mod direct_message;
 mod message_port;
@@ -127,6 +128,8 @@ thread_local! {
 /// single queued message synchronously without involving the pump.
 #[derive(Default)]
 struct MessagePortState {
+    activity: channel_activity::Reference,
+    handler_present: bool,
     /// Id of the paired port. `postMessage` delivers to the peer's inbox.
     peer: u64,
     /// NaN-boxed MessagePort object value, used as MessageEvent target.
@@ -161,6 +164,8 @@ struct MessagePortState {
 
 #[derive(Default)]
 struct BroadcastChannelState {
+    activity: channel_activity::Reference,
+    handler_present: bool,
     /// String-coerced channel name. Instances with equal names receive each
     /// other's posts within the current process.
     name: String,
@@ -199,7 +204,10 @@ enum WorkerCommand {
     Terminate,
 }
 
+static WORKER_ACTIVE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 struct WorkerRecord {
+    activity: crate::common::activity::Reference,
     sender: Sender<WorkerCommand>,
     /// NaN-boxed Worker handle used as the target for property handlers such
     /// as `worker.onmessage = fn`. Kept as a mutable GC root below.
@@ -927,6 +935,7 @@ extern "C" fn worker_ref(closure: *const ClosureHeader) -> f64 {
 fn worker_ref_by_id(worker_id: u64) -> f64 {
     if let Some(worker) = WORKERS.lock().unwrap().get_mut(&worker_id) {
         worker.refed = true;
+        worker.activity.set(worker.alive);
     }
     js_undefined()
 }
@@ -938,6 +947,7 @@ extern "C" fn worker_unref(closure: *const ClosureHeader) -> f64 {
 fn worker_unref_by_id(worker_id: u64) -> f64 {
     if let Some(worker) = WORKERS.lock().unwrap().get_mut(&worker_id) {
         worker.refed = false;
+        worker.activity.set(false);
     }
     js_undefined()
 }
@@ -1086,17 +1096,22 @@ pub extern "C" fn js_worker_threads_move_message_port_to_context(port: f64, _con
 pub extern "C" fn js_worker_threads_receive_message_on_port(port: f64) -> f64 {
     let msg = if let Some(port_id) = port_id_from_object(port) {
         MESSAGE_PORTS.with(|ports| {
-            ports
-                .borrow_mut()
-                .get_mut(&port_id)
-                .and_then(|state| state.inbox.pop_front())
+            ports.borrow_mut().get_mut(&port_id).and_then(|state| {
+                let message = state.inbox.pop_front();
+                state.refresh_activity();
+                message
+            })
         })
     } else if let Some(channel_id) = broadcast_channel_id_from_object(port) {
         BROADCAST_CHANNELS.with(|channels| {
             channels
                 .borrow_mut()
                 .get_mut(&channel_id)
-                .and_then(|state| state.inbox.pop_front())
+                .and_then(|state| {
+                    let message = state.inbox.pop_front();
+                    state.refresh_activity();
+                    message
+                })
         })
     } else {
         None
@@ -1226,6 +1241,7 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
     WORKERS.lock().unwrap().insert(
         worker_id,
         WorkerRecord {
+            activity: crate::common::activity::Reference::new(&WORKER_ACTIVE, true),
             sender: tx,
             object_bits: object_value(worker_obj).to_bits(),
             listeners: HashMap::new(),

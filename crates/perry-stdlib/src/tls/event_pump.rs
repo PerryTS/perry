@@ -198,21 +198,5 @@ pub fn js_tls_has_active_handles() -> i32 {
     if !pending_events().lock().unwrap().is_empty() {
         return 1;
     }
-    if servers()
-        .lock()
-        .unwrap()
-        .values()
-        .any(|server| server.listening || (server.closing && server.active_connections > 0))
-    {
-        return 1;
-    }
-    if sockets()
-        .lock()
-        .unwrap()
-        .values()
-        .any(|s| s.server_side && s.cmd_tx.is_some())
-    {
-        return 1;
-    }
-    0
+    i32::from(super::TLS_ACTIVE.load(std::sync::atomic::Ordering::Acquire) != 0)
 }

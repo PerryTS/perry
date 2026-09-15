@@ -138,6 +138,7 @@ pub extern "C" fn js_ext_net_is_socket_handle(handle: i64) -> i32 {
 pub extern "C" fn js_ext_net_socket_set_ref(handle: i64, refed: i32) {
     if let Some(socket) = statics::sockets().lock().unwrap().get_mut(&handle) {
         socket.refed = refed != 0;
+        socket.refresh_activity();
     }
     perry_ffi::notify_main_thread();
 }

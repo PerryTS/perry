@@ -158,21 +158,16 @@ fn escape_timeout_expired() -> bool {
 /// ceiling avoids truncating a sub-millisecond remainder to zero and spinning
 /// before the timeout is actually due.
 pub(crate) extern "C" fn js_readline_next_wake_ms() -> f64 {
+    next_deadline()
+        .map(|at| at.saturating_duration_since(Instant::now()).as_secs_f64() * 1000.0)
+        .unwrap_or(-1.0)
+}
+
+pub(crate) fn next_deadline() -> Option<Instant> {
     if STDIN_DESTROYED.load(Ordering::Acquire) || STDIN_PAUSED.load(Ordering::Acquire) {
-        return -1.0;
+        return None;
     }
-    let Ok(deadline) = PENDING_ESCAPE_DEADLINE.lock() else {
-        return -1.0;
-    };
-    let Some(deadline) = *deadline else {
-        return -1.0;
-    };
-    let now = Instant::now();
-    if deadline <= now {
-        0.0
-    } else {
-        deadline.duration_since(now).as_millis().saturating_add(1) as f64
-    }
+    *PENDING_ESCAPE_DEADLINE.lock().ok()?
 }
 
 /// Reassemble ANSI escape sequences that the raw-mode reader queues as

@@ -50,6 +50,7 @@ pub fn adopt_upgraded_tcp_stream(stream: tokio::net::TcpStream) -> i64 {
     statics::sockets().lock().unwrap().insert(
         id,
         SocketState {
+            activity: perry_ffi::activity::Reference::new(&crate::ACTIVE_HANDLES, true),
             tcp_async_id: 0,
             connect_async_id: 0,
             shutdown_async_id: 0,

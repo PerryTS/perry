@@ -447,6 +447,7 @@ unsafe extern "C" fn js_node_http_native_dispatch(
 /// Must be called before any user code runs.
 #[no_mangle]
 pub unsafe extern "C" fn js_stdlib_init_dispatch() {
+    crate::common::wait_driver::install();
     extern "C" {
         fn js_register_handle_method_dispatch(
             f: unsafe extern "C" fn(i64, *const u8, usize, *const f64, usize) -> f64,
