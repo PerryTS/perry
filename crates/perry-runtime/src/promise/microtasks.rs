@@ -1201,8 +1201,16 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
     // Node's turn ordering (`Promise.resolve().then(...)` before
     // `setTimeout(..., 0)`). Timer callbacks may enqueue more microtasks;
     // those drain on the next pump iteration before newly due timers.
+    //
+    // turnloop P3: `EventLoop` — the compiled entry's pump — no longer fires
+    // them. That pump is one step of an iteration whose phases the generated
+    // loop now emits in Node's order (timers → poll → check), so firing timers
+    // from inside the microtask checkpoint would put the check phase back
+    // before the poll phase. Every OTHER caller is a busy-wait pump with no
+    // phases of its own (`for await` over a stream, `fs.cp`, `perry_poll`), and
+    // for those "run whatever is due" is still the right approximation.
     let fire_timers = match mode {
-        MicrotaskDrainMode::AllowTimers | MicrotaskDrainMode::EventLoop => !reentrant,
+        MicrotaskDrainMode::AllowTimers => !reentrant,
         // #5437 (CodeRabbit): the codegen `await` loop calls this drain and then
         // `js_await_loop_tick_timers` (the guard-suspending timer path) on the
         // very same iteration — the two are always emitted as a pair and this is
@@ -1214,10 +1222,10 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
         _ => false,
     };
     if fire_timers {
-        *ran += crate::timer::js_timer_tick();
-        *ran += crate::timer::js_callback_timer_tick();
+        *ran += crate::timer::js_event_loop_timers_phase();
         *ran += crate::builtins::drain_queued_microtasks_count();
-        *ran += crate::timer::js_interval_timer_tick();
+        *ran += crate::timer::js_event_loop_poll_callbacks();
+        *ran += crate::timer::js_event_loop_check_phase();
     }
 }
 

@@ -34,6 +34,7 @@ use std::time::Duration;
 mod agent_loop;
 #[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
 mod precise_wait;
+pub(crate) use agent_loop::arm_timer as arm_agent_timer;
 #[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
 pub use agent_loop::{loop_statistics, LoopStats};
 /// `PERRY_LOOP_STATS=1` wait metrics, recorded identically in both A/B arms.
@@ -631,8 +632,8 @@ pub extern "C" fn perry_has_work() -> i32 {
 fn next_wake_sources_ms() -> [f64; 4] {
     [
         js_timer_next_deadline(),
-        js_callback_timer_next_deadline(),
-        js_interval_timer_next_deadline(),
+        -1.0,
+        -1.0,
         crate::stdlib_pump::stdlib_next_wake_ms(),
     ]
 }
