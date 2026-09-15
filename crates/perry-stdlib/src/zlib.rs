@@ -436,7 +436,6 @@ fn run_one_shot_codec(codec: Codec, input: &[u8]) -> std::io::Result<Vec<u8>> {
 unsafe fn queue_zlib_callback(codec: Codec, data_value: f64, callback_value: f64) {
     let callback = validate_callback_arg(callback_value) as i64;
     let data = codec_bytes(data_value);
-    let result = run_one_shot_codec(codec, &data).map_err(|e| e.to_string());
     crate::common::async_bridge::ensure_pump_registered();
     ensure_zlib_gc_scanner();
     let resource = perry_runtime::js_object_alloc_null_proto(0, 0);
@@ -445,11 +444,38 @@ unsafe fn queue_zlib_callback(codec: Codec, data_value: f64, callback_value: f64
         perry_runtime::js_nanbox_pointer(resource as i64),
         true,
     );
-    ZLIB_PENDING_EVENTS
-        .lock()
-        .unwrap()
-        .push(ZlibEvent::OneShotCallback(callback, result, async_ids));
-    perry_runtime::event_pump::js_notify_main_thread();
+    // turnloop P4: the codec runs on turnloop's shared blocking pool, which is
+    // where Node runs it too (libuv's threadpool). Perry ran it inline on the
+    // thread that owns the JS heap and deferred only the *callback*, so
+    // `zlib.gzip(oneMegabyte, cb)` stalled every timer, socket and immediate
+    // for the whole compression while still looking asynchronous from JS.
+    //
+    // The callback is a raw closure pointer with no other referent until the
+    // event is queued, so it is parked in the job's root set and comes back
+    // rewritten: `ZLIB_PENDING_EVENTS`' own scanner covers it only once the
+    // event exists, which is now after the compression rather than before it.
+    let parked = perry_runtime::js_nanbox_pointer(callback).to_bits();
+    perry_runtime::turnloop_pool::submit_or_run_inline_rooted(
+        vec![parked],
+        move || run_one_shot_codec(codec, &data).map_err(|e| e.to_string()),
+        move |delivery, roots| {
+            use perry_runtime::turnloop_pool::Delivery;
+            let callback = roots
+                .first()
+                .map(|bits| perry_runtime::js_nanbox_get_pointer(f64::from_bits(*bits)))
+                .unwrap_or(0);
+            let result = match delivery {
+                Delivery::Done(result) => result,
+                Delivery::Cancelled => Err("zlib operation was cancelled".to_string()),
+                Delivery::Failed(_) => Err("zlib operation failed".to_string()),
+            };
+            ZLIB_PENDING_EVENTS
+                .lock()
+                .unwrap()
+                .push(ZlibEvent::OneShotCallback(callback, result, async_ids));
+            perry_runtime::event_pump::js_notify_main_thread();
+        },
+    );
 }
 
 /// `zlib.gzip(data, callback)` -> undefined

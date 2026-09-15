@@ -1,15 +1,16 @@
 //! Native bindings for the npm `argon2` package.
 //!
-//! Sixth wrapper port under #466 Phase 5 (#466 step 6). Uses
-//! perry-ffi v0.5.1's async surface — same recipe as bcrypt.
+//! Sixth wrapper port under #466 Phase 5 (#466 step 6). Since turnloop P4 it
+//! uses the perry-ffi async **ABI v2** ([`perry_ffi::pool`]) — same recipe as
+//! bcrypt: the derivation runs on turnloop's shared bounded pool, and the JS
+//! string is built on the thread that owns the heap rather than on the worker
+//! (the #1824 arena hazard the v1 shape had).
 
 use argon2::{
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
 };
-use perry_ffi::{
-    alloc_string, read_string, spawn_blocking, JsPromise, JsString, Promise, StringHeader,
-};
+use perry_ffi::{alloc_string, pool, read_string, JsPromise, JsString, Promise, StringHeader};
 use rand_core::OsRng;
 
 /// `argon2.hash(password) -> Promise<string>` — Argon2id with
@@ -29,14 +30,21 @@ pub unsafe extern "C" fn js_argon2_hash(password_ptr: *const StringHeader) -> *m
         return raw;
     };
 
-    spawn_blocking(move || {
-        let salt = SaltString::generate(&mut OsRng);
-        let argon2 = Argon2::default();
-        match argon2.hash_password(password.as_bytes(), &salt) {
-            Ok(hash) => promise.resolve_string(&hash.to_string()),
-            Err(e) => promise.reject_string(&format!("Failed to hash password: {}", e)),
-        }
-    });
+    pool::submit_or_run_inline(
+        move || {
+            let salt = SaltString::generate(&mut OsRng);
+            Argon2::default()
+                .hash_password(password.as_bytes(), &salt)
+                .map(|hash| hash.to_string())
+                .map_err(|e| format!("Failed to hash password: {}", e))
+        },
+        move |outcome| match outcome {
+            pool::Outcome::Done(Ok(hash)) => promise.resolve_string(&hash),
+            pool::Outcome::Done(Err(message)) => promise.reject_string(&message),
+            pool::Outcome::Cancelled => promise.reject_string("argon2.hash was cancelled"),
+            pool::Outcome::Failed => promise.reject_string("argon2.hash failed"),
+        },
+    );
     raw
 }
 
@@ -85,20 +93,21 @@ pub unsafe extern "C" fn js_argon2_verify(
         return raw;
     };
 
-    spawn_blocking(move || {
-        let parsed_hash = match PasswordHash::new(&hash_str) {
-            Ok(h) => h,
-            Err(e) => {
-                promise.reject_string(&format!("Invalid hash format: {}", e));
-                return;
-            }
-        };
-        let argon2 = Argon2::default();
-        let is_valid = argon2
-            .verify_password(password.as_bytes(), &parsed_hash)
-            .is_ok();
-        promise.resolve_bool(is_valid);
-    });
+    pool::submit_or_run_inline(
+        move || -> Result<bool, String> {
+            let parsed_hash =
+                PasswordHash::new(&hash_str).map_err(|e| format!("Invalid hash format: {}", e))?;
+            Ok(Argon2::default()
+                .verify_password(password.as_bytes(), &parsed_hash)
+                .is_ok())
+        },
+        move |outcome| match outcome {
+            pool::Outcome::Done(Ok(is_valid)) => promise.resolve_bool(is_valid),
+            pool::Outcome::Done(Err(message)) => promise.reject_string(&message),
+            pool::Outcome::Cancelled => promise.reject_string("argon2.verify was cancelled"),
+            pool::Outcome::Failed => promise.reject_string("argon2.verify failed"),
+        },
+    );
     raw
 }
 

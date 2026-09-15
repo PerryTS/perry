@@ -220,6 +220,55 @@ pub(crate) fn with_net_driver<R>(f: impl FnOnce(&mut turnloop::Loop) -> R) -> Op
     }
 }
 
+/// turnloop P4: run `f` against this agent's driver for a blocking-pool
+/// submission, creating the loop first.
+///
+/// Deliberately the **same profile** as the net path rather than a cheaper
+/// pool-sized one. A profile upgrade *recreates* the loop, and a recreated
+/// loop takes its `WorkPort` with it: a pool job still running on a worker
+/// thread would then push its result into a closed port, which discards it,
+/// and the awaiting promise would never settle. Sharing the net profile means
+/// the only upgrade edge stays Wait → Net and it always runs *before* the
+/// submission that needed it, so no upgrade can ever happen underneath an
+/// outstanding job (`agent_loop::upgrade_profile` asserts exactly that).
+/// The cost is the net profile's pooled read buffers in a process whose only
+/// turnloop work is CPU-bound; that is the trade the note above buys.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn with_pool_driver<R>(f: impl FnOnce(&mut turnloop::Loop) -> R) -> Option<R> {
+    with_net_driver(f)
+}
+
+/// turnloop P4 (DESIGN §9, "`run_pending` becomes a bounded `turn`"): drive
+/// this agent's loop for at most `budget_ms`, dispatching whatever completes.
+///
+/// The v1 `perry_ffi_run_pending` exists for a *synchronous* native API that
+/// blocks the JS thread waiting for something another thread will deliver
+/// (`js_ws_wait_for_message`). Under tokio that meant "drive the runtime";
+/// under turnloop it means one bounded turn, because a turn is the only thing
+/// that collects a pool completion. Returns immediately when this thread has
+/// no loop, so the caller's legacy poll still works.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn js_loop_turn_bounded(budget_ms: u64) {
+    #[cfg(not(feature = "tokio-wait-driver"))]
+    {
+        if !agent_loop::eligible() || !agent_loop::ensure_loop() {
+            return;
+        }
+        if budget_ms == 0 || !agent_loop::has_outstanding_work() {
+            // Nothing to wait *for*: collect anything already queued and
+            // return rather than burning the caller's budget in an OS wait.
+            agent_loop::settle_turn();
+            return;
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(budget_ms);
+        let _ = agent_loop::park_until(deadline);
+    }
+    #[cfg(feature = "tokio-wait-driver")]
+    {
+        let _ = budget_ms;
+    }
+}
+
 /// Test-only: install an unrouted net-profile loop on this thread.
 #[cfg(all(test, not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
 pub(crate) fn install_net_loop_for_test() -> bool {

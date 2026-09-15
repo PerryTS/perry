@@ -5,7 +5,7 @@
 
 use perry_runtime::{js_string_from_bytes, JSValue, StringHeader};
 
-use crate::common::async_bridge::{queue_deferred_resolution, queue_promise_resolution, spawn};
+use crate::common::async_bridge::{pool_for_promise_deferred, queue_promise_resolution};
 use crate::common::string_from_header;
 
 /// Hash a password with the given cost factor
@@ -31,43 +31,19 @@ pub unsafe extern "C" fn js_bcrypt_hash(
 
     let cost = salt_rounds as u32;
 
-    // Spawn async task for hashing (bcrypt is CPU-intensive)
-    spawn(async move {
-        let result = tokio::task::spawn_blocking(move || bcrypt::hash(password, cost)).await;
-
-        match result {
-            Ok(Ok(hash)) => {
-                // #1292: build the JS string on the MAIN thread (deferred)
-                // and tag it STRING_TAG via `string_ptr`. The old path used
-                // `JSValue::pointer` (POINTER_TAG) and allocated on the tokio
-                // worker arena, so the awaited result was a string-like
-                // *object*: `typeof === "object"`, `+`/`String()` coerced to
-                // "[object Object]", and mysql2 prepared-binding serialized
-                // the object representation (>255 bytes) instead of the
-                // 60-char hash. `queue_deferred_resolution` runs the closure
-                // on the main thread so the StringHeader lands in the main
-                // arena. See common::async_bridge for the arena rationale.
-                queue_deferred_resolution(promise_ptr, true, move || {
-                    let hash_str = js_string_from_bytes(hash.as_ptr(), hash.len() as u32);
-                    JSValue::string_ptr(hash_str).bits()
-                });
-            }
-            Ok(Err(e)) => {
-                let err_msg = format!("Bcrypt error: {}", e);
-                queue_deferred_resolution(promise_ptr, false, move || {
-                    let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
-                    JSValue::string_ptr(err_str).bits()
-                });
-            }
-            Err(e) => {
-                let err_msg = format!("Task error: {}", e);
-                queue_deferred_resolution(promise_ptr, false, move || {
-                    let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
-                    JSValue::string_ptr(err_str).bits()
-                });
-            }
-        }
-    });
+    // turnloop P4: the hash runs on turnloop's shared blocking pool, and the
+    // JS string is built on the thread that owns the heap. The arena rule
+    // (#1292/#1824) is now a trait bound — `work` is `Send`, and a
+    // `StringHeader` is not — rather than a comment the next author has to
+    // read.
+    pool_for_promise_deferred(
+        promise as *mut u8,
+        move || bcrypt::hash(password, cost).map_err(|e| format!("Bcrypt error: {}", e)),
+        move |hash: String| {
+            let hash_str = js_string_from_bytes(hash.as_ptr(), hash.len() as u32);
+            JSValue::string_ptr(hash_str).bits()
+        },
+    );
 
     promise
 }
@@ -104,36 +80,23 @@ pub unsafe extern "C" fn js_bcrypt_compare(
         }
     };
 
-    // Spawn async task for verification (bcrypt is CPU-intensive)
-    spawn(async move {
-        let result = tokio::task::spawn_blocking(move || bcrypt::verify(password, &hash)).await;
-
-        match result {
-            Ok(Ok(matches)) => {
-                // Return boolean as f64 (1.0 for true, 0.0 for false)
-                let result_bits = if matches {
-                    1.0f64.to_bits()
-                } else {
-                    0.0f64.to_bits()
-                };
-                queue_promise_resolution(promise_ptr, true, result_bits);
+    // turnloop P4: verification is the same CPU cost as hashing, so it goes
+    // to the pool too. The result is a plain boolean, which needs no arena.
+    pool_for_promise_deferred(
+        promise as *mut u8,
+        move || bcrypt::verify(password, &hash).map_err(|e| format!("Bcrypt verify error: {}", e)),
+        // Deliberately the same encoding the tokio path used: the resolution
+        // is the f64 1.0/0.0, not a JS boolean. That is a pre-existing quirk of
+        // `bcrypt.compare` (`=== true` is false against it) and changing it is
+        // a behaviour change, not a migration.
+        move |matches: bool| {
+            if matches {
+                1.0f64.to_bits()
+            } else {
+                0.0f64.to_bits()
             }
-            Ok(Err(e)) => {
-                let err_msg = format!("Bcrypt verify error: {}", e);
-                queue_deferred_resolution(promise_ptr, false, move || {
-                    let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
-                    JSValue::string_ptr(err_str).bits()
-                });
-            }
-            Err(e) => {
-                let err_msg = format!("Task error: {}", e);
-                queue_deferred_resolution(promise_ptr, false, move || {
-                    let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
-                    JSValue::string_ptr(err_str).bits()
-                });
-            }
-        }
-    });
+        },
+    );
 
     promise
 }
@@ -143,56 +106,28 @@ pub unsafe extern "C" fn js_bcrypt_compare(
 #[no_mangle]
 pub unsafe extern "C" fn js_bcrypt_gen_salt(rounds: f64) -> *mut perry_runtime::Promise {
     let promise = perry_runtime::js_promise_new_cross_thread();
-    let promise_ptr = promise as usize;
     let cost = rounds as u32;
 
-    // Spawn async task
-    spawn(async move {
-        let result = tokio::task::spawn_blocking(move || {
-            // Generate a random salt with the given cost
-            // The bcrypt crate doesn't expose salt generation directly,
-            // so we generate a dummy hash and extract the salt prefix
-            let dummy = bcrypt::hash("", cost);
-            match dummy {
-                Ok(h) => {
-                    // bcrypt hash format: $2b$XX$<22-char-salt><31-char-hash>
-                    // We return the full salt portion including the prefix
-                    if h.len() >= 29 {
-                        Ok(h[..29].to_string())
-                    } else {
-                        Err("Invalid hash format".to_string())
-                    }
-                }
-                Err(e) => Err(format!("{}", e)),
+    // turnloop P4: on the pool with the other two.
+    pool_for_promise_deferred(
+        promise as *mut u8,
+        move || {
+            // The bcrypt crate does not expose salt generation, so a dummy
+            // hash is generated and its salt prefix taken. Unchanged from the
+            // tokio version; only where it runs has moved.
+            let hashed = bcrypt::hash("", cost).map_err(|e| format!("{}", e))?;
+            if hashed.len() >= 29 {
+                // bcrypt format: $2b$XX$<22-char salt><31-char hash>
+                Ok(hashed[..29].to_string())
+            } else {
+                Err("Invalid hash format".to_string())
             }
-        })
-        .await;
-
-        match result {
-            Ok(Ok(salt)) => {
-                // #1292: same as `js_bcrypt_hash` — defer string creation to
-                // the main thread and tag STRING_TAG so the salt awaits as a
-                // real JS string, not a string-like object.
-                queue_deferred_resolution(promise_ptr, true, move || {
-                    let salt_str = js_string_from_bytes(salt.as_ptr(), salt.len() as u32);
-                    JSValue::string_ptr(salt_str).bits()
-                });
-            }
-            Ok(Err(e)) => {
-                queue_deferred_resolution(promise_ptr, false, move || {
-                    let err_str = js_string_from_bytes(e.as_ptr(), e.len() as u32);
-                    JSValue::string_ptr(err_str).bits()
-                });
-            }
-            Err(e) => {
-                let err_msg = format!("Task error: {}", e);
-                queue_deferred_resolution(promise_ptr, false, move || {
-                    let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
-                    JSValue::string_ptr(err_str).bits()
-                });
-            }
-        }
-    });
+        },
+        move |salt: String| {
+            let salt_str = js_string_from_bytes(salt.as_ptr(), salt.len() as u32);
+            JSValue::string_ptr(salt_str).bits()
+        },
+    );
 
     promise
 }

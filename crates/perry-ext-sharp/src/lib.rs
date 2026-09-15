@@ -2,14 +2,21 @@
 //! uses only perry-ffi. Sync transforms (resize / rotate / flip /
 //! grayscale / blur / sharpen / crop / format selectors) plus three
 //! async exports (`toFile` / `toBuffer` / `metadata`) bridged
-//! through `spawn_blocking` + `JsPromise`.
+//! through the perry-ffi async ABI v2 pool (`perry_ffi::pool`) + `JsPromise`.
+//!
+//! turnloop P4: the encode/decode/resize work moved from tokio's blocking pool
+//! to turnloop's shared bounded pool. The JS side is unchanged, and did not
+//! need to change: every settlement here already goes through
+//! `JsPromise::resolve_with` / `reject_string`, which queue the JSValue
+//! construction onto the thread that owns the heap (#1824). What moved is only
+//! which pool runs the pixels.
 
 use image::{DynamicImage, GenericImageView, ImageFormat};
 use perry_ffi::{
     alloc_buffer, alloc_string, build_object_shape, get_handle, js_array_get, js_array_length,
-    js_object_alloc_with_shape, js_object_set_field, read_buffer_bytes, read_bytes, read_string,
-    register_handle, spawn_blocking, ArrayHeader, BufferHeader, Handle, JsPromise, JsString,
-    JsValue, Promise, StringHeader, TransientRootScope,
+    js_object_alloc_with_shape, js_object_set_field, pool, read_buffer_bytes, read_bytes,
+    read_string, register_handle, ArrayHeader, BufferHeader, Handle, JsPromise, JsString, JsValue,
+    Promise, StringHeader, TransientRootScope,
 };
 use std::io::Cursor;
 
@@ -742,7 +749,7 @@ pub unsafe extern "C" fn js_sharp_to_file(
         }
     };
 
-    spawn_blocking(move || {
+    pool::run(move || {
         if let Some(sharp) = get_handle::<SharpHandle>(handle) {
             // Output format follows the path extension (sharp behavior),
             // falling back to the pipeline's selected format. Encoding through
@@ -806,7 +813,7 @@ pub extern "C" fn js_sharp_to_buffer(handle: Handle) -> *mut Promise {
     let promise = JsPromise::new();
     let raw = promise.as_raw();
 
-    spawn_blocking(move || {
+    pool::run(move || {
         if let Some(sharp) = get_handle::<SharpHandle>(handle) {
             match encode_to_vec(&sharp.image, sharp.format, sharp.quality) {
                 Ok(bytes) => {
@@ -838,7 +845,7 @@ pub extern "C" fn js_sharp_metadata(handle: Handle) -> *mut Promise {
     let promise = JsPromise::new();
     let raw = promise.as_raw();
 
-    spawn_blocking(move || {
+    pool::run(move || {
         if let Some(sharp) = get_handle::<SharpHandle>(handle) {
             // sharp's metadata resolves a real object, not a string. Do the
             // image inspection here (Send data), build the JS object on the

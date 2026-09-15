@@ -218,6 +218,11 @@ pub mod turnloop_net;
 // gate as P1 — the driver itself is a native-only dependency.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod turnloop_proc;
+// turnloop P4: blocking and CPU-bound work on turnloop's shared bounded pool
+// (`turnloop_pool/mod.rs`). Same target gate as P1 and P2 — the driver itself
+// is a native-only dependency, and the pool it wraps is turnloop's.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod turnloop_pool;
 pub mod url;
 pub mod v8;
 pub mod validators;
@@ -794,6 +799,17 @@ pub(crate) mod stdlib_pump {
             return 1;
         }
         if crate::promise::js_native_async_has_active() != 0 {
+            return 1;
+        }
+        // turnloop P4: a job accepted by the shared blocking pool is work the
+        // process still owes an answer for. Its promise (or its callback, or
+        // an addon's `complete`) settles only when the completion reaches the
+        // owning thread, so the loop must outlive the job exactly as it
+        // outlived a `perry_ffi_spawn_blocking` closure (#591). Process-wide
+        // and one relaxed load; a program that never used the pool pays an
+        // atomic read.
+        #[cfg(not(target_arch = "wasm32"))]
+        if crate::turnloop_pool::has_pending_jobs() {
             return 1;
         }
         // #1934: a live spawn-reactor child keeps the event loop alive even when

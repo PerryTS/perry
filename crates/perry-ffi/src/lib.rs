@@ -55,6 +55,11 @@ pub use async_runtime::{
 
 pub mod turnloop_net;
 
+/// perry-ffi async ABI v2: blocking and CPU-bound work on turnloop's shared
+/// bounded pool, with the result delivered on the thread that owns the JS
+/// heap. See the module docs for what v1 remains and why.
+pub mod pool;
+
 mod tls_environment;
 pub use tls_environment::{node_tls_client_environment, NodeTlsClientEnvironment};
 
