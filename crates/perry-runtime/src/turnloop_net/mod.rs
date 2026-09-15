@@ -80,6 +80,8 @@ const OP_SHUTDOWN: u64 = 4;
 const OP_CONNECT: u64 = 5;
 const OP_CLOSE: u64 = 6;
 const OP_RESOLVE: u64 = 7;
+/// P5: a subsystem-owned one-shot deadline (server timeouts).
+const OP_TIMER: u64 = 8;
 
 /// The low 56 bits of a token hold the Perry-side id.
 const ID_BITS: u32 = 56;
@@ -104,6 +106,7 @@ fn syscall_for(op: u64) -> &'static str {
         OP_CONNECT => "connect",
         OP_CLOSE => "close",
         OP_RESOLVE => "getaddrinfo",
+        OP_TIMER => "timer",
         _ => "",
     }
 }
@@ -186,10 +189,29 @@ struct ConnectPlan {
     last_error: Option<NodeError>,
 }
 
+/// A subsystem-owned one-shot deadline (P5).
+///
+/// Perry's server timeouts — `keepAliveTimeout`, `headersTimeout`,
+/// `requestTimeout`, a TLS handshake deadline, a lingering close — are
+/// deadlines on a *connection*, not JS timers, and a binding has no way to
+/// create a JS timer. Arming them here puts them in `Loop::next_deadline()`,
+/// so a park that has nothing but an idle keep-alive connection still ends on
+/// time instead of blocking until the peer does something.
+///
+/// Deliberately **unreferenced**, like the agent's JS-timer deadline: a
+/// pending deadline must never keep the process alive on its own. An idle
+/// connection is kept alive by its own read operation, which is the thing the
+/// deadline is there to end.
+struct TimerEntry {
+    handle: Handle,
+    subsystem: u8,
+}
+
 #[derive(Default)]
 struct NetState {
     entries: HashMap<i64, Entry>,
     plans: HashMap<i64, ConnectPlan>,
+    timers: HashMap<i64, TimerEntry>,
 }
 
 thread_local! {
@@ -206,7 +228,7 @@ thread_local! {
 pub fn live_handles() -> usize {
     NET.with(|net| {
         let net = net.borrow();
-        net.entries.len() + net.plans.len()
+        net.entries.len() + net.plans.len() + net.timers.len()
     })
 }
 
@@ -388,6 +410,79 @@ pub fn pipe_connect(id: i64, subsystem: u8, path: &Path) -> NetResult<()> {
     .unwrap_or_else(|| Err(no_loop()))
 }
 
+/// Arm — or move — a subsystem-owned one-shot deadline `delay_ms` from now.
+///
+/// `id` is the caller's own id for the deadline; it must not collide with a
+/// socket id, which the shared handle-id allocator already guarantees. Arming
+/// an id that already has a deadline moves it, so a per-connection timeout can
+/// be refreshed on every read without churning handles.
+pub fn timer_arm(id: i64, subsystem: u8, delay_ms: u64) -> NetResult<()> {
+    with_driver(|driver| {
+        let at = driver.now() + std::time::Duration::from_millis(delay_ms);
+        let existing = NET.with(|net| net.borrow().timers.get(&id).map(|t| t.handle));
+        if let Some(handle) = existing {
+            if driver.timer_reset(handle, at) {
+                return Ok(());
+            }
+            // The timer already fired or is closing: replace it below.
+            let _ = driver.close(handle, token(OP_TIMER, id));
+            NET.with(|net| net.borrow_mut().timers.remove(&id));
+        }
+        let handle = driver
+            .timer(at, None, token(OP_TIMER, id))
+            .map_err(|e| map_error(e, "timer"))?;
+        // Must not hold the loop alive on its own (see `TimerEntry`).
+        let _ = driver.set_ref(handle, false);
+        NET.with(|net| {
+            net.borrow_mut()
+                .timers
+                .insert(id, TimerEntry { handle, subsystem })
+        });
+        Ok(())
+    })
+    .unwrap_or_else(|| Err(no_loop()))
+}
+
+/// Hand a live socket to another subsystem, keeping its id and every
+/// outstanding operation (P5).
+///
+/// An HTTP `'upgrade'` is exactly this: the server crate decoded the head and
+/// the rest of the connection belongs to `net` as a raw `net.Socket`. The
+/// multishot read is deliberately **not** cancelled — the token carries only
+/// the id, and routing reads the subsystem out of the entry at dispatch time,
+/// so the very next `Read` completion is delivered to the new owner with no
+/// gap and no resubmission. Anything the old owner had already buffered it
+/// hands over itself (Node's `'upgrade'` `head` argument).
+pub fn transfer(id: i64, subsystem: u8) -> NetResult<()> {
+    if subsystem as usize >= sink::MAX_SUBSYSTEMS {
+        return Err(map_error(Error::new(ErrorKind::InvalidInput), "transfer"));
+    }
+    NET.with(|net| {
+        let mut net = net.borrow_mut();
+        match net.entries.get_mut(&id) {
+            Some(entry) => {
+                entry.subsystem = subsystem;
+                Ok(())
+            }
+            None => Err(not_found("transfer")),
+        }
+    })
+}
+
+/// Cancel a deadline. Idempotent: an id with no deadline is not an error,
+/// because a connection cancels its timeout on every completion path.
+pub fn timer_cancel(id: i64) -> NetResult<()> {
+    let handle = NET.with(|net| net.borrow_mut().timers.remove(&id).map(|t| t.handle));
+    let Some(handle) = handle else {
+        return Ok(());
+    };
+    with_driver(|driver| {
+        let _ = driver.close(handle, token(OP_TIMER, id));
+        Ok(())
+    })
+    .unwrap_or_else(|| Err(no_loop()))
+}
+
 /// Start reading. Multishot into turnloop's buffer pool: the read side needs
 /// no per-socket buffer and no resubmission, and pool exhaustion applies
 /// backpressure by leaving the read pending rather than by allocating.
@@ -542,6 +637,27 @@ pub(crate) fn dispatch(completion: Completion) {
     let Completion {
         result, terminal, ..
     } = completion;
+
+    // A deadline has no `Entry`, so it is routed before the lookup below. Its
+    // expiry retires the operation, and its `Closed` is the terminal the
+    // cancel path produces — neither reaches the binding twice.
+    if op_class == OP_TIMER {
+        let fired = matches!(result, OpResult::Timer);
+        let subsystem = NET.with(|net| {
+            let mut net = net.borrow_mut();
+            let subsystem = net.timers.get(&id).map(|t| t.subsystem);
+            if fired {
+                // A one-shot expiry is terminal: drop the record so a later
+                // `timer_arm` for the same id creates a fresh handle.
+                net.timers.remove(&id);
+            }
+            subsystem
+        });
+        if let (true, Some(subsystem)) = (fired, subsystem) {
+            sink::emit(subsystem, NetCompletion::timer(id));
+        }
+        return;
+    }
 
     // Everything below needs the subsystem, and most arms need to mutate the
     // entry. Take both under one short borrow and release it before calling
@@ -828,6 +944,7 @@ fn accept_connection(subsystem: u8, server: i64, conn: Handle, peer: Option<Sock
 /// test that is about to drop the loop itself.
 #[cfg(test)]
 pub(crate) fn reset_for_test() {
+    NET.with(|net| net.borrow_mut().timers.clear());
     NET.with(|net| {
         let mut net = net.borrow_mut();
         net.entries.clear();

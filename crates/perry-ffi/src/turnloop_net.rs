@@ -43,6 +43,8 @@ pub const NET_SHUTDOWN: i32 = 6;
 pub const NET_CLOSED: i32 = 7;
 /// Completion kind: an operation failed.
 pub const NET_ERROR: i32 = 8;
+/// Completion kind: a subsystem-owned deadline expired (P5); `id` names it.
+pub const NET_TIMER: i32 = 9;
 
 /// This module's view of the runtime's completion record.
 ///
@@ -245,6 +247,10 @@ extern "C" {
         err: *mut RawNetError,
     ) -> i32;
     fn js_perry_net_read_start(id: i64, err: *mut RawNetError) -> i32;
+    fn js_perry_net_timer_arm(id: i64, subsystem: i32, delay_ms: u64, err: *mut RawNetError)
+        -> i32;
+    fn js_perry_net_timer_cancel(id: i64, err: *mut RawNetError) -> i32;
+    fn js_perry_net_transfer(id: i64, subsystem: i32, err: *mut RawNetError) -> i32;
     fn js_perry_net_write(
         id: i64,
         bytes: *const u8,
@@ -529,6 +535,67 @@ pub fn read_start(id: i64) -> Result<(), NetError> {
             let mut raw = RawNetError::blank();
             // SAFETY: `raw` is writable.
             let rc = unsafe { js_perry_net_read_start(id, &mut raw) };
+            check(rc, raw)
+        },
+        {
+            let _ = id;
+            Err(unavailable())
+        }
+    )
+}
+
+/// Arm — or move — a one-shot deadline `delay_ms` from now, delivered as a
+/// [`NET_TIMER`] completion naming `id` (P5).
+///
+/// Perry's server timeouts (`keepAliveTimeout`, `headersTimeout`,
+/// `requestTimeout`, a TLS handshake deadline) are per-connection deadlines,
+/// and a binding has no way to create a JS timer. Arming one here puts it in
+/// the loop's `next_deadline()`, so a park that has nothing but an idle
+/// keep-alive connection still ends on time. The deadline is unreferenced: it
+/// never keeps the process alive by itself.
+pub fn timer_arm(id: i64, subsystem: u8, delay_ms: u64) -> Result<(), NetError> {
+    runtime_call!(
+        {
+            let mut raw = RawNetError::blank();
+            // SAFETY: `raw` is writable.
+            let rc = unsafe { js_perry_net_timer_arm(id, subsystem as i32, delay_ms, &mut raw) };
+            check(rc, raw)
+        },
+        {
+            let _ = (id, subsystem, delay_ms);
+            Err(unavailable())
+        }
+    )
+}
+
+/// Hand a live socket to another subsystem, keeping its id and every
+/// outstanding operation (P5).
+///
+/// This is how an HTTP `'upgrade'` becomes a raw `net.Socket`: the multishot
+/// read is not cancelled, so the next byte is delivered straight to the new
+/// owner. The old owner hands over whatever it had already buffered itself.
+pub fn transfer(id: i64, subsystem: u8) -> Result<(), NetError> {
+    runtime_call!(
+        {
+            let mut raw = RawNetError::blank();
+            // SAFETY: `raw` is writable.
+            let rc = unsafe { js_perry_net_transfer(id, subsystem as i32, &mut raw) };
+            check(rc, raw)
+        },
+        {
+            let _ = (id, subsystem);
+            Err(unavailable())
+        }
+    )
+}
+
+/// Cancel a deadline. Idempotent: an id with no deadline is not an error.
+pub fn timer_cancel(id: i64) -> Result<(), NetError> {
+    runtime_call!(
+        {
+            let mut raw = RawNetError::blank();
+            // SAFETY: `raw` is writable.
+            let rc = unsafe { js_perry_net_timer_cancel(id, &mut raw) };
             check(rc, raw)
         },
         {

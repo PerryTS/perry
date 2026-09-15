@@ -54,7 +54,13 @@ mod deferred_events;
 use deferred_events::{drain_deferred_close_for, drain_deferred_listen_for, server_is_active};
 pub(crate) use deferred_events::{queue_deferred_close_emit, queue_deferred_listening_emit};
 mod io_activity;
+mod turnloop_listen;
 pub(crate) use io_activity::ReadActivity;
+use turnloop_listen::try_listen_on_turnloop;
+pub(crate) use turnloop_listen::{
+    idle_close_ms, queue_turnloop_connection_event, queue_turnloop_upgrade,
+    turnloop_connection_closed,
+};
 
 /// Apply a server's per-connection `noDelay` (Node's `socket.setNoDelay`
 /// default, ON) to a freshly accepted TCP stream before it is served. Node
@@ -306,12 +312,37 @@ pub(crate) static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
 /// the canonical connection-counting idiom.
 pub(crate) static PENDING_CONNECTION_EVENTS: Mutex<Vec<i64>> = Mutex::new(Vec::new());
 
+/// Read the `HttpServer` behind a JS server handle, whichever flavour it is.
+///
+/// `https.Server` and `http2.SecureServer` both embed an `HttpServer` as
+/// `base`, and the turnloop connection layer needs the same five fields off
+/// all three (`keepAliveTimeout`, `listening`, `maxRequestsPerSocket`,
+/// `noDelay`, and the listener map) without caring which it has.
+pub(crate) fn with_base_server<R>(handle: i64, f: impl FnOnce(&HttpServer) -> R) -> Option<R> {
+    if let Some(server) = get_handle::<HttpServer>(handle) {
+        return Some(f(&server));
+    }
+    if let Some(server) = get_handle::<crate::server::https_server::HttpsServer>(handle) {
+        return Some(f(&server.base));
+    }
+    get_handle::<crate::server::http2_server::Http2SecureServer>(handle)
+        .map(|server| f(&server.base))
+}
+
+pub(crate) static TURNLOOP_UPGRADES: Mutex<std::collections::VecDeque<HttpPendingUpgrade>> =
+    Mutex::new(std::collections::VecDeque::new());
+
 /// Signal tracked connections of `server_handle` to close. With
 /// `only_idle`, connections currently processing a request — or mid-way
 /// through sending one (`read_active`, #4971) — are left alone (Node's
 /// `closeIdleConnections` semantics; `server.close()` also closes idle
 /// keep-alive sockets since Node 19).
 pub(crate) fn signal_connections_close(server_handle: i64, only_idle: bool) {
+    for id in crate::server::turnloop_serve::connections_of(server_handle) {
+        if !only_idle || !crate::server::turnloop_serve::is_busy(id) {
+            crate::server::turnloop_serve::destroy_connection(id);
+        }
+    }
     let conns = CONNECTIONS.lock().unwrap();
     for entry in conns.values() {
         if entry.server_handle == server_handle
@@ -863,6 +894,16 @@ pub(super) unsafe fn listen_http_server(
                 no_delay,
             );
         }
+    } else if let Some(listener) = try_listen_on_turnloop(server_handle, &host, port, resolved) {
+        // P5 took the bind. `try_listen_on_turnloop` published the bound
+        // address and marked the server listening; the deferred `'listening'`
+        // emit below is shared with the hyper path.
+        if listener == 0 {
+            // The bind failed. Return without a `'listening'` emit, exactly as
+            // the hyper path does for its own `bind_listener` failure — falling
+            // through would only bind the same address and fail the same way.
+            return server_handle;
+        }
     } else {
         // The worker binds the primary-resolved port (shared listen(0)); a
         // non-cluster server binds the requested port directly.
@@ -991,6 +1032,12 @@ pub unsafe extern "C" fn js_node_http_server_close(server_handle: i64, callback:
         s.connections_checking_interval_destroyed = true;
         s.shutdown_tx.take();
         queue_deferred_close_emit(s, callback);
+    }
+    // P5: stop accepting. In-flight connections finish, which is Node's
+    // contract; the idle ones are destroyed by `signal_connections_close`
+    // below exactly as on the hyper path.
+    if let Some(listener) = crate::server::turnloop_serve::listener_for_server(server_handle) {
+        crate::server::turnloop_serve::close_listener(listener);
     }
     // Node 19+: `server.close()` destroys idle keep-alive connections
     // (active requests are allowed to finish) (#4905).
@@ -1662,6 +1709,11 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
 }
 
 fn try_recv_upgrade(server_handle: i64) -> Option<HttpPendingUpgrade> {
+    if let Ok(mut q) = TURNLOOP_UPGRADES.lock() {
+        if let Some(index) = q.iter().position(|p| p.server_handle == server_handle) {
+            return q.remove(index);
+        }
+    }
     if let Some(s) = get_handle_mut::<HttpServer>(server_handle) {
         if let Some(rx) = s.upgrade_rx.as_mut() {
             match rx.try_recv() {
@@ -1680,6 +1732,11 @@ fn try_recv_upgrade(server_handle: i64) -> Option<HttpPendingUpgrade> {
 /// blocking wait at the outer level via condvar, so we don't need to
 /// spin here.
 pub(crate) fn try_recv_pending_nonblocking(server_handle: i64) -> Option<HttpPendingRequest> {
+    // P5: a turnloop server decodes on this thread, so its requests are in a
+    // plain queue rather than an mpsc — no channel, no cross-thread notify.
+    if let Some(pending) = crate::server::turnloop_serve::take_pending(server_handle) {
+        return Some(pending);
+    }
     if let Some(s) = get_handle_mut::<HttpServer>(server_handle) {
         if let Some(rx) = s.request_rx.as_mut() {
             return rx.try_recv().ok();
@@ -1870,6 +1927,14 @@ pub(crate) fn synthesize_default_response_if_needed(response_handle: i64) {
                 sr.needs_drain = false;
                 return;
             }
+            // P5 streaming: the head is on the wire; close the body framing.
+            if sr.turnloop_streaming {
+                let (conn, seq) = sr.turnloop.expect("streaming implies a turnloop target");
+                let trailers = sr.snapshot_trailers();
+                sr.needs_drain = false;
+                crate::server::turnloop_serve::finish_body(conn, seq, &trailers);
+                return;
+            }
             let body = std::mem::take(&mut sr.buffered_body);
             // `snapshot_headers` expands array-valued headers (e.g.
             // Set-Cookie) into one entry per element so they emit a separate
@@ -1890,8 +1955,15 @@ pub(crate) fn synthesize_default_response_if_needed(response_handle: i64) {
                 body: crate::server::response::ShapeBody::Full(body),
                 auto_content_length,
             };
-            if let Some(tx) = sr.response_tx.take() {
-                let _ = tx.send(shape);
+            match sr.turnloop {
+                Some((conn, seq)) => {
+                    crate::server::turnloop_serve::send_response(conn, seq, shape);
+                }
+                None => {
+                    if let Some(tx) = sr.response_tx.take() {
+                        let _ = tx.send(shape);
+                    }
+                }
             }
         }
     }

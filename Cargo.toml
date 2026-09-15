@@ -409,6 +409,16 @@ perex = "0.1.4"
 # owner-approved one-time publish-age override (published 2026-09-15T09:37:32Z,
 # sha256 c3370511f37b90dc5ba694566cb941f0e89c205c84b798277f17a05f13e4a8ab).
 turnloop = "0.1.0-alpha.3"
+# turnloop P5 (DESIGN §5b, §12 "P5"): the sans-I/O protocol crates that
+# replace hyper's HTTP/1.1 parser and framer on Perry's server path, and
+# `tokio_rustls` on every TLS path the loop owns. Default features only — the
+# `turnloop` feature of these crates pulls `turnloop-io`'s `LocalExecutor`,
+# which owns its OWN `Driver` and drops every completion whose token it did not
+# issue; Perry already owns a `turnloop::Loop` and routes P1/P2/P3 tokens
+# through it, so the codecs are driven sans-I/O over the P1 socket layer
+# instead (docs/turnloop/p5-report.md, "Why sans-I/O").
+turnloop-http = { version = "0.1.0-alpha.3", default-features = false }
+turnloop-tls = { version = "0.1.0-alpha.3", default-features = false }
 hex = "0.4"
 tempfile = "3"
 itoa = "1.0"
