@@ -391,24 +391,23 @@ pub(crate) fn real_send_bytes(
     // duplicate shares that open file description, so a `send_to` here would
     // fail with `EWOULDBLOCK` the moment the socket buffer filled instead of
     // blocking as it used to (`dgram_reactor`'s module note).
+    let mut bytes = bytes;
     if let Some(id) = reactor_id(socket) {
         let callback_bits = callback_from_args(args).map(f64::to_bits).unwrap_or(0);
-        let connected = is_truthy_hidden(socket, KEY_CONNECTED);
-        if crate::dgram_reactor::send_on_loop(
-            id,
-            bytes,
-            if connected { None } else { Some(dest) },
-            callback_bits,
-        ) {
-            return undefined_value();
+        match crate::dgram_reactor::send_on_loop(id, bytes, dest, callback_bits) {
+            Ok(()) => return undefined_value(),
+            // Not on the loop (a worker agent, or the A/B arm): fall through
+            // to the synchronous send with the bytes handed back.
+            Err(crate::dgram_reactor::SendRefusal::NotOnLoop(returned)) => bytes = returned,
+            // The driver refused the submission and the bytes went with it.
+            Err(crate::dgram_reactor::SendRefusal::Refused) => {
+                return finish_send(
+                    socket,
+                    args,
+                    Err(socket_error_value("send EBADF", "EBADF", "send")),
+                )
+            }
         }
-        // `send_on_loop` moved `bytes` and refused; fall through is impossible,
-        // so report the refusal rather than silently dropping the datagram.
-        return finish_send(
-            socket,
-            args,
-            Err(socket_error_value("send EBADF", "EBADF", "send")),
-        );
     }
     let outcome = match live_udp(socket) {
         Some(udp) => match udp.send_to(&bytes, dest) {

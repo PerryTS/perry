@@ -312,21 +312,28 @@ fn socket_bits_for(id: u64) -> Option<u64> {
         .and_then(|map| map.get(&id).map(|ls| ls.socket_bits))
 }
 
-/// Queue one datagram on the loop. Returns `false` when this socket is not on
-/// the turnloop path, in which case the caller sends synchronously as before.
+/// Queue one datagram on the loop.
+///
+/// Returns [`SendRefusal::NotOnLoop`] — carrying the bytes back — when this
+/// socket is thread-backed, so the caller falls through to the synchronous
+/// send it used before P2. Handing the buffer back rather than reporting a
+/// failure is the whole point: a thread-backed socket must still be able to
+/// send, and a dropped `Vec` here would silently lose the datagram. The two
+/// refusals are separate variants rather than an empty-buffer sentinel,
+/// because a zero-length datagram is a real datagram Node can send.
 pub(crate) fn send_on_loop(
     id: u64,
     bytes: Vec<u8>,
-    dest: Option<SocketAddr>,
+    dest: SocketAddr,
     callback_bits: u64,
-) -> bool {
+) -> Result<(), SendRefusal> {
     let (proc_id, user) = {
         let mut guard = live_lock();
         let Some(ls) = guard.as_mut().and_then(|map| map.get_mut(&id)) else {
-            return false;
+            return Err(SendRefusal::NotOnLoop(bytes));
         };
         let Some(proc_id) = ls.proc_id else {
-            return false;
+            return Err(SendRefusal::NotOnLoop(bytes));
         };
         ls.next_send += 1;
         let user = ls.next_send;
@@ -339,13 +346,29 @@ pub(crate) fn send_on_loop(
         );
         (proc_id, user)
     };
-    if crate::turnloop_proc::send_to(proc_id, bytes, dest, user).is_err() {
-        // The submission never reached the driver, so no completion will name
-        // this token; release the rooted callback here instead of leaking it.
-        let _ = take_send(id, user);
-        return false;
+    // Always `send_to`, never a connected-socket `write`: Node's
+    // `socket.connect()` is bookkeeping in Perry (`dgram/ops.rs` sets hidden
+    // fields and never calls `connect(2)`), so the descriptor has no default
+    // peer and a write would fail with EDESTADDRREQ.
+    match crate::turnloop_proc::send_to(proc_id, bytes, Some(dest), user) {
+        Ok(_) => Ok(()),
+        Err(_) => {
+            // The submission never reached the driver, so no completion will
+            // name this token; release the rooted callback here rather than
+            // leaking it. The bytes are gone with the refused submission, so
+            // the caller is told the send failed, not asked to retry.
+            let _ = take_send(id, user);
+            Err(SendRefusal::Refused)
+        }
     }
-    true
+}
+
+/// Why [`send_on_loop`] did not take a datagram.
+pub(crate) enum SendRefusal {
+    /// This socket is thread-backed; send synchronously with these bytes.
+    NotOnLoop(Vec<u8>),
+    /// The driver refused the submission and the datagram went with it.
+    Refused,
 }
 
 /// Recover the live `UdpSocket` for `id` (set/used by `dgram.rs` methods).
