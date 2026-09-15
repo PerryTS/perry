@@ -163,7 +163,7 @@ pub(crate) fn begin_client_upgrade(
         },
     );
     // Produce and send the ClientHello.
-    drive(id);
+    pump_session(id);
     Ok(())
 }
 
@@ -224,7 +224,7 @@ pub fn receive(id: i64, ciphertext: &[u8]) -> Option<Received> {
     if !installed {
         return None;
     }
-    let out = drive(id);
+    let out = pump_session(id);
     Some(Received {
         plaintext: out.plaintext,
         peer_closed: out.peer_closed,
@@ -246,7 +246,7 @@ pub fn write(id: i64, bytes: &[u8], user: u64) -> Result<usize, String> {
     if !known {
         return Err("socket is closed".to_string());
     }
-    drive(id);
+    pump_session(id);
     Ok(tl::queued_bytes(id))
 }
 
@@ -262,7 +262,7 @@ pub fn shutdown(id: i64, user: u64) -> Result<(), String> {
     if !known {
         return Err("socket is closed".to_string());
     }
-    drive(id);
+    pump_session(id);
     Ok(())
 }
 
@@ -292,7 +292,15 @@ struct Driven {
 
 /// Run the session, submit whatever ciphertext it produced, and report the
 /// handshake and close transitions to JS.
-fn drive(id: i64) -> Driven {
+///
+/// Named `pump_session` rather than the obvious `drive` on purpose:
+/// `scripts/gc_runtime_root_holders.py` resolves function names ACROSS crates,
+/// and `perry-runtime`'s `gc/roots/stack_maps_walker_agreement.rs` has its own
+/// `fn drive`. A same-named function in a scanner-registering crate pulled that
+/// file's body into the reachable set and silently flipped its `PROBE` holder
+/// to COVERED, invalidating someone else's frontier entry (P1's report records
+/// the same coincidence from the other direction).
+fn pump_session(id: i64) -> Driven {
     let mut out = Driven {
         plaintext: Vec::new(),
         peer_closed: false,
