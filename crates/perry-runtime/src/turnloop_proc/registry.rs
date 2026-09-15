@@ -19,6 +19,8 @@ use super::NodeError;
 pub(crate) enum Owner {
     /// A `node:dgram` socket, keyed by `dgram_reactor`'s own socket id.
     Dgram { socket: u64 },
+    /// A process-wide OS signal subscription, keyed by signal number.
+    ProcessSignal { signum: i32 },
     /// The acceptance tests' own owner. It exists so the tests exercise the
     /// real registry, the real token space and the real dispatch path rather
     /// than a parallel mock of them.
@@ -70,6 +72,12 @@ pub(crate) fn deliver(owner: Owner, id: u64, event: StreamEvent) {
         Owner::Dgram { socket } => crate::dgram_reactor::on_completion(socket, event),
         #[cfg(not(feature = "mod-dgram"))]
         Owner::Dgram { .. } => {
+            let _ = event;
+        }
+        #[cfg(unix)]
+        Owner::ProcessSignal { signum } => crate::os::signal::on_signal_completion(signum, event),
+        #[cfg(not(unix))]
+        Owner::ProcessSignal { .. } => {
             let _ = event;
         }
         #[cfg(test)]
