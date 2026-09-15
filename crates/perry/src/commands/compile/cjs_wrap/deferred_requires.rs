@@ -139,6 +139,16 @@ impl Visit for Requires {
         self.defer(|visitor| stmt.body.visit_with(visitor));
     }
 
+    fn visit_do_while_stmt(&mut self, stmt: &ast::DoWhileStmt) {
+        // Both halves are conditional: the body can `break` or `return` before
+        // the test runs, so `do { break } while (require("dep"))` never
+        // evaluates the require in Node.
+        self.defer(|visitor| {
+            stmt.body.visit_with(visitor);
+            stmt.test.visit_with(visitor);
+        });
+    }
+
     fn visit_for_stmt(&mut self, stmt: &ast::ForStmt) {
         stmt.init.visit_with(self);
         stmt.test.visit_with(self);
@@ -184,6 +194,8 @@ mod tests {
             "try { require('dep'); } catch (e) {}",
             "switch (value) { case 1: require('dep'); }",
             "while (enabled) require('dep');",
+            "do { break; } while (require('dep'));",
+            "do { require('dep'); } while (enabled);",
             "for (; enabled;) require('dep');",
             "for (const item of items) require('dep');",
             "for (const key in object) require('dep');",
