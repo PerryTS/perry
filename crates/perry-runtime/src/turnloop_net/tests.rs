@@ -201,7 +201,11 @@ fn a_full_loopback_exchange_moves_real_bytes_both_ways() {
     // every accepted socket — which is exactly what the first draft did.
     let conn_local = super::local_addr(conn).expect("accepted socket has a local endpoint");
     let conn_peer = super::peer_addr(conn).expect("accepted socket has a peer endpoint");
-    assert_eq!(conn_local.port(), local.port(), "accepted on the bound port");
+    assert_eq!(
+        conn_local.port(),
+        local.port(),
+        "accepted on the bound port"
+    );
     assert!(conn_peer.ip().is_loopback(), "peer is the loopback client");
     assert_eq!(
         super::peer_addr(client).map(|a| a.port()),
