@@ -735,6 +735,19 @@ pub extern "C" fn js_wait_for_event() {
         return;
     }
 
+    // turnloop P3: a queued `setImmediate`, or a native completion callback
+    // awaiting its poll phase, must run on the very next turn — Node computes a
+    // zero poll timeout while its immediate queue is non-empty. The precise park
+    // above says the same thing for the primary agent; this covers the threads
+    // that take the legacy park (a worker agent, a second thread acting for the
+    // primary agent, the A/B arm). It goes through the shared zero-budget
+    // return, so the #1114 throttle still bounds a caller that never runs the
+    // phase that would drain the queue.
+    if crate::timer::js_immediate_has_pending() != 0 {
+        zero_budget_return();
+        return;
+    }
+
     let mut budget_ms: u64 = IDLE_CAP_MS;
     for d in next_wake_sources_ms() {
         if d >= 0.0 {
@@ -790,9 +803,11 @@ pub extern "C" fn js_wait_for_event() {
 /// the common spin. It still fires, legitimately and transiently, when a
 /// timer is due. A *sustained* run of it needs a deadline source that reports a
 /// due deadline its pump never consumes (the original #1114 wedge: a deadline
-/// pinned in the past). Nothing in P0 rules that out structurally — every
-/// deadline source is still Perry's own queue scan until P3 moves timers into
-/// the loop — so the throttle remains as the safety net, not as a latency
+/// pinned in the past). turnloop P3 closed the structural hole this named: the
+/// deadline and the expiry are now the same heap root, and the timers phase
+/// pops exactly the entries that root names. The throttle stays as the safety
+/// net for the remaining sources (the stdlib provider, a host-registered
+/// driver), not as a latency
 /// mechanism.
 fn zero_budget_return() {
     if crate::promise::mt_profile_enabled() {
