@@ -623,9 +623,24 @@ scripts/turnloop/server_ab.py run   --work /root/turnloop-ab \
     [--rounds 5] [--concurrency 1,64,1024] [--duration 15] [--warmup 3] \
     [--idle 10000,100000] [--idle-hold 10] \
     [--load-tool auto|oha|wrk|ab] [--oha PATH] [--wrk PATH] \
-    [--syscalls auto|perf|strace|off]
-scripts/turnloop/server_ab.py report --work /root/turnloop-ab      # re-render from results.json
+    [--perf auto|perf|strace|off] [--max-loadavg 2.0] [--shared-host]
+scripts/turnloop/server_ab.py callgrind --work /root/turnloop-ab    # separate Ir arm, Linux + valgrind
+scripts/turnloop/server_ab.py report --work /root/turnloop-ab      # re-render, folding in callgrind.json
 scripts/turnloop/server_ab.py all --dry-run                        # plan + reporting self-check, macOS-safe
+```
+
+The two machines of record, in the order they are meant to be run:
+
+```bash
+# 1. counters, on the shared Linux box. Timing is auto-marked advisory there.
+ssh root@84.32.71.237
+scripts/turnloop/server_ab.py all --work /root/turnloop-ab --jobs "$(nproc)"
+apt install -y valgrind && scripts/turnloop/server_ab.py callgrind --work /root/turnloop-ab
+scripts/turnloop/server_ab.py report --work /root/turnloop-ab   # counters + the separate Ir section
+
+# 2. timing, on the quiet mini. perf does not exist there; the perf rows say so.
+ssh perry@perry-macos.local
+scripts/turnloop/server_ab.py all --work ~/turnloop-ab --max-loadavg 2.0
 ```
 
 What `build` does, and why each part is there:

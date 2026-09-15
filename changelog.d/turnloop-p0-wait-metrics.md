@@ -41,3 +41,18 @@ large timeout instead. And a P0 server makes **zero** turnloop turns: its accept
 loop keeps a tokio task alive for the life of the process, so every park goes to
 the transitional tick. That is the documented P0 design rather than a
 regression, and the new line is what will show P1 changing it.
+
+The harness also reports hardware counters under load, and keeps them apart from
+the deterministic ones. `perf stat` over each measured window gives RETIRED
+instructions, cycles, IPC, task-clock, context switches, CPU migrations, page
+faults and the syscall tracepoint — each also normalised per request, so a
+throughput win cannot hide a per-request regression. A `callgrind` subcommand
+reports Valgrind `Ir`, instructions EXECUTED, in its own section with its own
+caveat (deterministic and load-independent by construction; microbenchmarks
+only, because Valgrind's 50-100x cost turns a server run into an artificial wait
+pattern). When `perf` cannot run, its rows are still rendered with the reason
+rather than dropped. The harness prints the host it ran on and marks a sample's
+throughput and latency ADVISORY on a shared build box or above `--max-loadavg`,
+while leaving the per-process counters authoritative — so counters can come from
+a shared Linux box and timing from a quiet one, with the report saying which is
+which.
