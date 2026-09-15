@@ -196,7 +196,7 @@ pub(super) fn i8_literal(b: u8) -> String {
 /// three-byte literal is settled by checking its one remaining middle byte.
 ///
 /// Returns an `i1` that is true iff the two operands are `===`.
-fn lower_string_literal_strict_eq(
+pub(crate) fn lower_string_literal_strict_eq(
     ctx: &mut FnCtx<'_>,
     val: &str,
     lit_box: &str,
