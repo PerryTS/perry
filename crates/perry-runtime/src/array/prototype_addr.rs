@@ -269,6 +269,9 @@ pub(crate) fn object_prototype_addr() -> usize {
 
 /// `true` when `addr` is **this realm's** canonical `Object.prototype` (cheap:
 /// one slot load + compare; lazily computes the address on first use).
+/// `#[inline]`: the object-field set funnel calls this on every store, and
+/// without the hint a small growth of that caller made LLVM outline it.
+#[inline]
 pub(crate) fn object_prototype_addr_matches(addr: usize) -> bool {
     addr != 0 && addr == object_prototype_addr()
 }
