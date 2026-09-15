@@ -170,14 +170,21 @@ the turnloop arm through `precise_wait`'s native-in-flight branch, the
 **Wake latency.** The waiter clears the stamp slot, publishes which wait kind it
 is parked in, and waits; a producer that sees a parked waiter stamps the
 monotonic clock (earliest notify wins); the waiter takes the stamp when the wait
-returns. Every producer is covered because they all fan out through
-`js_notify_main_thread` — a cross-thread producer (blocking pool, Worker,
-child-process reactor) and an in-thread native completion alike
-(`perry_ffi::notify_main_thread` from ext-http/net/ws, and the stdlib's own
-resolution sites). One notify into one parked wait is exactly one sample; a
-notify outside a wait is none. The one uncovered window — a notify published
-between the waiter's last `NOTIFIED` re-check and its parked-flag store — can
-only *omit* a sample, never invent one, and the wait itself is still counted.
+returns. There are exactly **two** wake producers and both stamp: almost
+everything fans out through `js_notify_main_thread` — a cross-thread producer
+(blocking pool, Worker, child-process reactor) and an in-thread native
+completion alike (`perry_ffi::notify_main_thread` from ext-http/net/ws, and the
+stdlib's own resolution sites) — and `js_native_work_submitted` wakes a parked
+turn *directly*, bypassing it, which is why it exists at all. It stamps too; it
+did not at first, and that omission was found by review and is now a test.
+
+One notify into one parked wait is exactly one sample; a notify outside a wait
+is none. Two windows are left open on purpose, both one-sided: a notify
+published between the waiter's last `NOTIFIED` re-check and its parked-flag
+store records no sample (the wait is still counted), and a stamp rejected for
+belonging to an earlier wait costs a sample rather than inventing a
+multi-millisecond one. The module can under-report a wake; it cannot invent or
+inflate one.
 
 **Cost and scope.** Diagnostic only. With the variable unset every hook is one
 relaxed load of a lazily resolved state byte; nothing allocates and nothing
@@ -333,6 +340,7 @@ Which test covers which counter:
 | `turnloop_waits` | `agent_loop::tests::another_thread_wakes_a_parked_turn_through_js_notify_main_thread` (exactly one turn, one wake sample) |
 | `condvar_waits` (+ `_ns`, `_max_ns`) | `loop_stats::tests::one_cross_thread_notify_into_a_condvar_park_is_one_wake_sample`, `…a_timed_out_wait_and_an_unparked_notify_add_no_wake_sample` |
 | `wake_samples`, exactly one per notify | the three tests above, one per wait kind |
+| a cross-thread **native submission** wake (`js_native_work_submitted`, which does not go through `js_notify_main_thread`) | `agent_loop::tests::a_cross_thread_native_submission_wakes_a_turn_and_is_one_wake_sample` |
 | no sample for a timeout, or a notify outside a wait | `…a_timed_out_wait_and_an_unparked_notify_add_no_wake_sample` |
 | bucket edges 50 µs / 200 µs / 1 ms / 5 ms | `loop_stats::tests::wake_latency_buckets_split_at_50us_200us_1ms_5ms` |
 | `fast_drives` (+ `_ns`), `zero_budget`, `throttle_sleeps` | `loop_stats::tests::fast_drives_and_zero_budget_returns_are_counted`; `…js_wait_for_event_zero_budget_path_is_counted` drives the real entry point |
@@ -393,6 +401,9 @@ Two more for the wait metrics, each reverted (`git diff` empty afterwards):
    `one_cross_thread_notify_into_a_condvar_park_is_one_wake_sample`,
    `one_notify_into_a_registered_tick_is_one_wake_sample`. The other 12 passed,
    so the failure is specific to the removed hook.
+5. `loop_stats::note_notify()` removed from `js_native_work_submitted`:
+   `a_cross_thread_native_submission_wakes_a_turn_and_is_one_wake_sample` FAILED
+   alone (0 vs 1); the other seven in the filter passed.
 4. The `begin_wait`/`end_wait` pair removed from `wait_driver_sleep` (the tick is
    still driven, just not measured):
    `native_work_in_flight_is_counted_as_a_tokio_tick_not_a_turn` FAILED ("the
