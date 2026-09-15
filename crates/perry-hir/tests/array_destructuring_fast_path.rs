@@ -154,3 +154,46 @@ fn a_spread_in_the_literal_does_not_take_the_scalar_arm() {
         "the spread must still build a real array"
     );
 }
+
+/// A binding pattern whose elements are only holes and plain identifiers
+/// (including a rest identifier) cannot complete abruptly outside the
+/// iterator's own step/value operations, which mark the iterator done, so it
+/// needs no `try` around its body: entering one captures a runtime savepoint on
+/// every destructuring. The normal-completion close must stay.
+#[test]
+fn identifier_only_binding_patterns_emit_no_try() {
+    for src in [
+        "declare const it: any;\nconst [a, b] = it;\nconsole.log(a, b);",
+        "declare const it: any;\nconst [, b, , d] = it;\nconsole.log(b, d);",
+        "declare const it: any;\nconst [a, ...rest] = it;\nconsole.log(a, rest);",
+        "function f([a, b]: any) { return a + b; }\nconsole.log(f([1, 2]));",
+    ] {
+        let dump = hir(src);
+        assert!(
+            !dump.contains("Try {"),
+            "an identifier-only pattern must not be wrapped in a try:\n{src}"
+        );
+        assert!(
+            dump.contains("iteratorCloseIfNotDone"),
+            "the normal-completion IteratorClose must remain:\n{src}"
+        );
+    }
+}
+
+/// A default initializer or a nested pattern can throw after the iterator was
+/// opened, so those patterns keep the abrupt-completion close.
+#[test]
+fn defaults_and_nested_patterns_keep_the_abrupt_close() {
+    for src in [
+        "declare const it: any;\ndeclare function d(): number;\nconst [a = d()] = it;\nconsole.log(a);",
+        "declare const it: any;\nconst [{ x }] = it;\nconsole.log(x);",
+        "declare const it: any;\nconst [[y]] = it;\nconsole.log(y);",
+        "declare const it: any;\nconst [...[z]] = it;\nconsole.log(z);",
+    ] {
+        let dump = hir(src);
+        assert!(
+            dump.contains("Try {"),
+            "a pattern that can throw mid-destructuring must keep its try:\n{src}"
+        );
+    }
+}
