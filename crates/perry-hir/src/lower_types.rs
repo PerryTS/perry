@@ -313,6 +313,12 @@ fn url_encoding_constructor_type(ctx: &LoweringContext, callee: &ast::Expr) -> O
 /// source never nests literals this deep, so the cap loses no practical
 /// precision while keeping pathological/minified inputs tractable.
 const INFER_TYPE_RECURSION_CAP: u32 = 48;
+// Logical chains are common in generated/minified predicates and are normally
+// left-deep. Walk them without spending one recursion level per `&&`/`||`, but
+// retain a fixed work bound so repeated inference while lowering a pathological
+// chain cannot restore #5258's unbounded O(n²) behavior. This admits up to 256
+// boolean-valued leaves, including cc's 212-comparison YF6 predicate.
+const INFER_LOGICAL_CHAIN_NODE_CAP: usize = 512;
 const INFER_TYPE_STACK_RED_ZONE: usize = 256 * 1024;
 const INFER_TYPE_STACK_SEGMENT: usize = 2 * 1024 * 1024;
 
@@ -341,6 +347,44 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
     stacker::maybe_grow(INFER_TYPE_STACK_RED_ZONE, INFER_TYPE_STACK_SEGMENT, || {
         infer_type_from_expr_inner(expr, ctx)
     })
+}
+
+/// Infer a tree made only from `&&` / `||` joins by flattening those joins onto
+/// an explicit worklist. The ordinary logical inference rule is associative at
+/// the type level: the result is a concrete type exactly when every leaf has
+/// the same concrete type. Keeping non-logical leaves on the regular inference
+/// path preserves all existing type rules.
+fn infer_logical_chain_type(root: &ast::BinExpr, ctx: &LoweringContext) -> Type {
+    let mut pending = vec![root.right.as_ref(), root.left.as_ref()];
+    let mut visited = 1usize;
+    let mut common: Option<Type> = None;
+
+    while let Some(expr) = pending.pop() {
+        visited += 1;
+        if visited > INFER_LOGICAL_CHAIN_NODE_CAP {
+            return Type::Any;
+        }
+
+        if let ast::Expr::Bin(bin) = expr {
+            if matches!(bin.op, ast::BinaryOp::LogicalAnd | ast::BinaryOp::LogicalOr) {
+                pending.push(bin.right.as_ref());
+                pending.push(bin.left.as_ref());
+                continue;
+            }
+        }
+
+        let ty = infer_type_from_expr(expr, ctx);
+        if matches!(ty, Type::Any) {
+            return Type::Any;
+        }
+        match &common {
+            None => common = Some(ty),
+            Some(expected) if *expected == ty => {}
+            Some(_) => return Type::Any,
+        }
+    }
+
+    common.unwrap_or(Type::Any)
 }
 
 fn infer_type_from_expr_inner(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
@@ -453,15 +497,7 @@ fn infer_type_from_expr_inner(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
                 // operand types match, else `Any` (dynamic truthiness/isArray).
                 // Extends the #3527 fix (right = `Any` → `Any`) to the
                 // mismatched-type case.
-                LogicalAnd | LogicalOr => {
-                    let left = infer_type_from_expr(&bin.left, ctx);
-                    let right = infer_type_from_expr(&bin.right, ctx);
-                    if left == right && !matches!(right, Type::Any) {
-                        right
-                    } else {
-                        Type::Any
-                    }
-                }
+                LogicalAnd | LogicalOr => infer_logical_chain_type(bin, ctx),
                 // One rule with the HIR-level `??` inference: an unknown left
                 // stays unknown, only a nullish left takes the right type.
                 // Pre-fix this arm answered the RIGHT type for an `Any` left,

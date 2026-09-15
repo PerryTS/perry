@@ -25,9 +25,10 @@ use super::spec_abi::{
 };
 use super::typed_abi::{
     emit_typed_arg_guard, emit_typed_arg_to_raw, generic_function_body_name, lower_typed_f64_body,
-    lower_typed_i1_body, lower_typed_i32_body, lower_typed_string_body, typed_f64_function_name,
-    typed_i1_function_name, typed_i32_function_name, typed_param_reps_for_params,
-    typed_string_function_name, TypedFunctionTrampolineKind, TypedParamRep,
+    lower_typed_i1_body_with_seed_locals, lower_typed_i32_body, lower_typed_string_body,
+    typed_f64_function_name, typed_i1_function_name, typed_i1_function_param_reps,
+    typed_i32_function_name, typed_param_reps_for_params, typed_string_function_name,
+    TypedFunctionTrampolineKind, TypedParamRep,
 };
 
 /// Internal body name for a self-recursive allocator whose arena-state pointer
@@ -144,7 +145,7 @@ pub(super) fn compile_typed_i1_function(
         .cloned()
         .ok_or_else(|| anyhow!("function name not resolved for {}", f.name))?;
     let llvm_name = typed_i1_function_name(&generic_name);
-    let param_reps = typed_param_reps_for_params(&f.params)
+    let param_reps = typed_i1_function_param_reps(f)
         .ok_or_else(|| anyhow!("typed-i1 function '{}' has unsupported parameter", f.name))?;
     let params: Vec<(LlvmType, String)> = f
         .params
@@ -159,7 +160,13 @@ pub(super) fn compile_typed_i1_function(
 
     let value = {
         let blk = lf.block_mut(0).unwrap();
-        lower_typed_i1_body(blk, &f.params, &f.body)?
+        let seed_reps = f
+            .params
+            .iter()
+            .zip(param_reps.iter().copied())
+            .map(|(param, rep)| (param.id, rep))
+            .collect();
+        lower_typed_i1_body_with_seed_locals(blk, &f.params, &f.body, HashMap::new(), seed_reps)?
     };
     lf.block_mut(0).unwrap().ret(I1, &value);
     Ok(())
@@ -288,7 +295,7 @@ fn emit_public_typed_function_trampoline(
             .unwrap_or_else(|| vec![TypedParamRep::F64; f.params.len()]),
         TypedFunctionTrampolineKind::I32 => typed_param_reps_for_params(&f.params)
             .unwrap_or_else(|| vec![TypedParamRep::I32; f.params.len()]),
-        TypedFunctionTrampolineKind::I1 => typed_param_reps_for_params(&f.params)
+        TypedFunctionTrampolineKind::I1 => typed_i1_function_param_reps(f)
             .unwrap_or_else(|| vec![TypedParamRep::I1; f.params.len()]),
         TypedFunctionTrampolineKind::StringRef => typed_param_reps_for_params(&f.params)
             .unwrap_or_else(|| vec![TypedParamRep::StringRef; f.params.len()]),
