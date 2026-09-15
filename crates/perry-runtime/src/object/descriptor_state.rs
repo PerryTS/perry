@@ -922,9 +922,7 @@ unsafe fn own_descriptor_may_cover_key(addr: usize, key: f64) -> bool {
                 return false;
             }
             let bit = descriptor_key_bit_bytes(kb);
-            let covered = ((*meta).attr_key_bits | (*meta).accessor_key_bits) & bit != 0;
-            if covered {}
-            covered
+            ((*meta).attr_key_bits | (*meta).accessor_key_bits) & bit != 0
         }
         None => true,
     }
