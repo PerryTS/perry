@@ -93,7 +93,7 @@ for (const mode of ['default', 'compact']) {
   const emitted = tables(staging);
   assert.equal(emitted.length, 1, 'the actual asset emitter must be retained');
   const c = fs.readFileSync(emitted[0], 'utf8');
-  assert.equal((c.match(/if \(!js_register_embedded_zstd_asset\(/g) ?? []).length, 3,
+  assert.equal((c.match(/if \(!js_register_embedded_zstd_asset_lazy\(/g) ?? []).length, 3,
     'three large payloads must actually use compression');
   assert(c.includes('PERRY_ASSET_DATA_'), 'raw tiny/empty payloads must coexist');
   const moved = path.join(work, 'source-away');

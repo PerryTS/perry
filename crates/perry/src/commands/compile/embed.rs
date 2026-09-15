@@ -411,7 +411,7 @@ pub(super) fn generate_embedded_asset_object(
     }
     if compressed {
         c.push_str("#include <stdint.h>\n#include <stdio.h>\n#include <stdlib.h>\n");
-        c.push_str("extern int32_t js_register_embedded_zstd_asset(const char *, size_t, const char *, size_t, size_t, uint32_t);\n");
+        c.push_str("extern int32_t js_register_embedded_zstd_asset_lazy(const char *, size_t, const char *, size_t, size_t, uint32_t);\n");
     }
 
     for (idx, (name, path)) in assets.iter().enumerate() {
@@ -479,7 +479,7 @@ pub(super) fn generate_embedded_asset_object(
     for idx in 0..assets.len() {
         if let Some(original_len) = payloads[idx].original_len {
             let text = u32::from(text_modules.contains(&assets[idx].0));
-            writeln!(c, "    if (!js_register_embedded_zstd_asset(PERRY_ASSET_NAME_{idx}, PERRY_ASSET_NAME_LEN_{idx}, PERRY_ASSET_ZSTD_DATA_{idx}, (size_t)(PERRY_ASSET_ZSTD_END_{idx} - PERRY_ASSET_ZSTD_DATA_{idx}), {original_len}, {text})) {{ fputs(\"Corrupt compressed embedded asset\\n\", stderr); _Exit(74); }}").ok();
+            writeln!(c, "    if (!js_register_embedded_zstd_asset_lazy(PERRY_ASSET_NAME_{idx}, PERRY_ASSET_NAME_LEN_{idx}, PERRY_ASSET_ZSTD_DATA_{idx}, (size_t)(PERRY_ASSET_ZSTD_END_{idx} - PERRY_ASSET_ZSTD_DATA_{idx}), {original_len}, {text})) {{ fputs(\"Corrupt compressed embedded asset\\n\", stderr); _Exit(74); }}").ok();
             continue;
         }
         let register = if text_modules.contains(&assets[idx].0) {
