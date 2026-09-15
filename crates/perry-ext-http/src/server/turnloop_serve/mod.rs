@@ -56,7 +56,7 @@ mod tests;
 
 pub(crate) use conn::{
     begin_stream, connections_of, destroy_connection, finish_body, is_busy, send_body,
-    send_interim, send_response, take_pending,
+    send_interim, send_response, take_aborted, take_pending,
 };
 
 /// This crate's slot in the runtime's completion-sink registry.

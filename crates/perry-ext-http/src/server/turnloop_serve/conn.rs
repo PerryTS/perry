@@ -49,6 +49,9 @@ struct Building {
 /// The request currently being answered.
 struct Active {
     seq: u64,
+    /// The `IncomingMessage` this answers, so a connection that dies before the
+    /// response completes can raise Node's `'aborted'` on it.
+    request_handle: i64,
     method: String,
     version: u8,
     connection: Option<String>,
@@ -97,6 +100,38 @@ fn conns() -> &'static Mutex<HashMap<i64, Conn>> {
 fn pending() -> &'static Mutex<HashMap<i64, VecDeque<HttpPendingRequest>>> {
     static PENDING: OnceLock<Mutex<HashMap<i64, VecDeque<HttpPendingRequest>>>> = OnceLock::new();
     PENDING.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// `IncomingMessage` handles whose connection died before their response
+/// completed. Node raises `'aborted'` on the request; the sink cannot run JS,
+/// so the pump drains this and fires the listeners on its own tick.
+fn aborted() -> &'static Mutex<Vec<i64>> {
+    static ABORTED: OnceLock<Mutex<Vec<i64>>> = OnceLock::new();
+    ABORTED.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Take the `IncomingMessage` handles whose connection died mid-request.
+pub(crate) fn take_aborted() -> Vec<i64> {
+    let mut queue = aborted().lock().unwrap_or_else(|e| e.into_inner());
+    std::mem::take(&mut *queue)
+}
+
+/// Note that this connection's in-flight request (if any) will never be
+/// answered, exactly once per request.
+fn note_aborted(id: i64) {
+    let handle = with_conn(id, |c| {
+        c.active
+            .as_mut()
+            .map(|a| std::mem::replace(&mut a.request_handle, 0))
+    })
+    .flatten()
+    .filter(|h| *h != 0);
+    if let Some(handle) = handle {
+        aborted()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(handle);
+    }
 }
 
 /// Take the next decoded request for `server_handle`, if any.
@@ -449,6 +484,7 @@ fn finish_request(c: &mut Conn, building: Building) -> (HttpPendingRequest, bool
 
     c.active = Some(Active {
         seq: c.seq,
+        request_handle: im_handle,
         method: building.method,
         version: building.version,
         connection: building.connection,
@@ -742,6 +778,7 @@ fn complete_response(conn_id: i64, seq: u64, framing: Framing) {
 
 /// `res.destroy()` / `socket.destroy()` on the turnloop connection.
 pub(crate) fn destroy_connection(conn_id: i64) {
+    note_aborted(conn_id);
     let known = with_conn(conn_id, |c| {
         c.destroyed = true;
         c.closing = true;
@@ -838,6 +875,9 @@ fn on_wrote(_id: i64, _len: usize) {
 }
 
 fn on_closed(id: i64) {
+    // A peer that vanished mid-request reaches the terminal `Closed` without
+    // ever passing through `destroy_connection`.
+    note_aborted(id);
     cancel_idle(id);
     let owned = conns()
         .lock()
