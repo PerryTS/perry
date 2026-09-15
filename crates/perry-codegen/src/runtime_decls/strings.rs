@@ -126,6 +126,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("llvm.ceil.f64", DOUBLE, &[DOUBLE]);
     module.declare_function("llvm.fabs.f64", DOUBLE, &[DOUBLE]);
     module.declare_function("llvm.copysign.f64", DOUBLE, &[DOUBLE, DOUBLE]);
+    // Two-argument Math.max / Math.min on plain doubles: NaN-propagating and
+    // ordering -0 below +0, exactly the JS semantics (one fmax/fmin on AArch64).
+    module.declare_function("llvm.maximum.f64", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("llvm.minimum.f64", DOUBLE, &[DOUBLE, DOUBLE]);
     // `llvm.assume` — used by Buffer index-set/get fast paths
     // (`crates/perry-codegen/src/expr.rs::Expr::BufferIndexSet/Get` etc.)
     // and the Buffer numeric-read intrinsics
