@@ -1,8 +1,6 @@
 //! #10274: a dynamic HeadersInit in a literal RequestInit needs conversion.
 
-mod support {
-    include!("support/proxy_value_probe.rs");
-}
+mod support;
 
 const SOURCE: &str = r#"
 const dump = (h: any) => { const out: string[] = []; h.forEach((v: string, k: string) => out.push(k + "=" + v)); return out.sort() }

@@ -1,8 +1,6 @@
 //! #10270: IsArray is not proof that a Proxy id is an ArrayHeader.
 
-mod support {
-    include!("support/proxy_value_probe.rs");
-}
+mod support;
 
 const SOURCE: &str = r#"
 const t = (name: string, f: () => any) => { try { console.log(name, JSON.stringify(f())) } catch (e: any) { console.log(name, "THROW", e.message) } }

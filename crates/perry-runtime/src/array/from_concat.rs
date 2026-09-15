@@ -1166,23 +1166,25 @@ unsafe fn append_concat_proxy(result: *mut ArrayHeader, proxy: f64) -> *mut Arra
     let scope = crate::gc::RuntimeHandleScope::new();
     let result = scope.root_raw_mut_ptr(result);
     let proxy = scope.root_nanbox_f64(proxy);
-    let len = array_like_length(proxy.get_nanbox_f64());
-    for index in 0..len {
-        let entry_scope = crate::gc::RuntimeHandleScope::new();
-        let name = index.to_string();
-        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        let key = entry_scope.root_nanbox_f64(crate::value::js_nanbox_string(key as i64));
-        let present =
-            crate::object::js_object_has_property(proxy.get_nanbox_f64(), key.get_nanbox_f64());
-        let value = if crate::value::js_is_truthy(present) != 0 {
-            crate::proxy::js_proxy_get(proxy.get_nanbox_f64(), key.get_nanbox_f64())
-        } else {
-            f64::from_bits(crate::value::TAG_HOLE)
-        };
-        let grown = js_array_push_f64(result.get_raw_mut_ptr(), value);
-        result.set_raw_mut_ptr(grown);
-    }
-    result.get_raw_mut_ptr()
+    let (_, result) = result.across_mut(|| {
+        let len = array_like_length(proxy.get_nanbox_f64());
+        for index in 0..len {
+            let entry_scope = crate::gc::RuntimeHandleScope::new();
+            let name = index.to_string();
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            let key = entry_scope.root_nanbox_f64(crate::value::js_nanbox_string(key as i64));
+            let present =
+                crate::object::js_object_has_property(proxy.get_nanbox_f64(), key.get_nanbox_f64());
+            let value = if crate::value::js_is_truthy(present) != 0 {
+                crate::proxy::js_proxy_get(proxy.get_nanbox_f64(), key.get_nanbox_f64())
+            } else {
+                f64::from_bits(crate::value::TAG_HOLE)
+            };
+            let grown = result.with_mut_ptr(|ptr| js_array_push_f64(ptr, value));
+            result.set_raw_mut_ptr(grown);
+        }
+    });
+    result
 }
 
 /// Append every element of the (already-materializable) source array `src`

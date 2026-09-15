@@ -18,52 +18,20 @@
 
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Once;
 
 fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))
 }
 
-fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("canonicalize workspace root")
-}
-
-fn target_debug_dir() -> PathBuf {
-    std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| workspace_root().join("target"))
-        .join("debug")
-}
-
-fn ensure_runtime_archive() {
-    static BUILD_RUNTIME: Once = Once::new();
-    BUILD_RUNTIME.call_once(|| {
-        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-        let build = Command::new(cargo)
-            .current_dir(workspace_root())
-            .arg("build")
-            .arg("-p")
-            .arg("perry-runtime-static")
-            .arg("-p")
-            .arg("perry-stdlib-static")
-            .output()
-            .expect("run cargo build for static wrapper crates");
-        assert!(
-            build.status.success(),
-            "cargo build -p perry-runtime-static -p perry-stdlib-static failed\n\
-             stdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&build.stdout),
-            String::from_utf8_lossy(&build.stderr)
-        );
-    });
-}
-
 fn runtime_dir() -> PathBuf {
-    ensure_runtime_archive();
-    target_debug_dir()
+    std::env::var_os("PERRY_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            perry_bin()
+                .parent()
+                .expect("compiler directory")
+                .to_path_buf()
+        })
 }
 
 /// Cycle member whose body assigns two exports at run time. A function
@@ -127,6 +95,7 @@ fn compile_and_run(entry_src: &str) -> String {
         .arg("-o")
         .arg(&output)
         .arg("--no-cache")
+        .arg("--no-codegen")
         .env("PERRY_NO_AUTO_OPTIMIZE", "1")
         .env("PERRY_RUNTIME_DIR", runtime_dir())
         .output()
