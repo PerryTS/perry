@@ -1786,10 +1786,16 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                 if let Some(header) = crate::value::addr_class::try_read_gc_header(addr) {
                     const SLOW_FLAGS: u16 = crate::gc::OBJ_FLAG_FROZEN
                         | crate::gc::OBJ_FLAG_SEALED
-                        | crate::gc::OBJ_FLAG_NO_EXTEND
-                        | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
+                        | crate::gc::OBJ_FLAG_NO_EXTEND;
+                    // #10287: an own descriptor is vetted per KEY (the summary
+                    // proves absence outright), so one `defineProperty` no
+                    // longer sends every later store on this receiver down the
+                    // full walk. Read before the coercion below: it reads key
+                    // bytes only and cannot allocate.
                     if header.obj_type == crate::gc::GC_TYPE_OBJECT
                         && header._reserved & SLOW_FLAGS == 0
+                        && (header._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS == 0
+                            || crate::object::own_descriptors_skip_key(addr, key))
                     {
                         let class_id = (*(addr as *const crate::ObjectHeader)).class_id;
                         // #6943: BOTH arms below reach a GC-capable
@@ -1855,9 +1861,17 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                             // Plain object: prototype is exactly Object.prototype, and
                             // Object.prototype doesn't intercept this key (per-key, not
                             // the coarse process-wide descriptor flag — that made wide
-                            // builds O(n²)).
-                            crate::object::prototype_chain::object_static_prototype(addr).is_none()
-                                && !crate::object::object_proto_may_intercept_key(key)
+                            // builds O(n²)). #10287: a RECORDED prototype (a
+                            // function-constructed receiver, `Object.create`,
+                            // `setPrototypeOf`) is walked per key rather than rejected.
+                            match crate::object::prototype_chain::object_static_prototype(cur_addr())
+                            {
+                                None => !crate::object::object_proto_may_intercept_key(cur_key()),
+                                Some(_) => !crate::object::plain_custom_prototype_may_intercept(
+                                    cur_addr(),
+                                    cur_key(),
+                                ),
+                            }
                         } else {
                             // `DisposableStack#disposed` is a getter-only
                             // builtin accessor on a reserved native prototype.

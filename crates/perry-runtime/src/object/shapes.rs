@@ -1598,6 +1598,121 @@ pub(crate) unsafe fn transition_object_shape_semantics(
 /// Returns the successor id, or 0 when the object is not stamped/shaped —
 /// the caller falls back to the compacting delete.
 
+/// #10287: a DATA-descriptor install reuses one generation per
+/// `(predecessor facts, key, attributes)`, so two receivers built the same way
+/// keep sharing shapes — and therefore transition edges, keys arrays and every
+/// shape-keyed cache — instead of each getting a private lineage.
+///
+/// Soundness rests on the same invariant the unique counter provides: a shape's
+/// identity must imply its descriptor semantics. Every semantic event
+/// (descriptor install, clear, accessor install, prototype change) mints a new
+/// generation, so two receivers can only reach the same generation by applying
+/// the same event to the same predecessor facts — which makes their descriptor
+/// state identical by induction. Accessor installs keep minting unique
+/// generations: their getter/setter identities differ per receiver, and nothing
+/// in the shape records which closure a key resolves to.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct SemanticGenerationKey {
+    keys: u64,
+    logical_key_count: u32,
+    live_inline_slot_count: u32,
+    semantic_generation: u64,
+    object_kind: ShapeObjectKind,
+    hole_count: u32,
+    attrs: u8,
+    key_hash: u64,
+}
+
+/// Bound on the deterministic-generation table. Reaching it clears the table:
+/// every generation already handed out stays valid (it lives in the shapes
+/// those receivers carry), and later installs simply mint fresh ones.
+///
+/// Sized for the population that BENEFITS — one entry per distinct
+/// `(predecessor, key, attributes)` a program repeats — rather than for one
+/// that cannot. A workload whose receivers never converge on a shared shape
+/// (each install from a private predecessor) would otherwise retain one entry
+/// per install for no reuse; 8,192 keeps that bounded at a few hundred KB.
+const SEMANTIC_GENERATION_TABLE_CAP: usize = 1 << 13;
+
+crate::perry_thread_local! {
+    static SEMANTIC_GENERATIONS: RefCell<
+        std::collections::HashMap<SemanticGenerationKey, Vec<(Box<[u8]>, u64)>>,
+    > = RefCell::new(std::collections::HashMap::new());
+}
+
+/// The generation for installing `attrs` on `key_bytes` over `current`, minted
+/// once and reused for every receiver that repeats that exact install.
+fn deterministic_semantic_generation(
+    current: &ShapeDescriptor,
+    key_bytes: &[u8],
+    attrs: u8,
+) -> Option<u64> {
+    let entry_key = SemanticGenerationKey {
+        keys: current.keys,
+        logical_key_count: current.logical_key_count,
+        live_inline_slot_count: current.live_inline_slot_count,
+        semantic_generation: current.semantic_generation,
+        object_kind: current.object_kind,
+        hole_count: current.hole_count,
+        attrs,
+        key_hash: crate::object::key_bytes_hash(key_bytes.as_ptr(), key_bytes.len()),
+    };
+    SEMANTIC_GENERATIONS
+        .try_with(|table| {
+            let mut table = table.borrow_mut();
+            if table.len() >= SEMANTIC_GENERATION_TABLE_CAP {
+                table.clear();
+            }
+            let bucket = table.entry(entry_key).or_default();
+            // The hash is a summary; the bytes decide, so a collision costs a
+            // second entry rather than a shared generation for two keys.
+            if let Some((_, generation)) = bucket.iter().find(|(bytes, _)| &**bytes == key_bytes) {
+                return Some(*generation);
+            }
+            let generation = SHAPE_SEMANTIC_NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if generation == 0 {
+                return None;
+            }
+            bucket.push((key_bytes.to_vec().into_boxed_slice(), generation));
+            Some(generation)
+        })
+        .ok()
+        .flatten()
+}
+
+/// [`transition_object_shape_semantics`] for a DATA-descriptor install, whose
+/// successor is shared by every receiver that performs the same install over
+/// the same predecessor facts (#10287).
+pub(crate) unsafe fn transition_object_shape_semantics_for_data_descriptor(
+    obj: *mut crate::object::ObjectHeader,
+    key_bytes: &[u8],
+    attrs: u8,
+) -> u32 {
+    if obj.is_null() || !shape_word_is_writable(obj) {
+        return 0;
+    }
+    crate::array::clear_array_subclass_named_prefix_token(obj);
+    let current = object_shape_descriptor(obj).unwrap_or_else(|| {
+        synchronize_object_shape_descriptor(obj);
+        object_shape_descriptor(obj).expect("shape synchronization must publish a descriptor")
+    });
+    let Some(generation) = deterministic_semantic_generation(&current, key_bytes, attrs) else {
+        // Table unavailable (teardown) or the counter wrapped: fall back to the
+        // unique-generation transition, which is always correct.
+        return transition_object_shape_semantics(obj);
+    };
+    let id = publish_shape_result(shape_descriptor_ensure_with_generation(
+        current.keys as usize as *mut ArrayHeader,
+        current.logical_key_count,
+        current.live_inline_slot_count,
+        generation,
+        current.object_kind,
+    ));
+    stamp_object_shape_id_with_carrier_note(obj, id);
+    debug_assert_object_shape_parity(obj);
+    id
+}
+
 /// Turn a class-expression object into a class receiver. The kind is part of
 /// the exact immutable descriptor, so it cannot alias GC layout bits and every
 /// pre-mark ShapeId guard permanently misses afterward.

@@ -48,11 +48,19 @@ pub(crate) unsafe fn try_existing_own_data_overwrite(
     const BLOCKING_FLAGS: u16 = crate::gc::OBJ_FLAG_FROZEN
         | crate::gc::OBJ_FLAG_SEALED
         | crate::gc::OBJ_FLAG_NO_EXTEND
-        | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
         | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
     if obj_gc.obj_type != crate::gc::GC_TYPE_OBJECT
         || obj_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || obj_gc._reserved & BLOCKING_FLAGS != 0
+        // #10287: an own descriptor is vetted per KEY. Overwriting a key the
+        // summary proves uncovered cannot hit an own accessor or a
+        // non-writable data property, which is what the object-wide flag
+        // stood in for.
+        || (obj_gc._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0
+            && !crate::object::own_descriptors_skip_key(
+                obj_addr,
+                f64::from_bits(JSValue::string_ptr(key as *mut _).bits()),
+            ))
         // A per-evaluation class object can carry dynamic static accessors in
         // the class registry while retaining an ordinary backing slot with the
         // same key. Overwriting that slot directly bypasses the accessor
@@ -536,11 +544,22 @@ fn object_set_field_by_name_transition_fast_impl_value(
             & (crate::gc::OBJ_FLAG_FROZEN
                 | crate::gc::OBJ_FLAG_SEALED
                 | crate::gc::OBJ_FLAG_NO_EXTEND
-                // #6084 item 6: an own descriptor on THIS object (accessor or
-                // non-writable) must route through the full setter semantics.
-                | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
                 | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO)
             != 0
+        {
+            return None;
+        }
+        // #6084 item 6: an own descriptor on THIS object (accessor or
+        // non-writable) must route through the full setter semantics —
+        // #10287: per KEY, so a receiver carrying one descriptor keeps the
+        // transition lane for every other key. The append below targets a key
+        // this shape does not have, so only an own descriptor recorded for
+        // that absent key can matter.
+        if object_flags & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0
+            && !crate::object::own_descriptors_skip_key(
+                obj as usize,
+                f64::from_bits(JSValue::string_ptr(key as *mut _).bits()),
+            )
         {
             return None;
         }

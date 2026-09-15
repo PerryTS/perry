@@ -579,6 +579,19 @@ pub(crate) unsafe fn class_instance_set_may_intercept(
 static HANDLE_HAS_DESCRIPTORS: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn note_descriptor_target(obj: usize) {
+    note_descriptor_target_keyed(obj, None);
+}
+
+/// [`note_descriptor_target`] for a single DATA-descriptor install (#10287):
+/// the semantic shape transition is keyed on `(key, attrs)`, so receivers that
+/// repeat the same install over the same predecessor share the successor shape
+/// instead of each minting a private lineage. Every other descriptor mutation
+/// (accessors, batches, clears, prototype changes) keeps a unique generation.
+pub(crate) fn note_data_descriptor_target(obj: usize, key: &str, attrs: PropertyAttrs) {
+    note_descriptor_target_keyed(obj, Some((key.as_bytes(), attrs.bits)));
+}
+
+fn note_descriptor_target_keyed(obj: usize, data_install: Option<(&[u8], u8)>) {
     if crate::value::addr_class::is_handle_band(obj) {
         HANDLE_HAS_DESCRIPTORS.store(true, Ordering::Relaxed);
     }
@@ -595,7 +608,17 @@ pub(crate) fn note_descriptor_target(obj: usize) {
                 (*header)._reserved |= crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
                 let object = obj as *mut crate::object::ObjectHeader;
                 if crate::object::object_is_shaped(object) {
-                    crate::object::shapes::transition_object_shape_semantics(object);
+                    match data_install {
+                        Some((key_bytes, attrs)) => {
+                            crate::object::shapes::
+                                transition_object_shape_semantics_for_data_descriptor(
+                                    object, key_bytes, attrs,
+                                );
+                        }
+                        None => {
+                            crate::object::shapes::transition_object_shape_semantics(object);
+                        }
+                    }
                 }
             }
         }
@@ -875,6 +898,142 @@ unsafe fn own_descriptor_may_cover_key(addr: usize, key: f64) -> bool {
     }
 }
 
+/// Per-key refinement of `OBJ_FLAG_HAS_DESCRIPTORS` for the store fast paths
+/// (#10287). `true` proves no OWN string-keyed descriptor (attr or accessor)
+/// covers `key` on `addr`, so a store of `key` meets the same own-property
+/// preconditions as one on a receiver that never had a descriptor. Prototype
+/// vetting stays with the caller.
+///
+/// zod v4 opens every schema constructor with
+/// `Object.defineProperty(inst, "_zod", …)` and then installs ~60 methods by
+/// assignment; the object-wide flag sent every one of those stores down the
+/// full `OrdinarySet` walk.
+///
+/// Index-shaped keys stay on the slow walk: a boxed `String` wrapper
+/// synthesizes non-writable index attributes that the summary never records.
+pub(crate) unsafe fn own_descriptors_skip_key(addr: usize, key: f64) -> bool {
+    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let Some(bytes) = crate::string::js_string_key_bytes(
+        crate::value::JSValue::from_bits(key.to_bits()),
+        &mut sso,
+    ) else {
+        return false;
+    };
+    if bytes.first().is_some_and(u8::is_ascii_digit) {
+        return false;
+    }
+    !own_descriptor_may_cover_key(addr, key)
+}
+
+/// Can anything on the prototype chain of a CLASS-LESS receiver whose
+/// `[[Prototype]]` was set explicitly (`new F()`, `Object.create`,
+/// `setPrototypeOf`) intercept a plain data write of `key` (#10287)?
+///
+/// The class-instance twin is [`class_instance_set_may_intercept`]; this is the
+/// same per-prototype walk without the class-chain probe for the receiver
+/// itself. Without it, EVERY function-constructed receiver — which is what
+/// zod's `$constructor` mints — was rejected wholesale by
+/// [`plain_data_write_may_intercept`], so no store fast path could serve it.
+///
+/// Conservative in every uncertain case (returns `true` = take the slow path):
+/// proxies and handle prototypes, non-object prototypes (functions, arrays),
+/// typed arrays, exotic expando hosts, class objects, native-module receivers,
+/// frozen prototypes, and any chain deeper than [`CUSTOM_PROTO_WALK_LIMIT`].
+pub(crate) unsafe fn plain_custom_prototype_may_intercept(obj_addr: usize, key: f64) -> bool {
+    const CUSTOM_PROTO_WALK_LIMIT: u32 = 8;
+    let mut name_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let Some(name_bytes) = crate::string::js_string_key_bytes(
+        crate::value::JSValue::from_bits(key.to_bits()),
+        &mut name_buf,
+    ) else {
+        return true;
+    };
+    let Ok(name) = std::str::from_utf8(name_bytes) else {
+        return true;
+    };
+    // `Object.prototype`'s Annex-B accessor is implemented in the walk itself,
+    // never as a materialized descriptor (see `object_proto_may_intercept_key`).
+    if name == "__proto__" {
+        return true;
+    }
+    let mut proto = js_object_get_prototype_of(crate::value::js_nanbox_pointer(obj_addr as i64));
+    let mut depth = 0u32;
+    loop {
+        depth += 1;
+        if depth > CUSTOM_PROTO_WALK_LIMIT {
+            return true;
+        }
+        let bits = proto.to_bits();
+        let top16 = bits >> 48;
+        // Same classification as the class-instance walk: a NaN-boxed small
+        // handle is a Proxy (trap), a raw pointer is a recorded literal
+        // prototype, null/undefined ends the chain.
+        let p = if top16 == 0x7FFD {
+            let p = (bits & crate::value::POINTER_MASK) as usize;
+            if p == 0 {
+                return false;
+            }
+            if crate::value::addr_class::is_small_handle(p) {
+                return true;
+            }
+            p
+        } else if top16 == 0 && bits >= (crate::gc::GC_HEADER_SIZE as u64) + 0x1000 {
+            bits as usize
+        } else if bits == crate::value::TAG_NULL || bits == crate::value::TAG_UNDEFINED {
+            return false;
+        } else {
+            return true;
+        };
+        if crate::array::object_prototype_addr_matches(p) {
+            return object_proto_may_intercept_key(key);
+        }
+        let Some(header) = crate::value::addr_class::try_read_gc_header(p) else {
+            return true;
+        };
+        // A non-object prototype (function, array, …) may carry semantics this
+        // walk does not model; a frozen one makes every inherited data property
+        // non-writable whether or not a per-key entry records it.
+        if header.obj_type != crate::gc::GC_TYPE_OBJECT
+            || header._reserved
+                & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO)
+                != 0
+        {
+            return true;
+        }
+        if crate::typedarray::lookup_typed_array_kind(p).is_some() {
+            return true;
+        }
+        let proto_value = crate::value::js_nanbox_pointer(p as i64);
+        if super::exotic_expando::exotic_expando_kind_of_value(proto_value).is_some() {
+            return true;
+        }
+        let proto_obj = p as *mut crate::object::ObjectHeader;
+        if class_registry::is_class_object_ptr(proto_obj.cast()) {
+            return true;
+        }
+        let class_id = (*proto_obj).class_id;
+        if class_id == crate::object::NATIVE_MODULE_CLASS_ID {
+            return true;
+        }
+        // A class instance or class prototype on the chain keeps its accessors
+        // in the class registry, not only in the descriptor tables.
+        if class_id != 0 && class_registry::class_chain_has_instance_accessor(class_id, name) {
+            return true;
+        }
+        if object_has_descriptors(p) {
+            if get_accessor_descriptor(p, name).is_some() {
+                return true;
+            }
+            if let Some(attrs) = get_property_attrs(p, name) {
+                if !attrs.writable() {
+                    return true;
+                }
+            }
+        }
+        proto = js_object_get_prototype_of(proto);
+    }
+}
+
 /// #6759 Phase C2 owner-level verdict: can the tables hold ANY entry owned
 /// by `owner`? Gates the O(table-size) owner scans (`Object.keys` fast
 /// path, `accessor_descriptor_keys_for_obj`). Same trust model as the
@@ -964,9 +1123,13 @@ pub(crate) unsafe fn plain_data_write_may_intercept(addr: usize, class_id: u32, 
 
     if class_id == 0 {
         // Plain object. Its prototype is exactly `Object.prototype` unless a
-        // `setPrototypeOf` target was recorded for it.
-        super::prototype_chain::object_static_prototype(addr).is_some()
-            || object_proto_may_intercept_key(key)
+        // `setPrototypeOf` target was recorded for it — #10287: a recorded
+        // prototype is vetted per key instead of rejecting the receiver.
+        if super::prototype_chain::object_static_prototype(addr).is_some() {
+            plain_custom_prototype_may_intercept(addr, key)
+        } else {
+            object_proto_may_intercept_key(key)
+        }
     } else {
         // Class instance: an inherited accessor / non-writable data property
         // anywhere in the chain intercepts the write.
@@ -977,7 +1140,7 @@ pub(crate) unsafe fn plain_data_write_may_intercept(addr: usize, class_id: u32, 
 /// Store a property descriptor for (obj, key).
 pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) {
     super::prop_plan::prop_plan_epoch_bump();
-    note_descriptor_target(obj);
+    note_data_descriptor_target(obj, &key, attrs);
     let st = state();
     st.descriptors.property_attrs_in_use.set(true);
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
