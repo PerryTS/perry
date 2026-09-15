@@ -627,16 +627,19 @@ fn local_typeof_strict_ne_literal_uses_the_integer_classifier() {
     );
 }
 
+/// `"string"` is decided by the value's tag bits alone (the classifier's own
+/// first arms), so the reversed literal form needs no classifier call at all.
 #[test]
-fn reversed_local_typeof_strict_eq_uses_the_same_integer_classifier() {
+fn reversed_local_typeof_strict_eq_is_decided_inline() {
     let ir = cmp_ir(
         "typeof_local_eq_reversed",
         CompareOp::Eq,
         Expr::String("string".to_string()),
         Expr::TypeOf(Box::new(Expr::LocalGet(X))),
     );
-    assert!(ir.contains("call i32 @js_value_typeof_tag("), "{ir}");
+    assert!(!ir.contains("call i32 @js_value_typeof_tag("), "{ir}");
     assert!(!ir.contains("call i64 @js_value_typeof("), "{ir}");
+    assert!(!ir.contains("call i32 @js_string_equals("), "{ir}");
 }
 
 #[test]
