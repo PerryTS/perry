@@ -431,6 +431,7 @@ pub(crate) mod stdlib_pump {
 
     impl PumpDepthGuard {
         fn enter() -> (Self, bool) {
+            crate::exception::note_catch_subsystem_used(crate::exception::catch_subsystem::PUMP);
             PUMP_DEPTH.with(|depth| {
                 let current = depth.get();
                 depth.set(current.saturating_add(1));

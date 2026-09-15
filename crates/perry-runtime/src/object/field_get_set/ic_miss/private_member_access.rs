@@ -5,8 +5,10 @@ fn private_brand_key(declaring_class_id: u32) -> String {
 crate::perry_thread_local! {
     static PRIVATE_METHOD_OWNER_HINT: std::cell::RefCell<Option<(u32, String)>> =
         std::cell::RefCell::new(None);
-    static PRIVATE_MEMBER_ACCESS_HINTS: std::cell::RefCell<Vec<PrivateMemberAccessHint>> =
-        std::cell::RefCell::new(Vec::new());
+    static PRIVATE_MEMBER_ACCESS_HINTS: std::cell::RefCell<crate::exception::CatchStack<PrivateMemberAccessHint>> =
+        std::cell::RefCell::new(crate::exception::CatchStack::new(
+            crate::exception::catch_subsystem::PRIVATE_MEMBER_ACCESS_HINTS,
+        ));
 }
 
 #[derive(Clone)]

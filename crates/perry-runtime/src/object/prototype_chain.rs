@@ -51,7 +51,11 @@ crate::perry_thread_local! {
     /// recursive property lookup bounded and stop on a repeated owner. These
     /// are NaN-boxed root slots, not raw addresses: an accessor or Proxy trap
     /// can collect and move an owner before re-entering property resolution.
-    static PROTOTYPE_RESOLUTION_STACK: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+    static PROTOTYPE_RESOLUTION_STACK: RefCell<crate::exception::CatchStack<u64>> = const {
+        RefCell::new(crate::exception::CatchStack::new(
+            crate::exception::catch_subsystem::PROTOTYPE_RESOLUTION,
+        ))
+    };
 }
 const MAX_PROTOTYPE_RESOLUTION_DEPTH: usize = 64;
 

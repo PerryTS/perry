@@ -134,3 +134,54 @@ pub(super) fn dyn_eval(marker: u32) {
     crate::dyn_eval::root_push(marker as f64);
     crate::dyn_eval::call_depth_enter().unwrap();
 }
+
+/// The latch must go up on the first push, before any state exists that a
+/// later capture could skip — and a set bit must switch capture back to the
+/// real read. Sabotage caught: a `CatchStack::push` that forgets
+/// `note_catch_subsystem_used` leaves the bit clear after the push below.
+#[test]
+fn catch_stack_push_latches_its_subsystem_bit() {
+    use super::{catch_subsystem, catch_subsystem_used, CatchStack};
+    // A bit no production subsystem uses, so this test owns it outright.
+    const PRIVATE_BIT: u32 = 1 << 30;
+    assert!(
+        !catch_subsystem_used(PRIVATE_BIT),
+        "fixture bit must start clear, or the latch assertion below is vacuous"
+    );
+    let mut stack = CatchStack::<u32>::new(PRIVATE_BIT);
+    assert!(stack.is_empty());
+    assert!(
+        !catch_subsystem_used(PRIVATE_BIT),
+        "construction must not latch"
+    );
+    stack.push(7);
+    assert!(
+        catch_subsystem_used(PRIVATE_BIT),
+        "the first push must latch"
+    );
+    assert_eq!(stack.pop(), Some(7));
+    assert!(catch_subsystem_used(PRIVATE_BIT), "bits are never cleared");
+    assert!(catch_subsystem_used(catch_subsystem::ALWAYS));
+}
+
+/// A stack pushed on one thread must be captured exactly on another thread
+/// that pushes later: the bit is process-wide, the depth is per thread.
+#[test]
+fn latched_capture_reads_real_depth_on_every_thread() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    crate::object::static_private_owner_push(1.0);
+    let here = crate::object::static_private_owner_stack_savepoint();
+    assert!(here >= 1);
+    let there = std::thread::spawn(|| {
+        let before = crate::object::static_private_owner_stack_savepoint();
+        crate::object::static_private_owner_push(2.0);
+        crate::object::static_private_owner_push(3.0);
+        let after = crate::object::static_private_owner_stack_savepoint();
+        crate::object::static_private_owner_stack_restore(before);
+        (before, after)
+    })
+    .join()
+    .expect("worker thread");
+    assert_eq!(there, (0, 2));
+    crate::object::static_private_owner_stack_restore(here - 1);
+}

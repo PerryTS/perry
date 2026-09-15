@@ -255,6 +255,7 @@ fn interp_safepoints_enabled() -> bool {
 /// Push a value onto the rooted stack; returns its index. The index stays
 /// valid until the owning frame truncates back past it.
 pub(crate) fn root_push(value: f64) -> usize {
+    crate::exception::note_catch_subsystem_used(crate::exception::catch_subsystem::DYN_EVAL);
     ROOTS.with(|r| {
         let mut v = r.borrow_mut();
         v.push(value.to_bits());
@@ -308,6 +309,7 @@ pub(crate) fn interp_restore(savepoint: u64) {
 }
 
 pub(crate) fn call_depth_enter() -> Result<(), ()> {
+    crate::exception::note_catch_subsystem_used(crate::exception::catch_subsystem::DYN_EVAL);
     CALL_DEPTH.with(|c| {
         let d = c.get();
         if d >= MAX_INTERP_CALL_DEPTH {
