@@ -13,8 +13,13 @@ at the process-exit funnel.
 Every counter is recorded identically in **both** A/B arms (`tokio-wait-driver`
 on and off), so the two arms can be compared like with like: the same tokio tick
 is measured in both, and the `arm=` field says which build produced the line.
-Diagnostic only — with `PERRY_LOOP_STATS` unset every hook is one relaxed atomic
-load, with no allocation and no lock on any wait path.
+Both wake producers stamp the clock — `js_notify_main_thread` and, separately,
+`js_native_work_submitted`, which wakes a parked turn directly and is the only
+way a cross-thread native submission reaches one. A stamp that belongs to an
+earlier wait is rejected rather than attributed to the next one, so the
+histogram can under-report a wake but never invent or inflate one. Diagnostic
+only — with `PERRY_LOOP_STATS` unset every hook is one relaxed atomic load, with
+no allocation and no lock on any wait path.
 
 `scripts/turnloop/server_ab.py` is the server A/B harness for that comparison
 (Linux; `--dry-run` works anywhere). It builds both arms from one commit into
@@ -27,3 +32,12 @@ raw_syscalls:sys_enter`, else `strace -c -f`), peak RSS, bytes per idle
 connection, binary size and the wait metrics above. A sample whose arm marker or
 `arm=` field does not match the arm it was supposed to measure is rejected rather
 than averaged in. Output is one markdown table plus JSON.
+
+Two findings fell out of building the harness. `server.keepAliveTimeout = 0` on
+a `node:http` server means "never time out" in Node but "no keep-alive" in
+Perry, which answers `Connection: close` — unrelated to turnloop (both arms
+behave identically) and not fixed here, but it is why the harness app sets a
+large timeout instead. And a P0 server makes **zero** turnloop turns: its accept
+loop keeps a tokio task alive for the life of the process, so every park goes to
+the transitional tick. That is the documented P0 design rather than a
+regression, and the new line is what will show P1 changing it.
