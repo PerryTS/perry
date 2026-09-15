@@ -483,8 +483,8 @@ fn an_armed_timer_deadline_does_not_keep_the_loop_alive() {
         let later = at + Duration::from_secs(1);
         arm_timer(Some(later));
         assert_eq!(
-            AGENT_LOOP.with(|slot| slot.borrow().as_ref().unwrap().timer.map(|(h, _)| h.key)),
-            armed.map(|(h, _)| h.key),
+            AGENT_LOOP.with(|slot| slot.borrow().as_ref().unwrap().timer.map(|(h, _)| h.key())),
+            armed.map(|(h, _)| h.key()),
             "a deadline move must reset the handle, not replace it"
         );
         assert_eq!(loop_deadline(), Some(later));
