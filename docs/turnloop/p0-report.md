@@ -1,0 +1,436 @@
+# turnloop P0 — wait driver, Instant deadlines, O(1) keep-alive
+
+Branch `turnloop/p0-wait-driver`, based on Perry `main` `1cd160f3d1`. Local
+host: macOS arm64 (M-series, 10 cores), shared and heavily loaded during the
+work (load average 80–150 from another session). Nothing here was measured on
+Linux or Windows.
+
+## Commits
+
+| SHA | What |
+|---|---|
+| `fed96bdb4d` | Codex checkpoint (partial, pre-existing) |
+| `0df1f6eecc` | Revert of the checkpoint (reasons in the commit message) |
+| `55d55221df` | `turnloop =0.1.0-alpha.2` dependency and lockfile |
+| `74989142c6` | Wait driver, Instant deadlines, coexistence bridge, A/B feature, O(1) keep-alive, unit tests |
+| (this commit) | Probes, statistics scripts, gap test, changelog fragment, this report |
+
+The checkpoint was reverted rather than amended. Its `Cargo.lock` was
+hand-spliced, its turnloop wake took a process-wide mutex on every
+cross-thread notify, several keep-alive conversions were regex-applied and
+missed transitions, it turned `MessagePort.onmessage` into an accessor
+property (observable in JS) and it changed `setTimeout` delay normalization
+(0 ms → 1 ms). The code in `74989142c6` was written fresh.
+
+## Design
+
+### Where the loop lives, and per-agent ownership
+
+- The loop is in **perry-runtime** (`crates/perry-runtime/src/event_pump/agent_loop.rs`),
+  not perry-stdlib. Timer- and promise-only programs link runtime-only and
+  park in `js_wait_for_event` too; a stdlib-installed driver would never run
+  for them, and those are exactly the programs the sub-millisecond spin hit.
+- **One `turnloop::Loop` per JS agent, thread-local.** It is created by the
+  primary agent's first real park (not by fast-path calls, so a program that
+  never parks never opens a poller) and destroyed at the process-exit funnel
+  `js_gc_release_current_thread_collection_side_allocations` (and in
+  `js_unsettled_top_level_await_exit`). Thread exit also drops it. There is no
+  process-global loop.
+- The only process-global piece is `PRIMARY_ROUTE`: the primary agent's
+  `Notifier` (a wake endpoint, not the loop) and an `in_turn` flag, because
+  `js_notify_main_thread` addresses the primary agent by definition.
+- **Workers keep today's behaviour.** A thread whose `current_agent()` is not
+  the primary agent is declined for life and runs the unchanged legacy park
+  (condvar, or the stdlib's registered tokio tick). A second thread acting for
+  the primary agent (a host pump thread) is declined too; exactly one thread
+  owns the route. `perry/thread` workers cannot `await`; `worker_threads`
+  Workers that await use the legacy path.
+- P0 submits no turnloop operation. The loop is sized for that
+  (`max_handles`/`max_operations`/`events_per_turn`/`post_capacity` = 16, no
+  pooled read buffers). The default `Config` preallocates 256 × 16 KiB
+  buffers and 4096 operation slots, megabytes for a process that only waits.
+
+### The precise park (`event_pump/precise_wait.rs`)
+
+1. Fast path unchanged: a pending notify or microtask returns at once after
+   `invoke_wait_driver_fast()` (the unchanged stdlib fast drive) and
+   `agent_loop::fast_turn()`, which turns `Timeout::Now` only when the loop has
+   outstanding work (`alive()`), i.e. never in P0 — no OS call on the hot
+   promise path.
+2. Deadline = min over the three timer queues (`Option<Instant>`, same filters
+   as the C functions), the stdlib provider (fractional ms, anchored to a
+   clock read taken *after* it returns so conversion can only be late), the
+   loop's own `next_deadline()` (always `None` in P0) and the 1 s idle cap.
+3. `deadline <= now` → the shared zero-budget return (throttle + fast drive).
+4. The GC idle-reclaim hook is offered the budget only when it is ≥ 1 ms (it
+   works in 4 ms slices; the legacy path never offered it a zero budget). Its
+   `Park(remaining)` is always "caller's deadline minus time spent", which
+   the absolute deadline already encodes, so the park uses the deadline.
+5. Native work in flight → the legacy tokio tick (see coexistence below).
+6. Otherwise one `Loop::turn(Timeout::Until(deadline))`. A turn error falls
+   back to the condvar park for the remaining budget and is counted.
+
+**Wake protocol.** The owner sets `in_turn`, then re-reads `NOTIFIED` and the
+native in-flight predicate, then turns. A producer publishes its work (stores
+`NOTIFIED`, or makes native work visible), then loads `in_turn` (all `SeqCst`);
+only when it is set does it lock the route and call `Notifier::notify()`,
+whose RUNNING/PARKED/NOTIFIED handshake covers the window before the OS wait.
+Outside a turn, `js_notify_main_thread` pays one extra atomic load: no lock,
+no syscall and no stale turnloop notification bit.
+
+**The #1114 spin throttle stays**, as a safety net only. With exact deadlines
+the zero-budget branch no longer fires for a deadline that is merely
+sub-millisecond away. It still fires, legitimately and transiently, when a
+timer is due. A sustained run needs a deadline source that reports a due
+deadline its pump never consumes (the original #1114 shape). All deadline
+sources are still Perry's own queue scans until P3, so nothing rules that out
+structurally.
+
+### Transitional coexistence with tokio (P8 deletes it)
+
+- Rule: stdlib registers `js_register_native_inflight` with an O(1)
+  predicate: tokio's `RuntimeMetrics::num_alive_tasks() != 0` on the shared
+  current-thread runtime, or `EXT_BLOCKING_TASKS_INFLIGHT != 0`. While it is
+  true the primary agent drives the registered tick
+  (`stdlib_wait_driver` → `run_one_tick(ms)`) exactly as before, including
+  its whole-millisecond budget and 1 ms floor. While it is false the wait is a
+  pure turnloop turn.
+- Every task on the shared runtime counts: fetch connections, net/ws/db
+  connection tasks, server accept loops. A server process therefore keeps
+  today's tokio tick for as long as it serves. The turnloop path covers
+  timer/promise programs, programs whose only native work is cross-thread
+  (child_process reactors, fs, stdin, dgram) and the idle time of async
+  programs between native operations.
+- The fast path still calls the unchanged `stdlib_fast_drive` with its own gate
+  (`EXT_BLOCKING_TASKS_INFLIGHT` or the extension registry). It is deliberately
+  not widened to "any alive task": that 1 ms tick on every notified iteration
+  would slow promise-heavy servers.
+- Spawns from another thread (a `worker_threads` Worker, a blocking-pool
+  closure) cannot wake a turnloop wait through tokio's own driver unpark. All
+  stdlib spawn sites (`async_bridge::spawn_native`, `perry_ffi_spawn_*`, cron,
+  the framework server) call `js_native_work_submitted()` after spawning. It
+  wakes a primary agent that is inside a turn; otherwise it is one atomic load.
+  No tokio helper thread or sidecar exists.
+
+### FFI shape changes
+
+| Symbol | Change |
+|---|---|
+| `js_register_native_inflight(Option<extern "C" fn() -> i32>)` | new, P0-transitional |
+| `js_native_work_submitted()` | new, P0-transitional |
+| `js_register_stdlib_next_wake` provider | contract now **fractional** milliseconds; readline returns the exact remainder (its `+1 ms` ceiling kept only under `tokio-wait-driver`) |
+| `js_timer_next_deadline` / `js_callback_timer_next_deadline` / `js_interval_timer_next_deadline` | unchanged whole-ms C shapes (embedders, legacy park); now derived from the internal `Option<Instant>` functions, equal by construction (truncation commutes with `min`) |
+| `perry_next_wake_ms` (embedder API) | still the min of the above plus the stdlib provider, so its stdlib component can now be fractional |
+| `js_register_wait_driver` | unchanged; now the primary agent's transitional tick, the workers' park and the A/B arm |
+| `perry_runtime::event_pump::{shutdown_wait_driver, loop_statistics, LoopStats}` | new Rust API |
+
+### A/B switch
+
+`perry-stdlib/tokio-wait-driver` (default off) forwards to
+`perry-runtime/tokio-wait-driver`. With it, the agent loop and precise park
+are not compiled: every agent runs the pre-P0 `js_wait_for_event` body. The
+body was refactored into `zero_budget_return`/`condvar_park` helpers but is
+otherwise unchanged. The stdlib registers no in-flight predicate, and readline
+keeps its ceiling. The runtime half exists so a runtime-only binary also
+measures the legacy arm. `PERRY_LOOP_STATS=1` prints
+`[perry-loop] driver=tokio-wait-driver` in that arm, so a run can prove which
+arm it measured.
+
+In **both** arms: the O(1) keep-alive counters, the `InflightGuard` RAII
+change and the fractional-ms provider contract in the runtime. The switch
+covers the driver, not the keep-alive work.
+
+**Caveat:** the auto-optimize path rebuilds the archives with a computed
+feature list that does not include `tokio-wait-driver`. The B arm is only
+valid with prebuilt archives (`PERRY_SKIP_BUILD=1` / `PERRY_NO_AUTO_OPTIMIZE=1`).
+Check the stats marker line in every run.
+
+### O(1) keep-alive
+
+Inventory basis: every predicate the generated loop evaluates per turn. With a
+pending ref'd `setTimeout`, the `js_stdlib_has_active_handles` chain ran twice
+per turn and the three timer queue scans ran 8, 8 and 2 times; each callback
+and interval scan also took the ref-state registry lock once per entry.
+
+| Predicate (per turn) | Before | After |
+|---|---|---|
+| `js_timer_has_pending` / `js_callback_timer_has_pending` / `js_interval_timer_has_pending`, `should_run_unref_*` | queue scan under lock, plus a per-entry registry lock | primary agent: one atomic per queue (`timer/liveness.rs`, `TimerQueue`); other agents: exact scan |
+| `js_native_async_has_active` | GC root-registry lock | length mirror |
+| `js_aux_has_active` | lock and `Vec` clone | registry-length gate (exact when 0) |
+| `stdin_listeners_keep_loop_alive` (runtime and stdlib chains) | up to 7 mutexes | armed latch (exact until the first listener) |
+| `js_process_ipc_has_active` | 2 mutexes | probe/available atomics (exact when there is no channel) |
+| `js_thread_has_pending` (microtask liveness) | lock and scan | length gate |
+| `diagnostics_channel_has_pending_publishes` | lock (and lazy init) | length mirror |
+| stdlib pending resolutions / deferred | 2 mutexes | length mirrors |
+| `js_tls_has_active_handles` | 2 map scans | exact count (`tls/liveness.rs`) |
+| `js_worker_threads_has_pending` live-worker part | map scan | exact count |
+
+Each counter changes only under the lock of the state it mirrors, at every
+insert, removal and state transition. Underflow is a `debug_assert!`. In debug
+builds the timer, native-async, TLS and worker counters re-derive their value
+on every read and assert equality. The full `perry-runtime` debug suite
+(3962 tests) ran with those assertions on.
+
+Deliberate semantic note: callback/interval entries now cache their ref state
+(`refed`). The `hasRef()` registry is bounded to 65 536 ids and an evicted id
+used to read as ref'd again, so a still-queued unref'd timer could start
+keeping the loop alive after 65 536 newer timers. The cached flag keeps the
+timer unref'd, which is what Node does. `hasRef()` itself still reads the
+registry.
+
+**Still a scan or locks (not converted in P0):**
+- readline (8 locks per call once the stdlib pump is registered);
+- ws/net/crypto/zlib (lock-only emptiness checks);
+- `MessagePort`/`BroadcastChannel` liveness (scans that read JS `onmessage`,
+  and are only non-trivial in programs that create channels);
+- `fs.watch` watcher scans (armed slot);
+- node-api threadsafe functions;
+- the bundled cron queue;
+- perry-ext-* has-active callbacks (fastify, http, net, ws), now behind the
+  length gate.
+
+These subsystems move onto loop handles in P1/P2/P5 (net, ws, TLS, stdin,
+child, fs-watch) or P3/P4 (channels, workers, cron), where `Loop::alive()`
+replaces them. The P0 per-turn *deadline* computation still scans the timer
+queues (not keep-alive; P3 moves timers into the turnloop heap).
+
+## Dependency
+
+- `turnloop = "=0.1.0-alpha.2"` (workspace), perry-runtime for
+  `cfg(not(target_arch = "wasm32"))`.
+- Published 2026-09-15T01:10:00Z. `Cargo.lock` checksum
+  `21053fd229e6437ba256b97b2e491dbb5e777ae14f8e585199d17dd9b46b6493`, equal
+  to the crates.io index entry and to `sha256` of the downloaded
+  `turnloop-0.1.0-alpha.2.crate`.
+- Resolved once with `CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow cargo
+  metadata`. Every later build and check used `--locked`. `.cargo/config.toml`
+  is unchanged.
+- **Owner decision needed: forced downgrades.** turnloop pins its own
+  dependencies with `=` (`libc =0.2.175`, `js-sys =0.3.85`,
+  `wasm-bindgen =0.2.108`, `windows-sys =0.61.2`, `wasip2 =1.0.3`,
+  `loom =0.7.2`). Cargo keeps one copy per semver-compatible range, so the
+  resolver downgraded the workspace (cargo's own log):
+  - libc 0.2.189→0.2.175
+  - tokio 1.53.1→1.50.0, tokio-macros 2.7.0→2.6.1, mio 1.2.1→1.1.0
+  - redis 1.6.0→1.2.4 (redis 1.2.4 raises a future-incompatibility warning)
+  - rustix 1.1.4→1.1.2, linux-raw-sys 0.12.1→0.11.0, tempfile 3.27.0→3.23.0
+  - js-sys and web-sys 0.3.99→0.3.85
+  - wasm-bindgen family 0.2.122→0.2.108, wasm-bindgen-futures 0.4.72→0.4.58
+  - added: generator 0.8.9, loom 0.7.2
+- `cargo audit` (same ignores as `security-audit.yml`) reports one
+  vulnerability: RUSTSEC-2026-0285 in rustls 0.23.43. That version is identical
+  on base `1cd160f3d1`; the advisory is dated 2026-09-14 and is not introduced
+  by this change. `cargo deny` is not installed locally: UNRUN.
+
+## Verification
+
+All commands used `CARGO_TARGET_DIR=<worktree>/target` and `CARGO_BUILD_JOBS=6`
+unless stated otherwise.
+
+| Command | Result |
+|---|---|
+| `cargo check --locked --tests -p perry-runtime -p perry-stdlib` | PASS (only pre-existing warnings in files not touched) |
+| `cargo check --locked --tests -p perry-runtime -p perry-stdlib --features perry-stdlib/tokio-wait-driver` | PASS |
+| `cargo build --locked --profile perry-dev -p perry -p perry-runtime-static -p perry-stdlib-static` | PASS (first attempt: rustc received SIGTERM from outside, retried). `nm` confirms `js_register_native_inflight`/`js_native_work_submitted` in the new `libperry_runtime.a` |
+| Same build with `--features perry-stdlib/tokio-wait-driver` into a separate target dir | PASS (archive has no `agent_loop` symbols) |
+| `RUST_TEST_THREADS=1 <perry-runtime debug lib test binary>` (all) | PASS — 3962 passed, 0 failed, 4 ignored |
+| …filters `event_pump::`, `timer::`, `agent_dispatch`, `native_async`, `thread::`, `diagnostics`, `stdlib_pump`, `gc::tests::idle_reclaim`, `global_sink_isolation` | PASS (13/13/5/12/8/…/10/14/11) |
+| `RUST_TEST_THREADS=1 <perry-stdlib debug lib test binary>` (all), 6 runs (one of them skipping the new in-flight test) | 2 runs PASS (141 passed); 4 runs aborted in `readline::mod_tests::listeners_provider_roots_readable_snapshot_across_array_allocation` on a debug-only `gc/young_log.rs:173` assertion (`closure.dynamic_props`). **Pre-existing flake:** the same suite built from base `1cd160f3d1` (exported source, same target dir) aborted with the same assertion in 2 of 3 runs and passed (139 tests) in 1. Subset bisection is non-deterministic (a subset that aborted once passed 6 of 6 reruns) |
+| same, `--skip listeners_provider_roots_readable_snapshot_across_array_allocation` | PASS — 140 passed |
+| …filters `common::async_bridge` (5), `tls::` (2), `readline` (26), `cron` (1) | PASS |
+| `cargo fmt --all -- --check`, `scripts/check_file_size.sh` | PASS |
+| `python3 scripts/gc_runtime_root_holders.py` | PASS (new `AGENT_LOOP` verdict; `PASS1_MARKED` window re-audited and re-pinned for the `gc/mod.rs` exit-funnel call) |
+| `BASE_SHA=1cd160f3d1 SKIP_COMPILE_GATES=1 scripts/run_lint_gates.sh` | see "Lint gates" below |
+| `python3 scripts/turnloop_p0_loop_stats.py` (turnloop arm) | PASS, 7/7 probes (table below) |
+| `python3 scripts/turnloop_p0_loop_stats.py --perry <A/B target>/perry-dev/perry --arm tokio-wait-driver` | PASS, 7/7 (stdout equals Node; legacy marker present) |
+| `python3 scripts/turnloop_p0_native_probe.py` | fetch PASS (`native_ticks=1`, then `turns=1` for the timer after the fetch; server saw both requests). websocket UNRUN: global `WebSocket` routes to the perry-ext-ws archive, which `PERRY_NO_AUTO_OPTIMIZE=1` refuses to link against a stdlib built separately (tokio identity check) |
+| `PERRY_SKIP_BUILD=1 PERRY_BIN=target/perry-dev/perry ./run_parity_tests.sh --filter <name>` for 30 gap tests (timers, promises, async, fetch, child_process, stdin, fs.watch, worker channels, readline, tick order, and the new `test_gap_turnloop_p0_timers`) | 29 PASS, 1 FAIL: `test_gap_9592_child_timeout_threads`. Node itself throws `spawn /bin/true ENOENT` on macOS, and the Perry output is identical on the turnloop and `tokio-wait-driver` arms (3 runs each). This is a host issue, not a P0 regression |
+| GC schedule stress: `PERRY_GC_SCHEDULE_SEED=1..5 PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_SCHEDULE_ALLOC_KB=0` on `test_gap_turnloop_p0_timers` | PASS (stdout equals Node; every seed ran collections, e.g. seed 5 `copying_minors=2 moved_objects=12764`) |
+| `cargo check --target x86_64-pc-windows-msvc -p perry-runtime` | see "Windows" below |
+| gap test ext-routed (`net`, `http`, `ws`) and full suites | UNRUN (auto-optimize rebuilds; integrator) |
+
+### Lint gates
+
+`BASE_SHA=1cd160f3d1 SKIP_COMPILE_GATES=1 scripts/run_lint_gates.sh`: 76 of 77
+script-tier gates PASS; 2 CI-only gates skipped; the compile tier was not run
+(UNRUN; covered by the `cargo check`/build rows above, not by clippy or the
+API-docs drift gate). One FAIL:
+`benchmarks/ci_public_baseline_check.py` ("public artifact benchmark inputs
+changed"). It is pre-existing: its fingerprinted inputs are the `[profile*]`
+tables of `Cargo.toml` plus files under `benchmarks/`, and both are
+byte-identical to base `1cd160f3d1` (checked with the script's own
+`_cargo_profile_tables` normalization; `git diff 1cd160f3d1 -- benchmarks` is
+empty). The first gate run was killed from outside (exit 144) and rerun.
+
+### Windows and other targets
+
+- `cargo check --locked --target x86_64-pc-windows-msvc -p perry-runtime`:
+  FAIL locally before reaching Perry code. The C build scripts of `psm`,
+  `stacker`, `libmimalloc-sys` and `zstd-sys` need Windows SDK headers
+  (`windows.h`, `wchar.h`) that this macOS host does not have. This is
+  environmental; the PR's Windows CI arm is the real check.
+- `cargo check --locked --target x86_64-pc-windows-msvc -p turnloop` (the
+  IOCP backend P0 uses): PASS.
+- `cargo check --locked --target x86_64-unknown-linux-gnu -p turnloop`
+  (epoll) and `--target aarch64-linux-android -p turnloop`: PASS.
+- perry-runtime itself was not checked for Linux locally (same C sysroot
+  problem).
+
+### Sabotage check (the tests can fail)
+
+Two throwaway builds of the perry-runtime debug test binary, reverted
+afterwards (`git diff` empty):
+
+1. `Timeout::Until(deadline)` → `Timeout::Now` in `park_until` (a spin), plus
+   `clearImmediate` using a plain `retain` (an unpaired counter). Results:
+   - `sub_and_whole_millisecond_deadlines_wait_without_spinning` FAILED
+     ("500 us: 16 turns");
+   - `js_wait_for_event_reaches_a_timer_deadline_in_at_most_two_turns` FAILED;
+   - `another_thread_wakes_…` FAILED ("owner never parked");
+   - the timer-liveness test run aborted on the debug consistency assertion
+     (`timer/liveness.rs:153`, "timer keep-alive count drifted"). The assertion
+     fires inside an `extern "C"` predicate, so it aborts the test process
+     rather than failing a single test.
+2. Only `agent_loop::wake_primary()` removed from `js_notify_main_thread`:
+   `another_thread_wakes_a_parked_turn_through_js_notify_main_thread` FAILED
+   ("wake was lost: waited 30.00s").
+
+### Measured loop counters (turnloop arm, macOS, `PERRY_LOOP_STATS=1`)
+
+| Probe | turns | os_waits | zero_event_waits | native_ticks |
+|---|---|---|---|---|
+| `setTimeout(…, 0.5)` | 0 | 0 | 0 | 0 |
+| `setTimeout(…, 2)` | 1 | 1 | 1 | 0 |
+| `setTimeout(…, 10)` | 1 | 1 | 1 | 0 |
+| 2 ms timer, first park with ~0.4 ms left | 1 (9 of 10 runs; 0 when scheduler delay made it due) | 1 | 1 | 0 |
+| `setInterval(…, 10)` × 3 | 3 | 3 | 3 | 0 |
+| 10 000 awaited promises, then a 10 ms timer | 1 | 1 | 1 | 0 |
+| idle 200 ms timer | 1 | 1 | 1 | 0 |
+| fetch against a local server, then a 20 ms timer | 1 | 1 | 1 | 1 |
+| `test_gap_9592` (50 child spawns and a timed kill) | 4 | 4 | 2 | 0 |
+
+- Perry treats a 0.5 ms delay as due at once, so no park happens. That is
+  pre-existing delay normalization; Node clamps to 1 ms.
+- Every quiet deadline is exactly one OS wait, and the timeout is its one
+  zero-event wait. The Rust test with an idle registered socket asserts
+  ≤ 2 turns and ≤ 1 zero-event wait for 500 µs, 2 ms and 10 ms, and that each
+  wait ended at or after its deadline.
+
+**Sub-millisecond remainder, both arms**
+(`PERRY_MT_PROFILE=1`, `event_wait` counters, 10 runs each):
+
+| Arm | Runs that reached a park | Zero-budget returns |
+|---|---|---|
+| turnloop | 9 | 0 (`total:1`, one precise turn) |
+| legacy (`tokio-wait-driver`) | 4 | 254–305 per run, timer fired at 2.03 ms. The other runs found the timer already due |
+
+Wall times printed by the stats script include macOS first-exec validation of
+a freshly linked binary (~0.3–1.5 s). Re-running the same binary: idle probe
+0.21 s on both arms.
+
+## Commands for the integrator
+
+Build both arms from the same commit, in separate target dirs, with the same
+package set:
+
+```bash
+# arm A (turnloop, default)
+CARGO_TARGET_DIR=$PWD/target-a cargo build --locked --release \
+  -p perry -p perry-runtime-static -p perry-stdlib-static
+# arm B (pre-P0 driver)
+CARGO_TARGET_DIR=$PWD/target-b cargo build --locked --release \
+  -p perry -p perry-runtime-static -p perry-stdlib-static \
+  --features perry-stdlib/tokio-wait-driver
+```
+
+**Fast gap suite, per arm.** The auto-optimize tier cannot run arm B, because
+it drops the feature.
+
+```bash
+PERRY_SKIP_BUILD=1 PERRY_BIN=$PWD/target-a/release/perry ./run_parity_tests.sh --filter test_gap_
+PERRY_SKIP_BUILD=1 PERRY_BIN=$PWD/target-b/release/perry ./run_parity_tests.sh --filter test_gap_
+```
+
+**Full auto-optimize tier (arm A).** `./scripts/run_gap_tests.sh` or the
+documented CI dispatch.
+
+**Loop statistics and bridge probes, per arm.**
+
+```bash
+python3 scripts/turnloop_p0_loop_stats.py --perry target-a/release/perry
+python3 scripts/turnloop_p0_loop_stats.py --perry target-b/release/perry --arm tokio-wait-driver
+python3 scripts/turnloop_p0_native_probe.py --perry target-a/release/perry
+```
+
+**GC stress.** Assert that collections ran while native I/O was pending:
+`copying_minors > 0` in the `[gc-schedule] done:` line of a fetch probe.
+
+```bash
+for seed in $(seq 1 50); do
+  PERRY_GC_SCHEDULE_SEED=$seed PERRY_GC_PROTECT_FROMSPACE=1 PERRY_LOOP_STATS=1 ./probe
+done
+```
+
+**Instruction/wall/RSS/size A/B at cgu=1 (Linux).**
+- Build both arms with the release profile (cgu=1).
+- Compile the same probes and benchmarks with each arm's compiler under
+  `PERRY_NO_AUTO_OPTIMIZE=1`.
+- Run interleaved fresh-process rounds under
+  `perf stat -e instructions:u,instructions:k`.
+- Require the `[perry-loop]` marker line in every run.
+- Use the timer-only and promise-churn probes as the subject and a pure-CPU
+  program with no timers as the control.
+
+**Windows.** The PR's Windows CI arm. Locally, see below.
+
+## Open issues for P1–P4
+
+- **P1 (net/IPC).** Size `p0_config()` for real handles. Dispatch completions
+  after `turn` and before releasing roots (see `AgentLoop::record`). Move the
+  ext-net, TLS and ws keep-alive onto `Loop::alive()` and delete the remaining
+  lock-only checks. Revisit `AGENT_LOOP`'s root-holder verdict once tokens name
+  JS work.
+- **P2 (child/stdin/dgram/fs-watch).** Replace the stdin latch, IPC atomics
+  and fs-watch scans with loop handles. Child exits already wake the loop
+  cross-thread (see `test_gap_9592` counters).
+- **P3 (timers, phase order).**
+  - Move timers into the loop heap. That makes `loop_deadline()` real and
+    deletes the deadline scans, the `TimerQueue` counters and the #1114
+    throttle.
+  - Give every worker agent its own loop, poster and route. Retire the
+    process-global `NOTIFIED`/`PRIMARY_ROUTE` pair in favour of per-agent
+    posters.
+  - Replace the "decline non-primary agents" rule with per-agent creation.
+  - Map the web/WASI clocks: `turnloop::Instant` is a distinct type on the web
+    backend.
+- **P4 (pool, perry-ffi v2).** Replace `EXT_BLOCKING_TASKS_INFLIGHT` and
+  `spawn_blocking` with pool jobs. Delete `js_native_work_submitted` together
+  with the tokio predicate (P8).
+- **Coexistence cost.** A process with any live tokio task (a server, or a
+  pooled fetch connection) stays on the tokio tick. The P0 gain for servers
+  arrives with P1/P5.
+- **Embedders.** `perry_next_wake_ms` and `js_*_next_deadline` still truncate
+  to whole milliseconds for hosts that drive their own wait.
+
+## turnloop API gaps found (0.1.0-alpha.2)
+
+1. **Exact `=` pins on shared ecosystem crates** force workspace-wide
+   downgrades in any host (see Dependency). Caret requirements would avoid it.
+2. **No way to clear or consume a pending notification without an OS call.** A
+   notify that lands while the host runs costs the next `turn` a zero-timeout
+   poll. Perry works around this with its own `in_turn` gate. A
+   `Notifier::notify_if_parked()` with a race-free contract, or a
+   `Driver::take_notification()`, would remove the workaround.
+3. **`TurnInfo` does not say why a turn returned** (deadline, notifier, I/O).
+   Hosts must infer it from `zero_event_waits`.
+4. **I01 (queued posts plus pending native operations).** Not hit in P0, which
+   posts nothing. Relevant from P1. P0 does not depend on the unreleased fix.
+5. **`Config::default()` is heavy** (256 × 16 KiB pooled buffers, 4096
+   operation slots with per-slot mutex warm-up). A "wait-only" or lazily grown
+   configuration would suit embedding.
+6. **No foreign readiness source.** A host that must also drive another
+   reactor during migration (tokio's) cannot register that reactor's fd or
+   waker in the same OS wait. This is why P0 alternates between the two waits
+   instead of combining them.
+7. **`Completions` default capacity 256** allocates per loop; there is no
+   const or empty constructor for a host that expects no completions.
