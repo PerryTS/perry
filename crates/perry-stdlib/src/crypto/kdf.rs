@@ -9,6 +9,48 @@ use super::*;
 /// SHA-256 — the algorithm SCRAM and the previous callers relied on. The
 /// digest was silently ignored before, so `pbkdf2Sync(..., 'sha512')`
 /// produced a SHA-256 key (#1355).
+/// The derivation itself: owned bytes in, owned bytes out, no JS heap.
+///
+/// Split out of [`js_crypto_pbkdf2_bytes`] so the async entry point can hand
+/// exactly this to turnloop's blocking pool (turnloop P4); the sync entry
+/// point calls it on the caller's thread as before. Everything that reads or
+/// allocates a JS value stays on the callers' side of this line.
+pub(super) fn pbkdf2_derive(
+    password: &[u8],
+    salt: &[u8],
+    iterations: u32,
+    keylen: usize,
+    digest: &str,
+) -> Vec<u8> {
+    use pbkdf2::pbkdf2_hmac;
+    use sha2::{Sha224, Sha384};
+    let mut out = vec![0u8; keylen];
+    match digest {
+        "sha1" => pbkdf2_hmac::<Sha1>(password, salt, iterations, &mut out),
+        "sha224" => pbkdf2_hmac::<Sha224>(password, salt, iterations, &mut out),
+        "sha384" => pbkdf2_hmac::<Sha384>(password, salt, iterations, &mut out),
+        "sha512" => pbkdf2_hmac::<Sha512>(password, salt, iterations, &mut out),
+        // After the `replace('-', "")` normalization, "sha512-256" comes
+        // through as "sha512256".
+        "sha512256" => pbkdf2_hmac::<Sha512_256>(password, salt, iterations, &mut out),
+        // "sha256" and the empty/unknown default.
+        _ => pbkdf2_hmac::<Sha256>(password, salt, iterations, &mut out),
+    }
+    out
+}
+
+/// Normalize the digest-name argument. `digest_ptr` may be a null/sentinel
+/// pointer (no arg passed) — the empty string then selects SHA-256.
+unsafe fn pbkdf2_digest_name(digest_ptr: i64) -> String {
+    if (digest_ptr as usize) < 0x1000 {
+        String::new()
+    } else {
+        String::from_utf8_lossy(&bytes_from_ptr(digest_ptr))
+            .to_ascii_lowercase()
+            .replace('-', "")
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_crypto_pbkdf2_bytes(
     password_ptr: i64,
@@ -17,33 +59,16 @@ pub unsafe extern "C" fn js_crypto_pbkdf2_bytes(
     keylen: f64,
     digest_ptr: i64,
 ) -> *mut perry_runtime::buffer::BufferHeader {
-    use pbkdf2::pbkdf2_hmac;
-    use sha2::{Sha224, Sha384};
     let password = bytes_from_ptr(password_ptr);
     let salt = bytes_from_ptr(salt_ptr);
-    let iter = iterations as u32;
-    let klen = keylen as usize;
-    let mut out = vec![0u8; klen];
-    // Resolve the digest algorithm. `digest_ptr` may be a null/sentinel
-    // pointer (no arg passed) — fall back to SHA-256 in that case.
-    let digest = if (digest_ptr as usize) < 0x1000 {
-        String::new()
-    } else {
-        String::from_utf8_lossy(&bytes_from_ptr(digest_ptr))
-            .to_ascii_lowercase()
-            .replace('-', "")
-    };
-    match digest.as_str() {
-        "sha1" => pbkdf2_hmac::<Sha1>(&password, &salt, iter, &mut out),
-        "sha224" => pbkdf2_hmac::<Sha224>(&password, &salt, iter, &mut out),
-        "sha384" => pbkdf2_hmac::<Sha384>(&password, &salt, iter, &mut out),
-        "sha512" => pbkdf2_hmac::<Sha512>(&password, &salt, iter, &mut out),
-        // After the `replace('-', "")` normalization, "sha512-256" comes
-        // through as "sha512256".
-        "sha512256" => pbkdf2_hmac::<Sha512_256>(&password, &salt, iter, &mut out),
-        // "sha256" and the empty/unknown default.
-        _ => pbkdf2_hmac::<Sha256>(&password, &salt, iter, &mut out),
-    }
+    let digest = pbkdf2_digest_name(digest_ptr);
+    let out = pbkdf2_derive(
+        &password,
+        &salt,
+        iterations as u32,
+        keylen as usize,
+        &digest,
+    );
     alloc_buffer_from_slice(&out)
 }
 
@@ -56,21 +81,73 @@ pub unsafe extern "C" fn js_crypto_pbkdf2_async_alg(
     alg_ptr: i64,
     callback_bits: f64,
 ) -> f64 {
-    // Routes to `js_crypto_pbkdf2_bytes` (the externally-visible 5-arg
-    // helper that normalizes digest names via `replace('-', "")`).
-    let buf = js_crypto_pbkdf2_bytes(password_ptr, salt_ptr, iterations, keylen, alg_ptr);
-    let value = if buf.is_null() {
-        f64::from_bits(JSValue::undefined().bits())
-    } else {
-        f64::from_bits(JSValue::pointer(buf as *const u8).bits())
-    };
-    schedule_node_style_callback2(
-        callback_bits,
-        f64::from_bits(JSValue::null().bits()),
-        value,
-        "PBKDF2REQUEST",
+    // turnloop P4: the derivation runs on turnloop's shared blocking pool,
+    // which is where Node runs it (libuv's threadpool). Perry derived inline on
+    // the thread that owns the JS heap and deferred only the callback, so
+    // `crypto.pbkdf2(..., 2_000_000, ...)` froze every timer, socket and
+    // immediate for a second or more while still looking asynchronous from JS.
+    //
+    // Reading the arguments and allocating the result Buffer stay on this
+    // thread; only the owned bytes cross.
+    let password = bytes_from_ptr(password_ptr);
+    let salt = bytes_from_ptr(salt_ptr);
+    let digest = pbkdf2_digest_name(alg_ptr);
+    let iterations = iterations as u32;
+    let keylen = keylen as usize;
+    // The callback is a NaN-boxed closure value with no other referent for the
+    // job's lifetime, so it is parked in the job's root set and comes back
+    // rewritten after any collection.
+    perry_runtime::turnloop_pool::submit_or_run_inline_rooted(
+        vec![callback_bits.to_bits()],
+        move || pbkdf2_derive(&password, &salt, iterations, keylen, &digest),
+        move |delivery, roots| {
+            let callback = roots
+                .first()
+                .map(|bits| f64::from_bits(*bits))
+                .unwrap_or(0.0);
+            deliver_kdf_callback(delivery, callback, "PBKDF2REQUEST");
+        },
     );
     f64::from_bits(JSValue::undefined().bits())
+}
+
+/// Settle one pool-derived key: allocate its Buffer on this thread and hand it
+/// to the Node-style `(err, derivedKey)` callback.
+///
+/// A cancelled or failed job still calls the callback, with an Error — leaving
+/// it uncalled is the one outcome a caller cannot recover from (turnloop
+/// DESIGN D4).
+unsafe fn deliver_kdf_callback(
+    delivery: perry_runtime::turnloop_pool::Delivery<Vec<u8>>,
+    callback_bits: f64,
+    provider_type: &'static str,
+) {
+    use perry_runtime::turnloop_pool::Delivery;
+    let null = f64::from_bits(JSValue::null().bits());
+    let undefined = f64::from_bits(JSValue::undefined().bits());
+    match delivery {
+        Delivery::Done(out) => {
+            let buf = alloc_buffer_from_slice(&out);
+            let value = if buf.is_null() {
+                undefined
+            } else {
+                f64::from_bits(JSValue::pointer(buf as *const u8).bits())
+            };
+            schedule_node_style_callback2(callback_bits, null, value, provider_type);
+        }
+        Delivery::Cancelled | Delivery::Failed(_) => {
+            const MESSAGE: &str = "key derivation failed";
+            const CODE: &str = "ERR_CRYPTO_OPERATION_FAILED";
+            let error = perry_runtime::error::js_error_value_with_code(
+                MESSAGE.as_ptr(),
+                MESSAGE.len(),
+                CODE.as_ptr(),
+                CODE.len(),
+                0,
+            );
+            schedule_node_style_callback2(callback_bits, error, undefined, provider_type);
+        }
+    }
 }
 
 /// Node-compatible `crypto.hkdfSync(digest, ikm, salt, info, keylen)`.
@@ -152,17 +229,38 @@ pub unsafe extern "C" fn js_crypto_scrypt_async(
     options_bits: f64,
     callback_bits: f64,
 ) -> f64 {
-    let buf = js_crypto_scrypt_bytes(password_ptr, salt_ptr, keylen, options_bits);
-    let value = if buf.is_null() {
-        f64::from_bits(JSValue::undefined().bits())
-    } else {
-        f64::from_bits(JSValue::pointer(buf as *const u8).bits())
-    };
-    schedule_node_style_callback2(
-        callback_bits,
-        f64::from_bits(JSValue::null().bits()),
-        value,
-        "SCRYPTREQUEST",
+    // turnloop P4: same move as `pbkdf2` above, and scrypt is the more
+    // expensive of the two — it is memory-hard by construction. Argument
+    // validation (which throws) and the result Buffer stay on this thread.
+    let password = bytes_from_ptr(password_ptr);
+    let salt = bytes_from_ptr(salt_ptr);
+    let keylen_value = JSValue::from_bits(keylen.to_bits());
+    let klen = scrypt_numeric_value(keylen_value, "keylen", i32::MAX as u64) as usize;
+    let (n, r, p, maxmem) = read_scrypt_options(options_bits);
+    let params = checked_scrypt_params(n, r, p, maxmem)
+        .unwrap_or_else(|error| throw_scrypt_param_error(error));
+    perry_runtime::turnloop_pool::submit_or_run_inline_rooted(
+        vec![callback_bits.to_bits()],
+        move || {
+            if klen == 0 {
+                return Vec::new();
+            }
+            let mut out = vec![0u8; klen];
+            match scrypt::scrypt(&password, &salt, &params, &mut out) {
+                Ok(()) => out,
+                // The parameters were already validated above, so this cannot
+                // be a parameter error; report it as a failed derivation
+                // rather than throwing from a pool thread.
+                Err(_) => Vec::new(),
+            }
+        },
+        move |delivery, roots| {
+            let callback = roots
+                .first()
+                .map(|bits| f64::from_bits(*bits))
+                .unwrap_or(0.0);
+            deliver_kdf_callback(delivery, callback, "SCRYPTREQUEST");
+        },
     );
     f64::from_bits(JSValue::undefined().bits())
 }
@@ -278,10 +376,13 @@ unsafe fn parse_node_argon2_params(params_bits: f64) -> NodeArgon2Params {
     }
 }
 
-unsafe fn node_argon2_key(
+/// Read and validate the arguments, and return everything the derivation needs
+/// as owned data. Validation throws, so it stays on the calling thread; the
+/// derivation itself is [`node_argon2_derive`] and may run anywhere.
+unsafe fn node_argon2_plan(
     algorithm_ptr: i64,
     params_bits: f64,
-) -> *mut perry_runtime::buffer::BufferHeader {
+) -> (argon2::Argon2<'static>, NodeArgon2Params) {
     use argon2::{Algorithm, Argon2, Params, Version};
 
     let algorithm = String::from_utf8_lossy(&bytes_from_ptr(algorithm_ptr)).to_string();
@@ -307,15 +408,32 @@ unsafe fn node_argon2_key(
             params.memory as u64,
         )
     });
-    let argon = Argon2::new(algorithm_kind, Version::V0x13, argon_params);
+    (
+        Argon2::new(algorithm_kind, Version::V0x13, argon_params),
+        params,
+    )
+}
+
+/// The derivation itself: owned data in, owned bytes out, no JS heap. An empty
+/// result is Node's "the derivation failed", which the callers turn into an
+/// empty Buffer exactly as before.
+fn node_argon2_derive(argon: argon2::Argon2<'static>, params: &NodeArgon2Params) -> Vec<u8> {
     let mut out = vec![0u8; params.tag_length];
     if argon
         .hash_password_into(&params.message, &params.nonce, &mut out)
         .is_err()
     {
-        return alloc_buffer_from_slice(&[]);
+        return Vec::new();
     }
-    alloc_buffer_from_slice(&out)
+    out
+}
+
+unsafe fn node_argon2_key(
+    algorithm_ptr: i64,
+    params_bits: f64,
+) -> *mut perry_runtime::buffer::BufferHeader {
+    let (argon, params) = node_argon2_plan(algorithm_ptr, params_bits);
+    alloc_buffer_from_slice(&node_argon2_derive(argon, &params))
 }
 
 #[no_mangle]
@@ -332,17 +450,20 @@ pub unsafe extern "C" fn js_crypto_argon2_async(
     params_bits: f64,
     callback_bits: f64,
 ) -> f64 {
-    let buf = node_argon2_key(algorithm_ptr, params_bits);
-    let value = if buf.is_null() {
-        f64::from_bits(JSValue::undefined().bits())
-    } else {
-        f64::from_bits(JSValue::pointer(buf as *const u8).bits())
-    };
-    schedule_node_style_callback2(
-        callback_bits,
-        f64::from_bits(JSValue::null().bits()),
-        value,
-        "ARGON2REQUEST",
+    // turnloop P4: argon2 is memory-hard by design, so it is the most expensive
+    // thing in this file to run on the thread that owns the JS heap. Argument
+    // validation throws and stays here; the derivation goes to the pool.
+    let (argon, params) = node_argon2_plan(algorithm_ptr, params_bits);
+    perry_runtime::turnloop_pool::submit_or_run_inline_rooted(
+        vec![callback_bits.to_bits()],
+        move || node_argon2_derive(argon, &params),
+        move |delivery, roots| {
+            let callback = roots
+                .first()
+                .map(|bits| f64::from_bits(*bits))
+                .unwrap_or(0.0);
+            deliver_kdf_callback(delivery, callback, "ARGON2REQUEST");
+        },
     );
     f64::from_bits(JSValue::undefined().bits())
 }

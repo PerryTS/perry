@@ -1100,6 +1100,12 @@
       "why": "Maps scalar timer handle IDs to the CallbackTimerKind enum so clearTimeout/clearInterval can destroy the matching async_hooks resource. Neither the i64 keys nor the enum values contain a JS heap address."
     },
     {
+      "file": "crates/perry-runtime/src/turnloop_pool/mod.rs",
+      "name": "SCANNER_REGISTERED",
+      "verdict": "not_a_gc_pointer",
+      "why": "Cell<bool> latch recording whether this thread already registered turnloop_pool's own mutable root scanner. It stores only true/false. The heap values that scanner walks live in POOL's job entries (the roots parked by submit_rooted), and the scanner it gates is registered through gc_register_mutable_root_scanner_named. It sits outside PoolState deliberately, so registering a scanner never happens while the job table's borrow is held."
+    },
+    {
       "file": "crates/perry-runtime/src/weakref/test_support.rs",
       "name": "DELIVERED",
       "verdict": "test_only",

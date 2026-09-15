@@ -901,6 +901,78 @@ where
     });
 }
 
+/// turnloop P4: run `work` on turnloop's shared blocking pool and settle
+/// `promise_ptr` from its result, on the thread that owns the JS heap.
+///
+/// This is [`spawn_for_promise_deferred`]'s contract with the tokio runtime
+/// taken out of the middle. The two halves are the same as before — owned Rust
+/// data on the worker, JSValue construction on the main thread — but now the
+/// split is a trait bound rather than a convention: `work` is `Send` and
+/// returns `Result<T, String>`, and `converter` runs inside the completion
+/// dispatch on the submitting thread.
+///
+/// Returns **false** when the pool refused the job, in which case the work has
+/// already run inline on the calling thread and the promise is already
+/// settled. A refusal happens on a thread with no event loop (a
+/// `worker_threads` agent) or under pool backpressure, and it is visible:
+/// `refused=` on the `PERRY_LOOP_STATS` line counts exactly those jobs.
+///
+/// # Safety
+/// `promise_ptr` must point to a live Perry Promise, as for
+/// [`spawn_for_promise_deferred`].
+#[cfg(not(target_arch = "wasm32"))]
+pub unsafe fn pool_for_promise_deferred<T, W, C>(
+    promise_ptr: *mut u8,
+    work: W,
+    converter: C,
+) -> bool
+where
+    T: Send + 'static,
+    W: FnOnce() -> Result<T, String> + Send + 'static,
+    // `Send` because the deferred-resolution queue is process-global and its
+    // entries are `Send`; the closure still only ever RUNS on the main thread.
+    C: FnOnce(T) -> u64 + Send + 'static,
+{
+    ensure_pump_registered();
+    ensure_gc_scanner_registered();
+    let ptr = promise_ptr as usize;
+    // Issue #859, unchanged: the job holds the promise only as an address,
+    // which no root scanner visits, so it is pinned across the crossing. The
+    // pin is a flag bit and `js_promise_new_cross_thread` has already set it;
+    // taking it again is idempotent and the single settlement releases it.
+    pin_promise_for_native_resolution(ptr);
+    perry_runtime::turnloop_pool::submit_or_run_inline(work, move |delivery| {
+        use perry_runtime::turnloop_pool::Delivery;
+        match delivery {
+            Delivery::Done(Ok(data)) => {
+                queue_deferred_resolution(ptr, true, move || converter(data));
+            }
+            Delivery::Done(Err(message)) => queue_rejection_string(ptr, message),
+            // A cancelled or panicking job still owes the awaiter an answer;
+            // leaving the promise pending is the one outcome a caller cannot
+            // recover from (DESIGN D4).
+            Delivery::Cancelled => {
+                queue_rejection_string(ptr, "operation was cancelled".to_string())
+            }
+            Delivery::Failed(_) => {
+                queue_rejection_string(ptr, "native operation failed".to_string())
+            }
+        }
+    })
+}
+
+/// Reject `promise` with a JS string built on the main thread.
+///
+/// `queue_deferred_resolution`'s converter runs on the main thread, which is
+/// the only place `js_string_from_bytes` is legal; every rejection path that
+/// carries a message goes through here so none of them can forget.
+fn queue_rejection_string(promise: usize, message: String) {
+    queue_deferred_resolution(promise, false, move || {
+        let str_ptr = perry_runtime::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+        perry_runtime::JSValue::string_ptr(str_ptr).bits()
+    });
+}
+
 /// Spawn an async operation whose success and error values both need to be
 /// materialized on the main thread.
 ///

@@ -247,12 +247,14 @@ fn dispatch_staged() {
             }
             continue;
         }
-        // One router, three token spaces. P1's classes are 1..=7, P2's are
-        // 0x10..=0x1F and P3 owns TIMER_TOKEN above, so `owns` is a range test
-        // and no module can be handed another's completion
-        // (`turnloop_proc`'s module note).
+        // One router, four token spaces. P1's classes are 1..=7, P2's are
+        // 0x10..=0x1F, P4's are 0x20..=0x2F and P3 owns TIMER_TOKEN above, so
+        // `owns` is a range test and no module can be handed another's
+        // completion (`turnloop_proc`'s module note).
         if crate::turnloop_proc::owns(completion.token) {
             crate::turnloop_proc::dispatch(completion);
+        } else if crate::turnloop_pool::owns(completion.token) {
+            crate::turnloop_pool::dispatch(completion);
         } else {
             crate::turnloop_net::dispatch(completion);
         }
@@ -344,6 +346,16 @@ fn upgrade_profile(profile: Profile) -> bool {
         0,
         "the loop profile is upgraded before the first handle, never under one"
     );
+    // P4: the same rule for jobs, which have no handle. A recreated loop takes
+    // its blocking-pool `WorkPort` with it, so a job outstanding across an
+    // upgrade would complete into a closed port and never be delivered. The
+    // pool submits at the net profile precisely so this cannot happen
+    // (`event_pump::with_pool_driver`); the assertion is what keeps that true.
+    debug_assert_eq!(
+        crate::turnloop_pool::outstanding(),
+        0,
+        "the loop profile is upgraded before the first pool job, never under one"
+    );
     let previous = AGENT_LOOP.with(|slot| slot.borrow_mut().take());
     let carried = previous.as_ref().map(|agent| agent.stats);
     drop(previous);
@@ -420,6 +432,7 @@ pub(super) fn turn_for_test(budget: std::time::Duration) {
 pub(super) fn reset_for_test() {
     crate::turnloop_net::reset_for_test();
     crate::turnloop_proc::reset_for_test();
+    crate::turnloop_pool::reset_for_test();
     AGENT_LOOP.with(|slot| *slot.borrow_mut() = None);
     STAGED.with(|staged| staged.borrow_mut().clear());
     STATE.with(|s| s.set(LoopState::Unset));
@@ -698,6 +711,10 @@ pub fn shutdown_current_thread() {
         // bookkeeping see the close rather than inferring it from teardown.
         crate::turnloop_net::shutdown_current_thread();
         crate::turnloop_proc::shutdown_current_thread();
+        // P4: settle every outstanding job before the loop goes away, so a job
+        // the pool is still running cannot complete into a closed port and
+        // silently skip its delivery (DESIGN D4).
+        crate::turnloop_pool::shutdown_current_thread();
         fast_turn();
     }
     let previous = STATE.with(|s| s.replace(LoopState::ShutDown));
@@ -743,6 +760,21 @@ fn print_stats(stats: LoopStats) {
         crate::turnloop_proc::live_handles(),
         dgram_sockets_on_turnloop(),
         crate::os::signal::signals_on_turnloop(),
+    );
+    // P4's own "the subject ran" line. `completions` above cannot distinguish a
+    // socket P1 carried from a blocking job P4 carried, and a program that ran
+    // one bcrypt hash exits with every live count at zero — so the lifetime
+    // totals are what an A/B or an acceptance test reads to know the work
+    // really left the JS thread. `refused` is separate on purpose: a refused
+    // submission ran the caller's own fallback, so a nonzero value means the
+    // pool was NOT the transport for that work.
+    eprintln!(
+        "[perry-loop] p4 pool_submitted={} completed={} cancelled={} failed={} refused={}",
+        crate::turnloop_pool::submitted_total(),
+        crate::turnloop_pool::completed_total(),
+        crate::turnloop_pool::cancelled_total(),
+        crate::turnloop_pool::failed_total(),
+        crate::turnloop_pool::refused_total(),
     );
 }
 

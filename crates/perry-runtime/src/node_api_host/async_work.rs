@@ -136,28 +136,81 @@ pub unsafe extern "C" fn napi_queue_async_work(env: NapiEnv, handle: NapiAsyncWo
         );
     }
     ACTIVE_WORK.fetch_add(1, Ordering::AcqRel);
-    std::thread::spawn(move || {
-        if work
-            .state
-            .compare_exchange(
-                WORK_QUEUED,
-                WORK_RUNNING,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .is_err()
-        {
-            return;
-        }
-        let execute: unsafe extern "C" fn(NapiEnv, *mut c_void) =
-            unsafe { std::mem::transmute(work.execute) };
-        unsafe {
-            execute(work.env_address as NapiEnv, work.data as *mut c_void);
-        }
-        work.state.store(WORK_COMPLETING, Ordering::Release);
-        enqueue_completion(work);
-    });
+    // turnloop P4: an addon's async work is exactly what the shared blocking
+    // pool is for (DESIGN D8). It used to get **one fresh OS thread per queued
+    // work item** — an addon that queues a work item per request paid a thread
+    // creation per request, and nothing bounded how many ran at once.
+    //
+    // `execute` is the addon's own C function and only ever touches the data
+    // pointer it was given; the `complete` half, which runs JS, still runs on
+    // the owning thread out of `COMPLETIONS`, unchanged. So the only thing
+    // that moves is which thread runs `execute`.
+    //
+    // A thread with no loop keeps the old transport rather than running the
+    // addon's `execute` inline: an addon that queues async work expects it
+    // *not* to run on the JS thread (that is the whole point of the API), so
+    // `submit_or_run_inline` would be the wrong fallback here.
+    #[cfg(not(target_arch = "wasm32"))]
+    let queued = {
+        let pooled = std::sync::Arc::clone(&work);
+        crate::turnloop_pool::submit(
+            move || run_async_work(pooled),
+            |delivery| {
+                if let crate::turnloop_pool::Delivery::Done(work) = delivery {
+                    // On the owning thread already; push into the same queue the
+                    // thread pushed into, so `drain_async_completions` and its
+                    // handle-scope handling are untouched.
+                    finish_async_work(work);
+                }
+            },
+        )
+        .is_ok()
+    };
+    #[cfg(target_arch = "wasm32")]
+    let queued = false;
+    if !queued {
+        std::thread::spawn(move || {
+            if let Some(work) = run_async_work(work) {
+                finish_async_work(Some(work));
+            }
+        });
+    }
     ok(env)
+}
+
+/// Run one queued work item's `execute` callback, wherever this is called.
+///
+/// Returns the record when it really ran, and `None` when the state machine
+/// had already moved it out of `WORK_QUEUED` (a cancel won). The `Arc` is
+/// carried through rather than captured so the same body serves the pool path
+/// and the no-loop thread fallback.
+fn run_async_work(work: Arc<AsyncWorkInner>) -> Option<Arc<AsyncWorkInner>> {
+    if work
+        .state
+        .compare_exchange(
+            WORK_QUEUED,
+            WORK_RUNNING,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
+        .is_err()
+    {
+        return None;
+    }
+    let execute: unsafe extern "C" fn(NapiEnv, *mut c_void) =
+        unsafe { std::mem::transmute(work.execute) };
+    unsafe {
+        execute(work.env_address as NapiEnv, work.data as *mut c_void);
+    }
+    work.state.store(WORK_COMPLETING, Ordering::Release);
+    Some(work)
+}
+
+/// Hand a finished work item to the owning thread's completion queue.
+fn finish_async_work(work: Option<Arc<AsyncWorkInner>>) {
+    if let Some(work) = work {
+        enqueue_completion(work);
+    }
 }
 
 #[no_mangle]
@@ -197,6 +250,19 @@ pub unsafe extern "C" fn napi_delete_async_work(env: NapiEnv, handle: NapiAsyncW
 }
 
 pub(crate) fn drain_async_completions() -> i32 {
+    // turnloop P4, and the rule P2 established: a pump has to turn the loop
+    // before it drains its queue. A thread-backed work item had already pushed
+    // its completion by the time anything looked; a pool-backed one exists only
+    // once the loop has been turned, so a caller that drives this pump without
+    // parking — an addon's own poll loop, and this module's unit tests — would
+    // otherwise spin against a queue nothing can fill.
+    //
+    // Costs a thread-local read and no syscall when this process has queued no
+    // pool job.
+    #[cfg(not(target_arch = "wasm32"))]
+    if crate::turnloop_pool::has_pending_jobs() {
+        crate::event_pump::js_loop_turn_bounded(0);
+    }
     let current = std::thread::current().id();
     let ready = {
         let Ok(mut queue) = COMPLETIONS.lock() else {
