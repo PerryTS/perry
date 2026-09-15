@@ -221,7 +221,14 @@ fn dispatch_staged() {
         return;
     }
     for completion in batch.drain(..) {
-        crate::turnloop_net::dispatch(completion);
+        // One router, two token spaces. P1's classes are 1..=7 and P2's are
+        // 0x10..=0x1F, so `owns` is a range test and neither module can be
+        // handed the other's completion (`turnloop_proc`'s module note).
+        if crate::turnloop_proc::owns(completion.token) {
+            crate::turnloop_proc::dispatch(completion);
+        } else {
+            crate::turnloop_net::dispatch(completion);
+        }
     }
     // Give the emptied allocation back so steady-state dispatch allocates
     // nothing (DESIGN §10 rule 1).
@@ -306,7 +313,7 @@ fn upgrade_profile(profile: Profile) -> bool {
         return true;
     }
     debug_assert_eq!(
-        crate::turnloop_net::live_handles(),
+        crate::turnloop_net::live_handles() + crate::turnloop_proc::live_handles(),
         0,
         "the loop profile is upgraded before the first handle, never under one"
     );
@@ -382,6 +389,7 @@ pub(super) fn turn_for_test(budget: std::time::Duration) {
 #[cfg(test)]
 pub(super) fn reset_for_test() {
     crate::turnloop_net::reset_for_test();
+    crate::turnloop_proc::reset_for_test();
     AGENT_LOOP.with(|slot| *slot.borrow_mut() = None);
     STAGED.with(|staged| staged.borrow_mut().clear());
     STATE.with(|s| s.set(LoopState::Unset));
@@ -556,6 +564,7 @@ pub fn shutdown_current_thread() {
         // descriptors either way; this is what lets a binding's own
         // bookkeeping see the close rather than inferring it from teardown.
         crate::turnloop_net::shutdown_current_thread();
+        crate::turnloop_proc::shutdown_current_thread();
         fast_turn();
     }
     let previous = STATE.with(|s| s.replace(LoopState::ShutDown));

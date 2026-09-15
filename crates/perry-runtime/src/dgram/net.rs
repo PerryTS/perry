@@ -381,8 +381,37 @@ pub(crate) fn real_send_bytes(
     if let Some(err) = ensure_bound_real(socket) {
         return finish_send(socket, args, Err(err));
     }
-    let outcome = match (live_udp(socket), resolve_send_addr(&address, port)) {
-        (Some(udp), Ok(dest)) => match udp.send_to(&bytes, dest) {
+    let dest = match resolve_send_addr(&address, port) {
+        Ok(dest) => dest,
+        Err(err) => return finish_send(socket, args, Err(err)),
+    };
+    // P2: on the turnloop path the datagram is queued on the loop and the
+    // callback fires from its completion. That is not an optimisation — the
+    // descriptor the driver adopted is non-blocking, and the retained
+    // duplicate shares that open file description, so a `send_to` here would
+    // fail with `EWOULDBLOCK` the moment the socket buffer filled instead of
+    // blocking as it used to (`dgram_reactor`'s module note).
+    if let Some(id) = reactor_id(socket) {
+        let callback_bits = callback_from_args(args).map(f64::to_bits).unwrap_or(0);
+        let connected = is_truthy_hidden(socket, KEY_CONNECTED);
+        if crate::dgram_reactor::send_on_loop(
+            id,
+            bytes,
+            if connected { None } else { Some(dest) },
+            callback_bits,
+        ) {
+            return undefined_value();
+        }
+        // `send_on_loop` moved `bytes` and refused; fall through is impossible,
+        // so report the refusal rather than silently dropping the datagram.
+        return finish_send(
+            socket,
+            args,
+            Err(socket_error_value("send EBADF", "EBADF", "send")),
+        );
+    }
+    let outcome = match live_udp(socket) {
+        Some(udp) => match udp.send_to(&bytes, dest) {
             Ok(_) => Ok(bytes.len()),
             Err(err) => Err(socket_error_value(
                 &format!("send {}", io_error_code(&err)),
@@ -390,10 +419,50 @@ pub(crate) fn real_send_bytes(
                 "send",
             )),
         },
-        (_, Err(err)) => Err(err),
-        (None, _) => Err(socket_error_value("send EBADF", "EBADF", "send")),
+        None => Err(socket_error_value("send EBADF", "EBADF", "send")),
     };
     finish_send(socket, args, outcome)
+}
+
+/// Report the outcome of a datagram the driver carried.
+///
+/// The two reporting shapes are Node's and are unchanged from the synchronous
+/// path: a supplied callback receives `(err, bytes)` and *suppresses* the
+/// error event; without one, a failure becomes an `'error'` event on the
+/// socket. Only the moment the outcome is known moved.
+pub(crate) fn complete_send(
+    socket: f64,
+    callback_bits: u64,
+    outcome: Result<usize, crate::turnloop_proc::NodeError>,
+) {
+    let callback = (callback_bits != 0).then(|| f64::from_bits(callback_bits));
+    match (outcome, callback) {
+        (Ok(size), Some(callback)) => {
+            defer_send_callback(callback, socket, null_value(), size as f64);
+        }
+        (Ok(_), None) => {}
+        (Err(error), Some(callback)) => {
+            defer_send_callback(callback, socket, node_error_value(error), undefined_value());
+        }
+        (Err(error), None) => {
+            emit_event(socket, "error", &[node_error_value(error)]);
+        }
+    }
+}
+
+/// Surface a receive-side driver failure as Node does: an `'error'` event on
+/// the socket.
+pub(crate) fn emit_socket_error(socket: f64, error: crate::turnloop_proc::NodeError) {
+    emit_event(socket, "error", &[node_error_value(error)]);
+}
+
+fn node_error_value(error: crate::turnloop_proc::NodeError) -> f64 {
+    let syscall = if error.syscall.is_empty() {
+        "send"
+    } else {
+        error.syscall
+    };
+    socket_error_value(&format!("{syscall} {}", error.code), error.code, syscall)
 }
 
 pub(crate) fn finish_send(socket: f64, args: &[f64], outcome: Result<usize, f64>) -> f64 {
