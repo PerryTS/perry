@@ -230,9 +230,11 @@ pub(super) fn park_until(deadline: Instant) -> Park {
             PRIMARY_ROUTE.in_turn.store(false, Ordering::SeqCst);
             return Park::Notified;
         }
+        let started = super::loop_stats::begin_wait(super::loop_stats::WaitKind::Turnloop);
         let result = agent
             .driver
             .turn(Timeout::Until(deadline), &mut agent.completions);
+        super::loop_stats::end_wait(super::loop_stats::WaitKind::Turnloop, started);
         PRIMARY_ROUTE.in_turn.store(false, Ordering::SeqCst);
         match result {
             Ok(info) => {
@@ -337,7 +339,7 @@ pub fn shutdown_current_thread() {
 }
 
 fn stats_enabled() -> bool {
-    std::env::var("PERRY_LOOP_STATS").as_deref() == Ok("1")
+    super::loop_stats::enabled()
 }
 
 fn print_stats(stats: LoopStats) {

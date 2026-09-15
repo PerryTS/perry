@@ -36,6 +36,8 @@ mod agent_loop;
 mod precise_wait;
 #[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
 pub use agent_loop::{loop_statistics, LoopStats};
+/// `PERRY_LOOP_STATS=1` wait metrics, recorded identically in both A/B arms.
+pub mod loop_stats;
 
 use crate::timer::{
     js_callback_timer_next_deadline, js_interval_timer_next_deadline, js_timer_next_deadline,
@@ -194,21 +196,23 @@ pub extern "C" fn js_native_work_submitted() {
 /// knob). Idempotent; a park after this uses the legacy path.
 pub fn shutdown_wait_driver() {
     #[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
-    agent_loop::shutdown_current_thread();
+    {
+        agent_loop::shutdown_current_thread();
+        loop_stats::print_once("turnloop");
+    }
     #[cfg(any(target_arch = "wasm32", feature = "tokio-wait-driver"))]
     {
         // Marks the arm so an A/B run can prove which driver it measured.
         static PRINTED: AtomicBool = AtomicBool::new(false);
-        if std::env::var("PERRY_LOOP_STATS").as_deref() == Ok("1")
-            && !PRINTED.swap(true, Ordering::AcqRel)
-        {
-            let driver = if cfg!(feature = "tokio-wait-driver") {
-                "tokio-wait-driver"
-            } else {
-                "legacy"
-            };
+        let driver = if cfg!(feature = "tokio-wait-driver") {
+            "tokio-wait-driver"
+        } else {
+            "legacy"
+        };
+        if loop_stats::enabled() && !PRINTED.swap(true, Ordering::AcqRel) {
             eprintln!("[perry-loop] driver={driver}");
         }
+        loop_stats::print_once(driver);
     }
 }
 
@@ -224,7 +228,9 @@ fn wait_driver_sleep(budget_ms: u64) -> bool {
     // SAFETY: the slot only ever holds an `extern "C" fn(u64)` installed by
     // `js_register_wait_driver`; re-checked non-null right above.
     let f: extern "C" fn(u64) = unsafe { std::mem::transmute(p) };
+    let started = loop_stats::begin_wait(loop_stats::WaitKind::TokioTick);
     f(budget_ms);
+    loop_stats::end_wait(loop_stats::WaitKind::TokioTick, started);
     true
 }
 
@@ -419,6 +425,9 @@ pub extern "C" fn js_notify_main_thread() {
     // path it took (Release so subsequent producer side-effects are
     // visible).
     NOTIFIED.store(true, Ordering::Release);
+    // PERRY_LOOP_STATS: stamp the notify for the wake-latency histogram before
+    // any wake below can return the waiter. One relaxed load when off.
+    loop_stats::note_notify();
     // #1088 — fan the wake out to the host-registered callback (if any)
     // BEFORE the WAITER_COUNT fast-path return. The host may be sleeping
     // on an OS primitive (winit's `EventLoopProxy`, an eventfd, …) that
@@ -732,6 +741,7 @@ fn zero_budget_return() {
     // zero-latency; only a *sustained* budget-0 spin (the #1114
     // wedge) gets throttled so it can't peg a core and starve the
     // request pump. See `SPIN_THROTTLE_AFTER`.
+    let mut throttled = false;
     if spin_throttle_enabled() {
         let streak = SPIN_STREAK.with(|s| {
             let n = s.get().saturating_add(1);
@@ -739,9 +749,11 @@ fn zero_budget_return() {
             n
         });
         if streak > SPIN_THROTTLE_AFTER {
+            throttled = true;
             std::thread::sleep(SPIN_THROTTLE_SLEEP);
         }
     }
+    loop_stats::note_zero_budget(throttled);
     // A due timer pins the budget at 0, but native work (a fetch's reqwest
     // `send`, sibling fetches, net/ws round-trips) still only advances inside
     // the wait-driver tick. A hot timer loop would otherwise take this branch
@@ -777,7 +789,9 @@ fn condvar_park(budget: Duration) {
         WAITER_COUNT.fetch_sub(1, Ordering::Release);
         return;
     }
+    let started = loop_stats::begin_wait(loop_stats::WaitKind::Condvar);
     let (mut new_flag, _) = PUMP.cvar.wait_timeout(flag, budget).unwrap();
+    loop_stats::end_wait(loop_stats::WaitKind::Condvar, started);
     *new_flag = false;
     WAITER_COUNT.fetch_sub(1, Ordering::Release);
     NOTIFIED.store(false, Ordering::Release);

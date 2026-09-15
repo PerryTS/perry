@@ -435,12 +435,15 @@ extern "C" fn stdlib_fast_drive() {
     if !native {
         return;
     }
+    // PERRY_LOOP_STATS (both A/B arms): a fast drive that actually ran tokio.
+    let stats = perry_runtime::event_pump::loop_stats::begin_fast_drive();
     RUNTIME.block_on(async {
         let notified = EVENT_READY.notified();
         tokio::pin!(notified);
         notified.as_mut().enable();
         let _ = tokio::time::timeout(std::time::Duration::from_millis(1), notified).await;
     });
+    perry_runtime::event_pump::loop_stats::end_fast_drive(stats);
 }
 
 #[inline]
@@ -1024,6 +1027,76 @@ mod tests {
         assert!(!perry_runtime::promise::native_async_promise_has_token(
             promise
         ));
+    }
+
+    /// PERRY_LOOP_STATS, real wiring: a live tokio task makes the primary
+    /// agent's park a TOKIO TICK, and the notify that ends it is one
+    /// wake-latency sample. Both arms take this path — the turnloop arm because
+    /// `native_work_inflight()` hands the wait back to the tick, the
+    /// `tokio-wait-driver` arm because it is the only wait it has — which is
+    /// what makes the A/B comparison like-for-like.
+    #[test]
+    fn a_live_tokio_task_parks_the_main_loop_in_a_counted_tokio_tick() {
+        use perry_runtime::event_pump::loop_stats;
+        loop_stats::enable_for_tests();
+        ensure_pump_registered();
+        // Drain a notify left by an earlier test: `js_wait_for_event` would
+        // take its fast path and never reach a wait.
+        while perry_runtime::event_pump::js_main_thread_notified() != 0 {
+            perry_runtime::event_pump::js_wait_for_event();
+        }
+
+        let (ran_tx, ran_rx) = std::sync::mpsc::channel();
+        spawn_native(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            perry_runtime::event_pump::js_notify_main_thread();
+            let _ = ran_tx.send(());
+        });
+        assert!(
+            RUNTIME.metrics().num_alive_tasks() >= 1,
+            "the spawned task is the subject and tokio does not own it"
+        );
+
+        let before = loop_stats::snapshot();
+        let started = std::time::Instant::now();
+        // Bounded: the idle-reclaim hook can consume a park by doing GC work.
+        for _ in 0..5 {
+            perry_runtime::event_pump::js_wait_for_event();
+            if loop_stats::snapshot().tokio_tick.count > before.tokio_tick.count {
+                break;
+            }
+        }
+        let after = loop_stats::snapshot();
+        ran_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the spawned task never ran");
+
+        assert_eq!(
+            after.tokio_tick.count - before.tokio_tick.count,
+            1,
+            "a live tokio task did not produce exactly one tokio tick"
+        );
+        assert!(
+            after.tokio_tick.total_ns > before.tokio_tick.total_ns,
+            "the tick was counted with no time in it"
+        );
+        assert_eq!(
+            after.turnloop.count - before.turnloop.count,
+            0,
+            "tokio-owned work was miscounted as a turnloop turn"
+        );
+        assert_eq!(
+            after.wake_samples() - before.wake_samples(),
+            1,
+            "the notify that ended the tick produced no wake-latency sample"
+        );
+        assert!(
+            started.elapsed() >= std::time::Duration::from_millis(15),
+            "the park returned before the task's notify: it never parked"
+        );
+        while perry_runtime::event_pump::js_main_thread_notified() != 0 {
+            perry_runtime::event_pump::js_wait_for_event();
+        }
     }
 
     #[test]
