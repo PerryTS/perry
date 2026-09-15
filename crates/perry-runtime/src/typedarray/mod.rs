@@ -1332,6 +1332,13 @@ pub fn typed_array_fast_index_set(ptr: usize, kind: u8, index: f64, value: f64) 
     if kind == KIND_BIGINT64 || kind == KIND_BIGUINT64 {
         return false;
     }
+    // `store_at` converts a Number. A NaN-boxed value — string, boolean,
+    // null/undefined, object, or an int32 box — needs the slow setter's full
+    // ToNumber first; storing its bits here wrote `true` into a Float64Array
+    // slot and 0 into every integer kind once the kind cache was warm.
+    if (value.to_bits() as i64) >= 0x7FF9_0000_0000_0000 {
+        return false;
+    }
     if !(index.is_finite() && index >= 0.0 && index.fract() == 0.0 && index <= u32::MAX as f64) {
         return false;
     }
@@ -1420,6 +1427,34 @@ mod tests {
             js_typed_array_get(ta, crate::gc::LARGE_OBJECT_THRESHOLD_BYTES as i32 - 1),
             99.0
         );
+    }
+
+    /// The #5525 fast store converts only Numbers: every NaN-boxed value must
+    /// decline so the slow setter can apply ToNumber, while plain doubles —
+    /// negative values and NaN included — still store here.
+    #[test]
+    fn fast_index_set_declines_nan_boxed_values() {
+        unsafe {
+            let ta = typed_array_alloc(KIND_FLOAT64, 2);
+            let ptr = ta as usize;
+            for boxed in [
+                crate::value::TAG_TRUE,
+                crate::value::TAG_FALSE,
+                crate::value::TAG_NULL,
+                crate::value::TAG_UNDEFINED,
+                crate::value::JSValue::int32(5).bits(),
+                0x7FF9_0100_0000_0035, // short string "5"
+            ] {
+                assert!(
+                    !typed_array_fast_index_set(ptr, KIND_FLOAT64, 0.0, f64::from_bits(boxed)),
+                    "boxed value {boxed:#x} must take the slow setter"
+                );
+            }
+            assert!(typed_array_fast_index_set(ptr, KIND_FLOAT64, 1.0, -2.5));
+            assert_eq!(load_at(ta, 1), -2.5);
+            assert!(typed_array_fast_index_set(ptr, KIND_FLOAT64, 1.0, f64::NAN));
+            assert!(load_at(ta, 1).is_nan());
+        }
     }
 
     #[test]

@@ -643,13 +643,17 @@ pub(crate) fn lower(
                         ctx,
                         &[object, index, value],
                         |ctx, vals| {
-                            let blk = ctx.block();
-                            let arr_bits = blk.bitcast_double_to_i64(&vals[0]);
-                            let arr_i64 = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                            let result = blk.call(
-                                DOUBLE,
-                                "js_typed_array_index_set_dynamic",
-                                &[(I64, &arr_i64), (DOUBLE, &vals[1]), (DOUBLE, &vals[2])],
+                            // Same guarded inline store an `any` receiver takes
+                            // (#5525), instead of an unconditional
+                            // `js_typed_array_index_set_dynamic` call per store.
+                            // Its exit, `js_dyn_index_set`, is the complete
+                            // dynamic `[[Set]]`.
+                            let result = lower_inline_dyn_typed_array_set(
+                                ctx,
+                                &vals[0],
+                                &vals[1],
+                                &vals[2],
+                                assignment_strict,
                             );
                             let slow = LoweredValue::js_value(result.clone());
                             ctx.record_lowered_value_with_access_mode(
@@ -674,13 +678,16 @@ pub(crate) fn lower(
                 // Stores fall back for untracked views, unknown bounds, unsafe
                 // conversions, and Uint8ClampedArray's ToUint8Clamp semantics.
                 return rooting::with_operands_rooted(ctx, &[object, index, value], |ctx, vals| {
-                    let blk = ctx.block();
-                    let arr_bits = blk.bitcast_double_to_i64(&vals[0]);
-                    let arr_i64 = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                    let idx_i32 = blk.fptosi(DOUBLE, &vals[1], I32);
-                    blk.call_void(
-                        "js_typed_array_set",
-                        &[(I64, &arr_i64), (I32, &idx_i32), (DOUBLE, &vals[2])],
+                    // The guarded inline typed-array store (#5525) keeps an
+                    // owning numeric typed array out of line only on a guard
+                    // miss; `js_dyn_index_set` owns the rest (views, clamped
+                    // and BigInt kinds, out-of-bounds, a lying annotation).
+                    let _ = lower_inline_dyn_typed_array_set(
+                        ctx,
+                        &vals[0],
+                        &vals[1],
+                        &vals[2],
+                        assignment_strict,
                     );
                     let slow = LoweredValue::js_value(vals[2].clone());
                     ctx.record_lowered_value_with_access_mode(

@@ -134,3 +134,70 @@ fn unproven_numeric_index_store_has_an_inline_element_tier() {
         "a declined key must still reach the exact helper:\n{slow}"
     );
 }
+
+/// A declared typed array with an unproven index takes the same guarded inline
+/// arms as an erased receiver, not an unconditional runtime call per access.
+#[test]
+fn declared_typed_array_unproven_index_access_is_inline() {
+    let get = probe_ir(&module(
+        "ta_dynamic_get",
+        vec![param(1, named("Float64Array")), param(2, Type::Number)],
+        vec![Stmt::Return(Some(Expr::IndexGet {
+            object: Box::new(Expr::LocalGet(1)),
+            index: Box::new(Expr::LocalGet(2)),
+        }))],
+    ));
+    assert!(
+        get.contains("tav.brand") && !get.contains("@js_typed_array_index_get_dynamic("),
+        "declared typed-array read must use the inline arm:\n{get}"
+    );
+    let set = probe_ir(&module(
+        "ta_dynamic_set",
+        vec![
+            param(1, named("Float64Array")),
+            param(2, Type::Number),
+            param(3, Type::Number),
+        ],
+        vec![Stmt::Expr(Expr::IndexSet {
+            object: Box::new(Expr::LocalGet(1)),
+            index: Box::new(Expr::LocalGet(2)),
+            value: Box::new(Expr::LocalGet(3)),
+        })],
+    ));
+    // The erased `$generic` clone keeps the runtime dispatcher: it has no
+    // typed-array receiver to route. What must change is the guarded body.
+    assert!(
+        set.contains("tav.set.fast"),
+        "declared typed-array store must use the inline arm:\n{set}"
+    );
+}
+
+/// The inline typed-array store admits only plain doubles (anything NaN-boxed
+/// needs the runtime's ToNumber), and its integer kinds use the exact modular
+/// ToInt32 — the unwrapped conversion is poison for |v| >= 2^63.
+#[test]
+fn inline_typed_array_store_rejects_boxed_values_and_wraps_exactly() {
+    let ir = probe_ir(&module(
+        "ta_erased_set",
+        vec![
+            param(1, Type::Any),
+            param(2, Type::Any),
+            param(3, Type::Any),
+        ],
+        vec![Stmt::Expr(Expr::IndexSet {
+            object: Box::new(Expr::LocalGet(1)),
+            index: Box::new(Expr::LocalGet(2)),
+            value: Box::new(Expr::LocalGet(3)),
+        })],
+    ));
+    assert!(
+        ir.lines()
+            .any(|line| line.contains("icmp slt i64") && line.contains("9221401712017801216")),
+        "the entry guard must reject NaN-boxed values:\n{ir}"
+    );
+    let store = block_body(&ir, "tav.set.store").unwrap_or_else(|| panic!("no store block:\n{ir}"));
+    assert!(
+        !store.contains("fptosi"),
+        "integer kinds must not use the |v| < 2^63-only conversion:\n{store}"
+    );
+}
