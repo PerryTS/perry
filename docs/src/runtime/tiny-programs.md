@@ -4,8 +4,7 @@ Perry automatically specializes a narrow class of standalone programs on native
 64-bit Linux and macOS. No enabling flag is needed:
 
 ```typescript
-const who: string = "world";
-console.log(`hello, ${who}`);
+{{#include ../../examples/runtime/tiny_program.ts}}
 ```
 
 A proof over the original, unfolded AST admits only empty statements, literal

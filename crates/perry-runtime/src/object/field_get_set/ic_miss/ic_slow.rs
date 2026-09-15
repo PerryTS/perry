@@ -541,7 +541,10 @@ mod tests {
 
         // A token that no longer matches the receiver's must fall through to
         // the ordinary lookup (which still answers, and primes).
-        cache[PIC_NAMED_PREFIX_TOKEN] = (TOKEN + 1) as i64;
+        // Through `slot`, the raw-pointer alias the IC reads: assigning to
+        // `cache` here is a write the `unused_assignments` lint cannot see
+        // through, and `-D warnings` makes that an error.
+        unsafe { (*slot)[PIC_NAMED_PREFIX_TOKEN] = (TOKEN + 1) as i64 };
         let v = obj.with_mut_ptr(|o: *mut ObjectHeader| {
             key.with_const_ptr(|k| js_object_get_field_ic_slow(handle(o), k, &mut slot, &packed))
         });

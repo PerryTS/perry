@@ -25,6 +25,8 @@ pub(crate) unsafe fn object_meta_ensure_for_cell(user_ptr: usize) -> Option<*mut
     (*meta).prototype = 0;
     (*meta).attr_key_bits = 0;
     (*meta).accessor_key_bits = 0;
+    (*meta).descriptor_key_hash = 0;
+    (*meta).descriptor_key_count = 0;
     (*meta).flags = 0;
     (*meta).spill = 0;
     (*meta).private_evaluation_brand = 0;
@@ -67,6 +69,8 @@ pub(crate) unsafe fn object_meta_ensure(obj: *mut ObjectHeader) -> *mut ObjectMe
     (*meta).prototype = 0;
     (*meta).attr_key_bits = 0;
     (*meta).accessor_key_bits = 0;
+    (*meta).descriptor_key_hash = 0;
+    (*meta).descriptor_key_count = 0;
     (*meta).flags = 0;
     (*meta).spill = 0;
     (*meta).private_evaluation_brand = 0;

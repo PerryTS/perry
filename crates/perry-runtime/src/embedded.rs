@@ -23,7 +23,7 @@
 #[cfg(feature = "bun-cli-utils")]
 mod compressed;
 #[cfg(feature = "bun-cli-utils")]
-pub use compressed::js_register_embedded_zstd_asset;
+pub use compressed::{js_register_embedded_zstd_asset, js_register_embedded_zstd_asset_lazy};
 
 use std::collections::BTreeMap;
 use std::sync::{Mutex, OnceLock};
@@ -41,14 +41,59 @@ pub const VIRTUAL_PREFIX: &str = "$perryfs/";
 /// code can keep passing the original string to `node:fs` and `Bun.file()`.
 pub const BUNFS_ROOT_PREFIX: &str = "/$bunfs/root/";
 
-/// One embedded file. `bytes` points into read-only data or decoded native
-/// storage and is valid for the life of the process.
+/// One embedded file, valid for the life of the process.
 struct EmbeddedAsset {
     /// Registry key — the embed-relative path, e.g. `dist/index.html`.
     name: String,
-    bytes: &'static [u8],
+    bytes: AssetBytes,
     /// Explicit loader metadata, never inferred from the file extension.
     text_module: bool,
+}
+
+/// Raw bytes in read-only data or already-decoded native storage, or a zstd
+/// frame in immortal read-only data that is decoded on first read. Decoding
+/// every compressed asset in the pre-`main` constructor made each process pay
+/// for payloads it never reads: OpenCode's 952-file web UI decoded 34 MB and
+/// 2.8% of the instructions of `opencode --version`.
+enum AssetBytes {
+    Ready(&'static [u8]),
+    #[cfg(feature = "bun-cli-utils")]
+    Compressed {
+        packed: &'static [u8],
+        original_len: usize,
+    },
+}
+
+impl EmbeddedAsset {
+    fn len(&self) -> usize {
+        match self.bytes {
+            AssetBytes::Ready(bytes) => bytes.len(),
+            #[cfg(feature = "bun-cli-utils")]
+            AssetBytes::Compressed { original_len, .. } => original_len,
+        }
+    }
+
+    /// The asset's bytes, decoding a compressed frame once. The frame's
+    /// metadata was validated at registration; a payload that still fails to
+    /// decode (checksum damage) is fatal exactly as it was in the constructor.
+    fn bytes(&mut self) -> &'static [u8] {
+        match self.bytes {
+            AssetBytes::Ready(bytes) => bytes,
+            #[cfg(feature = "bun-cli-utils")]
+            AssetBytes::Compressed {
+                packed,
+                original_len,
+            } => {
+                let Some(decoded) = compressed::decode(packed, original_len) else {
+                    eprintln!("Corrupt compressed embedded asset");
+                    std::process::exit(74);
+                };
+                let bytes: &'static [u8] = Box::leak(decoded);
+                self.bytes = AssetBytes::Ready(bytes);
+                bytes
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -142,6 +187,10 @@ unsafe fn register_asset(
     } else {
         std::slice::from_raw_parts(bytes_ptr, bytes_len)
     };
+    push_asset(name, AssetBytes::Ready(bytes), text_module);
+}
+
+fn push_asset(name: String, bytes: AssetBytes, text_module: bool) {
     registry()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -157,18 +206,20 @@ unsafe fn register_asset(
 /// authoritative presence test — a path is "embedded" iff this returns `Some`.
 pub fn lookup(path: &str) -> Option<&'static [u8]> {
     let key = normalize_key(path);
-    let reg = registry().lock().unwrap_or_else(|e| e.into_inner());
-    reg.iter().find(|a| a.name == key).map(|a| a.bytes)
+    let mut reg = registry().lock().unwrap_or_else(|e| e.into_inner());
+    reg.iter_mut()
+        .find(|a| a.name == key)
+        .map(EmbeddedAsset::bytes)
 }
 
 /// Data modules supported by `require` must opt in via their original loader.
 /// Merely embedding a JS source, native addon or arbitrary file is not enough.
 pub(crate) fn lookup_text_module(path: &str) -> Option<&'static [u8]> {
     let key = normalize_key(path);
-    let reg = registry().lock().unwrap_or_else(|e| e.into_inner());
-    reg.iter()
+    let mut reg = registry().lock().unwrap_or_else(|e| e.into_inner());
+    reg.iter_mut()
         .find(|a| a.name == key && a.text_module)
-        .map(|a| a.bytes)
+        .map(EmbeddedAsset::bytes)
 }
 
 /// Metadata for an embedded file or an inferred `$perryfs` directory.
@@ -180,7 +231,7 @@ pub(crate) fn metadata(path: &str) -> Option<EmbeddedMetadata> {
         return Some(EmbeddedMetadata {
             is_file: true,
             is_directory: false,
-            size: asset.bytes.len(),
+            size: asset.len(),
         });
     }
     let (directory_key, _) = perry_virtual_key(path)?;
@@ -273,9 +324,7 @@ pub fn is_virtual_path(path: &str) -> bool {
 /// Snapshot of `(name, size)` for every embedded asset, in registration order.
 fn snapshot() -> Vec<(String, usize)> {
     let reg = registry().lock().unwrap_or_else(|e| e.into_inner());
-    reg.iter()
-        .map(|a| (a.name.clone(), a.bytes.len()))
-        .collect()
+    reg.iter().map(|a| (a.name.clone(), a.len())).collect()
 }
 
 /// Best-effort MIME type from a file extension, covering the asset classes a

@@ -1,15 +1,20 @@
 //! Byte-exact compressed payload registration before JavaScript/GC startup.
 //! Only the Bun utility pack links zstd; ordinary embedding remains unchanged.
 
-use super::register_asset;
+use super::{push_asset, register_asset, AssetBytes};
 
-fn decode(packed: &[u8], original_len: usize) -> Option<Box<[u8]>> {
-    if original_len > isize::MAX as usize
-        || zstd::zstd_safe::get_frame_content_size(packed).ok()?? != original_len as u64
-        || zstd::zstd_safe::find_frame_compressed_size(packed).ok()? != packed.len()
-    {
-        return None;
-    }
+/// The frame declares exactly `original_len` content bytes and occupies all of
+/// `packed` (no truncation, trailing or concatenated data). Reads frame and
+/// block headers only; the payload checksum is verified by [`decode`].
+fn frame_matches(packed: &[u8], original_len: usize) -> Option<()> {
+    (original_len <= isize::MAX as usize
+        && zstd::zstd_safe::get_frame_content_size(packed).ok()?? == original_len as u64
+        && zstd::zstd_safe::find_frame_compressed_size(packed).ok()? == packed.len())
+    .then_some(())
+}
+
+pub(super) fn decode(packed: &[u8], original_len: usize) -> Option<Box<[u8]>> {
+    frame_matches(packed, original_len)?;
     // Validate the frame's own length before reserving. Never let an unchecked
     // caller length drive an allocation, or accept trailing/concatenated data.
     let mut bytes = Vec::new();
@@ -68,6 +73,61 @@ pub unsafe extern "C" fn js_register_embedded_zstd_asset(
     );
     1
 }
+
+/// Register one compiler-emitted zstd frame that lives in immortal read-only
+/// data, deferring the decode to the first read of the asset. Frame metadata
+/// is still validated here, so truncated, trailing or mis-sized frames are
+/// rejected (0) before `main` exactly like the eager form; checksum damage is
+/// reported fatally on first read instead. Size queries and directory listings
+/// never decode. Returns 1 on success.
+///
+/// # Safety
+/// Non-null pointers must name readable ranges of the supplied lengths; the
+/// compressed range must stay valid for the life of the process (the compiler
+/// emits it into `.rodata`). `text_module` must be 0 or 1.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_embedded_zstd_asset_lazy(
+    name_ptr: *const u8,
+    name_len: usize,
+    packed_ptr: *const u8,
+    packed_len: usize,
+    original_len: usize,
+    text_module: u32,
+) -> i32 {
+    if name_ptr.is_null()
+        || packed_ptr.is_null()
+        || name_len > isize::MAX as usize
+        || packed_len > isize::MAX as usize
+        || text_module > 1
+    {
+        return 0;
+    }
+    let packed: &'static [u8] = std::slice::from_raw_parts(packed_ptr, packed_len);
+    if frame_matches(packed, original_len).is_none() {
+        return 0;
+    }
+    let name = String::from_utf8_lossy(std::slice::from_raw_parts(name_ptr, name_len)).into_owned();
+    push_asset(
+        name,
+        AssetBytes::Compressed {
+            packed,
+            original_len,
+        },
+        text_module == 1,
+    );
+    1
+}
+
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_REGISTER_ZSTD_LAZY: unsafe extern "C" fn(
+    *const u8,
+    usize,
+    *const u8,
+    usize,
+    usize,
+    u32,
+) -> i32 = js_register_embedded_zstd_asset_lazy;
 
 #[cfg(feature = "keepalive-anchors")]
 #[used]
@@ -210,5 +270,89 @@ mod tests {
             );
         }
         assert!(super::super::lookup("compressed-test/invalid").is_none());
+    }
+
+    #[test]
+    fn lazy_registration_reports_size_without_decoding_and_reads_exact_bytes() {
+        let bytes = b"lazy\0payload\xff".repeat(4096);
+        let mut compressor = zstd::bulk::Compressor::new(3).unwrap();
+        compressor.include_checksum(true).unwrap();
+        let packed: &'static [u8] =
+            Box::leak(compressor.compress(&bytes).unwrap().into_boxed_slice());
+        // Checksum damage passes the header-only registration check. Its size
+        // and presence are answered without decoding; only a read would fail.
+        let mut damaged = packed.to_vec();
+        *damaged.last_mut().unwrap() ^= 1;
+        let damaged: &'static [u8] = Box::leak(damaged.into_boxed_slice());
+        unsafe {
+            for (name, frame, text) in [
+                ("lazy-test/file.bin", packed, 0),
+                ("lazy-test/text.md", packed, 1),
+                ("lazy-test/damaged.bin", damaged, 0),
+            ] {
+                assert_eq!(
+                    js_register_embedded_zstd_asset_lazy(
+                        name.as_ptr(),
+                        name.len(),
+                        frame.as_ptr(),
+                        frame.len(),
+                        bytes.len(),
+                        text
+                    ),
+                    1
+                );
+            }
+        }
+        assert_eq!(
+            super::super::metadata("lazy-test/damaged.bin")
+                .unwrap()
+                .size,
+            bytes.len()
+        );
+        assert_eq!(
+            super::super::lookup("$perryfs/lazy-test/file.bin"),
+            Some(bytes.as_slice())
+        );
+        // A second read serves the cached decode.
+        let first = super::super::lookup("lazy-test/file.bin").unwrap();
+        assert_eq!(
+            super::super::lookup("lazy-test/file.bin").unwrap().as_ptr(),
+            first.as_ptr()
+        );
+        assert!(super::super::lookup_text_module("lazy-test/file.bin").is_none());
+        assert_eq!(
+            super::super::lookup_text_module("lazy-test/text.md"),
+            Some(bytes.as_slice())
+        );
+    }
+
+    #[test]
+    fn lazy_registration_rejects_mis_sized_and_truncated_frames() {
+        let name = b"lazy-test/invalid";
+        let packed: &'static [u8] = Box::leak(
+            zstd::bulk::compress(b"value", 3)
+                .unwrap()
+                .into_boxed_slice(),
+        );
+        unsafe {
+            for (len, original, text) in [
+                (packed.len(), 6, 0),
+                (packed.len() - 1, 5, 0),
+                (packed.len(), 5, 2),
+            ] {
+                assert_eq!(
+                    js_register_embedded_zstd_asset_lazy(
+                        name.as_ptr(),
+                        name.len(),
+                        packed.as_ptr(),
+                        len,
+                        original,
+                        text
+                    ),
+                    0
+                );
+            }
+        }
+        assert!(super::super::metadata("lazy-test/invalid").is_none());
     }
 }

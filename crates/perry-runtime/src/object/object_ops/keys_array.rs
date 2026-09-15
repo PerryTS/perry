@@ -42,6 +42,50 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
                 return;
             }
         } else {
+            // #10287: the FIRST key is the case that matters for a
+            // function-constructed receiver (zod defines `_zod` before the
+            // object has any key at all), and the `[[Set]]` tail already
+            // learns these keyless→one-key edges. Try the shared edge before
+            // minting a private array, and teach it otherwise.
+            let transition_eligible_first = define_append_transition_eligible(obj, keys);
+            let prev_shape_id = if transition_eligible_first {
+                super::super::shapes::object_shape_stamp(obj)
+            } else {
+                0
+            };
+            let interned = if prev_shape_id != 0 {
+                let interned = intern_define_key(&scope, key);
+                refresh_define_property_roots!();
+                interned
+            } else {
+                None
+            };
+            if let Some(handle) = interned.as_ref() {
+                let probe = handle.with_const_ptr::<crate::StringHeader, _>(|interned_key| {
+                    super::super::transition_cache_lookup(prev_shape_id, interned_key)
+                });
+                if let Some((next_keys, slot_idx, target_shape_id)) = probe {
+                    let live = crate::object::object_live_slot_count(obj);
+                    let alloc_limit = std::cmp::max(live, crate::object::INLINE_SLOT_FLOOR as u32);
+                    if next_keys != 0
+                        && slot_idx < alloc_limit
+                        && cached_target_fits(target_shape_id, alloc_limit)
+                    {
+                        if !super::super::shapes::install_cached_object_shape_transition(
+                            obj,
+                            prev_shape_id,
+                            target_shape_id,
+                            next_keys as *mut ArrayHeader,
+                        ) {
+                            set_object_keys_array(obj, next_keys as *mut ArrayHeader);
+                        }
+                        if slot_idx >= live {
+                            set_object_live_slot_count(obj, slot_idx + 1);
+                        }
+                        return;
+                    }
+                }
+            }
             let new_keys = crate::array::js_array_alloc(4);
             refresh_define_property_roots!();
             let new_keys =
@@ -50,6 +94,25 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
             set_object_keys_array(obj, new_keys);
             if crate::object::object_live_slot_count(obj) == 0 {
                 set_object_live_slot_count(obj, 1);
+            }
+            if let Some(handle) = interned.as_ref() {
+                let target_shape_id = super::super::shapes::object_shape_stamp(obj);
+                let published_keys = crate::object::object_keys_array(obj);
+                if target_shape_id != 0
+                    && target_shape_id != prev_shape_id
+                    && !published_keys.is_null()
+                {
+                    handle.with_const_ptr::<crate::StringHeader, _>(|interned_key| {
+                        super::super::transition_cache_insert(
+                            std::ptr::null(),
+                            prev_shape_id,
+                            interned_key,
+                            published_keys as usize,
+                            0,
+                            target_shape_id,
+                        )
+                    });
+                }
             }
             return;
         }
@@ -99,6 +162,63 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
             }
         }
     }
+    // #10287: `Object.defineProperty` adding a NEW key performs the same
+    // STRUCTURAL append as an ordinary `[[Set]]`, so it can reuse the learned
+    // shape transition instead of minting a private keys array per receiver.
+    // Without this every zod schema instance — whose constructor defines
+    // `_zod` before installing ~60 methods by assignment — starts a private
+    // lineage on its first define and can never again share a shape, a
+    // transition edge or a keys array with its siblings.
+    //
+    // The edge is purely structural. Descriptor semantics are published
+    // separately by the caller's `set_property_attrs`, whose keyed semantic
+    // transition gives every receiver performing the same install the same
+    // successor shape.
+    let transition_eligible = define_append_transition_eligible(obj, keys);
+    let mut interned_handle = None;
+    let mut prev_shape_id = 0u32;
+    if transition_eligible {
+        let interned = intern_define_key(&scope, key);
+        refresh_define_property_roots!();
+        if interned.is_some() {
+            // Interning can collect, so the keys edge and the receiver's stamp
+            // are re-read here rather than reused from above.
+            if crate::object::object_keys_array(obj) == keys {
+                prev_shape_id = super::super::shapes::object_shape_stamp(obj);
+                interned_handle = interned;
+            }
+        }
+    }
+    if let (Some(handle), true) = (interned_handle.as_ref(), prev_shape_id != 0) {
+        let probe = handle.with_const_ptr::<crate::StringHeader, _>(|interned| {
+            super::super::transition_cache_lookup(prev_shape_id, interned)
+        });
+        if let Some((next_keys, slot_idx, target_shape_id)) = probe {
+            let live = crate::object::object_live_slot_count(obj);
+            let alloc_limit = std::cmp::max(live, crate::object::INLINE_SLOT_FLOOR as u32);
+            // An overflow target stays on the private path below: a keys-only
+            // install (an accessor claiming its slot) writes no value, so the
+            // overflow entry such an edge implies would never be created.
+            if next_keys != 0
+                && slot_idx < alloc_limit
+                && cached_target_fits(target_shape_id, alloc_limit)
+            {
+                if !super::super::shapes::install_cached_object_shape_transition(
+                    obj,
+                    prev_shape_id,
+                    target_shape_id,
+                    next_keys as *mut ArrayHeader,
+                ) {
+                    set_object_keys_array(obj, next_keys as *mut ArrayHeader);
+                }
+                if slot_idx >= live {
+                    set_object_live_slot_count(obj, slot_idx + 1);
+                }
+                return;
+            }
+        }
+    }
+
     // Clone a shape-cache / transition-cache keys array before appending.
     //
     // The old `key_count == field_count` proxy was not an ownership test.
@@ -176,6 +296,114 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
     let inline_capacity = std::cmp::max(live_slots, crate::object::INLINE_SLOT_FLOOR as u32);
     if new_index < inline_capacity && new_index >= live_slots {
         set_object_live_slot_count(obj, new_index + 1);
+    }
+    // #10287: teach the edge this append just built, so the NEXT receiver with
+    // the same predecessor shape takes the branch above instead of cloning a
+    // private keys array of its own. Inline targets only, for the reason given
+    // there. `transition_cache_insert` stamps `GC_FLAG_SHAPE_SHARED` on the
+    // published array, so any later growth on either receiver clones first.
+    if let (Some(handle), true) = (interned_handle.as_ref(), prev_shape_id != 0) {
+        if new_index < inline_capacity {
+            let target_shape_id = super::super::shapes::object_shape_stamp(obj);
+            let published_keys = crate::object::object_keys_array(obj);
+            if target_shape_id != 0 && target_shape_id != prev_shape_id && !published_keys.is_null()
+            {
+                handle.with_const_ptr::<crate::StringHeader, _>(|interned_key| {
+                    super::super::transition_cache_insert(
+                        std::ptr::null(),
+                        prev_shape_id,
+                        interned_key,
+                        published_keys as usize,
+                        new_index,
+                        target_shape_id,
+                    )
+                });
+            }
+        }
+    }
+}
+
+/// Does the cached target's live inline-slot bound fit THIS receiver?
+///
+/// A transition edge is keyed by the predecessor SHAPE, and two receivers can
+/// share a shape (notably the keyless birth shape) while holding different
+/// physical inline capacities — the allocator sizes them from their birth
+/// field count. Adopting a target whose bound exceeds this receiver's
+/// allocation would publish payload slots past the end of the object: the
+/// collector traces that range, so the next collection reads (and rewrites)
+/// memory the object does not own. Keep such a receiver on the private append.
+unsafe fn cached_target_fits(target_shape_id: u32, alloc_limit: u32) -> bool {
+    super::super::shapes::shape_descriptor_by_id(target_shape_id)
+        .is_some_and(|target| target.live_inline_slot_count <= alloc_limit)
+}
+
+/// Intern `key` for a transition-cache probe, rooted in the caller's scope.
+/// Interning can collect, so the caller refreshes its own roots afterwards.
+unsafe fn intern_define_key<'scope>(
+    scope: &'scope crate::gc::RuntimeHandleScope,
+    key: *const crate::StringHeader,
+) -> Option<crate::gc::RuntimeHandle<'scope>> {
+    let key_gc = (key as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    let interned = if (*key_gc).gc_flags & crate::gc::GC_FLAG_INTERNED != 0 {
+        key
+    } else {
+        let hash = super::super::key_content_hash(key);
+        crate::string::js_string_intern(key, hash)
+    };
+    (!interned.is_null()).then(|| scope.root_string_ptr(interned))
+}
+
+/// Is `obj` an ordinary class-less receiver whose `defineProperty` key append
+/// is exactly the append the `[[Set]]` transition lattice already models
+/// (#10287)? Conservative: anything with its own layout rules — a class
+/// instance or class object, a native-module receiver, a reserved-slot floor,
+/// `Object.prototype`, a URL, a typed array, an exotic expando host, a
+/// tombstoned or non-ordinary shape, or a keys edge that does not match the
+/// receiver's published descriptor — keeps the private append.
+unsafe fn define_append_transition_eligible(
+    obj: *mut ObjectHeader,
+    keys: *const ArrayHeader,
+) -> bool {
+    let Some(gc) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
+        return false;
+    };
+    const BLOCKING: u16 = crate::gc::OBJ_FLAG_FROZEN
+        | crate::gc::OBJ_FLAG_SEALED
+        | crate::gc::OBJ_FLAG_NO_EXTEND
+        | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
+        | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES;
+    if gc.obj_type != crate::gc::GC_TYPE_OBJECT
+        || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || gc._reserved & BLOCKING != 0
+        || !crate::object::object_is_regular(obj)
+    {
+        return false;
+    }
+    let class_id = (*obj).class_id;
+    // A class INSTANCE is eligible — the `[[Set]]` tail already learns and
+    // replays transition edges for class receivers. A class OBJECT is not: its
+    // writes must reach the `mirror_class_object_static_write` completions.
+    if class_id == crate::object::NATIVE_MODULE_CLASS_ID
+        || crate::object::class_registry::is_class_object_ptr(obj.cast())
+        || crate::object::reserved_slot_floor_for_class_id(class_id) != 0
+        || crate::array::object_prototype_addr_matches(obj as usize)
+        || crate::url::is_url_object_shape(obj)
+        || crate::typedarray::lookup_typed_array_kind(obj as usize).is_some()
+    {
+        return false;
+    }
+    let value = crate::value::js_nanbox_pointer(obj as i64);
+    if crate::object::exotic_expando::exotic_expando_kind_of_value(value).is_some() {
+        return false;
+    }
+    if crate::object::prototype_chain::object_has_prototype_divergence(obj as usize) {
+        return false;
+    }
+    match super::super::shapes::object_shape_descriptor(obj) {
+        // A keyless receiver has no descriptor yet on some paths; the tail
+        // learns its keyless→one-key edge from the same stamp.
+        None => keys.is_null(),
+        Some(shape) => shape.hole_count == 0 && shape.keys == keys as u64,
     }
 }
 

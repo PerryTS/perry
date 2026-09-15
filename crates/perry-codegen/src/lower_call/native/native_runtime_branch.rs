@@ -109,8 +109,8 @@
                     &[(DOUBLE, &from), (DOUBLE, &specifier)],
                 ));
             }
-            // Next.js wall 54: publish a CJS module's partial exports before
-            // its body so same-thread recursive requires can observe them.
+            // Publish the CJS record before its body so same-thread recursive
+            // requires see its current exports, including replacements.
             "registerPathModulePartial" => {
                 let path = args.first().map_or_else(
                     || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),

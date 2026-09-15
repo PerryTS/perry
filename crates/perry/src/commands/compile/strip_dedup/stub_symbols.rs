@@ -23,6 +23,7 @@ const STDLIB_STUB_SYMBOLS: &[&str] = &[
     "js_fetch_with_options",
     "js_blob_new",
     "js_headers_new",
+    "js_headers_from_value",
     "js_headers_init_from_value",
     "js_request_new",
     "js_response_new",

@@ -764,6 +764,10 @@ pub fn run_with_parse_cache(
 
     let mut ctx = CompilationContext::new(project_root.clone());
     ctx.bun_platform = args.platform == JavaScriptPlatform::Bun;
+    // #10281: the package `exports` / `imports` resolvers rank `bun` above
+    // `node` for this target, so a package shipping both entries resolves the
+    // one the bun binary would run.
+    resolve::subpath_imports::set_bun_platform(ctx.bun_platform);
     ctx.cache_root = object_cache_project_root(&args.input, &project_root);
     ctx.bunfs_root = match args.bunfs_root.as_deref() {
         Some(root) => {
@@ -3319,8 +3323,29 @@ pub fn run_with_parse_cache(
                 .enumerate()
                 .map(|(i, name)| (sanitize_name(name), i))
                 .collect();
+            //
+            // A Deferred dep is the exception (#10278). The back-edge drop is
+            // sound only because the entry's eager init loop runs every Eager
+            // module in `init_pos` order, so a dep positioned before this
+            // module has already initialized by the time this wrapper runs.
+            // Deferred modules are filtered OUT of that loop — nothing runs
+            // them but a dynamic-import dispatch site or another wrapper — so
+            // dropping the edge to one strands it: its body never runs and
+            // every export the body assigns at runtime stays undefined. A
+            // static `import()` entry into a Deferred cycle reproduced it
+            // (`useAssigned()` returned undefined, `obj.method` threw). Keep
+            // the edge whenever the dep is Deferred; the `__init` guard
+            // already makes the call idempotent and cycle-safe, and it
+            // reproduces ESM's order (the partner body runs first, the
+            // re-entrant call returns immediately). This cannot perturb the
+            // Eager ordering #6463 fixed: a module statically imported by an
+            // Eager module is itself statically reachable from the entry, so
+            // it is Eager, so this arm never fires for it.
             if let Some(&self_pos) = init_pos.get(&sanitize_name(&hir_module.name)) {
-                deps.retain(|dep| init_pos.get(dep).map_or(true, |&p| p < self_pos));
+                deps.retain(|dep| {
+                    deferred_module_prefixes.contains(dep)
+                        || init_pos.get(dep).map_or(true, |&p| p < self_pos)
+                });
             }
             deps
         };
@@ -4557,8 +4582,25 @@ pub fn run_with_parse_cache(
                         .map(|k| exported_var_names.contains(k))
                         .unwrap_or(false)
                 {
-                    imported_vars.insert(exported_name.clone());
-                    if local_name != exported_name {
+                    // #10286: key this set by the LOCAL name only, exactly as
+                    // `import_function_prefixes` above already does. Codegen
+                    // asks `ctx.imported_vars.contains(name)` with the name an
+                    // `ExternFuncRef` carries, and in the aliased case that is
+                    // the LOCAL name. Inserting the ORIGIN module's
+                    // `exported_name` too claims an identifier this module may
+                    // bind to something else entirely: minifiers reuse short
+                    // aliases across import statements, so
+                    // `import { t as e } from "./a"; import { extend as t } from "./b"`
+                    // put "t" in this set on behalf of module a, which made the
+                    // call `t(...)` compile as a var read of a not-yet-published
+                    // slot instead of a call to b's function — undefined during
+                    // module init, correct afterwards. Local names cannot
+                    // collide with each other inside one module (each binding
+                    // needs a distinct identifier), but exported names from
+                    // different source modules can and do.
+                    if local_name == exported_name {
+                        imported_vars.insert(exported_name.clone());
+                    } else {
                         imported_vars.insert(local_name.clone());
                     }
 

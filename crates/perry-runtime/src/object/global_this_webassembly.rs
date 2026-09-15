@@ -188,7 +188,10 @@ pub(crate) fn register_module_wrapper(wrapper: usize, host_handle: usize) {
 
 /// Bind a genuine Memory/Table/Global wrapper identity to the opaque host
 /// external used when another WebAssembly module imports it.
-#[cfg(any(test, feature = "wasm-host"))]
+// No test constructs an extern wrapper — the tests below cover the MODULE
+// registry — so unlike `register_module_wrapper` this one carries the feature
+// gate alone; `any(test, ...)` would leave it dead in a lib-test build.
+#[cfg(feature = "wasm-host")]
 pub(crate) fn register_extern_wrapper(wrapper: usize, kind: &'static [u8], host_handle: usize) {
     if wrapper != 0 && host_handle != 0 {
         if let Ok(mut wrappers) = extern_wrappers().lock() {
@@ -198,6 +201,10 @@ pub(crate) fn register_extern_wrapper(wrapper: usize, kind: &'static [u8], host_
     }
 }
 
+// Read only from `wasm-host`-gated call sites (this file's Memory thunks and
+// `crate::webassembly`), so the definition carries the same gate: without it a
+// build fails `-D warnings` as dead code.
+#[cfg(feature = "wasm-host")]
 pub(crate) fn registered_extern_handle(wrapper: usize, expected_kind: &[u8]) -> Option<usize> {
     if wrapper == 0 || !module_wrapper_registry_used().load(std::sync::atomic::Ordering::Acquire) {
         return None;
@@ -659,6 +666,10 @@ fn wasm_memory_descriptor_pages(descriptor: f64) -> Result<u32, MemoryCtorError>
     Ok(pages)
 }
 
+// Read only from `wasm-host`-gated call sites (this file's Memory thunks and
+// `crate::webassembly`), so the definition carries the same gate: without it a
+// build fails `-D warnings` as dead code.
+#[cfg(feature = "wasm-host")]
 fn wasm_memory_descriptor_maximum(descriptor: f64) -> u32 {
     let Some(obj) = value_object_ptr(descriptor) else {
         return u32::MAX;
@@ -1321,6 +1332,10 @@ mod tests {
         }
     }
 
+    // Only `async_members_reject_with_compile_error` calls this, and that test
+    // is `cfg(not(wasm-host))`: without the same gate the helper is dead code
+    // in a wasm-host test build.
+    #[cfg(not(feature = "wasm-host"))]
     fn assert_rejected_with_compile_error(promise_value: f64, api_fragment: &str) {
         let ptr = value_heap_ptr(promise_value).expect("promise pointer");
         let promise = ptr as *const crate::promise::Promise;

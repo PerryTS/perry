@@ -283,12 +283,13 @@ pub(crate) use descriptor_state::{
     constructor_accessor_ever_installed, descriptors_in_use, disable_class_field_inline_guard,
     get_accessor_descriptor, get_property_attrs, install_fresh_accessor_property,
     json_object_getter_value, mark_all_keys, object_has_descriptors,
-    object_proto_may_intercept_key, owner_has_property_descriptors,
-    owner_may_have_descriptor_entries, plain_data_write_may_intercept,
-    prune_dead_descriptor_owner_entries, prune_dead_descriptor_owner_entries_young,
-    reflect_getter_closure_bits, set_accessor_descriptor, set_builtin_accessor_descriptor,
-    set_builtin_property_attrs, set_property_attrs, transfer_descriptor_owner, AccessorDescriptor,
-    DescriptorTables, PropertyAttrs,
+    object_proto_may_intercept_key, own_descriptors_skip_key, owner_has_property_descriptors,
+    owner_may_have_descriptor_entries, plain_custom_prototype_may_intercept,
+    plain_data_write_may_intercept, prune_dead_descriptor_owner_entries,
+    prune_dead_descriptor_owner_entries_young, reflect_getter_closure_bits,
+    set_accessor_descriptor, set_builtin_accessor_descriptor, set_builtin_property_attrs,
+    set_property_attrs, transfer_descriptor_owner, AccessorDescriptor, DescriptorTables,
+    PropertyAttrs,
 };
 pub(crate) use field_get_set::FieldLookupCaches;
 pub(crate) use field_get_set::{
@@ -1576,6 +1577,28 @@ pub struct ObjectMeta {
     /// Installed by `js_array_subclass_init` under
     /// `array_subclass_elements_enabled()`; never present otherwise.
     pub elements: u64,
+    /// #10287 exact identity for the overwhelmingly common case of an object
+    /// carrying descriptors for exactly ONE key. `descriptor_key_count` is 0
+    /// (none recorded), 1 (`descriptor_key_hash` is the full
+    /// `key_bytes_hash` of that single key) or 2 (more than one distinct key
+    /// — consult the Bloom summaries and then the tables).
+    ///
+    /// The 64-bit Bloom above answers "maybe" for about one key in 64, and a
+    /// maybe costs far more than a table probe: the store it rejects takes
+    /// the slow path, which appends to a PRIVATE keys array and drops the
+    /// receiver off the shared transition chain for the rest of its life.
+    /// zod installs exactly one descriptor per schema (`_zod`), so a single
+    /// full-width compare here answers every store on those objects exactly,
+    /// with no table probe and no string rebuild.
+    ///
+    /// Maintained by the same writer as the Bloom bits
+    /// (`note_meta_descriptor_key`), so it inherits that function's
+    /// invariant: every descriptor-table insert for a meta-capable owner
+    /// records its key here first.
+    pub descriptor_key_hash: u64,
+    /// Distinct descriptor-key count, saturating at 2. See
+    /// [`ObjectMeta::descriptor_key_hash`].
+    pub descriptor_key_count: u64,
 }
 
 pub(crate) const OBJECT_META_FLAG_PROTO_DIVERGED: u64 = 1;

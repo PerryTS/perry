@@ -12,6 +12,8 @@ use super::{
 use crate::closure::ClosureHeader;
 use crate::value::JSValue;
 
+mod proxy_from;
+
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 
@@ -720,6 +722,13 @@ pub fn array_from_full(c: f64, items: f64, mapfn: f64, this_arg: f64) -> f64 {
         throw_not_iterable("object null");
     }
 
+    // Proxy GetMethod is observable. Resolve it once, retain it across
+    // construction, and root iterator state across callbacks that can collect.
+    if let Some(proxy) = crate::array::array_ptr_as_proxy(
+        crate::value::js_nanbox_get_pointer(items) as *const ArrayHeader,
+    ) {
+        return proxy_from::array_from_proxy(c, proxy, mapfn, this_arg, mapping);
+    }
     let is_ctor = is_constructor_value(c);
 
     if items_is_iterable(items) {
@@ -1037,8 +1046,10 @@ unsafe fn try_append_spread_array_dense(
     src: *const ArrayHeader,
 ) -> Option<*mut ArrayHeader> {
     // A masked proxy id is not a dereferenceable ArrayHeader.
-    if crate::array::array_ptr_as_proxy(src).is_some() {
-        return None;
+    if let Some(proxy) = crate::array::array_ptr_as_proxy(src) {
+        // Concat uses HasProperty/Get, never @@iterator. Resolve this inside
+        // the existing proxy guard so the ordinary bulk-copy path is unchanged.
+        return Some(append_concat_proxy(result, proxy));
     }
     let src = clean_arr_ptr(src);
     if src.is_null() {
@@ -1129,6 +1140,32 @@ unsafe fn try_append_spread_array_dense(
     (*result).length = new_len;
     crate::array::rebuild_array_layout_exact(result);
     Some(result)
+}
+
+/// Indexed concat of a proxy, preserving holes and observing its traps.
+unsafe fn append_concat_proxy(result: *mut ArrayHeader, proxy: f64) -> *mut ArrayHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let result = scope.root_raw_mut_ptr(result);
+    let proxy = scope.root_nanbox_f64(proxy);
+    let (_, result) = result.across_mut(|| {
+        let len = array_like_length(proxy.get_nanbox_f64());
+        for index in 0..len {
+            let entry_scope = crate::gc::RuntimeHandleScope::new();
+            let name = index.to_string();
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            let key = entry_scope.root_nanbox_f64(crate::value::js_nanbox_string(key as i64));
+            let present =
+                crate::object::js_object_has_property(proxy.get_nanbox_f64(), key.get_nanbox_f64());
+            let value = if crate::value::js_is_truthy(present) != 0 {
+                crate::proxy::js_proxy_get(proxy.get_nanbox_f64(), key.get_nanbox_f64())
+            } else {
+                f64::from_bits(crate::value::TAG_HOLE)
+            };
+            let grown = result.with_mut_ptr(|ptr| js_array_push_f64(ptr, value));
+            result.set_raw_mut_ptr(grown);
+        }
+    });
+    result
 }
 
 /// Append every element of the (already-materializable) source array `src`

@@ -67,6 +67,23 @@ pub(in crate::lower_call) fn build_headers_from_object(
     })
 }
 
+/// Convert a dynamic HeadersInit with the same helper as `new Headers(init)`.
+/// The literal path stays in `build_headers_from_object`; a runtime value is
+/// not necessarily a Headers registry handle (it may be a record or iterable).
+pub(in crate::lower_call) fn build_headers_from_value(
+    ctx: &mut FnCtx<'_>,
+    init: &Expr,
+) -> Result<String> {
+    with_rooted_group(ctx, 1, |ctx, group| {
+        let value = lower_expr(ctx, init)?;
+        let h = ctx
+            .block()
+            .call(DOUBLE, "js_headers_from_value", &[(DOUBLE, &value)]);
+        let h_root = group.adopt_emitted(ctx, Repr::Boxed, &h, true);
+        Ok(group.reread_emitted(ctx, h_root))
+    })
+}
+
 /// Phase 3 compat: extract `{key: value, ...}` pairs from an options
 /// argument in a form that works whether the options literal reached us
 /// as a plain `Expr::Object(props)` (pre-Phase-3 / spread/dynamic shapes)
