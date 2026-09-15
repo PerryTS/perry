@@ -447,6 +447,12 @@ change:
    so this predates P5.
 3. **`socket.remoteAddress` is `undefined` on an accepted socket** — P1 recorded
    this and it is unchanged; the `'upgrade'` probe sees it too.
+4. **`perry-ext-http`'s `tls_client::tests::needs_custom_client_logic` fails on
+   `main`.** Reproduced alone, single-threaded, on the base commit: its very
+   first assertion (`!t.needs_custom_client()` on a default `TlsOptions`) fails,
+   so `perry_ffi::node_tls_client_environment()` is already reporting
+   `NODE_TLS_REJECT_UNAUTHORIZED=0` or a CA list in that binary. Nothing here
+   touches it.
 
 ## Environment notes for whoever runs this next
 
