@@ -309,6 +309,27 @@ register turnloop's `Integration::Fd` (unix) / `Integration::Event` (Windows)
 inside the tick so it ends when turnloop has work; P2–P7 remove the second loop
 entirely and with it this branch.
 
+## Remaining tokio in the `net` path
+
+Every one of these is still reachable and still exercised, which is why the
+tokio transport is narrowed rather than removed.
+
+| site | what still uses tokio |
+|---|---|
+| `lib.rs` `spawn_socket_task_initialized` | the outbound TCP connect and its `run_socket_task` |
+| `lib.rs` `run_socket_task` | the read/command loop for every socket that stayed |
+| `ipc.rs` `spawn_listener` / `run_listener` | the local accept loops, now only the fallback when the agent has no loop |
+| `ipc.rs` `spawn_connect` (tokio branch) | same fallback for a local client |
+| `tls.rs`, `transport.rs` | `tokio_rustls`, `Transport::Tls`, and the mid-stream upgrade |
+| `tls.rs` `schedule_tls_abort` | a 25 ms `tokio::time::sleep` that defers an aborted TLS connect's error |
+| `server_state.rs` `schedule_server_connection` | a 1 ms `tokio::time::sleep` that orders a loopback `'connection'` against the client's `'connect'` |
+| `adopt.rs` | an HTTP `'upgrade'` handing its live `TcpStream` to `net` |
+| `perry-stdlib/src/net/` | the whole bundled implementation (compiled out by default) |
+
+The two `sleep`-based ordering helpers are worth noting for P3: they are timers
+being used as sequencing, and they will want the turnloop timer heap rather than
+tokio's.
+
 ## Known gaps
 
 - **`socket.setNoDelay()` cannot reach the kernel on a turnloop socket.**
