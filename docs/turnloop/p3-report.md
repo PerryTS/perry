@@ -185,7 +185,7 @@ sleep()` parks, 20 sub-millisecond remainders, 2,000 short timeouts, a 200-deep
 | arm | turns | os_waits | zero_event_waits | completions | timer_arms | timer_expiries |
 |---|---|---|---|---|---|---|
 | base `c6f185d6e8` | 107 / 97 / 117 | 97 / 95 / 114 | 107 / 97 / 117 | **0** | — | — |
-| P3 | 362 / 297 / 340 | 169 / 142 / 164 | 174 / 146 / 164 | 377 / 303 / 353 | 495 / 581 / 440 | **189 / 152 / 177** |
+| P3 | 351 / 373 / 336 | 161 / 173 / 160 | 168 / 181 / 163 | 367 / 385 / 349 | 518 / 521 / 474 | **184 / 193 / 174** |
 
 `completions=0` on the base arm is the point: turnloop carried nothing for a
 timer program, and every wake was a timeout Perry had computed for itself. On
@@ -207,6 +207,22 @@ turn. It costs a turn per expiry and no syscall. Arming the deadline as a
 remove that turn, the handle churn and half the completions; it is a follow-up,
 not a correctness issue, and it is not done here because it was measured to cost
 no OS wait.
+
+**Where the mixed workload's extra OS waits come from.** The first table's
+`os_waits` rise (≈97 → ≈165) is not spread over the whole program. Two probes
+split it:
+
+| probe | base os_waits | P3 os_waits |
+|---|---|---|
+| a 200-deep `setImmediate` chain | the loop never parks (`parked=0`) | the loop never parks (`parked=0`) |
+| 2,000 `setTimeout`s across 7 distinct delays | 38 / 41 | 47 / 61 |
+
+The check-phase split costs nothing: neither arm parks at all while immediates
+are queued. The increase is in **timer churn** — roughly 10-20 extra waits per
+2,000 timers, against a run-to-run spread of the same order. No mechanism is
+claimed for it here, because none was measured: an instruction A/B at cgu=1 with
+a control probe is what would price it, and P3 did not run one (see "For the
+integrator").
 
 ## Test evidence
 
@@ -272,15 +288,15 @@ the committed snapshot as known failures; the other three
 (`…_static_helpers`, `disposablestack_2875`, `iterator_prototype_next_patch`)
 are pre-existing regressions on the base commit, not P3's.
 
-**The 25 compile failures are a test-harness artifact, not a code result.**
-They are exactly the ext-routed set — `http`, `http2`, `net`, `ws`, `zlib`,
-`events`, the WebAssembly fixture and the native-base fixtures — i.e. every test
-whose link needs a `perry-ext-*` archive. The gap tier does not prebuild those,
-so each such test shells out to `cargo build -p perry-ext-…`, and eight shards
-plus a concurrent `cargo test` serialised on one cargo lock until the per-test
-compile timed out. Re-run one at a time with the ext archives built coherently
-alongside the runtime and stdlib (the invocation `run_parity_tests.sh` itself
-prescribes), on an otherwise idle tree, all 25 pass.
+**The 25 compile failures are a harness artifact, not a code result.** They are
+exactly the ext-routed set — every test whose link needs a `perry-ext-*` archive
+(`http`, `http2`, `net`, `ws`, `zlib`, `events`, plus the WebAssembly and
+native-base fixtures). The gap tier does not prebuild those, so each such test
+shells out to `cargo build -p perry-ext-…`; eight shards and a concurrent
+`cargo test` in the same tree serialised on one cargo lock until the per-test
+compile timed out. Re-run on a tree where nothing else holds that lock, the
+whole suite matches the baseline exactly — see the row above, which is from the
+clean re-run.
 
 ### The workspace unit tests
 
