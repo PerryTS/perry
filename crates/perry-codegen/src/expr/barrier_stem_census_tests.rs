@@ -93,6 +93,7 @@ pub(super) const VERIFIED_BARRIER_STEMS: &[(&str, StemKind)] = &[
     ("idxset.recv_captured", StemKind::ValueAndGenerationTested),
     ("idxset.recv_global", StemKind::ValueAndGenerationTested),
     ("idxset.recv_prop", StemKind::ValueAndGenerationTested),
+    ("idxset.runtime_key", StemKind::ValueAndGenerationTested),
     ("put.pic", StemKind::PointerTestedStore),
 ];
 
@@ -664,6 +665,53 @@ fn apush_ir() -> String {
         .expect("LLVM IR should be UTF-8")
 }
 
+/// `probe(a: any[], k: number, v: any) { a[k] = v }` — a numeric index with no
+/// static range proof reaches the runtime-canonical element tier, whose inline
+/// in-bounds store must keep the value-and-generation-tested barrier.
+fn idxset_runtime_key_ir() -> String {
+    const ARR_ID: u32 = 31;
+    let mut m = Module::new("idxset_runtime_key_census.ts");
+    let param = |id: u32, name: &str, ty: Type| Param {
+        id,
+        name: name.to_string(),
+        ty,
+        default: None,
+        decorators: Vec::new(),
+        is_rest: false,
+        arguments_object: None,
+    };
+    m.functions = vec![Function {
+        id: 1,
+        name: "probe".to_string(),
+        type_params: Vec::new(),
+        params: vec![
+            param(ARR_ID, "a", Type::Array(Box::new(Type::Any))),
+            param(IDX_ID, "k", Type::Number),
+            param(VAL_ID, "v", Type::Any),
+        ],
+        return_type: Type::Any,
+        body: vec![
+            Stmt::Expr(Expr::IndexSet {
+                object: Box::new(Expr::LocalGet(ARR_ID)),
+                index: Box::new(Expr::LocalGet(IDX_ID)),
+                value: Box::new(Expr::LocalGet(VAL_ID)),
+            }),
+            Stmt::Return(Some(Expr::LocalGet(ARR_ID))),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: true,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    }];
+    m.init_kind = ModuleInitKind::Eager;
+    String::from_utf8(compile_module(&m, ir_opts()).expect("module compiles"))
+        .expect("LLVM IR should be UTF-8")
+}
+
 /// `class Boxed { v: any; constructor(v) { this.v = v } }` plus an escaping
 /// `new Boxed(1)` — the complete parameter-to-field constructor is what selects
 /// constructor-free prologue stores, and the boxed field requires their
@@ -683,6 +731,7 @@ fn probe_ir(stem: &str) -> String {
         "idxset.recv_captured" => idxset_recv_captured_ir(),
         "idxset.recv_global" => idxset_recv_global_ir(),
         "idxset.recv_prop" => super::index_set_barrier_tests::ir(),
+        "idxset.runtime_key" => idxset_runtime_key_ir(),
         "put.pic" => super::write_pic_barrier_tests::census_put_pic_ir(),
         other => panic!(
             "VERIFIED_BARRIER_STEMS entry {other:?} has no probe in \

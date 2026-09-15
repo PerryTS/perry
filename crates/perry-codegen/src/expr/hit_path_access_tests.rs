@@ -104,3 +104,33 @@ fn declared_typed_array_length_reads_the_header_inline() {
         "a view or an own `length` property must keep the header read off:\n{arm}"
     );
 }
+
+/// `probe(a: number[], k: number, v: number) { a[k] = v }` — an index with no
+/// static range proof — takes the guarded in-bounds store for a canonical
+/// element index and calls the exact key helper only on a guard miss.
+#[test]
+fn unproven_numeric_index_store_has_an_inline_element_tier() {
+    let ir = probe_ir(&module(
+        "array_runtime_key",
+        vec![
+            param(1, Type::Array(Box::new(Type::Number))),
+            param(2, Type::Number),
+            param(3, Type::Number),
+        ],
+        vec![Stmt::Expr(Expr::IndexSet {
+            object: Box::new(Expr::LocalGet(1)),
+            index: Box::new(Expr::LocalGet(2)),
+            value: Box::new(Expr::LocalGet(3)),
+        })],
+    ));
+    assert!(
+        ir.contains("idxset.runtime_key.fast"),
+        "the canonical element index must reach the inline store:\n{ir}"
+    );
+    let slow = block_body(&ir, "idxset.runtime_key.slow")
+        .unwrap_or_else(|| panic!("no helper arm:\n{ir}"));
+    assert!(
+        slow.contains("@js_typed_feedback_array_set_index_or_string("),
+        "a declined key must still reach the exact helper:\n{slow}"
+    );
+}
