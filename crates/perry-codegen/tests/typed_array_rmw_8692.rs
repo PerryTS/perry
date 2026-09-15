@@ -217,8 +217,14 @@ fn specialized_uint32_dynamic_index_rmw_has_a_call_free_fast_arm_and_fallback() 
             "the guarded fast arm must not call `{helper}`:\n{load}\n{store}"
         );
     }
+    // The declared typed-array read with an unproven index now takes the
+    // guarded inline arm whose single exit, `js_packed_arraylike_index_get`,
+    // is the complete dynamic `[[Get]]`. Either shape satisfies what this
+    // pins: on guard failure the read still reaches full element semantics.
     assert!(
-        fallback.contains("js_typed_array_index_get_dynamic"),
+        fallback.contains("js_typed_array_index_get_dynamic")
+            || (fallback.contains("arrlike.ic.")
+                && specialized.contains("js_packed_arraylike_index_get")),
         "guard failure must retain the semantic get fallback:\n{fallback}\n{specialized}"
     );
     // Since #9157 the fallback's `+` is itself lowered as a guarded diamond,
@@ -227,7 +233,8 @@ fn specialized_uint32_dynamic_index_rmw_has_a_call_free_fast_arm_and_fallback() 
     // failure the add still reaches JavaScript `+` semantics.
     assert!(
         fallback.contains("js_dynamic_string_or_number_add")
-            || (fallback.contains("guarded_add.")
+            || ((fallback.contains("guarded_add.") || fallback.contains("arrlike.ic."))
+                && specialized.contains("guarded_add.")
                 && specialized.contains("js_dynamic_string_or_number_add")),
         "guard failure must retain the semantic add fallback:\n{fallback}\n{specialized}"
     );
