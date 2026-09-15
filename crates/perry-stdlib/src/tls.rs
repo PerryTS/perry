@@ -30,8 +30,6 @@ const TLS_DISPATCH_MISSING_BITS: u64 = TAG_UNDEFINED_BITS;
 mod client_verifier;
 mod dispatch;
 mod event_pump;
-#[cfg(test)]
-mod liveness_tests;
 mod module_api;
 mod socket_api;
 // Re-export the handle-dispatch and module-level entry points so
@@ -72,10 +70,7 @@ thread_local! {
     static TLS_GC_REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-static TLS_ACTIVE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-
 struct TlsServerState {
-    activity: crate::common::activity::Reference,
     shutdown_tx: Option<oneshot::Sender<()>>,
     bound_port: u16,
     bound_host: String,
@@ -152,7 +147,6 @@ impl rustls::server::ResolvesServerCert for EmptyCertResolver {
 }
 
 struct TlsSocketState {
-    _activity: crate::common::activity::Reference,
     cmd_tx: Option<mpsc::UnboundedSender<TlsSocketCommand>>,
     #[allow(dead_code)] // captured socket local address for future localAddress exposure
     local_addr: Option<SocketAddr>,
@@ -438,7 +432,6 @@ fn tls_server_connection_started(server_id: i64) -> bool {
         return false;
     }
     server.active_connections += 1;
-    server.refresh_activity();
     true
 }
 
@@ -449,7 +442,6 @@ fn tls_server_connection_finished(server_id: i64) {
             return;
         };
         server.active_connections = server.active_connections.saturating_sub(1);
-        server.refresh_activity();
         let emit = server.closing && server.active_connections == 0 && !server.close_event_queued;
         if emit {
             server.close_event_queued = true;
@@ -469,7 +461,6 @@ fn tls_server_begin_close(server_id: i64) {
         };
         server.listening = false;
         server.closing = true;
-        server.refresh_activity();
         let emit = server.active_connections == 0 && !server.close_event_queued;
         if emit {
             server.close_event_queued = true;
@@ -1052,7 +1043,6 @@ unsafe fn failed_server_socket(server_handle: i64, servername: Option<String>) -
     sockets().lock().unwrap().insert(
         socket_id,
         TlsSocketState {
-            _activity: crate::common::activity::Reference::new(&TLS_ACTIVE, false),
             cmd_tx: None,
             local_addr: None,
             peer_addr: None,
@@ -1383,7 +1373,6 @@ pub unsafe extern "C" fn js_tls_create_server(options_bits: i64, listener_bits: 
     servers().lock().unwrap().insert(
         id,
         TlsServerState {
-            activity: crate::common::activity::Reference::new(&TLS_ACTIVE, false),
             shutdown_tx: None,
             bound_port: 0,
             bound_host: String::new(),
@@ -1432,7 +1421,6 @@ pub unsafe extern "C" fn js_tls_tlssocket_constructor(socket_bits: i64, options_
     sockets().lock().unwrap().insert(
         handle,
         TlsSocketState {
-            _activity: crate::common::activity::Reference::new(&TLS_ACTIVE, false),
             cmd_tx: None,
             local_addr: None,
             peer_addr: None,
@@ -1496,7 +1484,6 @@ pub unsafe extern "C" fn js_tls_server_listen(
         server.active_connections = 0;
         server.closing = false;
         server.close_event_queued = false;
-        server.refresh_activity();
         let cb = pointer_addr(f64_from_raw_bits(callback_bits)).unwrap_or(0) as i64;
         if cb != 0 {
             register_listener(handle, "listening".to_string(), cb, true);
@@ -1522,7 +1509,6 @@ pub unsafe extern "C" fn js_tls_server_listen(
                 push_tls_event(PendingTlsEvent::ServerClose(server_id));
                 if let Some(server) = servers().lock().unwrap().get_mut(&server_id) {
                     server.listening = false;
-                    server.refresh_activity();
                 }
                 return;
             }
@@ -1577,7 +1563,6 @@ pub unsafe extern "C" fn js_tls_server_listen(
                                         sockets().lock().unwrap().insert(
                                             socket_id,
                                             TlsSocketState {
-                                                _activity: crate::common::activity::Reference::new(&TLS_ACTIVE, true),
                                                 cmd_tx: Some(tx),
                                                 local_addr,
                                                 peer_addr,
@@ -1608,7 +1593,6 @@ pub unsafe extern "C" fn js_tls_server_listen(
                                         sockets().lock().unwrap().insert(
                                             socket_id,
                                             TlsSocketState {
-                                                _activity: crate::common::activity::Reference::new(&TLS_ACTIVE, false),
                                                 cmd_tx: None,
                                                 local_addr,
                                                 peer_addr,
@@ -1894,10 +1878,3 @@ static KEEP_TLS_FFI: KeepTlsFfi<23> = KeepTlsFfi([
     js_tls_socket_set_max_send_fragment as *const (),
     js_tls_process_pending as *const (),
 ]);
-
-impl TlsServerState {
-    fn refresh_activity(&mut self) {
-        self.activity
-            .set(self.listening || (self.closing && self.active_connections > 0));
-    }
-}

@@ -845,10 +845,6 @@ pub(crate) unsafe fn dispatch_method(handle: i64, method: &str, args: &[f64]) ->
             "ref" | "unref" => {
                 if let Some(server) = servers().lock().unwrap().get_mut(&handle) {
                     server.refed = method == "ref";
-                    if let Some(native) = crate::statics::servers().lock().unwrap().get_mut(&handle) {
-                        native.refed = server.refed;
-                        native.refresh_activity();
-                    }
                 }
                 perry_ffi::notify_main_thread();
                 undefined()

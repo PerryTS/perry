@@ -612,9 +612,7 @@ pub extern "C" fn js_ext_net_destroy_socket(handle: i64) {
     let mut sockets = statics::sockets().lock().unwrap();
     if let Some(s) = sockets.get_mut(&handle) {
         s.destroyed = true;
-        s.refresh_activity();
         s.is_open = false;
-        s.refresh_activity();
         let _ = s.cmd_tx.send(crate::SocketCommand::Destroy);
     }
 }

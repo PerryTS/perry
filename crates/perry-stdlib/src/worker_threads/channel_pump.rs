@@ -61,7 +61,6 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
                     {
                         state.refed = false;
                     }
-                    state.refresh_activity();
                     MessageDispatch {
                         target_bits: state.object_bits,
                         raw_cbs,
@@ -159,7 +158,6 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
                 state.inbox.pop_front().map(|msg| {
                     let event_cbs = state.message_event_cbs.clone();
                     state.message_event_cbs.retain(|listener| !listener.once);
-                    state.refresh_activity();
                     BroadcastDispatch {
                         target_bits: state.object_bits,
                         event_cbs,
@@ -224,7 +222,6 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
         for state in ports.borrow_mut().values_mut() {
             if state.close_pending {
                 state.close_pending = false;
-                state.refresh_activity();
                 let raw_cbs = state.close_cbs.clone();
                 state.close_cbs.retain(|listener| !listener.once);
                 let event_cbs = state.close_event_cbs.clone();
@@ -279,5 +276,57 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
 /// `message` listener with queued or potentially-incoming messages (#3157).
 #[no_mangle]
 pub extern "C" fn js_worker_threads_channels_has_pending() -> i32 {
-    super::channel_activity::has_pending()
+    let pending_without_onmessage = MESSAGE_PORTS.with(|ports| {
+        ports.borrow().values().any(|state| {
+            let has_event_target = state.started
+                && (!state.message_cbs.is_empty() || !state.message_event_cbs.is_empty());
+            (!state.closed && !state.inbox.is_empty() && has_event_target) || state.close_pending
+        })
+    });
+    if pending_without_onmessage {
+        return 1;
+    }
+
+    let onmessage_targets: Vec<u64> = MESSAGE_PORTS.with(|ports| {
+        ports
+            .borrow()
+            .values()
+            .filter_map(|state| {
+                (!state.closed && !state.inbox.is_empty()).then_some(state.object_bits)
+            })
+            .collect()
+    });
+    if onmessage_targets
+        .into_iter()
+        .any(|target_bits| object_event_handler(target_bits, "onmessage").is_some())
+    {
+        return 1;
+    }
+
+    let broadcast_pending = BROADCAST_CHANNELS.with(|channels| {
+        channels.borrow().values().any(|state| {
+            !state.closed && !state.inbox.is_empty() && !state.message_event_cbs.is_empty()
+        })
+    });
+    if broadcast_pending {
+        return 1;
+    }
+
+    let broadcast_onmessage_targets: Vec<u64> = BROADCAST_CHANNELS.with(|channels| {
+        channels
+            .borrow()
+            .values()
+            .filter_map(|state| {
+                (!state.closed && !state.inbox.is_empty()).then_some(state.object_bits)
+            })
+            .collect()
+    });
+    if broadcast_onmessage_targets
+        .into_iter()
+        .any(|target_bits| object_event_handler(target_bits, "onmessage").is_some())
+    {
+        1
+    } else {
+        0
+    }
 }

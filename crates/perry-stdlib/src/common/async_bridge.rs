@@ -173,10 +173,7 @@ fn ensure_gc_scanner_registered() {
 }
 
 /// A pending promise resolution (for simple values that don't need conversion)
-static PENDING_NATIVE_COUNT: AtomicUsize = AtomicUsize::new(0);
-
 struct PendingResolution {
-    _activity: crate::common::activity::Reference,
     /// Pointer to the Promise object (as usize for Send)
     promise_ptr: usize,
     /// True if resolved successfully, false if rejected
@@ -188,7 +185,6 @@ struct PendingResolution {
 /// A deferred promise resolution with a conversion callback
 /// The converter function runs on the main thread to safely create JSValues
 struct DeferredResolution {
-    _activity: crate::common::activity::Reference,
     /// Pointer to the Promise object (as usize for Send)
     promise_ptr: usize,
     /// True if resolved successfully, false if rejected
@@ -265,10 +261,10 @@ where
     F: Future<Output = ()> + Send + 'static,
 {
     ensure_pump_registered();
-    let inflight = InflightGuard::new();
+    EXT_BLOCKING_TASKS_INFLIGHT.fetch_add(1, Ordering::AcqRel);
     RUNTIME.spawn(async move {
-        let _inflight = inflight;
         future.await;
+        EXT_BLOCKING_TASKS_INFLIGHT.fetch_sub(1, Ordering::AcqRel);
         // Notify in case the future resolved without going through
         // `queue_promise_resolution` — flip the active-handle gate
         // so the loop re-evaluates.
@@ -357,7 +353,6 @@ pub fn drive_pending(budget_ms: u64) {
 /// the durable signal the tick re-checks), which is what keeps stale permits from
 /// making every tick return instantly without parking on the reactor.
 extern "C" fn stdlib_wait_wake() {
-    super::wait_driver::wake();
     EVENT_READY.notify_waiters();
 }
 
@@ -382,10 +377,6 @@ extern "C" fn stdlib_fast_drive() {
     if !native {
         return;
     }
-    run_native_fast_tick();
-}
-
-pub(super) fn run_native_fast_tick() {
     RUNTIME.block_on(async {
         let notified = EVENT_READY.notified();
         tokio::pin!(notified);
@@ -417,7 +408,6 @@ pub fn queue_promise_resolution(promise_ptr: usize, is_success: bool, result_bit
     {
         let mut pending = PENDING_RESOLUTIONS.lock().unwrap();
         pending.push(PendingResolution {
-            _activity: crate::common::activity::Reference::new(&PENDING_NATIVE_COUNT, true),
             promise_ptr,
             is_success,
             result_bits,
@@ -446,7 +436,6 @@ where
     {
         let mut pending = PENDING_DEFERRED.lock().unwrap();
         pending.push(DeferredResolution {
-            _activity: crate::common::activity::Reference::new(&PENDING_NATIVE_COUNT, true),
             promise_ptr,
             is_success,
             converter: Box::new(converter),
@@ -483,11 +472,16 @@ pub fn ensure_pump_registered() {
         // any async work spawns, so the first `js_wait_for_event` after a spawn
         // already drives the runtime. Forcing RUNTIME now also constructs it on
         // the main thread up front.
-        install_legacy_wait_driver();
+        perry_runtime::event_pump::js_register_wait_driver(
+            Some(stdlib_wait_driver),
+            Some(stdlib_fast_drive),
+            Some(stdlib_wait_wake),
+        );
+        Lazy::force(&RUNTIME);
         unsafe {
             js_register_stdlib_pump(js_stdlib_process_pending);
             js_register_stdlib_has_active(js_stdlib_has_active_handles);
-            js_register_stdlib_next_wake(super::wait_driver::next_wake_ms);
+            js_register_stdlib_next_wake(crate::readline::js_readline_next_wake_ms);
             // Wire up the runtime-level HANDLE_METHOD_DISPATCH so that
             // generic `jsObject.method(args)` calls on stdlib handle types
             // (net.Socket, Fastify, ioredis) fall back to the right FFI
@@ -654,8 +648,18 @@ pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
     if EXT_BLOCKING_TASKS_INFLIGHT.load(Ordering::Acquire) != 0 {
         return 1;
     }
-    if PENDING_NATIVE_COUNT.load(Ordering::Acquire) != 0 {
-        return 1;
+    // Check for pending stdlib resolutions
+    {
+        let pending = PENDING_RESOLUTIONS.lock().unwrap();
+        if !pending.is_empty() {
+            return 1;
+        }
+    }
+    {
+        let pending = PENDING_DEFERRED.lock().unwrap();
+        if !pending.is_empty() {
+            return 1;
+        }
     }
     // Check for active WebSocket servers/connections
     #[cfg(feature = "websocket")]
@@ -758,9 +762,8 @@ where
     // `spawn()` above — bump INFLIGHT for the lifetime of the
     // future so the event loop's `js_stdlib_has_active_handles`
     // check stays truthy until the resolution is queued.
-    let inflight = InflightGuard::new();
+    EXT_BLOCKING_TASKS_INFLIGHT.fetch_add(1, Ordering::AcqRel);
     RUNTIME.spawn(async move {
-        let _inflight = inflight;
         match future.await {
             Ok(result_bits) => {
                 queue_promise_resolution(ptr, true, result_bits);
@@ -777,6 +780,7 @@ where
                 });
             }
         }
+        EXT_BLOCKING_TASKS_INFLIGHT.fetch_sub(1, Ordering::AcqRel);
         perry_runtime::event_pump::js_notify_main_thread();
     });
 }
@@ -813,9 +817,8 @@ where
 
     // Issue #921: same race-window mitigation as `spawn_for_promise`
     // above — bump INFLIGHT for the lifetime of the future.
-    let inflight = InflightGuard::new();
+    EXT_BLOCKING_TASKS_INFLIGHT.fetch_add(1, Ordering::AcqRel);
     RUNTIME.spawn(async move {
-        let _inflight = inflight;
         match future.await {
             Ok(data) => {
                 // Queue deferred resolution with the converter
@@ -833,6 +836,7 @@ where
                 });
             }
         }
+        EXT_BLOCKING_TASKS_INFLIGHT.fetch_sub(1, Ordering::AcqRel);
         perry_runtime::event_pump::js_notify_main_thread();
     });
 }
@@ -864,13 +868,13 @@ pub unsafe fn spawn_for_promise_deferred_with_error<T, E, F, C, R>(
     let ptr = promise_ptr as usize;
     pin_promise_for_native_resolution(ptr);
 
-    let inflight = InflightGuard::new();
+    EXT_BLOCKING_TASKS_INFLIGHT.fetch_add(1, Ordering::AcqRel);
     RUNTIME.spawn(async move {
-        let _inflight = inflight;
         match future.await {
             Ok(data) => queue_deferred_resolution(ptr, true, move || converter(data)),
             Err(error) => queue_deferred_resolution(ptr, false, move || reject_converter(error)),
         }
+        EXT_BLOCKING_TASKS_INFLIGHT.fetch_sub(1, Ordering::AcqRel);
         perry_runtime::event_pump::js_notify_main_thread();
     });
 }
@@ -948,13 +952,11 @@ mod tests {
         let deferred_promise_ptr = 0x1234_6000usize;
         let result_bits = 0x7FFD_0000_1234_7000u64;
         PENDING_RESOLUTIONS.lock().unwrap().push(PendingResolution {
-            _activity: crate::common::activity::Reference::new(&PENDING_NATIVE_COUNT, true),
             promise_ptr,
             is_success: true,
             result_bits,
         });
         PENDING_DEFERRED.lock().unwrap().push(DeferredResolution {
-            _activity: crate::common::activity::Reference::new(&PENDING_NATIVE_COUNT, true),
             promise_ptr: deferred_promise_ptr,
             is_success: true,
             converter: Box::new(|| 0),
@@ -971,88 +973,5 @@ mod tests {
         assert!(emitted.contains(&result_bits));
         assert!(emitted.contains(&(0x7FFD_0000_0000_0000 | deferred_promise_ptr as u64)));
         clear_pending();
-    }
-}
-
-/// O(1) P0 transitional native-work predicate, including protocol child tasks.
-#[cfg(not(feature = "tokio-wait-driver"))]
-pub(super) fn native_inflight() -> bool {
-    EXT_BLOCKING_TASKS_INFLIGHT.load(Ordering::Acquire) != 0
-        || Lazy::get(&RUNTIME).is_some_and(|runtime| runtime.metrics().num_alive_tasks() != 0)
-}
-
-/// Install the P0-transitional driver for native work and legacy worker callers.
-pub(super) fn install_legacy_wait_driver() {
-    perry_runtime::event_pump::js_register_wait_driver(
-        Some(stdlib_wait_driver),
-        Some(stdlib_fast_drive),
-        Some(stdlib_wait_wake),
-    );
-}
-
-/// One reference from submission through completion, panic, or task cancellation.
-/// Construct outside the future so cancellation before its first poll balances.
-pub(crate) struct InflightGuard;
-
-impl InflightGuard {
-    pub(crate) fn new() -> Self {
-        EXT_BLOCKING_TASKS_INFLIGHT.fetch_add(1, Ordering::AcqRel);
-        Self
-    }
-}
-
-impl Drop for InflightGuard {
-    fn drop(&mut self) {
-        let previous = EXT_BLOCKING_TASKS_INFLIGHT.fetch_sub(1, Ordering::AcqRel);
-        debug_assert!(previous > 0, "native in-flight counter underflow");
-        perry_runtime::event_pump::js_notify_main_thread();
-    }
-}
-
-#[cfg(test)]
-mod inflight_tests {
-    use super::*;
-    #[test]
-    fn native_counter_balances_success_error_and_cancel_before_first_poll() {
-        let baseline = EXT_BLOCKING_TASKS_INFLIGHT.load(Ordering::Acquire);
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        for fail in [false, true] {
-            let guard = InflightGuard::new();
-            assert_eq!(
-                EXT_BLOCKING_TASKS_INFLIGHT.load(Ordering::Acquire),
-                baseline + 1
-            );
-            let task = runtime.spawn(async move {
-                let _guard = guard;
-                if fail {
-                    Err(())
-                } else {
-                    Ok(())
-                }
-            });
-            assert_eq!(runtime.block_on(task).unwrap().is_err(), fail);
-            assert_eq!(
-                EXT_BLOCKING_TASKS_INFLIGHT.load(Ordering::Acquire),
-                baseline
-            );
-        }
-        let guard = InflightGuard::new();
-        let task = runtime.spawn(async move {
-            let _guard = guard;
-            std::future::pending::<()>().await;
-        });
-        assert_eq!(
-            EXT_BLOCKING_TASKS_INFLIGHT.load(Ordering::Acquire),
-            baseline + 1
-        );
-        task.abort();
-        assert!(runtime.block_on(task).unwrap_err().is_cancelled());
-        assert_eq!(
-            EXT_BLOCKING_TASKS_INFLIGHT.load(Ordering::Acquire),
-            baseline
-        );
     }
 }

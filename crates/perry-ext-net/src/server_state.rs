@@ -350,7 +350,6 @@ pub(crate) fn mark_socket_closed(socket_id: i64) {
         return;
     };
     socket.is_open = false;
-    socket.refresh_activity();
     socket.bytes_queued = 0;
     let Some(server_id) = socket.server_id.take() else {
         return;
@@ -374,8 +373,22 @@ pub(crate) fn remove_server(server_id: i64) {
 /// servers need the runtime event loop to stay alive. Constructed but
 /// unlistened sockets/servers match Node by not keeping the process alive.
 pub(crate) fn has_active_handles() -> bool {
-    crate::ACTIVE_HANDLES.load(std::sync::atomic::Ordering::Acquire) != 0
-        || !statics::pending_events().lock().unwrap().is_empty()
+    if !statics::pending_events().lock().unwrap().is_empty() {
+        return true;
+    }
+    if statics::sockets().lock().unwrap().values().any(|socket| {
+        socket.refed && !socket.destroyed && (socket.is_open || socket.pending_rx.is_none())
+    }) {
+        return true;
+    }
+    statics::servers()
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(id, server)| {
+            (server.listening || server.shutdown_tx.is_some())
+                && crate::bun_tcp::server_keeps_alive(*id)
+        })
 }
 
 #[no_mangle]

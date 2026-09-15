@@ -1935,8 +1935,8 @@ pub extern "C" fn js_readline_stdin_destroy() -> f64 {
 // ---------------------------------------------------------------------------
 
 mod pump;
+pub(crate) use pump::js_readline_next_wake_ms;
 pub use pump::{js_readline_has_active, js_readline_process_pending};
-pub(crate) use pump::{js_readline_next_wake_ms, next_deadline};
 
 // ---------------------------------------------------------------------------
 // Tests

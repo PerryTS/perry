@@ -130,7 +130,6 @@ pub extern "C" fn js_worker_threads_process_pending() -> i32 {
                 let (terminate_promise, async_resources) =
                     if let Some(worker) = WORKERS.lock().unwrap().get_mut(&worker_id) {
                         worker.alive = false;
-                        worker.activity.set(false);
                         (
                             worker.terminate_promise.take(),
                             Some(worker.async_resources),
@@ -198,8 +197,11 @@ pub extern "C" fn js_worker_threads_has_pending() -> i32 {
     let eof = STDIN_EOF.with(|eof| *eof.borrow());
     let has_messages = PENDING_MESSAGES.with(|q| !q.borrow().is_empty());
     let has_worker_events = !PARENT_EVENTS.lock().unwrap().is_empty();
-    let has_live_refed_worker =
-        super::WORKER_ACTIVE.load(std::sync::atomic::Ordering::Acquire) != 0;
+    let has_live_refed_worker = WORKERS
+        .lock()
+        .unwrap()
+        .values()
+        .any(|worker| worker.alive && worker.refed);
 
     if has_messages || has_worker_events || has_live_refed_worker || (started && !eof) {
         1

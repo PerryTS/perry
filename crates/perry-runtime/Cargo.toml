@@ -494,7 +494,3 @@ encoding_rs = "0.8"
 # binaries for launch time; `watch_fsevents.rs` binds FSEvents via dlopen.
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 notify.workspace = true
-
-# Native P0 wait driver; web/WASI retain their existing host integration.
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-turnloop = "=0.1.0-alpha.2"

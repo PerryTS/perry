@@ -13,6 +13,7 @@ use super::*;
 pub(super) fn message_port_object(port_id: u64) -> *mut perry_runtime::object::ObjectHeader {
     let obj = perry_runtime::object::js_object_alloc(0, 0);
     set_object_prototype(obj, constructor_prototype("MessagePort"));
+    let object_bits = object_value(obj).to_bits();
     set_object_field(obj, "constructor", get_global_constructor("MessagePort"));
     set_object_field(
         obj,
@@ -85,14 +86,11 @@ pub(super) fn message_port_object(port_id: u64) -> *mut perry_runtime::object::O
         port_bound_closure(port_has_ref as *const u8, 0, port_id),
     );
     set_object_field(obj, "__perryPortId", f64::from_bits(port_id));
+    set_object_field(obj, "onmessage", js_null());
     set_object_field(obj, "onmessageerror", js_null());
-    let obj = super::channel_activity::install_handler(obj, port_id, false);
-    let object_bits = object_value(obj).to_bits();
     MESSAGE_PORTS.with(|ports| {
         if let Some(state) = ports.borrow_mut().get_mut(&port_id) {
             state.object_bits = object_bits;
-            state.handler_present = false;
-            state.refresh_activity();
         }
     });
     obj
@@ -101,7 +99,6 @@ pub(super) fn message_port_object(port_id: u64) -> *mut perry_runtime::object::O
 /// port.postMessage(value) — deliver to the peer port's inbox (#3157).
 extern "C" fn port_post_message(closure: *const ClosureHeader, value: f64, _transfer: f64) -> f64 {
     let port_id = port_id_from_closure(closure);
-    let _activity = super::channel_activity::PortChange::new(port_id);
     if port_id == PARENT_PORT_HANDLE as u64 && CURRENT_WORKER_ID.with(|id| id.get()) != 0 {
         return js_worker_threads_post_message(value);
     }
@@ -146,7 +143,6 @@ fn port_add_node_listener(
     once: bool,
 ) -> f64 {
     let port_id = port_id_from_closure(closure);
-    let _activity = super::channel_activity::PortChange::new(port_id);
     let event_name = string_value_to_string(event).unwrap_or_default();
     if port_id == PARENT_PORT_HANDLE as u64 && CURRENT_WORKER_ID.with(|id| id.get()) != 0 {
         let callback_ptr = perry_runtime::value::js_nanbox_get_pointer(callback) as i64;
@@ -155,7 +151,6 @@ fn port_add_node_listener(
     let Some(cb_bits) = callback_bits_from_value(callback) else {
         return js_undefined();
     };
-    let _activity = super::channel_activity::PortChange::new(port_id);
     // A program that only uses MessageChannel never calls spawn_for_promise, so
     // the runtime pump would otherwise never be registered and `main` would
     // return before any queued `message` is delivered. Register it here (mirrors
@@ -206,7 +201,6 @@ fn port_add_node_listener(
 /// port.off(event) / removeListener (#3157).
 extern "C" fn port_off(closure: *const ClosureHeader, event: f64, callback: f64) -> f64 {
     let port_id = port_id_from_closure(closure);
-    let _activity = super::channel_activity::PortChange::new(port_id);
     let event_name = string_value_to_string(event).unwrap_or_default();
     if port_id == PARENT_PORT_HANDLE as u64 && CURRENT_WORKER_ID.with(|id| id.get()) != 0 {
         match event_name.as_str() {
@@ -245,7 +239,6 @@ extern "C" fn port_off(closure: *const ClosureHeader, event: f64, callback: f64)
 
 extern "C" fn port_listener_count(closure: *const ClosureHeader, event: f64) -> f64 {
     let port_id = port_id_from_closure(closure);
-    let _activity = super::channel_activity::PortChange::new(port_id);
     let event_name = string_value_to_string(event).unwrap_or_default();
     MESSAGE_PORTS.with(|ports| {
         let ports = ports.borrow();
@@ -276,7 +269,6 @@ extern "C" fn port_add_event_listener(
     options: f64,
 ) -> f64 {
     let port_id = port_id_from_closure(closure);
-    let _activity = super::channel_activity::PortChange::new(port_id);
     let event_name = string_value_to_string(event).unwrap_or_default();
     let Some(cb_bits) = callback_bits_from_value(callback) else {
         return js_undefined();
@@ -330,7 +322,6 @@ extern "C" fn port_remove_event_listener(
     callback: f64,
 ) -> f64 {
     let port_id = port_id_from_closure(closure);
-    let _activity = super::channel_activity::PortChange::new(port_id);
     let event_name = string_value_to_string(event).unwrap_or_default();
     let Some(cb_bits) = callback_bits_from_value(callback) else {
         return js_undefined();
@@ -362,7 +353,6 @@ extern "C" fn port_remove_event_listener(
 /// port.start() — enable delivery of queued messages to the listener (#3157).
 extern "C" fn port_start(closure: *const ClosureHeader) -> f64 {
     let port_id = port_id_from_closure(closure);
-    let _activity = super::channel_activity::PortChange::new(port_id);
     MESSAGE_PORTS.with(|ports| {
         if let Some(state) = ports.borrow_mut().get_mut(&port_id) {
             state.started = true;
@@ -373,7 +363,6 @@ extern "C" fn port_start(closure: *const ClosureHeader) -> f64 {
 
 extern "C" fn port_ref(closure: *const ClosureHeader) -> f64 {
     let port_id = port_id_from_closure(closure);
-    let _activity = super::channel_activity::PortChange::new(port_id);
     let has_handler = MESSAGE_PORTS.with(|ports| {
         ports
             .borrow()
@@ -393,7 +382,6 @@ extern "C" fn port_ref(closure: *const ClosureHeader) -> f64 {
 
 extern "C" fn port_unref(closure: *const ClosureHeader) -> f64 {
     let port_id = port_id_from_closure(closure);
-    let _activity = super::channel_activity::PortChange::new(port_id);
     let has_handler = MESSAGE_PORTS.with(|ports| {
         ports
             .borrow()
@@ -413,7 +401,6 @@ extern "C" fn port_unref(closure: *const ClosureHeader) -> f64 {
 
 extern "C" fn port_has_ref(closure: *const ClosureHeader) -> f64 {
     let port_id = port_id_from_closure(closure);
-    let _activity = super::channel_activity::PortChange::new(port_id);
     let has_handler = MESSAGE_PORTS.with(|ports| {
         let ports = ports.borrow();
         ports
@@ -437,7 +424,6 @@ extern "C" fn port_has_ref(closure: *const ClosureHeader) -> f64 {
 /// port.close() — mark closed and queue `close` events on both ends (#3157).
 extern "C" fn port_close(closure: *const ClosureHeader) -> f64 {
     let port_id = port_id_from_closure(closure);
-    let _activity = super::channel_activity::PortChange::new(port_id);
     let peer_id = MESSAGE_PORTS.with(|ports| ports.borrow().get(&port_id).map(|state| state.peer));
     MESSAGE_PORTS.with(|ports| {
         let mut ports = ports.borrow_mut();

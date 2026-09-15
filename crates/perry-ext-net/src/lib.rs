@@ -220,11 +220,7 @@ pub(crate) mod statics {
 /// in the shared `statics::listeners()` map keyed by the server's id;
 /// reusing the socket listener map keeps the GC scanner walk single-
 /// pass instead of needing a second per-server scanner.
-pub(crate) static ACTIVE_HANDLES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-
 pub(crate) struct ServerState {
-    pub(crate) activity: perry_ffi::activity::Reference,
-    pub(crate) refed: bool,
     pub async_id: u64,
     /// Set by `.listen()`, dropped by `.close()`. Send on this channel
     /// to break the accept loop's `tokio::select!`.
@@ -243,7 +239,6 @@ pub(crate) struct ServerState {
 }
 
 pub(crate) struct SocketState {
-    activity: perry_ffi::activity::Reference,
     pub(crate) tcp_async_id: u64,
     pub(crate) connect_async_id: u64,
     pub(crate) shutdown_async_id: u64,
@@ -290,7 +285,6 @@ impl SocketState {
     /// command-path test, which only needs `cmd_tx` to reach `run_socket_task`.
     pub(crate) fn for_test(cmd_tx: mpsc::UnboundedSender<SocketCommand>) -> Self {
         SocketState {
-            activity: perry_ffi::activity::Reference::new(&ACTIVE_HANDLES, true),
             tcp_async_id: 0,
             connect_async_id: 0,
             shutdown_async_id: 0,
@@ -545,7 +539,6 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
     statics::sockets().lock().unwrap().insert(
         id,
         SocketState {
-            activity: perry_ffi::activity::Reference::new(&ACTIVE_HANDLES, false),
             tcp_async_id,
             connect_async_id: 0,
             shutdown_async_id: 0,
@@ -598,8 +591,6 @@ pub unsafe extern "C" fn js_net_create_server(
     statics::servers().lock().unwrap().insert(
         id,
         ServerState {
-            activity: perry_ffi::activity::Reference::new(&ACTIVE_HANDLES, false),
-            refed: true,
             async_id: 0,
             shutdown_tx: None,
             bound_port: 0,
@@ -705,12 +696,10 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
         };
         s.async_id = server_async_id;
         s.shutdown_tx = Some(shutdown_tx);
-        s.refresh_activity();
         s.bound_port = port_u16;
         s.bound_host = host.clone();
         s.bound_path = path.clone();
         s.listening = true;
-        s.refresh_activity();
     }
 
     // Stash the listen-callback under `'listening'` so the pump fires
@@ -754,7 +743,6 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
                 if let Ok(mut servers) = statics::servers().lock() {
                     if let Some(s) = servers.get_mut(&server_id) {
                         s.listening = false;
-                        s.refresh_activity();
                     }
                 }
                 return;
@@ -835,7 +823,6 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
         if let Ok(mut servers) = statics::servers().lock() {
             if let Some(s) = servers.get_mut(&server_id) {
                 s.listening = false;
-                s.refresh_activity();
             }
         }
     });
@@ -868,7 +855,6 @@ pub unsafe extern "C" fn js_net_server_close(handle: i64, callback_i64: i64) {
     if let Ok(mut servers) = statics::servers().lock() {
         if let Some(s) = servers.get_mut(&handle) {
             s.shutdown_tx.take();
-            s.refresh_activity();
         }
     }
 }
@@ -985,7 +971,7 @@ pub unsafe extern "C" fn js_net_socket_method_connect(
     let (rx, tcp_async_id) = {
         let mut guard = statics::sockets().lock().unwrap();
         match guard.get_mut(&handle) {
-            Some(socket) => match socket.take_pending_rx() {
+            Some(socket) => match socket.pending_rx.take() {
                 Some(rx) => (rx, socket.tcp_async_id),
                 None => {
                     push_event(PendingNetEvent::Error(
@@ -1032,7 +1018,6 @@ pub unsafe extern "C" fn js_net_socket_method_connect(
             let remote = tcp.peer_addr().ok();
             if let Some(s) = statics::sockets().lock().unwrap().get_mut(&handle) {
                 s.is_open = true;
-                s.refresh_activity();
                 s.local_addr = local;
                 s.remote_addr = remote;
             }
@@ -1085,7 +1070,6 @@ where
     statics::sockets().lock().unwrap().insert(
         id,
         SocketState {
-            activity: perry_ffi::activity::Reference::new(&ACTIVE_HANDLES, true),
             tcp_async_id,
             connect_async_id,
             shutdown_async_id: 0,
@@ -1159,7 +1143,6 @@ where
 
             if let Some(s) = statics::sockets().lock().unwrap().get_mut(&id) {
                 s.is_open = true;
-                s.refresh_activity();
                 s.local_addr = local;
                 s.raw_fd = raw_fd;
                 s.remote_addr = remote;
@@ -1601,20 +1584,3 @@ pub use handle_exports::{
 
 #[cfg(test)]
 mod tests;
-
-
-impl SocketState {
-    pub(crate) fn refresh_activity(&mut self) {
-        self.activity.set(self.refed && !self.destroyed && (self.is_open || self.pending_rx.is_none()));
-    }
-    pub(crate) fn take_pending_rx(&mut self) -> Option<mpsc::UnboundedReceiver<SocketCommand>> {
-        let receiver = self.pending_rx.take();
-        self.refresh_activity();
-        receiver
-    }
-}
-impl ServerState {
-    pub(crate) fn refresh_activity(&mut self) {
-        self.activity.set(self.refed && (self.listening || self.shutdown_tx.is_some()));
-    }
-}
