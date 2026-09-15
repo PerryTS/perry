@@ -73,3 +73,63 @@ pub extern "C" fn perry_ffi_spawn_async(_ctx: *mut c_void) {}
 // this crate's test binaries pulls the extern in with it.
 #[no_mangle]
 pub extern "C" fn perry_ffi_run_pending(_budget_ms: u64) {}
+
+// P5: `perry-ext-net`'s TLS layer holds an `'upgradeToTLS'` promise as a
+// `JsNativeAsyncCompletion` (the runtime's pinned, root-scanned handle — #9552
+// — rather than a bare `*mut Promise` in a side table). ext-net's own shims are
+// `#[cfg(test)]`, so they exist only in ITS test binary; this crate links
+// ext-net as an ordinary rlib and therefore has to satisfy the same symbols in
+// its own. Synchronous no-ops: nothing in this crate's unit tests settles one.
+
+#[no_mangle]
+pub extern "C" fn perry_ffi_native_async_new(_flags: u32) -> *mut perry_ffi::NativeAsyncCompletion {
+    std::ptr::null_mut()
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ffi_native_async_promise(
+    _token: *mut perry_ffi::NativeAsyncCompletion,
+) -> *mut perry_ffi::Promise {
+    std::ptr::null_mut()
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ffi_native_async_resolve_bits(
+    _token: *mut perry_ffi::NativeAsyncCompletion,
+    _bits: u64,
+) -> i32 {
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ffi_native_async_reject_bits(
+    _token: *mut perry_ffi::NativeAsyncCompletion,
+    _bits: u64,
+) -> i32 {
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ffi_native_async_reject_string(
+    _token: *mut perry_ffi::NativeAsyncCompletion,
+    _data: *const u8,
+    _len: usize,
+) -> i32 {
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ffi_native_async_cancel(
+    _token: *mut perry_ffi::NativeAsyncCompletion,
+) -> i32 {
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ffi_native_async_attach_handle(
+    _token: *mut perry_ffi::NativeAsyncCompletion,
+    _handle_bits: u64,
+    _cleanup_flags: u32,
+) -> i32 {
+    0
+}

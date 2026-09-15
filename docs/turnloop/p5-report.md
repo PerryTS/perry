@@ -324,6 +324,44 @@ changed (`net`'s composite handle dispatch has no `write` row, and the listener
 reaches the socket as an untyped value). Worth its own issue; the migration
 reproduces the existing behaviour exactly.
 
+### `server.keepAliveTimeout`, against the oracle
+
+`test-files/test_gap_turnloop_keepalive_timeout.ts`, run on both:
+
+| `keepAliveTimeout` | `keepAliveTimeoutBuffer` | Perry | Node |
+|---|---|---|---|
+| 300 | 0 | `keep-alive`, `timeout=0`, closed on schedule | identical |
+| 300 | 1000 | `keep-alive`, `timeout=0`, closed on schedule | identical |
+| 1000 | 1000 | `keep-alive`, `timeout=1`, closed on schedule | identical |
+| 0 | 1000 | `keep-alive`, **no** `Keep-Alive` header, **never closed** | identical |
+
+That is the answer to P0's open question, and it is also the live test of the
+new `NET_TIMER` deadline: without it the idle close would never fire and every
+finite row would read `closed=false`.
+
+### GC stress with requests in flight
+
+```
+PERRY_GC_DIAG=1 PERRY_GC_SCHEDULE_SEED=<1|7|12345> PERRY_GC_SCHEDULE_RATE=1 \
+PERRY_GC_SCHEDULE_ALLOC_KB=0 PERRY_GC_PROTECT_FROMSPACE=1 \
+PERRY_GC_PROTECT_FROMSPACE_DEPTH=800 PERRY_LOOP_STATS=1 ./test_gap_turnloop_http_server
+```
+
+Clean on all three seeds, and the instruments prove they were **armed** rather
+than merely quiet:
+
+- **343** `[gc-fromspace-protect] retired_set=#N` lines — copying minors really
+  ran and their from-space really was quarantined and `mprotect`ed. A run with
+  zero copying minors protects nothing and would have passed vacuously;
+- 13,244 `[gc…]` diagnostic lines;
+- **`completions=209`** on the same run, so those collections landed while
+  socket operations were in flight;
+- no SIGSEGV from the quarantine reporter: no stale from-space pointer was
+  dereferenced, and the whole exchange still printed its expected output.
+
+All three seeds report identical counts, which is the documented behaviour at
+`RATE=1`: every handled safepoint collects, so the seed stops selecting.
+
 ### `PERRY_LOOP_STATS` and thread count, before and after
 
 A server answering 20 requests from an in-process client, reporting its own
