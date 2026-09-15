@@ -71,10 +71,22 @@
       "why": "Vec of server-handle registry ids drained by js_node_http_server_process_pending to fire 'connection' listeners; the listeners themselves are in HttpServer.listeners, scanned by scan_http_server_roots."
     },
     {
+      "file": "crates/perry-ext-http/src/server/server.rs",
+      "name": "TURNLOOP_UPGRADES",
+      "verdict": "not_a_gc_pointer",
+      "why": "turnloop P5. `HttpPendingUpgrade` carries only handle ids (i64) and an owned `Vec<u8>` of the bytes that followed the request head — no NaN-boxed value and no heap pointer. Carrying ids rather than closure addresses is deliberate: #8082 showed that a snapshot parked in a queue goes stale across a moving collection, so the dispatcher re-reads the listeners from the server handle, whose side tables scan_http_server_roots does rewrite."
+    },
+    {
       "file": "crates/perry-ext-http/src/server/server/in_flight.rs",
       "name": "IN_FLIGHT",
       "verdict": "not_a_gc_pointer",
       "why": "InFlightRequest = three perry-ffi registry handle ids + a deadline Instant. The JS-value-bearing objects behind the ids (IncomingMessage/ServerResponse) are registered handles scanned by scan_http_server_roots via iter_handles_of_mut."
+    },
+    {
+      "file": "crates/perry-ext-http/src/server/turnloop_serve/conn.rs",
+      "name": "CONNS",
+      "verdict": "not_a_gc_pointer",
+      "why": "turnloop P5. A `Conn` holds the connection's decoded head/body bytes as owned `Vec<u8>`s, a `turnloop_http::http1` decoder/encoder, and the two handle ids (i64) of the request it produced. No NaN-boxed value and no heap pointer ever enters it — the IncomingMessage / ServerResponse payloads those ids name are scanned by scan_http_server_roots, which is what makes the id-only rule sufficient."
     },
     {
       "file": "crates/perry-ext-net/src/bun_tcp.rs",
@@ -107,22 +119,23 @@
       "why": "Drain-side reusable Vec<PendingNetEvent> inside js_ext_net_drain_pending; same payload as P (ids/Bytes/strings), emptied within the drain call. No JS values."
     },
     {
-      "file": "crates/perry-ext-net/src/turnloop_io.rs",
-      "name": "AUX",
-      "verdict": "not_a_gc_pointer",
-      "why": "HashMap<i64 socket HANDLE, Aux> holding the per-socket state the turnloop transport needs and SocketState has no field for: whether the peer's FIN arrived before the 'connection' callback, whether the post-EOF shutdown should be followed by a close, and whether an 'error' and a 'close' have been emitted -- plus the server_state::begin_local_connect reservation, a server HANDLE and a bool. Rule S fires on those i64s; every one is a handle-band id used to look a record up in crate::statics::sockets() or servers(), never a heap address and never dereferenced. No JS value reaches this map: read bytes are copied into a Bytes before the sink returns and write bytes were already owned Vecs. forget_aux removes the entry on the terminal close."
-    },
-    {
       "file": "crates/perry-ext-net/src/tls.rs",
       "name": "ABORTS",
       "verdict": "not_a_gc_pointer",
       "why": "HashSet<i64> of pending TLS abort handles. Each i64 is a socket HANDLE -- the key used to look the socket up in crate::statics::sockets() and the payload of PendingNetEvent::AbortError/Close -- i.e. an index into the handle side table, stable across collection, not a heap address. The set holds no other field, so there is nothing for a scanner to visit."
     },
     {
-      "file": "crates/perry-runtime/src/agent.rs",
-      "name": "CURRENT_AGENT",
+      "file": "crates/perry-ext-net/src/turnloop_io.rs",
+      "name": "AUX",
       "verdict": "not_a_gc_pointer",
-      "why": "The calling thread's JS-agent id, an integer (Cell<Option<AgentId>>, AgentId = u64) set once at worker entry and never cleared (agent.rs:75). It names a heap; it never holds a pointer into one. It stopped being reached incidentally by a registered scanner when turnloop P3 moved the timer root walk behind timer::store::with_current, whose generic closure the call-graph walk does not follow -- the holder itself did not change."
+      "why": "HashMap<i64 socket HANDLE, Aux> holding the per-socket state the turnloop transport needs and SocketState has no field for: whether the peer's FIN arrived before the 'connection' callback, whether the post-EOF shutdown should be followed by a close, and whether an 'error' and a 'close' have been emitted -- plus the server_state::begin_local_connect reservation, a server HANDLE and a bool; and, since P5, whether the write side was already ended, whether the readable EOF was already delivered, and a pending `tls.connect` request (a servername String, a bool and a TlsClientConfigData of owned PEM/DER byte vectors). Rule S fires on those i64s; every one is a handle-band id used to look a record up in crate::statics::sockets() or servers(), never a heap address and never dereferenced. No JS value reaches this map: read bytes are copied into a Bytes before the sink returns and write bytes were already owned Vecs. forget_aux removes the entry on the terminal close."
+    },
+    {
+      "file": "crates/perry-ext-net/src/turnloop_tls_io.rs",
+      "name": "LAYERS",
+      "verdict": "covered_elsewhere",
+      "scanner": "perry-runtime's native-async completion registry (promise::native_async::scan_native_async_completion_roots_mut), armed by perry_ffi_native_async_new before the token is stored",
+      "why": "turnloop P5. A `Layer` is owned `Vec<u8>` buffers plus ONE JS-visible thing: the `JsNativeAsyncCompletion` token for a pending `socket.upgradeToTLS()` promise. That is deliberately a native-async token and not a bare `*mut Promise` cached here — the runtime creates such a promise cross-thread-pinned and root-scans it until settlement (#9552), so the pointer in this table is one the collector already knows about. Settling or dropping the layer releases it."
     },
     {
       "file": "crates/perry-ext-parcel-watcher/src/lib.rs",
@@ -135,6 +148,12 @@
       "name": "WARNED",
       "verdict": "not_a_gc_pointer",
       "why": "HashSet of perry-ffi registry handle ids already found stale, kept only to log each once. Registry ids are indices into the ffi DashMap, not heap addresses."
+    },
+    {
+      "file": "crates/perry-runtime/src/agent.rs",
+      "name": "CURRENT_AGENT",
+      "verdict": "not_a_gc_pointer",
+      "why": "The calling thread's JS-agent id, an integer (Cell<Option<AgentId>>, AgentId = u64) set once at worker entry and never cleared (agent.rs:75). It names a heap; it never holds a pointer into one. It stopped being reached incidentally by a registered scanner when turnloop P3 moved the timer root walk behind timer::store::with_current, whose generic closure the call-graph walk does not follow -- the holder itself did not change."
     },
     {
       "file": "crates/perry-runtime/src/alloc_census.rs",

@@ -56,6 +56,9 @@ pub const NET_SHUTDOWN: i32 = 6;
 pub const NET_CLOSED: i32 = 7;
 /// An operation failed; `code`/`errno`/`syscall` carry Node's triple.
 pub const NET_ERROR: i32 = 8;
+/// A subsystem-owned deadline expired (P5). `id` names the deadline, which is
+/// the caller's own id — a connection's, not a socket handle's.
+pub const NET_TIMER: i32 = 9;
 
 /// One completion, in the shape a separately linked binding can read.
 ///
@@ -140,6 +143,10 @@ impl NetCompletion {
             bytes.as_ptr()
         };
         c
+    }
+
+    pub(super) fn timer(id: i64) -> Self {
+        Self::blank(NET_TIMER, id)
     }
 
     pub(super) fn eof(id: i64) -> Self {

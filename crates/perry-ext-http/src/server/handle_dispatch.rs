@@ -988,13 +988,20 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
         // `write()` then errors its callback with `ERR_STREAM_DESTROYED`
         // rather than buffering (see `js_node_http_res_write_with_cb`).
         "destroy" => {
-            if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+            let turnloop = get_handle_mut::<ServerResponse>(handle).and_then(|sr| {
                 sr.destroyed = true;
                 sr.transport_destroyed
                     .store(true, std::sync::atomic::Ordering::Release);
                 if let Some(close) = sr.connection_close.as_ref() {
                     close.notify_one();
                 }
+                sr.turnloop
+            });
+            // P5: the turnloop twin of dropping the pinned hyper connection —
+            // the socket closes immediately and an in-flight request gets a
+            // reset, which is what Node's `socket.destroy()` does.
+            if let Some((conn, _)) = turnloop {
+                crate::server::turnloop_serve::destroy_connection(conn);
             }
             self_ref
         }

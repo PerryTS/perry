@@ -394,6 +394,62 @@ pub extern "C" fn js_perry_net_queued_bytes(id: i64) -> usize {
     super::queued_bytes(id)
 }
 
+/// Arm — or move — a subsystem-owned one-shot deadline `delay_ms` from now
+/// (P5). `id` is the caller's own id for the deadline, from the same shared
+/// allocator socket ids come from, so it cannot collide with one.
+///
+/// # Safety
+/// `err` must be null or writable.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_timer_arm(
+    id: i64,
+    subsystem: i32,
+    delay_ms: u64,
+    err: *mut PerryNetError,
+) -> i32 {
+    if subsystem < 0 || subsystem as usize >= super::MAX_SUBSYSTEMS {
+        return finish(
+            Err(super::map_error(
+                turnloop::Error::new(turnloop::ErrorKind::InvalidInput),
+                "timer",
+            )),
+            err,
+        );
+    }
+    finish(super::timer_arm(id, subsystem as u8, delay_ms), err)
+}
+
+/// Hand a live socket to another subsystem, keeping its id (P5).
+///
+/// # Safety
+/// `err` must be null or writable.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_transfer(
+    id: i64,
+    subsystem: i32,
+    err: *mut PerryNetError,
+) -> i32 {
+    if subsystem < 0 {
+        return finish(
+            Err(super::map_error(
+                turnloop::Error::new(turnloop::ErrorKind::InvalidInput),
+                "transfer",
+            )),
+            err,
+        );
+    }
+    finish(super::transfer(id, subsystem as u8), err)
+}
+
+/// Cancel a deadline. Idempotent.
+///
+/// # Safety
+/// `err` must be null or writable.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_timer_cancel(id: i64, err: *mut PerryNetError) -> i32 {
+    finish(super::timer_cancel(id), err)
+}
+
 /// Nonzero when `id` names a live turnloop-backed handle on this thread.
 #[no_mangle]
 pub extern "C" fn js_perry_net_is_live(id: i64) -> i32 {

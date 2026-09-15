@@ -2153,7 +2153,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2724,7 +2724,7 @@ dependencies = [
  "gobject-sys 0.22.6",
  "libc",
  "system-deps",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3971,7 +3971,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5979,6 +5979,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "h2",
+ "http",
  "http-body-util",
  "httpdate",
  "hyper",
@@ -6000,6 +6001,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite",
+ "turnloop-http",
  "webpki-roots 1.0.9",
  "x509-cert",
 ]
@@ -6088,6 +6090,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-rustls",
+ "turnloop-tls",
 ]
 
 [[package]]
@@ -7748,7 +7751,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9267,7 +9270,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9806,6 +9809,52 @@ dependencies = [
  "wasm-bindgen",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "turnloop-http"
+version = "0.1.0-alpha.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d6e677c4ef07deebb4ba782d3532b52bd93d0bc5d188b82e62eb0919d0f544d7"
+dependencies = [
+ "base64 0.22.1",
+ "brotli",
+ "bytes",
+ "flate2",
+ "http",
+ "httparse",
+ "percent-encoding",
+ "turnloop-tls",
+ "turnloop-zstd-decoder",
+ "url",
+ "zstd",
+]
+
+[[package]]
+name = "turnloop-tls"
+version = "0.1.0-alpha.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7164073896ac12daa05990b5cdb7f12b958e7825950599229bfd071349cc694"
+dependencies = [
+ "ring",
+ "rustls",
+ "rustls-pki-types",
+ "webpki-roots 1.0.9",
+]
+
+[[package]]
+name = "turnloop-zstd-decoder"
+version = "0.1.0-alpha.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d81b65167c410f28293d6790f9e559f7e0674aecf7f3d0102d0f68e37493037"
+dependencies = [
+ "twox-hash",
+]
+
+[[package]]
+name = "twox-hash"
+version = "2.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5283634e518fe9e82c7b20520bb4bc209009fd16c82077c802f8111ecbb0117a"
 
 [[package]]
 name = "typed-builder"
@@ -10465,7 +10514,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -16,6 +16,11 @@ perry-ffi.workspace = true
 # Server-side HTTP/1.1, HTTPS, HTTP/2, and WebSocket upgrade support.
 perry-ext-ws.workspace = true
 perry-ext-net.workspace = true
+# P5: the sans-I/O HTTP/1.1 codec that replaces hyper's parser and framer on
+# the turnloop server path (`server/turnloop_serve`). Default features only —
+# see that module's header for why `turnloop_http::asynchronous` is not used.
+turnloop-http.workspace = true
+http = "1"
 hyper = { workspace = true, features = ["server", "http1", "http2"] }
 hyper-util = { workspace = true, features = ["server", "server-auto", "tokio"] }
 h2 = "0.4"

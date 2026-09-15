@@ -134,3 +134,95 @@ fn on_and_once_combine_then_once_drops() {
     // The `once` listener is gone; only the persistent one remains.
     assert_eq!(take_event_listeners(&mut sr, "finish"), vec![1]);
 }
+
+// ── P5: `keepAliveTimeout = 0` means "never time out", not "no keep-alive" ──
+//
+// Node 26.5.1, measured with a raw socket client (`docs/turnloop/p5-report.md`
+// carries the numbers): `keepAliveTimeout = 0` answers `Connection:
+// keep-alive` with **no** `Keep-Alive` header and never closes the idle
+// connection; a finite timeout answers `Keep-Alive: timeout=floor(ms/1000)`
+// and FINs at `keepAliveTimeout + keepAliveTimeoutBuffer`. Perry used to fold
+// the reuse decision and the timeout together, so a zero timeout produced
+// `Connection: close` on every response and no reuse at all.
+
+fn shape_with(headers: Vec<(String, String)>) -> HyperResponseShape {
+    HyperResponseShape {
+        status: 200,
+        status_message: None,
+        response_version: None,
+        headers,
+        trailers: Vec::new(),
+        body: ShapeBody::Full(Vec::new()),
+        auto_content_length: false,
+    }
+}
+
+fn header_of<'a>(shape: &'a HyperResponseShape, name: &str) -> Option<&'a str> {
+    shape
+        .headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(name))
+        .map(|(_, v)| v.as_str())
+}
+
+#[test]
+fn keep_alive_timeout_zero_keeps_the_connection_and_omits_the_header() {
+    let mut shape = shape_with(Vec::new());
+    shape.apply_default_connection_headers_for(1, None, 0.0);
+    assert_eq!(header_of(&shape, "connection"), Some("keep-alive"));
+    assert_eq!(
+        header_of(&shape, "keep-alive"),
+        None,
+        "a disabled timeout advertises none"
+    );
+}
+
+#[test]
+fn a_finite_keep_alive_timeout_advertises_whole_seconds() {
+    let mut shape = shape_with(Vec::new());
+    shape.apply_default_connection_headers_for(1, None, 5_000.0);
+    assert_eq!(header_of(&shape, "connection"), Some("keep-alive"));
+    assert_eq!(header_of(&shape, "keep-alive"), Some("timeout=5"));
+
+    // Node floors: 300 ms reports `timeout=0` and still keeps the connection.
+    let mut sub_second = shape_with(Vec::new());
+    sub_second.apply_default_connection_headers_for(1, None, 300.0);
+    assert_eq!(header_of(&sub_second, "connection"), Some("keep-alive"));
+    assert_eq!(header_of(&sub_second, "keep-alive"), Some("timeout=0"));
+}
+
+#[test]
+fn an_explicit_close_request_still_closes_whatever_the_timeout_is() {
+    let mut shape = shape_with(Vec::new());
+    shape.apply_default_connection_headers_for(1, Some("close"), 0.0);
+    assert_eq!(header_of(&shape, "connection"), Some("close"));
+    assert_eq!(header_of(&shape, "keep-alive"), None);
+}
+
+#[test]
+fn http_10_needs_an_explicit_keep_alive_request() {
+    let mut implicit = shape_with(Vec::new());
+    implicit.apply_default_connection_headers_for(0, None, 5_000.0);
+    assert_eq!(header_of(&implicit, "connection"), Some("close"));
+
+    let mut explicit = shape_with(Vec::new());
+    explicit.apply_default_connection_headers_for(0, Some("keep-alive"), 5_000.0);
+    assert_eq!(header_of(&explicit, "connection"), Some("keep-alive"));
+    assert_eq!(header_of(&explicit, "keep-alive"), Some("timeout=5"));
+}
+
+#[test]
+fn a_handler_set_connection_header_is_never_overridden() {
+    let mut shape = shape_with(vec![("Connection".to_string(), "upgrade".to_string())]);
+    shape.apply_default_connection_headers_for(1, None, 5_000.0);
+    assert_eq!(header_of(&shape, "connection"), Some("upgrade"));
+    assert_eq!(header_of(&shape, "keep-alive"), None);
+}
+
+#[test]
+fn http_2_carries_no_connection_header_at_all() {
+    let mut shape = shape_with(Vec::new());
+    shape.apply_default_connection_headers_for(2, None, 5_000.0);
+    assert_eq!(header_of(&shape, "connection"), None);
+    assert_eq!(header_of(&shape, "keep-alive"), None);
+}

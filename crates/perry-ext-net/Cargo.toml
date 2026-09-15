@@ -21,6 +21,10 @@ tokio = { workspace = true }
 # lockfile via tokio/rustls, so declaring it pulls nothing new.
 bytes.workspace = true
 tokio-rustls.workspace = true
+# P5: the sans-I/O rustls core (and Node error-code mapping) that drives TLS
+# over a turnloop socket — `turnloop_tls.rs`. Re-exports the same rustls 0.23
+# this crate already links, so the config types unify.
+turnloop-tls.workspace = true
 rustls.workspace = true
 rustls-native-certs = "0.8"
 serde_json.workspace = true

@@ -81,6 +81,27 @@ struct Aux {
     /// `PendingNetEvent::Close` has been pushed. Node emits `'close'` AFTER
     /// `'error'`, so this guards double-emission — never emission itself.
     closed_emitted: bool,
+    /// `socket.end()` has already submitted the write-side shutdown. Node's
+    /// `allowHalfOpen: false` close on `'end'` must NOT submit a second one: a
+    /// second `shutdown(2)` on a socket whose peer has gone answers `ENOTCONN`,
+    /// which reached JS as a spurious `'error'` — visible on the TLS upgrade
+    /// path, where `end()` always precedes the peer's FIN, and latent on a
+    /// plain socket with the same ordering.
+    write_ended: bool,
+    /// That shutdown has completed, which means every write queued ahead of it
+    /// has left. Until then the socket must not be closed: `Loop::close`
+    /// cancels outstanding operations, so closing here would cancel exactly
+    /// the writes an `'end'` handler just issued (P1's third behaviour note).
+    shutdown_done: bool,
+    /// The readable EOF has been delivered. A TLS socket can reach it twice —
+    /// the peer's `close_notify` and then the TCP FIN — and Node emits
+    /// `'end'` exactly once.
+    eof_emitted: bool,
+    /// P5: `tls.connect` asked for TLS from byte zero. The session is
+    /// installed the instant the connect completes and before `'connect'` is
+    /// pushed, which is the ordering the tokio path got by handshaking before
+    /// it pushed the event.
+    direct_tls: Option<(String, bool, crate::TlsClientConfigData)>,
 }
 
 fn aux() -> &'static Mutex<std::collections::HashMap<i64, Aux>> {
@@ -141,7 +162,17 @@ pub(crate) fn command(
     cmd: SocketCommand,
     queued_out: &mut Option<u64>,
 ) -> Result<(), String> {
+    let secure = crate::turnloop_tls_io::installed(id);
     match cmd {
+        SocketCommand::Write(bytes, completion) if secure => {
+            match crate::turnloop_tls_io::write(id, &bytes, completion) {
+                Ok(queued) => {
+                    *queued_out = Some(queued as u64);
+                    Ok(())
+                }
+                Err(message) => Err(message),
+            }
+        }
         SocketCommand::Write(bytes, completion) => match tl::write(id, &bytes, completion) {
             Ok(queued) => {
                 *queued_out = Some(queued as u64);
@@ -149,7 +180,17 @@ pub(crate) fn command(
             }
             Err(err) => Err(err.message()),
         },
-        SocketCommand::End(completion) => tl::shutdown(id, completion).map_err(|e| e.message()),
+        // `end()` on a TLS socket sends close_notify first; the FIN is queued
+        // behind it so the peer sees an orderly shutdown rather than a
+        // truncation attack.
+        SocketCommand::End(completion) if secure => {
+            with_aux(id, |a| a.write_ended = true);
+            crate::turnloop_tls_io::shutdown(id, completion)
+        }
+        SocketCommand::End(completion) => {
+            with_aux(id, |a| a.write_ended = true);
+            tl::shutdown(id, completion).map_err(|e| e.message())
+        }
         SocketCommand::Destroy => tl::close(id).map_err(|e| e.message()),
         // TCP_NODELAY is settable on a turnloop socket only at creation
         // (`TcpOpts`), which covers the paths P1 moves. An accepted connection
@@ -163,9 +204,12 @@ pub(crate) fn command(
             release_deferred_eof(id);
             Ok(())
         }
-        // Only `UpgradeTls` (and the test-only probe) reach this, and a
-        // turnloop socket is never TLS-upgradable.
-        _ => Err("TLS upgrade is unsupported on a turnloop socket".to_string()),
+        // P5: `UpgradeTls` never reaches here — `js_net_socket_upgrade_tls`
+        // and `tls::begin_tls_upgrade` branch on the transport and install a
+        // `turnloop_tls_io` layer directly, because the upgrade's result is a
+        // promise settled on the loop thread rather than a channel reply.
+        // Anything else is a command with no turnloop meaning.
+        _ => Err("unsupported socket command on a turnloop socket".to_string()),
     }
 }
 
@@ -208,6 +252,7 @@ fn emit_close_once(id: i64) {
     if with_aux(id, |a| std::mem::replace(&mut a.closed_emitted, true)) {
         return;
     }
+    crate::turnloop_tls_io::forget(id);
     if !raw_bridge::mark_terminal(id, None) {
         push_event(PendingNetEvent::Close(id));
     }
@@ -234,6 +279,20 @@ pub(crate) fn finish_read_end(id: i64) {
     if !with_aux(id, |a| std::mem::replace(&mut a.read_ended, false)) {
         return;
     }
+    // The application already ended the writable side inside its `'end'`
+    // handler, so the shutdown is submitted and there is nothing to ask for
+    // again (a second `shutdown(2)` answers `ENOTCONN`). Whether the socket may
+    // close *now* is the whole question: closing while that shutdown is still
+    // outstanding cancels the writes queued ahead of it, which is how a
+    // `socket.write()` from an `'end'` handler went missing.
+    if with_aux(id, |a| a.write_ended) {
+        if with_aux(id, |a| a.shutdown_done) {
+            destroy(id);
+        } else {
+            with_aux(id, |a| a.close_after_shutdown = true);
+        }
+        return;
+    }
     // Queue the shutdown BEHIND whatever the `'end'` handler just wrote, and
     // close only when it completes. turnloop orders a handle's writes and its
     // shutdown, so a completed shutdown means every queued byte left — while
@@ -249,9 +308,41 @@ pub(crate) fn note_local_connect(id: i64, local_server: Option<(i64, bool)>) {
     with_aux(id, |a| a.local_server = local_server);
 }
 
+/// Record that this connecting socket is a `tls.connect`, so the handshake
+/// starts as soon as the connect completes.
+pub(crate) fn note_direct_tls(
+    id: i64,
+    servername: String,
+    verify: bool,
+    config: crate::TlsClientConfigData,
+) {
+    with_aux(id, |a| a.direct_tls = Some((servername, verify, config)));
+}
+
 /// Start a local (Unix socket / named pipe) client connect.
 pub(crate) fn connect_pipe(id: i64, path: &str) -> Result<(), tl::NetError> {
     tl::pipe_connect(id, SUBSYSTEM, path)
+}
+
+/// Start an outbound TCP client connect.
+///
+/// P1 deliberately left this class on tokio: `socket.upgradeToTLS` moved a
+/// live `TcpStream` into `tokio_rustls`, turnloop owns its descriptor without
+/// exposing it, and a socket's transport is fixed at creation — so a client
+/// that *might* be upgraded could not be created on turnloop. P5 removes the
+/// premise rather than the restriction: TLS now runs above the turnloop handle
+/// (`turnloop_tls_io`), so nothing has to move and the class comes over.
+///
+/// A hostname is resolved by the driver off the loop thread, which is the
+/// property `TcpStream::connect(&str)` had and a `to_socket_addrs()` here
+/// would have silently lost.
+pub(crate) fn connect_tcp(
+    id: i64,
+    host: &str,
+    port: u16,
+    nodelay: bool,
+) -> Result<(), tl::NetError> {
+    tl::tcp_connect(id, SUBSYSTEM, host, port, nodelay)
 }
 
 /// Bind, listen and start accepting on a TCP server.
@@ -324,6 +415,16 @@ fn on_connect(id: i64) {
         }
     }
     let local_server = with_aux(id, |a| a.local_server.take());
+    if let Some((servername, verify, config)) = with_aux(id, |a| a.direct_tls.take()) {
+        if let Err(message) =
+            crate::turnloop_tls_io::begin_client_upgrade(id, servername, verify, config, None)
+        {
+            server_state::cancel_pending_connection(id);
+            push_event(PendingNetEvent::Error(id, message));
+            destroy(id);
+            return;
+        }
+    }
     push_event(PendingNetEvent::Connect(id, local_server));
     start_reading(id);
 }
@@ -363,6 +464,24 @@ fn on_data(id: i64, bytes: &[u8]) {
     if bytes.is_empty() {
         return;
     }
+    // A TLS socket receives ciphertext. Decrypting here, inside the dispatch
+    // call on the loop thread, keeps the rule that no JS value and no heap
+    // pointer ever reaches the driver: plaintext is an owned `Vec` that the
+    // plaintext path below copies into this crate's read pool exactly as it
+    // would a cleartext read.
+    if let Some(received) = crate::turnloop_tls_io::receive(id, bytes) {
+        if !received.plaintext.is_empty() {
+            deliver_plaintext(id, &received.plaintext);
+        }
+        if received.peer_closed {
+            on_eof(id);
+        }
+        return;
+    }
+    deliver_plaintext(id, bytes);
+}
+
+fn deliver_plaintext(id: i64, bytes: &[u8]) {
     if let Ok(mut sockets) = statics::sockets().lock() {
         if let Some(s) = sockets.get_mut(&id) {
             s.bytes_read += bytes.len() as u64;
@@ -381,7 +500,9 @@ fn on_data(id: i64, bytes: &[u8]) {
 }
 
 fn on_eof(id: i64) {
-    if with_aux(id, |a| a.closed_emitted || a.errored) {
+    if with_aux(id, |a| {
+        a.closed_emitted || a.errored || std::mem::replace(&mut a.eof_emitted, true)
+    }) {
         return;
     }
     if raw_bridge::mark_terminal(id, None) {
@@ -422,6 +543,9 @@ fn release_deferred_eof(id: i64) {
 }
 
 fn on_shutdown(id: i64, user: u64) {
+    // Every byte queued ahead of the shutdown has left: turnloop orders a
+    // handle's writes before its shutdown.
+    with_aux(id, |a| a.shutdown_done = true);
     push_event(PendingNetEvent::ShutdownComplete(id, user, None));
     if with_aux(id, |a| {
         std::mem::replace(&mut a.close_after_shutdown, false)
@@ -431,6 +555,27 @@ fn on_shutdown(id: i64, user: u64) {
 }
 
 fn on_wrote(id: i64, user: u64, len: usize, queued: usize) {
+    // On a TLS socket `len` is ciphertext and `user` is always zero (the
+    // ciphertext submission is not an application write). The layer maps the
+    // acknowledgement back to the application writes it covers, so
+    // `bytesWritten` stays plaintext and `write(chunk, cb)` still fires when
+    // the bytes have left.
+    if let Some(completed) = crate::turnloop_tls_io::wrote(id, len) {
+        if let Ok(mut sockets) = statics::sockets().lock() {
+            if let Some(s) = sockets.get_mut(&id) {
+                s.bytes_queued = queued as u64;
+                for (_, plain_len) in &completed {
+                    s.bytes_written += *plain_len as u64;
+                }
+            }
+        }
+        for (user, _) in completed {
+            if user != 0 {
+                push_event(PendingNetEvent::WriteComplete(id, user, None));
+            }
+        }
+        return;
+    }
     if let Ok(mut sockets) = statics::sockets().lock() {
         if let Some(s) = sockets.get_mut(&id) {
             s.bytes_written += len as u64;

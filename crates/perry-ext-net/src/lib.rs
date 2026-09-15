@@ -85,7 +85,15 @@ use raw_bridge::RawReadState;
 // `#[no_mangle]` setter/setTimeout symbols re-export at the crate root; the
 // validator `extern` declarations are imported for the listen/connect sites.
 mod adopt;
-pub use adopt::{adopt_upgraded_tcp_stream, ensure_adopted_socket_dispatch};
+pub use adopt::{
+    adopt_turnloop_upgrade, adopt_upgraded_tcp_stream, ensure_adopted_socket_dispatch,
+};
+
+/// This crate's slot in the runtime's turnloop completion-sink registry.
+///
+/// Published so perry-ext-http can `turnloop_net::transfer` an upgraded
+/// connection here by name rather than by a duplicated literal.
+pub const TURNLOOP_SUBSYSTEM: u8 = turnloop_io::SUBSYSTEM;
 mod option_setters;
 pub use option_setters::{
     js_net_server_noop_self, js_net_socket_get_type_of_service, js_net_socket_noop_self,
@@ -131,6 +139,8 @@ use crate::tls::{do_tls_handshake, record_tls_handshake, TlsClientConfigData};
 mod transport;
 /// `node:net` on turnloop handles — the P1 transport (`turnloop_io.rs`).
 mod turnloop_io;
+pub mod turnloop_tls;
+pub mod turnloop_tls_io;
 pub(crate) use transport::Transport;
 
 // ─── Handle storage ──────────────────────────────────────────────────────────
@@ -1271,20 +1281,46 @@ where
         .insert(id, HashMap::new());
     initialize(id);
 
-    // P1 does NOT move the outbound TCP client here, and the reason is
-    // `socket.upgradeToTLS`: it hands a live `TcpStream` to `tokio_rustls`
-    // mid-stream (Postgres' SSLRequest flow, `test_net_upgrade_tls.ts`), and
-    // turnloop owns its descriptor without exposing it — `Detached` has no fd
-    // accessor in 0.1.0-alpha.2 or alpha.3. A socket's transport is fixed at
-    // creation, and whether this one will be upgraded is not knowable then, so
-    // the whole class stays on tokio rather than breaking the upgrade.
+    // P5: the outbound TCP client moves to turnloop. P1 kept it on tokio
+    // because `socket.upgradeToTLS` handed a live `TcpStream` to
+    // `tokio_rustls` mid-stream and turnloop owns its descriptor without
+    // exposing it — so a client that *might* be upgraded could not be created
+    // on the loop. TLS now runs above the turnloop handle
+    // (`turnloop_tls_io`), so the upgrade needs no descriptor at all and the
+    // premise is gone rather than the restriction relaxed.
     //
-    // Every socket that *cannot* be upgraded does move: listeners, accepted
-    // connections, and both ends of a local (UDS / named pipe) connection,
-    // for which the upgrade already reports "unsupported for IPC sockets".
-    // Finishing this class needs one turnloop addition — a way to take a
-    // connected transport back out of the loop (`Detached::into_fd`) or TLS on
-    // turnloop (P5); either closes it.
+    // `tls.connect` (`direct_tls`) comes too: the session is installed on the
+    // socket the moment the connect completes, before `'connect'` is pushed,
+    // which is the same ordering the tokio path produced by handshaking before
+    // it pushed the event.
+    if turnloop_io::enabled() {
+        match turnloop_io::connect_tcp(id, &host, port, true) {
+            Ok(()) => {
+                if let Some(s) = statics::sockets().lock().unwrap().get_mut(&id) {
+                    s.turnloop = true;
+                }
+                turnloop_io::note_local_connect(id, local_server);
+                if let Some((servername, verify, config)) = direct_tls {
+                    turnloop_io::note_direct_tls(id, servername, verify, config);
+                }
+                return id;
+            }
+            // `no_loop` means this thread lost its loop between the
+            // `enabled()` check and the submission: fall through to tokio.
+            Err(err) if !err.no_loop => {
+                server_state::cancel_local_connect(local_server);
+                push_event(PendingNetEvent::Error(
+                    id,
+                    format!("connect {} {}:{}", err.code, host, port),
+                ));
+                push_event(PendingNetEvent::Close(id));
+                mark_closed(id);
+                return id;
+            }
+            Err(_) => {}
+        }
+    }
+
     spawn_socket_runner(move || {
         Box::pin(async move {
             let mut rx = rx;
@@ -1700,26 +1736,44 @@ pub unsafe extern "C" fn js_net_socket_upgrade_tls(
         }
     };
 
-    let cmd_tx = {
+    let (cmd_tx, turnloop) = {
         let sockets = statics::sockets().lock().unwrap();
         match sockets.get(&handle) {
-            // A turnloop-backed socket cannot be upgraded: `tokio_rustls`
-            // needs to own the `TcpStream` and turnloop owns its descriptor
-            // without exposing it. P1 keeps every upgradable socket class on
-            // tokio precisely so this branch is unreachable for TCP clients;
-            // it is reachable for a local (UDS / named-pipe) socket, where
-            // the tokio path already refused the same upgrade.
-            Some(s) if s.turnloop => {
-                promise.reject_string("TLS upgrade is unsupported for IPC sockets");
-                return promise_raw;
-            }
-            Some(s) => s.cmd_tx.clone(),
+            Some(s) => (s.cmd_tx.clone(), s.turnloop),
             None => {
                 promise.reject_string(&format!("socket {} not found", handle));
                 return promise_raw;
             }
         }
     };
+
+    // P5: a turnloop socket upgrades in place. No descriptor changes hands —
+    // the rustls session is installed *above* the same handle, which is why
+    // P1's "turnloop owns its descriptor without exposing it" blocker is gone.
+    // The promise is held by a native-async token rather than a bare
+    // `*mut Promise` in a side table, so the runtime pins and root-scans it
+    // across the collections that happen while the handshake is in flight
+    // (#9552); the token settles on the loop thread, inside the same dispatch
+    // that sees the handshake finish.
+    if turnloop {
+        let token = perry_ffi::JsNativeAsyncCompletion::with_flags(
+            perry_ffi::PERRY_NATIVE_ASYNC_THREAD_MAIN,
+        );
+        let token_promise = token.promise();
+        // The promise minted above is unused on this path; settle it so the
+        // runtime never carries a permanently pending one.
+        promise.resolve_undefined();
+        // `begin_client_upgrade` settles the token on every failure path, so
+        // the caller does not have to get it back to reject it.
+        let _ = turnloop_tls_io::begin_client_upgrade(
+            handle,
+            servername,
+            verify != 0.0,
+            TlsClientConfigData::default(),
+            Some(token),
+        );
+        return token_promise;
+    }
 
     let (reply_tx, reply_rx) = oneshot::channel::<Result<(), String>>();
     let verify_bool = verify != 0.0;
