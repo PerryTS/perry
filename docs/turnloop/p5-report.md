@@ -5,6 +5,22 @@ Branch `turnloop/p5-servers`, based on `turnloop/integration` at `14803019fc`
 (EPYC 9354P) against the pinned gap oracle Node **26.5.1**. Nothing here was run
 on Windows, and nothing was benchmarked.
 
+## Dependencies, added and not removed
+
+`turnloop-http` and `turnloop-tls` 0.1.0-alpha.3 are added (default features
+only). **hyper, hyper-util, h2, tokio-rustls and tokio-tungstenite are NOT
+removed**, and the reason is the fallback table below rather than reluctance: a
+`worker_threads` agent has no loop, a cluster worker needs the `std` listener,
+`http2.createSecureServer` and `perry-ext-fastify` keep their own loops, and an
+attached `WebSocketServer` still completes its handshake with
+`tokio_tungstenite`. Every one of those paths is reachable and exercised, so
+deleting the dependency would delete a working configuration. `reqwest` keeps
+hyper in `perry-ext-http`'s tree regardless until P6.
+
+`turnloop-websocket` is deliberately *not* added: nothing uses it yet (see
+"What P5 did not do"), and an unused workspace dependency is a claim the
+lockfile would then carry.
+
 ## What moved, and what did not
 
 | server surface | transport after P5 | why |
