@@ -211,6 +211,7 @@ pub struct Registry<C: DbCore> {
     connects: Cell<usize>,
     reads: Cell<usize>,
     writes: Cell<usize>,
+    timers: Cell<usize>,
     entries: RefCell<HashMap<i64, Entry<C>>>,
 }
 
@@ -222,6 +223,7 @@ impl<C: DbCore> Registry<C> {
             connects: Cell::new(0),
             reads: Cell::new(0),
             writes: Cell::new(0),
+            timers: Cell::new(0),
             entries: RefCell::new(HashMap::new()),
         }
     }
@@ -316,9 +318,17 @@ impl<C: DbCore> Registry<C> {
         self.entries.borrow().len()
     }
 
-    /// `(connects, reads, writes)` since process start, on this thread.
-    pub fn counters(&self) -> (usize, usize, usize) {
-        (self.connects.get(), self.reads.get(), self.writes.get())
+    /// `(connects, reads, writes, timer arms)` since process start, on this
+    /// thread. `timers` is the one a reader is most likely to need: a protocol
+    /// deadline that never armed is a command timeout that can never fire, and
+    /// nothing else in the process would say so.
+    pub fn counters(&self) -> (usize, usize, usize, usize) {
+        (
+            self.connects.get(),
+            self.reads.get(),
+            self.writes.get(),
+            self.timers.get(),
+        )
     }
 
     /// Hand the core's pending output to turnloop and re-arm its deadline.
@@ -333,14 +343,23 @@ impl<C: DbCore> Registry<C> {
         // The whole body deliberately releases the table borrow before every
         // FFI submission: `abort` re-enters, and a `RefCell` held across it
         // would panic rather than misbehave quietly.
+        //
+        // Output is written only once the transport is up — a core's handshake
+        // bytes are produced by `transport_connected`, not before — but the
+        // deadline and the ref flag are armed either way. A connect that never
+        // completes has a deadline of its own (every core sets one), and
+        // skipping the arm until after the connect would make exactly that
+        // case the one nothing can time out.
         let chunk: Option<Vec<u8>> = {
             let map = self.entries.borrow();
             match map.get(&id) {
-                Some(e) if !e.closing && e.connected => {
+                Some(e) if e.closing => return,
+                Some(e) if e.connected => {
                     let out = e.core.output();
                     (!out.is_empty()).then(|| out.to_vec())
                 }
-                _ => return,
+                Some(_) => None,
+                None => return,
             }
         };
         if let Some(bytes) = chunk {
@@ -379,6 +398,7 @@ impl<C: DbCore> Registry<C> {
         match delay_ms {
             Some(ms) => {
                 if tl::timer_arm(id, self.subsystem, ms).is_ok() {
+                    self.timers.set(self.timers.get() + 1);
                     if let Some(e) = self.entries.borrow_mut().get_mut(&id) {
                         e.timer_armed = true;
                     }
@@ -534,12 +554,13 @@ impl<C: DbCore> Registry<C> {
                 drop(map);
                 if diag() {
                     eprintln!(
-                        "[perry-db] subsystem={} closed id={} connects={} reads={} writes={} live={}",
+                        "[perry-db] subsystem={} closed id={} connects={} reads={} writes={} timer_arms={} live={}",
                         self.subsystem,
                         id,
                         self.connects.get(),
                         self.reads.get(),
                         self.writes.get(),
+                        self.timers.get(),
                         self.entries.borrow().len()
                     );
                 }
