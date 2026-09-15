@@ -61,8 +61,9 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
                 None
             };
             if let Some(handle) = interned.as_ref() {
-                let interned_key = handle.get_raw_const_ptr::<crate::StringHeader>();
-                let probe = super::super::transition_cache_lookup(prev_shape_id, interned_key);
+                let probe = handle.with_const_ptr::<crate::StringHeader, _>(|interned_key| {
+                    super::super::transition_cache_lookup(prev_shape_id, interned_key)
+                });
                 if let Some((next_keys, slot_idx, target_shape_id)) = probe {
                     let live = crate::object::object_live_slot_count(obj);
                     let alloc_limit = std::cmp::max(live, crate::object::INLINE_SLOT_FLOOR as u32);
@@ -101,14 +102,16 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
                     && target_shape_id != prev_shape_id
                     && !published_keys.is_null()
                 {
-                    super::super::transition_cache_insert(
-                        std::ptr::null(),
-                        prev_shape_id,
-                        handle.get_raw_const_ptr::<crate::StringHeader>(),
-                        published_keys as usize,
-                        0,
-                        target_shape_id,
-                    );
+                    handle.with_const_ptr::<crate::StringHeader, _>(|interned_key| {
+                        super::super::transition_cache_insert(
+                            std::ptr::null(),
+                            prev_shape_id,
+                            interned_key,
+                            published_keys as usize,
+                            0,
+                            target_shape_id,
+                        )
+                    });
                 }
             }
             return;
@@ -187,8 +190,9 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
         }
     }
     if let (Some(handle), true) = (interned_handle.as_ref(), prev_shape_id != 0) {
-        let interned = handle.get_raw_const_ptr::<crate::StringHeader>();
-        let probe = super::super::transition_cache_lookup(prev_shape_id, interned);
+        let probe = handle.with_const_ptr::<crate::StringHeader, _>(|interned| {
+            super::super::transition_cache_lookup(prev_shape_id, interned)
+        });
         if let Some((next_keys, slot_idx, target_shape_id)) = probe {
             let live = crate::object::object_live_slot_count(obj);
             let alloc_limit = std::cmp::max(live, crate::object::INLINE_SLOT_FLOOR as u32);
@@ -304,14 +308,16 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
             let published_keys = crate::object::object_keys_array(obj);
             if target_shape_id != 0 && target_shape_id != prev_shape_id && !published_keys.is_null()
             {
-                super::super::transition_cache_insert(
-                    std::ptr::null(),
-                    prev_shape_id,
-                    handle.get_raw_const_ptr::<crate::StringHeader>(),
-                    published_keys as usize,
-                    new_index,
-                    target_shape_id,
-                );
+                handle.with_const_ptr::<crate::StringHeader, _>(|interned_key| {
+                    super::super::transition_cache_insert(
+                        std::ptr::null(),
+                        prev_shape_id,
+                        interned_key,
+                        published_keys as usize,
+                        new_index,
+                        target_shape_id,
+                    )
+                });
             }
         }
     }
