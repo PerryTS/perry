@@ -470,6 +470,31 @@ Reported here in the shape #34, #35 and #38 were.
 8. **`setNoDelay` on an accepted connection** is still unreachable (P1's finding,
    unchanged).
 
+### The full gap suite, against this branch's own base
+
+Both trees built identically (the harness's default package set plus the
+`perry-ext-*` wrappers, in one cargo invocation, with **no**
+`external-*-pump` features — see the environment note below) and run as
+`PERRY_SKIP_BUILD=1 ./scripts/run_gap_tests.sh`.
+
+| | base `14803019fc` | P5 |
+|---|---|---|
+| parity pass | 791 | *(filled below)* |
+| parity fail | 9 | |
+| compile fail | 0 | |
+| crash | 0 | |
+| total | 800 | 803 (+3 new tests) |
+
+The base's nine, none of them touched by this work:
+`2159_defineproperty_class_prototype`, `2514_settracesigint`,
+`2899_2779_2777_static_helpers`, `disposablestack_2875`,
+`iterator_prototype_next_patch`, `json_lazy_defineproperty_index`,
+`perfhooks_3088_3008_3010_3011`, `prop_plan_cache_invalidation`,
+`v8_2_3680plus`. Three of those (`2899_…`, `disposablestack_2875`,
+`iterator_prototype_next_patch`) the committed snapshot expects to PASS, so the
+gate is red on the base commit before P5 changes anything — which is exactly
+why this comparison is against the base rather than against the snapshot.
+
 ## Perry-side defects this work found (not P5 regressions)
 
 Each was reproduced on the base commit's hyper/tokio path too, so they are
