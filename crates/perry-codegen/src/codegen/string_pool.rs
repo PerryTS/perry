@@ -116,6 +116,9 @@ pub(super) fn emit_string_pool(
     class_header_image_inits: &std::collections::HashMap<String, (u32, u64)>,
     class_ids: &HashMap<String, u32>,
     classes: &HashMap<String, &perry_hir::Class>,
+    // Imported class stubs: their ShapeId slots are registered so they follow
+    // the defining module's typed ShapeId (`js_register_imported_class_shape_slot`).
+    imported_class_stubs: &[perry_hir::Class],
     // #5592: user-visible `.name` overrides keyed by ClassId, for classes
     // whose HIR registration key was uniquified away from their JS name.
     class_display_names: &HashMap<u32, String>,
@@ -528,6 +531,10 @@ pub(super) fn emit_string_pool(
     // module init; every `new ClassName()` call from then on does a
     // single global load + inline allocator call (no SHAPE_CACHE
     // lookup, no js_build_class_keys_array overhead).
+    let imported_stub_classes: std::collections::HashSet<String> = imported_class_stubs
+        .iter()
+        .map(|stub| sanitize(&stub.name))
+        .collect();
     for (idx, (global_name, packed, field_count, raw_mask_words, pointer_mask_words)) in
         class_keys_init_data.iter().enumerate()
     {
@@ -665,6 +672,39 @@ pub(super) fn emit_string_pool(
                 "store <2 x i64> {}, ptr {}, align 8",
                 image, image_global
             ));
+        }
+
+        // An imported class's typed ShapeId can only be minted by its defining
+        // module, and that module may initialize AFTER this string pool runs
+        // (this is the entry module, or the two are in an import cycle). Hand
+        // the runtime this module's ShapeId and image slots so it points them
+        // at the typed id whenever it exists; otherwise every instance built
+        // here misses the defining module's exact store guards. The registry
+        // keeps these addresses, so an image that can be unloaded registers
+        // nothing.
+        if strings_outlive_registry
+            && !typed_side_mask
+            && class_id != 0
+            && imported_stub_classes.contains(sanitized_class)
+        {
+            let image_ref = if class_header_image_inits.contains_key(global_name) {
+                format!(
+                    "@{}",
+                    crate::typed_shape::header_image_global_name_from_keys_global(global_name)
+                )
+            } else {
+                "null".to_string()
+            };
+            blk.call_void(
+                "js_register_imported_class_shape_slot",
+                &[
+                    (I32, &cid_str),
+                    (I32, &fc_str),
+                    (PTR, &global_ref),
+                    (PTR, &shape_global),
+                    (PTR, &image_ref),
+                ],
+            );
         }
     }
 

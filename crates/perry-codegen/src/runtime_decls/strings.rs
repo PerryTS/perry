@@ -1172,6 +1172,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         I32,
         &[I32, I64, I32, PTR, I32, PTR, I32],
     );
+    module.declare_function(
+        "js_register_imported_class_shape_slot",
+        VOID,
+        &[I32, I32, PTR, PTR, PTR],
+    );
     // Inline bump-allocator state accessor + slow path. Ordinary allocation
     // kernels cache `js_inline_arena_state` at function entry. Self-recursive
     // allocators resolve it in a public wrapper and forward it as a hidden body

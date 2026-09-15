@@ -88,6 +88,27 @@ struct RegisteredTypedShapes {
     ids_by_layout: crate::fast_hash::FastKeyHashMap<RegisteredTypedShapeKey, u32>,
     /// Bare `u32` ShapeId key -> `PtrHasher` (single multiply + avalanche).
     layouts_by_id: crate::fast_hash::PtrHashMap<u32, TypedLayoutDescriptor>,
+    /// `(class id, slot count)` -> the first typed ShapeId registered for it.
+    /// Read when an importing module registers its compiled ShapeId slots.
+    typed_by_class: std::collections::HashMap<(u32, u32), u32>,
+    /// Importing modules' compiled ShapeId slots still waiting for their
+    /// class's typed ShapeId. See [`js_register_imported_class_shape_slot`].
+    pending_imported: std::collections::HashMap<(u32, u32), Vec<ImportedShapeSlot>>,
+}
+
+/// The ADDRESSES of one importing module's compiled per-class globals: its
+/// keys-array global, its `u32` ShapeId global and, when it composes one, its
+/// `<2 x i64>` inline-`new` header image. All three live in the executable's
+/// data section for the life of the process (codegen registers them only for
+/// images that are never unloaded), and none of them is a heap pointer: the
+/// keys global's CONTENTS are one, rewritten by the collector because codegen
+/// registers that global as a root, and this is only ever read at the moment
+/// of a rewrite.
+#[derive(Clone, Copy)]
+struct ImportedShapeSlot {
+    keys_slot: usize,
+    shape_slot: usize,
+    image_slot: usize,
 }
 
 static REGISTERED_TYPED_SHAPES: std::sync::LazyLock<std::sync::Mutex<RegisteredTypedShapes>> =
@@ -161,6 +182,7 @@ pub extern "C" fn js_gc_typed_shape_id_for_keys(
             eprintln!("Perry internal error: typed ShapeId structural mismatch");
             std::process::abort();
         }
+        publish_to_imported_slots(&mut registered, class_id, slot_count, shape_id);
         return shape_id;
     }
     let shape_id = crate::object::shapes::mint_registered_typed_shape_id(
@@ -169,8 +191,129 @@ pub extern "C" fn js_gc_typed_shape_id_for_keys(
     );
     registered.ids_by_layout.insert(key, shape_id);
     registered.layouts_by_id.insert(shape_id, descriptor);
+    publish_to_imported_slots(&mut registered, class_id, slot_count, shape_id);
     shape_id
 }
+
+/// Point every importing module's compiled ShapeId slot for `class_id` at the
+/// defining module's typed ShapeId, whatever order the modules initialized in.
+///
+/// A module mints the ShapeId of every class it allocates — imported stubs
+/// included — in its string-pool initializer, which runs at the start of that
+/// module's init. Only the DEFINING module can mint #8405's typed id (only it
+/// has the constructor that proves the layout); a consumer mints the ordinary
+/// structural id, and `js_object_shape_id_for_keys` returns the typed id only
+/// if the defining module has already registered it. Whenever a consumer's
+/// string pool runs first — the entry module, whose pool `main` runs before any
+/// dependency init; a module in an import cycle; a deferred module's cycle —
+/// the class carried two identities and every instance the consumer allocated
+/// missed the defining module's exact field-store guards (n.next = m: 2,786
+/// instructions per store against 224).
+///
+/// Codegen therefore registers each imported stub's slots
+/// ([`js_register_imported_class_shape_slot`]), and this rewrites them to the
+/// typed id: immediately if it already exists, otherwise when it is minted.
+///
+/// Soundness: both ids are valid descriptors of the same keys array and slot
+/// count, so every object keeps working whichever id it was born with.
+/// `install_registered_typed_shape_id` checks that structural match against the
+/// consumer's own keys global before any slot is written. The consumer's
+/// header image carries no typed-layout claim for an imported class, so an
+/// instance stamped with the typed id still validates its slots in
+/// `js_gc_init_typed_shape_layout` before it claims `TYPED_LAYOUT_INTACT`.
+/// Instances born before the rewrite keep the ordinary id, which only makes
+/// their exact guards miss onto the runtime fallback. The ShapeId slot is one
+/// `u32` store and the image rewrite one `u64` store of its second word, so a
+/// reader never observes a torn word; a reader that pairs the new id with the
+/// old image (or the reverse) builds an object whose guard misses — slow, not
+/// wrong. The registry lock serializes registration against publication.
+fn publish_to_imported_slots(
+    registered: &mut RegisteredTypedShapes,
+    class_id: u32,
+    slot_count: u32,
+    shape_id: u32,
+) {
+    registered
+        .typed_by_class
+        .entry((class_id, slot_count))
+        .or_insert(shape_id);
+    if let Some(slots) = registered.pending_imported.remove(&(class_id, slot_count)) {
+        for slot in slots {
+            unsafe { rewrite_imported_shape_slot(slot, slot_count, shape_id) };
+        }
+    }
+}
+
+/// # Safety
+/// `slot` must hold the addresses codegen registered: a live `u64` keys global,
+/// a `u32` ShapeId global and a null or `<2 x i64>` header image global.
+unsafe fn rewrite_imported_shape_slot(slot: ImportedShapeSlot, slot_count: u32, shape_id: u32) {
+    let keys = std::ptr::read(slot.keys_slot as *const u64);
+    if keys == 0
+        || !crate::object::shapes::install_registered_typed_shape_id(
+            shape_id,
+            keys as usize as *const crate::array::ArrayHeader,
+            slot_count,
+        )
+    {
+        return;
+    }
+    std::ptr::write(slot.shape_slot as *mut u32, shape_id);
+    if slot.image_slot != 0 {
+        let word = (slot.image_slot as *mut u64).add(1);
+        let class_id_bits = std::ptr::read(word) & 0xFFFF_FFFF;
+        std::ptr::write(word, ((shape_id as u64) << 32) | class_id_bits);
+    }
+}
+
+/// Register an importing module's compiled ShapeId slots for `class_id` so
+/// they follow the defining module's typed ShapeId (see
+/// [`publish_to_imported_slots`]). Called once per imported class stub from
+/// the module's string-pool initializer, after it stored its own id and image.
+///
+/// `keys_slot`, `shape_slot` and `image_slot` are addresses of compiled
+/// globals, never heap pointers; codegen emits this call only for images that
+/// are never unloaded, because the registry keeps the addresses.
+#[no_mangle]
+pub extern "C" fn js_register_imported_class_shape_slot(
+    class_id: u32,
+    slot_count: u32,
+    keys_slot: *const u64,
+    shape_slot: *mut u32,
+    image_slot: *mut u64,
+) {
+    if class_id == 0 || keys_slot.is_null() || shape_slot.is_null() || slot_count >= 16_000_000 {
+        return;
+    }
+    let slot = ImportedShapeSlot {
+        keys_slot: keys_slot as usize,
+        shape_slot: shape_slot as usize,
+        image_slot: image_slot as usize,
+    };
+    let mut registered = registered_typed_shapes();
+    match registered
+        .typed_by_class
+        .get(&(class_id, slot_count))
+        .copied()
+    {
+        Some(shape_id) => unsafe { rewrite_imported_shape_slot(slot, slot_count, shape_id) },
+        None => registered
+            .pending_imported
+            .entry((class_id, slot_count))
+            .or_default()
+            .push(slot),
+    }
+}
+
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_REGISTER_IMPORTED_CLASS_SHAPE_SLOT: extern "C" fn(
+    u32,
+    u32,
+    *const u64,
+    *mut u32,
+    *mut u64,
+) = js_register_imported_class_shape_slot;
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn init_typed_shape_layout(
@@ -483,4 +626,120 @@ pub extern "C" fn js_gc_declare_typed_shape_layout(
         pointer_mask_word_count,
         TypedShapeProof::FreshlyAllocated,
     );
+}
+
+#[cfg(test)]
+mod imported_shape_slot_tests {
+    use super::*;
+
+    fn keys_for(class_id: u32) -> u64 {
+        let packed = b"next\0value\0";
+        crate::object::js_build_class_keys_array(class_id, 2, packed.as_ptr(), packed.len() as u32)
+            as usize as u64
+    }
+
+    struct Slots {
+        keys: Box<u64>,
+        shape: Box<u32>,
+        image: Box<[u64; 2]>,
+    }
+
+    fn slots(class_id: u32) -> Slots {
+        let keys = keys_for(class_id);
+        let ordinary = crate::object::shapes::js_object_shape_id_for_keys(keys, 2);
+        Slots {
+            keys: Box::new(keys),
+            shape: Box::new(ordinary),
+            image: Box::new([0x1234_5678, ((ordinary as u64) << 32) | class_id as u64]),
+        }
+    }
+
+    fn register(class_id: u32, s: &mut Slots) {
+        js_register_imported_class_shape_slot(
+            class_id,
+            2,
+            &*s.keys as *const u64,
+            &mut *s.shape as *mut u32,
+            s.image.as_mut_ptr(),
+        );
+    }
+
+    fn mint(class_id: u32, keys: u64) -> u32 {
+        let raw_mask = [0b10u64];
+        let pointer_mask = [0b01u64];
+        js_gc_typed_shape_id_for_keys(
+            class_id,
+            keys,
+            2,
+            raw_mask.as_ptr(),
+            1,
+            pointer_mask.as_ptr(),
+            1,
+        )
+    }
+
+    fn assert_published(class_id: u32, s: &Slots, typed: u32) {
+        assert_eq!(*s.shape, typed, "the ShapeId slot follows the typed id");
+        assert_eq!(
+            s.image[0], 0x1234_5678,
+            "the consumer's packed word is untouched"
+        );
+        assert_eq!(s.image[1], ((typed as u64) << 32) | class_id as u64);
+    }
+
+    /// The consumer registers first (its string pool ran before the defining
+    /// module's init): the slots are rewritten when the typed id is minted.
+    #[test]
+    fn slots_registered_before_the_typed_id_are_rewritten_at_mint() {
+        let class_id = 0x0B1_1001;
+        let mut s = slots(class_id);
+        let ordinary = *s.shape;
+        register(class_id, &mut s);
+        assert_eq!(*s.shape, ordinary, "nothing typed exists yet");
+        let typed = mint(class_id, *s.keys);
+        assert_ne!(typed, ordinary);
+        assert_published(class_id, &s, typed);
+    }
+
+    /// The defining module initialized first: registration rewrites at once.
+    #[test]
+    fn slots_registered_after_the_typed_id_are_rewritten_immediately() {
+        let class_id = 0x0B1_1002;
+        let mut s = slots(class_id);
+        let typed = mint(class_id, *s.keys);
+        register(class_id, &mut s);
+        assert_published(class_id, &s, typed);
+    }
+
+    /// A slot whose keys global does not hold the typed id's keys array, or
+    /// whose slot count differs, is never rewritten.
+    #[test]
+    fn mismatched_slots_keep_their_ordinary_id() {
+        let class_id = 0x0B1_1003;
+        let other_class = 0x0B1_1004;
+        let mut foreign = slots(other_class);
+        let foreign_ordinary = *foreign.shape;
+        js_register_imported_class_shape_slot(
+            class_id,
+            2,
+            &*foreign.keys as *const u64,
+            &mut *foreign.shape as *mut u32,
+            foreign.image.as_mut_ptr(),
+        );
+        let mut narrow = slots(class_id);
+        let narrow_ordinary = *narrow.shape;
+        js_register_imported_class_shape_slot(
+            class_id,
+            1,
+            &*narrow.keys as *const u64,
+            &mut *narrow.shape as *mut u32,
+            std::ptr::null_mut(),
+        );
+        let _typed = mint(class_id, *narrow.keys);
+        assert_eq!(
+            *foreign.shape, foreign_ordinary,
+            "another class's keys array"
+        );
+        assert_eq!(*narrow.shape, narrow_ordinary, "a different slot count");
+    }
 }
