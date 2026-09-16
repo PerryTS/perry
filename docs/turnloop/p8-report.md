@@ -1,0 +1,717 @@
+# turnloop P8 — taking tokio out: the inventory, and what it would cost
+
+Branch `turnloop/p8-detokio`, based on `turnloop/integration` at `babc5f0d1f`
+(P0–P7 merged, plus `main` through v0.5.1576). Built and tested on the shared
+Linux build box (`perrybuilder`, EPYC 32c/64t) against the pinned gap oracle
+Node **26.5.1** (`/opt/node-v26.5.1-linux-x64/bin`, not the box default
+26.8.1). Nothing here ran on Windows or macOS, and nothing here was
+benchmarked — see "What P8 did not do".
+
+## The verdict, first
+
+**tokio cannot leave Perry's dependency graph in this lane, and it is not
+close.** `Cargo.lock` holds 20 tokio-family packages and the workspace holds
+**46 manifest edges** to them across **16 crates**. Not one of those edges is
+removable by a transport swap: every one is either a surface no lane has
+migrated at all, or the still-reachable fallback of a surface that was
+migrated only for the primary agent.
+
+The count is unchanged by this branch:
+
+```
+$ grep -c '^name = "tokio"' Cargo.lock      # before and after: 1
+$ python3 scripts/tokio_inventory.py
+tokio inventory: 46 manifest edges across 16 workspace crates,
+20 tokio-family packages in Cargo.lock — unchanged.
+```
+
+### One thing that must not wait for the inventory
+
+Building the probe that measures the "a worker agent declines to tokio" claim
+every lane depends on turned up a **regression on this integration branch**:
+`fetch()` inside a `node:worker_threads` Worker answers `status=200` on `main`
+and `error: fetch failed` on `turnloop/integration`. Deterministic, three runs
+on each arm, both built from source here. Full evidence and cause in "Perry
+defects this work found" below. It should be fixed before this branch merges,
+and it is the reason this report leads with it rather than with the table.
+
+### The rest of the lane
+
+So this lane's deliverable is the inventory, and the inventory is a gate rather
+than a paragraph. What it says, in one sentence: **one missing capability — a
+`turnloop::Loop` on an agent that is not the primary one — is why every surface
+P1, P5, P6 and P7 migrated still carries its tokio transport**, and five
+further surfaces (the `node:http` client, HTTP/2, `fastify`, `ws`, and both npm
+HTTP-client wrappers) were never migrated at all.
+
+## Why the inventory is a script and not a section
+
+P0–P7 each ended with a prose list of what it did not move. Those eight lists
+are the only record of the remaining surface, and reading all eight against the
+tree turned up three problems, none of which is a criticism of any individual
+report:
+
+* **They are incomplete, and nothing could tell you.** No lane report names the
+  `perry` CLI, `perry-container-compose` or `perry-ui-gtk4`. Between them those
+  hold **6 of the 46 edges** — a seventh of the problem, invisible because no
+  lane's scope included a crate with no JS surface, and no lane was measuring
+  edges in the first place.
+* **They scope the same blocker differently each time.** Every lane from P1 on
+  says some version of "a worker agent has no loop". None says that it is *one
+  predicate in one function* (`agent_loop::net_available`) that gates net, TLS,
+  the HTTP server, fetch, SMTP and all four database drivers simultaneously —
+  and, as this lane measured, none of them is right about
+  `node:worker_threads`, where the predicate returns the *wrong* answer and the
+  fallback is never taken at all.
+* **They have no number in them.** "What did not move" is a list of names, and
+  a list of names cannot be compared between two commits. A count can.
+
+A migration whose remaining surface is measured by reading eight reports
+written at eight different commits cannot be finished, because nobody can say
+when it is done. So the measurement is now
+[`scripts/tokio_inventory.py`](../../scripts/tokio_inventory.py), and it runs
+in the required `lint` job.
+
+### What it gates
+
+* every **(workspace crate → tokio-family crate) manifest edge**, and
+* every **tokio-family package in `Cargo.lock`**,
+
+compared strictly against `scripts/tokio_inventory.json` **in both
+directions**. A new edge fails, so tokio cannot creep back in behind a green
+build. A *stale* entry fails too — so a lane that removes an edge must delete
+its own line, and the file can never describe a tree that is gone. That is the
+rule `scripts/gc_root_dominance_allowlist.json` already follows, and it is the
+rule that makes an inventory outlive the lane that wrote it.
+
+Edges come from `cargo metadata --no-deps`, not from `cargo tree`, for two
+reasons this tree demonstrates rather than hypothesises:
+
+1. **`cargo tree -i tokio --workspace` reports crates that have no edge.** It
+   names `perry-runtime`, `perry-runtime-static`, `perry-updater`,
+   `perry-ext-node-forge` and `perry-ext-undici` as tokio dependents. None of
+   them is: resolved on its own, **every one of those five reaches no tokio at
+   all** (`cargo tree -i tokio -p perry-runtime --target all` → "did not match
+   any packages"). The workspace-wide hit is feature unification through
+   `timezone_provider → combine`, whose `tokio` feature the `redis` crate turns
+   on. Reading it as an edge overstates the problem by five crates and would
+   send a lane to "de-tokio the runtime", which has nothing to do — the core
+   (`perry-runtime`, `perry-hir`, `perry-codegen`, `perry-ffi`,
+   `perry-db-turnloop`) is already tokio-free.
+2. **`cargo tree` cannot see a target-gated edge on the wrong host.**
+   `perry-ui-gtk4`'s tokio is `cfg(target_os = "linux")`; on the macOS
+   development host it is invisible. An inventory that misses it is not an
+   inventory.
+
+### What it does *not* gate, and why that is said out loud
+
+The per-crate count of tokio-shaped **source lines** is recorded and printed,
+and deliberately not gated: a doc comment naming `tokio::spawn` moves it, so a
+failure would carry no information. An ungated number living in a gate file is
+a number somebody will eventually trust, so the script's docstring says which
+of its two numbers is load-bearing.
+
+## The inventory
+
+Full text — what reaches each edge from JS, when, what blocks it, and where it
+is tracked — is in `scripts/tokio_inventory.json` and renders with
+`python3 scripts/tokio_inventory.py --table`. The summary:
+
+| crate | tokio-family deps | reached from JS by | status |
+|---|---|---|---|
+| `perry` | reqwest, tokio, tokio-tungstenite | **nothing** — the CLI's `publish`/`login`/`verify`/`audit`/`run --remote`/`setup`/update-check | never linked into a compiled program |
+| `perry-container-compose` | tokio (normal + dev) | **nothing** — the separate `perry-compose` binary | not in `full`; no JS surface |
+| `perry-ext-axios` | reqwest, tokio | `import axios` | never migrated |
+| `perry-ext-fetch` | reqwest, tokio | `import 'node-fetch'` (and the bare `fetch` alias) | never migrated; **and see the defect below** |
+| `perry-ext-fastify` | hyper, hyper-util, tokio, tokio-tungstenite | `import Fastify` | never migrated — own accept loop, no edge to perry-ext-http |
+| `perry-ext-http` | h2, hyper, hyper-util, reqwest, tokio, tokio-rustls, tokio-tungstenite | `http`/`https` **client**, `http2` both halves, the server on any declining path, an attached `WebSocketServer` | server migrated for the primary agent (P5); client and HTTP/2 never |
+| `perry-ext-ws` | tokio, tokio-tungstenite | `import WebSocket from 'ws'` | never migrated — tungstenite 0.29 vs turnloop-websocket 0.30 |
+| `perry-ext-net` | tokio, tokio-rustls | `net`/`tls` on a declining path | migrated for the primary agent (P1/P5) |
+| `perry-ext-ioredis` | redis, tokio | `new Redis()` — **including the default configuration** (#10335) | migrated for plaintext on the primary agent (P7) |
+| `perry-ext-pg` / `perry-ext-mysql2` | sqlx, tokio | `pg` / `mysql2` on a declining path, any TLS, a UDS host | migrated for plaintext on the primary agent (P7) |
+| `perry-ext-mongodb` | mongodb, tokio | `MongoClient` on a declining path, `+srv`, `tls=`, replica sets | migrated for direct single-host plaintext (P7) |
+| `perry-ext-nodemailer` | lettre, tokio | `sendMail`/`verify` on a declining path | transport migrated (P6); the MIME builder is lettre forever |
+| `perry-stdlib` | hyper, hyper-util, lettre, mongodb, redis, reqwest, sqlx, tokio, tokio-rustls, tokio-tungstenite (all optional) | the global `fetch` on a declining path, `js_fetch_stream_start`, the bundled TLS server, and every bundled module under `PERRY_DISABLE_WELL_KNOWN=1` | mixed — and `tokio` here is the last edge that can go, not the first |
+| `perry-ui-gtk4` | tokio (`cfg(linux)`) | `perry/ui` tray + MPRIS | `ksni`/`mpris-server` require tokio |
+| `perry-ui-android` | tungstenite (`cfg(android)`) | `perry/ui` WebSocket on Android | **not a tokio edge** — sync tungstenite 0.24 on its own thread |
+
+## The one blocker that gates almost everything
+
+Every lane from P1 on kept its tokio transport "because a worker agent has no
+loop". Stated once, precisely, from the code rather than from the reports:
+
+```rust
+// crates/perry-runtime/src/event_pump/agent_loop.rs:459
+pub(super) fn net_available() -> bool {
+    match STATE.with(Cell::get) {
+        LoopState::Owner => true,
+        LoopState::Declined | LoopState::ShutDown => false,
+        LoopState::Unset => crate::agent::current_agent() == crate::agent::PRIMARY_AGENT,
+    }
+}
+```
+
+`turnloop_net::available()` is that function. `perry-ext-net`,
+`perry-ext-http`'s server, `perry-stdlib`'s fetch bridge, its SMTP bridge and
+all four database drivers gate on it — directly, or through
+`perry_db_turnloop`'s `enabled()`, which calls it. `ensure_loop_with` sets
+`LoopState::Declined` for any thread whose agent is not `PRIMARY_AGENT` and
+never revisits it.
+
+So one missing capability — a loop per agent — is what keeps a tokio
+`TcpStream`, a `reqwest::Client`, a `hyper` server, an `AsyncSmtpTransport`,
+`sqlx`, the `redis` crate and the `mongodb` driver all reachable from ordinary
+JavaScript. **No issue tracks it.** It is the highest-leverage item left in the
+whole migration, and it is a phase (P4 costed it: reshaping `PRIMARY_ROUTE`,
+the notify routing and the keep-alive accounting), not a patch. It also has a
+validation cost nobody has paid: turning it on makes *every* P1/P5/P6/P7
+surface start taking the turnloop path on a `perry/thread` worker for the first
+time, and no lane tested any of them there.
+
+### …and running the probe found that half of it is not even true
+
+The census probe exists because a predicate is a claim and a measurement is
+evidence. Running it produced a result the eight lane reports do not describe:
+
+```
+=== perry, turnloop/integration @ babc5f0d1f ===
+idle:           threads=[wcensus x1]
+primary-agent:  status=200                  threads=[wcensus x1]
+worker-agent:   status=error:fetch failed   threads=[wcensus x2]
+[perry-loop] p6 http_submitted=2 declined=0 completed=1 failed=1 connects=1
+```
+
+`declined=0`. The Worker's fetch **did not decline to reqwest** — it was
+submitted to the turnloop engine, on a thread that cannot own the loop, and
+failed. Node 26.5.1 answers `status=200` on both agents.
+
+The reason is a second predicate nobody has written down.
+`agent::enter_worker_agent()` — the only thing that ever sets `CURRENT_AGENT` —
+is called from exactly three places, all in
+`crates/perry-runtime/src/thread.rs`: `perry/thread`'s `spawn`, `parallelMap`
+and `parallelFilter`. A `node:worker_threads` `Worker` never calls it, so its
+`CURRENT_AGENT` stays `None`, and:
+
+```rust
+// crates/perry-runtime/src/agent.rs:93
+pub fn current_agent() -> AgentId {
+    CURRENT_AGENT.with(|slot| slot.get()).unwrap_or(PRIMARY_AGENT)
+}
+```
+
+**every `worker_threads` Worker reports itself as `PRIMARY_AGENT`.**
+`net_available()` therefore returns `true` on it, `turnloop_client::submit`
+passes its `tl::available()` guard, `SUBMITTED` is incremented, and
+`exchange::start` submits a connect to a loop the thread does not own.
+`ensure_loop_with` does refuse — `PRIMARY_ROUTE` is already held by the main
+thread, so the Worker is marked `LoopState::Declined` — but that happens
+*after* the request was accepted, so the caller gets a failure rather than the
+fallback the design intends.
+
+So the "worker agents decline" story is right for `perry/thread` workers and
+**wrong for `node:worker_threads`**, which is the one a Node program actually
+uses. Both halves matter here and they pull in opposite directions:
+
+* the tokio fallback is *less* reachable on this surface than the inventory
+  would suggest, because nothing declines to it; and
+* it is less reachable because the surface is broken instead, which is worse.
+
+Attribution — whether this predates the turnloop lanes — is in "Perry defects
+this work found" below.
+
+
+## Linked, versus reachable at runtime
+
+The brief asked for this distinction and it is worth the measurement, because
+the two answers are different for almost every row above. Three facts, each
+established by running something rather than by reading a manifest:
+
+**1. A program that only uses the global `fetch()` reaches no tokio at all.**
+`scripts/turnloop/apps/` style probe, one `await fetch(url)` against a local
+origin, base compiler, `PERRY_LOOP_STATS=1`:
+
+```
+status 200 len 159323
+[perry-loop] driver=turnloop turns=5 os_waits=3 native_ticks=0 completions=15
+[perry-loop] p6 http_submitted=1 declined=0 completed=1 connects=1
+[perry-loop-waits] arm=turnloop turnloop_waits=4 tokio_ticks=0 …
+```
+
+`declined=0` and `tokio_ticks=0` together are the claim: P6's engine served it
+and the legacy tick never ran. Thread census: **1 thread**, before and after.
+
+**2. `import axios` does *not* take the global fetch off turnloop — but axios
+itself is on reqwest, in the same process.** Same probe plus
+`await axios.get(url)`:
+
+```
+global status 200 / axios status 200
+[perry-loop] p6 http_submitted=1 declined=0 completed=1
+[perry-loop-waits] arm=turnloop turnloop_waits=4 tokio_ticks=1 tokio_tick_ns=13754149
+```
+
+One turnloop-served fetch and one tokio tick, in one program. This is the shape
+the whole inventory has: linked *and* reachable, side by side, with the
+transport chosen per call site rather than per program.
+
+**3. The compiler's own tokio is linked into the compiler and never into a
+compiled program.** `perry`'s reqwest/tokio/tokio-tungstenite serve `perry
+publish`, `login`, `verify`, `audit`, `run --remote`, `setup ios|macos`, the
+update check, telemetry and compat reports. A user binary links
+`libperry_runtime.a`, `libperry_stdlib.a` and the `perry-ext-*` archives; it
+does not link the `perry` crate. Those three edges still have to go for the
+`Cargo.lock` goal, and no JS program is affected by when.
+
+## Perry defects this work found (none of them P8's)
+
+### 1. `import 'node-fetch'` makes the program's global `fetch()` SIGSEGV
+
+Reduced to four lines, and deterministic — three runs, three
+`Segmentation fault (core dumped)`:
+
+```ts
+// g1.ts
+import nodeFetch from "node-fetch";
+console.log("A: start, nodeFetch is", typeof nodeFetch);
+const r = await fetch("http://127.0.0.1:8099/");   // <-- SIGSEGV here
+console.log("B: typeof r =", typeof r);
+```
+
+```
+A: start, nodeFetch is object
+Segmentation fault (core dumped)            rc=139
+segfault at 5 … Code: … 48 85 ff 74 2c … <8b> 57 04 …
+```
+
+`segfault at 5` with `mov 0x4(%rdi),%edx` and `rdi = 1` is a **handle id being
+dereferenced as an object pointer**. Delete the one import and the identical
+program is correct, on turnloop:
+
+```
+$ ./g0                      # same file, no node-fetch import
+A: start / B: typeof r = object / C: status = 200 / D: len = 159336
+[perry-loop] p6 http_submitted=1 declined=0 completed=1
+```
+
+**Cause, proven from the archives rather than inferred.** The well-known flip
+maps `node-fetch` to `["http-client"]` and strips it — but
+`compute_required_features` inserts **`web-fetch`** independently whenever
+`uses_fetch` is true, and `web-fetch` is a different feature name from the one
+that was stripped. So a program that imports `node-fetch` *and* calls the
+global `fetch()` gets both archives, each defining the whole `js_fetch_*`
+surface:
+
+```
+$ nm --defined-only target/perry-auto-f2a918410ade6174/release/libperry_stdlib.a
+      js_fetch_get=1  js_fetch_response_status=1  js_headers_new=1
+$ nm --defined-only target/perry-auto-f2a918410ade6174/release/libperry_ext_fetch.a
+      js_fetch_get=1  js_fetch_response_status=1  js_headers_new=1
+```
+
+Two definitions, two response registries, and two **different handle
+encodings** for the value the promise resolves with:
+
+| | encoding |
+|---|---|
+| `perry-stdlib/src/fetch/mod.rs:406` | `handle_to_f64(id) = js_nanbox_pointer(id)` — NaN-boxed POINTER_TAG |
+| `perry-ext-fetch/src/lib.rs:583` | `promise.resolve(JsValue::from_number(id as f64))` — a bare double |
+
+The program that imports node-fetch but never calls the global `fetch()` gets
+a *single* definition (`uses_fetch` is false, stdlib's are stripped) and does
+not crash — it fails more quietly instead: `await nodeFetch(url)` resolves a
+bare number, so `r.status` is `undefined` and the program throws
+`TypeError: Cannot read properties of undefined (reading 'status')`.
+
+The decisive control: the same source, the same compiler, one environment
+variable apart.
+
+| build | result |
+|---|---|
+| default (node-fetch → `perry-ext-fetch`) | **SIGSEGV** |
+| `PERRY_DISABLE_WELL_KNOWN=1` (bundled copy) | `status = 200`, `p6 http_submitted=1 declined=0` |
+
+**This is the same family as #10310** (`new Headers()` is a number because two
+`js_headers_new` implementations disagree on the encoding) but it is a
+different symbol, a different symptom and a wider blast radius: #10310 loses a
+dynamic method call, this one kills the process on the single most common
+network call in JavaScript. #10310's proposed fix — box the handle *and* add a
+registered cross-boundary dispatch hook — does not by itself remove the
+duplicate `js_fetch_*` definitions, so it would not fix this.
+
+**Attribution: pre-existing on `main`, not a turnloop regression.** Measured,
+not inferred — a `main` tree (`fcd108bfb`, v0.5.1579) was cloned and built from
+source on the same box with the same package set, and the same `g1.ts`
+compiled by it segfaults identically:
+
+| | `g0` (no node-fetch import) | `g1` (node-fetch imported) |
+|---|---|---|
+| `main` @ `fcd108bfb` | `status = 200`, rc=0 | **rc=139**, 3/3 runs |
+| `turnloop/integration` @ `babc5f0d1f` | `status = 200`, rc=0 | **rc=139**, 3/3 runs |
+
+That agrees with the source: `perry-ext-fetch/src/lib.rs` and
+`crates/perry/src/commands/stdlib_features.rs` are byte-identical to
+`origin/main` on this branch, and `perry-stdlib`'s `handle_to_f64` was last
+touched in August (#8448).
+
+## The compile-time A/B switch (`tokio-wait-driver`)
+
+The brief asked what removing it would take, and said the decision is the
+coordinator's. Inventory, exactly:
+
+| | |
+|---|---|
+| declared | `perry-stdlib/Cargo.toml` → `perry-runtime/tokio-wait-driver` (both are no-op features; nothing else may depend on them) |
+| `#[cfg]` guards | **27** — 25 in `crates/perry-runtime/src/event_pump.rs` (its test module included), 2 in `crates/perry-stdlib/src/common/async_bridge.rs` |
+| runtime `cfg!()` reads | **3** — two in `event_pump.rs`'s stats banner, one in `perry-stdlib/src/readline/pump.rs` |
+| named in comments only | 19 further files (`perry-ffi`, `perry-ext-{net,pg,mysql2,ioredis,nodemailer}`, `perry-stdlib/src/{fetch,nodemailer,turnloop_client,turnloop_smtp}`, `perry-runtime/src/{turnloop_net,turnloop_pool,turnloop_proc,dgram_reactor,child_process}`) — each says "this declines in the `tokio-wait-driver` arm", none compiles differently |
+
+What it does: with the feature on, `event_pump::net_loop_available()` returns
+`false` unconditionally, `register_wait_driver` returns `None`, and every agent
+parks through the legacy tokio tick. **Every turnloop surface then declines**,
+which is why 19 further files mention it in comments — it is the second arm of
+exactly the same predicate the worker-agent decline is the first arm of.
+
+Removing it is a small, mechanical change — delete the two feature
+declarations, take the `#[cfg(not(...))]` branch at all 27 sites, fold the
+three `cfg!()` reads, delete the `#[cfg(feature = ...)]` bodies, and reword 19
+files' comments. It is *not* small in consequence, and the argument cuts both
+ways:
+
+* **For removing it now.** CLAUDE.md's kill-policy: "a mode that still exists
+  is a decision that hasn't been made", and no CI arm exercises the feature-on
+  state. P6 recorded that it did not even *build* the arm, only reasoned that
+  it should work. That is precisely the shape the policy exists to forbid.
+* **Against removing it now.** It is the measurement instrument for the
+  published P0–P7 A/B, which the coordinator says is still running on the quiet
+  mini. Deleting the "before" arm before the comparison is published destroys
+  the only reproducible baseline.
+
+The honest reading is that both are true and they are sequenced: the switch
+should go the day the A/B numbers are published, not before, and it should go
+in **one** commit that also deletes the dead branch bodies rather than leaving
+`cfg(not(...))` scaffolding behind. P4's report also flags a trap for whoever
+uses it in the meantime: for P4's own subjects the feature arm is **not** a
+faithful "before", because with the loop off those subjects take the *inline*
+fallback rather than the tokio pool they used pre-P4.
+
+## What it would cost to actually remove tokio
+
+Ordered by dependency, not by size: **A is the precondition for B, C, I and
+every "on a declining path" row in the inventory**, and L cannot happen until
+everything above it has.
+
+| # | work | edges it removes | cost |
+|---|---|---|---|
+| **A** | **Per-agent `turnloop::Loop`s.** `ensure_loop_with` declines every non-`PRIMARY_AGENT` thread; give each agent its own loop, poster and timer heap, and a per-agent notify route (`PRIMARY_ROUTE` stays for `js_notify_main_thread`). | **0 directly** — and it is still first, because it is the precondition for every "on a declining path" row in the inventory | a phase. Plus the validation nobody has done: every P1/P5/P6/P7 surface starts taking the turnloop path on worker threads for the first time |
+| **B** | **TLS from a database binding** (`perry_db_turnloop` → `turnloop-tls`), **a UDS connect** for pg, and **SRV/topology** for mongo | `perry-ext-{ioredis,pg,mysql2,mongodb}` × 2 = **8** | a phase. #10335 makes it urgent: the default `new Redis()` configuration already declines |
+| **C** | **The `node:http`/`node:https` client**, including `agent.rs`'s ~1,950-line Node-semantics pool and the three raw-`TcpStream` bypasses | 1 of `perry-ext-http`'s 7 | a phase on its own; P6 said so and P8 agrees |
+| **D** | **HTTP/2**, both halves, onto `turnloop_http::http2::Connection` | `h2`, and `perry-ext-http`'s private per-session runtime | a phase (#10327) |
+| **E** | **`ws`**, onto `turnloop-websocket` — which is a tungstenite **major-version** migration of the stored connection type, not a transport swap | `perry-ext-ws` × 2, `perry-ext-http`'s tokio-tungstenite, `perry-stdlib`'s | medium; unblocks P5's "attached `WebSocketServer`" hole too |
+| **F** | **`fastify`**, which needs either an edge to perry-ext-http or a new crate holding the sans-I/O server | `perry-ext-fastify` × 4 | medium |
+| **G** | **`axios` and `node-fetch`**: a `js_perry_http_*` C seam of the shape P6 built for SMTP, plus fixing the duplicate-`js_fetch_*` defect above first | `perry-ext-{axios,fetch}` × 4, and `perry-stdlib`'s `reqwest` | medium; the seam is the bounded part, the two crates' own defects (#10325, #10326, #10310) are not |
+| **H** | **Delete or migrate `perry-stdlib`'s bundled `pg`/`mysql2`/`ioredis`/`mongodb`/`ws`/framework-server copies** — compiled out of every default build, so this is a policy call about whether the fallback stays | `perry-stdlib` × 6 | small as code, a decision as policy |
+| **I** | **lettre's async transport**, which lets `bundled-nodemailer` drop `tokio1`/`tokio1-rustls-tls`/`pool` and keep only the MIME builder | `perry-ext-nodemailer` × 2, `perry-stdlib`'s `lettre` tokio features | small, gated on A |
+| **J** | **The `perry` CLI** — `publish`, `login`, `verify`, `audit`, `run --remote`, `setup`, the update check | `perry` × 3 | medium, and it needs multipart in `turnloop-http`'s client, which does not have it |
+| **K** | **`perry-compose`** | `perry-container-compose` × 2 | a rewrite of a 14.8k-line async tool with no JS surface |
+| **L** | **`perry-stdlib`'s `tokio`** — the `async-runtime` feature, `common::async_bridge` and the `perry_ffi_spawn_blocking*` / `spawn_async` C ABI | the **last** edge | falls out of A–K; see below |
+| **M** | **`perry-ui-gtk4`** — `ksni` and `mpris-server` require tokio | 1 | replace both crates, or drop Linux tray/MPRIS |
+
+### Why L is genuinely last, and not a layer you can lift out first
+
+`perry-stdlib`'s `async-runtime` feature gates `common::async_bridge` and
+`perry_ffi_async` — the whole promise bridge, and the C ABI every
+`perry-ext-*` crate settles its promises through. Twenty other features imply
+it. It reads like the bottom layer, and it is not a layer at all:
+`async_bridge::RUNTIME` is a tokio current-thread runtime **because its clients
+hand it tokio futures**. `spawn`, `block_on`, `run_one_tick` and
+`drive_pending` exist to drive reqwest, hyper, tokio-tungstenite, sqlx, the
+`redis` crate, the `mongodb` driver and lettre. Remove the last of those and
+the bridge's tokio has no work; remove the bridge first and there is nothing to
+run them on.
+
+P4's three v1 shims are the same shape and are the concrete blocker:
+`perry_ffi_spawn_blocking`, `_with_reactor` and `spawn_async` cannot move onto
+turnloop's pool because their remaining callers — the HTTP/2 accept loop, the
+HTTP/2 client, and every database binding running `Handle::current().block_on`
+— hold a thread for a **connection's** lifetime, not a job's, and turnloop's
+pool is bounded and fixed-size by design. That is upstream
+**PerryTS/turnloop#42**, and until it lands (a detached/long-occupancy job
+class, or a second pool) the shims stay whatever else moves.
+
+## What this lane changed
+
+Three things, and the first is the one that matters.
+
+### 1. `scripts/tokio_inventory.py` + `scripts/tokio_inventory.json`, in `lint`
+
+Described above. It is wired into the **existing** required `lint` job rather
+than added as a new required context, which sidesteps the trap CLAUDE.md names:
+a brand-new gate has never been green, so promoting it to required immediately
+blocks every open PR. A new *step* in a job that is already required gates from
+the first run with no branch-protection change.
+
+`--self-test` plants seven changes and requires the checker to catch each one:
+a new edge, a stale entry, a package entering the lockfile, a package leaving
+it, a version change, a target-gated edge (the shape `cargo tree` hides), and
+an optionality flip (`optional = true` → `false` changes which builds link it,
+so it is a different edge, not the same one).
+
+```
+$ python3 scripts/tokio_inventory.py --self-test
+tokio_inventory self-test: OK (7 planted changes, all caught)
+```
+
+### 2. `perry-stdlib`'s cron helpers no longer spawn a task that cannot fire
+
+`js_cron_set_interval` and `js_cron_set_timeout` each spawned a native task
+whose entire body was
+
+```rust
+// Invoke callback (in real impl: js_callback_invoke(callback_id))
+```
+
+— the placeholder `cron.rs`'s own module header records as the bug
+`js_cron_schedule` was rewritten to fix. The task could not do the thing it
+existed for, and the interval's loop only observes its cancel flag *after* the
+next sleep, so a cleared 24-hour interval held a tokio task for a day.
+
+Reaching either would have been a defect, and reaching them is also impossible:
+codegen declares the four symbols in `runtime_decls/stdlib_ffi/third_party.rs`
+and **no lowering path emits a call to any of them** (`setInterval`/`setTimeout`
+lower to the runtime timer heap; the npm `cron` surface lowers to
+`js_cron_schedule` / `js_cron_job_*`). `perry-ext-cron` — the copy the
+well-known flip actually links for `import 'cron'` — has always been a bare
+handle allocator.
+
+So the spawn is removed rather than migrated, and the two copies of the same
+four symbols now agree. This is CLAUDE.md's kill-policy call, not a transport
+one. `cron.rs` now has no tokio call sites. It removes no manifest edge and the
+report does not claim otherwise.
+
+### 3. `scripts/turnloop/apps/tokio_worker_agent_census.ts`
+
+The probe for the decline in "The one blocker" above: the same `fetch`, once on
+the primary agent and once inside a `worker_threads` Worker, with the OS thread
+names read out of `/proc` both times. tokio names its pool `tokio-rt-worker`;
+turnloop names its blocking threads `turnloop-blocki`. Linux only, and it
+prints `unavailable` rather than a zero that would read as "no tokio".
+
+## turnloop gaps found
+
+Second-hand rather than first-hand — this lane wrote no turnloop code — but
+each is a concrete thing Perry needs and does not have. The coordinator files
+them.
+
+1. **A long-occupancy job class, or a second pool** (already **PerryTS/turnloop#42**,
+   raised by P4). Restated here only because it is load-bearing for this lane's
+   conclusion: it is the reason `perry_ffi_spawn_blocking*` and `spawn_async`
+   cannot move, and therefore the reason `perry-stdlib`'s `tokio` edge is last
+   rather than first.
+2. **`turnloop_http::client` has no multipart form builder.** `perry publish`,
+   `perry audit`, `perry verify` and `perry run --remote` all post
+   `reqwest::multipart::Form`s. Without multipart, moving the CLI off reqwest
+   means hand-rolling RFC 7578 in Perry — which is the kind of thing that
+   belongs in the HTTP crate, next to the chunked encoder it already has.
+3. **`turnloop-websocket` is on tungstenite 0.30; Perry stores tungstenite 0.29
+   types** (`perry-ext-ws`, `perry-ext-http`, `perry-stdlib`), and
+   `perry-ui-android` carries a third major (0.24, sync). This is the whole
+   reason `ws` and the attached-`WebSocketServer` path did not move in P5, and
+   it is not a transport problem — it is a stored-type problem. Either a
+   compatibility shim or an explicit statement of the intended migration order
+   would unblock three surfaces at once.
+
+### 2. A `Worker` whose entry is its own module does not link
+
+```
+undefined reference to `tokio_worker_agent_census_ts__init_body'
+        referenced from `perry_closure_tokio_worker_agent_census_ts__11'
+```
+
+`new Worker(new URL(import.meta.url))` — the idiomatic Node form for a
+self-hosting worker, and what this lane's census probe was first written as —
+fails at link time. Node 26.5.1 runs the same file correctly. The same program
+with the worker body in a separate file
+(`test-files/test_gap_9744_static_worker_helpers.ts`'s shape) links and runs,
+which is what the committed probe now does.
+
+Not investigated further: it is a codegen/emission bug, not a transport one,
+and it is outside this lane. It is named here because the workaround is in a
+committed file and a reader of that file is entitled to know why it is two
+files instead of one.
+
+### 3. REGRESSION: `fetch()` inside a `node:worker_threads` Worker is broken on this branch
+
+This is the finding the lane would report if it could report only one. It is a
+regression of `turnloop/integration` against `main`, measured on both, three
+runs each, and it is deterministic:
+
+| | primary agent | inside a `Worker` |
+|---|---|---|
+| Node 26.5.1 | `status=200` | `status=200` |
+| **`main` @ `fcd108bfb` (v0.5.1579)** | `status=200` | **`status=200`** |
+| **`turnloop/integration` @ `babc5f0d1f`** | `status=200` | **`status=error:fetch failed`** |
+
+Both Perry binaries were built from source in their own trees on the same box
+with the same package set, and the probe is the same file compiled by each. The
+commits `main` has that the integration branch does not (v0.5.1577–1579) touch
+no file matching `fetch|worker|agent|event_pump|turnloop`, so the difference is
+not a main-line fix the branch is missing.
+
+The counters say what happened:
+
+```
+[perry-loop] p6 http_submitted=2 declined=0 completed=1 failed=1 connects=1
+```
+
+Two requests submitted to P6's engine, **zero declined**, one completed (the
+primary agent's), one failed (the Worker's). The Worker did not fall back to
+reqwest — it was accepted by an engine whose loop it cannot own.
+
+### 3b. The cause: `node:worker_threads` Workers never claim an agent id
+
+`agent::enter_worker_agent()` is the only writer of `CURRENT_AGENT`, and its
+three call sites are all in `crates/perry-runtime/src/thread.rs` —
+`perry/thread`'s `spawn`, `parallelMap` and `parallelFilter`.
+`crates/perry-stdlib/src/worker_threads.rs:1273` spawns the Worker's OS thread
+with a bare `std::thread::spawn` and never calls it, so a `worker_threads`
+Worker resolves to `PRIMARY_AGENT` for the whole of its life.
+
+Everything that asks "am I the primary agent?" therefore gets the wrong
+answer on a Worker. `turnloop_net::available()` is one of those things:
+
+```rust
+// crates/perry-stdlib/src/turnloop_client/mod.rs:428
+pub(crate) fn submit(spec: RequestSpec, sink: Sink) -> Result<(), Declined> {
+    if !tl::available() {              // true on a Worker — see above
+        return Err(Declined::NoLoop);  // the fallback that never happens
+    }
+    …
+    SUBMITTED.fetch_add(1, Ordering::Relaxed);
+    exchange::start(id);               // submits to a loop this thread has none of
+```
+
+`ensure_loop_with` *does* refuse a moment later — `PRIMARY_ROUTE` is already
+held by the main thread, so the Worker is marked `LoopState::Declined` — but
+that is after the request was accepted, so the caller gets a failure instead of
+the reqwest fallback the design intends. On `main` there was no engine to
+accept it and the Worker's fetch ran on the shared runtime, which is why it
+worked.
+
+This is why the decline is worth measuring rather than asserting: eight lane
+reports describe a fallback that, on the agent kind a Node program actually
+uses, is not reached.
+
+Two other things read the same predicate and are worth checking under it,
+though this lane did not: the keep-alive accounting (`owns(owner)` decides
+which thread may drain a queue entry) and `class_image.rs`'s comment, which
+already notes that `CURRENT_AGENT` defaults to the primary and keys around it.
+
+The fix is not obviously one line, which is why this lane reports rather than
+applies it. Calling `enter_worker_agent()` in the Worker's thread body makes
+every turnloop surface decline on a Worker — which is the documented intent and
+would repair `fetch` — but it also switches net, TLS, the HTTP server, SMTP and
+all four database drivers onto their tokio paths there for the first time, on a
+surface with almost no gap-suite coverage. The alternative reading is that the
+predicate is wrong rather than the agent id: "can this thread own a loop" is a
+question about `PRIMARY_ROUTE`, not about agent identity, and `submit` checks
+`tl::available()` *before* `ensure_loop_with` has had a chance to say no.
+Whichever is chosen, it wants its own change with its own oracle run.
+
+## What P8 did not do
+
+Named precisely, because each is a hole rather than a preference.
+
+* **It moved nothing off tokio.** Not one of the 46 edges is gone, and the
+  report says so in its first paragraph rather than in a footnote. The three
+  changes it does make are an instrument, a dead-code subtraction and a probe.
+* **It did not attempt per-agent loops**, which is the item its own analysis
+  says is highest-leverage. That is a deliberate call: switching every
+  P1/P5/P6/P7 surface onto turnloop on worker threads, on a surface with almost
+  no gap-suite coverage, without the per-subsystem validation each of those
+  lanes did for the primary agent, is exactly the kind of change that is
+  discovered in production. It is a phase.
+* **It did not fix the `worker_threads` agent-id defect** it found, for the
+  same reason and with the added complication that there are two defensible
+  fixes (see the defects section) and choosing between them needs an oracle run
+  this lane did not have time for.
+* **It did not build the `js_perry_http_*` C seam** that would move `axios` and
+  `node-fetch`. P6 costed it as "a second ABI's worth of design"; P8 agrees, and
+  adds that the duplicate-`js_fetch_*` defect has to be fixed first or the seam
+  would be built on top of a SIGSEGV.
+* **It did not delete the `tokio-wait-driver` switch.** The brief reserves that
+  for the coordinator, and the A/B it exists for is still running.
+* **It did not delete `perry-stdlib`'s bundled database modules**, which is the
+  single cheapest lockfile reduction available (it removes `sqlx`, `redis` and
+  `mongodb` from that crate). They are the fallback when a wrapper archive
+  cannot be built, so removing them is a policy decision about release archives,
+  not a transport one.
+* **Windows and macOS.** Everything here ran on Linux x86_64. The inventory
+  script itself runs on both (it is manifest-reading Python, and it is written
+  to report target-gated edges precisely because the development host is macOS),
+  but no probe and no sweep ran off Linux.
+* **Any benchmark.** The build box was running two gap sweeps and three cargo
+  builds throughout, and the brief forbids timing there. No number in this
+  report is a performance claim; the `[perry-loop]` counters are liveness
+  evidence, not measurements.
+* **The auto-optimize gap tier** as a whole. The fast tier ran, which itself
+  takes the auto-optimize path per ext-routed test (#7629), so 35 of the 798
+  fixtures did build their own archives — but the 8-shard auto-optimize mode
+  did not run.
+* **`cargo test --workspace`**, and the `perry-runtime` unit suite. This
+  branch's only Rust change is the removal of two `spawn_native` calls from
+  `cron.rs`; `cargo check -p perry-stdlib --no-default-features --features full`
+  is clean and the release build of the full package set is clean, but the unit
+  suites were not run.
+
+## For the integrator
+
+The branch is `turnloop/p8-detokio` on `origin`. Nothing here bumps the
+version. The changelog fragment is
+`changelog.d/turnloop-p8-tokio-inventory.md`.
+
+Run, on a machine with the pinned oracle installed:
+
+```bash
+# the gate, and proof it can fail
+python3 scripts/tokio_inventory.py --self-test
+python3 scripts/tokio_inventory.py
+python3 scripts/tokio_inventory.py --list      # the census
+python3 scripts/tokio_inventory.py --table     # the annotated inventory
+
+# the only Rust change
+cargo check -p perry-stdlib --no-default-features --features full
+
+# the gap suite, against a baseline from this branch's OWN base commit
+cargo build --release --locked \
+  -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static \
+  -p perry-ext-http -p perry-ext-net -p perry-ext-ws -p perry-ext-zlib -p perry-ext-events
+PERRY_SKIP_BUILD=1 ./scripts/run_gap_tests.sh
+
+# the worker-agent census (needs an HTTP origin; Linux only)
+python3 -m http.server 8099 --bind 127.0.0.1 &
+perry scripts/turnloop/apps/tokio_worker_agent_census.ts -o wcensus
+PERRY_LOOP_STATS=1 ./wcensus
+node --experimental-strip-types scripts/turnloop/apps/tokio_worker_agent_census.ts
+```
+
+Three decisions are yours, not this lane's:
+
+1. **The `tokio-wait-driver` switch.** Delete it the day the P0–P7 A/B is
+   published, in one commit that also removes the dead branch bodies.
+2. **`perry-stdlib`'s bundled `pg`/`mysql2`/`ioredis`/`mongodb` copies.**
+   Deleting them removes `sqlx`, `redis` and `mongodb` from that crate — the
+   cheapest lockfile reduction available anywhere in the tree — at the cost of
+   the fallback used when a wrapper archive cannot be built.
+3. **Whether the tokio inventory gate stays in `lint`.** It is there now, it is
+   green, and its `--self-test` proves it can fail. If it is removed, the
+   migration goes back to being measured by prose.
+
+And three things want issues filed, none of which is a duplicate of the 47
+already open:
+
+* the `node-fetch` + global-`fetch` SIGSEGV and its duplicate `js_fetch_*`
+  definitions (related to #10310, not the same bug);
+* `node:worker_threads` Workers never claiming an agent id, and `fetch()`
+  failing inside one as a consequence;
+* per-agent `turnloop::Loop`s, as the tracking issue for the item that gates
+  most of the remaining migration.
