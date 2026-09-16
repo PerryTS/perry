@@ -1,4 +1,4 @@
-### turnloop P6 — outbound HTTP (`fetch`, axios) and SMTP on turnloop
+### turnloop P6 — outbound HTTP (`fetch`, `undici`) and SMTP on turnloop
 
 Perry's outbound HTTP/1.1 and its SMTP client leave tokio and reqwest/lettre for
 turnloop handles, driven sans-I/O over `turnloop-http`'s `client` + `http1`
@@ -10,19 +10,31 @@ unbuffered rustls core. Full writeup: `docs/turnloop/p6-report.md`.
 
 - `turnloop_client/` — the outbound HTTP/1.1 engine: connection pool
   (`pool_max_idle_per_host = 16`, `pool_idle_timeout = 90 s`, the numbers the
-  reqwest client already used), redirects, per-phase deadlines, abort,
-  `Content-Encoding` decoding, and the idle-close deadline that keeps a pooled
-  socket from holding the process open.
+  reqwest client already used), redirects, abort, `Content-Encoding` decoding,
+  and the idle-close deadline that keeps a pooled socket from holding the
+  process open. Per-phase request deadlines are deliberately NOT armed — the
+  reqwest path armed none either, and every default they would pick is
+  observable.
 - `turnloop_smtp/` — SMTP: greeting, EHLO/HELO, STARTTLS and implicit TLS,
   AUTH PLAIN, envelope, dot-stuffed DATA, QUIT. Its C seam (`js_perry_smtp_*`)
   is how `perry-ext-nodemailer` — a separately linked staticlib — reaches it.
 - `turnloop_tls_client.rs` — the client TLS session both engines drive.
 
 **Wired:** the global `fetch` (every transport-bearing `js_fetch_*` entry
-point), `undici` (which rides the same stack), the bundled `nodemailer`, and
-`perry-ext-nodemailer`. reqwest and lettre are **not** removed: a proxy, a
-worker agent with no loop and the `tokio-wait-driver` arm all still decline to
-them.
+point) and `undici`, which rides the same stack. `axios`, `node-fetch`, the
+`node:http` client and `http2.connect` are NOT moved — each needs an HTTP C seam
+of the shape `js_perry_smtp_*` has, and each has a defect of its own worth
+fixing first. reqwest and lettre are **not** removed: a proxy, a worker agent
+with no loop and the `tokio-wait-driver` arm all still decline to them.
+
+**SMTP is engine-complete and surface-blocked.** `turnloop_smtp` drives the
+protocol correctly (8 tests over real bytes) and `perry-ext-nodemailer` reaches
+it through the seam, but `transporter.sendMail(...)` has never worked from JS in
+Perry: `createTransport` returns a bare handle NUMBER, so codegen refuses the
+call on a primitive receiver before the runtime's handle dispatch is consulted.
+Two missing dispatch rows are added here; the other half — returning a
+handle-band pointer — belongs with whoever owns that binding. No claim is made
+that a Perry program's mail now goes over turnloop.
 
 **Node-fidelity fixes this exposed, all reproduced on the base commit first:**
 
