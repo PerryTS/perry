@@ -745,7 +745,66 @@ and P8's lists, none of them this lane's, and two of them
 snapshot expects to PASS and which are red on the base commit before this branch
 changes anything.
 
-<!-- P11_GAP_TABLE_FULL -->
+#### The complete sweep, both arms
+
+Both arms were then re-run from scratch, and the P11 arm was **rebuilt at the
+branch's own HEAD first** so the swept binary is this branch's code rather than
+the commit the interrupted pass had used:
+
+| | base `1edb5b7e8d` | **P11 `8773f388bb`** |
+|---|---|---|
+| tests run | 818 | 818 |
+| pass | 809 | **809** |
+| parity_fail | **9** | **9 — the same nine** |
+| compile_fail | 0 | **0** |
+| crash | 0 | **0** |
+| skipped | 0 | 0 |
+| parity rate | 98.8 % | **98.8 %** |
+| harness exit | 1 | 1 |
+| **status changes, compared per test** | — | **0** |
+
+Compared from the two JSONL journals test by test, not from the totals — the
+two runs share all 818 test ids and **not one of them differs**:
+
+```
+$ compare_gap.py base-final.jsonl p11-final.jsonl
+A: 818 tests  head=1edb5b7e8d  bin=.../base/target/release/perry
+   {'parity_fail': 9, 'pass': 809}
+B: 818 tests  head=8773f388bb  bin=.../perry/target/release/perry
+   {'parity_fail': 9, 'pass': 809}
+COMMON TESTS: 818
+STATUS CHANGES: 0
+```
+
+The nine, byte-identical sets on both arms and none of them this lane's:
+
+```
+2159_defineproperty_class_prototype   json_lazy_defineproperty_index
+2514_settracesigint                   perfhooks_3088_3008_3010_3011
+2899_2779_2777_static_helpers         prop_plan_cache_invalidation
+disposablestack_2875                  v8_2_3680plus
+iterator_prototype_next_patch
+```
+
+Both arms exit 1 for the same reason and print the same three lines: three of
+those nine (`…_static_helpers`, `disposablestack_2875`,
+`iterator_prototype_next_patch`) are expected to PASS by the committed snapshot
+and are red on the base commit before this branch changes anything. That is
+exactly why the comparison here is arm-against-arm rather than against the
+snapshot.
+
+Two fixtures are worth naming individually because they are the ones this lane
+could have broken: **`test_gap_turnloop_fetch`** — P6's thirteen-case fetch
+fixture — and **`test_gap_fetch_reqresp_2640_2643`** both PASS on the arm where
+`perry-ext-fetch` does not exist, which is the sweep's own statement that
+routing `node-fetch` to perry-stdlib did not disturb the global `fetch`.
+
+**`compile_fail 0` on both arms is load-bearing** for a different reason (#7629):
+the gap suite links whatever `perry-ext-*` archive is already in the tree, and
+an incoherent one makes every `http`/`net` fixture fail to *compile* with "the
+wrapper archive bundles a DIFFERENT tokio compilation than the stdlib archive" —
+indistinguishable from a real regression. Deleting a wrapper crate is precisely
+the change that could have caused it.
 
 ### Local gates
 
