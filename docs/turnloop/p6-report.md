@@ -192,6 +192,15 @@ Two things the turnloop path has to do that reqwest did for itself:
   a fresh connection, and only if it is replayable. A *fresh* connection's
   failure is never retried.
 
+`tcp_keepalive(60 s)` is the one setting NOT carried over: turnloop's
+`TcpOpts` exposes `nodelay` and nothing else, so `SO_KEEPALIVE` cannot be set
+on a socket it owns. That is P1's `setNoDelay` finding from the other side and
+it wants the same turnloop socket-option API. The practical difference is a
+connection to a peer that vanishes without a FIN: reqwest's kernel keepalive
+would have reaped it after a minute; here it sits idle until the pool's own
+90-second deadline closes it, which is the same order of magnitude and strictly
+bounded.
+
 ## HTTP/2 — a decision, not an omission
 
 The turnloop client advertises **only `http/1.1`** in ALPN, so no server can
@@ -303,7 +312,7 @@ the error-code re-interning, including the degrade-to-generic case; the debug
 knob asserted OFF by default; and every URL shape that must DECLINE rather than
 fail.
 
-`turnloop_smtp` (7): a full delivery asserted command by command (EHLO, the
+`turnloop_smtp` (8): a full delivery asserted command by command (EHLO, the
 capability parse, `AUTH PLAIN`, `MAIL FROM … SIZE=`, per-recipient `RCPT TO`,
 `DATA`, the terminated body, and the `Sent` event's token / `accepted` /
 `rejected` / `response` / envelope); dot-stuffing asserted on the bytes,
@@ -521,6 +530,46 @@ Named precisely.
 * **The auto-optimize gap tier.** Only the fast tier ran.
 * **`cargo test --workspace`.**
 
+## What P6 did not do
+
+Named precisely, because each is a hole rather than a preference, and each is a
+path a real program still reaches.
+
+* **`axios`.** `perry-ext-axios` is a real reqwest implementation in a
+  separately linked `staticlib`, and `import 'axios'` routes there — so the
+  stdlib mirror (`perry-stdlib/src/axios.rs`) is dead for any program that
+  imports it. Moving the wrapper needs an HTTP C seam of the shape
+  `js_perry_smtp_*` has, which is a second ABI's worth of design, and the crate
+  has a defect of its own first (a fresh `reqwest::Client` per request — see the
+  defects section). Migrating it without fixing that would be moving a bug onto
+  a new transport. The stdlib mirror was left alone rather than migrated in
+  isolation, because a change only reachable under `PERRY_DISABLE_WELL_KNOWN=1`
+  is an untested configuration, which is exactly what CLAUDE.md's kill-policy
+  says not to ship.
+* **`node-fetch` (`perry-ext-fetch`).** Same shape, same seam missing. It is a
+  near-duplicate of the stdlib fetch and has its own defect (no `AbortSignal`
+  wiring at all), so it wants the duplication resolved rather than the
+  duplication migrated.
+* **The `node:http` / `node:https` CLIENT.** `http.request` / `https.get` in
+  `perry-ext-http` — reqwest, plus three raw-`tokio::net::TcpStream` bypasses
+  (`TE: trailers`, `Expect: 100-continue`, and an `agent.createConnection`
+  override). P5 migrated that crate's SERVER; the client half is the larger of
+  the two surfaces (`agent.rs` alone is ~1,950 lines with a second Node-
+  semantics pool layered over reqwest's) and it is its own change.
+* **`http2.connect()`.** Untouched, like P5 left `http2.createSecureServer`.
+* **`js_fetch_stream_start`** — Perry's line-oriented SSE poll surface. The
+  engine has the hooks for it (`Sink::on_head` / `on_chunk` stream the final
+  response's decoded body as it arrives, and a followed redirect's body is
+  deliberately withheld from them), and they are used by nothing: the surface
+  is a separate line-splitting state machine and wiring it is not a transport
+  change. The hooks are therefore an unexercised path today, which is worth
+  saying plainly.
+* **`AbortSignal` on the `perry-ext-fetch` route.** Fixed for the global
+  `fetch`; that crate still has no wiring.
+* **Per-phase request deadlines.** `client::Lifecycle` is wired but nothing arms
+  a deadline, because the reqwest fetch path armed none either. Arming one would
+  reject requests that previously succeeded.
+
 ## turnloop gaps found
 
 Reported here in the shape P5's were; the coordinator files them.
@@ -560,17 +609,21 @@ Reported here in the shape P5's were; the coordinator files them.
    consumed and wrote something, and the caller has to loop until a step does
    neither. That works, and it is what this host does, but a `needs_input` flag
    would let a host size its scratch buffer instead of guessing.
-7. **`turnloop_smtp::Connection::send` takes the message as one `&[u8]`.** A
+7. **`TcpOpts` still exposes only `nodelay`.** A client cannot set
+   `SO_KEEPALIVE` on a socket turnloop owns, so the `tcp_keepalive(60 s)` the
+   reqwest client set has no equivalent here. Same missing API as P1's
+   `setNoDelay` finding, from the client side.
+8. **`turnloop_smtp::Connection::send` takes the message as one `&[u8]`.** A
    large attachment is therefore materialized in full before the first byte
    reaches the socket, and `encode_data` copies it again for dot-stuffing. A
    streaming body (`send_chunk` / `finish_body`, as `http1::Encoder` has) would
    let a host with a 25 MB attachment avoid two copies of it.
-8. **`turnloop_smtp` has no `Tls::Required` enforcement at `Ready`.** `Required`
+9. **`turnloop_smtp` has no `Tls::Required` enforcement at `Ready`.** `Required`
    controls whether STARTTLS is *attempted*; a server that advertises no
    STARTTLS still reaches `Ready` in the clear, and the host must notice. Perry
    does (`on_ready` refuses), but "required" reading as "preferred" is a
    security-shaped surprise.
-9. **`LocalExecutor` silently drops completions it did not issue** — P5's finding
+10. **`LocalExecutor` silently drops completions it did not issue** — P5's finding
    (turnloop#45), unchanged, and the reason this phase is sans-I/O too.
 
 ## Perry-side defects this work found (not P6 regressions)

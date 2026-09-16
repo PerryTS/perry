@@ -85,19 +85,34 @@ fn a_full_delivery_writes_the_commands_in_order() {
         Instant::now(),
     )
     .expect("send accepted");
+    // The server advertised PIPELINING, so MAIL FROM, both RCPT TOs and DATA
+    // are written as ONE block rather than one round trip each. Asserting per
+    // command would be asserting the absence of pipelining.
     let mail = drain(&mut conn);
     assert!(
         mail.starts_with("MAIL FROM:<sender@example.com> SIZE="),
         "SIZE is advertised, so it must be declared: {mail:?}"
     );
+    let order: Vec<usize> = [
+        "MAIL FROM:<sender@example.com>",
+        "RCPT TO:<a@example.com>",
+        "RCPT TO:<b@example.com>",
+        "DATA\r\n",
+    ]
+    .iter()
+    .map(|needle| {
+        mail.find(needle)
+            .unwrap_or_else(|| panic!("{needle:?} missing from {mail:?}"))
+    })
+    .collect();
+    assert!(
+        order.windows(2).all(|w| w[0] < w[1]),
+        "the pipelined block must be in protocol order: {mail:?}"
+    );
 
     feed(&mut conn, "250 2.1.0 Ok\r\n");
-    assert_eq!(drain(&mut conn), "RCPT TO:<a@example.com>\r\n");
     feed(&mut conn, "250 2.1.5 Ok\r\n");
-    assert_eq!(drain(&mut conn), "RCPT TO:<b@example.com>\r\n");
     feed(&mut conn, "250 2.1.5 Ok\r\n");
-    assert_eq!(drain(&mut conn), "DATA\r\n");
-
     feed(&mut conn, "354 Go ahead\r\n");
     let body = drain(&mut conn);
     assert!(
