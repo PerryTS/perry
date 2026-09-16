@@ -51,7 +51,7 @@
       "kind": "normal",
       "optional": false,
       "target": null,
-      "surface": "`import Fastify from 'fastify'` \u2014 its HTTP server accept loop and its WebSocket upgrade path",
+      "surface": "`import Fastify from 'fastify'` \u2014 its HTTP server accept loop, and the hyper protocol switch behind `@fastify/websocket` (whose WebSocket protocol is perry-ext-ws's now)",
       "reached_when": "always, in any program that imports fastify",
       "blocker": "its own hyper accept loop, independent of perry-ext-http's. P5 migrated perry-ext-http's server; this crate has no dependency edge to it, so sharing that core needs either a new crate for the sans-I/O server or a new edge.",
       "issue": "unfiled \u2014 P5 named it, P8 confirms it",
@@ -63,7 +63,7 @@
       "kind": "normal",
       "optional": false,
       "target": null,
-      "surface": "`import Fastify from 'fastify'` \u2014 its HTTP server accept loop and its WebSocket upgrade path",
+      "surface": "`import Fastify from 'fastify'` \u2014 its HTTP server accept loop, and the hyper protocol switch behind `@fastify/websocket` (whose WebSocket protocol is perry-ext-ws's now)",
       "reached_when": "always, in any program that imports fastify",
       "blocker": "the `server-auto` connection builder behind that accept loop. P5 migrated perry-ext-http's server; this crate has no dependency edge to it, so sharing that core needs either a new crate for the sans-I/O server or a new edge.",
       "issue": "unfiled \u2014 P5 named it, P8 confirms it",
@@ -75,21 +75,9 @@
       "kind": "normal",
       "optional": false,
       "target": null,
-      "surface": "`import Fastify from 'fastify'` \u2014 its HTTP server accept loop and its WebSocket upgrade path",
+      "surface": "`import Fastify from 'fastify'` \u2014 its HTTP server accept loop, and the hyper protocol switch behind `@fastify/websocket` (whose WebSocket protocol is perry-ext-ws's now)",
       "reached_when": "always, in any program that imports fastify",
       "blocker": "the runtime those futures need, entered through `spawn_blocking_with_reactor`. P5 migrated perry-ext-http's server; this crate has no dependency edge to it, so sharing that core needs either a new crate for the sans-I/O server or a new edge.",
-      "issue": "unfiled \u2014 P5 named it, P8 confirms it",
-      "plan": "F"
-    },
-    {
-      "crate": "perry-ext-fastify",
-      "dep": "tokio-tungstenite",
-      "kind": "normal",
-      "optional": false,
-      "target": null,
-      "surface": "`import Fastify from 'fastify'` \u2014 its HTTP server accept loop and its WebSocket upgrade path",
-      "reached_when": "always, in any program that imports fastify",
-      "blocker": "the `@fastify/websocket` upgrade handshake. P5 migrated perry-ext-http's server; this crate has no dependency edge to it, so sharing that core needs either a new crate for the sans-I/O server or a new edge.",
       "issue": "unfiled \u2014 P5 named it, P8 confirms it",
       "plan": "F"
     },
@@ -100,8 +88,8 @@
       "optional": false,
       "target": null,
       "surface": "`http2.createSecureServer()` (server) and `http2.connect()` (client)",
-      "reached_when": "`http2.connect('https://…')` (the TLS client), and `http2.createServer` / `createSecureServer` on a thread that could not get a loop of its own or in a cluster worker. NOT the ordinary case any more: since the HTTP/2 turnloop lane, a cleartext or TLS **server** and a cleartext `http2.connect` on the primary agent are on `turnloop_http::http2` and never construct an `h2` connection.",
-      "blocker": "the TLS **client**: `perry_ext_net::turnloop_tls_io` exposes `install_server_session` publicly but only `begin_client_upgrade` (`pub(crate)`, takes perry-ext-net's own `TlsClientConfigData`, settles a `JsNativeAsyncCompletion`), so `http2.connect('https://…')` has no way to install a client session on a turnloop socket. Plus the same declining paths hyper keeps: a thread with no loop, and a cluster worker. Removing the edge means deleting HTTP/2 on those paths, not migrating it.",
+      "reached_when": "`http2.connect('https://\u2026')` (the TLS client), and `http2.createServer` / `createSecureServer` on a thread that could not get a loop of its own or in a cluster worker. NOT the ordinary case any more: since the HTTP/2 turnloop lane, a cleartext or TLS **server** and a cleartext `http2.connect` on the primary agent are on `turnloop_http::http2` and never construct an `h2` connection.",
+      "blocker": "the TLS **client**: `perry_ext_net::turnloop_tls_io` exposes `install_server_session` publicly but only `begin_client_upgrade` (`pub(crate)`, takes perry-ext-net's own `TlsClientConfigData`, settles a `JsNativeAsyncCompletion`), so `http2.connect('https://\u2026')` has no way to install a client session on a turnloop socket. Plus the same declining paths hyper keeps: a thread with no loop, and a cluster worker. Removing the edge means deleting HTTP/2 on those paths, not migrating it.",
       "issue": "#10327",
       "plan": "D"
     },
@@ -113,7 +101,7 @@
       "target": null,
       "surface": "`http.createServer()` / `https.createServer()` on a declining path, and http2.createSecureServer",
       "reached_when": "a thread that could not get a loop of its own \u2014 since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed; also a cluster worker (needs SO_REUSEPORT or a passed descriptor) and a server with `new WebSocketServer({ server })` attached at listen time",
-      "blocker": "turnloop P9 landed per-agent loops, which closes the first; PerryTS/turnloop#49 (SO_REUSEPORT) closes the cluster case; the attached WebSocketServer needs perry-ext-ws moved to turnloop-websocket's tungstenite major.",
+      "blocker": "one reason left, and it is the P1 coexistence rule rather than a hole: a thread that cannot get a loop of its own keeps this accept loop. turnloop P9 closed the per-agent-loop case; PerryTS/turnloop#49 (SO_REUSEPORT) is what the cluster worker still waits on. The attached `WebSocketServer` blocker is CLOSED: its handshake and framing are `turnloop_websocket`'s sans-I/O core now, driven over the connection perry-ext-http already owns (`turnloop_serve::conn::on_websocket`), so it needs no owned stream and `try_listen_on_turnloop` no longer declines for it. See docs/turnloop/ws-report.md.",
       "issue": "unfiled \u2014 P8",
       "plan": "A"
     },
@@ -164,18 +152,6 @@
       "blocker": "P5 put the accepted-connection TLS on turnloop-tls; the declining server and the whole client still use tokio_rustls.",
       "issue": "unfiled \u2014 P8",
       "plan": "C"
-    },
-    {
-      "crate": "perry-ext-http",
-      "dep": "tokio-tungstenite",
-      "kind": "normal",
-      "optional": false,
-      "target": null,
-      "surface": "`new WebSocketServer({ server })` attached to a node:http server at listen time",
-      "reached_when": "always, for that attachment shape; `server.on('upgrade')` (what @hono/node-server uses) is on turnloop",
-      "blocker": "the handshake needs an owned stream a turnloop connection cannot produce, and perry-ext-ws stores `WebSocketStream` values from tungstenite 0.29 while turnloop-websocket is on 0.30.",
-      "issue": "unfiled \u2014 P5 named it, P8 confirms it",
-      "plan": "E"
     },
     {
       "crate": "perry-ext-ioredis",
@@ -327,22 +303,10 @@
       "kind": "normal",
       "optional": false,
       "target": null,
-      "surface": "`import WebSocket from 'ws'` \u2014 client and `WebSocketServer`",
-      "reached_when": "always: the `ws` binding was never a P1\u2013P7 subject",
-      "blocker": "this crate is the one P5 could not reach: it stores `tokio_tungstenite::WebSocketStream` values, and turnloop-websocket is on a different tungstenite major, so the stored connection type has to change with the transport.",
-      "issue": "unfiled \u2014 P5 named it, P8 confirms it",
-      "plan": "E"
-    },
-    {
-      "crate": "perry-ext-ws",
-      "dep": "tokio-tungstenite",
-      "kind": "normal",
-      "optional": false,
-      "target": null,
-      "surface": "as `tokio` above",
-      "reached_when": "always",
-      "blocker": "tungstenite 0.29 here vs turnloop-websocket's 0.30 \u2014 a major-version migration of the stored connection type, not a transport swap.",
-      "issue": "unfiled \u2014 P5 named it, P8 confirms it",
+      "surface": "`import WebSocket from 'ws'` \u2014 the outbound client's connect and the standalone `WebSocketServer({ port })` accept loop. NOT the attached `WebSocketServer({ server })`, which runs on turnloop through perry-ext-http.",
+      "reached_when": "any `new WebSocket(url)` or `new WebSocketServer({ port })`. An attached `WebSocketServer` reaches neither and is on turnloop.",
+      "blocker": "the transport, and only the transport. The protocol left with `tokio-tungstenite`: the codec and the handshake are `turnloop_websocket`'s sans-I/O core (`codec.rs`, `handshake.rs`) and already drive both transports, so what remains is a turnloop connect (DNS + `tcp_connect` + a `turnloop_tls_io` client install for `wss://`) and a turnloop `tcp_listen`/`accept_start` for the standalone server. Both primitives exist. The tokio path then stays as the declining transport under the P1 coexistence rule, the way perry-ext-net's socket task did.",
+      "issue": "unfiled \u2014 turnloop WS lane",
       "plan": "E"
     },
     {
@@ -454,18 +418,6 @@
       "plan": "H"
     },
     {
-      "crate": "perry-stdlib",
-      "dep": "tokio-tungstenite",
-      "kind": "normal",
-      "optional": true,
-      "target": null,
-      "surface": "perry-stdlib is the bundled implementation. For every module below, the well-known flip compiles the bundled copy OUT and routes the import to the perry-ext-* wrapper \u2014 so these are reachable only under `PERRY_DISABLE_WELL_KNOWN=1`, when the wrapper's source is absent, or in a prebuilt release archive that ships `full`. the bundled `ws` module.",
-      "reached_when": "`PERRY_DISABLE_WELL_KNOWN=1`, or an import that does not route to perry-ext-ws",
-      "blocker": "same tungstenite-major blocker as perry-ext-ws.",
-      "issue": "unfiled \u2014 P8",
-      "plan": "E"
-    },
-    {
       "crate": "perry-ui-android",
       "dep": "tungstenite",
       "kind": "normal",
@@ -473,7 +425,7 @@
       "target": "cfg(target_os = \"android\")",
       "surface": "`perry/ui` WebSocket on Android (`crates/perry-ui-android/src/ws.rs`)",
       "reached_when": "an Android target build only",
-      "blocker": "this is SYNC tungstenite 0.24 on its own thread \u2014 it is not a tokio edge at all, and it is listed because it pins the third tungstenite major in the tree, which is part of why perry-ext-ws cannot move to turnloop-websocket cheaply.",
+      "blocker": "SYNC tungstenite 0.24 on its own thread \u2014 not a tokio edge at all. It is now the LAST holder of a second tungstenite major: the turnloop WS lane took 0.29 out of the tree, so this edge and turnloop-websocket's 0.30 are all that remain. `turnloop_websocket::Connection` works over a blocking `std::net::TcpStream` as happily as over anything else, so the migration is mechanical \u2014 but it cannot be built or run from the shared Linux box, and an unexecutable migration is not one to land blind.",
       "issue": "unfiled \u2014 P8",
       "plan": "N"
     }
@@ -524,9 +476,6 @@
     "tokio-stream": [
       "0.1.18"
     ],
-    "tokio-tungstenite": [
-      "0.29.0"
-    ],
     "tokio-util": [
       "0.7.18"
     ],
@@ -538,7 +487,7 @@
     ],
     "tungstenite": [
       "0.24.0",
-      "0.29.0"
+      "0.30.0"
     ]
   },
   "source_sites": {
@@ -546,17 +495,17 @@
     "perry-container-compose": 14,
     "perry-ext-ads": 5,
     "perry-ext-axios": 2,
-    "perry-ext-fastify": 11,
-    "perry-ext-http": 106,
+    "perry-ext-fastify": 8,
+    "perry-ext-http": 104,
     "perry-ext-ioredis": 13,
     "perry-ext-mongodb": 29,
     "perry-ext-mysql2": 35,
-    "perry-ext-net": 52,
+    "perry-ext-net": 55,
     "perry-ext-nodemailer": 6,
     "perry-ext-pg": 20,
-    "perry-ext-ws": 24,
+    "perry-ext-ws": 26,
     "perry-ffi": 2,
-    "perry-stdlib": 104,
+    "perry-stdlib": 114,
     "perry-ui-gtk4": 6
   }
 }

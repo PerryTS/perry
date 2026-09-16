@@ -19,7 +19,10 @@ fn knows(handle: i64, name: &str) -> bool {
             "clients" | "address" | "handleUpgrade" | "emit" | "on" | "addListener" | "close"
         )
     } else if get_handle_mut::<WsClientHandle>(handle).is_some() {
-        matches!(name, "send" | "close" | "on" | "addListener" | "readyState")
+        matches!(
+            name,
+            "send" | "close" | "terminate" | "ping" | "pong" | "on" | "addListener" | "readyState"
+        )
     } else {
         false
     }
@@ -99,11 +102,23 @@ unsafe extern "C" fn method(
             f64::from_bits(POINTER_TAG | handle as u64)
         }
         "send" => {
-            js_ws_send(handle, string_arg(arg(0)));
+            js_ws_send_value(handle, arg(0), arg(1));
+            undefined()
+        }
+        "ping" => {
+            js_ws_ping(handle, arg(0));
+            undefined()
+        }
+        "pong" => {
+            js_ws_pong(handle, arg(0));
+            undefined()
+        }
+        "terminate" => {
+            js_ws_terminate(handle);
             undefined()
         }
         "close" => {
-            js_ws_close(handle);
+            js_ws_close_with(handle, arg(0), arg(1));
             undefined()
         }
         _ => return 0,

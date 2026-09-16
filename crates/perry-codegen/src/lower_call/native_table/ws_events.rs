@@ -36,21 +36,58 @@ pub(super) const WS_EVENTS_ROWS: &[NativeModSig] = &[
         args: &[NA_STR, NA_PTR],
         ret: NR_I32,
     },
+    // `ws.send(data)` takes the VALUE, not a string: `ws` frames a string as
+    // text and anything buffer-shaped as binary, and `NA_STR` could express
+    // only the first — a `Buffer` argument could not be sent at all.
     NativeModSig {
         module: "ws",
         has_receiver: true,
         method: "send",
         class_filter: None,
-        runtime: "js_ws_send",
-        args: &[NA_STR],
+        runtime: "js_ws_send_value",
+        args: &[NA_F64, NA_F64],
         ret: NR_VOID,
     },
+    // `ws.close([code[, reason]])`. Both arguments used to be dropped on the
+    // floor — the signature took none and the frame was always `Close(None)`,
+    // so a peer could never observe an application close code. A missing arg
+    // is padded with `TAG_UNDEFINED`, which `js_ws_close_with` reads as "no
+    // code", so a bare `close()` is unchanged.
     NativeModSig {
         module: "ws",
         has_receiver: true,
         method: "close",
         class_filter: None,
-        runtime: "js_ws_close",
+        runtime: "js_ws_close_with",
+        args: &[NA_F64, NA_F64],
+        ret: NR_VOID,
+    },
+    // `ws.ping([data])` / `ws.pong([data])` — previously absent entirely.
+    NativeModSig {
+        module: "ws",
+        has_receiver: true,
+        method: "ping",
+        class_filter: None,
+        runtime: "js_ws_ping",
+        args: &[NA_F64],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "ws",
+        has_receiver: true,
+        method: "pong",
+        class_filter: None,
+        runtime: "js_ws_pong",
+        args: &[NA_F64],
+        ret: NR_VOID,
+    },
+    // `ws.terminate()` — close with no closing handshake.
+    NativeModSig {
+        module: "ws",
+        has_receiver: true,
+        method: "terminate",
+        class_filter: None,
+        runtime: "js_ws_terminate",
         args: &[],
         ret: NR_VOID,
     },
@@ -117,8 +154,8 @@ pub(super) const WS_EVENTS_ROWS: &[NativeModSig] = &[
         has_receiver: true,
         method: "send",
         class_filter: Some("Client"),
-        runtime: "js_ws_send_client_i64",
-        args: &[NA_STR],
+        runtime: "js_ws_send_value_client_i64",
+        args: &[NA_F64, NA_F64],
         ret: NR_VOID,
     },
     NativeModSig {
@@ -126,7 +163,34 @@ pub(super) const WS_EVENTS_ROWS: &[NativeModSig] = &[
         has_receiver: true,
         method: "close",
         class_filter: Some("Client"),
-        runtime: "js_ws_close_client_i64",
+        runtime: "js_ws_close_with_client_i64",
+        args: &[NA_F64, NA_F64],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "ws",
+        has_receiver: true,
+        method: "ping",
+        class_filter: Some("Client"),
+        runtime: "js_ws_ping",
+        args: &[NA_F64],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "ws",
+        has_receiver: true,
+        method: "pong",
+        class_filter: Some("Client"),
+        runtime: "js_ws_pong",
+        args: &[NA_F64],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "ws",
+        has_receiver: true,
+        method: "terminate",
+        class_filter: Some("Client"),
+        runtime: "js_ws_terminate",
         args: &[],
         ret: NR_VOID,
     },

@@ -8,6 +8,17 @@ extern "C" {
     ) -> JsValue;
 }
 
+/// Read one named field off a JS object value.
+///
+/// # Safety
+/// `key` must be a Perry-runtime `StringHeader`.
+pub(super) unsafe fn object_field_by_name(object: JsValue, key: *const StringHeader) -> JsValue {
+    if !object.is_pointer() {
+        return JsValue::from_bits(0x7FFC_0000_0000_0001);
+    }
+    js_object_get_field_by_name(object.as_pointer::<perry_ffi::ObjectHeader>(), key)
+}
+
 pub(super) fn value_string(value: JsValue) -> Option<String> {
     if value.is_short_string() {
         let mut bytes = [0; 5];
@@ -122,26 +133,19 @@ pub extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
                     accept_result = listener.accept() => {
                         match accept_result {
                             Ok((tcp_stream, _addr)) => {
-                                match tokio_tungstenite::accept_async(tcp_stream).await {
-                                    Ok(ws_stream) => {
-                                        let ws_id = register_handle(WsClientHandle) as usize;
-                                        let (tx, rx) = mpsc::unbounded_channel::<WsCommand>();
-                                        WS_CONNECTIONS.lock().unwrap().insert(ws_id, WsConnection {
-                                            sender: tx,
-                                            messages: Vec::new(),
-                                            is_open: true,
-                                            is_closing: false,
-                                            is_closed: false,
-                                        });
-                                        WS_CLIENT_LISTENERS.lock().unwrap().insert(ws_id, WsClientListeners {
-                                            listeners: HashMap::new(),
-                                        });
-                                        if let Some(s) = get_handle_mut::<WsServerHandle>(handle_id) {
-                                            s.client_ids.push(ws_id);
-                                        }
-                                        WS_CLIENT_PARENT_SERVER.lock().unwrap().insert(ws_id, handle_id);
+                                // Node's `ws` sets TCP_NODELAY on accepted
+                                // sockets; without it a small frame can sit in
+                                // Nagle's queue behind the handshake.
+                                let _ = tcp_stream.set_nodelay(true);
+                                // The handshake is `turnloop_websocket`'s, run
+                                // over bytes rather than over an owned stream —
+                                // the same call the turnloop transport makes.
+                                // `accept_async` used to hide this, and hid the
+                                // subprotocol negotiation with it.
+                                match accept_on_stream(tcp_stream).await {
+                                    Ok((stream, codec, leftover)) => {
+                                        let ws_id = adopt_server_client(handle_id, stream, codec, leftover);
                                         push_ws_event(PendingWsEvent::Connection(handle_id, ws_id));
-                                        drive_server_client_io(ws_id, ws_stream, rx);
                                     }
                                     Err(e) => {
                                         push_ws_event(PendingWsEvent::ServerError(
@@ -335,4 +339,74 @@ pub extern "C" fn js_ws_server_address(handle: i64) -> f64 {
         perry_ffi::js_object_set_field(object, 2, JsValue::from_number(port as f64));
         f64::from_bits(JsValue::from_object_ptr(object).bits())
     }
+}
+
+// ── The standalone server's own handshake ────────────────────────────────────
+
+/// Read the upgrade request off a freshly accepted stream and answer it.
+///
+/// This is the tokio-transport twin of [`crate::turnloop_link::accept_response`]
+/// and it calls the same function: the handshake has no transport of its own,
+/// so the only difference between the two is who does the reading and writing.
+async fn accept_on_stream<S>(mut stream: S) -> Result<(S, crate::codec::Codec, Vec<u8>), String>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut reader = crate::handshake::HeadReader::new(turnloop_http::http1::Mode::Request);
+    let mut buffer = vec![0u8; 16 * 1024];
+    let head = loop {
+        let n = stream
+            .read(&mut buffer)
+            .await
+            .map_err(|e| format!("read: {e}"))?;
+        if n == 0 {
+            return Err("socket hang up before the handshake completed".to_string());
+        }
+        if let Some(head) = reader.receive(&buffer[..n]).map_err(|e| e.message)? {
+            break head;
+        }
+    };
+    match crate::handshake::accept(&head, &[]) {
+        Ok((response, _protocol)) => {
+            stream
+                .write_all(&response)
+                .await
+                .map_err(|e| format!("write: {e}"))?;
+            Ok((
+                stream,
+                crate::codec::Codec::new(crate::codec::Role::Server),
+                reader.into_leftover(),
+            ))
+        }
+        Err(e) => {
+            // `ws` answers a malformed upgrade with a 400 and closes, rather
+            // than dropping the connection silently.
+            let _ = stream
+                .write_all(&crate::handshake::reject(400, "Bad Request"))
+                .await;
+            let _ = stream.shutdown().await;
+            Err(e.message)
+        }
+    }
+}
+
+/// Register an accepted connection against its parent server and start its IO.
+fn adopt_server_client<S>(
+    server_handle: Handle,
+    stream: S,
+    codec: crate::codec::Codec,
+    leftover: Vec<u8>,
+) -> usize
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    // The parent link must exist before the IO loop can deliver anything, or a
+    // frame that arrived with the handshake is queued against no server and the
+    // `wss.on('message')` fallback never sees it.
+    let ws_id = crate::register_stream_client_for_server(server_handle, stream, codec, leftover);
+    if let Some(s) = get_handle_mut::<WsServerHandle>(server_handle) {
+        s.client_ids.push(ws_id);
+    }
+    ws_id
 }

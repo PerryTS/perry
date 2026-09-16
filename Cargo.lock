@@ -5974,7 +5974,6 @@ dependencies = [
  "serde_json",
  "socket2",
  "tokio",
- "tokio-tungstenite",
 ]
 
 [[package]]
@@ -6005,7 +6004,6 @@ dependencies = [
  "socket2",
  "tokio",
  "tokio-rustls",
- "tokio-tungstenite",
  "turnloop-http",
  "webpki-roots 1.0.9",
  "x509-cert",
@@ -6256,11 +6254,14 @@ version = "0.5.1582"
 dependencies = [
  "futures-util",
  "lazy_static",
+ "perry-ext-net",
  "perry-ffi",
  "perry-runtime",
  "rustls",
  "tokio",
- "tokio-tungstenite",
+ "turnloop-http",
+ "turnloop-websocket",
+ "url",
 ]
 
 [[package]]
@@ -6489,10 +6490,10 @@ dependencies = [
  "sqlx",
  "tokio",
  "tokio-rustls",
- "tokio-tungstenite",
  "turnloop-http",
  "turnloop-smtp",
  "turnloop-tls",
+ "turnloop-websocket",
  "url",
  "uuid",
  "windows-sys 0.61.2",
@@ -9600,22 +9601,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tokio-tungstenite"
-version = "0.29.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f72a05e828585856dacd553fba484c242c46e391fb0e58917c942ee9202915c"
-dependencies = [
- "futures-util",
- "log",
- "rustls",
- "rustls-pki-types",
- "tokio",
- "tokio-rustls",
- "tungstenite 0.29.0",
- "webpki-roots 0.26.11",
-]
-
-[[package]]
 name = "tokio-util"
 version = "0.7.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9844,19 +9829,17 @@ dependencies = [
 
 [[package]]
 name = "tungstenite"
-version = "0.29.0"
+version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c01152af293afb9c7c2a57e4b559c5620b421f6d133261c60dd2d0cdb38e6b8"
+checksum = "e48ac77174b19c110a50ab2128b24215ac9cb40e0e12e093fb602d175c569d22"
 dependencies = [
  "bytes",
  "data-encoding",
  "http",
  "httparse",
  "log",
- "rand 0.9.4",
- "rustls",
- "rustls-pki-types",
- "sha1 0.10.6",
+ "rand 0.10.2",
+ "sha1 0.11.0",
  "thiserror 2.0.18",
 ]
 
@@ -9973,6 +9956,21 @@ checksum = "406cec104ce3f881cf169542d54d3dd14f9b1dec937342f683576ea5577fad4e"
 dependencies = [
  "getrandom 0.3.4",
  "getrandom 0.4.3",
+]
+
+[[package]]
+name = "turnloop-websocket"
+version = "0.1.0-alpha.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a248ac141b235a4b6f12a5abc1f991dd6d215dc6626053fab0dba740018280c3"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "getrandom 0.4.3",
+ "http",
+ "tungstenite 0.30.0",
+ "turnloop-http",
+ "turnloop-wasi-random",
 ]
 
 [[package]]

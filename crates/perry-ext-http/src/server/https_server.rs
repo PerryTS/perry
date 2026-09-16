@@ -843,9 +843,10 @@ fn turnloop_https_listen(
     tls_config: Arc<rustls::ServerConfig>,
     no_delay: bool,
 ) -> bool {
-    if crate::server::cluster_bind::is_cluster_worker()
-        || perry_ext_ws::has_attached_server(server_handle)
-        || !crate::server::turnloop_serve::enabled()
+    // An attached `WebSocketServer` no longer declines: its handshake runs over
+    // the connection rather than over an owned stream, and the 101 and every
+    // frame go out through the same TLS layer the HTTP responses did.
+    if crate::server::cluster_bind::is_cluster_worker() || !crate::server::turnloop_serve::enabled()
     {
         return false;
     }

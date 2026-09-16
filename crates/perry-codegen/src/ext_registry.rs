@@ -502,7 +502,14 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_ws_connect",                               OwnerKind::WellKnown("ws")),
     ("js_ws_connect_start",                         OwnerKind::WellKnown("ws")),
     ("js_ws_send",                                  OwnerKind::WellKnown("ws")),
+    ("js_ws_send_value",                            OwnerKind::WellKnown("ws")),
+    ("js_ws_send_value_client_i64",                 OwnerKind::WellKnown("ws")),
     ("js_ws_close",                                 OwnerKind::WellKnown("ws")),
+    ("js_ws_close_with",                            OwnerKind::WellKnown("ws")),
+    ("js_ws_close_with_client_i64",                 OwnerKind::WellKnown("ws")),
+    ("js_ws_ping",                                  OwnerKind::WellKnown("ws")),
+    ("js_ws_pong",                                  OwnerKind::WellKnown("ws")),
+    ("js_ws_terminate",                             OwnerKind::WellKnown("ws")),
     ("js_ws_on",                                    OwnerKind::WellKnown("ws")),
     ("js_ws_receive",                               OwnerKind::WellKnown("ws")),
     ("js_ws_is_open",                               OwnerKind::WellKnown("ws")),
@@ -518,6 +525,7 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_ws_server_address",                        OwnerKind::WellKnown("ws")),
     ("js_ws_server_emit",                           OwnerKind::WellKnown("ws")),
     ("js_ws_server_close",                          OwnerKind::WellKnown("ws")),
+    ("js_ws_server_close_with",                     OwnerKind::WellKnown("ws")),
 
     // ── #1724: global Blob/File + URL object-URL helpers ──────────────
     // `new Blob([...])`, `new File([...], name)`, `URL.createObjectURL`,

@@ -91,6 +91,9 @@ pub(crate) fn enabled() -> bool {
         // match this crate's, which leaves `available` false and keeps every
         // server on hyper rather than submitting work nothing can deliver.
         tl::register_sink(SUBSYSTEM, conn::sink, alloc_id);
+        // An attached `WebSocketServer` runs on this connection, so give
+        // perry-ext-ws the writer it needs to reach it (see `conn::on_websocket`).
+        conn::register_ws_transport();
     }
     tl::available(SUBSYSTEM)
 }

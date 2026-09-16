@@ -114,11 +114,21 @@ bundled-streams = ["dep:flate2", "dep:brotli"]
 # `import 'ws'` can route to perry-ext-ws without duplicate
 # `_js_ws_*` symbols at link time.
 websocket = ["bundled-ws"]
+# turnloop WS lane: the codec is `turnloop-websocket`'s sans-I/O protocol core,
+# with `turnloop-http` supplying the HTTP/1 head codec the opening handshake is
+# expressed in, driven over the tokio streams `ws.rs` already owned. It
+# replaced the old `WebSocketStream<S>` wrapper, which welded the codec to the
+# transport. `dep:url` parses the connect target; `dep:tokio-rustls` +
+# `dep:rustls-native-certs` are the outbound `wss://` client — both were
+# already declared for `tls-runtime`, so no new third-party crate enters the
+# graph. perry-stdlib must NOT depend on perry-ext-ws: it is the bundled
+# alternative to that crate, so the duplication between the two `ws` bindings
+# is deliberate.
 # #6117: `dep:rustls` so the client-connect path can install a process-level
 # CryptoProvider before the first `wss://` handshake — feature unification
 # enables BOTH `ring` and `aws-lc-rs` in the final link, so rustls panics
 # unless one is installed explicitly (same as the `tls` feature's paths).
-bundled-ws = ["dep:tokio-tungstenite", "dep:futures-util", "dep:rustls", "async-runtime"]
+bundled-ws = ["dep:turnloop-websocket", "dep:turnloop-http", "dep:url", "dep:tokio-rustls", "dep:rustls", "dep:rustls-native-certs", "async-runtime"]
 
 # Activated by `optimized_libs::build_optimized_libs` when the
 # well-known flip strips `bundled-ws` and routes `import 'ws'` to
@@ -180,7 +190,7 @@ external-events-construct = []
 
 # TLS — direct `tls.connect()` and `socket.upgradeToTLS()` (Postgres SSLRequest flow).
 # Uses rustls (not native-tls) to avoid OpenSSL on every platform and keep Android
-# cross-compile unblocked; matches reqwest/tokio-tungstenite/mongodb feature flags.
+# cross-compile unblocked; matches the reqwest/mongodb feature flags.
 #
 # `tls-runtime` contains the shared TLS server/preflight implementation. The
 # `external-net-tls` adapter uses that implementation while resolving
@@ -388,8 +398,12 @@ dashmap.workspace = true
 # HTTP Client
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "http2"], default-features = false, optional = true }
 
-# WebSocket
-tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"], optional = true }
+# WebSocket — the sans-I/O protocol core the `ws` module's codec is built on.
+# `turnloop-http` is declared with the other turnloop client engines above.
+turnloop-websocket = { workspace = true, optional = true }
+# Still optional for `bundled-mongodb`'s `TryStreamExt`; the `ws` module no
+# longer needs a futures `Sink`/`Stream` now that its codec drives tokio's
+# `AsyncRead`/`AsyncWrite` directly.
 futures-util = { version = "0.3", optional = true }
 
 # TLS (for net.Socket.upgradeToTLS and tls.connect) — rustls-only, no OpenSSL.

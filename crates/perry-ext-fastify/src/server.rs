@@ -878,9 +878,8 @@ async fn handle_request(
 ///
 /// Synchronously builds the 101 response (so hyper drives the protocol
 /// switch) and spawns a tokio task that awaits the upgraded stream,
-/// finishes the handshake server-side via
-/// `tokio_tungstenite::WebSocketStream::from_raw_socket`, registers
-/// the stream with perry-ext-ws, and queues a `FastifyPendingUpgrade`
+/// hands it to perry-ext-ws (which installs the protocol over it), and
+/// queues a `FastifyPendingUpgrade`
 /// on the per-server channel; the main-thread pump fires the
 /// `app.server.on("upgrade", …)` handlers with `(req, ws_id, head)`.
 async fn handle_fastify_websocket_upgrade(
@@ -891,30 +890,44 @@ async fn handle_fastify_websocket_upgrade(
     headers: HashMap<String, String>,
     upgrade_tx: Arc<mpsc::Sender<FastifyPendingUpgrade>>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
-    // Compute the Sec-WebSocket-Accept value before consuming req.
-    let accept_value = req
+    // Validate the upgrade and compute its response headers.
+    //
+    // `perry_ext_ws::accept_headers` is `turnloop_websocket::accept` — the same
+    // handshake perry-ext-http and the turnloop transport run. The hand-rolled
+    // `derive_accept_key` it replaces checked neither `Sec-WebSocket-Version`
+    // nor `Upgrade: websocket`, and answered a request with no
+    // `Sec-WebSocket-Key` with an empty accept value and a 101.
+    let request_headers: Vec<(String, String)> = req
         .headers()
-        .get("sec-websocket-key")
-        .and_then(|v| v.to_str().ok())
-        .map(|k| tokio_tungstenite::tungstenite::handshake::derive_accept_key(k.as_bytes()))
-        .unwrap_or_default();
+        .iter()
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|value| (name.as_str().to_string(), value.to_string()))
+        })
+        .collect();
+    let response_headers = match perry_ext_ws::accept_headers("GET", "/", &request_headers, &[]) {
+        Ok(headers) => headers,
+        Err(_) => {
+            return Ok(Response::builder()
+                .status(400)
+                .header("connection", "close")
+                .body(Full::new(Bytes::new()))
+                .unwrap())
+        }
+    };
 
-    // Spawn a task that waits for hyper to perform the protocol
-    // switch, completes the tungstenite handshake, and hands the
-    // resulting stream to perry-ext-ws.
+    // Spawn a task that waits for hyper to perform the protocol switch and
+    // hands the raw stream to perry-ext-ws, which installs the protocol over
+    // it. Constructing a `WebSocketStream` here is what used to put
+    // `tokio-tungstenite` in this crate's dependency graph.
     tokio::spawn(async move {
         let upgraded = match hyper::upgrade::on(&mut req).await {
             Ok(u) => u,
             Err(_) => return,
         };
-        let io = TokioIo::new(upgraded);
-        let ws = tokio_tungstenite::WebSocketStream::from_raw_socket(
-            io,
-            tokio_tungstenite::tungstenite::protocol::Role::Server,
-            None,
-        )
-        .await;
-        let ws_id = perry_ext_ws::register_external_ws_stream(ws);
+        let ws_id = perry_ext_ws::register_upgraded_stream(TokioIo::new(upgraded));
         let pending = FastifyPendingUpgrade {
             app_handle,
             method,
@@ -926,13 +939,11 @@ async fn handle_fastify_websocket_upgrade(
         perry_ffi::notify_main_thread();
     });
 
-    Ok(Response::builder()
-        .status(101)
-        .header("upgrade", "websocket")
-        .header("connection", "Upgrade")
-        .header("sec-websocket-accept", accept_value)
-        .body(Full::new(Bytes::new()))
-        .unwrap())
+    let mut response = Response::builder().status(101);
+    for (name, value) in response_headers {
+        response = response.header(name, value);
+    }
+    Ok(response.body(Full::new(Bytes::new())).unwrap())
 }
 
 /// Build the per-request [`FastifyContext`], MOVING the pending request's

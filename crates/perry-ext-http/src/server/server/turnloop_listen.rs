@@ -64,18 +64,21 @@ pub(crate) fn turnloop_connection_closed(_conn_id: i64) {}
 /// (P5). Returns the listener id, or `None` when the caller must keep the
 /// hyper path.
 ///
-/// Three reasons to decline, each a real hole rather than a preference:
+/// Two reasons to decline, each a real hole rather than a preference:
 ///
-/// * **No loop.** A `worker_threads` agent has none before P3/P4, exactly as
-///   P1's net transport declines there. This is why the hyper accept loop is
-///   narrowed rather than deleted.
+/// * **No loop.** A thread acting for an agent another thread already owns has
+///   none, exactly as P1's net transport declines there. This is why the hyper
+///   accept loop is narrowed rather than deleted.
 /// * **A cluster worker.** SCHED_RR fd passing and the SO_REUSEPORT bind both
 ///   need the `std::net::TcpListener` the hyper path builds; turnloop's
 ///   `ListenOpts` exposes no `reuse_port` through Perry's binding yet.
-/// * **An attached `WebSocketServer`.** Its handshake is completed by
-///   `tokio_tungstenite` over an owned stream, which a turnloop connection
-///   cannot produce; a `server.on('upgrade')` listener needs no such thing and
-///   is served on turnloop through `turnloop_net::transfer`.
+///
+/// An attached `WebSocketServer` used to be a third: its handshake was
+/// completed by `tokio_tungstenite` over an owned stream, which a turnloop
+/// connection cannot produce. It no longer is — the handshake and the framing
+/// are `turnloop_websocket`'s sans-I/O core now, driven over the connection
+/// this crate keeps (`turnloop_serve::conn::on_websocket`), so no stream and no
+/// descriptor has to exist for it.
 pub(super) fn try_listen_on_turnloop(
     server_handle: i64,
     host: &str,
@@ -83,9 +86,6 @@ pub(super) fn try_listen_on_turnloop(
     resolved: Option<u16>,
 ) -> Option<i64> {
     if resolved.is_some() || crate::server::cluster_bind::is_cluster_worker() {
-        return None;
-    }
-    if perry_ext_ws::has_attached_server(server_handle) {
         return None;
     }
     if !crate::server::turnloop_serve::enabled() {

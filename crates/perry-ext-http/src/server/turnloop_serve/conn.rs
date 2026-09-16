@@ -44,6 +44,9 @@ struct Building {
     /// upgrade is an ordinary head with no body and the server is the one that
     /// has to recognize it.
     upgrade: bool,
+    /// `Connection: upgrade` naming `websocket`, with a `Sec-WebSocket-Key`.
+    /// An attached `WebSocketServer` answers these itself.
+    websocket: bool,
 }
 
 /// The request currently being answered.
@@ -89,6 +92,13 @@ pub(crate) struct Conn {
     secure: bool,
     /// The handshake has not completed, so no HTTP byte has been seen yet.
     handshaking: bool,
+    /// The connection has been upgraded to WebSocket. Bytes now go to
+    /// `perry_ext_ws::turnloop_link` rather than the HTTP decoder, and the
+    /// connection stays ours: P5's `turnloop_net::transfer` moves an
+    /// `'upgrade'` socket to `net` because a `net.Socket` outlives it, but a
+    /// WebSocket has no such JS object and the protocol runs *above* the
+    /// handle, TLS layer and all.
+    websocket: bool,
 }
 
 fn conns() -> &'static Mutex<HashMap<i64, Conn>> {
@@ -266,6 +276,7 @@ fn on_accept(listener_id: i64, conn_id: i64) {
             destroyed: false,
             secure,
             handshaking: secure,
+            websocket: false,
         },
     );
     crate::server::server::queue_turnloop_connection_event(server_handle);
@@ -324,6 +335,7 @@ pub(crate) fn adopt_alpn_http1(
             secure: true,
             // The handshake is already complete: that is what decided ALPN.
             handshaking: false,
+            websocket: false,
         },
     );
     if !leftover.is_empty() {
@@ -369,7 +381,19 @@ fn on_data(id: i64, bytes: &[u8]) {
     }
 }
 
+/// Is this connection carrying a WebSocket rather than HTTP?
+fn is_websocket(id: i64) -> bool {
+    with_conn(id, |c| c.websocket).unwrap_or(false)
+}
+
 fn feed(id: i64, bytes: &[u8]) {
+    if is_websocket(id) {
+        // Past the 101 these are frames, not HTTP. The connection, its id, its
+        // outstanding multishot read and its TLS layer are all unchanged — only
+        // who decodes the bytes.
+        perry_ext_ws::turnloop_link::on_data(id, bytes);
+        return;
+    }
     let known = with_conn(id, |c| c.input.extend_from_slice(bytes)).is_some();
     if known {
         decode(id);
@@ -391,6 +415,8 @@ fn decode(id: i64) {
             /// `100 Continue` before it sends the body.
             Dispatch(HttpPendingRequest, bool),
             Upgrade(Building),
+            /// A WebSocket upgrade an attached `WebSocketServer` will answer.
+            WebSocket(Building),
             Failed(&'static str),
         }
         let step = with_conn(id, |c| {
@@ -417,6 +443,17 @@ fn decode(id: i64) {
                 Some(http1::Event::Trailers(_)) => outcome = Step::Again,
                 Some(http1::Event::End) => {
                     outcome = match c.building.take() {
+                        // A WebSocket upgrade with a `WebSocketServer` attached
+                        // to this server is answered here, before the generic
+                        // `'upgrade'` route — that is `ws`'s own precedence,
+                        // and it is the case P5 had to decline.
+                        Some(building)
+                            if building.websocket
+                                && perry_ext_ws::has_attached_server(c.server_handle) =>
+                        {
+                            c.paused = true;
+                            Step::WebSocket(building)
+                        }
                         // Node dispatches an upgrade request to `'upgrade'`
                         // instead of `'request'` — but only when a listener
                         // exists; with none it is served as an ordinary
@@ -473,6 +510,10 @@ fn decode(id: i64) {
                 on_upgrade(id, building);
                 return;
             }
+            Some(Step::WebSocket(building)) => {
+                on_websocket(id, building);
+                return;
+            }
             Some(Step::Failed(code)) => {
                 bad_request(id, code);
                 return;
@@ -507,6 +548,10 @@ fn building_from(head: &http1::Head) -> Building {
         raw_headers.push((header.name.clone(), value.to_string()));
     }
     let connection = headers_lower.get("connection").cloned();
+    let websocket_upgrade = headers_lower
+        .get("upgrade")
+        .is_some_and(|v| v.eq_ignore_ascii_case("websocket"))
+        && headers_lower.contains_key("sec-websocket-key");
     let upgrade = headers_lower.contains_key("upgrade")
         && connection.as_deref().is_some_and(|v| {
             v.to_ascii_lowercase()
@@ -526,6 +571,7 @@ fn building_from(head: &http1::Head) -> Building {
         expects_continue,
         connection,
         upgrade,
+        websocket: upgrade && websocket_upgrade,
     }
 }
 
@@ -925,6 +971,19 @@ fn bad_request(conn_id: i64, _code: &str) {
 // ── Terminal completions ────────────────────────────────────────────────────
 
 fn on_eof(id: i64) {
+    if is_websocket(id) {
+        // An upgraded connection has no request in flight and no response to
+        // finish; `ws` reports a missing close frame as 1006. Our own side is
+        // closed here rather than by the ws layer, which owns the protocol and
+        // not the connection — but only if the close handshake had not already
+        // finished. Shutting down twice answers `ENOTCONN`, and answering that
+        // with a destroy resets a connection whose answering close frame is
+        // still on the wire.
+        if perry_ext_ws::turnloop_link::on_eof(id) {
+            finish_and_close(id);
+        }
+        return;
+    }
     let state = with_conn(id, |c| {
         // A TLS connection reaches EOF twice — the peer's `close_notify` and
         // then the TCP FIN — and the close must only be driven once.
@@ -966,6 +1025,13 @@ fn on_wrote(_id: i64, _len: usize) {
 }
 
 fn on_closed(id: i64) {
+    if is_websocket(id) {
+        // The ws side has to learn the connection is gone before the id is
+        // recycled, or a later connection drawing the same id would find a
+        // stale link — the same class of bug the `turnloop_tls_io::forget`
+        // comment below records.
+        perry_ext_ws::turnloop_link::on_closed(id);
+    }
     // A peer that vanished mid-request reaches the terminal `Closed` without
     // ever passing through `destroy_connection`.
     note_aborted(id);
@@ -1018,6 +1084,18 @@ fn on_error(id: i64, code: Option<&str>, syscall: Option<&str>, terminal: bool) 
         }
         return;
     }
+    if is_websocket(id) {
+        let message = code.unwrap_or("WS_ERR_SOCKET");
+        // Same rule, and the same reason P5 stopped reporting a rustls failure
+        // raised after the application had asked to close: an error on a
+        // connection this layer has already finished with is teardown noise,
+        // and destroying the handle for it cancels writes that are still going
+        // out.
+        if perry_ext_ws::turnloop_link::on_error(id, message) {
+            destroy_connection(id);
+        }
+        return;
+    }
     let _ = (code, syscall);
     destroy_connection(id);
 }
@@ -1040,6 +1118,100 @@ fn arm_idle(id: i64) {
 
 fn cancel_idle(id: i64) {
     let _ = tl::timer_cancel(id);
+}
+
+// ── WebSocket ───────────────────────────────────────────────────────────────
+
+/// Answer a WebSocket upgrade for a server with a `WebSocketServer` attached,
+/// on the connection we already have.
+///
+/// This is what P5 could not do, and the reason it could not is worth naming
+/// precisely: `tokio_tungstenite::WebSocketStream<S>` needs an owned
+/// `AsyncRead + AsyncWrite`, and a turnloop connection is an `i64` handle id
+/// with a completion sink. The protocol never needed the stream —
+/// `turnloop_websocket` is sans-I/O, so the handshake is a function of the
+/// request head and the framing is a function of byte slices.
+///
+/// So nothing moves. No `turnloop_net::transfer`, no descriptor handoff, no
+/// second owner: the connection, its id, its outstanding multishot read and its
+/// TLS layer all stay exactly as they are, and only the decoder changes. That
+/// is the shape P5 used for TLS (a session *above* the handle), applied one
+/// layer up.
+fn on_websocket(id: i64, building: Building) {
+    let Some((server_handle, leftover, secure)) = with_conn(id, |c| {
+        (c.server_handle, std::mem::take(&mut c.input), c.secure)
+    }) else {
+        return;
+    };
+    let _ = secure;
+    let head = perry_ext_ws::turnloop_link::request_head(
+        &building.method,
+        &building.url,
+        building.version,
+        &building.raw_headers,
+    );
+    let (response, _protocol) = match perry_ext_ws::turnloop_link::accept_response(&head, &[]) {
+        Ok(accepted) => accepted,
+        Err(e) => {
+            // `ws` answers a malformed handshake with a 400 and closes rather
+            // than dropping the connection.
+            write_raw(
+                id,
+                &perry_ext_ws::turnloop_link::reject_response(400, &e.message),
+            );
+            finish_and_close(id);
+            return;
+        }
+    };
+    cancel_idle(id);
+    // The 101 goes out through the ordinary write path, so an HTTPS server's
+    // attached WebSocket is encrypted exactly like its HTTP responses were.
+    write_raw(id, &response);
+    // Flip before adopting: `adopt` decodes the pipelined leftover, which can
+    // deliver a frame, and `write_raw` from that path must not re-enter the
+    // HTTP encoder.
+    with_conn(id, |c| {
+        c.websocket = true;
+        c.paused = false;
+    });
+    let ws_id = perry_ext_ws::turnloop_link::adopt(id, &leftover);
+
+    let mut im = IncomingMessage::new(
+        building.method,
+        building.url,
+        building.headers_lower,
+        building.raw_headers,
+        Vec::new(),
+        String::new(),
+        0,
+    );
+    im.http_version = if building.version == 0 { "1.0" } else { "1.1" }.to_string();
+    im.complete = true;
+    let request_handle = alloc_incoming_message(im);
+    // The same queue the hyper path uses, so the main-thread drain fires
+    // `wss.on('connection')` and the server's `'upgrade'` listeners in the
+    // order they already ran in.
+    crate::server::server::queue_turnloop_upgrade(crate::server::server::HttpPendingUpgrade {
+        server_handle,
+        request_handle,
+        ws_id,
+        raw_socket_id: 0,
+        head: Vec::new(),
+    });
+}
+
+/// Install this crate as `perry-ext-ws`'s turnloop transport.
+///
+/// `perry-ext-http` already depends on `perry-ext-ws`, so the reverse would be
+/// a cycle; function pointers are the same one-way seam
+/// `register_http_address_reader` uses. Both are TLS-transparent because
+/// `write_raw` and `destroy_connection` are.
+pub(crate) fn register_ws_transport() {
+    perry_ext_ws::turnloop_link::register_transport(perry_ext_ws::turnloop_link::Transport {
+        write: |id, bytes| write_raw(id, bytes),
+        finish: finish_and_close,
+        destroy: destroy_connection,
+    });
 }
 
 // ── Upgrade ─────────────────────────────────────────────────────────────────
