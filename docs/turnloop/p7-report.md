@@ -57,9 +57,14 @@ finishes. The loop made **zero** turns: turnloop carried nothing.
 | `better-sqlite3`, `bun:sqlite` | untouched | not a network driver |
 
 This is a narrowing, not a removal. `sqlx`, the `redis` crate and the `mongodb`
-driver all stay, and every declining case above is reachable — so deleting the
-dependency would delete a working configuration, which is the same shape P1 and
-P5 left their fallbacks in.
+driver all stay, and the declining rows are reachable configurations — the same
+shape P1 and P5 left their fallbacks in.
+
+One qualification, because the table would otherwise overstate it: the
+`rediss://` row declines to a path that **cannot work either**, since this
+crate's `redis` dependency has no TLS backend compiled in. Declining preserves
+today's failure rather than a working configuration, which is still the right
+answer for a transport migration but is not the same claim.
 
 ## The result, measured
 
@@ -243,7 +248,11 @@ migrated path buffers:
   **follows the cursor with `getMore`** until it is exhausted, which is a
   correctness requirement rather than a feature: a transport that stopped at the
   first `OP_MSG` batch would silently return the server's default 101 documents.
-  `mongo_parity.ts` inserts 250 and checks both the count and the sum.
+  That continuation is **implemented but not verified end to end**, and the
+  reason is defect 3 below: `find().toArray()` resolves an empty string on both
+  arms, so no fixture can observe how many documents the cursor produced.
+  `mongo_parity.ts` therefore inserts 250 and checks the *server's* count, which
+  proves the write half and says nothing about the read half.
 
 A streaming API is a JS-surface change (`query().stream()`, a real cursor
 object) and belongs in its own phase.
@@ -545,24 +554,31 @@ BASE vs P7: BYTE-IDENTICAL
 
 **Not** byte-identical to Node, and deliberately reported that way: Perry's
 MongoDB surface diverges from the npm driver's in ways that predate this change
-and are unaffected by it. `findOne` resolves a JSON *string* rather than a
-document; `find().toArray()` resolves `""`; `insertOne().acknowledged` is
-`false`; `updateOne().modifiedCount`, `deleteOne().deletedCount` and
-`insertMany().insertedCount` are `undefined`. Every one of those reads exactly
-the same on `7f77cce3c6`. The transport is what this lane changed, and the
-transport changed nothing:
+and are unaffected by it. The complete list of lines that differ from Node, all
+of them identical on `7f77cce3c6`:
+
+| line | Node | Perry, both arms |
+|---|---|---|
+| `insertOne().acknowledged` | `true` | `false` |
+| `insertMany().insertedCount` | `2` | `0` |
+| `findOne(...)` | a document | a JSON **string** |
+| `find().toArray()` | the documents | `""` |
+| `updateOne().modifiedCount`, `updateMany().modifiedCount`, `deleteOne().deletedCount` | numbers | `undefined` |
+
+Everything else matches Node exactly: `count`, `count-filtered`,
+`count-after-delete`, `bulk-count: 250`, `bulk-count-filtered: 1`,
+`count-after-clear: 0`, `find-one-missing: null`, and `findOne`'s payload once
+the string quoting is accounted for. So the wire half works and the JS half is
+the pre-existing gap. `find().toArray()` resolving an empty string is the most
+serious of these — MongoDB's primary read API is unusable from TypeScript on
+either transport — and it is also why the `getMore` continuation could not be
+verified end to end.
 
 ```
 [perry-db] subsystem=6 connect id=7696581394432 127.0.0.1:57017
 [perry-loop] driver=turnloop turns=39 os_waits=19 … native_ticks=0 … completions=41
 [perry-loop-waits] … tokio_ticks=0 …
 ```
-
-The document *data* is right on both arms — `count`, `count-filtered`,
-`find-one`'s payload and `count-after-delete` all match Node — so the wire half
-works and the JS half is the pre-existing gap. `find().toArray()` resolving an
-empty string is the most serious of these and is worth its own issue: MongoDB's
-primary read API is unusable from TypeScript on either transport.
 
 <!-- EVIDENCE:GAP -->
 

@@ -62,20 +62,22 @@ async function main(): Promise<void> {
   console.log("count-after-delete:", await col.countDocuments({}));
 
   // More documents than one OP_MSG batch carries (the server's default is 101),
-  // so `find().toArray()` has to follow the cursor with getMore. A transport
-  // that stopped at the first batch would silently return 101 here.
+  // so reading them all requires following the cursor with `getMore`. The
+  // turnloop path does; whether it does *correctly* cannot be checked from
+  // here, because `find().toArray()` resolves an empty string on both Perry
+  // arms (see the P7 report's defect list) — so this checks what Perry can
+  // observe, which is the server's own count after a 250-document insert.
   await col.deleteMany({});
   const bulk: Array<{ _id: string; k: number }> = [];
   for (let i = 0; i < 250; i++) bulk.push({ _id: `k${String(i).padStart(3, "0")}`, k: i });
   await col.insertMany(bulk);
-  const cursored = await col.find({}).toArray();
-  console.log("cursor-count:", cursored.length);
-  let sum = 0;
-  for (const d of cursored) sum += (d as { k: number }).k;
-  console.log("cursor-sum:", sum);
+  console.log("bulk-count:", await col.countDocuments({}));
+  console.log("bulk-count-filtered:", await col.countDocuments({ k: 42 }));
+  const one249 = await col.findOne({ _id: "k249" });
+  console.log("bulk-last:", JSON.stringify(one249));
 
-  const delMany = await col.deleteMany({});
-  console.log("delete-many:", delMany.deletedCount);
+  await col.deleteMany({});
+  console.log("count-after-clear:", await col.countDocuments({}));
 
   await client.close();
   console.log("done");
