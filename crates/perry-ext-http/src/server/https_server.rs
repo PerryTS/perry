@@ -846,8 +846,7 @@ fn turnloop_https_listen(
     // An attached `WebSocketServer` no longer declines: its handshake runs over
     // the connection rather than over an owned stream, and the 101 and every
     // frame go out through the same TLS layer the HTTP responses did.
-    if crate::server::cluster_bind::is_cluster_worker()
-        || !crate::server::turnloop_serve::enabled()
+    if crate::server::cluster_bind::is_cluster_worker() || !crate::server::turnloop_serve::enabled()
     {
         return false;
     }

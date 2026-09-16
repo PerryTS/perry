@@ -116,8 +116,9 @@ pub(crate) fn declare_web(module: &mut LlModule) {
     // string as text and anything buffer-shaped as binary, so the argument has
     // to arrive as a JSValue rather than a `StringHeader*`; `close(code, reason)`
     // needs both arguments for the same reason — they used to be dropped.
-    module.declare_function("js_ws_send_value", VOID, &[I64, DOUBLE]);
-    module.declare_function("js_ws_send_value_client_i64", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_ws_send_value", VOID, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function("js_ws_send_value_client_i64", VOID, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function("js_ws_server_close_with", VOID, &[I64, DOUBLE]);
     module.declare_function("js_ws_close_with", VOID, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_ws_close_with_client_i64", VOID, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_ws_ping", VOID, &[I64, DOUBLE]);

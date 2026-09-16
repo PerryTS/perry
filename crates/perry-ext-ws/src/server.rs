@@ -8,6 +8,17 @@ extern "C" {
     ) -> JsValue;
 }
 
+/// Read one named field off a JS object value.
+///
+/// # Safety
+/// `key` must be a Perry-runtime `StringHeader`.
+pub(super) unsafe fn object_field_by_name(object: JsValue, key: *const StringHeader) -> JsValue {
+    if !object.is_pointer() {
+        return JsValue::from_bits(0x7FFC_0000_0000_0001);
+    }
+    js_object_get_field_by_name(object.as_pointer::<perry_ffi::ObjectHeader>(), key)
+}
+
 pub(super) fn value_string(value: JsValue) -> Option<String> {
     if value.is_short_string() {
         let mut bytes = [0; 5];
@@ -337,9 +348,7 @@ pub extern "C" fn js_ws_server_address(handle: i64) -> f64 {
 /// This is the tokio-transport twin of [`crate::turnloop_link::accept_response`]
 /// and it calls the same function: the handshake has no transport of its own,
 /// so the only difference between the two is who does the reading and writing.
-async fn accept_on_stream<S>(
-    mut stream: S,
-) -> Result<(S, crate::codec::Codec, Vec<u8>), String>
+async fn accept_on_stream<S>(mut stream: S) -> Result<(S, crate::codec::Codec, Vec<u8>), String>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {

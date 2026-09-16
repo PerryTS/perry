@@ -73,13 +73,18 @@ mod ws_stubs {
     // program that emits these without the `ws` wrapper on the link line needs
     // a definition here for the same reason `js_ws_send` does.
     #[no_mangle]
-    pub extern "C" fn js_ws_send_value(_handle: i64, _value: f64) {
+    pub extern "C" fn js_ws_send_value(_handle: i64, _value: f64, _options: f64) {
         perry_stub_warn("js_ws_send_value", WS_REASON, None);
     }
 
     #[no_mangle]
-    pub extern "C" fn js_ws_send_value_client_i64(_handle: i64, _value: f64) {
+    pub extern "C" fn js_ws_send_value_client_i64(_handle: i64, _value: f64, _options: f64) {
         perry_stub_warn("js_ws_send_value_client_i64", WS_REASON, None);
+    }
+
+    #[no_mangle]
+    pub extern "C" fn js_ws_server_close_with(_handle: i64, _callback: f64) {
+        perry_stub_warn("js_ws_server_close_with", WS_REASON, None);
     }
 
     #[no_mangle]

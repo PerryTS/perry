@@ -1,10 +1,18 @@
 //! WebSocket module (ws compatible)
 //!
-//! Native implementation of the 'ws' npm package using tokio-tungstenite.
-//! Provides WebSocket client and server functionality.
+//! Native implementation of the 'ws' npm package on `turnloop-websocket`'s
+//! sans-I/O protocol core (see [`codec`]), driven over the tokio streams this
+//! module already owned. Provides WebSocket client and server functionality.
+//!
+//! This is the BUNDLED `ws` binding; `perry-ext-ws` is the other one, and the
+//! two are deliberately independent implementations of the same surface —
+//! perry-stdlib must not depend on the crate it is the alternative to.
+//!
+//! One thing this module does NOT do, and must not be "improved" into doing:
+//! a binary frame reaches JS as `String::from_utf8_lossy`, because
+//! `PendingWsEvent::Message` carries a `String`. Fixing that is an event-queue
+//! change, not a codec change, and it is not this swap's business.
 
-#[cfg(not(target_os = "ios"))]
-use futures_util::{SinkExt, StreamExt};
 #[cfg(not(target_os = "ios"))]
 use perry_runtime::set::{js_set_add, js_set_alloc, js_set_delete, SetHeader};
 use perry_runtime::{
@@ -14,9 +22,15 @@ use perry_runtime::{
 use std::collections::HashMap;
 use std::sync::Mutex;
 #[cfg(not(target_os = "ios"))]
-use tokio::sync::mpsc;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[cfg(not(target_os = "ios"))]
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio::sync::mpsc;
+
+/// The protocol state machine, with no I/O of its own. Read its header before
+/// touching the receive loop: `Received` has two zero cases, and a host that
+/// is wrong about either stalls or silently drops a message.
+#[cfg(not(target_os = "ios"))]
+mod codec;
 
 #[cfg(not(target_os = "ios"))]
 use crate::common::async_bridge::{queue_deferred_resolution, queue_promise_resolution, spawn};
@@ -262,6 +276,503 @@ fn track_server_client(server_handle: Handle, ws_id: usize) {
     }
 }
 
+// ============================================================================
+// The tokio transport: [`codec::Codec`] driven over a split byte stream
+// ============================================================================
+
+/// Anything this transport can carry. `tokio::io::split` works for any
+/// `AsyncRead + AsyncWrite`, which is what lets one loop serve a plain TCP
+/// socket and a TLS one without naming either type at the call site. This is
+/// what replaced `tokio_tungstenite::WebSocketStream::split()` plus a
+/// `futures_util` `Sink`/`Stream` pair.
+#[cfg(not(target_os = "ios"))]
+trait WsTransport: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static {}
+#[cfg(not(target_os = "ios"))]
+impl<T> WsTransport for T where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static
+{
+}
+
+/// A handshaken connection, plus whatever frame bytes arrived in the same read
+/// as the upgrade head. Dropping the leftover loses the peer's first message.
+#[cfg(not(target_os = "ios"))]
+struct WsConnected {
+    stream: Box<dyn WsTransport>,
+    codec: codec::Codec,
+    leftover: Vec<u8>,
+}
+
+/// Which of the three call sites a driver task is serving. The loop is shared;
+/// these variants carry the exact behavioural differences the three inline
+/// `split()` loops had, so a codec swap does not become a redesign.
+#[cfg(not(target_os = "ios"))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum IoFlavor {
+    /// `js_ws_connect`: logs under `[WS-io]`, buffers a message into
+    /// `conn.messages` when nothing is listening, ignores binary frames.
+    ClientLogged,
+    /// `js_ws_connect_start`: the same routing, with no logging.
+    ClientQuiet,
+    /// A server-accepted client: logs under `[WS-srv-io]`, always pushes the
+    /// message event, and reports a binary frame as lossy UTF-8 text.
+    ServerClient,
+}
+
+/// One read's worth of wire bytes. Matches tungstenite's own default read
+/// buffer, so a large message costs the same number of syscalls it used to.
+#[cfg(not(target_os = "ios"))]
+const WS_READ_CHUNK: usize = 128 * 1024;
+
+#[cfg(not(target_os = "ios"))]
+struct WsTarget {
+    secure: bool,
+    host: String,
+    port: u16,
+    /// What goes in the `Host` header. `ws` omits a default port, like a browser.
+    authority: String,
+    path: String,
+}
+
+#[cfg(not(target_os = "ios"))]
+fn parse_ws_url(url: &str) -> Result<WsTarget, String> {
+    let parsed = url::Url::parse(url).map_err(|e| format!("Invalid URL: {}", e))?;
+    let secure = match parsed.scheme() {
+        "ws" | "http" => false,
+        "wss" | "https" => true,
+        other => {
+            return Err(format!(
+                "The URL's protocol must be one of \"ws:\", \"wss:\", \"http:\", or \"https:\" (got \"{}:\")",
+                other
+            ))
+        }
+    };
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "Invalid URL: no host".to_string())?
+        .to_string();
+    let port = parsed
+        .port_or_known_default()
+        .unwrap_or(if secure { 443 } else { 80 });
+    let authority = match parsed.port() {
+        Some(explicit) => format!("{}:{}", host, explicit),
+        None => host.clone(),
+    };
+    let mut path = parsed.path().to_string();
+    if path.is_empty() {
+        path.push('/');
+    }
+    if let Some(query) = parsed.query() {
+        path.push('?');
+        path.push_str(query);
+    }
+    Ok(WsTarget {
+        secure,
+        host,
+        port,
+        authority,
+        path,
+    })
+}
+
+/// The outbound `wss://` client.
+///
+/// perry-stdlib has no TLS *client* helper reachable from a `bundled-ws`
+/// build: `net::build_tls_connector` is private to `net` and gated on the
+/// `tls` feature (which implies `bundled-net`), and `turnloop_tls_client` is
+/// gated on the turnloop HTTP/SMTP client features and is sans-I/O besides. So
+/// the connector is built here from `tokio-rustls` + `rustls-native-certs` —
+/// both already declared in this crate's manifest for `tls-runtime`, so no new
+/// third-party crate enters the graph. The shape mirrors
+/// `net::build_tls_connector`'s verifying path.
+///
+/// Cached: loading the system trust store per connect would be a syscall storm
+/// on a reconnecting client.
+#[cfg(not(target_os = "ios"))]
+fn ws_tls_connector() -> Result<tokio_rustls::TlsConnector, String> {
+    use tokio_rustls::rustls;
+
+    static CONNECTOR: std::sync::OnceLock<Result<tokio_rustls::TlsConnector, String>> =
+        std::sync::OnceLock::new();
+    CONNECTOR
+        .get_or_init(|| {
+            let mut roots = rustls::RootCertStore::empty();
+            // rustls-native-certs 0.8 reports per-cert failures alongside the
+            // certs it did load; accept the partial set, exactly as `net` does.
+            let native = rustls_native_certs::load_native_certs();
+            for cert in native.certs {
+                let _ = roots.add(cert);
+            }
+            if roots.is_empty() {
+                return Err("no trusted root certificates available for wss://".to_string());
+            }
+            let config = rustls::ClientConfig::builder_with_provider(
+                rustls::crypto::aws_lc_rs::default_provider().into(),
+            )
+            .with_safe_default_protocol_versions()
+            .map_err(|e| format!("tls protocol versions: {}", e))?
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+            Ok(tokio_rustls::TlsConnector::from(std::sync::Arc::new(
+                config,
+            )))
+        })
+        .clone()
+}
+
+/// RFC 6455 §4.1's nonce must be unpredictable, not merely unique: a guessable
+/// key lets an attacker who can make this client issue a request convince a
+/// cache that the `101` belongs to an ordinary GET. Both connect entry points
+/// call `ensure_tls_crypto_provider` first, so a default provider is installed
+/// by the time this runs.
+#[cfg(not(target_os = "ios"))]
+fn ws_nonce() -> Result<[u8; 16], String> {
+    let provider = rustls::crypto::CryptoProvider::get_default()
+        .cloned()
+        .unwrap_or_else(|| std::sync::Arc::new(rustls::crypto::aws_lc_rs::default_provider()));
+    let mut nonce = [0u8; 16];
+    provider
+        .secure_random
+        .fill(&mut nonce)
+        .map_err(|_| "no secure random source for the WebSocket key".to_string())?;
+    Ok(nonce)
+}
+
+/// Open a connection and run the client half of the opening handshake.
+///
+/// Replaces `tokio_tungstenite::connect_async`, which did four things in one
+/// call: parse the URL, open the TCP connection, negotiate TLS for `wss://`,
+/// and run the handshake.
+#[cfg(not(target_os = "ios"))]
+async fn ws_client_connect(url: &str) -> Result<WsConnected, String> {
+    let target = parse_ws_url(url)?;
+    let tcp = tokio::net::TcpStream::connect((target.host.as_str(), target.port))
+        .await
+        .map_err(|e| format!("{}", e))?;
+    // Node's `ws` sets TCP_NODELAY on its sockets; a handshake sitting in
+    // Nagle's queue would add a round trip to every connect.
+    let _ = tcp.set_nodelay(true);
+    let mut stream: Box<dyn WsTransport> = if target.secure {
+        let connector = ws_tls_connector()?;
+        let server_name =
+            tokio_rustls::rustls::pki_types::ServerName::try_from(target.host.clone())
+                .map_err(|_| format!("invalid TLS server name: {}", target.host))?;
+        Box::new(
+            connector
+                .connect(server_name, tcp)
+                .await
+                .map_err(|e| format!("TLS handshake failed: {}", e))?,
+        )
+    } else {
+        Box::new(tcp)
+    };
+
+    let (handshake, head) = turnloop_websocket::ClientHandshake::new(
+        &target.authority,
+        &target.path,
+        ws_nonce()?,
+        Vec::new(),
+    )
+    .map_err(|e| format!("{}", e))?;
+    stream
+        .write_all(&codec::encode_head(&head)?)
+        .await
+        .map_err(|e| format!("{}", e))?;
+
+    let mut reader = codec::HeadReader::new(codec::Mode::Response);
+    let mut buffer = vec![0u8; 16 * 1024];
+    loop {
+        let n = stream
+            .read(&mut buffer)
+            .await
+            .map_err(|e| format!("{}", e))?;
+        if n == 0 {
+            return Err("socket hang up before the upgrade completed".to_string());
+        }
+        if let Some(response) = reader.receive(&buffer[..n])? {
+            handshake
+                .verify(&response)
+                .map_err(|e| format!("Unexpected server response: {} ({})", response.status, e))?;
+            // Bytes that followed the `101` in the same read are already frame
+            // data; dropping them loses the peer's first message.
+            return Ok(WsConnected {
+                stream,
+                codec: codec::Codec::new(codec::Role::Client),
+                leftover: reader.into_leftover(),
+            });
+        }
+    }
+}
+
+/// Read the upgrade request head and answer it with the `101`.
+/// Replaces `tokio_tungstenite::accept_async`.
+#[cfg(not(target_os = "ios"))]
+async fn ws_server_accept(mut tcp: tokio::net::TcpStream) -> Result<WsConnected, String> {
+    let mut reader = codec::HeadReader::new(codec::Mode::Request);
+    let mut buffer = vec![0u8; 16 * 1024];
+    loop {
+        let n = tcp.read(&mut buffer).await.map_err(|e| format!("{}", e))?;
+        if n == 0 {
+            return Err("socket hang up before the upgrade request completed".to_string());
+        }
+        if let Some(request) = reader.receive(&buffer[..n])? {
+            let (head, _protocol) =
+                turnloop_websocket::accept(&request, &[]).map_err(|e| format!("{}", e))?;
+            tcp.write_all(&codec::encode_head(&head)?)
+                .await
+                .map_err(|e| format!("{}", e))?;
+            return Ok(WsConnected {
+                stream: Box::new(tcp),
+                codec: codec::Codec::new(codec::Role::Server),
+                leftover: reader.into_leftover(),
+            });
+        }
+    }
+}
+
+/// Put whatever the codec queued on the wire. Nothing else will: the automatic
+/// pong for a ping and the answering close are only encoded by a flush.
+#[cfg(not(target_os = "ios"))]
+async fn ws_flush<W>(proto: &mut codec::Codec, writer: &mut W) -> Result<(), String>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let out = proto.take_output();
+    if out.is_empty() {
+        return Ok(());
+    }
+    writer.write_all(&out).await.map_err(|e| format!("{}", e))
+}
+
+/// Route a decoded text payload the way the originating call site did.
+#[cfg(not(target_os = "ios"))]
+fn ws_deliver_message(ws_id: usize, text: String, flavor: IoFlavor) {
+    if flavor == IoFlavor::ServerClient {
+        push_ws_event(PendingWsEvent::Message(ws_id, text));
+        return;
+    }
+    let has_listeners = WS_CLIENT_LISTENERS
+        .lock()
+        .unwrap()
+        .get(&ws_id)
+        .map(|l| {
+            l.listeners
+                .get("message")
+                .map(|v| !v.is_empty())
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
+    if has_listeners {
+        push_ws_event(PendingWsEvent::Message(ws_id, text));
+    } else if let Some(conn) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id) {
+        conn.messages.push(text);
+    }
+}
+
+/// Feed wire bytes through the codec, emit what they decoded, and flush what
+/// the codec wants to answer. `false` means the connection is finished.
+#[cfg(not(target_os = "ios"))]
+async fn ws_feed<W>(
+    ws_id: usize,
+    proto: &mut codec::Codec,
+    bytes: &[u8],
+    writer: &mut W,
+    flavor: IoFlavor,
+) -> bool
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let events = match proto.receive(bytes) {
+        Ok(events) => events,
+        Err(e) => {
+            mark_ws_connection_closed(ws_id);
+            push_ws_event(PendingWsEvent::Error(ws_id, format!("{}", e)));
+            push_ws_event(PendingWsEvent::Close(ws_id, 1006, String::new()));
+            // Still flush: the codec may have queued a close frame naming the
+            // protocol error, which the old Sink also put on the wire.
+            let _ = ws_flush(proto, writer).await;
+            return false;
+        }
+    };
+    let mut alive = true;
+    for event in events {
+        match event {
+            codec::Incoming::Text(text) => {
+                if flavor == IoFlavor::ServerClient {
+                    ws_file_log(&format!("[WS-srv-io] id={} recv len={}", ws_id, text.len()));
+                }
+                ws_deliver_message(ws_id, text, flavor);
+            }
+            // The event queue carries `String`, so a server-side binary frame
+            // is still reported as lossy UTF-8 and a client-side one is still
+            // dropped. See this module's header note.
+            codec::Incoming::Binary(data) => {
+                if flavor == IoFlavor::ServerClient {
+                    ws_deliver_message(ws_id, String::from_utf8_lossy(&data).to_string(), flavor);
+                }
+            }
+            // A ping is answered inside `codec::Codec::receive`'s flush; neither
+            // ping nor pong reaches JS, exactly as the old `Some(Ok(_))` arm.
+            codec::Incoming::Ping(_) | codec::Incoming::Pong(_) => {}
+            codec::Incoming::Close(frame) => {
+                let (code, reason) = frame.unwrap_or((1000u16, String::new()));
+                mark_ws_connection_closed(ws_id);
+                push_ws_event(PendingWsEvent::Close(ws_id, code, reason));
+                alive = false;
+                break;
+            }
+        }
+    }
+    if let Err(e) = ws_flush(proto, writer).await {
+        if mark_ws_connection_closed(ws_id) {
+            push_ws_event(PendingWsEvent::Error(ws_id, e));
+            push_ws_event(PendingWsEvent::Close(ws_id, 1006, String::new()));
+        }
+        return false;
+    }
+    alive
+}
+
+/// Apply one command from the JS side. `false` means the loop is done.
+#[cfg(not(target_os = "ios"))]
+async fn ws_apply<W>(
+    ws_id: usize,
+    proto: &mut codec::Codec,
+    command: Option<WsCommand>,
+    writer: &mut W,
+    flavor: IoFlavor,
+) -> bool
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    match command {
+        Some(WsCommand::Send(msg)) => {
+            match flavor {
+                IoFlavor::ClientLogged => {
+                    ws_file_log(&format!("[WS-io] sending len={}", msg.len()))
+                }
+                IoFlavor::ServerClient => ws_file_log(&format!(
+                    "[WS-srv-io] id={} sending len={}",
+                    ws_id,
+                    msg.len()
+                )),
+                IoFlavor::ClientQuiet => {}
+            }
+            let failure = match proto.send(codec::Message::text(msg)) {
+                Err(e) => Some(format!("{}", e)),
+                Ok(()) => ws_flush(proto, writer).await.err(),
+            };
+            if let Some(e) = failure {
+                match flavor {
+                    IoFlavor::ClientLogged => ws_file_log(&format!("[WS-io] send ERR: {}", e)),
+                    IoFlavor::ServerClient => {
+                        ws_file_log(&format!("[WS-srv-io] id={} send ERR: {}", ws_id, e))
+                    }
+                    IoFlavor::ClientQuiet => {}
+                }
+                if mark_ws_connection_closed(ws_id) {
+                    push_ws_event(PendingWsEvent::Error(ws_id, e));
+                    push_ws_event(PendingWsEvent::Close(ws_id, 1006, String::new()));
+                }
+                return false;
+            }
+            match flavor {
+                IoFlavor::ClientLogged => ws_file_log("[WS-io] send OK"),
+                IoFlavor::ServerClient => ws_file_log(&format!("[WS-srv-io] id={} send OK", ws_id)),
+                IoFlavor::ClientQuiet => {}
+            }
+            true
+        }
+        Some(WsCommand::Close) => {
+            if flavor == IoFlavor::ServerClient {
+                ws_file_log(&format!("[WS-srv-io] id={} closing", ws_id));
+            }
+            // The old path sent `Message::Close(None)` and did NOT wait for the
+            // peer's answering close, so neither does this.
+            let _ = proto.close(None, "");
+            let _ = ws_flush(proto, writer).await;
+            if mark_ws_connection_closed(ws_id) {
+                push_ws_event(PendingWsEvent::Close(ws_id, 1000, String::new()));
+            }
+            false
+        }
+        // Every sender dropped: the JS object is unreachable.
+        None => {
+            if mark_ws_connection_closed(ws_id) {
+                push_ws_event(PendingWsEvent::Close(ws_id, 1000, String::new()));
+            }
+            false
+        }
+    }
+}
+
+/// Drive one connection until it closes. One task still handles both
+/// directions; the stream is split by `tokio::io::split` instead of by
+/// `WebSocketStream::split()`, and the framing is [`codec::Codec`]'s.
+#[cfg(not(target_os = "ios"))]
+async fn run_ws_io(
+    ws_id: usize,
+    connected: WsConnected,
+    mut rx: mpsc::UnboundedReceiver<WsCommand>,
+    flavor: IoFlavor,
+) {
+    let WsConnected {
+        stream,
+        codec: mut proto,
+        leftover,
+    } = connected;
+    let (mut reader, mut writer) = tokio::io::split(stream);
+    let mut buffer = vec![0u8; WS_READ_CHUNK];
+
+    // The leftover has to go through the codec before the first read, or a
+    // message that arrived with the `101` is delivered out of order.
+    let mut running =
+        leftover.is_empty() || ws_feed(ws_id, &mut proto, &leftover, &mut writer, flavor).await;
+
+    while running && !proto.is_terminal() {
+        tokio::select! {
+            read = reader.read(&mut buffer) => match read {
+                Ok(0) => {
+                    // tungstenite surfaced a bare FIN as
+                    // `Protocol(ResetWithoutClosingHandshake)`, so the old loop
+                    // took its error arm; a FIN after the closing handshake was
+                    // the quiet stream-ended arm.
+                    if proto.is_terminal() {
+                        if mark_ws_connection_closed(ws_id) {
+                            push_ws_event(PendingWsEvent::Close(ws_id, 1000, String::new()));
+                        }
+                    } else {
+                        mark_ws_connection_closed(ws_id);
+                        push_ws_event(PendingWsEvent::Error(
+                            ws_id,
+                            "WebSocket protocol error: Connection reset without closing handshake"
+                                .to_string(),
+                        ));
+                        push_ws_event(PendingWsEvent::Close(ws_id, 1006, String::new()));
+                    }
+                    running = false;
+                }
+                Ok(n) => {
+                    running = ws_feed(ws_id, &mut proto, &buffer[..n], &mut writer, flavor).await;
+                }
+                Err(e) => {
+                    mark_ws_connection_closed(ws_id);
+                    push_ws_event(PendingWsEvent::Error(ws_id, format!("{}", e)));
+                    push_ws_event(PendingWsEvent::Close(ws_id, 1006, String::new()));
+                    running = false;
+                }
+            },
+            command = rx.recv() => {
+                running = ws_apply(ws_id, &mut proto, command, &mut writer, flavor).await;
+            }
+        }
+    }
+
+    mark_ws_connection_closed(ws_id);
+    if flavor == IoFlavor::ClientLogged {
+        ws_file_log(&format!("[WS-io] task ended for id={}", ws_id));
+    }
+}
+
 /// Create a new WebSocket connection
 /// new WebSocket(url) -> Promise<WebSocket>
 #[cfg(not(target_os = "ios"))]
@@ -315,12 +826,12 @@ pub unsafe extern "C" fn js_ws_connect(
                 __android_log_print(
                     3,
                     b"PerryWS\0".as_ptr(),
-                    b"ws_connect: connect_async starting\0".as_ptr(),
+                    b"ws_connect: connect starting\0".as_ptr(),
                 );
             }
         }
-        match connect_async(&url_for_log).await {
-            Ok((ws_stream, _response)) => {
+        match ws_client_connect(&url_for_log).await {
+            Ok(connected) => {
                 #[cfg(target_os = "android")]
                 {
                     extern "C" {
@@ -340,7 +851,7 @@ pub unsafe extern "C" fn js_ws_connect(
                     }
                 }
                 // Create command channel
-                let (tx, mut rx) = mpsc::unbounded_channel::<WsCommand>();
+                let (tx, rx) = mpsc::unbounded_channel::<WsCommand>();
 
                 // Allocate connection ID
                 let mut id_guard = NEXT_WS_ID.lock().unwrap();
@@ -368,105 +879,11 @@ pub unsafe extern "C" fn js_ws_connect(
                     },
                 );
 
-                // Single task handles both read and write (avoids BiLock split issue)
+                // A single task handles both read and write over one split stream.
                 let ws_id_io = ws_id;
                 tokio::spawn(async move {
                     ws_file_log(&format!("[WS-io] started for id={}", ws_id_io));
-                    let (mut write, mut read) = ws_stream.split();
-                    loop {
-                        tokio::select! {
-                            msg_result = read.next() => {
-                                match msg_result {
-                                    Some(Ok(Message::Text(text))) => {
-                                        let text = text.to_string();
-                                        let has_listeners = WS_CLIENT_LISTENERS.lock().unwrap()
-                                            .get(&ws_id_io)
-                                            .map(|l| l.listeners.get("message").map(|v| !v.is_empty()).unwrap_or(false))
-                                            .unwrap_or(false);
-                                        if has_listeners {
-                                            push_ws_event(
-                                                PendingWsEvent::Message(ws_id_io, text)
-                                            );
-                                        } else {
-                                            if let Some(conn) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id_io) {
-                                                conn.messages.push(text);
-                                            }
-                                        }
-                                    }
-                                    Some(Ok(Message::Close(frame))) => {
-                                        let (code, reason) = frame
-                                            .map(|f| (f.code.into(), f.reason.to_string()))
-                                            .unwrap_or((1000u16, String::new()));
-                                        mark_ws_connection_closed(ws_id_io);
-                                        push_ws_event(
-                                            PendingWsEvent::Close(ws_id_io, code, reason)
-                                        );
-                                        break;
-                                    }
-                                    Some(Err(e)) => {
-                                        mark_ws_connection_closed(ws_id_io);
-                                        push_ws_event(
-                                            PendingWsEvent::Error(ws_id_io, format!("{}", e))
-                                        );
-                                        push_ws_event(
-                                            PendingWsEvent::Close(ws_id_io, 1006, String::new())
-                                        );
-                                        break;
-                                    }
-                                    Some(Ok(_)) => {} // binary, ping, pong — ignore
-                                    None => {
-                                        // Stream ended
-                                        if mark_ws_connection_closed(ws_id_io) {
-                                            push_ws_event(
-                                                PendingWsEvent::Close(ws_id_io, 1000, String::new())
-                                            );
-                                        }
-                                        break;
-                                    }
-                                }
-                            }
-                            cmd = rx.recv() => {
-                                match cmd {
-                                    Some(WsCommand::Send(msg)) => {
-                                        ws_file_log(&format!("[WS-io] sending len={}", msg.len()));
-                                        if let Err(e) = write.send(Message::Text(msg.into())).await {
-                                            ws_file_log(&format!("[WS-io] send ERR: {}", e));
-                                            if mark_ws_connection_closed(ws_id_io) {
-                                                push_ws_event(
-                                                    PendingWsEvent::Error(ws_id_io, format!("{}", e))
-                                                );
-                                                push_ws_event(
-                                                    PendingWsEvent::Close(ws_id_io, 1006, String::new())
-                                                );
-                                            }
-                                            break;
-                                        }
-                                        ws_file_log("[WS-io] send OK");
-                                    }
-                                    Some(WsCommand::Close) => {
-                                        let _ = write.send(Message::Close(None)).await;
-                                        if mark_ws_connection_closed(ws_id_io) {
-                                            push_ws_event(
-                                                PendingWsEvent::Close(ws_id_io, 1000, String::new())
-                                            );
-                                        }
-                                        break;
-                                    }
-                                    None => {
-                                        if mark_ws_connection_closed(ws_id_io) {
-                                            push_ws_event(
-                                                PendingWsEvent::Close(ws_id_io, 1000, String::new())
-                                            );
-                                        }
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    // Mark as closed
-                    mark_ws_connection_closed(ws_id_io);
-                    ws_file_log(&format!("[WS-io] task ended for id={}", ws_id_io));
+                    run_ws_io(ws_id_io, connected, rx, IoFlavor::ClientLogged).await;
                 });
 
                 // Return WebSocket handle
@@ -539,7 +956,7 @@ pub unsafe extern "C" fn js_ws_connect_start(url_nanboxed: f64) -> f64 {
     drop(id_guard);
 
     // Create command channel
-    let (tx, mut rx) = mpsc::unbounded_channel::<WsCommand>();
+    let (tx, rx) = mpsc::unbounded_channel::<WsCommand>();
 
     // Store connection (initially NOT open)
     WS_CONNECTIONS.lock().unwrap().insert(
@@ -563,105 +980,17 @@ pub unsafe extern "C" fn js_ws_connect_start(url_nanboxed: f64) -> f64 {
 
     // Connect in background
     spawn(async move {
-        match connect_async(&url).await {
-            Ok((ws_stream, _response)) => {
+        match ws_client_connect(&url).await {
+            Ok(connected) => {
                 // Mark as open
                 if let Some(conn) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id) {
                     conn.is_open = true;
                 }
 
-                // Single task handles both read and write (avoids BiLock split issue)
+                // A single task handles both read and write over one split stream.
                 let ws_id_io = ws_id;
                 tokio::spawn(async move {
-                    let (mut write, mut read) = ws_stream.split();
-                    loop {
-                        tokio::select! {
-                            msg_result = read.next() => {
-                                match msg_result {
-                                    Some(Ok(Message::Text(text))) => {
-                                        let text = text.to_string();
-                                        let has_listeners = WS_CLIENT_LISTENERS.lock().unwrap()
-                                            .get(&ws_id_io)
-                                            .map(|l| l.listeners.get("message").map(|v| !v.is_empty()).unwrap_or(false))
-                                            .unwrap_or(false);
-                                        if has_listeners {
-                                            push_ws_event(
-                                                PendingWsEvent::Message(ws_id_io, text)
-                                            );
-                                        } else {
-                                            if let Some(conn) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id_io) {
-                                                conn.messages.push(text);
-                                            }
-                                        }
-                                    }
-                                    Some(Ok(Message::Close(frame))) => {
-                                        let (code, reason) = frame
-                                            .map(|f| (f.code.into(), f.reason.to_string()))
-                                            .unwrap_or((1000u16, String::new()));
-                                        mark_ws_connection_closed(ws_id_io);
-                                        push_ws_event(
-                                            PendingWsEvent::Close(ws_id_io, code, reason)
-                                        );
-                                        break;
-                                    }
-                                    Some(Err(e)) => {
-                                        mark_ws_connection_closed(ws_id_io);
-                                        push_ws_event(
-                                            PendingWsEvent::Error(ws_id_io, format!("{}", e))
-                                        );
-                                        push_ws_event(
-                                            PendingWsEvent::Close(ws_id_io, 1006, String::new())
-                                        );
-                                        break;
-                                    }
-                                    Some(Ok(_)) => {}
-                                    None => {
-                                        if mark_ws_connection_closed(ws_id_io) {
-                                            push_ws_event(
-                                                PendingWsEvent::Close(ws_id_io, 1000, String::new())
-                                            );
-                                        }
-                                        break;
-                                    }
-                                }
-                            }
-                            cmd = rx.recv() => {
-                                match cmd {
-                                    Some(WsCommand::Send(msg)) => {
-                                        if let Err(e) = write.send(Message::Text(msg.into())).await {
-                                            if mark_ws_connection_closed(ws_id_io) {
-                                                push_ws_event(
-                                                    PendingWsEvent::Error(ws_id_io, format!("{}", e))
-                                                );
-                                                push_ws_event(
-                                                    PendingWsEvent::Close(ws_id_io, 1006, String::new())
-                                                );
-                                            }
-                                            break;
-                                        }
-                                    }
-                                    Some(WsCommand::Close) => {
-                                        let _ = write.send(Message::Close(None)).await;
-                                        if mark_ws_connection_closed(ws_id_io) {
-                                            push_ws_event(
-                                                PendingWsEvent::Close(ws_id_io, 1000, String::new())
-                                            );
-                                        }
-                                        break;
-                                    }
-                                    None => {
-                                        if mark_ws_connection_closed(ws_id_io) {
-                                            push_ws_event(
-                                                PendingWsEvent::Close(ws_id_io, 1000, String::new())
-                                            );
-                                        }
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    mark_ws_connection_closed(ws_id_io);
+                    run_ws_io(ws_id_io, connected, rx, IoFlavor::ClientQuiet).await;
                 });
             }
             Err(e) => {
@@ -1106,10 +1435,9 @@ pub unsafe extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
                     match accept_result {
                         Ok((tcp_stream, _addr)) => {
                             // Upgrade to WebSocket
-                            match tokio_tungstenite::accept_async(tcp_stream).await {
-                                Ok(ws_stream) => {
-                                    let (mut write, mut read) = ws_stream.split();
-                                    let (tx, mut rx) = mpsc::unbounded_channel::<WsCommand>();
+                            match ws_server_accept(tcp_stream).await {
+                                Ok(connected) => {
+                                    let (tx, rx) = mpsc::unbounded_channel::<WsCommand>();
 
                                     // Allocate client ID
                                     let mut id_guard = NEXT_WS_ID.lock().unwrap();
@@ -1142,103 +1470,11 @@ pub unsafe extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
                                         PendingWsEvent::Connection(handle_id, ws_id)
                                     );
 
-                                    // Single task handles both read and write (avoids BiLock split issue)
+                                    // A single task handles both read and write over one split stream.
                                     let ws_id_io = ws_id;
                                     ws_file_log(&format!("[WS-srv] spawning io task for id={}", ws_id_io));
                                     tokio::spawn(async move {
-                                        loop {
-                                            tokio::select! {
-                                                msg_result = read.next() => {
-                                                    match msg_result {
-                                                        Some(Ok(Message::Text(text))) => {
-                                                            let text = text.to_string();
-                                                            ws_file_log(&format!("[WS-srv-io] id={} recv len={}", ws_id_io, text.len()));
-                                                            push_ws_event(
-                                                                PendingWsEvent::Message(ws_id_io, text)
-                                                            );
-                                                        }
-                                                        Some(Ok(Message::Binary(data))) => {
-                                                            let text = String::from_utf8_lossy(&data).to_string();
-                                                            push_ws_event(
-                                                                PendingWsEvent::Message(ws_id_io, text)
-                                                            );
-                                                        }
-                                                        Some(Ok(Message::Close(frame))) => {
-                                                            let (code, reason) = frame
-                                                                .map(|f| (f.code.into(), f.reason.to_string()))
-                                                                .unwrap_or((1000u16, String::new()));
-                                                            mark_ws_connection_closed(ws_id_io);
-                                                            push_ws_event(
-                                                                PendingWsEvent::Close(ws_id_io, code, reason)
-                                                            );
-                                                            break;
-                                                        }
-                                                        Some(Err(e)) => {
-                                                            mark_ws_connection_closed(ws_id_io);
-                                                            push_ws_event(
-                                                                PendingWsEvent::Error(ws_id_io, format!("{}", e))
-                                                            );
-                                                            push_ws_event(
-                                                                PendingWsEvent::Close(ws_id_io, 1006, String::new())
-                                                            );
-                                                            break;
-                                                        }
-                                                        Some(Ok(_)) => {}
-                                                        None => {
-                                                            if mark_ws_connection_closed(ws_id_io) {
-                                                                push_ws_event(
-                                                                    PendingWsEvent::Close(ws_id_io, 1000, String::new())
-                                                                );
-                                                            }
-                                                            break;
-                                                        }
-                                                    }
-                                                }
-                                                cmd = rx.recv() => {
-                                                    match cmd {
-                                                        Some(WsCommand::Send(msg)) => {
-                                                            ws_file_log(&format!("[WS-srv-io] id={} sending len={}", ws_id_io, msg.len()));
-                                                            match write.send(Message::Text(msg.into())).await {
-                                                                Ok(_) => {
-                                                                    ws_file_log(&format!("[WS-srv-io] id={} send OK", ws_id_io));
-                                                                }
-                                                                Err(e) => {
-                                                                    ws_file_log(&format!("[WS-srv-io] id={} send ERR: {}", ws_id_io, e));
-                                                                    if mark_ws_connection_closed(ws_id_io) {
-                                                                        push_ws_event(
-                                                                            PendingWsEvent::Error(ws_id_io, format!("{}", e))
-                                                                        );
-                                                                        push_ws_event(
-                                                                            PendingWsEvent::Close(ws_id_io, 1006, String::new())
-                                                                        );
-                                                                    }
-                                                                    break;
-                                                                }
-                                                            }
-                                                        }
-                                                        Some(WsCommand::Close) => {
-                                                            ws_file_log(&format!("[WS-srv-io] id={} closing", ws_id_io));
-                                                            let _ = write.send(Message::Close(None)).await;
-                                                            if mark_ws_connection_closed(ws_id_io) {
-                                                                push_ws_event(
-                                                                    PendingWsEvent::Close(ws_id_io, 1000, String::new())
-                                                                );
-                                                            }
-                                                            break;
-                                                        }
-                                                        None => {
-                                                            if mark_ws_connection_closed(ws_id_io) {
-                                                                push_ws_event(
-                                                                    PendingWsEvent::Close(ws_id_io, 1000, String::new())
-                                                                );
-                                                            }
-                                                            break;
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        mark_ws_connection_closed(ws_id_io);
+                                        run_ws_io(ws_id_io, connected, rx, IoFlavor::ServerClient).await;
                                     });
                                 }
                                 Err(e) => {

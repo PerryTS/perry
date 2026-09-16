@@ -137,12 +137,10 @@ impl ClientUpgrade {
         protocols: Vec<String>,
         extra_headers: &[(String, String)],
     ) -> Result<(Self, Vec<u8>), HandshakeError> {
-        let (handshake, mut head) =
-            ClientHandshake::new(authority, target, nonce, protocols).map_err(|e| {
-                HandshakeError {
-                    code: "WS_ERR_INVALID_HANDSHAKE",
-                    message: e.to_string(),
-                }
+        let (handshake, mut head) = ClientHandshake::new(authority, target, nonce, protocols)
+            .map_err(|e| HandshakeError {
+                code: "WS_ERR_INVALID_HANDSHAKE",
+                message: e.to_string(),
             })?;
         for (name, value) in extra_headers {
             // A caller header never replaces a handshake header: `ws` lets
@@ -184,11 +182,7 @@ impl ClientUpgrade {
         };
         let protocol = self.handshake.verify(&head).map_err(|e| HandshakeError {
             code: "WS_ERR_INVALID_HANDSHAKE",
-            message: format!(
-                "Unexpected server response: {} ({})",
-                head.status,
-                e
-            ),
+            message: format!("Unexpected server response: {} ({})", head.status, e),
         })?;
         let reader = std::mem::replace(&mut self.reader, HeadReader::new(Mode::Response));
         Ok(Some(Upgraded {
@@ -267,7 +261,10 @@ mod tests {
         );
         let (bytes, protocol) = accept(&head, &[]).unwrap();
         let text = String::from_utf8(bytes).unwrap();
-        assert!(text.starts_with("HTTP/1.1 101 Switching Protocols\r\n"), "{text}");
+        assert!(
+            text.starts_with("HTTP/1.1 101 Switching Protocols\r\n"),
+            "{text}"
+        );
         // RFC 6455 §1.3's worked example.
         assert!(
             text.contains("sec-websocket-accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo="),
@@ -285,7 +282,9 @@ mod tests {
         );
         let (bytes, protocol) = accept(&head, &["superchat", "chat"]).unwrap();
         assert_eq!(protocol.as_deref(), Some("superchat"));
-        assert!(String::from_utf8(bytes).unwrap().contains("sec-websocket-protocol: superchat"));
+        assert!(String::from_utf8(bytes)
+            .unwrap()
+            .contains("sec-websocket-protocol: superchat"));
     }
 
     #[test]

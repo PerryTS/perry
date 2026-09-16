@@ -58,12 +58,14 @@ pub(crate) use deferred_events::{
 };
 mod io_activity;
 mod turnloop_listen;
+mod websocket_upgrade;
 pub(crate) use io_activity::ReadActivity;
 use turnloop_listen::try_listen_on_turnloop;
 pub(crate) use turnloop_listen::{
     idle_close_ms, note_turnloop_request_aborted, queue_turnloop_connection_event,
     queue_turnloop_upgrade, turnloop_connection_closed,
 };
+use websocket_upgrade::handle_websocket_upgrade;
 
 /// Apply a server's per-connection `noDelay` (Node's `socket.setNoDelay`
 /// default, ON) to a freshly accepted TCP stream before it is served. Node
@@ -1393,100 +1395,6 @@ async fn handle_request(
             .body(Full::new(Bytes::from("Handler error")).boxed())
             .unwrap()),
     }
-}
-
-/// Phase 4 — WebSocket upgrade dispatch.
-///
-/// Synchronously builds the 101 response (so hyper drives the
-/// protocol switch) and spawns a tokio task that awaits the
-/// upgraded stream and hands it to perry-ext-ws, which installs the
-/// protocol over it. The
-/// resulting connection is registered through perry-ext-ws and an
-/// `HttpPendingUpgrade` is pushed to the main-thread upgrade
-/// channel; the event-loop fires the user's `'upgrade'` listeners
-/// with `(req, wsId, head)`.
-async fn handle_websocket_upgrade(
-    server_handle: i64,
-    peer: SocketAddr,
-    mut req: Request<Incoming>,
-    method: String,
-    url: String,
-    headers_lower: HashMap<String, String>,
-    raw_headers: Vec<(String, String)>,
-    upgrade_tx: Arc<mpsc::Sender<HttpPendingUpgrade>>,
-) -> Result<Response<ResponseBody>, hyper::Error> {
-    // Validate the upgrade and compute its response headers.
-    //
-    // This used to be a bare `derive_accept_key` plus a literal header block,
-    // which validated nothing: neither `Sec-WebSocket-Version` nor
-    // `Upgrade: websocket` was checked, and a request with no
-    // `Sec-WebSocket-Key` got an empty `Sec-WebSocket-Accept` and a 101 anyway.
-    // `perry_ext_ws::accept_headers` is the same `turnloop_websocket::accept`
-    // the turnloop path runs — one handshake implementation, not two.
-    let request_headers: Vec<(String, String)> = req
-        .headers()
-        .iter()
-        .filter_map(|(name, value)| {
-            value
-                .to_str()
-                .ok()
-                .map(|value| (name.as_str().to_string(), value.to_string()))
-        })
-        .collect();
-    let response_headers =
-        match perry_ext_ws::accept_headers("GET", "/", &request_headers, &[]) {
-            Ok(headers) => headers,
-            Err(_) => {
-                return Ok(Response::builder()
-                    .status(400)
-                    .header("connection", "close")
-                    .body(Full::new(Bytes::new()).boxed())
-                    .unwrap())
-            }
-        };
-
-    // Build the upgraded-protocol IncomingMessage now (no body — WS
-    // upgrades carry no request body).
-    let mut im = IncomingMessage::new(
-        method,
-        url,
-        headers_lower,
-        raw_headers,
-        Vec::new(),
-        peer.ip().to_string(),
-        peer.port(),
-    );
-    im.complete = true;
-    let im_handle = alloc_incoming_message(im);
-
-    // Spawn a task that waits for hyper to perform the protocol
-    // switch + completes the tungstenite handshake + hands the
-    // resulting stream to perry-ext-ws.
-    tokio::spawn(async move {
-        let upgraded = match hyper::upgrade::on(&mut req).await {
-            Ok(u) => u,
-            Err(_) => return,
-        };
-        // The raw upgraded stream goes straight to perry-ext-ws, which installs
-        // the protocol. Constructing a `WebSocketStream` here is what used to
-        // put `tokio-tungstenite` in this crate's dependency graph.
-        let ws_id = perry_ext_ws::register_upgraded_stream(TokioIo::new(upgraded));
-        let pending = HttpPendingUpgrade {
-            server_handle,
-            request_handle: im_handle,
-            ws_id,
-            raw_socket_id: 0,
-            head: Vec::new(),
-        };
-        let _ = upgrade_tx.send(pending).await;
-        perry_ffi::notify_main_thread();
-    });
-
-    let mut response = Response::builder().status(101);
-    for (name, value) in response_headers {
-        response = response.header(name, value);
-    }
-    Ok(response.body(Full::new(Bytes::new()).boxed()).unwrap())
 }
 
 // ============================================================================

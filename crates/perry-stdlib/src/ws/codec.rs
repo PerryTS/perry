@@ -1,15 +1,10 @@
-//! The one WebSocket codec in the tree: `turnloop_websocket`'s sans-I/O
-//! `Connection`, wrapped so that every transport drives it the same way.
+//! The WebSocket codec: `turnloop_websocket`'s sans-I/O `Connection`, wrapped
+//! so the `ws` module's tokio transport can drive it.
 //!
-//! # Why a wrapper at all
-//!
-//! `turnloop_websocket::Connection` is a pure state machine over
-//! `(&[u8] in, &mut Vec<u8> out)`. That is exactly what makes it usable from
-//! *both* of Perry's transports — a turnloop handle id and a tokio stream —
-//! and it is why the WebSocket handshake never needed an owned stream in the
-//! first place (see `docs/turnloop/ws-report.md`). What it does **not** give
-//! you is a loop, and its `Received` type has two zero cases that a naive one
-//! is wrong about.
+//! This duplicates `perry-ext-ws/src/codec.rs` on purpose. perry-stdlib is the
+//! BUNDLED `ws` binding and perry-ext-ws is the external one; a dependency
+//! from here to there would be backwards, so the two are deliberately
+//! independent implementations of the same protocol wrapper.
 //!
 //! # The `Received` contract (PerryTS/turnloop#86)
 //!
@@ -21,40 +16,40 @@
 //! | `0` | `None` | **wait.** No progress is possible until more bytes arrive. |
 //! | `> 0` | `None` | **keep going.** Bytes were absorbed — a partial frame, or a control frame answered internally — and the next call may well produce a message from what is left. |
 //! | `0` | `Some` | **keep going.** tungstenite had a whole frame buffered from an earlier call and needed no new bytes for it. |
-//! | `> 0` | `Some` | **keep going.** tungstenite reads at most one chunk per pass, so a segment carrying several messages yields them one call at a time. |
+//! | `> 0` | `Some` | **keep going.** One call yields at most one message, so a read carrying several needs several calls. |
 //!
 //! Only the first row terminates the loop. A host that stops as soon as
 //! `message` is `None` stalls on a partial frame; a host that stops as soon as
-//! `consumed` is `0` drops a message that was already decoded. [`Codec::receive`]
-//! is the single place in Perry that gets this right, and
+//! `consumed` is `0` drops a message that was already decoded.
+//! [`Codec::receive`] is the one place in this crate that gets it right, and
 //! `receive_loop_handles_both_zero_cases` pins it.
 
-use std::time::Instant;
+pub(super) use turnloop_http::http1::Mode;
+pub(super) use turnloop_websocket::{Message, Role};
 
-pub use turnloop_websocket::{CloseFrame, Error as WsError, Message, Role, WebSocketConfig};
+use turnloop_http::http1::{BodyLength, Decoder, Encoder, Event, Head, Limits};
+use turnloop_websocket::{Error as WsError, WebSocketConfig};
 
 /// A decoded, application-visible WebSocket event.
 ///
-/// This is deliberately *not* `turnloop_websocket::Message`: `ws`'s JS surface
-/// distinguishes a close with a code from one without, and carries ping/pong
-/// payloads that `Message` models as `Bytes`.
+/// Deliberately not `turnloop_websocket::Message`: `ws`'s JS surface
+/// distinguishes a close carrying a status code from one without.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Incoming {
+pub(super) enum Incoming {
     Text(String),
     Binary(Vec<u8>),
     Ping(Vec<u8>),
     Pong(Vec<u8>),
-    /// The peer's close frame. `None` when it sent no status code, which `ws`
-    /// reports to JS as code 1005 with an empty reason.
+    /// The peer's close frame; `None` when it sent no status code.
     Close(Option<(u16, String)>),
 }
 
-/// How long a `close()` waits for the peer's answering close frame before the
-/// connection is declared dead. `ws`'s own `closeTimeout` is 30 s.
-pub const CLOSE_TIMEOUT_MS: u64 = 30_000;
+/// How long a `close()` waits for the peer's answering close frame. `ws`'s own
+/// `closeTimeout` is 30 s.
+const CLOSE_TIMEOUT_MS: u64 = 30_000;
 
 /// A WebSocket connection's protocol state, with no I/O of its own.
-pub struct Codec {
+pub(super) struct Codec {
     conn: turnloop_websocket::Connection,
     /// Wire bytes received and not yet consumed by the state machine.
     inbox: Vec<u8>,
@@ -64,13 +59,9 @@ pub struct Codec {
 }
 
 impl Codec {
-    pub fn new(role: Role) -> Self {
-        Self::with_config(role, WebSocketConfig::default())
-    }
-
-    pub fn with_config(role: Role, config: WebSocketConfig) -> Self {
+    pub(super) fn new(role: Role) -> Self {
         Self {
-            conn: turnloop_websocket::Connection::new(role, config),
+            conn: turnloop_websocket::Connection::new(role, WebSocketConfig::default()),
             inbox: Vec::new(),
             outbox: Vec::new(),
             terminal: false,
@@ -83,7 +74,7 @@ impl Codec {
     /// a transport may hand over whatever a single read produced. Automatic
     /// replies (a pong for a ping, the answering close) land in `outbox`; the
     /// caller must `take_output` after every call.
-    pub fn receive(&mut self, bytes: &[u8]) -> Result<Vec<Incoming>, WsError> {
+    pub(super) fn receive(&mut self, bytes: &[u8]) -> Result<Vec<Incoming>, WsError> {
         if !bytes.is_empty() {
             self.inbox.extend_from_slice(bytes);
         }
@@ -112,9 +103,9 @@ impl Codec {
                 }
             };
             offset += received.consumed;
-            // The whole point of this module. `consumed == 0 && message.is_none()`
-            // is the ONLY case that means "wait": everything else made progress
-            // and the state machine may have more to give.
+            // The whole point of this module. `consumed == 0 &&
+            // message.is_none()` is the ONLY case that means "wait": everything
+            // else made progress and the state machine may have more to give.
             let progressed = received.consumed > 0 || received.message.is_some();
             if let Some(message) = received.message {
                 let terminal = matches!(message, Message::Close(_));
@@ -145,9 +136,9 @@ impl Codec {
         Ok(events)
     }
 
-    /// Encode an application message. Fragmentation is tungstenite's to choose;
-    /// `ws` sends a message as one frame and so does this.
-    pub fn send(&mut self, message: Message) -> Result<(), WsError> {
+    /// Encode an application message. `ws` sends a message as one frame and so
+    /// does this.
+    pub(super) fn send(&mut self, message: Message) -> Result<(), WsError> {
         if self.terminal {
             return Err(WsError::AlreadyClosed);
         }
@@ -155,16 +146,17 @@ impl Codec {
     }
 
     /// Begin the closing handshake. The peer's answering close arrives through
-    /// [`Codec::receive`]; `deadline_ms` bounds the wait.
-    pub fn close(&mut self, code: Option<u16>, reason: &str) -> Result<(), WsError> {
+    /// [`Codec::receive`].
+    pub(super) fn close(&mut self, code: Option<u16>, reason: &str) -> Result<(), WsError> {
         if self.terminal {
             return Ok(());
         }
-        let frame = code.map(|code| CloseFrame {
+        let frame = code.map(|code| turnloop_websocket::CloseFrame {
             code: code.into(),
             reason: reason.to_string().into(),
         });
-        let deadline = Instant::now() + std::time::Duration::from_millis(CLOSE_TIMEOUT_MS);
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_millis(CLOSE_TIMEOUT_MS);
         match self.conn.close(frame, deadline, &mut self.outbox) {
             Ok(()) => Ok(()),
             // Closing an already-closed connection is what `ws.close()` does
@@ -179,38 +171,11 @@ impl Codec {
 
     /// Bytes to put on the wire. Always call this after `receive`, `send` or
     /// `close` — the state machine has no other way out.
-    pub fn take_output(&mut self) -> Vec<u8> {
+    pub(super) fn take_output(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.outbox)
     }
 
-    pub fn has_output(&self) -> bool {
-        !self.outbox.is_empty()
-    }
-
-    /// The close deadline armed by [`Codec::close`], if any.
-    pub fn next_timeout(&self) -> Option<Instant> {
-        self.conn.next_timeout()
-    }
-
-    /// Answer a fired close deadline. `Some(code)` means the peer never replied
-    /// and the connection is now dead with that status.
-    pub fn handle_timeout(&mut self, now: Instant) -> Option<u16> {
-        let code = self.conn.handle_timeout(now);
-        if code.is_some() {
-            self.terminal = true;
-        }
-        code
-    }
-
-    /// The transport saw EOF. `Some(code)` is the status to report to JS —
-    /// the peer's own code when it sent one, else 1006 (abnormal closure).
-    pub fn eof(&mut self) -> Option<u16> {
-        let code = self.conn.eof();
-        self.terminal = true;
-        code
-    }
-
-    pub fn is_terminal(&self) -> bool {
+    pub(super) fn is_terminal(&self) -> bool {
         self.terminal
     }
 }
@@ -224,16 +189,88 @@ fn convert(message: Message) -> Incoming {
         Message::Close(frame) => {
             Incoming::Close(frame.map(|f| (u16::from(f.code), f.reason.as_str().to_string())))
         }
-        // `Message::Frame` is only produced by the raw frame API, which this
-        // codec never uses.
+        // Only the raw frame API produces this, and this codec never uses it.
         Message::Frame(_) => Incoming::Binary(Vec::new()),
     }
 }
 
-/// `ws`'s `CloseEvent.code` when the peer closed with no status code.
-pub const CLOSE_NO_STATUS: u16 = 1005;
-/// `ws`'s `CloseEvent.code` when the connection dropped without a close frame.
-pub const CLOSE_ABNORMAL: u16 = 1006;
+/// Reads exactly one HTTP head out of a byte stream, keeping whatever followed
+/// it — which for an upgrade is already WebSocket frame data and must not be
+/// dropped. Used in `Mode::Response` by the client and `Mode::Request` by the
+/// server.
+pub(super) struct HeadReader {
+    decoder: Decoder,
+    buffer: Vec<u8>,
+    done: bool,
+}
+
+impl HeadReader {
+    pub(super) fn new(mode: Mode) -> Self {
+        let mut decoder = Decoder::new(mode, Limits::default());
+        if mode == Mode::Response {
+            // The upgrade request is a GET, so the decoder must not expect a
+            // HEAD response's framing.
+            decoder.response_to("GET");
+        }
+        Self {
+            decoder,
+            buffer: Vec::new(),
+            done: false,
+        }
+    }
+
+    /// Feed bytes. `Ok(Some(head))` once the head is complete; the bytes that
+    /// followed it are then available from [`HeadReader::into_leftover`].
+    ///
+    /// The loop has the same shape as [`Codec::receive`]'s: `consumed == 0`
+    /// with no event is the only "wait", and an `Informational` head (a `1xx`
+    /// before the `101`) is skipped rather than returned.
+    pub(super) fn receive(&mut self, bytes: &[u8]) -> Result<Option<Head>, String> {
+        self.buffer.extend_from_slice(bytes);
+        if self.done {
+            return Ok(None);
+        }
+        let mut offset = 0usize;
+        let mut head = None;
+        while offset < self.buffer.len() {
+            let step = self
+                .decoder
+                .receive(&self.buffer[offset..])
+                .map_err(|e| format!("invalid upgrade head: {}", e))?;
+            offset += step.consumed;
+            match step.event {
+                Some(Event::Head(h)) => {
+                    head = Some(h);
+                    break;
+                }
+                Some(Event::Informational(_)) => continue,
+                None if step.consumed == 0 => break,
+                _ => continue,
+            }
+        }
+        self.buffer.drain(..offset);
+        if head.is_some() {
+            self.done = true;
+        }
+        Ok(head)
+    }
+
+    /// The bytes that arrived after the head — the first WebSocket frames.
+    pub(super) fn into_leftover(self) -> Vec<u8> {
+        self.buffer
+    }
+}
+
+/// Encode a bodyless HTTP head: the upgrade request, and the `101`.
+pub(super) fn encode_head(head: &Head) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    let mut encoder = Encoder::start(head, BodyLength::Empty, &mut out)
+        .map_err(|e| format!("cannot encode upgrade head: {}", e))?;
+    encoder
+        .finish(&[], &mut out)
+        .map_err(|e| format!("cannot encode upgrade head: {}", e))?;
+    Ok(out)
+}
 
 #[cfg(test)]
 mod tests {
@@ -245,25 +282,6 @@ mod tests {
         (Codec::new(Role::Client), Codec::new(Role::Server))
     }
 
-    #[test]
-    fn text_and_binary_round_trip() {
-        let (mut client, mut server) = pair();
-        client.send(Message::text("hello")).unwrap();
-        client
-            .send(Message::binary(vec![0u8, 159, 146, 150]))
-            .unwrap();
-        let wire = client.take_output();
-        let events = server.receive(&wire).unwrap();
-        assert_eq!(
-            events,
-            vec![
-                Incoming::Text("hello".into()),
-                // The bytes that `String::from_utf8_lossy` used to destroy.
-                Incoming::Binary(vec![0u8, 159, 146, 150]),
-            ]
-        );
-    }
-
     /// The whole reason this module exists. A message split across two reads
     /// must not be lost, and a read carrying two messages must yield both.
     #[test]
@@ -273,11 +291,10 @@ mod tests {
         client.send(Message::text("second")).unwrap();
         let wire = client.take_output();
 
-        // Case A: `consumed > 0, message: None` — a partial frame. Feeding the
-        // first three bytes must absorb them and produce nothing, WITHOUT the
-        // loop concluding that the connection is idle.
-        let head = &wire[..3];
-        assert!(server.receive(head).unwrap().is_empty());
+        // Case A: `consumed > 0, message: None` — a partial frame. The first
+        // three bytes must be absorbed and produce nothing, WITHOUT the loop
+        // concluding that the connection is idle.
+        assert!(server.receive(&wire[..3]).unwrap().is_empty());
 
         // Case B: the rest completes both messages. A loop that stopped at the
         // first `consumed == 0` would return only "first".
@@ -290,7 +307,8 @@ mod tests {
             ]
         );
 
-        // Case C: no bytes at all is the genuine "wait" case and must terminate.
+        // Case C: no bytes at all is the genuine "wait" case and must
+        // terminate.
         assert!(server.receive(&[]).unwrap().is_empty());
     }
 
@@ -314,7 +332,24 @@ mod tests {
     }
 
     #[test]
-    fn a_ping_is_reported_and_answered_without_the_application_sending() {
+    fn text_and_binary_round_trip() {
+        let (mut client, mut server) = pair();
+        client.send(Message::text("hello")).unwrap();
+        client
+            .send(Message::binary(vec![0u8, 159, 146, 150]))
+            .unwrap();
+        let events = server.receive(&client.take_output()).unwrap();
+        assert_eq!(
+            events,
+            vec![
+                Incoming::Text("hello".into()),
+                Incoming::Binary(vec![0u8, 159, 146, 150]),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_ping_is_answered_by_the_flush_inside_receive() {
         let (mut client, mut server) = pair();
         client.send(Message::Ping(b"beat".to_vec().into())).unwrap();
         let events = server.receive(&client.take_output()).unwrap();
@@ -346,50 +381,39 @@ mod tests {
     fn a_close_with_no_code_is_reported_as_none() {
         let (mut client, mut server) = pair();
         client.close(None, "").unwrap();
-        let events = server.receive(&client.take_output()).unwrap();
-        assert_eq!(events, vec![Incoming::Close(None)]);
+        assert_eq!(
+            server.receive(&client.take_output()).unwrap(),
+            vec![Incoming::Close(None)]
+        );
     }
 
-    /// A peer-fragmented message is reassembled by the codec, which is what
-    /// `ws` promises: `'message'` fires once, with the whole payload.
+    /// The two handshake halves meet, and the part that matters for a transport
+    /// holds: the bytes that rode along with the `101` survive.
     #[test]
-    fn peer_fragmentation_is_reassembled_into_one_message() {
-        let mut server = Codec::new(Role::Server);
-        // Hand-built client frames: text "abc" (fin=0), cont "def" (fin=0),
-        // cont "ghi" (fin=1). tungstenite has no fragmented-send API, so the
-        // wire is written by hand — which is also what the gap fixture does.
-        let mut wire = Vec::new();
-        wire.extend_from_slice(&masked_frame(0x01, false, b"abc"));
-        wire.extend_from_slice(&masked_frame(0x00, false, b"def"));
-        wire.extend_from_slice(&masked_frame(0x00, true, b"ghi"));
-        let events = server.receive(&wire).unwrap();
-        assert_eq!(events, vec![Incoming::Text("abcdefghi".into())]);
-    }
+    fn a_client_handshake_keeps_the_bytes_after_the_101() {
+        let (handshake, request_head) =
+            turnloop_websocket::ClientHandshake::new("example.com", "/chat", [7u8; 16], Vec::new())
+                .unwrap();
+        let request = encode_head(&request_head).unwrap();
 
-    #[test]
-    fn eof_without_a_close_frame_is_1006() {
-        let mut server = Codec::new(Role::Server);
-        assert_eq!(server.eof(), Some(CLOSE_ABNORMAL));
-    }
+        let mut server_reader = HeadReader::new(Mode::Request);
+        let head = server_reader
+            .receive(&request)
+            .unwrap()
+            .expect("a complete head");
+        assert_eq!(head.method, "GET");
+        assert_eq!(head.target, "/chat");
+        let (response_head, _) = turnloop_websocket::accept(&head, &[]).unwrap();
+        let response = encode_head(&response_head).unwrap();
 
-    #[test]
-    fn eof_after_the_peer_closed_keeps_the_peer_code() {
-        let (mut client, mut server) = pair();
-        client.close(Some(4002), "bye").unwrap();
-        server.receive(&client.take_output()).unwrap();
-        assert_eq!(server.eof(), None, "a closed codec is already terminal");
-    }
-
-    fn masked_frame(opcode: u8, fin: bool, payload: &[u8]) -> Vec<u8> {
-        let key = [0x12u8, 0x34, 0x56, 0x78];
-        let mut out = vec![
-            if fin { 0x80 | opcode } else { opcode },
-            0x80 | payload.len() as u8,
-        ];
-        out.extend_from_slice(&key);
-        for (i, b) in payload.iter().enumerate() {
-            out.push(b ^ key[i % 4]);
-        }
-        out
+        // Split the response so the client sees a partial head first: the
+        // `consumed == 0, no event` wait case has to hold here too.
+        let mut client_reader = HeadReader::new(Mode::Response);
+        assert!(client_reader.receive(&response[..12]).unwrap().is_none());
+        let mut tail = response[12..].to_vec();
+        tail.extend_from_slice(b"\x81\x03abc"); // an unmasked text frame riding along
+        let verified = client_reader.receive(&tail).unwrap().expect("the 101");
+        assert_eq!(handshake.verify(&verified).unwrap(), None);
+        assert_eq!(client_reader.into_leftover(), b"\x81\x03abc");
     }
 }

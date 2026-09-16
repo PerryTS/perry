@@ -49,6 +49,7 @@ const STDLIB_STUB_SYMBOLS: &[&str] = &[
     "js_ws_on",
     "js_ws_server_new",
     "js_ws_server_close",
+    "js_ws_server_close_with",
     "js_ws_process_pending",
     // readline (#347)
     "js_readline_set_raw_mode",

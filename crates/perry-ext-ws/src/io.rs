@@ -16,9 +16,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 
 use crate::codec::{Codec, Incoming};
-use crate::{
-    connection_closed, connection_error, emit_incoming, WsCommand,
-};
+use crate::{connection_closed, connection_error, emit_incoming, WsCommand};
 
 /// One read's worth of wire bytes. Matches tungstenite's own default read
 /// buffer, so a large message costs the same number of syscalls it used to.
@@ -27,8 +25,10 @@ const READ_CHUNK: usize = 128 * 1024;
 /// Anything this transport can carry. The blanket impl is what lets the HTTP
 /// upgrade path hand over `TokioIo<Upgraded>` without naming it here.
 pub trait Transport: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static {}
-impl<T> Transport for T where T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static
-{}
+impl<T> Transport for T where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static
+{
+}
 
 /// Drive a connection until it closes.
 ///

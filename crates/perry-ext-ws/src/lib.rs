@@ -192,6 +192,8 @@ enum PendingWsEvent {
     Error(usize, String),
     ServerError(Handle, String),
     Listening(Handle),
+    /// `wss.close()` finished: fire `'close'`, then retire the handle.
+    ServerClose(Handle),
     /// Issue #606 — fired when an outbound client connection succeeds
     /// so `client.on("open", cb)` callbacks fire. Without this, code that
     /// awaits `new Promise(r => client.on("open", () => r()))` hangs
@@ -475,19 +477,15 @@ fn send_on(ws_id: usize, outgoing: WsOutgoing) {
 
 /// `ws.close(code, reason)` on either transport.
 fn close_on(ws_id: usize, code: Option<u16>, reason: &str) {
-    let target = WS_CONNECTIONS
-        .lock()
-        .unwrap()
-        .get_mut(&ws_id)
-        .map(|c| {
-            // `readyState` is CLOSING (2) until the handshake finishes; the
-            // connection is NOT closed yet, and a peer frame may still arrive.
-            c.is_closing = true;
-            match &c.transport {
-                WsTransport::Tokio(tx) => Ok(tx.clone()),
-                WsTransport::Turnloop(conn_id) => Err(*conn_id),
-            }
-        });
+    let target = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id).map(|c| {
+        // `readyState` is CLOSING (2) until the handshake finishes; the
+        // connection is NOT closed yet, and a peer frame may still arrive.
+        c.is_closing = true;
+        match &c.transport {
+            WsTransport::Tokio(tx) => Ok(tx.clone()),
+            WsTransport::Turnloop(conn_id) => Err(*conn_id),
+        }
+    });
     match target {
         Some(Ok(tx)) => {
             let _ = tx.send(WsCommand::Close(code, reason.to_string()));
@@ -721,11 +719,48 @@ pub(crate) fn outgoing_from_value(value: f64) -> Option<WsOutgoing> {
     js_string_of(value).map(WsOutgoing::Text)
 }
 
-/// `ws.send(data)`.
+/// `ws.send(data[, options])`.
+///
+/// `options.binary` overrides the framing `ws` would infer from the value —
+/// `send(buffer, { binary: false })` is a TEXT frame carrying those bytes, and
+/// `send(string, { binary: true })` is a binary one. Inferring from the value
+/// alone gets the common case right and this one wrong, which is observable on
+/// the wire as the opcode.
 #[no_mangle]
-pub extern "C" fn js_ws_send_value(handle: i64, value: f64) {
-    if let Some(outgoing) = outgoing_from_value(value) {
-        send_on(handle as usize, outgoing);
+pub extern "C" fn js_ws_send_value(handle: i64, value: f64, options: f64) {
+    let Some(outgoing) = outgoing_from_value(value) else {
+        return;
+    };
+    let outgoing = match binary_option(options) {
+        Some(true) => WsOutgoing::Binary(match outgoing {
+            WsOutgoing::Text(text) => text.into_bytes(),
+            WsOutgoing::Binary(bytes) => bytes,
+            other => return send_on(handle as usize, other),
+        }),
+        Some(false) => WsOutgoing::Text(match outgoing {
+            WsOutgoing::Text(text) => text,
+            // A forced-text frame must still carry the bytes it was given, and
+            // it must be valid UTF-8 to be a legal text frame at all.
+            WsOutgoing::Binary(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+            other => return send_on(handle as usize, other),
+        }),
+        None => outgoing,
+    };
+    send_on(handle as usize, outgoing);
+}
+
+/// `options.binary`, when the caller passed an options object with one.
+fn binary_option(options: f64) -> Option<bool> {
+    let value = JsValue::from_bits(options.to_bits());
+    if !value.is_pointer() {
+        return None;
+    }
+    let key = alloc_string("binary");
+    let field = unsafe { server::object_field_by_name(value, key.as_raw() as *const StringHeader) };
+    if field.is_bool() {
+        Some(field.to_bool())
+    } else {
+        None
     }
 }
 
@@ -782,7 +817,10 @@ pub extern "C" fn js_ws_close(handle: i64) {
 #[no_mangle]
 pub extern "C" fn js_ws_close_with(handle: i64, code: f64, reason: f64) {
     if get_handle_mut::<WsServerHandle>(handle).is_some() {
-        js_ws_server_close(handle);
+        // `wss.close([cb])`. The first argument is a callback, not a close
+        // code: a server has no close frame. It used to be dropped, so
+        // `wss.close(() => …)` never ran and a program that awaited it hung.
+        js_ws_server_close_with(handle, code);
         return;
     }
     let (code, reason) = close_args(code, reason);
@@ -833,8 +871,8 @@ pub unsafe extern "C" fn js_ws_send_client_i64(handle: i64, message_ptr: *const 
 /// Issue #577 Phase 4 — `wsId.send(data)` on an upgrade-path Client, for any
 /// value shape.
 #[no_mangle]
-pub extern "C" fn js_ws_send_value_client_i64(handle: i64, value: f64) {
-    js_ws_send_value(handle, value)
+pub extern "C" fn js_ws_send_value_client_i64(handle: i64, value: f64, options: f64) {
+    js_ws_send_value(handle, value, options)
 }
 
 /// Issue #577 Phase 4 — `wsId.close([code, reason])` on an upgrade-path Client.
@@ -887,12 +925,12 @@ pub unsafe extern "C" fn js_ws_on_client_i64(
     // next `js_ws_process_pending` tick fires this freshly-registered
     // listener against them.
     if event_name == "message" {
-        let queued: Vec<WsPayload> =
-            if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id) {
-                std::mem::take(&mut c.messages)
-            } else {
-                Vec::new()
-            };
+        let queued: Vec<WsPayload> = if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id)
+        {
+            std::mem::take(&mut c.messages)
+        } else {
+            Vec::new()
+        };
         for msg in queued {
             push_ws_event(PendingWsEvent::Message(ws_id, msg));
         }
@@ -1071,6 +1109,7 @@ pub unsafe extern "C" fn js_ws_on(
             .get(&ws_id)
             .map(|c| c.is_open)
             .unwrap_or(false);
+    let replay_messages = event_name == "message";
     let mut g = WS_CLIENT_LISTENERS.lock().unwrap();
     let entry = g.entry(ws_id).or_insert_with(|| WsClientListeners {
         listeners: HashMap::new(),
@@ -1084,6 +1123,23 @@ pub unsafe extern "C" fn js_ws_on(
     if already_open {
         push_ws_event(PendingWsEvent::Open(ws_id));
     }
+    // Replay whatever arrived before this listener existed. `js_ws_on_client_i64`
+    // has always done this; `js_ws_on` had not, which is the same race seen from
+    // the other receiver convention and it is reachable now: on the turnloop
+    // transport a frame pipelined behind the handshake is decoded inside the
+    // sink, one pump tick BEFORE `wss.on('connection')` runs and registers this
+    // listener.
+    if replay_messages {
+        let queued: Vec<WsPayload> = if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id)
+        {
+            std::mem::take(&mut c.messages)
+        } else {
+            Vec::new()
+        };
+        for msg in queued {
+            push_ws_event(PendingWsEvent::Message(ws_id, msg));
+        }
+    }
     handle
 }
 
@@ -1091,11 +1147,53 @@ pub unsafe extern "C" fn js_ws_on(
 
 #[no_mangle]
 pub extern "C" fn js_ws_server_close(handle: i64) {
-    if let Some(server) = take_handle::<WsServerHandle>(handle) {
-        if let Some(tx) = server.shutdown_tx {
-            let _ = tx.send(());
+    js_ws_server_close_with(handle, undefined())
+}
+
+/// `wss.close([cb])`.
+///
+/// The callback is registered as a `'close'` listener rather than stashed in
+/// the pending queue, which is deliberate: `WsServerHandle::listeners` is
+/// walked by `scan_ws_roots`, so the closure pointer is a rooted slot a moving
+/// collection rewrites. A raw closure address parked in `WS_PENDING_EVENTS`
+/// would be exactly the unrooted-cache shape `gc_runtime_root_holders.py`
+/// exists to catch — and that queue's freedom from JS values is what lets it
+/// have no scanner at all.
+///
+/// The handle is NOT taken here. It used to be, which destroyed the listener
+/// map and the `clients` Set before anything could fire `'close'`; the drain
+/// takes it after the listeners have run.
+#[no_mangle]
+pub extern "C" fn js_ws_server_close_with(handle: i64, callback: f64) {
+    let callback_ptr = {
+        let value = JsValue::from_bits(callback.to_bits());
+        if value.is_pointer() {
+            (value.bits() & POINTER_MASK) as i64
+        } else {
+            0
         }
+    };
+    // Scoped: `push_ws_event` notifies the main thread and the shutdown send
+    // wakes the accept loop, and neither may run while a handle-registry
+    // borrow is live (the same rule `track_server_client` follows).
+    let shutdown = {
+        let Some(server) = get_handle_mut::<WsServerHandle>(handle) else {
+            return;
+        };
+        if callback_ptr != 0 {
+            server
+                .listeners
+                .entry("close".to_string())
+                .or_default()
+                .push(callback_ptr);
+        }
+        server.is_listening = false;
+        server.shutdown_tx.take()
+    };
+    if let Some(tx) = shutdown {
+        let _ = tx.send(());
     }
+    push_ws_event(PendingWsEvent::ServerClose(handle));
 }
 
 /// Adopt a stream whose WebSocket handshake a host crate has already completed
@@ -1398,6 +1496,17 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
                         fired += 1;
                     }
                 }
+            }
+            PendingWsEvent::ServerClose(server_handle) => {
+                for cb in listeners_on_server(server_handle, "close") {
+                    if cb != 0 {
+                        let closure = unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
+                        let _ = unsafe { closure.call0() };
+                        fired += 1;
+                    }
+                }
+                // Retire the handle only once its listeners have run.
+                let _ = take_handle::<WsServerHandle>(server_handle);
             }
             PendingWsEvent::Open(ws_id) => {
                 let listeners = listeners_on_client(ws_id, "open");

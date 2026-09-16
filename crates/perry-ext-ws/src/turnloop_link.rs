@@ -177,7 +177,12 @@ pub fn adopt(conn_id: i64, leftover: &[u8]) -> i64 {
 pub fn on_data(conn_id: i64, bytes: &[u8]) {
     let Some((ws_id, events, out, terminal)) = with_link(conn_id, |link| {
         let events = link.codec.receive(bytes);
-        (link.ws_id, events, link.codec.take_output(), link.codec.is_terminal())
+        (
+            link.ws_id,
+            events,
+            link.codec.take_output(),
+            link.codec.is_terminal(),
+        )
     }) else {
         return;
     };
@@ -361,15 +366,24 @@ mod tests {
                 ("host".into(), "example.test".into()),
                 ("upgrade".into(), "websocket".into()),
                 ("connection".into(), "Upgrade".into()),
-                ("sec-websocket-key".into(), "dGhlIHNhbXBsZSBub25jZQ==".into()),
+                (
+                    "sec-websocket-key".into(),
+                    "dGhlIHNhbXBsZSBub25jZQ==".into(),
+                ),
                 ("sec-websocket-version".into(), "13".into()),
             ],
         );
         let (bytes, protocol) = accept_response(&head, &[]).expect("a 101");
         assert_eq!(protocol, None);
         let text = String::from_utf8(bytes).unwrap();
-        assert!(text.starts_with("HTTP/1.1 101 Switching Protocols\r\n"), "{text}");
-        assert!(text.contains("sec-websocket-accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo="), "{text}");
+        assert!(
+            text.starts_with("HTTP/1.1 101 Switching Protocols\r\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("sec-websocket-accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo="),
+            "{text}"
+        );
     }
 
     #[test]
@@ -377,7 +391,10 @@ mod tests {
         let head = request_head("GET", "/", 1, &[("host".into(), "h".into())]);
         assert!(accept_response(&head, &[]).is_err());
         let refusal = String::from_utf8(reject_response(400, "Bad Request")).unwrap();
-        assert!(refusal.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{refusal}");
+        assert!(
+            refusal.starts_with("HTTP/1.1 400 Bad Request\r\n"),
+            "{refusal}"
+        );
         assert!(refusal.contains("connection: close"), "{refusal}");
     }
 

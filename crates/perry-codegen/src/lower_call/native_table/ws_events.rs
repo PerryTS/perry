@@ -45,7 +45,7 @@ pub(super) const WS_EVENTS_ROWS: &[NativeModSig] = &[
         method: "send",
         class_filter: None,
         runtime: "js_ws_send_value",
-        args: &[NA_F64],
+        args: &[NA_F64, NA_F64],
         ret: NR_VOID,
     },
     // `ws.close([code[, reason]])`. Both arguments used to be dropped on the
@@ -155,7 +155,7 @@ pub(super) const WS_EVENTS_ROWS: &[NativeModSig] = &[
         method: "send",
         class_filter: Some("Client"),
         runtime: "js_ws_send_value_client_i64",
-        args: &[NA_F64],
+        args: &[NA_F64, NA_F64],
         ret: NR_VOID,
     },
     NativeModSig {

@@ -1129,11 +1129,7 @@ fn cancel_idle(id: i64) {
 /// layer up.
 fn on_websocket(id: i64, building: Building) {
     let Some((server_handle, leftover, secure)) = with_conn(id, |c| {
-        (
-            c.server_handle,
-            std::mem::take(&mut c.input),
-            c.secure,
-        )
+        (c.server_handle, std::mem::take(&mut c.input), c.secure)
     }) else {
         return;
     };
@@ -1149,7 +1145,10 @@ fn on_websocket(id: i64, building: Building) {
         Err(e) => {
             // `ws` answers a malformed handshake with a 400 and closes rather
             // than dropping the connection.
-            write_raw(id, &perry_ext_ws::turnloop_link::reject_response(400, &e.message));
+            write_raw(
+                id,
+                &perry_ext_ws::turnloop_link::reject_response(400, &e.message),
+            );
             finish_and_close(id);
             return;
         }
