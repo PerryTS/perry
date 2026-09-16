@@ -37,5 +37,9 @@ workspace crates to 39 across 13**, the first lane to move P8's count.
   ~250 KB `reqwest::Client`, with cold DNS and TLS caches, on every call.
   Eleven assertions across seven methods are byte-identical on both arms.
 
+The full gap suite ran on both arms from source in their own trees: **818 tests,
+809 pass, the same nine known parity failures, 0 compile_fail, 0 crashes, and
+zero status changes compared per test**.
+
 Full report, including the `nm` evidence, the gap-suite comparison and the
 turnloop gaps: `docs/turnloop/p11-report.md`.
