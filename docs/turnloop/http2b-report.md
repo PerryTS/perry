@@ -603,6 +603,31 @@ trailer block and `queue_turnloop_client_body` drops the argument. That is
 pre-existing — the base arm answers `none` too — and it belongs to the Node
 surface the sibling fixture lane owns, so it is reported rather than fixed here.
 
+### Reproducing
+
+Everything above runs from three files on the box, against the shipped binary
+(`/root/claude-h2b/work/target/release/perry`, archives from the same
+`cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static
+-p perry-ext-http -p perry-ext-net`):
+
+```
+bash /root/h2spec.sh    work 49011   # h2c:  147/147, threads=1
+bash /root/h2b-tls.sh   work 49012   # TLS:  147/147 + both curl ALPN paths
+bash /root/h2b-gapshard.sh work 6    # the gap suite, CI's fast mode, 6 shards
+python3 /root/h2b-gapdiff.py         # the per-test A/B of the two arms
+bash /root/h2b-gcstress.sh work      # 5 subjects x 4 seeds
+```
+
+The last h2spec pair in this report was run on the binary this branch pushes,
+after everything else, so the headline number is the shipped artefact's:
+
+```
+h2c  : 147 tests, 147 passed, 0 skipped, 0 failed   threads=1
+TLS  : 147 tests, 147 passed, 0 skipped, 0 failed   threads=1
+       curl --http2   -> secure:/alpha:2.0  [http_version=2]
+       curl --http1.1 -> secure:/beta:1.1   [http_version=1.1]
+```
+
 ---
 
 ## turnloop gaps found
