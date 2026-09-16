@@ -92,7 +92,7 @@ impl Drop for Reservation<'_> {
     fn drop(&mut self) {
         self.budget.live.set(self.budget.live.get() - self.bytes);
         if self.bytes != 0 {
-            crate::gc::gc_note_external_side_free(self.bytes);
+            crate::gc::gc_note_external_side_free_transient(self.bytes);
         }
     }
 }
@@ -153,7 +153,7 @@ impl<T: Copy + Default> Drop for Buffer<'_, T> {
     fn drop(&mut self) {
         self.budget.live.set(self.budget.live.get() - self.bytes);
         if self.bytes != 0 {
-            crate::gc::gc_note_external_side_free(self.bytes);
+            crate::gc::gc_note_external_side_free_transient(self.bytes);
         }
     }
 }

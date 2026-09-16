@@ -166,7 +166,7 @@ impl Spans {
 
 impl Drop for Spans {
     fn drop(&mut self) {
-        crate::gc::gc_note_external_side_free(self.noted);
+        crate::gc::gc_note_external_side_free_transient(self.noted);
     }
 }
 

@@ -746,6 +746,25 @@ pub(crate) fn gc_note_external_side_free(bytes: usize) {
     GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL.with(|c| c.set(c.get().saturating_add(bytes)));
 }
 
+/// Release external side bytes that were never retained past the operation
+/// that allocated them — regex match scratch, whose owner frees it on the
+/// same call that took it.
+///
+/// They leave [`external_side_live_bytes`] exactly as any other bytes do. What
+/// they must NOT enter is the drained term, whose whole purpose is to
+/// reconstruct bytes a cheap collection released EARLIER than a full would
+/// have ([`external_side_old_reclaim_pressure_bytes`]). A transient
+/// allocation's release is not early: every build, with or without the
+/// parse-boundary band, frees it at the same program point, so there is
+/// nothing to reconstruct. Counting it manufactures old-reclaim pressure out
+/// of per-call churn that no collection ever saw live — #10376, where a
+/// million-call `.test()` loop paid three unproductive old-gen cycles, one of
+/// them a full that freed 59 KB of a 52 MB arena, and 33 % more instructions
+/// per call.
+pub(crate) fn gc_note_external_side_free_transient(bytes: usize) {
+    GC_EXTERNAL_SIDE_LIVE_BYTES.with(|c| c.set(c.get().saturating_sub(bytes)));
+}
+
 /// The external side-buffer term of OLD-RECLAIM pressure.
 ///
 /// Live bytes plus all reported releases since the last full baseline. The
