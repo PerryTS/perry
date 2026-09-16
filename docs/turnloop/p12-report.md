@@ -30,9 +30,9 @@ binding forced to build a `rustls::ClientConfig` would need rustls in its own
 manifest.
 
 ```rust
-let transport = TlsClientTransport::install(id, &options)?;   // sends the ClientHello
-let progress  = transport.pump(id);                            // submits ciphertext
-let facts     = transport.facts();                             // alpn, chain, channel binding
+let mut transport = TlsClientTransport::connect(&options)?;
+let progress      = transport.pump(id);   // sends the ClientHello, then submits ciphertext
+let facts         = transport.facts();    // alpn, chain, channel binding
 ```
 
 Three things in the contract come from the callers rather than from taste.

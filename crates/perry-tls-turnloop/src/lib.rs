@@ -200,23 +200,6 @@ impl TlsClientTransport {
         })
     }
 
-    /// Install a session on turnloop handle `id` and send the ClientHello.
-    ///
-    /// The convenience form of `connect` + `pump`, for a caller whose upgrade
-    /// point is a single moment. Returns the transport and the first pump's
-    /// progress (which carries no plaintext, but can already carry a failure).
-    pub fn install(id: i64, options: &TlsClientOptions) -> Result<Self, String> {
-        if !tl::is_live(id) {
-            return Err("socket is closed".to_string());
-        }
-        let mut transport = Self::connect(options)?;
-        let progress = transport.pump(id);
-        if let Some(failure) = progress.failure {
-            return Err(failure);
-        }
-        Ok(transport)
-    }
-
     /// Hand ciphertext from a `NET_DATA` completion to the session.
     pub fn receive(&mut self, ciphertext: &[u8]) {
         self.session.receive(ciphertext);
