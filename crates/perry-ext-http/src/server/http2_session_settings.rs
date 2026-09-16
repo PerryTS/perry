@@ -39,6 +39,13 @@ impl Http2SettingsState {
         let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json) else {
             return;
         };
+        self.apply_json(&parsed);
+    }
+
+    /// The same merge from an already-parsed object, for option surfaces that
+    /// reach Rust as JSON (`createServer({ settings })`) rather than as a
+    /// NaN-boxed value.
+    pub(crate) fn apply_json(&mut self, parsed: &serde_json::Value) {
         let Some(obj) = parsed.as_object() else {
             return;
         };

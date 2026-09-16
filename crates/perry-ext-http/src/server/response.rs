@@ -1213,7 +1213,7 @@ fn stream_write_with_cb(handle: i64, bytes: &[u8], callback: i64) -> Option<bool
     // backpressure is the socket's own queued-byte count rather than a
     // channel's in-flight counter.
     if let Some((conn, seq)) = get_handle::<ServerResponse>(handle).and_then(|sr| sr.turnloop) {
-        if !crate::server::turnloop_serve::send_body(conn, seq, bytes) {
+        if !crate::server::turnloop_route::send_body(conn, seq, bytes) {
             return None;
         }
         let queued = perry_ffi::turnloop_net::queued_bytes(conn);
@@ -1414,9 +1414,9 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
         let finish_listeners = take_event_listeners(sr, "finish");
         let close_listeners = take_event_listeners(sr, "close");
         if let Some(c) = chunk {
-            crate::server::turnloop_serve::send_body(conn, seq, &c);
+            crate::server::turnloop_route::send_body(conn, seq, &c);
         }
-        crate::server::turnloop_serve::finish_body(conn, seq, &trailers);
+        crate::server::turnloop_route::finish_body(conn, seq, &trailers);
         crate::server::request::mark_connection_written(req_handle_of(handle));
         return Some((finish_listeners, close_listeners));
     }
@@ -1482,7 +1482,7 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
         // P5: the handler, the codec and the socket are on the same thread,
         // so the response is encoded and submitted here rather than parked in
         // a oneshot for a hyper task to pick up.
-        Some((conn, seq)) => crate::server::turnloop_serve::send_response(conn, seq, shape),
+        Some((conn, seq)) => crate::server::turnloop_route::send_response(conn, seq, shape),
         None => {
             if let Some(tx) = sr.response_tx.take() {
                 let _ = tx.send(shape);
@@ -1534,14 +1534,14 @@ pub(crate) fn begin_streaming(handle: i64) -> bool {
         let first = std::mem::take(&mut sr.buffered_body);
         sr.headers_sent = true;
         sr.turnloop_streaming = true;
-        if !crate::server::turnloop_serve::begin_stream(conn, seq, shape) {
+        if !crate::server::turnloop_route::begin_stream(conn, seq, shape) {
             if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
                 sr.turnloop_streaming = false;
             }
             return false;
         }
         if !first.is_empty() {
-            crate::server::turnloop_serve::send_body(conn, seq, &first);
+            crate::server::turnloop_route::send_body(conn, seq, &first);
         }
         return true;
     }

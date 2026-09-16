@@ -43,6 +43,7 @@ pub(crate) fn register_server_session(server_handle: i64, peer_addr: SocketAddr)
         close_callbacks: Vec::new(),
         pending_callbacks: Vec::new(),
         timeout_callback: 0,
+        turnloop_conn: 0,
     });
     let has_session_listener = get_handle::<Http2SecureServer>(server_handle)
         .map(|server| crate::server::server::server_has_event_listener(&server.base, "session"))
@@ -67,15 +68,25 @@ pub(crate) fn mark_session_closed(session_handle: i64) {
 }
 
 pub(crate) fn mark_server_sessions_closed(server_handle: i64) {
+    let mut turnloop_conns = Vec::new();
     iter_handles_of_mut::<Http2SessionHandle, _>(|session| {
         if session.server_handle == server_handle {
             session.closed = true;
             session.destroyed = true;
+            if session.turnloop_conn != 0 {
+                turnloop_conns.push(std::mem::replace(&mut session.turnloop_conn, 0));
+            }
             if let Ok(mut slot) = session.sender.lock() {
                 *slot = None;
             }
         }
     });
+    // A turnloop connection is a live handle that keeps the loop referenced;
+    // marking the JS session destroyed without closing it would keep the
+    // process alive after `server.close()`.
+    for conn in turnloop_conns {
+        crate::server::turnloop_h2::control::session_destroy(conn);
+    }
 }
 
 pub(crate) fn h2_listening_server_for_authority(authority: &str) -> Option<i64> {
@@ -285,7 +296,25 @@ pub unsafe extern "C" fn js_node_http2_connect(
         close_callbacks: Vec::new(),
         pending_callbacks: Vec::new(),
         timeout_callback: 0,
+        turnloop_conn: 0,
     });
+
+    // Cleartext `http://` goes on the loop. That removes **two** private
+    // `current_thread` tokio runtimes — one built here per session, one built
+    // in `start_client_request` per request (perry#10327) — and makes
+    // concurrent `session.request()` calls real multiplexed streams instead of
+    // a race for a single `h2::client::SendRequest`.
+    //
+    // `https://` keeps the `h2` path: a TLS client session on a turnloop socket
+    // needs an installer `perry-ext-net` does not expose yet.
+    if !authority.starts_with("https:") && crate::server::turnloop_h2::enabled() {
+        if let Some(conn_id) =
+            crate::server::turnloop_h2::connect_client(session_handle, &host, port)
+        {
+            bind_turnloop_session(session_handle, conn_id);
+            return session_handle;
+        }
+    }
 
     perry_ffi::spawn_blocking(move || {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -402,7 +431,62 @@ pub(crate) fn parse_headers_object(value: f64) -> HashMap<String, String> {
     out
 }
 
+/// The HEADERS block for `session.request(headers)` on the turnloop path.
+///
+/// RFC 9113 §8.3 is strict about this in a way the `h2` path never had to be,
+/// because `h2` built the block from a `Request` object: pseudo-headers come
+/// first and in no particular order among themselves but **before** every
+/// regular field, every name is lowercase, and `:method` / `:scheme` / `:path`
+/// are mandatory. `turnloop_http::http2::validate_headers` rejects a block that
+/// breaks any of it — as a connection error — so the defaults Node applies are
+/// applied here rather than left to the caller.
+fn client_request_headers(stream_handle: i64, session_handle: i64) -> Vec<(String, String)> {
+    let requested = get_handle::<Http2StreamHandle>(stream_handle)
+        .map(|stream| stream.request_headers.clone())
+        .unwrap_or_default();
+    let authority = get_handle::<Http2SessionHandle>(session_handle)
+        .map(|session| session.authority.clone())
+        .unwrap_or_default();
+    let pick = |name: &str, fallback: &str| {
+        requested
+            .get(name)
+            .filter(|value| !value.is_empty())
+            .cloned()
+            .unwrap_or_else(|| fallback.to_string())
+    };
+    let mut out = vec![
+        (":method".to_string(), pick(":method", "GET")),
+        (":scheme".to_string(), pick(":scheme", "http")),
+        (":path".to_string(), pick(":path", "/")),
+    ];
+    let authority = pick(":authority", &authority);
+    if !authority.is_empty() {
+        out.push((":authority".to_string(), authority));
+    }
+    let mut regular: Vec<(String, String)> = requested
+        .iter()
+        .filter(|(name, _)| !name.starts_with(':'))
+        .map(|(name, value)| (name.to_ascii_lowercase(), value.clone()))
+        .collect();
+    // `request_headers` is a `HashMap`, so its iteration order is not stable
+    // across runs and an unordered header block would make every byte-for-byte
+    // parity comparison flaky.
+    regular.sort();
+    out.extend(regular);
+    out
+}
+
 pub(crate) fn start_client_request(stream_handle: i64, body: Vec<u8>) {
+    // On turnloop the stream opens on this thread, on the session's existing
+    // connection. No runtime, no thread, no `SendRequest` to race for.
+    if let Some((session_handle, conn_id)) = get_handle::<Http2StreamHandle>(stream_handle)
+        .map(|stream| stream.session_handle)
+        .and_then(|session| super::turnloop_conn_of_session(session).map(|conn| (session, conn)))
+    {
+        let headers = client_request_headers(stream_handle, session_handle);
+        crate::server::turnloop_h2::stream::request(conn_id, stream_handle, headers, body);
+        return;
+    }
     let (session_handle, headers, sender_slot, authority) =
         match get_handle::<Http2StreamHandle>(stream_handle) {
             Some(stream) => {

@@ -61,8 +61,8 @@ mod turnloop_listen;
 pub(crate) use io_activity::ReadActivity;
 use turnloop_listen::try_listen_on_turnloop;
 pub(crate) use turnloop_listen::{
-    idle_close_ms, queue_turnloop_connection_event, queue_turnloop_upgrade,
-    turnloop_connection_closed,
+    idle_close_ms, note_turnloop_request_aborted, queue_turnloop_connection_event,
+    queue_turnloop_upgrade, turnloop_connection_closed,
 };
 
 /// Apply a server's per-connection `noDelay` (Node's `socket.setNoDelay`
