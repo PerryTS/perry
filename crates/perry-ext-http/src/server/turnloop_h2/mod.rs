@@ -146,8 +146,10 @@ pub(crate) fn listen(
         return Err(tl::error_from_os(None, "listen"));
     }
     // `reuse_port` is false: two `http2.createServer().listen(p)` calls must
-    // race to `EADDRINUSE` the way Node's do, not both succeed.
-    tl::tcp_listen(id, SUBSYSTEM, host, port, backlog, false)?;
+    // race to `EADDRINUSE` the way Node's do, not both succeed. `no_delay` is
+    // false: this path never applied it, and P5's `no_delay` argument reached
+    // `tcp_listen` only on the HTTP/1 listener.
+    tl::tcp_listen(id, SUBSYSTEM, host, port, backlog, false, false)?;
     tl::accept_start(id)?;
     let bound = tl::local_address(id);
     let bound_port = bound.as_ref().map(|e| e.port).unwrap_or(port);
