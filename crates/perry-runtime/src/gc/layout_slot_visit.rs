@@ -30,10 +30,10 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors(
             visit(fixed_slot(slot));
         });
     }
-    // #8112: the authoritative ordered-keys edge, taken from the descriptor
+    // #8112: the authoritative ordered-keys edge, taken from the shape record
     // `gc_child_slots` already resolved for this receiver. It is the boxed
     // record's OWN `keys` word, so the collector marks through it and rewrites
-    // it in place — the descriptor is the root and the rewritable location.
+    // it in place — the record is the root and the rewritable location.
     //
     // Never enumerate the HashMap BUCKET as a GC slot: dirty-page work may
     // retain enumerated slot addresses across budgeted resumptions, during
@@ -117,7 +117,9 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors(
             });
         }
         HeapPayloadSlotScan::Masked => {
-            for child_slot in child_slots {
+            // Iterate by reference: `for .. in child_slots` moves the iterator
+            // into the loop, a copy per traced object (#10362).
+            for child_slot in &mut child_slots {
                 if let HeapChildSlot::Child(slot, layout_kind) = child_slot {
                     visit(GcMutableSlotDescriptor::Slot(GcMutableSlot::new(
                         slot,
