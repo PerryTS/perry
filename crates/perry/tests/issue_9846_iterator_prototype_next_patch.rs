@@ -14,6 +14,15 @@
 //! (`test-files/test_gap_iterator_prototype_next_patch.ts`), captured
 //! 2026-09-06. The discriminating lines are:
 //!
+//! * `A-spread 8,10` / `A-from-array 22,24` / `A-call-spread 26,28` /
+//!   `A-multi-spread 30,32` / `D-set s1,s2` / `D-map-spread [["z",105]]` /
+//!   `E-string A,B` — every one of these is a runtime element-COPY fast arm
+//!   that materializes the result without ever calling `.next()`, so the
+//!   per-call proof above cannot see the patch from inside them. They decline
+//!   on the #10086 escape signal instead (the family prototype object reached
+//!   user code through `Object.getPrototypeOf`), which is the only event that
+//!   can precede a patch. Without that the fixture printed the raw elements —
+//!   `A-spread 4,5`, `D-set 1,2`, `E-string a,b`.
 //! * `F-bound-copy 100,200` — `orig.bind(other)` has the SAME native entry as
 //!   the builtin thunk but a different `this`. A proof that compared by native
 //!   entry alone, without first reading the prototype's own slot, would call
@@ -39,6 +48,9 @@ const SOURCE: &str = include_str!("../../../test-files/test_gap_iterator_prototy
 const EXPECTED: &str = "A-forof 2,4,6\n\
 A-spread 8,10\n\
 A-from 12\n\
+A-from-array 22,24\n\
+A-call-spread 26,28\n\
+A-multi-spread 30,32\n\
 A-manual 14 16 true\n\
 B-forof 1,2,3\n\
 B-spread 4,5\n\
@@ -46,10 +58,14 @@ B-manual 7 8 true\n\
 C-forof-empty 0\n\
 C-restored 9\n\
 D-map a=101,b=102\n\
+D-map-spread [[\"z\",105]]\n\
+D-map-from [[\"y\",106]]\n\
 D-map-restored a,1\n\
 D-set s1,s2\n\
+D-set-from s3,s4\n\
 D-set-restored 3\n\
 E-string A,B\n\
+E-string-from C,D\n\
 E-string-restored c,d\n\
 F-same-object 1,2\n\
 F-bound-copy 100,200\n\

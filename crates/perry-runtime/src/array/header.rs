@@ -1297,6 +1297,33 @@ pub(crate) unsafe fn clear_array_numeric_layout(arr: *const ArrayHeader) {
     clear_array_raw_f64_layout_flag(arr);
 }
 
+/// Re-derive the raw-f64 numeric layout flag from the slots that are actually
+/// there, CLEARING it when any live slot is not a number. Never sets it.
+///
+/// `js_array_alloc` stamps `GC_ARRAY_RAW_F64_LAYOUT` on the fresh (length 0)
+/// array, where it is vacuously true. A producer that fills the array through
+/// the noting store helpers keeps the flag honest; one that sets `length` and
+/// `std::ptr::write`s the element words directly — the documented "internal
+/// scratch array" shape called out on [`mark_array_raw_f64_holes_fresh`] —
+/// bypasses every clear and leaves a NaN-boxed pointer sitting in a slot the
+/// flag promises is a plain double.
+///
+/// That used to be merely latent. `json::stringify_primitive_array` (#9849)
+/// now takes the flag as proof and emits every slot through `write_number`, so
+/// a mislabelled array serializes its strings as `null`
+/// (`JSON.stringify([...Map.groupBy("aba", ch => ch).entries()])`). This is the
+/// repair for the choke point those producers already call,
+/// `object::gc_slots::rebuild_array_layout_from_slots`.
+#[inline]
+pub(crate) unsafe fn reclassify_array_numeric_layout_from_slots(arr: *mut ArrayHeader) {
+    if arr.is_null() || !array_has_raw_f64_layout_flag(arr) {
+        return;
+    }
+    if !array_slots_are_numeric(arr) {
+        clear_array_numeric_layout(arr);
+    }
+}
+
 #[inline]
 pub(crate) fn clear_array_numeric_layout_ptr(user_ptr: usize) {
     if user_ptr == 0 {

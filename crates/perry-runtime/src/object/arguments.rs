@@ -713,11 +713,13 @@ pub extern "C" fn js_array_like_to_array(value: f64) -> *mut ArrayHeader {
         // #7542: unless `Array.prototype[Symbol.iterator]` was replaced, in
         // which case call-spread (`f(...arr)`) must drive the patched method —
         // it decides how many arguments the callee receives, so `f(...[1,2,3])`
-        // passed 3 where node passes 1. `array_proto_iterator_modified()` is a
-        // sticky flag that is false until user code writes the prototype slot,
-        // so the fast path is untouched in every ordinary program.
+        // passed 3 where node passes 1. #9846 widened the condition to the
+        // whole `array_iteration_not_pristine` fact, so a replaced
+        // `%ArrayIteratorPrototype%.next` drives `f(...arr)` as well; both are
+        // sticky flags that stay false until user code touches the prototype
+        // tower, so the fast path is untouched in every ordinary program.
         if crate::array::js_array_is_array(value).to_bits() == crate::value::TAG_TRUE {
-            if crate::array::array_proto_iterator_modified()
+            if crate::array::array_iteration_not_pristine()
                 || crate::array::array_ptr_as_proxy(raw as *const ArrayHeader).is_some()
             {
                 return crate::array::js_array_clone_for_spread(value);

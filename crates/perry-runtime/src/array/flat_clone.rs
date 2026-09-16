@@ -50,9 +50,16 @@ unsafe fn receiver_gc_type(ptr: *const ArrayHeader) -> u8 {
 ///    `Array.prototype` / `Object.prototype` index properties shadowing the
 ///    dense slots, and no live indices past the dense backing store — the three
 ///    cases where `arr[i]` is not the raw slot.
-///  - `array_proto_iterator_modified`: user code replaced or deleted
-///    `Array.prototype[Symbol.iterator]`, so the builtin walk is no longer what
-///    a spread must run.
+///  - `array_iteration_not_pristine`: array iteration can no longer be PROVEN
+///    to be the pristine builtin protocol — either user code replaced or
+///    deleted `Array.prototype[Symbol.iterator]`, or `%ArrayIteratorPrototype%`
+///    itself escaped through `Object.getPrototypeOf` and its `next` may have
+///    been replaced (#10086's escape signal; #9846). Both mean the builtin walk
+///    is no longer what a spread must run. This gate used to read only the
+///    narrower `array_proto_iterator_modified`, so `[...[4, 5]]` under a patched
+///    `%ArrayIteratorPrototype%.next` memcpy'd the raw elements and never called
+///    the patch. The narrow fact implies the broad one, so nothing that used to
+///    decline now passes.
 ///  - `object_static_prototype`: `Object.setPrototypeOf(array, custom)` can
 ///    replace the inherited iterator without touching Array.prototype.
 ///  - `has_own_symbol_property`: the instance carries its OWN `[Symbol.iterator]`,
@@ -85,7 +92,7 @@ pub(crate) fn dense_spread_source(value: f64) -> Option<*const ArrayHeader> {
     if crate::array::array_iteration_is_exotic(arr) {
         return None;
     }
-    if crate::array::array_proto_iterator_modified() {
+    if crate::array::array_iteration_not_pristine() {
         return None;
     }
     if crate::object::prototype_chain::object_static_prototype(arr as usize).is_some() {
