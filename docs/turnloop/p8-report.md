@@ -338,9 +338,12 @@ encodings** for the value the promise resolves with:
 
 The program that imports node-fetch but never calls the global `fetch()` gets
 a *single* definition (`uses_fetch` is false, stdlib's are stripped) and does
-not crash — it fails more quietly instead: `await nodeFetch(url)` resolves a
-bare number, so `r.status` is `undefined` and the program throws
-`TypeError: Cannot read properties of undefined (reading 'status')`.
+not crash. It fails more quietly instead: `const r = await nodeFetch(url);
+r.status` throws `TypeError: Cannot read properties of undefined (reading
+'status')`. This lane did not chase that one to its cause — it may be the
+bare-number handle above, or it may be that the awaited value's type is not
+proven to be a `Response` at the property site — so it is reported as an
+observation, not as a diagnosis.
 
 The decisive control: the same source, the same compiler, one environment
 variable apart.
