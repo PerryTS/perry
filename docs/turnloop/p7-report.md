@@ -377,6 +377,9 @@ arrive at the end.
 | 7 | 0 | 24,109 | 11,827 | 24,109 | 24,000 | 808,372 | 216 | byte-identical |
 | 12345 | 0 | 24,109 | 11,827 | 24,109 | 24,000 | 808,372 | 216 | byte-identical |
 
+Re-run on the final build — after the retirement fix and after the other three
+bindings landed — and every number above is unchanged.
+
 All three seeds report identical counts, which is the documented behaviour at
 `RATE=1`: every handled safepoint collects, so the seed stops selecting. No
 SIGSEGV from the quarantine reporter: no stale from-space pointer was
@@ -444,9 +447,15 @@ reproduced on the base commit:
 
 The parameter defect is identical on both arms — the parameters never reach the
 `Bind` message — so it is a pre-existing Perry defect and not something the
-transport introduced. The `rowCount` row is a P7 improvement that does not go
-far enough; `turnloop_postgres` supplies the real `CommandComplete` row count
-and plumbing it through is a JS-visible change that belongs in its own commit.
+transport introduced. The `rowCount` row is inherited deliberately: the sqlx
+path's no-parameter entry point called `fetch_all` for *every* statement and
+reported `rows.len()`, so an `INSERT` reported zero, and the turnloop path
+reproduces that choice rather than quietly changing a JS-visible value during a
+transport migration. The real `CommandComplete` count is available from
+`turnloop_postgres` and the binding already has the other shape
+(`ResultKind::RowsAffected`) wired for the parameterized entry point; switching
+the no-parameter one over is a one-line change that belongs in its own commit,
+with its own oracle comparison.
 
 ### PostgreSQL, the same headline measurement
 
