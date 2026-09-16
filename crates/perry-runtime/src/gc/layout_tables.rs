@@ -1037,6 +1037,17 @@ pub(in crate::gc) fn per_object_layouts_maybe_nonempty() -> bool {
     hot_per_object_layout_hint().nonempty.get()
 }
 
+/// Can EITHER address carry a per-object record? The relocation funnel
+/// (`gc/layout/transfer.rs`) asks once for both maps and both ends of a move,
+/// where the two `transfer_*` entry points below each resolve the hot slot
+/// again for their own pair (#10362). Same answer, one thread-local
+/// resolution: the flag and the filter live in the same slot.
+#[inline]
+pub(in crate::gc) fn per_object_layouts_may_hold_either(old_user: usize, new_user: usize) -> bool {
+    let hint = hot_per_object_layout_hint();
+    hint.nonempty.get() && (hint_may_hold(hint, old_user) || hint_may_hold(hint, new_user))
+}
+
 /// Arm the flag. Called by anything that inserts into either map — including
 /// the one insert site that holds its own `borrow_mut` and so cannot go
 /// through the wrappers below.

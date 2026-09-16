@@ -469,6 +469,17 @@ pub(crate) fn prune_dead_object_prototype_owners(is_dead_owner: &dyn Fn(usize) -
     }
 }
 
+/// Can the residual owner registry hold an entry at all?
+///
+/// The latch is stored (`Release`) before the first insert, so `false` proves
+/// the registry empty — the same proof [`object_static_prototype_owner_moved`]
+/// makes on entry, exposed so the relocation funnel
+/// (`gc/layout/transfer.rs`) can decide without the call (#10362).
+#[inline]
+pub(crate) fn object_static_prototypes_maybe_nonempty() -> bool {
+    OBJECT_PROTOTYPES_NONEMPTY.load(Ordering::Acquire)
+}
+
 /// Migrate the residual side-table entry when an owner's allocation address
 /// changes, either through moving GC or an `ArrayHeader` growth replacement.
 /// Mirrors `closure_dynamic_props_owner_moved`.

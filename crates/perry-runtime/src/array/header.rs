@@ -1335,25 +1335,6 @@ pub(crate) fn clear_array_numeric_layout_ptr(user_ptr: usize) {
 }
 
 #[inline]
-pub(crate) fn transfer_array_numeric_layout(old_user: usize, new_user: usize) {
-    if old_user == 0 || new_user == 0 || old_user == new_user {
-        return;
-    }
-    unsafe {
-        if array_has_raw_f64_layout_flag(old_user as *const ArrayHeader) {
-            set_array_raw_f64_layout_flag(new_user as *const ArrayHeader);
-        } else if array_has_raw_f64_holes_flag(old_user as *const ArrayHeader) {
-            // #6011: relocation copies slot bits verbatim, so the verified
-            // raw-f64-or-holes invariant carries over to the new backing.
-            clear_array_raw_f64_layout_flag(new_user as *const ArrayHeader);
-            set_array_raw_f64_holes_flag(new_user as *const ArrayHeader);
-        } else {
-            clear_array_raw_f64_layout_flag(new_user as *const ArrayHeader);
-        }
-    }
-}
-
-#[inline]
 pub(crate) unsafe fn array_numeric_layout(arr: *const ArrayHeader) -> Option<NumericArrayLayout> {
     let arr = clean_arr_ptr(arr);
     if arr.is_null() {
