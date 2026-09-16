@@ -1,5 +1,21 @@
-//! Native bindings for the npm `ws` package — WebSocket client +
-//! server via `tokio-tungstenite`. Uses only perry-ffi.
+//! Native bindings for the npm `ws` package — WebSocket client + server.
+//!
+//! # One codec, two transports
+//!
+//! The protocol lives in [`codec`] and [`handshake`], which wrap
+//! `turnloop_websocket`'s sans-I/O state machine and do no I/O at all. Two
+//! transports drive it:
+//!
+//! * [`turnloop_link`] — a connection `perry-ext-http` keeps owning on a
+//!   turnloop handle. No task, no channel, no stream. This is what closes P5's
+//!   attached-`WebSocketServer` hole.
+//! * [`io`] — a tokio stream, for the standalone `WebSocketServer({port})`, the
+//!   outbound client, and any agent with no `turnloop::Loop` of its own.
+//!
+//! Replacing `tokio-tungstenite` with the sans-I/O core is what let the second
+//! transport exist: a `WebSocketStream<S>` needs an owned `AsyncRead + AsyncWrite`,
+//! and a turnloop connection is an `i64` handle id. Nothing about the *protocol*
+//! ever needed the stream.
 //!
 //! Architecture mirrors perry-stdlib's existing copy minus the iOS
 //! `NSURLSessionWebSocketTask` delegation path (out of scope for an
@@ -25,7 +41,11 @@
 //! enough for typical WebSocket usage. Cooperative `spawn_async` is
 //! a v0.6.0 followup.
 
+pub mod codec;
+mod connect;
 mod dispatch;
+pub mod handshake;
+mod io;
 /// SIMD-widened WebSocket frame (un)masking (RFC 6455 §5.3). See
 /// [`mask::apply_mask`] / [`mask::apply_mask_from`]. The hot tungstenite
 /// read/write path masks internally with its own `u32`-blocked routine
@@ -35,11 +55,11 @@ mod dispatch;
 pub mod mask;
 mod server;
 pub use server::*;
+pub mod turnloop_link;
 
 #[cfg(test)]
 mod test_async_shims;
 
-use futures_util::{SinkExt, StreamExt};
 use lazy_static::lazy_static;
 use perry_ffi::{
     alloc_set, alloc_string, gc_register_mutable_root_scanner_named, get_handle_mut,
@@ -51,7 +71,8 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Mutex;
 use tokio::sync::mpsc;
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+
+use crate::codec::{Codec, Incoming, Message, WsError};
 
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
@@ -79,9 +100,19 @@ unsafe fn read_str(ptr: *const StringHeader) -> Option<String> {
 
 struct WsClientHandle;
 
+/// How a connection's bytes reach the wire.
+///
+/// The discriminant is the whole of the transport migration on this side:
+/// `Turnloop` carries only the host's connection id, because the host still
+/// owns the connection and this crate owns the protocol state keyed by it.
+enum WsTransport {
+    Tokio(mpsc::UnboundedSender<WsCommand>),
+    Turnloop(i64),
+}
+
 struct WsConnection {
-    sender: mpsc::UnboundedSender<WsCommand>,
-    messages: Vec<String>,
+    transport: WsTransport,
+    messages: Vec<WsPayload>,
     is_open: bool,
     /// #6117 — `close()` was called but the close handshake hasn't finished:
     /// `readyState` reports CLOSING (2).
@@ -92,9 +123,41 @@ struct WsConnection {
     is_closed: bool,
 }
 
+/// An application message on its way out.
+#[derive(Clone, Debug)]
+pub(crate) enum WsOutgoing {
+    Text(String),
+    Binary(Vec<u8>),
+    Ping(Vec<u8>),
+    Pong(Vec<u8>),
+}
+
+impl WsOutgoing {
+    pub(crate) fn into_message(self) -> Message {
+        match self {
+            WsOutgoing::Text(text) => Message::text(text),
+            WsOutgoing::Binary(bytes) => Message::binary(bytes),
+            WsOutgoing::Ping(bytes) => Message::Ping(bytes.into()),
+            WsOutgoing::Pong(bytes) => Message::Pong(bytes.into()),
+        }
+    }
+}
+
+/// An application message on its way in. Binary is kept as bytes rather than
+/// lossily decoded: `String::from_utf8_lossy` replaced every non-UTF-8 byte
+/// with U+FFFD, so a `ws` client could not receive a binary payload intact.
+#[derive(Clone, Debug)]
+pub(crate) enum WsPayload {
+    Text(String),
+    Binary(Vec<u8>),
+}
+
 enum WsCommand {
-    Send(String),
-    Close,
+    Send(WsOutgoing),
+    /// `ws.close(code, reason)` — start the closing handshake.
+    Close(Option<u16>, String),
+    /// `ws.terminate()` — drop the connection without one.
+    Terminate,
 }
 
 struct WsClientListeners {
@@ -119,7 +182,12 @@ pub struct WsServerHandle {
 
 enum PendingWsEvent {
     Connection(Handle, usize),
-    Message(usize, String),
+    Message(usize, WsPayload),
+    /// `ws.on('ping' | 'pong', data)`. The codec answers a ping itself; these
+    /// are the JS-visible notifications, which did not exist before — an
+    /// inbound control frame used to hit a catch-all and vanish.
+    Ping(usize, Vec<u8>),
+    Pong(usize, Vec<u8>),
     Close(usize, u16, String),
     Error(usize, String),
     ServerError(Handle, String),
@@ -216,6 +284,242 @@ fn push_ws_event(ev: PendingWsEvent) {
     notify_main_thread();
 }
 
+/// `ws`'s error `code` for a protocol failure, as `turnloop_websocket` names it.
+pub(crate) fn codec_error_message(error: &WsError) -> String {
+    format!("{}: {error}", turnloop_websocket::node_error_code(error))
+}
+
+/// Queue a decoded message for the main-thread pump.
+///
+/// Both transports funnel through here so they cannot disagree about ordering,
+/// about the pre-listener backlog, or about which events exist.
+///
+/// **This never runs JS.** The turnloop transport calls it from inside the
+/// host's completion dispatch, where running JS would reorder the event loop;
+/// the tokio transport calls it from a task. Delivery is `js_ws_process_pending`'s
+/// job either way.
+pub(crate) fn emit_incoming(ws_id: usize, event: Incoming) {
+    match event {
+        Incoming::Text(text) => queue_payload(ws_id, WsPayload::Text(text)),
+        Incoming::Binary(bytes) => queue_payload(ws_id, WsPayload::Binary(bytes)),
+        Incoming::Ping(bytes) => push_ws_event(PendingWsEvent::Ping(ws_id, bytes)),
+        Incoming::Pong(bytes) => push_ws_event(PendingWsEvent::Pong(ws_id, bytes)),
+        // The close event is raised by `connection_closed` once the transport
+        // has finished with the connection, so a listener never sees `'close'`
+        // before the answering frame has been written.
+        Incoming::Close(_) => {}
+    }
+}
+
+/// A message is queued as a pending event only once a listener exists; before
+/// that it is parked on the connection so the registration site can replay it.
+/// That race is real — the transport starts reading the moment the handshake
+/// completes, and `wss.on('connection')` runs a tick later.
+fn queue_payload(ws_id: usize, payload: WsPayload) {
+    let client_has_listener = WS_CLIENT_LISTENERS
+        .lock()
+        .unwrap()
+        .get(&ws_id)
+        .map(|l| l.listeners.get("message").is_some_and(|v| !v.is_empty()))
+        .unwrap_or(false);
+    let server_has_listener = WS_CLIENT_PARENT_SERVER
+        .lock()
+        .unwrap()
+        .get(&ws_id)
+        .copied()
+        .map(|sh| !listeners_on_server(sh, "message").is_empty())
+        .unwrap_or(false);
+    if client_has_listener || server_has_listener {
+        push_ws_event(PendingWsEvent::Message(ws_id, payload));
+    } else if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id) {
+        c.messages.push(payload);
+    }
+}
+
+/// The connection failed. Reported to JS as `ws.on('error')`.
+pub(crate) fn connection_error(ws_id: usize, message: &str) {
+    push_ws_event(PendingWsEvent::Error(ws_id, message.to_string()));
+}
+
+/// The connection is finished, with the status JS should see.
+pub(crate) fn connection_closed(ws_id: usize, code: u16, reason: String) {
+    if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id) {
+        if c.is_closed {
+            // A close frame and then EOF is one close, not two.
+            return;
+        }
+        c.is_open = false;
+        c.is_closed = true;
+    } else {
+        return;
+    }
+    push_ws_event(PendingWsEvent::Close(ws_id, code, reason));
+}
+
+/// Register a client whose bytes a turnloop host carries. No channel and no
+/// task: `send`/`close` drive the codec inline and hand the bytes back.
+pub(crate) fn register_turnloop_client(conn_id: i64) -> usize {
+    ensure_runtime_hooks_registered();
+    let ws_id = register_handle(WsClientHandle) as usize;
+    WS_CONNECTIONS.lock().unwrap().insert(
+        ws_id,
+        WsConnection {
+            transport: WsTransport::Turnloop(conn_id),
+            messages: Vec::new(),
+            is_open: true,
+            is_closing: false,
+            is_closed: false,
+        },
+    );
+    WS_CLIENT_LISTENERS.lock().unwrap().insert(
+        ws_id,
+        WsClientListeners {
+            listeners: HashMap::new(),
+        },
+    );
+    ws_id
+}
+
+/// Register a client on a tokio stream and start its IO loop.
+fn register_stream_client<S: io::Transport>(
+    stream: S,
+    codec: Codec,
+    leftover: Vec<u8>,
+    open: bool,
+) -> usize {
+    ensure_runtime_hooks_registered();
+    let ws_id = register_handle(WsClientHandle) as usize;
+    let (tx, rx) = mpsc::unbounded_channel::<WsCommand>();
+    WS_CONNECTIONS.lock().unwrap().insert(
+        ws_id,
+        WsConnection {
+            transport: WsTransport::Tokio(tx),
+            messages: Vec::new(),
+            is_open: open,
+            is_closing: false,
+            is_closed: false,
+        },
+    );
+    WS_CLIENT_LISTENERS.lock().unwrap().insert(
+        ws_id,
+        WsClientListeners {
+            listeners: HashMap::new(),
+        },
+    );
+    // `spawn_async` drives the loop on Perry's shared reactor-owned runtime.
+    // It does NOT bump the event-loop active-handle counter, so the connection
+    // is kept alive by `js_ws_has_pending` reporting live while it is open —
+    // the gate `WS_CONNECTIONS` above establishes before this call.
+    spawn_async(io::run(ws_id, stream, codec, leftover, rx));
+    ws_id
+}
+
+/// Register a client on a tokio stream that belongs to a `WebSocketServer`.
+///
+/// The parent link is published before the IO loop starts, so a message that
+/// arrived with the handshake is routed to the server's own `'message'`
+/// listener rather than parked forever.
+fn register_stream_client_for_server<S: io::Transport>(
+    server_handle: Handle,
+    stream: S,
+    codec: Codec,
+    leftover: Vec<u8>,
+) -> usize {
+    ensure_runtime_hooks_registered();
+    let ws_id = register_handle(WsClientHandle) as usize;
+    let (tx, rx) = mpsc::unbounded_channel::<WsCommand>();
+    WS_CONNECTIONS.lock().unwrap().insert(
+        ws_id,
+        WsConnection {
+            transport: WsTransport::Tokio(tx),
+            messages: Vec::new(),
+            is_open: true,
+            is_closing: false,
+            is_closed: false,
+        },
+    );
+    WS_CLIENT_LISTENERS.lock().unwrap().insert(
+        ws_id,
+        WsClientListeners {
+            listeners: HashMap::new(),
+        },
+    );
+    WS_CLIENT_PARENT_SERVER
+        .lock()
+        .unwrap()
+        .insert(ws_id, server_handle);
+    spawn_async(io::run(ws_id, stream, codec, leftover, rx));
+    ws_id
+}
+
+/// `ws.send(...)` on either transport.
+fn send_on(ws_id: usize, outgoing: WsOutgoing) {
+    let target = WS_CONNECTIONS
+        .lock()
+        .unwrap()
+        .get(&ws_id)
+        .map(|c| match &c.transport {
+            WsTransport::Tokio(tx) => Ok(tx.clone()),
+            WsTransport::Turnloop(conn_id) => Err(*conn_id),
+        });
+    match target {
+        Some(Ok(tx)) => {
+            let _ = tx.send(WsCommand::Send(outgoing));
+        }
+        Some(Err(conn_id)) => {
+            turnloop_link::send(conn_id, outgoing);
+        }
+        None => {}
+    }
+}
+
+/// `ws.close(code, reason)` on either transport.
+fn close_on(ws_id: usize, code: Option<u16>, reason: &str) {
+    let target = WS_CONNECTIONS
+        .lock()
+        .unwrap()
+        .get_mut(&ws_id)
+        .map(|c| {
+            // `readyState` is CLOSING (2) until the handshake finishes; the
+            // connection is NOT closed yet, and a peer frame may still arrive.
+            c.is_closing = true;
+            match &c.transport {
+                WsTransport::Tokio(tx) => Ok(tx.clone()),
+                WsTransport::Turnloop(conn_id) => Err(*conn_id),
+            }
+        });
+    match target {
+        Some(Ok(tx)) => {
+            let _ = tx.send(WsCommand::Close(code, reason.to_string()));
+        }
+        Some(Err(conn_id)) => {
+            turnloop_link::close(conn_id, code, reason);
+        }
+        None => {}
+    }
+}
+
+/// `ws.terminate()` — no closing handshake.
+fn terminate_on(ws_id: usize) {
+    let target = WS_CONNECTIONS
+        .lock()
+        .unwrap()
+        .get(&ws_id)
+        .map(|c| match &c.transport {
+            WsTransport::Tokio(tx) => Ok(tx.clone()),
+            WsTransport::Turnloop(conn_id) => Err(*conn_id),
+        });
+    match target {
+        Some(Ok(tx)) => {
+            let _ = tx.send(WsCommand::Terminate);
+        }
+        Some(Err(conn_id)) => {
+            turnloop_link::terminate(conn_id);
+        }
+        None => {}
+    }
+}
+
 #[inline]
 fn client_js_value(ws_id: usize) -> JsValue {
     JsValue::from_bits(POINTER_TAG | ws_id as u64)
@@ -279,34 +583,42 @@ pub unsafe extern "C" fn js_ws_connect(url_ptr: *const StringHeader) -> *mut per
         promise.reject_string("Invalid URL");
         return raw;
     };
-    // Issue #606 — `spawn_blocking_with_reactor` runs the closure inside
-    // a tokio worker task; `Handle::current().block_on` panics in that
-    // context. Use `tokio::spawn` so the connect awaits as a sibling task.
+    // Issue #606 — `spawn_blocking_with_reactor` runs the closure inside a
+    // tokio worker task, where `Handle::current().block_on` panics. Use
+    // `tokio::spawn` so the connect awaits as a sibling task.
     spawn_blocking(move || {
         tokio::spawn(async move {
-            match connect_async(&url).await {
-                Ok((ws_stream, _resp)) => {
-                    let id = setup_client_io(ws_stream);
+            match connect::connect(&url, Vec::new(), Vec::new()).await {
+                Ok(connected) => {
+                    let id = register_stream_client(
+                        connected.stream,
+                        connected.codec,
+                        connected.leftover,
+                        true,
+                    );
                     push_ws_event(PendingWsEvent::Open(id));
                     promise.resolve(JsValue::from_number(id as f64));
                 }
-                Err(e) => promise.reject_string(&format!("WebSocket connect error: {}", e)),
+                Err(e) => promise.reject_string(&format!("WebSocket connect error: {e}")),
             }
         });
     });
     raw
 }
 
-/// `js_ws_connect_start(url_nanboxed)` — sync alternative used by
-/// codegen sites that don't expect a Promise return.
+/// `js_ws_connect_start(url_nanboxed)` — sync alternative used by codegen sites
+/// that don't expect a Promise return.
+///
+/// The id is allocated synchronously so the caller can register listeners
+/// before the connect resolves; the connection is adopted into that id once it
+/// completes.
 #[no_mangle]
 pub extern "C" fn js_ws_connect_start(url_nanboxed: f64) -> f64 {
     ensure_runtime_hooks_registered();
     ensure_tls_crypto_provider();
     let bits = url_nanboxed.to_bits();
-    let mask = TAG_MASK;
     let string_tag = 0x7FFF_0000_0000_0000u64;
-    let url = if (bits & mask) == string_tag {
+    let url = if (bits & TAG_MASK) == string_tag {
         let ptr = (bits & POINTER_MASK) as *const StringHeader;
         unsafe { read_str(ptr) }
     } else {
@@ -314,14 +626,15 @@ pub extern "C" fn js_ws_connect_start(url_nanboxed: f64) -> f64 {
     };
     let Some(url) = url else { return 0.0 };
 
-    // Allocate the id synchronously so the caller can register
-    // listeners before the connect resolves.
+    // A connection that has not opened yet still needs an id and a command
+    // channel, so `ws.send(...)` issued before `'open'` is queued rather than
+    // dropped — which is what `ws` does with its own `_sender` queue.
     let ws_id = register_handle(WsClientHandle) as usize;
     let (tx, rx) = mpsc::unbounded_channel::<WsCommand>();
     WS_CONNECTIONS.lock().unwrap().insert(
         ws_id,
         WsConnection {
-            sender: tx,
+            transport: WsTransport::Tokio(tx),
             messages: Vec::new(),
             is_open: false,
             is_closing: false,
@@ -334,18 +647,21 @@ pub extern "C" fn js_ws_connect_start(url_nanboxed: f64) -> f64 {
             listeners: HashMap::new(),
         },
     );
-    // Issue #606 — same fix as js_ws_connect: tokio::spawn instead of
-    // block_on so the connect+IO loop runs as a sibling task on the
-    // existing runtime.
     spawn_blocking(move || {
         tokio::spawn(async move {
-            match connect_async(&url).await {
-                Ok((ws_stream, _)) => {
+            match connect::connect(&url, Vec::new(), Vec::new()).await {
+                Ok(connected) => {
                     if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id) {
                         c.is_open = true;
                     }
                     push_ws_event(PendingWsEvent::Open(ws_id));
-                    drive_client_io(ws_id, ws_stream, rx);
+                    spawn_async(io::run(
+                        ws_id,
+                        connected.stream,
+                        connected.codec,
+                        connected.leftover,
+                        rx,
+                    ));
                 }
                 Err(e) => {
                     // #6117 — readyState must report CLOSED (3), not
@@ -355,7 +671,7 @@ pub extern "C" fn js_ws_connect_start(url_nanboxed: f64) -> f64 {
                     }
                     push_ws_event(PendingWsEvent::Error(
                         ws_id,
-                        format!("WebSocket connect error: {}", e),
+                        format!("WebSocket connect error: {e}"),
                     ));
                 }
             }
@@ -364,112 +680,58 @@ pub extern "C" fn js_ws_connect_start(url_nanboxed: f64) -> f64 {
     ws_id as f64
 }
 
-fn setup_client_io(
-    ws_stream: tokio_tungstenite::WebSocketStream<
-        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-    >,
-) -> usize {
-    let ws_id = register_handle(WsClientHandle) as usize;
-    let (tx, rx) = mpsc::unbounded_channel::<WsCommand>();
-    WS_CONNECTIONS.lock().unwrap().insert(
-        ws_id,
-        WsConnection {
-            sender: tx,
-            messages: Vec::new(),
-            is_open: true,
-            is_closing: false,
-            is_closed: false,
-        },
-    );
-    WS_CLIENT_LISTENERS.lock().unwrap().insert(
-        ws_id,
-        WsClientListeners {
-            listeners: HashMap::new(),
-        },
-    );
-    drive_client_io(ws_id, ws_stream, rx);
-    ws_id
-}
-
-fn drive_client_io<S>(
-    ws_id: usize,
-    ws_stream: tokio_tungstenite::WebSocketStream<S>,
-    mut rx: mpsc::UnboundedReceiver<WsCommand>,
-) where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
-{
-    // Issue #606 — `spawn_blocking_with_reactor` runs the closure inside
-    // a tokio worker task; `Handle::current().block_on` panics in that
-    // context. Spawn the IO loop as a sibling task on the existing
-    // runtime instead.
-    spawn_blocking(move || {
-        tokio::spawn(async move {
-            let (mut write, mut read) = ws_stream.split();
-            loop {
-                tokio::select! {
-                    msg_result = read.next() => {
-                        match msg_result {
-                            Some(Ok(Message::Text(text))) => {
-                                let has_listeners = WS_CLIENT_LISTENERS.lock().unwrap()
-                                    .get(&ws_id)
-                                    .map(|l| l.listeners.get("message").map(|v| !v.is_empty()).unwrap_or(false))
-                                    .unwrap_or(false);
-                                let text = text.to_string();
-                                if has_listeners {
-                                    push_ws_event(PendingWsEvent::Message(ws_id, text));
-                                } else if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id) {
-                                    c.messages.push(text);
-                                }
-                            }
-                            Some(Ok(Message::Binary(b))) => {
-                                let s = String::from_utf8_lossy(&b).to_string();
-                                push_ws_event(PendingWsEvent::Message(ws_id, s));
-                            }
-                            Some(Ok(Message::Close(frame))) => {
-                                let (code, reason) = frame
-                                    .map(|f| (f.code.into(), f.reason.to_string()))
-                                    .unwrap_or((1000u16, String::new()));
-                                if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id) {
-                                    c.is_open = false;
-                                    c.is_closed = true;
-                                }
-                                push_ws_event(PendingWsEvent::Close(ws_id, code, reason));
-                                break;
-                            }
-                            Some(Ok(_)) => { /* ping/pong/etc — ignore */ }
-                            Some(Err(e)) => {
-                                push_ws_event(PendingWsEvent::Error(ws_id, format!("{}", e)));
-                                break;
-                            }
-                            None => break,
-                        }
-                    }
-                    cmd = rx.recv() => {
-                        match cmd {
-                            Some(WsCommand::Send(text)) => {
-                                if write.send(Message::Text(text.into())).await.is_err() {
-                                    break;
-                                }
-                            }
-                            Some(WsCommand::Close) => {
-                                let _ = write.send(Message::Close(None)).await;
-                                break;
-                            }
-                            None => break,
-                        }
-                    }
-                }
-            }
-            if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id) {
-                c.is_open = false;
-                c.is_closed = true;
-            }
-        });
-    });
-}
-
 // ── Send / close (client) ─────────────────────────────────────────
 
+/// A JS value as a string, for the places `ws` stringifies its argument.
+fn js_string_of(value: JsValue) -> Option<String> {
+    if value.is_any_string() {
+        return value_string(value);
+    }
+    if value.is_number() {
+        let n = value.to_number();
+        return Some(if n.fract() == 0.0 && n.abs() < 1e21 {
+            format!("{}", n as i64)
+        } else {
+            format!("{n}")
+        });
+    }
+    if value.is_bool() {
+        return Some(value.to_bool().to_string());
+    }
+    None
+}
+
+/// Read a `ws.send(data)` argument.
+///
+/// `ws` sends a string as a text frame and anything buffer-shaped as a binary
+/// frame; everything else is stringified. Perry used to take only a
+/// `StringHeader`, so a `Buffer` argument could not be sent at all.
+pub(crate) fn outgoing_from_value(value: f64) -> Option<WsOutgoing> {
+    let value = JsValue::from_bits(value.to_bits());
+    if value.is_undefined() || value.is_null() {
+        return None;
+    }
+    // A Buffer / TypedArray / ArrayBuffer resolves to its backing bytes; a
+    // string does not, which is how the two cases are told apart.
+    if !value.is_any_string() {
+        if let Some(bytes) = perry_ffi::value_byte_slice(value) {
+            return Some(WsOutgoing::Binary(bytes.to_vec()));
+        }
+    }
+    js_string_of(value).map(WsOutgoing::Text)
+}
+
+/// `ws.send(data)`.
+#[no_mangle]
+pub extern "C" fn js_ws_send_value(handle: i64, value: f64) {
+    if let Some(outgoing) = outgoing_from_value(value) {
+        send_on(handle as usize, outgoing);
+    }
+}
+
+/// `ws.send(text)` — the string-typed entry point kept for call sites whose
+/// argument codegen proved a string.
+///
 /// # Safety
 /// `message_ptr` must be null or a Perry-runtime `StringHeader`.
 #[no_mangle]
@@ -477,26 +739,73 @@ pub unsafe extern "C" fn js_ws_send(handle: i64, message_ptr: *const StringHeade
     let Some(msg) = read_str(message_ptr) else {
         return;
     };
-    let id = handle as usize;
-    if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&id) {
-        let _ = c.sender.send(WsCommand::Send(msg));
+    send_on(handle as usize, WsOutgoing::Text(msg));
+}
+
+/// `ws.ping([data])`.
+#[no_mangle]
+pub extern "C" fn js_ws_ping(handle: i64, value: f64) {
+    send_on(handle as usize, WsOutgoing::Ping(control_payload(value)));
+}
+
+/// `ws.pong([data])`.
+#[no_mangle]
+pub extern "C" fn js_ws_pong(handle: i64, value: f64) {
+    send_on(handle as usize, WsOutgoing::Pong(control_payload(value)));
+}
+
+/// `ws.terminate()` — drop the connection with no closing handshake.
+#[no_mangle]
+pub extern "C" fn js_ws_terminate(handle: i64) {
+    terminate_on(handle as usize);
+}
+
+fn control_payload(value: f64) -> Vec<u8> {
+    match outgoing_from_value(value) {
+        Some(WsOutgoing::Text(text)) => text.into_bytes(),
+        Some(WsOutgoing::Binary(bytes)) => bytes,
+        _ => Vec::new(),
     }
 }
 
+/// `ws.close()` / `wss.close()`.
 #[no_mangle]
 pub extern "C" fn js_ws_close(handle: i64) {
+    js_ws_close_with(handle, undefined(), undefined())
+}
+
+/// `ws.close(code, reason)`.
+///
+/// Both arguments reach the wire now. They used to be dropped entirely — the
+/// FFI took none and the frame was always `Close(None)` — so a peer could never
+/// observe an application close code.
+#[no_mangle]
+pub extern "C" fn js_ws_close_with(handle: i64, code: f64, reason: f64) {
     if get_handle_mut::<WsServerHandle>(handle).is_some() {
         js_ws_server_close(handle);
         return;
     }
-    let id = handle as usize;
-    if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&id) {
-        let _ = c.sender.send(WsCommand::Close);
-        c.is_open = false;
-        // #6117 — readyState reports CLOSING (2) until the IO loop
-        // finishes the close handshake and marks is_closed.
-        c.is_closing = true;
-    }
+    let (code, reason) = close_args(code, reason);
+    close_on(handle as usize, code, &reason);
+}
+
+/// `ws`'s own validation: a code must be 1000 or in 3000..=4999, and a reason
+/// without a code is ignored rather than sent as 1005.
+fn close_args(code: f64, reason: f64) -> (Option<u16>, String) {
+    let code_value = JsValue::from_bits(code.to_bits());
+    let code = Some(code_value)
+        .filter(|v| v.is_number())
+        .map(|v| v.to_number())
+        .filter(|n| n.is_finite())
+        .map(|n| n as i64)
+        .filter(|n| *n == 1000 || (3000..=4999).contains(n))
+        .map(|n| n as u16);
+    let reason = if code.is_some() {
+        js_string_of(JsValue::from_bits(reason.to_bits())).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    (code, reason)
 }
 
 /// # Safety
@@ -518,21 +827,27 @@ pub unsafe extern "C" fn js_ws_send_client_i64(handle: i64, message_ptr: *const 
     let Some(msg) = read_str(message_ptr) else {
         return;
     };
-    let id = handle as usize;
-    if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&id) {
-        let _ = c.sender.send(WsCommand::Send(msg));
-    }
+    send_on(handle as usize, WsOutgoing::Text(msg));
 }
 
-/// Issue #577 Phase 4 — `wsId.close()` on an upgrade-path Client.
+/// Issue #577 Phase 4 — `wsId.send(data)` on an upgrade-path Client, for any
+/// value shape.
+#[no_mangle]
+pub extern "C" fn js_ws_send_value_client_i64(handle: i64, value: f64) {
+    js_ws_send_value(handle, value)
+}
+
+/// Issue #577 Phase 4 — `wsId.close([code, reason])` on an upgrade-path Client.
 #[no_mangle]
 pub extern "C" fn js_ws_close_client_i64(handle: i64) {
-    let id = handle as usize;
-    if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&id) {
-        let _ = c.sender.send(WsCommand::Close);
-        c.is_open = false;
-        c.is_closing = true;
-    }
+    close_on(handle as usize, None, "");
+}
+
+/// Issue #577 Phase 4 — `wsId.close(code, reason)` on an upgrade-path Client.
+#[no_mangle]
+pub extern "C" fn js_ws_close_with_client_i64(handle: i64, code: f64, reason: f64) {
+    let (code, reason) = close_args(code, reason);
+    close_on(handle as usize, code, &reason);
 }
 
 /// Issue #577 Phase 4 — `wsId.on(event, cb)` on an upgrade-path Client.
@@ -572,11 +887,12 @@ pub unsafe extern "C" fn js_ws_on_client_i64(
     // next `js_ws_process_pending` tick fires this freshly-registered
     // listener against them.
     if event_name == "message" {
-        let queued: Vec<String> = if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id) {
-            std::mem::take(&mut c.messages)
-        } else {
-            Vec::new()
-        };
+        let queued: Vec<WsPayload> =
+            if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id) {
+                std::mem::take(&mut c.messages)
+            } else {
+                Vec::new()
+            };
         for msg in queued {
             push_ws_event(PendingWsEvent::Message(ws_id, msg));
         }
@@ -587,23 +903,15 @@ pub unsafe extern "C" fn js_ws_on_client_i64(
 /// `message_ptr` must be null or a Perry-runtime `StringHeader`.
 #[no_mangle]
 pub unsafe extern "C" fn js_ws_send_to_client(handle_f64: f64, message_ptr: *const StringHeader) {
-    let id = decode_client_id(handle_f64);
     let Some(msg) = read_str(message_ptr) else {
         return;
     };
-    if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&id) {
-        let _ = c.sender.send(WsCommand::Send(msg));
-    }
+    send_on(decode_client_id(handle_f64), WsOutgoing::Text(msg));
 }
 
 #[no_mangle]
 pub extern "C" fn js_ws_close_client(handle_f64: f64) {
-    let id = decode_client_id(handle_f64);
-    if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&id) {
-        let _ = c.sender.send(WsCommand::Close);
-        c.is_open = false;
-        c.is_closing = true;
-    }
+    close_on(decode_client_id(handle_f64), None, "");
 }
 
 // ── Accessors ─────────────────────────────────────────────────────
@@ -653,10 +961,20 @@ pub extern "C" fn js_ws_receive(handle: i64) -> *mut StringHeader {
     if let Some(c) = g.get_mut(&id) {
         if !c.messages.is_empty() {
             let msg = c.messages.remove(0);
-            return alloc_string(&msg).as_raw();
+            return alloc_string(&payload_text(&msg)).as_raw();
         }
     }
     std::ptr::null_mut()
+}
+
+/// `js_ws_receive` / `js_ws_wait_for_message` are Perry-only string APIs that
+/// predate binary support, so a binary payload is rendered lossily for them —
+/// and only for them. Every `ws`-shaped path delivers a `Buffer`.
+fn payload_text(payload: &WsPayload) -> String {
+    match payload {
+        WsPayload::Text(text) => text.clone(),
+        WsPayload::Binary(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+    }
 }
 
 /// `js_ws_wait_for_message(handle, timeout_ms)` — block up to
@@ -671,7 +989,7 @@ pub unsafe extern "C" fn js_ws_wait_for_message(handle: i64, timeout_ms: f64) ->
         if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&id) {
             if !c.messages.is_empty() {
                 let msg = c.messages.remove(0);
-                return alloc_string(&msg).as_raw();
+                return alloc_string(&payload_text(&msg)).as_raw();
             }
         }
         if start.elapsed() >= timeout {
@@ -771,125 +1089,6 @@ pub unsafe extern "C" fn js_ws_on(
 
 // ── Server ────────────────────────────────────────────────────────
 
-fn drive_server_client_io<S>(
-    ws_id: usize,
-    ws_stream: tokio_tungstenite::WebSocketStream<S>,
-    mut rx: mpsc::UnboundedReceiver<WsCommand>,
-) where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
-{
-    // Issue #577 (Phase 4 + follow-up): the caller may already be inside a tokio
-    // runtime task (the upgrade-from-http path via `register_external_ws_stream`),
-    // so `Handle::current().block_on(fut)` would panic ("Cannot start a runtime
-    // from within a runtime"). Avoid `spawn_blocking(|| tokio::spawn(...))` too:
-    // the nested spawn depends on an ambient `Handle` on a blocking-pool thread,
-    // which "proved brittle under release/LTO builds" (see `perry_ffi::spawn_async`
-    // docs) — in release the IO loop silently failed to start, so neither inbound
-    // frames were read nor `WsCommand::Send` writes flushed (a dead post-upgrade
-    // channel). Drive the per-connection IO loop on Perry's shared reactor-owned
-    // runtime instead, matching perry-ext-net's socket reader loops.
-    //
-    // Keepalive: unlike the old `spawn_blocking_with_reactor`, `spawn_async` does
-    // NOT bump the event-loop active-handle counter, so this task is not
-    // self-keepalive — the caller must own a gate. It does: every path that
-    // reaches here registers the connection in `WS_CONNECTIONS` with
-    // `is_open = true` BEFORE this call (`register_external_ws_stream` for the
-    // upgrade path; the standalone server also holds `WS_ACTIVE_SERVERS`), and
-    // `js_ws_has_pending` reports the loop live while any connection is open. So
-    // the WS connection itself keeps the shared loop alive for as long as it is
-    // open — independent of the host HTTP listener's own gate.
-    spawn_async(async move {
-        let (mut write, mut read) = ws_stream.split();
-        loop {
-            tokio::select! {
-                msg_result = read.next() => {
-                    match msg_result {
-                        Some(Ok(Message::Text(text))) => {
-                            // Issue #577 Phase 4 — race between
-                            // `register_external_ws_stream` (which spawns
-                            // this IO loop and starts reading immediately)
-                            // and the main-thread `'upgrade'` event firing
-                            // (which is where user code registers
-                            // `wsId.on('message', cb)`). If the client
-                            // sends a frame fast enough, the IO loop
-                            // pushes it to WS_PENDING_EVENTS before the
-                            // listener exists, then `js_ws_process_pending`
-                            // drops it silently. Mirror the client-side
-                            // logic at line 268: only push as a pending
-                            // event when a listener is already registered;
-                            // otherwise queue on `c.messages` so the
-                            // listener-registration site can drain it
-                            // synchronously.
-                            let text_str = text.to_string();
-                            let client_has_listener = WS_CLIENT_LISTENERS
-                                .lock()
-                                .unwrap()
-                                .get(&ws_id)
-                                .map(|l| l.listeners.get("message").map(|v| !v.is_empty()).unwrap_or(false))
-                                .unwrap_or(false);
-                            // #746 follow-up: a server-level
-                            // `wss.on('message', (ws, data) => ...)` handler
-                            // (perry-stdlib::ws parity) registers on the parent
-                            // WsServerHandle, not on WS_CLIENT_LISTENERS. The
-                            // original #577 Phase 4 race-guard only checked the
-                            // per-client map, so a server-only message handler
-                            // never produced a PendingWsEvent::Message — the
-                            // frame was parked on c.messages forever.
-                            let server_has_listener = WS_CLIENT_PARENT_SERVER
-                                .lock()
-                                .unwrap()
-                                .get(&ws_id)
-                                .copied()
-                                .map(|sh| !listeners_on_server(sh, "message").is_empty())
-                                .unwrap_or(false);
-                            if client_has_listener || server_has_listener {
-                                push_ws_event(PendingWsEvent::Message(ws_id, text_str));
-                            } else if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id) {
-                                c.messages.push(text_str);
-                            }
-                        }
-                        Some(Ok(Message::Binary(b))) => {
-                            let s = String::from_utf8_lossy(&b).to_string();
-                            push_ws_event(PendingWsEvent::Message(ws_id, s));
-                        }
-                        Some(Ok(Message::Close(frame))) => {
-                            let (code, reason) = frame
-                                .map(|f| (f.code.into(), f.reason.to_string()))
-                                .unwrap_or((1000u16, String::new()));
-                            push_ws_event(PendingWsEvent::Close(ws_id, code, reason));
-                            break;
-                        }
-                        Some(Ok(_)) => {}
-                        Some(Err(e)) => {
-                            push_ws_event(PendingWsEvent::Error(ws_id, format!("{}", e)));
-                            break;
-                        }
-                        None => break,
-                    }
-                }
-                cmd = rx.recv() => {
-                    match cmd {
-                        Some(WsCommand::Send(text)) => {
-                            if write.send(Message::Text(text.into())).await.is_err() {
-                                break;
-                            }
-                        }
-                        Some(WsCommand::Close) => {
-                            let _ = write.send(Message::Close(None)).await;
-                            break;
-                        }
-                        None => break,
-                    }
-                }
-            }
-        }
-        if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id) {
-            c.is_open = false;
-            c.is_closed = true;
-        }
-    });
-}
-
 #[no_mangle]
 pub extern "C" fn js_ws_server_close(handle: i64) {
     if let Some(server) = take_handle::<WsServerHandle>(handle) {
@@ -899,42 +1098,52 @@ pub extern "C" fn js_ws_server_close(handle: i64) {
     }
 }
 
-/// Register an externally-provided WebSocket stream as a perry-ext-ws
-/// connection — used by perry-ext-http's upgrade path so that
-/// `Server.on('upgrade', ...)` integration flows through the same
-/// per-client IO loop and listener registry as standalone
-/// `WebSocketServer({port})` connections (issue #577 Phase 4).
+/// Adopt a stream whose WebSocket handshake a host crate has already completed
+/// — `perry-ext-http`'s and `perry-ext-fastify`'s hyper upgrade paths.
 ///
-/// Returns the assigned `ws_id` (`usize`-shaped, fits in `i64`)
-/// that user code consumes via `js_ws_send` / `js_ws_close` / `js_ws_on`.
-/// The caller is responsible for firing whatever 'connection' /
-/// 'upgrade' event listeners are appropriate; this function does not
-/// push a `PendingWsEvent::Connection`.
-pub fn register_external_ws_stream<S>(ws_stream: tokio_tungstenite::WebSocketStream<S>) -> i64
+/// The stream is any `AsyncRead + AsyncWrite`; in practice
+/// `TokioIo<hyper::upgrade::Upgraded>`. What changed with the codec swap is
+/// that the *caller* no longer constructs a `tokio_tungstenite::WebSocketStream`
+/// and therefore no longer needs `tokio-tungstenite` in its own dependency
+/// graph: it hands over the raw stream and this crate installs the protocol.
+///
+/// Returns the assigned `ws_id`. The caller fires whatever `'connection'` /
+/// `'upgrade'` listeners are appropriate; this does not push a
+/// `PendingWsEvent::Connection`.
+pub fn register_upgraded_stream<S>(stream: S) -> i64
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    ensure_runtime_hooks_registered();
-    let ws_id = register_handle(WsClientHandle) as usize;
-    let (tx, rx) = mpsc::unbounded_channel::<WsCommand>();
-    WS_CONNECTIONS.lock().unwrap().insert(
-        ws_id,
-        WsConnection {
-            sender: tx,
-            messages: Vec::new(),
-            is_open: true,
-            is_closing: false,
-            is_closed: false,
-        },
-    );
-    WS_CLIENT_LISTENERS.lock().unwrap().insert(
-        ws_id,
-        WsClientListeners {
-            listeners: HashMap::new(),
-        },
-    );
-    drive_server_client_io(ws_id, ws_stream, rx);
-    ws_id as i64
+    register_stream_client(stream, Codec::new(codec::Role::Server), Vec::new(), true) as i64
+}
+
+/// Validate an upgrade request and return the headers a `101` must carry, so a
+/// host crate does not need a WebSocket library of its own to answer one.
+///
+/// `request_headers` is the request's header list, in any case. `protocols` is
+/// the server's offered subprotocol list in preference order.
+///
+/// This replaces the hyper path's hand-rolled `derive_accept_key` + literal
+/// header block, which validated *nothing*: it checked neither
+/// `Sec-WebSocket-Version` nor `Upgrade: websocket`, and a missing
+/// `Sec-WebSocket-Key` produced an empty accept value rather than a refusal.
+///
+/// (`turnloop_websocket` does not re-export `derive_accept_key`, so a host that
+/// wants only the one header cannot get it; going through `accept` is better
+/// anyway, because it is the validation too.)
+pub fn accept_headers(
+    method: &str,
+    target: &str,
+    request_headers: &[(String, String)],
+    protocols: &[&str],
+) -> Result<Vec<(String, String)>, String> {
+    let head = turnloop_link::request_head(method, target, 1, request_headers);
+    let (response, _) = turnloop_websocket::accept(&head, protocols).map_err(|e| e.to_string())?;
+    Ok(response
+        .headers
+        .into_iter()
+        .map(|h| (h.name, String::from_utf8_lossy(&h.value).into_owned()))
+        .collect())
 }
 
 /// #1113 — `wss.handleUpgrade(req, socket, head, cb)` for a
@@ -993,6 +1202,23 @@ pub unsafe extern "C" fn js_ws_handle_upgrade(
 
 // ── Event-loop tick ───────────────────────────────────────────────
 
+/// A `Buffer` holding these bytes, for the JS side of a binary frame.
+fn buffer_value(bytes: &[u8]) -> f64 {
+    let buffer = perry_ffi::alloc_buffer(bytes);
+    f64::from_bits(POINTER_TAG | (buffer as u64 & POINTER_MASK))
+}
+
+/// A message payload as JS sees it: a string for text, a `Buffer` for binary.
+fn payload_value(payload: &WsPayload) -> f64 {
+    match payload {
+        WsPayload::Text(text) => {
+            let s = alloc_string(text);
+            f64::from_bits(JsValue::from_string_ptr(s.as_raw()).bits())
+        }
+        WsPayload::Binary(bytes) => buffer_value(bytes),
+    }
+}
+
 /// Drain pending events and dispatch to user-registered listeners.
 /// Called by perry-codegen's main-thread event-loop pump.
 #[no_mangle]
@@ -1024,16 +1250,23 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
                     }
                 }
             }
-            PendingWsEvent::Message(ws_id, text) => {
+            PendingWsEvent::Message(ws_id, payload) => {
                 let listeners = listeners_on_client(ws_id, "message");
-                let s = alloc_string(&text);
-                let msg_f64 = f64::from_bits(JsValue::from_string_ptr(s.as_raw()).bits());
+                // `ws` hands a text frame to JS as a string and a binary frame
+                // as a Buffer, and passes `isBinary` as the second argument.
+                // Perry used to deliver every frame as a string, with a binary
+                // payload run through `String::from_utf8_lossy` — which is not
+                // a representation choice but data loss: every non-UTF-8 byte
+                // became U+FFFD and could not be recovered.
+                let is_binary = matches!(payload, WsPayload::Binary(_));
+                let msg_f64 = payload_value(&payload);
+                let binary_f64 = f64::from_bits(JsValue::from_bool(is_binary).bits());
                 if !listeners.is_empty() {
                     for cb in listeners {
                         if cb != 0 {
                             let closure =
                                 unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
-                            let _ = unsafe { closure.call1(msg_f64) };
+                            let _ = unsafe { closure.call2(msg_f64, binary_f64) };
                             fired += 1;
                         }
                     }
@@ -1058,18 +1291,54 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
                     }
                 }
             }
-            PendingWsEvent::Close(ws_id, _code, _reason) => {
+            PendingWsEvent::Ping(ws_id, data) => {
+                let listeners = listeners_on_client(ws_id, "ping");
+                if !listeners.is_empty() {
+                    let value = buffer_value(&data);
+                    for cb in listeners {
+                        if cb != 0 {
+                            let closure =
+                                unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
+                            let _ = unsafe { closure.call1(value) };
+                            fired += 1;
+                        }
+                    }
+                }
+            }
+            PendingWsEvent::Pong(ws_id, data) => {
+                let listeners = listeners_on_client(ws_id, "pong");
+                if !listeners.is_empty() {
+                    let value = buffer_value(&data);
+                    for cb in listeners {
+                        if cb != 0 {
+                            let closure =
+                                unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
+                            let _ = unsafe { closure.call1(value) };
+                            fired += 1;
+                        }
+                    }
+                }
+            }
+            PendingWsEvent::Close(ws_id, code, reason) => {
                 // The upstream `ws` package installs its tracking listener
                 // before handing the socket to user code, so user close
                 // callbacks observe the client as already removed.
                 let parent = untrack_server_client(ws_id);
                 let listeners = listeners_on_client(ws_id, "close");
                 if !listeners.is_empty() {
+                    // `ws.on('close', (code, reason) => ...)`. Both arguments
+                    // used to be `undefined`: the queue carried them and the
+                    // drain destructured them into `_code`/`_reason` and called
+                    // the listener with no arguments at all.
+                    let code_f64 = f64::from_bits(JsValue::from_number(code as f64).bits());
+                    let reason_string = alloc_string(&reason);
+                    let reason_f64 =
+                        f64::from_bits(JsValue::from_string_ptr(reason_string.as_raw()).bits());
                     for cb in listeners {
                         if cb != 0 {
                             let closure =
                                 unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
-                            let _ = unsafe { closure.call0() };
+                            let _ = unsafe { closure.call2(code_f64, reason_f64) };
                             fired += 1;
                         }
                     }
@@ -1432,7 +1701,7 @@ mod tests {
         WS_CONNECTIONS.lock().unwrap().insert(
             ws_id,
             WsConnection {
-                sender: tx,
+                transport: WsTransport::Tokio(tx),
                 messages: Vec::new(),
                 is_open: false,
                 is_closing: false,

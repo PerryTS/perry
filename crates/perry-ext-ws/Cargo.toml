@@ -3,7 +3,7 @@ name = "perry-ext-ws"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Native bindings for npm `ws` — WebSocket client + server via tokio-tungstenite. Uses only `perry-ffi`. Per-client + per-server task via spawn_blocking; per-module pending queue + GC root scanner for listener closures."
+description = "Native bindings for npm `ws` — WebSocket client + server on turnloop-websocket's sans-I/O protocol core, over a turnloop handle or a tokio stream. Uses only `perry-ffi` plus perry-ext-net for outbound TLS."
 
 [lints]
 workspace = true
@@ -14,11 +14,20 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 perry-ffi.workspace = true
 tokio = { workspace = true }
-# Use the workspace pin so perry-ext-http (issue #577) and
-# perry-ext-ws agree on the WebSocketStream<S> type for the upgrade
-# handoff; mismatched versions split type identity and the
-# `register_external_ws_stream` re-export silently fails to compile.
-tokio-tungstenite = { workspace = true }
+# The protocol, sans-I/O. This is what lets one codec serve both transports:
+# a `turnloop_websocket::Connection` is a state machine over byte slices, so it
+# runs equally on a tokio stream and on a turnloop handle id. It replaced
+# `tokio-tungstenite`, whose `WebSocketStream<S>` needs an owned
+# `AsyncRead + AsyncWrite` that a turnloop connection cannot produce -- the
+# blocker P5 recorded for the attached `WebSocketServer`.
+turnloop-websocket = { workspace = true }
+# The HTTP/1 head codec the upgrade handshake is expressed in. Already in the
+# graph via turnloop-websocket; declared because this crate names its types.
+turnloop-http = { workspace = true }
+url.workspace = true
+# The outbound `wss://` client's TLS, so this crate declares no TLS stack of
+# its own (`connect_tls_client` hands back a boxed stream).
+perry-ext-net.workspace = true
 # #6117: already in the graph via tokio-tungstenite's rustls-tls, so this
 # pulls nothing new — declared so the connect path can install a process-level
 # CryptoProvider (feature unification enables both `ring` and `aws-lc-rs` in

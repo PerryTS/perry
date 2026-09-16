@@ -25,7 +25,6 @@ hyper-util = { workspace = true, features = ["server", "server-auto", "tokio"] }
 http-body-util.workspace = true
 bytes.workspace = true
 tokio = { workspace = true }
-tokio-tungstenite = { workspace = true }
 serde_json.workspace = true
 
 # #cluster — SO_REUSEPORT bind for `cluster.fork()` workers (unix only),

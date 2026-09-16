@@ -421,6 +421,12 @@ turnloop = "0.1.0-alpha.5"
 # instead (docs/turnloop/p5-report.md, "Why sans-I/O").
 turnloop-http = { version = "0.1.0-alpha.5", default-features = false }
 turnloop-tls = { version = "0.1.0-alpha.5", default-features = false }
+# turnloop WS lane: the sans-I/O WebSocket protocol + HTTP-upgrade helpers that
+# replace tokio-tungstenite everywhere in the tree. Default features only --
+# the `turnloop` feature pulls turnloop-io's LocalExecutor, which Perry cannot
+# adopt for the same reason P5 recorded (it builds its own Driver and drops
+# every completion it did not issue). See docs/turnloop/ws-report.md.
+turnloop-websocket = { version = "0.1.0-alpha.5", default-features = false }
 # turnloop P6 (DESIGN §12 "P6"): the sans-I/O SMTP client and MIME builder that
 # replaces `lettre`'s tokio transport on the outbound mail path. Its `message`
 # module re-exports the same `lettre` 0.11 builder Perry's nodemailer surface

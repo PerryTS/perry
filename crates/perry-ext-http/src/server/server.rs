@@ -1399,9 +1399,9 @@ async fn handle_request(
 ///
 /// Synchronously builds the 101 response (so hyper drives the
 /// protocol switch) and spawns a tokio task that awaits the
-/// upgraded stream + finishes the handshake server-side via
-/// `tokio_tungstenite::WebSocketStream::from_raw_socket`. The
-/// resulting WS stream is registered through perry-ext-ws and an
+/// upgraded stream and hands it to perry-ext-ws, which installs the
+/// protocol over it. The
+/// resulting connection is registered through perry-ext-ws and an
 /// `HttpPendingUpgrade` is pushed to the main-thread upgrade
 /// channel; the event-loop fires the user's `'upgrade'` listeners
 /// with `(req, wsId, head)`.
@@ -1415,13 +1415,35 @@ async fn handle_websocket_upgrade(
     raw_headers: Vec<(String, String)>,
     upgrade_tx: Arc<mpsc::Sender<HttpPendingUpgrade>>,
 ) -> Result<Response<ResponseBody>, hyper::Error> {
-    // Compute the Sec-WebSocket-Accept value before consuming req.
-    let accept_value = req
+    // Validate the upgrade and compute its response headers.
+    //
+    // This used to be a bare `derive_accept_key` plus a literal header block,
+    // which validated nothing: neither `Sec-WebSocket-Version` nor
+    // `Upgrade: websocket` was checked, and a request with no
+    // `Sec-WebSocket-Key` got an empty `Sec-WebSocket-Accept` and a 101 anyway.
+    // `perry_ext_ws::accept_headers` is the same `turnloop_websocket::accept`
+    // the turnloop path runs — one handshake implementation, not two.
+    let request_headers: Vec<(String, String)> = req
         .headers()
-        .get("sec-websocket-key")
-        .and_then(|v| v.to_str().ok())
-        .map(|k| tokio_tungstenite::tungstenite::handshake::derive_accept_key(k.as_bytes()))
-        .unwrap_or_default();
+        .iter()
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|value| (name.as_str().to_string(), value.to_string()))
+        })
+        .collect();
+    let response_headers =
+        match perry_ext_ws::accept_headers("GET", "/", &request_headers, &[]) {
+            Ok(headers) => headers,
+            Err(_) => {
+                return Ok(Response::builder()
+                    .status(400)
+                    .header("connection", "close")
+                    .body(Full::new(Bytes::new()).boxed())
+                    .unwrap())
+            }
+        };
 
     // Build the upgraded-protocol IncomingMessage now (no body — WS
     // upgrades carry no request body).
@@ -1445,14 +1467,10 @@ async fn handle_websocket_upgrade(
             Ok(u) => u,
             Err(_) => return,
         };
-        let io = TokioIo::new(upgraded);
-        let ws = tokio_tungstenite::WebSocketStream::from_raw_socket(
-            io,
-            tokio_tungstenite::tungstenite::protocol::Role::Server,
-            None,
-        )
-        .await;
-        let ws_id = perry_ext_ws::register_external_ws_stream(ws);
+        // The raw upgraded stream goes straight to perry-ext-ws, which installs
+        // the protocol. Constructing a `WebSocketStream` here is what used to
+        // put `tokio-tungstenite` in this crate's dependency graph.
+        let ws_id = perry_ext_ws::register_upgraded_stream(TokioIo::new(upgraded));
         let pending = HttpPendingUpgrade {
             server_handle,
             request_handle: im_handle,
@@ -1464,13 +1482,11 @@ async fn handle_websocket_upgrade(
         perry_ffi::notify_main_thread();
     });
 
-    Ok(Response::builder()
-        .status(101)
-        .header("upgrade", "websocket")
-        .header("connection", "Upgrade")
-        .header("sec-websocket-accept", accept_value)
-        .body(Full::new(Bytes::new()).boxed())
-        .unwrap())
+    let mut response = Response::builder().status(101);
+    for (name, value) in response_headers {
+        response = response.header(name, value);
+    }
+    Ok(response.body(Full::new(Bytes::new()).boxed()).unwrap())
 }
 
 // ============================================================================

@@ -1845,3 +1845,36 @@ pub use handle_exports::{
 
 #[cfg(test)]
 mod tests;
+
+// ── An outbound TLS client for other bindings ────────────────────────────────
+
+/// A connected TLS client stream, as an object-safe trait.
+///
+/// This exists so a *caller* can use `perry-ext-net`'s TLS client without
+/// naming `tokio-rustls`. `perry-ext-ws` needs exactly this for `wss://`: it
+/// dropped `tokio-tungstenite`, whose `connect_async` used to bundle the TLS
+/// negotiation, and re-declaring a TLS stack there would put a second one in
+/// the tree for one call site.
+pub trait TlsClientStream:
+    tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static
+{
+}
+impl<T> TlsClientStream for T where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static
+{
+}
+
+/// Negotiate TLS over an already-connected TCP stream, with Node's default
+/// client policy (verify the chain against the platform roots, SNI = the given
+/// servername).
+///
+/// This is the *tokio* client. A connection on a turnloop handle installs a
+/// session above the handle instead (`turnloop_tls_io::begin_client_upgrade`),
+/// because there no descriptor has to move.
+pub async fn connect_tls_client(
+    tcp: tokio::net::TcpStream,
+    servername: &str,
+) -> Result<Box<dyn TlsClientStream>, String> {
+    let stream = tls::do_tls_handshake(tcp, servername, true, None).await?;
+    Ok(Box::new(stream))
+}
