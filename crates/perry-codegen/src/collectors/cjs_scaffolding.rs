@@ -99,8 +99,10 @@
 //!
 //! * **R1** `Stmt::Let` named `__cjs_module`, `mutable: false`, initialized by
 //!   an `Expr::New` of an `__AnonShape_…` class (an object literal);
-//! * **R2** that literal is exactly `{ exports: {} }` — one field whose value
-//!   is an argument-less `__AnonShape_…` allocation;
+//! * **R2** that literal is `{ exports: {} }` — one field whose value is an
+//!   argument-less `__AnonShape_…` allocation — or one of the two folded
+//!   wrapper templates (eight or eleven fixed fields) that lowering produces
+//!   when `wrap.rs` emits the record as a single object literal;
 //! * **R3** exactly one top-level statement satisfying R1+R2, so "the record"
 //!   is unambiguous;
 //! * **R4** the same top level binds `var module = __cjs_module` —
@@ -500,6 +502,13 @@ fn record_binding(stmt: &Stmt) -> Option<u32> {
     if !inner.starts_with(ANON_SHAPE_PREFIX) || !inner_args.is_empty() {
         return None;
     }
+    // The eight fixed fields the wrapper folds into the record literal, and the
+    // eleven-field form that also folds `parent`, `paths` and `require`.
+    //
+    // R2 carries no soundness weight (see the module doc: R4 alone discharges
+    // the obligation, and this half is report-only). Widening it can therefore
+    // only change whether Perry's own scaffolding is reported as a denied user
+    // candidate — never what codegen does.
     let folded_template = matches!(
         args.as_slice(),
         [
@@ -514,6 +523,24 @@ fn record_binding(stmt: &Stmt) -> Option<u32> {
         ] if matches!(factory, Expr::LocalGet(_) | Expr::Undefined)
             && id_value == filename
             && children.is_empty()
+    ) || matches!(
+        args.as_slice(),
+        [
+            _,
+            Expr::Bool(true),
+            factory,
+            Expr::String(id_value),
+            Expr::String(_path),
+            Expr::String(filename),
+            Expr::Bool(false),
+            Expr::Array(children),
+            _parent,
+            Expr::Array(paths),
+            Expr::Undefined,
+        ] if matches!(factory, Expr::LocalGet(_) | Expr::Undefined)
+            && id_value == filename
+            && children.is_empty()
+            && paths.len() == 1
     );
     (args.len() == 1 || folded_template).then_some(*id)
 }
