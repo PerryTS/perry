@@ -161,6 +161,32 @@ fn net_config() -> Config {
         // net loop, measured, for a ring a server holding idle connections
         // never fills. 32_768 covers one armed read per connection at the
         // 65_536-handle ceiling.
+        //
+        // WINDOWS COSTS A THIRD THING, and it is the biggest (#10385). The
+        // IOCP backend's `kernel` slab — one `OVERLAPPED`+addr+wire block per
+        // operation, `sizeof` 1096 bytes — is deliberately NOT paged: mapping
+        // a completion packet's pointer back to an op index is pointer
+        // arithmetic over one allocation, so it must stay contiguous, and
+        // `Iocp::new` builds and zeroes every slot up front. That makes the
+        // ceiling cost real resident memory on Windows while it stays free on
+        // epoll/kqueue. Measured here, idle HTTP server, `perry-dev`:
+        //
+        //     max_operations   idle working set   idle private
+        //     32_768                 69.0 MB          84.7 MB
+        //      2_048                 32.9 MB          48.0 MB
+        //     (no net loop at all)   10.3 MB          21.6 MB
+        //
+        // i.e. ~36 MB of the idle footprint is this ceiling alone, matching
+        // (32_768 - 2_048) * 1096 B = 33.7 MB plus the per-slot `bridges`.
+        //
+        // Deliberately NOT lowered on Windows. Trading the slab for a smaller
+        // ceiling just reinstates the refusal perry#10351 removed — a
+        // connection costs two handles and an armed read, so a low
+        // `max_operations` is a connection ceiling wearing a different name.
+        // The fix belongs in turnloop: the slab needs to be contiguous, not
+        // committed, so reserving the address range and committing to the
+        // high-water mark would keep the pointer arithmetic and drop the idle
+        // cost to the paged backends' level. Tracked in the #10385 writeup.
         max_operations: 32_768,
         events_per_turn: 64,
         pooled_buffers: 64,

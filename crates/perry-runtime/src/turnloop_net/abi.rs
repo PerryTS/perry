@@ -160,8 +160,8 @@ pub unsafe extern "C" fn js_perry_net_error_from_os(
     PERRY_NET_OK
 }
 
-/// The host OS code for a Node error name, negated the way libuv reports
-/// `err.errno`. Zero when the name is unknown to the table.
+/// libuv's `err.errno` for a Node error name. Zero when the name is unknown
+/// to the table.
 ///
 /// # Safety
 /// `code`/`code_len` must describe a readable UTF-8 range.
@@ -169,7 +169,9 @@ pub unsafe extern "C" fn js_perry_net_error_from_os(
 pub unsafe extern "C" fn js_perry_net_errno_for_code(code: *const u8, code_len: usize) -> i32 {
     // SAFETY: forwarded contract from this function's own safety note.
     let name = unsafe { str_arg(code, code_len) };
-    super::errors::os_code_for_name(name).map_or(0, |os| -os)
+    // NOT `-os`: on Windows libuv's errno is its own -4xxx value, not the
+    // negated Winsock number, so the code name is what decides it.
+    super::errors::libuv_errno(name, super::errors::os_code_for_name(name))
 }
 
 /// Nonzero when this thread can take the turnloop net path.

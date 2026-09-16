@@ -843,8 +843,9 @@ pub fn error_from_os(os: Option<i32>, syscall: &str) -> NetError {
     )
 }
 
-/// The host OS code for a Node error name, negated the way libuv reports
-/// `err.errno`. Zero when the name is not one this table knows.
+/// libuv's `err.errno` for a Node error name: the negated OS code on Linux
+/// and macOS, libuv's own `-4xxx` number on Windows. Zero when the name is not
+/// one this table knows.
 pub fn errno_for_code(code: &str) -> i32 {
     runtime_call!(
         {
