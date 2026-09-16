@@ -512,6 +512,58 @@ fn a_finished_collection_moves_the_external_base_to_the_post_collection_reading(
 /// `external_side_live_bytes()` read fails BOTH tests below; deleting the reset
 /// from `finish_full_old_reclaim_baseline` fails
 /// `a_full_collection_clears_the_drained_debt` alone.
+/// A transient side allocation — one the operation that allocated it frees on
+/// the same call — must leave the drained term alone, however many times the
+/// program does it.
+///
+/// The drained term reconstructs bytes a cheap collection released EARLIER
+/// than a full would have. Nothing about regex match scratch is early: every
+/// build frees it at the same program point, so there is nothing to
+/// reconstruct, and accumulating it manufactures old-reclaim pressure out of
+/// per-call churn no collection ever saw live. #10376: a million-call
+/// `.test()` loop paid three old-gen cycles, one a full that traced a 52 MB
+/// arena and freed 59 KB.
+///
+/// Sabotage-proved: pointing `gc_note_external_side_free_transient` at
+/// `gc_note_external_side_free` fails this test on the first iteration's
+/// assertion, with the term 1 MB above the live reading.
+#[test]
+fn transient_side_allocations_never_enter_the_drained_debt() {
+    use super::super::policy::{
+        external_side_live_bytes, external_side_old_reclaim_pressure_bytes,
+        GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL,
+    };
+    use super::support::*;
+    let _isolation = GcTestIsolationGuard::new();
+    let restore = GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL.with(|cell| cell.replace(0));
+    let live_before = external_side_live_bytes();
+    let term_before = external_side_old_reclaim_pressure_bytes();
+
+    const BYTES: usize = 1024 * 1024;
+    for round in 0..8 {
+        crate::gc::gc_note_external_side_alloc(BYTES);
+        assert_eq!(
+            external_side_old_reclaim_pressure_bytes(),
+            term_before + BYTES,
+            "round {round}: a live transient buffer is pressure like any other"
+        );
+        crate::gc::gc_note_external_side_free_transient(BYTES);
+        assert_eq!(
+            external_side_live_bytes(),
+            live_before,
+            "round {round}: the live reading must fall by what was released"
+        );
+        assert_eq!(
+            external_side_old_reclaim_pressure_bytes(),
+            term_before,
+            "round {round}: releasing a transient buffer must leave no debt \
+             behind — this is what accumulated into a full in #10376"
+        );
+    }
+
+    GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL.with(|cell| cell.set(restore));
+}
+
 #[test]
 fn a_drained_side_byte_still_pays_old_reclaim_until_the_next_full() {
     use super::super::policy::{
