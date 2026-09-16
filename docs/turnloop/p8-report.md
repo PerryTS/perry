@@ -208,6 +208,15 @@ thread, so the Worker is marked `LoopState::Declined` — but that happens
 *after* the request was accepted, so the caller gets a failure rather than the
 fallback the design intends.
 
+The predicate is therefore **time-dependent**, which is the sharpest way to
+say what is wrong with it: `net_available()` answers from `LoopState::Unset`
+using agent identity until the thread's first park, and from `LoopState` after
+it. On a `worker_threads` Worker the identity answer is wrong and the post-park
+answer is right, so whether a surface works depends on whether that thread has
+parked yet. That is visible in the measurements: `net.connect` inside a Worker
+answers **OK on both arms** (this lane built and ran that probe too), while
+`fetch` — called before the Worker has parked — does not.
+
 So the "worker agents decline" story is right for `perry/thread` workers and
 **wrong for `node:worker_threads`**, which is the one a Node program actually
 uses. Both halves matter here and they pull in opposite directions:
@@ -352,6 +361,124 @@ That agrees with the source: `perry-ext-fetch/src/lib.rs` and
 `crates/perry/src/commands/stdlib_features.rs` are byte-identical to
 `origin/main` on this branch, and `perry-stdlib`'s `handle_to_f64` was last
 touched in August (#8448).
+
+### 2. REGRESSION: `fetch()` inside a `node:worker_threads` Worker is broken on this branch
+
+This is the finding the lane would report if it could report only one. It is a
+regression of `turnloop/integration` against `main`, measured on both, three
+runs each, and it is deterministic:
+
+| | primary agent | inside a `Worker` |
+|---|---|---|
+| Node 26.5.1 | `status=200` | `status=200` |
+| **`main` @ `fcd108bfb` (v0.5.1579)** | `status=200` | **`status=200`** |
+| **`turnloop/integration` @ `babc5f0d1f`** | `status=200` | **`status=error:fetch failed`** |
+
+Both Perry binaries were built from source in their own trees on the same box
+with the same package set, and the probe is the same file compiled by each. The
+commits `main` has that the integration branch does not (v0.5.1577–1579) touch
+no file matching `fetch|worker|agent|event_pump|turnloop`, so the difference is
+not a main-line fix the branch is missing.
+
+The counters say what happened:
+
+```
+[perry-loop] p6 http_submitted=2 declined=0 completed=1 failed=1 connects=1
+```
+
+Two requests submitted to P6's engine, **zero declined**, one completed (the
+primary agent's), one failed (the Worker's). The Worker did not fall back to
+reqwest — it was accepted by an engine whose loop it cannot own.
+
+### 2b. The cause: `node:worker_threads` Workers never claim an agent id
+
+`agent::enter_worker_agent()` is the only writer of `CURRENT_AGENT`, and its
+three call sites are all in `crates/perry-runtime/src/thread.rs` —
+`perry/thread`'s `spawn`, `parallelMap` and `parallelFilter`.
+`crates/perry-stdlib/src/worker_threads.rs:1273` spawns the Worker's OS thread
+with a bare `std::thread::spawn` and never calls it, so a `worker_threads`
+Worker resolves to `PRIMARY_AGENT` for the whole of its life.
+
+Everything that asks "am I the primary agent?" therefore gets the wrong
+answer on a Worker. `turnloop_net::available()` is one of those things:
+
+```rust
+// crates/perry-stdlib/src/turnloop_client/mod.rs:428
+pub(crate) fn submit(spec: RequestSpec, sink: Sink) -> Result<(), Declined> {
+    if !tl::available() {              // true on a Worker — see above
+        return Err(Declined::NoLoop);  // the fallback that never happens
+    }
+    …
+    SUBMITTED.fetch_add(1, Ordering::Relaxed);
+    exchange::start(id);               // submits to a loop this thread has none of
+```
+
+`ensure_loop_with` *does* refuse a moment later — `PRIMARY_ROUTE` is already
+held by the main thread, so the Worker is marked `LoopState::Declined` — but
+that is after the request was accepted, so the caller gets a failure instead of
+the reqwest fallback the design intends. On `main` there was no engine to
+accept it and the Worker's fetch ran on the shared runtime, which is why it
+worked.
+
+This is why the decline is worth measuring rather than asserting: eight lane
+reports describe a fallback that, on the agent kind a Node program actually
+uses, is not reached.
+
+Two other things read the same predicate and are worth checking under it,
+though this lane did not: the keep-alive accounting (`owns(owner)` decides
+which thread may drain a queue entry) and `class_image.rs`'s comment, which
+already notes that `CURRENT_AGENT` defaults to the primary and keys around it.
+
+The fix is not obviously one line, which is why this lane reports rather than
+applies it. Calling `enter_worker_agent()` in the Worker's thread body makes
+every turnloop surface decline on a Worker — which is the documented intent and
+would repair `fetch` — but it also switches net, TLS, the HTTP server, SMTP and
+all four database drivers onto their tokio paths there for the first time, on a
+surface with almost no gap-suite coverage. The alternative reading is that the
+predicate is wrong rather than the agent id: "can this thread own a loop" is a
+question about `PRIMARY_ROUTE`, not about agent identity, and `submit` checks
+`tl::available()` *before* `ensure_loop_with` has had a chance to say no.
+Whichever is chosen, it wants its own change with its own oracle run.
+
+### 3. A `Worker` whose entry is its own module does not link
+
+```
+undefined reference to `tokio_worker_agent_census_ts__init_body'
+        referenced from `perry_closure_tokio_worker_agent_census_ts__11'
+```
+
+`new Worker(new URL(import.meta.url))` — the idiomatic Node form for a
+self-hosting worker, and what this lane's census probe was first written as —
+fails at link time. Node 26.5.1 runs the same file correctly. The same program
+with the worker body in a separate file
+(`test-files/test_gap_9744_static_worker_helpers.ts`'s shape) links and runs,
+which is what the committed probe now does.
+
+Not investigated further: it is a codegen/emission bug, not a transport one,
+and it is outside this lane. It is named here because the workaround is in a
+committed file and a reader of that file is entitled to know why it is two
+files instead of one.
+
+
+### 4. `scripts/gc_runtime_root_holders.py` is red on the integration branch
+
+`lint` runs it, `lint` is part of the required `pr-gate`, and it fails on
+`turnloop/integration` before this branch changes anything:
+
+```
+gc_runtime_root_holders: these inventory entries no longer match an
+uncovered holder. Delete them — a stale exemption is how this gate stops
+being one.
+
+  crates/perry-ext-http/src/server/turnloop_serve/conn.rs | CONNS | turnloop P5. …
+```
+
+Verified as pre-existing rather than assumed: restoring the base commit's
+`cron.rs` (this branch's only Rust change, and in a different crate) leaves the
+same single failure. The entry was added by P5 and has since become *covered*,
+which the gate's own text says "is exactly what a fix looks like" — so the fix
+is to delete that entry, and it belongs to whoever owns P5's change rather than
+to this lane.
 
 ## The compile-time A/B switch (`tokio-wait-driver`)
 
@@ -539,103 +666,6 @@ them.
    it is not a transport problem — it is a stored-type problem. Either a
    compatibility shim or an explicit statement of the intended migration order
    would unblock three surfaces at once.
-
-### 2. A `Worker` whose entry is its own module does not link
-
-```
-undefined reference to `tokio_worker_agent_census_ts__init_body'
-        referenced from `perry_closure_tokio_worker_agent_census_ts__11'
-```
-
-`new Worker(new URL(import.meta.url))` — the idiomatic Node form for a
-self-hosting worker, and what this lane's census probe was first written as —
-fails at link time. Node 26.5.1 runs the same file correctly. The same program
-with the worker body in a separate file
-(`test-files/test_gap_9744_static_worker_helpers.ts`'s shape) links and runs,
-which is what the committed probe now does.
-
-Not investigated further: it is a codegen/emission bug, not a transport one,
-and it is outside this lane. It is named here because the workaround is in a
-committed file and a reader of that file is entitled to know why it is two
-files instead of one.
-
-### 3. REGRESSION: `fetch()` inside a `node:worker_threads` Worker is broken on this branch
-
-This is the finding the lane would report if it could report only one. It is a
-regression of `turnloop/integration` against `main`, measured on both, three
-runs each, and it is deterministic:
-
-| | primary agent | inside a `Worker` |
-|---|---|---|
-| Node 26.5.1 | `status=200` | `status=200` |
-| **`main` @ `fcd108bfb` (v0.5.1579)** | `status=200` | **`status=200`** |
-| **`turnloop/integration` @ `babc5f0d1f`** | `status=200` | **`status=error:fetch failed`** |
-
-Both Perry binaries were built from source in their own trees on the same box
-with the same package set, and the probe is the same file compiled by each. The
-commits `main` has that the integration branch does not (v0.5.1577–1579) touch
-no file matching `fetch|worker|agent|event_pump|turnloop`, so the difference is
-not a main-line fix the branch is missing.
-
-The counters say what happened:
-
-```
-[perry-loop] p6 http_submitted=2 declined=0 completed=1 failed=1 connects=1
-```
-
-Two requests submitted to P6's engine, **zero declined**, one completed (the
-primary agent's), one failed (the Worker's). The Worker did not fall back to
-reqwest — it was accepted by an engine whose loop it cannot own.
-
-### 3b. The cause: `node:worker_threads` Workers never claim an agent id
-
-`agent::enter_worker_agent()` is the only writer of `CURRENT_AGENT`, and its
-three call sites are all in `crates/perry-runtime/src/thread.rs` —
-`perry/thread`'s `spawn`, `parallelMap` and `parallelFilter`.
-`crates/perry-stdlib/src/worker_threads.rs:1273` spawns the Worker's OS thread
-with a bare `std::thread::spawn` and never calls it, so a `worker_threads`
-Worker resolves to `PRIMARY_AGENT` for the whole of its life.
-
-Everything that asks "am I the primary agent?" therefore gets the wrong
-answer on a Worker. `turnloop_net::available()` is one of those things:
-
-```rust
-// crates/perry-stdlib/src/turnloop_client/mod.rs:428
-pub(crate) fn submit(spec: RequestSpec, sink: Sink) -> Result<(), Declined> {
-    if !tl::available() {              // true on a Worker — see above
-        return Err(Declined::NoLoop);  // the fallback that never happens
-    }
-    …
-    SUBMITTED.fetch_add(1, Ordering::Relaxed);
-    exchange::start(id);               // submits to a loop this thread has none of
-```
-
-`ensure_loop_with` *does* refuse a moment later — `PRIMARY_ROUTE` is already
-held by the main thread, so the Worker is marked `LoopState::Declined` — but
-that is after the request was accepted, so the caller gets a failure instead of
-the reqwest fallback the design intends. On `main` there was no engine to
-accept it and the Worker's fetch ran on the shared runtime, which is why it
-worked.
-
-This is why the decline is worth measuring rather than asserting: eight lane
-reports describe a fallback that, on the agent kind a Node program actually
-uses, is not reached.
-
-Two other things read the same predicate and are worth checking under it,
-though this lane did not: the keep-alive accounting (`owns(owner)` decides
-which thread may drain a queue entry) and `class_image.rs`'s comment, which
-already notes that `CURRENT_AGENT` defaults to the primary and keys around it.
-
-The fix is not obviously one line, which is why this lane reports rather than
-applies it. Calling `enter_worker_agent()` in the Worker's thread body makes
-every turnloop surface decline on a Worker — which is the documented intent and
-would repair `fetch` — but it also switches net, TLS, the HTTP server, SMTP and
-all four database drivers onto their tokio paths there for the first time, on a
-surface with almost no gap-suite coverage. The alternative reading is that the
-predicate is wrong rather than the agent id: "can this thread own a loop" is a
-question about `PRIMARY_ROUTE`, not about agent identity, and `submit` checks
-`tl::available()` *before* `ensure_loop_with` has had a chance to say no.
-Whichever is chosen, it wants its own change with its own oracle run.
 
 ## What P8 did not do
 
