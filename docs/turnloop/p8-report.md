@@ -759,7 +759,11 @@ PERRY_SKIP_BUILD=1 ./scripts/run_gap_tests.sh
 
 The baseline is `babc5f0d1f` — this branch's own base — in its own clone
 (`/root/claude-turnloop-p8/base`), because the committed snapshot cannot be
-assumed to agree with it. Three tests
+assumed to agree with it. The P8 arm's binaries were built at `4a3966747`;
+every commit after it on this branch touches only `docs/`, `scripts/`,
+`changelog.d/` and `.github/`, verified with
+`git diff --stat 4a3966747..HEAD -- crates/ Cargo.toml Cargo.lock` (empty), so
+the swept binary is HEAD's code. Three tests
 (`2899_2779_2777_static_helpers`, `disposablestack_2875`,
 `iterator_prototype_next_patch`) are red against the committed snapshot on the
 base commit before this branch changes anything, which is exactly why the
