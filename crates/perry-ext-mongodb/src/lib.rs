@@ -27,17 +27,19 @@
 //! # Transports (turnloop P7)
 //!
 //! A client is **loop-driven state** when its URI names a direct,
-//! single-server, plaintext endpoint: one turnloop socket plus a
+//! single-server endpoint, encrypted or not: one turnloop socket plus a
 //! `turnloop_mongodb::Connection` sans-I/O core, driven from the event loop's
-//! own completion dispatch (`turnloop_io`). No thread is held at any point.
+//! own completion dispatch (`turnloop_io`), with `perry-db-turnloop` performing
+//! the TLS upgrade the core asks for. No thread is held at any point.
 //!
 //! Every other configuration keeps the `mongodb`-crate path above, unchanged:
-//! `mongodb+srv://`, `tls=true`/`ssl=true`, several hosts, `replicaSet=`, a
-//! compressor, a URI this parser rejects, and any agent with no loop of its own
-//! (a `worker_threads` Worker). Those need SRV/DNS resolution, rustls TLS,
-//! replica-set topology discovery with background monitors, or a connection
-//! pool — none of which this slice reimplements, and none of which it deletes.
-//! `turnloop_io`'s module docs state the boundary precisely.
+//! `mongodb+srv://`, several hosts, `replicaSet=`, a compressor, a
+//! per-connection TLS key (`tlsCAFile`, `tlsInsecure`), a URI this parser
+//! rejects, and any agent with no loop of its own (a `worker_threads` Worker).
+//! Those need SRV/DNS resolution, replica-set topology discovery with
+//! background monitors, a trust store belonging to one connection, or a
+//! connection pool — none of which this slice reimplements, and none of which
+//! it deletes. `turnloop_io`'s module docs state the boundary precisely.
 //!
 //! The JS-visible surface is identical on both: the same 26 `js_mongodb_*`
 //! symbols with the same signatures, results crossing as JSON strings, the same

@@ -99,6 +99,16 @@ fn lenenc_str(out: &mut Vec<u8>, bytes: &[u8]) {
 /// A protocol-41 greeting offering `mysql_native_password`, which the core
 /// answers without asking the host for entropy.
 fn greeting() -> Vec<u8> {
+    greeting_with(0)
+}
+
+/// The same greeting with `CLIENT_SSL` offered, which is what lets a `tls`
+/// config get past the core's "Server does not support secure connection".
+fn greeting_offering_ssl() -> Vec<u8> {
+    greeting_with(1 << 11)
+}
+
+fn greeting_with(extra: u32) -> Vec<u8> {
     const CAPS: u32 = 1          // LONG_PASSWORD
         | 1 << 2                 // LONG_FLAG
         | 1 << 9                 // PROTOCOL_41
@@ -109,16 +119,17 @@ fn greeting() -> Vec<u8> {
         | 1 << 18                // PS_MULTI_RESULTS
         | 1 << 19                // PLUGIN_AUTH
         | 1 << 21; // PLUGIN_AUTH_LENENC_CLIENT_DATA
+    let caps = CAPS | extra;
     let mut p = Vec::new();
     p.push(10);
     p.extend_from_slice(b"8.0.46\0");
     p.extend_from_slice(&7u32.to_le_bytes());
     p.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
     p.push(0);
-    p.extend_from_slice(&(CAPS as u16).to_le_bytes());
+    p.extend_from_slice(&(caps as u16).to_le_bytes());
     p.push(45);
     p.extend_from_slice(&2u16.to_le_bytes());
-    p.extend_from_slice(&((CAPS >> 16) as u16).to_le_bytes());
+    p.extend_from_slice(&((caps >> 16) as u16).to_le_bytes());
     p.push(21);
     p.extend_from_slice(&[0u8; 10]);
     p.extend_from_slice(&[9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 0]);
@@ -955,11 +966,11 @@ fn bind_values_carry_every_supported_parameter_shape() {
 
 #[test]
 fn the_config_asks_for_no_tls_and_no_compression() {
-    // `MySqlConfig::to_url` hardcodes `?ssl-mode=disabled`, so every MySQL
-    // connection Perry has opened is plaintext. Asking for TLS here would make
-    // the core emit `UpgradeTls`, which this host cannot perform; compression
-    // is a wire change with no caller. Multi-statement stays on because sqlx
-    // negotiated it and `query("A; B")` works today.
+    // A config with no `ssl` option is plaintext, which is every MySQL
+    // connection Perry has opened until now and stays the default. Asking for
+    // TLS here would make the core emit an `SSLRequest` no caller wanted;
+    // compression is a wire change with no caller. Multi-statement stays on
+    // because sqlx negotiated it and `query("A; B")` works today.
     let config = connection::protocol_config(&crate::MySqlConfig::default());
     assert!(!config.tls);
     assert!(!config.compression);
@@ -968,5 +979,135 @@ fn the_config_asks_for_no_tls_and_no_compression() {
     assert!(
         config.connect_deadline.is_some(),
         "a connect with no deadline is a connect that can hang forever"
+    );
+}
+
+// ── TLS ───────────────────────────────────────────────────────────
+
+#[test]
+fn an_ssl_option_makes_the_core_negotiate_tls() {
+    // `tls` is what makes the core emit `SSLRequest` and `UpgradeTls` at all. A
+    // config carrying an `ssl` option whose core stayed plaintext would connect
+    // happily and send the password in the clear, which is the failure this
+    // whole path exists to prevent.
+    let config = connection::protocol_config(&crate::MySqlConfig {
+        ssl: Some(crate::MySqlSslConfig::default()),
+        ..Default::default()
+    });
+    assert!(config.tls);
+}
+
+#[test]
+fn the_tls_options_name_the_host_unless_the_config_names_another() {
+    let mut config = crate::MySqlConfig {
+        host: "db.example.com".to_string(),
+        ssl: Some(crate::MySqlSslConfig::default()),
+        ..Default::default()
+    };
+    let options = tls_options(&config).expect("an ssl config installs a session");
+    // The certificate is verified against the host being connected to, and no
+    // ALPN protocol is offered.
+    assert_eq!(options.servername, "db.example.com");
+    assert!(options.reject_unauthorized);
+    assert!(options.alpn.is_empty());
+    assert!(options.ca_pem.is_empty());
+
+    config.ssl = Some(crate::MySqlSslConfig {
+        reject_unauthorized: false,
+        ca: b"-----BEGIN CERTIFICATE-----\n".to_vec(),
+        servername: Some("primary.internal".to_string()),
+    });
+    let options = tls_options(&config).expect("an ssl config installs a session");
+    assert_eq!(options.servername, "primary.internal");
+    assert!(!options.reject_unauthorized);
+    assert_eq!(options.ca_pem, b"-----BEGIN CERTIFICATE-----\n".to_vec());
+
+    // A plaintext config installs nothing, which is what makes an `UpgradeTls`
+    // on such a connection a driver error instead of a silent downgrade.
+    config.ssl = None;
+    assert!(tls_options(&config).is_none());
+}
+
+#[test]
+fn a_tls_connection_sends_only_the_ssl_request_before_the_upgrade() {
+    // The whole mid-stream contract, in order: the core answers the greeting
+    // with an `SSLRequest` packet and NOTHING else, asks for the upgrade
+    // exactly once, and writes the handshake response — which carries the
+    // credentials — only after the session is acknowledged. A core that wrote
+    // the response alongside the request would put the password on the wire in
+    // plaintext.
+    let mut core = MysqlCore::new(&crate::MySqlConfig {
+        ssl: Some(crate::MySqlSslConfig::default()),
+        ..Default::default()
+    })
+    .expect("a config asking for TLS");
+    core.transport_connected()
+        .expect("MySQL's server speaks first, so there is nothing to send yet");
+    let mut wire = Wire { seq: 0 };
+    let bytes = wire.frame(&greeting_offering_ssl());
+    core.receive(&bytes).expect("the greeting parses");
+    core.drain().expect("the greeting is consumed");
+
+    assert!(core.take_tls_request(), "the core must ask for the upgrade");
+    assert!(
+        !core.take_tls_request(),
+        "the request is taken once, or the driver installs a second session"
+    );
+
+    let request = take_output(&mut core);
+    // One packet: a 4-byte header and the 32-byte `SSLRequest` body. Anything
+    // longer is the handshake response having gone out unencrypted.
+    assert_eq!(
+        request.len(),
+        36,
+        "only the SSLRequest may precede the upgrade"
+    );
+    let client_caps = u32::from_le_bytes([request[4], request[5], request[6], request[7]]);
+    assert_ne!(
+        client_caps & (1 << 11),
+        0,
+        "the SSLRequest must claim CLIENT_SSL, or the server keeps reading plaintext"
+    );
+
+    // The driver acknowledges only once the request above has been flushed;
+    // the core refuses while it still has output, so this is the real ordering.
+    core.tls_established(&perry_db_turnloop::TlsFacts::default())
+        .expect("the acknowledgement releases the handshake response");
+    let response = take_output(&mut core);
+    assert!(
+        !response.is_empty(),
+        "the handshake response is written after the upgrade, not before"
+    );
+
+    // Greeting 0, SSLRequest 1, handshake response 2 — so the server's OK is 3.
+    wire.seq = 3;
+    let bytes = wire.frame(&ok_packet(0, 0));
+    core.receive(&bytes).expect("the auth OK parses");
+    core.drain().expect("authentication completes");
+    assert!(
+        core.is_ready(),
+        "a TLS handshake must finish the connection, not just start it"
+    );
+}
+
+#[test]
+fn a_plaintext_config_never_asks_for_an_upgrade() {
+    // The counter-case: the very same greeting, offering `CLIENT_SSL`, must not
+    // move a config that asked for no TLS. Without this the test above would
+    // pass on a core that upgraded whenever the server allowed it, and a
+    // program that never mentioned `ssl` would silently change transports.
+    let mut core = MysqlCore::new(&crate::MySqlConfig::default()).expect("a default config");
+    core.transport_connected().expect("the server speaks first");
+    let mut wire = Wire { seq: 0 };
+    let bytes = wire.frame(&greeting_offering_ssl());
+    core.receive(&bytes).expect("the greeting parses");
+    core.drain().expect("the greeting is consumed");
+
+    assert!(!core.take_tls_request());
+    let response = take_output(&mut core);
+    assert!(
+        response.len() > 36,
+        "a plaintext config answers the greeting with its handshake response, \
+         not with a 36-byte SSLRequest"
     );
 }

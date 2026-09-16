@@ -11,6 +11,7 @@ members = [
     "crates/perry-runtime",
     "crates/perry-ffi",
     "crates/perry-db-turnloop",
+    "crates/perry-tls-turnloop",
     "crates/perry-tls-session",
     "crates/perry-http-client",
     "crates/perry-native-registration",
@@ -537,6 +538,12 @@ perry-db-turnloop = { path = "crates/perry-db-turnloop" }
 # and SMTP engines (which drive it from a completion sink) and by
 # perry-http-client (which drives it from a blocking call on a loop it owns).
 perry-tls-session = { path = "crates/perry-tls-session" }
+# turnloop P12 (docs/turnloop/p12-report.md): the PUBLIC TLS client installer
+# for a turnloop socket — the one thing P5 built for `perry-ext-net` and left
+# `pub(crate)` there. ALPN goes in, the negotiated protocol and the RFC 5929
+# `tls-server-end-point` channel binding come back out. rlib only: it is linked
+# *into* each binding's staticlib, exactly like perry-db-turnloop.
+perry-tls-turnloop = { path = "crates/perry-tls-turnloop" }
 # turnloop P11: a blocking HTTP/1.1 + WebSocket client on a self-owned
 # `turnloop::Loop`, for callers with NO JS event loop to cooperate with — the
 # `perry` CLI, and the `perry-ext-*` HTTP bindings that already run on a

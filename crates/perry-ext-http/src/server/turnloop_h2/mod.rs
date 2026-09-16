@@ -66,7 +66,7 @@ pub(crate) mod stream;
 #[path = "tests.rs"]
 mod tests;
 
-pub(crate) use conn::{connect_client, intercept, intercept_listener_error, owns};
+pub(crate) use conn::{connect_client, intercept, intercept_listener_error, owns, ClientTls};
 pub(crate) use stream::{
     destroy_stream, h2_begin_stream, h2_finish_body, h2_send_body, h2_send_response,
 };

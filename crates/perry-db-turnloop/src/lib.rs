@@ -78,8 +78,14 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use perry_ffi::turnloop_net as tl;
+use perry_tls_turnloop::{TlsClientTransport, TlsProgress};
 
 pub use perry_ffi::turnloop_net::NetCompletion;
+/// Re-exported so a binding can describe its TLS without naming rustls or
+/// taking a dependency of its own: what a driver knows about TLS is "the user
+/// asked for it, here is the trust material", and what it learns back is "this
+/// is the negotiated protocol and this is the channel binding".
+pub use perry_tls_turnloop::{TlsClientOptions, TlsFacts};
 
 /// `PERRY_DB_TURNLOOP_DIAG=1` prints one line per connection open and close.
 ///
@@ -176,6 +182,36 @@ pub trait DbCore: 'static {
     /// outstanding operation with `reason` and stop.
     fn fail(&mut self, reason: &str);
 
+    /// Whether the core has asked for the transport to be upgraded to TLS,
+    /// taking the request so it is answered once.
+    ///
+    /// Polled after every drain. All four protocol crates spell the request the
+    /// same way — an `UpgradeTls` event — but they raise it at different
+    /// moments: `turnloop-redis` and `turnloop-mongodb` raise it from
+    /// `transport_connected`, before a single protocol byte, while
+    /// `turnloop-postgres` raises it after the one-byte `S` answer to its
+    /// `SSLRequest` and `turnloop-mysql` after the server's greeting and its
+    /// own `SSLRequest` packet. The driver does not need to know which: it
+    /// flushes whatever plaintext the core still owes, *then* installs the
+    /// session. That ordering is required by both mid-stream cores — each
+    /// refuses `tls_established` while its output is unflushed.
+    fn take_tls_request(&mut self) -> bool {
+        false
+    }
+
+    /// The TLS handshake completed. Acknowledge it to the protocol core.
+    ///
+    /// `facts` carries the negotiated ALPN protocol (none, for every database
+    /// here) and the RFC 5929 `tls-server-end-point` digest of the verified
+    /// leaf, which is what PostgreSQL's SCRAM-SHA-256-PLUS binds to. A core
+    /// that is told a binding is available and then cannot produce one fails
+    /// the connection rather than authenticating with the wrong digest, so
+    /// pass `facts.channel_binding.is_some()` through honestly.
+    fn tls_established(&mut self, facts: &TlsFacts) -> Result<(), String> {
+        let _ = facts;
+        Ok(())
+    }
+
     /// Whether the connection still owes an answer to JS.
     ///
     /// The driver mirrors this onto the turnloop handle's ref flag, so an idle
@@ -198,6 +234,14 @@ struct Entry<C: DbCore> {
     timer_armed: bool,
     /// The handle has been asked to close; further submissions are refused.
     closing: bool,
+    /// The TLS session, once installed. Owned by the entry rather than kept in
+    /// a table keyed by handle id, for the same reason this whole registry is
+    /// thread-local: a turnloop handle belongs to the loop that created it.
+    tls: Option<TlsClientTransport>,
+    /// What to install when the core asks. `None` means the client configured
+    /// no TLS, which makes an `UpgradeTls` request a connection error rather
+    /// than a silent plaintext continuation.
+    tls_options: Option<TlsClientOptions>,
     /// Whatever the binding wants to hang off the connection (its JS-visible
     /// handle id, a pool membership). Opaque here.
     tag: u64,
@@ -212,6 +256,7 @@ pub struct Registry<C: DbCore> {
     reads: Cell<usize>,
     writes: Cell<usize>,
     timers: Cell<usize>,
+    tls_handshakes: Cell<usize>,
     entries: RefCell<HashMap<i64, Entry<C>>>,
 }
 
@@ -224,6 +269,7 @@ impl<C: DbCore> Registry<C> {
             reads: Cell::new(0),
             writes: Cell::new(0),
             timers: Cell::new(0),
+            tls_handshakes: Cell::new(0),
             entries: RefCell::new(HashMap::new()),
         }
     }
@@ -271,15 +317,35 @@ impl<C: DbCore> Registry<C> {
                 connected: false,
                 timer_armed: false,
                 closing: false,
+                tls: None,
+                tls_options: None,
                 tag,
             },
         );
         self.connects.set(self.connects.get() + 1);
     }
 
-    /// Open a connection. Returns its driver id; the core's handshake runs when
-    /// the connect completion arrives.
+    /// Open a plaintext connection. Returns its driver id; the core's handshake
+    /// runs when the connect completion arrives.
     pub fn connect(&self, host: &str, port: u16, core: C, tag: u64) -> Result<i64, String> {
+        self.connect_with_tls(host, port, core, tag, None)
+    }
+
+    /// Open a connection whose core may ask for a TLS upgrade.
+    ///
+    /// `tls` is what will be installed *if* the core asks — it does not itself
+    /// start a handshake. Which is the whole point: the four protocol cores
+    /// disagree about when TLS begins (see [`DbCore::take_tls_request`]) and
+    /// agree about how they ask for it, so the driver holds the configuration
+    /// and lets the core choose the moment.
+    pub fn connect_with_tls(
+        &self,
+        host: &str,
+        port: u16,
+        core: C,
+        tag: u64,
+        tls: Option<TlsClientOptions>,
+    ) -> Result<i64, String> {
         let id = id_base(self.subsystem) + NEXT_ID.fetch_add(1, Ordering::Relaxed);
         self.entries.borrow_mut().insert(
             id,
@@ -288,6 +354,8 @@ impl<C: DbCore> Registry<C> {
                 connected: false,
                 timer_armed: false,
                 closing: false,
+                tls: None,
+                tls_options: tls,
                 tag,
             },
         );
@@ -395,17 +463,37 @@ impl<C: DbCore> Registry<C> {
             }
         };
         if let Some(bytes) = chunk {
-            match tl::write(id, &bytes, 0) {
-                Ok(_) => {
-                    if let Some(e) = self.entries.borrow_mut().get_mut(&id) {
-                        e.core.consume_output(bytes.len());
+            // With a session installed the core's bytes are PLAINTEXT and the
+            // socket takes ciphertext, so the write goes through the session
+            // instead. The acknowledgement point does not move: rustls has
+            // taken the bytes and turnloop orders a handle's writes, so nothing
+            // encrypted afterwards can overtake them — the same reasoning the
+            // plaintext arm below records, one layer up.
+            let carried = if self.has_tls(id) {
+                match self.run_tls(id, |tls| tls.write(&bytes)) {
+                    Some(progress) => {
+                        if let Some(failure) = progress.failure {
+                            self.abort(id, &failure);
+                            return;
+                        }
+                        true
                     }
-                    self.writes.set(self.writes.get() + 1);
+                    None => return,
                 }
-                Err(err) => {
-                    self.abort(id, &err.message());
-                    return;
+            } else {
+                match tl::write(id, &bytes, 0) {
+                    Ok(_) => true,
+                    Err(err) => {
+                        self.abort(id, &err.message());
+                        return;
+                    }
                 }
+            };
+            if carried {
+                if let Some(e) = self.entries.borrow_mut().get_mut(&id) {
+                    e.core.consume_output(bytes.len());
+                }
+                self.writes.set(self.writes.get() + 1);
             }
         }
         let (delay, referenced) = {
@@ -443,6 +531,158 @@ impl<C: DbCore> Registry<C> {
                 }
             }
             None => {}
+        }
+    }
+
+    /// Whether a TLS session is installed on this connection.
+    pub fn has_tls(&self, id: i64) -> bool {
+        self.entries
+            .borrow()
+            .get(&id)
+            .is_some_and(|e| e.tls.is_some())
+    }
+
+    /// What the handshake negotiated, once it has completed.
+    ///
+    /// A binding reports this to JS (`connection.ssl`, an `alpnProtocol`) and a
+    /// fixture asserts on it. `channel_binding` being `Some` is the only
+    /// evidence that a SCRAM-SHA-256-PLUS exchange had a real digest to bind.
+    pub fn tls_facts(&self, id: i64) -> Option<TlsFacts> {
+        self.entries
+            .borrow()
+            .get(&id)
+            .and_then(|e| e.tls.as_ref())
+            .and_then(|tls| tls.facts().cloned())
+    }
+
+    /// Ciphertext bytes this connection has pushed through its TLS session.
+    ///
+    /// The liveness counter for a TLS claim. `has_tls` says a session was
+    /// installed; only this says bytes went through it, which is the difference
+    /// between a gate that can fail and one that cannot.
+    pub fn tls_cipher_written(&self, id: i64) -> u64 {
+        self.entries
+            .borrow()
+            .get(&id)
+            .and_then(|e| e.tls.as_ref())
+            .map_or(0, TlsClientTransport::cipher_written)
+    }
+
+    /// How many TLS handshakes this binding has completed on this thread.
+    pub fn tls_handshakes(&self) -> usize {
+        self.tls_handshakes.get()
+    }
+
+    /// Run `f` against the connection's TLS session, then pump it and submit
+    /// whatever ciphertext it produced.
+    ///
+    /// The session is taken **out** of the table for the duration: the pump
+    /// submits through the FFI, and this module's rule is that no `RefCell`
+    /// borrow is held across a submission (`abort` re-enters, and a held borrow
+    /// would panic rather than misbehave quietly). Returns `None` when the id
+    /// names no connection with a session, so every caller has one way to say
+    /// "there was nothing to do".
+    fn run_tls(&self, id: i64, f: impl FnOnce(&mut TlsClientTransport)) -> Option<TlsProgress> {
+        let mut tls = {
+            let mut map = self.entries.borrow_mut();
+            map.get_mut(&id)?.tls.take()?
+        };
+        f(&mut tls);
+        let progress = tls.pump(id);
+        // The entry can be gone: `pump` submits, and a submission failure on a
+        // handle the loop has already retired reaches us as a closed entry.
+        if let Some(entry) = self.entries.borrow_mut().get_mut(&id) {
+            entry.tls = Some(tls);
+        }
+        Some(progress)
+    }
+
+    /// Install the TLS session the core just asked for and send the
+    /// ClientHello.
+    ///
+    /// The caller must have flushed the core's pending plaintext first — both
+    /// mid-stream cores refuse `tls_established` while their output is
+    /// unflushed, and MySQL's `SSLRequest` packet is *in* that output.
+    fn begin_tls(&self, id: i64) {
+        let options = match self
+            .entries
+            .borrow()
+            .get(&id)
+            .and_then(|e| e.tls_options.clone())
+        {
+            Some(options) => options,
+            // Reached only if a core asks for an upgrade the binding never
+            // configured. Failing is the only safe answer: continuing in
+            // plaintext would mean a client that asked for TLS, was told the
+            // server wanted it, and then sent its password in the clear.
+            None => {
+                self.abort(
+                    id,
+                    "the server requested a TLS upgrade but this connection has no TLS configuration",
+                );
+                return;
+            }
+        };
+        let transport = match TlsClientTransport::connect(&options) {
+            Ok(transport) => transport,
+            Err(message) => {
+                self.abort(id, &message);
+                return;
+            }
+        };
+        {
+            let mut map = self.entries.borrow_mut();
+            let Some(entry) = map.get_mut(&id) else {
+                return;
+            };
+            if entry.closing {
+                return;
+            }
+            entry.tls = Some(transport);
+        }
+        self.tls_handshakes.set(self.tls_handshakes.get() + 1);
+        if diag() {
+            eprintln!(
+                "[perry-db] subsystem={} id={} tls upgrade begins servername={:?}",
+                self.subsystem, id, options.servername
+            );
+        }
+        // Sends the ClientHello.
+        if let Some(progress) = self.run_tls(id, |_| {}) {
+            if let Some(failure) = progress.failure {
+                self.abort(id, &failure);
+            }
+        }
+    }
+
+    /// Acknowledge a completed handshake to the core, and report it.
+    fn finish_tls(&self, id: i64) -> bool {
+        let Some(facts) = self.tls_facts(id) else {
+            return true;
+        };
+        if diag() {
+            eprintln!(
+                "[perry-db] subsystem={} id={} tls established alpn={:?} chain={} channel_binding={}",
+                self.subsystem,
+                id,
+                facts.alpn_str(),
+                facts.peer_certificates.len(),
+                facts.channel_binding.is_some(),
+            );
+        }
+        let acknowledged = {
+            let mut map = self.entries.borrow_mut();
+            match map.get_mut(&id) {
+                Some(entry) => entry.core.tls_established(&facts),
+                None => return false,
+            }
+        };
+        match acknowledged {
+            Ok(()) => true,
+            Err(message) => {
+                self.abort(id, &message);
+                false
+            }
         }
     }
 
@@ -485,6 +725,15 @@ impl<C: DbCore> Registry<C> {
         };
         if armed {
             let _ = tl::timer_cancel(id);
+        }
+        // A TLS connection that just vanishes makes the server log a truncation
+        // ("could not receive data from client: Connection reset by peer" on
+        // PostgreSQL). turnloop orders a handle's writes ahead of its close, so
+        // queueing `close_notify` here puts it on the wire before the FIN. A
+        // failed session refuses it, which is why this needs no guard of its
+        // own.
+        if self.has_tls(id) {
+            let _ = self.run_tls(id, TlsClientTransport::close_notify);
         }
         // `close` is exactly-once in the driver and answers with `NET_CLOSED`,
         // which is where the entry is normally retired. If the handle is
@@ -571,6 +820,38 @@ impl<C: DbCore> Registry<C> {
                     // duration of this call.
                     unsafe { std::slice::from_raw_parts(c.data, c.len) }
                 };
+                // With a session installed these are TLS records, not protocol
+                // bytes: decrypt first and hand the core only what came out.
+                // Every core in this family refuses plaintext once it is in its
+                // TLS state, so feeding the records straight through would be a
+                // protocol error rather than a silent corruption — but the
+                // right answer is still to never do it.
+                let plaintext = if self.has_tls(id) {
+                    let Some(progress) = self.run_tls(id, |tls| tls.receive(bytes)) else {
+                        return;
+                    };
+                    if let Some(failure) = progress.failure {
+                        self.abort(id, &failure);
+                        return;
+                    }
+                    if progress.handshake_done && !self.finish_tls(id) {
+                        return;
+                    }
+                    if progress.peer_closed && progress.plaintext.is_empty() {
+                        self.abort(id, "Connection closed by the server");
+                        return;
+                    }
+                    progress.plaintext
+                } else {
+                    bytes.to_vec()
+                };
+                if plaintext.is_empty() {
+                    // A handshake flight carries no application data. Flushing
+                    // is still right: acknowledging TLS can have produced the
+                    // core's startup bytes.
+                    self.drive(id);
+                    return;
+                }
                 let fed = {
                     let mut map = self.entries.borrow_mut();
                     let Some(entry) = map.get_mut(&id) else {
@@ -579,7 +860,7 @@ impl<C: DbCore> Registry<C> {
                     if entry.closing {
                         return;
                     }
-                    entry.core.receive(bytes)
+                    entry.core.receive(&plaintext)
                 };
                 match fed {
                     Ok(()) => self.drive(id),
@@ -633,9 +914,33 @@ impl<C: DbCore> Registry<C> {
             entry.core.drain()
         };
         match outcome {
-            Ok(true) => self.close(id),
-            Ok(false) => self.flush(id),
-            Err(message) => self.abort(id, &message),
+            Ok(true) => {
+                self.close(id);
+                return;
+            }
+            Ok(false) => {}
+            Err(message) => {
+                self.abort(id, &message);
+                return;
+            }
+        }
+        let upgrade = {
+            let mut map = self.entries.borrow_mut();
+            match map.get_mut(&id) {
+                Some(entry) if !entry.closing => entry.core.take_tls_request(),
+                _ => return,
+            }
+        };
+        // Order matters and is not interchangeable: the flush below happens
+        // while the connection is still plaintext, which is what puts
+        // PostgreSQL's `SSLRequest` and MySQL's `SSLRequest` packet on the wire
+        // unencrypted. Installing first would encrypt the very packet that asks
+        // for encryption, and both cores refuse `tls_established` while their
+        // output is unflushed, so the mistake would surface as a state error
+        // rather than as a hang.
+        self.flush(id);
+        if upgrade {
+            self.begin_tls(id);
         }
     }
 }

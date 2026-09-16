@@ -33,11 +33,26 @@ mod test_async_shims;
 use perry_ffi::{
     alloc_string, build_object_shape, get_handle, get_handle_mut, js_array_alloc, js_array_get,
     js_array_push, js_object_alloc_with_shape, js_object_get_field, js_object_set_field,
-    register_handle, spawn_blocking, take_handle, ArrayHeader, Handle, JsPromise, JsValue,
-    ObjectHeader, Promise, StringHeader,
+    object_field_by_name, register_handle, spawn_blocking, take_handle, ArrayHeader, Handle,
+    JsPromise, JsValue, ObjectHeader, Promise, StringHeader,
 };
 use sqlx::postgres::{PgColumn, PgConnection, PgPool, PgPoolOptions, PgRow};
 use sqlx::{Column, Connection, Row, TypeInfo};
+
+/// What node-pg's `ssl` option asked for.
+///
+/// `pg` accepts `ssl: true`, `ssl: "require"` and an options object; all three
+/// mean the same thing to the wire (send an `SSLRequest` and refuse a server
+/// that declines), and differ only in the trust material they carry.
+#[derive(Debug, Clone, Default)]
+pub struct PgSslConfig {
+    /// Node's `rejectUnauthorized`, default `true`.
+    pub reject_unauthorized: bool,
+    /// Explicit trust roots, PEM. Replaces the default set, as in Node.
+    pub ca: Vec<u8>,
+    /// Override the name verified and sent as SNI. Node calls it `servername`.
+    pub servername: Option<String>,
+}
 
 /// Connection config — same field shape as perry-stdlib's PgConfig.
 #[derive(Debug, Clone)]
@@ -47,6 +62,11 @@ pub struct PgConfig {
     pub user: String,
     pub password: String,
     pub database: Option<String>,
+    /// `None` is plaintext. `Some` makes the core send an `SSLRequest` and
+    /// refuse a server that answers `N` — `pg`'s own reading of `ssl: true`,
+    /// and the only safe one: a client that asked for TLS and silently got
+    /// none would send its password in the clear.
+    pub ssl: Option<PgSslConfig>,
 }
 
 impl Default for PgConfig {
@@ -57,20 +77,40 @@ impl Default for PgConfig {
             user: "postgres".to_string(),
             password: String::new(),
             database: None,
+            ssl: None,
         }
     }
 }
 
 impl PgConfig {
+    /// The URL the **legacy** sqlx transport connects with.
+    ///
+    /// `sslmode` is carried even though this crate's sqlx is built without a
+    /// TLS backend, and precisely because of that: `Require`/`VerifyFull` make
+    /// sqlx answer "TLS upgrade required by connect options but SQLx was built
+    /// without TLS support enabled" and REFUSE. Leaving it off would make a
+    /// client that asked for `ssl` and then declined this transport — a
+    /// Unix-socket host, or a thread with no loop of its own — connect in
+    /// PLAINTEXT and send its password in the clear. A silent downgrade is the
+    /// one outcome worse than a refused connection, and it only became
+    /// reachable when `ssl` became a field this binding parses at all.
     pub fn to_url(&self) -> String {
         let db = self
             .database
             .as_ref()
             .map(|d| format!("/{}", d))
             .unwrap_or_default();
+        let sslmode = match self.ssl.as_ref() {
+            None => "",
+            // `verify-full` rather than `require` when the caller wanted the
+            // certificate checked, so the spelling stays truthful if a TLS
+            // backend is ever compiled in.
+            Some(ssl) if ssl.reject_unauthorized => "?sslmode=verify-full",
+            Some(_) => "?sslmode=require",
+        };
         format!(
-            "postgres://{}:{}@{}:{}{}",
-            self.user, self.password, self.host, self.port, db
+            "postgres://{}:{}@{}:{}{}{}",
+            self.user, self.password, self.host, self.port, db, sslmode
         )
     }
 }
@@ -152,7 +192,77 @@ unsafe fn parse_pg_config(config: JsValue) -> PgConfig {
             result.database = Some(s);
         }
     }
+    // `ssl` is read BY NAME rather than by position. The five fields above are
+    // positional because perry-stdlib's own `PgConfig` fixes their order, but
+    // `ssl` is optional and a user object literal that omits `database` would
+    // put it at a different index. `object_field_by_name` goes through the
+    // runtime's property lookup, which is what a user's `{ host, ssl }` needs.
+    result.ssl = parse_pg_ssl(object_field_by_name(config, "ssl"));
     result
+}
+
+/// node-pg's `ssl`: `false`/absent, `true`, `"require"`, or an options object.
+///
+/// Anything truthy that is not an object means "TLS with the defaults", which
+/// is what `ssl: true` means in `pg`. An object contributes `rejectUnauthorized`
+/// (default `true`, as Node), `ca`, and `servername`.
+unsafe fn parse_pg_ssl(value: JsValue) -> Option<PgSslConfig> {
+    if value.is_undefined() || value.is_null() {
+        return None;
+    }
+    if let Some(text) = jsvalue_to_string(value) {
+        // `ssl: "disable"` is libpq's spelling for off; every other string
+        // (`"require"`, `"prefer"`, `"verify-full"`) asks for TLS.
+        if text.eq_ignore_ascii_case("disable") || text.eq_ignore_ascii_case("false") {
+            return None;
+        }
+        return Some(PgSslConfig {
+            reject_unauthorized: true,
+            ..PgSslConfig::default()
+        });
+    }
+    let mut ssl = PgSslConfig {
+        reject_unauthorized: true,
+        ..PgSslConfig::default()
+    };
+    let obj = value.as_pointer::<ObjectHeader>();
+    if obj.is_null() {
+        // `ssl: true` — a boolean, no fields to read.
+        return value.to_bool().then_some(ssl);
+    }
+    let reject = object_field_by_name(value, "rejectUnauthorized");
+    if !reject.is_undefined() && !reject.is_null() {
+        ssl.reject_unauthorized = reject.to_bool();
+    }
+    if let Some(ca) = jsvalue_to_bytes(object_field_by_name(value, "ca")) {
+        ssl.ca = ca;
+    }
+    if let Some(name) = jsvalue_to_string(object_field_by_name(value, "servername")) {
+        ssl.servername = Some(name);
+    }
+    Some(ssl)
+}
+
+/// A `ca` may be a string or a Buffer — `fs.readFileSync` returns the latter.
+///
+/// The Buffer read goes through the **canonical runtime registry** rather than
+/// perry-ffi's local one: this crate is a separately linked archive and cannot
+/// see a Buffer the program runtime allocated. `perry-ext-net` learned the same
+/// thing about `ca`/`cert`/`key` and its comment is the precedent.
+unsafe fn jsvalue_to_bytes(value: JsValue) -> Option<Vec<u8>> {
+    if let Some(text) = jsvalue_to_string(value) {
+        return Some(text.into_bytes());
+    }
+    extern "C" {
+        fn js_value_buffer_or_typedarray_data(value: f64, out_len: *mut u32) -> *const u8;
+    }
+    let mut len = 0u32;
+    let data = js_value_buffer_or_typedarray_data(f64::from_bits(value.bits()), &mut len);
+    if data.is_null() || len == 0 {
+        None
+    } else {
+        Some(std::slice::from_raw_parts(data, len as usize).to_vec())
+    }
 }
 
 /// Convert a single column value to a JsValue, mapping common
@@ -911,6 +1021,59 @@ pub extern "C" fn js_pg_pool_end(pool_handle: Handle) -> *mut Promise {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_plaintext_config_asks_the_legacy_transport_for_no_tls() {
+        let url = PgConfig {
+            host: "db".into(),
+            port: 5432,
+            user: "u".into(),
+            password: "p".into(),
+            database: Some("d".into()),
+            ssl: None,
+        }
+        .to_url();
+        assert_eq!(url, "postgres://u:p@db:5432/d");
+    }
+
+    #[test]
+    fn an_ssl_config_makes_the_legacy_transport_refuse_rather_than_downgrade() {
+        // sqlx here is built with no TLS backend, so `sslmode=verify-full`
+        // makes it answer "TLS upgrade required by connect options but SQLx was
+        // built without TLS support enabled". That refusal is the point: the
+        // alternative is a client that asked for `ssl`, declined this
+        // transport, and sent its password in plaintext.
+        let config = PgConfig {
+            host: "db".into(),
+            port: 5432,
+            user: "u".into(),
+            password: "p".into(),
+            database: Some("d".into()),
+            ssl: Some(PgSslConfig {
+                reject_unauthorized: true,
+                ca: Vec::new(),
+                servername: None,
+            }),
+        };
+        assert_eq!(
+            config.to_url(),
+            "postgres://u:p@db:5432/d?sslmode=verify-full"
+        );
+
+        // `rejectUnauthorized: false` still requires TLS — it only relaxes what
+        // is checked about the certificate, never whether there is one.
+        let unverified = PgConfig {
+            ssl: Some(PgSslConfig {
+                reject_unauthorized: false,
+                ca: Vec::new(),
+                servername: None,
+            }),
+            ..config
+        };
+        assert_eq!(
+            unverified.to_url(),
+            "postgres://u:p@db:5432/d?sslmode=require"
+        );
+    }
 
     #[test]
     fn pg_config_defaults() {

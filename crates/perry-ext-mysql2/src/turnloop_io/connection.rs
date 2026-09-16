@@ -37,7 +37,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 
-use perry_db_turnloop::DbCore;
+use perry_db_turnloop::{DbCore, TlsFacts};
 use perry_ffi::{Handle, JsPromise, JsValue};
 use turnloop_mysql::{Config, Connection, Error, Event, Instant, Outcome, Statement, Token};
 
@@ -284,6 +284,10 @@ pub(crate) struct MysqlCore {
     /// The driver's word for a transport failure, preferred over the core's
     /// generic `Connection lost`.
     host_failure: Option<String>,
+    /// The core has put its `SSLRequest` packet in `output()` and wants the
+    /// transport upgraded. Taken by the driver, which flushes that packet in
+    /// the clear and only then installs the session.
+    tls_requested: bool,
 }
 
 impl MysqlCore {
@@ -305,6 +309,7 @@ impl MysqlCore {
             quit: None,
             last_server_error: None,
             host_failure: None,
+            tls_requested: false,
         })
     }
 
@@ -545,9 +550,16 @@ impl MysqlCore {
                 Event::Progress | Event::AuthFastSuccess | Event::AuthFull => None,
                 Event::Connected { .. } => Some(Action::Connected),
                 Event::RsaSeedNeeded => Some(Action::RsaSeed),
-                Event::UpgradeTls => Some(Action::Unsupported(
-                    "MySQL TLS is not available on the turnloop transport".to_string(),
-                )),
+                Event::UpgradeTls => {
+                    // The hard boundary: the `SSLRequest` packet is already in
+                    // `output()` and everything after it is encrypted. The
+                    // driver flushes that packet in the clear and then installs
+                    // the session — acknowledging here would be too early,
+                    // since the core refuses `tls_established` while it still
+                    // has unsent output.
+                    self.tls_requested = true;
+                    None
+                }
                 Event::LocalInfile { .. } => Some(Action::Unsupported(
                     "LOAD DATA LOCAL INFILE is disabled".to_string(),
                 )),
@@ -913,6 +925,23 @@ impl DbCore for MysqlCore {
             .map_err(|err| format!("MySQL protocol error: {err}"))
     }
 
+    fn take_tls_request(&mut self) -> bool {
+        std::mem::take(&mut self.tls_requested)
+    }
+
+    fn tls_established(&mut self, facts: &TlsFacts) -> Result<(), String> {
+        // `facts` is deliberately unread. MySQL's authentication plugins define
+        // no channel binding, and its TLS carries the MySQL protocol alone, so
+        // there is no negotiated ALPN protocol either — nothing in the
+        // handshake is an input to what the core does next. The acknowledgement
+        // itself is what matters: it releases the handshake response, which
+        // carries the credentials and is now written encrypted.
+        let _ = facts;
+        self.conn
+            .tls_established()
+            .map_err(|err| format!("MySQL TLS upgrade failed: {err}"))
+    }
+
     fn drain(&mut self) -> Result<bool, String> {
         self.drain_events()
     }
@@ -990,18 +1019,26 @@ impl DbCore for MysqlCore {
 
 /// The protocol config for one connection.
 ///
-/// **MySQL TLS is not supported on either transport.** `MySqlConfig::to_url`
-/// hardcodes `?ssl-mode=disabled`, so every connection Perry has ever opened to
-/// MySQL has been plaintext; `tls: false` keeps that exactly, and turning it on
-/// would need a TLS layer a database binding does not have. Compression is off
-/// for the same reason the sqlx path never enabled it: it is a wire change with
-/// no caller asking for it.
+/// Separated from [`MysqlCore::new`] so the choices below are assertable
+/// without a server: whether the handshake negotiates `CLIENT_SSL`, and the
+/// capabilities sqlx negotiated that programs already depend on.
+///
+/// `tls` follows the `ssl` option alone, and turning it on also changes
+/// **authentication**: `caching_sha2_password`'s full-auth path sends the
+/// password as cleartext over the encrypted channel instead of RSA-OAEP
+/// encrypting it, so a TLS connection never reaches `random_seed` and never
+/// needs `/dev/urandom`. Compression stays off for the reason the sqlx path
+/// never enabled it: a wire change with no caller asking for it.
 pub(crate) fn protocol_config(config: &crate::MySqlConfig) -> Config {
     Config {
         user: config.user.clone(),
         password: config.password.clone().into_bytes(),
         database: config.database.clone(),
-        tls: false,
+        // A server that does not offer `CLIENT_SSL` fails the connection here
+        // rather than continuing in the clear: there is no "prefer TLS" mode,
+        // because a client that asked for TLS and silently got none would send
+        // its password in plaintext.
+        tls: config.ssl.is_some(),
         compression: false,
         // sqlx negotiates `CLIENT_MULTI_STATEMENTS` (sqlx-mysql's
         // `stream.rs`), so `query("A; B")` works on the legacy transport today.

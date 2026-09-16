@@ -131,6 +131,41 @@ impl TlsClientSession {
         self.client.alpn_protocol().map(<[u8]>::to_vec)
     }
 
+    /// The peer's certificate chain, leaf first, DER-encoded. `None` until the
+    /// handshake has completed.
+    ///
+    /// Exposed because the chain is otherwise unreachable: the session owns the
+    /// rustls connection, and a caller that needs the leaf — for RFC 5929
+    /// channel binding, or to report `socket.getPeerCertificate()` — has no
+    /// other way to ask. Verification has already happened by the time this can
+    /// return `Some`; the configured verifier decided it, not this accessor.
+    pub fn peer_certificates(&self) -> Option<Vec<Vec<u8>>> {
+        Some(
+            self.client
+                .peer_certificates()?
+                .iter()
+                .map(|certificate| certificate.as_ref().to_vec())
+                .collect(),
+        )
+    }
+
+    /// RFC 5929 `tls-server-end-point` channel-binding data over the verified
+    /// leaf — the digest PostgreSQL's SCRAM-SHA-256-**PLUS** binds to.
+    ///
+    /// Derived here rather than by the caller on purpose. The leaf is only
+    /// reachable through the session, so a caller forced to fetch the chain
+    /// itself is a caller that can just as easily hash an *unverified* one; and
+    /// the fallback has to be exactly right, because `None` makes
+    /// `turnloop-postgres` offer plain SCRAM while a wrong digest makes it
+    /// offer PLUS and fail the server signature. `None` means the leaf's
+    /// signature algorithm has no defined binding (Ed25519, notably) or the
+    /// handshake has not completed.
+    pub fn tls_server_end_point(&self) -> Option<Vec<u8>> {
+        let chain = self.client.peer_certificates()?;
+        let leaf = chain.first()?;
+        turnloop_tls::tls_server_end_point(leaf.as_ref()).map(|digest| digest.as_ref().to_vec())
+    }
+
     pub fn is_handshaking(&self) -> bool {
         self.handshaking
     }

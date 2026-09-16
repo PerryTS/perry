@@ -468,7 +468,22 @@ pub fn alloc_null_proto_object(fields: &[(&str, JsValue)]) -> JsValue {
 ///
 /// Untagged legacy pointers are accepted because older generated call paths
 /// can still pass them. Non-object values return `undefined`.
+///
+/// `value` is parked in a [`crate::TransientRootScope`] for the duration,
+/// because `alloc_string` below can collect and a moving collector then
+/// rewrites the object this is about to read from. The receiver arrived as an
+/// `f64` in a register or an FFI stack slot, which is not a root the collector
+/// can see, so the pointer had to be taken **after** the allocation and read
+/// back through the handle rather than kept across it — the
+/// `#7184`/`#7192` shape, which presents as a rooted slot holding a dangling
+/// pointer and surfaces cycles later as `TypeError: value is not a function`.
+/// It used to take the pointer first.
 pub fn object_field_by_name(value: JsValue, key: &str) -> JsValue {
+    let roots = crate::TransientRootScope::enter();
+    let rooted = roots.root_nanbox(f64::from_bits(value.bits()));
+    let key = alloc_string(key);
+    // Re-read AFTER the allocation: this is the post-collection value.
+    let value = JsValue::from_bits(rooted.get().to_bits());
     let bits = value.bits();
     let obj = if value.is_pointer() {
         value.as_pointer::<ObjectHeader>()
@@ -480,7 +495,6 @@ pub fn object_field_by_name(value: JsValue, key: &str) -> JsValue {
     if obj.is_null() {
         return JsValue::UNDEFINED;
     }
-    let key = alloc_string(key);
     unsafe { js_object_get_field_by_name(obj, key.as_raw()) }
 }
 
