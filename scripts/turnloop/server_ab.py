@@ -97,6 +97,21 @@ ARM_MARKER = {
     "tokio": "[perry-loop] driver=tokio-wait-driver",
 }
 ARM_WAITS = {"turnloop": "turnloop", "tokio": "tokio-wait-driver"}
+# Cross-commit mode: the two arms are two COMMITS, not one commit built twice
+# with a feature flag. That is what P1-P8 force -- once `node:net`, the servers,
+# the clients and the database drivers stop going through tokio at all, the
+# `tokio-wait-driver` feature no longer selects "Perry on tokio"; it selects
+# "Perry on turnloop with the wait driver swapped and the migrated subjects
+# falling back to inline", which is a third thing and not the baseline anyone
+# wants. So the tokio arm becomes a pre-migration commit. It has NO
+# `[perry-loop]` marker and NO wait-metrics line, because neither existed
+# before P0 -- and their ABSENCE is what proves the arm is the tokio build,
+# exactly as the marker's PRESENCE proves the turnloop one.
+CROSS = {"enabled": False, "trees": {}, "commits": {}}
+
+
+def cross_enabled():
+    return CROSS["enabled"]
 PACKAGES = [
     "perry", "perry-runtime-static", "perry-stdlib-static",
     "perry-ext-http", "perry-ext-net", "perry-ext-ws",
@@ -169,7 +184,15 @@ def sha256(path):
 
 
 def git(*args):
-    return subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True).stdout.strip()
+    return git_in(ROOT, *args)
+
+
+def git_in(tree, *args):
+    """git in an explicit checkout. Cross-commit arms live outside ROOT, and
+    `git -C ROOT -C other` is cumulative rather than a replacement, so the two
+    callers must not share one hardcoded -C."""
+    return subprocess.run(["git", "-C", str(tree), *args],
+                          capture_output=True, text=True).stdout.strip()
 
 
 def build(args):
@@ -181,8 +204,16 @@ def build(args):
     commit_time = int(git("log", "-1", "--format=%ct") or 0)
     meta = {"commit": commit, "dirty": dirty, "profile": args.profile, "arms": {}}
     for arm in ARMS:
-        target = work / f"target-{arm}"
-        out = target / profile_dir(args.profile)
+        if cross_enabled() and arm in CROSS["trees"]:
+            # An already-built tree at another commit. Its layout is a normal
+            # cargo target dir, so `out` is <tree>/target/<profile-dir>.
+            target = Path(CROSS["trees"][arm]).resolve()
+            out = target / "target" / profile_dir(args.profile)
+            if not (out / "perry").is_file() and (target / "perry").is_file():
+                out = target
+        else:
+            target = work / f"target-{arm}"
+            out = target / profile_dir(args.profile)
         env = dict(os.environ, CARGO_TARGET_DIR=str(target))
         if args.jobs:
             env["CARGO_BUILD_JOBS"] = str(args.jobs)
@@ -202,6 +233,9 @@ def build(args):
             subprocess.run(cmd, cwd=ROOT, env=env, check=True)
         arm_meta = {"target_dir": str(out), "cargo": None if getattr(args, "skip_cargo", False) else cmd,
                     "build_started": started, "archives": {}}
+        if cross_enabled() and arm in CROSS["trees"]:
+            arm_meta["commit"] = CROSS["commits"].get(arm)
+            arm_meta["tree"] = str(CROSS["trees"][arm])
         if not args.dry_run:
             for name in ARCHIVES:
                 path = out / name
@@ -250,9 +284,12 @@ def assert_arms_differ(meta):
     same = [name for name in ("libperry_runtime.a", "libperry_stdlib.a")
             if a["archives"][name]["sha256"] == b["archives"][name]["sha256"]]
     if same:
+        why = ("the two arms are supposed to be different COMMITS, so identical "
+               "archives mean one tree was not rebuilt"
+               if cross_enabled() else
+               "the tokio-wait-driver feature did not reach the build")
         raise SystemExit(
-            f"the two arms share identical {', '.join(same)}: the "
-            "tokio-wait-driver feature did not reach the build, so any "
+            f"the two arms share identical {', '.join(same)}: {why}, so any "
             "comparison would be vacuous")
     if a["server_binary_bytes"] == b["server_binary_bytes"] and sha256(
             Path(a["server_binary"])) == sha256(Path(b["server_binary"])):
@@ -281,6 +318,22 @@ def verify_marker(arm, binary):
     finally:
         server.stop()
         shutil.rmtree(logdir, ignore_errors=True)
+    if cross_enabled() and arm == "tokio":
+        # A pre-migration commit. Assert the NEGATIVE: no turnloop marker and no
+        # wait-metrics line. If either appears, this tree is not the baseline we
+        # think it is and the comparison would be against the wrong thing.
+        stray = [line for line in server.stderr_text.splitlines() if "[perry-loop]" in line]
+        if stray:
+            raise SystemExit(
+                f"tokio arm at {CROSS['commits'].get('tokio')} printed a turnloop "
+                f"marker {stray!r}: this tree is not pre-migration")
+        if server.waits():
+            raise SystemExit(
+                f"tokio arm at {CROSS['commits'].get('tokio')} emitted wait metrics: "
+                "not a pre-migration tree")
+        line = f"[baseline] commit={CROSS['commits'].get('tokio')} no turnloop driver present"
+        log(f"verified tokio: {line}")
+        return line
     if ARM_MARKER[arm] not in server.stderr_text:
         raise SystemExit(f"{arm}: marker {ARM_MARKER[arm]!r} missing; stderr={server.stderr_text!r}")
     waits = server.waits()
@@ -1023,10 +1076,16 @@ def finish_sample(sample, arm, server):
     waits = server.waits()
     sample["waits"] = waits
     problems = []
-    if sample["marker"] is None or ARM_MARKER[arm] not in sample["marker"]:
-        problems.append("arm marker missing or wrong")
-    if waits.get("arm") != ARM_WAITS[arm]:
-        problems.append("wait metrics missing or wrong arm")
+    if cross_enabled() and arm == "tokio":
+        if sample["marker"] is not None and "[perry-loop]" in sample["marker"]:
+            problems.append("baseline arm printed a turnloop marker")
+        if waits:
+            problems.append("baseline arm emitted wait metrics")
+    else:
+        if sample["marker"] is None or ARM_MARKER[arm] not in sample["marker"]:
+            problems.append("arm marker missing or wrong")
+        if waits.get("arm") != ARM_WAITS[arm]:
+            problems.append("wait metrics missing or wrong arm")
     if server.forced_kill:
         problems.append("server needed SIGKILL")
     if sample.get("rusage_missing"):
@@ -1540,6 +1599,12 @@ def main():
         p.add_argument("--work", default=str(ROOT / "target/turnloop-server-ab"))
         p.add_argument("--dry-run", action="store_true")
         p.add_argument("--profile", default="release")
+        p.add_argument("--arm-tree", action="append", default=[], metavar="ARM=PATH",
+                       help="cross-commit mode: build ARM from an already-built tree at "
+                            "PATH instead of from HEAD with a feature flag. Give it twice "
+                            "(tokio=... and turnloop=...). The tokio arm is then expected "
+                            "to be a PRE-MIGRATION commit: it must print no [perry-loop] "
+                            "marker and no wait metrics, and that absence is verified.")
 
     def run_options(p):
         p.add_argument("--rounds", type=int, default=5)
@@ -1595,6 +1660,28 @@ def main():
     p_idle.add_argument("--timeout", type=float, default=15.0)
 
     args = parser.parse_args()
+    for spec in getattr(args, "arm_tree", []) or []:
+        if "=" not in spec:
+            raise SystemExit(f"--arm-tree wants ARM=PATH, got {spec!r}")
+        arm, _, path = spec.partition("=")
+        if arm not in ARMS:
+            raise SystemExit(f"--arm-tree: unknown arm {arm!r}; want one of {ARMS}")
+        tree = Path(path).expanduser().resolve()
+        if not (tree / ".git").exists() and not (tree / "target").exists():
+            raise SystemExit(f"--arm-tree {arm}: {tree} is neither a checkout nor a target tree")
+        CROSS["enabled"] = True
+        CROSS["trees"][arm] = tree
+        CROSS["commits"][arm] = git_in(tree, "rev-parse", "--short", "HEAD") or "unknown"
+        dirty = git_in(tree, "status", "--porcelain", "--untracked-files=no")
+        if dirty:
+            raise SystemExit(
+                f"--arm-tree {arm}: {tree} has uncommitted changes, so the commit it "
+                "reports is not what it would measure")
+    if CROSS["enabled"] and set(CROSS["trees"]) != set(ARMS):
+        raise SystemExit(f"--arm-tree: give a tree for BOTH arms, got {sorted(CROSS['trees'])}")
+    if CROSS["enabled"]:
+        log("cross-commit arms: " + ", ".join(
+            f"{a}={CROSS['commits'][a]} ({CROSS['trees'][a]})" for a in ARMS))
     if args.command == "idle-client":
         idle_client(args)
     elif args.command == "build":
