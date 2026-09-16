@@ -145,7 +145,18 @@ pub(crate) fn native_instance_base_in_chain(
     let mut cur = class.extends_name.as_deref();
     for _ in 0..32 {
         let name = cur?;
-        if ctx.imported_class_ctors.contains_key(name) {
+        // #10300: an IMPORTED ancestor stops the walk only when its standalone
+        // ctor actually owns construction (own body, instance fields, or
+        // declared params). A bare `export class B extends EventEmitter {}`
+        // compiles to a synthesized ctor that performs no base init, so
+        // treating its mere presence as a stop lost the base for every
+        // consumer-side subclass. Same predicate as
+        // `default_ctor_dynamic_parent_owner`.
+        if ctx
+            .imported_class_ctors
+            .get(name)
+            .is_some_and(|ctor| ctor.stops_constructor_walk())
+        {
             return None;
         }
         match ctx.classes.get(name).copied() {

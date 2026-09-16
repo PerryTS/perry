@@ -14,6 +14,13 @@
 //! Deliberately conservative: only RHS shapes that are statically known to
 //! be non-numeric trigger widening, so number-typed fast paths for actual
 //! numeric code are untouched (zero-regression requirement).
+//!
+//! #10348 added the `Type::Null` / `Type::Void` arm, where a stale declared
+//! type is not merely slow but unsound: those two are the declared types that
+//! `typed_shape::type_is_pointer_bearing` answers `false` for, and that answer
+//! becomes a class's compile-time GC pointer mask. A slot the mask omits is a
+//! slot the collector never scans, so `var head = null; head = { … }` left a
+//! live object's child unmarked and unrewritten.
 
 use crate::analysis::{infer_expr_type, HirTypeEnv};
 use crate::ir::*;
@@ -60,6 +67,37 @@ struct WidenSets {
     non_number_primitive: HashSet<LocalId>,
     /// Assigned a certainly non-array object -> revoke Array/Tuple intrinsics.
     non_array_object: HashSet<LocalId>,
+    /// Assigned a value that is certainly NOT `null` / `undefined` → widen a
+    /// `null`/`undefined`-declared type. Kept separate from `object_like`
+    /// because that set is deliberately entered by `null` and `undefined` too
+    /// ([`type_is_certainly_object_like`] counts them), which is exactly the
+    /// assignment that must NOT widen here.
+    non_nullish: HashSet<LocalId>,
+}
+
+/// Is this RHS certainly `null` / `undefined`?
+///
+/// The narrow side of the test on purpose: everything it cannot prove nullish
+/// widens a `null`/`undefined`-declared local, because that declared type is
+/// read as a GC fact and not just a codegen hint — see the `Type::Null` arm of
+/// [`widen_lets_stmt`].
+///
+/// The structural arms are [`rhs_certainly_object_like`]'s own list, answered
+/// the other way round, so this costs no extra `infer_expr_type` on any RHS
+/// that function already decided by shape.
+fn rhs_certainly_nullish(expr: &Expr, env: &HirTypeEnv) -> bool {
+    match expr {
+        Expr::Null | Expr::Undefined => true,
+        Expr::This
+        | Expr::Object(_)
+        | Expr::ObjectSpread { .. }
+        | Expr::ObjectAssign { .. }
+        | Expr::Array(_)
+        | Expr::ArraySpread(_)
+        | Expr::Closure { .. }
+        | Expr::New { .. } => false,
+        _ => matches!(infer_expr_type(expr, env), Type::Null | Type::Void),
+    }
 }
 
 fn rhs_certainly_non_array_object(expr: &Expr) -> bool {
@@ -82,8 +120,12 @@ fn visit_expr(expr: &Expr, out: &mut WidenSets, env: &HirTypeEnv) {
         }
         if rhs_certainly_object_like(rhs, env) {
             out.object_like.insert(*id);
+            if !rhs_certainly_nullish(rhs, env) {
+                out.non_nullish.insert(*id);
+            }
         } else if rhs_certainly_non_number_primitive(rhs, env) {
             out.non_number_primitive.insert(*id);
+            out.non_nullish.insert(*id);
         }
     }
     if let Expr::Closure { params, body, .. } = expr {
@@ -193,6 +235,17 @@ fn widen_lets_stmt(stmt: &mut Stmt, sets: &WidenSets) {
                 }
                 Type::String | Type::Boolean => sets.object_like.contains(id),
                 Type::Array(_) | Type::Tuple(_) => sets.non_array_object.contains(id),
+                // #10348: `var head = null` infers `Type::Null`, and this arm
+                // used to be `_ => false` — so no later assignment could ever
+                // repair it. Of every declared type this pass covers these two
+                // are the ones whose lie is not merely slow: `Null` and `Void`
+                // are not pointer-bearing
+                // (`typed_shape::type_is_pointer_bearing`), so a slot typed
+                // from such a local is left OUT of a class's compile-time GC
+                // pointer mask and the collector never scans it. The `head`
+                // holding a `{ … }` was exactly that, and its `next` chain was
+                // collected out from under a live object.
+                Type::Null | Type::Void => sets.non_nullish.contains(id),
                 _ => false,
             };
             if widen {
@@ -298,6 +351,7 @@ impl TypeWidening {
         if self.sets.object_like.is_empty()
             && self.sets.non_number_primitive.is_empty()
             && self.sets.non_array_object.is_empty()
+            && self.sets.non_nullish.is_empty()
         {
             return;
         }
@@ -538,6 +592,90 @@ mod tests {
         widening.apply(&mut module.init);
 
         assert_eq!(let_ty(&module.init, 1), &Type::Any);
+    }
+
+    /// #10348: `var head = null; for (…) head = new C();` — the declared
+    /// `Type::Null` is what `typed_shape::type_is_pointer_bearing` reads as
+    /// "this slot can never hold a heap pointer", so leaving it stale takes a
+    /// live child out of the collector's reach.
+    #[test]
+    fn widens_null_declared_local_assigned_object() {
+        let mut module = Module::new("type-widening-test");
+        module.init = vec![
+            Stmt::Let {
+                id: 1,
+                name: "head".to_string(),
+                ty: Type::Null,
+                mutable: true,
+                init: Some(Expr::Null),
+            },
+            Stmt::Expr(Expr::LocalSet(
+                1,
+                Box::new(Expr::New {
+                    class_name: "__AnonShape_test".to_string(),
+                    args: vec![],
+                    type_args: vec![],
+                    byte_offset: 0,
+                    cap_args_appended: 0,
+                }),
+            )),
+        ];
+
+        let mut widening = TypeWidening::from_module(&module);
+        widening.collect(&module.init);
+        widening.apply(&mut module.init);
+
+        assert_eq!(let_ty(&module.init, 1), &Type::Any);
+    }
+
+    /// A string is object-unlike but still a heap pointer, so it has to widen a
+    /// `null`-declared local for the same reason an object does.
+    #[test]
+    fn widens_null_declared_local_assigned_string() {
+        let mut module = Module::new("type-widening-test");
+        module.init = vec![
+            Stmt::Let {
+                id: 1,
+                name: "tag".to_string(),
+                ty: Type::Null,
+                mutable: true,
+                init: Some(Expr::Null),
+            },
+            Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::String("x".to_string())))),
+        ];
+
+        let mut widening = TypeWidening::from_module(&module);
+        widening.collect(&module.init);
+        widening.apply(&mut module.init);
+
+        assert_eq!(let_ty(&module.init, 1), &Type::Any);
+    }
+
+    /// The other half of the contract: a local that is only ever re-assigned
+    /// `null` / `undefined` keeps its exact declared type. `object_like` is
+    /// entered by those assignments (`type_is_certainly_object_like` counts
+    /// `Null`/`Void`), so widening off that set alone would demote every
+    /// nullable local in the program to `Any`.
+    #[test]
+    fn preserves_null_declared_local_assigned_only_nullish() {
+        let mut module = Module::new("type-widening-test");
+        module.init = vec![
+            Stmt::Let {
+                id: 1,
+                name: "head".to_string(),
+                ty: Type::Null,
+                mutable: true,
+                init: Some(Expr::Null),
+            },
+            Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::Null))),
+            Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::Undefined))),
+        ];
+
+        let mut widening = TypeWidening::from_module(&module);
+        widening.collect(&module.init);
+        widening.apply(&mut module.init);
+
+        assert_eq!(let_ty(&module.init, 1), &Type::Null);
     }
 
     #[test]

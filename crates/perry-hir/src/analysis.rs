@@ -9,10 +9,21 @@ use crate::ir::*;
 use crate::walker::{walk_expr_children, walk_expr_children_mut};
 
 mod builtins;
+pub(crate) use builtins::is_builtin_global_value_name;
 pub(crate) use builtins::{
     builtin_constructor_length, builtin_global_function_length, builtin_static_function_length,
-    is_builtin_function, is_builtin_global_value_name, is_builtin_static_function_member,
+    is_builtin_function, is_builtin_static_function_member,
 };
+
+/// Whether `name` is one of the global constructors / namespaces the runtime
+/// installs on `globalThis` (`Request`, `Response`, `Headers`, `URL`, `Map`,
+/// …). Public so the compile pipeline can tell a global apart from a
+/// user-defined class of the same name — see #10356: implicitly registering
+/// an *un-imported* exported class under a global's name shadows the global
+/// for every `new` in the importing module.
+pub fn is_global_intrinsic_value_name(name: &str) -> bool {
+    is_builtin_global_value_name(name)
+}
 
 mod uses_this;
 pub(crate) use uses_this::{closure_uses_new_target, closure_uses_this, uses_this_stmt};
