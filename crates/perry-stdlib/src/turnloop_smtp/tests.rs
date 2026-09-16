@@ -93,11 +93,12 @@ fn a_full_delivery_writes_the_commands_in_order() {
         mail.starts_with("MAIL FROM:<sender@example.com> SIZE="),
         "SIZE is advertised, so it must be declared: {mail:?}"
     );
+    // MAIL FROM and both RCPT TOs go out together; DATA waits for their
+    // replies, because its own reply (354) must not be confused with theirs.
     let order: Vec<usize> = [
         "MAIL FROM:<sender@example.com>",
         "RCPT TO:<a@example.com>",
         "RCPT TO:<b@example.com>",
-        "DATA\r\n",
     ]
     .iter()
     .map(|needle| {
@@ -109,10 +110,15 @@ fn a_full_delivery_writes_the_commands_in_order() {
         order.windows(2).all(|w| w[0] < w[1]),
         "the pipelined block must be in protocol order: {mail:?}"
     );
+    assert!(
+        !mail.contains("DATA\r\n"),
+        "DATA must wait for the recipient replies: {mail:?}"
+    );
 
     feed(&mut conn, "250 2.1.0 Ok\r\n");
     feed(&mut conn, "250 2.1.5 Ok\r\n");
     feed(&mut conn, "250 2.1.5 Ok\r\n");
+    assert_eq!(drain(&mut conn), "DATA\r\n");
     feed(&mut conn, "354 Go ahead\r\n");
     let body = drain(&mut conn);
     assert!(

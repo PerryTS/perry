@@ -169,8 +169,20 @@ are asserted in tests rather than left to the comment.
 * **The sinks are plain `fn` pointers, not boxed closures.** A thread-local
   engine table must hold nothing a moving collector could invalidate, and a `fn`
   is exactly that. The caller's key (`ctx`) is the pinned promise address.
-* `scripts/gc_runtime_root_holders.py` needs no new entry: the only new
-  thread-locals are the two `MESSAGE_IDS` maps, which hold `String`s.
+* `scripts/gc_runtime_root_holders.py` has **four** new researched verdicts —
+  the two `MESSAGE_IDS` maps (`HashMap<usize, String>`), the SMTP seam's
+  `DRAFTS` and `NEXT_DRAFT`, and its `CALLBACKS` map of `extern "C"` fn
+  pointers. None holds a NaN-boxed value or a heap pointer. The engines' own
+  `ENGINE` / `STATE` thread-locals are not flagged by the gate at all, because
+  the structs behind them contain no raw pointer to flag.
+* **The gate also went red on five entries this work never touched** — P5's
+  `CONNS` and four `regex/site_test.rs` test counters flipped from UNCOVERED to
+  COVERED, which makes an inventory entry stale, and a stale entry fails. That
+  is P1's finding repeating: the script resolves function names *across* crates,
+  so adding reachable bodies to a registering crate pulls unrelated text into a
+  scanner's reachable set. The five entries are deleted here, as the gate
+  instructs; what is lost is the *record* of their reasoning, which is the cost
+  P1 already flagged and which per-crate name resolution would remove.
 
 ## Connection pooling and keep-alive — measured, then preserved
 

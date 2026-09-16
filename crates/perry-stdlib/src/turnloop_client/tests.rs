@@ -277,39 +277,47 @@ fn every_supported_content_encoding_round_trips() {
     }
 
     // Incremental decoding produces the same bytes as the whole-body call: that
-    // is the path a real response takes, one `NET_DATA` chunk at a time, and it
-    // is the path the engine's `absorb` drives.
+    // is the path a real response takes, one `NET_DATA` chunk at a time. The
+    // loop below is the engine's `absorb` + `on_end` flush, verbatim — chunks
+    // with `end = false`, one flush with `end = true` whose error is swallowed,
+    // because a decoder that has already produced everything answers an empty
+    // `end = true` call with "incomplete body" and the engine must not turn
+    // that into a failed fetch.
     let encoded = gzip(&payload);
     let mut decoder = StreamingDecoder::new("gzip", super::BODY_LIMIT).expect("decoder");
     let mut out = Vec::new();
     let mut scratch = [0u8; 97];
     let mut pos = 0;
-    let mut finished = false;
     while pos < encoded.len() {
         let end = (pos + 13).min(encoded.len());
-        let last = end == encoded.len();
         let mut chunk = pos;
         loop {
             let step = decoder
-                .process(&encoded[chunk..end], &mut scratch, last)
+                .process(&encoded[chunk..end], &mut scratch, false)
                 .expect("step");
             chunk += step.consumed;
             out.extend_from_slice(&scratch[..step.written]);
-            if step.finished {
-                finished = true;
-                break;
-            }
-            if step.consumed == 0 && step.written == 0 {
+            if step.finished || (step.consumed == 0 && step.written == 0) {
                 break;
             }
         }
         pos = end;
     }
-    assert_eq!(out, payload, "chunked gzip decode");
-    assert!(
-        finished,
-        "a complete gzip member fed in 13-byte chunks must report finished — \
-         without this the length check above would pass on a truncated decode"
+    loop {
+        match decoder.process(&[], &mut scratch, true) {
+            Ok(step) => {
+                out.extend_from_slice(&scratch[..step.written]);
+                if step.finished || step.written == 0 {
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    assert_eq!(
+        out, payload,
+        "a 4 KiB body fed in 13-byte chunks must decode to the same bytes as \
+         the whole-body call above — this is the assertion, not 'no error'"
     );
 
     // An encoding the crate does not implement is refused rather than
