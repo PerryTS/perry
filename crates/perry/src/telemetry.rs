@@ -262,9 +262,9 @@ fn send_event_blocking(event: &str, dims: &[(String, String)], client_id: &str) 
 
     // One whole-request budget rather than reqwest's separate connect and
     // request timeouts: `perry_http_client` measures the connect against the
-    // same window, so the longer of the two is the faithful bound. Telemetry
-    // is fire-and-forget on a background thread, so being generous here costs
-    // nothing a user can observe.
+    // same window, so their SUM is the bound that cannot reject something the
+    // old pair accepted. Telemetry is fire-and-forget on a background thread,
+    // so being generous here costs nothing a user can observe.
     let client = perry_http_client::Client::with_timeout(CONNECT_TIMEOUT + REQUEST_TIMEOUT);
 
     let mut dims_obj = serde_json::Map::new();

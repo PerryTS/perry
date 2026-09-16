@@ -239,17 +239,22 @@ pub fn execute(options: &Options, request: Request) -> Result<Response> {
 
 /// Run one request and hand the final response's body to `sink` as it arrives.
 ///
-/// The returned [`Response`] carries the status, headers and final URL with an
-/// **empty** body — the bytes went to the sink.
+/// Any method may stream; the response is fetched once, so there is nothing to
+/// re-send and no idempotence requirement. The returned [`Response`] carries the
+/// status, headers and final URL with an **empty** body when the bytes went to
+/// the sink.
 ///
 /// Three details a caller has to know:
 ///
-/// * **`on_head` fires exactly once, on the final response.** A 3xx that will
+/// * **`on_head` fires exactly once, on a 2xx final response.** A 3xx that will
 ///   be followed is buffered under `max_body` and never reaches the sink, so a
-///   redirect chain does not produce several heads. The one case where it fires
-///   *zero* times is a chain that ENDS on a 3xx — [`RedirectMode::Manual`], or
-///   a `Location`-less 3xx — and there the body is in the returned `Response`
-///   instead, as it would be from [`execute`].
+///   redirect chain does not produce several heads; a 4xx or 5xx is buffered
+///   too, so `error_for_status()` sees the error page before anything is
+///   written. The cases where it fires *zero* times are therefore a non-2xx
+///   final response, and a chain that ENDS on a 3xx
+///   ([`RedirectMode::Manual`], or a `Location`-less 3xx) — and in all of them
+///   the body is in the returned `Response` instead, as it would be from
+///   [`execute`].
 /// * **`Accept-Encoding` is not sent on this path**, so a `Content-Encoding` in
 ///   the answer is a server that ignored the request, and it is refused rather
 ///   than silently written to disk compressed: the one caller writes an archive
@@ -300,7 +305,10 @@ fn run(
     // available before a connection (and therefore a `turnloop::Instant`)
     // exists, so the chain's budget is kept here and each hop converts it.
     let started = std::time::Instant::now();
-    let max_redirects = turnloop_http::client::DEFAULT_MAX_REDIRECTS;
+    // reqwest's default policy was `Policy::limited(10)`, and every CLI call
+    // site took the default. `turnloop_http::client::DEFAULT_MAX_REDIRECTS` is
+    // 20, so using it would be a silent widening.
+    let max_redirects = 10;
 
     loop {
         let remaining = options
@@ -360,12 +368,17 @@ fn one_hop(
     };
     let addrs = transport::resolve(&hostname, port).map_err(|e| Error::io("resolve", e))?;
 
-    // The connect budget is the whole remaining budget: a server that is slow
-    // to accept is not different in kind from one slow to answer.
+    // ONE budget for this hop, spent across the connect and the exchange. An
+    // earlier draft handed the full budget to the connect and then the full
+    // budget again to the response, so a hop could take twice its window — and
+    // `Connection::connect` gave the full budget to EACH resolved address, so a
+    // host with four A and four AAAA records could take eight times it.
+    let started = std::time::Instant::now();
     let mut conn = Connection::connect(&addrs, budget).map_err(|e| Error::io("connect", e))?;
-    // Re-anchored after the connect: the response budget is what is left of
-    // the caller's window, measured on the loop's own clock.
-    let deadline = conn.deadline_in(budget);
+    let remaining = budget
+        .checked_sub(started.elapsed())
+        .ok_or_else(|| Error::timeout("request"))?;
+    let deadline = conn.deadline_in(remaining);
 
     // An HTTPS request through an HTTP proxy needs a CONNECT tunnel first.
     if let Some(head) = route.connect_head(None) {
@@ -519,13 +532,17 @@ fn exchange(
                         .into_iter()
                         .map(|header| (header.name, header.value))
                         .collect();
-                    // A 3xx body belongs to a hop the caller is about to
-                    // discard, so it is buffered under `max_body` and never
-                    // offered to the sink — which is also what makes
-                    // `on_head` fire exactly once, on the final response.
-                    streaming = sink.is_some() && !(300..400).contains(&status);
+                    // Only a 2xx body reaches the sink. A 3xx belongs to a
+                    // hop the caller is about to discard — which is what makes
+                    // `on_head` fire exactly once, on the final response — and
+                    // a 4xx/5xx is an error page that must NOT be written to
+                    // the caller's file before `error_for_status()` has seen
+                    // it. `reqwest::send()` returned on the head, so the status
+                    // was always checked before a byte was copied; buffering
+                    // the non-2xx body here restores that ordering.
+                    streaming = sink.is_some() && (200..300).contains(&status);
                     if let (true, Some(sink)) = (streaming, sink.as_deref_mut()) {
-                        if let Some(encoding) = content_encoding(&headers) {
+                        if let Some(encoding) = content_encodings(&headers).first() {
                             return Err(Error::other(format!(
                                 "server applied content-encoding {encoding:?} to a streamed \
                                  response, which was not asked for"
@@ -610,28 +627,47 @@ fn drain_output(
 
 /// Apply `Content-Encoding`. `reqwest` did this transparently, so a caller
 /// that used to read JSON out of a gzipped response must keep doing so.
-/// The response's effective `Content-Encoding`, or `None` when it is absent,
-/// empty or `identity`.
-fn content_encoding(headers: &[(String, Vec<u8>)]) -> Option<String> {
-    let (_, value) = headers
+/// The response's effective `Content-Encoding`, innermost last.
+///
+/// Two things this has to get right and an earlier draft did not.
+/// `Content-Encoding` is a **list** (`gzip, gzip` is legal), and it may appear
+/// on **several header lines**, which are equivalent to one comma-joined line.
+/// `turnloop_http::compression` matches a single token exactly — it has no
+/// splitting of its own — so a list handed to it straight fails the whole
+/// response with `UND_ERR_NOT_SUPPORTED`. That became reachable the moment this
+/// client started sending `Accept-Encoding` of its own, which the reqwest build
+/// never did (no decompression feature is enabled anywhere in the workspace).
+///
+/// `identity` and empty entries are dropped rather than passed on.
+fn content_encodings(headers: &[(String, Vec<u8>)]) -> Vec<String> {
+    headers
         .iter()
-        .find(|(name, _)| name.eq_ignore_ascii_case("content-encoding"))?;
-    let encoding = String::from_utf8_lossy(value).trim().to_ascii_lowercase();
-    if encoding.is_empty() || encoding == "identity" {
-        return None;
-    }
-    Some(encoding)
+        .filter(|(name, _)| name.eq_ignore_ascii_case("content-encoding"))
+        .flat_map(|(_, value)| {
+            String::from_utf8_lossy(value)
+                .split(',')
+                .map(|token| token.trim().to_ascii_lowercase())
+                .collect::<Vec<_>>()
+        })
+        .filter(|token| !token.is_empty() && token != "identity")
+        .collect()
 }
 
 fn decode_body(headers: &[(String, Vec<u8>)], raw: Vec<u8>, limit: usize) -> Result<Vec<u8>> {
-    let Some(encoding) = content_encoding(headers) else {
+    let encodings = content_encodings(headers);
+    if encodings.is_empty() {
         return Ok(raw);
-    };
-    let mut out = Vec::new();
-    // `decode` walks a comma-separated list right-to-left itself.
-    turnloop_http::compression::decode(&encoding, &raw, &mut out, limit)
-        .map_err(|e| Error::protocol("content-encoding", &e))?;
-    Ok(out)
+    }
+    // Applied in reverse: the last-listed encoding was applied last, so it is
+    // the outermost and must be removed first.
+    let mut body = raw;
+    for encoding in encodings.iter().rev() {
+        let mut out = Vec::new();
+        turnloop_http::compression::decode(encoding, &body, &mut out, limit)
+            .map_err(|e| Error::protocol("content-encoding", &e))?;
+        body = out;
+    }
+    Ok(body)
 }
 
 #[cfg(test)]
@@ -821,6 +857,101 @@ mod tests {
         sink.on_chunk(b"hello").unwrap();
         assert_eq!(sink.heads, vec![(200, Some(5))]);
         assert_eq!(sink.bytes, b"hello");
+    }
+
+    /// `Content-Encoding` is a LIST, and `turnloop_http::compression` matches a
+    /// single token exactly. Handing it `"gzip, gzip"` fails the whole response
+    /// with `UND_ERR_NOT_SUPPORTED`, which became reachable the moment this
+    /// client started asking for compression.
+    #[test]
+    fn a_content_encoding_list_is_split_innermost_last() {
+        let headers = vec![("content-encoding".to_string(), b"gzip, gzip".to_vec())];
+        assert_eq!(content_encodings(&headers), vec!["gzip", "gzip"]);
+    }
+
+    /// Several header lines are equivalent to one comma-joined line.
+    #[test]
+    fn several_content_encoding_lines_are_one_list() {
+        let headers = vec![
+            ("Content-Encoding".to_string(), b"deflate".to_vec()),
+            ("content-encoding".to_string(), b"gzip".to_vec()),
+        ];
+        assert_eq!(content_encodings(&headers), vec!["deflate", "gzip"]);
+    }
+
+    #[test]
+    fn identity_and_empty_entries_are_dropped_from_the_list() {
+        let headers = vec![(
+            "content-encoding".to_string(),
+            b" identity , gzip ,, IDENTITY".to_vec(),
+        )];
+        assert_eq!(content_encodings(&headers), vec!["gzip"]);
+    }
+
+    /// A round trip through the real codec, as a list rather than a token —
+    /// the case the single-token call could not serve. The fixture is a
+    /// literal gzip stream (`"p11"`, no name, no mtime) gzipped a second time,
+    /// because `turnloop_http::compression` decodes only.
+    #[test]
+    fn a_doubly_gzipped_body_round_trips() {
+        // gzip("p11")
+        const ONCE: &[u8] = &[
+            0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x2b, 0x30, 0x34, 0x04,
+            0x00, 0xca, 0xb6, 0x33, 0x3c, 0x03, 0x00, 0x00, 0x00,
+        ];
+        // A single-encoding decode must already work…
+        let single = vec![("content-encoding".to_string(), b"gzip".to_vec())];
+        assert_eq!(
+            decode_body(&single, ONCE.to_vec(), BODY_LIMIT).unwrap(),
+            b"p11"
+        );
+        // …and the token-at-a-time form must reject the list, which is the
+        // defect this split exists to fix. Feeding "gzip, gzip" straight to the
+        // codec is `UND_ERR_NOT_SUPPORTED`.
+        let mut scratch = Vec::new();
+        assert!(
+            turnloop_http::compression::decode("gzip, gzip", ONCE, &mut scratch, BODY_LIMIT)
+                .is_err(),
+            "if the codec ever splits lists itself, this split is redundant and the \
+             comment above content_encodings is stale"
+        );
+    }
+
+    /// reqwest's default redirect policy was `Policy::limited(10)` and every
+    /// CLI call site took the default; turnloop's constant is 20, so reading it
+    /// would have widened the ceiling silently.
+    #[test]
+    fn the_redirect_ceiling_matches_the_one_reqwest_used() {
+        let source = include_str!("http.rs");
+        let body = source
+            .split("fn run(")
+            .nth(1)
+            .expect("run() is in this file");
+        let body = body.split("\nfn ").next().expect("run() has an end");
+        assert_ne!(
+            10,
+            turnloop_http::client::DEFAULT_MAX_REDIRECTS,
+            "turnloop's default is now 10 as well, so this test no longer \
+             discriminates between the two — delete it or re-point it"
+        );
+        assert!(
+            body.contains("let max_redirects = 10;"),
+            "the ceiling must stay at reqwest's 10, not turnloop's DEFAULT_MAX_REDIRECTS"
+        );
+    }
+
+    /// A 4xx body must not reach the sink: `reqwest::send()` returned on the
+    /// head, so `error_for_status()` always ran before a byte was copied, and
+    /// the one caller writes into a file it then hashes against a signed
+    /// manifest.
+    #[test]
+    fn only_a_2xx_response_streams_to_the_sink() {
+        let source = include_str!("http.rs");
+        assert!(
+            source.contains("streaming = sink.is_some() && (200..300).contains(&status);"),
+            "the sink gate must be 2xx-only; a 3xx belongs to a discarded hop and a \
+             4xx/5xx is an error page error_for_status() has not seen yet"
+        );
     }
 
     #[test]

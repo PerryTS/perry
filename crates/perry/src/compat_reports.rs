@@ -450,8 +450,8 @@ fn send_compat_report(report: &CompatibilityReport) {
             return;
         }
 
-        // 3 s connect + 5 s request, as one whole-request budget — see the
-        // note in `telemetry::send_event_blocking`.
+        // 3 s connect + 5 s request, summed into one whole-request budget —
+        // see the note in `telemetry::send_event_blocking`.
         let client = perry_http_client::Client::with_timeout(std::time::Duration::from_secs(8));
         let envelope = serde_json::json!({
             "event": "compat_report",

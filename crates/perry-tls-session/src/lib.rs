@@ -368,7 +368,7 @@ fn flush_scratch(b: &mut Buffers) {
 
 /// Node's cause code plus rustls's own text — the shape `net` / `tls` already
 /// reports for a handshake failure.
-pub fn node_message(error: &rustls::Error) -> String {
+pub(crate) fn node_message(error: &rustls::Error) -> String {
     format!("{}: {error}", turnloop_tls::node_error_code(error))
 }
 

@@ -1,19 +1,28 @@
 //! The client's TLS configuration, and the secure random the WebSocket
 //! handshake needs.
 //!
-//! Perry's runtime builds its `ClientConfig` from Node's TLS environment
-//! through `perry_ffi` (`perry_stdlib::turnloop_tls_client::client_config`).
-//! This crate has no `perry_ffi` and no JS, so it reads the same two variables
-//! directly. They are the ones a CI job actually sets:
+//! # No environment configuration, deliberately
 //!
-//! * `NODE_EXTRA_CA_CERTS` / `SSL_CERT_FILE` — a PEM bundle added to the
-//!   Mozilla roots, which is how a corporate MITM proxy is trusted;
-//! * `NODE_TLS_REJECT_UNAUTHORIZED=0` — verification off, honoured because
-//!   `reqwest` honoured it here before this crate replaced it and a build box
-//!   behind a self-signed proxy would otherwise stop being able to publish.
+//! Perry's *runtime* builds its `ClientConfig` from Node's TLS environment
+//! through `perry_ffi` — `NODE_TLS_REJECT_UNAUTHORIZED`, `NODE_EXTRA_CA_CERTS`,
+//! `SSL_CERT_FILE` — because a JS program's `fetch` should answer the way
+//! `node:https` does. **This crate reads none of them**, and that is a decision
+//! rather than an omission.
 //!
-//! The configuration is built once per process and shared, so the rustls
-//! session cache is shared too.
+//! Its two callers are the `perry` CLI and `perry-ext-axios`, and neither
+//! honoured any of those variables before: the CLI used the workspace `reqwest`
+//! with `rustls-tls` and webpki roots and no environment handling at all, and
+//! old axios built a bare `reqwest::Client::new()`. Honouring
+//! `NODE_TLS_REJECT_UNAUTHORIZED=0` here would mean that a variable JS
+//! developers set casually, for an unrelated program, silently turns off
+//! certificate verification for `perry publish` — which uploads Apple signing
+//! certificates, API tokens and licence keys. An earlier draft of this file did
+//! exactly that, and described it as preserving behaviour it was in fact
+//! introducing.
+//!
+//! So: webpki roots, verification always on. A corporate-CA story for the CLI
+//! is a feature with its own decision and its own test, not a side effect of a
+//! transport migration.
 
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -27,38 +36,6 @@ fn unix_seconds() -> u64 {
         .unwrap_or(0)
 }
 
-/// Read a PEM bundle named by the environment, if one is named and readable.
-///
-/// An unreadable path is ignored rather than fatal: that is what Node does
-/// with `NODE_EXTRA_CA_CERTS`, and failing the whole command because a stale
-/// variable points at a deleted file would be worse than using the defaults.
-fn extra_ca_pem() -> Vec<u8> {
-    let mut pem = Vec::new();
-    for key in ["NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE"] {
-        let Ok(path) = std::env::var(key) else {
-            continue;
-        };
-        if path.is_empty() {
-            continue;
-        }
-        let Ok(bytes) = std::fs::read(&path) else {
-            continue;
-        };
-        pem.extend_from_slice(&bytes);
-        if !pem.ends_with(b"\n") {
-            pem.push(b'\n');
-        }
-    }
-    pem
-}
-
-fn reject_unauthorized() -> bool {
-    !matches!(
-        std::env::var("NODE_TLS_REJECT_UNAUTHORIZED").as_deref(),
-        Ok("0")
-    )
-}
-
 /// The process-wide outbound TLS configuration. Only `http/1.1` is advertised
 /// in ALPN — this client speaks HTTP/1.1 and nothing else, so a server that
 /// could select h2 must not be allowed to.
@@ -70,8 +47,9 @@ pub fn client_config() -> Result<&'static turnloop_tls::ClientConfig> {
             let options = turnloop_tls::ClientOptions {
                 alpn: vec![b"http/1.1".to_vec()],
                 ca: None,
-                extra_ca_pem: extra_ca_pem(),
-                reject_unauthorized: reject_unauthorized(),
+                extra_ca_pem: Vec::new(),
+                // Never configurable from this crate — see the module docs.
+                reject_unauthorized: true,
                 enable_sni: true,
             };
             turnloop_tls::ClientConfig::new(options, unix_seconds()).map_err(|e| e.to_string())

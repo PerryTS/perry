@@ -102,9 +102,17 @@ impl Connection {
     /// it before a loop exists. Each attempt converts the budget against its
     /// own loop's clock; `deadline_in` produces every later deadline.
     pub fn connect(addrs: &[SocketAddr], budget: Duration) -> Result<Self> {
+        // ONE budget across every address, not one each. A host with four A
+        // and four AAAA records would otherwise be allowed eight times the
+        // caller's whole-request window before the first byte is sent, which
+        // is what an earlier draft did.
+        let started = std::time::Instant::now();
         let mut last = IoError::new(ErrorKind::NotFound, "no address");
         for addr in addrs {
-            match Self::connect_one(*addr, budget) {
+            let Some(remaining) = budget.checked_sub(started.elapsed()) else {
+                return Err(timed_out("connect"));
+            };
+            match Self::connect_one(*addr, remaining) {
                 Ok(conn) => return Ok(conn),
                 Err(e) => last = e,
             }
@@ -288,8 +296,13 @@ impl Connection {
     }
 
     /// Move whatever the TLS session has encrypted onto the socket.
+    ///
+    /// Bounded like every other loop in this file. It already terminates
+    /// because `write_raw` carries the deadline, but a session that kept
+    /// producing output onto an accepting socket would otherwise spin with no
+    /// diagnostic, and "no diagnostic" is the part worth fixing.
     fn flush_tls_output(&mut self, deadline: Instant) -> Result<()> {
-        loop {
+        for _ in 0..MAX_TURNS {
             let out = match self.tls.as_mut() {
                 Some(tls) => tls.take_output(),
                 None => return Ok(()),
@@ -299,6 +312,7 @@ impl Connection {
             }
             self.write_raw(out, deadline)?;
         }
+        Err(IoError::other("TLS output never drained"))
     }
 
     /// One socket read, decrypted when TLS is active, appended to `inbox`.
