@@ -1819,6 +1819,58 @@ extern "C" {
     );
 }
 
+/// `instanceof` kind-probe for this crate's fetch handles.
+///
+/// The runtime resolves `x instanceof Headers` (and Response/Request/Blob) for
+/// pointer-tagged small-integer handles by asking the registered probe what
+/// kind an id is — there is no class chain to walk. perry-stdlib exports
+/// `js_fetch_handle_kind` and its init registers it; when this crate wins the
+/// link for the fetch surface, its registries are the live ones, so it must
+/// export the probe too or every brand check answers false.
+///
+/// That mattered far downstream: `@opencode-ai/sdk`'s `mergeHeaders` branches
+/// on `header instanceof Headers` and falls back to `Object.entries(header)`,
+/// which is `[]` for a handle. Every header was silently dropped and the merged
+/// result came back empty — `mergeHeaders(h).get("Content-Type")` was `null`
+/// where bun gives `"application/json"`. A false brand check does not throw; it
+/// quietly takes the wrong branch.
+///
+/// Codes match perry-stdlib's: 0 = none, 1 = Response, 2 = Request,
+/// 3 = Headers, 4 = Blob, 5 = File. This crate's `BlobData` carries no file
+/// name, so it never reports 5.
+#[no_mangle]
+pub extern "C" fn js_fetch_handle_kind(id: usize) -> u8 {
+    if FETCH_RESPONSES
+        .lock()
+        .map(|guard| guard.contains_key(&id))
+        .unwrap_or(false)
+    {
+        return 1;
+    }
+    if REQUEST_HANDLES
+        .lock()
+        .map(|guard| guard.contains_key(&id))
+        .unwrap_or(false)
+    {
+        return 2;
+    }
+    if HEADERS_HANDLES
+        .lock()
+        .map(|guard| guard.contains_key(&id))
+        .unwrap_or(false)
+    {
+        return 3;
+    }
+    if BLOB_HANDLES
+        .lock()
+        .map(|guard| guard.contains_key(&id))
+        .unwrap_or(false)
+    {
+        return 4;
+    }
+    0
+}
+
 /// Normalise a predicate result to a JS boolean, passing a real boolean
 /// through untouched.
 fn ext_bool_value(value: f64) -> f64 {
