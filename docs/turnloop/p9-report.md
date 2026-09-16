@@ -385,6 +385,18 @@ worker's counters; `pick_marker()` now prefers the `agent=0` line and falls back
 to the first match, which is exactly the old behaviour on any build that
 predates this lane (no `agent=` field, one match).
 
+Neither of the harness's two rejection checks is weakened by that, and one is
+strengthened. `verify_marker` still refuses an arm whose marker substring is
+absent, and whose `[perry-loop-waits]` line is missing or names the wrong arm,
+*before* `pick_marker` is consulted at all -- and it now raises rather than
+logging if selection somehow returns nothing, because a `next(...)` that used to
+raise becoming a function that returns `None` is precisely how a verification
+decays into a log line. `finish_sample`'s per-sample check is unchanged in form
+and stricter in effect: a program whose PRIMARY agent fell back to the legacy
+driver while a Worker ran on turnloop is now described by the primary's
+`driver=legacy` line and correctly marked invalid, where taking the first match
+would have let the Worker's `driver=turnloop` line stand in for it.
+
 **The process-wide lines still print exactly once.** `p2 adopted=`, `p4
 pool_submitted=` and P6's `http_submitted=` are lifetime totals for the whole
 process, so `print_stats` emits them only under the primary agent's line, whose
