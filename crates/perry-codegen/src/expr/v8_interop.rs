@@ -278,7 +278,7 @@ pub(crate) fn emit_v8_member_method_call(
 ///     collision-free `(namespace, member)` registry key; the rest of the
 ///     lower_new path resolves that key through the usual `ctx.classes`
 ///     lookup.
-fn is_global_object_expr(expr: &Expr) -> bool {
+pub(crate) fn is_global_object_expr(expr: &Expr) -> bool {
     match expr {
         Expr::GlobalGet(_) => true,
         Expr::PropertyGet {
