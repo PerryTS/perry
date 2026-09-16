@@ -761,6 +761,11 @@ pub(crate) fn gc_note_external_side_free(bytes: usize) {
 /// million-call `.test()` loop paid three unproductive old-gen cycles, one of
 /// them a full that freed 59 KB of a 52 MB arena, and 33 % more instructions
 /// per call.
+/// Only the regex scratch owners report through here, and the workspace pins
+/// perry-runtime with `default-features = false`, so a product build has no
+/// caller for it — gate it like its callers rather than leave dead code the
+/// warnings lint gate rejects.
+#[cfg(feature = "regex-engine")]
 pub(crate) fn gc_note_external_side_free_transient(bytes: usize) {
     GC_EXTERNAL_SIDE_LIVE_BYTES.with(|c| c.set(c.get().saturating_sub(bytes)));
 }

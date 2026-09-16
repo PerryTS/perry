@@ -527,6 +527,7 @@ fn a_finished_collection_moves_the_external_base_to_the_post_collection_reading(
 /// Sabotage-proved: pointing `gc_note_external_side_free_transient` at
 /// `gc_note_external_side_free` fails this test on the first iteration's
 /// assertion, with the term 1 MB above the live reading.
+#[cfg(feature = "regex-engine")]
 #[test]
 fn transient_side_allocations_never_enter_the_drained_debt() {
     use super::super::policy::{
