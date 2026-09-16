@@ -342,7 +342,44 @@ pub(crate) fn lower_rest_call_args_rooted<'a>(
     // exactly as the push loop is for its elements.
     let mut accs: Vec<crate::rooting::AccArray> = Vec::with_capacity(bundles.len());
     for bundle in bundles {
-        let cap = (args.len().saturating_sub(bundle.from) as u32).to_string();
+        let count = args.len().saturating_sub(bundle.from);
+        // Build it the way an array literal of the same width is built: ONE
+        // inline bump allocation and N stores. `js_array_alloc` + one
+        // `js_array_push_f64` per element re-classified the receiver,
+        // re-noted the slot layout and re-checked the barrier on every push —
+        // 1,586 instructions for `f(a, b, c)` into a three-element rest.
+        // Rooting is unchanged: every element is re-read from the group's
+        // slots first (the allocator's slow arm collects), and the finished
+        // array is adopted into the same scope, so the next bundle's
+        // allocation cannot sweep it.
+        if count > 0 && count <= crate::expr::INLINE_ARRAY_MAX_ELEMENTS {
+            let rest_args = &args[bundle.from..];
+            let canonical_raw_f64: Vec<bool> = rest_args
+                .iter()
+                .map(|e| crate::type_analysis::expr_produces_canonical_raw_f64(ctx, e))
+                .collect();
+            let layout_notes_needed: Vec<bool> = rest_args
+                .iter()
+                .map(|e| !crate::expr::expr_produces_non_pointer_bits_by_construction(ctx, e))
+                .collect();
+            let all_numeric = rest_args
+                .iter()
+                .all(|e| crate::type_analysis::is_numeric_expr(ctx, e));
+            let mut vals: Vec<String> = Vec::with_capacity(count);
+            for i in bundle.from..group.len() {
+                vals.push(group.reread(ctx, i)?);
+            }
+            let arr = crate::expr::emit_array_from_lowered_values(
+                ctx,
+                &vals,
+                &canonical_raw_f64,
+                &layout_notes_needed,
+                all_numeric,
+            )?;
+            accs.push(group.adopt_array(ctx, &arr));
+            continue;
+        }
+        let cap = (count as u32).to_string();
         let acc = group.begin_array(ctx, &cap);
         for i in bundle.from..group.len() {
             // Re-read per element: the previous push allocated, so the register
