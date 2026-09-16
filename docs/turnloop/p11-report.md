@@ -246,6 +246,28 @@ than find them.
    same `reconnect_or_bail!` path a dropped stream took. The retry count,
    backoff and 60-retry cap are unchanged.
 
+### `perry-updater` has nothing to migrate
+
+The brief named it, so: `crates/perry-updater/Cargo.toml` depends on `anyhow`,
+`perry-runtime`, `serde`, `semver`, `sha2`, `hex`, `base64` and `ed25519-dalek`.
+No `tokio`, no `reqwest`, no transport crate at all, and `grep -rE
+'reqwest|tokio|ureq|hyper'` over the crate returns exactly one hit — a test
+fixture URL string. Its own module docs say why: *"Download lives in TS (using
+existing `fetch()`) — Rust only handles the security-critical and
+platform-touching pieces."* It verifies bytes that are already on disk. P8's
+inventory agrees — it has no edge and never appears in the 46.
+
+The bytes it verifies are fetched by `update_checker.rs`, which **is** in scope
+and did move; that is the streaming download above.
+
+### The count, against the brief's
+
+The brief said 14 `reqwest::Client` constructions. It is **13 constructions**
+plus one `&reqwest::blocking::Client` in a function signature
+(`setup/macos.rs:452`, `create_apple_certificate`), which is where the
+fourteenth mention comes from. 7 `Runtime::new` and 2 WebSocket clients are
+exact.
+
 ## `perry-http-client`: why an owned loop is right here and nowhere else
 
 P5, P6 and P7 all refused `turnloop_http::asynchronous` for the same two
@@ -686,6 +708,7 @@ Run from the branch on the macOS development host unless noted:
 | `python3 scripts/unrooted_local_shape.py --check` | **FAIL — red on the base commit too**, see below |
 | `cargo clippy -p perry-http-client -p perry-tls-session -p perry-ext-axios` | no findings in those three crates |
 | `cargo check -p perry-stdlib --no-default-features --features full` | clean (the pre-existing `redis v1.6.0` future-incompat note only) |
+| `cargo check -p perry` warnings | **10, and all 10 are on the base commit too** — nine dead-code warnings in P2's `perry-runtime/src/turnloop_proc` plus the roll-up line. Identical string-for-string on both arms. |
 
 Two of those want explaining, because both were already failing before this
 branch and one of them changed *which* failure it reports.
