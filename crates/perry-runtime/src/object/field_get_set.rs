@@ -213,6 +213,7 @@ mod get_field_by_name_async;
 mod get_field_by_name_probe_tests;
 mod get_field_by_name_tail;
 mod has_property;
+mod has_property_ic;
 mod ic_miss;
 #[cfg(test)]
 #[path = "field_get_set/ic_miss_array_length_tests.rs"]
@@ -291,6 +292,7 @@ pub(crate) use has_property::{
     wide_key_index_lookup, wide_key_index_note_hit, WIDE_KEY_INDEX_MIN_KEYS,
 };
 pub use has_property::{js_in_operator, js_object_has_property};
+pub use has_property_ic::js_in_operator_presence_ic;
 pub(crate) use ic_miss::{
     bind_primitive_proto_method_static, cannot_be_private_member_name,
     current_private_lexical_brand_value, is_array_method_value_name,
