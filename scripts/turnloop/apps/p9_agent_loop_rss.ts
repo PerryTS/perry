@@ -8,11 +8,22 @@
 //
 // This measures the DELTA rather than an absolute, because an absolute mixes in
 // the JS heap, the thread stacks and the class image every Worker adopts. Run
-// it at P9_AGENTS=1, 8 and 64 with P9_RSS_MODE=net (a loop at the net profile)
-// and P9_RSS_MODE=idle (an agent that parks but never submits, so its loop
-// stays at the WAIT profile: 16 handles, no pooled buffers). The difference
-// between the two modes is the part this lane controls; the rest is what a
-// Worker costs whatever the transport.
+// it at P9_AGENTS=1, 8 and 64 in three modes:
+//
+//   idle  an agent that never submits; its loop stays at the WAIT profile
+//         (16 handles, no pooled buffers) or is never built at all.
+//   sock  one `net.connect` round-trip: the loop reaches the NET profile with
+//         none of `fetch`'s client engine behind it.
+//   net   one `fetch`: the NET profile PLUS the whole outbound HTTP stack.
+//
+// `sock - idle` is the closest this probe gets to the loop's own cost, which is
+// the number this lane owns. `net - idle` is dominated by machinery that is not
+// the loop; reading it as a loop cost overstates this lane by an order of
+// magnitude, and an earlier revision of this file did exactly that.
+//
+// The comparison that actually answers "what did P9 cost" is the same row on
+// both arms: on the base commit a worker agent is REFUSED a loop, so base's
+// numbers are the same workload with one loop in the process instead of N.
 //
 // ## Why this does not use postMessage or terminate()
 //
