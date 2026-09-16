@@ -43,7 +43,11 @@
 //!
 //! The **legacy** sqlx path still has no TLS — this crate's sqlx dependency is
 //! built without a backend — so a client that declines to it (a Unix-socket
-//! host, or a thread with no loop) fails exactly as it does today.
+//! host, or a thread with no loop) and asked for `ssl` is REFUSED rather than
+//! downgraded: [`crate::PgConfig::to_url`] puts `sslmode` in the URL and sqlx
+//! answers "TLS upgrade required by connect options but SQLx was built without
+//! TLS support enabled". Only a client that asked for no TLS is plaintext
+//! there, exactly as today.
 //!
 //! # Authentication
 //!

@@ -33,10 +33,13 @@
 //! first thing written encrypted. A server that does not offer `CLIENT_SSL`
 //! fails the connection instead of continuing in plaintext.
 //!
-//! The **legacy** sqlx path still has no TLS: `MySqlConfig::to_url` hardcodes
-//! `?ssl-mode=disabled` and this crate's sqlx dependency is built without a TLS
-//! backend. A client that declines to it — a `worker_threads` agent, the
-//! `tokio-wait-driver` arm — is plaintext exactly as it is today.
+//! The **legacy** sqlx path still has no TLS — this crate's sqlx dependency is
+//! built without a backend — so a client that declines to it (a
+//! `worker_threads` agent, the `tokio-wait-driver` arm) and asked for `ssl` is
+//! REFUSED rather than downgraded: `MySqlConfig::to_url` puts the mode the
+//! caller asked for in the URL, and sqlx answers "TLS upgrade required by
+//! connect options but SQLx was built without TLS support enabled". Only a
+//! client that asked for no TLS is plaintext there, exactly as today.
 //!
 //! # Threading and the GC
 //!
