@@ -1212,7 +1212,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // first enforces ECMA-262 13.10.1 step 5: a non-Object right operand
         // (`"x" in 5`, `... in null`, `... in Symbol()`, …) throws a TypeError.
         Expr::In { property, object } => {
+            // A literal key gets a presence inline cache (`in_presence_ic`).
+            // The cache records a ShapeId and nothing else, so the key it
+            // stands for has to be fixed at the site: a dynamic key keeps the
+            // bare call. `full_outline_ic_enabled` is the size mode that asks
+            // every IC to stay out of the emitted function.
+            let constant_key = matches!(&**property, Expr::String(_))
+                && !crate::codegen::full_outline_ic_enabled();
             rooting::with_operands_rooted(ctx, &[property, object], |ctx, vals| {
+                if constant_key {
+                    return Ok(super::in_presence_ic::lower_in_presence_ic(
+                        ctx, &vals[1], &vals[0],
+                    ));
+                }
                 Ok(ctx.block().call(
                     DOUBLE,
                     "js_in_operator",

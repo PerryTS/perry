@@ -47,6 +47,7 @@ mod class_method_arguments_object_tests;
 mod conforming_layout_note_tests;
 mod helpers;
 mod i32_fast_path;
+mod in_presence_ic;
 mod index;
 mod nanbox_inline;
 mod native_memory;
