@@ -1126,8 +1126,12 @@ unsafe fn ordinary_has_property(
     // fallback below must be skipped — the recorded chain (walked above) is now
     // authoritative, so a key that was deleted/replaced off the prototype must
     // not be resurrected from the original class vtable.
-    let has_recorded_prototype =
-        super::super::prototype_chain::object_static_prototype(obj_ptr as usize).is_some();
+    // Asked at the class-vtable fallback below, which is the ONLY consumer and
+    // is reached only after the whole chain walk has missed. Resolving it here
+    // spent a shape/registry probe on every call, including the common one that
+    // finds an own key on the first hop and returns from the loop. Nothing in
+    // the walk can change the recorded prototype (it runs no user code), so
+    // asking later is the same answer.
     let mut cur = obj_ptr;
     let mut last_valid = obj_ptr;
     let mut guard = 0u32;
@@ -1289,7 +1293,7 @@ unsafe fn ordinary_has_property(
     // `keys_array`, so the own-key + recorded-prototype walk above misses them.
     // Check the class chain so `'method' in instance` is `true` (e.g. NestJS's
     // app Proxy gating on `'listen' in receiver`).
-    if !has_recorded_prototype {
+    if super::super::prototype_chain::object_static_prototype(obj_ptr as usize).is_none() {
         if let Some(name) = key_name {
             let class_id = unsafe { (*obj_ptr).class_id };
             if class_id != 0
