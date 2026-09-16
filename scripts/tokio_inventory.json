@@ -29,7 +29,7 @@
       "target": null,
       "surface": "none. This is the `perry` CLI binary: `publish`, `login`, `verify`, `audit`, `run --remote`, `setup ios|macos`, the update check, telemetry and compat reports. A compiled program links libperry_runtime.a, libperry_stdlib.a and the perry-ext-* archives \u2014 never this crate.",
       "reached_when": "the developer runs one of those subcommands; never at a compiled program's runtime",
-      "blocker": "~10 call sites (4 blocking, 6 async) that need multipart upload and streaming download. turnloop-http's client has no multipart builder, so this is a feature request upstream plus a rewrite of publish/audit/verify, not a transport swap.",
+      "blocker": "14 `reqwest::Client` constructions (7 blocking, 7 async) across 11 files, needing multipart upload and streaming download. turnloop-http's client has no multipart builder, so this is an upstream feature request plus a rewrite of publish/audit/verify/login/setup, not a transport swap.",
       "issue": "unfiled \u2014 P8",
       "plan": "J"
     },
@@ -41,7 +41,7 @@
       "target": null,
       "surface": "none. This is the `perry` CLI binary: `publish`, `login`, `verify`, `audit`, `run --remote`, `setup ios|macos`, the update check, telemetry and compat reports. A compiled program links libperry_runtime.a, libperry_stdlib.a and the perry-ext-* archives \u2014 never this crate.",
       "reached_when": "the developer runs one of those subcommands; never at a compiled program's runtime",
-      "blocker": "six `Runtime::new()` / `new_current_thread()` call sites that exist only to drive the reqwest and tokio-tungstenite futures above. Goes when they go.",
+      "blocker": "seven `Runtime::new()` / `Builder::new_current_thread()` call sites (audit, login, publish, run x2, setup/ios, verify) that exist only to drive the reqwest and tokio-tungstenite futures above. Goes when they go.",
       "issue": "unfiled \u2014 P8",
       "plan": "J"
     },
