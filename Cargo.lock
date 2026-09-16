@@ -6326,6 +6326,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "perry-http-client"
+version = "0.5.1580"
+dependencies = [
+ "base64 0.22.1",
+ "perry-tls-session",
+ "sha1 0.11.0",
+ "turnloop",
+ "turnloop-http",
+ "turnloop-tls",
+ "url",
+]
+
+[[package]]
 name = "perry-native-registration"
 version = "0.5.1580"
 
@@ -6468,6 +6481,7 @@ dependencies = [
  "perry-container-compose",
  "perry-ffi",
  "perry-runtime",
+ "perry-tls-session",
  "perry-updater",
  "perry-validation",
  "proptest",
@@ -6515,6 +6529,13 @@ name = "perry-stdlib-static"
 version = "0.5.1580"
 dependencies = [
  "perry-stdlib",
+]
+
+[[package]]
+name = "perry-tls-session"
+version = "0.5.1580"
+dependencies = [
+ "turnloop-tls",
 ]
 
 [[package]]
