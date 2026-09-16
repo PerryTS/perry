@@ -176,6 +176,13 @@ or `Bun.file` stdio. On POSIX targets, `Bun.Terminal` can attach a subprocess
 to Perry's native PTY implementation; ConPTY-backed terminals are not yet
 available on Windows.
 
+Web APIs otherwise keep Node's behavior; the one runtime difference in this
+mode is that a `Response` may carry a body under a null-body status (204, 205,
+304), as in Bun:
+`new Response("", { status: 204 })` and `Response.json(value, { status: 204 })`
+succeed, where the default `node` mode throws Node's
+`TypeError: Response constructor: Invalid response status code 204`.
+
 ## Embedding Assets
 
 Bake static files (an SPA `dist/`, images, JSON, fonts, …) into the standalone
