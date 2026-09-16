@@ -167,6 +167,39 @@ pub(crate) fn begin_client_upgrade(
     Ok(())
 }
 
+/// Install a client session on a turnloop socket that is already connected.
+///
+/// The client twin of [`install_server_session`], and the reason it exists
+/// separately from [`begin_client_upgrade`]: that one takes this crate's own
+/// `TlsClientConfigData` (built by reading JS values) and settles a
+/// `JsNativeAsyncCompletion`, so it is reachable only from `net.Socket`'s
+/// `upgradeToTLS`. A caller that owns a raw turnloop handle and has no promise
+/// to settle — `http2.connect('https://…')`, which needs **ALPN** decided
+/// before it knows whether it may speak HTTP/2 at all — could not use it.
+///
+/// `alpn` is the protocol list to offer, in preference order; read the result
+/// back with [`alpn_protocol`] once [`handshake_done`] is true. The outcome is
+/// reported the way `tls.connect` reports it — a `'secureConnect'` event on
+/// success, an `'error'` and a destroyed socket on failure — because that is
+/// what this layer already does for a socket with no upgrade promise.
+///
+/// The ClientHello goes out before this returns.
+pub fn install_client_session(
+    id: i64,
+    servername: String,
+    verify: bool,
+    alpn: Vec<Vec<u8>>,
+    ca: Vec<Vec<u8>>,
+) -> Result<(), String> {
+    begin_client_upgrade(
+        id,
+        servername,
+        verify,
+        crate::tls::TlsClientConfigData::for_alpn(alpn, ca),
+        None,
+    )
+}
+
 /// Install an already-built server session on an accepted connection.
 ///
 /// Used by the `https` / `http2` server paths, which build their

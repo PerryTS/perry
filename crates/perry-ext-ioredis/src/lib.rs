@@ -7,9 +7,12 @@
 //! The legacy transport — `redis::AsyncCommands` bridged through
 //! `spawn_blocking` + `tokio::Handle::current().block_on`, which borrowed a
 //! tokio blocking-pool thread for every round trip — remains for the clients
-//! that decline: a `worker_threads` agent (no loop of its own), the
-//! `tokio-wait-driver` A/B arm, and any TLS (`rediss://`) client, because a
-//! database binding has no TLS layer to hand the upgrade to.
+//! that decline: a `worker_threads` agent (no loop of its own) and the
+//! `tokio-wait-driver` A/B arm. A TLS (`rediss://`) client no longer declines,
+//! and that is the case that matters most here: `REDIS_TLS` defaults to
+//! `true`, and the legacy path has no TLS backend compiled into its `redis`
+//! dependency, so until the driver could perform the upgrade itself every
+//! default `new Redis()` declined onto a transport that could not serve it.
 //!
 //! Mirrors perry-stdlib's existing surface byte-for-byte on both transports:
 //! lazy connection (established on first command), 10-second default timeout,
@@ -140,13 +143,11 @@ pub unsafe extern "C" fn js_ioredis_new(_config_ptr: *const std::ffi::c_void) ->
 
     let handle = register_handle(RedisClient { url: url.clone() });
     URLS.lock().unwrap().insert(handle, url);
-    // A TLS client keeps the legacy transport: `turnloop_redis` asks its host
-    // to perform the upgrade and a database binding has no TLS layer to hand it
-    // to. That configuration does not work on the legacy transport either —
-    // this crate's `redis` dependency has no TLS backend compiled in — so
-    // declining preserves today's behaviour exactly rather than trading one
-    // failure for another.
-    let turnloop = !use_tls && turnloop_io::enabled();
+    // TLS no longer sends a client to the legacy transport: `turnloop_redis`
+    // asks its host for the upgrade and `perry-db-turnloop` now performs it.
+    // Nothing else about the decision moves — the remaining decliners are the
+    // agent-shaped ones `enabled` answers for.
+    let turnloop = turnloop_io::enabled();
     ENDPOINTS.lock().unwrap().insert(
         handle,
         RedisEndpoint {

@@ -582,11 +582,7 @@ impl<C: DbCore> Registry<C> {
     /// would panic rather than misbehave quietly). Returns `None` when the id
     /// names no connection with a session, so every caller has one way to say
     /// "there was nothing to do".
-    fn run_tls(
-        &self,
-        id: i64,
-        f: impl FnOnce(&mut TlsClientTransport),
-    ) -> Option<TlsProgress> {
+    fn run_tls(&self, id: i64, f: impl FnOnce(&mut TlsClientTransport)) -> Option<TlsProgress> {
         let mut tls = {
             let mut map = self.entries.borrow_mut();
             map.get_mut(&id)?.tls.take()?

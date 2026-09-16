@@ -134,6 +134,21 @@ fn own_event(event: Event<'_>) -> Owned {
 }
 
 /// One HTTP/2 connection, server-side or client-side.
+/// The TLS a `http2.connect('https://…')` session needs.
+///
+/// Deliberately not `rustls` types: the configuration this asks for is
+/// "verify this name, offer `h2`", and `perry_ext_net::turnloop_tls_io`'s
+/// public client installer is the one place that turns it into a session.
+#[derive(Clone, Debug)]
+pub(crate) struct ClientTls {
+    /// The name verified against the certificate and sent as SNI.
+    pub(crate) servername: String,
+    /// Node's `rejectUnauthorized`. `false` accepts any certificate.
+    pub(crate) verify: bool,
+    /// Node's `ca`, as PEM blobs. Empty keeps the platform roots.
+    pub(crate) ca: Vec<Vec<u8>>,
+}
+
 pub(crate) struct H2Conn {
     pub(crate) id: i64,
     pub(crate) role: Role,
@@ -149,6 +164,10 @@ pub(crate) struct H2Conn {
     pub(crate) secure: bool,
     pub(crate) handshaking: bool,
     pub(crate) connecting: bool,
+    /// What a `https://` client session installs once the socket is up. Taken
+    /// by `on_connect`; `None` on a server connection, whose TLS configuration
+    /// belongs to the listener and is installed at accept time instead.
+    pub(crate) client_tls: Option<ClientTls>,
     pub(crate) alpn: Option<Vec<u8>>,
     pub(crate) peer_address: String,
     pub(crate) peer_port: u16,
@@ -386,6 +405,9 @@ fn on_accept(listener_id: i64, conn_id: i64) {
         secure,
         handshaking: secure,
         connecting: false,
+        // A server connection's TLS is the listener's; it was installed at
+        // accept time, before this record existed.
+        client_tls: None,
         alpn: None,
         peer_address: peer.as_ref().map(|e| e.address.clone()).unwrap_or_default(),
         peer_port: peer.as_ref().map(|e| e.port).unwrap_or(0),
@@ -536,14 +558,22 @@ fn arm_settings_timeout(c: &mut H2Conn) {
 /// `current_thread` tokio runtime the `h2` client built **per session** — and
 /// the second one `start_client_request` built **per request** (perry#10327).
 ///
-/// Cleartext only. A `https://` authority needs a TLS client session installed
-/// on the turnloop socket, and `perry_ext_net::turnloop_tls_io` exposes only
-/// `begin_client_upgrade`, which is `pub(crate)` and settles a
-/// `JsNativeAsyncCompletion` of its own; see the report.
+/// `tls` turns the connection into an `https://` one: the servername to verify
+/// and offer as SNI, and whether to verify at all. It is `Some` for exactly the
+/// authorities Node would have put TLS under, and it is what makes **ALPN**
+/// reachable — `http2.connect('https://…')` may only speak HTTP/2 if the server
+/// selected `h2`, and until `perry_ext_net::turnloop_tls_io` grew a public
+/// client installer there was no way to ask.
 ///
 /// Returns the connection id, or `None` when the caller must keep the `h2`
-/// path. The connect itself is asynchronous: `NET_CONNECT` starts the core.
-pub(crate) fn connect_client(session_handle: i64, host: &str, port: u16) -> Option<i64> {
+/// path. The connect itself is asynchronous: `NET_CONNECT` installs the TLS
+/// session (or starts the core, for cleartext).
+pub(crate) fn connect_client(
+    session_handle: i64,
+    host: &str,
+    port: u16,
+    tls: Option<ClientTls>,
+) -> Option<i64> {
     let id = super::next_id();
     if id == perry_ffi::INVALID_HANDLE {
         return None;
@@ -556,9 +586,14 @@ pub(crate) fn connect_client(session_handle: i64, host: &str, port: u16) -> Opti
         core: None,
         input: Vec::with_capacity(16 * 1024),
         streams: Vec::new(),
-        secure: false,
-        handshaking: false,
+        secure: tls.is_some(),
+        // A client handshake has not started yet — `on_connect` installs the
+        // session once the socket is up — but the flag has to be set here,
+        // because `on_data` reads it to decide whether the first bytes are a
+        // ServerHello or an HTTP/2 preface.
+        handshaking: tls.is_some(),
         connecting: true,
+        client_tls: tls,
         alpn: None,
         peer_address: String::new(),
         peer_port: port,
@@ -602,26 +637,71 @@ fn on_connect(id: i64) {
         // `'session'` event never fires on an in-process pair.
         crate::server::http2_server::bind_turnloop_client_port(c.session_handle, local_port);
         if c.secure {
-            // The TLS handshake starts now; the core waits for ALPN.
-            return false;
+            // The TLS handshake starts now; the core waits for ALPN. The
+            // configuration is taken rather than cloned — a second connect on
+            // the same id cannot happen, and leaving it behind would be a
+            // second place the servername could be read from.
+            return Started::Tls(c.client_tls.take());
         }
-        start_core(c)
+        if start_core(c) {
+            Started::Ready
+        } else {
+            Started::Waiting
+        }
     });
     match ready {
-        Some(true) => {
+        Some(Started::Ready) => {
             if tl::read_start(id).is_err() {
                 destroy_connection(id);
                 return;
             }
             client_transport_ready(id);
         }
-        Some(false) => {
+        Some(Started::Tls(tls)) => {
+            // Reads start BEFORE the ClientHello goes out: the installer writes
+            // it inside the call below, and a ServerHello that arrived before
+            // the multishot read was armed would have nowhere to land.
+            if tl::read_start(id).is_err() {
+                destroy_connection(id);
+                return;
+            }
+            let Some(tls) = tls else {
+                destroy_connection(id);
+                return;
+            };
+            // `h2` alone, which is what Node offers for `http2.connect` over
+            // TLS. Offering `http/1.1` as well would let a server select it and
+            // leave this connection holding a protocol its core cannot speak.
+            if perry_ext_net::turnloop_tls_io::install_client_session(
+                id,
+                tls.servername,
+                tls.verify,
+                vec![b"h2".to_vec()],
+                tls.ca,
+            )
+            .is_err()
+            {
+                destroy_connection(id);
+            }
+        }
+        Some(Started::Waiting) => {
             if tl::read_start(id).is_err() {
                 destroy_connection(id);
             }
         }
         None => {}
     }
+}
+
+/// What `on_connect` decided, so the TLS install happens outside the table
+/// borrow: the installer writes to the socket and can destroy the connection.
+enum Started {
+    /// Cleartext, core running — announce `'connect'`.
+    Ready,
+    /// Install this client session; ALPN decides the rest.
+    Tls(Option<ClientTls>),
+    /// Cleartext, but the core could not start.
+    Waiting,
 }
 
 /// The transport is up and the core exists: announce `'connect'` and release
@@ -1228,6 +1308,7 @@ mod prescan_tests {
             secure: false,
             handshaking: false,
             connecting: false,
+            client_tls: None,
             alpn: None,
             peer_address: String::new(),
             peer_port: 0,

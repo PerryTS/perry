@@ -21,6 +21,28 @@ pub(crate) struct TlsClientConfigData {
     custom_identity: bool,
 }
 
+impl TlsClientConfigData {
+    /// The configuration an **in-process** caller needs: an ALPN list, and
+    /// everything else left at the platform default.
+    ///
+    /// Every other constructor reads JS values (`ca`, `cert`, `key`,
+    /// `secureContext`), which a caller with no options object cannot produce.
+    /// `http2.connect('https://…')` is that caller: it has an authority and a
+    /// protocol requirement and nothing else, and before this it had no way to
+    /// say so — which is the whole reason `turnloop_tls_io` exposed only a
+    /// server installer.
+    pub(crate) fn for_alpn(alpn_protocols: Vec<Vec<u8>>, ca: Vec<Vec<u8>>) -> Self {
+        Self {
+            alpn_protocols,
+            // `None` and `Some(vec![])` are different answers: `None` keeps the
+            // platform roots, an empty explicit list would trust nothing. Node
+            // draws the same line for an absent `ca`.
+            ca: (!ca.is_empty()).then_some(ca),
+            ..Self::default()
+        }
+    }
+}
+
 fn pending_tls_aborts() -> &'static Mutex<std::collections::HashSet<i64>> {
     static ABORTS: OnceLock<Mutex<std::collections::HashSet<i64>>> = OnceLock::new();
     ABORTS.get_or_init(|| Mutex::new(std::collections::HashSet::new()))

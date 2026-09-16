@@ -21,14 +21,29 @@
 //! submits a TCP connect, and reaching a socket file needs `pipe_connect`.
 //! Those clients keep the sqlx path, where they work exactly as they do today.
 //!
-//! **There is no TLS on either path.** `parse_pg_config` has never read an
-//! `ssl`/`sslmode` field and this crate's sqlx dependency is built without a TLS
-//! backend, so Perry's `pg` has always spoken plaintext. This core is therefore
-//! constructed with [`SslMode::Disable`] and never sends an SSLRequest. If a
-//! future change makes the core ask for an upgrade anyway, [`PgCore::drain`]
-//! fails the connection with a named error rather than continuing in plaintext
-//! where TLS was requested — silently downgrading is the one outcome worse than
-//! not connecting.
+//! # TLS, and SCRAM-SHA-256-PLUS
+//!
+//! A config with an `ssl` option connects with [`SslMode::Require`]: the core
+//! sends an `SSLRequest`, the driver installs a client session on the same
+//! turnloop handle when the server answers `S`, and a server that answers `N`
+//! fails the connection rather than continuing in the clear. There is no
+//! `prefer` mode — a client that asked for TLS and silently got none would send
+//! its password in plaintext, which is the one outcome worse than a refused
+//! connection.
+//!
+//! Channel binding comes with it. `turnloop-postgres` offers
+//! **SCRAM-SHA-256-PLUS** only when the host says it can supply RFC 5929
+//! `tls-server-end-point` data, and then cross-checks that the `ScramSha256`
+//! the host builds really carries a `p=tls-server-end-point,` GS2 header. So
+//! [`PgCore::tls_established`] passes `facts.channel_binding.is_some()` through
+//! honestly and keeps the digest for [`Step::ScramNeeded`]; a leaf whose
+//! signature algorithm has no defined binding (Ed25519) reports `false` and
+//! authenticates with plain SCRAM-SHA-256, which is what the server offers in
+//! that case anyway.
+//!
+//! The **legacy** sqlx path still has no TLS — this crate's sqlx dependency is
+//! built without a backend — so a client that declines to it (a Unix-socket
+//! host, or a thread with no loop) fails exactly as it does today.
 //!
 //! # Authentication
 //!
@@ -75,7 +90,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 
-use perry_db_turnloop::{subsystem, DbCore, NetCompletion, Registry};
+use perry_db_turnloop::{subsystem, DbCore, NetCompletion, Registry, TlsClientOptions, TlsFacts};
 use perry_ffi::{register_handle, Handle, JsPromise, JsValue};
 use turnloop_postgres::{
     ChannelBinding, Config, Connection, Error, Event, ExtendedQuery, Instant, Outcome, Parameter,
@@ -217,14 +232,22 @@ pub(crate) struct PgCore {
     /// later "Connection closed" is a consequence, and reporting it would hide
     /// the `28P01` or `ECONNREFUSED` that actually explains the failure.
     transport_failure: Option<String>,
+    /// The core answered `S` to its `SSLRequest` and wants the transport
+    /// upgraded. Taken by the driver, which flushes the pending plaintext and
+    /// installs the session.
+    tls_requested: bool,
+    /// RFC 5929 `tls-server-end-point` over the verified leaf, kept from the
+    /// handshake because `ScramSha256` is built here, later, and by then the
+    /// facts are no longer in hand.
+    channel_binding: Option<Vec<u8>>,
 }
 
 /// The protocol config for one connection.
 ///
 /// Separated from [`PgCore::new`] so the choices below are assertable without a
-/// server: no TLS, no channel binding, and PostgreSQL's own default of "the
-/// database is named after the user" when the JS config omits `database` —
-/// which is what a sqlx URL with no path component did.
+/// server: the SSL mode the JS `ssl` option asks for, and PostgreSQL's own
+/// default of "the database is named after the user" when the JS config omits
+/// `database` — which is what a sqlx URL with no path component did.
 fn turnloop_config(config: &PgConfig) -> Config {
     Config {
         user: config.user.clone(),
@@ -238,10 +261,76 @@ fn turnloop_config(config: &PgConfig) -> Config {
         // equivalent — it leaves `pg_stat_activity.application_name` blank, as
         // today. Not JS-visible either way.
         application_name: String::new(),
-        ssl: SslMode::Disable,
+        // `Require`, never `Prefer`: `Prefer` lets the server answer `N` and
+        // the core continue in plaintext, which would turn "I asked for TLS"
+        // into "I sent my password in the clear" without telling anyone.
+        ssl: if config.ssl.is_some() {
+            SslMode::Require
+        } else {
+            SslMode::Disable
+        },
+        // Not required: a server that offers only SCRAM-SHA-256 (or a leaf
+        // whose algorithm has no RFC 5929 binding) must still authenticate.
+        // The core still refuses to *downgrade* — it asks for PLUS only when
+        // the host said a binding is available.
         channel_binding_required: false,
         ..Config::default()
     }
+}
+
+/// The TLS options the driver installs when the core asks for the upgrade.
+///
+/// `None` for a plaintext config, which is what makes an `UpgradeTls` request
+/// on such a connection a driver error rather than a silent plaintext
+/// continuation.
+fn tls_options(config: &PgConfig) -> Option<TlsClientOptions> {
+    let ssl = config.ssl.as_ref()?;
+    let servername = ssl
+        .servername
+        .clone()
+        .unwrap_or_else(|| config.host.clone());
+    let mut options = TlsClientOptions::from_node_environment(servername);
+    options.reject_unauthorized = ssl.reject_unauthorized;
+    options.ca_pem = ssl.ca.clone();
+    // No ALPN: PostgreSQL's TLS carries the PostgreSQL protocol and nothing
+    // else, and offering a protocol list a server has no opinion about is how
+    // a middlebox learns to have one.
+    Some(options)
+}
+
+/// Which channel binding a SCRAM exchange carries.
+///
+/// Split out of [`PgCore::apply`] so the downgrade guard is assertable without
+/// a server. The rule it encodes: `plus` is the CORE's decision, taken from
+/// what the server offered and from what [`PgCore::tls_established`] said was
+/// available, so a `plus` request with no digest in hand is a bug in this file
+/// — and answering it with `ChannelBinding::unsupported()` would be a silent
+/// channel-binding downgrade, which is the attack RFC 5802's `p=` header
+/// exists to prevent.
+fn scram_channel(plus: bool, binding: Option<&[u8]>) -> Result<ChannelBinding, String> {
+    if !plus {
+        return Ok(ChannelBinding::unsupported());
+    }
+    match binding {
+        Some(binding) => Ok(ChannelBinding::tls_server_end_point(binding.to_vec())),
+        None => Err(
+            "PostgreSQL SCRAM-SHA-256-PLUS needs tls-server-end-point channel binding, which this connection has none of"
+                .to_string(),
+        ),
+    }
+}
+
+/// `PERRY_DB_TURNLOOP_DIAG=1` also prints the SCRAM mechanism.
+///
+/// Same knob as the driver's, deliberately: a reader debugging a database
+/// connection should not have to discover a second one, and the mechanism is
+/// only interesting next to the `tls established … channel_binding=` line the
+/// driver prints from the same variable.
+fn scram_diag() -> bool {
+    matches!(
+        std::env::var("PERRY_DB_TURNLOOP_DIAG").as_deref(),
+        Ok("1") | Ok("on") | Ok("true")
+    )
 }
 
 impl PgCore {
@@ -268,6 +357,8 @@ impl PgCore {
             ready: false,
             finished: false,
             transport_failure: None,
+            tls_requested: false,
+            channel_binding: None,
         })
     }
 
@@ -451,26 +542,45 @@ impl PgCore {
                 }
             }
             Step::ScramNeeded { plus } => {
-                if plus {
-                    // The core only asks for PLUS once TLS is established and
-                    // the host has said it can supply binding data. Neither is
-                    // true here, so reaching this means the core changed its
-                    // mind mid-handshake; answering with `unsupported()` would
-                    // be a channel-binding downgrade.
-                    return Some(
-                        "PostgreSQL SCRAM-SHA-256-PLUS needs TLS, which this transport does not have"
-                            .to_string(),
+                // `plus` is the core's own decision, taken from what the server
+                // offered AND from what `tls_established` said was available.
+                // Answering a `plus` request with `unsupported()` would be a
+                // channel-binding downgrade, so a missing digest here is a
+                // failure rather than a fallback — and the core cross-checks
+                // the GS2 header anyway, so a mismatch cannot get past it.
+                let channel = match scram_channel(plus, self.channel_binding.as_deref()) {
+                    Ok(channel) => channel,
+                    Err(message) => return Some(message),
+                };
+                let scram = ScramSha256::new(&self.password, channel);
+                if scram_diag() {
+                    // The one place a run can say WHICH mechanism it used.
+                    // Nothing else does: the server accepts both, the core
+                    // decides silently, and a PLUS exchange that silently
+                    // became plain SCRAM would look identical from JS. The
+                    // `p=` prefix is read off the SCRAM client-first message
+                    // itself rather than off `plus`, so this reports what went
+                    // on the wire rather than what was intended.
+                    eprintln!(
+                        "[perry-pg] scram mechanism={} gs2={}",
+                        if plus {
+                            "SCRAM-SHA-256-PLUS"
+                        } else {
+                            "SCRAM-SHA-256"
+                        },
+                        String::from_utf8_lossy(&scram.message()[..scram.message().len().min(24)]),
                     );
                 }
-                let scram = ScramSha256::new(&self.password, ChannelBinding::unsupported());
                 if let Err(err) = self.conn.start_scram(scram) {
                     return Some(err.to_string());
                 }
             }
             Step::UpgradeTls => {
-                return Some(
-                    "PostgreSQL TLS is not available on the turnloop transport".to_string(),
-                );
+                // The hard boundary: no more plaintext is parsed, and the
+                // driver installs the session once it has flushed whatever the
+                // core still owes. Answering here would be too early — the
+                // core refuses `tls_established` while its output is unsent.
+                self.tls_requested = true;
             }
             Step::Fields { token, columns } => {
                 if let Some(op) = self.pending_mut(token) {
@@ -629,6 +739,24 @@ impl DbCore for PgCore {
         // Bare detail, no prefix: the driver hands this back to `fail`, which
         // is where the `Query failed: ` / `Failed to connect: ` choice is made.
         self.conn.receive(bytes).map_err(|e| e.to_string())
+    }
+
+    fn take_tls_request(&mut self) -> bool {
+        std::mem::take(&mut self.tls_requested)
+    }
+
+    fn tls_established(&mut self, facts: &TlsFacts) -> Result<(), String> {
+        // Kept for `Step::ScramNeeded`, which happens several round trips
+        // later and has no way back to the handshake.
+        self.channel_binding = facts.channel_binding.clone();
+        // The bool the core believes. `tls_established_with_channel_binding`
+        // is what decides whether SCRAM-SHA-256-PLUS is offered at all, so
+        // passing `true` here without a digest to back it would make the core
+        // ask for PLUS and then fail — which is exactly the failure mode this
+        // pair of calls exists to prevent.
+        self.conn
+            .tls_established_with_channel_binding(facts.channel_binding.is_some())
+            .map_err(|e| e.to_string())
     }
 
     fn drain(&mut self) -> Result<bool, String> {
@@ -838,12 +966,14 @@ fn open(
         open.borrow_mut().remove(&handle);
     });
     let core = PgCore::new(config, connect_failure, queue_offline)?;
+    let tls = tls_options(config);
     let id = REGISTRY.with(|reg| {
-        reg.connect(
+        reg.connect_with_tls(
             &config.host,
             config.port,
             core,
             handle.try_into().unwrap_or(0),
+            tls,
         )
     })?;
     OPEN.with(|open| {
@@ -1138,6 +1268,110 @@ mod tests {
             encode_param(&ParamValue::String(String::new())),
             Some(Vec::new())
         );
+    }
+
+    #[test]
+    fn scram_plus_without_a_binding_is_refused_rather_than_downgraded() {
+        // The failure this guards is silent: `ChannelBinding::unsupported()`
+        // authenticates successfully against a server that also offers plain
+        // SCRAM, so a downgrade here would look like a working connection.
+        let Err(refused) = scram_channel(true, None) else {
+            panic!("PLUS with no digest must be refused");
+        };
+        assert!(
+            refused.contains("tls-server-end-point"),
+            "the message names what is missing, got {refused:?}"
+        );
+    }
+
+    #[test]
+    fn scram_plus_binds_the_digest_into_the_gs2_header() {
+        // `start_scram` cross-checks the mechanism against this prefix, and the
+        // SERVER recomputes the digest from its own certificate — so a wrong
+        // one fails authentication rather than weakening it. Asserting the
+        // prefix here is asserting that the digest reached the message at all.
+        let digest = vec![0xABu8; 32];
+        let channel = scram_channel(true, Some(&digest)).expect("a digest is enough");
+        let scram = ScramSha256::new(b"pw", channel);
+        assert!(
+            scram.message().starts_with(b"p=tls-server-end-point,"),
+            "got {:?}",
+            String::from_utf8_lossy(&scram.message()[..24.min(scram.message().len())])
+        );
+    }
+
+    #[test]
+    fn plain_scram_announces_that_it_did_not_bind() {
+        let channel = scram_channel(false, None).expect("plain SCRAM needs nothing");
+        let scram = ScramSha256::new(b"pw", channel);
+        // `n,,` is RFC 5802's "client does not support channel binding". The
+        // third spelling, `y,,`, would claim the server hid PLUS from us, and
+        // claiming that when TLS is off is how a downgrade goes unnoticed.
+        assert!(
+            scram.message().starts_with(b"n,,"),
+            "got {:?}",
+            String::from_utf8_lossy(&scram.message()[..8.min(scram.message().len())])
+        );
+    }
+
+    #[test]
+    fn a_binding_is_ignored_when_the_core_did_not_ask_for_plus() {
+        // Having a digest does not license offering PLUS: the core asks for it
+        // only when the SERVER offered the PLUS mechanism, and answering a
+        // plain request with a `p=` header makes `start_scram` refuse.
+        let scram = ScramSha256::new(b"pw", scram_channel(false, Some(&[0u8; 32])).unwrap());
+        assert!(scram.message().starts_with(b"n,,"));
+    }
+
+    #[test]
+    fn a_config_without_ssl_disables_the_sslrequest_entirely() {
+        let plain = turnloop_config(&PgConfig::default());
+        assert_eq!(plain.ssl, SslMode::Disable);
+        assert!(!plain.channel_binding_required);
+        assert!(tls_options(&PgConfig::default()).is_none());
+    }
+
+    #[test]
+    fn an_ssl_config_requires_tls_rather_than_preferring_it() {
+        // `Prefer` would let a server answer `N` and the core continue in
+        // plaintext — a client that asked for TLS sending its password in the
+        // clear. That is the whole reason this is not configurable.
+        let config = PgConfig {
+            host: "db.example.com".to_string(),
+            ssl: Some(crate::PgSslConfig {
+                reject_unauthorized: true,
+                ca: b"-----BEGIN CERTIFICATE-----".to_vec(),
+                servername: None,
+            }),
+            ..PgConfig::default()
+        };
+        assert_eq!(turnloop_config(&config).ssl, SslMode::Require);
+        let options = tls_options(&config).expect("an ssl config produces TLS options");
+        assert_eq!(options.servername, "db.example.com");
+        assert!(options.reject_unauthorized);
+        assert_eq!(options.ca_pem, b"-----BEGIN CERTIFICATE-----".to_vec());
+        assert!(
+            options.alpn.is_empty(),
+            "PostgreSQL's TLS carries PostgreSQL and nothing else"
+        );
+    }
+
+    #[test]
+    fn an_explicit_servername_overrides_the_host() {
+        // What a client connecting through a pooler or an IP literal needs:
+        // the certificate names the logical host, not the address dialled.
+        let config = PgConfig {
+            host: "10.0.0.7".to_string(),
+            ssl: Some(crate::PgSslConfig {
+                reject_unauthorized: false,
+                ca: Vec::new(),
+                servername: Some("db.internal".to_string()),
+            }),
+            ..PgConfig::default()
+        };
+        let options = tls_options(&config).expect("TLS options");
+        assert_eq!(options.servername, "db.internal");
+        assert!(!options.reject_unauthorized);
     }
 
     #[test]
