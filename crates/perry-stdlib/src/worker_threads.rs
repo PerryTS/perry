@@ -1272,6 +1272,15 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
     let class_image = perry_runtime::object::class_image::current_image_handle();
     std::thread::spawn(move || {
         perry_runtime::object::class_image::adopt_image(class_image);
+        // A `worker_threads` Worker runs JS on its own thread with its own heap,
+        // so it IS an agent and must claim an id before it can allocate or
+        // enqueue anything — exactly as `perry/thread`'s spawn/parallelMap do
+        // (#6185). Without this the thread reports `PRIMARY_AGENT`, which makes
+        // `agent_loop::net_available()` true on a thread that cannot own the
+        // primary agent's turnloop loop: `fetch()` is then accepted by the
+        // submit guard and refused a moment later by `ensure_loop_with`, so the
+        // request fails after acceptance instead of taking the fallback path.
+        let worker_agent = perry_runtime::agent::enter_worker_agent();
         let previous_env = apply_worker_env(&thread_options.env);
         CURRENT_WORKER_ID.with(|id| id.set(worker_id));
         CURRENT_WORKER_DATA.with(|slot| *slot.borrow_mut() = worker_data);
@@ -1342,6 +1351,10 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
             }
         };
         push_parent_event(WorkerEvent::Exit(worker_id, exit_code));
+        // The arena backing this agent is about to go away; purge anything
+        // still queued under its id rather than leaving it for a drain that
+        // can never legally run.
+        perry_runtime::agent::retire_agent(worker_agent);
     });
 
     object_value(worker_obj)
