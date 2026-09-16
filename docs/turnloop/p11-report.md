@@ -416,6 +416,33 @@ P11 set, because the crate does not exist there.** The base tree was rebuilt
 with this exact set after its first build, so the difference is only the crate
 this lane deletes.
 
+**The swept P11 binaries are at `24bed7439b`, and HEAD is two commits later.**
+That is not the "docs only" case P8 could claim, so here is what changed and why
+no gap test can see it:
+
+```
+$ git diff --stat 24bed7439b..HEAD -- crates/ Cargo.toml Cargo.lock
+ crates/perry-http-client/examples/probe.rs    |  88 ++++++++-
+ crates/perry-http-client/examples/ws_probe.rs |  60 +++++++
+ crates/perry-http-client/src/http.rs          | 148 +++++++++-----
+
+$ cargo tree -i perry-http-client --workspace -e normal
+perry-http-client
+├── perry              (the CLI binary — not linked into any compiled program)
+└── perry-ext-axios    (linked only by a program that imports 'axios')
+
+$ grep -l "from ['\"]axios" test-files/test_gap_*.ts | wc -l
+0
+```
+
+Two of the three files are `examples/`, which nothing links. The third is
+`perry-http-client`'s request driver, whose only two reverse dependencies are
+the CLI binary — which a gap run invokes for `compile`, never for a network
+subcommand — and `perry-ext-axios`, which **no `test_gap_*` fixture imports**.
+So the changed code is not in any swept fixture's link, and the `perry` binary's
+copy of it is on a path a gap run does not execute. The change is the
+double-fetch fix described under "The streamed download".
+
 ### Unit tests
 
 ```
