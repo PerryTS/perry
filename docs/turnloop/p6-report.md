@@ -338,11 +338,11 @@ and `turnloop_smtp::Connection` are all sans-I/O, so the parts of this phase
 that decide *correctness* can be tested without a socket, and they are.
 
 ```
-RUST_TEST_THREADS=1 cargo test --release -p perry-stdlib --lib turnloop_client  -> 9 passed
+RUST_TEST_THREADS=1 cargo test --release -p perry-stdlib --lib turnloop_client  -> 10 passed
 RUST_TEST_THREADS=1 cargo test --release -p perry-stdlib --lib turnloop_smtp    -> 8 passed
 ```
 
-`turnloop_client` (9): the id band proven disjoint from both handle registries
+`turnloop_client` (10): the id band proven disjoint from both handle registries
 and from the SMTP engine's; the `Event::End` regression test described below;
 the framing decision for a bodyless GET / bodyless POST / sized POST, checked
 against the bytes `Encoder::start` writes; the redirect policy (303 → GET with
@@ -351,8 +351,9 @@ the pool reusing within an origin, refusing to overbook, and ageing a
 connection out; every `Content-Encoding` round-tripped by content — whole-body
 *and* chunk-by-chunk, because the chunked path is the one a real response takes;
 the error-code re-interning, including the degrade-to-generic case; the debug
-knob asserted OFF by default; and every URL shape that must DECLINE rather than
-fail.
+knob asserted OFF by default; every URL shape that must DECLINE rather than
+fail; and the pool contract the admission fix rests on — that CLOSING a
+connection frees an origin's seat exactly as releasing one does.
 
 `turnloop_smtp` (8): a full delivery asserted command by command (EHLO, the
 capability parse, `AUTH PLAIN`, `MAIL FROM … SIZE=`, per-recipient `RCPT TO`,
@@ -364,7 +365,7 @@ re-issuing EHLO on the secure channel and discarding the cleartext capability
 list; implicit TLS writing nothing in the clear; a `421` ending the session;
 and the id band and error-code interning.
 
-Two of the seventeen failed on their first run, both because the *test* assumed
+Two of the eighteen failed on their first run, both because the *test* assumed
 something the protocol does not do: the gzip flush error a decoder that has
 already produced everything answers with, and — the more interesting one — that
 `MAIL FROM` / `RCPT TO` / `DATA` are four round trips. The server in that test
@@ -627,7 +628,42 @@ because no gap test imports it), in one cargo invocation, with **no**
 `external-*-pump` features — and run as
 `PERRY_SKIP_BUILD=1 ./scripts/run_gap_tests.sh`.
 
-<!--GAP-TABLE-->
+| | base `7f77cce3c6` | P6 |
+|---|---|---|
+| tests | 805 | **807** (the two new fixtures) |
+| pass | 796 | **798** |
+| parity_fail | **9** | **9 — the same nine** |
+| compile_fail | 0 | **0** |
+| crash | 0 | **0** |
+| parity rate | 98.8 % | 98.8 % |
+| **status changes on the 805 common tests** | — | **0** |
+
+Compared per test from the two JSON reports, not from the totals: every one of
+the 805 tests both arms ran has the identical status, the two tests only P6 has
+are the new fixtures, and both pass. Both arms exit 1 for the *same* reason —
+the three tests the committed snapshot expects to pass and which are red on the
+base commit before this branch changes anything.
+
+Both trees were built with the identical package set:
+
+```
+cargo build --release --locked \
+  -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static \
+  -p perry-ext-http -p perry-ext-net -p perry-ext-ws -p perry-ext-zlib -p perry-ext-events
+```
+
+The `perry-ext-*` wrappers are in the same invocation as `perry-stdlib-static`
+on purpose (#7629): the gap suite adds them to its own build only for the
+node-suite, so a gap run links whatever wrapper archive is already in the tree,
+and an incoherent one makes every http/net fixture fail to *compile* with "the
+wrapper archive bundles a DIFFERENT tokio compilation than the stdlib archive" —
+indistinguishable from a real regression. `compile_fail 0` in both arms is what
+says that did not happen here.
+
+And the subject was asserted live before the sweep was believed: a hand-compiled
+`test_gap_turnloop_fetch` reports `turns=53 completions=145 native_ticks=0
+tokio_ticks=0` with `p6 http_submitted=15 declined=0`. A green sweep over a
+build where the engine never ran would prove nothing.
 
 The base's nine, none of them touched by this work:
 `2159_defineproperty_class_prototype`, `2514_settracesigint`,
