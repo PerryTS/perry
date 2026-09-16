@@ -209,7 +209,7 @@ struct ProcState {
     next_id: u64,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// Per agent, like the loop itself. A descriptor belongs to the thread
     /// that adopted it; there is no cross-thread map to race on.
     static PROC: RefCell<ProcState> = RefCell::new(ProcState::default());
@@ -332,6 +332,12 @@ pub(crate) fn read_start(id: u64) -> ProcResult<()> {
 
 /// Arm one datagram receive. UDP receive is single-shot in turnloop 0.1, so
 /// the sink rearms after each datagram while `recv_armed` holds.
+// Datagram-side surface of the P2 handle table: real, exercised by
+// `turnloop_proc::tests`, and consumed in production only by
+// `dgram_reactor`, which is `#[cfg(feature = "mod-dgram")]`. The gate
+// stays LIVE in the configuration that has the consumer -- if
+// `dgram_reactor` ever stops calling this, a `mod-dgram` build goes red.
+#[cfg_attr(not(feature = "mod-dgram"), allow(dead_code))]
 pub(crate) fn recv_start(id: u64) -> ProcResult<()> {
     with_driver(|driver| {
         PROC.with(|state| {
@@ -347,6 +353,12 @@ pub(crate) fn recv_start(id: u64) -> ProcResult<()> {
     .unwrap_or_else(|| Err(no_loop()))
 }
 
+// Datagram-side surface of the P2 handle table: real, exercised by
+// `turnloop_proc::tests`, and consumed in production only by
+// `dgram_reactor`, which is `#[cfg(feature = "mod-dgram")]`. The gate
+// stays LIVE in the configuration that has the consumer -- if
+// `dgram_reactor` ever stops calling this, a `mod-dgram` build goes red.
+#[cfg_attr(not(feature = "mod-dgram"), allow(dead_code))]
 fn arm_recv(driver: &mut turnloop::Loop, id: u64, entry: &mut Entry) -> ProcResult<()> {
     if entry.recv_op.is_some() || entry.closing || !entry.recv_armed {
         return Ok(());
@@ -359,6 +371,12 @@ fn arm_recv(driver: &mut turnloop::Loop, id: u64, entry: &mut Entry) -> ProcResu
 }
 
 /// Send one datagram. `to` is `None` for a connected socket.
+// Datagram-side surface of the P2 handle table: real, exercised by
+// `turnloop_proc::tests`, and consumed in production only by
+// `dgram_reactor`, which is `#[cfg(feature = "mod-dgram")]`. The gate
+// stays LIVE in the configuration that has the consumer -- if
+// `dgram_reactor` ever stops calling this, a `mod-dgram` build goes red.
+#[cfg_attr(not(feature = "mod-dgram"), allow(dead_code))]
 pub(crate) fn send_to(
     id: u64,
     bytes: Vec<u8>,
@@ -514,6 +532,12 @@ pub(crate) fn drain_pending() {
 /// Bounded, and deliberately so: a turn that cannot run — re-entry from inside
 /// a dispatch pass, or a thread with no loop — must not spin, and a completion
 /// that never arrives must not hang a `close()`.
+// Datagram-side surface of the P2 handle table: real, exercised by
+// `turnloop_proc::tests`, and consumed in production only by
+// `dgram_reactor`, which is `#[cfg(feature = "mod-dgram")]`. The gate
+// stays LIVE in the configuration that has the consumer -- if
+// `dgram_reactor` ever stops calling this, a `mod-dgram` build goes red.
+#[cfg_attr(not(feature = "mod-dgram"), allow(dead_code))]
 pub(crate) fn close_and_settle(id: u64) {
     close(id);
     for _ in 0..64 {

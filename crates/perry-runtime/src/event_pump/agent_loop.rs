@@ -306,7 +306,7 @@ impl Drop for ClaimGuard {
     }
 }
 
-thread_local! {
+crate::perry_thread_local! {
     static STATE: Cell<LoopState> = const { Cell::new(LoopState::Unset) };
     static AGENT_LOOP: RefCell<Option<AgentLoop>> = const { RefCell::new(None) };
     /// This thread's route slot, from the claim to thread exit. See

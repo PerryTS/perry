@@ -99,6 +99,26 @@ cp "$runtime_manifest_backup" "$runtime_manifest"
 
 stdlib_manifest="$provider_source/tests/fixtures/issue_8075_provider_gc/stdlib-provider/Cargo.toml"
 stdlib_linker="$provider_source/tests/fixtures/issue_8075_provider_gc/stdlib-linker.sh"
+
+# The fixture carries `[workspace]`, so it is its own workspace root and
+# resolves independently of the repository's `Cargo.lock` -- and an independent
+# resolution is subject to `.cargo/config.toml`'s `[unstable] min-publish-age`
+# soak window, which the pinned nightly makes live. A dependency the repository
+# adopted less recently than the window therefore fails HERE while building
+# everywhere else, which reads as a GC-gate failure and is not one. Measured:
+#
+#   error: failed to select a version for the requirement `turnloop-http = "^0.1.0-alpha.5"`
+#     version 0.1.0-alpha.5 is too new (published 7 hours ago, minimum age 7 days)
+#
+# Seed it with the repository's own lock. That pins the exact versions the
+# workspace already resolved, so this build adopts NOTHING new -- the soak keeps
+# applying where it belongs, to the workspace lock, and this gate stops being a
+# second, undated place where a fresh dependency can go red. `cargo build`
+# respects an existing lock and resolves only what it does not already pin,
+# which is what makes seeding sufficient (`cargo generate-lockfile` would not
+# do: it re-resolves from scratch by definition).
+cp "$provider_source/Cargo.lock" "$(dirname "$stdlib_manifest")/Cargo.lock"
+
 env \
   CARGO_TARGET_DIR="$provider_target_dir" \
   PERRY_ISSUE_8075_RUNTIME_LIBRARY="$runtime_library" \

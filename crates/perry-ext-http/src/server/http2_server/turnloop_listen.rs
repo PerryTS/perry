@@ -32,13 +32,19 @@ pub(super) fn try_listen_on_turnloop(
     if !crate::server::turnloop_h2::enabled() {
         return None;
     }
-    let (tls, plaintext, settings, allow_http1) = {
+    // `noDelay` is read here, under the same handle borrow as the TLS config
+    // and the settings, because the turnloop listener applies it once at bind
+    // time rather than per accepted socket. The hyper HTTP/2 path reads the
+    // same field (`http2_server.rs`) and applies it per connection; both honour
+    // `server.noDelay()`, which Node defaults to true.
+    let (tls, plaintext, settings, allow_http1, no_delay) = {
         let server = get_handle::<Http2SecureServer>(server_handle)?;
         (
             server.tls_config.clone(),
             server.plaintext,
             server.settings.clone(),
             server.allow_http1,
+            server.base.no_delay,
         )
     };
     if !plaintext && tls.is_none() {
@@ -56,6 +62,7 @@ pub(super) fn try_listen_on_turnloop(
         allow_http1,
         settings,
         DEFAULT_MAX_SESSION_MEMORY_MB * 1024 * 1024,
+        no_delay,
     ) {
         Ok((id, bound_port, bound_host)) => {
             crate::server::cluster_bind::notify_listening(host, bound_port);

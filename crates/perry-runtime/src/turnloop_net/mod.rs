@@ -222,7 +222,7 @@ struct NetState {
     timers: HashMap<i64, TimerEntry>,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// Per agent, like the loop itself. A socket belongs to the thread that
     /// created it; there is no cross-thread map to race on.
     static NET: RefCell<NetState> = RefCell::new(NetState::default());

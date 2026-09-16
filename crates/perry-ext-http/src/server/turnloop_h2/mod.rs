@@ -140,6 +140,7 @@ pub(crate) fn listen(
     allow_http1: bool,
     settings: crate::server::http2_session_settings::Http2SettingsState,
     max_session_memory: usize,
+    no_delay: bool,
 ) -> Result<(i64, u16, String), tl::NetError> {
     let id = next_id();
     if id == perry_ffi::INVALID_HANDLE {
@@ -147,7 +148,14 @@ pub(crate) fn listen(
     }
     // `reuse_port` is false: two `http2.createServer().listen(p)` calls must
     // race to `EADDRINUSE` the way Node's do, not both succeed.
-    tl::tcp_listen(id, SUBSYSTEM, host, port, backlog, false)?;
+    //
+    // `no_delay` is the server's own `noDelay` (Node defaults it to true), and
+    // it reaches the listener rather than being applied per accepted socket:
+    // `tcp_listen` hands it to the accepting loop, which applies it to every
+    // connection before the completion reaches the binding. The hyper HTTP/2
+    // path does the same thing by hand in `http2_server.rs`
+    // (`apply_accept_no_delay`) — this is that behaviour on the turnloop path.
+    tl::tcp_listen(id, SUBSYSTEM, host, port, backlog, false, no_delay)?;
     tl::accept_start(id)?;
     let bound = tl::local_address(id);
     let bound_port = bound.as_ref().map(|e| e.port).unwrap_or(port);

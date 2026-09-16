@@ -125,14 +125,23 @@ def write_source(path: Path, text: str) -> None:
 
 
 # `#[cfg(test)] mod <stem>;` — the whole file is a test module.
+# An `#[cfg(test)]` may be separated from its `mod` by further attributes --
+# `#[path = "tests.rs"]` is the spelling 58 declarations in perry-runtime use.
+# Requiring the two to be adjacent made every one of those files read as
+# shipping code, so a `thread_local!` in one was counted against a build it
+# cannot appear in. Intervening attributes only ever NARROW the cfg, so a block
+# reached through them is still test-only.
+_ATTRS = r"(?:[ \t]*#\[[^\]\n]*\]\s*\n)*"
 CFG_TEST_MOD_RE = re.compile(
-    r"(?m)^[ \t]*#\[cfg\(test\)\]\s*\n[ \t]*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_0-9]+)\s*;"
+    r"(?m)^[ \t]*#\[cfg\(test\)\]\s*\n" + _ATTRS
+    + r"[ \t]*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_0-9]+)\s*;"
 )
 # Any out-of-line `mod <stem>;`, gated or not — the edges of the module tree.
 ANY_MOD_RE = re.compile(r"(?m)^[ \t]*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_0-9]+)\s*;")
 # `#[cfg(test)] mod <name> {` — an inline test module, whose body is skipped.
 CFG_TEST_INLINE_MOD_RE = re.compile(
-    r"(?m)^[ \t]*#\[cfg\(test\)\]\s*\n[ \t]*(?:pub(?:\([^)]*\))?\s+)?mod\s+[A-Za-z_0-9]+\s*\{"
+    r"(?m)^[ \t]*#\[cfg\(test\)\]\s*\n" + _ATTRS
+    + r"[ \t]*(?:pub(?:\([^)]*\))?\s+)?mod\s+[A-Za-z_0-9]+\s*\{"
 )
 
 
@@ -457,11 +466,35 @@ def self_test() -> int:
         if not verify(root, CRATES, allowlist):
             failures.append("an ungated `mod <stem>;` file passed")
 
+        # 7. `#[cfg(test)]` need not be ADJACENT to its `mod`. `#[path = ...]`
+        #    between the two is the spelling 58 declarations in perry-runtime
+        #    use, and requiring adjacency made every one of those files read as
+        #    shipping code — a `thread_local!` in one was counted against a
+        #    build it cannot appear in. Still gated when the attributes are
+        #    reordered, and still back in scope when `#[cfg(test)]` goes away.
+        write_source(src_dir / "probes.rs",
+            "thread_local! { static G: u8 = const { 0 }; }\n"
+        )
+        separated = {
+            "cfg then path": '#[cfg(test)]\n#[path = "probes.rs"]\nmod probes;\n',
+            "path then cfg": '#[path = "probes.rs"]\n#[cfg(test)]\nmod probes;\n',
+        }
+        for shape, decl in separated.items():
+            write_source(src_dir / "lib.rs", decl)
+            if verify(root, CRATES, allowlist):
+                failures.append(
+                    f"a `#[cfg(test)]` file declared `{shape}` was counted"
+                )
+            write_source(src_dir / "lib.rs",
+                         decl.replace("#[cfg(test)]\n", ""))
+            if not verify(root, CRATES, allowlist):
+                failures.append(f"an UNGATED `{shape}` file passed")
+
     for f in failures:
         print(f"SELF-TEST FAILED: {f}", file=sys.stderr)
     if failures:
         return 1
-    print("self-test: the checker can fail in all seven directions")
+    print("self-test: the checker can fail in all nine directions")
     return 0
 
 
