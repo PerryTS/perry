@@ -611,6 +611,11 @@ pub(crate) fn lower_module_decl(
                 ast::Decl::Var(var_decl) => {
                     // Handle exported variables
                     for decl in &var_decl.decls {
+                        // #10363: `export declare const x` is erased like
+                        // `export declare function`: no binding, no export.
+                        if super::ambient::declarator_binds_nothing(var_decl, decl) {
+                            continue;
+                        }
                         if is_destructuring_pattern(&decl.name) {
                             let mut names = Vec::new();
                             collect_binding_names(&decl.name, &mut names);

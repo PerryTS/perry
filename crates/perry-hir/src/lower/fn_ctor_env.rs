@@ -845,7 +845,9 @@ fn collect_fn_scope_names(stmts: &[ast::Stmt], out: &mut Shadow) {
         match stmt {
             ast::Stmt::Decl(ast::Decl::Var(var)) => {
                 for d in &var.decls {
-                    collect_pat_names(&d.name, out);
+                    if !super::ambient::declarator_binds_nothing(var, d) {
+                        collect_pat_names(&d.name, out);
+                    }
                 }
             }
             ast::Stmt::Decl(ast::Decl::Fn(f)) => {
@@ -955,6 +957,11 @@ fn scan_stmt(
     match stmt {
         ast::Stmt::Decl(ast::Decl::Var(var)) => {
             for d in &var.decls {
+                // #10363: an ambient `declare var x` is not a never-written
+                // `var x;`. It names a global whose value is unknown here.
+                if super::ambient::declarator_binds_nothing(var, d) {
+                    continue;
+                }
                 if let ast::Pat::Ident(b) = &d.name {
                     record_decl(&b.id.sym, d.init.as_deref(), decls);
                 } else {
@@ -1401,5 +1408,55 @@ mod tests {
     fn indirect_eval_factory_rejects_generator_wrapper() {
         let init = first_var_initializer("const factory = function* (ev) { return ev(src); };");
         assert!(indirect_eval_factory_shape(&init).is_none());
+    }
+
+    /// #10363: `declare var body: string` names a global whose value is not
+    /// known at compile time. Recording it as a never-written `var body;`
+    /// would fold `new Function(body)` to `new Function("undefined")`.
+    #[test]
+    fn ambient_var_is_not_a_never_written_var() {
+        let module = perry_parser::parse_typescript(
+            "declare var body: string; var control; new Function(body); new Function(control);",
+            "fn-ctor-ambient.ts",
+        )
+        .unwrap();
+        let env = build_fn_ctor_env(&module);
+        assert!(
+            matches!(env.entries.get("control"), Some(FnCtorShape::UndefinedVar)),
+            "a real never-written `var` still resolves to undefined: {:?}",
+            env.entries
+        );
+        assert!(
+            !env.entries.contains_key("body"),
+            "an ambient `declare var` must not resolve to a constant: {:?}",
+            env.entries
+        );
+    }
+
+    /// An erased `declare var` inside a function does not shadow the module
+    /// binding of that name, so a write there still reaches the module `var`.
+    #[test]
+    fn ambient_var_in_a_function_does_not_shadow_a_module_write() {
+        let module = perry_parser::parse_typescript(
+            r#"
+            var counter = "a";
+            function bump() { declare var counter: string; counter = "b"; }
+            var control = "a";
+            function other() { var control = "x"; control = "b"; }
+            "#,
+            "fn-ctor-ambient-shadow.ts",
+        )
+        .unwrap();
+        let env = build_fn_ctor_env(&module);
+        assert!(
+            matches!(env.entries.get("control"), Some(FnCtorShape::Str(s)) if s == "a"),
+            "a real inner `var` shadows the write: {:?}",
+            env.entries
+        );
+        assert!(
+            !env.entries.contains_key("counter"),
+            "the write behind an ambient `declare var` reaches the module binding: {:?}",
+            env.entries
+        );
     }
 }

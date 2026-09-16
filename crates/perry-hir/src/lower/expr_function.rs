@@ -809,6 +809,10 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
             if let ast::Stmt::Decl(ast::Decl::Var(var_decl)) = stmt {
                 if var_decl.kind == ast::VarDeclKind::Var {
                     for decl in &var_decl.decls {
+                        // #10363: an ambient declarator binds nothing.
+                        if super::ambient::declarator_binds_nothing(var_decl, decl) {
+                            continue;
+                        }
                         // Collect every binding name introduced by this
                         // declarator. Plain `var x` is a single `Pat::Ident`;
                         // a destructuring `var { t: dSq } = re()` (the esbuild
@@ -978,6 +982,9 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
                         ast::VarDeclKind::Let | ast::VarDeclKind::Const
                     ) {
                         for decl in &var_decl.decls {
+                            if super::ambient::declarator_binds_nothing(var_decl, decl) {
+                                continue;
+                            }
                             if let ast::Pat::Ident(ident) = &decl.name {
                                 let name = ident.id.sym.to_string();
                                 let already_in_scope = ctx

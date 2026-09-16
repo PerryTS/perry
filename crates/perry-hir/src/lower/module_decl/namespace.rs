@@ -249,6 +249,9 @@ pub(crate) fn lower_namespace_as_class(
             // Pre-register non-exported variables
             ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Var(var_decl))) => {
                 for decl in &var_decl.decls {
+                    if crate::lower::ambient::declarator_binds_nothing(var_decl, decl) {
+                        continue;
+                    }
                     if let ast::Pat::Ident(ident) = &decl.name {
                         let name = ident.id.sym.to_string();
                         if ctx.lookup_local(&name).is_none() {
