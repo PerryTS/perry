@@ -147,8 +147,15 @@ fn net_config() -> Config {
         // from 1K to 1M handles, so the ceiling is free and only the
         // high-water mark costs anything. 64K handles is ~32K connections.
         max_handles: 65_536,
-        // Two in-flight operations per connection (a read and a write).
-        max_operations: 131_072,
+        // NOT simply "two per connection". `max_operations` sizes two very
+        // different things in turnloop: the paged `ops` table (free at any
+        // ceiling) and the blocking `WorkPort`'s lock-free ring, which is
+        // eagerly allocated because its capacity IS its backpressure bound.
+        // Setting this to 131_072 by reflex cost 19 MB of resident memory per
+        // net loop, measured, for a ring a server holding idle connections
+        // never fills. 32_768 covers one armed read per connection at the
+        // 65_536-handle ceiling.
+        max_operations: 32_768,
         events_per_turn: 64,
         pooled_buffers: 64,
         pooled_buffer_size: 16 * 1024,
