@@ -1291,7 +1291,10 @@ pub extern "C" fn js_response_get_headers(handle: f64) -> f64 {
         .get(&id)
         .map(|r| r.headers.clone())
         .unwrap_or_default();
-    store_headers(headers) as f64
+    // Boxed, not a bare id: see `js_headers_new`. A derived Headers handed to
+    // JS as a raw double is a NUMBER, and `response.headers.entries()` then
+    // reads a property off it through the dynamic tower and gets undefined.
+    nanbox_headers_handle(store_headers(headers))
 }
 
 #[no_mangle]
@@ -1299,8 +1302,8 @@ pub extern "C" fn js_response_clone(handle: f64) -> f64 {
     let id = handle_id(handle);
     let cloned = FETCH_RESPONSES.lock().unwrap().get(&id).cloned();
     match cloned {
-        Some(r) => store_response(r) as f64,
-        None => 0.0,
+        Some(r) => nanbox_headers_handle(store_response(r)),
+        None => f64::from_bits(EXT_TAG_UNDEFINED),
     }
 }
 
@@ -1680,7 +1683,12 @@ pub unsafe extern "C" fn js_request_new(
     } else {
         HeadersStore::default()
     };
-    store_request(RequestData {
+    // Boxed for the same reason as `js_headers_new`: a bare id is a JS NUMBER,
+    // and a property read on a number never reaches the handle tower at all —
+    // `request.url` answered undefined without consulting any dispatcher.
+    // Boxing and `ext_fetch_request_property_dispatch` are only useful
+    // together: the box gets the read INTO the tower, the extension answers it.
+    nanbox_headers_handle(store_request(RequestData {
         url,
         method,
         body,
@@ -1696,7 +1704,7 @@ pub unsafe extern "C" fn js_request_new(
         keepalive: bool_from_js(keepalive),
         duplex: read_str(duplex_ptr).unwrap_or_else(|| "half".to_string()),
         signal: signal_or_default(signal),
-    }) as f64
+    }))
 }
 
 #[no_mangle]
@@ -1812,6 +1820,9 @@ const EXT_TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 const EXT_TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 
 extern "C" {
+    fn js_register_handle_property_dispatch_extension(
+        f: unsafe extern "C" fn(i64, *const u8, usize, *mut f64) -> i32,
+    );
     fn js_get_string_pointer_unified(value: f64) -> i64;
     fn js_json_stringify(value: f64, type_hint: u32) -> *mut StringHeader;
     fn js_register_handle_method_dispatch_extension(
@@ -1885,7 +1896,7 @@ fn ext_bool_value(value: f64) -> f64 {
     })
 }
 
-fn nanbox_headers_handle(id: usize) -> f64 {
+pub(crate) fn nanbox_headers_handle(id: usize) -> f64 {
     f64::from_bits(EXT_POINTER_TAG | (id as u64 & EXT_POINTER_MASK))
 }
 
@@ -1893,6 +1904,7 @@ pub(crate) fn ensure_headers_dispatch_registered() {
     static REGISTER: std::sync::Once = std::sync::Once::new();
     REGISTER.call_once(|| unsafe {
         js_register_handle_method_dispatch_extension(ext_fetch_headers_method_dispatch);
+        js_register_handle_property_dispatch_extension(ext_fetch_request_property_dispatch);
     });
 }
 
@@ -2099,4 +2111,174 @@ fn json_scalar_to_header_value(value: &serde_json::Value) -> String {
         serde_json::Value::Null => "null".to_string(),
         other => other.to_string(),
     }
+}
+
+
+/// `new Request(url, init)` — the constructor codegen actually emits for the
+/// two-argument form.
+///
+/// This crate did not export it, so the call resolved to perry-stdlib's, which
+/// built the Request in perry-stdlib's registry — while every getter
+/// (`js_request_get_url`, `js_request_get_headers`, `js_request_get_method`)
+/// resolved HERE and looked in this crate's registry. The result was a Request
+/// on which every property read answered `undefined`, including the
+/// `Object.fromEntries(request.headers.entries())` in OpenCode's TUI worker,
+/// which surfaced as "Cannot read properties of undefined (reading 'entries')".
+///
+/// Ported from perry-stdlib's implementation so the field handling matches
+/// exactly; it routes back through this crate's own `js_headers_new` /
+/// `js_headers_init_from_value` / `js_request_new`, keeping one registry in
+/// play for the whole object.
+///
+/// # Safety
+/// `url_ptr` must be null or a Perry-runtime `StringHeader`.
+#[no_mangle]
+pub unsafe extern "C" fn js_request_new_from_init(url_ptr: *const StringHeader, init: f64) -> f64 {
+    unsafe extern "C" {
+        fn js_nanbox_get_pointer(value: f64) -> i64;
+        fn js_object_get_field_by_name_f64(obj: *const std::ffi::c_void, key: i64) -> f64;
+        fn js_string_from_bytes(ptr: *const u8, len: u32) -> i64;
+    }
+
+    let raw = js_nanbox_get_pointer(init);
+    // A non-object init (undefined / number / small handle) behaves like
+    // `new Request(url)`: every field keeps its default.
+    if raw < 0x10000 {
+        return js_request_new(
+            url_ptr,
+            std::ptr::null(),
+            std::ptr::null(),
+            0.0,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            f64::from_bits(EXT_TAG_FALSE),
+            std::ptr::null(),
+            f64::from_bits(EXT_TAG_UNDEFINED),
+        );
+    }
+    let obj = raw as *const std::ffi::c_void;
+
+    let field = |name: &[u8]| -> f64 {
+        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        js_object_get_field_by_name_f64(obj, key)
+    };
+    // Null for absent/undefined/null so `js_request_new` applies the correct
+    // per-field default rather than an empty string.
+    let str_field = |name: &[u8]| -> *const StringHeader {
+        let v = field(name);
+        if matches!(v.to_bits(), EXT_TAG_UNDEFINED | EXT_TAG_NULL) {
+            return std::ptr::null();
+        }
+        js_get_string_pointer_unified(v) as *const StringHeader
+    };
+
+    // `headers` may be a Headers handle, a record, or an iterable of pairs —
+    // `js_headers_init_from_value` handles all three.
+    let headers_val = field(b"headers");
+    let headers_handle = if matches!(headers_val.to_bits(), EXT_TAG_UNDEFINED | EXT_TAG_NULL) {
+        0.0
+    } else {
+        let h = js_headers_new();
+        js_headers_init_from_value(h, headers_val);
+        h
+    };
+
+    let keepalive = field(b"keepalive");
+    let keepalive = if keepalive.to_bits() == EXT_TAG_UNDEFINED {
+        f64::from_bits(EXT_TAG_FALSE)
+    } else {
+        keepalive
+    };
+
+    js_request_new(
+        url_ptr,
+        str_field(b"method"),
+        str_field(b"body"),
+        headers_handle,
+        str_field(b"referrer"),
+        str_field(b"referrerPolicy"),
+        str_field(b"mode"),
+        str_field(b"credentials"),
+        str_field(b"cache"),
+        str_field(b"redirect"),
+        str_field(b"integrity"),
+        keepalive,
+        str_field(b"duplex"),
+        field(b"signal"),
+    )
+}
+
+
+/// Serve this crate's Request handles from the runtime's dynamic PROPERTY
+/// tower — the sibling of `ext_fetch_headers_method_dispatch`.
+///
+/// `request.url` / `.method` / `.headers` do not lower to the getter symbols;
+/// codegen emits a generic property read, which lands in perry-stdlib's
+/// `dispatch_request_property` and reads perry-stdlib's registry while the
+/// Request lives in this crate's. Every property answered `undefined` —
+/// including the `request.headers` in OpenCode's TUI worker, where
+/// `Object.fromEntries(request.headers.entries())` then failed with "Cannot
+/// read properties of undefined (reading 'entries')".
+///
+/// Registry membership gates it, so another subsystem's handle id falls
+/// through untouched. `headers` is returned as a BOXED handle so the value is
+/// an object rather than a bare id — the same contract `js_headers_new` holds.
+unsafe extern "C" fn ext_fetch_request_property_dispatch(
+    handle: i64,
+    property_name_ptr: *const u8,
+    property_name_len: usize,
+    out: *mut f64,
+) -> i32 {
+    if out.is_null() || property_name_ptr.is_null() || handle <= 0 {
+        return 0;
+    }
+    let id = handle as usize;
+    match REQUEST_HANDLES.lock() {
+        Ok(guard) => {
+            if !guard.contains_key(&id) {
+                return 0;
+            }
+        }
+        Err(_) => return 0,
+    }
+    let Ok(property) =
+        std::str::from_utf8(std::slice::from_raw_parts(property_name_ptr, property_name_len))
+    else {
+        return 0;
+    };
+    let boxed = nanbox_headers_handle(id);
+    let string_value = |p: *mut StringHeader| -> f64 {
+        if p.is_null() {
+            f64::from_bits(EXT_TAG_UNDEFINED)
+        } else {
+            f64::from_bits(JsValue::from_string_ptr(p).bits())
+        }
+    };
+    let value = match property {
+        "url" => string_value(js_request_get_url(boxed)),
+        "method" => string_value(js_request_get_method(boxed)),
+        "headers" => crate::request_fields::js_request_get_headers(boxed),
+        "body" => crate::request_fields::js_request_get_body(boxed),
+        "signal" => crate::request_fields::js_request_get_signal(boxed),
+        "keepalive" => crate::request_fields::js_request_get_keepalive(boxed),
+        "destination" => string_value(crate::request_fields::js_request_get_destination(boxed)),
+        "referrer" => string_value(crate::request_fields::js_request_get_referrer(boxed)),
+        "referrerPolicy" => {
+            string_value(crate::request_fields::js_request_get_referrer_policy(boxed))
+        }
+        "mode" => string_value(crate::request_fields::js_request_get_mode(boxed)),
+        "credentials" => string_value(crate::request_fields::js_request_get_credentials(boxed)),
+        "cache" => string_value(crate::request_fields::js_request_get_cache(boxed)),
+        "redirect" => string_value(crate::request_fields::js_request_get_redirect(boxed)),
+        "integrity" => string_value(crate::request_fields::js_request_get_integrity(boxed)),
+        "duplex" => string_value(crate::request_fields::js_request_get_duplex(boxed)),
+        _ => return 0,
+    };
+    *out = value;
+    1
 }

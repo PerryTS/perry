@@ -88,7 +88,11 @@ pub extern "C" fn js_request_get_headers(handle: f64) -> f64 {
         .get(&id)
         .map(|r| r.headers.clone())
         .unwrap_or_default();
-    store_headers(headers) as f64
+    // Boxed, not a bare id: see `js_headers_new`. OpenCode's TUI worker does
+    // `Object.fromEntries(request.headers.entries())`, and a bare id made
+    // `request.headers` a NUMBER whose property read answered undefined —
+    // "Cannot read properties of undefined (reading 'entries')".
+    crate::nanbox_headers_handle(store_headers(headers))
 }
 
 #[no_mangle]
