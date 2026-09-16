@@ -96,6 +96,18 @@ while (files.length < agents && Date.now() < deadline) {
   files = readyFiles();
 }
 
+// A settle window before the reading. A worker writes its ready file the
+// instant its own work finishes, but RSS is RESIDENT memory and its pages are
+// faulted in lazily -- at 64 agents the first version of this table read while
+// the last workers were still touching their arenas, and reported a per-agent
+// cost a third of the 1-agent row's. A per-agent number that FALLS as agents
+// rise is not a preallocation; it is a measurement taken too early.
+const settleMs = Number(process.env.P9_SETTLE_MS ?? "1500");
+const settleUntil = Date.now() + settleMs;
+while (Date.now() < settleUntil) {
+  await new Promise<void>((r) => setTimeout(r, 50));
+}
+
 // Read RSS while every agent is alive and idle -- which is the number the brief
 // asks for -- and BEFORE anything is torn down.
 const after = rssKb();
@@ -116,7 +128,7 @@ for (const name of files) {
 }
 
 console.log(
-  `agents=${agents} mode=${mode} ready=${files.length}/${agents} ` +
+  `agents=${agents} mode=${mode} settle_ms=${settleMs} ready=${files.length}/${agents} ` +
     `rss_before_kb=${before} rss_after_kb=${after} delta_kb=${delta} per_agent_kb=${per} ` +
     `net_ok=${netOk}/${agents}` + (firstError ? ` first_error=${JSON.stringify(firstError)}` : ""),
 );
