@@ -9,8 +9,6 @@
     "crates/perry-ext-events/src/module_iterators.rs": 2,
     "crates/perry-ext-events/src/tests.rs": 2,
     "crates/perry-ext-fastify/src/upgrade.rs": 4,
-    "crates/perry-ext-fetch/src/lib.rs": 14,
-    "crates/perry-ext-fetch/src/tests.rs": 14,
     "crates/perry-ext-http/src/agent.rs": 3,
     "crates/perry-ext-http/src/client_request_surface.rs": 2,
     "crates/perry-ext-http/src/response_headers.rs": 1,
@@ -26,6 +24,7 @@
     "crates/perry-ext-net/src/lifecycle.rs": 1,
     "crates/perry-ext-node-forge/src/lib.rs": 20,
     "crates/perry-ext-pg/src/lib.rs": 7,
+    "crates/perry-ext-pg/src/turnloop_io/result.rs": 4,
     "crates/perry-ext-ratelimit/src/lib.rs": 4,
     "crates/perry-ext-streams/src/lib.rs": 2,
     "crates/perry-ext-uuid/src/lib.rs": 2,
@@ -51,6 +50,7 @@
     "crates/perry-stdlib/src/mysql2/result.rs": 39,
     "crates/perry-stdlib/src/mysql2/types.rs": 16,
     "crates/perry-stdlib/src/nodemailer.rs": 3,
+    "crates/perry-stdlib/src/nodemailer/turnloop_bridge.rs": 3,
     "crates/perry-stdlib/src/pg/result.rs": 14,
     "crates/perry-stdlib/src/pg/types.rs": 14,
     "crates/perry-stdlib/src/querystring.rs": 2,
@@ -83,5 +83,5 @@
     "crates/perry-stdlib/src/zlib.rs": 2
   },
   "schema_version": 2,
-  "total": 561
+  "total": 539
 }
