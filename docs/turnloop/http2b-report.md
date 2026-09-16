@@ -233,9 +233,48 @@ Reviewed rather than adopted. Six defects, each of which would have shipped:
    `turnloop_serve::adopt_alpn_http1` — the whole reason the module shares
    subsystem slot 1 — did not exist. Both are here.
 
-A seventh is not a defect but is worth naming: the module referenced twelve
+A seventh was found not by reading but by the gap suite, and is written up under
+"The one regression this found": the three connection-level controls were sent
+immediately even when the transport had not connected yet.
+
+An eighth is not a defect but is worth naming: the module referenced twelve
 `crate::server::http2_server::*` glue functions and three `crate::server::*`
-entry points that did not exist. None of it had ever been compiled.
+entry points that did not exist, and named a `client.rs` that was never written.
+None of it had ever been compiled.
+
+## Unit tests
+
+Eighteen, in three places, chosen for the things h2spec cannot reach.
+`RUST_TEST_THREADS=1 cargo test --release -p perry-ext-http --lib`:
+
+```
+work: 127 passed; 1 failed          base: 109 passed; 1 failed
+```
+
+The one failure is `tls_client::tests::needs_custom_client_logic`, identical in
+both arms and in a file this branch does not touch — pre-existing on the
+integration branch. The eighteen added are:
+
+* `turnloop_h2::control`'s `clamp_to_core` — that a setting may be **lowered**
+  and that a **raise** is clamped back to what the core honours, plus that a
+  server never advertises ENABLE_PUSH and that the payload is always a whole
+  number of 6-byte entries. A raise that escaped the clamp is a connection error
+  on the peer's side minutes later, which is exactly the failure a unit test
+  should catch instead of a soak.
+* `turnloop_h2::conn`'s `prescan` — that the core's **own** SETTINGS
+  acknowledgement is never stolen (stealing it leaves `settings_awaiting_ack`
+  set until the SETTINGS deadline kills the session, somewhere else entirely),
+  that exactly the owed acks are withheld and the next belongs to the core, that
+  a malformed ack is left for the core to reject, that GOAWAY opaque data and
+  peer SETTINGS values are captured and that stale opaque data is cleared, and
+  that nothing is peeked before the client preface or on a partial frame.
+  h2spec never makes Perry send a second SETTINGS, so **none** of the
+  ack-withholding is exercised by the conformance run at all.
+
+* `turnloop_h2::tests`, which pins the response-header translation against
+the core itself: the block `response_headers` produces is fed to a real
+`Connection::send_headers` and must be accepted, rather than checked against
+this module's own idea of the rules.
 
 ---
 
@@ -278,6 +317,34 @@ flushes first and then fails the connection, which is why it is 147.
 So the binding is not merely no worse than hyper on the protocol; it is one test
 better, and the difference is a rule that had to be found by reading
 `receive`'s implementation rather than its signature.
+
+### h2spec over TLS
+
+The same 147 against `http2.createSecureServer({ key, cert, allowHTTP1: true })`
+with `--tls --insecure --strict`:
+
+```
+147 tests, 147 passed, 0 skipped, 0 failed     (twice, on a fresh server)
+147 tests, 147 passed, 0 skipped, 0 failed     (after six mixed-ALPN curls)
+```
+
+For calibration, **the same h2spec TLS run against Node 26.5.1's own
+`http2.createSecureServer` scores 136/147** on this box, so the TLS arm is not
+a clean bar and the comparison that means something is the cleartext one above.
+
+ALPN itself is proven by an external client rather than by Perry's own, because
+`http2.connect('https://…')` is still the pre-existing cleartext-to-port-80
+defect:
+
+```
+curl -k --http2   https://…/alpha  →  secure:/alpha:2.0   [http_version=2]
+curl -k --http1.1 https://…/beta   →  secure:/beta:1.1    [http_version=1.1]
+```
+
+The second is the `allowHTTP1` handoff end to end: rustls negotiated
+`http/1.1`, the connection moved from the HTTP/2 table to P5's by one table
+entry — same id, same TLS layer, same outstanding multishot read — and the
+HTTP/1.1 state machine answered it.
 
 
 ### Liveness — the counters, and the thread count
@@ -333,11 +400,208 @@ would not be.
 
 ### The gap suite
 
-<!-- GAPSUITE -->
+`PERRY_SKIP_BUILD=1 ./scripts/run_gap_tests.sh --shard N/6` on both arms —
+CI's own fast-mode configuration — each arm built from source in its own tree
+(`/root/claude-h2b/base` at the branch's base commit, `/root/claude-h2b/work`
+at its head), each with `npm ci` done, against Node 26.5.1.
+
+Compared **per test**, by merging the six shard journals per arm:
+
+```
+base tests: 819   work tests: 821
+  base: parity_fail=9  pass=810
+  work: parity_fail=9  pass=811  node_fail=1
+
+common tests: 819
+STATUS CHANGES: 1
+  test_gap_9536_fetch_url_error: pass -> node_fail
+
+work-only tests (2):
+  test_gap_turnloop_http2_control: pass
+  test_gap_turnloop_http2_server: pass
+```
+
+The one change is a `node_fail` — **Node** exited non-zero, which no Perry
+change can cause. `test_gap_9536_fetch_url_error` resolves
+`https://example.invalid/` and asserts the `ENOTFOUND` shape, so it depends on
+the box's DNS resolver, and twelve concurrent shards were hammering it. Node
+answers it correctly 3/3 when re-run directly, and the test re-runs `PASS` on
+the work arm through the harness:
+
+```
+[1/1] (00:00:10) test_gap_9536_fetch_url_error … PASS
+Parity Rate: 100.0%
+```
+
+So the attributable count is **zero**.
+
+The nine non-passing tests are the **same nine in both arms**:
+
+```
+test_gap_2159_defineproperty_class_prototype   test_gap_json_lazy_defineproperty_index
+test_gap_2514_settracesigint                   test_gap_perfhooks_3088_3008_3010_3011
+test_gap_2899_2779_2777_static_helpers         test_gap_prop_plan_cache_invalidation
+test_gap_disposablestack_2875                  test_gap_v8_2_3680plus
+test_gap_iterator_prototype_next_patch
+```
+
+Three of them — `2899_2779_2777_static_helpers`, `disposablestack_2875`,
+`iterator_prototype_next_patch` — are the ones the brief names as already red
+against the committed snapshot on the base commit, and the base arm reproduced
+exactly those three as snapshot "regressions", which is what says the baseline
+is behaving as documented rather than as a coincidence.
+
+### The one regression this found, and what it was
+
+The **first** pair of sweeps was not zero. It reported exactly one status
+change:
+
+```
+test_gap_gc_http2_pending_event_callback_rooting: pass -> crash
+```
+
+Reproduced immediately outside the harness — a hang, not a signal
+(`perry-rc=124` under a 30 s timeout), preceded by `client error: undefined`:
+
+```
+--- node ---            --- perry, before the fix ---
+settings cb fired       client error: undefined
+ping cb fired           (hangs)
+close cb fired
+```
+
+That test calls `client.settings(…)` on the **first tick after
+`http2.connect()`**, before the TCP connect has completed. `send_settings` wrote
+the SETTINGS frame straight to the socket, so it reached the peer **ahead of the
+client connection preface** — a connection error on the server's side, and a
+client whose callback could then never fire. `session.request()` was already
+queued for exactly this reason (`H2Conn::queued_opens`); the three
+connection-level controls were not.
+
+They are now, in `H2Conn::pending_controls`, drained by
+`control::drain_pending` from `client_transport_ready` **before** the queued
+stream opens — so a control frame the caller issued first does not end up behind
+a HEADERS it preceded. With that in place the test is byte-identical to Node
+again and the per-test comparison above is the second pair of sweeps, at zero.
+
 
 ### The `node:http2` granular parity suite
 
-<!-- NODESUITE -->
+`test-parity/node-suite/http2` — 60 fixtures, run on both arms with a
+per-test-outcome variant of `scripts/node_suite_run.py` so the comparison is
+per fixture rather than per count:
+
+```
+$ diff <(grep ^RESULT ns.base.txt) <(grep ^RESULT ns.work.txt)
+diff-rc=0
+
+base: http2  29  60  48.3%   diff=24 perry_err=7
+work: http2  29  60  48.3%   diff=24 perry_err=7
+```
+
+**Byte-identical outcome sets.** Every one of the 60 fixtures lands in the same
+bucket on both arms.
+
+Two things about that number have to be said plainly rather than left to be
+inferred.
+
+**First, this corpus is no longer evidence for the control surface.** Every
+network case in it is a Perry client talking to a Perry server in one process,
+which is exactly the configuration the loopback simulation was built for. It
+passed `settings`/`goaway`/`ping` before any frame existed, and it passes them
+now that they are real; it cannot distinguish the two. The new gap tests and
+h2spec are what distinguish them.
+
+**Second, both arms sit below the committed floor of 32/60**
+(`test-parity/node_suite_baseline.json`), and the seven `perry_err` — which are
+30-second timeouts in the runner, not compile failures — are the same seven
+fixtures in both arms. Being identical in both arms makes them not this
+branch's, but it also means this run is not a clean check against the floor,
+and the floor was captured on a quiet machine rather than one carrying load
+15–25 from four other lanes.
+
+They are not load, though, and they are not the integration branch's either.
+`plaintext/response-body.ts` — a server that answers `stream.respond` +
+`stream.end("hello h2")` and a client that reads it, i.e. the shape this branch
+passes in its own probes — **hangs for 30 s on all three of**: the base arm, the
+work arm, and a **pristine `main` checkout** (`/root/projects/perry/perry` at
+`0c0e850e9` = v0.5.1573, `git status` clean), each run alone on an otherwise
+idle tree:
+
+```
+base  rc=124      work  rc=124      main  rc=124      node  rc=0  ("hello h2")
+```
+
+So those seven fixtures are a pre-existing `main` regression against the
+recorded floor, visible here only because this lane happened to run the corpus.
+Caveat on the third figure: that binary is another session's build of that clean
+tree, which makes it a characterisation and not a bisect endpoint.
+
+
+
+
+### GC stress
+
+Five subjects, four seeds each, under
+`PERRY_GC_SCHEDULE_SEED=<n> PERRY_GC_SCHEDULE_RATE=1 PERRY_GC_SCHEDULE_ALLOC_KB=0
+PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=800`. **Every run's
+stdout is byte-identical to its unstressed run**, and no from-space quarantine
+fault, SIGSEGV or panic was raised in any of the twenty.
+
+| subject | copying minors | objects moved | loop polls | exit |
+|---|---|---|---|---|
+| `test_gap_gc_http2_pending_event_callback_rooting` | 60,020 | 492,038 | 60,000 | 0 |
+| `test_gap_turnloop_http2_server` | 63 | 8,957 | 0 | 70 |
+| `test_gap_turnloop_http2_control` | 39 | 8,600 | 0 | 70 |
+| `h2smoke` (client + server, `'stream'` path) | 30 | 8,634 | 0 | 70 |
+| `h2stream` (streamed response + trailers) | 25 | 8,566 | 0 | 70 |
+
+(Identical figures across all four seeds per subject, which is what a
+single-threaded replay should give.)
+
+**The exit 70 rows are the instrument telling the truth about itself**, and it
+is worth not glossing: `loop_polls=0` means no back-edge poll was reached, so
+the run "exercised nothing worth trusting" *as a loop-body test*. Those four
+programs are event-driven and have no allocating loop to poll in. What they did
+exercise is the collection point this module actually has — the window between
+the completion sink queueing an event and the main-thread pump firing it — and
+they ran 25–63 **copying** minors moving 8.5k+ objects each inside it. The
+first row is the one that satisfies the instrument on its own terms, and it is
+also the fixture written for precisely this hazard (`session.settings(cb)` /
+`.ping(cb)` / `.close(cb)` callbacks parked as raw NaN-box bits across a pump
+tick): 60,000 polls, 492k objects moved, identical output, exit 0.
+
+No root scanner was added, and that is a claim rather than an omission: a
+connection holds request/response bytes as owned `Vec<u8>`s and the *handle ids*
+of the JS objects it produced. No JS value and no heap pointer reaches the
+driver. The `IncomingMessage` / `ServerResponse` / `Http2SessionHandle` /
+`Http2StreamHandle` records are scanned by the existing
+`scan_http_server_roots`, the queued event callbacks by
+`scan_h2_pending_event_roots`, and `Http2SessionHandle::pending_callbacks` —
+where a `ping`/`settings` callback now waits out a real network round trip
+instead of one tick — was already visited there. `scripts/gc_runtime_root_holders.py`
+reports **OK**, with the same 1,489 holder declarations as before this change.
+
+### The streaming response path
+
+`writeHead` + two `write`s + `addTrailers` + `end` — `h2_begin_stream` /
+`h2_send_body` / `h2_finish_body` rather than the single-shot
+`h2_send_response`:
+
+```
+             node          this branch     base arm
+write ret    true          true            true
+status       200           200             200
+body         alpha|beta|gamma  (same)      (same)
+trailer      x-sum 3       x-sum none      x-sum none
+```
+
+The trailer block **is** encoded and sent — the server-side path builds it and
+`send_headers(trailers, END_STREAM)` puts it on the wire. What is missing is the
+**client**-side `'trailers'` event: `Http2PendingEvent` has no variant for a
+trailer block and `queue_turnloop_client_body` drops the argument. That is
+pre-existing — the base arm answers `none` too — and it belongs to the Node
+surface the sibling fixture lane owns, so it is reported rather than fixed here.
 
 ---
 

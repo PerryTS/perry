@@ -46,7 +46,7 @@ use turnloop_http::http2::encode_frame;
 
 use crate::server::http2_session_settings::Http2SettingsState;
 
-use super::conn;
+use super::conn::{self, H2Conn, PendingControl};
 
 /// SETTINGS identifiers, RFC 9113 §6.5.2.
 const HEADER_TABLE_SIZE: u16 = 1;
@@ -113,18 +113,72 @@ pub(crate) fn send_settings(
 ) -> Option<Http2SettingsState> {
     conn::with_owned(conn_id, |c| {
         let effective = clamp_to_core(requested, &c.settings);
-        let payload = settings_payload(c.role == turnloop_http::http2::Role::Client, &effective);
-        let mut frame = Vec::with_capacity(9 + payload.len());
-        if encode_frame(4, 0, 0, &payload, &mut frame).is_err() {
+        if !conn::transport_ready(c) {
+            // `http2.connect()` hands JS a session object synchronously and
+            // Node accepts `settings()` on it immediately. Writing the frame
+            // now would put it on the wire ahead of the client preface, and the
+            // peer answers a connection error — measured as a hung
+            // `test_gap_gc_http2_pending_event_callback_rooting`.
+            c.pending_controls
+                .push(PendingControl::Settings(effective.clone()));
+            return Some(effective);
+        }
+        if !write_settings(c, &effective) {
             return None;
         }
-        conn::write_raw(c, &frame);
-        // The peer's acknowledgement is intercepted by `conn::prescan`, which
-        // is what turns it into `'localSettings'` and the user's callback.
-        c.owed_settings_acks = c.owed_settings_acks.saturating_add(1);
         Some(effective)
     })
     .flatten()
+}
+
+/// Encode and send one SETTINGS frame, counting the acknowledgement it owes.
+fn write_settings(c: &mut H2Conn, effective: &Http2SettingsState) -> bool {
+    let payload = settings_payload(c.role == turnloop_http::http2::Role::Client, effective);
+    let mut frame = Vec::with_capacity(9 + payload.len());
+    if encode_frame(4, 0, 0, &payload, &mut frame).is_err() {
+        return false;
+    }
+    conn::write_raw(c, &frame);
+    // The peer's acknowledgement is intercepted by `conn::prescan`, which is
+    // what turns it into `'localSettings'` and the user's callback.
+    c.owed_settings_acks = c.owed_settings_acks.saturating_add(1);
+    true
+}
+
+/// Send the connection-level frames JS asked for before the transport was
+/// ready, in the order it asked for them.
+///
+/// Called from `conn::client_transport_ready`, **before** the queued
+/// `session.request()` opens: a connection-level frame the caller issued first
+/// must not end up behind a HEADERS it preceded.
+pub(crate) fn drain_pending(c: &mut H2Conn) {
+    let queued = std::mem::take(&mut c.pending_controls);
+    for control in queued {
+        match control {
+            PendingControl::Settings(settings) => {
+                write_settings(c, &settings);
+            }
+            PendingControl::Ping(data) => {
+                if c.core.as_mut().is_some_and(|core| core.ping(data).is_ok()) {
+                    conn::flush(c);
+                }
+            }
+            PendingControl::Goaway {
+                code,
+                last_stream,
+                opaque,
+            } => {
+                write_goaway(c, code, last_stream, &opaque);
+            }
+            PendingControl::Close => {
+                if let Some(core) = c.core.as_mut() {
+                    let _ = core.shutdown();
+                }
+                c.draining = true;
+                conn::flush(c);
+            }
+        }
+    }
 }
 
 /// `session.goaway(code, lastStreamID, opaqueData)`.
@@ -135,24 +189,42 @@ pub(crate) fn send_settings(
 /// unlike `close()`.
 pub(crate) fn send_goaway(conn_id: i64, code: u32, last_stream_id: u32, opaque: &[u8]) -> bool {
     conn::with_owned(conn_id, |c| {
-        let mut payload = Vec::with_capacity(8 + opaque.len());
-        payload.extend_from_slice(&(last_stream_id & 0x7fff_ffff).to_be_bytes());
-        payload.extend_from_slice(&code.to_be_bytes());
-        payload.extend_from_slice(opaque);
-        let mut frame = Vec::with_capacity(9 + payload.len());
-        if encode_frame(7, 0, 0, &payload, &mut frame).is_err() {
-            return false;
+        if !conn::transport_ready(c) {
+            c.pending_controls.push(PendingControl::Goaway {
+                code,
+                last_stream: last_stream_id,
+                opaque: opaque.to_vec(),
+            });
+            return true;
         }
-        conn::write_raw(c, &frame);
-        true
+        write_goaway(c, code, last_stream_id, opaque)
     })
     .unwrap_or(false)
+}
+
+fn write_goaway(c: &mut H2Conn, code: u32, last_stream_id: u32, opaque: &[u8]) -> bool {
+    let mut payload = Vec::with_capacity(8 + opaque.len());
+    payload.extend_from_slice(&(last_stream_id & 0x7fff_ffff).to_be_bytes());
+    payload.extend_from_slice(&code.to_be_bytes());
+    payload.extend_from_slice(opaque);
+    let mut frame = Vec::with_capacity(9 + payload.len());
+    if encode_frame(7, 0, 0, &payload, &mut frame).is_err() {
+        return false;
+    }
+    conn::write_raw(c, &frame);
+    true
 }
 
 /// `session.ping(payload, cb)` — a real PING frame. The callback fires from
 /// `Event::Ping { ack: true }`, not from here.
 pub(crate) fn send_ping(conn_id: i64, payload: [u8; 8]) -> bool {
     conn::with_owned(conn_id, |c| {
+        if !conn::transport_ready(c) {
+            // Node's `ping()` answers true for a session that is still
+            // connecting; the frame goes out when the transport is up.
+            c.pending_controls.push(PendingControl::Ping(payload));
+            return true;
+        }
         let sent = c
             .core
             .as_mut()

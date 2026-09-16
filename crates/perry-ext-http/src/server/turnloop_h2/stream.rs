@@ -881,6 +881,13 @@ pub(crate) fn request(
 /// `session.close()` — Node's graceful GOAWAY.
 pub(crate) fn session_close(conn_id: i64) {
     let drained = super::conn::with_owned(conn_id, |conn| {
+        if !super::conn::transport_ready(conn) {
+            // A `close()` on a session that is still connecting: the GOAWAY
+            // goes out with the rest of the queued control frames.
+            conn.pending_controls
+                .push(super::conn::PendingControl::Close);
+            return false;
+        }
         if let Some(core) = conn.core.as_mut() {
             let _ = core.shutdown();
         }

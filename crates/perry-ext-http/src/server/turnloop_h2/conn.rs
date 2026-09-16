@@ -183,6 +183,33 @@ pub(crate) struct H2Conn {
     /// The peer's SETTINGS values captured by the pre-scan, for the
     /// `'remoteSettings'` event the core's unit `Event::Settings` cannot carry.
     pub(crate) peer_settings: Option<Http2SettingsState>,
+    /// Connection-level frames JS asked for before the transport was ready.
+    ///
+    /// `http2.connect()` returns a session object synchronously and Node lets
+    /// `settings()` / `ping()` / `goaway()` be called on it immediately — which
+    /// is what `test_gap_gc_http2_pending_event_callback_rooting.ts` does on its
+    /// first tick. Writing such a frame straight to a socket that has not
+    /// finished connecting puts it on the wire **before the client preface**,
+    /// and the peer answers a connection error.
+    pub(crate) pending_controls: Vec<PendingControl>,
+}
+
+/// A connection-level frame queued until `NET_CONNECT` (and, on a secure
+/// client, until ALPN) has produced a core to encode it with.
+pub(crate) enum PendingControl {
+    Settings(Http2SettingsState),
+    Ping([u8; 8]),
+    Goaway {
+        code: u32,
+        last_stream: u32,
+        opaque: Vec<u8>,
+    },
+    Close,
+}
+
+/// Whether this connection can encode a frame right now.
+pub(crate) fn transport_ready(c: &H2Conn) -> bool {
+    c.core.is_some() && !c.connecting && !c.handshaking && !c.destroyed
 }
 
 fn conns() -> &'static Mutex<HashMap<i64, H2Conn>> {
@@ -377,6 +404,7 @@ fn on_accept(listener_id: i64, conn_id: i64) {
         owed_settings_acks: 0,
         goaway_opaque: Vec::new(),
         peer_settings: None,
+        pending_controls: Vec::new(),
     };
     if !secure {
         // h2c with prior knowledge: the core starts immediately and the client
@@ -553,6 +581,7 @@ pub(crate) fn connect_client(session_handle: i64, host: &str, port: u16) -> Opti
         owed_settings_acks: 0,
         goaway_opaque: Vec::new(),
         peer_settings: None,
+        pending_controls: Vec::new(),
     });
     // Node sets TCP_NODELAY on an HTTP/2 client socket.
     if tl::tcp_connect(id, super::SUBSYSTEM, host, port, true).is_err() {
@@ -609,6 +638,7 @@ fn client_transport_ready(id: i64) {
         crate::server::http2_server::mark_turnloop_client_connected(session, protocol);
     }
     with_owned(id, |c| {
+        super::control::drain_pending(c);
         let queued = std::mem::take(&mut c.queued_opens);
         for open in queued {
             stream::open_client_stream(c, open);
@@ -750,7 +780,7 @@ fn feed(id: i64, bytes: &[u8]) {
 // ── The receive loop ────────────────────────────────────────────────────────
 
 /// What the pre-scan did with the frame at the head of the input buffer.
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Debug)]
 enum Prescan {
     /// The frame was taken out of the stream entirely; the core never sees it.
     Consumed,
@@ -1170,4 +1200,166 @@ fn on_error(id: i64, code: Option<&str>) {
         );
     }
     destroy_connection(id);
+}
+
+#[cfg(test)]
+mod prescan_tests {
+    //! The pre-scan is the subtlest thing in this module and h2spec cannot
+    //! reach it: h2spec never makes Perry send a second SETTINGS, so nothing in
+    //! the conformance run exercises the ack-withholding at all. Getting it
+    //! wrong in either direction is a **connection** error — stealing the
+    //! core's own acknowledgement leaves `settings_awaiting_ack` set until the
+    //! SETTINGS deadline kills the session, and failing to steal ours lets the
+    //! core answer `protocol("unsolicited SETTINGS ack")`.
+
+    use super::*;
+
+    fn conn(owed: u32, core_acked: bool) -> H2Conn {
+        H2Conn {
+            id: 0,
+            role: Role::Server,
+            server_handle: 0,
+            // Zero: every glue call this module makes returns early on it, so a
+            // pre-scan test touches no handle registry.
+            session_handle: 0,
+            core: None,
+            input: Vec::new(),
+            streams: Vec::new(),
+            secure: false,
+            handshaking: false,
+            connecting: false,
+            alpn: None,
+            peer_address: String::new(),
+            peer_port: 0,
+            buffered: 0,
+            max_session_memory: 10 * 1024 * 1024,
+            timer: Timer::None,
+            draining: false,
+            closing: false,
+            read_eof: false,
+            destroyed: false,
+            queued_opens: Vec::new(),
+            allow_http1: false,
+            settings: Http2SettingsState::default(),
+            preface_done: true,
+            core_settings_acked: core_acked,
+            owed_settings_acks: owed,
+            goaway_opaque: Vec::new(),
+            peer_settings: None,
+            pending_controls: Vec::new(),
+        }
+    }
+
+    fn frame(kind: u8, flags: u8, stream: u32, payload: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        http2::encode_frame(kind, flags, stream, payload, &mut out).expect("encode");
+        out
+    }
+
+    /// The handshake's own acknowledgement belongs to the core. Eating it would
+    /// leave `settings_awaiting_ack` set forever and the SETTINGS deadline
+    /// would fail the connection ten seconds later, somewhere else entirely.
+    #[test]
+    fn the_cores_own_ack_is_never_stolen() {
+        let mut c = conn(1, false);
+        c.input = frame(4, 1, 0, &[]);
+        assert!(prescan(&mut c) == Prescan::Pass);
+        assert_eq!(c.input.len(), 9, "the ack must still be there for the core");
+        assert_eq!(c.owed_settings_acks, 1, "and it must not have been counted");
+    }
+
+    /// Exactly as many acknowledgements are withheld as this module sent
+    /// SETTINGS frames; the next one belongs to the core again.
+    #[test]
+    fn exactly_the_owed_acks_are_withheld() {
+        let mut c = conn(2, true);
+        let ack = frame(4, 1, 0, &[]);
+        c.input.extend_from_slice(&ack);
+        c.input.extend_from_slice(&ack);
+        c.input.extend_from_slice(&ack);
+        assert!(prescan(&mut c) == Prescan::Consumed);
+        assert_eq!(c.owed_settings_acks, 1);
+        assert!(prescan(&mut c) == Prescan::Consumed);
+        assert_eq!(c.owed_settings_acks, 0);
+        assert!(prescan(&mut c) == Prescan::Pass);
+        assert_eq!(c.input.len(), 9, "the third ack is the core's");
+    }
+
+    /// A SETTINGS ack with a payload is a FRAME_SIZE_ERROR, and only the core
+    /// can raise it. Swallowing the frame would turn a protocol violation into
+    /// silence.
+    #[test]
+    fn a_malformed_ack_is_left_for_the_core() {
+        let mut c = conn(1, true);
+        c.input = frame(4, 1, 0, &[0; 6]);
+        assert!(prescan(&mut c) == Prescan::Pass);
+        assert_eq!(c.input.len(), 15);
+        assert_eq!(c.owed_settings_acks, 1);
+    }
+
+    /// `Event::Settings` is a unit variant, so `session.remoteSettings` comes
+    /// from here or from nowhere.
+    #[test]
+    fn peer_settings_values_are_captured() {
+        let mut c = conn(0, true);
+        let mut payload = Vec::new();
+        for (id, value) in [(3u16, 7u32), (4, 1 << 20), (6, 9)] {
+            payload.extend_from_slice(&id.to_be_bytes());
+            payload.extend_from_slice(&value.to_be_bytes());
+        }
+        c.input = frame(4, 0, 0, &payload);
+        assert!(prescan(&mut c) == Prescan::Pass);
+        let seen = c.peer_settings.expect("captured");
+        assert_eq!(seen.max_concurrent_streams, 7);
+        assert_eq!(seen.initial_window_size, 1 << 20);
+        assert_eq!(seen.max_header_list_size, 9);
+        // An identifier the peer did not send stays at the protocol default.
+        assert_eq!(seen.max_frame_size, 16_384);
+        // And the frame is still there for the core, which has its own work to
+        // do with these values.
+        assert_eq!(c.input.len(), 9 + payload.len());
+    }
+
+    /// RFC 9113 §6.8's Additional Debug Data, which `Event::Goaway` drops.
+    #[test]
+    fn goaway_opaque_data_is_captured_and_cleared() {
+        let mut c = conn(0, true);
+        let mut payload = vec![0, 0, 0, 5, 0, 0, 0, 2];
+        payload.extend_from_slice(b"why");
+        c.input = frame(7, 0, 0, &payload);
+        assert!(prescan(&mut c) == Prescan::Pass);
+        assert_eq!(c.goaway_opaque, b"why");
+
+        // A second GOAWAY with no debug data must not inherit the first's.
+        let mut c2 = conn(0, true);
+        c2.goaway_opaque = b"stale".to_vec();
+        c2.input = frame(7, 0, 0, &[0, 0, 0, 5, 0, 0, 0, 2]);
+        assert!(prescan(&mut c2) == Prescan::Pass);
+        assert!(c2.goaway_opaque.is_empty());
+    }
+
+    /// Before the client preface has been consumed the buffer starts with
+    /// `PRI * HTTP/2.0…`, which decodes as a frame header of some absurd kind.
+    /// Reading it would be reading noise.
+    #[test]
+    fn nothing_is_peeked_before_the_preface() {
+        let mut c = conn(4, true);
+        c.preface_done = false;
+        c.input = http2::PREFACE.to_vec();
+        c.input.extend_from_slice(&frame(4, 1, 0, &[]));
+        assert!(prescan(&mut c) == Prescan::Pass);
+        assert_eq!(c.owed_settings_acks, 4);
+        assert_eq!(c.input.len(), http2::PREFACE.len() + 9);
+    }
+
+    /// A partial frame is nobody's: the host must wait for the rest rather than
+    /// act on a length it has not received.
+    #[test]
+    fn a_partial_frame_is_not_peeked() {
+        let mut c = conn(1, true);
+        let full = frame(4, 0, 0, &[0, 3, 0, 0, 0, 7]);
+        c.input = full[..full.len() - 1].to_vec();
+        assert!(prescan(&mut c) == Prescan::Pass);
+        assert!(c.peer_settings.is_none());
+    }
 }

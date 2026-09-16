@@ -35,8 +35,8 @@ What changes that a user can see:
   no window in which a completion could be misrouted — which is why the module
   shares P5's subsystem slot rather than taking one of the eight.
 
-Six defects in the previously committed-but-unwired transport were found by
-wiring it, each of which would have shipped: a `'stream'` listener would have
+Seven defects in the previously committed-but-unwired transport were found by
+wiring it and by the gap suite, each of which would have shipped: a `'stream'` listener would have
 had a default response synthesized on top of its own (two responses on one
 stream, i.e. `STREAM_CLOSED` and a dead connection); a 204/304/HEAD response's
 HEADERS frame was never flushed; a half-closed(local) stream was retired while
@@ -44,7 +44,12 @@ its peer could still send DATA; a failed write released the connection id to
 P5's sink and leaked one handle id per connection; two hand-encoded control
 frames were written ahead of whatever the core had queued; and
 `turnloop_serve::adopt_alpn_http1` — the whole reason for sharing the subsystem
-slot — did not exist.
+slot — did not exist. The seventh was found by the gap suite rather than by
+reading: `session.settings()` / `.ping()` / `.goaway()` called on the tick after
+`http2.connect()` wrote their frame **ahead of the client connection preface**
+and the peer answered a connection error, hanging
+`test_gap_gc_http2_pending_event_callback_rooting`; those three are now queued
+until the transport is ready, as `session.request()` already was.
 
 Full writeup, the turnloop gaps this hit, and what it did not do:
 `docs/turnloop/http2b-report.md`.
