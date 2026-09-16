@@ -2548,6 +2548,14 @@ pub extern "C" fn js_typed_feedback_numeric_array_push_guard(
     value: f64,
 ) -> i32 {
     let raw_addr = normalize_raw_object_addr(receiver.to_bits());
+    // #5094's gate, which this guard never got. With recording off (the
+    // default) `guard_observe` hands back `contract_valid` untouched, so the
+    // push index lookup, the `classify_array` walk and the observation are all
+    // dead work on every `a.push(v)`. Every sibling array guard already gates
+    // here; this one was the last hot one that did not.
+    if !typed_feedback_enabled() {
+        return numeric_array_push_guard(raw_addr as *const ArrayHeader, value) as i32;
+    }
     let push_index = match gc_header_for_user_addr(raw_addr) {
         Some(header) if unsafe { (*header).obj_type == crate::gc::GC_TYPE_ARRAY } => unsafe {
             (*(raw_addr as *const ArrayHeader)).length
@@ -2793,6 +2801,18 @@ pub extern "C" fn js_typed_feedback_object_set_unboxed_f64_field(
     key: *const crate::StringHeader,
     value: f64,
 ) {
+    // #5094's gate. `object_shape` resolves the receiver's shape and `key_hash`
+    // hashes the key purely to fill an `Observation` that `guard_observe`
+    // discards while recording is off.
+    if !typed_feedback_enabled() {
+        if object_key_matches_field(obj, key, field_index) && is_plain_number_bits(value.to_bits())
+        {
+            crate::object::js_object_set_field(obj, field_index, crate::JSValue::number(value));
+        } else {
+            crate::object::js_object_set_field_by_name(obj, key, value);
+        }
+        return;
+    }
     let object_addr = normalize_raw_object_addr(obj as u64);
     let (shape_addr, class_id, gc_type) = object_shape(object_addr);
     let observation = Observation {
@@ -2826,6 +2846,12 @@ pub extern "C" fn js_typed_feedback_object_set_unboxed_f64_field(
 
 #[no_mangle]
 pub extern "C" fn js_typed_feedback_observe_helper_return(site_id: u64, value: f64) -> f64 {
+    // #5094's gate. The contract is unconditionally valid here, so with
+    // recording off this wrapper is the identity function and `helper_return_facts`
+    // (which resolves a shape for a pointer payload) is pure dead work.
+    if !typed_feedback_enabled() {
+        return value;
+    }
     let bits = value.to_bits();
     let (shape_addr, class_id, heap_type, aux, value_kind) = helper_return_facts(bits);
     let observation = Observation {
