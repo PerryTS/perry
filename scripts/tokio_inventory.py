@@ -49,6 +49,12 @@ Each edge in the JSON carries the four things a reader of
                      "every worker_threads agent hits it".
   * `blocker`      — what has to exist before it can move.
   * `issue`        — where that is tracked.
+  * `plan`         — which group of the costed removal plan in
+                     `docs/turnloop/p8-report.md` this edge belongs to. Every
+                     edge is in exactly one group, and `--list` prints the
+                     per-group totals, so the plan's arithmetic is checked
+                     rather than asserted: a plan whose parts do not add up to
+                     the whole is a plan that discovers a late item.
 
 `--table` prints those as the markdown inventory table, so the report is
 generated from the gate rather than transcribed beside it.
@@ -337,6 +343,17 @@ def render_list(baseline: dict, edges: list[dict], lock: dict, sites: dict) -> s
                    and not recorded[edge_key(e)].get("blocker")]
     if unannotated:
         out.append(f"edges with no recorded blocker: {len(unannotated)}")
+    groups: dict[str, int] = {}
+    for e in baseline.get("edges", []):
+        groups[e.get("plan", "?")] = groups.get(e.get("plan", "?"), 0) + 1
+    if groups:
+        out.append("")
+        out.append(
+            "removal-plan groups (docs/turnloop/p8-report.md), "
+            f"{sum(groups.values())} edges in {len(groups)} groups:"
+        )
+        for g, n in sorted(groups.items()):
+            out.append(f"  {g:<4} {n}")
     return "\n".join(out)
 
 
@@ -486,6 +503,7 @@ def main() -> int:
                     "reached_when": old.get("reached_when", "TODO"),
                     "blocker": old.get("blocker", "TODO"),
                     "issue": old.get("issue", "TODO"),
+                    "plan": old.get("plan", "TODO"),
                 }
             )
         baseline["edges"] = merged

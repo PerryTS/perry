@@ -400,21 +400,41 @@ Ordered by dependency, not by size: **A is the precondition for B, C, I and
 every "on a declining path" row in the inventory**, and L cannot happen until
 everything above it has.
 
+Every one of the 46 edges appears in exactly one row, and the `edges` column
+sums to 46. That is not an assertion: each edge carries its group in
+`scripts/tokio_inventory.json`, and `--list` prints the totals, so the
+arithmetic is re-derived from the tree every run:
+
+```
+$ python3 scripts/tokio_inventory.py --list | tail -16
+removal-plan groups (docs/turnloop/p8-report.md), 46 edges in 14 groups:
+  A    4      F    4      K    2
+  B    8      G    5      L    1
+  C    2      H    6      M    1
+  D    2      I    3      N    1
+  E    4      J    3
+```
+
+A plan whose parts do not add up to the whole is a plan that discovers a
+fifteenth item late.
+
 | # | work | edges it removes | cost |
 |---|---|---|---|
-| **A** | **Per-agent `turnloop::Loop`s.** `ensure_loop_with` declines every non-`PRIMARY_AGENT` thread; give each agent its own loop, poster and timer heap, and a per-agent notify route (`PRIMARY_ROUTE` stays for `js_notify_main_thread`). | **0 directly** — and it is still first, because it is the precondition for every "on a declining path" row in the inventory | a phase. Plus the validation nobody has done: every P1/P5/P6/P7 surface starts taking the turnloop path on worker threads for the first time |
-| **B** | **TLS from a database binding** (`perry_db_turnloop` → `turnloop-tls`), **a UDS connect** for pg, and **SRV/topology** for mongo | `perry-ext-{ioredis,pg,mysql2,mongodb}` × 2 = **8** | a phase. #10335 makes it urgent: the default `new Redis()` configuration already declines |
-| **C** | **The `node:http`/`node:https` client**, including `agent.rs`'s ~1,950-line Node-semantics pool and the three raw-`TcpStream` bypasses | 1 of `perry-ext-http`'s 7 | a phase on its own; P6 said so and P8 agrees |
-| **D** | **HTTP/2**, both halves, onto `turnloop_http::http2::Connection` | `h2`, and `perry-ext-http`'s private per-session runtime | a phase (#10327) |
-| **E** | **`ws`**, onto `turnloop-websocket` — which is a tungstenite **major-version** migration of the stored connection type, not a transport swap | `perry-ext-ws` × 2, `perry-ext-http`'s tokio-tungstenite, `perry-stdlib`'s | medium; unblocks P5's "attached `WebSocketServer`" hole too |
-| **F** | **`fastify`**, which needs either an edge to perry-ext-http or a new crate holding the sans-I/O server | `perry-ext-fastify` × 4 | medium |
-| **G** | **`axios` and `node-fetch`**: a `js_perry_http_*` C seam of the shape P6 built for SMTP, plus fixing the duplicate-`js_fetch_*` defect above first | `perry-ext-{axios,fetch}` × 4, and `perry-stdlib`'s `reqwest` | medium; the seam is the bounded part, the two crates' own defects (#10325, #10326, #10310) are not |
-| **H** | **Delete or migrate `perry-stdlib`'s bundled `pg`/`mysql2`/`ioredis`/`mongodb`/`ws`/framework-server copies** — compiled out of every default build, so this is a policy call about whether the fallback stays | `perry-stdlib` × 6 | small as code, a decision as policy |
-| **I** | **lettre's async transport**, which lets `bundled-nodemailer` drop `tokio1`/`tokio1-rustls-tls`/`pool` and keep only the MIME builder | `perry-ext-nodemailer` × 2, `perry-stdlib`'s `lettre` tokio features | small, gated on A |
-| **J** | **The `perry` CLI** — `publish`, `login`, `verify`, `audit`, `run --remote`, `setup`, the update check | `perry` × 3 | medium, and it needs multipart in `turnloop-http`'s client, which does not have it |
-| **K** | **`perry-compose`** | `perry-container-compose` × 2 | a rewrite of a 14.8k-line async tool with no JS surface |
-| **L** | **`perry-stdlib`'s `tokio`** — the `async-runtime` feature, `common::async_bridge` and the `perry_ffi_spawn_blocking*` / `spawn_async` C ABI | the **last** edge | falls out of A–K; see below |
-| **M** | **`perry-ui-gtk4`** — `ksni` and `mpris-server` require tokio | 1 | replace both crates, or drop Linux tray/MPRIS |
+| **A** | **Per-agent `turnloop::Loop`s.** `ensure_loop_with` declines every non-`PRIMARY_AGENT` thread; give each agent its own loop, poster and timer heap, and a per-agent notify route (`PRIMARY_ROUTE` stays for `js_notify_main_thread`). Fix the `worker_threads` agent-id defect with it, or the two interact. | **4** — `perry-ext-net` × 2, and `perry-ext-http`'s `hyper` + `hyper-util` server fallback | a phase. Plus validation nobody has done: every P1/P5/P6/P7 surface starts taking the turnloop path on a worker for the first time. Also needs `SO_REUSEPORT` (PerryTS/turnloop#49) for the cluster-worker row |
+| **B** | **TLS, UDS and topology from a database binding** — `perry_db_turnloop` → `turnloop-tls`, a `pipe_connect` for pg's Unix socket, SRV + SDAM for mongo. Gated on A. | **8** — `perry-ext-{ioredis,pg,mysql2,mongodb}` × 2 | a phase. #10335 makes it urgent: the default `new Redis()` configuration already declines |
+| **C** | **The `node:http`/`node:https` client** — `agent.rs`'s ~1,950-line Node-semantics pool over reqwest's, plus three raw-`tokio::net::TcpStream` bypasses (`TE: trailers`, `Expect: 100-continue`, `agent.createConnection`) | **2** — `perry-ext-http`'s `reqwest` and `tokio-rustls` | a phase on its own; P6 said so and P8 agrees. #10328 rides along |
+| **D** | **HTTP/2**, both halves, onto `turnloop_http::http2::Connection` | **2** — `h2`, and `perry-ext-http`'s `tokio` (its last, once C and E are done) | a phase (#10327) |
+| **E** | **`ws`** onto `turnloop-websocket` — a tungstenite **major-version** migration of the stored connection type, not a transport swap | **4** — `perry-ext-ws` × 2, `perry-ext-http`'s and `perry-stdlib`'s `tokio-tungstenite` | medium; unblocks P5's attached-`WebSocketServer` hole at the same time |
+| **F** | **`fastify`** — needs either a dependency edge to perry-ext-http or a new crate holding the sans-I/O server | **4** — `perry-ext-fastify` × 4 | medium |
+| **G** | **`axios` and `node-fetch`** — a `js_perry_http_*` C seam of the shape P6 built for SMTP. The duplicate-`js_fetch_*` defect above has to be fixed first, or the seam is built on a SIGSEGV | **5** — `perry-ext-{axios,fetch}` × 4, `perry-stdlib`'s `reqwest` | medium; the seam is the bounded part, the two crates' own defects (#10310, #10325, #10326) are not |
+| **H** | **`perry-stdlib`'s bundled `pg`/`mysql2`/`ioredis`/`mongodb`, its `ws` module and its hyper framework server** — all compiled out of every default build, so this is a policy call about whether the fallback stays, not a transport one | **6** — `perry-stdlib`'s `sqlx`, `redis`, `mongodb`, `hyper`, `hyper-util`, `tokio-rustls` | small as code, a decision as policy. It is the cheapest lockfile reduction in the tree |
+| **I** | **lettre's async transport** — lets `bundled-nodemailer` drop `tokio1` / `tokio1-rustls-tls` / `pool` and keep only the MIME builder, which stays forever (`turnloop-smtp` re-exports it). Gated on A. | **3** — `perry-ext-nodemailer` × 2, `perry-stdlib`'s `lettre` | small |
+| **J** | **The `perry` CLI** — `publish`, `login`, `verify`, `audit`, `run --remote`, `setup`, the update check, telemetry, compat reports | **3** — `perry` × 3 | medium, and it needs multipart in `turnloop-http`'s client, which does not have it |
+| **K** | **`perry-compose`** | **2** — `perry-container-compose` normal + dev | a rewrite of a 14.8k-line async tool with no JS surface |
+| **L** | **`perry-stdlib`'s `tokio`** — the `async-runtime` feature, `common::async_bridge`, and the `perry_ffi_spawn_blocking*` / `spawn_async` C ABI | **1** — the last edge | falls out of A–K; see below |
+| **M** | **`perry-ui-gtk4`** — `ksni` and `mpris-server` *require* tokio | **1** | replace both crates, or drop Linux tray/MPRIS |
+| **N** | **`perry-ui-android`'s `tungstenite`** — sync 0.24 on its own thread. **Not a tokio edge**; listed because it pins the third tungstenite major in the tree, which is part of E's cost | **1** | small, and only worth doing with E |
+| | | **46** | |
 
 ### Why L is genuinely last, and not a layer you can lift out first
 
