@@ -502,6 +502,39 @@ byte-identical, and the transport counters show the two extra round trips:
 [perry-loop-waits] … tokio_ticks=0 …
 ```
 
+### MySQL's pool, which had no unit test at all
+
+Opening a pool member needs a real socket, so `pool.rs` is reviewed rather than
+unit-tested. `scripts/turnloop/apps/mysql_pool_parity.ts` is the only
+end-to-end exercise it gets, and it is **byte-identical** to Node:
+
+```
+pool-select: [{"id":1,"name":"one"},{"id":2,"name":"two"}]
+pool-execute: [{"name":"two"}]
+pool-concurrent: 1,2,3,4
+inside-tx: [{"id":3}]
+outside-tx: []
+after-rollback: [{"id":1},{"id":2}]
+after-commit: [{"id":1},{"id":2},{"id":4}]
+done
+```
+
+`inside-tx` / `outside-tx` is the load-bearing pair. The pinned connection from
+`getConnection()` has an open transaction holding row 3; the pool query issued
+while it is still open sees **nothing** — so the pool really handed that query a
+different physical connection, rather than the pinned one. `after-commit` then
+proves the released member was returned usable. Four connections were opened,
+all on one loop:
+
+```
+[perry-db] subsystem=4 connect id=5497558138880 127.0.0.1:53306
+[perry-db] subsystem=4 connect id=5497558138881 127.0.0.1:53306
+[perry-db] subsystem=4 connect id=5497558138882 127.0.0.1:53306
+[perry-db] subsystem=4 connect id=5497558138883 127.0.0.1:53306
+[perry-loop] driver=turnloop turns=60 … native_ticks=0 … completions=104
+[perry-loop-waits] … tokio_ticks=0 …
+```
+
 ### MongoDB, byte-for-byte against the base arm
 
 `scripts/turnloop/apps/mongo_parity.ts`:
@@ -744,7 +777,10 @@ Named precisely, because each is a hole rather than a preference.
   throughout; DESIGN §12's per-phase instruction A/B at cgu=1 with a control
   probe has not been taken.
 * **A saturation soak.** `mysql2`'s pool is bounded at ten and queues beyond
-  that; the acquire-deadline path is reviewed, not exercised end to end.
+  that. `mysql_pool_parity.ts` exercises acquire, pinning, isolation and release
+  against a real server, but never with more than ten callers outstanding, so
+  the **queue** and the acquire deadline are still reviewed rather than
+  exercised.
 
 ## For the integrator
 
@@ -767,6 +803,7 @@ PERRY_SKIP_BUILD=1 ./scripts/run_gap_tests.sh
 /root/claude-turnloop-p7/p7run.sh <tree> scripts/turnloop/apps/redis_parity.ts
 /root/claude-turnloop-p7/p7run.sh <tree> scripts/turnloop/apps/pg_parity.ts
 /root/claude-turnloop-p7/p7run.sh <tree> scripts/turnloop/apps/mysql_parity.ts
+/root/claude-turnloop-p7/p7run.sh <tree> scripts/turnloop/apps/mysql_pool_parity.ts
 /root/claude-turnloop-p7/p7run.sh <tree> scripts/turnloop/apps/mongo_parity.ts
 /root/claude-turnloop-p7/p7run.sh <tree> scripts/turnloop/apps/pg_thread_census.ts
 
