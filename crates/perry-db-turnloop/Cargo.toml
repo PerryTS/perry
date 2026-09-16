@@ -13,6 +13,10 @@ crate-type = ["rlib"]
 
 [dependencies]
 perry-ffi.workspace = true
+# The public TLS client installer (P12). It is what makes `Registry::connect_with_tls`
+# possible without this crate knowing anything about rustls: a binding hands
+# over `TlsClientOptions` and gets `TlsFacts` back.
+perry-tls-turnloop.workspace = true
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }
