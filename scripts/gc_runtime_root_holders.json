@@ -83,12 +83,6 @@
       "why": "InFlightRequest = three perry-ffi registry handle ids + a deadline Instant. The JS-value-bearing objects behind the ids (IncomingMessage/ServerResponse) are registered handles scanned by scan_http_server_roots via iter_handles_of_mut."
     },
     {
-      "file": "crates/perry-ext-http/src/server/turnloop_serve/conn.rs",
-      "name": "CONNS",
-      "verdict": "not_a_gc_pointer",
-      "why": "turnloop P5. A `Conn` holds the connection's decoded head/body bytes as owned `Vec<u8>`s, a `turnloop_http::http1` decoder/encoder, and the two handle ids (i64) of the request it produced. No NaN-boxed value and no heap pointer ever enters it — the IncomingMessage / ServerResponse payloads those ids name are scanned by scan_http_server_roots, which is what makes the id-only rule sufficient."
-    },
-    {
       "file": "crates/perry-ext-ioredis/src/turnloop_io.rs",
       "name": "OPEN",
       "verdict": "not_a_gc_pointer",
