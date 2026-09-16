@@ -125,6 +125,13 @@ pub extern "C" fn js_string_index_get_boxed(value: f64, key: f64) -> f64 {
     const UNDEFINED: f64 = f64::from_bits(crate::value::TAG_UNDEFINED);
     let jsval = crate::value::JSValue::from_bits(value.to_bits());
     if jsval.is_short_string() {
+        // Reading one character out of an ASCII short string needs neither the
+        // heap nor a handle scope: the bytes are in the value. Without this,
+        // every `s[i]` on a short string allocated a `StringHeader` for the
+        // receiver just to index it.
+        if let Some(character) = short_string_index_get(jsval, key) {
+            return character;
+        }
         let scope = crate::gc::RuntimeHandleScope::new();
         let key = scope.root_nanbox_f64(key);
         let hdr = crate::string::js_string_materialize_to_heap(value);
@@ -220,35 +227,77 @@ pub extern "C" fn js_string_index_get(s: *const StringHeader, key: f64) -> f64 {
         }
     }
     let len = unsafe { (*s).utf16_len } as u64;
-    let jsval = crate::value::JSValue::from_bits(key.to_bits());
 
-    let idx: u64 = if jsval.is_int32() {
-        let i = jsval.as_int32();
-        if i < 0 {
-            return UNDEFINED;
-        }
-        i as u64
-    } else if jsval.is_number() {
-        // Real double: only a finite, non-negative integer is an array index.
-        if !key.is_finite() || key < 0.0 || key.fract() != 0.0 {
-            return UNDEFINED;
-        }
-        key as u64 // saturating; an out-of-range magnitude fails the bound below
-    } else if jsval.is_any_string() {
-        match crate::builtins::jsvalue_string_content(key).and_then(|k| canonical_string_index(&k))
-        {
-            Some(i) => i,
-            None => return UNDEFINED,
-        }
-    } else {
-        return UNDEFINED;
+    let idx = match canonical_index_of(key) {
+        Some(idx) => idx,
+        None => return UNDEFINED,
     };
 
     if idx >= len {
         return UNDEFINED;
     }
+    // An ASCII receiver's character is one byte, which is exactly a
+    // short-string value: pack it here instead of routing through
+    // `js_string_char_at` -> `ascii_char_string`, whose canonical table costs a
+    // thread-local lookup and hands back a heap `StringHeader` that the caller
+    // immediately NaN-boxes. Same value either way — a short string and a heap
+    // string with the same bytes compare equal everywhere (`is_any_string` +
+    // `string_bytes` decode both) — and two equal characters now share one bit
+    // pattern rather than one pointer.
+    if is_ascii_string(s) {
+        let byte = unsafe { *string_data(s).add(idx as usize) };
+        debug_assert!(byte < 0x80, "utf16_len == byte_len proves one-byte units");
+        return f64::from_bits(crate::value::JSValue::short_string_unchecked(&[byte]).bits());
+    }
     let ptr = js_string_char_at(s, idx as i32);
     crate::value::js_nanbox_string(ptr as i64)
+}
+
+/// The index `s[key]` names, per `CanonicalNumericIndexString`, or `None` when
+/// the key is not an index at all (`s.length`, `s["01"]`, a symbol, …) and the
+/// caller must continue to the ordinary property lookup.
+fn canonical_index_of(key: f64) -> Option<u64> {
+    let jsval = crate::value::JSValue::from_bits(key.to_bits());
+    if jsval.is_int32() {
+        let i = jsval.as_int32();
+        return if i < 0 { None } else { Some(i as u64) };
+    }
+    if jsval.is_number() {
+        // Real double: only a finite, non-negative integer is an array index.
+        if !key.is_finite() || key < 0.0 || key.fract() != 0.0 {
+            return None;
+        }
+        // Saturating; an out-of-range magnitude fails the caller's bound check.
+        return Some(key as u64);
+    }
+    if jsval.is_any_string() {
+        return crate::builtins::jsvalue_string_content(key)
+            .and_then(|k| canonical_string_index(&k));
+    }
+    None
+}
+
+/// `s[i]` on a short-string receiver of pure ASCII: the answer is one of its
+/// own packed bytes, so neither the receiver nor the result needs to reach the
+/// heap. `None` falls through to the general path, which owns every other case
+/// (non-index keys, out-of-range indices, non-ASCII payloads).
+fn short_string_index_get(jsval: crate::value::JSValue, key: f64) -> Option<f64> {
+    let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let len = jsval.short_string_to_buf(&mut buf);
+    let bytes = &buf[..len];
+    if !bytes.is_ascii() {
+        // A multi-byte payload makes the byte index and the UTF-16 index
+        // disagree; the heap path resolves those.
+        return None;
+    }
+    let idx = canonical_index_of(key)?;
+    if idx >= len as u64 {
+        return None;
+    }
+    let byte = bytes[idx as usize];
+    Some(f64::from_bits(
+        crate::value::JSValue::short_string_unchecked(&[byte]).bits(),
+    ))
 }
 
 /// Parse a property-key string into a canonical array index per
