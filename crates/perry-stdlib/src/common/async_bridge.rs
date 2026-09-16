@@ -723,6 +723,20 @@ pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
     {
         return 1;
     }
+    // turnloop P6: an outbound request the client engine accepted is work the
+    // process owes an answer for, and it holds NO `InflightGuard` on purpose.
+    // The guard also feeds `native_work_inflight`, which makes the park choose
+    // the legacy tokio tick over a turnloop turn (P4's note 2) — so a fetch
+    // that took the turnloop path would have driven tokio to wait for work
+    // tokio was not carrying. A separate predicate is the whole point.
+    #[cfg(feature = "turnloop-http-client")]
+    if crate::turnloop_client::has_pending_requests() {
+        return 1;
+    }
+    #[cfg(feature = "turnloop-smtp-client")]
+    if crate::turnloop_smtp::has_pending() {
+        return 1;
+    }
     // Check for active WebSocket servers/connections
     #[cfg(feature = "websocket")]
     {

@@ -737,6 +737,31 @@ fn stats_enabled() -> bool {
     super::loop_stats::enabled()
 }
 
+/// A `PERRY_LOOP_STATS` line produced by a crate that depends on this one.
+///
+/// perry-stdlib owns P6's outbound-client counters and depends on perry-runtime
+/// rather than the other way round, so it installs a reporter here instead of
+/// this module reaching into it. One slot: a second consumer adds its own.
+pub type StatsReporter = extern "C" fn();
+
+static EXTRA_STATS: std::sync::atomic::AtomicPtr<()> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+/// Install the extra reporter. Idempotent for the same pointer.
+pub fn register_stats_reporter(reporter: StatsReporter) {
+    EXTRA_STATS.store(reporter as *mut (), std::sync::atomic::Ordering::Release);
+}
+
+fn print_extra_stats() {
+    let p = EXTRA_STATS.load(std::sync::atomic::Ordering::Acquire);
+    if p.is_null() {
+        return;
+    }
+    // SAFETY: the slot only ever holds a `StatsReporter` stored above.
+    let f: StatsReporter = unsafe { std::mem::transmute(p) };
+    f();
+}
+
 fn print_stats(stats: LoopStats) {
     eprintln!(
         "[perry-loop] driver=turnloop turns={} os_waits={} zero_event_waits={} native_ticks={} turn_errors={} completions={} timer_arms={} timer_expiries={}",
@@ -776,6 +801,9 @@ fn print_stats(stats: LoopStats) {
         crate::turnloop_pool::failed_total(),
         crate::turnloop_pool::refused_total(),
     );
+    // P6's own line, when perry-stdlib is linked and its client engine
+    // registered one (see `register_stats_reporter`).
+    print_extra_stats();
 }
 
 #[cfg(feature = "mod-dgram")]

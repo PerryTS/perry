@@ -71,6 +71,14 @@ mod tests;
 
 pub use errors::{map_error, NodeError};
 pub use sink::{register_sink, sink_installed, NetCompletion, SinkFn, MAX_SUBSYSTEMS};
+// P6: the completion kinds, for an in-tree subsystem. A separately linked
+// binding reads them through `perry_ffi::turnloop_net`, which declares its
+// own copy; perry-stdlib has a Cargo edge to this crate and must not need a
+// second declaration to keep in step with.
+pub use sink::{
+    NET_ACCEPT, NET_CLOSED, NET_CONNECT, NET_DATA, NET_EOF, NET_ERROR, NET_SHUTDOWN, NET_TIMER,
+    NET_WROTE,
+};
 
 // ── Operation classes, carried in the top 8 bits of every submission token ──
 const OP_ACCEPT: u64 = 1;

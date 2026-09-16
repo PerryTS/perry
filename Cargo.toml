@@ -419,6 +419,12 @@ turnloop = "0.1.0-alpha.3"
 # instead (docs/turnloop/p5-report.md, "Why sans-I/O").
 turnloop-http = { version = "0.1.0-alpha.3", default-features = false }
 turnloop-tls = { version = "0.1.0-alpha.3", default-features = false }
+# turnloop P6 (DESIGN §12 "P6"): the sans-I/O SMTP client and MIME builder that
+# replaces `lettre`'s tokio transport on the outbound mail path. Its `message`
+# module re-exports the same `lettre` 0.11 builder Perry's nodemailer surface
+# already uses, so only the transport changes
+# (docs/turnloop/p6-report.md).
+turnloop-smtp = { version = "0.1.0-alpha.3", default-features = false }
 hex = "0.4"
 tempfile = "3"
 itoa = "1.0"
@@ -452,6 +458,9 @@ tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
 hyper = "1.4"
 hyper-util = "0.1"
 http-body-util = "0.1"
+# The `http` types crate. Already in the graph via hyper/reqwest/turnloop-http;
+# named here so perry-stdlib can reach `StatusCode::canonical_reason` directly.
+http = "1"
 tokio-rustls = "0.26"
 rustls = "0.23"
 rustls-pemfile = "2"

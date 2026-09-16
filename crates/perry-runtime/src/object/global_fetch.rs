@@ -169,6 +169,37 @@ pub extern "C" fn js_register_global_fetch_with_options(f: FetchWithOptionsFn) {
     GLOBAL_FETCH_WITH_OPTIONS.store(f as *mut (), Ordering::Release);
 }
 
+/// The stdlib hook an `AbortSignal` abort must reach, for a build that does NOT
+/// carry `external-fetch-symbols`.
+///
+/// `url::abort::notify_fetch_abort` used to declare `js_fetch_notify_signal_
+/// aborted` as an `extern` under `#[cfg(feature = "external-fetch-symbols")]`
+/// and do *nothing at all* otherwise — so in a default build, where the global
+/// `fetch` is reached through `GLOBAL_FETCH_WITH_OPTIONS` rather than the
+/// linked symbol, `controller.abort()` and an `AbortSignal.timeout` deadline
+/// never reached the in-flight request and the fetch ran to completion. This is
+/// the registered twin of that symbol, and it is what makes the two dispatch
+/// modes agree.
+pub type FetchNotifyAbortFn = extern "C" fn(i64);
+static GLOBAL_FETCH_NOTIFY_ABORT: AtomicPtr<()> = AtomicPtr::new(null_mut());
+
+#[no_mangle]
+pub extern "C" fn js_register_global_fetch_notify_abort(f: FetchNotifyAbortFn) {
+    GLOBAL_FETCH_NOTIFY_ABORT.store(f as *mut (), Ordering::Release);
+}
+
+/// Call the registered hook, if any. Used only on the non-`external-fetch-
+/// symbols` path; the other one calls the linked symbol directly.
+pub(crate) fn notify_fetch_abort_registered(signal_ptr: i64) {
+    let f = GLOBAL_FETCH_NOTIFY_ABORT.load(Ordering::Acquire);
+    if f.is_null() {
+        return;
+    }
+    // SAFETY: the slot only ever holds a `FetchNotifyAbortFn` stored above.
+    let func: FetchNotifyAbortFn = unsafe { std::mem::transmute(f) };
+    func(signal_ptr);
+}
+
 #[no_mangle]
 pub extern "C" fn js_register_global_fetch_constructors(
     blob_new: FetchBlobNewFn,

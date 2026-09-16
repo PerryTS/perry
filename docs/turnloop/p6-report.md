@@ -1,0 +1,602 @@
+# turnloop P6 — the outbound HTTP and SMTP clients
+
+Branch `turnloop/p6-clients`, based on `turnloop/integration` at `7f77cce3c6`
+(P0–P5 plus `main` through v0.5.1576). Built and tested on the shared Linux box
+(`perrybuilder`, EPYC 9354P) against the pinned gap oracle Node **26.5.1**
+(`/opt/node-v26.5.1-linux-x64/bin`, not the box default). Nothing here was run
+on Windows or macOS, and nothing was benchmarked — see "What was not run".
+
+## What this phase found, before what it changed
+
+P6's scope is "outbound HTTP and SMTP". Measuring what Perry did first turned up
+five divergences from Node that have nothing to do with the transport, and one
+that makes a whole surface unreachable. Every one was reproduced on the **base
+commit** before it was touched:
+
+| subject | Node 26.5.1 | base `7f77cce3c6` |
+|---|---|---|
+| `fetch(url, { signal })`, `controller.abort()` | rejects `AbortError` | **runs to completion** — the abort never reached the request |
+| a `Content-Encoding: gzip` response body | decompressed | **raw gzip bytes** handed to `response.text()` |
+| `response.url` after a redirect | the final URL | **the original URL** |
+| `response.redirected` after a redirect | `true` | **`false`** |
+| a bodyless `POST` | `content-length: 0` | **no `content-length` at all** |
+| `ECONNREFUSED`, `err.cause.code` | `"ECONNREFUSED"` | **`undefined`** |
+| `transporter.sendMail(...)` / `.verify()` | — | **`TypeError: (number).sendMail is not a function`** |
+
+The first is the sharpest. `url::abort::notify_fetch_abort` declared its stdlib
+hook as an `extern` inside `#[cfg(feature = "external-fetch-symbols")]` and did
+*nothing at all* in the other arm — and the other arm is the one a default
+`fetch`-using build compiles to, because the global `fetch` is reached through
+the registered `GLOBAL_FETCH_WITH_OPTIONS` pointer rather than a linked symbol.
+So the entire `AbortSignal` path — `controller.abort()` **and**
+`AbortSignal.timeout(ms)` — was dead for `fetch`, while `abort_bridge.rs`'s
+`Notify` registry, the per-signal watch list and the `tokio::select!` all sat
+there looking correct.
+
+The last one is the widest, and it is **not fully fixed here**:
+`nodemailer.createTransport()` returns a bare handle *number* (`NR_F64` in the
+native table), so `transporter.sendMail(...)` has a receiver codegen types as a
+primitive and lowers to a hard `js_throw_type_error_not_a_function` — the
+runtime's handle dispatch is never consulted at all. Both methods fail, in every
+call shape tried (module scope, inside an `async fn`, a `.then` chain, and with
+the receiver annotated `any`), on the base commit and on this branch. **Perry's
+nodemailer surface has never worked from JS.** See "SMTP" under test evidence
+for what that costs this phase, and the defects section for the two halves.
+
+## Dependencies, added and not removed
+
+`turnloop-smtp 0.1.0-alpha.3` is added (default features only — the sans-I/O
+`Connection` plus the `message` module, **not** the `turnloop` feature, which
+would pull `turnloop-io`'s `LocalExecutor`; see "Why sans-I/O" below).
+`turnloop-http` and `turnloop-tls` were already in the tree from P5;
+`turnloop-http`'s `client` and `compression` modules are new consumers here.
+`url` and `http` are named directly by perry-stdlib — both were already in its
+graph through reqwest.
+
+**reqwest, hyper and lettre are NOT removed.** The decline table below is the
+reason, not reluctance: a proxy, a worker agent with no loop, and the
+`tokio-wait-driver` A/B arm are all reachable and all still exercised.
+`turnloop-smtp`'s `message` module re-exports the same `lettre` 0.11 builder
+Perry's nodemailer surface already used, so lettre stays in the graph regardless
+— which is also what makes the MIME bytes byte-identical across the migration.
+
+## What moved, and what did not
+
+| outbound surface | transport after P6 | why |
+|---|---|---|
+| global `fetch()` — `js_fetch_get`, `…_get_with_auth`, `…_post`, `…_post_with_auth`, `js_fetch_with_options`, `js_fetch_text` | **turnloop** + `turnloop_http::{client,http1}` | — |
+| `fetch` over `https:` | **turnloop** + `turnloop-tls` (unbuffered rustls) | — |
+| `undici.fetch`, `undici` dispatcher wiring | **turnloop** | it is glue over the same stack; it moved for free |
+| `js_nodemailer_send_mail` / `js_nodemailer_verify`, bundled surface | **turnloop** + `turnloop-smtp` | reachable from Rust; see the note below |
+| the same two through `perry-ext-nodemailer` (what `import 'nodemailer'` selects) | **turnloop**, through the `js_perry_smtp_*` C seam | ditto |
+| a fetch through a proxy (`HTTP_PROXY`, or `undici.setGlobalDispatcher(new ProxyAgent(…))`) | reqwest | Perry's proxy surface is a prebuilt `reqwest::Client`, not a URL a CONNECT tunnel could be driven from |
+| a fetch on a `worker_threads` agent | reqwest | that agent has no loop (P3/P4 left per-agent loops to a later phase) |
+| any fetch in the `tokio-wait-driver` A/B arm | reqwest | there is no loop at all |
+| `js_fetch_stream_start` (the SSE line-poll surface) | reqwest | see "What P6 did not do" |
+| `axios` (`perry-ext-axios`, and the stdlib mirror) | reqwest | ditto |
+| `node-fetch` (`perry-ext-fetch`) | reqwest | ditto |
+| `node:http` / `node:https` **client** (`http.request`, `https.get`) | reqwest | ditto |
+| `http2.connect()` | `h2` + its own private tokio runtime | ditto |
+
+This is a narrowing, not a removal — the same shape P1 left the tokio socket
+task in, and for the same reason.
+
+## Why sans-I/O, and not `turnloop_http::asynchronous::client`
+
+The same reason P5 gave for the server, and it applies unchanged to the client
+and to `turnloop_smtp::asynchronous`:
+
+* `LocalExecutor::with_config` constructs its **own** `Driver`. Perry already
+  owns one `turnloop::Loop` per agent, and a second loop in the same process is
+  exactly the mixed-transport deadlock P1 had to paper over with a 1 ms tick
+  slice.
+* Even sharing one, `LocalExecutor::turn` drains completions into
+  `Shared::dispatch`, which returns early for any token without its own tag bit.
+  P1's net tokens, P2's process tokens, P3's timer token and P4's pool tokens
+  would all be **silently dropped** — no error, no counter (PerryTS/turnloop#45).
+
+So the codecs are driven sans-I/O over P1's completion layer, which is what
+DESIGN §5b asks for and what keeps DESIGN D1 true.
+
+## Architecture
+
+```
+submit(spec) ─► client::Pool::acquire ─► turnloop_net::tcp_connect_host
+                                              │ NET_CONNECT
+                                              ▼
+                                  [TlsClientSession handshake]      (https)
+                                              │ NET_DATA
+                                              ▼
+              client::Http1Connection::start ─► turnloop_net::write
+                                              │ NET_DATA
+                                              ▼
+                [TLS decrypt] ─► Http1Connection::receive ─► Event::Head
+                                                             Event::Body
+                                                             Event::End
+                                              │
+                                              ▼
+                            client::Request::redirect ── resend ──┐
+                                              │ final             │
+                                              ▼                   │
+                       compression::StreamingDecoder ─────────────┘
+                                              │
+                                              ▼
+                        Sink::on_done ─► queue_promise_resolution
+```
+
+Four rules hold it together, three of them inherited:
+
+1. **The sink runs no JS.** It runs inside `dispatch_staged`, after a turn has
+   returned. It may build Rust state and insert a `FetchResponse`; the promise
+   is settled through the existing deferred-resolution queue, whose converter
+   runs on the owning thread. (P5's rule, unchanged.)
+2. **One request in flight per connection.** `Http1Connection` refuses to
+   `start` while a response is outstanding, so HTTP/1 pipelining cannot happen
+   by accident. That is also Node's per-connection serialization.
+3. **No JS value and no heap pointer reaches the driver.** Reads land in
+   turnloop's pooled buffers and are copied inside the dispatch call; writes are
+   owned `Vec<u8>`s. (P1's rule, unchanged — and the reason neither engine
+   registers a GC root scanner.)
+4. **A sink never runs while the engine's tables are borrowed.** A completed
+   request is pushed onto a `pending` list and delivered by `drain_pending`
+   after the `RefCell` is released, because a sink may submit the *next* request
+   (a redirect chain in JS, a `Promise.all` fan-out) and would otherwise re-enter
+   the same borrow.
+
+## Ids, and the collision that was waiting to happen
+
+`turnloop_net` keys **every** handle on a thread in ONE `HashMap<i64, Entry>`,
+regardless of subsystem. And perry-ffi's handle registry (which `perry-ext-net`
+names its sockets from) and perry-stdlib's `common` registry are two *different*
+registries over the *same* numeric range, `[1, 0x40000)` — so an id allocated
+naively from either would have collided with a live `net.Socket`, and the
+failure mode is one subsystem's completion reaching another's socket.
+
+Both P6 engines therefore allocate from private bands far above both:
+`1 << 40` for the HTTP client (subsystem slot 2) and `1 << 45` for SMTP
+(slot 3), each ceilinged well inside `turnloop_net`'s 56-bit token field. Both
+are asserted in tests rather than left to the comment.
+
+## GC decisions
+
+* **No new roots, and no root scanner.** A request holds owned `String`s and
+  `Vec<u8>`s and the `usize` address of a promise from
+  `js_promise_new_cross_thread`, which pins it across the crossing (#9552) —
+  exactly the exposure the reqwest path already had, for the same duration.
+  Read payloads are copied out inside the dispatch call.
+* **The TLS session holds no JS value either** — only owned ciphertext and
+  plaintext buffers.
+* **The sinks are plain `fn` pointers, not boxed closures.** A thread-local
+  engine table must hold nothing a moving collector could invalidate, and a `fn`
+  is exactly that. The caller's key (`ctx`) is the pinned promise address.
+* `scripts/gc_runtime_root_holders.py` needs no new entry: the only new
+  thread-locals are the two `MESSAGE_IDS` maps, which hold `String`s.
+
+## Connection pooling and keep-alive — measured, then preserved
+
+Perry's reqwest fetch client has always been built with
+`pool_idle_timeout(90 s)`, `pool_max_idle_per_host(16)` and
+`tcp_keepalive(60 s)` (`fetch_client_builder`). The turnloop engine uses
+`turnloop_http::client::Pool` with **the same two numbers**, so a long-running
+service's socket behaviour does not change.
+
+Two things the turnloop path has to do that reqwest did for itself:
+
+* **An idle pooled socket must not keep the process alive.** A turnloop handle
+  is referenced by default, so a program that finished its work would never
+  exit. On release the socket is `set_ref(false)`d and the pool's idle deadline
+  is armed as a real `NET_TIMER` (P5's primitive), unreferenced like the agent's
+  own timer deadline. Re-acquiring cancels it and re-references the socket.
+* **The idle-connection race.** A reused socket the peer closed while it sat in
+  the pool fails before any response byte; such a request is retried **once** on
+  a fresh connection, and only if it is replayable. A *fresh* connection's
+  failure is never retried.
+
+## HTTP/2 — a decision, not an omission
+
+The turnloop client advertises **only `http/1.1`** in ALPN, so no server can
+select h2 on this path. That is checked rather than assumed: after the handshake
+the negotiated protocol is compared against `http/1.1` and a mismatch fails the
+connection with `ERR_SSL_TLSV1_ALERT_NO_APPLICATION_PROTOCOL`.
+
+This is a real behavioural change. reqwest is built with its `http2` feature, so
+before this an `https://` fetch to an ALPN-capable origin negotiated h2 and
+multiplexed over one connection; now it uses HTTP/1.1 with the pool above.
+Nothing observable from JS changes (status, headers, body and timing semantics
+are identical), but a service issuing many concurrent requests to one h2 origin
+now opens up to `max_per_host` sockets instead of one.
+
+`turnloop_http::http2::Connection` is sans-I/O and `client::Pool` already models
+an h2 slot's `max_streams`, so the piece that is missing is the HPACK/flow-
+control driving, not the plumbing. Routing a fetch to the existing reqwest path
+on an h2-capable origin was rejected as the alternative: it would mean deciding
+the transport *after* the TLS handshake, on a socket turnloop owns, which is the
+descriptor-handoff problem P1 was blocked on.
+
+## `Content-Encoding` — the gap this closed
+
+**No reqwest decompression feature is enabled anywhere in the workspace** —
+not in perry-stdlib, perry-ext-fetch, perry-ext-http or the workspace default.
+So Perry sent no `Accept-Encoding` of its own and, when a caller set one
+explicitly (common in ported axios/got code), handed the *compressed bytes* to
+`response.text()`. That is the base row in the table at the top of this report.
+
+The turnloop path decodes `gzip`, `x-gzip`, `deflate` (with raw-deflate
+detection), `br` and `zstd` through `turnloop_http::compression`, bounded by a
+512 MiB limit so a decompression bomb cannot exhaust the heap. An encoding the
+crate does not implement is left encoded — which is no worse than the reqwest
+path, where *every* encoding was.
+
+**Perry still sends no `Accept-Encoding` header of its own.** That is
+deliberate: adding one would change the bytes of every outbound request and is a
+separate decision from decoding a response that carries the header anyway. Node
+sends `accept-encoding: gzip, deflate, br, zstd`; Perry sends none, on both
+transports. It is why `test_gap_turnloop_fetch.ts` prints request headers
+through an allowlist.
+
+## Abort and timeout semantics
+
+An aborted fetch cancels the in-flight operation on the loop **exactly once**:
+the request is detached from its connection, `turnloop_net::close` is submitted
+(which cancels the socket's outstanding operations), and the request is
+delivered as `AbortError` through the exactly-once `delivered` guard. A second
+`controller.abort()` finds no entry and is a no-op; the `NET_CLOSED` that
+follows finds the request already delivered and does not settle it again.
+
+`AbortSignal` reaches the engine through `js_fetch_notify_signal_aborted`, which
+now also calls `turnloop_client::abort_signal(key)`. Getting there needed the
+runtime-side fix described at the top: the hook is registered next to the fetch
+hook (`js_register_global_fetch_notify_abort`) rather than being a linked
+`extern` compiled in under a feature a default build does not carry.
+
+Per-phase deadlines (`connect`, `headers`, `body`) exist in
+`client::Lifecycle` and the engine wires `next_timeout`/`handle_timeout`, but
+**no deadline is armed by default**, because the reqwest fetch path set no
+`.timeout()` either — timeouts arrive only through `AbortSignal.timeout(ms)`,
+and arming one here would reject requests that previously succeeded.
+
+## The keep-alive gate, and the fixture that hid it needing one
+
+A turnloop handle is referenced by default, which keeps `Loop::turn` blocking —
+but it does not keep *Perry's event loop* running. That decision is the runtime's
+`AUX_HAS_ACTIVE` registry, and an engine that registers nothing there is a
+program that exits with "Detected unsettled top-level await" the moment its only
+outstanding work is an outbound request.
+
+This was found late, and by the right instrument rather than by luck: the fetch
+gap fixture passed throughout, because it runs a local `node:http` server, and
+**the server was holding the loop open**. The standalone remote probe — one
+`fetch` and nothing else — exited after a single turn with
+`http_submitted=1 completed=0`. Both engines now register an
+`aux_has_active` contributor.
+
+Deliberately NOT `InflightGuard`, which the reqwest path used: that counter also
+feeds `native_work_inflight`, which makes the park choose the legacy tokio tick
+instead of a turn (P4's note 2). A fetch on the turnloop path would then have
+driven tokio to wait for work tokio was not carrying, and `tokio_ticks=0` would
+have been false.
+
+## Test evidence
+
+Every command as run, on the shared Linux box, against Node **26.5.1**.
+
+### `fetch`, byte-for-byte against the oracle
+
+`test-files/test_gap_turnloop_fetch.ts` — a local `node:http` server and
+thirteen cases: a plain GET (status, `statusText`, `ok`, headers, body); a POST
+with a JSON body and a custom header, echoed back; a bodyless POST's framing; a
+404; a followed redirect with `url` and `redirected`; a `Content-Encoding: gzip`
+body; a binary body through `arrayBuffer()`; five requests in flight at once; an
+abort; an already-aborted signal; `ECONNREFUSED` with `cause.code`/`syscall`;
+`getaddrinfo ENOTFOUND` with Node's `errno`; and connection reuse.
+
+```
+target/release/perry test-files/test_gap_turnloop_fetch.ts -o /tmp/p6fetch
+diff <(node --experimental-strip-types test-files/test_gap_turnloop_fetch.ts) <(/tmp/p6fetch)
+```
+
+→ **byte-identical**. The oracle output was pinned three times before Perry ever
+ran the file, and the same file on the **base commit** differs on six lines —
+the six rows in the table at the top of this report.
+
+Nothing host-specific is printed: no port, no `Date`, no `user-agent`, no
+`accept-encoding` (see the note above), and the reuse assertion is the property
+(`connections < 12` for eighteen requests) rather than an exact count, because
+the engines pool differently.
+
+### `PERRY_LOOP_STATS`, both arms, same workload
+
+| | base `7f77cce3c6` | P6 |
+|---|---|---|
+| `turns` | 48 | **53** |
+| `completions` | 85 | **145** |
+| `native_ticks` | **32** | **0** |
+| `tokio_ticks` | **32** | **0** |
+| `turnloop_wait_ns` | 0 | 2,676,017 |
+| `tokio_tick_ns` | 44,638,675 | **0** |
+| P6 line | — | `http_submitted=15 declined=0 completed=12 failed=3 connects=5 reused=9 redirects=1 decoded_bodies=1` |
+
+`declined=0` is the load-bearing number: every one of the fifteen requests took
+the turnloop path, so a green comparison is not a comparison of the reqwest
+path against itself. `connects=5 reused=9` says the pool was live, and
+`decoded_bodies=1` says the decompressor really ran.
+
+### The five-second bug this caught, and the test that pins it
+
+The first working build answered every request correctly and took **~5 seconds
+per fetch**, with `turnloop_wait_ns=60008423200` over the run and zero
+connection reuse. The cause: `http1::Decoder` emits `Event::End` from a step
+that consumes **zero** bytes (`State::End -> Done` is a transition, not a
+parse), and the feed loop stopped at `pos >= input.len()`. The response never
+completed on data alone; the only thing that finished it was the server's
+keep-alive timeout closing the socket — which also made every connection
+unreusable, and which is why the symptom was *latency plus no pooling* rather
+than a hang.
+
+`the_end_event_arrives_from_a_step_that_consumes_nothing` drives both loop rules
+against the same real response bytes and asserts the old one does **not** see
+`End` while the new one does and leaves the connection reusable. It fails if the
+defect is ever reintroduced, and its first assertion fails if the defect becomes
+unreachable — so it cannot quietly stop discriminating.
+
+### A real remote endpoint, through TLS
+
+`scripts/turnloop/apps/p6_tls_remote.ts` — not a gap fixture, because it needs
+the network. It asserts what a loopback test cannot: a real certificate chain
+verified against the webpki roots, a real cross-origin `http:` → `https:`
+redirect, and six TLS requests in flight at once.
+
+| | Node 26.5.1 | P6 |
+|---|---|---|
+| `https://example.com/` | `200 true ctype=text/html bytes=true` | identical |
+| `https://api.github.com/meta` | `200 true ctype=application/json bytes=true` | identical |
+| `http://github.com/` → https | `200 redirected=true https=true` | identical |
+| `https://expired.badssl.com/` | `rejected CERT_HAS_EXPIRED` | identical |
+| six concurrent TLS requests | `200,200,200,200,200,200` | identical |
+
+`[perry-loop] driver=turnloop turns=207 … native_ticks=0 completions=228` and
+`p6 http_submitted=10 declined=0 completed=9 failed=1 connects=10 reused=1
+redirects=1`. The one failure is the expired certificate, which is the correct
+outcome; `tokio_ticks=0`.
+
+**This probe found two defects that every loopback fixture passed through.**
+
+1. **No default `User-Agent`.** Perry's reqwest client sets
+   `user_agent("perry/<version>")` deliberately — #236 is about
+   `api.github.com` rejecting anonymous requests — and the turnloop path sent
+   none. `api.github.com/meta` answered **403** where Node answered 200. A
+   caller's own header still wins, as `RequestBuilder::header` did.
+2. **Unconsumed decoder input was not retained.** `http1::Decoder`'s contract is
+   that the host keeps what a step did not consume; a response head that has not
+   reached its blank line consumes nothing and returns no event. Feeding only
+   the newest read threw the earlier half away, so any response whose HEAD spans
+   two reads failed with `HPE_INVALID_HEADER_TOKEN: invalid response head`.
+   `https://github.com/` is such a response; `example.com`, `google.com` and
+   `crates.io` are not, and neither is anything a local fixture serves. That is
+   the reason this probe exists, and it is the strongest argument in this report
+   for not accepting loopback-only evidence for a client.
+
+### Abort, mid-body
+
+`scripts/turnloop/apps/p6_abort_midbody.ts`: the server sends the head and 100
+of 1000 declared body bytes, then stalls; the client aborts.
+
+| | Node 26.5.1 | P6 |
+|---|---|---|
+| `server-stalled` | true | true |
+| abort surfaces at | `res.text()` (Node resolves at the head) | the `fetch()` await (Perry buffers the body) |
+| error | `AbortError` | `AbortError` |
+| a second `abort()` | no second settlement | no second settlement |
+| the next request on the same loop | 200 `after-abort-ok` | 200 `after-abort-ok` |
+| three more concurrent | 200,200,200 | 200,200,200 |
+| P6 counters | — | `http_submitted=5 completed=4 failed=1 connects=4 reused=1` |
+
+`completed=4 failed=1` for five submissions is the exactly-once assertion from
+the other side. Where "mid-body" falls differs between the engines because
+Perry's fetch buffers the whole body before resolving where Node streams it —
+a pre-existing difference this phase did not change, and the probe prints both
+shapes so neither engine can pass by accident.
+
+### GC stress, with requests in flight
+
+```
+PERRY_GC_DIAG=1 PERRY_GC_SCHEDULE_SEED=<1|7|12345> PERRY_GC_SCHEDULE_RATE=1 \
+  PERRY_GC_SCHEDULE_ALLOC_KB=0 PERRY_GC_PROTECT_FROMSPACE=1 \
+  PERRY_GC_PROTECT_FROMSPACE_DEPTH=800 PERRY_LOOP_STATS=1 ./p6fetch
+```
+
+| seed | copying minors | objects moved | from-space quarantines | `[gc…]` lines | P6 counters |
+|---|---|---|---|---|---|
+| 1 | 105 | 13,741 | 105 | 4,419 | `http_submitted=15 completed=12 failed=3 connects=5 reused=9` |
+| 7 | 105 | 13,741 | 105 | 4,419 | same |
+| 12345 | 105 | 13,741 | 105 | 4,419 | same |
+
+All three exit 0 with **stdout byte-identical to the unstressed run**, and the
+instruments prove they were armed rather than merely quiet: 105
+`[gc-fromspace-protect] retired_set=` lines say the from-space really was
+detached, poisoned and `mprotect`ed, and 13,741 moved objects say survivors
+really were copied — while fifteen requests, five connections and nine pool
+reuses were in flight. No SIGSEGV from the quarantine reporter: no stale
+from-space pointer was dereferenced. Identical counts across seeds is the
+documented behaviour at `RATE=1`, where every handled safepoint collects and the
+seed stops selecting.
+
+### SMTP
+
+`turnloop-smtp`'s `Connection` is sans-I/O, so the protocol is driven in
+`turnloop_smtp/tests.rs` with real bytes and no socket — greeting, EHLO,
+capability parsing, `AUTH PLAIN`, `MAIL FROM` with `SIZE`, per-recipient
+`RCPT TO`, `DATA`, the dot-stuffed body, the `Sent` event's `accepted`/
+`rejected`/`response`, a rejected recipient, STARTTLS re-issuing EHLO on the
+secure channel, implicit TLS writing nothing in the clear, and a `421`.
+
+**There is no end-to-end SMTP evidence, and that is the honest state of it.**
+`test-files/test_turnloop_p6_smtp.ts` exists and drives a scripted SMTP
+responder through `nodemailer`, but it cannot run: `transporter.sendMail(...)`
+throws `TypeError: (number).sendMail is not a function` before any native code
+is reached — on this branch **and on the base commit**, in every call shape
+tried. So the engine below it is proven at the protocol level and unproven at
+the surface level, and no claim is made here that a Perry program's mail now
+goes over turnloop. What IS demonstrated: the engine drives the protocol
+correctly against real bytes, the C seam links (the ext wrapper's externs
+resolve once the driver re-asserts `turnloop-smtp-client`), and the two missing
+dispatch rows are now present.
+
+The fixture is also **not** a gap test for a second reason: `nodemailer` is not
+in the repository's `package.json`, so the Node oracle cannot import it, and
+adding a dependency to satisfy one fixture is a supply-chain decision this lane
+should not make on its own.
+
+What the remaining half needs, precisely: `js_nodemailer_create_transport` would
+have to return a **handle-band NaN-boxed pointer** rather than a raw double (the
+shape `fetch`'s `handle_to_f64` uses), so the receiver is an object and the
+method call routes through `HANDLE_METHOD_DISPATCH` instead of being refused by
+codegen. That also makes `typeof transporter === "object"`, which is what Node
+reports. It is a two-sided change — the statically typed native-table rows take
+the receiver as a raw `Handle` today — and it belongs with whoever owns that
+binding rather than in a transport migration.
+
+### What was not run
+
+Named precisely.
+
+* **Windows and macOS.** Everything in this report ran on Linux x86_64.
+* **A benchmark.** The box was running another lane's work throughout, and the
+  brief forbids timing there. The five-second finding above is a *latency
+  defect*, measured as the difference between 60 s and 2.4 ms of loop wait on
+  one fixture — not a performance claim.
+* **The auto-optimize gap tier.** Only the fast tier ran.
+* **`cargo test --workspace`.**
+
+## turnloop gaps found
+
+Reported here in the shape P5's were; the coordinator files them.
+
+1. **`http1::Decoder` emits `Event::End` from a step that consumes zero bytes,
+   and nothing says so.** `State::End -> Done` is a transition, not a parse, so a
+   host that stops feeding once every byte has been handed over never sees the
+   response complete. Taking `Step { consumed, event }` at face value — "loop
+   while there is input" — produces a client that works and is five seconds
+   slower per request, because the only thing that finishes the exchange is the
+   peer's idle timeout. A `Decoder::wants_step()` predicate, or one line in the
+   `Step` docs, would have cost nothing. (Same asymmetry class as P5's finding
+   about `Event::Upgrade` on the request side.)
+2. **`client::Pool` has no way to ask which connection a `ConnectionId` is.**
+   `Acquire::Reuse(id)` hands back an id whose socket the host must find in its
+   own table; if the two ever disagree (a socket closed without the pool being
+   told) the host has to recover by releasing-and-closing the slot and retrying.
+   A `Pool::contains(id)` or a `release_unknown` would make the recovery path
+   expressible rather than improvised.
+3. **`client::Lifecycle`'s deadlines cannot be armed without a clock.** That is
+   correct sans-I/O design, but the crate offers no companion for "the deadline
+   the host should arm next" across a *set* of connections — `Pool::next_timeout`
+   exists and `Lifecycle::next_timeout` exists, and a host with N in-flight
+   requests must min() them itself every turn. A single `next_timeout` over a
+   client-wide structure would remove an O(N) scan per turn from every consumer.
+4. **`turnloop_tls::ClientConfig` hardcodes `rustls::crypto::ring`.** Perry's
+   other TLS paths install `aws_lc_rs` as the process default (#6117), and both
+   providers are in the final link. Naming the provider explicitly is what makes
+   this safe, so the behaviour is right — but a host that wants ONE provider in
+   the binary cannot express that, and `ClientOptions` has no field for it.
+5. **`turnloop_tls::ClientConfig` cannot express a client certificate.**
+   `ClientOptions` covers ALPN, roots, `reject_unauthorized` and SNI — enough for
+   `fetch`, but not for `node:https`'s `cert`/`key`/`pfx`, which is the next
+   consumer. (P5 recorded the server-side twin of this.)
+6. **`compression::StreamingDecoder::process` gives no way to distinguish
+   "needs more input" from "output buffer full".** Both surface as a step that
+   consumed and wrote something, and the caller has to loop until a step does
+   neither. That works, and it is what this host does, but a `needs_input` flag
+   would let a host size its scratch buffer instead of guessing.
+7. **`turnloop_smtp::Connection::send` takes the message as one `&[u8]`.** A
+   large attachment is therefore materialized in full before the first byte
+   reaches the socket, and `encode_data` copies it again for dot-stuffing. A
+   streaming body (`send_chunk` / `finish_body`, as `http1::Encoder` has) would
+   let a host with a 25 MB attachment avoid two copies of it.
+8. **`turnloop_smtp` has no `Tls::Required` enforcement at `Ready`.** `Required`
+   controls whether STARTTLS is *attempted*; a server that advertises no
+   STARTTLS still reaches `Ready` in the clear, and the host must notice. Perry
+   does (`on_ready` refuses), but "required" reading as "preferred" is a
+   security-shaped surprise.
+9. **`LocalExecutor` silently drops completions it did not issue** — P5's finding
+   (turnloop#45), unchanged, and the reason this phase is sans-I/O too.
+
+## Perry-side defects this work found (not P6 regressions)
+
+Each was reproduced on the base commit. The first two are fixed here because
+the phase's own acceptance case depends on them; the rest are recorded.
+
+1. **`AbortSignal` never reached the global `fetch`** — fixed. See the top of
+   this report. Registered twin `js_register_global_fetch_notify_abort`; the
+   `#[cfg(feature = "external-fetch-symbols")]` arm is unchanged.
+2. **The whole `nodemailer` transporter surface is unreachable from JS** —
+   HALF fixed, and still broken. `createTransport` returns a bare handle
+   *number*, so `sendMail` / `verify` answer `TypeError: (number).sendMail is
+   not a function` on the base commit and on this branch, in every call shape.
+   There are two independent holes:
+   * **no `HANDLE_METHOD_DISPATCH` arm claimed a nodemailer handle.** Fixed, in
+     two places because the two copies of the binding register handles in two
+     different registries: an arm in perry-stdlib's `method_dispatch.rs` for the
+     bundled surface, and a dispatch **extension** registered by
+     `perry-ext-nodemailer` for the well-known-flip surface (the shape
+     `perry-ext-http` already uses). Both gate on registry membership first and
+     the two-name vocabulary second, so a user object wrapping the transporter
+     keeps its own methods.
+   * **codegen never gets there.** The receiver is a primitive `number`, so the
+     call lowers to `js_throw_type_error_not_a_function` and the runtime is not
+     consulted. **Not fixed** — see the SMTP evidence section for what it would
+     take. The two dispatch rows above are therefore correct-but-unexercised
+     today; they are kept because the hole they fill is real and the other half
+     cannot be written without them. An integrator who would rather not carry an
+     unexercised arm can drop both commits' dispatch hunks without touching the
+     engine.
+3. **`perry-ext-fetch` has no `AbortSignal` wiring at all.** `signal` is stored
+   as a `Request` field and never consulted: no `Notify`, no `select!`, no
+   `AbortError`. So `import 'node-fetch'` and the global `fetch` differ in abort
+   behaviour — and after fix (1) they differ *more*, because the global one now
+   works. Not touched here; it is the same crate P6 did not migrate.
+4. **Both `axios` copies build a fresh `reqwest::Client` per request**
+   (`perry-ext-axios/src/lib.rs`, `perry-stdlib/src/axios.rs`): ~250 KB of
+   state, a cold DNS and TLS path, and no pooling, on every call — exactly the
+   failure mode the `fetch`/`node:http` singletons exist to avoid.
+5. **`http2.connect()` is cleartext-only and spins its own tokio runtime per
+   session.** `connect_h2_stream` returns a bare `tokio::net::TcpStream` with no
+   `tokio-rustls` wrap, so no ALPN; the session is hardcoded `h2c` /
+   `encrypted: false`, and `http2.connect('https://…')` does not do TLS.
+6. **`perry-ext-http`'s `AGENT_CLIENTS` cache never evicts** (its own comment
+   says so): one `reqwest::Client` per `http.Agent`, held for the process.
+7. **WHATWG's blocked-port list is not implemented.** `fetch('http://host:1/')`
+   rejects with `cause.message === 'bad port'` on Node before a socket is
+   created; Perry connects. Both transports; found while writing the fixture,
+   which is why it uses a port the OS just released instead of a literal.
+
+## For the integrator
+
+- The branch is `turnloop/p6-clients` on `origin`. Nothing here bumps the
+  version.
+- `turnloop-smtp 0.1.0-alpha.3` is new in `Cargo.lock` — one crate, resolved
+  with `CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow` and then pinned
+  `--precise` to alpha.3 so it stays in lockstep with turnloop/-http/-tls.
+  alpha.4 exists and resolves cleanly, but was two hours old.
+- **Build the ext wrappers in the same cargo invocation as
+  `perry-stdlib-static`** (#7629). `perry-ext-nodemailer` is now in that set for
+  any tree that wants to exercise SMTP.
+- **`crates/perry/src/commands/compile/optimized_libs/driver.rs` re-asserts
+  `turnloop-smtp-client`** for an `import 'nodemailer'` program, the same way it
+  re-asserts `web-fetch` for `undici`. Without it the auto-optimize rebuild of
+  perry-stdlib drops the engine and the wrapper's externs dangle at link time —
+  which is how it first failed here.
+- Run, on a machine with the pinned oracle:
+
+```bash
+RUST_TEST_THREADS=1 cargo test --release -p perry-stdlib turnloop_client
+RUST_TEST_THREADS=1 cargo test --release -p perry-stdlib turnloop_smtp
+PERRY_SKIP_BUILD=1 ./scripts/run_gap_tests.sh
+PERRY_SKIP_BUILD=1 ./run_parity_tests.sh --filter test_gap_turnloop_fetch
+PERRY_LOOP_STATS=1 ./p6_tls_remote      # needs the network
+PERRY_LOOP_STATS=1 ./p6_abort_midbody
+```
+
+- The two trees are on the build box at `/root/claude-turnloop-p6/{base,perry}`
+  (base at `7f77cce3c6`), each with its own `target/`. Delete both when the A/B
+  is done. `PERRY_RUNTIME_DIR` must be overridden per tree —
+  `/etc/profile.d/perry.sh` points it at a different checkout.

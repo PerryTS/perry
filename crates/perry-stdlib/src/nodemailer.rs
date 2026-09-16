@@ -12,6 +12,8 @@ use perry_runtime::{
 
 use crate::common::{register_handle, Handle};
 
+mod turnloop_bridge;
+
 /// SMTP transporter configuration
 #[derive(Debug, Clone)]
 pub struct SmtpConfig {
@@ -131,12 +133,12 @@ pub unsafe extern "C" fn js_nodemailer_create_transport(config_f: f64) -> f64 {
 }
 
 /// Email message options
-struct MailOptions {
-    from: String,
-    to: String,
-    subject: String,
-    text: Option<String>,
-    html: Option<String>,
+pub(crate) struct MailOptions {
+    pub(crate) from: String,
+    pub(crate) to: String,
+    pub(crate) subject: String,
+    pub(crate) text: Option<String>,
+    pub(crate) html: Option<String>,
 }
 
 /// Parse mail options from JSValue
@@ -206,6 +208,15 @@ pub unsafe extern "C" fn js_nodemailer_send_mail(
             return promise;
         }
     };
+
+    // turnloop P6 first: the same `lettre` message builder renders the bytes,
+    // but `turnloop-smtp` speaks the protocol over a turnloop socket instead of
+    // an `AsyncSmtpTransport<Tokio1Executor>`. A decline keeps the lettre path
+    // below, which is why it is not deleted.
+    match turnloop_bridge::try_send(transporter_handle, &mail_opts, promise as usize) {
+        turnloop_bridge::Dispatched::Accepted => return promise,
+        turnloop_bridge::Dispatched::Declined => {}
+    }
 
     crate::common::spawn_for_promise(promise as *mut u8, async move {
         use crate::common::get_handle;
@@ -300,6 +311,11 @@ pub unsafe extern "C" fn js_nodemailer_send_mail(
 pub unsafe extern "C" fn js_nodemailer_verify(transporter_handle: Handle) -> *mut Promise {
     let promise = js_promise_new_cross_thread();
 
+    match turnloop_bridge::try_verify(transporter_handle, promise as usize) {
+        turnloop_bridge::Dispatched::Accepted => return promise,
+        turnloop_bridge::Dispatched::Declined => {}
+    }
+
     crate::common::spawn_for_promise(promise as *mut u8, async move {
         use crate::common::get_handle;
 
@@ -338,4 +354,44 @@ pub unsafe extern "C" fn js_nodemailer_verify(transporter_handle: Handle) -> *mu
     });
 
     promise
+}
+
+/// Runtime method dispatch for a transporter handle whose static type was lost.
+///
+/// `createTransport` hands JS a bare handle id (`NR_F64`), so EVERY method call
+/// on the result is an untyped call. See the arm in
+/// `common/dispatch/method_dispatch.rs` for why this had to exist.
+///
+/// Registry membership is checked first and the name vocabulary second, so an
+/// id belonging to another subsystem, or a name this binding does not
+/// implement, is never claimed — the runtime then falls through to the
+/// prototype chain, as it must for a user object wrapping the transporter.
+///
+/// # Safety
+/// `handle` comes from the runtime's dispatcher and `args` are NaN-boxed.
+pub(crate) unsafe fn dispatch_transporter_method(
+    handle: Handle,
+    method: &str,
+    args: &[f64],
+) -> Option<f64> {
+    if crate::common::get_handle::<SmtpTransportHandle>(handle).is_none() {
+        return None;
+    }
+    let promise = match method {
+        "sendMail" => {
+            let options = args
+                .first()
+                .copied()
+                .map(|bits| JSValue::from_bits(bits.to_bits()))
+                .unwrap_or_else(|| {
+                    JSValue::from_bits(crate::common::dispatch::TAG_UNDEFINED_F64.to_bits())
+                });
+            js_nodemailer_send_mail(handle, options)
+        }
+        "verify" => js_nodemailer_verify(handle),
+        _ => return None,
+    };
+    Some(f64::from_bits(
+        JSValue::pointer(promise as *const u8).bits(),
+    ))
 }

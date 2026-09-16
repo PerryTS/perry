@@ -19,6 +19,9 @@ use perry_ffi::{
     Promise, StringHeader,
 };
 
+mod dispatch_ext;
+mod turnloop_bridge;
+
 #[derive(Debug, Clone)]
 pub struct SmtpConfig {
     pub host: String,
@@ -111,6 +114,12 @@ unsafe fn parse_smtp_config(config: JsValue) -> SmtpConfig {
 pub unsafe extern "C" fn js_nodemailer_create_transport(config_f: f64) -> f64 {
     let config = JsValue::from_bits(config_f.to_bits());
     let smtp_config = parse_smtp_config(config);
+    // The transporter is returned to JS as a bare handle NUMBER, so every
+    // method call on it lands in the runtime's untyped dispatch. Register the
+    // extension that claims those before the first one can happen — without it
+    // `transporter.sendMail(...)` is `TypeError: (number).sendMail is not a
+    // function`, which is what it was on the base commit.
+    dispatch_ext::ensure_registered();
     register_handle(SmtpTransportHandle::new(smtp_config)) as f64
 }
 
@@ -175,6 +184,18 @@ pub unsafe extern "C" fn js_nodemailer_send_mail(
             return raw;
         }
     };
+
+    // turnloop P6 first. On acceptance no tokio blocking thread is taken at
+    // all: the exchange runs on this agent's own loop and the promise settles
+    // from a completion. A decline keeps the `spawn_blocking` + lettre path
+    // below, which is why it is not deleted.
+    if let Some(config) =
+        get_handle::<SmtpTransportHandle>(transporter_handle).map(|w| w.config.clone())
+    {
+        if turnloop_bridge::try_send(&config, &mail_opts, raw) {
+            return raw;
+        }
+    }
 
     spawn_blocking(move || {
         let outcome = (|| -> Result<JsValue, String> {
@@ -255,6 +276,14 @@ pub unsafe extern "C" fn js_nodemailer_send_mail(
 pub extern "C" fn js_nodemailer_verify(transporter_handle: Handle) -> *mut Promise {
     let promise = JsPromise::new();
     let raw = promise.as_raw();
+
+    if let Some(config) =
+        get_handle::<SmtpTransportHandle>(transporter_handle).map(|w| w.config.clone())
+    {
+        if turnloop_bridge::try_verify(&config, raw) {
+            return raw;
+        }
+    }
 
     spawn_blocking(move || {
         let outcome = (|| -> Result<bool, String> {

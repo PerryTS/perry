@@ -37,6 +37,18 @@ mod precise_wait;
 pub(crate) use agent_loop::arm_timer as arm_agent_timer;
 #[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
 pub use agent_loop::{loop_statistics, LoopStats};
+// turnloop P6: perry-stdlib's outbound-client counters reach the stats line
+// through this, because the dependency edge runs stdlib → runtime.
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+pub use agent_loop::{register_stats_reporter, StatsReporter};
+
+/// The A/B and wasm arms have no agent loop, so there is no stats line to add
+/// to. Registration is accepted and dropped rather than `#[cfg]`-ed at every
+/// call site.
+#[cfg(any(target_arch = "wasm32", feature = "tokio-wait-driver"))]
+pub type StatsReporter = extern "C" fn();
+#[cfg(any(target_arch = "wasm32", feature = "tokio-wait-driver"))]
+pub fn register_stats_reporter(_reporter: StatsReporter) {}
 /// `PERRY_LOOP_STATS=1` wait metrics, recorded identically in both A/B arms.
 pub mod loop_stats;
 

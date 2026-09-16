@@ -381,6 +381,17 @@ pub(crate) fn build_optimized_libs(
             if module_normalized == "undici" {
                 features.insert("web-fetch");
             }
+            // turnloop P6 — the same shape, for SMTP. `import 'nodemailer'`
+            // strips `bundled-nodemailer` and routes to perry-ext-nodemailer,
+            // which reaches perry-stdlib's turnloop SMTP engine through the
+            // `js_perry_smtp_*` C seam. That engine is gated on
+            // `turnloop-smtp-client`, which is NOT implied by
+            // `bundled-nodemailer` precisely so the strip cannot take it — but
+            // the rebuilt feature list is explicit, so it has to be re-asserted
+            // here or the wrapper's externs dangle at link time.
+            if module_normalized == "nodemailer" {
+                features.insert("turnloop-smtp-client");
+            }
             // v0.5.579 — when the flip strips `bundled-net`, activate
             // `external-net-pump` to retain the shared runtime and external
             // net dispatch adapters. perry-ext-net registers its pump and

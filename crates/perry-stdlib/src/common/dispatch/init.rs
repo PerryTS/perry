@@ -477,6 +477,8 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
             ) -> *mut perry_runtime::Promise,
         );
         #[cfg(feature = "web-fetch")]
+        fn js_register_global_fetch_notify_abort(f: extern "C" fn(i64));
+        #[cfg(feature = "web-fetch")]
         fn js_register_global_fetch_constructors(
             blob_new: unsafe extern "C" fn(f64, f64) -> f64,
             file_new: unsafe extern "C" fn(f64, f64, f64, f64) -> f64,
@@ -550,6 +552,12 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     crate::string_decoder::string_decoder_prototype_value();
     #[cfg(feature = "web-fetch")]
     js_register_global_fetch_with_options(crate::fetch::js_fetch_with_options);
+    // turnloop P6: the abort hook has to be registered next to the fetch hook.
+    // Before this, `notify_fetch_abort` only reached the stdlib through a
+    // linked `extern` compiled in under `external-fetch-symbols`, so in a
+    // default build `controller.abort()` reached nothing at all.
+    #[cfg(feature = "web-fetch")]
+    js_register_global_fetch_notify_abort(crate::fetch::js_fetch_notify_signal_aborted);
     #[cfg(feature = "web-fetch")]
     js_register_global_fetch_constructors(
         crate::fetch_blob::js_blob_new,

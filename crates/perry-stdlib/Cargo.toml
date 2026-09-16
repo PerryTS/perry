@@ -29,7 +29,7 @@ default = ["full"]
 # must stay out of this list: release archives enable `full` without linking
 # their per-program provider archives, and adding an external HTTP pump here
 # made HTTP-free Linux UI links require libperry_ext_http.a (#5983, #8587).
-full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "rate-limit", "validation", "net", "tls", "bundled-dotenv", "bundled-lru-cache", "bundled-exponential-backoff", "bundled-events", "bundled-decimal", "bundled-dayjs", "bundled-moment", "bundled-commander", "bundled-streams"]
+full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "rate-limit", "validation", "net", "tls", "turnloop-smtp-client", "bundled-dotenv", "bundled-lru-cache", "bundled-exponential-backoff", "bundled-events", "bundled-decimal", "bundled-dayjs", "bundled-moment", "bundled-commander", "bundled-streams"]
 
 # Minimal core - just what's needed for basic programs
 core = []
@@ -94,7 +94,13 @@ http-server = ["dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:bytes",
 # #5174: `http-client` decomposes into `web-fetch` (the Web Fetch API)
 # plus the Axios compatibility module. Node HTTP is provided only by
 # perry-ext-http.
-web-fetch = ["dep:reqwest", "async-runtime", "bundled-streams"]
+# turnloop P6: the outbound HTTP/1.1 client engine
+# (`src/turnloop_client/`). Rides under `web-fetch` because that is the
+# gate the Web Fetch surface itself is behind; the reqwest client stays
+# beside it as the declining path (proxy, HTTP/2, a worker agent with no
+# loop) exactly as P1 kept the tokio socket task.
+turnloop-http-client = ["dep:turnloop-http", "dep:turnloop-tls", "dep:url", "dep:http"]
+web-fetch = ["dep:reqwest", "async-runtime", "bundled-streams", "turnloop-http-client"]
 http-client = ["web-fetch"]
 
 # Web Streams API (issue #237). Per-binding gate v0.5.572 — the
@@ -272,7 +278,12 @@ compression = ["compression-gzip", "compression-brotli", "compression-zstd"]
 # backwards-compat; v0.5.558's well-known flip toggles
 # `bundled-nodemailer` instead.
 email = ["bundled-nodemailer"]
-bundled-nodemailer = ["dep:lettre", "async-runtime"]
+bundled-nodemailer = ["dep:lettre", "async-runtime", "turnloop-smtp-client"]
+# turnloop P6: SMTP on turnloop (`src/turnloop_smtp/`). Kept OUT of the
+# `bundled-nodemailer` gate's strip path — it rides in `full` on its own so
+# the `js_smtp_*` entry points survive the well-known flip that strips
+# `bundled-nodemailer`, and perry-ext-nodemailer can reach them.
+turnloop-smtp-client = ["dep:turnloop-smtp", "dep:turnloop-tls", "dep:url"]
 
 # Image processing (sharp) — `image` umbrella stays for
 # backwards-compat; v0.5.551's well-known flip toggles
@@ -342,6 +353,16 @@ perry-container-compose = { path = "../perry-container-compose", optional = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 once_cell.workspace = true
+# turnloop P6 — the outbound client engines. Optional: a build without
+# `web-fetch` / `turnloop-smtp-client` links neither.
+turnloop-http = { workspace = true, optional = true }
+turnloop-tls = { workspace = true, optional = true }
+turnloop-smtp = { workspace = true, optional = true }
+# `turnloop_http::client::Request` exposes a `url::Url`, and the canonical
+# reason phrase `Response.statusText` reports comes from `http::StatusCode`
+# — the same crate reqwest already puts in this graph.
+url = { workspace = true, optional = true }
+http = { workspace = true, optional = true }
 lazy_static.workspace = true
 chrono = { workspace = true, features = ["serde"] }
 rand = "0.10"  # Required by lodash (core module)
