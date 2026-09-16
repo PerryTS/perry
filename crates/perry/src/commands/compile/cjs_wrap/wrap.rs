@@ -416,7 +416,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         .collect::<Vec<_>>()
         .join("\n");
     let imports = format!(
-        "import {{ createRequire as __perry_cjs_create_require, isBuiltin as __perry_cjs_require_is_builtin }} from 'node:module';\n{imports}"
+        "import {{ createRequire as __perry_cjs_create_require, isBuiltin as __perry_cjs_is_builtin }} from 'node:module';\n{imports}"
     );
 
     // An UNRESOLVABLE adopted specifier (`require('@opentelemetry/api')`
@@ -1018,6 +1018,22 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         const err = kind === 'type' ? new TypeError(message) : new Error(message);
         err.code = code;
         return err;
+    }}
+    // Accepts BOTH spellings of every builtin, which is what the switch this
+    // replaced did. `isBuiltin` alone is stricter than the switch: `sea`,
+    // `sqlite`, `test` and `test/reporters` are builtins only in their `node:`
+    // form, so bare `require("sqlite")` stopped resolving — and OpenCode's
+    // dependency graph contains exactly that. wrangler does
+    // `DatabaseSync = __require("sqlite").DatabaseSync` and then
+    // `new DatabaseSync(...)`, which became `new undefined()`.
+    //
+    // Whether Perry should accept the bare spellings at all is a real question,
+    // but it is a SEMANTIC one and does not belong in a performance change.
+    // Behaviour here is byte-for-byte what the switch did; the divergence is
+    // filed separately.
+    function __perry_cjs_require_is_builtin(specifier) {{
+        return __perry_cjs_is_builtin(specifier)
+            || __perry_cjs_is_builtin('node:' + specifier);
     }}
     // `isBuiltin` comes from `node:module` instead of a switch emitted into
     // EVERY CommonJS module. The switch carried both spellings of all 58
