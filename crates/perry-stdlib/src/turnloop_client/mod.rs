@@ -1,0 +1,551 @@
+//! turnloop P6: Perry's **outbound** HTTP/1.1 on turnloop handles.
+//!
+//! P1 put Perry's sockets on turnloop and P5 put the HTTP/1.1 *server* codec and
+//! TLS there. This is the client half: `fetch`, `axios` and anything else that
+//! issues an outbound request stops being a `reqwest` future driven by a tokio
+//! tick and becomes a state machine driven by `NET_*` completions on the
+//! agent's own `turnloop::Loop`.
+//!
+//! # What drives what
+//!
+//! ```text
+//!   submit(spec)  ──► Pool::acquire ──► turnloop_net::tcp_connect_host
+//!                                            │ NET_CONNECT
+//!                                            ▼
+//!                              [TlsClientSession handshake]   (https only)
+//!                                            │
+//!                                            ▼
+//!            client::Http1Connection::start ──► turnloop_net::write
+//!                                            │ NET_DATA
+//!                                            ▼
+//!              [TLS decrypt] ──► Http1Connection::receive ──► Event::Head
+//!                                                             Event::Body
+//!                                                             Event::End
+//!                                            │
+//!                                            ▼
+//!                       client::Request::redirect  ── resend ──┐
+//!                                            │ final           │
+//!                                            ▼                 │
+//!                    compression::StreamingDecoder ────────────┘
+//!                                            │
+//!                                            ▼
+//!                             Sink::on_done → queue_promise_resolution
+//! ```
+//!
+//! Every policy decision — redirects, the pool, the per-phase deadlines, the
+//! proxy environment, `Content-Encoding` — comes from `turnloop_http::client`
+//! and `turnloop_http::compression` rather than being written here. This module
+//! owns the *transport*: sockets, completions, ids and TLS.
+//!
+//! # Why not `turnloop_http::asynchronous::client`
+//!
+//! The same reason P5 gave for the server: it needs a `turnloop_io::
+//! ExecutorHandle`, `LocalExecutor::with_config` constructs its **own** driver,
+//! and even sharing one, `Shared::dispatch` returns early for a token without
+//! its tag bit — P1's net tokens, P2's process tokens, P3's timer token and P4's
+//! pool tokens would all be silently dropped (turnloop#45). Perry owns one
+//! `turnloop::Loop` per agent, so the codecs are driven sans-I/O over P1's
+//! completion layer.
+//!
+//! # Ids
+//!
+//! Every turnloop handle on a thread lives in ONE `HashMap<i64, Entry>` in
+//! `turnloop_net`, regardless of subsystem — and perry-ffi's handle band
+//! (`[1, 0x40000)`, which is what `perry-ext-net` names its sockets from) and
+//! perry-stdlib's `common` handle band are two *different* registries over the
+//! *same* numeric range. Ids allocated here therefore come from a private band
+//! starting at `ID_BASE = 1 << 40`, far above both, so a client socket can never
+//! be confused with a `net.Socket`. `ids_are_disjoint_from_the_binding_bands`
+//! tests that rather than leaving it to the comment.
+//!
+//! # GC
+//!
+//! **No JS value and no heap pointer reaches the driver**, exactly as in P1 and
+//! P5. A request carries owned `String`/`Vec<u8>` and the `usize` address of a
+//! promise created by `js_promise_new_cross_thread`, which pins it (#9552) the
+//! same way the reqwest path already did; reads land in turnloop's pooled
+//! buffers and are copied out inside the dispatch call. So this module registers
+//! no GC root scanner, and `scripts/gc_runtime_root_holders.py` needs no entry
+//! for it.
+
+use std::cell::RefCell;
+use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
+
+use perry_runtime::turnloop_net as tl;
+use turnloop_http::client::{self as tlc, ConnectionId, PoolKey, RedirectMode};
+use turnloop_http::http1;
+
+mod exchange;
+
+#[cfg(test)]
+#[path = "tests.rs"]
+mod tests;
+
+pub(crate) use exchange::ClientError;
+
+/// The `turnloop_net` subsystem slot this module registers.
+///
+/// Slot 0 is `perry-ext-net`; slot 1 is reserved for the bundled stdlib `net`
+/// (P1's note). This takes slot 2, leaving 3 free.
+const SUBSYSTEM: u8 = 2;
+
+/// Private id band. See the module note: it must not overlap perry-ffi's or
+/// perry-stdlib's handle bands, both of which end at `0x40000`.
+const ID_BASE: i64 = 1 << 40;
+/// Ids wrap inside `[ID_BASE, ID_CEILING)`; `turnloop_net` tokens carry 56 bits.
+const ID_CEILING: i64 = 1 << 55;
+
+/// Matches the reqwest client `fetch` has always built
+/// (`fetch_client_builder`): `pool_max_idle_per_host(16)`,
+/// `pool_idle_timeout(90s)`. Preserving those two numbers is what keeps the
+/// migration invisible to a long-running service's connection behaviour.
+const POOL_MAX_PER_HOST: usize = 16;
+const POOL_IDLE: Duration = Duration::from_secs(90);
+
+/// A response body larger than this is refused rather than buffered. Sixteen
+/// megabytes of *decompressed* body is already beyond what the buffered
+/// `fetch` surface can usefully hand to JS, and an unbounded decoder is a
+/// decompression bomb.
+pub(crate) const BODY_LIMIT: usize = 512 * 1024 * 1024;
+
+/// Lifetime counters. A "turnloop carried this fetch" claim is worth nothing if
+/// these are zero, so `PERRY_LOOP_STATS` prints them (DESIGN §11).
+static SUBMITTED: AtomicU64 = AtomicU64::new(0);
+static DECLINED: AtomicU64 = AtomicU64::new(0);
+static COMPLETED: AtomicU64 = AtomicU64::new(0);
+static FAILED: AtomicU64 = AtomicU64::new(0);
+static REUSED: AtomicU64 = AtomicU64::new(0);
+static CONNECTED: AtomicU64 = AtomicU64::new(0);
+static REDIRECTS: AtomicU64 = AtomicU64::new(0);
+static DECODED: AtomicU64 = AtomicU64::new(0);
+
+/// Why a submission could not be served here. Every variant is a real
+/// configuration the reqwest path still handles, which is why the fallback is
+/// not deleted (P1's coexistence rule).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Declined {
+    /// This agent has no loop (a `worker_threads` agent before its own loop
+    /// lands, or the `tokio-wait-driver` A/B arm).
+    NoLoop,
+    /// A proxy is configured for this origin. `undici`'s `ProxyAgent` installs
+    /// one process-wide, and the CONNECT tunnel is not implemented here yet.
+    Proxy,
+    /// Not an `http:`/`https:` URL, or the URL is malformed in a way
+    /// `client::Request::new` rejects for a reason the caller must report the
+    /// existing way.
+    Unsupported,
+    /// TLS is wanted but the client configuration could not be built.
+    NoTls,
+}
+
+pub(crate) fn note_declined() {
+    DECLINED.fetch_add(1, Ordering::Relaxed);
+}
+
+/// `PERRY_LOOP_STATS`'s P6 line. Printed by the event pump's stats reporter.
+pub fn stats_line() -> String {
+    format!(
+        "[perry-loop] p6 http_submitted={} declined={} completed={} failed={} \
+         connects={} reused={} redirects={} decoded_bodies={}",
+        SUBMITTED.load(Ordering::Relaxed),
+        DECLINED.load(Ordering::Relaxed),
+        COMPLETED.load(Ordering::Relaxed),
+        FAILED.load(Ordering::Relaxed),
+        CONNECTED.load(Ordering::Relaxed),
+        REUSED.load(Ordering::Relaxed),
+        REDIRECTS.load(Ordering::Relaxed),
+        DECODED.load(Ordering::Relaxed),
+    )
+}
+
+/// Whether this phase carried any request at all — the liveness assertion a
+/// test needs before believing a green run says anything.
+pub fn submitted_total() -> u64 {
+    SUBMITTED.load(Ordering::Relaxed)
+}
+
+/// Requests still outstanding on this thread. Read by the keep-alive gate so
+/// `main()` returning while a fetch is in flight does not exit the loop (the
+/// shape #591 fixed for the tokio pool).
+pub fn has_pending_requests() -> bool {
+    ENGINE.with(|e| !e.borrow().requests.is_empty())
+}
+
+// ── What a caller hands in, and gets back ──────────────────────────────────
+
+/// One outbound request, fully materialized on the owning thread before it is
+/// submitted. Owned data only — no JS value crosses into the engine.
+pub(crate) struct RequestSpec {
+    pub(crate) url: String,
+    pub(crate) method: String,
+    /// Caller headers in insertion order. `host` is supplied by
+    /// `client::Request::head`, so one here is dropped.
+    pub(crate) headers: Vec<(String, String)>,
+    pub(crate) body: Option<Vec<u8>>,
+    pub(crate) redirect: RedirectMode,
+    /// The `AbortSignal` object address, when the caller bound one. Used only
+    /// as a cancellation key; never dereferenced here.
+    pub(crate) abort_key: Option<usize>,
+}
+
+/// The finished response, in the shape `fetch` stores in `FETCH_RESPONSES`.
+pub(crate) struct ResponseOut {
+    pub(crate) status: u16,
+    pub(crate) status_text: String,
+    pub(crate) headers: Vec<(String, String)>,
+    pub(crate) body: Vec<u8>,
+    pub(crate) final_url: String,
+    pub(crate) redirected: bool,
+}
+
+pub(crate) enum Outcome {
+    Ok(Box<ResponseOut>),
+    Err(ClientError),
+}
+
+/// Where a finished (or streaming) response goes.
+///
+/// Plain function pointers rather than a boxed closure: the engine is a
+/// thread-local table that must hold nothing a moving collector could
+/// invalidate, and a `fn` is exactly that. `ctx` is the caller's own key — for
+/// `fetch` it is the pinned promise address.
+#[derive(Clone, Copy)]
+pub(crate) struct Sink {
+    pub(crate) ctx: usize,
+    /// Called once, at the FINAL response's head (never for a followed
+    /// redirect). Only set by a streaming caller.
+    pub(crate) on_head: Option<fn(usize, u16, &[(String, String)])>,
+    /// Called per decoded body chunk of the final response. Only set by a
+    /// streaming caller; when set, `on_done` receives an empty body.
+    pub(crate) on_chunk: Option<fn(usize, &[u8])>,
+    pub(crate) on_done: fn(usize, Outcome),
+}
+
+// ── Engine state ───────────────────────────────────────────────────────────
+
+/// A socket this engine owns.
+struct Conn {
+    pool_id: ConnectionId,
+    key: PoolKey,
+    tls: Option<Box<crate::turnloop_tls_client::TlsClientSession>>,
+    http: tlc::Http1Connection,
+    /// Decoded bytes the codec has not consumed yet.
+    ///
+    /// `http1::Decoder`'s contract is that **the host retains unconsumed
+    /// input**: a head that has not reached its blank line consumes nothing and
+    /// returns no event, and a chunk size or trailer block split across two
+    /// reads does the same. Feeding only the newest read would silently drop
+    /// the earlier half — which is a defect no loopback fixture can catch,
+    /// because a small response head always arrives in one piece. It was found
+    /// against `https://github.com/`, whose head spans two TLS records.
+    input: Vec<u8>,
+    /// The request currently using this socket, if any.
+    request: Option<u64>,
+    /// Armed while the socket is idle in the pool; `NET_TIMER` closes it.
+    idle_timer: Option<i64>,
+    /// Set once `close` has been submitted so a late completion is ignored.
+    closing: bool,
+    /// The connection has served at least one complete response. A reused
+    /// connection that dies before its first byte is retried once (the classic
+    /// idle-connection race); a fresh one is not.
+    used: bool,
+}
+
+/// One in-flight logical request — possibly across several connections, if it
+/// is redirected or retried.
+struct Req {
+    spec: RequestSpec,
+    sink: Sink,
+    /// `turnloop_http`'s policy object: the URL, method, headers, body and the
+    /// redirect counter. Rewritten in place by `Request::redirect`.
+    request: tlc::Request,
+    conn: Option<i64>,
+    /// Head of the response currently being decoded.
+    head: Option<http1::Head>,
+    /// Accumulated body of the response currently being decoded, still encoded.
+    body: Vec<u8>,
+    /// Decoder for a `Content-Encoding`d body; `None` for identity.
+    decoder: Option<Box<turnloop_http::compression::StreamingDecoder>>,
+    /// Decoded body. For a streaming sink this stays empty and chunks go out as
+    /// they are produced.
+    decoded: Vec<u8>,
+    /// True once a redirect has been followed, for `response.redirected`.
+    redirected: bool,
+    /// True once the final head has been streamed to a streaming sink.
+    streaming: bool,
+    /// Set when the request has been retried once after an idle-connection
+    /// race, so a second failure is reported rather than looping.
+    retried: bool,
+    /// Terminal: the sink has been called. Guards exactly-once delivery
+    /// (DESIGN D4) against a completion that arrives after the outcome.
+    delivered: bool,
+}
+
+#[derive(Default)]
+struct Engine {
+    registered: bool,
+    pool: Option<tlc::Pool>,
+    conns: HashMap<i64, Conn>,
+    requests: HashMap<u64, Req>,
+    /// Requests the pool told to `Wait`, per origin, in arrival order.
+    waiting: HashMap<String, VecDeque<u64>>,
+    /// `AbortSignal` address → the requests bound to it.
+    aborts: HashMap<usize, Vec<u64>>,
+    next_id: i64,
+    next_req: u64,
+    /// Sinks to run once the current dispatch has finished touching the tables.
+    /// A sink may call back into `submit`, so it must never run while the
+    /// `RefCell` is borrowed.
+    pending: Vec<(Sink, Outcome)>,
+    /// Set while `drain_pending` is running, so a sink that submits a new
+    /// request does not re-enter the drain.
+    draining: bool,
+}
+
+thread_local! {
+    /// Per agent, like the loop itself. A request belongs to the thread that
+    /// submitted it; there is no cross-thread map to race on.
+    static ENGINE: RefCell<Engine> = RefCell::new(Engine::default());
+}
+
+impl Engine {
+    fn alloc_id(&mut self) -> i64 {
+        loop {
+            if self.next_id < ID_BASE || self.next_id >= ID_CEILING {
+                self.next_id = ID_BASE;
+            }
+            let id = self.next_id;
+            self.next_id += 1;
+            if !self.conns.contains_key(&id) {
+                return id;
+            }
+        }
+    }
+
+    fn pool(&mut self) -> &mut tlc::Pool {
+        self.pool
+            .get_or_insert_with(|| tlc::Pool::new(POOL_MAX_PER_HOST, POOL_IDLE))
+    }
+}
+
+/// Install the completion sink. Idempotent; called from `submit`.
+fn ensure_registered(engine: &mut Engine) -> bool {
+    if engine.registered {
+        return true;
+    }
+    // A client never accepts, so the accepted-connection id allocator refuses.
+    // Returning zero is `register_sink`'s documented refusal.
+    extern "C" fn no_accept() -> i64 {
+        0
+    }
+    engine.registered = tl::register_sink(SUBSYSTEM, sink, no_accept);
+    if engine.registered {
+        // `PERRY_LOOP_STATS`'s P6 line. Installed here rather than at startup so
+        // a program that never issues an outbound request prints nothing extra.
+        perry_runtime::event_pump::register_stats_reporter(print_stats);
+        // The keep-alive contributor. Without it a program whose only work is an
+        // outbound request exits before the response arrives — "Detected
+        // unsettled top-level await", which is exactly how this was found: the
+        // fetch fixture passed only because its own `node:http` server was
+        // holding the loop open. A separate registry from `InflightGuard` on
+        // purpose (P4's note 2): that counter also feeds `native_work_inflight`,
+        // which would make the park choose the legacy tokio tick over a turn.
+        //
+        // SAFETY: a plain registration with a `'static` function pointer.
+        unsafe { js_register_aux_has_active(aux_has_active) };
+    }
+    engine.registered
+}
+
+unsafe extern "C" {
+    /// perry-runtime's `stdlib_pump::js_register_aux_has_active`. It is
+    /// `pub(crate)` there, so it is reached as a `#[no_mangle]` extern — the
+    /// same route `perry-ext-net` takes.
+    fn js_register_aux_has_active(f: extern "C" fn() -> i32);
+}
+
+extern "C" fn aux_has_active() -> i32 {
+    i32::from(has_pending_requests())
+}
+
+extern "C" fn print_stats() {
+    eprintln!("{}", stats_line());
+}
+
+/// The `turnloop_net` completion sink. Runs on the loop-owning thread inside
+/// the dispatch call, after `turn` has returned — so it may allocate Rust state
+/// and settle promises through the deferred queue, but it runs no JS itself.
+extern "C" fn sink(completion: *const tl::NetCompletion) {
+    // SAFETY: `turnloop_net::dispatch` borrows a live `NetCompletion` for the
+    // duration of this call; nothing here retains it.
+    let c = unsafe { &*completion };
+    // SAFETY: only read inside this call, which is the documented lease.
+    let bytes = unsafe { c.bytes() };
+    let code = unsafe { c.code_str() };
+    let syscall = unsafe { c.syscall_str() };
+    exchange::on_completion(c.kind, c.id, c.errno, code, syscall, bytes, c.terminal != 0);
+    drain_pending();
+}
+
+/// Run every queued sink outside the engine borrow. A sink may submit another
+/// request (a redirect chain in JS, `Promise.all` fan-out), which takes the
+/// same `RefCell`.
+fn drain_pending() {
+    let already = ENGINE.with(|e| {
+        let mut engine = e.borrow_mut();
+        if engine.draining {
+            return true;
+        }
+        engine.draining = !engine.pending.is_empty();
+        !engine.draining
+    });
+    if already {
+        return;
+    }
+    loop {
+        let next = ENGINE.with(|e| {
+            let mut engine = e.borrow_mut();
+            let next = engine.pending.pop();
+            if next.is_none() {
+                engine.draining = false;
+            }
+            next
+        });
+        let Some((sink, outcome)) = next else { break };
+        (sink.on_done)(sink.ctx, outcome);
+    }
+}
+
+// ── Submission ─────────────────────────────────────────────────────────────
+
+/// Take the turnloop path for one outbound request.
+///
+/// `Err(Declined)` means the caller must keep its existing transport for this
+/// request; nothing has been allocated and no completion will arrive. `Ok(())`
+/// means the sink will be called exactly once.
+pub(crate) fn submit(spec: RequestSpec, sink: Sink) -> Result<(), Declined> {
+    if !tl::available() {
+        return Err(Declined::NoLoop);
+    }
+    let request = tlc::Request::new(&spec.url, &spec.method).map_err(|_| Declined::Unsupported)?;
+    if proxy_for(&request.url)?.is_some() {
+        return Err(Declined::Proxy);
+    }
+    if request.url.scheme() == "https" && exchange::tls_config().is_none() {
+        return Err(Declined::NoTls);
+    }
+    let id = ENGINE.with(|e| {
+        let mut engine = e.borrow_mut();
+        if !ensure_registered(&mut engine) {
+            return None;
+        }
+        engine.next_req = engine.next_req.wrapping_add(1).max(1);
+        let id = engine.next_req;
+        let mut request = request;
+        request.headers = spec
+            .headers
+            .iter()
+            .map(|(name, value)| http1::Header::new(name, value.as_bytes()))
+            .collect();
+        if let Some(body) = spec.body.clone() {
+            request.body = body;
+        }
+        if let Some(key) = spec.abort_key {
+            engine.aborts.entry(key).or_default().push(id);
+        }
+        engine.requests.insert(
+            id,
+            Req {
+                spec,
+                sink,
+                request,
+                conn: None,
+                head: None,
+                body: Vec::new(),
+                decoder: None,
+                decoded: Vec::new(),
+                redirected: false,
+                streaming: false,
+                retried: false,
+                delivered: false,
+            },
+        );
+        Some(id)
+    });
+    let Some(id) = id else {
+        return Err(Declined::NoLoop);
+    };
+    SUBMITTED.fetch_add(1, Ordering::Relaxed);
+    exchange::start(id);
+    drain_pending();
+    Ok(())
+}
+
+/// Cancel every request bound to `signal_ptr`. Called from the abort bridge on
+/// the main thread when `controller.abort()` or an `AbortSignal.timeout`
+/// deadline fires. A miss is a no-op.
+pub(crate) fn abort_signal(signal_ptr: usize) -> usize {
+    let ids = ENGINE.with(|e| {
+        e.borrow_mut()
+            .aborts
+            .remove(&signal_ptr)
+            .unwrap_or_default()
+    });
+    let n = ids.len();
+    for id in ids {
+        exchange::abort(id);
+    }
+    drain_pending();
+    n
+}
+
+/// Node's proxy environment, read through `turnloop_http`'s own matcher so the
+/// `NO_PROXY` rules are the crate's rather than a second implementation.
+fn proxy_for(url: &url::Url) -> Result<Option<url::Url>, Declined> {
+    // `undici.setGlobalDispatcher(new ProxyAgent(...))` installs a reqwest
+    // client rather than an environment variable; that path is declined by
+    // `fetch`'s own caller before it reaches here.
+    let env = tlc::ProxyEnvironment {
+        http_proxy: var("HTTP_PROXY").or_else(|| var("http_proxy")),
+        https_proxy: var("HTTPS_PROXY").or_else(|| var("https_proxy")),
+        no_proxy: var("NO_PROXY")
+            .or_else(|| var("no_proxy"))
+            .unwrap_or_default(),
+    };
+    env.proxy_for(url).map_err(|_| Declined::Proxy)
+}
+
+fn var(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|v| !v.is_empty())
+}
+
+// ── Delivery ───────────────────────────────────────────────────────────────
+
+/// Queue a sink call for `drain_pending`, marking the request delivered so a
+/// later completion cannot call it twice (DESIGN D4).
+fn deliver(engine: &mut Engine, id: u64, outcome: Outcome) {
+    let Some(req) = engine.requests.get_mut(&id) else {
+        return;
+    };
+    if req.delivered {
+        return;
+    }
+    req.delivered = true;
+    match &outcome {
+        Outcome::Ok(_) => COMPLETED.fetch_add(1, Ordering::Relaxed),
+        Outcome::Err(_) => FAILED.fetch_add(1, Ordering::Relaxed),
+    };
+    let sink = req.sink;
+    if let Some(key) = req.spec.abort_key {
+        if let Some(list) = engine.aborts.get_mut(&key) {
+            list.retain(|other| *other != id);
+            if list.is_empty() {
+                engine.aborts.remove(&key);
+            }
+        }
+    }
+    engine.requests.remove(&id);
+    engine.pending.push((sink, outcome));
+}

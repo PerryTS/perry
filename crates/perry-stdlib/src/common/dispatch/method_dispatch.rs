@@ -215,6 +215,20 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         return value;
     }
 
+    // turnloop P6: `nodemailer.createTransport(...)` returns a bare handle
+    // NUMBER, so `transporter.sendMail(...)` / `.verify()` are lowered as
+    // generic calls on an untyped receiver and land here. No arm claimed them,
+    // so the whole surface answered `TypeError: (number).sendMail is not a
+    // function` — on the base commit too, in every call shape. This is the
+    // bundled-surface half of the fix; `perry-ext-nodemailer` registers a
+    // dispatch EXTENSION for the well-known-flip half, because its handles live
+    // in perry-ffi's registry rather than this one.
+    #[cfg(feature = "bundled-nodemailer")]
+    if let Some(value) = crate::nodemailer::dispatch_transporter_method(handle, method_name, &args)
+    {
+        return value;
+    }
+
     // mysql2 handles frequently pass through interface-typed fields in Drizzle,
     // which removes the static class information used by native lowering.
     #[cfg(feature = "bundled-mysql2")]

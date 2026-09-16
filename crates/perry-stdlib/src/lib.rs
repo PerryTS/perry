@@ -129,6 +129,26 @@ pub use framework::*;
 // per-tick bridge into the external crate lives behind the
 // `external-fastify-pump` feature (drained from `async_bridge`).
 
+// === turnloop P6: the shared client TLS session ===
+// Driven by both outbound engines below (`turnloop_client`, `turnloop_smtp`).
+#[cfg(any(feature = "turnloop-http-client", feature = "turnloop-smtp-client"))]
+pub(crate) mod turnloop_tls_client;
+
+// === turnloop P6: SMTP on turnloop handles ===
+// `turnloop-smtp`'s sans-I/O `Connection` over a turnloop socket. Gated on its
+// own feature rather than `bundled-nodemailer` so the `js_smtp_*` entry points
+// survive the well-known flip that strips the bundled surface — that is how
+// perry-ext-nodemailer reaches this engine.
+#[cfg(feature = "turnloop-smtp-client")]
+pub mod turnloop_smtp;
+
+// === turnloop P6: outbound HTTP/1.1 on turnloop handles ===
+// The transport `fetch` and `axios` take when this agent owns a loop; the
+// reqwest client stays beside it for the configurations this engine declines
+// (a proxy, a worker agent with no loop). See `turnloop_client`'s module note.
+#[cfg(feature = "turnloop-http-client")]
+pub mod turnloop_client;
+
 // === Web Fetch API (fetch / Headers / Request / Response / Blob) ===
 // #5174: gated on `web-fetch`, not `http-client`, so Web Fetch stays
 // independent from the external node:http implementation.

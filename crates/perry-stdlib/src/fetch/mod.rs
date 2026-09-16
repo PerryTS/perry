@@ -18,9 +18,15 @@ use crate::common::async_bridge::{queue_promise_resolution, spawn};
 // `use super::*`.
 mod abort_bridge;
 pub use abort_bridge::*;
+
+// turnloop P6: the outbound transport this module prefers when the agent owns a
+// loop. Every transport-bearing entry point below asks it first and keeps its
+// reqwest future only when it declines (see the bridge's module note).
 mod headers;
 mod request_handle;
 mod transport_error;
+#[path = "turnloop_bridge.rs"]
+mod turnloop_bridge;
 pub use headers::*;
 
 // Cached bound-method values for Fetch `Headers` handles — split out to keep
@@ -151,6 +157,17 @@ fn apply_node_tls_environment(mut builder: reqwest::ClientBuilder) -> reqwest::C
         }
     }
     builder
+}
+
+/// Whether `undici.setGlobalDispatcher(new ProxyAgent(...))` installed a
+/// process-wide proxy. The turnloop engine declines such a request: the proxy
+/// surface here is a prebuilt `reqwest::Client`, not a URL the CONNECT tunnel
+/// could be driven from.
+pub(crate) fn global_proxy_installed() -> bool {
+    GLOBAL_PROXY_CLIENT
+        .read()
+        .map(|guard| guard.is_some())
+        .unwrap_or(false)
 }
 
 /// The client every fetch path must use: the proxied client when a global
@@ -467,6 +484,19 @@ pub unsafe extern "C" fn js_fetch_get(url_ptr: *const StringHeader) -> *mut perr
         }
     };
 
+    if turnloop_bridge::try_dispatch(
+        turnloop_bridge::FetchDispatch {
+            url: url.clone(),
+            method: "GET".to_string(),
+            headers: Vec::new(),
+            body: None,
+            abort_key: None,
+        },
+        promise_ptr,
+    ) {
+        return promise;
+    }
+
     spawn(async move {
         match fetch_client().get(&url).send().await {
             Ok(response) => {
@@ -534,6 +564,22 @@ pub unsafe extern "C" fn js_fetch_get_with_auth(
     };
 
     let auth_header = string_from_header(auth_header_ptr).unwrap_or_default();
+
+    if turnloop_bridge::try_dispatch(
+        turnloop_bridge::FetchDispatch {
+            url: url.clone(),
+            method: "GET".to_string(),
+            headers: auth_header
+                .is_empty()
+                .then(Vec::new)
+                .unwrap_or_else(|| vec![("authorization".to_string(), auth_header.clone())]),
+            body: None,
+            abort_key: None,
+        },
+        promise_ptr,
+    ) {
+        return promise;
+    }
 
     spawn(async move {
         let client = fetch_client();
@@ -607,6 +653,25 @@ pub unsafe extern "C" fn js_fetch_post_with_auth(
 
     let auth_header = string_from_header(auth_header_ptr).unwrap_or_default();
     let body = string_from_header(body_ptr).unwrap_or_default();
+
+    {
+        let mut headers = vec![("content-type".to_string(), "application/json".to_string())];
+        if !auth_header.is_empty() {
+            headers.push(("authorization".to_string(), auth_header.clone()));
+        }
+        if turnloop_bridge::try_dispatch(
+            turnloop_bridge::FetchDispatch {
+                url: url.clone(),
+                method: "POST".to_string(),
+                headers,
+                body: Some(body.clone().into_bytes()),
+                abort_key: None,
+            },
+            promise_ptr,
+        ) {
+            return promise;
+        }
+    }
 
     spawn(async move {
         let client = fetch_client();
@@ -694,6 +759,19 @@ pub unsafe extern "C" fn js_fetch_post(
     let content_type = string_from_header(content_type_ptr)
         .or(form_data_content_type)
         .unwrap_or_else(|| "application/json".to_string());
+
+    if turnloop_bridge::try_dispatch(
+        turnloop_bridge::FetchDispatch {
+            url: url.clone(),
+            method: "POST".to_string(),
+            headers: vec![("content-type".to_string(), content_type.clone())],
+            body: Some(body.clone()),
+            abort_key: None,
+        },
+        promise_ptr,
+    ) {
+        return promise;
+    }
 
     spawn(async move {
         let client = fetch_client();
@@ -805,6 +883,21 @@ pub unsafe extern "C" fn js_fetch_with_options(
             .entry("content-type".to_string())
             .or_insert(content_type);
     }
+
+    // turnloop first: accepting here means no tokio task is created at all,
+    // which is what makes `tokio_ticks=0` on a fetch-only workload true. The
+    // watch is dropped on acceptance because the engine owns cancellation from
+    // then on — `js_fetch_notify_signal_aborted` reaches it directly.
+    let abort_key = abort_watch
+        .as_ref()
+        .map(abort_bridge::FetchAbortWatch::signal_ptr);
+    let inputs = match turnloop_bridge::try_dispatch_inputs(inputs, abort_key, promise_ptr) {
+        Ok(()) => {
+            drop(abort_watch);
+            return promise;
+        }
+        Err(inputs) => inputs,
+    };
 
     // Dispatch + abort handling live in `abort_bridge::run_request` (keeps this
     // file under the line-size lint gate).
@@ -1023,6 +1116,10 @@ pub unsafe extern "C" fn js_fetch_text(
             return promise;
         }
     };
+
+    if turnloop_bridge::try_dispatch_text(url.clone(), promise_ptr) {
+        return promise;
+    }
 
     spawn(async move {
         match fetch_client().get(&url).send().await {

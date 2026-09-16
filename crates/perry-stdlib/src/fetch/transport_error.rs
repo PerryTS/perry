@@ -27,6 +27,33 @@ impl FetchFailure {
         Self::classify(url, &chain, cause_message)
     }
 
+    /// The turnloop client engine's failure, which already carries Node's
+    /// `cause.code` and `syscall` rather than a prose chain to classify.
+    /// `getaddrinfo ENOTFOUND` keeps the `errno` and `hostname` Node reports,
+    /// because that is the one shape callers match on (the reqwest path
+    /// synthesized the same triple).
+    pub(crate) fn from_client(
+        code: &'static str,
+        message: String,
+        syscall: Option<&'static str>,
+    ) -> Self {
+        let hostname = (code == "ENOTFOUND").then(|| {
+            message
+                .rsplit(' ')
+                .next()
+                .filter(|h| !h.is_empty() && *h != code)
+                .unwrap_or_default()
+                .to_string()
+        });
+        Self {
+            cause_message: message,
+            code: Some(code),
+            errno: (code == "ENOTFOUND").then_some(-3008),
+            syscall,
+            hostname,
+        }
+    }
+
     fn classify(url: &str, chain: &str, fallback_message: String) -> Self {
         let hostname = reqwest::Url::parse(url)
             .ok()
