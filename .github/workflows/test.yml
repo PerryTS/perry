@@ -1034,6 +1034,22 @@ jobs:
         run: |
           rm -rf target/perry-auto-* target/debug/libperry_ext_*.a 2>/dev/null || true
 
+      # This job runs `cargo test -p perry`, whose integration tests shell out
+      # to node scripts under scripts/ -- and those scripts assert
+      # `process.versions.node` equals the .node-version pin, because the
+      # loader/byte behaviour they gate on is version-specific. Without this
+      # step the job inherits whatever node the ubuntu-latest image happens to
+      # ship (22.23.2 on 2026-09-16), so
+      # `bun_embedded_compression::standalone_compressed_asset_regression`
+      # fails that assertion and takes the whole job red on main. Pinned from
+      # the FILE, never a literal: check_node_version_consistency.py (a lint
+      # step) requires every literal `node-version:` to be a registered
+      # exemption, and this is not one.
+      - name: Setup Node.js for the node-backed integration tests
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version-file: .node-version
+
       - name: Run cargo test
         # The exclusions below are maintained once in
         # workspace-architecture.json and consumed by ci_test_scope.py:
@@ -1295,6 +1311,18 @@ jobs:
       - name: Evict stale auto-opt archives (#5892)
         run: |
           rm -rf target/perry-auto-* target/debug/libperry_ext_*.a 2>/dev/null || true
+
+      # Same reason as the `cargo-test` job: these shards run `-p perry`
+      # integration tests that shell out to node scripts asserting
+      # `process.versions.node` equals the .node-version pin. Which shard a
+      # node-backed test lands in is decided by ci_cargo_test_shard.py, so
+      # leaving this job unpinned makes the failure move with the sharding
+      # rather than stay fixed. From the FILE, not a literal — see
+      # check_node_version_consistency.py.
+      - name: Setup Node.js for the node-backed integration tests
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version-file: .node-version
 
       - name: Run perry integration shard ${{ matrix.shard }}
         env:
