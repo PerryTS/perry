@@ -76,40 +76,42 @@ pub struct Request {
 }
 
 impl Request {
-    pub fn new(method: &str, url: &str) -> Self {
+    /// `url` takes anything string-shaped because almost every call site
+    /// builds it with `format!`, and `reqwest`'s `IntoUrl` accepted both.
+    pub fn new(method: &str, url: impl AsRef<str>) -> Self {
         Self {
             method: method.to_string(),
-            url: url.to_string(),
+            url: url.as_ref().to_string(),
             headers: Vec::new(),
             body: Vec::new(),
         }
     }
 
-    pub fn get(url: &str) -> Self {
+    pub fn get(url: impl AsRef<str>) -> Self {
         Self::new("GET", url)
     }
 
-    pub fn post(url: &str) -> Self {
+    pub fn post(url: impl AsRef<str>) -> Self {
         Self::new("POST", url)
     }
 
-    pub fn put(url: &str) -> Self {
+    pub fn put(url: impl AsRef<str>) -> Self {
         Self::new("PUT", url)
     }
 
-    pub fn patch(url: &str) -> Self {
+    pub fn patch(url: impl AsRef<str>) -> Self {
         Self::new("PATCH", url)
     }
 
-    pub fn delete(url: &str) -> Self {
+    pub fn delete(url: impl AsRef<str>) -> Self {
         Self::new("DELETE", url)
     }
 
-    pub fn head(url: &str) -> Self {
+    pub fn head(url: impl AsRef<str>) -> Self {
         Self::new("HEAD", url)
     }
 
-    pub fn options(url: &str) -> Self {
+    pub fn options(url: impl AsRef<str>) -> Self {
         Self::new("OPTIONS", url)
     }
 

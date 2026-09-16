@@ -55,10 +55,12 @@ toml.workspace = true
 walkdir.workspace = true
 # `perry dev` file-watch loop only (commands/dev.rs); optional under watch-cli.
 notify = { workspace = true, optional = true }
-reqwest.workspace = true
-tokio.workspace = true
-tokio-tungstenite.workspace = true
-futures-util.workspace = true
+# turnloop P11 (docs/turnloop/p11-report.md): the CLI's HTTP and WebSocket
+# transport. It has no JS event loop to cooperate with, so it owns a
+# `turnloop::Loop` per connection and turns it to completion — which is why
+# reqwest, tokio and tokio-tungstenite are gone from this manifest rather than
+# narrowed. `python3 scripts/tokio_inventory.py` gates that they stay gone.
+perry-http-client.workspace = true
 url.workspace = true
 dirs.workspace = true
 flate2.workspace = true

@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 use console::style;
 use dialoguer::{Confirm, Select};
+use perry_http_client::{Client, Request};
 use std::process::Command;
 
 use super::super::publish::{config_path, save_config, AppleSavedConfig, PerryConfig};
@@ -129,20 +130,23 @@ pub fn macos_wizard(saved: &mut PerryConfig) -> Result<()> {
     println!();
 
     // Verify API connectivity
-    let client = reqwest::blocking::Client::new();
+    // reqwest's client had no timeout; the default 120 s whole-request budget
+    // is the new bound on every App Store Connect call in this wizard.
+    let client = Client::new();
     let jwt = generate_asc_jwt(&key_id, &issuer_id, &p8_content)?;
     print!("  Verifying API access... ");
     std::io::Write::flush(&mut std::io::stdout()).ok();
     let resp = client
-        .get("https://api.appstoreconnect.apple.com/v1/certificates?limit=1")
-        .bearer_auth(&jwt)
-        .send()
+        .execute(
+            Request::get("https://api.appstoreconnect.apple.com/v1/certificates?limit=1")
+                .bearer(&jwt),
+        )
         .context("Failed to connect to App Store Connect API")?;
-    if resp.status() == 401 || resp.status() == 403 {
+    if resp.status == 401 || resp.status == 403 {
         bail!("API authentication failed — check your Key ID, Issuer ID, and .p8 key");
     }
-    if !resp.status().is_success() {
-        let body = resp.text().unwrap_or_default();
+    if !resp.is_success() {
+        let body = resp.text();
         bail!("API error: {body}");
     }
     println!("{}", style("ok").green());
@@ -449,7 +453,7 @@ pub fn merge_p12_files(
 ///
 /// Returns (p12_path, signing_identity).
 pub fn create_apple_certificate(
-    client: &reqwest::blocking::Client,
+    client: &Client,
     key_id: &str,
     issuer_id: &str,
     p8_content: &str,
@@ -468,12 +472,12 @@ pub fn create_apple_certificate(
     std::io::Write::flush(&mut std::io::stdout()).ok();
 
     let jwt = generate_asc_jwt(key_id, issuer_id, p8_content)?;
-    let resp = client
-        .get("https://api.appstoreconnect.apple.com/v1/certificates")
-        .bearer_auth(&jwt)
-        .query(&[("filter[certificateType]", cert_type), ("limit", "200")])
-        .send()?;
-    let body: serde_json::Value = resp.json()?;
+    let resp = client.execute(
+        Request::get("https://api.appstoreconnect.apple.com/v1/certificates")
+            .bearer(&jwt)
+            .query(&[("filter[certificateType]", cert_type), ("limit", "200")]),
+    )?;
+    let body: serde_json::Value = serde_json::from_slice(&resp.body)?;
     let existing = body["data"].as_array().and_then(|arr| arr.first()).cloned();
 
     if let Some(ref cert) = existing {
@@ -521,15 +525,15 @@ pub fn create_apple_certificate(
             }
         }
     });
-    let resp = client
-        .post("https://api.appstoreconnect.apple.com/v1/certificates")
-        .bearer_auth(&jwt)
-        .json(&create_body)
-        .send()?;
+    let resp = client.execute(
+        Request::post("https://api.appstoreconnect.apple.com/v1/certificates")
+            .bearer(&jwt)
+            .json_body(create_body.to_string()),
+    )?;
 
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let err = resp.text().unwrap_or_default();
+    if !resp.is_success() {
+        let status = resp.status;
+        let err = resp.text();
 
         // 403 for Developer ID certs means the API key doesn't have Account Holder role.
         // Fall back to exporting from the local Keychain.
@@ -546,7 +550,7 @@ pub fn create_apple_certificate(
 
         bail!("Failed to create {display_name} certificate: {err}");
     }
-    let resp_body: serde_json::Value = resp.json()?;
+    let resp_body: serde_json::Value = serde_json::from_slice(&resp.body)?;
     let cert_content = resp_body["data"]["attributes"]["certificateContent"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("No certificate content in response"))?;

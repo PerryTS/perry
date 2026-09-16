@@ -22,42 +22,6 @@
   ],
   "edges": [
     {
-      "crate": "perry",
-      "dep": "reqwest",
-      "kind": "normal",
-      "optional": false,
-      "target": null,
-      "surface": "none. This is the `perry` CLI binary: `publish`, `login`, `verify`, `audit`, `run --remote`, `setup ios|macos`, the update check, telemetry and compat reports. A compiled program links libperry_runtime.a, libperry_stdlib.a and the perry-ext-* archives \u2014 never this crate.",
-      "reached_when": "the developer runs one of those subcommands; never at a compiled program's runtime",
-      "blocker": "14 `reqwest::Client` constructions (7 blocking, 7 async) across 11 files, needing multipart upload and streaming download. turnloop-http's client has no multipart builder, so this is an upstream feature request plus a rewrite of publish/audit/verify/login/setup, not a transport swap.",
-      "issue": "unfiled \u2014 P8",
-      "plan": "J"
-    },
-    {
-      "crate": "perry",
-      "dep": "tokio",
-      "kind": "normal",
-      "optional": false,
-      "target": null,
-      "surface": "none. This is the `perry` CLI binary: `publish`, `login`, `verify`, `audit`, `run --remote`, `setup ios|macos`, the update check, telemetry and compat reports. A compiled program links libperry_runtime.a, libperry_stdlib.a and the perry-ext-* archives \u2014 never this crate.",
-      "reached_when": "the developer runs one of those subcommands; never at a compiled program's runtime",
-      "blocker": "seven `Runtime::new()` / `Builder::new_current_thread()` call sites (audit, login, publish, run x2, setup/ios, verify) that exist only to drive the reqwest and tokio-tungstenite futures above. Goes when they go.",
-      "issue": "unfiled \u2014 P8",
-      "plan": "J"
-    },
-    {
-      "crate": "perry",
-      "dep": "tokio-tungstenite",
-      "kind": "normal",
-      "optional": false,
-      "target": null,
-      "surface": "none. This is the `perry` CLI binary: `publish`, `login`, `verify`, `audit`, `run --remote`, `setup ios|macos`, the update check, telemetry and compat reports. A compiled program links libperry_runtime.a, libperry_stdlib.a and the perry-ext-* archives \u2014 never this crate.",
-      "reached_when": "the developer runs one of those subcommands; never at a compiled program's runtime",
-      "blocker": "two WebSocket clients (`publish`'s build-log stream and `run --remote`). turnloop-websocket is sans-I/O and would fit, over a turnloop socket the CLI does not have.",
-      "issue": "unfiled \u2014 P8",
-      "plan": "J"
-    },
-    {
       "crate": "perry-container-compose",
       "dep": "tokio",
       "kind": "dev",
@@ -80,30 +44,6 @@
       "blocker": "async end-to-end across ~14.8k lines (`async-trait` backends, `tokio::process::Command`, `tokio::time::timeout`). A rewrite of a non-JS tool; no event-loop transport is involved.",
       "issue": "unfiled \u2014 P8",
       "plan": "K"
-    },
-    {
-      "crate": "perry-ext-axios",
-      "dep": "reqwest",
-      "kind": "normal",
-      "optional": false,
-      "target": null,
-      "surface": "`import axios from 'axios'` \u2014 every axios request, through this crate's own `js_axios_*` symbols. MEASURED: it does NOT take the program's global `fetch()` with it \u2014 a program that imports axios and calls `fetch()` keeps the fetch on turnloop (`p6 http_submitted=1 declined=0`) and runs axios on reqwest in the same process (`tokio_ticks=1`).",
-      "reached_when": "always, in any program that imports axios",
-      "blocker": "no C seam to perry-stdlib's turnloop HTTP engine (the `js_perry_smtp_*` shape P6 built for SMTP). The crate also builds a fresh reqwest::Client per request, so migrating before that is fixed would move a defect onto a new transport.",
-      "issue": "#10326 (per-request client); the transport and the global-fetch takeover are unfiled \u2014 P8",
-      "plan": "G"
-    },
-    {
-      "crate": "perry-ext-axios",
-      "dep": "tokio",
-      "kind": "normal",
-      "optional": false,
-      "target": null,
-      "surface": "`import axios from 'axios'` \u2014 every axios request, through this crate's own `js_axios_*` symbols. MEASURED: it does NOT take the program's global `fetch()` with it \u2014 a program that imports axios and calls `fetch()` keeps the fetch on turnloop (`p6 http_submitted=1 declined=0`) and runs axios on reqwest in the same process (`tokio_ticks=1`).",
-      "reached_when": "always, in any program that imports axios",
-      "blocker": "`spawn_blocking` + `Handle::current().block_on` around the reqwest future. Goes with reqwest.",
-      "issue": "unfiled \u2014 P8",
-      "plan": "G"
     },
     {
       "crate": "perry-ext-fastify",
@@ -152,30 +92,6 @@
       "blocker": "the `@fastify/websocket` upgrade handshake. P5 migrated perry-ext-http's server; this crate has no dependency edge to it, so sharing that core needs either a new crate for the sans-I/O server or a new edge.",
       "issue": "unfiled \u2014 P5 named it, P8 confirms it",
       "plan": "F"
-    },
-    {
-      "crate": "perry-ext-fetch",
-      "dep": "reqwest",
-      "kind": "normal",
-      "optional": false,
-      "target": null,
-      "surface": "`import fetch from 'node-fetch'` (and the bare `fetch` well-known alias). Unlike axios, this crate defines the SAME `js_fetch_*` symbols perry-stdlib's Web Fetch owns \u2014 and because `uses_fetch` re-asserts `web-fetch` after the flip stripped `http-client`, a program that imports node-fetch AND calls the global `fetch()` links BOTH definitions and SIGSEGVs. See docs/turnloop/p8-report.md.",
-      "reached_when": "always, in any program that imports node-fetch",
-      "blocker": "same missing C seam as axios. This crate also has no AbortSignal wiring (#10325) and its `js_headers_new` disagrees with perry-stdlib's (#10310), so it wants the duplication resolved rather than the duplication migrated.",
-      "issue": "#10325, #10310; the transport and the global-fetch takeover are unfiled \u2014 P8",
-      "plan": "G"
-    },
-    {
-      "crate": "perry-ext-fetch",
-      "dep": "tokio",
-      "kind": "normal",
-      "optional": false,
-      "target": null,
-      "surface": "`import fetch from 'node-fetch'` (and the bare `fetch` well-known alias). Unlike axios, this crate defines the SAME `js_fetch_*` symbols perry-stdlib's Web Fetch owns \u2014 and because `uses_fetch` re-asserts `web-fetch` after the flip stripped `http-client`, a program that imports node-fetch AND calls the global `fetch()` links BOTH definitions and SIGSEGVs. See docs/turnloop/p8-report.md.",
-      "reached_when": "always, in any program that imports node-fetch",
-      "blocker": "`spawn_blocking` + `Handle::current().block_on` around the reqwest future. Goes with reqwest.",
-      "issue": "unfiled \u2014 P8",
-      "plan": "G"
     },
     {
       "crate": "perry-ext-http",
@@ -495,10 +411,10 @@
       "kind": "normal",
       "optional": true,
       "target": null,
-      "surface": "the global `fetch()` when the turnloop engine DECLINES, `js_fetch_stream_start` (the SSE line-poll surface, which never takes the turnloop path), a proxied fetch, and the `axios.rs` mirror.",
+      "surface": "the global `fetch()` when the turnloop engine DECLINES, `js_fetch_stream_start` (the SSE line-poll surface, which never takes the turnloop path), a proxied fetch, and the `axios.rs` mirror. Since P11 this is ALSO what `import 'node-fetch'` reaches: perry-ext-fetch is deleted and node-fetch routes to this crate's WHATWG fetch.",
       "reached_when": "a worker_threads agent (no loop: agent_loop::net_available is `current_agent() == PRIMARY_AGENT`), the `tokio-wait-driver` A/B arm, or a host where Loop::new failed, a proxy (`HTTP_PROXY`/`HTTPS_PROXY` or `setGlobalDispatcher(new ProxyAgent(...))`), or a URL `turnloop_http::client::Request::new` rejects; `js_fetch_stream_start` and `axios.rs` take it unconditionally",
       "blocker": "per-agent loops for the decline; a CONNECT tunnel driven from a URL rather than from a prebuilt `reqwest::Client` for the proxy; and a line-splitting state machine over the engine's `Sink::on_head`/`on_chunk` hooks for the stream surface \u2014 those hooks exist and NOTHING calls them, which by CLAUDE.md's kill-policy makes them a decision nobody has made.",
-      "issue": "unfiled \u2014 P6 named all three, P8 confirms them",
+      "issue": "unfiled \u2014 P6 named all three, P8 confirms them; P11 removed the axios/node-fetch half of group G",
       "plan": "G"
     },
     {
@@ -638,12 +554,11 @@
     ]
   },
   "source_sites": {
-    "perry": 25,
+    "perry": 3,
     "perry-container-compose": 14,
     "perry-ext-ads": 5,
-    "perry-ext-axios": 4,
+    "perry-ext-axios": 2,
     "perry-ext-fastify": 11,
-    "perry-ext-fetch": 9,
     "perry-ext-http": 106,
     "perry-ext-ioredis": 13,
     "perry-ext-mongodb": 29,

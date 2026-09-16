@@ -96,6 +96,13 @@ impl Error {
         self.timed_out
     }
 
+    /// For a [`BodySink`] that refused a chunk — a disk write that failed, or
+    /// a caller cancelling the transfer. `execute_streaming` stops feeding the
+    /// sink and returns it.
+    pub fn sink(message: impl Into<String>) -> Self {
+        Self::new(message)
+    }
+
     /// A transport failure. A deadline keeps its identity so the CLI's polling
     /// loops can tell "the server is slow" from "the server said no".
     pub(crate) fn io(what: &str, error: std::io::Error) -> Self {
@@ -244,7 +251,7 @@ impl Client {
     }
 
     /// POST a `multipart/form-data` body.
-    pub fn post_form(&self, url: &str, form: Form) -> Result<Response> {
+    pub fn post_form(&self, url: impl AsRef<str>, form: Form) -> Result<Response> {
         let (content_type, body) = form.finish();
         self.execute(
             Request::post(url)

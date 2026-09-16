@@ -1,6 +1,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use console::style;
 use dialoguer::{Confirm, Input, Select};
+use perry_http_client::{Client, Request};
 use std::process::Command;
 
 use super::super::publish::{
@@ -88,17 +89,20 @@ pub fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
     // Verify API connectivity
     print!("  Verifying API access... ");
     std::io::Write::flush(&mut std::io::stdout()).ok();
-    let client = reqwest::blocking::Client::new();
+    // reqwest's client had no timeout; the default 120 s whole-request budget
+    // is the new bound on every App Store Connect call in this wizard.
+    let client = Client::new();
     let resp = client
-        .get("https://api.appstoreconnect.apple.com/v1/certificates?limit=1")
-        .bearer_auth(&jwt)
-        .send()
+        .execute(
+            Request::get("https://api.appstoreconnect.apple.com/v1/certificates?limit=1")
+                .bearer(&jwt),
+        )
         .context("Failed to connect to App Store Connect API")?;
-    if resp.status() == 401 || resp.status() == 403 {
+    if resp.status == 401 || resp.status == 403 {
         bail!("API authentication failed — check your Key ID, Issuer ID, and .p8 key file");
     }
-    if !resp.status().is_success() {
-        let body = resp.text().unwrap_or_default();
+    if !resp.is_success() {
+        let body = resp.text();
         bail!("API error: {body}");
     }
     println!("{}", style("ok").green());
@@ -156,15 +160,12 @@ pub fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
     std::io::Write::flush(&mut std::io::stdout()).ok();
 
     let jwt = generate_asc_jwt(&key_id, &issuer_id, &p8_content)?;
-    let resp = client
-        .get("https://api.appstoreconnect.apple.com/v1/bundleIds")
-        .bearer_auth(&jwt)
-        .query(&[
-            ("filter[identifier]", &bundle_id),
-            ("limit", &"1".to_string()),
-        ])
-        .send()?;
-    let body: serde_json::Value = resp.json()?;
+    let resp = client.execute(
+        Request::get("https://api.appstoreconnect.apple.com/v1/bundleIds")
+            .bearer(&jwt)
+            .query(&[("filter[identifier]", bundle_id.as_str()), ("limit", "1")]),
+    )?;
+    let body: serde_json::Value = serde_json::from_slice(&resp.body)?;
     let existing_bundle_ids = body["data"].as_array();
     let bundle_id_resource_id = if let Some(ids) = existing_bundle_ids {
         if ids.is_empty() {
@@ -182,16 +183,16 @@ pub fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
                     }
                 }
             });
-            let resp = client
-                .post("https://api.appstoreconnect.apple.com/v1/bundleIds")
-                .bearer_auth(&jwt)
-                .json(&create_body)
-                .send()?;
-            if !resp.status().is_success() {
-                let err = resp.text().unwrap_or_default();
+            let resp = client.execute(
+                Request::post("https://api.appstoreconnect.apple.com/v1/bundleIds")
+                    .bearer(&jwt)
+                    .json_body(create_body.to_string()),
+            )?;
+            if !resp.is_success() {
+                let err = resp.text();
                 bail!("Failed to register Bundle ID: {err}");
             }
-            let resp_body: serde_json::Value = resp.json()?;
+            let resp_body: serde_json::Value = serde_json::from_slice(&resp.body)?;
             let rid = resp_body["data"]["id"]
                 .as_str()
                 .ok_or_else(|| anyhow::anyhow!("No ID in bundle registration response"))?
@@ -223,12 +224,12 @@ pub fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
     std::io::Write::flush(&mut std::io::stdout()).ok();
 
     let jwt = generate_asc_jwt(&key_id, &issuer_id, &p8_content)?;
-    let resp = client
-        .get("https://api.appstoreconnect.apple.com/v1/apps")
-        .bearer_auth(&jwt)
-        .query(&[("filter[bundleId]", bundle_id.as_str()), ("limit", "1")])
-        .send()?;
-    let body: serde_json::Value = resp.json()?;
+    let resp = client.execute(
+        Request::get("https://api.appstoreconnect.apple.com/v1/apps")
+            .bearer(&jwt)
+            .query(&[("filter[bundleId]", bundle_id.as_str()), ("limit", "1")]),
+    )?;
+    let body: serde_json::Value = serde_json::from_slice(&resp.body)?;
     let existing_apps = body["data"].as_array();
     if let Some(apps) = existing_apps {
         if apps.is_empty() {
@@ -294,13 +295,13 @@ pub fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
             });
 
             let jwt = generate_asc_jwt(&key_id, &issuer_id, &p8_content)?;
-            let resp = client
-                .post("https://api.appstoreconnect.apple.com/v1/apps")
-                .bearer_auth(&jwt)
-                .json(&create_body)
-                .send()?;
-            if !resp.status().is_success() {
-                let err = resp.text().unwrap_or_default();
+            let resp = client.execute(
+                Request::post("https://api.appstoreconnect.apple.com/v1/apps")
+                    .bearer(&jwt)
+                    .json_body(create_body.to_string()),
+            )?;
+            if !resp.is_success() {
+                let err = resp.text();
                 // Don't fail hard — app creation is optional, user can create manually
                 println!("  {} Could not create app: {}", style("!").yellow(), err);
                 println!("  You may need to create the app manually in App Store Connect.");
@@ -329,15 +330,15 @@ pub fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
     std::io::Write::flush(&mut std::io::stdout()).ok();
 
     let jwt = generate_asc_jwt(&key_id, &issuer_id, &p8_content)?;
-    let resp = client
-        .get("https://api.appstoreconnect.apple.com/v1/certificates")
-        .bearer_auth(&jwt)
-        .query(&[
-            ("filter[certificateType]", "DISTRIBUTION"),
-            ("limit", "200"),
-        ])
-        .send()?;
-    let body: serde_json::Value = resp.json()?;
+    let resp = client.execute(
+        Request::get("https://api.appstoreconnect.apple.com/v1/certificates")
+            .bearer(&jwt)
+            .query(&[
+                ("filter[certificateType]", "DISTRIBUTION"),
+                ("limit", "200"),
+            ]),
+    )?;
+    let body: serde_json::Value = serde_json::from_slice(&resp.body)?;
     let certs = body["data"].as_array();
 
     let perry_dir = dirs::home_dir().unwrap_or_default().join(".perry");
@@ -513,16 +514,16 @@ pub fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
                 }
             }
         });
-        let resp = client
-            .post("https://api.appstoreconnect.apple.com/v1/certificates")
-            .bearer_auth(&jwt)
-            .json(&create_body)
-            .send()?;
-        if !resp.status().is_success() {
-            let err = resp.text().unwrap_or_default();
+        let resp = client.execute(
+            Request::post("https://api.appstoreconnect.apple.com/v1/certificates")
+                .bearer(&jwt)
+                .json_body(create_body.to_string()),
+        )?;
+        if !resp.is_success() {
+            let err = resp.text();
             bail!("Failed to create certificate: {err}");
         }
-        let resp_body: serde_json::Value = resp.json()?;
+        let resp_body: serde_json::Value = serde_json::from_slice(&resp.body)?;
         let cert_content_b64 = resp_body["data"]["attributes"]["certificateContent"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("No certificate content in response"))?;
@@ -623,16 +624,16 @@ pub fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
     let jwt = generate_asc_jwt(&key_id, &issuer_id, &p8_content)?;
 
     // First check if one already exists
-    let resp = client
-        .get("https://api.appstoreconnect.apple.com/v1/profiles")
-        .bearer_auth(&jwt)
-        .query(&[
-            ("filter[profileType]", "IOS_APP_STORE"),
-            ("include", "bundleId"),
-            ("limit", "200"),
-        ])
-        .send()?;
-    let body: serde_json::Value = resp.json()?;
+    let resp = client.execute(
+        Request::get("https://api.appstoreconnect.apple.com/v1/profiles")
+            .bearer(&jwt)
+            .query(&[
+                ("filter[profileType]", "IOS_APP_STORE"),
+                ("include", "bundleId"),
+                ("limit", "200"),
+            ]),
+    )?;
+    let body: serde_json::Value = serde_json::from_slice(&resp.body)?;
     let existing_profile = body["data"].as_array().and_then(|profiles| {
         profiles.iter().find(|p| {
             // Check if this profile's bundle ID matches ours
@@ -650,12 +651,12 @@ pub fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
             print!("{}, replacing... ", style("found existing").yellow());
             std::io::Write::flush(&mut std::io::stdout()).ok();
             let jwt = generate_asc_jwt(&key_id, &issuer_id, &p8_content)?;
-            let _ = client
-                .delete(format!(
+            let _ = client.execute(
+                Request::delete(&format!(
                     "https://api.appstoreconnect.apple.com/v1/profiles/{profile_id}"
                 ))
-                .bearer_auth(&jwt)
-                .send();
+                .bearer(&jwt),
+            );
         }
         // Fall through to create new profile below
         "".to_string()
@@ -687,16 +688,16 @@ pub fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
             }
         });
         let jwt = generate_asc_jwt(&key_id, &issuer_id, &p8_content)?;
-        let resp = client
-            .post("https://api.appstoreconnect.apple.com/v1/profiles")
-            .bearer_auth(&jwt)
-            .json(&create_body)
-            .send()?;
-        if !resp.status().is_success() {
-            let err = resp.text().unwrap_or_default();
+        let resp = client.execute(
+            Request::post("https://api.appstoreconnect.apple.com/v1/profiles")
+                .bearer(&jwt)
+                .json_body(create_body.to_string()),
+        )?;
+        if !resp.is_success() {
+            let err = resp.text();
             bail!("Failed to create provisioning profile: {err}");
         }
-        let resp_body: serde_json::Value = resp.json()?;
+        let resp_body: serde_json::Value = serde_json::from_slice(&resp.body)?;
         println!("{}", style("created").green());
         resp_body["data"]["attributes"]["profileContent"]
             .as_str()
@@ -891,8 +892,7 @@ pub fn ios_development_setup(saved: &PerryConfig) -> Result<()> {
     // the remaining manual portal step is surfaced inside the API call (#1301).
     let app_group = crate::commands::run::read_ios_app_group_from_toml();
     let push = crate::commands::run::read_ios_push_notifications_from_toml().unwrap_or(false);
-    let rt = tokio::runtime::Runtime::new()?;
-    let profile_data = rt.block_on(crate::commands::run::create_dev_profile_via_api(
+    let profile_data = crate::commands::run::create_dev_profile_via_api(
         saved,
         &bundle_id,
         &team_id,
@@ -900,7 +900,7 @@ pub fn ios_development_setup(saved: &PerryConfig) -> Result<()> {
         app_group.as_deref(),
         push,
         crate::OutputFormat::Text,
-    ))?;
+    )?;
 
     let save_path = dirs::home_dir().map(|h| {
         h.join(".perry").join(format!(

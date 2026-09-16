@@ -4644,16 +4644,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
 
 [[package]]
-name = "mime_guess"
-version = "2.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7c44f8e672c00fe5308fa235f821cb4198414e1c77935c1ab6948d3fd78550e"
-dependencies = [
- "mime",
- "unicase",
-]
-
-[[package]]
 name = "minimal-lexical"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5645,7 +5635,6 @@ dependencies = [
  "env_logger",
  "flate2",
  "fslock",
- "futures-util",
  "hex",
  "indicatif",
  "jsonwebtoken",
@@ -5663,6 +5652,7 @@ dependencies = [
  "perry-codegen-wear-tiles",
  "perry-diagnostics",
  "perry-hir",
+ "perry-http-client",
  "perry-parser",
  "perry-perex",
  "perry-runtime",
@@ -5670,7 +5660,6 @@ dependencies = [
  "perry-updater",
  "rand 0.10.2",
  "rayon",
- "reqwest",
  "rustc-demangle",
  "semver",
  "serde",
@@ -5682,8 +5671,6 @@ dependencies = [
  "swc_ecma_visit",
  "tar",
  "tempfile",
- "tokio",
- "tokio-tungstenite",
  "toml",
  "url",
  "walkdir",
@@ -5876,8 +5863,7 @@ name = "perry-ext-axios"
 version = "0.5.1580"
 dependencies = [
  "perry-ffi",
- "reqwest",
- "tokio",
+ "perry-http-client",
 ]
 
 [[package]]
@@ -5984,19 +5970,6 @@ dependencies = [
  "socket2",
  "tokio",
  "tokio-tungstenite",
-]
-
-[[package]]
-name = "perry-ext-fetch"
-version = "0.5.1580"
-dependencies = [
- "bytes",
- "lazy_static",
- "perry-ffi",
- "perry-runtime",
- "reqwest",
- "serde_json",
- "tokio",
 ]
 
 [[package]]
@@ -7622,9 +7595,7 @@ checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
 dependencies = [
  "base64 0.22.1",
  "bytes",
- "futures-channel",
  "futures-core",
- "futures-util",
  "h2",
  "http",
  "http-body",
@@ -7634,7 +7605,6 @@ dependencies = [
  "hyper-util",
  "js-sys",
  "log",
- "mime_guess",
  "percent-encoding",
  "pin-project-lite",
  "quinn",
@@ -10068,12 +10038,6 @@ name = "unarray"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eaea85b334db583fe3274d12b4cd1880032beab409c0d774be044d4480ab9a94"
-
-[[package]]
-name = "unicase"
-version = "2.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dbc4bc3a9f746d862c45cb89d705aa10f187bb96c76001afab07a0d35ce60142"
 
 [[package]]
 name = "unicode-bidi"

@@ -3,7 +3,7 @@
 use anyhow::{bail, Context, Result};
 use clap::Args;
 use console::style;
-use reqwest::multipart;
+use perry_http_client::{Client, Form};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -160,7 +160,10 @@ pub fn grade_fails_threshold(grade: &str, threshold: &str) -> bool {
 }
 
 /// Core audit logic — reusable from publish.rs
-pub async fn run_audit_check(
+///
+/// Synchronous: one multipart POST that the caller has nothing to overlap
+/// with, so it blocks the calling thread instead of a runtime's.
+pub fn run_audit_check(
     project_dir: &Path,
     verify_url: &str,
     app_type: &str,
@@ -200,30 +203,26 @@ pub async fn run_audit_check(
     });
     let config_json = serde_json::to_string(&config)?;
 
-    // POST multipart to /audit
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
-        .build()?;
+    // POST multipart to /audit. The 120 s budget now covers connect and
+    // response together, where reqwest timed them separately.
+    let client = Client::with_timeout(std::time::Duration::from_secs(120));
 
-    let form = multipart::Form::new()
+    let form = Form::new()
         .text("source", source_json)
         .text("config", config_json);
 
     let url = format!("{}/audit", verify_url.trim_end_matches('/'));
     let resp = client
-        .post(&url)
-        .multipart(form)
-        .send()
-        .await
+        .post_form(&url, form)
         .context("Failed to connect to audit service")?;
 
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
+    if !resp.is_success() {
+        let status = resp.status;
+        let body = resp.text();
         bail!("Audit service returned {}: {}", status, body);
     }
 
-    let body = resp.text().await?;
+    let body = resp.text();
     let audit: AuditResponse =
         serde_json::from_str(&body).context("Failed to parse audit response")?;
 
@@ -444,45 +443,41 @@ fn print_sbom_text(manifest: &perry_hir::AuditManifest) {
 }
 
 pub fn run(args: AuditArgs, format: OutputFormat, _use_color: bool) -> Result<()> {
-    // #495: `--sbom` switches to the local behavioral-SBOM viewer.
-    // No tokio runtime needed — we just read a JSON file and print
-    // it. Short-circuits before the remote-scan path below.
+    // #495: `--sbom` switches to the local behavioral-SBOM viewer — it
+    // just reads a JSON file and prints it. Short-circuits before the
+    // remote-scan path below.
     if args.sbom {
         return print_local_sbom(&args.path, format);
     }
-    let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(async {
-        let path = std::path::PathBuf::from(&args.path);
-        let path = path.canonicalize().unwrap_or(path);
+    let path = std::path::PathBuf::from(&args.path);
+    let path = path.canonicalize().unwrap_or(path);
 
-        let result = run_audit_check(
-            &path,
-            &args.verify_url,
-            &args.app_type,
-            &args.severity,
-            &args.ignore,
-            &args.fail_on,
-            args.deep_scan,
-            format,
-        )
-        .await;
+    let result = run_audit_check(
+        &path,
+        &args.verify_url,
+        &args.app_type,
+        &args.severity,
+        &args.ignore,
+        &args.fail_on,
+        args.deep_scan,
+        format,
+    );
 
-        match (&result, &format) {
-            (Ok(audit), OutputFormat::Json) => {
-                println!("{}", serde_json::to_string_pretty(audit)?);
-                Ok(())
-            }
-            (Ok(_), _) => Ok(()),
-            (Err(_), OutputFormat::Json) => {
-                // In JSON mode, output structured error
-                let err_msg = result.as_ref().unwrap_err().to_string();
-                println!(
-                    "{}",
-                    serde_json::json!({ "error": err_msg, "grade": serde_json::Value::Null })
-                );
-                std::process::exit(1);
-            }
-            (Err(e), _) => Err(anyhow::anyhow!("{}", e)),
+    match (&result, &format) {
+        (Ok(audit), OutputFormat::Json) => {
+            println!("{}", serde_json::to_string_pretty(audit)?);
+            Ok(())
         }
-    })
+        (Ok(_), _) => Ok(()),
+        (Err(_), OutputFormat::Json) => {
+            // In JSON mode, output structured error
+            let err_msg = result.as_ref().unwrap_err().to_string();
+            println!(
+                "{}",
+                serde_json::json!({ "error": err_msg, "grade": serde_json::Value::Null })
+            );
+            std::process::exit(1);
+        }
+        (Err(e), _) => Err(anyhow::anyhow!("{}", e)),
+    }
 }

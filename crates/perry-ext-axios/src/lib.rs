@@ -2,15 +2,19 @@
 //!
 //! Phase 5 step 13 — first HTTP-client wrapper port. Uses
 //! perry-ffi v0.5.x's full surface: handle registry +
-//! spawn_blocking + JsPromise + JsValue. Reqwest under the hood
-//! (same as perry-stdlib's existing axios copy).
+//! spawn_blocking + JsPromise + JsValue.
 //!
-//! Functionally identical to `crates/perry-stdlib/src/axios.rs`.
+//! Transport is `perry_http_client` since P11 (turnloop), not reqwest — see
+//! `run_request`. `crates/perry-stdlib/src/axios.rs` is still the reqwest copy,
+//! and is reachable only under `PERRY_DISABLE_WELL_KNOWN=1`.
+
+use std::time::Duration;
 
 use perry_ffi::{
     alloc_string, get_handle, json_stringify, read_string, register_handle, spawn_blocking,
     with_handle, Handle, JsPromise, JsString, JsValue, Promise, StringHeader,
 };
+use perry_http_client::{Client, Request};
 
 /// #598: read the body argument as a JSON string. axios in npm-land
 /// accepts the body as either a string (sent as-is) or any JS value
@@ -65,20 +69,32 @@ unsafe fn read_str(ptr: *const StringHeader) -> Option<String> {
     read_string(handle).map(String::from)
 }
 
-/// Common request driver — runs the reqwest call inside
-/// spawn_blocking, packages the response into an
-/// `AxiosResponseHandle`, registers it, and resolves the promise
-/// with a POINTER_TAG-tagged handle value (issue #340 trick from
-/// the original perry-stdlib axios — without the explicit
-/// NaN-boxing, the awaiter sees a subnormal float that decays
-/// to `undefined` on `r.status` accesses).
+/// The default whole-request budget.
+///
+/// `reqwest::Client::new()` set none, so a hung server held the blocking-pool
+/// thread for the life of the process. Axios itself defaults to no timeout too,
+/// which is why this is generous rather than short — but it is finite, and a
+/// pool thread is a bounded resource.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Common request driver — runs the HTTP call inside `spawn_blocking`, packages
+/// the response into an `AxiosResponseHandle`, registers it, and resolves the
+/// promise with a POINTER_TAG-tagged handle value (issue #340 trick from the
+/// original perry-stdlib axios — without the explicit NaN-boxing, the awaiter
+/// sees a subnormal float that decays to `undefined` on `r.status` accesses).
+///
+/// The transport is `perry_http_client`, which owns a `turnloop::Loop` for the
+/// duration of the call. That is only sound because this body already runs on a
+/// blocking-pool thread that is not a JS agent and owns no loop of its own —
+/// the same place it used to block on `tokio::runtime::Handle::current()`. See
+/// that crate's module docs for why no other Perry caller may do this.
 fn run_request<F>(
     method: &'static str,
     url_or_err: Result<String, &'static str>,
     build: F,
 ) -> *mut Promise
 where
-    F: FnOnce(reqwest::Client, String) -> reqwest::RequestBuilder + Send + 'static,
+    F: FnOnce(String) -> Request + Send + 'static,
 {
     let promise = JsPromise::new();
     let raw = promise.as_raw();
@@ -91,41 +107,34 @@ where
     };
 
     spawn_blocking(move || {
-        let result: Result<AxiosResponseHandle, String> = tokio::runtime::Handle::current()
-            .block_on(async move {
-                let client = reqwest::Client::new();
-                let request = build(client, url);
-                let response = request
-                    .send()
-                    .await
-                    .map_err(|e| format!("{} request failed: {}", method, e))?;
-                let status = response.status().as_u16();
-                let status_text = response
-                    .status()
-                    .canonical_reason()
-                    .unwrap_or("")
-                    .to_string();
-                // Issue #627: capture Content-Type before consuming the
-                // body. Lower-case + take the part before `;` so
-                // `application/json; charset=utf-8` reduces to
-                // `application/json` for the JSON-parse decision.
-                let content_type = response
-                    .headers()
-                    .get(reqwest::header::CONTENT_TYPE)
-                    .and_then(|v| v.to_str().ok())
-                    .map(|s| s.split(';').next().unwrap_or(s).trim().to_ascii_lowercase())
-                    .unwrap_or_default();
-                let data = response
-                    .text()
-                    .await
-                    .map_err(|e| format!("Failed to read response body: {}", e))?;
-                Ok(AxiosResponseHandle {
-                    status,
-                    status_text,
-                    data,
-                    content_type,
+        let result: Result<AxiosResponseHandle, String> = (|| {
+            let client = Client::with_timeout(REQUEST_TIMEOUT);
+            let response = client
+                .execute(build(url))
+                .map_err(|e| format!("{} request failed: {}", method, e))?;
+            let status = response.status;
+            let status_text = reason_phrase(status).to_string();
+            // Issue #627: lower-case the Content-Type and take the part before
+            // `;` so `application/json; charset=utf-8` reduces to
+            // `application/json` for the JSON-parse decision.
+            let content_type = response
+                .header("content-type")
+                .map(|v| String::from_utf8_lossy(v).into_owned())
+                .map(|s| {
+                    s.split(';')
+                        .next()
+                        .unwrap_or(&s)
+                        .trim()
+                        .to_ascii_lowercase()
                 })
-            });
+                .unwrap_or_default();
+            Ok(AxiosResponseHandle {
+                status,
+                status_text,
+                data: response.text(),
+                content_type,
+            })
+        })();
         match result {
             Ok(resp) => {
                 let handle = register_handle(resp);
@@ -138,6 +147,78 @@ where
     raw
 }
 
+/// `response.statusText`, as `http::StatusCode::canonical_reason` gave it.
+///
+/// Axios sets `statusText` from the status line, and a JS caller can compare it
+/// against a literal, so this is observable rather than cosmetic. Only the codes
+/// a real HTTP server sends are listed; an unknown code answers `""`, which is
+/// what `canonical_reason()` did for one.
+fn reason_phrase(status: u16) -> &'static str {
+    match status {
+        100 => "Continue",
+        101 => "Switching Protocols",
+        102 => "Processing",
+        200 => "OK",
+        201 => "Created",
+        202 => "Accepted",
+        203 => "Non Authoritative Information",
+        204 => "No Content",
+        205 => "Reset Content",
+        206 => "Partial Content",
+        207 => "Multi-Status",
+        208 => "Already Reported",
+        226 => "IM Used",
+        300 => "Multiple Choices",
+        301 => "Moved Permanently",
+        302 => "Found",
+        303 => "See Other",
+        304 => "Not Modified",
+        305 => "Use Proxy",
+        307 => "Temporary Redirect",
+        308 => "Permanent Redirect",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        402 => "Payment Required",
+        403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        406 => "Not Acceptable",
+        407 => "Proxy Authentication Required",
+        408 => "Request Timeout",
+        409 => "Conflict",
+        410 => "Gone",
+        411 => "Length Required",
+        412 => "Precondition Failed",
+        413 => "Payload Too Large",
+        414 => "URI Too Long",
+        415 => "Unsupported Media Type",
+        416 => "Range Not Satisfiable",
+        417 => "Expectation Failed",
+        418 => "I'm a teapot",
+        421 => "Misdirected Request",
+        422 => "Unprocessable Entity",
+        423 => "Locked",
+        424 => "Failed Dependency",
+        426 => "Upgrade Required",
+        428 => "Precondition Required",
+        429 => "Too Many Requests",
+        431 => "Request Header Fields Too Large",
+        451 => "Unavailable For Legal Reasons",
+        500 => "Internal Server Error",
+        501 => "Not Implemented",
+        502 => "Bad Gateway",
+        503 => "Service Unavailable",
+        504 => "Gateway Timeout",
+        505 => "HTTP Version Not Supported",
+        506 => "Variant Also Negotiates",
+        507 => "Insufficient Storage",
+        508 => "Loop Detected",
+        510 => "Not Extended",
+        511 => "Network Authentication Required",
+        _ => "",
+    }
+}
+
 /// `axios.get(url) -> Promise<Response>`.
 ///
 /// # Safety
@@ -146,7 +227,7 @@ where
 #[no_mangle]
 pub unsafe extern "C" fn js_axios_get(url_ptr: *const StringHeader) -> *mut Promise {
     let url = read_str(url_ptr).ok_or("Invalid URL");
-    run_request("GET", url, |client, url| client.get(&url))
+    run_request("GET", url, Request::get)
 }
 
 /// `axios.head(url) -> Promise<Response>`.
@@ -157,7 +238,7 @@ pub unsafe extern "C" fn js_axios_get(url_ptr: *const StringHeader) -> *mut Prom
 #[no_mangle]
 pub unsafe extern "C" fn js_axios_head(url_ptr: *const StringHeader) -> *mut Promise {
     let url = read_str(url_ptr).ok_or("Invalid URL");
-    run_request("HEAD", url, |client, url| client.head(&url))
+    run_request("HEAD", url, Request::head)
 }
 
 /// `axios.options(url) -> Promise<Response>`.
@@ -168,9 +249,7 @@ pub unsafe extern "C" fn js_axios_head(url_ptr: *const StringHeader) -> *mut Pro
 #[no_mangle]
 pub unsafe extern "C" fn js_axios_options(url_ptr: *const StringHeader) -> *mut Promise {
     let url = read_str(url_ptr).ok_or("Invalid URL");
-    run_request("OPTIONS", url, |client, url| {
-        client.request(reqwest::Method::OPTIONS, &url)
-    })
+    run_request("OPTIONS", url, Request::options)
 }
 
 /// `axios.post(url, data) -> Promise<Response>`.
@@ -187,10 +266,9 @@ pub unsafe extern "C" fn js_axios_options(url_ptr: *const StringHeader) -> *mut 
 pub unsafe extern "C" fn js_axios_post(url_ptr: *const StringHeader, data: f64) -> *mut Promise {
     let url = read_str(url_ptr).ok_or("Invalid URL");
     let body = read_body_as_string(data);
-    run_request("POST", url, move |client, url| {
-        client
-            .post(&url)
-            .header("Content-Type", "application/json")
+    run_request("POST", url, move |url| {
+        Request::post(url)
+            .header("content-type", "application/json")
             .body(body)
     })
 }
@@ -206,10 +284,9 @@ pub unsafe extern "C" fn js_axios_post(url_ptr: *const StringHeader, data: f64) 
 pub unsafe extern "C" fn js_axios_put(url_ptr: *const StringHeader, data: f64) -> *mut Promise {
     let url = read_str(url_ptr).ok_or("Invalid URL");
     let body = read_body_as_string(data);
-    run_request("PUT", url, move |client, url| {
-        client
-            .put(&url)
-            .header("Content-Type", "application/json")
+    run_request("PUT", url, move |url| {
+        Request::put(url)
+            .header("content-type", "application/json")
             .body(body)
     })
 }
@@ -222,7 +299,7 @@ pub unsafe extern "C" fn js_axios_put(url_ptr: *const StringHeader, data: f64) -
 #[no_mangle]
 pub unsafe extern "C" fn js_axios_delete(url_ptr: *const StringHeader) -> *mut Promise {
     let url = read_str(url_ptr).ok_or("Invalid URL");
-    run_request("DELETE", url, |client, url| client.delete(&url))
+    run_request("DELETE", url, Request::delete)
 }
 
 /// `axios.patch(url, data) -> Promise<Response>`. Same body-encoding
@@ -236,10 +313,9 @@ pub unsafe extern "C" fn js_axios_delete(url_ptr: *const StringHeader) -> *mut P
 pub unsafe extern "C" fn js_axios_patch(url_ptr: *const StringHeader, data: f64) -> *mut Promise {
     let url = read_str(url_ptr).ok_or("Invalid URL");
     let body = read_body_as_string(data);
-    run_request("PATCH", url, move |client, url| {
-        client
-            .patch(&url)
-            .header("Content-Type", "application/json")
+    run_request("PATCH", url, move |url| {
+        Request::patch(url)
+            .header("content-type", "application/json")
             .body(body)
     })
 }
