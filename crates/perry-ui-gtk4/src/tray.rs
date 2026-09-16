@@ -4,17 +4,19 @@
 //! extension, XFCE, Cinnamon, MATE, Budgie) speak the freedesktop
 //! `org.kde.StatusNotifierItem` DBus protocol. The pure-Rust `ksni`
 //! crate handles the DBus protocol surface; we model each tray icon as
-//! a long-lived `ksni::Service` running on a dedicated tokio current-
-//! thread runtime in a background OS thread (mirrors the mpris-server
-//! pattern in `media_playback.rs`).
+//! a long-lived `ksni::Service`. `ksni` is built on its `async-io`
+//! feature rather than its `tokio` default, so the service loop runs on
+//! the executor thread `ksni` starts for itself and Perry supplies no
+//! runtime at all (see `background.rs` for why that works).
 //!
 //! Architecture
 //! ============
 //! - `TRAYS: Mutex<Vec<Option<TrayHandle>>>` — process-wide registry,
 //!   1-based indices match `menu.rs` / `widgets/`. We use a Mutex (not
-//!   thread_local) because tray creation initiates the spawn from a
-//!   tokio worker, and we need cross-thread access from `set_icon` /
-//!   `set_tooltip` / `attach_menu` / `on_click` after the fact.
+//!   thread_local) because the tray's own callbacks reach it from
+//!   `ksni`'s executor thread, and we need cross-thread access from
+//!   `set_icon` / `set_tooltip` / `attach_menu` / `on_click` after the
+//!   fact.
 //! - `TrayState` carries the dynamic tray-icon state (icon path, tooltip,
 //!   attached menu handle, click callback). Wrapped in `Arc<Mutex>` so
 //!   the `impl ksni::Tray for PerryTray` can read from it.
@@ -27,9 +29,9 @@
 //! Callback marshalling
 //! ====================
 //! KSNI invokes `activate()` and menu-item `activate` callbacks from
-//! its tokio runtime (background thread). Perry's runtime is largely
-//! thread-local — `js_closure_call0` must run on the GTK main thread
-//! where the JS heap lives. We marshal via
+//! its own executor thread. Perry's runtime is largely thread-local —
+//! `js_closure_call0` must run on the GTK main thread where the JS heap
+//! lives. We marshal via
 //! `glib::MainContext::default().invoke(move || ...)`, identical to
 //! the location.rs pattern.
 //!
@@ -45,11 +47,11 @@
 
 #![cfg(target_os = "linux")]
 
+use crate::background;
 use crate::menu::{snapshot_menu, MenuItemSnapshot};
 use ksni::menu::{StandardItem, SubMenu};
 use ksni::{Handle, MenuItem, ToolTip, TrayMethods};
 use std::sync::{Arc, Mutex, OnceLock};
-use tokio::runtime::{Builder, Runtime};
 
 extern "C" {
     fn js_closure_call0(closure: *const u8) -> f64;
@@ -167,7 +169,7 @@ impl ksni::Tray for PerryTray {
 }
 
 /// Schedule `js_closure_call0(callback_ptr)` on the GTK main loop. Safe
-/// to call from any thread; the call site is the KSNI tokio worker.
+/// to call from any thread; the call site is the KSNI executor thread.
 fn invoke_callback_on_main(callback: f64) {
     use gtk4::glib;
     glib::MainContext::default().invoke(move || {
@@ -325,9 +327,9 @@ struct TrayHandle {
     ksni_handle: Handle<PerryTray>,
 }
 
-/// Process-wide tray registry. Mutex (not thread_local) because tray
-/// creation runs on a tokio worker; subsequent set_icon / attach_menu
-/// calls run on the GTK main thread.
+/// Process-wide tray registry. Mutex (not thread_local) because the
+/// tray's `activate` / menu callbacks run on KSNI's executor thread;
+/// subsequent set_icon / attach_menu calls run on the GTK main thread.
 fn trays() -> &'static Mutex<Vec<Option<TrayHandle>>> {
     static TRAYS: OnceLock<Mutex<Vec<Option<TrayHandle>>>> = OnceLock::new();
     TRAYS.get_or_init(|| Mutex::new(Vec::new()))
@@ -343,43 +345,10 @@ pub(crate) fn scan_gtk4_tray_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>
     }
 }
 
-/// Dedicated tokio runtime for the tray's KSNI service — re-used
-/// across all tray icons (KSNI services share a single DBus connection
-/// via zbus's shared session bus, so one runtime is sufficient).
-fn tray_runtime() -> Option<&'static Runtime> {
-    static RT: OnceLock<Option<Runtime>> = OnceLock::new();
-    RT.get_or_init(|| {
-        // Spawn a dedicated thread to host the runtime so its Handle
-        // outlives any individual entry-point call.
-        match Builder::new_multi_thread()
-            .worker_threads(1)
-            .thread_name("perry-tray")
-            .enable_all()
-            .build()
-        {
-            Ok(rt) => Some(rt),
-            Err(e) => {
-                eprintln!(
-                    "[perry] warning: tray icon: failed to start tokio runtime: {} \
-                    (#490 — KSNI requires an async runtime)",
-                    e
-                );
-                None
-            }
-        }
-    })
-    .as_ref()
-}
-
-/// `trayCreate(iconPath)` — start a KSNI service on the background
-/// runtime, return a 1-based handle index. Returns 0 on failure.
+/// `trayCreate(iconPath)` — start a KSNI service, return a 1-based
+/// handle index. Returns 0 on failure.
 pub fn create(icon_path_ptr: *const u8) -> i64 {
     let icon_path = unsafe { str_from_header(icon_path_ptr) }.to_string();
-
-    let rt = match tray_runtime() {
-        Some(r) => r,
-        None => return 0,
-    };
 
     // Reserve the handle slot first so `id` is stable.
     let idx = {
@@ -401,7 +370,11 @@ pub fn create(icon_path_ptr: *const u8) -> i64 {
         state: state.clone(),
     };
 
-    let handle = match rt.block_on(async move {
+    // Blocks the calling (GTK main) thread for the SNI registration
+    // handshake only — exactly what `Runtime::block_on` did here before.
+    // What it starts, `ksni` then drives on its own executor thread: the
+    // service loop, its zbus connection, and every later `activate`.
+    let handle = match background::block_on(async move {
         // assume_sni_available routes "no SNI host" to watcher_offline
         // instead of an immediate Err, matching the macOS no-tray-bar
         // graceful fallback.
@@ -435,13 +408,12 @@ pub fn create(icon_path_ptr: *const u8) -> i64 {
 /// Trigger a property refresh — KSNI broadcasts changed DBus properties
 /// to the system tray host. Cheap; safe to call from the GTK main thread.
 fn refresh(handle: &Handle<PerryTray>) {
-    if let Some(rt) = tray_runtime() {
-        let h = handle.clone();
-        // Fire-and-forget — we don't need to await the DBus round-trip.
-        rt.spawn(async move {
-            let _ = h.update(|_| ()).await;
-        });
-    }
+    let h = handle.clone();
+    // Fire-and-forget — we don't need to await the DBus round-trip, and
+    // the GTK main thread must not be parked on one.
+    background::spawn_detached(async move {
+        let _ = h.update(|_| ()).await;
+    });
 }
 
 fn with_tray<F>(handle: i64, f: F)
@@ -508,14 +480,12 @@ pub fn destroy(handle: i64) {
     };
     if let Some(tray) = removed {
         // ksni::Handle::shutdown returns an awaiter; fire-and-forget on
-        // the tray runtime. The slot is left as None so subsequent
+        // the background executor. The slot is left as None so subsequent
         // index-based operations on this handle silently no-op (matches
         // the macOS pattern in tray.rs).
-        if let Some(rt) = tray_runtime() {
-            let h = tray.ksni_handle;
-            rt.spawn(async move {
-                let _ = h.shutdown().await;
-            });
-        }
+        let h = tray.ksni_handle;
+        background::spawn_detached(async move {
+            h.shutdown().await;
+        });
     }
 }

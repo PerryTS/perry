@@ -15,12 +15,13 @@
 //! Lock-screen / system media-key integration (#366) goes through MPRIS
 //! — the canonical Linux desktop spec exposed over D-Bus as
 //! `org.mpris.MediaPlayer2.Player`. The MPRIS server runs on a dedicated
-//! thread with a tokio current-thread runtime owning the zbus connection;
-//! D-Bus method calls (Play / Pause / Seek …) post commands into a
-//! channel that the GLib poll tick drains, so all GStreamer pipeline
-//! mutation stays on the main thread (pipelines are stored in a
-//! thread_local). `set_now_playing` and state changes push the other
-//! direction via a sync `properties_changed` call into the runtime.
+//! thread that blocks on its update queue; zbus (on `async-io`, not
+//! tokio) owns the connection on a thread of its own. D-Bus method calls
+//! (Play / Pause / Seek …) post commands into a channel that the GLib
+//! poll tick drains, so all GStreamer pipeline mutation stays on the
+//! main thread (pipelines are stored in a thread_local).
+//! `set_now_playing` and state changes push the other direction by
+//! enqueuing onto that update queue.
 
 use gstreamer::prelude::*;
 use std::cell::RefCell;
@@ -542,20 +543,23 @@ fn current_position_seconds(handle: f64) -> f64 {
 mod mpris {
     //! D-Bus MPRIS server. Lazy-bootstrapped on the first
     //! `set_now_playing` call so apps that don't use Now Playing don't
-    //! pay the zbus / tokio-runtime startup cost.
+    //! pay the zbus startup cost.
     //!
-    //! Threading: the zbus connection lives on a dedicated tokio
-    //! current-thread runtime. The `PlayerInterface` impl runs there
-    //! and forwards method calls (Play / Pause / Seek …) into a
-    //! `std::sync::mpsc` queue that `poll_tick` drains on the main
-    //! GLib thread — that's where the GStreamer pipelines live
-    //! (thread_local PLAYERS), so all pipeline mutation stays on
-    //! the main thread.
+    //! Threading: `mpris-server` is built WITHOUT its `tokio` feature
+    //! (that feature only forwards to `zbus/tokio`), so zbus runs on
+    //! `async-io` and services the connection's socket on a
+    //! `zbus::Connection executor` thread it starts itself. The
+    //! `PlayerInterface` impl runs there and forwards method calls
+    //! (Play / Pause / Seek …) into a `std::sync::mpsc` queue that
+    //! `poll_tick` drains on the main GLib thread — that's where the
+    //! GStreamer pipelines live (thread_local PLAYERS), so all pipeline
+    //! mutation stays on the main thread.
     //!
     //! Property pushes (Metadata / PlaybackStatus) go the other way
-    //! through a tokio mpsc channel: the main thread enqueues, the
-    //! runtime drains and calls `Server::properties_changed` from
-    //! within an async context.
+    //! through an `async-channel`: the main thread enqueues, and the
+    //! dedicated `perry-mpris` thread — which blocks on that queue in
+    //! `block_on` — drains it and calls `Server::properties_changed`
+    //! from within an async context.
 
     use super::{first_active_handle, MediaState};
     use mpris_server::{
@@ -565,7 +569,6 @@ mod mpris {
     };
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{mpsc, Mutex, OnceLock};
-    use tokio::sync::mpsc as tmpsc;
 
     /// D-Bus → main thread.
     enum Command {
@@ -579,7 +582,7 @@ mod mpris {
         SeekAbsolute(f64),
     }
 
-    /// Main thread → tokio runtime.
+    /// Main thread → the `perry-mpris` server thread.
     enum Update {
         Metadata(Metadata),
         Status(PlaybackStatus),
@@ -587,7 +590,7 @@ mod mpris {
 
     static CMD_TX: OnceLock<Mutex<mpsc::Sender<Command>>> = OnceLock::new();
     static CMD_RX: OnceLock<Mutex<mpsc::Receiver<Command>>> = OnceLock::new();
-    static UPDATE_TX: OnceLock<tmpsc::UnboundedSender<Update>> = OnceLock::new();
+    static UPDATE_TX: OnceLock<async_channel::Sender<Update>> = OnceLock::new();
     static INIT_FAILED: AtomicBool = AtomicBool::new(false);
     static TRACKID_COUNTER: AtomicU64 = AtomicU64::new(0);
     static LAST_STATUS: Mutex<Option<PlaybackStatus>> = Mutex::new(None);
@@ -605,8 +608,8 @@ mod mpris {
         let _ = CMD_TX.set(Mutex::new(cmd_tx));
         let _ = CMD_RX.set(Mutex::new(cmd_rx));
 
-        let (utx, urx) = tmpsc::unbounded_channel::<Update>();
-        // The runtime owns urx; we share utx via OnceLock.
+        let (utx, urx) = async_channel::unbounded::<Update>();
+        // The server thread owns urx; we share utx via OnceLock.
         if UPDATE_TX.set(utx).is_err() {
             return true; // another thread won the race
         }
@@ -615,19 +618,10 @@ mod mpris {
         std::thread::Builder::new()
             .name("perry-mpris".into())
             .spawn(move || {
-                let rt = match tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                {
-                    Ok(r) => r,
-                    Err(_) => {
-                        INIT_FAILED.store(true, Ordering::Relaxed);
-                        return;
-                    }
-                };
-                rt.block_on(async move {
-                    run_server(pid, urx).await;
-                });
+                // No runtime to build: zbus (on `async-io`) drives the
+                // connection itself, so this thread only has to drive
+                // `run_server`'s own state machine.
+                crate::background::block_on(run_server(pid, urx));
             })
             .map(|_| true)
             .unwrap_or_else(|_| {
@@ -636,7 +630,7 @@ mod mpris {
             })
     }
 
-    async fn run_server(pid: u32, mut urx: tmpsc::UnboundedReceiver<Update>) {
+    async fn run_server(pid: u32, urx: async_channel::Receiver<Update>) {
         // Bus name pattern `org.mpris.MediaPlayer2.<suffix>` — Server
         // prepends the prefix internally, so we only supply the
         // suffix (`perry-<pid>`).
@@ -648,7 +642,7 @@ mod mpris {
                 return;
             }
         };
-        while let Some(update) = urx.recv().await {
+        while let Ok(update) = urx.recv().await {
             let prop = match update {
                 Update::Metadata(m) => Property::Metadata(m),
                 Update::Status(s) => Property::PlaybackStatus(s),
@@ -681,7 +675,9 @@ mod mpris {
         }
         let metadata = builder.build();
         if let Some(tx) = UPDATE_TX.get() {
-            let _ = tx.send(Update::Metadata(metadata));
+            // Unbounded: `try_send` can only fail if the server thread
+            // is gone, which is the same "drop it" case `send` was.
+            let _ = tx.try_send(Update::Metadata(metadata));
         }
     }
 
@@ -709,7 +705,7 @@ mod mpris {
         }
         *last = Some(status);
         if let Some(tx) = UPDATE_TX.get() {
-            let _ = tx.send(Update::Status(status));
+            let _ = tx.try_send(Update::Status(status));
         }
     }
 

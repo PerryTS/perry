@@ -4200,10 +4200,15 @@ version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "814b44c24cd2cb236c3b8a41c7f08237b452a8e76ecaa81f1cec40b5b678215b"
 dependencies = [
+ "async-executor",
+ "async-io",
+ "async-lock",
+ "futures-channel",
+ "futures-lite",
  "futures-util",
  "pastey 0.2.3",
  "serde",
- "tokio",
+ "task-local",
  "zbus",
 ]
 
@@ -6557,9 +6562,12 @@ dependencies = [
 name = "perry-ui-gtk4"
 version = "0.5.1580"
 dependencies = [
+ "async-channel",
+ "async-executor",
  "base64 0.22.1",
  "cairo-rs 0.22.9",
  "dirs",
+ "futures-lite",
  "gstreamer",
  "gstreamer-app",
  "gtk4",
@@ -6572,7 +6580,6 @@ dependencies = [
  "perry-runtime",
  "perry-ui",
  "perry-ui-testkit",
- "tokio",
  "webkit6",
 ]
 
@@ -9310,6 +9317,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
 
 [[package]]
+name = "task-local"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2972044a9e5e448a506a7ff6f0d03b566d8ef4cd6918a58fc59835a0f8666626"
+dependencies = [
+ "pin-project-lite",
+]
+
+[[package]]
 name = "tempfile"
 version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9548,7 +9564,6 @@ dependencies = [
  "signal-hook-registry",
  "socket2",
  "tokio-macros",
- "tracing",
  "windows-sys 0.61.2",
 ]
 
@@ -11188,7 +11203,6 @@ dependencies = [
  "rustix",
  "serde",
  "serde_repr",
- "tokio",
  "tracing",
  "uds_windows",
  "uuid",

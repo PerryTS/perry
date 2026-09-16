@@ -476,18 +476,6 @@
       "blocker": "this is SYNC tungstenite 0.24 on its own thread \u2014 it is not a tokio edge at all, and it is listed because it pins the third tungstenite major in the tree, which is part of why perry-ext-ws cannot move to turnloop-websocket cheaply.",
       "issue": "unfiled \u2014 P8",
       "plan": "N"
-    },
-    {
-      "crate": "perry-ui-gtk4",
-      "dep": "tokio",
-      "kind": "normal",
-      "optional": false,
-      "target": "cfg(target_os = \"linux\")",
-      "surface": "`perry/ui` tray icon and MPRIS media keys on Linux (`ksni`, `mpris-server`)",
-      "reached_when": "a Linux GTK4 UI build only. Invisible to `cargo tree` on macOS \u2014 this edge is target-gated, which is why this gate reads manifests rather than a resolved tree",
-      "blocker": "`ksni` and `mpris-server` REQUIRE tokio (they are zbus clients with a `tokio` feature). Removing it means replacing both crates or dropping tray/MPRIS support on Linux.",
-      "issue": "unfiled \u2014 P8",
-      "plan": "M"
     }
   ],
   "lockfile": {
@@ -569,6 +557,6 @@
     "perry-ext-ws": 24,
     "perry-ffi": 2,
     "perry-stdlib": 104,
-    "perry-ui-gtk4": 7
+    "perry-ui-gtk4": 6
   }
 }
