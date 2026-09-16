@@ -873,12 +873,22 @@ Three decisions are yours, not this lane's:
    green, and its `--self-test` proves it can fail. If it is removed, the
    migration goes back to being measured by prose.
 
-And three things want issues filed, none of which is a duplicate of the 47
+And five things want issues filed, none of which is a duplicate of the 47
 already open:
 
-* the `node-fetch` + global-`fetch` SIGSEGV and its duplicate `js_fetch_*`
-  definitions (related to #10310, not the same bug);
-* `node:worker_threads` Workers never claiming an agent id, and `fetch()`
-  failing inside one as a consequence;
-* per-agent `turnloop::Loop`s, as the tracking issue for the item that gates
-  most of the remaining migration.
+1. **`fetch()` inside a `node:worker_threads` Worker fails on this branch and
+   works on `main`** — a regression, and the one thing that should block the
+   merge.
+2. **`node:worker_threads` Workers never claim an agent id**, which is its
+   cause and which every other reader of `current_agent()` inherits.
+3. **A Worker that parks before fetching hangs forever** — measured on `main`
+   too, so a separate pre-existing defect, and a worse one than (1).
+4. **`import 'node-fetch'` + the global `fetch()` SIGSEGVs**, from two linked
+   definitions of every `js_fetch_*` symbol. Pre-existing on `main`; related to
+   #10310 but not the same bug and not fixed by #10310's proposed fix.
+5. **Per-agent `turnloop::Loop`s**, as the tracking issue for the item that
+   gates most of the remaining migration.
+
+Two more, smaller: `new Worker(new URL(import.meta.url))` does not link, and
+`scripts/gc_runtime_root_holders.py` is red on `turnloop/integration` with a
+stale P5 entry.
