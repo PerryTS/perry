@@ -38,27 +38,36 @@ if (before < 0) {
 
 const workerUrl = new URL("./_helpers/p9_rss_worker.ts", import.meta.url);
 const workers: Worker[] = [];
-const ready: Promise<void>[] = [];
+const ready: Promise<string>[] = [];
 for (let i = 0; i < agents; i++) {
   const w = new Worker(workerUrl);
   workers.push(w);
   ready.push(
-    new Promise<void>((resolve) => {
+    new Promise<string>((resolve) => {
       w.on("message", (m: unknown) => {
-        if (m === "ready") resolve();
+        const text = String(m);
+        if (text.startsWith("ready")) resolve(text.slice("ready ".length));
       });
-      w.on("error", () => resolve());
+      w.on("error", (e: Error) => resolve("error:" + e.message));
     }),
   );
 }
-await Promise.all(ready);
+const statuses = await Promise.all(ready);
 
 const after = rssKb();
 const delta = after - before;
 const per = agents > 0 ? Math.round((delta / agents) * 10) / 10 : 0;
+
+// `net_ok` is the assertion that this row measured what it claims to measure.
+// Only an agent whose fetch succeeded upgraded its loop to the NET profile, so
+// a row with `net_ok` below `agents` is reporting the cost of fewer loops than
+// it counted -- a finding, not a cheaper number.
+const netOk = statuses.filter((s) => s.startsWith("ok:")).length;
+const firstError = statuses.find((s) => !s.startsWith("ok:") && s !== "skipped");
 console.log(
   `agents=${agents} mode=${mode} rss_before_kb=${before} rss_after_kb=${after} ` +
-    `delta_kb=${delta} per_agent_kb=${per}`,
+    `delta_kb=${delta} per_agent_kb=${per} net_ok=${netOk}/${agents}` +
+    (firstError ? ` first_error=${JSON.stringify(firstError)}` : ""),
 );
 
 for (const w of workers) w.postMessage("stop");

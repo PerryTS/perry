@@ -36,31 +36,45 @@ function doConnect(): Promise<string> {
     const sock = net.connect(echoPort, "127.0.0.1");
     let seen = "";
     sock.on("connect", () => sock.write("p9\n"));
-    sock.on("data", (chunk: Buffer) => {
-      seen += chunk.toString();
+    sock.on("data", (chunk: unknown) => {
+      seen += typeof chunk === "string" ? chunk : String(chunk);
       sock.end();
     });
-    sock.on("close", () => resolve(`echo=${JSON.stringify(seen.trim())}`));
+    sock.on("close", () => resolve(`echo=${JSON.stringify(String(seen).trim())}`));
     sock.on("error", (e: Error) => resolve("error:" + e.message));
   });
 }
 
+// `set` / `get` / `del`, not `ping`: `ping` and `echo` exist as `js_ioredis_*`
+// symbols but have no row in the compiler's native-method table, so they return
+// `undefined` on BOTH transports (P7's own probe says so). Asserting them would
+// assert that defect instead of this migration -- and an earlier revision of
+// this file did exactly that, printing `ping=undefined` as if it were a pass.
+//
+// Perry's binding also IGNORES the constructor argument and reads REDIS_HOST /
+// REDIS_PORT / REDIS_TLS from the environment; `REDIS_TLS` must be the literal
+// string "false" or it declines at construction whatever this lane does (P7
+// defect 6, perry#10335). The run sets both, and a mismatch shows up as a
+// connection error rather than as a silent tokio fallback.
 async function doDatabase(): Promise<string> {
   try {
     const client = new Redis({ port: redisPort, host: "127.0.0.1" });
-    const pong = await client.ping();
-    const echoed = await client.echo("p9");
+    const key = "p9:worker";
+    await client.del(key);
+    const stored = await client.set(key, "p9-value");
+    const loaded = await client.get(key);
+    const removed = await client.del(key);
     await client.quit();
-    return `ping=${pong} echo=${echoed}`;
+    return `set=${stored} get=${loaded} del=${removed}`;
   } catch (e) {
     return "error:" + (e as Error).message;
   }
 }
 
-const fetched = await doFetch();
-const connected = await doConnect();
-const queried = await doDatabase();
-console.log(`worker-agent fetch: ${fetched}`);
-console.log(`worker-agent connect: ${connected}`);
-console.log(`worker-agent database: ${queried}`);
+// Printed as each one finishes, not collected and printed at the end: a throw
+// anywhere in the batch would otherwise take every result with it, and "the
+// Worker printed nothing" is indistinguishable from "the Worker never ran".
+console.log(`worker-agent fetch: ${await doFetch()}`);
+console.log(`worker-agent connect: ${await doConnect()}`);
+console.log(`worker-agent database: ${await doDatabase()}`);
 parentPort?.postMessage("done");

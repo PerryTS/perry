@@ -41,11 +41,11 @@ const echoed = await new Promise<string>((resolve) => {
     sock.write("p9-gc\n");
     churned += churn(retained);
   });
-  sock.on("data", (chunk: Buffer) => {
-    seen += chunk.toString();
+  sock.on("data", (chunk: unknown) => {
+    seen += typeof chunk === "string" ? chunk : String(chunk);
     sock.end();
   });
-  sock.on("close", () => resolve(seen.trim()));
+  sock.on("close", () => resolve(String(seen).trim()));
   sock.on("error", (e: Error) => resolve("error:" + e.message));
 });
 churned += churn(retained);
