@@ -132,6 +132,34 @@ pub(crate) fn test_resolution_stack_enter_and_forget(owner: usize) -> bool {
 /// an object — the overwhelmingly common case.
 static OBJECT_PROTOTYPES_NONEMPTY: AtomicBool = AtomicBool::new(false);
 
+/// Latched true by the first `OBJECT_META_FLAG_USER_PROTO_OVERRIDE` a receiver
+/// is ever given — i.e. the first `Object.setPrototypeOf` / `util.inherits`
+/// that re-points a live object's `[[Prototype]]` away from its class default.
+///
+/// The flag lives on the receiver's meta record, so asking "does this object
+/// have one?" costs two dependent loads — but only after the caller has
+/// already found the object. `instanceof`'s `util.inherits` escape hatch has
+/// to look up TWO class declaration prototypes through the class registry
+/// before it can ask, and that pair of registry probes was the single largest
+/// cost of a `o instanceof C` MISS (~130 instructions each, on a path whose
+/// whole budget was 669). This latch answers for the entire process in one
+/// relaxed-acquire load.
+///
+/// Conservative by construction: it is set, never cleared, and it is stored
+/// BEFORE the flag it guards (same discipline as [`OBJECT_PROTOTYPES_NONEMPTY`]
+/// above), so any reader that could observe the flag already observes the
+/// latch. A false positive costs a probe pair; a false negative is impossible.
+static USER_PROTO_OVERRIDE_EVER: AtomicBool = AtomicBool::new(false);
+
+/// Has any object in this process ever been given a user `[[Prototype]]`
+/// override? A `false` proves `object_has_user_prototype_override` would
+/// answer `false` for every receiver, so a caller may skip whatever work it
+/// would need to do to ask.
+#[inline]
+pub(crate) fn any_user_prototype_override() -> bool {
+    USER_PROTO_OVERRIDE_EVER.load(Ordering::Acquire)
+}
+
 fn get_object_prototypes() -> &'static Mutex<HashMap<usize, u64>> {
     OBJECT_PROTOTYPES.get_or_init(|| Mutex::new(HashMap::new()))
 }
@@ -258,6 +286,9 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
                 (*meta).flags |= crate::object::OBJECT_META_FLAG_PROTO_DIVERGED;
             }
             if user_override {
+                // Latch BEFORE the flag: a reader that observes the flag must
+                // already observe the latch (see `USER_PROTO_OVERRIDE_EVER`).
+                USER_PROTO_OVERRIDE_EVER.store(true, Ordering::Release);
                 (*meta).flags |= crate::object::OBJECT_META_FLAG_USER_PROTO_OVERRIDE;
             }
             if link_kind == PrototypeLinkKind::ClassEvaluation {

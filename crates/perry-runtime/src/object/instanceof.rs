@@ -1122,19 +1122,33 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
                     // prototype chain contains BaseClass.prototype. Only pay
                     // for the spec prototype walk when the candidate class's
                     // declaration prototype has a user-selected parent.
-                    let candidate_proto = super::class_registry::class_decl_prototype_object(cur);
-                    let target_proto = super::class_registry::class_decl_prototype_object(class_id);
-                    if !candidate_proto.is_null()
-                        && !target_proto.is_null()
-                        && super::prototype_chain::object_has_user_prototype_override(
-                            candidate_proto as usize,
-                        )
-                        && ordinary_has_instance_prototype_walk(
-                            value,
-                            super::class_constructor_ref_value(class_id),
-                        )
-                    {
-                        return true_val;
+                    // The two `class_decl_prototype_object` probes are class
+                    // registry reads (TLS + RwLock + map, ~130 instructions
+                    // each) and they ran EAGERLY on every call that got this
+                    // far — which is every MISS, the path this whole ladder
+                    // exists to answer `false` on. They exist only to ask a
+                    // question whose answer is `false` for every receiver in a
+                    // process that never re-points an object's prototype, and
+                    // the latch answers that for the whole process in one
+                    // load. Set, never cleared, and published before the flag
+                    // it guards, so it can only ever be conservatively true.
+                    if super::prototype_chain::any_user_prototype_override() {
+                        let candidate_proto =
+                            super::class_registry::class_decl_prototype_object(cur);
+                        let target_proto =
+                            super::class_registry::class_decl_prototype_object(class_id);
+                        if !candidate_proto.is_null()
+                            && !target_proto.is_null()
+                            && super::prototype_chain::object_has_user_prototype_override(
+                                candidate_proto as usize,
+                            )
+                            && ordinary_has_instance_prototype_walk(
+                                value,
+                                super::class_constructor_ref_value(class_id),
+                            )
+                        {
+                            return true_val;
+                        }
                     }
                 }
             }
