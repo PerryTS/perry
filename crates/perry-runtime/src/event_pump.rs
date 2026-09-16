@@ -208,7 +208,7 @@ pub extern "C" fn js_native_work_submitted() {
     #[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
     {
         loop_stats::note_notify();
-        agent_loop::wake_primary();
+        agent_loop::wake_parked_agents();
     }
 }
 
@@ -322,6 +322,18 @@ pub(crate) fn net_loop_available() -> bool {
     {
         false
     }
+}
+
+/// turnloop P9: destroy the calling *worker* agent's loop at
+/// `agent::retire_agent`, settling its outstanding operations first.
+///
+/// Separate from [`shutdown_wait_driver`] only because that one also prints the
+/// process-wide `[perry-loop-waits]` line, which belongs to the process-exit
+/// funnel and must not be emitted once per Worker. The per-agent `[perry-loop]`
+/// line still is — it is the only evidence a worker agent's loop ever ran.
+pub fn shutdown_agent_loop() {
+    #[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+    agent_loop::shutdown_current_thread();
 }
 
 /// Destroy the calling thread's agent loop at the process-exit funnel and, with
@@ -580,7 +592,7 @@ pub extern "C" fn js_notify_main_thread() {
     // turnloop P0: wake the primary agent's loop if it is inside a turn. One
     // atomic load otherwise; must follow the `NOTIFIED` store above.
     #[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
-    agent_loop::wake_primary();
+    agent_loop::wake_parked_agents();
     // Hot path: no consumer is currently in `cvar.wait_timeout`, so
     // we don't need to take the mutex or signal the cvar — the next
     // call to `js_wait_for_event` will see `NOTIFIED == true` on the

@@ -1,0 +1,82 @@
+// turnloop P9 acceptance: every JS agent has a loop, so every JS agent's
+// network I/O goes through turnloop.
+//
+// The same three operations — `fetch`, `net.connect`, one database query — run
+// twice: once on the primary agent and once inside a `node:worker_threads`
+// Worker, which is the surface a Node program actually uses for a second JS
+// heap. Before P9 the Worker's three declined to reqwest / a tokio
+// `TcpStream` / the `redis` crate, because the submit guard asked "am I the
+// primary agent?". They are the four `perry-ext-net` and `perry-ext-http`
+// edges of P8's removal-plan group A.
+//
+// What makes this a measurement rather than a smoke test: run it with
+// `PERRY_LOOP_STATS=1` and read the per-agent `[perry-loop] driver=turnloop
+// … agent=N` lines on stderr. A Worker line with `turns>0` and
+// `native_ticks=0` is the evidence that that agent's own loop carried the
+// work; the process-wide `p6 http_submitted=/declined=` line says the fetch
+// did not fall back. A green run whose Worker printed no `[perry-loop]` line
+// at all proves nothing — the operations would have succeeded on tokio too.
+//
+// Needs, all on 127.0.0.1: an HTTP origin at $P9_URL (default :8099), a TCP
+// echo at $P9_ECHO_PORT (default 8098), and a Redis at $P9_REDIS_PORT
+// (default 56379). `scripts/turnloop/apps/_helpers/p9_servers.mjs` starts the
+// first two under Node.
+import net from "node:net";
+import { Worker } from "node:worker_threads";
+
+const url = process.env.P9_URL ?? "http://127.0.0.1:8099/";
+const echoPort = Number(process.env.P9_ECHO_PORT ?? "8098");
+const redisPort = Number(process.env.P9_REDIS_PORT ?? "56379");
+
+async function doFetch(): Promise<string> {
+  try {
+    const r = await fetch(url);
+    const body = await r.text();
+    return `status=${r.status} bytes=${body.length}`;
+  } catch (e) {
+    return "error:" + (e as Error).message;
+  }
+}
+
+function doConnect(): Promise<string> {
+  return new Promise<string>((resolve) => {
+    const sock = net.connect(echoPort, "127.0.0.1");
+    let seen = "";
+    sock.on("connect", () => sock.write("p9\n"));
+    sock.on("data", (chunk: Buffer) => {
+      seen += chunk.toString();
+      sock.end();
+    });
+    sock.on("close", () => resolve(`echo=${JSON.stringify(seen.trim())}`));
+    sock.on("error", (e: Error) => resolve("error:" + e.message));
+  });
+}
+
+async function doDatabase(): Promise<string> {
+  try {
+    const { default: Redis } = await import("ioredis");
+    const client = new Redis({ port: redisPort, host: "127.0.0.1" });
+    const pong = await client.ping();
+    const echoed = await client.echo("p9");
+    await client.quit();
+    return `ping=${pong} echo=${echoed}`;
+  } catch (e) {
+    return "error:" + (e as Error).message;
+  }
+}
+
+console.log(`primary-agent fetch: ${await doFetch()}`);
+console.log(`primary-agent connect: ${await doConnect()}`);
+console.log(`primary-agent database: ${await doDatabase()}`);
+
+const workerUrl = new URL("./_helpers/p9_worker_acceptance_worker.ts", import.meta.url);
+const w = new Worker(workerUrl);
+await new Promise<void>((resolve) => {
+  w.on("message", () => resolve());
+  w.on("error", (e: Error) => {
+    console.log("worker error:", e.message);
+    resolve();
+  });
+});
+await w.terminate();
+console.log("done");

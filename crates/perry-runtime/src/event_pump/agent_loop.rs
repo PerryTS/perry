@@ -8,17 +8,26 @@
 //! `Instant` deadline `js_wait_for_event` computed, or until a producer wakes
 //! the loop through its `Notifier`.
 //!
-//! Thread model (DESIGN §5a):
-//! - The loop is thread-local. There is no process-global loop. The primary
-//!   agent's loop is created lazily by that agent's first real park.
-//! - `js_notify_main_thread` addresses the primary agent, so the only
-//!   process-global piece is [`PRIMARY_ROUTE`]: that agent's `Notifier` (a
-//!   cloneable wake endpoint, not the loop) plus a flag saying whether the
-//!   owning thread is inside `turn`.
-//! - Worker agents have no loop in P0 and keep the legacy park unchanged
-//!   (`perry/thread` workers cannot `await`; a `worker_threads` Worker that
-//!   awaits parks on the condvar or on the legacy registered driver exactly as
-//!   before). P3/P4 give every agent its own loop, poster and timer heap.
+//! Thread model (DESIGN §5a; P9 made it true for every agent):
+//! - The loop is thread-local, and **every JS agent may own one** — the
+//!   primary agent, a `node:worker_threads` Worker, a `perry/thread` worker.
+//!   It is created lazily by that agent's first park or first net submission.
+//! - Exactly ONE thread owns an agent's loop. A second thread acting for the
+//!   same agent — Android's UI thread pumping on behalf of `perry-native`, an
+//!   embedder's host thread — is declined and keeps the legacy park, which is
+//!   the behaviour it has today. The tie-break is "first to ask wins", and the
+//!   thread that asks first is the one running that agent's event loop.
+//! - The cross-thread piece is therefore a route *table* keyed by [`AgentId`]
+//!   ([`ROUTES`]): each entry is one agent's `Notifier` (a cloneable wake
+//!   endpoint, not the loop) plus a flag saying whether its owner is inside
+//!   `turn`. [`PARKED_LOOPS`] keeps a producer's fast path at the single
+//!   atomic load the one-route design had.
+//! - `js_notify_main_thread` is a *broadcast*, not a point-to-point send: the
+//!   flag it sets (`event_pump::NOTIFIED`) and the condvar it signals are both
+//!   process-global and `notify_all`-shaped, so the turnloop wake has to reach
+//!   every parked agent or a Worker waiting on a `postMessage`-driven
+//!   resolution would never wake. Only agents actually inside a turn are
+//!   poked, so an idle agent costs nothing.
 //!
 //! Wake protocol (no lost wake, no hot-path syscall, no hot-path lock):
 //! the owner sets `in_turn` and then re-reads the runtime's `NOTIFIED` flag
@@ -34,11 +43,14 @@
 //! zero-event poll.
 
 use std::cell::{Cell, RefCell};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Mutex, PoisonError};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::thread::ThreadId;
 use std::time::Instant;
 
 use turnloop::{Completions, Config, Handle, Loop, Notifier, Timeout, Token};
+
+use crate::agent::AgentId;
 
 /// The token of the single timer this agent arms for its JS timer heap.
 ///
@@ -47,18 +59,43 @@ use turnloop::{Completions, Config, Handle, Loop, Notifier, Timeout, Token};
 /// (op class 255) can never collide with one.
 pub(crate) const TIMER_TOKEN: Token = Token(u64::MAX);
 
-/// Cross-thread route to the primary agent's loop.
-struct PrimaryRoute {
-    /// True exactly while the owning thread is inside `Loop::turn`.
-    in_turn: AtomicBool,
-    /// `(loop id, notifier)` of the thread that currently owns the route.
-    notifier: Mutex<Option<(u64, Notifier)>>,
+/// One agent's cross-thread wake route.
+///
+/// The entry is created by the *claim* (before any loop exists), so a thread
+/// can answer "may I use turnloop?" authoritatively without paying for a loop
+/// it may not use — which is the predicate `c13372cc70` had to fix after
+/// `net_available()` and `ensure_loop_with` disagreed on a Worker.
+struct Route {
+    /// The agent this route belongs to.
+    agent: AgentId,
+    /// The thread that claimed it. Only this thread may own the agent's loop.
+    owner: ThreadId,
+    /// Identity of the loop currently behind the route, or 0 while the slot is
+    /// claimed but no loop has been built. Lets a dropped loop clear only its
+    /// own endpoint, and lets a profile upgrade replace it without the slot
+    /// changing hands.
+    loop_id: u64,
+    /// True exactly while the owner is inside `Loop::turn`. Shared with the
+    /// owner (which keeps a clone in its [`AgentLoop`]) so a producer can read
+    /// it under the registry lock without touching the owner's TLS.
+    in_turn: Arc<AtomicBool>,
+    /// The loop's wake endpoint. `None` while the slot is merely claimed.
+    notifier: Option<Notifier>,
 }
 
-static PRIMARY_ROUTE: PrimaryRoute = PrimaryRoute {
-    in_turn: AtomicBool::new(false),
-    notifier: Mutex::new(None),
-};
+/// Every claimed agent route, one entry per agent. A `Vec` rather than a map:
+/// the population is the number of JS agents that have asked for a loop (one,
+/// in almost every program), the list is only walked on the cold wake path,
+/// and a `Vec` needs no allocation to look up.
+static ROUTES: Mutex<Vec<Route>> = Mutex::new(Vec::new());
+
+/// Agent loops currently inside `Loop::turn`.
+///
+/// The wake producer's fast path is one atomic load of this, exactly as it was
+/// one load of the single route's `in_turn` flag before P9. A process with no
+/// parked loop — the common case, because the notifying thread is usually the
+/// one that would be parked — never takes the registry lock.
+static PARKED_LOOPS: AtomicI64 = AtomicI64::new(0);
 
 /// Identity for route ownership; lets a dropped loop clear only its own route.
 static NEXT_LOOP_ID: AtomicU64 = AtomicU64::new(1);
@@ -145,26 +182,33 @@ pub struct LoopStats {
 
 pub(super) struct AgentLoop {
     id: u64,
+    /// The agent this loop belongs to. Carried so the stats line can name it
+    /// and so teardown can clear the right route entry.
+    agent: AgentId,
     profile: Profile,
     driver: Loop,
     completions: Completions,
     stats: LoopStats,
+    /// This loop's half of its route's `in_turn` flag (see [`Route`]).
+    in_turn: Arc<AtomicBool>,
     /// The single timer handle carrying this agent's JS timer deadline, and the
     /// deadline it currently holds.
     timer: Option<(Handle, Instant)>,
 }
 
 impl AgentLoop {
-    fn new(profile: Profile) -> turnloop::Result<Self> {
+    fn new(profile: Profile, agent: AgentId, in_turn: Arc<AtomicBool>) -> turnloop::Result<Self> {
         let config = config_for(profile);
         let capacity = config.events_per_turn.max(1);
         let driver = Loop::new(config)?;
         Ok(Self {
             id: NEXT_LOOP_ID.fetch_add(1, Ordering::Relaxed),
+            agent,
             profile,
             driver,
             completions: Completions::with_capacity(capacity),
             stats: LoopStats::default(),
+            in_turn,
             timer: None,
         })
     }
@@ -189,40 +233,152 @@ impl AgentLoop {
 
 impl Drop for AgentLoop {
     fn drop(&mut self) {
-        // Thread exit is a teardown path too (unit-test threads, embedders).
-        // Clear the route only if it is still this loop's.
-        let mut route = PRIMARY_ROUTE
-            .notifier
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if route.as_ref().is_some_and(|(id, _)| *id == self.id) {
-            *route = None;
+        // Thread exit is a teardown path too (unit-test threads, embedders),
+        // and so is a profile upgrade, which drops this loop and installs a
+        // replacement in the same slot. Clear the endpoint only if it is still
+        // this loop's, and leave the CLAIM alone: the slot belongs to the
+        // thread, not to the loop, and [`ClaimGuard`] releases it at thread
+        // exit or at an explicit shutdown.
+        self.in_turn.store(false, Ordering::SeqCst);
+        let mut routes = ROUTES.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(route) = routes.iter_mut().find(|route| route.loop_id == self.id) {
+            route.loop_id = 0;
+            route.notifier = None;
         }
-        // `Loop::drop` closes the notifier, poster and native backend. P0 owns
-        // no handles and never touched the blocking pool, so nothing joins.
+        // `Loop::drop` closes the notifier, poster and native backend.
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LoopState {
-    /// This thread has not parked through the precise path yet.
+    /// This thread has not asked whether it may own its agent's loop.
     Unset,
-    /// This thread owns the primary agent's loop and route.
+    /// This thread holds its agent's route slot but has not built a loop yet.
+    /// `net_available()` is true here: the slot is what makes the answer
+    /// authoritative, so a submission accepted now cannot be refused later.
+    Claimed,
+    /// This thread owns its agent's route slot AND its loop.
     Owner,
-    /// Not eligible: a worker agent, the route is held by another thread, or
-    /// loop creation failed. Parks use the legacy path.
+    /// Not eligible: another thread already owns this agent's loop, or loop
+    /// creation failed. Parks use the legacy path.
     Declined,
     /// `shutdown_current_thread` ran; parks use the legacy path from now on.
     ShutDown,
 }
 
+/// Releases this thread's route slot when the thread goes away.
+///
+/// Held in TLS rather than dropped by [`AgentLoop`]: the slot is claimed
+/// *before* the loop exists and must outlive a profile upgrade (which drops
+/// one loop and builds another), so its lifetime is the thread's, not the
+/// loop's. Without this, a program that spawns Workers in a sequence would
+/// leak one `Route` per retired agent.
+struct ClaimGuard {
+    in_turn: Arc<AtomicBool>,
+}
+
+impl Drop for ClaimGuard {
+    fn drop(&mut self) {
+        // A parked owner cannot be dropping its own claim, so the flag can only
+        // be false here; clearing it is belt-and-braces against a wake that
+        // races the teardown and finds a stale `true` with no notifier.
+        self.in_turn.store(false, Ordering::SeqCst);
+        let flag = &self.in_turn;
+        let mut routes = ROUTES.lock().unwrap_or_else(PoisonError::into_inner);
+        routes.retain(|route| !Arc::ptr_eq(&route.in_turn, flag));
+    }
+}
+
 thread_local! {
     static STATE: Cell<LoopState> = const { Cell::new(LoopState::Unset) };
     static AGENT_LOOP: RefCell<Option<AgentLoop>> = const { RefCell::new(None) };
+    /// This thread's route slot, from the claim to thread exit. See
+    /// [`ClaimGuard`].
+    static CLAIM: RefCell<Option<ClaimGuard>> = const { RefCell::new(None) };
     /// Completions moved out of the driver by [`AgentLoop::record`] and not
     /// yet routed. Owned by this thread, drained in FIFO order by
     /// [`dispatch_staged`] once no borrow on `AGENT_LOOP` is held.
     static STAGED: RefCell<Vec<turnloop::Completion>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Take this agent's route slot for this thread, without building a loop.
+///
+/// This is the whole admission decision, and it is taken **once per thread**:
+/// after it, [`eligible`] and [`net_available`] are a single TLS read. Exactly
+/// one thread owns an agent's loop — the first to ask, which is the thread
+/// running that agent's event loop — and a second thread acting for the same
+/// agent keeps the legacy park it has today (Android's UI thread pumping for
+/// `perry-native`, an embedder's host thread).
+///
+/// Answering here rather than from agent identity is what keeps
+/// `net_available()` and `ensure_loop_with()` in lockstep. They disagreed once
+/// (`c13372cc70`): a `worker_threads` Worker reported `PRIMARY_AGENT`, the
+/// submit guard accepted its `fetch()`, and `ensure_loop_with` refused a moment
+/// later — so the request failed *after acceptance* instead of taking the
+/// fallback. A claimed slot cannot be taken away, so that class is gone.
+fn claim_route() -> bool {
+    match STATE.with(Cell::get) {
+        LoopState::Claimed | LoopState::Owner => return true,
+        LoopState::Declined | LoopState::ShutDown => return false,
+        LoopState::Unset => {}
+    }
+    let agent = crate::agent::current_agent();
+    let me = std::thread::current().id();
+    let flag = {
+        let mut routes = ROUTES.lock().unwrap_or_else(PoisonError::into_inner);
+        match routes.iter().find(|route| route.agent == agent) {
+            // Someone already speaks for this agent. If it is us the slot is
+            // reusable (a shutdown that left the claim behind); if not, decline
+            // for the life of this thread.
+            Some(route) if route.owner == me => route.in_turn.clone(),
+            Some(_) => {
+                drop(routes);
+                STATE.with(|s| s.set(LoopState::Declined));
+                return false;
+            }
+            None => {
+                let flag = Arc::new(AtomicBool::new(false));
+                routes.push(Route {
+                    agent,
+                    owner: me,
+                    loop_id: 0,
+                    in_turn: flag.clone(),
+                    notifier: None,
+                });
+                flag
+            }
+        }
+    };
+    CLAIM.with(|slot| {
+        *slot.borrow_mut() = Some(ClaimGuard {
+            in_turn: flag.clone(),
+        })
+    });
+    STATE.with(|s| s.set(LoopState::Claimed));
+    true
+}
+
+/// This thread's claimed `in_turn` flag, if it holds a slot.
+fn claimed_flag() -> Option<Arc<AtomicBool>> {
+    CLAIM.with(|slot| slot.borrow().as_ref().map(|c| c.in_turn.clone()))
+}
+
+/// Give up this thread's route slot: at an explicit shutdown, or when loop
+/// creation failed and the thread will never own one.
+fn release_route() {
+    CLAIM.with(|slot| *slot.borrow_mut() = None);
+}
+
+/// Publish a freshly built loop's wake endpoint into its route slot.
+fn publish_route(agent: &AgentLoop) {
+    let mut routes = ROUTES.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(route) = routes
+        .iter_mut()
+        .find(|route| Arc::ptr_eq(&route.in_turn, &agent.in_turn))
+    {
+        route.loop_id = agent.id;
+        route.notifier = Some(agent.driver.notifier());
+    }
 }
 
 /// Route every staged completion to its subsystem.
@@ -270,13 +426,13 @@ fn dispatch_staged() {
 }
 
 /// Whether this thread may take the precise park path. One TLS read once the
-/// loop exists; a worker agent is declined for its whole life.
+/// slot is claimed; the claim itself is taken once, on the first ask.
 #[inline]
 pub(super) fn eligible() -> bool {
     match STATE.with(Cell::get) {
-        LoopState::Owner => true,
-        LoopState::Unset => crate::agent::current_agent() == crate::agent::PRIMARY_AGENT,
+        LoopState::Claimed | LoopState::Owner => true,
         LoopState::Declined | LoopState::ShutDown => false,
+        LoopState::Unset => claim_route(),
     }
 }
 
@@ -295,33 +451,34 @@ pub(super) fn ensure_loop_with(profile: Profile) -> bool {
     match STATE.with(Cell::get) {
         LoopState::Owner => return upgrade_profile(profile),
         LoopState::Declined | LoopState::ShutDown => return false,
-        LoopState::Unset => {}
+        LoopState::Claimed => {}
+        LoopState::Unset => {
+            if !claim_route() {
+                return false;
+            }
+        }
     }
-    if crate::agent::current_agent() != crate::agent::PRIMARY_AGENT {
+    let Some(in_turn) = claimed_flag() else {
+        // Unreachable: `LoopState::Claimed` and a missing claim cannot coexist.
+        // Decline rather than assert, so a future refactor degrades to the
+        // legacy park instead of aborting a user's program.
+        debug_assert!(false, "claimed state without a claim guard");
         STATE.with(|s| s.set(LoopState::Declined));
         return false;
-    }
-    let mut route = PRIMARY_ROUTE
-        .notifier
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
-    if route.is_some() {
-        // A second thread acting for the primary agent (a host pump thread).
-        // Exactly one thread owns the route; this one keeps the legacy park.
-        STATE.with(|s| s.set(LoopState::Declined));
-        return false;
-    }
-    let agent = match AgentLoop::new(profile) {
+    };
+    let agent = match AgentLoop::new(profile, crate::agent::current_agent(), in_turn) {
         Ok(agent) => agent,
         Err(_) => {
             // Descriptor exhaustion or an unsupported host. Keep the legacy
             // park rather than failing the program; the stats line says so.
+            // Release the slot: this thread will never own a loop, and holding
+            // it would deny a sibling thread of the same agent the chance.
+            release_route();
             STATE.with(|s| s.set(LoopState::Declined));
             return false;
         }
     };
-    *route = Some((agent.id, agent.driver.notifier()));
-    drop(route);
+    publish_route(&agent);
     AGENT_LOOP.with(|slot| *slot.borrow_mut() = Some(agent));
     STATE.with(|s| s.set(LoopState::Owner));
     true
@@ -358,11 +515,23 @@ fn upgrade_profile(profile: Profile) -> bool {
     );
     let previous = AGENT_LOOP.with(|slot| slot.borrow_mut().take());
     let carried = previous.as_ref().map(|agent| agent.stats);
+    let owner = previous.as_ref().map(|agent| agent.agent);
     drop(previous);
-    // `AgentLoop::drop` cleared the route; install the replacement's.
-    let mut agent = match AgentLoop::new(profile) {
+    let Some(in_turn) = claimed_flag() else {
+        debug_assert!(false, "an owned loop without a claim guard");
+        STATE.with(|s| s.set(LoopState::Declined));
+        return false;
+    };
+    // `AgentLoop::drop` cleared the endpoint but kept the slot; install the
+    // replacement's into the same slot.
+    let mut agent = match AgentLoop::new(
+        profile,
+        owner.unwrap_or_else(crate::agent::current_agent),
+        in_turn,
+    ) {
         Ok(agent) => agent,
         Err(_) => {
+            release_route();
             STATE.with(|s| s.set(LoopState::Declined));
             return false;
         }
@@ -370,12 +539,7 @@ fn upgrade_profile(profile: Profile) -> bool {
     if let Some(stats) = carried {
         agent.stats = stats;
     }
-    let mut route = PRIMARY_ROUTE
-        .notifier
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
-    *route = Some((agent.id, agent.driver.notifier()));
-    drop(route);
+    publish_route(&agent);
     AGENT_LOOP.with(|slot| *slot.borrow_mut() = Some(agent));
     // The replaced loop took its timer handle with it; re-arm on the new one
     // from the store, outside the borrow above.
@@ -393,12 +557,13 @@ pub(super) fn with_net_driver<R>(f: impl FnOnce(&mut Loop) -> R) -> Option<R> {
     AGENT_LOOP.with(|slot| slot.borrow_mut().as_mut().map(|agent| f(&mut agent.driver)))
 }
 
-/// Give the calling thread a loop at `profile` WITHOUT taking the process-wide
-/// route, so a test that only exercises turns and completions cannot race
-/// another test thread for route ownership.
+/// Give the calling thread a loop at `profile` WITHOUT taking a route slot, so
+/// a test that only exercises turns and completions cannot race another test
+/// thread for its agent's route.
 #[cfg(test)]
 pub(super) fn install_unrouted_for_test(profile: Profile) -> bool {
-    match AgentLoop::new(profile) {
+    let in_turn = Arc::new(AtomicBool::new(false));
+    match AgentLoop::new(profile, crate::agent::current_agent(), in_turn) {
         Ok(agent) => {
             AGENT_LOOP.with(|slot| *slot.borrow_mut() = Some(agent));
             STATE.with(|s| s.set(LoopState::Owner));
@@ -435,6 +600,7 @@ pub(super) fn reset_for_test() {
     crate::turnloop_pool::reset_for_test();
     AGENT_LOOP.with(|slot| *slot.borrow_mut() = None);
     STAGED.with(|staged| staged.borrow_mut().clear());
+    release_route();
     STATE.with(|s| s.set(LoopState::Unset));
 }
 
@@ -452,15 +618,22 @@ pub(super) fn has_outstanding_work() -> bool {
     })
 }
 
-/// Whether this thread can own the primary agent's loop at all.
+/// Whether this thread can own its agent's loop at all.
 ///
-/// Answers without creating one: a caller asking "may I use turnloop?" on a
-/// worker agent must not pay for a loop it will never park in.
+/// Answers without creating one — a caller asking "may I use turnloop?" must
+/// not pay for a loop it may not use — but **authoritatively**: a `true` here
+/// means the route slot is this thread's, so the `ensure_loop_with` that
+/// follows the submission cannot refuse for want of ownership. That lockstep
+/// is the whole point; see [`claim_route`] for the bug that taught it.
+///
+/// It no longer mentions `PRIMARY_AGENT`. Every JS agent may have a loop, so
+/// the question is "do I have (or may I take) one", which is true on every
+/// thread that runs an agent's event loop.
 pub(super) fn net_available() -> bool {
     match STATE.with(Cell::get) {
-        LoopState::Owner => true,
+        LoopState::Claimed | LoopState::Owner => true,
         LoopState::Declined | LoopState::ShutDown => false,
-        LoopState::Unset => crate::agent::current_agent() == crate::agent::PRIMARY_AGENT,
+        LoopState::Unset => claim_route(),
     }
 }
 
@@ -489,13 +662,22 @@ fn park_turn(deadline: Instant) -> Park {
         let Some(agent) = slot.as_mut() else {
             return Park::Failed;
         };
-        PRIMARY_ROUTE.in_turn.store(true, Ordering::SeqCst);
+        // Publish "parked" BEFORE re-reading the work flags, and in this
+        // order: the per-route flag first (it is what a producer reads to pick
+        // a target), then the global count (it is what a producer reads to
+        // decide whether to look at all). A producer stores its work and then
+        // loads the count, both `SeqCst`, so in the single total order either
+        // it sees this increment — and then also the flag, which precedes it —
+        // or this thread's load below sees the producer's store. No lost wake.
+        agent.in_turn.store(true, Ordering::SeqCst);
+        PARKED_LOOPS.fetch_add(1, Ordering::SeqCst);
         if super::NOTIFIED.load(Ordering::SeqCst) || super::precise_wait::native_inflight() {
             // A notify landed after the fast path (leave the flag for the next
             // `js_wait_for_event` fast path to consume), or tokio-owned native
             // work appeared after the caller chose this wait
             // (`js_native_work_submitted`). Either way, go back around the loop.
-            PRIMARY_ROUTE.in_turn.store(false, Ordering::SeqCst);
+            agent.in_turn.store(false, Ordering::SeqCst);
+            PARKED_LOOPS.fetch_sub(1, Ordering::SeqCst);
             return Park::Notified;
         }
         let started = super::loop_stats::begin_wait(super::loop_stats::WaitKind::Turnloop);
@@ -503,7 +685,8 @@ fn park_turn(deadline: Instant) -> Park {
             .driver
             .turn(Timeout::Until(deadline), &mut agent.completions);
         super::loop_stats::end_wait(super::loop_stats::WaitKind::Turnloop, started);
-        PRIMARY_ROUTE.in_turn.store(false, Ordering::SeqCst);
+        agent.in_turn.store(false, Ordering::SeqCst);
+        PARKED_LOOPS.fetch_sub(1, Ordering::SeqCst);
         match result {
             Ok(info) => {
                 agent.record(&info);
@@ -673,26 +856,48 @@ pub(super) fn note_native_tick() {
     });
 }
 
-/// Wake the primary agent's loop if it is inside a turn. `js_notify_main_thread`
+/// Wake every agent loop currently inside a turn. `js_notify_main_thread`
 /// calls this after storing `NOTIFIED`; `js_native_work_submitted` after new
 /// tokio-owned work became visible to the in-flight predicate.
+///
+/// A broadcast, deliberately. The two things it mirrors are both broadcasts:
+/// `NOTIFIED` is one process-global flag every JS thread consumes, and the
+/// legacy park's `PUMP.cvar` is signalled for whoever is waiting on it. Before
+/// P9 only the primary agent could be inside a turn, so "wake the route" and
+/// "wake everyone parked" were the same thing; now a Worker parks in its own
+/// turn instead of on that condvar, and a point-to-point wake addressed to the
+/// primary agent would leave it asleep on a `postMessage`-driven resolution —
+/// P6's failure mode, a hang rather than an error.
+///
+/// The fast path is one atomic load, exactly as it was before. Only agents
+/// actually inside a turn are poked, so an idle agent costs nothing and a
+/// program with one agent behaves identically.
 #[inline]
-pub(super) fn wake_primary() {
-    if PRIMARY_ROUTE.in_turn.load(Ordering::SeqCst) {
-        wake_primary_slow();
+pub(super) fn wake_parked_agents() {
+    if PARKED_LOOPS.load(Ordering::SeqCst) > 0 {
+        wake_parked_agents_slow();
     }
 }
 
 #[cold]
-fn wake_primary_slow() {
-    let route = PRIMARY_ROUTE
-        .notifier
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
-    if let Some((_, notifier)) = route.as_ref() {
-        // Err means the loop is closing: there is no waiter left to wake.
-        let _ = notifier.notify();
+fn wake_parked_agents_slow() {
+    let routes = ROUTES.lock().unwrap_or_else(PoisonError::into_inner);
+    for route in routes.iter() {
+        if !route.in_turn.load(Ordering::SeqCst) {
+            continue;
+        }
+        if let Some(notifier) = route.notifier.as_ref() {
+            // Err means that loop is closing: there is no waiter left to wake.
+            let _ = notifier.notify();
+        }
     }
+}
+
+/// How many agents hold a route slot. A leak check for tests: a program that
+/// spawns and retires Workers must not grow this.
+#[cfg(test)]
+pub(super) fn routed_agents() -> usize {
+    ROUTES.lock().unwrap_or_else(PoisonError::into_inner).len()
 }
 
 /// This thread's loop counters, if it owns a loop.
@@ -700,8 +905,15 @@ pub fn loop_statistics() -> Option<LoopStats> {
     AGENT_LOOP.with(|slot| slot.borrow().as_ref().map(|agent| agent.stats))
 }
 
-/// Destroy this thread's loop at the process-exit funnel and print the
+/// Destroy this thread's loop at the process-exit funnel — or, for a worker
+/// agent, at [`crate::agent::retire_agent`] — and print the
 /// `PERRY_LOOP_STATS=1` line once. Idempotent; later parks use the legacy path.
+///
+/// Running this on a worker agent is not optional. The settle sequence below
+/// is the only thing that turns an outstanding operation into a completion the
+/// binding can see, and P5/P6/P7's engines learn about teardown *only* through
+/// those completions. Skipping it on a worker would strand every promise those
+/// engines owe — which presents as a hang, not an error.
 pub fn shutdown_current_thread() {
     if STATE.with(Cell::get) == LoopState::Owner {
         // Close P1's sockets while the loop is still here, then run one
@@ -723,14 +935,26 @@ pub fn shutdown_current_thread() {
     }
     let agent = AGENT_LOOP.with(|slot| slot.borrow_mut().take());
     STAGED.with(|staged| staged.borrow_mut().clear());
+    let id = agent
+        .as_ref()
+        .map(|agent| agent.agent)
+        .unwrap_or_else(crate::agent::current_agent);
     if stats_enabled() {
         match (&agent, previous) {
-            (Some(agent), _) => print_stats(agent.stats),
-            (None, LoopState::Declined) => eprintln!("[perry-loop] driver=legacy"),
-            (None, _) => eprintln!("[perry-loop] driver=turnloop parked=0"),
+            (Some(agent), _) => print_stats(id, agent.stats),
+            (None, LoopState::Declined) => eprintln!("[perry-loop] driver=legacy agent={id}"),
+            // A worker agent that never parked and never submitted is the
+            // ordinary case for `parallelMap` over 64 cores. Saying so once per
+            // core would bury the primary agent's line, so stay quiet unless
+            // this thread actually reached the driver.
+            (None, _) if id != crate::agent::PRIMARY_AGENT => {}
+            (None, _) => eprintln!("[perry-loop] driver=turnloop parked=0 agent={id}"),
         }
     }
     drop(agent);
+    // After the loop, so a wake that races teardown finds the endpoint gone
+    // rather than the slot gone and the endpoint live.
+    release_route();
 }
 
 fn stats_enabled() -> bool {
@@ -762,9 +986,16 @@ fn print_extra_stats() {
     f();
 }
 
-fn print_stats(stats: LoopStats) {
+fn print_stats(id: AgentId, stats: LoopStats) {
+    // `agent=` is APPENDED, never inserted. Two instruments parse this line
+    // positionally — `scripts/turnloop/server_ab.py` matches the literal
+    // prefix `[perry-loop] driver=turnloop` as its arm marker, and
+    // `scripts/turnloop_p0_loop_stats.py` has a regex anchored on
+    // `driver=turnloop turns=… turn_errors=…` — so a new field in the middle
+    // would make the A/B harness reject every sample as "wrong arm", which is
+    // exactly the check that stops it comparing a tree against itself.
     eprintln!(
-        "[perry-loop] driver=turnloop turns={} os_waits={} zero_event_waits={} native_ticks={} turn_errors={} completions={} timer_arms={} timer_expiries={}",
+        "[perry-loop] driver=turnloop turns={} os_waits={} zero_event_waits={} native_ticks={} turn_errors={} completions={} timer_arms={} timer_expiries={} agent={id}",
         stats.turns,
         stats.os_waits,
         stats.zero_event_waits,
@@ -774,6 +1005,13 @@ fn print_stats(stats: LoopStats) {
         stats.timer_arms,
         stats.timer_expiries
     );
+    // Everything below is a PROCESS-wide lifetime total, not this agent's, so
+    // it is printed once — by the primary agent, whose shutdown is the
+    // process-exit funnel and therefore the last one to run. A worker agent
+    // retiring mid-program would otherwise print a partial copy of each.
+    if id != crate::agent::PRIMARY_AGENT {
+        return;
+    }
     // P2's own "the subject ran" line. `completions` above cannot distinguish
     // a socket P1 carried from a child pipe P2 carried, and every live count
     // is zero by the time a process exits — so the lifetime adoption count is

@@ -87,6 +87,15 @@ pub fn enter_worker_agent() -> AgentId {
     id
 }
 
+/// Make the calling thread report an EXISTING agent id, without minting a new
+/// one. Models the second-thread-of-one-agent shape — Android's UI thread
+/// pumping on behalf of `perry-native` — which must be declined a loop of its
+/// own by `event_pump::agent_loop`.
+#[cfg(test)]
+pub(crate) fn enter_agent_for_test(id: AgentId) {
+    CURRENT_AGENT.with(|slot| slot.set(Some(id)));
+}
+
 /// The agent whose queued work the calling thread may touch: its own if it is a
 /// worker, otherwise [`PRIMARY_AGENT`] (it is a JS thread on the primary heap,
 /// or a pump acting for it).
@@ -114,6 +123,22 @@ pub fn retire_agent(id: AgentId) {
         id, PRIMARY_AGENT,
         "the primary agent outlives the process; it is never retired"
     );
+    // turnloop P9: this agent may own a `turnloop::Loop`. Tear it down FIRST,
+    // while the arena is still mapped and this thread can still run the
+    // bindings' completion sinks.
+    //
+    // Order matters twice over. The shutdown closes every handle this agent
+    // still owns and runs one nonblocking turn so their terminal completions
+    // reach the binding (exactly-once release, DESIGN D4) — that is how
+    // P5/P6/P7's engines learn about teardown at all, and a stranded promise
+    // there presents as a hang rather than an error. And it must precede the
+    // purges below: a completion delivered by that turn can legitimately
+    // queue a timer or a thread result, which the purges are here to drop.
+    //
+    // The primary agent is not retired; its loop goes down through the
+    // process-exit funnel (`event_pump::shutdown_wait_driver`) instead.
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::event_pump::shutdown_agent_loop();
     crate::timer::purge_agent_timers(id);
     crate::thread::purge_agent_thread_results(id);
     // Deliberately do NOT clear `CURRENT_AGENT`. Clearing it would make
