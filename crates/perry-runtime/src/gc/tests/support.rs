@@ -24,6 +24,17 @@ impl Drop for ShadowAndGlobalRootResetGuard {
     }
 }
 
+/// Model what every relocation caller does before `layout_transfer`: make the
+/// destination header a copy of the source's, which is the funnel's contract
+/// (#10362, `gc/layout/transfer.rs`). A test that calls the funnel directly
+/// has to do it for the same reason `move_young` and `js_array_grow` do —
+/// every header-carried layout fact rides this word.
+pub(super) unsafe fn model_relocation_header_copy(src_user: usize, dst_user: usize) {
+    let src = header_from_user_ptr(src_user as *const u8);
+    let dst = header_from_user_ptr(dst_user as *const u8);
+    (*dst)._reserved = (*src)._reserved;
+}
+
 pub(super) unsafe fn test_heap_child_slots_for_user(user_ptr: *mut u8) -> Vec<HeapChildSlot> {
     let header = header_from_user_ptr(user_ptr as *const u8);
     gc_child_slots(header).collect()

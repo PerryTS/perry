@@ -352,6 +352,184 @@ fn test_shape_keyed_typed_layout_survives_copying_minor() {
     assert!(layout_slot_is_raw_f64_typed(after, 0));
 }
 
+/// #10362: a relocation carries `GC_OBJ_TYPED_LAYOUT_INTACT` in the `_reserved`
+/// copy and no longer re-derives it. This pins the exact state that the old
+/// re-derivation used to clear — an INTACT receiver whose shape's SHARED
+/// descriptor has since been poisoned to `None` — across a real copying minor,
+/// together with the address-keyed half the funnel must still move.
+///
+/// The two receivers are one fixture because they are one cycle:
+///
+/// * `poisoned` installs the shared descriptor first and keeps its bit. An
+///   unmoved sibling in this state keeps its bit too (`shape_install_shared`
+///   leaves "any still-INTACT siblings" to fall back), so clearing it on the
+///   copy alone was never a correctness rule. What the collector owes the
+///   object is that its pointer field survive: with no descriptor resolvable
+///   the trace falls back to scanning every slot.
+/// * `per_object` is the receiver whose different layout POISONED the shape,
+///   so its canonical descriptor is a per-object record — the address-keyed
+///   half `transfer_address_keyed_records` still has to move. Its pointer
+///   mask must answer the same after the move; a funnel that skips the record
+///   move fails exactly that assertion.
+#[test]
+fn test_poisoned_shape_intact_and_per_object_record_survive_a_copying_minor() {
+    // Two rooted receivers, so two shadow slots: a slot index outside the
+    // pushed frame is bounds-checked into a silent no-op (#7184), which would
+    // leave the second receiver unrooted and every verdict below vacuous.
+    let _guard = CopyingNurseryTestGuard::new(2);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+    let packed = b"x\0y\0";
+    let keys = crate::object::js_build_class_keys_array(
+        0x1036_20,
+        2,
+        packed.as_ptr(),
+        packed.len() as u32,
+    );
+
+    // Slot 0 raw-f64, slot 1 a declared pointer: the shape's first descriptor.
+    let poisoned = crate::object::js_object_alloc_class_inline_keys(0x1036_20, 0, 2, keys);
+    let poisoned_child = crate::string::js_string_from_bytes(b"poisoned-child".as_ptr(), 14);
+    crate::object::js_object_set_field(poisoned, 0, crate::value::JSValue::number(1.5));
+    crate::object::js_object_set_field(
+        poisoned,
+        1,
+        crate::value::JSValue::string_ptr(poisoned_child),
+    );
+    let raw_mask = [0b01u64];
+    let pointer_mask = [0b10u64];
+    js_gc_init_typed_shape_layout(
+        poisoned as u64,
+        2,
+        raw_mask.as_ptr(),
+        raw_mask.len() as u32,
+        pointer_mask.as_ptr(),
+        pointer_mask.len() as u32,
+    );
+    assert!(layout_typed_intact_for_user(poisoned as usize));
+    assert!(layout_typed_raw_f64_slot_for_user(poisoned as usize, 0));
+
+    // Same keys, DIFFERENT layout (slot 0 carries no raw-f64 proof): the
+    // install poisons the shared entry and falls back to a per-object record.
+    let per_object = crate::object::js_object_alloc_class_inline_keys(0x1036_20, 0, 2, keys);
+    let per_object_child = crate::string::js_string_from_bytes(b"per-object-child".as_ptr(), 16);
+    crate::object::js_object_set_field(per_object, 0, crate::value::JSValue::number(2.5));
+    crate::object::js_object_set_field(
+        per_object,
+        1,
+        crate::value::JSValue::string_ptr(per_object_child),
+    );
+    js_gc_init_typed_shape_layout(
+        per_object as u64,
+        2,
+        std::ptr::null(),
+        0,
+        pointer_mask.as_ptr(),
+        pointer_mask.len() as u32,
+    );
+
+    // The fixture must START in the state under test, or every verdict below
+    // is vacuous: the shared descriptor is gone for the first receiver while
+    // its intact bit stands, and the second receiver answers from a record.
+    assert!(
+        layout_typed_intact_for_user(poisoned as usize),
+        "the poisoning install must not clear a sibling's intact bit"
+    );
+    assert!(
+        !layout_typed_raw_f64_slot_for_user(poisoned as usize, 0),
+        "fixture precondition: the shared descriptor must be poisoned, so no \
+         descriptor is resolvable for the first receiver"
+    );
+    assert_eq!(
+        test_layout_pointer_slot_count(poisoned as usize, 2),
+        None,
+        "fixture precondition: an unresolvable descriptor means the conservative scan"
+    );
+    assert_eq!(
+        test_layout_pointer_slot_count(per_object as usize, 2),
+        Some(1),
+        "fixture precondition: the second receiver's layout is a per-object record"
+    );
+
+    js_shadow_slot_set(0, ptr_bits(poisoned as usize));
+    js_shadow_slot_set(1, ptr_bits(per_object as usize));
+
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+
+    let poisoned_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    let per_object_after = (js_shadow_slot_get(1) & POINTER_MASK) as usize;
+    assert_ne!(
+        poisoned_after, poisoned as usize,
+        "the minor must actually relocate the first receiver — an inert arm proves nothing"
+    );
+    assert_ne!(
+        per_object_after, per_object as usize,
+        "the minor must actually relocate the second receiver"
+    );
+
+    // The bit rides `_reserved`. Before #10362 the funnel re-probed
+    // `SHAPE_LAYOUTS` here, found the poisoned `None`, and cleared it on the
+    // copy — a downgrade no unmoved sibling ever received.
+    assert!(
+        layout_typed_intact_for_user(poisoned_after),
+        "the relocated receiver keeps the intact bit its `_reserved` copy carried"
+    );
+    assert!(
+        !layout_typed_raw_f64_slot_for_user(poisoned_after, 0),
+        "and still resolves no descriptor, exactly as before the move"
+    );
+    assert_eq!(
+        test_layout_pointer_slot_count(poisoned_after, 2),
+        None,
+        "so the trace still falls back to scanning every slot"
+    );
+
+    // What the collector owes it: the field behind the unresolvable descriptor
+    // is marked and rewritten.
+    let moved_child =
+        crate::object::js_object_get_field(poisoned_after as *const crate::object::ObjectHeader, 1);
+    assert!(moved_child.is_string());
+    let moved_child_ptr = moved_child.as_string_ptr();
+    assert_ne!(
+        moved_child_ptr as usize, poisoned_child as usize,
+        "the child moved too, so the slot proves the rewrite, not just the mark"
+    );
+    unsafe {
+        assert_string_bytes(moved_child_ptr, b"poisoned-child");
+    }
+
+    // The address-keyed half: the per-object record followed the move.
+    assert_eq!(
+        test_layout_pointer_slot_count(per_object_after, 2),
+        Some(1),
+        "the per-object layout record must be keyed by the post-move address"
+    );
+    assert!(layout_typed_intact_for_user(per_object_after));
+    let moved_per_object_child = crate::object::js_object_get_field(
+        per_object_after as *const crate::object::ObjectHeader,
+        1,
+    );
+    assert!(moved_per_object_child.is_string());
+    unsafe {
+        assert_string_bytes(moved_per_object_child.as_string_ptr(), b"per-object-child");
+    }
+}
+
+/// #10362: the relocation contract is asserted in test and debug builds, so a
+/// future move path that allocates a destination without copying `_reserved`
+/// fails here instead of silently losing a layout state, an `ALL_POINTERS` bit
+/// or an element-shape proof at the first collection.
+#[test]
+#[should_panic(expected = "the caller must copy `_reserved`")]
+fn test_layout_transfer_requires_the_relocation_header_copy() {
+    let src = crate::array::js_array_alloc_pointer_elements(2);
+    let dst = crate::array::js_array_alloc(2);
+    unsafe {
+        layout_transfer(src as *mut u8, dst as *mut u8);
+    }
+}
+
 #[test]
 fn test_typed_shape_raw_numeric_slots_accept_pointer_like_f64_bits() {
     clear_marks();
@@ -488,6 +666,7 @@ fn test_typed_shape_descriptor_transfers_on_object_move() {
     );
 
     unsafe {
+        model_relocation_header_copy(src as usize, dst as usize);
         layout_transfer(src as *mut u8, dst as *mut u8);
     }
 
@@ -511,6 +690,9 @@ fn test_all_pointer_layout_transfers_on_array_move() {
     let src = crate::array::js_array_alloc_pointer_elements(2);
     let dst = crate::array::js_array_alloc(2);
     unsafe {
+        // `GC_LAYOUT_ALL_POINTERS` rides `_reserved`, so since #10362 the
+        // header copy is what carries it and the funnel must leave it alone.
+        model_relocation_header_copy(src as usize, dst as usize);
         layout_transfer(src as *mut u8, dst as *mut u8);
     }
 

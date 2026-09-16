@@ -32,7 +32,7 @@
 //! | fast proof | `_reserved` bit 7 | `_reserved` bit 11 |
 //! | rides a move | yes (`_reserved` is copied) | yes (same word) |
 //! | self-heals by rescan | `ensure_array_numeric_raw_f64` | [`ensure_element_shape`] |
-//! | move fixup | `transfer_array_numeric_layout` | [`transfer_element_shape`] |
+//! | move fixup | none — the bit IS the record | [`transfer_element_shape`] |
 //! | clear funnel | `clear_array_numeric_layout` | [`clear_element_shape`] |
 //!
 //! The one thing 4a does not need is a *payload*: "raw f64" is the whole
@@ -441,16 +441,6 @@ pub(crate) unsafe fn clear_element_shape(arr: *const ArrayHeader) {
         m.borrow_mut().remove(&key);
     });
     bump_epoch();
-}
-
-/// Address-keyed sibling of [`clear_element_shape`], for the `layout_*`
-/// family and other callers that hold a `usize`.
-#[inline]
-pub(crate) fn clear_element_shape_ptr(user_ptr: usize) {
-    if user_ptr == 0 {
-        return;
-    }
-    unsafe { clear_element_shape(user_ptr as *const ArrayHeader) }
 }
 
 /// Forget everything about an address, bit included. Used when an allocation

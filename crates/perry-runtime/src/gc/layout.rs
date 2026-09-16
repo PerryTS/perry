@@ -1,6 +1,7 @@
-//! Per-object pointer-slot states, store maintenance, copying-GC transfer and
-//! child-slot enumeration. Mask storage is in `layout/slot_mask.rs`; typed
-//! descriptor installation is in `layout/typed_shape.rs`.
+//! Per-object pointer-slot states, store maintenance and child-slot
+//! enumeration. Mask storage is in `layout/slot_mask.rs`; typed descriptor
+//! installation is in `layout/typed_shape.rs`; the relocation funnel every
+//! moving-GC and growth path calls is in `layout/transfer.rs`.
 
 use super::hot_tls::{hot_layout_slot_masks, hot_shape_layouts};
 use super::layout_tables::{
@@ -82,8 +83,9 @@ pub(crate) const GC_LAYOUT_ALL_POINTERS: u16 = 0x2000;
 // "slot K is raw-f64" from this single bit — no cross-crate guard call, no
 // thread-local hashmap probe — for any field K the class declares as a raw-f64
 // candidate. The bit travels with `_reserved` across copying/evacuating GC (the
-// collector copies the whole reserved word), and `layout_transfer` re-syncs it
-// defensively after moving the descriptor.
+// collector copies the whole reserved word), which is all a relocation owes it:
+// `layout/transfer.rs` re-sets it only for an object whose per-object
+// descriptor moved, and never re-derives it (#10362).
 pub const GC_OBJ_TYPED_LAYOUT_INTACT: u16 = 0x1000;
 
 #[inline]
@@ -111,9 +113,11 @@ pub(super) fn clear_typed_layout_intact_for_user(user_ptr: usize) {
 }
 
 mod slot_mask;
+mod transfer;
 mod typed_shape;
 
 pub(in crate::gc) use slot_mask::LayoutSlotMask;
+pub(crate) use transfer::layout_transfer;
 pub use typed_shape::{
     js_gc_declare_typed_shape_layout, js_gc_init_typed_shape_layout, js_gc_typed_shape_id_for_keys,
 };
@@ -1252,91 +1256,6 @@ pub(crate) unsafe fn layout_rebuild_exact_from_slots(
     slot_count: usize,
 ) {
     layout_rebuild_from_slots_with_policy(user_ptr, slots, slot_count, true);
-}
-
-pub(crate) unsafe fn layout_transfer(old_user: *mut u8, new_user: *mut u8) {
-    if old_user.is_null() || new_user.is_null() || old_user == new_user {
-        return;
-    }
-    let Some(old_header) = layout_header_for_user(old_user as usize) else {
-        return;
-    };
-    let Some(new_header) = layout_header_for_user(new_user as usize) else {
-        return;
-    };
-    let state = (*old_header)._reserved & GC_LAYOUT_STATE_MASK;
-    let all_pointers = (*old_header)._reserved & GC_LAYOUT_ALL_POINTERS != 0;
-    set_layout_state(new_header, state);
-    if all_pointers {
-        (*new_header)._reserved |= GC_LAYOUT_ALL_POINTERS;
-    }
-    if (*old_header).obj_type == GC_TYPE_ARRAY && (*new_header).obj_type == GC_TYPE_ARRAY {
-        crate::array::transfer_array_numeric_layout(old_user as usize, new_user as usize);
-        // #7480: the element-shape bit rides `_reserved` for free, but its
-        // record is address-keyed and has to follow the move — same split,
-        // and same call site, as `TYPED_LAYOUTS` below.
-        crate::array::transfer_element_shape(old_user as usize, new_user as usize);
-        // #9304: real arrays keep explicit [[Prototype]] values in the
-        // residual address-keyed registry. Array growth and moving GC both
-        // replace the owner allocation through this transfer hook.
-        crate::object::prototype_chain::object_static_prototype_owner_moved(
-            old_user as usize,
-            new_user as usize,
-        );
-    } else {
-        crate::array::clear_array_numeric_layout_ptr(new_user as usize);
-        crate::array::clear_element_shape_ptr(new_user as usize);
-    }
-    // Read the source object's intact bit BEFORE the transfer clears it — it is
-    // the per-object half of the shape-keyed resolution below. `_reserved` is
-    // untouched by `set_forwarding_address` (which writes gc_flags and the first
-    // payload word), so it is still authoritative here even though the
-    // evacuation callers forward the original before calling us.
-    let old_intact = (*old_header)._reserved & GC_OBJ_TYPED_LAYOUT_INTACT != 0;
-    // #7510: with both per-object maps provably empty there is nothing to
-    // move, and every relocated object would otherwise pay two `RefCell`
-    // round-trips plus two hashes during evacuation. The shape-keyed half
-    // below is unaffected — it needs no move at all.
-    let new_has_typed = transfer_per_object_descriptor(old_user as usize, new_user as usize);
-    // #6964: the canonical descriptor may live in EITHER map, exactly as the
-    // query helpers resolve it (#6957/#6963). The per-object `TYPED_LAYOUTS`
-    // entry is keyed by ADDRESS, so it has to be moved (above). The shape-keyed
-    // `SHAPE_LAYOUTS` entry (#6893/#8289) is keyed by immutable runtime
-    // ShapeId, which the relocated copy carries verbatim — it needs no move,
-    // but it only describes THIS object while the object is still INTACT.
-    //
-    // Probing only `TYPED_LAYOUTS` missed for every object #6893 actually moved
-    // (i.e. every class instance: it carries a keys_array and therefore has NO
-    // per-object entry), so `new_has_typed` was false and the relocated copy had
-    // a still-valid intact bit CLEARED — permanently deopting its typed guards.
-    // Latent until an evacuating minor became reachable (#6950); the fourth
-    // caller, array growth in `array/push_pop.rs`, is `GC_TYPE_ARRAY`, which is
-    // not `GcLayoutSlotKind::ObjectFields` and so never had a shape-keyed
-    // descriptor to lose.
-    //
-    // Read the shape through `new_user`: the evacuation callers install the
-    // forwarding pointer over the ORIGINAL's first payload word, which for an
-    // ObjectFields object overlaps the header fields this lookup reads.
-    //
-    // Mirrors #6963's split: the per-object half stays ungated (so a forged or
-    // stale intact bit cannot manufacture a descriptor), the shared half is
-    // gated on the source object's intact bit (so an object that diverged from
-    // its shape does not silently re-adopt the shape's stale descriptor by
-    // moving).
-    let new_has_shape_typed = !new_has_typed
-        && old_intact
-        && with_shape_shared_descriptor(new_user as usize, |_| ()).is_some();
-    // Keep the intact bit in lock-step with the moved descriptor. Copying GC
-    // normally propagates `_reserved` (so the bit already rode along), but
-    // re-sync defensively for callers that allocate the destination fresh
-    // (e.g. array growth) so a stale/missing bit can never desync from the map.
-    if new_has_typed || new_has_shape_typed {
-        header_set_typed_layout_intact(new_header);
-    } else {
-        header_clear_typed_layout_intact(new_header);
-    }
-    header_clear_typed_layout_intact(old_header);
-    transfer_per_object_slot_mask(old_user as usize, new_user as usize);
 }
 
 pub(super) fn layout_visit_pointer_slots<F: FnMut(usize)>(
