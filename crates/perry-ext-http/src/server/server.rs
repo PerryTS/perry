@@ -1542,43 +1542,7 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
         count += drain_deferred_close_for::<HttpServer, _>(h, |s| s);
         // Drain upgrades first so they don't get starved by a busy
         // request stream.
-        while let Some(up) = try_recv_upgrade(h) {
-            // #6710 — the upgrade path bypasses `process_pending`, but its
-            // request handle and the adopted socket / WebSocket handles are
-            // recycled from the same freelist. Clear their per-handle JS side
-            // tables here, on the main thread, before any upgrade listener sees
-            // them (no-op for a zero handle).
-            unsafe {
-                js_handle_clear_side_tables(up.request_handle);
-                js_handle_clear_side_tables(up.raw_socket_id);
-                js_handle_clear_side_tables(up.ws_id);
-            }
-            if up.raw_socket_id != 0 {
-                // #4973 raw path: make sure the adopted net.Socket's
-                // dispatch extensions + GC scanner are registered on the
-                // main thread before user code touches the socket.
-                perry_ext_net::ensure_adopted_socket_dispatch();
-                crate::server::upgrade::fire_upgrade_listeners(
-                    up.server_handle,
-                    up.request_handle,
-                    up.raw_socket_id,
-                    up.head,
-                );
-            } else {
-                perry_ext_ws::accept_attached_connection(
-                    up.server_handle,
-                    handle_to_pointer_f64(up.request_handle),
-                    up.ws_id,
-                );
-                crate::server::upgrade::fire_upgrade_listeners(
-                    up.server_handle,
-                    up.request_handle,
-                    up.ws_id,
-                    Vec::new(),
-                );
-            }
-            count += 1;
-        }
+        count += drain_upgrades(h);
         while let Some(p) = try_recv_pending_nonblocking(h) {
             process_pending(p);
             count += 1;
@@ -1598,6 +1562,14 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
         });
         count += crate::server::https_server::process_pending_tls_keylogs(h);
         count += crate::server::https_server::process_pending_tls_client_errors(h);
+        // An HTTPS server's upgrades were never drained at all. It did not show
+        // until the turnloop path started answering an attached
+        // `WebSocketServer` on an `https.createServer()`: the `101` went out
+        // over TLS and the client opened, and then `wss.on('connection')` never
+        // fired, because the record queued against the HTTPS server's handle
+        // had no reader. The queue is keyed by server handle and is transport-
+        // agnostic, so this is the same drain as the HTTP one.
+        count += drain_upgrades(h);
         while let Some(p) = crate::server::https_server::try_recv_pending_https_nonblocking(h) {
             crate::server::https_server::process_pending_https(p);
             count += 1;
@@ -1640,6 +1612,52 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
     // socket stops pinning the event loop. Cheap (one mutex peek) when empty.
     count += unsafe { perry_ext_net::js_ext_net_drain_pending() };
 
+    count
+}
+
+/// Deliver every pending `'upgrade'` for one server handle.
+///
+/// Shared by the HTTP and HTTPS drains: `TURNLOOP_UPGRADES` is keyed by server
+/// handle and knows nothing about which of the two queued the record.
+fn drain_upgrades(server_handle: i64) -> i32 {
+    let mut count = 0;
+    while let Some(up) = try_recv_upgrade(server_handle) {
+        // #6710 — the upgrade path bypasses `process_pending`, but its request
+        // handle and the adopted socket / WebSocket handles are recycled from
+        // the same freelist. Clear their per-handle JS side tables here, on the
+        // main thread, before any upgrade listener sees them (no-op for a zero
+        // handle).
+        unsafe {
+            js_handle_clear_side_tables(up.request_handle);
+            js_handle_clear_side_tables(up.raw_socket_id);
+            js_handle_clear_side_tables(up.ws_id);
+        }
+        if up.raw_socket_id != 0 {
+            // #4973 raw path: make sure the adopted net.Socket's dispatch
+            // extensions + GC scanner are registered on the main thread before
+            // user code touches the socket.
+            perry_ext_net::ensure_adopted_socket_dispatch();
+            crate::server::upgrade::fire_upgrade_listeners(
+                up.server_handle,
+                up.request_handle,
+                up.raw_socket_id,
+                up.head,
+            );
+        } else {
+            perry_ext_ws::accept_attached_connection(
+                up.server_handle,
+                handle_to_pointer_f64(up.request_handle),
+                up.ws_id,
+            );
+            crate::server::upgrade::fire_upgrade_listeners(
+                up.server_handle,
+                up.request_handle,
+                up.ws_id,
+                Vec::new(),
+            );
+        }
+        count += 1;
+    }
     count
 }
 

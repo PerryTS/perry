@@ -288,3 +288,28 @@ Reported here in the shape P5's were; the coordinator files them.
 
 Not a gap, recorded because the inventory said it was: **the handshake never
 needed an owned stream.** See "The question this lane was given".
+
+## Pre-existing `ws` findings this lane surfaced but did NOT fix
+
+Recorded because they were measured, not guessed, and because a reader of the
+byte-identical fixture table above would otherwise conclude the `ws` binding is
+finished. It is not.
+
+* **`typeof WebSocket` is `'undefined'`** under Perry for
+  `import { WebSocket } from 'ws'` and `import { WebSocketServer } from 'ws'`
+  (Node: `'function'`), even though `new WebSocket(...)` off that same binding
+  works. Any `typeof`-guarded feature detection against `ws` fails, and a
+  `WebSocket.CLOSED`-style static read is a live risk.
+* **`import WebSocket from 'ws'` (default) is an object**, with `.Server` and
+  `.WebSocketServer` on it. Node resolves ESM through `wrapper.mjs` and gives a
+  function with neither. Perry is serving the CJS namespace as the default
+  export.
+* **`WebSocketServer({ path })` is read nowhere**, so such a server accepts on
+  every path. Silently.
+* **`'error'` receives a JS string, not an `Error`** — `err.message` is
+  `undefined`.
+* **`ws.send(data)` on a message the peer sent as text delivers a JS string**
+  where `ws` delivers a `Buffer`. The fixtures do not distinguish them because
+  both stringify the same, but `Buffer.from(data)` does not.
+
+These are the binding's, not the transport's, and none of them changed here.
