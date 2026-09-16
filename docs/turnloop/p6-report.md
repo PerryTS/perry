@@ -562,6 +562,15 @@ Named precisely.
   one fixture — not a performance claim.
 * **The auto-optimize gap tier.** Only the fast tier ran.
 * **`cargo test --workspace`.**
+* **A build of the `tokio-wait-driver` A/B arm.** Both engines decline on it
+  (`turnloop_net::available()` is false without a loop) and
+  `event_pump::register_stats_reporter` has an explicit no-op under that
+  feature, so it *should* compile and fall back cleanly — but that is reasoning,
+  not a build. `cargo build --features perry-stdlib/tokio-wait-driver` is one
+  command and it was not run here.
+* **The `node-suite` corpora.** P5 ran `--suite node-suite --module http|https|
+  net` as its behavioural gate; the equivalent for a client would be the
+  `http`/`https` client fixtures, and they were not run.
 
 ## What P6 did not do
 
