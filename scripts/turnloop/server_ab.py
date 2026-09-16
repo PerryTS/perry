@@ -1068,20 +1068,19 @@ def timing_verdict(sample, args, load_before):
     # stamps every sample after the first as advisory on an idle machine. Judge
     # against the ambient load measured once, before any round ran, and allow
     # this run's own expected contribution on top of it.
+    # Loadavg DURING a load test is this harness's own doing, and the 1-minute
+    # average carries the previous round into the next one's "before" reading,
+    # so a per-sample loadavg threshold cannot separate a neighbour from us --
+    # it only measures how hard we just pushed. The honest question is whether
+    # the HOST was ours alone, and that is answered by the ambient load sampled
+    # before any round ran (and again after the last one settles, in run()).
+    # Per-sample loadavg stays in the record as a diagnostic, not as a verdict.
     ambient = AMBIENT_LOADAVG[0]
-    expected = sample.get("concurrency", 0) + 1
-    budget = max(args.max_loadavg, ambient + expected)
     if ambient > args.max_loadavg:
         reasons.append(
             f"host was already at loadavg {ambient:.2f} before this run started, "
-            f"above --max-loadavg {args.max_loadavg}")
-    if load_before > budget:
-        reasons.append(
-            f"loadavg {load_before:.2f} before the sample exceeds ambient {ambient:.2f} "
-            f"plus this run's own {expected}")
-    after = sample.get("loadavg_after")
-    if after is not None and after > budget + expected:
-        reasons.append(f"loadavg rose to {after:.2f}, beyond ambient plus twice this run's own {expected}")
+            f"above --max-loadavg {args.max_loadavg}: something else was running")
+    sample["ambient_loadavg"] = ambient
     sample["timing_authoritative"] = not reasons
     sample["timing_reasons"] = reasons
 
@@ -1149,11 +1148,11 @@ def run(args):
         print(INSTALL_HINTS, file=sys.stderr)
         if not args.dry_run:
             raise SystemExit(2)
+    AMBIENT_LOADAVG[0] = os.getloadavg()[0]
+    log(f"host: {HOSTNAME} (role {HOST_ROLE}), ambient loadavg {AMBIENT_LOADAVG[0]:.2f} "
+        f"(sampled before any round; every later reading includes this run's own load)")
     if args.dry_run:
         log(f"dry-run plan: rounds={args.rounds} arms={ARMS} concurrency={concurrency} idle={idle}")
-        AMBIENT_LOADAVG[0] = os.getloadavg()[0]
-        log(f"host: {HOSTNAME} (role {HOST_ROLE}), ambient loadavg {AMBIENT_LOADAVG[0]:.2f} "
-            f"(sampled before any round; later samples include this run's own load)")
         log(f"load tool: {tool[0] or 'NONE'} ({tool[1]})")
         log(f"perf: {perf_status}")
         for rnd in range(1, args.rounds + 1):
@@ -1205,6 +1204,22 @@ def run(args):
                 doc["samples"].append(sample)
                 out.write_text(json.dumps(doc, indent=2))
     doc["finished"] = datetime.datetime.now().isoformat()
+    # Ambient load again, after our own has had a minute to decay. Together with
+    # the reading taken before the first round this brackets the whole run: quiet
+    # at both ends means nobody else showed up in between, which is the claim the
+    # timing verdict actually rests on.
+    log("settling for 70s to re-read ambient load (the 1-minute average must shed this run's own)")
+    time.sleep(70)
+    settled = os.getloadavg()[0]
+    doc["ambient_loadavg_before"] = AMBIENT_LOADAVG[0]
+    doc["ambient_loadavg_after"] = settled
+    log(f"ambient loadavg: {AMBIENT_LOADAVG[0]:.2f} before the run, {settled:.2f} after it settled")
+    if settled > args.max_loadavg:
+        note = (f"host was at loadavg {settled:.2f} after the run settled, above "
+                f"--max-loadavg {args.max_loadavg}: another tenant may have arrived mid-run")
+        for sample in doc["samples"]:
+            sample.setdefault("timing_reasons", []).append(note)
+            sample["timing_authoritative"] = False
     out.write_text(json.dumps(doc, indent=2))
     callgrind_json = results_dir / "callgrind.json"
     if callgrind_json.is_file():
