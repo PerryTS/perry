@@ -11,11 +11,11 @@
 //! * **A worker agent**, which has no `turnloop::Loop` of its own yet (P3/P4
 //!   left per-agent loops to a later phase), and the `tokio-wait-driver` A/B
 //!   arm, where there is no loop at all.
-//! * **A proxy** — either `HTTP_PROXY`/`HTTPS_PROXY` from the environment or
-//!   the process-wide dispatcher `undici.setGlobalDispatcher(new ProxyAgent(…))`
-//!   installs. `turnloop_http::client::Route` models the CONNECT tunnel, but
-//!   Perry's proxy surface is a prebuilt `reqwest::Client` and moving it is its
-//!   own change.
+//! * **A proxy this client cannot drive** — a proxy URL whose scheme is not
+//!   `http` (socks5, https-to-proxy), or one that will not parse. An ordinary
+//!   `http://` proxy is no longer a decline: `HTTP_PROXY`/`HTTPS_PROXY` and the
+//!   process-wide `undici.setGlobalDispatcher(new ProxyAgent(…))` are both read
+//!   as a URL now, and the engine runs the CONNECT tunnel itself.
 //! * **A URL `turnloop_http::client::Request::new` rejects** (a non-http(s)
 //!   scheme, embedded credentials, a forbidden method). Declining rather than
 //!   failing keeps the existing error text, which the suite pins.
@@ -77,10 +77,6 @@ pub(crate) fn try_dispatch_inputs(
 /// The `js_fetch_text` form, which resolves with the decoded body text rather
 /// than a `Response` handle.
 pub(crate) fn try_dispatch_text(url: String, promise_ptr: usize) -> bool {
-    if super::global_proxy_installed() {
-        turnloop_client::note_declined();
-        return false;
-    }
     let spec = RequestSpec {
         url,
         method: "GET".to_string(),
@@ -101,6 +97,78 @@ pub(crate) fn try_dispatch_text(url: String, promise_ptr: usize) -> bool {
             turnloop_client::note_declined();
             false
         }
+    }
+}
+
+/// The `js_fetch_stream_start` form: Perry's line-oriented SSE poll surface.
+///
+/// This is the only caller of the engine's `Sink::on_head` / `Sink::on_chunk`
+/// hooks. They were added by P6 and left unused, which by CLAUDE.md's
+/// kill-policy made them an unexercised mode — a green engine test said nothing
+/// about them. `ctx` is the stream id, not a promise: this surface resolves
+/// nothing and is polled from JS instead.
+///
+/// `false` means the engine declined and the caller must run its reqwest task.
+pub(crate) fn try_dispatch_stream(
+    stream_id: usize,
+    url: String,
+    method: String,
+    headers: Vec<(String, String)>,
+    body: Option<Vec<u8>>,
+) -> bool {
+    let spec = RequestSpec {
+        url,
+        method,
+        headers,
+        body,
+        redirect: turnloop_http::client::RedirectMode::Follow,
+        abort_key: None,
+    };
+    let sink = Sink {
+        ctx: stream_id,
+        on_head: Some(stream_head),
+        on_chunk: Some(stream_chunk),
+        on_done: stream_done,
+    };
+    match turnloop_client::submit(spec, sink) {
+        Ok(()) => true,
+        Err(_) => {
+            turnloop_client::note_declined();
+            false
+        }
+    }
+}
+
+/// The FINAL response's head — the engine never reports a followed redirect's,
+/// which matches what `reqwest::Response::status()` reported here.
+fn stream_head(ctx: usize, status: u16, _headers: &[(String, String)]) {
+    super::with_stream(ctx, |state| {
+        state.http_status = status;
+        state.status = 1;
+    });
+}
+
+fn stream_chunk(ctx: usize, bytes: &[u8]) {
+    let text = String::from_utf8_lossy(bytes).to_string();
+    super::with_stream(ctx, |state| state.push_text(&text));
+}
+
+fn stream_done(ctx: usize, outcome: Outcome) {
+    match outcome {
+        // A streaming sink's `on_done` carries an empty body; every byte
+        // already went through `stream_chunk`.
+        Outcome::Ok(_) => super::with_stream(ctx, |state| state.finish()),
+        Outcome::Err(error) => super::with_stream(ctx, |state| {
+            // The two message prefixes the reqwest path used, kept: a failure
+            // before the head is a connection error, one after it a stream
+            // error.
+            state.error = if state.status >= 1 {
+                format!("Stream error: {}", error.message)
+            } else {
+                format!("Connection error: {}", error.message)
+            };
+            state.status = 3;
+        }),
     }
 }
 
@@ -127,10 +195,6 @@ fn settle_text(ctx: usize, outcome: Outcome) {
 
 /// Try the turnloop path. `false` means the caller keeps its reqwest future.
 pub(crate) fn try_dispatch(dispatch: FetchDispatch, promise_ptr: usize) -> bool {
-    if super::global_proxy_installed() {
-        turnloop_client::note_declined();
-        return false;
-    }
     let spec = RequestSpec {
         url: dispatch.url,
         method: dispatch.method,

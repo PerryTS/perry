@@ -120,6 +120,9 @@ static REUSED: AtomicU64 = AtomicU64::new(0);
 static CONNECTED: AtomicU64 = AtomicU64::new(0);
 static REDIRECTS: AtomicU64 = AtomicU64::new(0);
 static DECODED: AtomicU64 = AtomicU64::new(0);
+/// CONNECT tunnels established. A "the proxy path ran" claim is worth nothing
+/// if this is zero, which is exactly the assertion the proxy fixture makes.
+static TUNNELS: AtomicU64 = AtomicU64::new(0);
 
 /// Why a submission could not be served here. Every variant is a real
 /// configuration the reqwest path still handles, which is why the fallback is
@@ -129,8 +132,11 @@ pub(crate) enum Declined {
     /// This agent has no loop (a `worker_threads` agent before its own loop
     /// lands, or the `tokio-wait-driver` A/B arm).
     NoLoop,
-    /// A proxy is configured for this origin. `undici`'s `ProxyAgent` installs
-    /// one process-wide, and the CONNECT tunnel is not implemented here yet.
+    /// A proxy this client cannot drive. An `http://` proxy is served here now
+    /// — `turnloop_http::client::Route` supplies the CONNECT head and the
+    /// tunnel decision, and `exchange` runs it — so this variant is reached
+    /// only for a proxy URL `ProxyEnvironment::proxy_for` refuses: a scheme
+    /// other than `http` (socks5, https-to-proxy), or one that will not parse.
     Proxy,
     /// Not an `http:`/`https:` URL, or the URL is malformed in a way
     /// `client::Request::new` rejects for a reason the caller must report the
@@ -148,7 +154,7 @@ pub(crate) fn note_declined() {
 pub fn stats_line() -> String {
     format!(
         "[perry-loop] p6 http_submitted={} declined={} completed={} failed={} \
-         connects={} reused={} redirects={} decoded_bodies={}",
+         connects={} reused={} redirects={} decoded_bodies={} tunnels={}",
         SUBMITTED.load(Ordering::Relaxed),
         DECLINED.load(Ordering::Relaxed),
         COMPLETED.load(Ordering::Relaxed),
@@ -157,7 +163,14 @@ pub fn stats_line() -> String {
         REUSED.load(Ordering::Relaxed),
         REDIRECTS.load(Ordering::Relaxed),
         DECODED.load(Ordering::Relaxed),
+        TUNNELS.load(Ordering::Relaxed),
     )
+}
+
+/// Tunnels established on this thread. The liveness assertion for the proxy
+/// path: a green proxy fixture with this at zero went direct.
+pub fn tunnels_total() -> u64 {
+    TUNNELS.load(Ordering::Relaxed)
 }
 
 /// Whether this phase carried any request at all — the liveness assertion a
@@ -251,6 +264,27 @@ struct Conn {
     /// connection that dies before its first byte is retried once (the classic
     /// idle-connection race); a fresh one is not.
     used: bool,
+    /// The HTTP proxy this socket is dialled through, if any. The socket's peer
+    /// is the PROXY, not the origin, so this is also what makes the pool key
+    /// distinct — a tunnelled connection must never be handed to a direct
+    /// request for the same origin, and vice versa.
+    proxy: Option<url::Url>,
+    /// Live only while a `CONNECT` tunnel is being established.
+    tunnel: Option<Box<Tunnel>>,
+}
+
+/// One in-flight `CONNECT` exchange with a proxy.
+///
+/// It gets its own `Http1Connection` rather than borrowing `conn.http`: the
+/// request's codec must stay untouched until the tunnel is up, so that
+/// `Http1Connection::start`'s "one request in flight" check still means what it
+/// says when the real head finally goes out. The tunnel is always spoken in the
+/// clear — TLS begins *after* the proxy answers 2xx, which is the whole point.
+struct Tunnel {
+    http: tlc::Http1Connection,
+    /// Bytes of the proxy's answer the codec has not consumed. Same retention
+    /// rule as `Conn::input`, for the same reason.
+    input: Vec<u8>,
 }
 
 /// One in-flight logical request — possibly across several connections, if it
@@ -258,6 +292,11 @@ struct Conn {
 struct Req {
     spec: RequestSpec,
     sink: Sink,
+    /// The HTTP proxy resolved for this request's URL at submission time, from
+    /// `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` or from
+    /// `undici.setGlobalDispatcher(new ProxyAgent(...))`. Resolved once, not
+    /// per connection attempt, so a retry cannot silently change route.
+    proxy: Option<url::Url>,
     /// `turnloop_http`'s policy object: the URL, method, headers, body and the
     /// redirect counter. Rewritten in place by `Request::redirect`.
     request: tlc::Request,
@@ -430,9 +469,7 @@ pub(crate) fn submit(spec: RequestSpec, sink: Sink) -> Result<(), Declined> {
         return Err(Declined::NoLoop);
     }
     let request = tlc::Request::new(&spec.url, &spec.method).map_err(|_| Declined::Unsupported)?;
-    if proxy_for(&request.url)?.is_some() {
-        return Err(Declined::Proxy);
-    }
+    let proxy = proxy_for(&request.url)?;
     if request.url.scheme() == "https" && exchange::tls_config().is_none() {
         return Err(Declined::NoTls);
     }
@@ -460,6 +497,7 @@ pub(crate) fn submit(spec: RequestSpec, sink: Sink) -> Result<(), Declined> {
             Req {
                 spec,
                 sink,
+                proxy,
                 request,
                 conn: None,
                 head: None,
@@ -503,10 +541,31 @@ pub(crate) fn abort_signal(signal_ptr: usize) -> usize {
 
 /// Node's proxy environment, read through `turnloop_http`'s own matcher so the
 /// `NO_PROXY` rules are the crate's rather than a second implementation.
-fn proxy_for(url: &url::Url) -> Result<Option<url::Url>, Declined> {
-    // `undici.setGlobalDispatcher(new ProxyAgent(...))` installs a reqwest
-    // client rather than an environment variable; that path is declined by
-    // `fetch`'s own caller before it reaches here.
+pub(super) fn proxy_for(url: &url::Url) -> Result<Option<url::Url>, Declined> {
+    // `undici.setGlobalDispatcher(new ProxyAgent(uri, token))` is a process-wide
+    // override rather than an environment variable, and it wins over the
+    // environment for every origin — undici's own rule, and what the reqwest
+    // client this replaced did (`fetch_client()` returned the proxied client
+    // unconditionally once one was installed). `NO_PROXY` does not apply to it.
+    if let Some((uri, token)) = global_dispatcher_proxy() {
+        let mut parsed = url::Url::parse(&uri).map_err(|_| Declined::Proxy)?;
+        if parsed.scheme() != "http" || parsed.host_str().is_none() {
+            return Err(Declined::Proxy);
+        }
+        // undici's `token` is the literal `Proxy-Authorization` value. The
+        // route derives that header from the proxy URL's userinfo, so a token
+        // that is a `Basic <base64>` is folded back into the URL rather than
+        // carried as a second channel.
+        if let Some(token) = token {
+            if let Some(encoded) = token.strip_prefix("Basic ") {
+                if let Some((user, pass)) = decode_basic(encoded) {
+                    let _ = parsed.set_username(&user);
+                    let _ = parsed.set_password(Some(&pass));
+                }
+            }
+        }
+        return Ok(Some(parsed));
+    }
     let env = tlc::ProxyEnvironment {
         http_proxy: var("HTTP_PROXY").or_else(|| var("http_proxy")),
         https_proxy: var("HTTPS_PROXY").or_else(|| var("https_proxy")),
@@ -519,6 +578,31 @@ fn proxy_for(url: &url::Url) -> Result<Option<url::Url>, Declined> {
 
 fn var(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
+}
+
+/// The process-wide `setGlobalDispatcher` proxy, as `(uri, token)`.
+///
+/// `cfg`-gated rather than reached through a seam: the store lives in `fetch`,
+/// which is `web-fetch`'s, and `turnloop-http-client` can be enabled without it.
+#[cfg(feature = "web-fetch")]
+fn global_dispatcher_proxy() -> Option<(String, Option<String>)> {
+    crate::fetch::global_dispatcher_proxy()
+}
+
+#[cfg(not(feature = "web-fetch"))]
+fn global_dispatcher_proxy() -> Option<(String, Option<String>)> {
+    None
+}
+
+/// Split a `Basic` credential back into user and password.
+fn decode_basic(encoded: &str) -> Option<(String, String)> {
+    use base64::Engine;
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(encoded.trim())
+        .ok()?;
+    let text = String::from_utf8(raw).ok()?;
+    let (user, pass) = text.split_once(':')?;
+    Some((user.to_string(), pass.to_string()))
 }
 
 // ── Delivery ───────────────────────────────────────────────────────────────

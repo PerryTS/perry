@@ -250,30 +250,6 @@
       "plan": "A"
     },
     {
-      "crate": "perry-ext-nodemailer",
-      "dep": "lettre",
-      "kind": "normal",
-      "optional": false,
-      "target": null,
-      "surface": "`nodemailer.createTransport(...).sendMail()` / `.verify()`",
-      "reached_when": "a thread that could not get a loop of its own \u2014 since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed, or an unbuildable message. P6 moved the transport; the MIME builder did not move and never will \u2014 `turnloop-smtp` re-exports this same builder",
-      "blocker": "the builder is a permanent, legitimate use. What can go is the `AsyncSmtpTransport` fallback, and with it lettre's `tokio1` / `tokio1-rustls-tls` / `pool` features \u2014 which is what actually removes this edge's tokio, without removing lettre.",
-      "issue": "#10324",
-      "plan": "I"
-    },
-    {
-      "crate": "perry-ext-nodemailer",
-      "dep": "tokio",
-      "kind": "normal",
-      "optional": false,
-      "target": null,
-      "surface": "as `lettre` above",
-      "reached_when": "a thread that could not get a loop of its own \u2014 since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed",
-      "blocker": "`spawn_blocking` around the lettre transport. Goes with the transport fallback.",
-      "issue": "unfiled \u2014 P8",
-      "plan": "I"
-    },
-    {
       "crate": "perry-ext-pg",
       "dep": "sqlx",
       "kind": "normal",
@@ -308,18 +284,6 @@
       "blocker": "the transport, and only the transport. The protocol left with `tokio-tungstenite`: the codec and the handshake are `turnloop_websocket`'s sans-I/O core (`codec.rs`, `handshake.rs`) and already drive both transports, so what remains is a turnloop connect (DNS + `tcp_connect` + a `turnloop_tls_io` client install for `wss://`) and a turnloop `tcp_listen`/`accept_start` for the standalone server. Both primitives exist. The tokio path then stays as the declining transport under the P1 coexistence rule, the way perry-ext-net's socket task did.",
       "issue": "unfiled \u2014 turnloop WS lane",
       "plan": "E"
-    },
-    {
-      "crate": "perry-stdlib",
-      "dep": "lettre",
-      "kind": "normal",
-      "optional": true,
-      "target": null,
-      "surface": "perry-stdlib is the bundled implementation. For every module below, the well-known flip compiles the bundled copy OUT and routes the import to the perry-ext-* wrapper \u2014 so these are reachable only under `PERRY_DISABLE_WELL_KNOWN=1`, when the wrapper's source is absent, or in a prebuilt release archive that ships `full`. the bundled `nodemailer` module \u2014 and its MIME builder, which `turnloop_smtp` uses on the migrated path too.",
-      "reached_when": "the builder: always. The `AsyncSmtpTransport`: a thread that could not get a loop of its own \u2014 since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed",
-      "blocker": "the builder is permanent. Dropping lettre's `tokio1`/`tokio1-rustls-tls`/`pool` features \u2014 which requires deleting the async transport fallback \u2014 is what removes tokio from this edge.",
-      "issue": "unfiled \u2014 P8",
-      "plan": "I"
     },
     {
       "crate": "perry-stdlib",
@@ -477,7 +441,6 @@
     "perry-ext-mongodb": 29,
     "perry-ext-mysql2": 35,
     "perry-ext-net": 55,
-    "perry-ext-nodemailer": 6,
     "perry-ext-pg": 20,
     "perry-ext-ws": 26,
     "perry-ffi": 2,
