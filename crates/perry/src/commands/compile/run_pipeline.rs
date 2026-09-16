@@ -5185,6 +5185,25 @@ pub fn run_with_parse_cache(
                 .chain(parent_name_clone.into_iter().map(|name| (name, true)))
                 .collect();
             for (ref_name, is_parent_ref) in refs {
+                // #10356, second registration path. The implicit
+                // import-walk loop below is not the only way a class the
+                // importer never named gets registered under its bare name:
+                // this transitive closure pulls in whatever an imported
+                // class's FIELD and RETURN types mention. OpenCode's
+                // `OpencodeClient` carries `get request(): Request`, so
+                // `import { OpencodeClient }` registered `Request` here and
+                // `new Request(url, init)` in the importer built the SDK's
+                // `class Request extends HeyApiClient` instead of the global.
+                //
+                // A parent ref is exempt: `class Sub extends Request` really
+                // does need its parent's layout registered (#485 — too few
+                // inline slots otherwise), and parent refs already resolve
+                // path-aware in the child's own module (#26/#321).
+                if !is_parent_ref
+                    && perry_hir::analysis::is_global_intrinsic_value_name(&ref_name)
+                {
+                    continue;
+                }
                 // Resolve the type name in the declaring class's own
                 // module before falling back to the legacy global lookup.
                 // This includes erased `import type { Result as Local }`
