@@ -34,13 +34,30 @@ use std::time::Duration;
 mod agent_loop;
 #[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
 mod precise_wait;
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
 pub(crate) use agent_loop::arm_timer as arm_agent_timer;
+/// The A/B and wasm arms have no agent loop to arm: the legacy park recomputes
+/// its own timeout from the timer store on every pass, so there is no timer
+/// handle to re-arm and nothing to do here.
+///
+/// This mirror is not cosmetic. Without it the `tokio-wait-driver` arm — the
+/// BASELINE of the whole tokio-vs-turnloop measurement — does not compile, and
+/// that is exactly how it stopped building unnoticed when P3 moved JS timers
+/// onto the loop's own timer handle and left this `use` unconditional.
+#[cfg(any(target_arch = "wasm32", feature = "tokio-wait-driver"))]
+pub(crate) fn arm_agent_timer(_at: Option<std::time::Instant>) {}
 #[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
 pub use agent_loop::{loop_statistics, LoopStats};
 // turnloop P6: perry-stdlib's outbound-client counters reach the stats line
 // through this, because the dependency edge runs stdlib → runtime.
 #[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
 pub use agent_loop::{register_stats_reporter, StatsReporter};
+// perry#10395 step 1: hand work to the loop of an agent ANOTHER thread owns.
+// The decline path — a second thread acting for an agent that already has an
+// owner — is the single root cause behind 19 of the remaining tokio edges, and
+// this is what those bindings convert to instead of keeping a tokio fallback.
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+pub use agent_loop::{post_to_agent, PostToAgentError};
 
 /// The A/B and wasm arms have no agent loop, so there is no stats line to add
 /// to. Registration is accepted and dropped rather than `#[cfg]`-ed at every

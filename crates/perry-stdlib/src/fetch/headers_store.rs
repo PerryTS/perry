@@ -83,4 +83,3 @@ pub(super) fn headers_from_header_map(headers: &reqwest::header::HeaderMap) -> H
     }
     store
 }
-

@@ -48,7 +48,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::ThreadId;
 use std::time::Instant;
 
-use turnloop::{Completions, Config, Handle, Loop, Notifier, Timeout, Token};
+use turnloop::{Completions, Config, Handle, Loop, Notifier, Payload, Poster, Timeout, Token};
 
 use crate::agent::AgentId;
 
@@ -81,6 +81,12 @@ struct Route {
     in_turn: Arc<AtomicBool>,
     /// The loop's wake endpoint. `None` while the slot is merely claimed.
     notifier: Option<Notifier>,
+    /// The loop's submission endpoint, published with `notifier` and cleared
+    /// with it. `Notifier` lets another thread *wake* this agent; `Poster`
+    /// lets it hand the agent *work*. That is the whole difference between a
+    /// thread that must decline to tokio and one that can serve the agent it
+    /// is already acting for.
+    poster: Option<Poster>,
 }
 
 /// Every claimed agent route, one entry per agent. A `Vec` rather than a map:
@@ -261,6 +267,7 @@ impl Drop for AgentLoop {
         if let Some(route) = routes.iter_mut().find(|route| route.loop_id == self.id) {
             route.loop_id = 0;
             route.notifier = None;
+            route.poster = None;
         }
         // `Loop::drop` closes the notifier, poster and native backend.
     }
@@ -361,6 +368,7 @@ fn claim_route() -> bool {
                     loop_id: 0,
                     in_turn: flag.clone(),
                     notifier: None,
+                    poster: None,
                 });
                 flag
             }
@@ -395,6 +403,7 @@ fn publish_route(agent: &AgentLoop) {
     {
         route.loop_id = agent.id;
         route.notifier = Some(agent.driver.notifier());
+        route.poster = Some(agent.driver.poster());
     }
 }
 
@@ -908,6 +917,71 @@ fn wake_parked_agents_slow() {
             let _ = notifier.notify();
         }
     }
+}
+
+/// Why a post to another thread's agent loop could not be delivered.
+///
+/// Deliberately distinct from "declined": a caller that cannot post needs to
+/// know *why*, because the answers differ. No route at all means this agent has
+/// no loop and the caller must use its own fallback; a closed or full loop is a
+/// transient condition on a loop that does exist.
+#[derive(Debug)]
+pub enum PostToAgentError {
+    /// No thread has claimed a loop for this agent, so there is nothing to post
+    /// to. The caller's own fallback is the correct answer here.
+    NoRoute,
+    /// The agent has a loop, but its slot is claimed and the loop is not built
+    /// yet. Transient: the owner is between `claim_route` and `publish_route`.
+    NotPublished,
+    /// The loop refused the post. `payload` is returned when the caller may
+    /// retry; `None` means the post was accepted and must not be retried (a
+    /// wake error after enqueue), per `Poster::post`'s contract.
+    Refused { payload: Option<Payload> },
+}
+
+/// Hand work to the loop of an agent **another thread owns**.
+///
+/// This is what a host pump thread needs. Since P9 every JS agent has its own
+/// loop, but a second thread may still act *for* an agent another thread owns —
+/// a host pump, Android's UI thread for `perry-native`. Such a thread cannot
+/// own the loop, and until now its only option was to decline to tokio, which
+/// is why the tokio implementations are still live code.
+///
+/// Posting is sound precisely because both threads serve the **same agent's
+/// heap**: the completion is delivered on the owner, which is where that
+/// agent's JS values live. This is not the rejected "route completions between
+/// agents" idea — nothing crosses an agent boundary.
+///
+/// The owner is woken by `Poster::post` itself, so a parked loop picks the work
+/// up without a separate `notify`.
+///
+/// `pub` because the callers are in other crates — perry#10395 step 2 converts
+/// the declining bindings one at a time, and the ext crates reach this through
+/// perry-stdlib or a `turnloop_net::abi` export rather than from inside here.
+pub fn post_to_agent(
+    agent: AgentId,
+    token: Token,
+    payload: Payload,
+) -> Result<(), PostToAgentError> {
+    let poster = {
+        let routes = ROUTES.lock().unwrap_or_else(PoisonError::into_inner);
+        match routes.iter().find(|route| route.agent == agent) {
+            None => return Err(PostToAgentError::NoRoute),
+            Some(route) => match route.poster.as_ref() {
+                None => return Err(PostToAgentError::NotPublished),
+                // Cloned out so the post happens without the registry lock
+                // held: `post` can wake the owner, and waking under this lock
+                // would put a cross-thread wake inside a mutex every producer
+                // takes.
+                Some(poster) => poster.clone(),
+            },
+        }
+    };
+    poster
+        .post(token, payload)
+        .map_err(|err| PostToAgentError::Refused {
+            payload: err.payload,
+        })
 }
 
 /// How many agents hold a route slot. A leak check for tests: a program that

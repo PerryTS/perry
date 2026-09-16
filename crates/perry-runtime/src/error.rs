@@ -355,12 +355,8 @@ pub extern "C" fn js_error_new_with_message(message: *mut StringHeader) -> *mut 
 }
 
 /// Create a new Error-like object with a custom `.name` and stack prefix.
-///
-/// `pub` rather than `pub(crate)` because perry-stdlib's fetch transport needs
-/// it: a `TypeError`-shaped `cause` on a failed fetch carries a `.name` Node
-/// sets (`ConnectionRefused`, `AbortError`, …), and the sibling
-/// `js_error_new_with_message` next to it has been `pub extern "C"` all along
-/// — only the named form was unreachable from outside this crate.
+/// `pub` for perry-stdlib's fetch transport, whose `cause` carries the `.name`
+/// Node sets (`ConnectionRefused`, `AbortError`, …).
 pub fn js_error_new_with_name_message(
     name: &'static [u8],
     message: *mut StringHeader,

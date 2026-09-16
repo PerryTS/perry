@@ -307,15 +307,15 @@ fn send_head(engine: &mut Engine, conn_id: i64) {
     head.headers.retain(|h| {
         !h.name.eq_ignore_ascii_case("content-length")
             && !h.name.eq_ignore_ascii_case("transfer-encoding")
-            // `expect` is refused by `fetch` before it reaches here
-            // (`fetch::forbidden_header_failure`), matching undici. Stripping it
-            // as a defence in depth would be wrong: `Http1Connection::start`
-            // reads `expect: 100-continue` on a non-empty body as "park the
-            // upload", `can_send_body()` goes false and the next `send_body`
-            // fails `UND_ERR_INVALID_ARG "request body is not writable"` — a
-            // failure whose message names the body, not the header, which is
-            // what made this hard to see. A `node:http` client must implement
-            // the real handshake instead; that is `continue_client.rs`.
+        // `expect` is refused by `fetch` before it reaches here
+        // (`fetch::forbidden_header_failure`), matching undici. Stripping it
+        // as a defence in depth would be wrong: `Http1Connection::start`
+        // reads `expect: 100-continue` on a non-empty body as "park the
+        // upload", `can_send_body()` goes false and the next `send_body`
+        // fails `UND_ERR_INVALID_ARG "request body is not writable"` — a
+        // failure whose message names the body, not the header, which is
+        // what made this hard to see. A `node:http` client must implement
+        // the real handshake instead; that is `continue_client.rs`.
     });
     let body = std::mem::take(&mut req.request.body);
     let length = body_length(&req.request.method, body.len());

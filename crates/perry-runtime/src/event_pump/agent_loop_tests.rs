@@ -715,3 +715,171 @@ fn the_armed_deadline_and_perrys_own_deadline_agree() {
     .join()
     .expect("deadline agreement test thread");
 }
+
+/// One turn of this thread's own loop, staged but deliberately NOT dispatched,
+/// so a test can read the completions the turn actually produced. The real
+/// `settle_turn` dispatches, which would hand a synthetic token to a router.
+fn turn_and_stage(budget: Duration) {
+    AGENT_LOOP.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let agent = slot.as_mut().expect("this thread owns a loop");
+        let timeout = if budget.is_zero() {
+            Timeout::Now
+        } else {
+            Timeout::After(budget)
+        };
+        if let Ok(info) = agent.driver.turn(timeout, &mut agent.completions) {
+            agent.record(&info);
+        }
+    });
+}
+
+/// perry#10395: a thread that does **not** own an agent's loop can still hand
+/// that loop work.
+///
+/// This is the enabler a host pump thread needs. Since P9 every JS agent owns
+/// its own loop, but a second thread legitimately acts *for* an agent another
+/// thread owns — a host pump, Android's UI thread — and until now its only
+/// answer was to decline to tokio, which is why the tokio implementations are
+/// still live code behind those bindings.
+///
+/// Asserts the mechanism, not the absence of a panic: the payload arrives on
+/// the **owner**, exactly once, with its token and value intact, and an agent
+/// nobody speaks for gets a named error instead of a silent decline.
+#[test]
+fn a_foreign_thread_posts_work_to_an_agents_owner() {
+    const POSTED: Token = Token(0x1_0395);
+    const VALUE: u64 = 0x00C0_FFEE;
+
+    let _g = serial();
+    take_primary_route();
+    let agent = crate::agent::current_agent();
+
+    // "No loop at all" and "that loop refused this post" call for different
+    // answers from the caller, so they must not collapse into one failure.
+    let unrouted = u64::MAX;
+    assert!(!route_taken(unrouted), "no agent id is this one");
+    assert!(
+        matches!(
+            post_to_agent(unrouted, POSTED, Payload::U64(VALUE)),
+            Err(PostToAgentError::NoRoute)
+        ),
+        "a post to an agent with no route must name NoRoute"
+    );
+
+    // Clear whatever an earlier test staged, so the count below is this post's.
+    turn_and_stage(Duration::ZERO);
+    STAGED.with(|staged| staged.borrow_mut().clear());
+    let before = stats().completions;
+
+    // A second thread, acting FOR this agent, hands the owner work.
+    let (tx, rx) = mpsc::channel();
+    let foreign = std::thread::spawn(move || {
+        tx.send(post_to_agent(agent, POSTED, Payload::U64(VALUE)).is_ok())
+            .ok();
+    });
+    assert!(
+        rx.recv_timeout(Duration::from_secs(10))
+            .expect("the foreign thread reported"),
+        "the foreign post was not accepted"
+    );
+    foreign.join().expect("foreign poster thread");
+
+    // The owner picks it up in its own turn. `post` woke us, so this returns
+    // well inside the budget rather than at it.
+    let limit = Instant::now() + Duration::from_secs(10);
+    while STAGED.with(|staged| staged.borrow().is_empty()) {
+        assert!(
+            Instant::now() < limit,
+            "the posted payload never reached the owner"
+        );
+        turn_and_stage(Duration::from_millis(50));
+    }
+
+    STAGED.with(|staged| {
+        let staged = staged.borrow();
+        assert_eq!(
+            staged.len(),
+            1,
+            "exactly one completion — a post is delivered once, not retried"
+        );
+        let completion = &staged[0];
+        assert_eq!(completion.token, POSTED, "the routing token survived");
+        assert!(
+            completion.handle.is_none(),
+            "an unsolicited post owns no handle"
+        );
+        match &completion.result {
+            turnloop::OpResult::Posted(Payload::U64(value)) => {
+                assert_eq!(*value, VALUE, "the payload survived the thread hop");
+            }
+            other => panic!("expected the posted payload, got {other:?}"),
+        }
+    });
+    assert_eq!(
+        stats().completions,
+        before + 1,
+        "the owner counted the post exactly once"
+    );
+
+    // A synthetic token must never reach the routers.
+    STAGED.with(|staged| staged.borrow_mut().clear());
+}
+
+/// A refused post hands the payload **back**, so the caller can retry instead
+/// of losing the work.
+///
+/// This is the half of `Poster::post`'s contract that is easy to get wrong:
+/// `payload: None` does NOT mean "nothing to retry", it means the post was
+/// *accepted* and a later wake failed — retrying there would deliver twice.
+/// Only `Some` licenses a retry, so `PostToAgentError::Refused` has to carry
+/// the distinction through rather than flatten it into one error.
+#[test]
+fn a_full_postbox_hands_the_payload_back_so_the_caller_can_retry() {
+    const POSTED: Token = Token(0x1_0396);
+
+    let _g = serial();
+    take_primary_route();
+    let agent = crate::agent::current_agent();
+
+    turn_and_stage(Duration::ZERO);
+    STAGED.with(|staged| staged.borrow_mut().clear());
+
+    // Fill the postbox without turning, so nothing drains behind us.
+    let mut accepted = 0u64;
+    let refused = loop {
+        match post_to_agent(agent, POSTED, Payload::U64(accepted)) {
+            Ok(()) => {
+                accepted += 1;
+                assert!(accepted < 1_000_000, "the postbox is not bounded at all");
+            }
+            Err(err) => break err,
+        }
+    };
+    assert!(accepted > 0, "the postbox accepted nothing at all");
+    match refused {
+        PostToAgentError::Refused {
+            payload: Some(Payload::U64(value)),
+        } => assert_eq!(value, accepted, "the refused payload came back intact"),
+        other => panic!("a full postbox must hand the payload back, got {other:?}"),
+    }
+
+    // Drain it, so the next test starts on an empty loop — and so that the
+    // count proves every accepted post arrives, not merely the first.
+    let limit = Instant::now() + Duration::from_secs(10);
+    let mut delivered = 0u64;
+    while delivered < accepted {
+        assert!(Instant::now() < limit, "the accepted posts never drained");
+        turn_and_stage(Duration::from_millis(50));
+        delivered += STAGED.with(|staged| {
+            let mut staged = staged.borrow_mut();
+            let mine = staged.iter().filter(|c| c.token == POSTED).count() as u64;
+            staged.clear();
+            mine
+        });
+    }
+    assert_eq!(
+        delivered, accepted,
+        "every accepted post was delivered exactly once"
+    );
+}

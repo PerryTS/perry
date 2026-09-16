@@ -473,7 +473,9 @@ fn an_https_target_behind_a_proxy_tunnels_and_keeps_origin_form() {
     let proxy = url::Url::parse("http://proxy.test:8080").expect("proxy url");
     let route = tlc::Route::new(request.url.clone(), Some(proxy));
 
-    let connect = route.connect_head(None).expect("an https target must tunnel");
+    let connect = route
+        .connect_head(None)
+        .expect("an https target must tunnel");
     assert_eq!(connect.method, "CONNECT");
     assert_eq!(
         connect.target, "origin.test:443",
