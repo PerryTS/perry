@@ -1680,6 +1680,14 @@ def main():
     if CROSS["enabled"] and set(CROSS["trees"]) != set(ARMS):
         raise SystemExit(f"--arm-tree: give a tree for BOTH arms, got {sorted(CROSS['trees'])}")
     if CROSS["enabled"]:
+        # Cross-commit arms are already built, at two different commits. Building
+        # here would be wrong twice over: it would rebuild trees that are the
+        # measured artifact, and for the tokio arm it would ADD
+        # perry-stdlib/tokio-wait-driver to a pre-migration commit that has no
+        # such feature. Force the skip rather than trusting the caller.
+        if not getattr(args, "skip_cargo", False):
+            log("cross-commit: forcing --skip-cargo (the arms are prebuilt at their own commits)")
+        args.skip_cargo = True
         log("cross-commit arms: " + ", ".join(
             f"{a}={CROSS['commits'][a]} ({CROSS['trees'][a]})" for a in ARMS))
     if args.command == "idle-client":
