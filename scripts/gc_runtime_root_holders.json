@@ -956,6 +956,12 @@
       "why": "#10164: #[cfg(test)] Cell<u64> counting how many searches resumed from a recorded cross-call position, so tests can tell the position was used. A count, never an address, and absent from shipped binaries."
     },
     {
+      "file": "crates/perry-runtime/src/regex/perex_runtime.rs",
+      "name": "LENT_SCRATCH",
+      "verdict": "not_a_gc_pointer",
+      "why": "Per-thread match scratch lent to one search at a time (#10166): registers are subject offsets in UTF-16 units, frames and undo entries are perex's own opaque evaluator scratch. No GC pointer is ever stored, exactly as for the per-call MatchBuffers it replaces (this module's header and perex_memory.rs). The cell is borrowed for one search and holds no program, subject or result: those stay in GcProgram/HeapSubject roots and in the operation's MemoryBudget-charged slots."
+    },
+    {
       "file": "crates/perry-runtime/src/regex/perex_split.rs",
       "name": "FORWARD_SPLITS",
       "verdict": "test_only",

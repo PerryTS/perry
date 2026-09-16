@@ -159,10 +159,15 @@ impl<T: Copy + Default, const N: usize> std::ops::DerefMut for Slots<'_, T, N> {
     }
 }
 
-/// Registers a program can have and still search without allocating. Frames
-/// and undo entries start empty and only grow through `rebuffer`, so they are
-/// never inline.
-const INLINE_REGISTERS: usize = 32;
+/// Registers a program can have and still search without allocating on the
+/// owned path, which builds its buffers per call. Most programs need far
+/// fewer: `/^[a-z]+_[0-9]+$/` needs 2. Frames and undo entries start empty and
+/// only grow through `rebuffer`, so they are never inline.
+const INLINE_REGISTERS: usize = 8;
+/// Registers the lent cell holds. This array is allocated once per thread, not
+/// per call, so it is sized for the programs a search may bring rather than
+/// for what is cheap to move.
+const LENT_REGISTERS: usize = 32;
 /// Capture spans an `exec` result can have and still be read without
 /// allocating.
 const INLINE_CAPTURES: usize = 16;
@@ -194,6 +199,50 @@ impl ScratchOwner for MatchBuffers<'_> {
             undo: &mut self.undo,
         }
     }
+}
+
+/// Scratch a thread lends to one search at a time, instead of building an
+/// owner per call (#10166).
+///
+/// `find_near` built a `MatchBuffers` for every call: a 32-register inline
+/// array zeroed and then moved by value into `Search`, which disassembled to a
+/// 336-byte `memcpy` at every call and measured as a third of a short
+/// `.test()`. Nothing in that scratch depends on the subject, and a search
+/// initializes its own live state, so one cell serves every call on the
+/// thread. The arrays keep whatever size an earlier call needed, so a loop
+/// reaches a steady state that grows nothing and constructs nothing.
+///
+/// No GC pointer is ever stored here: registers are subject offsets, and
+/// frames and undo entries are the engine's own opaque scratch, exactly as in
+/// the owned buffers this replaces (see this module's header).
+struct ScratchCell {
+    registers: [usize; LENT_REGISTERS],
+    frames: Vec<Frame>,
+    undo: Vec<Undo>,
+}
+
+thread_local! {
+    /// Borrowed for one search. A nested regex — a replacer callback that runs
+    /// its own match, or a poll that re-enters — finds the cell borrowed and
+    /// takes the owned path, so two searches never share slots. This is the
+    /// runtime half of the guarantee perex's `ScratchOwner for &mut O` makes at
+    /// compile time within a single frame.
+    static LENT_SCRATCH: std::cell::RefCell<ScratchCell> =
+        std::cell::RefCell::new(ScratchCell {
+            registers: [0; LENT_REGISTERS],
+            frames: Vec::new(),
+            undo: Vec::new(),
+        });
+}
+
+/// What a lent attempt produced: an answer, or a reason to run the owned path.
+enum Lent<'mem> {
+    Done(Option<Match<'mem>>, Position),
+    /// The cell was already borrowed, or the search asked for more frames or
+    /// undo entries than it holds. The cell has been grown to the requested
+    /// size, so the next call starts big enough; this call runs the owned path
+    /// from its entry budget, exactly as it would have without lending.
+    Fallback,
 }
 
 #[derive(Clone, Copy)]
@@ -243,6 +292,105 @@ pub(crate) fn find<'mem, S: ImmutableSubject<Error = OwnerError>>(
 /// `near` must come from a search or reader over this same binding. Another
 /// string with an identical layout cannot be detected and would give wrong
 /// answers, so callers keep a position only as long as the binding it came from.
+/// One search over lent scratch. Returns `Fallback` without an answer when the
+/// scratch cannot serve this search; the caller then runs the owned path.
+#[allow(clippy::too_many_arguments)]
+fn find_near_lent<'mem, S: ImmutableSubject<Error = OwnerError>>(
+    resources: &BoundResources<'_, GcProgram<'_>, S>,
+    registers: usize,
+    start: usize,
+    near: Option<Position>,
+    mode: CaptureMode,
+    budget: &mut Budget,
+    memory: &'mem MemoryBudget,
+    quantum: usize,
+    poll: &mut impl FnMut() -> Result<(), EngineError>,
+) -> Result<Lent<'mem>, EngineError> {
+    LENT_SCRATCH.with(|cell| {
+        let Ok(mut cell) = cell.try_borrow_mut() else {
+            return Ok(Lent::Fallback);
+        };
+        let cell = &mut *cell;
+        // Charged exactly like the owner it replaces: the operation's limit
+        // sees the slots a search may use, whether or not they were allocated
+        // for it. The thread keeps the memory; the operation only borrows it.
+        let bytes = registers
+            .checked_mul(std::mem::size_of::<usize>())
+            .and_then(|n| {
+                n.checked_add(
+                    cell.frames
+                        .len()
+                        .checked_mul(std::mem::size_of::<Frame>())?,
+                )
+            })
+            .and_then(|n| n.checked_add(cell.undo.len().checked_mul(std::mem::size_of::<Undo>())?))
+            .ok_or(StorageError::Limit)?;
+        let _charge = Charge::new(memory, bytes)?;
+        let scratch = Scratch {
+            registers: &mut cell.registers[..registers],
+            frames: &mut cell.frames[..],
+            undo: &mut cell.undo[..],
+        };
+        poll()?;
+        let mut search = match near {
+            Some(near) => Search::new_near(resources, start, near, scratch, *budget),
+            None => Search::new(resources, start, scratch, *budget),
+        }
+        .map_err(search_error)?;
+        loop {
+            let result = search.advance(quantum);
+            *budget = Budget::new(search.remaining_work());
+            match result {
+                Ok(Progress::NoMatch) => return Ok(Lent::Done(None, search.position())),
+                Ok(Progress::Matched) => {
+                    let full = search
+                        .capture(0)
+                        .map_err(EngineError::Execution)?
+                        .ok_or(EngineError::Execution(ExecError::InvalidProgram))?;
+                    let captures = match mode {
+                        CaptureMode::Full => None,
+                        CaptureMode::All => {
+                            poll()?;
+                            let mut output = Slots::new(memory, search.capture_count())?;
+                            search
+                                .copy_captures(&mut output)
+                                .map_err(EngineError::Execution)?;
+                            Some(output)
+                        }
+                    };
+                    let position = search.position();
+                    return Ok(Lent::Done(Some(Match { full, captures }), position));
+                }
+                Ok(Progress::Pending) => poll()?,
+                Err(SearchError::Execution(ExecError::Frames | ExecError::Undo)) => {
+                    // Grow the cell for the next call and let this one run the
+                    // owned path, which charges the whole search once from the
+                    // caller's entry budget. Rebuffering in place would need a
+                    // second borrow of the cell the search already holds.
+                    let required = search.required_scratch();
+                    drop(search);
+                    if crate::hot_diag::regex_on() {
+                        crate::hot_diag::regex_with(|d| d.perex_scratch_grows += 1);
+                    }
+                    let frames = required
+                        .frames
+                        .max(cell.frames.len().saturating_mul(2))
+                        .max(8);
+                    let undo = required.undo.max(cell.undo.len().saturating_mul(2)).max(16);
+                    if frames > cell.frames.len() {
+                        cell.frames.resize(frames, Frame::default());
+                    }
+                    if undo > cell.undo.len() {
+                        cell.undo.resize(undo, Undo::default());
+                    }
+                    return Ok(Lent::Fallback);
+                }
+                Err(error) => return Err(search_error(error)),
+            }
+        }
+    })
+}
+
 pub(crate) fn find_near<'mem, S: ImmutableSubject<Error = OwnerError>>(
     program: &BoundProgram<GcProgram<'_>>,
     subject: &BoundSubject<S>,
@@ -269,6 +417,19 @@ pub(crate) fn find_near<'mem, S: ImmutableSubject<Error = OwnerError>>(
         frames: 0,
         undo: 0,
     };
+    // Lend the thread's scratch first: a search that fits it constructs and
+    // moves nothing (#10166). Anything the cell cannot serve falls through to
+    // the owned buffers below with the budget it entered on.
+    if registers <= LENT_REGISTERS {
+        let entry = *budget;
+        match find_near_lent(
+            &resources, registers, start, near, mode, budget, memory, quantum, poll,
+        )? {
+            Lent::Done(found, position) => return Ok((found, position)),
+            Lent::Fallback => *budget = entry,
+        }
+    }
+
     poll()?;
     let buffers = MatchBuffers::new(memory, size)?;
     let mut search = match near {
