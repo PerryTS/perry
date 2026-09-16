@@ -222,3 +222,67 @@ fn inner_shadow_does_not_inherit_the_counter_type() {
     );
     assert_eq!(tys(&m, "r"), vec![Type::Any]);
 }
+
+/// #10348 — the case where a minted field type is not merely imprecise but
+/// **unsound**, and silently corrupts the heap.
+///
+/// `var head = null` infers `Type::Null`, and `Type::Null` is one of the two
+/// types `typed_shape::type_is_pointer_bearing` answers `false` for. Codegen
+/// turns the minted field types into the class's compile-time GC pointer mask,
+/// `js_gc_typed_shape_id_for_keys` registers it against a dedicated ShapeId,
+/// and every allocation stamps `SIDE_MASK | TYPED_LAYOUT_INTACT` from the baked
+/// header image (#8405) — no per-object validation, no downgrade. So
+/// `{ next: head }` declared `next` unscannable while the loop stored an object
+/// there: the chain was neither marked nor rewritten, and the graph came out
+/// truncated and cross-linked with exit code 0.
+///
+/// Unlike the `Number` fields above there is no self-healing store guard behind
+/// this one, so the mint has to be right the first time.
+#[test]
+fn null_typed_local_value_mints_any_field() {
+    let m = lower_src(
+        r#"
+        function makeChain(seed) {
+          var head = null;
+          for (var i = 0; i < 8; i++) {
+            head = { id: seed + i, tag: null, next: head };
+          }
+          return head;
+        }
+        console.log(makeChain(1).id);
+    "#,
+    );
+    assert_eq!(
+        tys(&m, "next"),
+        vec![Type::Any, Type::Null, Type::Any],
+        "`next: head` is a LOCAL typed `Null` by its initializer and reassigned \
+         an object one line later, so the property must mint `Any` — a `Null` \
+         field leaves the slot out of the class's GC pointer mask and the \
+         collector never scans it (#10348). `tag: null` is the literal itself \
+         and keeps its exact type."
+    );
+}
+
+/// The other half, and the reason this is keyed on the expression rather than
+/// on the type alone: a literal `null` IS its value, so the ubiquitous
+/// `{ next: null }` record keeps its exact field type — same mask, same
+/// `POINTER_FREE` eligibility, no new scanning work. (A literal `undefined`
+/// already minted `Any` before #10348 and still does; it is pinned here so the
+/// two spellings can never silently swap places.)
+#[test]
+fn literal_nullish_property_keeps_its_exact_field_type() {
+    let m = lower_src(
+        r#"
+        for (let i = 0; i < 10; i++) {
+          const o = { head: null, tail: undefined, n: i };
+          console.log(o.head, o.tail, o.n);
+        }
+    "#,
+    );
+    assert_eq!(
+        tys(&m, "head"),
+        vec![Type::Null, Type::Any, Type::Number],
+        "a literal `null` proves its own slot holds no pointer; widening it \
+         would put the slot into the pointer mask for nothing"
+    );
+}
