@@ -270,11 +270,18 @@ pub(crate) fn set_field_by_name_object_tail(
         // diverges from its class chain (per-instance `setPrototypeOf`
         // override, null-proto) never records or honors a plan.
         // Flags that make an object ineligible for class-keyed plans: a
-        // diverging chain (per-instance proto override / null proto) or own
-        // descriptors (an own accessor must dispatch through the short-circuit
-        // below, which a plan hit skips).
-        const PLAN_BLOCKING_FLAGS: u16 =
-            crate::gc::OBJ_FLAG_NULL_PROTO | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
+        // diverging chain (per-instance proto override / null proto).
+        //
+        // Own descriptors used to be a wholesale disqualifier here for a real
+        // reason — an own accessor must dispatch through the short-circuit
+        // below, which a plan hit skips. But that is a per-KEY fact, not a
+        // per-receiver one (#10287). zod puts `_zod` on every schema object,
+        // so the object-level flag denied a plan to every one of them and made
+        // each store re-run the whole interception vet: the chain walk, the
+        // class-registry lookups and the `Object.prototype` probe. The plan is
+        // now denied only for the keys an own descriptor can actually cover,
+        // which `own_descriptors_skip_key` decides exactly.
+        const PLAN_BLOCKING_FLAGS: u16 = crate::gc::OBJ_FLAG_NULL_PROTO;
         let obj_class_id = (*obj).class_id;
         // #6595: class objects are excluded by their authoritative ShapeId
         // kind — their
@@ -286,6 +293,14 @@ pub(crate) fn set_field_by_name_object_tail(
             && obj_class_id != NATIVE_MODULE_CLASS_ID
             && crate::object::object_is_regular(obj)
             && (*gc_header)._reserved & PLAN_BLOCKING_FLAGS == 0
+            // Per-key, not per-receiver: a descriptor on some OTHER key cannot
+            // intercept this one, and a plan hit skips the own-accessor
+            // short-circuit below, so the key must be provably uncovered.
+            && ((*gc_header)._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS == 0
+                || crate::object::own_descriptors_skip_key(
+                    obj as usize,
+                    f64::from_bits(JSValue::string_ptr(key as *mut _).bits()),
+                ))
             && !super::prototype_chain::object_has_prototype_divergence(obj as usize);
         let plan_fast = plan_eligible
             && super::prop_plan::store_plan_check(obj_class_id, interned_key as usize);
@@ -525,6 +540,9 @@ pub(crate) fn set_field_by_name_object_tail(
                 && obj_class_id != NATIVE_MODULE_CLASS_ID
                 && crate::object::object_is_regular(obj)
                 && obj_flags & PLAN_BLOCKING_FLAGS == 0
+                // `desc_gate_ok` above already proved this key is uncovered on
+                // this receiver, which is the per-key half of the old flag.
+                && desc_gate_ok
                 && !super::prototype_chain::object_has_prototype_divergence(obj as usize);
             if !plan_fast && record_plan_eligible {
                 super::prop_plan::store_plan_record(obj_class_id, interned_key as usize);
