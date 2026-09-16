@@ -599,13 +599,26 @@ path a real program still reaches.
   the two surfaces (`agent.rs` alone is ~1,950 lines with a second Node-
   semantics pool layered over reqwest's) and it is its own change.
 * **`http2.connect()`.** Untouched, like P5 left `http2.createSecureServer`.
-* **`js_fetch_stream_start`** — Perry's line-oriented SSE poll surface. The
-  engine has the hooks for it (`Sink::on_head` / `on_chunk` stream the final
-  response's decoded body as it arrives, and a followed redirect's body is
-  deliberately withheld from them), and they are used by nothing: the surface
-  is a separate line-splitting state machine and wiring it is not a transport
-  change. The hooks are therefore an unexercised path today, which is worth
-  saying plainly.
+* **`js_fetch_stream_start`** — Perry's line-oriented SSE poll surface, still on
+  reqwest. The engine carries the hooks for it (`Sink::on_head` / `on_chunk`
+  stream the final response's decoded body as it arrives, and a followed
+  redirect's body is deliberately withheld from them) and **nothing calls
+  them**: that surface is a separate line-splitting state machine and wiring it
+  is not a transport change.
+
+  By CLAUDE.md's GC-knob kill-policy — "a mode that still exists is a decision
+  that hasn't been made" — those ~25 lines should be deleted rather than left
+  unexercised. They were not, for one reason and it is a schedule reason: the
+  gap sweep in this report was running against the built tree when that became
+  clear, and changing the engine would have invalidated it. The integrator
+  should treat it as a live choice: deleting `on_head`/`on_chunk`, the
+  `streaming` flag and the three branches that read them is a self-contained
+  subtraction, and the report's numbers stay true either way because no test
+  exercises them.
+
+  Also note that Perry's WHATWG `response.body` is **not** affected: it is
+  backed by the already-buffered body on both transports, so buffering the
+  response here is parity rather than a regression.
 * **`AbortSignal` on the `perry-ext-fetch` route.** Fixed for the global
   `fetch`; that crate still has no wiring.
 * **Per-phase request deadlines.** `client::Lifecycle` exists and nothing in
