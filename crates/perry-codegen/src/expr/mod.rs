@@ -64,7 +64,9 @@ mod v8_interop;
 mod write_barrier;
 
 pub(crate) use crate::native_value::{materialize_js_value, materialize_js_value_without_record};
-pub(crate) use array_literal::lower_array_literal;
+pub(crate) use array_literal::{
+    emit_array_from_lowered_values, lower_array_literal, INLINE_ARRAY_MAX_ELEMENTS,
+};
 pub(crate) use buffer_access::{
     access_facts_for_spec, can_lower_buffer_access_without_calls,
     can_lower_integer_typed_array_store_value, emit_buffer_access_pointer,
