@@ -13,6 +13,7 @@ members = [
     "crates/perry-db-turnloop",
     "crates/perry-tls-session",
     "crates/perry-http-client",
+    "crates/perry-http-server",
     "crates/perry-native-registration",
     "crates/perry-ext-dotenv",
     "crates/perry-ext-nanoid",
@@ -538,6 +539,11 @@ perry-tls-session = { path = "crates/perry-tls-session" }
 # and nothing should; see the crate docs for why an owned loop is correct here
 # and nowhere else (PerryTS/turnloop#45).
 perry-http-client = { path = "crates/perry-http-client" }
+# turnloop: the HTTP/1.1 SERVER core, shared by every binding that serves
+# HTTP and is not perry-ext-http (perry-ext-fastify, perry-stdlib's bundled
+# framework server). See its lib.rs header for why the core moved down into a
+# crate instead of those bindings taking an edge to perry-ext-http.
+perry-http-server = { path = "crates/perry-http-server" }
 perry-native-registration = { path = "crates/perry-native-registration", version = "0.5.1534" }
 perry-ext-dotenv = { path = "crates/perry-ext-dotenv" }
 perry-ext-nanoid = { path = "crates/perry-ext-nanoid" }

@@ -586,7 +586,7 @@ mod tests {
             headers: HashMap::new(),
             body: None,
             params: HashMap::new(),
-            response_tx,
+            reply: crate::server::Reply::Hyper(response_tx),
         };
 
         // Drive the real dispatcher; it returns the context handle it
@@ -794,8 +794,9 @@ mod tests {
         let mut params = HashMap::new();
         params.insert("id".to_string(), "42".to_string());
 
-        // The response channel is irrelevant to context construction; a dropped
-        // receiver is fine — the helper never touches `response_tx`.
+        // The reply is irrelevant to context construction; a dropped receiver
+        // is fine — the helper never touches it. (Dropping the pending then
+        // refuses through a closed channel, which is a no-op.)
         let (response_tx, _response_rx) = tokio::sync::oneshot::channel();
         let mut pending = FastifyPendingRequest {
             method: "POST".to_string(),
@@ -803,7 +804,7 @@ mod tests {
             headers,
             body: Some(b"{\"hello\":\"world\"}".to_vec()),
             params,
-            response_tx,
+            reply: crate::server::Reply::Hyper(response_tx),
         };
 
         // Exercise the production construction path.

@@ -5970,6 +5970,7 @@ dependencies = [
  "hyper-util",
  "perry-ext-ws",
  "perry-ffi",
+ "perry-http-server",
  "perry-runtime",
  "serde_json",
  "socket2",
@@ -6317,6 +6318,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "perry-http-server"
+version = "0.5.1582"
+dependencies = [
+ "http",
+ "httpdate",
+ "perry-ffi",
+ "turnloop-http",
+]
+
+[[package]]
 name = "perry-native-registration"
 version = "0.5.1582"
 
@@ -6439,8 +6450,6 @@ dependencies = [
  "hmac 0.13.0",
  "http",
  "http-body-util",
- "hyper",
- "hyper-util",
  "image",
  "jsonwebtoken",
  "lazy_static",
@@ -6458,6 +6467,7 @@ dependencies = [
  "pbkdf2 0.13.0",
  "perry-container-compose",
  "perry-ffi",
+ "perry-http-server",
  "perry-runtime",
  "perry-tls-session",
  "perry-updater",

@@ -74,13 +74,20 @@ bundled-moment = []
 # to perry-ext-commander instead.
 bundled-commander = []
 
-# HTTP server (hyper-based native framework)
+# HTTP server (the native framework's own server)
 # Note: dashmap is now always-on (used by core handle registry), no longer listed here.
-# Gates the `framework` module (non-fastify hyper plumbing) only. fastify is no
-# longer in-stdlib — `import 'fastify'` is served exclusively by the external
-# perry-ext-fastify crate via the well-known flip (see well_known_bindings.toml);
-# perry-stdlib's per-tick bridge into it lives behind `external-fastify-pump`.
-http-server = ["dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:bytes", "async-runtime"]
+# Gates the `framework` module only. fastify is no longer in-stdlib —
+# `import 'fastify'` is served exclusively by the external perry-ext-fastify
+# crate via the well-known flip (see well_known_bindings.toml); perry-stdlib's
+# per-tick bridge into it lives behind `external-fastify-pump`.
+#
+# turnloop: this used to be `dep:hyper` + `dep:hyper-util` + an `async-runtime`
+# (tokio) requirement, for a hyper service in `framework/server.rs`. It is
+# `perry-http-server` now — the shared HTTP/1.1 core on turnloop — and the
+# module needs no async runtime at all, so `async-runtime` is gone from this
+# gate too. The framework module is in `full`, so those were edges every
+# default build of perry-stdlib carried.
+http-server = ["dep:perry-http-server", "dep:http-body-util", "dep:bytes"]
 
 # Web Fetch and Axios compatibility surface. The well-known flip can
 # strip this when the external binding owns the imported surface.
@@ -377,8 +384,7 @@ rand_core_06 = { package = "rand_core", version = "0.6", features = ["getrandom"
 tokio = { version = "1", features = ["full"], optional = true }
 
 # HTTP Server
-hyper = { workspace = true, features = ["server", "http1", "http2"], optional = true }
-hyper-util = { workspace = true, features = ["server", "server-auto", "tokio"], optional = true }
+perry-http-server = { workspace = true, optional = true }
 http-body-util = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
 # DashMap is used by the always-on handle registry (`common/handle.rs`),
