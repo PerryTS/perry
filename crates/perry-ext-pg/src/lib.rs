@@ -1,6 +1,15 @@
 //! Native bindings for the npm `pg` PostgreSQL client — uses only
-//! perry-ffi. Async via `sqlx::postgres` bridged through
-//! `spawn_blocking + JsPromise + tokio::Handle::current().block_on`.
+//! perry-ffi.
+//!
+//! Since turnloop P7 a connection is **loop-driven state**: one turnloop socket
+//! and a `turnloop_postgres::Connection` sans-I/O core, driven from the event
+//! loop's own completion dispatch (`turnloop_io`). No thread is held at any
+//! point. The legacy transport — `sqlx::postgres` bridged through
+//! `spawn_blocking` + `tokio::Handle::current().block_on`, which borrowed a
+//! tokio blocking-pool thread for every round trip — remains for the
+//! connections that decline: a `worker_threads` agent (no loop of its own), the
+//! `tokio-wait-driver` A/B arm, and any config whose `host` names a
+//! Unix-domain socket, which this transport cannot reach.
 //!
 //! Mirrors perry-stdlib's existing surface: `Client` (pre-connect
 //! / connected handle states with `.connect()` deferring the TCP
@@ -13,11 +22,19 @@
 //! shape needs an extra adapter; followup once any wrapper actually
 //! demands it.
 
+mod turnloop_io;
+
+/// Production binaries receive the async-bridge symbols from perry-stdlib; a
+/// standalone `cargo test -p perry-ext-pg` binary has no stdlib archive, so it
+/// supplies its own. Same file as `perry-ext-ioredis`'s.
+#[cfg(test)]
+mod test_async_shims;
+
 use perry_ffi::{
-    alloc_string, build_object_shape, get_handle_mut, js_array_alloc, js_array_get, js_array_push,
-    js_object_alloc_with_shape, js_object_get_field, js_object_set_field, register_handle,
-    spawn_blocking, take_handle, ArrayHeader, Handle, JsPromise, JsValue, ObjectHeader, Promise,
-    StringHeader,
+    alloc_string, build_object_shape, get_handle, get_handle_mut, js_array_alloc, js_array_get,
+    js_array_push, js_object_alloc_with_shape, js_object_get_field, js_object_set_field,
+    register_handle, spawn_blocking, take_handle, ArrayHeader, Handle, JsPromise, JsValue,
+    ObjectHeader, Promise, StringHeader,
 };
 use sqlx::postgres::{PgColumn, PgConnection, PgPool, PgPoolOptions, PgRow};
 use sqlx::{Column, Connection, Row, TypeInfo};
@@ -56,6 +73,38 @@ impl PgConfig {
             self.user, self.password, self.host, self.port, db
         )
     }
+}
+
+/// The keys of pg's result object, in the order both transports write them.
+///
+/// A constant rather than two literal lists because `turnloop_io::result`
+/// builds the same object from owned data: a key added to one builder and not
+/// the other would be a shape divergence that only shows up at runtime, on
+/// whichever transport the program happened to take.
+pub(crate) const RESULT_KEYS: [&str; 4] = ["rows", "fields", "rowCount", "command"];
+
+/// The keys of one `result.fields[i]`, ditto.
+pub(crate) const FIELD_KEYS: [&str; 7] = [
+    "name",
+    "tableID",
+    "columnID",
+    "dataTypeID",
+    "dataTypeSize",
+    "dataTypeModifier",
+    "format",
+];
+
+/// pg's `result.command`: the first whitespace-delimited word of the statement,
+/// uppercased.
+///
+/// Derived from the statement text, not from the server's CommandComplete tag.
+/// The two differ — `WITH … INSERT` tags as `INSERT` but starts with `WITH` —
+/// and the text is where this binding has always taken it.
+fn command_of(sql: &str) -> String {
+    sql.split_whitespace()
+        .next()
+        .unwrap_or("SELECT")
+        .to_uppercase()
 }
 
 unsafe fn jsvalue_to_string(value: JsValue) -> Option<String> {
@@ -169,15 +218,7 @@ fn row_to_js_object(row: &PgRow) -> *mut ObjectHeader {
 /// the "unknown/variable" sentinel -1. Twin of
 /// `perry_stdlib::pg::types::column_to_field_def` — keep in sync.
 fn column_to_field_def(col: &PgColumn) -> *mut ObjectHeader {
-    let (packed, shape_id) = build_object_shape(&[
-        "name",
-        "tableID",
-        "columnID",
-        "dataTypeID",
-        "dataTypeSize",
-        "dataTypeModifier",
-        "format",
-    ]);
+    let (packed, shape_id) = build_object_shape(&FIELD_KEYS);
     let obj =
         unsafe { js_object_alloc_with_shape(shape_id, 7, packed.as_ptr(), packed.len() as u32) };
     let name_str = alloc_string(col.name());
@@ -203,7 +244,7 @@ fn column_to_field_def(col: &PgColumn) -> *mut ObjectHeader {
 /// Wrap a query outcome in pg's `{ rows, fields, rowCount, command }`
 /// result object.
 fn rows_to_pg_result(rows: Vec<PgRow>, columns: &[PgColumn], command: &str) -> JsValue {
-    let (packed, shape_id) = build_object_shape(&["rows", "fields", "rowCount", "command"]);
+    let (packed, shape_id) = build_object_shape(&RESULT_KEYS);
     let result_obj =
         unsafe { js_object_alloc_with_shape(shape_id, 4, packed.as_ptr(), packed.len() as u32) };
 
@@ -314,9 +355,32 @@ unsafe fn read_sql(sql_ptr: *const u8) -> String {
 /// Wraps a `PgConnection` so it can sit in the handle registry.
 /// Pre-connect: `pending_config = Some, connection = None`.
 /// Connected:   `pending_config = None, connection = Some`.
+///
+/// On the turnloop transport neither field is ever set: the connection is loop
+/// state, keyed by this handle in `turnloop_io`'s thread-local table (the core
+/// owns `JsPromise`s and so is neither `Send` nor `Sync`, which the handle
+/// registry requires). `turnloop` is what routes the entry points.
 pub struct PgConnectionHandle {
     pub connection: Option<PgConnection>,
     pub pending_config: Option<PgConfig>,
+    /// `Some` exactly when this client lives on turnloop, carrying the config
+    /// its connection will be built from.
+    ///
+    /// The transport is decided **once, at `new Client()`**, and never changes —
+    /// P1's rule for sockets, for the same reason: a client that switched
+    /// mid-life would have two different sessions on the same server, and
+    /// `client.query('BEGIN')` would silently stop meaning anything.
+    ///
+    /// It carries the config rather than a bare flag because `pending_config`
+    /// is *taken* by `connect()`, while the turnloop core is built when the
+    /// socket opens — later than that.
+    pub(crate) turnloop: Option<PgConfig>,
+    /// `connect()` has been called on this client at least once.
+    ///
+    /// Mirrors the sqlx path's `pending_config.take()`: a second `connect()`
+    /// there finds `None` and resolves `undefined` without touching the
+    /// network, and so does this one.
+    pub(crate) connect_started: bool,
 }
 
 impl PgConnectionHandle {
@@ -324,14 +388,75 @@ impl PgConnectionHandle {
         Self {
             connection: Some(conn),
             pending_config: None,
+            turnloop: None,
+            connect_started: false,
         }
     }
     pub fn pending(config: PgConfig) -> Self {
         Self {
             connection: None,
             pending_config: Some(config),
+            turnloop: None,
+            connect_started: false,
         }
     }
+    /// A client on the turnloop transport. `connect_started` is true for the
+    /// combined `pg.connect(config)` entry, whose caller already has a
+    /// connection in hand.
+    pub(crate) fn turnloop(config: PgConfig, connect_started: bool) -> Self {
+        Self {
+            connection: None,
+            pending_config: None,
+            turnloop: Some(config),
+            connect_started,
+        }
+    }
+}
+
+/// Take a client handle back out of the registry. `true` if it was there.
+pub(crate) fn forget_client(handle: Handle) -> bool {
+    take_handle::<PgConnectionHandle>(handle).is_some()
+}
+
+/// Take a pool handle back out of the registry. `true` if it was there.
+pub(crate) fn forget_pool(handle: Handle) -> bool {
+    take_handle::<PgPoolHandle>(handle).is_some()
+}
+
+/// The config of a turnloop client, or `None` if this handle is not one (or is
+/// not a client at all).
+fn client_turnloop_config(handle: Handle) -> Option<PgConfig> {
+    get_handle::<PgConnectionHandle>(handle).and_then(|h| h.turnloop.clone())
+}
+
+/// The config of a turnloop pool, or `None`.
+fn pool_turnloop_config(handle: Handle) -> Option<PgConfig> {
+    get_handle::<PgPoolHandle>(handle).and_then(|h| h.turnloop.clone())
+}
+
+/// What `client.connect()` should do with this handle.
+enum ConnectRoute {
+    /// Not a turnloop client (or not a live handle) — fall through to sqlx.
+    Legacy,
+    /// First `connect()` on a turnloop client; open the socket.
+    Turnloop(PgConfig),
+    /// `connect()` has already run once. The sqlx path resolves `undefined`
+    /// here because it took `pending_config` the first time round.
+    AlreadyStarted,
+}
+
+fn client_connect_route(handle: Handle) -> ConnectRoute {
+    let Some(record) = get_handle_mut::<PgConnectionHandle>(handle) else {
+        return ConnectRoute::Legacy;
+    };
+    let Some(config) = record.turnloop.clone() else {
+        return ConnectRoute::Legacy;
+    };
+    if record.connect_started {
+        return ConnectRoute::AlreadyStarted;
+    }
+    record.connect_started = true;
+    ConnectRoute::Turnloop(config)
 }
 
 /// `new Client(config)` — sync constructor, no TCP touch.
@@ -343,6 +468,11 @@ impl PgConnectionHandle {
 pub unsafe extern "C" fn js_pg_client_new(config_f: f64) -> Handle {
     let config = JsValue::from_bits(config_f.to_bits());
     let pg_config = parse_pg_config(config);
+    // The transport is decided here and never revisited; see
+    // `PgConnectionHandle::turnloop`.
+    if turnloop_io::supports(&pg_config) {
+        return register_handle(PgConnectionHandle::turnloop(pg_config, false));
+    }
     register_handle(PgConnectionHandle::pending(pg_config))
 }
 
@@ -353,6 +483,21 @@ pub unsafe extern "C" fn js_pg_client_new(config_f: f64) -> Handle {
 pub extern "C" fn js_pg_client_connect(client_handle: Handle) -> *mut Promise {
     let promise = JsPromise::new();
     let raw = promise.as_raw();
+
+    // Routed before the promise moves: `turnloop_io::client_connect` takes it
+    // by value, so asking afterwards would have dropped it — and a dropped
+    // `JsPromise` is a promise that never settles.
+    match client_connect_route(client_handle) {
+        ConnectRoute::Turnloop(config) => {
+            turnloop_io::client_connect(client_handle, &config, promise);
+            return raw;
+        }
+        ConnectRoute::AlreadyStarted => {
+            promise.resolve_undefined();
+            return raw;
+        }
+        ConnectRoute::Legacy => {}
+    }
 
     // Snapshot the pending config before entering spawn_blocking —
     // can't hold a `&mut` across the boundary.
@@ -392,6 +537,11 @@ pub unsafe extern "C" fn js_pg_connect(config_f: f64) -> *mut Promise {
     let promise = JsPromise::new();
     let raw = promise.as_raw();
 
+    if turnloop_io::supports(&pg_config) {
+        turnloop_io::connect_new_client(pg_config, promise);
+        return raw;
+    }
+
     spawn_blocking(move || {
         let result = tokio::runtime::Handle::current()
             .block_on(async move { PgConnection::connect(&pg_config.to_url()).await });
@@ -411,6 +561,10 @@ pub unsafe extern "C" fn js_pg_connect(config_f: f64) -> *mut Promise {
 pub extern "C" fn js_pg_client_end(client_handle: Handle) -> *mut Promise {
     let promise = JsPromise::new();
     let raw = promise.as_raw();
+    if client_turnloop_config(client_handle).is_some() {
+        turnloop_io::client_end(client_handle, promise);
+        return raw;
+    }
     spawn_blocking(move || {
         if let Some(mut wrapper) = take_handle::<PgConnectionHandle>(client_handle) {
             if let Some(conn) = wrapper.connection.take() {
@@ -439,14 +593,26 @@ pub unsafe extern "C" fn js_pg_client_query(
     sql_ptr: *const u8,
 ) -> *mut Promise {
     let sql = read_sql(sql_ptr);
-    let command = sql
-        .split_whitespace()
-        .next()
-        .unwrap_or("SELECT")
-        .to_uppercase();
+    let command = command_of(&sql);
 
     let promise = JsPromise::new();
     let raw = promise.as_raw();
+
+    if client_turnloop_config(client_handle).is_some() {
+        // `fetch_all` regardless of the statement, which is why a
+        // non-parameterised `INSERT` reports `rowCount: 0` on both transports.
+        turnloop_io::client_query(
+            client_handle,
+            promise,
+            turnloop_io::Statement {
+                sql,
+                params: Vec::new(),
+                kind: turnloop_io::ResultKind::Rows,
+                command,
+            },
+        );
+        return raw;
+    }
 
     spawn_blocking(move || {
         let outcome = tokio::runtime::Handle::current().block_on(async move {
@@ -490,15 +656,26 @@ pub unsafe extern "C" fn js_pg_client_query_params(
     let sql = read_sql(sql_ptr);
     let params = JsValue::from_bits(params_f.to_bits());
     let param_values = extract_params_from_jsvalue(params);
-    let command = sql
-        .split_whitespace()
-        .next()
-        .unwrap_or("SELECT")
-        .to_uppercase();
+    let command = command_of(&sql);
     let is_select = is_row_returning_query(&sql);
 
     let promise = JsPromise::new();
     let raw = promise.as_raw();
+
+    if client_turnloop_config(client_handle).is_some() {
+        let kind = turnloop_io::ResultKind::for_sql(&sql);
+        turnloop_io::client_query(
+            client_handle,
+            promise,
+            turnloop_io::Statement {
+                sql,
+                params: param_values,
+                kind,
+                command,
+            },
+        );
+        return raw;
+    }
 
     spawn_blocking(move || {
         let outcome = tokio::runtime::Handle::current().block_on(async move {
@@ -560,6 +737,11 @@ enum QueryOutcome {
 pub struct PgPoolHandle {
     pub pool: Option<PgPool>,
     pub pending_url: Option<String>,
+    /// `Some` exactly when this pool lives on turnloop; see
+    /// `PgConnectionHandle::turnloop`. What "pool" means on that transport is
+    /// spelled out in `turnloop_io`'s module docs — it is one pipelined
+    /// connection, not ten.
+    pub(crate) turnloop: Option<PgConfig>,
 }
 
 impl PgPoolHandle {
@@ -567,12 +749,21 @@ impl PgPoolHandle {
         Self {
             pool: Some(pool),
             pending_url: None,
+            turnloop: None,
         }
     }
     pub fn pending(url: String) -> Self {
         Self {
             pool: None,
             pending_url: Some(url),
+            turnloop: None,
+        }
+    }
+    pub(crate) fn turnloop(config: PgConfig) -> Self {
+        Self {
+            pool: None,
+            pending_url: None,
+            turnloop: Some(config),
         }
     }
 
@@ -603,6 +794,9 @@ impl PgPoolHandle {
 pub unsafe extern "C" fn js_pg_pool_new(config_f: f64) -> Handle {
     let config = JsValue::from_bits(config_f.to_bits());
     let pg_config = parse_pg_config(config);
+    if turnloop_io::supports(&pg_config) {
+        return register_handle(PgPoolHandle::turnloop(pg_config));
+    }
     register_handle(PgPoolHandle::pending(pg_config.to_url()))
 }
 
@@ -617,6 +811,11 @@ pub unsafe extern "C" fn js_pg_create_pool(config_f: f64) -> *mut Promise {
     let pg_config = parse_pg_config(config);
     let promise = JsPromise::new();
     let raw = promise.as_raw();
+
+    if turnloop_io::supports(&pg_config) {
+        turnloop_io::create_pool(pg_config, promise);
+        return raw;
+    }
 
     spawn_blocking(move || {
         let url = pg_config.to_url();
@@ -640,14 +839,26 @@ pub unsafe extern "C" fn js_pg_create_pool(config_f: f64) -> *mut Promise {
 #[no_mangle]
 pub unsafe extern "C" fn js_pg_pool_query(pool_handle: Handle, sql_ptr: *const u8) -> *mut Promise {
     let sql = read_sql(sql_ptr);
-    let command = sql
-        .split_whitespace()
-        .next()
-        .unwrap_or("SELECT")
-        .to_uppercase();
+    let command = command_of(&sql);
 
     let promise = JsPromise::new();
     let raw = promise.as_raw();
+    if let Some(config) = pool_turnloop_config(pool_handle) {
+        // `fetch_all` on the pool too, so `rowCount` is the collected row count
+        // exactly as it is today.
+        turnloop_io::pool_query(
+            pool_handle,
+            &config,
+            promise,
+            turnloop_io::Statement {
+                sql,
+                params: Vec::new(),
+                kind: turnloop_io::ResultKind::Rows,
+                command,
+            },
+        );
+        return raw;
+    }
     spawn_blocking(move || {
         let outcome = tokio::runtime::Handle::current().block_on(async move {
             let wrapper = get_handle_mut::<PgPoolHandle>(pool_handle)
@@ -678,6 +889,10 @@ pub unsafe extern "C" fn js_pg_pool_query(pool_handle: Handle, sql_ptr: *const u
 pub extern "C" fn js_pg_pool_end(pool_handle: Handle) -> *mut Promise {
     let promise = JsPromise::new();
     let raw = promise.as_raw();
+    if pool_turnloop_config(pool_handle).is_some() {
+        turnloop_io::pool_end(pool_handle, promise);
+        return raw;
+    }
     spawn_blocking(move || {
         if let Some(mut wrapper) = take_handle::<PgPoolHandle>(pool_handle) {
             tokio::runtime::Handle::current().block_on(async move {

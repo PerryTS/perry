@@ -1,6 +1,13 @@
 //! Native bindings for the npm `mysql2` MySQL client — uses only
-//! perry-ffi. Async via `sqlx::mysql` bridged through
-//! `spawn_blocking + JsPromise + tokio::Handle::current().block_on`.
+//! perry-ffi.
+//!
+//! Since turnloop P7 a connection is **loop-driven state**: one turnloop socket
+//! and a `turnloop_mysql::Connection` sans-I/O core, driven from the event
+//! loop's own completion dispatch (`turnloop_io`). No thread is held at any
+//! point. The legacy `sqlx::mysql` + `spawn_blocking` transport, which borrowed
+//! a tokio blocking-pool thread for every round trip, remains for the clients
+//! that decline: a `worker_threads` agent (no loop of its own) and the
+//! `tokio-wait-driver` A/B arm.
 //!
 //! Mirrors perry-stdlib's existing surface: `Connection` (eager
 //! `createConnection` with TCP timeout + transaction methods),
@@ -26,6 +33,8 @@ use sqlx::{Column, Connection, MySql, Row, TypeInfo};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
+
+mod turnloop_io;
 
 #[cfg(test)]
 mod test_async_shims;
@@ -221,7 +230,7 @@ unsafe fn parse_mysql_config(config: JsValue) -> MySqlConfig {
 
 // ── Result types (thread-safe intermediate) ───────────────────────
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 enum RawValue {
     Null,
     Bool(bool),
@@ -234,13 +243,13 @@ enum RawValue {
     Json(serde_json::Value),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct RawColumnInfo {
     name: String,
     type_name: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct RawRowData {
     values: Vec<(String, RawValue)>,
 }
@@ -698,12 +707,28 @@ fn rejected_params_promise(message: String) -> *mut Promise {
 
 pub struct MysqlConnectionHandle {
     pub connection: Arc<Mutex<Option<MySqlConnection>>>,
+    /// The `perry_db_turnloop` driver id when this connection lives on the
+    /// turnloop transport; `None` for a sqlx connection. Decided once, at
+    /// `createConnection`, and never changed — see `turnloop_io`'s module docs
+    /// for why a client cannot switch transports mid-life.
+    pub(crate) turnloop: Option<i64>,
 }
 
 impl MysqlConnectionHandle {
     pub fn new(conn: MySqlConnection) -> Self {
         Self {
             connection: Arc::new(Mutex::new(Some(conn))),
+            turnloop: None,
+        }
+    }
+
+    /// A connection whose transport is turnloop. The sqlx slot stays empty for
+    /// its whole life, so every entry point branches on `turnloop` before it
+    /// asks `connection_target`.
+    pub(crate) fn on_turnloop(id: i64) -> Self {
+        Self {
+            connection: Arc::new(Mutex::new(None)),
+            turnloop: Some(id),
         }
     }
 }
@@ -921,6 +946,9 @@ pub unsafe extern "C" fn js_mysql2_create_connection(config_f: f64) -> *mut Prom
     ensure_dispatch_registered();
     let config = JsValue::from_bits(config_f.to_bits());
     let mysql_config = parse_mysql_config(config);
+    if turnloop_io::enabled() {
+        return turnloop_io::create_connection(mysql_config);
+    }
     let promise = JsPromise::new();
     let raw = promise.as_raw();
     spawn_blocking(move || {
@@ -950,6 +978,9 @@ pub unsafe extern "C" fn js_mysql2_create_connection(config_f: f64) -> *mut Prom
 
 #[no_mangle]
 pub extern "C" fn js_mysql2_connection_end(conn_handle: Handle) -> *mut Promise {
+    if let Some(promise) = turnloop_io::connection_end(conn_handle) {
+        return promise;
+    }
     let promise = JsPromise::new();
     let raw = promise.as_raw();
     spawn_blocking(move || {
@@ -985,6 +1016,12 @@ unsafe fn run_connection_query(
         Ok(request) => request,
         Err(message) => return rejected_params_promise(message),
     };
+    // Asked before the legacy target is resolved: a turnloop connection has no
+    // sqlx connection behind it, so `connection_target` would call a live one
+    // "Connection already closed".
+    if turnloop_io::owns_connection(conn_handle) {
+        return turnloop_io::connection_request(conn_handle, request);
+    }
     let target = connection_target(conn_handle);
 
     let promise = JsPromise::new();
@@ -1038,6 +1075,9 @@ pub unsafe extern "C" fn js_mysql2_connection_execute(
 }
 
 fn run_simple_command(conn_handle: Handle, sql: &'static str) -> *mut Promise {
+    if turnloop_io::owns_connection(conn_handle) {
+        return turnloop_io::simple_command(conn_handle, sql);
+    }
     let target = connection_target(conn_handle);
     let promise = JsPromise::new();
     let raw = promise.as_raw();
@@ -1106,23 +1146,41 @@ pub extern "C" fn js_mysql2_connection_rollback(conn_handle: Handle) -> *mut Pro
 // ── Pool ──────────────────────────────────────────────────────────
 
 pub struct MysqlPoolHandle {
-    pub pool: MySqlPool,
+    /// `None` for a turnloop pool, whose connections live in
+    /// `turnloop_io::pool`. The handle still exists so the generic dispatch
+    /// tables below keep recognising `pool.query` on an interface-typed
+    /// receiver.
+    pub pool: Option<MySqlPool>,
 }
 
 impl MysqlPoolHandle {
     pub fn new(pool: MySqlPool) -> Self {
-        Self { pool }
+        Self { pool: Some(pool) }
+    }
+
+    pub(crate) fn on_turnloop() -> Self {
+        Self { pool: None }
     }
 }
 
 pub struct MysqlPoolConnectionHandle {
     pub connection: Arc<Mutex<Option<PoolConnection<MySql>>>>,
+    /// `(pool handle, driver id)` when this checkout lives on turnloop.
+    pub(crate) turnloop: Option<(Handle, i64)>,
 }
 
 impl MysqlPoolConnectionHandle {
     pub fn new(conn: PoolConnection<MySql>) -> Self {
         Self {
             connection: Arc::new(Mutex::new(Some(conn))),
+            turnloop: None,
+        }
+    }
+
+    pub(crate) fn on_turnloop(pool: Handle, id: i64) -> Self {
+        Self {
+            connection: Arc::new(Mutex::new(None)),
+            turnloop: Some((pool, id)),
         }
     }
 }
@@ -1141,6 +1199,11 @@ pub unsafe extern "C" fn js_mysql2_create_pool(config_f: f64) -> Handle {
     ensure_dispatch_registered();
     let config = JsValue::from_bits(config_f.to_bits());
     let mysql_config = parse_mysql_config(config);
+    if turnloop_io::enabled() {
+        // Still synchronous and still lazy: no connection is opened here, which
+        // is what mysql2's own `createPool` does.
+        return turnloop_io::pool::create(mysql_config);
+    }
     let url = mysql_config.to_url();
 
     // mysql2's `createPool` is SYNCHRONOUS and does NOT open a connection —
@@ -1418,11 +1481,16 @@ unsafe extern "C" fn js_mysql2_handle_property_dispatch(
 
 #[no_mangle]
 pub extern "C" fn js_mysql2_pool_end(pool_handle: Handle) -> *mut Promise {
+    if let Some(promise) = turnloop_io::pool::end(pool_handle) {
+        return promise;
+    }
     let promise = JsPromise::new();
     let raw = promise.as_raw();
     spawn_blocking(move || {
         if let Some(wrapper) = take_handle::<MysqlPoolHandle>(pool_handle) {
-            tokio::runtime::Handle::current().block_on(wrapper.pool.close());
+            if let Some(pool) = wrapper.pool {
+                tokio::runtime::Handle::current().block_on(pool.close());
+            }
             promise.resolve_undefined();
         } else {
             promise.reject_string("Invalid pool handle");
@@ -1441,7 +1509,11 @@ unsafe fn run_pool_query(
         Ok(request) => request,
         Err(message) => return rejected_params_promise(message),
     };
-    let pool = with_handle::<MysqlPoolHandle, _, _>(pool_handle, |wrapper| wrapper.pool.clone());
+    if turnloop_io::pool::is_turnloop_pool(pool_handle) {
+        return turnloop_io::pool::query(pool_handle, request);
+    }
+    let pool =
+        with_handle::<MysqlPoolHandle, _, _>(pool_handle, |wrapper| wrapper.pool.clone()).flatten();
     let promise = JsPromise::new();
     let raw = promise.as_raw();
 
@@ -1498,7 +1570,11 @@ pub unsafe extern "C" fn js_mysql2_pool_execute(
 
 #[no_mangle]
 pub extern "C" fn js_mysql2_pool_get_connection(pool_handle: Handle) -> *mut Promise {
-    let pool = with_handle::<MysqlPoolHandle, _, _>(pool_handle, |wrapper| wrapper.pool.clone());
+    if let Some(promise) = turnloop_io::pool::get_connection(pool_handle) {
+        return promise;
+    }
+    let pool =
+        with_handle::<MysqlPoolHandle, _, _>(pool_handle, |wrapper| wrapper.pool.clone()).flatten();
     let promise = JsPromise::new();
     let raw = promise.as_raw();
     spawn_blocking(move || {
@@ -1527,6 +1603,9 @@ pub extern "C" fn js_mysql2_pool_get_connection(pool_handle: Handle) -> *mut Pro
 /// underlying `PoolConnection<MySql>` returns to the pool via Drop.
 #[no_mangle]
 pub extern "C" fn js_mysql2_pool_connection_release(conn_handle: Handle) {
+    if turnloop_io::pool_connection_release(conn_handle) {
+        return;
+    }
     if let Some(wrapper) = take_handle::<MysqlPoolConnectionHandle>(conn_handle) {
         // A query already in flight owns another Arc and holds this mutex. Wait
         // for it to finish before dropping the checkout back into the pool.
@@ -1548,6 +1627,9 @@ unsafe fn run_pool_conn_query(
         Ok(request) => request,
         Err(message) => return rejected_params_promise(message),
     };
+    if turnloop_io::owns_connection(conn_handle) {
+        return turnloop_io::connection_request(conn_handle, request);
+    }
     let connection = with_handle::<MysqlPoolConnectionHandle, _, _>(conn_handle, |wrapper| {
         Arc::clone(&wrapper.connection)
     });
@@ -1711,10 +1793,12 @@ mod tests {
         let direct_connection = Arc::new(Mutex::new(None));
         let direct_handle = register_handle(MysqlConnectionHandle {
             connection: Arc::clone(&direct_connection),
+            turnloop: None,
         });
         let pool_connection = Arc::new(Mutex::new(None));
         let pool_handle = register_handle(MysqlPoolConnectionHandle {
             connection: Arc::clone(&pool_connection),
+            turnloop: None,
         });
 
         match connection_target(direct_handle) {

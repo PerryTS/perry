@@ -13,6 +13,11 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 perry-ffi.workspace = true
+perry-db-turnloop.workspace = true
+# The sans-I/O MySQL protocol core. `default-features = false` keeps its own
+# turnloop adapter out: Perry drives it through `perry-db-turnloop`, which owns
+# the socket, the deadline and the completion dispatch.
+turnloop-mysql.workspace = true
 # `mysql-rsa` enables the RSA public-key auth exchange MySQL 8's default
 # `caching_sha2_password` / `sha256_password` need over a NON-TLS connection.
 # Without it every query against such a server fails at connect with

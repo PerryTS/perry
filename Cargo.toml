@@ -10,6 +10,7 @@ members = [
     "crates/perry-dispatch",
     "crates/perry-runtime",
     "crates/perry-ffi",
+    "crates/perry-db-turnloop",
     "crates/perry-native-registration",
     "crates/perry-ext-dotenv",
     "crates/perry-ext-nanoid",
@@ -425,6 +426,19 @@ turnloop-tls = { version = "0.1.0-alpha.3", default-features = false }
 # already uses, so only the transport changes
 # (docs/turnloop/p6-report.md).
 turnloop-smtp = { version = "0.1.0-alpha.3", default-features = false }
+# turnloop P7 (docs/turnloop/p7-report.md): the sans-I/O database protocol
+# cores that replace sqlx, the `redis` crate and the `mongodb` driver on the
+# paths Perry's bindings own. Default features only, for the same reason as the
+# two above — with the `turnloop` feature off these crates depend on neither
+# `turnloop-io` nor `turnloop-tls`, so they are pure protocol state machines and
+# Perry drives them over P1's socket layer. alpha.4 rather than alpha.3 because
+# it is the release that gave MySQL and MongoDB one deflate state per
+# connection, each compressed message framed as its own zlib stream; alpha.3
+# re-created the state per message and is a wire-level regression to adopt.
+turnloop-mysql = { version = "0.1.0-alpha.4", default-features = false }
+turnloop-postgres = { version = "0.1.0-alpha.4", default-features = false }
+turnloop-redis = { version = "0.1.0-alpha.4", default-features = false }
+turnloop-mongodb = { version = "0.1.0-alpha.4", default-features = false }
 hex = "0.4"
 tempfile = "3"
 itoa = "1.0"
@@ -504,6 +518,10 @@ perry-dispatch = { path = "crates/perry-dispatch" }
 # `wasm-host` must stay out of `default`, generalized to all heavy features.
 perry-runtime = { path = "crates/perry-runtime", version = "0.5.1011", default-features = false }
 perry-ffi = { path = "crates/perry-ffi", version = "0.5.1011" }
+# turnloop P7 (docs/turnloop/p7-report.md): the loop-driven transport the four
+# database bindings share. rlib only — it is linked *into* each binding's
+# staticlib, never alongside it, so it exports no symbol of its own.
+perry-db-turnloop = { path = "crates/perry-db-turnloop" }
 perry-native-registration = { path = "crates/perry-native-registration", version = "0.5.1534" }
 perry-ext-dotenv = { path = "crates/perry-ext-dotenv" }
 perry-ext-nanoid = { path = "crates/perry-ext-nanoid" }
