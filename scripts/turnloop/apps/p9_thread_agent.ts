@@ -9,12 +9,12 @@
 // tick and no `js_wait_for_event` anywhere in those thread bodies, so such an
 // agent has no event loop to give a loop to.
 //
-// That is a claim about Rust. This makes it a measurement: the same async
-// work, on the primary agent and inside each of the three `perry/thread`
-// entry points. If a `perry/thread` agent could await, the second and third
-// rows would carry a value; if it cannot, they say what they returned instead.
-// Either way the run distinguishes "P9 did not reach this surface" from "this
-// surface has nothing to reach" — which a green suite cannot.
+// That is a claim about Rust, and the compiler makes it checkable: an `await`
+// anywhere inside a `spawn` closure is a COMPILE ERROR, not a runtime
+// behaviour (`p9_thread_agent_async_refused.ts` is that program). So this file
+// runs the cases that DO compile, and the pair of them distinguishes "P9 did
+// not reach this surface" from "this surface has nothing to reach" — which a
+// green suite cannot.
 import { parallelMap, spawn } from "perry/thread";
 
 const url = process.env.P9_URL ?? "http://127.0.0.1:8099/";
@@ -45,15 +45,13 @@ try {
   console.log(`thread-agent spawn(sync): error:${(e as Error).message}`);
 }
 
-try {
-  const spawnedAsync = await spawn(async () => {
-    const r = await fetch(url);
-    return `status=${r.status}`;
-  });
-  console.log(`thread-agent spawn(async): ${JSON.stringify(spawnedAsync)}`);
-} catch (e) {
-  console.log(`thread-agent spawn(async): error:${(e as Error).message}`);
-}
+// The async case is NOT here, because it does not compile: the compiler
+// refuses an async closure (or any `await`) inside `spawn` outright, citing
+// #6185. `p9_thread_agent_async_refused.ts` is that closure on its own, kept
+// as a file so the claim is checkable rather than quoted -- compile it and
+// read the refusal. That refusal is a stronger statement than any runtime row
+// could be: a `perry/thread` agent cannot await, so it has no event loop, so
+// there is nothing for P9 to give it a loop for.
 
 try {
   const mapped = parallelMap([1, 2, 3, 4], (x: number) => x * x);
