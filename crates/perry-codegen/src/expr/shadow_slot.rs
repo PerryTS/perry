@@ -104,6 +104,9 @@ pub(crate) fn expr_is_known_non_pointer_shadow_value(ctx: &FnCtx<'_>, expr: &Exp
                 object.as_ref(),
                 Expr::LocalGet(arr_id)
                     if super::masked_window_fact_for_index(ctx, *arr_id, index).is_some()
+            ) || matches!(
+                object.as_ref(),
+                Expr::LocalGet(arr_id) if packed_loop_counter_read_is_numeric(ctx, *arr_id, index)
             ) || super::is_proven_u32_view_read(ctx, expr)
         }
         // #6996: a typed-array / Buffer element read is a number (or
@@ -155,6 +158,31 @@ pub(crate) fn expr_is_known_non_pointer_shadow_value(ctx: &FnCtx<'_>, expr: &Exp
             .is_some_and(|last| expr_is_known_non_pointer_shadow_value(ctx, last)),
         _ => false,
     }
+}
+
+/// `arr[i]` at the counter of an ACTIVE packed-numeric loop fact: the same
+/// class of proof the masked-window arm above rests on. The entry guard proved
+/// `arr` is a plain dense raw-f64 (or packed i32/u32) Array, the fast clone it
+/// scopes has no safepoint and no growth (#9379), and the fast condition bounds
+/// the counter by the length read at loop entry — so the slot this reads is a
+/// raw numeric word and the value is a Number, never a heap reference. The fact
+/// is dematerialized before the slow clone is lowered, so this never leaks past
+/// the clone it was proved for.
+///
+/// Restricted to offset 0 on purpose. `arr[i ± c]` is in bounds only under a
+/// range-validated fact, and an out-of-bounds element read consults the
+/// prototype chain — where `Array.prototype[7] = {}` yields a genuine heap
+/// pointer that must stay rooted. The counter read cannot leave the array.
+fn packed_loop_counter_read_is_numeric(ctx: &FnCtx<'_>, arr_id: u32, index: &Expr) -> bool {
+    let Some((idx_id, offset)) = super::packed_f64_loop_index_parts(index) else {
+        return false;
+    };
+    if offset != 0 {
+        return false;
+    }
+    ctx.receiver_descriptors
+        .packed_f64_loop_facts()
+        .any(|fact| fact.array_local_id == arr_id && fact.index_local_id == idx_id)
 }
 
 pub(crate) fn emit_shadow_slot_clear(ctx: &mut FnCtx<'_>, slot_idx: u32) {
