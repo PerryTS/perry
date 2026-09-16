@@ -11,10 +11,15 @@ fn serial() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Give this test thread a loop WITHOUT the process-wide route, so a test that
-/// only exercises the turn cannot race another thread for route ownership.
+/// Give this test thread a loop WITHOUT a route slot, so a test that only
+/// exercises the turn cannot race another thread for its agent's route.
 fn install_unrouted() {
-    let agent = AgentLoop::new(Profile::Wait).expect("create agent loop");
+    let agent = AgentLoop::new(
+        Profile::Wait,
+        crate::agent::current_agent(),
+        Arc::new(AtomicBool::new(false)),
+    )
+    .expect("create agent loop");
     AGENT_LOOP.with(|slot| *slot.borrow_mut() = Some(agent));
     STATE.with(|s| s.set(LoopState::Owner));
 }
@@ -23,12 +28,13 @@ fn stats() -> LoopStats {
     loop_statistics().expect("this thread owns a loop")
 }
 
-/// Claim the primary route on this thread, waiting out a route held by a test
-/// thread that is still finishing.
-fn claim_route() {
+/// Claim the primary agent's route on this thread, waiting out a route held by
+/// a test thread that is still finishing.
+fn take_primary_route() {
     let limit = Instant::now() + Duration::from_secs(10);
     loop {
         STATE.with(|s| s.set(LoopState::Unset));
+        release_route();
         if ensure_loop() {
             return;
         }
@@ -37,12 +43,52 @@ fn claim_route() {
     }
 }
 
-fn route_is_free() -> bool {
-    PRIMARY_ROUTE
-        .notifier
+/// Whether any thread currently speaks for `agent`.
+fn route_taken(agent: crate::agent::AgentId) -> bool {
+    ROUTES
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .is_none()
+        .iter()
+        .any(|route| route.agent == agent)
+}
+
+fn route_is_free() -> bool {
+    !route_taken(crate::agent::PRIMARY_AGENT)
+}
+
+/// The identity of the loop behind `agent`'s route; 0 when the slot is merely
+/// claimed. Two agents whose loops are distinct have distinct ids here.
+fn route_loop_id(agent: crate::agent::AgentId) -> u64 {
+    ROUTES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+        .find(|route| route.agent == agent)
+        .map_or(0, |route| route.loop_id)
+}
+
+/// Spin until `agent`'s owner is blocked inside the OS wait itself, so a wake
+/// has to take the syscall path rather than a pre-park notification bit.
+fn await_parked(agent: crate::agent::AgentId) {
+    let limit = Instant::now() + Duration::from_secs(10);
+    loop {
+        let parked = {
+            let routes = ROUTES.lock().unwrap_or_else(PoisonError::into_inner);
+            routes.iter().any(|route| {
+                route.agent == agent
+                    && route.in_turn.load(Ordering::SeqCst)
+                    && route
+                        .notifier
+                        .as_ref()
+                        .is_some_and(|notifier| notifier.is_parked())
+            })
+        };
+        if parked {
+            return;
+        }
+        assert!(Instant::now() < limit, "owner never parked in its turn");
+        std::thread::yield_now();
+    }
 }
 
 /// DESIGN §10 rule 4a on the host side: with an idle registered socket and a
@@ -128,7 +174,7 @@ fn another_thread_wakes_a_parked_turn_through_js_notify_main_thread() {
     let waits_before = super::super::loop_stats::snapshot();
     let (parked_tx, parked_rx) = mpsc::channel();
     let owner = std::thread::spawn(move || {
-        claim_route();
+        take_primary_route();
         super::super::NOTIFIED.store(false, Ordering::SeqCst);
         let notifier = AGENT_LOOP.with(|slot| slot.borrow().as_ref().unwrap().driver.notifier());
         parked_tx.send(()).unwrap();
@@ -141,23 +187,7 @@ fn another_thread_wakes_a_parked_turn_through_js_notify_main_thread() {
         (park, waited, stats, syscalls)
     });
     parked_rx.recv().unwrap();
-    let limit = Instant::now() + Duration::from_secs(10);
-    // Wait until the owner is blocked in the OS wait itself, so the wake has to
-    // take the syscall path rather than a pre-park notification bit.
-    loop {
-        let parked = PRIMARY_ROUTE.in_turn.load(Ordering::SeqCst)
-            && PRIMARY_ROUTE
-                .notifier
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .as_ref()
-                .is_some_and(|(_, notifier)| notifier.is_parked());
-        if parked {
-            break;
-        }
-        assert!(Instant::now() < limit, "owner never parked in its turn");
-        std::thread::yield_now();
-    }
+    await_parked(crate::agent::PRIMARY_AGENT);
     super::super::js_notify_main_thread();
     let (park, waited, stats, syscalls) = owner.join().unwrap();
     assert_eq!(park, Park::Waited);
@@ -195,7 +225,7 @@ fn a_cross_thread_native_submission_wakes_a_turn_and_is_one_wake_sample() {
     let before = super::super::loop_stats::snapshot();
     let (parked_tx, parked_rx) = mpsc::channel();
     let owner = std::thread::spawn(move || {
-        claim_route();
+        take_primary_route();
         super::super::NOTIFIED.store(false, Ordering::SeqCst);
         parked_tx.send(()).unwrap();
         let start = Instant::now();
@@ -205,21 +235,7 @@ fn a_cross_thread_native_submission_wakes_a_turn_and_is_one_wake_sample() {
         (park, waited)
     });
     parked_rx.recv().unwrap();
-    let limit = Instant::now() + Duration::from_secs(10);
-    loop {
-        let parked = PRIMARY_ROUTE.in_turn.load(Ordering::SeqCst)
-            && PRIMARY_ROUTE
-                .notifier
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .as_ref()
-                .is_some_and(|(_, notifier)| notifier.is_parked());
-        if parked {
-            break;
-        }
-        assert!(Instant::now() < limit, "owner never parked in its turn");
-        std::thread::yield_now();
-    }
+    await_parked(crate::agent::PRIMARY_AGENT);
     super::super::js_native_work_submitted();
     let (park, waited) = owner.join().unwrap();
     assert_eq!(park, Park::Waited);
@@ -247,7 +263,7 @@ fn a_cross_thread_native_submission_wakes_a_turn_and_is_one_wake_sample() {
 fn install_shutdown_and_thread_exit_release_the_loop_and_route() {
     let _g = serial();
     std::thread::spawn(|| {
-        claim_route();
+        take_primary_route();
         assert!(eligible());
         assert!(loop_statistics().is_some());
         assert!(!route_is_free());
@@ -260,22 +276,149 @@ fn install_shutdown_and_thread_exit_release_the_loop_and_route() {
     })
     .join()
     .unwrap();
-    std::thread::spawn(claim_route).join().unwrap();
+    std::thread::spawn(take_primary_route).join().unwrap();
     assert!(route_is_free(), "thread exit kept the route");
 }
 
-/// Worker agents have no loop in P0 and keep the legacy park.
+/// turnloop P9: a worker agent gets a loop of its own, and the two predicates
+/// that decide whether a submission is accepted agree with each other.
+///
+/// `net_available()` and `ensure_loop_with()` disagreeing is the class
+/// `c13372cc70` fixed from the other side — a `worker_threads` Worker's
+/// `fetch()` was accepted by the submit guard and refused a moment later, so
+/// it failed after acceptance instead of falling back. Asserting them together
+/// on the same thread is what keeps that closed.
 #[test]
-fn worker_agents_are_declined() {
+fn a_worker_agent_gets_its_own_loop() {
     std::thread::spawn(|| {
         let agent = crate::agent::enter_worker_agent();
-        assert!(!eligible());
-        assert!(!ensure_loop());
-        assert!(loop_statistics().is_none());
+        assert_ne!(agent, crate::agent::PRIMARY_AGENT);
+        assert!(
+            net_available(),
+            "a worker agent must be able to take the turnloop net path"
+        );
+        assert!(eligible(), "a worker agent must be able to park precisely");
+        assert!(
+            ensure_loop(),
+            "net_available() promised a loop it cannot get"
+        );
+        assert!(loop_statistics().is_some());
+        assert!(route_taken(agent), "the worker claimed no route");
+        // The teardown a worker agent actually takes.
         crate::agent::retire_agent(agent);
+        assert!(
+            !route_taken(agent),
+            "retiring the agent left its route installed"
+        );
+        assert!(loop_statistics().is_none(), "retire kept the loop");
+        assert!(!net_available(), "a retired agent must not re-arm");
     })
     .join()
     .unwrap();
+}
+
+/// Two worker agents get two independent loops, and neither takes the
+/// primary agent's route.
+#[test]
+fn sibling_worker_agents_do_not_share_a_loop() {
+    let _g = serial();
+    let before = routed_agents();
+    let (a_tx, a_rx) = mpsc::channel();
+    let (go_tx, go_rx) = mpsc::channel::<()>();
+    let a = std::thread::spawn(move || {
+        let agent = crate::agent::enter_worker_agent();
+        assert!(ensure_loop());
+        let loop_id = route_loop_id(agent);
+        assert_ne!(loop_id, 0, "no endpoint published for this agent");
+        a_tx.send((agent, loop_id)).unwrap();
+        // Hold the loop until the sibling has built its own, so both exist at
+        // once — a sequential pair would pass even with one shared route.
+        go_rx.recv().unwrap();
+        crate::agent::retire_agent(agent);
+    });
+    let (a_agent, a_loop) = a_rx.recv().unwrap();
+    let b = std::thread::spawn(move || {
+        let agent = crate::agent::enter_worker_agent();
+        assert!(ensure_loop());
+        let loop_id = route_loop_id(agent);
+        assert_ne!(loop_id, 0, "no endpoint published for this agent");
+        crate::agent::retire_agent(agent);
+        (agent, loop_id)
+    });
+    let (b_agent, b_loop) = b.join().unwrap();
+    go_tx.send(()).unwrap();
+    a.join().unwrap();
+    assert_ne!(a_agent, b_agent);
+    assert_ne!(a_loop, b_loop, "two agents shared one loop");
+    assert_eq!(
+        routed_agents(),
+        before,
+        "retired worker agents leaked route slots"
+    );
+}
+
+/// A second thread acting for an agent that already has an owner keeps the
+/// legacy park. This is the Android shape — `perry-native` runs the JS and
+/// owns the loop, the UI thread pumps on its behalf — and it must stay
+/// exactly one owner per agent.
+#[test]
+fn a_second_thread_of_the_same_agent_is_declined() {
+    let _g = serial();
+    let (owned_tx, owned_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel::<()>();
+    let owner = std::thread::spawn(move || {
+        let agent = crate::agent::enter_worker_agent();
+        assert!(ensure_loop());
+        owned_tx.send(agent).unwrap();
+        done_rx.recv().unwrap();
+        crate::agent::retire_agent(agent);
+    });
+    let agent = owned_rx.recv().unwrap();
+    std::thread::spawn(move || {
+        // Same agent id, different thread: a pump, not an owner.
+        crate::agent::enter_agent_for_test(agent);
+        assert!(!net_available(), "two threads claimed one agent's loop");
+        assert!(!eligible());
+        assert!(!ensure_loop());
+        assert!(loop_statistics().is_none());
+    })
+    .join()
+    .unwrap();
+    done_tx.send(()).unwrap();
+    owner.join().unwrap();
+}
+
+/// `js_notify_main_thread` is a broadcast: a Worker parked in its OWN turn has
+/// to be woken by it, or a `postMessage`-driven resolution leaves that agent
+/// asleep — a hang, not an error.
+#[test]
+fn a_notify_wakes_a_parked_worker_agent() {
+    let _g = serial();
+    let (parked_tx, parked_rx) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let agent = crate::agent::enter_worker_agent();
+        assert!(ensure_loop());
+        super::super::NOTIFIED.store(false, Ordering::SeqCst);
+        parked_tx.send(agent).unwrap();
+        let start = Instant::now();
+        let park = park_until(start + Duration::from_secs(30));
+        let waited = start.elapsed();
+        let stats = stats();
+        crate::agent::retire_agent(agent);
+        (park, waited, stats)
+    });
+    let agent = parked_rx.recv().unwrap();
+    await_parked(agent);
+    super::super::js_notify_main_thread();
+    let (park, waited, stats) = worker.join().unwrap();
+    assert_eq!(park, Park::Waited);
+    assert!(
+        waited < Duration::from_secs(10),
+        "a parked worker agent missed the wake: waited {waited:?}"
+    );
+    assert_eq!(stats.turns, 1, "{stats:?}");
+    assert_eq!(stats.os_waits, 1, "{stats:?}");
+    super::super::NOTIFIED.store(false, Ordering::SeqCst);
 }
 
 /// `fast()` turns only when turnloop has outstanding work: no OS call while
@@ -343,7 +486,7 @@ fn native_work_visible_before_the_turn_skips_the_wait() {
 fn js_wait_for_event_reaches_a_timer_deadline_in_at_most_two_turns() {
     let _g = serial();
     std::thread::spawn(|| {
-        claim_route();
+        take_primary_route();
         let mut clean = false;
         for _attempt in 0..20 {
             crate::timer::js_timer_tick();
@@ -402,7 +545,7 @@ fn native_work_in_flight_is_counted_as_a_tokio_tick_not_a_turn() {
         TICKS.fetch_add(1, Ordering::SeqCst);
     }
 
-    claim_route();
+    take_primary_route();
     super::super::NOTIFIED.store(false, Ordering::SeqCst);
     super::super::js_register_wait_driver(Some(counting_tick), None, None);
     super::super::js_register_native_inflight(Some(always_inflight));

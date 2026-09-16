@@ -312,6 +312,31 @@ def compile_app(arm, out, work, dry_run):
     return binary
 
 
+def pick_marker(stderr_text, needle, startswith=False):
+    """The PRIMARY agent's marker line, not merely the first one.
+
+    turnloop P9 gave every JS agent its own loop, so a program with a
+    `worker_threads` Worker prints one `[perry-loop] driver=turnloop ... agent=N`
+    line per agent that owned one -- and a worker retires DURING the program
+    while the primary retires at exit, so the worker's line comes first. The
+    arm marker has to be the primary agent's or a multi-agent app would have its
+    sample described by a worker's counters.
+
+    `agent=` is absent on any build that predates P9, and on those the first
+    match is the only match, so the fallback is exactly the old behaviour.
+    """
+    matches = [
+        line for line in stderr_text.splitlines()
+        if (line.startswith(needle) if startswith else needle in line)
+    ]
+    if not matches:
+        return None
+    for line in matches:
+        if line.endswith(" agent=0") or " agent=0 " in line:
+            return line
+    return matches[0]
+
+
 def verify_marker(arm, binary):
     logdir = Path(tempfile.mkdtemp(prefix="server-ab-verify-"))
     server = Server(binary, free_port(), logdir)
@@ -342,7 +367,12 @@ def verify_marker(arm, binary):
     waits = server.waits()
     if waits.get("arm") != ARM_WAITS[arm]:
         raise SystemExit(f"{arm}: wait metrics line missing or wrong arm: {waits}")
-    marker_line = next(line for line in server.stderr_text.splitlines() if ARM_MARKER[arm] in line)
+    marker_line = pick_marker(server.stderr_text, ARM_MARKER[arm])
+    if marker_line is None:
+        # Unreachable: the substring check above already proved a match exists.
+        # Explicit anyway, because `pick_marker` returning None where `next(...)`
+        # used to raise is exactly how a verification turns into a log line.
+        raise SystemExit(f"{arm}: marker present but not selectable; stderr={server.stderr_text!r}")
     log(f"verified {arm}: {marker_line}")
     return marker_line
 
@@ -470,10 +500,7 @@ class Server:
         return out
 
     def marker(self):
-        for line in self.stderr_text.splitlines():
-            if line.startswith("[perry-loop] driver="):
-                return line
-        return None
+        return pick_marker(self.stderr_text, "[perry-loop] driver=", startswith=True)
 
 
 def proc_sample(pid):

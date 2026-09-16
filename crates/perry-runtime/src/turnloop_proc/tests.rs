@@ -419,3 +419,62 @@ fn a_failed_send_names_the_caller_token_and_nodes_error_code() {
         "with Node's code for an oversized datagram"
     );
 }
+
+/// turnloop P9: two agents' ids are disjoint by construction.
+///
+/// The entry tables are thread-local, so before P9 — one loop, one minter — a
+/// per-thread counter from 1 was enough. Now every JS agent can own a loop,
+/// and two agents counting from 1 would both own an id `1`: same-thread
+/// lookups would each find their own entry, and a lookup that crossed agents
+/// would find the *wrong* entry rather than none. Banding the id by agent
+/// turns that silent misroute into a guaranteed miss, which the caller sees as
+/// an error.
+///
+/// Asserted rather than commented, because the property is invisible in normal
+/// operation — it only shows up the one time something crosses.
+#[test]
+fn agent_id_bands_do_not_overlap() {
+    fn mint_three() -> Vec<u64> {
+        PROC.with(|state| {
+            let mut state = state.borrow_mut();
+            (0..3).map(|_| mint_id(&mut state)).collect()
+        })
+    }
+
+    // The primary agent keeps the band it always had, so nothing about a
+    // single-agent program moves.
+    let primary = std::thread::spawn(mint_three).join().unwrap();
+    assert_eq!(primary, vec![1, 2, 3], "the primary agent's ids moved");
+
+    let (a, b) = (
+        std::thread::spawn(|| {
+            let id = crate::agent::enter_worker_agent();
+            let ids = mint_three();
+            crate::agent::retire_agent(id);
+            ids
+        })
+        .join()
+        .unwrap(),
+        std::thread::spawn(|| {
+            let id = crate::agent::enter_worker_agent();
+            let ids = mint_three();
+            crate::agent::retire_agent(id);
+            ids
+        })
+        .join()
+        .unwrap(),
+    );
+
+    for ids in [&a, &b] {
+        for id in ids {
+            assert!(*id > 0 && *id <= ID_MASK, "id {id} left the token field");
+        }
+    }
+    for id in &a {
+        assert!(!b.contains(id), "id {id} was minted by two agents");
+        assert!(
+            !primary.contains(id),
+            "id {id} collides with the primary agent"
+        );
+    }
+}

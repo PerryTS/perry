@@ -93,6 +93,38 @@ const OP_SIGNAL: u64 = 0x16;
 const ID_BITS: u32 = 56;
 const ID_MASK: u64 = (1 << ID_BITS) - 1;
 
+/// Bits of the 56-bit token id reserved for the minting agent.
+///
+/// The tables that hold these ids are thread-local, so before P9 — when only
+/// the primary agent could own a loop — a plain per-thread counter was enough:
+/// there was one minter. Now every JS agent can own a loop, and two agents
+/// counting from 1 would both own an id `1`. That is harmless while every
+/// lookup is same-thread (each finds its own entry), and a **silent misroute**
+/// the moment one is not.
+///
+/// So the id carries its agent: agent N mints from `(N & 0xFFFF) << ID_AGENT_SHIFT`,
+/// leaving each agent 2^40 ids inside the 56-bit field. A foreign id then MISSES
+/// the table rather than aliasing an entry, which turns a misroute into an
+/// error the caller can see. The primary agent is unchanged (band 0, ids from
+/// 1), so nothing about a single-agent program moves.
+const ID_AGENT_SHIFT: u32 = 40;
+const ID_AGENT_MASK: u64 = 0xFFFF;
+
+/// The first id this agent may mint, minus one.
+fn agent_id_band() -> u64 {
+    (crate::agent::current_agent() & ID_AGENT_MASK) << ID_AGENT_SHIFT
+}
+
+/// Take the next id for this thread's agent, seeding the band on first use.
+fn mint_id(state: &mut ProcState) -> u64 {
+    if state.next_id == 0 {
+        state.next_id = agent_id_band();
+    }
+    state.next_id += 1;
+    debug_assert!(state.next_id <= ID_MASK, "agent id band overflowed a token");
+    state.next_id
+}
+
 fn token(op: u64, id: u64) -> Token {
     debug_assert!(id > 0 && id <= ID_MASK, "id {id} fits a token");
     debug_assert!((CLASS_MIN..=CLASS_MAX).contains(&op), "class {op} is P2's");
@@ -194,10 +226,11 @@ pub fn live_handles() -> usize {
 
 /// Whether this thread can take the turnloop P2 path at all.
 ///
-/// False on a worker agent (no loop before P3/P4), in the `tokio-wait-driver`
-/// A/B arm, and on a host where loop creation failed. A caller that gets
-/// `false` keeps its existing thread-backed transport — the P1 coexistence
-/// rule, unchanged.
+/// True on every thread that runs a JS agent's event loop, since turnloop P9
+/// gave every agent a loop. False in the `tokio-wait-driver` A/B arm, on a host
+/// where loop creation failed, and on a second thread acting for an agent
+/// another thread already owns. A caller that gets `false` keeps its existing
+/// thread-backed transport — the P1 coexistence rule, unchanged.
 pub fn available() -> bool {
     crate::event_pump::net_loop_available()
 }
@@ -265,8 +298,7 @@ fn insert(handle: Handle, owner: Owner) -> u64 {
     ADOPTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     PROC.with(|state| {
         let mut state = state.borrow_mut();
-        state.next_id += 1;
-        let id = state.next_id;
+        let id = mint_id(&mut state);
         state.entries.insert(id, Entry::new(handle, owner));
         id
     })
@@ -368,11 +400,7 @@ pub(crate) fn send_to(
 /// completion would then release the new entry instead of the old one.
 pub(crate) fn signal_start(signal: turnloop::Signal, owner: Owner) -> ProcResult<u64> {
     with_driver(|driver| {
-        let id = PROC.with(|state| {
-            let mut state = state.borrow_mut();
-            state.next_id += 1;
-            state.next_id
-        });
+        let id = PROC.with(|state| mint_id(&mut state.borrow_mut()));
         let handle = driver
             .signal_start(signal, token(OP_SIGNAL, id))
             .map_err(|e| map_error(e, "sigaction"))?;
