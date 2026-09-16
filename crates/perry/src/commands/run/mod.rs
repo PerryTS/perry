@@ -169,8 +169,7 @@ pub fn run(args: RunArgs, format: OutputFormat, use_color: bool, verbose: u8) ->
 
     if use_remote {
         let target_str = target.as_deref().unwrap_or("native");
-        let rt = tokio::runtime::Runtime::new()?;
-        let result = rt.block_on(remote_build_and_launch(
+        return remote_build_and_launch(
             &input,
             target_str,
             device_udid.as_deref(),
@@ -178,8 +177,7 @@ pub fn run(args: RunArgs, format: OutputFormat, use_color: bool, verbose: u8) ->
             args.enable_geisterhand || args.geisterhand_port.is_some(),
             args.geisterhand_port,
             format,
-        ));
-        return result;
+        );
     }
 
     // Read app metadata from perry.toml / package.json
@@ -261,13 +259,7 @@ pub fn run(args: RunArgs, format: OutputFormat, use_color: bool, verbose: u8) ->
     if matches!(target.as_deref(), Some("ios") | Some("visionos")) {
         if let Some(udid) = device_udid.as_deref() {
             let config = super::publish::load_config();
-            let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(resign_for_development(
-                &result.output_path,
-                &config,
-                udid,
-                format,
-            ))?;
+            resign_for_development(&result.output_path, &config, udid, format)?;
         }
     }
 

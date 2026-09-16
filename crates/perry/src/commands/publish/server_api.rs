@@ -218,3 +218,23 @@ pub(super) struct CredentialsPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) gcloud_service_account_base64: Option<String>,
 }
+
+/// Claim an anonymous licence key from the hub.
+///
+/// Lives here rather than in `mod.rs` because it is a self-contained hub call
+/// with no publish state, and `mod.rs` is at the 2000-line cap.
+pub(crate) fn auto_register_license(server_url: &str) -> Result<String> {
+    let client = perry_http_client::Client::new();
+    let resp = client
+        .execute(
+            perry_http_client::Request::post(format!("{server_url}/api/v1/license/register"))
+                .json_body("{}".into()),
+        )
+        .context("Failed to register license")?;
+    if !resp.is_success() {
+        let body = resp.text();
+        bail!("License registration failed: {body}");
+    }
+    let reg: RegisterResponse = serde_json::from_slice(&resp.body)?;
+    Ok(reg.license_key)
+}

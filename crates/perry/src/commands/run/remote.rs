@@ -2,8 +2,14 @@
 
 use super::*;
 
-/// Build remotely via Perry Hub and launch the result
-pub async fn remote_build_and_launch(
+/// Build remotely via Perry Hub and launch the result.
+///
+/// Synchronous since P11: the HTTP upload, the artifact download and the
+/// progress WebSocket all run on `perry_http_client`, which owns a
+/// `turnloop::Loop` per connection and turns it to completion. There is no JS
+/// event loop on this thread and nothing else for it to do while the build
+/// runs, so a runtime bought nothing.
+pub fn remote_build_and_launch(
     input: &Path,
     target: &str,
     device_udid: Option<&str>,
@@ -16,12 +22,11 @@ pub async fn remote_build_and_launch(
         auto_register_license, create_project_tarball_with_filters, load_config, save_config,
     };
     use base64::Engine;
-    use futures_util::{SinkExt, StreamExt};
     use indicatif::{ProgressBar, ProgressStyle};
-    use reqwest::multipart;
+    use perry_http_client::ws::Message;
+    use perry_http_client::{Form, Request, WebSocket};
     use serde::Deserialize;
     use std::io::Write;
-    use tokio_tungstenite::tungstenite::Message;
 
     let project_dir = input
         .parent()
@@ -45,7 +50,7 @@ pub async fn remote_build_and_launch(
             if let OutputFormat::Text = format {
                 println!("  Registering with Perry Hub...");
             }
-            let key = auto_register_license(&server_url).await?;
+            let key = auto_register_license(&server_url)?;
             config.license_key = Some(key.clone());
             save_config(&config)?;
             key
@@ -159,24 +164,22 @@ pub async fn remote_build_and_launch(
 
     let tarball_b64 = base64::engine::general_purpose::STANDARD.encode(&tarball);
 
-    let client = reqwest::Client::new();
-    let form = multipart::Form::new()
+    // `reqwest::Client::new()` had no timeout here and a remote build upload is
+    // a whole project tarball, so the budget is generous rather than default.
+    let client = perry_http_client::Client::with_timeout(std::time::Duration::from_secs(900));
+    let form = Form::new()
         .text("license_key", license_key)
         .text("manifest", serde_json::to_string(&manifest)?)
-        .text("credentials", serde_json::to_string(&credentials)?);
-
-    let form = form.text("tarball_b64", tarball_b64);
+        .text("credentials", serde_json::to_string(&credentials)?)
+        .text("tarball_b64", tarball_b64);
 
     let resp = client
-        .post(format!("{server_url}/api/v1/build"))
-        .multipart(form)
-        .send()
-        .await
+        .post_form(&format!("{server_url}/api/v1/build"), form)
         .context("Failed to connect to build server")?;
 
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
+    if !resp.is_success() {
+        let status = resp.status;
+        let body = resp.text();
         bail!("Build server returned {status}: {body}");
     }
 
@@ -187,7 +190,8 @@ pub async fn remote_build_and_launch(
         position: usize,
     }
 
-    let build_resp: BuildResponse = resp.json().await.context("Invalid build response")?;
+    let build_resp: BuildResponse =
+        serde_json::from_slice(&resp.body).context("Invalid build response")?;
 
     if let OutputFormat::Text = format {
         println!(" {}", style("done").green());
@@ -216,18 +220,26 @@ pub async fn remote_build_and_launch(
             )
         };
 
-    let (ws_stream, _) = tokio_tungstenite::connect_async(&ws_url)
-        .await
+    // A remote build can queue for a long time before the first frame, so the
+    // per-message read budget is the same 15 minutes the upload gets. The
+    // connect itself is bounded separately and much tighter.
+    //
+    // This IS a behaviour change and it is the drift worth knowing about: the
+    // async stream waited forever, so a hub that went quiet mid-build hung the
+    // command; it now fails after 15 minutes of silence, and — unlike
+    // `perry publish`, which has a `reconnect_or_bail!` loop — there is no
+    // reconnect here to fall back on. Both shapes are bad; which is worse is a
+    // product call, and this one at least terminates. See
+    // docs/turnloop/p11-report.md, "Behaviour changes".
+    let ws_read_timeout = std::time::Duration::from_secs(900);
+    let mut ws = WebSocket::connect(&ws_url, std::time::Duration::from_secs(30))
         .context("Failed to connect WebSocket")?;
 
-    let (mut ws_write, mut read) = ws_stream.split();
-
-    ws_write
-        .send(Message::Text(
-            format!(r#"{{"type":"subscribe","job_id":"{}"}}"#, build_resp.job_id).into(),
-        ))
-        .await
-        .context("Failed to send subscribe message")?;
+    ws.send_text(
+        &format!(r#"{{"type":"subscribe","job_id":"{}"}}"#, build_resp.job_id),
+        std::time::Duration::from_secs(30),
+    )
+    .context("Failed to send subscribe message")?;
 
     let pb = if let OutputFormat::Text = format {
         let pb = ProgressBar::new(100);
@@ -291,9 +303,12 @@ pub async fn remote_build_and_launch(
     let mut artifact_name: Option<String> = None;
     let mut build_success = false;
 
-    while let Some(msg) = read.next().await {
-        let msg = match msg {
-            Ok(m) => m,
+    loop {
+        let msg = match ws.read_message(ws_read_timeout) {
+            Ok(Some(m)) => m,
+            // `None` is the peer closing — the same thing `Message::Close`
+            // meant before, and the same thing the stream ending meant.
+            Ok(None) => break,
             Err(e) => {
                 if let Some(ref pb) = pb {
                     pb.abandon_with_message(format!("WebSocket error: {e}"));
@@ -305,7 +320,7 @@ pub async fn remote_build_and_launch(
         let text = match msg {
             Message::Text(t) => t,
             Message::Close(_) => break,
-            _ => continue,
+            Message::Binary(_) => continue,
         };
 
         let server_msg: ServerMsg = match serde_json::from_str(&text) {
@@ -399,17 +414,21 @@ pub async fn remote_build_and_launch(
         } else {
             format!("{server_url}{url}")
         };
+        // The artifact is buffered rather than streamed, exactly as before —
+        // the base64 sniff below needs the whole body anyway. The default
+        // 32 MiB ceiling would refuse a real app bundle, so it is raised here
+        // rather than in the default.
         let resp = client
-            .get(&full_url)
-            .send()
-            .await
+            .clone()
+            .max_body(2 * 1024 * 1024 * 1024)
+            .execute(Request::get(&full_url))
             .context("Failed to download artifact")?;
 
-        if !resp.status().is_success() {
-            bail!("Download failed: {}", resp.status());
+        if !resp.is_success() {
+            bail!("Download failed: {}", resp.status);
         }
 
-        let bytes = resp.bytes().await?;
+        let bytes = resp.body;
         // Detect base64-encoded content
         let data = if bytes.len() > 4
             && bytes.iter().all(|&b| {
@@ -422,9 +441,9 @@ pub async fn remote_build_and_launch(
             }) {
             base64::engine::general_purpose::STANDARD
                 .decode(&bytes)
-                .unwrap_or_else(|_| bytes.to_vec())
+                .unwrap_or(bytes)
         } else {
-            bytes.to_vec()
+            bytes
         };
         std::fs::write(&dest, &data)?;
     }
@@ -457,7 +476,7 @@ pub async fn remote_build_and_launch(
         // For device builds, re-sign with a local development identity
         // (the hub may have signed with a distribution profile)
         if target == "ios" || target == "visionos" {
-            resign_for_development(&app_dir, &config, udid, format).await?;
+            resign_for_development(&app_dir, &config, udid, format)?;
         }
 
         if target == "ios-simulator" || target == "visionos-simulator" {

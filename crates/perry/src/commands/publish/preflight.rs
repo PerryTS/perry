@@ -2,7 +2,7 @@ use super::*;
 
 /// Run the security audit step before building. Extracted from `run_async`
 /// (line ~549) so the runner stays under the file-size cap.
-pub(super) async fn run_security_audit_step(
+pub(super) fn run_security_audit_step(
     args: &PublishArgs,
     project_dir: &Path,
     config: &PerryToml,
@@ -66,9 +66,7 @@ pub(super) async fn run_security_audit_step(
             &audit_fail_on,
             false,
             format,
-        )
-        .await
-        {
+        ) {
             Ok(_) => {}
             Err(e) => {
                 bail!("{}\n  Use {} to bypass.", e, style("--skip-audit").yellow());

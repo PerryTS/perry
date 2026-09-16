@@ -260,14 +260,12 @@ fn send_event_blocking(event: &str, dims: &[(String, String)], client_id: &str) 
         return;
     }
 
-    let client = match reqwest::blocking::Client::builder()
-        .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(REQUEST_TIMEOUT)
-        .build()
-    {
-        Ok(c) => c,
-        Err(_) => return,
-    };
+    // One whole-request budget rather than reqwest's separate connect and
+    // request timeouts: `perry_http_client` measures the connect against the
+    // same window, so their SUM is the bound that cannot reject something the
+    // old pair accepted. Telemetry is fire-and-forget on a background thread,
+    // so being generous here costs nothing a user can observe.
+    let client = perry_http_client::Client::with_timeout(CONNECT_TIMEOUT + REQUEST_TIMEOUT);
 
     let mut dims_obj = serde_json::Map::new();
     for (k, v) in dims.iter().take(4) {
@@ -279,13 +277,12 @@ fn send_event_blocking(event: &str, dims: &[(String, String)], client_id: &str) 
         "dims": dims_obj,
     });
 
-    let _ = client
-        .post(CHIRP_URL)
-        .header("Content-Type", "application/json")
-        .header("X-Chirp-Key", CHIRP_KEY)
-        .header("X-Chirp-Client", client_id)
-        .json(&body)
-        .send();
+    let _ = client.execute(
+        perry_http_client::Request::post(CHIRP_URL)
+            .header("x-chirp-key", CHIRP_KEY)
+            .header("x-chirp-client", client_id)
+            .json_body(body.to_string()),
+    );
 }
 
 #[cfg(test)]

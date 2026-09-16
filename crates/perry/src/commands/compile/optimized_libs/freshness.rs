@@ -746,10 +746,14 @@ pub(crate) fn binding_needs_shared_tokio(module: &str) -> bool {
         | "http"
         | "https"
         | "http2"
-        // HTTP clients (reqwest, hyper)
+        // `axios`'s wrapper has had no tokio dependency since P11 — it speaks
+        // HTTP through `perry-http-client` — but it stays here for the same
+        // reason `undici` does: this predicate is also what makes the driver
+        // auto-build the wrapper's archive in the SAME cargo invocation as the
+        // runtime, which perry-ffi's shims require whatever the transport is.
+        // `node-fetch` and `fetch` were listed beside it and are gone: they
+        // have no wrapper crate any more, so this is never asked about them.
         | "axios"
-        | "node-fetch"
-        | "fetch"
         // undici — glue over the native fetch stack (network I/O family).
         // The wrapper itself has no tokio dep today, but it rides the
         // shared build so the driver auto-builds its archive alongside

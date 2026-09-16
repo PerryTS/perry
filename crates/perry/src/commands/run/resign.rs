@@ -1,5 +1,7 @@
 //! iOS development re-signing (local + App Store Connect provisioning).
 
+use perry_http_client::{Client, Request};
+
 use super::*;
 
 /// Re-sign an .app bundle for development device installs.
@@ -7,7 +9,10 @@ use super::*;
 /// Searches for an existing dev provisioning profile, or creates one via
 /// the App Store Connect API (registers device, creates App ID + profile).
 /// Then re-signs with a local Apple Development identity.
-pub async fn resign_for_development(
+///
+/// Synchronous: the App Store Connect calls underneath are blocking now, so
+/// there is no future left to await.
+pub fn resign_for_development(
     app_dir: &Path,
     config: &super::super::publish::PerryConfig,
     device_udid: &str,
@@ -64,7 +69,6 @@ pub async fn resign_for_development(
             push,
             format,
         )
-        .await
         .context(
             "Could not create development provisioning profile.\n\
                  Ensure your App Store Connect API key has the right permissions,\n\
@@ -316,7 +320,10 @@ pub fn find_system_dev_profile(bundle_id: &str, team_id: &str) -> Option<PathBuf
 ///
 /// Steps: generate JWT → register device → find/create App ID → find dev cert →
 /// create profile → download profile content
-pub async fn create_dev_profile_via_api(
+///
+/// Synchronous: every call below is a blocking request, so the caller no
+/// longer needs a runtime to drive it.
+pub fn create_dev_profile_via_api(
     config: &super::super::publish::PerryConfig,
     bundle_id: &str,
     _team_id: &str,
@@ -347,7 +354,9 @@ pub async fn create_dev_profile_via_api(
     // Generate JWT for App Store Connect API
     let token = generate_asc_jwt(key_id, issuer_id, &p8_key)?;
 
-    let client = reqwest::Client::new();
+    // The async reqwest client had no timeout; the default 120 s
+    // whole-request budget is the new bound on each call below.
+    let client = Client::new();
     let base = "https://api.appstoreconnect.apple.com/v1";
 
     // 1. Register the device (ignore error if already registered)
@@ -359,21 +368,23 @@ pub async fn create_dev_profile_via_api(
         "Perry Dev Device {}",
         &device_udid[..8.min(device_udid.len())]
     );
-    let _ = client
-        .post(format!("{base}/devices"))
-        .bearer_auth(&token)
-        .json(&serde_json::json!({
-            "data": {
-                "type": "devices",
-                "attributes": {
-                    "name": device_name,
-                    "platform": "IOS",
-                    "udid": device_udid
-                }
-            }
-        }))
-        .send()
-        .await;
+    let _ = client.execute(
+        Request::post(&format!("{base}/devices"))
+            .bearer(&token)
+            .json_body(
+                serde_json::json!({
+                    "data": {
+                        "type": "devices",
+                        "attributes": {
+                            "name": device_name,
+                            "platform": "IOS",
+                            "udid": device_udid
+                        }
+                    }
+                })
+                .to_string(),
+            ),
+    );
     if let OutputFormat::Text = format {
         println!(" done");
     }
@@ -384,13 +395,13 @@ pub async fn create_dev_profile_via_api(
         std::io::Write::flush(&mut std::io::stdout()).ok();
     }
     let resp = client
-        .get(format!("{base}/bundleIds"))
-        .bearer_auth(&token)
-        .query(&[("filter[identifier]", bundle_id)])
-        .send()
-        .await
+        .execute(
+            Request::get(&format!("{base}/bundleIds"))
+                .bearer(&token)
+                .query(&[("filter[identifier]", bundle_id)]),
+        )
         .context("Failed to query bundleIds")?;
-    let body: serde_json::Value = resp.json().await?;
+    let body: serde_json::Value = serde_json::from_slice(&resp.body)?;
 
     let bundle_id_resource_id = if let Some(first) = body["data"].as_array().and_then(|a| a.first())
     {
@@ -399,22 +410,25 @@ pub async fn create_dev_profile_via_api(
         // Create App ID
         let app_name = bundle_id.split('.').next_back().unwrap_or("app");
         let resp = client
-            .post(format!("{base}/bundleIds"))
-            .bearer_auth(&token)
-            .json(&serde_json::json!({
-                "data": {
-                    "type": "bundleIds",
-                    "attributes": {
-                        "identifier": bundle_id,
-                        "name": format!("Perry {app_name}"),
-                        "platform": "IOS"
-                    }
-                }
-            }))
-            .send()
-            .await
+            .execute(
+                Request::post(&format!("{base}/bundleIds"))
+                    .bearer(&token)
+                    .json_body(
+                        serde_json::json!({
+                            "data": {
+                                "type": "bundleIds",
+                                "attributes": {
+                                    "identifier": bundle_id,
+                                    "name": format!("Perry {app_name}"),
+                                    "platform": "IOS"
+                                }
+                            }
+                        })
+                        .to_string(),
+                    ),
+            )
             .context("Failed to create bundleId")?;
-        let body: serde_json::Value = resp.json().await?;
+        let body: serde_json::Value = serde_json::from_slice(&resp.body)?;
         body["data"]["id"].as_str().unwrap_or("").to_string()
     };
     if bundle_id_resource_id.is_empty() {
@@ -438,25 +452,27 @@ pub async fn create_dev_profile_via_api(
             print!("    Enabling App Groups capability...");
             std::io::Write::flush(&mut std::io::stdout()).ok();
         }
-        let resp = client
-            .post(format!("{base}/bundleIdCapabilities"))
-            .bearer_auth(&token)
-            .json(&serde_json::json!({
-                "data": {
-                    "type": "bundleIdCapabilities",
-                    "attributes": { "capabilityType": "APP_GROUPS" },
-                    "relationships": {
-                        "bundleId": {
-                            "data": { "type": "bundleIds", "id": bundle_id_resource_id }
+        let resp = client.execute(
+            Request::post(&format!("{base}/bundleIdCapabilities"))
+                .bearer(&token)
+                .json_body(
+                    serde_json::json!({
+                        "data": {
+                            "type": "bundleIdCapabilities",
+                            "attributes": { "capabilityType": "APP_GROUPS" },
+                            "relationships": {
+                                "bundleId": {
+                                    "data": { "type": "bundleIds", "id": bundle_id_resource_id }
+                                }
+                            }
                         }
-                    }
-                }
-            }))
-            .send()
-            .await;
+                    })
+                    .to_string(),
+                ),
+        );
         // An already-enabled capability comes back as a 409 conflict; treat that
         // as success, and never fail profile creation over the capability toggle.
-        let enabled = matches!(&resp, Ok(r) if r.status().is_success());
+        let enabled = matches!(&resp, Ok(r) if r.is_success());
         if let OutputFormat::Text = format {
             println!(" {}", if enabled { "done" } else { "already enabled" });
             println!();
@@ -489,23 +505,25 @@ pub async fn create_dev_profile_via_api(
             print!("    Enabling Push Notifications capability...");
             std::io::Write::flush(&mut std::io::stdout()).ok();
         }
-        let resp = client
-            .post(format!("{base}/bundleIdCapabilities"))
-            .bearer_auth(&token)
-            .json(&serde_json::json!({
-                "data": {
-                    "type": "bundleIdCapabilities",
-                    "attributes": { "capabilityType": "PUSH_NOTIFICATIONS" },
-                    "relationships": {
-                        "bundleId": {
-                            "data": { "type": "bundleIds", "id": bundle_id_resource_id }
+        let resp = client.execute(
+            Request::post(&format!("{base}/bundleIdCapabilities"))
+                .bearer(&token)
+                .json_body(
+                    serde_json::json!({
+                        "data": {
+                            "type": "bundleIdCapabilities",
+                            "attributes": { "capabilityType": "PUSH_NOTIFICATIONS" },
+                            "relationships": {
+                                "bundleId": {
+                                    "data": { "type": "bundleIds", "id": bundle_id_resource_id }
+                                }
+                            }
                         }
-                    }
-                }
-            }))
-            .send()
-            .await;
-        let enabled = matches!(&resp, Ok(r) if r.status().is_success());
+                    })
+                    .to_string(),
+                ),
+        );
+        let enabled = matches!(&resp, Ok(r) if r.is_success());
         if let OutputFormat::Text = format {
             println!(" {}", if enabled { "done" } else { "already enabled" });
         }
@@ -517,13 +535,13 @@ pub async fn create_dev_profile_via_api(
         std::io::Write::flush(&mut std::io::stdout()).ok();
     }
     let resp = client
-        .get(format!("{base}/certificates"))
-        .bearer_auth(&token)
-        .query(&[("filter[certificateType]", "IOS_DEVELOPMENT,DEVELOPMENT")])
-        .send()
-        .await
+        .execute(
+            Request::get(&format!("{base}/certificates"))
+                .bearer(&token)
+                .query(&[("filter[certificateType]", "IOS_DEVELOPMENT,DEVELOPMENT")]),
+        )
         .context("Failed to query certificates")?;
-    let body: serde_json::Value = resp.json().await?;
+    let body: serde_json::Value = serde_json::from_slice(&resp.body)?;
 
     let cert_ids: Vec<String> = body["data"]
         .as_array()
@@ -542,13 +560,13 @@ pub async fn create_dev_profile_via_api(
 
     // 4. Get all registered device IDs
     let resp = client
-        .get(format!("{base}/devices"))
-        .bearer_auth(&token)
-        .query(&[("filter[platform]", "IOS"), ("limit", "200")])
-        .send()
-        .await
+        .execute(
+            Request::get(&format!("{base}/devices"))
+                .bearer(&token)
+                .query(&[("filter[platform]", "IOS"), ("limit", "200")]),
+        )
         .context("Failed to query devices")?;
-    let body: serde_json::Value = resp.json().await?;
+    let body: serde_json::Value = serde_json::from_slice(&resp.body)?;
     let device_ids: Vec<String> = body["data"]
         .as_array()
         .map(|arr| {
@@ -575,39 +593,42 @@ pub async fn create_dev_profile_via_api(
 
     let profile_name = format!("Perry Dev - {bundle_id}");
     let resp = client
-        .post(format!("{base}/profiles"))
-        .bearer_auth(&token)
-        .json(&serde_json::json!({
-            "data": {
-                "type": "profiles",
-                "attributes": {
-                    "name": profile_name,
-                    "profileType": "IOS_APP_DEVELOPMENT"
-                },
-                "relationships": {
-                    "bundleId": {
-                        "data": {"type": "bundleIds", "id": bundle_id_resource_id}
-                    },
-                    "certificates": {
-                        "data": cert_relationships
-                    },
-                    "devices": {
-                        "data": device_relationships
-                    }
-                }
-            }
-        }))
-        .send()
-        .await
+        .execute(
+            Request::post(&format!("{base}/profiles"))
+                .bearer(&token)
+                .json_body(
+                    serde_json::json!({
+                        "data": {
+                            "type": "profiles",
+                            "attributes": {
+                                "name": profile_name,
+                                "profileType": "IOS_APP_DEVELOPMENT"
+                            },
+                            "relationships": {
+                                "bundleId": {
+                                    "data": {"type": "bundleIds", "id": bundle_id_resource_id}
+                                },
+                                "certificates": {
+                                    "data": cert_relationships
+                                },
+                                "devices": {
+                                    "data": device_relationships
+                                }
+                            }
+                        }
+                    })
+                    .to_string(),
+                ),
+        )
         .context("Failed to create provisioning profile")?;
 
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
+    if !resp.is_success() {
+        let status = resp.status;
+        let body = resp.text();
         bail!("Failed to create profile (HTTP {status}): {body}");
     }
 
-    let body: serde_json::Value = resp.json().await?;
+    let body: serde_json::Value = serde_json::from_slice(&resp.body)?;
 
     // The profile content is base64-encoded in attributes.profileContent
     let profile_b64 = body["data"]["attributes"]["profileContent"]

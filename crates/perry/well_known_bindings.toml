@@ -499,25 +499,27 @@ repo = "https://github.com/mongodb/node-mongodb-native"
 ref = "c4368315b2ab08789f8ae505fce6721549f3bf9d"
 ported-at = "7.5.0"
 date = "2026-07-30"
-[bindings."node-fetch"]
-crate = "perry-ext-fetch"
-lib = "perry_ext_fetch"
-tracking = "#466"
-
-[bindings.node-fetch.upstream]
-version = "3.3.2"
-sha256 = "615af90e363f8f276b4b54f8e6c163cf3686dce1d8867dd7e52cbed4d38d2dab"
-repo = "https://github.com/node-fetch/node-fetch"
-ref = "8b3320d2a7c07bce4afc6b2bf6c3bbddda85b01f"
-ported-at = "3.3.2"
-date = "2026-07-30"
-[bindings.fetch]
-crate = "perry-ext-fetch"
-lib = "perry_ext_fetch"
-tracking = "#466"
-# Bare `fetch` is an alias for the node-fetch surface (same wrapper crate); it
-# is not itself an npm package, so it inherits node-fetch's provenance.
-alias-of = "node-fetch"
+# `node-fetch` and the bare `fetch` alias deliberately have NO row here (P11).
+#
+# perry-ext-fetch defined the SAME 74 `js_fetch_*` / `js_headers_*` /
+# `js_response_*` / `js_request_*` / `js_blob_*` / `js_form_data_*` symbols
+# perry-stdlib owns, as a strict subset of them, and the two archives disagreed
+# on how a handle is encoded: perry-stdlib NaN-boxes it with POINTER_TAG out of
+# the fetch band, the wrapper returned a bare double counting from 1. A program
+# that imported `node-fetch` AND called the global `fetch()` linked both (the
+# flip strips `http-client`, but `compute_required_features` re-inserts
+# `web-fetch`, which is the feature that actually gates the stdlib symbols), and
+# whichever archive won the link decided whether the program SIGSEGV'd on
+# `await fetch(...)` — `segfault at 5`, a handle id dereferenced as an object
+# pointer. P8 measured it on `main` as well as on the turnloop branch.
+#
+# So `node-fetch` now routes to perry-stdlib's WHATWG fetch, which is a superset
+# of what the wrapper implemented and which also gives node-fetch the things the
+# wrapper never had: `AbortSignal` (#10325), `Content-Encoding` decoding,
+# connection pooling, and P6's turnloop transport. `module_to_features` still
+# maps `node-fetch` to `http-client`, which implies `web-fetch` — and with no
+# row here nothing strips it, so the stdlib copy is required rather than
+# optional. Restoring the two rows is all it takes to put the wrapper back.
 
 [bindings.ws]
 crate = "perry-ext-ws"

@@ -3,6 +3,7 @@
 use anyhow::{bail, Context, Result};
 use clap::Args;
 use console::style;
+use perry_http_client::{Client, Form, Request};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -84,7 +85,10 @@ pub struct VerifyStep {
 }
 
 /// Core verify logic — reusable from publish.rs
-pub async fn run_verify_check(
+///
+/// Synchronous: submit, then sleep-and-poll. There was never anything to
+/// overlap with, so it blocks the calling thread rather than a runtime's.
+pub fn run_verify_check(
     binary_path: &PathBuf,
     verify_url: &str,
     target: &str,
@@ -126,33 +130,29 @@ pub async fn run_verify_check(
     })
     .to_string();
 
-    // POST multipart to /verify
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(timeout + 30))
-        .build()?;
+    // POST multipart to /verify. The `timeout + 30` budget now covers
+    // connect and response together, where reqwest timed them separately.
+    let client = Client::with_timeout(std::time::Duration::from_secs(timeout + 30));
 
-    let form = reqwest::multipart::Form::new()
+    let form = Form::new()
         .text("binary_b64", b64)
-        .text("target", target.to_string())
+        .text("target", target)
         .text("config", config_json)
         .text("manifest", manifest_json);
 
     let base_url = verify_url.trim_end_matches('/');
     let submit_url = format!("{}/verify", base_url);
     let resp = client
-        .post(&submit_url)
-        .multipart(form)
-        .send()
-        .await
+        .post_form(&submit_url, form)
         .context("Failed to connect to verify service")?;
 
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
+    if !resp.is_success() {
+        let status = resp.status;
+        let body = resp.text();
         bail!("Verify service returned {}: {}", status, body);
     }
 
-    let body = resp.text().await?;
+    let body = resp.text();
     let submit: VerifySubmitResponse =
         serde_json::from_str(&body).context("Failed to parse verify submit response")?;
 
@@ -172,19 +172,17 @@ pub async fn run_verify_check(
             bail!("Verification timed out after {}s", timeout);
         }
 
-        tokio::time::sleep(poll_dur).await;
+        std::thread::sleep(poll_dur);
 
         let resp = client
-            .get(&poll_url)
-            .send()
-            .await
+            .execute(Request::get(&poll_url))
             .context("Failed to poll verify status")?;
 
-        if !resp.status().is_success() {
+        if !resp.is_success() {
             continue; // Retry on transient errors
         }
 
-        let body = resp.text().await?;
+        let body = resp.text();
         let status: VerifyStatusResponse =
             serde_json::from_str(&body).context("Failed to parse verify status")?;
 
@@ -306,7 +304,7 @@ fn run_local_attest_verify(binary: &PathBuf, format: OutputFormat) -> Result<()>
 
 pub fn run(args: VerifyArgs, format: OutputFormat, _use_color: bool) -> Result<()> {
     // #504: `--attest` short-circuits to local-attest mode — no
-    // tokio runtime, no remote call, no beta-consent prompt.
+    // remote call, no beta-consent prompt.
     // Reads `<binary>.attest.json`, recomputes SHA-256 of the binary
     // on disk, reports a single ok/mismatch line + exit status.
     if args.attest {
@@ -319,8 +317,10 @@ pub fn run(args: VerifyArgs, format: OutputFormat, _use_color: bool) -> Result<(
 
     let target_hint = args.target.clone();
 
-    let rt = tokio::runtime::Runtime::new()?;
-    let result = rt.block_on(async {
+    // A closure rather than straight-line code so the `?` on the optional
+    // audit still funnels into the one `Result` the beta-error report below
+    // reads — that is all the `block_on` it replaces was doing.
+    let result = (|| -> Result<()> {
         // Run audit first if requested
         if let Some(ref audit_path) = args.audit {
             let path = std::path::PathBuf::from(audit_path);
@@ -334,8 +334,7 @@ pub fn run(args: VerifyArgs, format: OutputFormat, _use_color: bool) -> Result<(
                 "D",
                 false,
                 format,
-            )
-            .await?;
+            )?;
         }
 
         let result = run_verify_check(
@@ -347,8 +346,7 @@ pub fn run(args: VerifyArgs, format: OutputFormat, _use_color: bool) -> Result<(
             args.poll_interval,
             args.timeout,
             format,
-        )
-        .await;
+        );
 
         match (&result, &format) {
             (Ok(status), OutputFormat::Json) => {
@@ -374,7 +372,7 @@ pub fn run(args: VerifyArgs, format: OutputFormat, _use_color: bool) -> Result<(
             }
             (Err(e), _) => Err(anyhow::anyhow!("{}", e)),
         }
-    });
+    })();
 
     if let Err(ref e) = result {
         crate::commands::publish::report_beta_error(

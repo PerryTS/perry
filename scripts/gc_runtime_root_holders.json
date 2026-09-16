@@ -40,13 +40,6 @@
       "why": "Monotonic backoff-state id counter (lib.rs:378). The closures live in STATES (BackoffState.task/outer/retry_cb), which scan_backoff_roots visits."
     },
     {
-      "file": "crates/perry-ext-fetch/src/lib.rs",
-      "name": "REQUEST_HANDLES",
-      "verdict": "covered_elsewhere",
-      "scanner": "gc::scan_fetch_roots (crates/perry-ext-fetch/src/gc.rs), registered via perry_ffi::gc_register_mutable_root_scanner_named from gc::ensure_gc_scanner_registered, armed at store_request before the first insert",
-      "why": "Declared in lib.rs, scanned from the gc.rs submodule (split out for the 2,000-line gate): every RequestRecord.signal slot is visited and rewritten."
-    },
-    {
       "file": "crates/perry-ext-http/src/server/https_server.rs",
       "name": "PENDING_TLS_CLIENT_ERRORS",
       "verdict": "not_a_gc_pointer",

@@ -3,6 +3,7 @@
 use anyhow::{bail, Context, Result};
 use clap::Args;
 use console::style;
+use perry_http_client::{Client, Request};
 use serde::Deserialize;
 use std::io::Write;
 
@@ -32,15 +33,10 @@ struct PollResponse {
     tier: Option<String>,
 }
 
-pub fn run(args: LoginArgs, format: OutputFormat, use_color: bool) -> Result<()> {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("Failed to create async runtime")?;
-    rt.block_on(run_async(args, format, use_color))
-}
-
-async fn run_async(args: LoginArgs, format: OutputFormat, _use_color: bool) -> Result<()> {
+// The device flow is a POST, then a sleep-and-GET loop: there is nothing to
+// overlap, so it runs straight through on the calling thread rather than on a
+// current-thread tokio runtime built to host two requests.
+pub fn run(args: LoginArgs, format: OutputFormat, _use_color: bool) -> Result<()> {
     let server_url = args.server.as_deref().unwrap_or("https://app.perryts.com");
 
     // Check if already logged in
@@ -75,21 +71,24 @@ async fn run_async(args: LoginArgs, format: OutputFormat, _use_color: bool) -> R
         println!();
     }
 
-    // Register device code with dashboard
-    let client = reqwest::Client::new();
+    // Register device code with dashboard. `reqwest::Client::new()` set no
+    // timeout at all; the default 120 s whole-request budget is kept, since
+    // the wait for the user is the poll loop below (150 attempts × 2 s), not
+    // any single request.
+    let client = Client::new();
     let start_resp = client
-        .post(format!("{}/api/cli/start", server_url))
-        .json(&serde_json::json!({ "device_code": device_code }))
-        .send()
-        .await
+        .execute(
+            Request::post(&format!("{}/api/cli/start", server_url))
+                .json_body(serde_json::json!({ "device_code": device_code }).to_string()),
+        )
         .context("Failed to connect to dashboard")?;
 
-    if !start_resp.status().is_success() {
-        let body = start_resp.text().await.unwrap_or_default();
-        bail!("Failed to start login: {}", body);
+    if !start_resp.is_success() {
+        bail!("Failed to start login: {}", start_resp.text());
     }
 
-    let start: StartResponse = start_resp.json().await.context("Invalid response")?;
+    let start: StartResponse =
+        serde_json::from_slice(&start_resp.body).context("Invalid response")?;
     let authorize_url = start.authorize_url;
 
     // Open browser
@@ -134,7 +133,7 @@ async fn run_async(args: LoginArgs, format: OutputFormat, _use_color: bool) -> R
     let mut attempts = 0;
     let max_attempts = 150; // 5 minutes at 2s intervals
     loop {
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        std::thread::sleep(std::time::Duration::from_secs(2));
         attempts += 1;
 
         if attempts > max_attempts {
@@ -142,21 +141,21 @@ async fn run_async(args: LoginArgs, format: OutputFormat, _use_color: bool) -> R
             bail!("Login timed out. Please try again.");
         }
 
-        let poll_resp = client
-            .get(format!("{}/api/cli/poll?code={}", server_url, device_code))
-            .send()
-            .await;
+        let poll_resp = client.execute(Request::get(&format!(
+            "{}/api/cli/poll?code={}",
+            server_url, device_code
+        )));
 
         let poll_resp = match poll_resp {
             Ok(r) => r,
             Err(_) => continue, // network hiccup, retry
         };
 
-        if !poll_resp.status().is_success() {
+        if !poll_resp.is_success() {
             continue;
         }
 
-        let poll: PollResponse = match poll_resp.json().await {
+        let poll: PollResponse = match serde_json::from_slice(&poll_resp.body) {
             Ok(p) => p,
             Err(_) => continue,
         };

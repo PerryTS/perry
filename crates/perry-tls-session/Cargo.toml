@@ -1,0 +1,12 @@
+[package]
+name = "perry-tls-session"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Host-driven outbound TLS client session over rustls's unbuffered API — the one copy of P6's state machine, shared by perry-stdlib's fetch/SMTP engines and the CLI's HTTP client."
+
+[lints]
+workspace = true
+
+[dependencies]
+turnloop-tls.workspace = true

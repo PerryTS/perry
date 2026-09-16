@@ -99,7 +99,7 @@ http-server = ["dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:bytes",
 # gate the Web Fetch surface itself is behind; the reqwest client stays
 # beside it as the declining path (proxy, HTTP/2, a worker agent with no
 # loop) exactly as P1 kept the tokio socket task.
-turnloop-http-client = ["dep:turnloop-http", "dep:turnloop-tls", "dep:url", "dep:http"]
+turnloop-http-client = ["dep:turnloop-http", "dep:turnloop-tls", "dep:perry-tls-session", "dep:url", "dep:http"]
 web-fetch = ["dep:reqwest", "async-runtime", "bundled-streams", "turnloop-http-client"]
 http-client = ["web-fetch"]
 
@@ -283,7 +283,7 @@ bundled-nodemailer = ["dep:lettre", "async-runtime", "turnloop-smtp-client"]
 # `bundled-nodemailer` gate's strip path — it rides in `full` on its own so
 # the `js_smtp_*` entry points survive the well-known flip that strips
 # `bundled-nodemailer`, and perry-ext-nodemailer can reach them.
-turnloop-smtp-client = ["dep:turnloop-smtp", "dep:turnloop-tls", "dep:url"]
+turnloop-smtp-client = ["dep:turnloop-smtp", "dep:turnloop-tls", "dep:perry-tls-session", "dep:url"]
 
 # Image processing (sharp) — `image` umbrella stays for
 # backwards-compat; v0.5.551's well-known flip toggles
@@ -357,6 +357,9 @@ once_cell.workspace = true
 # `web-fetch` / `turnloop-smtp-client` links neither.
 turnloop-http = { workspace = true, optional = true }
 turnloop-tls = { workspace = true, optional = true }
+# P11: the extracted TLS client session (one copy, shared with the CLI's
+# blocking HTTP client). Follows turnloop-tls's optionality exactly.
+perry-tls-session = { workspace = true, optional = true }
 turnloop-smtp = { workspace = true, optional = true }
 # `turnloop_http::client::Request` exposes a `url::Url`, and the canonical
 # reason phrase `Response.statusText` reports comes from `http::StatusCode`

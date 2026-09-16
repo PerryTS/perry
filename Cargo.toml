@@ -11,6 +11,8 @@ members = [
     "crates/perry-runtime",
     "crates/perry-ffi",
     "crates/perry-db-turnloop",
+    "crates/perry-tls-session",
+    "crates/perry-http-client",
     "crates/perry-native-registration",
     "crates/perry-ext-dotenv",
     "crates/perry-ext-nanoid",
@@ -41,7 +43,6 @@ members = [
     "crates/perry-ext-ioredis",
     "crates/perry-ext-pg",
     "crates/perry-ext-mysql2",
-    "crates/perry-ext-fetch",
     "crates/perry-ext-undici",
     "crates/perry-ext-mongodb",
     "crates/perry-ext-ws",
@@ -490,6 +491,9 @@ dotenvy = "0.15"
 flate2 = "1"
 tar = "0.4"
 base64 = "0.22"
+# RFC 6455 §4.2.2's `Sec-WebSocket-Accept` digest. Already in the lockfile
+# through perry-stdlib's optional `sha1`, so naming it here adds no package.
+sha1 = "0.11"
 zip = "8"
 # zstd for transparent decompression of the npm-shipped `*.a.zst` archives.
 # Statically vendored (no system libzstd dependency on the user's machine).
@@ -522,6 +526,18 @@ perry-ffi = { path = "crates/perry-ffi", version = "0.5.1011" }
 # database bindings share. rlib only — it is linked *into* each binding's
 # staticlib, never alongside it, so it exports no symbol of its own.
 perry-db-turnloop = { path = "crates/perry-db-turnloop" }
+# turnloop P11 (docs/turnloop/p11-report.md): the one copy of P6's outbound TLS
+# client session — no socket, no loop, no I/O — shared by perry-stdlib's fetch
+# and SMTP engines (which drive it from a completion sink) and by
+# perry-http-client (which drives it from a blocking call on a loop it owns).
+perry-tls-session = { path = "crates/perry-tls-session" }
+# turnloop P11: a blocking HTTP/1.1 + WebSocket client on a self-owned
+# `turnloop::Loop`, for callers with NO JS event loop to cooperate with — the
+# `perry` CLI, and the `perry-ext-*` HTTP bindings that already run on a
+# blocking-pool thread. Nothing in perry-runtime or perry-stdlib depends on it
+# and nothing should; see the crate docs for why an owned loop is correct here
+# and nowhere else (PerryTS/turnloop#45).
+perry-http-client = { path = "crates/perry-http-client" }
 perry-native-registration = { path = "crates/perry-native-registration", version = "0.5.1534" }
 perry-ext-dotenv = { path = "crates/perry-ext-dotenv" }
 perry-ext-nanoid = { path = "crates/perry-ext-nanoid" }
@@ -552,7 +568,6 @@ perry-ext-cron = { path = "crates/perry-ext-cron" }
 perry-ext-ioredis = { path = "crates/perry-ext-ioredis" }
 perry-ext-pg = { path = "crates/perry-ext-pg" }
 perry-ext-mysql2 = { path = "crates/perry-ext-mysql2" }
-perry-ext-fetch = { path = "crates/perry-ext-fetch" }
 perry-ext-undici = { path = "crates/perry-ext-undici" }
 perry-ext-mongodb = { path = "crates/perry-ext-mongodb" }
 perry-ext-ws = { path = "crates/perry-ext-ws" }

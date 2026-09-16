@@ -344,12 +344,11 @@ pub fn compare_versions(a: &str, b: &str) -> Result<Ordering> {
 }
 
 fn fetch_latest_version() -> Result<UpdateCache> {
-    let client = reqwest::blocking::Client::builder()
-        .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(REQUEST_TIMEOUT)
-        .user_agent(format!("perry/{}", env!("CARGO_PKG_VERSION")))
-        .build()
-        .context("Failed to create HTTP client")?;
+    // `perry_http_client` measures the connect against the same whole-request
+    // window rather than carrying a separate connect deadline, so the budget
+    // here is the sum of the two reqwest used.
+    let client = perry_http_client::Client::with_timeout(CONNECT_TIMEOUT + REQUEST_TIMEOUT)
+        .user_agent(format!("perry/{}", env!("CARGO_PKG_VERSION")));
 
     let mut last_err = None;
 
@@ -358,21 +357,21 @@ fn fetch_latest_version() -> Result<UpdateCache> {
     // not a version from somewhere they did not name.
     if let Some(source) = crate::release_source::resolve() {
         let (url, headers) = source.request()?;
-        let mut request = client.get(&url);
+        let mut request = perry_http_client::Request::get(&url);
         for (name, value) in &headers {
-            request = request.header(*name, value);
+            request = request.header(name, value);
         }
-        let response = request
-            .send()
+        let response = client
+            .execute(request)
             .with_context(|| format!("{} check failed ({url})", source.label()))?;
-        if !response.status().is_success() {
+        if !response.is_success() {
             bail!(
                 "{} check failed: HTTP {} from {url}",
                 source.label(),
-                response.status()
+                response.status
             );
         }
-        let body = response.text().context("update source returned no body")?;
+        let body = response.text();
         let probe = source.parse(&body)?;
         parse_version(&probe.latest_version).with_context(|| {
             format!(
@@ -403,50 +402,54 @@ fn fetch_latest_version() -> Result<UpdateCache> {
 
     let servers = crate::release_source::release_info_servers();
     for url in &servers {
-        match client.get(url).send() {
-            Ok(resp) if resp.status().is_success() => match resp.json::<ReleaseInfo>() {
-                Ok(info) => {
-                    let version = info
-                        .tag_name
-                        .strip_prefix('v')
-                        .unwrap_or(&info.tag_name)
-                        .to_string();
-                    if let Err(error) = parse_version(&version) {
-                        last_err = Some(format!(
-                            "{}: update server returned an invalid release version: {error}",
-                            url
-                        ));
-                        continue;
+        match client.execute(perry_http_client::Request::get(url)) {
+            Ok(resp) if resp.is_success() => {
+                match serde_json::from_slice::<ReleaseInfo>(&resp.body) {
+                    Ok(info) => {
+                        let version = info
+                            .tag_name
+                            .strip_prefix('v')
+                            .unwrap_or(&info.tag_name)
+                            .to_string();
+                        if let Err(error) = parse_version(&version) {
+                            last_err = Some(format!(
+                                "{}: update server returned an invalid release version: {error}",
+                                url
+                            ));
+                            continue;
+                        }
+                        // Re-read the notice state INSIDE the lock rather than
+                        // before the request. This struct is rebuilt from scratch,
+                        // and a notice recorded while the request was in flight
+                        // would otherwise be overwritten with the stale value read
+                        // minutes earlier — telling the user twice about the same
+                        // release.
+                        let _guard = lock_cache();
+                        let prior = load_cache();
+                        let cache = UpdateCache {
+                            schema: CACHE_SCHEMA,
+                            last_check: now_rfc3339(),
+                            latest_version: version,
+                            release_url: info.html_url,
+                            last_notification: prior
+                                .as_ref()
+                                .and_then(|c| c.last_notification.clone()),
+                            last_notified_version: prior
+                                .as_ref()
+                                .and_then(|c| c.last_notified_version.clone()),
+                            published_at: info.published_at.clone(),
+                            headline: info.name.clone().filter(|n| !n.trim().is_empty()),
+                        };
+                        save_cache(&cache);
+                        return Ok(cache);
                     }
-                    // Re-read the notice state INSIDE the lock rather than
-                    // before the request. This struct is rebuilt from scratch,
-                    // and a notice recorded while the request was in flight
-                    // would otherwise be overwritten with the stale value read
-                    // minutes earlier — telling the user twice about the same
-                    // release.
-                    let _guard = lock_cache();
-                    let prior = load_cache();
-                    let cache = UpdateCache {
-                        schema: CACHE_SCHEMA,
-                        last_check: now_rfc3339(),
-                        latest_version: version,
-                        release_url: info.html_url,
-                        last_notification: prior.as_ref().and_then(|c| c.last_notification.clone()),
-                        last_notified_version: prior
-                            .as_ref()
-                            .and_then(|c| c.last_notified_version.clone()),
-                        published_at: info.published_at.clone(),
-                        headline: info.name.clone().filter(|n| !n.trim().is_empty()),
-                    };
-                    save_cache(&cache);
-                    return Ok(cache);
+                    Err(e) => {
+                        last_err = Some(format!("{}: JSON parse error: {}", url, e));
+                    }
                 }
-                Err(e) => {
-                    last_err = Some(format!("{}: JSON parse error: {}", url, e));
-                }
-            },
+            }
             Ok(resp) => {
-                last_err = Some(format!("{}: HTTP {}", url, resp.status()));
+                last_err = Some(format!("{}: HTTP {}", url, resp.status));
             }
             Err(e) => {
                 last_err = Some(format!("{}: {}", url, e));
@@ -785,6 +788,65 @@ fn copy_with_progress<R: Read, W: Write>(
     Ok(downloaded)
 }
 
+/// Writes a streamed release artifact to disk, drawing the progress bar.
+///
+/// The bar cannot be started before the request the way it was on `reqwest`:
+/// the declared length arrives with the response head, which on a streamed
+/// transfer is inside the call. So `on_head` starts it and `finish` ends it,
+/// and a transfer that never produced a head (an error before the status line)
+/// leaves `progress` `None` and prints nothing, which is correct.
+struct ArtifactSink<'a, W: Write> {
+    writer: &'a mut W,
+    artifact: &'a str,
+    /// The size the already-verified signed manifest declares. Used only when
+    /// the transfer reports none of its own.
+    manifest_size: u64,
+    output: UpdateOutput,
+    progress: Option<DownloadProgress>,
+    downloaded: u64,
+}
+
+impl<W: Write> ArtifactSink<'_, W> {
+    fn finish(self) -> u64 {
+        if let Some(progress) = self.progress {
+            progress.finish(self.downloaded);
+        }
+        self.downloaded
+    }
+}
+
+impl<W: Write> perry_http_client::BodySink for ArtifactSink<'_, W> {
+    fn on_head(
+        &mut self,
+        _status: u16,
+        content_length: Option<u64>,
+    ) -> perry_http_client::Result<()> {
+        // Prefer the transfer's own Content-Length; fall back to the size in
+        // the already-verified manifest (a transfer-encoded body reports no
+        // length). If neither is usable we still show a spinner rather than a
+        // bogus 0%.
+        let total = content_length
+            .or(Some(self.manifest_size))
+            .filter(|len| *len > 0);
+        self.progress = Some(DownloadProgress::start(self.artifact, total, self.output));
+        Ok(())
+    }
+
+    fn on_chunk(&mut self, bytes: &[u8]) -> perry_http_client::Result<()> {
+        // Reuses `copy_with_progress` rather than writing the chunk directly,
+        // so the byte accounting and the bar advance stay in one place — and
+        // its test keeps covering the code this path runs.
+        let silent = DownloadProgress::Silent;
+        let progress = self.progress.as_ref().unwrap_or(&silent);
+        let mut source = bytes;
+        let written = copy_with_progress(&mut source, self.writer, progress).map_err(|e| {
+            perry_http_client::Error::sink(format!("failed to stage update artifact: {e}"))
+        })?;
+        self.downloaded += written;
+        Ok(())
+    }
+}
+
 pub fn perform_self_update(output: UpdateOutput) -> Result<()> {
     let current = env!("CARGO_PKG_VERSION");
     let verbose = output.verbose;
@@ -800,11 +862,11 @@ pub fn perform_self_update(output: UpdateOutput) -> Result<()> {
         return Ok(());
     }
     let artifact_name = platform_artifact_name().context("Unsupported platform for self-update")?;
-    let client = reqwest::blocking::Client::builder()
-        .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(Duration::from_secs(300))
-        .user_agent(format!("perry/{}", current))
-        .build()?;
+    // 300 s covers the artifact transfer, which is the long one; the manifest
+    // and release-info requests on the same client are small.
+    let client =
+        perry_http_client::Client::with_timeout(CONNECT_TIMEOUT + Duration::from_secs(300))
+            .user_agent(format!("perry/{}", current));
     let mut release_info = None;
     let mut last_err = None;
     // The ARTIFACT ladder, deliberately not the check source: this is where
@@ -813,26 +875,29 @@ pub fn perform_self_update(output: UpdateOutput) -> Result<()> {
     let servers = crate::release_source::release_info_servers();
 
     for url in &servers {
-        match client.get(url).send() {
-            Ok(resp) if resp.status().is_success() => match resp.json::<ReleaseInfo>() {
-                Ok(info) => {
-                    let release_version = info.tag_name.strip_prefix('v').unwrap_or(&info.tag_name);
-                    match parse_version(release_version) {
-                        Ok(_) => {
-                            release_info = Some(info);
-                            break;
-                        }
-                        Err(error) => {
-                            last_err = Some(format!(
+        match client.execute(perry_http_client::Request::get(url)) {
+            Ok(resp) if resp.is_success() => {
+                match serde_json::from_slice::<ReleaseInfo>(&resp.body) {
+                    Ok(info) => {
+                        let release_version =
+                            info.tag_name.strip_prefix('v').unwrap_or(&info.tag_name);
+                        match parse_version(release_version) {
+                            Ok(_) => {
+                                release_info = Some(info);
+                                break;
+                            }
+                            Err(error) => {
+                                last_err = Some(format!(
                                 "{}: update server returned an invalid release version: {error}",
                                 url
                             ));
+                            }
                         }
                     }
+                    Err(error) => last_err = Some(format!("{}: JSON parse error: {error}", url)),
                 }
-                Err(error) => last_err = Some(format!("{}: JSON parse error: {error}", url)),
-            },
-            Ok(resp) => last_err = Some(format!("{}: HTTP {}", url, resp.status())),
+            }
+            Ok(resp) => last_err = Some(format!("{}: HTTP {}", url, resp.status)),
             Err(error) => last_err = Some(format!("{}: {error}", url)),
         }
     }
@@ -852,12 +917,13 @@ pub fn perform_self_update(output: UpdateOutput) -> Result<()> {
         .with_context(|| format!("No authenticated update manifest found ({})", manifest_name))?;
     require_https(&manifest_asset.browser_download_url, "manifest")?;
     let manifest_bytes = client
-        .get(&manifest_asset.browser_download_url)
-        .send()
+        .execute(perry_http_client::Request::get(
+            &manifest_asset.browser_download_url,
+        ))
         .context("failed to download update manifest")?
         .error_for_status()
         .context("failed to download update manifest")?
-        .bytes()?;
+        .body;
     let manifest: perry_updater::cli_manifest::CliUpdateManifest =
         serde_json::from_slice(&manifest_bytes).context("update manifest is malformed")?;
     let keys = trusted_cli_update_keys()?;
@@ -889,23 +955,28 @@ pub fn perform_self_update(output: UpdateOutput) -> Result<()> {
     let archive_path = staging.path().join("download");
     let mut archive =
         fs::File::create(&archive_path).context("failed to create staged update artifact")?;
-    let mut response = client
-        .get(&manifest.artifact.url)
-        .send()
+    // The one streamed transfer in the CLI: a release archive is tens of
+    // megabytes and must not be buffered in memory. `perry_http_client` hands
+    // the body to a sink as it arrives, and the sink is where the progress bar
+    // now starts — it needs the head's `Content-Length`, which on this path
+    // arrives during the request rather than before it.
+    let mut sink = ArtifactSink {
+        writer: &mut archive,
+        artifact: artifact_name,
+        manifest_size: manifest.artifact.size,
+        output,
+        progress: None,
+        downloaded: 0,
+    };
+    client
+        .execute_streaming(
+            perry_http_client::Request::get(&manifest.artifact.url),
+            &mut sink,
+        )
         .context("Failed to download update")?
         .error_for_status()
         .context("Failed to download update")?;
-    // Prefer the transfer's own Content-Length; fall back to the size in the
-    // already-verified manifest (a transfer-encoded body reports no length).
-    // If neither is usable we still show a spinner rather than a bogus 0%.
-    let total = response
-        .content_length()
-        .or(Some(manifest.artifact.size))
-        .filter(|len| *len > 0);
-    let progress = DownloadProgress::start(artifact_name, total, output);
-    let downloaded = copy_with_progress(&mut response, &mut archive, &progress)
-        .context("failed to stage update artifact")?;
-    progress.finish(downloaded);
+    let downloaded = sink.finish();
     // A body that ends cleanly but short reads as `Ok(0)` and would otherwise
     // sail through as success. `verify_cli_artifact` below does catch it — but
     // as a hash mismatch, which reads like a tampered or corrupt release rather
