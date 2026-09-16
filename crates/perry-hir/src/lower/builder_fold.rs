@@ -15,6 +15,21 @@
 //! - The appended value expressions run in the same order at the same
 //!   sequence points; only the allocation moves AFTER them, and a bare
 //!   object allocation has no user-visible effects.
+//! - #10353: the assignments need not follow the binding IMMEDIATELY. The
+//!   scan skips up to `MAX_FOLD_GAP_STMTS` statements in between when
+//!   moving the allocation below them is unobservable by the same argument
+//!   — `gap_stmt_is_hoistable` requires exactly what the value side already
+//!   requires: the statement must not name the binding, and it must not be
+//!   able to execute user code. Skipped statements keep their relative
+//!   order and still run before every appended value, so
+//!   `const o = {}; const X = 1; o.a = X;` folds to
+//!   `const X = 1; const o = { a: X };`. That gap is the ordinary shape of
+//!   initialisation code, and before #10353 it cost 75×: the unfolded form
+//!   leaves a 0-field anon shape that denies `Ptr<Shape>` containment, so
+//!   every store takes the dynamic `PutValueSet` path. A gap is allowed only
+//!   for an EMPTY literal — sinking a populated one would move its own value
+//!   expressions below the skipped statements, and `const o = { a: y };
+//!   const y = 1; o.b = 2;` must keep throwing on `y`'s TDZ.
 //! - Values must not reference the bound name (checked conservatively by
 //!   symbol name anywhere in the value expression, ignoring shadowing), so
 //!   no expression can observe the half-built object.
@@ -46,6 +61,12 @@ use swc_ecma_visit::{Visit, VisitWith};
 /// Fold cap per literal — beyond this the object is dictionary-like and the
 /// literal machinery's inline-slot benefits taper off anyway.
 const MAX_FOLDED_PROPS: usize = 64;
+
+/// How many statements the scan may skip between the binding and its first
+/// assignment (#10353). Real builders separate the two by a handful of
+/// constant bindings at most; the cap keeps the forward scan O(n) over a
+/// statement list instead of O(n²) on a long run of hoistable declarations.
+const MAX_FOLD_GAP_STMTS: usize = 64;
 
 /// Returns a folded clone when at least one builder sequence was folded;
 /// `None` means "nothing to do — lower the original".
@@ -155,17 +176,25 @@ fn is_object_prototype_expr(expr: &ast::Expr) -> bool {
 
 /// Cheap read-only pre-scan: is any statement list anywhere (including
 /// function bodies nested in expressions) a `const/let/var x = {…}`
-/// immediately followed by a static member assignment to the same name?
-/// False positives only cost the clone; a false negative would skip a
-/// fold, so the walk mirrors the mutating one's reach.
+/// followed — across a hoistable gap (#10353) — by a static member
+/// assignment to the same name? False positives only cost the clone; a
+/// false negative would skip a fold, so the walk mirrors the mutating
+/// one's reach, gap included.
 fn module_has_candidate(module: &ast::Module) -> bool {
-    for pair in module.body.windows(2) {
-        if let (ast::ModuleItem::Stmt(a), ast::ModuleItem::Stmt(b)) = (&pair[0], &pair[1]) {
-            if let (Some(name), _) = decl_object_binding(a) {
-                if assign_to_name_key(b, name.as_str()).is_some() {
-                    return true;
-                }
-            }
+    for (i, item) in module.body.iter().enumerate() {
+        let ast::ModuleItem::Stmt(a) = item else {
+            continue;
+        };
+        let (Some(name), _) = decl_object_binding(a) else {
+            continue;
+        };
+        let item_stmt = |k: usize| match module.body.get(i + 1 + k) {
+            Some(ast::ModuleItem::Stmt(s)) => Some(s),
+            _ => None,
+        };
+        let gap = fold_gap_len(name.as_str(), item_stmt);
+        if item_stmt(gap).is_some_and(|b| assign_to_name_key(b, name.as_str()).is_some()) {
+            return true;
         }
     }
     module.body.iter().any(|item| match item {
@@ -177,11 +206,16 @@ fn module_has_candidate(module: &ast::Module) -> bool {
 }
 
 fn stmts_have_candidate(stmts: &[ast::Stmt]) -> bool {
-    for pair in stmts.windows(2) {
-        if let (Some(name), _) = decl_object_binding(&pair[0]) {
-            if assign_to_name_key(&pair[1], name.as_str()).is_some() {
-                return true;
-            }
+    for (i, s) in stmts.iter().enumerate() {
+        let (Some(name), _) = decl_object_binding(s) else {
+            continue;
+        };
+        let gap = fold_gap_len(name.as_str(), |k| stmts.get(i + 1 + k));
+        if stmts
+            .get(i + 1 + gap)
+            .is_some_and(|b| assign_to_name_key(b, name.as_str()).is_some())
+        {
+            return true;
         }
     }
     stmts.iter().any(scan_stmt)
@@ -368,10 +402,23 @@ fn fold_module_stmt_run(items: &mut [ast::ModuleItem], changed: &mut bool) {
             idx += 1;
             continue;
         }
+        // A gap is only skippable for an EMPTY literal: sinking a populated
+        // one would move its own value expressions below the skipped
+        // statements, and `const o = { a: y }; const y = 1; o.b = 2;` must
+        // keep throwing on `y`'s TDZ.
+        let gap = if existing.is_empty() {
+            fold_gap_len(&name_start, |k| match items.get(idx + 1 + k) {
+                Some(ast::ModuleItem::Stmt(s)) => Some(s),
+                _ => None,
+            })
+        } else {
+            0
+        };
+        let first = idx + 1 + gap;
         let mut keys = existing_keys(existing);
         let mut appended: Vec<(ast::PropName, Box<ast::Expr>)> = Vec::new();
         let mut consumed = 0usize;
-        for follower in items[idx + 1..].iter() {
+        for follower in items[first..].iter() {
             let ast::ModuleItem::Stmt(fs) = follower else {
                 break;
             };
@@ -392,16 +439,28 @@ fn fold_module_stmt_run(items: &mut [ast::ModuleItem], changed: &mut bool) {
             idx += 1;
             continue;
         }
-        // Apply: extend the literal, blank out the consumed statements.
+        // Apply: extend the literal, sink the declaration below the skipped
+        // statements so the appended values still evaluate after them, and
+        // blank out the consumed statements.
         if let ast::ModuleItem::Stmt(s) = &mut items[idx] {
             append_props(s, appended);
         }
-        for follower in items[idx + 1..idx + 1 + consumed].iter_mut() {
+        if gap > 0 {
+            items[idx..first].rotate_left(1);
+        }
+        for follower in items[first..first + consumed].iter_mut() {
             *follower = ast::ModuleItem::Stmt(ast::Stmt::Empty(ast::EmptyStmt {
                 span: swc_common::DUMMY_SP,
             }));
         }
         *changed = true;
+        if gap > 0 {
+            // `items[idx]` is now the first skipped statement, which may open
+            // a builder of its own (`const a = {}; const b = {}; a.x = 1;
+            // b.y = 2;`). Re-examining it terminates: each fold blanks at
+            // least one assignment statement, and the run holds finitely many.
+            continue;
+        }
         idx += 1 + consumed;
     }
 }
@@ -419,9 +478,16 @@ fn fold_stmts(stmts: &mut Vec<ast::Stmt>, changed: &mut bool) {
             idx += 1;
             continue;
         };
+        // Empty literals only — see `fold_module_stmt_run`.
+        let gap = if existing_len == 0 {
+            fold_gap_len(&name, |k| stmts.get(idx + 1 + k))
+        } else {
+            0
+        };
+        let first = idx + 1 + gap;
         let mut appended: Vec<(ast::PropName, Box<ast::Expr>)> = Vec::new();
         let mut consumed = 0usize;
-        for follower in stmts[idx + 1..].iter() {
+        for follower in stmts[first..].iter() {
             let Some((key, value)) = assign_to_name_key(follower, &name) else {
                 break;
             };
@@ -437,8 +503,20 @@ fn fold_stmts(stmts: &mut Vec<ast::Stmt>, changed: &mut bool) {
         }
         if consumed > 0 {
             append_props(&mut stmts[idx], appended);
-            stmts.drain(idx + 1..idx + 1 + consumed);
+            // Sink the declaration below the skipped statements: the appended
+            // values evaluate where the literal now sits, so they must still
+            // run after everything that used to precede them.
+            if gap > 0 {
+                stmts[idx..first].rotate_left(1);
+            }
+            stmts.drain(first..first + consumed);
             *changed = true;
+            if gap > 0 {
+                // `stmts[idx]` is now the first skipped statement, which may
+                // open a builder of its own. Re-examining it terminates: each
+                // fold removes at least one statement from the list.
+                continue;
+            }
         }
         idx += 1;
     }
@@ -498,6 +576,66 @@ fn assign_to_name_key<'a>(
         ast::MemberProp::PrivateName(_) => return None,
     };
     Some((key, &a.right))
+}
+
+/// How many statements between the `{ … }` binding and its first fold-able
+/// assignment the scan may skip (#10353).
+///
+/// `at(k)` yields the k-th follower of the binding, or `None` when the run
+/// ends (a non-`Stmt` module item, or the end of the list). The walk stops at
+/// the first statement that is an assignment to `name` — that is where the
+/// fold proper takes over — and at the first statement the declaration may
+/// not move below.
+fn fold_gap_len<'a>(name: &str, at: impl Fn(usize) -> Option<&'a ast::Stmt>) -> usize {
+    let mut gap = 0usize;
+    while gap < MAX_FOLD_GAP_STMTS {
+        let Some(s) = at(gap) else { break };
+        if assign_to_name_key(s, name).is_some() || !gap_stmt_is_hoistable(s, name) {
+            break;
+        }
+        gap += 1;
+    }
+    gap
+}
+
+/// May the `{ … }` declaration move BELOW this statement?
+///
+/// The fold evaluates the appended values where the literal ends up, so a
+/// statement standing between the binding and its first assignment is only
+/// skippable when moving the ALLOCATION past it is unobservable. That is the
+/// same pair of conditions `value_is_fold_safe` already enforces on the value
+/// side, for the same two reasons:
+///
+/// - the statement must not NAME the binding — it would otherwise read, write
+///   or capture an object that no longer exists at that point (`const o = {};
+///   f(o); o.a = 1` keeps its dynamic writes);
+/// - the statement must not be able to execute user code, because a call can
+///   reach a hoisted `function peek() { return o; }` that names the binding
+///   WITHOUT the statement naming it, turning a successful read into a TDZ
+///   `ReferenceError`. Reusing `value_is_fold_safe` for initializers and
+///   expression statements buys exactly that test, and deliberately shares
+///   its precision: that predicate admits the implicit conversions (`a + b`,
+///   a template substitution) that can still reach a user `valueOf`, which
+///   is a pre-existing imprecision of the value side, tracked separately —
+///   the two sides must not drift apart here.
+///
+/// Destructuring patterns are excluded: the binding itself performs property
+/// reads, which can run a getter. Type-only declarations are erased before
+/// codegen, so they carry no runtime effect at all and always qualify —
+/// `enum` and `namespace` do emit code and do not.
+fn gap_stmt_is_hoistable(s: &ast::Stmt, name: &str) -> bool {
+    match s {
+        ast::Stmt::Empty(_) => true,
+        ast::Stmt::Decl(ast::Decl::TsInterface(_) | ast::Decl::TsTypeAlias(_)) => true,
+        ast::Stmt::Expr(es) => value_is_fold_safe(&es.expr, name),
+        ast::Stmt::Decl(ast::Decl::Var(var)) => var.decls.iter().all(|d| {
+            matches!(&d.name, ast::Pat::Ident(bi) if bi.id.sym.as_ref() != name)
+                && d.init
+                    .as_deref()
+                    .is_none_or(|init| value_is_fold_safe(init, name))
+        }),
+        _ => false,
+    }
 }
 
 /// The literal may only contain plain key/value + shorthand props; anything
