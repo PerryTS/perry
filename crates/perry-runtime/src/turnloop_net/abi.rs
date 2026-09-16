@@ -196,6 +196,7 @@ pub unsafe extern "C" fn js_perry_net_tcp_listen(
     port: u16,
     backlog: u32,
     reuse_port: i32,
+    nodelay: i32,
     err: *mut PerryNetError,
 ) -> i32 {
     // SAFETY: forwarded contract from this function's own safety note.
@@ -212,7 +213,14 @@ pub unsafe extern "C" fn js_perry_net_tcp_listen(
         );
         return PERRY_NET_ERR;
     };
-    match super::tcp_listen(id, subsystem.max(0) as u8, addr, backlog, reuse_port != 0) {
+    match super::tcp_listen(
+        id,
+        subsystem.max(0) as u8,
+        addr,
+        backlog,
+        reuse_port != 0,
+        nodelay != 0,
+    ) {
         Ok(_) => PERRY_NET_OK,
         Err(e) => finish(Err(e), err),
     }

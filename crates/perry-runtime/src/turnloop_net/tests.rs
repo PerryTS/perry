@@ -150,6 +150,7 @@ fn listen_local() -> (i64, SocketAddr) {
         "127.0.0.1:0".parse().unwrap(),
         128,
         false,
+        true,
     )
     .expect("bind an ephemeral loopback port");
     assert_ne!(local.port(), 0, "listen(0) must report its real port");
@@ -537,4 +538,40 @@ fn submissions_for_an_unknown_id_are_rejected_not_ignored() {
     assert_eq!(err.syscall, "write");
     assert!(super::read_start(4242).is_err());
     assert!(super::close(4242).is_err());
+}
+
+/// The bug this pins: `perry-ext-http` passed `server.noDelay` into
+/// `tcp_listen`'s `reuse_port` position. `noDelay` defaults to true, so every
+/// turnloop HTTP and HTTPS listener bound with `SO_REUSEPORT` — a duplicate
+/// `listen()` silently succeeded where Node answers EADDRINUSE — and
+/// `TCP_NODELAY` was never applied to an accepted connection, leaving the
+/// turnloop transport as the only one serving HTTP with Nagle on.
+///
+/// Neither symptom is visible at the call site, and no existing test could see
+/// either, because both live in options handed to the OS. This asserts the one
+/// thing that was actually wrong: which argument lands in which field.
+#[test]
+fn listen_opts_put_each_argument_in_its_own_field() {
+    let server = super::listen_opts(511, false, true);
+    assert!(
+        !server.reuse_port,
+        "a plain server listener must not set SO_REUSEPORT"
+    );
+    assert!(
+        server.accept_defaults.nodelay,
+        "noDelay must reach TCP_NODELAY on every accepted connection"
+    );
+    assert_eq!(server.backlog, 511);
+
+    // The two are independent, in both directions.
+    let cluster = super::listen_opts(128, true, false);
+    assert!(cluster.reuse_port);
+    assert!(!cluster.accept_defaults.nodelay);
+    assert_eq!(cluster.backlog, 128);
+
+    // Nothing else is turned on behind the caller's back.
+    assert!(
+        server.accept_defaults.keep_alive.is_none(),
+        "keep-alive is not wired on either transport; do not invent a default"
+    );
 }

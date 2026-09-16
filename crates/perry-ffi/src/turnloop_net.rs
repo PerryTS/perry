@@ -219,6 +219,7 @@ extern "C" {
         port: u16,
         backlog: u32,
         reuse_port: i32,
+        nodelay: i32,
         err: *mut RawNetError,
     ) -> i32;
     fn js_perry_net_pipe_listen(
@@ -404,6 +405,9 @@ fn unavailable() -> NetError {
 
 /// Bind and listen on `host:port`. Synchronous: a bind failure is reported
 /// here, not as a completion.
+/// `nodelay` is applied by the accepting loop to **every** connection this
+/// listener accepts, before its completion reaches the binding — which is where
+/// Node applies `noDelay`, a server option rather than a per-socket one.
 pub fn tcp_listen(
     id: i64,
     subsystem: u8,
@@ -411,6 +415,7 @@ pub fn tcp_listen(
     port: u16,
     backlog: u32,
     reuse_port: bool,
+    nodelay: bool,
 ) -> Result<(), NetError> {
     runtime_call!(
         {
@@ -425,13 +430,14 @@ pub fn tcp_listen(
                     port,
                     backlog,
                     i32::from(reuse_port),
+                    i32::from(nodelay),
                     &mut raw,
                 )
             };
             check(rc, raw)
         },
         {
-            let _ = (id, subsystem, host, port, backlog, reuse_port);
+            let _ = (id, subsystem, host, port, backlog, reuse_port, nodelay);
             Err(unavailable())
         }
     )

@@ -107,11 +107,18 @@ pub(super) fn try_listen_on_turnloop(
         }
         Err(err) if err.no_loop => None,
         Err(err) => {
-            eprintln!(
-                "[node:http] bind {}:{} failed: {}",
+            // Node emits `'error'` on the server object, asynchronously, with
+            // `code` / `errno` / `syscall` / `address` / `port`. This used to
+            // `eprintln!` and return, so a failed bind was invisible to the
+            // program: `server.on('error', ...)` never fired and a script that
+            // waited on it hung. Reported once, to JS, where Node reports it.
+            super::queue_listen_error_parts(
+                server_handle,
                 host,
                 port,
-                err.message()
+                &err.code,
+                err.errno,
+                &err.syscall,
             );
             // Returning the id-less `Some` would be a lie; the hyper path
             // would then bind the same address and fail the same way, so the
