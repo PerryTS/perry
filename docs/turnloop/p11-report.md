@@ -924,6 +924,11 @@ the panic machinery leaves behind for every crate actually compiled in:
 | `rustls-0.23` | 33 | 33 |
 | binary size | 104,909,856 | **103,115,808** (−1.79 MB) |
 
+**`libperry_ext_axios.a`**, the archive `import 'axios'` links into a compiled
+program, drops from **71,676,480 to 60,711,548 bytes** — 11 MB, 15 %. The
+turnloop stack (`turnloop` + `turnloop-http` + `turnloop-tls` + rustls) is
+smaller than reqwest + hyper + tokio, even though rustls is in both.
+
 **Peak OS threads during one `perry verify`** (a multipart submit and a poll
 loop), sampled from `/proc/<pid>/task` while the command ran, on the 64-thread
 box:
