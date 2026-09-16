@@ -720,54 +720,10 @@ fn descriptor_for_type(
         .map(|(descriptor, _)| descriptor)
 }
 
-/// A loop makes the body's own work potentially unbounded, so a collection or
-/// recursive graph walk can still be amortizable. With no loop, validating an
-/// unbounded input to enter a bounded body cannot win as the input grows.
-/// Nested closure bodies are not part of the enclosing function's work.
-fn body_contains_loop(stmts: &[perry_hir::Stmt]) -> bool {
-    use perry_hir::Stmt;
-    stmts.iter().any(|stmt| match stmt {
-        Stmt::While { .. } | Stmt::DoWhile { .. } | Stmt::For { .. } => true,
-        Stmt::If {
-            then_branch,
-            else_branch,
-            ..
-        } => {
-            body_contains_loop(then_branch)
-                || else_branch.as_deref().is_some_and(body_contains_loop)
-        }
-        Stmt::Try {
-            body,
-            catch,
-            finally,
-        } => {
-            body_contains_loop(body)
-                || catch
-                    .as_ref()
-                    .is_some_and(|catch| body_contains_loop(&catch.body))
-                || finally.as_deref().is_some_and(body_contains_loop)
-        }
-        Stmt::Switch { cases, .. } => cases.iter().any(|case| body_contains_loop(&case.body)),
-        Stmt::Labeled { body, .. } => body_contains_loop(std::slice::from_ref(body.as_ref())),
-        Stmt::Expr(_)
-        | Stmt::Throw(_)
-        | Stmt::Return(_)
-        | Stmt::Let { .. }
-        | Stmt::Break
-        | Stmt::Continue
-        | Stmt::LabeledBreak(_)
-        | Stmt::LabeledContinue(_)
-        | Stmt::PreallocateBoxes(_)
-        | Stmt::PreallocateTdzBoxes(_)
-        | Stmt::ReleaseBoxes(_) => false,
-    })
-}
-
 pub(crate) fn declaration_guards(
     function_id: u32,
     module_prefix: &str,
     params: &[perry_hir::Param],
-    body: &[perry_hir::Stmt],
     demoted_params: &[bool],
     // (#8094) Guard-only ineligibility, kept SEPARATE from `demoted_params`
     // because that mask also drives raw representation selection: a reference
@@ -779,7 +735,6 @@ pub(crate) fn declaration_guards(
     classes: &HashMap<String, &perry_hir::Class>,
     class_ids: &HashMap<String, u32>,
 ) -> Vec<Option<SpecParamGuard>> {
-    let body_can_amortize_unbounded_walk = body_contains_loop(body);
     params
         .iter()
         .zip(demoted_params.iter())
@@ -801,10 +756,26 @@ pub(crate) fn declaration_guards(
             // graph to read one discriminant and one field. The validator was
             // 9.8-12% of those programs and the clone it licensed was worth
             // only 0.1-0.2%. Do not emit a guard whose work grows with the
-            // input when the guarded body itself is statically bounded. A
-            // loop leaves the decision unchanged: array reducers and similar
-            // consumers can amortize validation over their own traversal.
-            if !walk_is_bounded && !body_can_amortize_unbounded_walk {
+            // input.
+            //
+            // A loop in the body used to lift this, on the theory that array
+            // reducers amortize validation over their own traversal. Measured,
+            // they do not. The walk is a SECOND full pass over the same array,
+            // and the clone's saving per element is smaller than the walk's
+            // cost per element, so the guarded arm loses at every length —
+            // instructions per call against the same body taking an unproven
+            // parameter, both arms re-run in one window:
+            //
+            //   Pt[],      16 elements   11,635 vs  9,360   +24.3%
+            //   Pt[],    1600 elements  789,536 vs 550,881   +43.3%
+            //   string[],  16 elements   10,210 vs  9,818    +4.0%
+            //   string[], 1600 elements  603,351 vs 529,337  +14.0%
+            //
+            // Refusing is the win: the fallback is the generic body. Note the
+            // penalty GROWS with length, which is the opposite of what
+            // amortization would predict, and is why a longer array cannot be
+            // the case that rescues the rule.
+            if !walk_is_bounded {
                 return None;
             }
             Some(SpecParamGuard {
@@ -1404,11 +1375,7 @@ mod tests {
         assert_eq!(scalar_descriptor_rep(b"PGT1"), None);
     }
 
-    fn declaration_guard_for(
-        ty: Type,
-        body: &[perry_hir::Stmt],
-        aliases: &HashMap<String, Type>,
-    ) -> Option<SpecParamGuard> {
+    fn declaration_guard_for(ty: Type, aliases: &HashMap<String, Type>) -> Option<SpecParamGuard> {
         let params = [perry_hir::Param {
             id: 1,
             name: "value".to_string(),
@@ -1422,7 +1389,6 @@ mod tests {
             1,
             "walk_bound_test",
             &params,
-            body,
             &[false],
             &[false],
             aliases,
@@ -1444,21 +1410,21 @@ mod tests {
         let flat = object_alias("Flat", &[("value", Type::Number)]);
         let flat_aliases = HashMap::from([flat]);
         assert!(
-            declaration_guard_for(Type::Named("Flat".to_string()), &[], &flat_aliases).is_some(),
+            declaration_guard_for(Type::Named("Flat".to_string()), &flat_aliases).is_some(),
             "a fixed field walk remains eligible"
         );
 
         let array = Type::Array(Box::new(Type::Number));
-        assert!(declaration_guard_for(array.clone(), &[], &HashMap::new()).is_none());
+        assert!(declaration_guard_for(array.clone(), &HashMap::new()).is_none());
 
-        let loop_body = [perry_hir::Stmt::While {
-            condition: perry_hir::Expr::Bool(false),
-            body: Vec::new(),
-        }];
-        assert!(
-            declaration_guard_for(array, &loop_body, &HashMap::new()).is_some(),
-            "a loop consumer keeps the existing structural specialization"
-        );
+        // The refusal is now unconditional. A loop in the body used to lift
+        // it, on the theory that array reducers amortize validation over their
+        // own traversal; measurement contradicts that (the guarded arm loses
+        // 4-43%, by MORE the longer the array), so the body is no longer an
+        // input to this decision at all — `declaration_guards` does not take
+        // one. That makes the old behavior unexpressible rather than merely
+        // untested.
+        let _ = &array;
 
         let recursive_aliases = HashMap::from([object_alias(
             "Link",
@@ -1468,8 +1434,7 @@ mod tests {
             )],
         )]);
         assert!(
-            declaration_guard_for(Type::Named("Link".to_string()), &[], &recursive_aliases)
-                .is_none(),
+            declaration_guard_for(Type::Named("Link".to_string()), &recursive_aliases).is_none(),
             "a recursive value walk is runtime-sized too"
         );
     }
