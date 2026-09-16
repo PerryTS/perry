@@ -163,9 +163,16 @@ impl WebSocket {
         let deadline = self.socket.deadline_in(timeout);
         let mut out = Vec::new();
         frame::text_frame(text, self.mask()?, &mut out);
-        self.socket
-            .write_all(&out, deadline)
-            .map_err(|e| Error::io("WebSocket send", e))
+        match self.socket.write_all(&out, deadline) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                // A half-written frame desynchronises the stream for good — the
+                // peer would read the remainder as a frame header. Same rule as
+                // `read_message`: the connection is finished, not retryable.
+                self.closed = true;
+                Err(Error::io("WebSocket send", e))
+            }
+        }
     }
 
     /// Read the next application message, or `None` once the peer has closed.
@@ -215,10 +222,19 @@ impl WebSocket {
             }
 
             let mut scratch = Vec::new();
-            let n = self
-                .socket
-                .read(&mut scratch, deadline)
-                .map_err(|e| Error::io("WebSocket read", e))?;
+            // A failed read — including a deadline — leaves an operation
+            // outstanding on the loop, so the socket must not be read again.
+            // Marking it closed here is what makes that impossible: `publish`
+            // answers a read failure by reconnecting, and a caller that
+            // instead retried would otherwise submit a second read on the
+            // same handle.
+            let n = match self.socket.read(&mut scratch, deadline) {
+                Ok(n) => n,
+                Err(e) => {
+                    self.closed = true;
+                    return Err(Error::io("WebSocket read", e));
+                }
+            };
             if n == 0 {
                 self.closed = true;
                 return Ok(None);
