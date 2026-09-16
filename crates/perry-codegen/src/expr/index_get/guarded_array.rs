@@ -714,10 +714,19 @@ pub(super) fn lower_packed_f64_loop_index_get(
             .cond_br(&in_bounds, &cont_label, &fact.store_side_exit_label);
         ctx.current_block = cont_idx;
     }
+    // #9379 proved this clone has no safepoint: the matcher admits no call,
+    // closure or await, its reads and writes are bare `double` load/store on
+    // existing slots, and the back-edge poll is suppressed for exactly that
+    // reason. So the receiver cannot move and its header words cannot change
+    // for the clone's whole dynamic extent — take the pre-masked handle from
+    // the hoisted receiver cache instead of re-laundering the rooted slot and
+    // re-masking it per element. The cache is a plain `i64` alloca nothing in
+    // the clone stores to, so the element-base chain hanging off it
+    // (`size` at `-4`, `capacity` at `+4`, the shifts and the subtract) becomes
+    // loop-invariant to LICM, which the laundered reload deliberately blocked.
     let value = {
+        let arr_handle = super::super::receiver_descriptor_handle_i64(ctx, Some(arr_id), arr_box);
         let blk = ctx.block();
-        let arr_bits = blk.bitcast_double_to_i64(arr_box);
-        let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
         let idx_i64 = blk.zext(I32, idx_i32, I64);
         let byte_offset = blk.shl(I64, &idx_i64, "3");
         let elements_addr = blk.array_elements_addr(&arr_handle);
