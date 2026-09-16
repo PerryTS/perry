@@ -124,6 +124,24 @@ submit(spec) ─► client::Pool::acquire ─► turnloop_net::tcp_connect_host
                         Sink::on_done ─► queue_promise_resolution
 ```
 
+SMTP is the same shape with a different protocol object:
+
+```
+send(config, job) ─► turnloop_net::tcp_connect_host
+                             │ NET_CONNECT
+                             ▼
+                   Connection::connected ─► 220 greeting ─► EHLO
+                             │ Event::UpgradeTls   (STARTTLS or implicit)
+                             ▼
+                   TlsClientSession ─► Connection::tls_established
+                             │ EHLO ─► AUTH ─► Event::Ready
+                             ▼
+                   Connection::send(envelope, message)
+                             │ Event::Sent { info } / Event::Failed
+                             ▼
+                   Sink::on_done ─► queue_deferred_resolution
+```
+
 Four rules hold it together, three of them inherited:
 
 1. **The sink runs no JS.** It runs inside `dispatch_staged`, after a turn has
