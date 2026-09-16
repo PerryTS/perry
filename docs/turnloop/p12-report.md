@@ -223,6 +223,37 @@ byte — above all no `AUTH` and no MySQL handshake response — may precede the
 session**. MySQL's asserts the output is exactly 36 bytes, a 4-byte header plus
 the 32-byte `SSLRequest`, with capability bit 11 set.
 
+### Under the GC instruments
+
+`object_field_by_name` is the one thing in this lane that touches the collector,
+so the `pg` TLS fixture was re-run on it — `new Client({ …, ssl })` is the call
+that reaches it — with the #7154 family armed:
+
+```
+PERRY_GC_SCHEDULE_SEED=20260916 PERRY_GC_SCHEDULE_RATE=1 PERRY_GC_SCHEDULE_ALLOC_KB=0 \
+PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=800 \
+PERRY_GC_VERIFY_EVACUATION=1
+```
+
+Output byte-identical to the unarmed run. 61 forced copying minors, 8 775
+objects moved, `[gc-verify] minor=N evacuation_ok` on every one, and the
+from-space quarantine armed at `mode=ProtectPages` with no fault.
+
+**With one limit the runtime states itself**, and it is worth repeating rather
+than burying: the exit verdict was
+
+> `THIS RUN EXERCISED NOTHING WORTH TRUSTING. … NOT ONE back-edge poll was
+> reached, so every collection came from an event-loop boundary and no loop body
+> was covered.`
+
+— and the process exits non-zero on that verdict rather than reporting success.
+This fixture has no allocating loop codegen emits a poll for. So what is
+established is "clean across 61 forced evacuating minors at event-loop
+boundaries, with evacuation verification on", not "clean under in-loop
+collection". For the call this lane is about that is the relevant window
+anyway — `new Client(…)` is at a turn boundary — but the stronger claim is not
+made.
+
 ## Enabling TLS on the four P7 database servers
 
 P7 brought them up without TLS (`/root/claude-turnloop-p7/dbservers.sh`). The
