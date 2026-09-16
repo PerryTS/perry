@@ -25,7 +25,7 @@
     ]
   },
   "baseline": {
-    "workspace_members": 86,
+    "workspace_members": 87,
     "default_dependency_closure": [
       "perry",
       "perry-api-manifest",
@@ -73,7 +73,7 @@
     ],
     "decision_counts": {
       "externalize": 32,
-      "keep": 49,
+      "keep": 50,
       "merge": 1,
       "remove": 1,
       "review": 3
@@ -388,6 +388,10 @@
       "decision": "keep"
     },
     "perry-tls-session": {
+      "category": "runtime-core",
+      "decision": "keep"
+    },
+    "perry-tls-turnloop": {
       "category": "runtime-core",
       "decision": "keep"
     },
