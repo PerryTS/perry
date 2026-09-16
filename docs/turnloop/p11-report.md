@@ -720,7 +720,32 @@ this lane's own code. The first proves several frames are drained out of one
 read rather than one per read, and that the peer's close is `Ok(None)` and not
 an error.
 
-<!-- P11_GAP_TABLE -->
+### The gap suite, against a baseline built from this branch's own base
+
+**The first pass of both arms was killed by something outside this lane**, at
+test 539 (base) and 533 (P11) of 818, with `GAP_base_RC=143` and
+`GAP_perry_RC=143` — SIGTERM, simultaneously, with no OOM in `dmesg` and 139 GB
+of memory free. The build box runs four or five lanes at once and CLAUDE.md's
+brief warns that an unanchored `pkill -f` has already destroyed other lanes'
+multi-hour sweeps twice. The partial result is still worth reporting, because it
+is a per-test comparison over two-thirds of the suite:
+
+| | base `1edb5b7e8d` | P11 (`24bed7439b`) |
+|---|---|---|
+| tests reached before the kill | 528 | 521 |
+| pass | 524 | 517 |
+| parity_fail | **4** | **4 — the same four** |
+| compile_fail / crash | 0 | 0 |
+| **status changes on the 521 common tests** | — | **0** |
+
+The four are `2159_defineproperty_class_prototype`, `2514_settracesigint`,
+`2899_2779_2777_static_helpers` and `disposablestack_2875` — all four in P6's
+and P8's lists, none of them this lane's, and two of them
+(`…_static_helpers`, `disposablestack_2875`) among the three the committed
+snapshot expects to PASS and which are red on the base commit before this branch
+changes anything.
+
+<!-- P11_GAP_TABLE_FULL -->
 
 ### Local gates
 
