@@ -356,6 +356,21 @@ jobs:
           python3 scripts/addr_class_inventory.py --self-test
           python3 scripts/addr_class_inventory.py
 
+      # turnloop migration (docs/turnloop/): Perry is moving off tokio, and the
+      # only record of what is left used to be eight lane reports written at
+      # eight different commits — which had already gone stale in both
+      # directions by the time P8 read them. This re-derives the remaining
+      # surface from the tree: every (workspace crate -> tokio-family crate)
+      # manifest edge and every tokio-family package in Cargo.lock, compared
+      # strictly against scripts/tokio_inventory.json. A NEW edge fails, and so
+      # does a STALE entry, so a lane that removes an edge must delete its own
+      # line and the file can never describe a tree that is gone.
+      - name: tokio dependency inventory
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/tokio_inventory.py --self-test
+          python3 scripts/tokio_inventory.py
+
       # String payloads live directly after StringHeader in the moving GC heap.
       # Keep new consumers on the owned-copy or rooted-reread APIs instead of
       # adding more layout arithmetic and caller-chosen `&'static str` helpers.

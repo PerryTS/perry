@@ -1,0 +1,593 @@
+{
+  "edges": [
+    {
+      "crate": "perry",
+      "dep": "reqwest",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "none. This is the `perry` CLI binary: `publish`, `login`, `verify`, `audit`, `run --remote`, `setup ios|macos`, the update check, telemetry and compat reports. A compiled program links libperry_runtime.a, libperry_stdlib.a and the perry-ext-* archives \u2014 never this crate.",
+      "reached_when": "the developer runs one of those subcommands; never at a compiled program's runtime",
+      "blocker": "~10 call sites (4 blocking, 6 async) that need multipart upload and streaming download. turnloop-http's client has no multipart builder, so this is a feature request upstream plus a rewrite of publish/audit/verify, not a transport swap.",
+      "issue": "unfiled \u2014 P8"
+    },
+    {
+      "crate": "perry",
+      "dep": "tokio",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "none. This is the `perry` CLI binary: `publish`, `login`, `verify`, `audit`, `run --remote`, `setup ios|macos`, the update check, telemetry and compat reports. A compiled program links libperry_runtime.a, libperry_stdlib.a and the perry-ext-* archives \u2014 never this crate.",
+      "reached_when": "the developer runs one of those subcommands; never at a compiled program's runtime",
+      "blocker": "six `Runtime::new()` / `new_current_thread()` call sites that exist only to drive the reqwest and tokio-tungstenite futures above. Goes when they go.",
+      "issue": "unfiled \u2014 P8"
+    },
+    {
+      "crate": "perry",
+      "dep": "tokio-tungstenite",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "none. This is the `perry` CLI binary: `publish`, `login`, `verify`, `audit`, `run --remote`, `setup ios|macos`, the update check, telemetry and compat reports. A compiled program links libperry_runtime.a, libperry_stdlib.a and the perry-ext-* archives \u2014 never this crate.",
+      "reached_when": "the developer runs one of those subcommands; never at a compiled program's runtime",
+      "blocker": "two WebSocket clients (`publish`'s build-log stream and `run --remote`). turnloop-websocket is sans-I/O and would fit, over a turnloop socket the CLI does not have.",
+      "issue": "unfiled \u2014 P8"
+    },
+    {
+      "crate": "perry-container-compose",
+      "dep": "tokio",
+      "kind": "dev",
+      "optional": false,
+      "target": null,
+      "surface": "none. The separate `perry-compose` binary (a Docker-Compose-like driver for Apple Container / Podman). perry-stdlib reaches it only under the non-default `container` feature, which `full` does not enable.",
+      "reached_when": "running `perry-compose`, or a build that explicitly enables `perry-stdlib/container`",
+      "blocker": "async end-to-end across ~14.8k lines (`async-trait` backends, `tokio::process::Command`, `tokio::time::timeout`). A rewrite of a non-JS tool; no event-loop transport is involved.",
+      "issue": "unfiled \u2014 P8"
+    },
+    {
+      "crate": "perry-container-compose",
+      "dep": "tokio",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "none. The separate `perry-compose` binary (a Docker-Compose-like driver for Apple Container / Podman). perry-stdlib reaches it only under the non-default `container` feature, which `full` does not enable.",
+      "reached_when": "running `perry-compose`, or a build that explicitly enables `perry-stdlib/container`",
+      "blocker": "async end-to-end across ~14.8k lines (`async-trait` backends, `tokio::process::Command`, `tokio::time::timeout`). A rewrite of a non-JS tool; no event-loop transport is involved.",
+      "issue": "unfiled \u2014 P8"
+    },
+    {
+      "crate": "perry-ext-axios",
+      "dep": "reqwest",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "`import axios from 'axios'` \u2014 and, because this crate defines the same `js_fetch_*` symbols perry-stdlib's Web Fetch owns while the well-known flip strips perry-stdlib's `http-client`/`web-fetch` for that import, **the program's global `fetch()` as well**. Importing axios silently moves global fetch back off turnloop.",
+      "reached_when": "always, in any program that imports axios",
+      "blocker": "no C seam to perry-stdlib's turnloop HTTP engine (the `js_perry_smtp_*` shape P6 built for SMTP). The crate also builds a fresh reqwest::Client per request, so migrating before that is fixed would move a defect onto a new transport.",
+      "issue": "#10326 (per-request client); the transport and the global-fetch takeover are unfiled \u2014 P8"
+    },
+    {
+      "crate": "perry-ext-axios",
+      "dep": "tokio",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "`import axios from 'axios'` \u2014 and, because this crate defines the same `js_fetch_*` symbols perry-stdlib's Web Fetch owns while the well-known flip strips perry-stdlib's `http-client`/`web-fetch` for that import, **the program's global `fetch()` as well**. Importing axios silently moves global fetch back off turnloop.",
+      "reached_when": "always, in any program that imports axios",
+      "blocker": "`spawn_blocking` + `Handle::current().block_on` around the reqwest future. Goes with reqwest.",
+      "issue": "unfiled \u2014 P8"
+    },
+    {
+      "crate": "perry-ext-fastify",
+      "dep": "hyper",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "`import Fastify from 'fastify'` \u2014 its HTTP server accept loop and its WebSocket upgrade path",
+      "reached_when": "always, in any program that imports fastify",
+      "blocker": "its own hyper accept loop, independent of perry-ext-http's. P5 migrated perry-ext-http's server; this crate has no dependency edge to it, so sharing that core needs either a new crate for the sans-I/O server or a new edge.",
+      "issue": "unfiled \u2014 P5 named it, P8 confirms it"
+    },
+    {
+      "crate": "perry-ext-fastify",
+      "dep": "hyper-util",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "`import Fastify from 'fastify'` \u2014 its HTTP server accept loop and its WebSocket upgrade path",
+      "reached_when": "always, in any program that imports fastify",
+      "blocker": "the `server-auto` connection builder behind that accept loop. P5 migrated perry-ext-http's server; this crate has no dependency edge to it, so sharing that core needs either a new crate for the sans-I/O server or a new edge.",
+      "issue": "unfiled \u2014 P5 named it, P8 confirms it"
+    },
+    {
+      "crate": "perry-ext-fastify",
+      "dep": "tokio",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "`import Fastify from 'fastify'` \u2014 its HTTP server accept loop and its WebSocket upgrade path",
+      "reached_when": "always, in any program that imports fastify",
+      "blocker": "the runtime those futures need, entered through `spawn_blocking_with_reactor`. P5 migrated perry-ext-http's server; this crate has no dependency edge to it, so sharing that core needs either a new crate for the sans-I/O server or a new edge.",
+      "issue": "unfiled \u2014 P5 named it, P8 confirms it"
+    },
+    {
+      "crate": "perry-ext-fastify",
+      "dep": "tokio-tungstenite",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "`import Fastify from 'fastify'` \u2014 its HTTP server accept loop and its WebSocket upgrade path",
+      "reached_when": "always, in any program that imports fastify",
+      "blocker": "the `@fastify/websocket` upgrade handshake. P5 migrated perry-ext-http's server; this crate has no dependency edge to it, so sharing that core needs either a new crate for the sans-I/O server or a new edge.",
+      "issue": "unfiled \u2014 P5 named it, P8 confirms it"
+    },
+    {
+      "crate": "perry-ext-fetch",
+      "dep": "reqwest",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "`import fetch from 'node-fetch'` (and the bare `fetch` well-known alias) \u2014 and, by the same symbol takeover as axios, **the program's global `fetch()`**.",
+      "reached_when": "always, in any program that imports node-fetch",
+      "blocker": "same missing C seam as axios. This crate also has no AbortSignal wiring (#10325) and its `js_headers_new` disagrees with perry-stdlib's (#10310), so it wants the duplication resolved rather than the duplication migrated.",
+      "issue": "#10325, #10310; the transport and the global-fetch takeover are unfiled \u2014 P8"
+    },
+    {
+      "crate": "perry-ext-fetch",
+      "dep": "tokio",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "`import fetch from 'node-fetch'` (and the bare `fetch` well-known alias) \u2014 and, by the same symbol takeover as axios, **the program's global `fetch()`**.",
+      "reached_when": "always, in any program that imports node-fetch",
+      "blocker": "`spawn_blocking` + `Handle::current().block_on` around the reqwest future. Goes with reqwest.",
+      "issue": "unfiled \u2014 P8"
+    },
+    {
+      "crate": "perry-ext-http",
+      "dep": "h2",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "`http2.createSecureServer()` (server) and `http2.connect()` (client)",
+      "reached_when": "always, in any program that imports node:http2",
+      "blocker": "HTTP/2 is a second full surface (`server/http2_server/*`, its own stream handles, settings, ALPN and flow control) and the client spins up a private tokio runtime per session. `turnloop_http::http2::Connection` exists and is sans-I/O; wiring it is its own phase.",
+      "issue": "#10327"
+    },
+    {
+      "crate": "perry-ext-http",
+      "dep": "hyper",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "`http.createServer()` / `https.createServer()` on a declining path, and http2.createSecureServer",
+      "reached_when": "a worker_threads agent (no loop: agent_loop::net_available is `current_agent() == PRIMARY_AGENT`), the `tokio-wait-driver` A/B arm, or a host where Loop::new failed; also a cluster worker (needs SO_REUSEPORT or a passed descriptor) and a server with `new WebSocketServer({ server })` attached at listen time",
+      "blocker": "per-agent loops close the first; PerryTS/turnloop#49 (SO_REUSEPORT) closes the cluster case; the attached WebSocketServer needs perry-ext-ws moved to turnloop-websocket's tungstenite major.",
+      "issue": "unfiled \u2014 P8"
+    },
+    {
+      "crate": "perry-ext-http",
+      "dep": "hyper-util",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "as `hyper` above \u2014 the `server-auto` connection builder",
+      "reached_when": "a worker_threads agent (no loop: agent_loop::net_available is `current_agent() == PRIMARY_AGENT`), the `tokio-wait-driver` A/B arm, or a host where Loop::new failed",
+      "blocker": "goes with hyper.",
+      "issue": "unfiled \u2014 P8"
+    },
+    {
+      "crate": "perry-ext-http",
+      "dep": "reqwest",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "`http.request()` / `https.get()` / `https.request()` \u2014 the node:http CLIENT half",
+      "reached_when": "always: P5 migrated this crate's SERVER, the client was never migrated",
+      "blocker": "`agent.rs` alone is ~1,950 lines, a second Node-semantics connection pool layered over reqwest's own. Plus three raw `tokio::net::TcpStream` bypasses (`TE: trailers`, `Expect: 100-continue`, an `agent.createConnection` override) that are not reqwest at all.",
+      "issue": "#10328 (the agent cache never evicts); the transport is unfiled \u2014 P6 named it, P8 confirms it"
+    },
+    {
+      "crate": "perry-ext-http",
+      "dep": "tokio",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "every row above, plus the three raw-TcpStream client bypasses",
+      "reached_when": "always (the client) or a worker_threads agent (no loop: agent_loop::net_available is `current_agent() == PRIMARY_AGENT`), the `tokio-wait-driver` A/B arm, or a host where Loop::new failed (the server)",
+      "blocker": "the union of the rows above.",
+      "issue": "unfiled \u2014 P8"
+    },
+    {
+      "crate": "perry-ext-http",
+      "dep": "tokio-rustls",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "`https.createServer()` on a declining path, and TLS for the node:https client",
+      "reached_when": "a worker_threads agent (no loop: agent_loop::net_available is `current_agent() == PRIMARY_AGENT`), the `tokio-wait-driver` A/B arm, or a host where Loop::new failed",
+      "blocker": "P5 put the accepted-connection TLS on turnloop-tls; the declining server and the whole client still use tokio_rustls.",
+      "issue": "unfiled \u2014 P8"
+    },
+    {
+      "crate": "perry-ext-http",
+      "dep": "tokio-tungstenite",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "`new WebSocketServer({ server })` attached to a node:http server at listen time",
+      "reached_when": "always, for that attachment shape; `server.on('upgrade')` (what @hono/node-server uses) is on turnloop",
+      "blocker": "the handshake needs an owned stream a turnloop connection cannot produce, and perry-ext-ws stores `WebSocketStream` values from tungstenite 0.29 while turnloop-websocket is on 0.30.",
+      "issue": "unfiled \u2014 P5 named it, P8 confirms it"
+    },
+    {
+      "crate": "perry-ext-ioredis",
+      "dep": "redis",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "`new Redis()` / ioredis \u2014 every command",
+      "reached_when": "a worker_threads agent (no loop: agent_loop::net_available is `current_agent() == PRIMARY_AGENT`), the `tokio-wait-driver` A/B arm, or a host where Loop::new failed, **or `REDIS_TLS` is not the string `false` \u2014 which is the DEFAULT**, so the out-of-the-box configuration takes this path",
+      "blocker": "TLS from a database binding: nothing in perry_db_turnloop reaches turnloop-tls. Note the declining path cannot work either \u2014 this crate's `redis` has no TLS backend compiled in \u2014 so the decline preserves today's failure rather than a working configuration.",
+      "issue": "#10335"
+    },
+    {
+      "crate": "perry-ext-ioredis",
+      "dep": "tokio",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "as `redis` above",
+      "reached_when": "a worker_threads agent (no loop: agent_loop::net_available is `current_agent() == PRIMARY_AGENT`), the `tokio-wait-driver` A/B arm, or a host where Loop::new failed or the REDIS_TLS default",
+      "blocker": "`spawn_blocking` + `Handle::current().block_on` per command, and the #1824 hazard of building the JS result on that thread (#10336).",
+      "issue": "#10336, #10339"
+    },
+    {
+      "crate": "perry-ext-mongodb",
+      "dep": "mongodb",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "`new MongoClient()` \u2014 connect, find, insert, update, delete, aggregate",
+      "reached_when": "a worker_threads agent (no loop: agent_loop::net_available is `current_agent() == PRIMARY_AGENT`), the `tokio-wait-driver` A/B arm, or a host where Loop::new failed, plus `mongodb+srv://`, `tls=`, several hosts, `replicaSet=`, `compressors=`, an unparsable URI, or no /dev/urandom",
+      "blocker": "SRV lookup, topology discovery/SDAM monitors and rustls all stay in the `mongodb` driver; turnloop-mongodb is a single-connection protocol core.",
+      "issue": "#10332, #10341"
+    },
+    {
+      "crate": "perry-ext-mongodb",
+      "dep": "tokio",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "as `mongodb` above",
+      "reached_when": "a worker_threads agent (no loop: agent_loop::net_available is `current_agent() == PRIMARY_AGENT`), the `tokio-wait-driver` A/B arm, or a host where Loop::new failed or any of the URI features above",
+      "blocker": "`spawn_blocking` + `Handle::current().block_on` per operation. Goes with the driver.",
+      "issue": "#10339"
+    },
+    {
+      "crate": "perry-ext-mysql2",
+      "dep": "sqlx",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "`new Client()` / `new Pool()` (pg) or `createConnection()` / `createPool()` (mysql2)",
+      "reached_when": "a worker_threads agent (no loop: agent_loop::net_available is `current_agent() == PRIMARY_AGENT`), the `tokio-wait-driver` A/B arm, or a host where Loop::new failed, plus any TLS connection",
+      "blocker": "TLS to a database, and sqlx::mysql is also the only path that serves a UDS host. Both need work in perry-db-turnloop, not in this crate.",
+      "issue": "#10339, #10341"
+    },
+    {
+      "crate": "perry-ext-mysql2",
+      "dep": "tokio",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "`new Client()` / `new Pool()` (pg) or `createConnection()` / `createPool()` (mysql2)",
+      "reached_when": "a worker_threads agent (no loop: agent_loop::net_available is `current_agent() == PRIMARY_AGENT`), the `tokio-wait-driver` A/B arm, or a host where Loop::new failed",
+      "blocker": "`spawn_blocking` + `Handle::current().block_on` per statement. Goes with sqlx.",
+      "issue": "#10339"
+    },
+    {
+      "crate": "perry-ext-net",
+      "dep": "tokio",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "`net.createServer()`, `net.connect()`, `tls.connect()`, `socket.upgradeToTLS()`, and node:net IPC",
+      "reached_when": "a worker_threads agent (no loop: agent_loop::net_available is `current_agent() == PRIMARY_AGENT`), the `tokio-wait-driver` A/B arm, or a host where Loop::new failed",
+      "blocker": "per-agent loops. P1 and P5 moved every one of these to turnloop for the primary agent and kept the tokio socket task for the declining ones \u2014 that is the P1 coexistence rule, not an omission.",
+      "issue": "unfiled \u2014 P8"
+    },
+    {
+      "crate": "perry-ext-net",
+      "dep": "tokio-rustls",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "`tls.connect()` and `socket.upgradeToTLS()` on a declining path",
+      "reached_when": "a worker_threads agent (no loop: agent_loop::net_available is `current_agent() == PRIMARY_AGENT`), the `tokio-wait-driver` A/B arm, or a host where Loop::new failed",
+      "blocker": "goes with the tokio socket task.",
+      "issue": "unfiled \u2014 P8"
+    },
+    {
+      "crate": "perry-ext-nodemailer",
+      "dep": "lettre",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "`nodemailer.createTransport(...).sendMail()` / `.verify()`",
+      "reached_when": "a worker_threads agent (no loop: agent_loop::net_available is `current_agent() == PRIMARY_AGENT`), the `tokio-wait-driver` A/B arm, or a host where Loop::new failed, or an unbuildable message. P6 moved the transport; the MIME builder did not move and never will \u2014 `turnloop-smtp` re-exports this same builder",
+      "blocker": "the builder is a permanent, legitimate use. What can go is the `AsyncSmtpTransport` fallback, and with it lettre's `tokio1` / `tokio1-rustls-tls` / `pool` features \u2014 which is what actually removes this edge's tokio, without removing lettre.",
+      "issue": "#10324"
+    },
+    {
+      "crate": "perry-ext-nodemailer",
+      "dep": "tokio",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "as `lettre` above",
+      "reached_when": "a worker_threads agent (no loop: agent_loop::net_available is `current_agent() == PRIMARY_AGENT`), the `tokio-wait-driver` A/B arm, or a host where Loop::new failed",
+      "blocker": "`spawn_blocking` around the lettre transport. Goes with the transport fallback.",
+      "issue": "unfiled \u2014 P8"
+    },
+    {
+      "crate": "perry-ext-pg",
+      "dep": "sqlx",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "`new Client()` / `new Pool()` (pg) or `createConnection()` / `createPool()` (mysql2)",
+      "reached_when": "a worker_threads agent (no loop: agent_loop::net_available is `current_agent() == PRIMARY_AGENT`), the `tokio-wait-driver` A/B arm, or a host where Loop::new failed, plus a Unix-domain-socket host (turnloop's driver submits a TCP connect), plus any TLS connection",
+      "blocker": "TLS to a database, and sqlx::postgres is also the only path that serves a UDS host. Both need work in perry-db-turnloop, not in this crate.",
+      "issue": "#10337, #10338, #10339, #10341"
+    },
+    {
+      "crate": "perry-ext-pg",
+      "dep": "tokio",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "`new Client()` / `new Pool()` (pg) or `createConnection()` / `createPool()` (mysql2)",
+      "reached_when": "a worker_threads agent (no loop: agent_loop::net_available is `current_agent() == PRIMARY_AGENT`), the `tokio-wait-driver` A/B arm, or a host where Loop::new failed",
+      "blocker": "`spawn_blocking` + `Handle::current().block_on` per statement. Goes with sqlx.",
+      "issue": "#10339"
+    },
+    {
+      "crate": "perry-ext-ws",
+      "dep": "tokio",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "`import WebSocket from 'ws'` \u2014 client and `WebSocketServer`",
+      "reached_when": "always: the `ws` binding was never a P1\u2013P7 subject",
+      "blocker": "this crate is the one P5 could not reach: it stores `tokio_tungstenite::WebSocketStream` values, and turnloop-websocket is on a different tungstenite major, so the stored connection type has to change with the transport.",
+      "issue": "unfiled \u2014 P5 named it, P8 confirms it"
+    },
+    {
+      "crate": "perry-ext-ws",
+      "dep": "tokio-tungstenite",
+      "kind": "normal",
+      "optional": false,
+      "target": null,
+      "surface": "as `tokio` above",
+      "reached_when": "always",
+      "blocker": "tungstenite 0.29 here vs turnloop-websocket's 0.30 \u2014 a major-version migration of the stored connection type, not a transport swap.",
+      "issue": "unfiled \u2014 P5 named it, P8 confirms it"
+    },
+    {
+      "crate": "perry-stdlib",
+      "dep": "hyper",
+      "kind": "normal",
+      "optional": true,
+      "target": null,
+      "surface": "perry-stdlib is the bundled implementation. For every module below, the well-known flip compiles the bundled copy OUT and routes the import to the perry-ext-* wrapper \u2014 so these are reachable only under `PERRY_DISABLE_WELL_KNOWN=1`, when the wrapper's source is absent, or in a prebuilt release archive that ships `full`. `http.createServer()` through the bundled framework server.",
+      "reached_when": "`PERRY_DISABLE_WELL_KNOWN=1`, or a program whose http import does not route to perry-ext-http",
+      "blocker": "`framework/server.rs` is a hyper service Perry never migrated; P5 left it alone the way P1 left the bundled `net`.",
+      "issue": "unfiled \u2014 P5 named it, P8 confirms it"
+    },
+    {
+      "crate": "perry-stdlib",
+      "dep": "hyper-util",
+      "kind": "normal",
+      "optional": true,
+      "target": null,
+      "surface": "perry-stdlib is the bundled implementation. For every module below, the well-known flip compiles the bundled copy OUT and routes the import to the perry-ext-* wrapper \u2014 so these are reachable only under `PERRY_DISABLE_WELL_KNOWN=1`, when the wrapper's source is absent, or in a prebuilt release archive that ships `full`. as `hyper` above.",
+      "reached_when": "as `hyper` above",
+      "blocker": "goes with hyper.",
+      "issue": "unfiled \u2014 P8"
+    },
+    {
+      "crate": "perry-stdlib",
+      "dep": "lettre",
+      "kind": "normal",
+      "optional": true,
+      "target": null,
+      "surface": "perry-stdlib is the bundled implementation. For every module below, the well-known flip compiles the bundled copy OUT and routes the import to the perry-ext-* wrapper \u2014 so these are reachable only under `PERRY_DISABLE_WELL_KNOWN=1`, when the wrapper's source is absent, or in a prebuilt release archive that ships `full`. the bundled `nodemailer` module \u2014 and its MIME builder, which `turnloop_smtp` uses on the migrated path too.",
+      "reached_when": "the builder: always. The `AsyncSmtpTransport`: a worker_threads agent (no loop: agent_loop::net_available is `current_agent() == PRIMARY_AGENT`), the `tokio-wait-driver` A/B arm, or a host where Loop::new failed",
+      "blocker": "the builder is permanent. Dropping lettre's `tokio1`/`tokio1-rustls-tls`/`pool` features \u2014 which requires deleting the async transport fallback \u2014 is what removes tokio from this edge.",
+      "issue": "unfiled \u2014 P8"
+    },
+    {
+      "crate": "perry-stdlib",
+      "dep": "mongodb",
+      "kind": "normal",
+      "optional": true,
+      "target": null,
+      "surface": "perry-stdlib is the bundled implementation. For every module below, the well-known flip compiles the bundled copy OUT and routes the import to the perry-ext-* wrapper \u2014 so these are reachable only under `PERRY_DISABLE_WELL_KNOWN=1`, when the wrapper's source is absent, or in a prebuilt release archive that ships `full`. the bundled `mongodb` module.",
+      "reached_when": "`PERRY_DISABLE_WELL_KNOWN=1`, or the ext crate's source being absent from disk",
+      "blocker": "as sqlx. Compiled out of every default build, so the cheapest removal in the tree is to DELETE these copies \u2014 which is a policy decision (they are the fallback when a wrapper cannot be built), not a transport one.",
+      "issue": "unfiled \u2014 P7 named them, P8 confirms them"
+    },
+    {
+      "crate": "perry-stdlib",
+      "dep": "redis",
+      "kind": "normal",
+      "optional": true,
+      "target": null,
+      "surface": "perry-stdlib is the bundled implementation. For every module below, the well-known flip compiles the bundled copy OUT and routes the import to the perry-ext-* wrapper \u2014 so these are reachable only under `PERRY_DISABLE_WELL_KNOWN=1`, when the wrapper's source is absent, or in a prebuilt release archive that ships `full`. the bundled `ioredis` module.",
+      "reached_when": "`PERRY_DISABLE_WELL_KNOWN=1`, or the ext crate's source being absent from disk",
+      "blocker": "as sqlx. Compiled out of every default build, so the cheapest removal in the tree is to DELETE these copies \u2014 which is a policy decision (they are the fallback when a wrapper cannot be built), not a transport one.",
+      "issue": "unfiled \u2014 P7 named them, P8 confirms them"
+    },
+    {
+      "crate": "perry-stdlib",
+      "dep": "reqwest",
+      "kind": "normal",
+      "optional": true,
+      "target": null,
+      "surface": "the global `fetch()` when the turnloop engine DECLINES, `js_fetch_stream_start` (the SSE line-poll surface, which never takes the turnloop path), a proxied fetch, and the `axios.rs` mirror.",
+      "reached_when": "a worker_threads agent (no loop: agent_loop::net_available is `current_agent() == PRIMARY_AGENT`), the `tokio-wait-driver` A/B arm, or a host where Loop::new failed, a proxy (`HTTP_PROXY`/`HTTPS_PROXY` or `setGlobalDispatcher(new ProxyAgent(...))`), or a URL `turnloop_http::client::Request::new` rejects; `js_fetch_stream_start` and `axios.rs` take it unconditionally",
+      "blocker": "per-agent loops for the decline; a CONNECT tunnel driven from a URL rather than from a prebuilt `reqwest::Client` for the proxy; and a line-splitting state machine over the engine's `Sink::on_head`/`on_chunk` hooks for the stream surface \u2014 those hooks exist and NOTHING calls them, which by CLAUDE.md's kill-policy makes them a decision nobody has made.",
+      "issue": "unfiled \u2014 P6 named all three, P8 confirms them"
+    },
+    {
+      "crate": "perry-stdlib",
+      "dep": "sqlx",
+      "kind": "normal",
+      "optional": true,
+      "target": null,
+      "surface": "perry-stdlib is the bundled implementation. For every module below, the well-known flip compiles the bundled copy OUT and routes the import to the perry-ext-* wrapper \u2014 so these are reachable only under `PERRY_DISABLE_WELL_KNOWN=1`, when the wrapper's source is absent, or in a prebuilt release archive that ships `full`. the bundled `pg` and `mysql2` modules.",
+      "reached_when": "`PERRY_DISABLE_WELL_KNOWN=1`, or the ext crate's source being absent from disk",
+      "blocker": "these are the only database copies that never needed a thread per call \u2014 they were already cooperative on the shared current-thread runtime. Compiled out of every default build, so the cheapest removal in the tree is to DELETE these copies \u2014 which is a policy decision (they are the fallback when a wrapper cannot be built), not a transport one.",
+      "issue": "unfiled \u2014 P7 named them, P8 confirms them"
+    },
+    {
+      "crate": "perry-stdlib",
+      "dep": "tokio",
+      "kind": "normal",
+      "optional": true,
+      "target": null,
+      "surface": "every async stdlib surface: the `async-runtime` feature gates `common::async_bridge` and `perry_ffi_async`, i.e. the whole promise bridge and the `perry_ffi_spawn_blocking*` / `spawn_async` C ABI every perry-ext-* crate settles its promises through.",
+      "reached_when": "always \u2014 `full` implies it, and 20 other features imply it individually",
+      "blocker": "this is the hardest edge in the tree and it is NOT a separable layer: `async_bridge::RUNTIME` is tokio because its clients hand it tokio futures (reqwest, hyper, tokio-tungstenite, sqlx, redis, mongodb, lettre). It goes when the last of them goes, not before. P4's v1 shims (`spawn_blocking`, `spawn_blocking_with_reactor`, `spawn_async`) cannot move onto turnloop's bounded pool because their callers hold a thread for a CONNECTION's lifetime, not a job's (PerryTS/turnloop#42).",
+      "issue": "unfiled \u2014 P8; PerryTS/turnloop#42 upstream"
+    },
+    {
+      "crate": "perry-stdlib",
+      "dep": "tokio-rustls",
+      "kind": "normal",
+      "optional": true,
+      "target": null,
+      "surface": "perry-stdlib is the bundled implementation. For every module below, the well-known flip compiles the bundled copy OUT and routes the import to the perry-ext-* wrapper \u2014 so these are reachable only under `PERRY_DISABLE_WELL_KNOWN=1`, when the wrapper's source is absent, or in a prebuilt release archive that ships `full`. `tls.connect()`, `socket.upgradeToTLS()` and the bundled TLS server.",
+      "reached_when": "the `tls-runtime` feature, which `external-net-tls` and `external-tls-server` also pull in \u2014 so this one survives the well-known flip",
+      "blocker": "the bundled TLS server and preflight were never a P5 subject; only perry-ext-net's client TLS and perry-ext-http's accepted-connection TLS moved.",
+      "issue": "unfiled \u2014 P8"
+    },
+    {
+      "crate": "perry-stdlib",
+      "dep": "tokio-tungstenite",
+      "kind": "normal",
+      "optional": true,
+      "target": null,
+      "surface": "perry-stdlib is the bundled implementation. For every module below, the well-known flip compiles the bundled copy OUT and routes the import to the perry-ext-* wrapper \u2014 so these are reachable only under `PERRY_DISABLE_WELL_KNOWN=1`, when the wrapper's source is absent, or in a prebuilt release archive that ships `full`. the bundled `ws` module.",
+      "reached_when": "`PERRY_DISABLE_WELL_KNOWN=1`, or an import that does not route to perry-ext-ws",
+      "blocker": "same tungstenite-major blocker as perry-ext-ws.",
+      "issue": "unfiled \u2014 P8"
+    },
+    {
+      "crate": "perry-ui-android",
+      "dep": "tungstenite",
+      "kind": "normal",
+      "optional": false,
+      "target": "cfg(target_os = \"android\")",
+      "surface": "`perry/ui` WebSocket on Android (`crates/perry-ui-android/src/ws.rs`)",
+      "reached_when": "an Android target build only",
+      "blocker": "this is SYNC tungstenite 0.24 on its own thread \u2014 it is not a tokio edge at all, and it is listed because it pins the third tungstenite major in the tree, which is part of why perry-ext-ws cannot move to turnloop-websocket cheaply.",
+      "issue": "unfiled \u2014 P8"
+    },
+    {
+      "crate": "perry-ui-gtk4",
+      "dep": "tokio",
+      "kind": "normal",
+      "optional": false,
+      "target": "cfg(target_os = \"linux\")",
+      "surface": "`perry/ui` tray icon and MPRIS media keys on Linux (`ksni`, `mpris-server`)",
+      "reached_when": "a Linux GTK4 UI build only. Invisible to `cargo tree` on macOS \u2014 this edge is target-gated, which is why this gate reads manifests rather than a resolved tree",
+      "blocker": "`ksni` and `mpris-server` REQUIRE tokio (they are zbus clients with a `tokio` feature). Removing it means replacing both crates or dropping tray/MPRIS support on Linux.",
+      "issue": "unfiled \u2014 P8"
+    }
+  ],
+  "lockfile": {
+    "h2": [
+      "0.4.19"
+    ],
+    "hyper": [
+      "1.11.1"
+    ],
+    "hyper-rustls": [
+      "0.27.9"
+    ],
+    "hyper-util": [
+      "0.1.20"
+    ],
+    "lettre": [
+      "0.11.23"
+    ],
+    "mongodb": [
+      "3.8.2"
+    ],
+    "redis": [
+      "1.6.0"
+    ],
+    "reqwest": [
+      "0.12.28"
+    ],
+    "sqlx": [
+      "0.9.0"
+    ],
+    "sqlx-core": [
+      "0.9.0"
+    ],
+    "sqlx-mysql": [
+      "0.9.0"
+    ],
+    "sqlx-postgres": [
+      "0.9.0"
+    ],
+    "tokio": [
+      "1.53.1"
+    ],
+    "tokio-rustls": [
+      "0.26.4"
+    ],
+    "tokio-stream": [
+      "0.1.18"
+    ],
+    "tokio-tungstenite": [
+      "0.29.0"
+    ],
+    "tokio-util": [
+      "0.7.18"
+    ],
+    "tower": [
+      "0.5.3"
+    ],
+    "tower-http": [
+      "0.6.11"
+    ],
+    "tungstenite": [
+      "0.24.0",
+      "0.29.0"
+    ]
+  },
+  "source_sites": {
+    "perry": 25,
+    "perry-container-compose": 14,
+    "perry-ext-ads": 5,
+    "perry-ext-axios": 4,
+    "perry-ext-fastify": 11,
+    "perry-ext-fetch": 9,
+    "perry-ext-http": 106,
+    "perry-ext-ioredis": 13,
+    "perry-ext-mongodb": 29,
+    "perry-ext-mysql2": 35,
+    "perry-ext-net": 52,
+    "perry-ext-nodemailer": 6,
+    "perry-ext-pg": 20,
+    "perry-ext-ws": 24,
+    "perry-ffi": 2,
+    "perry-stdlib": 106,
+    "perry-ui-gtk4": 7
+  },
+  "_comment": "Generated by scripts/tokio_inventory.py --update; the surface / reached_when / blocker / issue fields are hand-written and are the turnloop migration's remaining-work inventory. See docs/turnloop/p8-report.md and the script's docstring for what is gated and what is not."
+}
