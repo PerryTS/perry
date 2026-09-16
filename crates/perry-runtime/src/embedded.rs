@@ -490,13 +490,13 @@ pub extern "C" fn js_perry_read_embedded(path_value: f64) -> *mut crate::buffer:
 mod keep_embedded {
     use super::*;
     #[cfg(feature = "keepalive-anchors")]
-#[used] static K0: unsafe extern "C" fn(*const u8, usize, *const u8, usize) = js_register_embedded_asset;
+#[used(compiler)] static K0: unsafe extern "C" fn(*const u8, usize, *const u8, usize) = js_register_embedded_asset;
     #[cfg(feature = "keepalive-anchors")]
-#[used] static K1: extern "C" fn(f64) -> *mut crate::buffer::BufferHeader = js_perry_read_embedded;
+#[used(compiler)] static K1: extern "C" fn(f64) -> *mut crate::buffer::BufferHeader = js_perry_read_embedded;
     #[cfg(feature = "keepalive-anchors")]
-#[used] static K2: extern "C" fn() -> *mut crate::array::ArrayHeader = js_perry_embedded_files;
+#[used(compiler)] static K2: extern "C" fn() -> *mut crate::array::ArrayHeader = js_perry_embedded_files;
     #[cfg(feature = "keepalive-anchors")]
-#[used] static K3: unsafe extern "C" fn(*const u8, usize, *const u8, usize) = js_register_embedded_text_asset;
+#[used(compiler)] static K3: unsafe extern "C" fn(*const u8, usize, *const u8, usize) = js_register_embedded_text_asset;
 }
 
 #[cfg(test)]

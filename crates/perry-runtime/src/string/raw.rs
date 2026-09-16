@@ -116,5 +116,5 @@ fn throw_raw_type_error() -> ! {
 /// LLVM rebuild would otherwise dead-strip this `#[no_mangle]` symbol and
 /// break linking (see PR #3320 / the `#[used]` keepalive pattern).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_STRING_RAW: extern "C" fn(f64, f64) -> *mut StringHeader = js_string_raw;

@@ -85,7 +85,7 @@ pub extern "C" fn js_worker_threads_post_message_to_thread(
     perry_runtime::value::js_nanbox_pointer(promise as i64)
 }
 
-#[used]
+#[used(compiler)]
 static KEEP_WT_POST_MESSAGE_TO_THREAD: extern "C" fn(f64, f64, f64, f64) -> f64 =
     js_worker_threads_post_message_to_thread;
 

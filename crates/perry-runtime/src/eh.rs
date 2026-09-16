@@ -474,7 +474,7 @@ unsafe fn read_encoded_pointer(
 // Keep the personality (and therefore this module's symbols) out of
 // dead-strip's reach in the static archives: generated code references
 // `perry_eh_personality` by name only.
-#[used]
+#[used(compiler)]
 static _KEEP_PERSONALITY: unsafe extern "C" fn(
     c_int,
     UnwindAction,

@@ -185,7 +185,7 @@ pub unsafe extern "C" fn js_set_call_location(file_ptr: *const u8, file_len: usi
 // Generated-code-only callee: anchor against the auto-optimize LTO dead-strip
 // (see project_auto_optimize_keepalive_3320).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_SET_CALL_LOCATION: unsafe extern "C" fn(*const u8, usize, u32) =
     js_set_call_location;
 
@@ -554,7 +554,7 @@ pub unsafe extern "C" fn js_node_system_error_value(
 // otherwise dead-strip them (see project_auto_optimize_keepalive_3320). The
 // `#[used]` anchors pin them.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_ERROR_VALUE_WITH_CODE: unsafe extern "C" fn(
     *const u8,
     usize,
@@ -564,7 +564,7 @@ static KEEP_JS_ERROR_VALUE_WITH_CODE: unsafe extern "C" fn(
 ) -> f64 = js_error_value_with_code;
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_NODE_SYSTEM_ERROR_VALUE: unsafe extern "C" fn(
     *const u8,
     usize,
@@ -576,7 +576,7 @@ static KEEP_JS_NODE_SYSTEM_ERROR_VALUE: unsafe extern "C" fn(
 ) -> f64 = js_node_system_error_value;
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_THROW_ERROR_WITH_CODE: unsafe extern "C" fn(
     *const u8,
     usize,
@@ -1006,7 +1006,7 @@ pub extern "C" fn js_throw_eval_syntax_error(message: f64) -> f64 {
 
 // #1561-style force-keep: only generated IR calls this.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_THROW_EVAL_SYNTAX_ERROR: extern "C" fn(f64) -> f64 = js_throw_eval_syntax_error;
 
 #[no_mangle]
@@ -1019,7 +1019,7 @@ pub extern "C" fn js_throw_restricted_function_property_assignment() -> f64 {
 
 // #1561-style force-keep: only generated IR calls this.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_THROW_RESTRICTED_FN_PROP_ASSIGN: extern "C" fn() -> f64 =
     js_throw_restricted_function_property_assignment;
 
@@ -1109,7 +1109,7 @@ pub extern "C" fn js_throw_reference_error_tdz(name: f64) -> f64 {
 /// Keepalive anchor for the auto-optimize whole-program build (generated-code-
 /// and runtime-only callee).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_THROW_REFERENCE_ERROR_TDZ: extern "C" fn(f64) -> f64 = js_throw_reference_error_tdz;
 
 #[no_mangle]
@@ -1120,7 +1120,7 @@ pub extern "C" fn js_throw_reference_error_unresolved_get() -> f64 {
 /// Keepalive anchor for the auto-optimize whole-program build (generated-code
 ///-only callee; see project_auto_optimize_keepalive_3320).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_GLOBAL_GET_OR_THROW_UNRESOLVED: extern "C-unwind" fn(f64) -> f64 =
     js_global_get_or_throw_unresolved;
 
@@ -1187,11 +1187,11 @@ const _: extern "C-unwind" fn(f64) -> f64 = js_global_get_or_throw_unresolved;
 /// Keepalive anchor for the auto-optimize whole-program build (generated-code
 ///-only callee; see project_auto_optimize_keepalive_3320).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_GLOBAL_GET_OPTIONAL: extern "C" fn(f64) -> f64 = js_global_get_optional;
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_GLOBAL_UPDATE: extern "C" fn(f64, f64, f64) -> f64 = js_global_update;
 
 /// `++x` / `x++` / `--x` / `x--` where `x` resolves to no lexical binding —
@@ -1278,7 +1278,7 @@ pub extern "C" fn js_global_update(name_value: f64, is_increment: f64, is_prefix
 /// Keepalive anchor for the auto-optimize whole-program build (generated-code
 ///-only callee; see project_auto_optimize_keepalive_3320).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_GLOBAL_ASSIGN_EXISTING_OR_THROW: extern "C" fn(f64, f64) -> f64 =
     js_global_assign_existing_or_throw;
 
@@ -1924,21 +1924,21 @@ pub(crate) fn throw_immutable_write(kind: u32, key: &str) -> ! {
 // internalize+dead-strip pass drops them and the default `perry file.ts -o`
 // link fails (see project_auto_optimize_keepalive_3320).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ERROR_NEW_KIND_WITH_OPTIONS: extern "C" fn(
     u32,
     *mut StringHeader,
     f64,
 ) -> *mut ErrorHeader = js_error_new_kind_with_options;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_AGGREGATEERROR_NEW_FULL: extern "C" fn(
     f64,
     *mut StringHeader,
     f64,
 ) -> *mut ErrorHeader = js_aggregateerror_new_full;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ERROR_IS_ERROR: extern "C" fn(f64) -> f64 = js_error_is_error;
 
 #[path = "error_stack_frames.rs"]

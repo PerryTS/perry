@@ -530,13 +530,13 @@ extern "C" fn depd_wrapfunction_outer_thunk(
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 #[cfg(not(panic = "abort"))]
 static KEEP_JS_FUNCTION_CTOR_FROM_STRINGS: extern "C-unwind" fn(*const f64, usize) -> f64 =
     js_function_ctor_from_strings;
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 #[cfg(panic = "abort")]
 static KEEP_JS_FUNCTION_CTOR_FROM_STRINGS: extern "C" fn(*const f64, usize) -> f64 =
     js_function_ctor_from_strings;

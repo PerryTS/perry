@@ -1574,38 +1574,38 @@ fn scan_parent_port_event_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRoot
 // `.o`. The auto-optimize whole-program-LLVM rebuild internalizes + dead-strips
 // unreferenced `#[no_mangle]` symbols, so anchor them here. See
 // [[project_auto_optimize_keepalive_3320]].
-#[used]
+#[used(compiler)]
 static KEEP_WT_MESSAGE_CHANNEL_NEW: extern "C" fn() -> f64 = js_worker_threads_message_channel_new;
-#[used]
+#[used(compiler)]
 static KEEP_WT_BROADCAST_NEW: extern "C" fn(f64) -> f64 = js_worker_threads_broadcast_channel_new;
-#[used]
+#[used(compiler)]
 static KEEP_WT_RECEIVE_MESSAGE_ON_PORT: extern "C" fn(f64) -> f64 =
     js_worker_threads_receive_message_on_port;
-#[used]
+#[used(compiler)]
 static KEEP_WT_MARK_AS_UNCLONEABLE: extern "C" fn(f64) -> f64 =
     js_worker_threads_mark_as_uncloneable;
-#[used]
+#[used(compiler)]
 static KEEP_WT_WORKER_NEW: extern "C" fn(i64, f64) -> f64 = js_worker_threads_worker_new;
-#[used]
+#[used(compiler)]
 static KEEP_WT_WORKER_POST_MESSAGE: extern "C" fn(i64, f64) -> f64 =
     js_worker_threads_worker_post_message;
-#[used]
+#[used(compiler)]
 static KEEP_WT_WORKER_ON: extern "C" fn(i64, f64, i64) -> f64 = js_worker_threads_worker_on;
-#[used]
+#[used(compiler)]
 static KEEP_WT_WORKER_ONCE: extern "C" fn(i64, f64, i64) -> f64 = js_worker_threads_worker_once;
-#[used]
+#[used(compiler)]
 static KEEP_WT_WORKER_OFF: extern "C" fn(i64, f64, i64) -> f64 = js_worker_threads_worker_off;
-#[used]
+#[used(compiler)]
 static KEEP_WT_WORKER_ADD_EVENT_LISTENER: extern "C" fn(i64, f64, i64) -> f64 =
     worker_surface::js_worker_threads_worker_add_event_listener;
-#[used]
+#[used(compiler)]
 static KEEP_WT_WORKER_REMOVE_EVENT_LISTENER: extern "C" fn(i64, f64, i64) -> f64 =
     worker_surface::js_worker_threads_worker_remove_event_listener;
-#[used]
+#[used(compiler)]
 static KEEP_WT_WORKER_TERMINATE: extern "C" fn(i64) -> f64 = js_worker_threads_worker_terminate;
-#[used]
+#[used(compiler)]
 static KEEP_WT_WORKER_RELOAD: extern "C" fn(i64) -> f64 = js_worker_threads_worker_reload;
-#[used]
+#[used(compiler)]
 static KEEP_WT_WORKER_REF: extern "C" fn(i64) -> f64 = js_worker_threads_worker_ref;
-#[used]
+#[used(compiler)]
 static KEEP_WT_WORKER_UNREF: extern "C" fn(i64) -> f64 = js_worker_threads_worker_unref;

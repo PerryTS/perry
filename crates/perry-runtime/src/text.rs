@@ -620,20 +620,20 @@ fn throw_invalid_encoded_data(encoding: &str) -> ! {
 /// would dead-strip them without `#[used]` retention (see
 /// [[project_auto_optimize_keepalive_3320]]).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_TEXT_DECODER_NEW: extern "C" fn(f64, f64, f64) -> i64 = js_text_decoder_new;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_TEXT_DECODER_DECODE: extern "C" fn(f64, f64) -> i64 = js_text_decoder_decode_llvm;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_TEXT_DECODER_ENCODING: extern "C" fn(f64) -> *mut StringHeader =
     js_text_decoder_encoding;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_TEXT_DECODER_FATAL: extern "C" fn(f64) -> f64 = js_text_decoder_fatal;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_TEXT_DECODER_IGNORE_BOM: extern "C" fn(f64) -> f64 = js_text_decoder_ignore_bom;
 
 /// TextDecoder / TextEncoder registry-handle property surface for VALUE

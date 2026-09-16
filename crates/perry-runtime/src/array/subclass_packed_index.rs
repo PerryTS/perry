@@ -152,7 +152,7 @@ pub extern "C" fn js_packed_arraylike_index_get(
     crate::value::js_dyn_index_get(receiver, index)
 }
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_PACKED_ARRAYLIKE_INDEX_GET: extern "C" fn(
     f64,
     f64,

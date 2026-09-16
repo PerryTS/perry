@@ -786,7 +786,7 @@ pub extern "C" fn js_array_join_value(
 // Codegen lowers `arr.join(sep)` to this symbol. Keep it alive through the
 // auto-optimize whole-program-bitcode link.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ARRAY_JOIN_VALUE: extern "C" fn(*const ArrayHeader, f64) -> *mut StringHeader =
     js_array_join_value;
 

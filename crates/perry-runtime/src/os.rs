@@ -1316,7 +1316,7 @@ fn options_request_buffer(opts_bits: i64) -> bool {
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_OS_USER_INFO_OPTIONS: extern "C" fn(i64) -> *mut ObjectHeader = js_os_user_info_options;
 
 fn js_os_user_info_impl(buffer_encoding: bool) -> *mut ObjectHeader {

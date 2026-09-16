@@ -153,23 +153,23 @@ pub(crate) fn event_emitter_async_resource_handle(handle: Handle) -> i64 {
 // link fails with `Undefined symbols: _js_event_emitter_new_with_options`
 // (see project_auto_optimize_keepalive_3320). Anchoring constructor shapes
 // keeps `new EventEmitter()` and `new EventEmitterAsyncResource()` compiling.
-#[used]
+#[used(compiler)]
 static KEEP_JS_EVENT_EMITTER_NEW: extern "C" fn() -> Handle = js_event_emitter_new;
-#[used]
+#[used(compiler)]
 static KEEP_JS_EVENT_EMITTER_NEW_WITH_OPTIONS: unsafe extern "C" fn(f64) -> Handle =
     js_event_emitter_new_with_options;
-#[used]
+#[used(compiler)]
 static KEEP_JS_EVENT_EMITTER_ASYNC_RESOURCE_NEW: unsafe extern "C" fn(f64) -> Handle =
     js_event_emitter_async_resource_new;
-#[used]
+#[used(compiler)]
 static KEEP_JS_EVENT_EMITTER_ASYNC_RESOURCE_ASYNC_ID: unsafe extern "C" fn(Handle) -> f64 =
     js_event_emitter_async_resource_async_id;
-#[used]
+#[used(compiler)]
 static KEEP_JS_EVENT_EMITTER_ASYNC_RESOURCE_TRIGGER_ASYNC_ID: unsafe extern "C" fn(Handle) -> f64 =
     js_event_emitter_async_resource_trigger_async_id;
-#[used]
+#[used(compiler)]
 static KEEP_JS_EVENT_EMITTER_ASYNC_RESOURCE_ASYNC_RESOURCE: unsafe extern "C" fn(Handle) -> f64 =
     js_event_emitter_async_resource_async_resource;
-#[used]
+#[used(compiler)]
 static KEEP_JS_EVENT_EMITTER_ASYNC_RESOURCE_EMIT_DESTROY: unsafe extern "C" fn(Handle) -> f64 =
     js_event_emitter_async_resource_emit_destroy;

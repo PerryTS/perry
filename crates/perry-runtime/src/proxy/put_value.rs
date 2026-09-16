@@ -892,7 +892,7 @@ unsafe fn dyn_ic_try_store(target: f64, token: u64, slot: u32, value: f64) -> Op
 // #6088-style keep: codegen emits the only call; a whole-program bitcode
 // link would otherwise dead-strip the IC entry.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_PUT_VALUE_SET_DYN_IC: extern "C" fn(
     *mut WritePicCacheSlot,
     f64,
@@ -960,7 +960,7 @@ pub extern "C" fn js_transition_ic_spill_append(
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_TRANSITION_IC_SPILL_APPEND: extern "C" fn(f64, i64, u32, f64) -> i32 =
     js_transition_ic_spill_append;
 

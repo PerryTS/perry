@@ -53,7 +53,7 @@ pub extern "C" fn js_path_arg_header(value: f64) -> i64 {
 /// Keepalive anchor: emitted only from generated code, so the whole-program
 /// auto-optimize bitcode pass would otherwise dead-strip it.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_PATH_ARG_HEADER: extern "C" fn(f64) -> i64 = js_path_arg_header;
 
 pub(crate) fn path_arg_header(value: f64) -> *const StringHeader {
@@ -120,7 +120,7 @@ macro_rules! two_operand_value_entry {
 
         /// Keepalive anchor — see [`KEEP_PATH_ARG_HEADER`].
         #[cfg(feature = "keepalive-anchors")]
-        #[used]
+        #[used(compiler)]
         static $keep: extern "C" fn(f64, f64) -> $ret = $value_fn;
     };
 }

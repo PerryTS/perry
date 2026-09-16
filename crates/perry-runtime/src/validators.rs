@@ -424,14 +424,14 @@ pub unsafe extern "C" fn js_runtime_validate_integer_arg(
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_VALIDATE_STRING_ARG: unsafe extern "C" fn(f64, *const u8, u32) =
     js_runtime_validate_string_arg;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_VALIDATE_CRYPTO_KEY_ARG: unsafe extern "C" fn(f64, *const u8, u32) =
     js_runtime_validate_crypto_key_arg;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_VALIDATE_INTEGER_ARG: unsafe extern "C" fn(f64, *const u8, u32, f64, f64) =
     js_runtime_validate_integer_arg;

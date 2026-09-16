@@ -663,17 +663,17 @@ fn revalidate_admitted_subclass_live(
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_PACKED_ARRAYLIKE_LOOP_GUARD: extern "C" fn(f64, f64, i32, *mut u64) -> i32 =
     js_packed_arraylike_loop_guard;
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_PACKED_ARRAYLIKE_LOOP_GUARD_LIVE: extern "C" fn(f64, f64, i32, *mut u64) -> i64 =
     js_packed_arraylike_loop_guard_live;
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_PACKED_ARRAYLIKE_LOOP_REVALIDATE_LIVE: extern "C" fn(
     f64,
     f64,

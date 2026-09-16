@@ -509,16 +509,16 @@ pub extern "C" fn js_rel_ge(x: f64, y: f64) -> f64 {
 // and leave `undefined _js_rel_lt …`. Pin them with `#[used]` statics — same
 // pattern as the write-barrier roots in `gc/barrier.rs`.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_REL_LT: extern "C" fn(f64, f64) -> f64 = js_rel_lt;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_REL_GT: extern "C" fn(f64, f64) -> f64 = js_rel_gt;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_REL_LE: extern "C" fn(f64, f64) -> f64 = js_rel_le;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_REL_GE: extern "C" fn(f64, f64) -> f64 = js_rel_ge;
 
 #[no_mangle]

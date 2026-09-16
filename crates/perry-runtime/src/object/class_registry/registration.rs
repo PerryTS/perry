@@ -127,7 +127,7 @@ pub unsafe extern "C" fn js_register_class_string_member_order(
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_REGISTER_CLASS_STRING_MEMBER_ORDER: unsafe extern "C" fn(
     i64,
     *const u8,
@@ -414,11 +414,11 @@ pub unsafe extern "C" fn js_register_class_static_setter(
 // caller), so the auto-optimize whole-program-LLVM build would dead-strip them
 // without an anchor. Pin each via a `#[used]` static (mirrors node_v8.rs).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_REGISTER_STATIC_GETTER: unsafe extern "C" fn(i64, *const u8, i64, i64) =
     js_register_class_static_getter;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_REGISTER_STATIC_SETTER: unsafe extern "C" fn(i64, *const u8, i64, i64) =
     js_register_class_static_setter;
 
@@ -452,7 +452,7 @@ pub unsafe extern "C" fn js_register_class_method_bind_length(
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_REGISTER_METHOD_BIND_LENGTH: unsafe extern "C" fn(i64, *const u8, i64, i64) =
     js_register_class_method_bind_length;
 
@@ -486,7 +486,7 @@ pub unsafe extern "C" fn js_register_class_static_method_bind_length(
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_REGISTER_STATIC_METHOD_BIND_LENGTH: unsafe extern "C" fn(i64, *const u8, i64, i64) =
     js_register_class_static_method_bind_length;
 

@@ -1650,7 +1650,7 @@ pub extern "C" fn js_map_find_key_index(map_boxed: f64, key: f64) -> f64 {
     unsafe { find_key_index(map, normalize_zero(key)) as f64 }
 }
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_MAP_FIND_KEY_INDEX: extern "C" fn(f64, f64) -> f64 = js_map_find_key_index;
 
 /// C-ABI, for the `for…of` fast path (`perry-hir`'s
@@ -1672,7 +1672,7 @@ pub extern "C" fn js_map_cursor_next(map_boxed: f64, cursor: f64, epoch: f64) ->
     }
 }
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_MAP_CURSOR_NEXT: extern "C" fn(f64, f64, f64) -> f64 = js_map_cursor_next;
 
 /// C-ABI companion: the header's compaction epoch, which the loop stores
@@ -1686,7 +1686,7 @@ pub extern "C" fn js_map_compaction_epoch(map_boxed: f64) -> f64 {
     map_compaction_epoch(map) as f64
 }
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_MAP_COMPACTION_EPOCH: extern "C" fn(f64) -> f64 = js_map_compaction_epoch;
 
 /// Live-extent accessor for iteration (`0..used` are the raw entry indices).
@@ -2576,80 +2576,80 @@ pub extern "C" fn js_map_delete_number_key(map: *mut MapHeader, key: f64) -> i32
 // generated LLVM IR. Keep roots prevent whole-program LTO/dead-strip from
 // removing the exported symbols when the Rust crate graph has no caller.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_MAP_SET_STRING_NUMBER: extern "C" fn(
     *mut MapHeader,
     *const StringHeader,
     f64,
 ) -> *mut MapHeader = js_map_set_string_number;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_MAP_SET_NUMBER_KEY: extern "C" fn(*mut MapHeader, f64, f64) -> *mut MapHeader =
     js_map_set_number_key;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_MAP_SET_STRING_KEY: extern "C" fn(
     *mut MapHeader,
     *const StringHeader,
     f64,
 ) -> *mut MapHeader = js_map_set_string_key;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_MAP_SET_STRING_I32: extern "C" fn(
     *mut MapHeader,
     *const StringHeader,
     i32,
 ) -> *mut MapHeader = js_map_set_string_i32;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_MAP_SET_STRING_U32: extern "C" fn(
     *mut MapHeader,
     *const StringHeader,
     u32,
 ) -> *mut MapHeader = js_map_set_string_u32;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_MAP_SET_STRING_F32: extern "C" fn(
     *mut MapHeader,
     *const StringHeader,
     f32,
 ) -> *mut MapHeader = js_map_set_string_f32;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_MAP_SET_STRING_BOOL: extern "C" fn(
     *mut MapHeader,
     *const StringHeader,
     i32,
 ) -> *mut MapHeader = js_map_set_string_bool;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_MAP_SET_STRING_STRING: extern "C" fn(
     *mut MapHeader,
     *const StringHeader,
     *const StringHeader,
 ) -> *mut MapHeader = js_map_set_string_string;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_MAP_GET_STRING_KEY: extern "C" fn(*const MapHeader, *const StringHeader) -> f64 =
     js_map_get_string_key;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_MAP_GET_NUMBER_KEY: extern "C" fn(*const MapHeader, f64) -> f64 =
     js_map_get_number_key;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_MAP_HAS_STRING_KEY: extern "C" fn(*const MapHeader, *const StringHeader) -> i32 =
     js_map_has_string_key;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_MAP_HAS_NUMBER_KEY: extern "C" fn(*const MapHeader, f64) -> i32 =
     js_map_has_number_key;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_MAP_DELETE_STRING_KEY: extern "C" fn(*mut MapHeader, *const StringHeader) -> i32 =
     js_map_delete_string_key;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_MAP_DELETE_NUMBER_KEY: extern "C" fn(*mut MapHeader, f64) -> i32 =
     js_map_delete_number_key;
 
@@ -2964,7 +2964,7 @@ pub extern "C" fn js_map_entry_key_raw_at(map: *const MapHeader, idx: u32) -> f6
     }
 }
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_MAP_ENTRY_KEY_RAW_AT: extern "C" fn(*const MapHeader, u32) -> f64 =
     js_map_entry_key_raw_at;
 
@@ -3002,7 +3002,7 @@ pub extern "C" fn js_map_entry_value_raw_at(map: *const MapHeader, idx: u32) -> 
     }
 }
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_MAP_ENTRY_VALUE_RAW_AT: extern "C" fn(*const MapHeader, u32) -> f64 =
     js_map_entry_value_raw_at;
 
@@ -3369,7 +3369,7 @@ pub extern "C" fn js_map_from_iterable(value: f64) -> *mut MapHeader {
 // internalize + dead-strip the `#[no_mangle]` export and break the default
 // compile path. The `#[used]` anchor pins it (see project_auto_optimize_keepalive).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_MAP_FROM_ITERABLE: extern "C" fn(f64) -> *mut MapHeader = js_map_from_iterable;
 
 /// `Map.prototype.forEach(callback, thisArg)` — calls `callback` with the

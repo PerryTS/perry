@@ -179,7 +179,7 @@ pub extern "C" fn js_register_class_generic_origin(class_id: u32, generic_id: u3
 /// Keepalive anchor: emitted only from generated module-init code, so the
 /// whole-program auto-optimize bitcode pass would otherwise dead-strip it.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_REGISTER_CLASS_GENERIC_ORIGIN: extern "C" fn(u32, u32) =
     js_register_class_generic_origin;
 

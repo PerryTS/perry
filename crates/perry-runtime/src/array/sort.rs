@@ -715,7 +715,7 @@ pub extern "C" fn js_validate_array_comparator(cmp_boxed: f64) -> i64 {
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_VALIDATE_ARRAY_COMPARATOR: extern "C" fn(f64) -> i64 = js_validate_array_comparator;
 
 #[cold]

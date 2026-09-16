@@ -633,30 +633,30 @@ pub unsafe extern "C" fn js_sqlite_stmt_columns(stmt_handle: Handle) -> *mut Arr
 /// Without these, a `node:sqlite` program compiled under DEFAULT
 /// auto-optimize fails to link (`Undefined symbols: _js_sqlite_*`).
 /// See project_auto_optimize_keepalive_3320.
-#[used]
+#[used(compiler)]
 pub(crate) static KEEP_SQLITE_OPEN: unsafe extern "C" fn(*const StringHeader) -> Handle =
     js_sqlite_open;
-#[used]
+#[used(compiler)]
 pub(crate) static KEEP_SQLITE_EXEC: unsafe extern "C" fn(Handle, *const StringHeader) -> i32 =
     js_sqlite_exec;
-#[used]
+#[used(compiler)]
 pub(crate) static KEEP_SQLITE_PREPARE: unsafe extern "C" fn(Handle, *const StringHeader) -> Handle =
     js_sqlite_prepare;
-#[used]
+#[used(compiler)]
 pub(crate) static KEEP_SQLITE_STMT_RUN: unsafe extern "C" fn(
     Handle,
     *const ArrayHeader,
 ) -> *mut ObjectHeader = js_sqlite_stmt_run;
-#[used]
+#[used(compiler)]
 pub(crate) static KEEP_SQLITE_STMT_GET: unsafe extern "C" fn(Handle, *const ArrayHeader) -> f64 =
     js_sqlite_stmt_get;
-#[used]
+#[used(compiler)]
 pub(crate) static KEEP_SQLITE_STMT_ALL: unsafe extern "C" fn(
     Handle,
     *const ArrayHeader,
 ) -> *mut ArrayHeader = js_sqlite_stmt_all;
-#[used]
+#[used(compiler)]
 pub(crate) static KEEP_SQLITE_CLOSE: unsafe extern "C" fn(Handle) -> i32 = js_sqlite_close;
-#[used]
+#[used(compiler)]
 pub(crate) static KEEP_SQLITE_STMT_COLUMNS: unsafe extern "C" fn(Handle) -> *mut ArrayHeader =
     js_sqlite_stmt_columns;

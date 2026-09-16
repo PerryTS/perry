@@ -835,12 +835,12 @@ pub(crate) fn lookup_closure_versioned_loop_direct(
 /// Keepalive anchor for the auto-optimize whole-program build — registration
 /// is referenced only by generated module-init code.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_REGISTER_CLOSURE_TRUSTED_DIRECT: extern "C" fn(*const u8, *const u8, u32, u64) =
     js_register_closure_trusted_direct;
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_REGISTER_CLOSURE_VERSIONED_LOOP_DIRECT: extern "C" fn(
     *const u8,
     *const u8,
@@ -861,7 +861,7 @@ pub extern "C" fn js_register_closure_strict_function(func_ptr: *const u8) {
 /// Keepalive anchor for the auto-optimize whole-program build — the strict
 /// registration is emitted only from generated module-init code.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_REGISTER_CLOSURE_STRICT_FUNCTION: extern "C" fn(*const u8) =
     js_register_closure_strict_function;
 

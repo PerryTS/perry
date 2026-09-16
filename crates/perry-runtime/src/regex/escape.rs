@@ -140,7 +140,7 @@ pub extern "C" fn js_regexp_escape(input: f64) -> f64 {
 /// `.o`, so the auto-optimize whole-program LLVM rebuild would dead-strip it
 /// without this `#[used]` reference (see #3320).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_REGEXP_ESCAPE: extern "C" fn(f64) -> f64 = js_regexp_escape;
 
 /// ECMA-262 22.2.6.10 EscapeRegExpPattern for a valid UTF-8 pattern.

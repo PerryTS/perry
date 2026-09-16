@@ -206,10 +206,10 @@ pub extern "C" fn js_import_meta_resolve_value(fallback: f64) -> f64 {
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_RESOLVE: extern "C" fn(f64, f64, f64) -> f64 = js_import_meta_resolve;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_RESOLVE_VALUE: extern "C" fn(f64) -> f64 = js_import_meta_resolve_value;
 
 #[cfg(test)]

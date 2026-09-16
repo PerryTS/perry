@@ -563,20 +563,20 @@ pub extern "C" fn js_u8_set_from_hex(addr: i64, str_handle: i64) -> f64 {
 // rebuild would dead-strip them without an `#[used]` reference. See
 // project_auto_optimize_keepalive_3320.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_U8_TO_BASE64: extern "C" fn(i64, f64) -> *mut StringHeader = js_u8_to_base64;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_U8_TO_HEX: extern "C" fn(i64) -> *mut StringHeader = js_u8_to_hex;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_U8_FROM_BASE64: extern "C" fn(i64, f64) -> *mut BufferHeader = js_u8_from_base64;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_U8_FROM_HEX: extern "C" fn(i64) -> *mut BufferHeader = js_u8_from_hex;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_U8_SET_FROM_BASE64: extern "C" fn(i64, i64, f64) -> f64 = js_u8_set_from_base64;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_U8_SET_FROM_HEX: extern "C" fn(i64, i64) -> f64 = js_u8_set_from_hex;

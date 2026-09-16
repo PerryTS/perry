@@ -184,10 +184,10 @@ pub extern "C" fn js_map_group_by(items_value: f64, callback: f64) -> f64 {
 /// codegen-emitted `.o`. The auto-optimize whole-program LLVM rebuild
 /// dead-strips unreferenced `#[no_mangle]` symbols (see #3320), so pin them.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_OBJECT_GROUP_BY: extern "C" fn(f64, f64) -> f64 = js_object_group_by;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_MAP_GROUP_BY: extern "C" fn(f64, f64) -> f64 = js_map_group_by;
 
 /// NaN-box a heap address with `POINTER_TAG`.

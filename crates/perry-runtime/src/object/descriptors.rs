@@ -1913,7 +1913,7 @@ pub extern "C" fn js_object_create_with_props(proto_value: f64, props_value: f64
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_OBJECT_CREATE_WITH_PROPS: extern "C" fn(f64, f64) -> f64 = js_object_create_with_props;
 
 /// `Object.getOwnPropertyDescriptor` handling for native-module namespace

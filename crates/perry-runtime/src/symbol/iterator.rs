@@ -183,7 +183,7 @@ pub(crate) fn class_ref_resolves_iterator(val_f64: f64) -> bool {
 /// unchanged when it is an object.
 // #1561-style force-keep: only generated IR calls this.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_ITERATOR_RESULT_VALIDATE: extern "C" fn(f64) -> f64 = js_iterator_result_validate;
 
 #[no_mangle]

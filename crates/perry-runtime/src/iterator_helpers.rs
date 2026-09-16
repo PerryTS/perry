@@ -247,7 +247,7 @@ pub extern "C" fn js_iterator_from(val_f64: f64) -> f64 {
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ITERATOR_FROM: extern "C" fn(f64) -> f64 = js_iterator_from;
 
 /// `.next()` on a helper iterator object. Pulls lazily from the source per the

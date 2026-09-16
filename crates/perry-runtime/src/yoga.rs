@@ -729,7 +729,7 @@ pub extern "C" fn js_yoga_get_computed_edge(id: f64, kind: f64, edge: f64) -> f6
 macro_rules! keep {
     ($n:ident : $t:ty = $f:ident) => {
         #[cfg(feature = "keepalive-anchors")]
-        #[used]
+        #[used(compiler)]
         static $n: $t = $f;
     };
 }

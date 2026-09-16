@@ -1116,7 +1116,7 @@ fn assert_lto_keepalive_anchor(src: &str, static_name: &str, signature: &str, ta
     let window = &src[start..end];
     assert!(
         window.contains(r#"#[cfg(feature = "keepalive-anchors")]"#)
-            && window.contains(r#"#[used]"#),
+            && (window.contains(r#"#[used]"#) || window.contains(r#"#[used(compiler)]"#)),
         "keepalive static {static_name} for {target} lacks the keepalive-anchors \
          gate and #[used] attribute"
     );
