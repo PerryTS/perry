@@ -223,6 +223,14 @@ pub fn remote_build_and_launch(
     // A remote build can queue for a long time before the first frame, so the
     // per-message read budget is the same 15 minutes the upload gets. The
     // connect itself is bounded separately and much tighter.
+    //
+    // This IS a behaviour change and it is the drift worth knowing about: the
+    // async stream waited forever, so a hub that went quiet mid-build hung the
+    // command; it now fails after 15 minutes of silence, and — unlike
+    // `perry publish`, which has a `reconnect_or_bail!` loop — there is no
+    // reconnect here to fall back on. Both shapes are bad; which is worse is a
+    // product call, and this one at least terminates. See
+    // docs/turnloop/p11-report.md, "Behaviour changes".
     let ws_read_timeout = std::time::Duration::from_secs(900);
     let mut ws = WebSocket::connect(&ws_url, std::time::Duration::from_secs(30))
         .context("Failed to connect WebSocket")?;
