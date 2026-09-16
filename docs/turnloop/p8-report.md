@@ -121,8 +121,8 @@ is tracked — is in `scripts/tokio_inventory.json` and renders with
 |---|---|---|---|
 | `perry` | reqwest, tokio, tokio-tungstenite | **nothing** — the CLI's `publish`/`login`/`verify`/`audit`/`run --remote`/`setup`/update-check | never linked into a compiled program |
 | `perry-container-compose` | tokio (normal + dev) | **nothing** — the separate `perry-compose` binary | not in `full`; no JS surface |
-| `perry-ext-axios` | reqwest, tokio | `import axios` | never migrated |
-| `perry-ext-fetch` | reqwest, tokio | `import 'node-fetch'` (and the bare `fetch` alias) | never migrated; **and see the defect below** |
+| `perry-ext-axios` | reqwest, tokio | `import axios` (its own `js_axios_*` symbols; it does **not** take the global `fetch` with it — measured) | never migrated |
+| `perry-ext-fetch` | reqwest, tokio | `import 'node-fetch'` (and the bare `fetch` alias) — and it defines the **same `js_fetch_*` symbols** perry-stdlib owns | never migrated; the overlap SIGSEGVs, see defect 1 |
 | `perry-ext-fastify` | hyper, hyper-util, tokio, tokio-tungstenite | `import Fastify` | never migrated — own accept loop, no edge to perry-ext-http |
 | `perry-ext-http` | h2, hyper, hyper-util, reqwest, tokio, tokio-rustls, tokio-tungstenite | `http`/`https` **client**, `http2` both halves, the server on any declining path, an attached `WebSocketServer` | server migrated for the primary agent (P5); client and HTTP/2 never |
 | `perry-ext-ws` | tokio, tokio-tungstenite | `import WebSocket from 'ws'` | never migrated — tungstenite 0.29 vs turnloop-websocket 0.30 |
@@ -547,7 +547,7 @@ fifteenth item late.
 
 | # | work | edges it removes | cost |
 |---|---|---|---|
-| **A** | **Per-agent `turnloop::Loop`s.** `ensure_loop_with` declines every non-`PRIMARY_AGENT` thread; give each agent its own loop, poster and timer heap, and a per-agent notify route (`PRIMARY_ROUTE` stays for `js_notify_main_thread`). Fix the `worker_threads` agent-id defect with it, or the two interact. | **4** — `perry-ext-net` × 2, and `perry-ext-http`'s `hyper` + `hyper-util` server fallback | a phase. Plus validation nobody has done: every P1/P5/P6/P7 surface starts taking the turnloop path on a worker for the first time. Also needs `SO_REUSEPORT` (PerryTS/turnloop#49) for the cluster-worker row |
+| **A** | **Per-agent `turnloop::Loop`s.** `ensure_loop_with` declines every non-`PRIMARY_AGENT` thread; give each agent its own loop, poster and timer heap, and a per-agent notify route (`PRIMARY_ROUTE` stays for `js_notify_main_thread`). Fix the `worker_threads` agent-id defect with it, or the two interact. | **4** — `perry-ext-net` × 2 outright; `perry-ext-http`'s `hyper` + `hyper-util` need **A and E and the cluster fix** together, because the declining server has three causes (no loop, an attached `WebSocketServer`, a cluster worker's `SO_REUSEPORT` bind) | a phase. Plus validation nobody has done: every P1/P5/P6/P7 surface starts taking the turnloop path on a worker for the first time. The cluster case also needs PerryTS/turnloop#49 |
 | **B** | **TLS, UDS and topology from a database binding** — `perry_db_turnloop` → `turnloop-tls`, a `pipe_connect` for pg's Unix socket, SRV + SDAM for mongo. Gated on A. | **8** — `perry-ext-{ioredis,pg,mysql2,mongodb}` × 2 | a phase. #10335 makes it urgent: the default `new Redis()` configuration already declines |
 | **C** | **The `node:http`/`node:https` client** — `agent.rs`'s ~1,950-line Node-semantics pool over reqwest's, plus three raw-`tokio::net::TcpStream` bypasses (`TE: trailers`, `Expect: 100-continue`, `agent.createConnection`) | **2** — `perry-ext-http`'s `reqwest` and `tokio-rustls` | a phase on its own; P6 said so and P8 agrees. #10328 rides along |
 | **D** | **HTTP/2**, both halves, onto `turnloop_http::http2::Connection` | **2** — `h2`, and `perry-ext-http`'s `tokio` (its last, once C and E are done) | a phase (#10327) |
