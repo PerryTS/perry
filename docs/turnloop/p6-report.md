@@ -535,6 +535,15 @@ correctly against real bytes, the C seam links (the ext wrapper's externs
 resolve once the driver re-asserts `turnloop-smtp-client`), and the two missing
 dispatch rows are now present.
 
+Be precise about what "unproven" covers. It is not only the JS surface: **the
+SMTP transport wiring has never run** — `tcp_connect_host`, the `NET_DATA`
+plaintext path, the STARTTLS install and the `flush` that routes protocol output
+through the TLS session are reviewed and compile-checked and nothing more. The
+HTTP engine's equivalents are exercised hard (fifteen requests per fixture run,
+real TLS to four public origins, three GC-stress seeds); SMTP's are not
+exercised at all. A reviewer should read that code rather than trust this
+report's protocol evidence to cover it.
+
 The fixture is also **not** a gap test for a second reason: `nodemailer` is not
 in the repository's `package.json`, so the Node oracle cannot import it, and
 adding a dependency to satisfy one fixture is a supply-chain decision this lane
