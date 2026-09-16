@@ -416,7 +416,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         .collect::<Vec<_>>()
         .join("\n");
     let imports = format!(
-        "import {{ createRequire as __perry_cjs_create_require }} from 'node:module';\n{imports}"
+        "import {{ createRequire as __perry_cjs_create_require, isBuiltin as __perry_cjs_require_is_builtin }} from 'node:module';\n{imports}"
     );
 
     // An UNRESOLVABLE adopted specifier (`require('@opentelemetry/api')`
@@ -494,7 +494,10 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
                 // codegen does not initialize for native modules in CJS-wrapped
                 // modules). createRequire calls js_create_native_module_namespace
                 // under the hood — the same path Node.js uses for require("process").
-                format!("{link_child}return __perry_cjs_create_require({:?})(specifier);", source_path.to_string_lossy())
+                format!(
+                    "{link_child}return (globalThis.__perry_cjs_shared_require || (globalThis.__perry_cjs_shared_require = __perry_cjs_create_require({:?})))(specifier);",
+                    source_path.to_string_lossy()
+                )
             } else if needs_runtime_record {
                 runtime_require.clone().unwrap_or_else(|| format!("return {local};"))
             } else {
@@ -952,11 +955,6 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     // `require(specifier)` for one of those fell through to compiled-module
     // resolution and raised `MODULE_NOT_FOUND` instead of routing through
     // `createRequire`. Each entry emits both the bare and `node:` spelling.
-    let builtin_predicate_cases = perry_hir::NODE_BUILTIN_MODULES
-        .iter()
-        .map(|name| format!("case '{name}': case 'node:{name}':"))
-        .collect::<Vec<_>>()
-        .join("\n            ");
     let cjs_preamble = format!(
         r#"    // #3527: `module`/`exports` are reassignable `var`s (mirroring Node, where
     // they are wrapper-function parameters), so CJS bodies that do
@@ -967,20 +965,35 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     // a body reassigning its local `module` can't clobber it (Node holds the
     // real module ref the same way), so named/default-export resolution stays
     // correct regardless of what the body does to its `module` local.
-    const __cjs_module = {{ exports: {{}} }};
     // #6769: the Node `Module` record surface. Set before user code so a
     // recursive load of this module observes the same shape Node exposes.
-    __cjs_module.__perry_cjs_record = true;
-    __cjs_module.__perry_cjs_factory = {cjs_factory_value};
-    __cjs_module.id = {module_filename_literal};
-    __cjs_module.path = {module_dir_literal};
-    __cjs_module.filename = {module_filename_literal};
-    __cjs_module.loaded = false;
-    __cjs_module.children = [];
-    __cjs_module.parent = globalThis.__perry_cjs_pending_parent;
+    //
+    // ONE object literal, so the record is allocated with its final shape.
+    // As eleven sequential assignments it walked eleven shape transitions and
+    // eleven cold property stores — about 10k instructions each at module-init
+    // time — in every CommonJS module in the graph. Folding only some of the
+    // fields does not help: the trailing assignments keep transitioning the
+    // record and the win disappears (measured at -0.08%), so the whole surface
+    // folds or none of it does.
+    //
+    // `cjs_scaffolding.rs`'s `record_binding` matches this field list
+    // positionally. Adding or reordering a field drops the record back to being
+    // reported as a denied user candidate in the `Ptr<Shape>` report;
+    // `preamble_canary_tests` is what catches that.
+    const __cjs_module = {{
+        exports: {{}},
+        __perry_cjs_record: true,
+        __perry_cjs_factory: {cjs_factory_value},
+        id: {module_filename_literal},
+        path: {module_dir_literal},
+        filename: {module_filename_literal},
+        loaded: false,
+        children: [],
+        parent: globalThis.__perry_cjs_pending_parent,
+        paths: [{module_dir_literal} + '/node_modules'],
+        require: undefined,
+    }};
     globalThis.__perry_cjs_pending_parent = undefined;
-    __cjs_module.paths = [{module_dir_literal} + '/node_modules'];
-    __cjs_module.require = undefined;
     // Node populates `module.parent` before the body evaluates, so link it
     // here rather than at the tail's registry publication.
     __perry_link_path_module_parent(__cjs_module);
@@ -992,21 +1005,28 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     __perry_register_path_module_partial({module_path_literal}, __cjs_module);
     var module = __cjs_module;
     var exports = __cjs_module.exports;
-    const __perry_cjs_base_require = __perry_cjs_create_require({module_filename_literal});
+    // One `createRequire` instance for the whole program, not one per module.
+    // It is used only for `.cache`, `.extensions` and loading builtins, and all
+    // three are process-global in Node — nothing here is bound to this
+    // module's path. The call costs ~117k instructions, so paying it per module
+    // cost OpenCode's ~2,200 CJS modules a quarter of a billion instructions
+    // before any user code ran.
+    const __perry_cjs_base_require = (globalThis.__perry_cjs_shared_require
+        || (globalThis.__perry_cjs_shared_require = __perry_cjs_create_require({module_filename_literal})));
     __perry_cjs_base_require.cache[{module_filename_literal}] = __cjs_module;
     function __perry_cjs_require_error(kind, code, message) {{
         const err = kind === 'type' ? new TypeError(message) : new Error(message);
         err.code = code;
         return err;
     }}
-    function __perry_cjs_require_is_builtin(specifier) {{
-        switch (specifier) {{
-            {builtin_predicate_cases}
-                return true;
-            default:
-                return false;
-        }}
-    }}
+    // `isBuiltin` comes from `node:module` instead of a switch emitted into
+    // EVERY CommonJS module. The switch carried both spellings of all 58
+    // builtin names, so each module interned ~120 string constants and
+    // initialised its own copy of the table before running a line of user
+    // code. It was also more permissive than Node: `sea`, `sqlite`, `test` and
+    // `test/reporters` are builtins only in their `node:` form, and the switch
+    // accepted the bare spelling too. The runtime predicate agrees with Node
+    // 26 on all 58 names in both spellings.
     function require(specifier) {{
         if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "id" argument must be of type string.');
         if (specifier === '') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_VALUE', 'The argument "id" must be a non-empty string.');
@@ -1016,7 +1036,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         // createRequire at runtime, which calls js_create_native_module_namespace
         // under the hood — the same path Node.js uses for require("process").
         if (__perry_cjs_require_is_builtin(specifier)) {{
-            return __perry_cjs_create_require({module_path_literal})(specifier);
+            return __perry_cjs_base_require(specifier);
         }}
         // Runtime `require(path)` of a module Perry AOT-compiled but that is
         // only reachable via a computed path. Next's webpack runtime uses both
@@ -1073,12 +1093,13 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         }}
         throw __perry_cjs_require_error('error', 'MODULE_NOT_FOUND', "Cannot find module '" + specifier + "'");
     }}
-    Object.defineProperty(require, 'name', {{
-        value: 'require',
-        writable: false,
-        enumerable: false,
-        configurable: true,
-    }});
+    // No `defineProperty(require, 'name', ...)`: a `function require(...)`
+    // declaration already carries exactly
+    // {{value:'require', writable:false, enumerable:false, configurable:true}},
+    // verified identical in Node 26 and Perry. The redundant install also gave
+    // the require object OBJ_FLAG_HAS_DESCRIPTORS, which pushed every later
+    // `require.resolve = ...` / `require.cache = ...` assignment onto the
+    // descriptor-bearing store path (#10287) in every CommonJS module.
     require.resolve = function resolve(specifier, options) {{
         if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "request" argument must be of type string.');
 {require_resolve_cases}
@@ -1091,12 +1112,11 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "request" argument must be of type string.');
         return null;
     }};
-    require.cache = {{}};
-    require.extensions = {{
-        '.js': function(module, filename) {{}},
-        '.json': function(module, filename) {{}},
-        '.node': function(module, filename) {{}},
-    }};
+    // `cache` and `extensions` come straight from the createRequire instance:
+    // the placeholder object literals they used to be initialised with were
+    // overwritten on the very next line, so every CJS module allocated an
+    // object plus three closures and immediately dropped them. At OpenCode's
+    // ~2,200 CJS modules that is pure startup garbage.
     require.cache = __perry_cjs_base_require.cache;
     require.extensions = __perry_cjs_base_require.extensions;
     require.main = module;"#
