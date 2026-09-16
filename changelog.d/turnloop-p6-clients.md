@@ -43,6 +43,22 @@ them.
 - **A transport failure carried no `cause.code`** unless it was DNS; an
   `ECONNREFUSED` reached JS with `cause.code === undefined`.
 
+Three more defects, all found by a probe against **real remote endpoints** and
+all invisible to every loopback fixture:
+
+- **Unconsumed decoder input was not retained.** `http1::Decoder`'s contract is
+  that the host keeps what a step did not consume. Feeding only the newest read
+  threw the earlier half away, so any response whose HEAD spans two reads failed
+  with `HPE_INVALID_HEADER_TOKEN`. `https://github.com/` is such a response;
+  nothing a local fixture serves is.
+- **No default `User-Agent`.** The reqwest client sets `perry/<version>`
+  deliberately (#236 is about `api.github.com` rejecting anonymous requests);
+  the turnloop path sent none and got a 403 where Node got a 200.
+- **No keep-alive contributor.** A turnloop handle keeps `Loop::turn` blocking
+  but not Perry's event loop, so a program whose only work was an outbound
+  request exited before the response arrived. The fetch gap fixture hid it by
+  running a server of its own.
+
 `turnloop-smtp 0.1.0-alpha.3` is added (default features: sans-I/O, no
 `turnloop-io`); it re-exports the same `lettre` 0.11 message builder the
 nodemailer surface already used, so the MIME bytes are produced by the same code

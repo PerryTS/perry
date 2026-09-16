@@ -66,7 +66,7 @@ Perry's nodemailer surface already used, so lettre stays in the graph regardless
 |---|---|---|
 | global `fetch()` — `js_fetch_get`, `…_get_with_auth`, `…_post`, `…_post_with_auth`, `js_fetch_with_options`, `js_fetch_text` | **turnloop** + `turnloop_http::{client,http1}` | — |
 | `fetch` over `https:` | **turnloop** + `turnloop-tls` (unbuffered rustls) | — |
-| `undici.fetch`, `undici` dispatcher wiring | **turnloop** | it is glue over the same stack; it moved for free |
+| `undici.fetch`, and `undici.fetch` under a plain `Agent` dispatcher | **turnloop** | perry-ext-undici is glue over the same `js_fetch_*` symbols, so it moved for free; a plain `Agent` clears the proxy and the engine takes it |
 | `js_nodemailer_send_mail` / `js_nodemailer_verify`, bundled surface | **turnloop** + `turnloop-smtp` | reachable from Rust; see the note below |
 | the same two through `perry-ext-nodemailer` (what `import 'nodemailer'` selects) | **turnloop**, through the `js_perry_smtp_*` C seam | ditto |
 | a fetch through a proxy (`HTTP_PROXY`, or `undici.setGlobalDispatcher(new ProxyAgent(…))`) | reqwest | Perry's proxy surface is a prebuilt `reqwest::Client`, not a URL a CONNECT tunnel could be driven from |
