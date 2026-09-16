@@ -127,6 +127,9 @@ HOSTNAME = socket.gethostname()
 # moment we look: shared build boxes. Their counters are still fine — retired
 # instructions, syscalls and page faults are per-process.
 SHARED_HOST_PATTERNS = ("perrybuilder", "builder", "buildbox", "ci-")
+# Ambient 1-minute load, sampled ONCE before any round runs. Everything after
+# that point includes our own load, which is the point of the exercise.
+AMBIENT_LOADAVG = [0.0]
 # Hosts that ARE the timing machine of record.
 QUIET_HOST_PATTERNS = ("perry-macos", "perry-mini")
 WAITS_RE = re.compile(r"^\[perry-loop-waits\] (.*)$", re.M)
@@ -1058,12 +1061,27 @@ def timing_verdict(sample, args, load_before):
         reasons.append("--shared-host: this box is shared, timing is not its job")
     elif SHARED_HOST_HINT:
         reasons.append(f"host looks like a shared build box ({SHARED_HOST_HINT})")
-    if load_before > args.max_loadavg:
-        reasons.append(f"loadavg {load_before:.2f} > --max-loadavg {args.max_loadavg}")
-    after = sample.get("loadavg_after")
+    # The question this gate answers is "was ANOTHER tenant competing with us",
+    # not "was the machine busy" -- a load test makes the machine busy on
+    # purpose. The 1-minute average does not decay between back-to-back rounds,
+    # so `load_before` carries OUR previous round and gating on it directly
+    # stamps every sample after the first as advisory on an idle machine. Judge
+    # against the ambient load measured once, before any round ran, and allow
+    # this run's own expected contribution on top of it.
+    ambient = AMBIENT_LOADAVG[0]
     expected = sample.get("concurrency", 0) + 1
-    if after is not None and after > args.max_loadavg + expected:
-        reasons.append(f"loadavg rose to {after:.2f}, beyond this run's own {expected}")
+    budget = max(args.max_loadavg, ambient + expected)
+    if ambient > args.max_loadavg:
+        reasons.append(
+            f"host was already at loadavg {ambient:.2f} before this run started, "
+            f"above --max-loadavg {args.max_loadavg}")
+    if load_before > budget:
+        reasons.append(
+            f"loadavg {load_before:.2f} before the sample exceeds ambient {ambient:.2f} "
+            f"plus this run's own {expected}")
+    after = sample.get("loadavg_after")
+    if after is not None and after > budget + expected:
+        reasons.append(f"loadavg rose to {after:.2f}, beyond ambient plus twice this run's own {expected}")
     sample["timing_authoritative"] = not reasons
     sample["timing_reasons"] = reasons
 
@@ -1133,7 +1151,9 @@ def run(args):
             raise SystemExit(2)
     if args.dry_run:
         log(f"dry-run plan: rounds={args.rounds} arms={ARMS} concurrency={concurrency} idle={idle}")
-        log(f"host: {HOSTNAME} (role {HOST_ROLE}), loadavg {os.getloadavg()[0]:.2f}")
+        AMBIENT_LOADAVG[0] = os.getloadavg()[0]
+        log(f"host: {HOSTNAME} (role {HOST_ROLE}), ambient loadavg {AMBIENT_LOADAVG[0]:.2f} "
+            f"(sampled before any round; later samples include this run's own load)")
         log(f"load tool: {tool[0] or 'NONE'} ({tool[1]})")
         log(f"perf: {perf_status}")
         for rnd in range(1, args.rounds + 1):
