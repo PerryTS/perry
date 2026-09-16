@@ -38,7 +38,9 @@ fn collect_var_binding_names_from_var_decl(var_decl: &ast::VarDecl, out: &mut Ve
         return;
     }
     for decl in &var_decl.decls {
-        collect_var_binding_names_from_pat(&decl.name, out);
+        if !crate::lower::ambient::declarator_binds_nothing(var_decl, decl) {
+            collect_var_binding_names_from_pat(&decl.name, out);
+        }
     }
 }
 
@@ -122,6 +124,9 @@ pub(crate) fn collect_lexical_decl_names(
         match stmt {
             ast::Stmt::Decl(ast::Decl::Var(var_decl)) if var_decl.kind != ast::VarDeclKind::Var => {
                 for decl in &var_decl.decls {
+                    if crate::lower::ambient::declarator_binds_nothing(var_decl, decl) {
+                        continue;
+                    }
                     let mut names = Vec::new();
                     collect_var_binding_names_from_pat(&decl.name, &mut names);
                     out.extend(names);

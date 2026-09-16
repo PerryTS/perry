@@ -1163,6 +1163,14 @@ pub fn lower_module_full_with_platform_globals(
         };
         if let Some(var_decl) = var_decl {
             for decl in &var_decl.decls {
+                // #10363: an ambient declarator binds nothing. Pre-registering
+                // it would resolve every earlier reference to a local that is
+                // never written, and a `var` would also be reflected onto
+                // globalThis as a non-configurable property.
+                if super::ambient::declarator_binds_nothing(var_decl, decl) {
+                    super::ambient::note_ambient_globals(&mut ctx, decl);
+                    continue;
+                }
                 // #4461: `var X = class { ... }` is lowered as a class
                 // expression bound to the name `X` (see stmt.rs) — the class
                 // itself takes the role of the value referenced by name, and

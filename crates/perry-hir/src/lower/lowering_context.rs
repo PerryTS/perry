@@ -1001,8 +1001,10 @@ pub struct LoweringContext {
     /// by `lower_module_with_class_id_types_seed_and_entry`; default false.
     pub(crate) is_entry_module: bool,
     /// Names installed on globalThis by the selected platform before module
-    /// initialization. They still use the by-name runtime lookup; this set
-    /// only prevents unknown-identifier diagnostics after lexical resolution.
+    /// initialization, plus names the source declares ambiently
+    /// (`declare const/let/var`, #10363). They still use the by-name runtime
+    /// lookup; this set only prevents unknown-identifier diagnostics after
+    /// lexical resolution.
     pub(crate) platform_globals: HashSet<String>,
     /// #5833: true once lowering has produced at least one `Expr::GlobalThisExpr`
     /// from a top-level `this` (global-script mode, `PERRY_GLOBAL_SCRIPT_THIS`).

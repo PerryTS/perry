@@ -224,6 +224,11 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             let mutable = var_decl.kind != ast::VarDeclKind::Const;
             let is_var = var_decl.kind == ast::VarDeclKind::Var;
             for decl in &var_decl.decls {
+                // #10363: an ambient declarator binds nothing (see `ambient`).
+                if crate::lower::ambient::declarator_binds_nothing(var_decl, decl) {
+                    crate::lower::ambient::note_ambient_globals(ctx, decl);
+                    continue;
+                }
                 // Record chained-assignment class self-aliases (`let Logger =
                 // Logger_1 = class …`) so the self-reference isn't captured (see
                 // `synthesize_class_captures`). Function / CJS-module body path.

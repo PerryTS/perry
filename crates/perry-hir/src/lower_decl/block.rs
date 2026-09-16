@@ -222,6 +222,10 @@ pub(crate) fn pre_register_forward_captured_lets(
                         if let Some(init) = &decl.init {
                             cic_expr(init, false, &mut seen_closure_refs);
                         }
+                        // #10363: an ambient declarator binds nothing.
+                        if crate::lower::ambient::declarator_binds_nothing(var_decl, decl) {
+                            continue;
+                        }
                         let mut binding_idents: Vec<(String, u32)> = Vec::new();
                         collect_pat_forward_idents(&decl.name, &mut binding_idents);
                         for (name, span_lo) in binding_idents {
@@ -270,6 +274,9 @@ pub(crate) fn pre_register_forward_captured_lets(
                     // hoist, so the capturing closure can live in a DIFFERENT
                     // (e.g. enclosing) scope than the `var` statement itself.
                     for decl in &var_decl.decls {
+                        if crate::lower::ambient::declarator_binds_nothing(var_decl, decl) {
+                            continue;
+                        }
                         let mut binding_idents: Vec<(String, u32)> = Vec::new();
                         collect_pat_forward_idents(&decl.name, &mut binding_idents);
                         for (name, _span_lo) in binding_idents {
@@ -1191,6 +1198,9 @@ fn register_block_forward_lexicals(ctx: &mut LoweringContext, stmts: &[ast::Stmt
                 ) =>
             {
                 for decl in &var_decl.decls {
+                    if crate::lower::ambient::declarator_binds_nothing(var_decl, decl) {
+                        continue;
+                    }
                     let mut idents: Vec<(String, u32)> = Vec::new();
                     collect_pat_forward_idents(&decl.name, &mut idents);
                     names.extend(idents.into_iter().map(|(n, _)| n));
