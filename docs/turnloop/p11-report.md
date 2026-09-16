@@ -240,7 +240,14 @@ than find them.
    same decision P6 took for `fetch`. A whole-workspace `cargo build` used to
    unify reqwest's features and give the CLI an h2-capable client; a
    `cargo build -p perry` did not. That inconsistency is also gone.
-8. **The publish WebSocket's "the stream ended" now has a deadline.** The async
+8. **`axios`'s `response.data` is no longer charset-transcoded.** `reqwest`'s
+   `.text()` read the `charset` parameter and decoded through `encoding_rs`;
+   this client's is `String::from_utf8_lossy`. Observable only for a non-UTF-8
+   response, which for axios's JSON-shaped surface is rare — but real.
+9. **`run --remote`'s WebSocket has a 900 s idle bound and no reconnect**, where
+   it previously waited forever. `publish` got 600 s and takes its existing
+   reconnect path.
+10. **The publish WebSocket's "the stream ended" now has a deadline.** The async
    stream ended when the hub dropped the connection; a blocking read has to
    decide how long "nothing arrived" is. It is 600 s, and reaching it takes the
    same `reconnect_or_bail!` path a dropped stream took. The retry count,
@@ -468,11 +475,17 @@ double-fetch fix described under "The streamed download".
 ### Unit tests
 
 ```
-cargo test -p perry-http-client   ->  34 passed, 0 failed  (+1 doc-test)
+cargo test -p perry-http-client   ->  42 passed, 0 failed  (+1 doc-test)
 ```
 
-The one worth naming is `the_end_event_arrives_from_a_step_that_consumes_nothing`
-— see "The bug the previous session left behind" below.
+Four of them exist because something was wrong and the test is what keeps it
+that way: `the_end_event_arrives_from_a_step_that_consumes_nothing` (see below),
+`a_streamed_request_issues_one_hop_per_redirect_and_no_more`,
+`the_redirect_ceiling_matches_the_one_reqwest_used` and
+`a_content_encoding_list_is_split_innermost_last`. Two of them are written so
+they fail if they stop discriminating rather than going quiet — the `End` test
+asserts the *old* rule still fails, and the redirect test asserts turnloop's
+constant is still different from 10.
 
 ### `perry-http-client` against real servers
 
@@ -697,6 +710,8 @@ Run from the branch on the macOS development host unless noted:
 
 | gate | result |
 |---|---|
+| `cargo test -p perry-http-client` | **42 passed** (+1 doc-test) |
+| `cargo check --workspace` (less the cross-host UI crates) | clean |
 | `cargo fmt --all -- --check` | OK |
 | `./scripts/check_file_size.sh` | OK |
 | `python3 scripts/addr_class_inventory.py` | OK |
@@ -732,6 +747,75 @@ entry. **This lane deliberately did not re-baseline it.** Recording another
 lane's debt under this lane's name is how a ratchet stops being one; it belongs
 to whoever owns P7's change, and it is now visible instead of hidden behind a
 total.
+
+## What an independent review of this branch found
+
+The diff was reviewed against the base commit by a reader with no stake in it,
+and it found six things worth fixing plus two worth naming. All six are fixed on
+this branch; the review is the reason they are, and the report says so rather
+than presenting a clean diff that was clean on the second attempt.
+
+1. **TLS: this crate was reading `NODE_TLS_REJECT_UNAUTHORIZED`,
+   `NODE_EXTRA_CA_CERTS` and `SSL_CERT_FILE`, and the doc said reqwest had
+   honoured them here.** It had not — the CLI used the workspace `reqwest` with
+   `rustls-tls` and webpki roots and no environment handling at all, and old
+   axios built a bare `reqwest::Client::new()`. Only the now-deleted
+   `perry-ext-fetch` read them, through `perry_ffi`. So this was a *new*
+   capability described as a preserved one, and its shape is the bad one: a
+   variable JS developers set casually for an unrelated program would silently
+   turn off certificate verification for `perry publish`, which uploads Apple
+   signing certificates, API tokens and licence keys. **Removed.** Verification
+   is always on and not configurable from this crate; a corporate-CA story for
+   the CLI is a feature with its own decision and its own test.
+2. **`Content-Encoding` is a list, and `turnloop_http::compression` matches one
+   token exactly.** A legal `gzip, gzip` — or two `Content-Encoding` header
+   lines — failed the whole response with `UND_ERR_NOT_SUPPORTED`. New failure
+   mode, reachable the moment this client started sending `Accept-Encoding` of
+   its own, which the reqwest build never did. **Fixed**: the list is split and
+   applied innermost-last, across every header line.
+3. **A non-2xx body was streamed to the sink.** `reqwest::send()` returned on
+   the head, so `error_for_status()` always ran before a byte was copied; the
+   new path wrote a 404 error page into the self-updater's staging file and
+   then reported the error. Not exploitable — the staging dir is a tempdir and
+   the manifest hash gates installation — but a real ordering change. **Fixed**:
+   only a 2xx streams; everything else buffers and is returned.
+4. **The whole-request budget could be exceeded by a factor of the resolved
+   address count.** `Connection::connect` gave the full budget to *each*
+   address, and `one_hop` then re-anchored the full budget again for the
+   response. A host with four A and four AAAA records could spend eight times a
+   120 s window before the first byte was sent. **Fixed**: one budget across
+   every address, and the response gets what is left of it.
+5. **The redirect ceiling had gone 10 → 20** by reading
+   `turnloop_http::client::DEFAULT_MAX_REDIRECTS`; reqwest's default, which
+   every CLI call site took, is 10. **Fixed**, with a test that fails if
+   turnloop's constant ever becomes 10 and the test stops discriminating.
+6. **`flush_tls_output` was the one unbounded loop** in `transport.rs`; the
+   other four have a spin cap and a diagnostic. **Fixed.** Also: axios's
+   `reason_phrase` was missing `103 Early Hints` and `425 Too Early`, and
+   `perry-tls-session::node_message` was made `pub` by the extraction when
+   nothing outside the crate calls it. Both fixed.
+
+Two findings are recorded rather than fixed, and both are named in "Behaviour
+changes":
+
+* **`axios`'s `data` loses charset transcoding.** `reqwest::Response::text()`
+  reads the `charset` parameter and transcodes through `encoding_rs`; this
+  client's `text()` is `String::from_utf8_lossy`. A
+  `text/html; charset=iso-8859-1` response now arrives with replacement
+  characters. Fixing it means a new dependency for a surface whose `data` is
+  almost always JSON, so it is a decision for whoever owns the binding.
+* **`run --remote`'s WebSocket now has a 900 s idle bound and no reconnect**,
+  where `publish` got 600 s *with* the existing reconnect loop and the old code
+  waited forever. A hub that legitimately goes quiet for more than fifteen
+  minutes mid-build now fails the command instead of hanging. Both are bad;
+  which is worse is a product call.
+
+The review also confirmed three things this report asserts, by reading the
+code rather than trusting it: the feed loop cannot spin or drop bytes (the only
+zero-consume events the decoder emits are `End` and `Upgrade`, and both
+transition to `Done` in the same step); `perry-tls-session` is a pure move with
+no logic line changed; and `update_checker`'s byte accounting, `require_https`
+calls and `verify_cli_artifact` gate are all intact.
 
 ## turnloop gaps found
 
