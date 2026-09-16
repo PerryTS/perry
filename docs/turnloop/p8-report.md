@@ -16,6 +16,11 @@ removable by a transport swap: every one is either a surface no lane has
 migrated at all, or the still-reachable fallback of a surface that was
 migrated only for the primary agent.
 
+The gap suite is clean — 807 tests on both arms, **zero Perry-side status
+changes**, the same nine known failures — but that is not the achievement,
+because this branch changes almost no runtime code. The achievement is the
+inventory, and a defect the inventory's probe found.
+
 The count is unchanged by this branch. Before and after, on
 `turnloop/integration` @ `babc5f0d1f` and on `turnloop/p8-detokio`:
 
@@ -760,7 +765,50 @@ assumed to agree with it. Three tests
 base commit before this branch changes anything, which is exactly why the
 comparison is arm-against-arm.
 
-GAP_TABLE_PLACEHOLDER
+| | base `babc5f0d1f` | **P8** (`4a3966747`) |
+|---|---|---|
+| tests run | 807 | 807 |
+| pass | 797 | **798** |
+| parity_fail | **9** | **9 — the same nine** |
+| compile_fail | 0 | **0** |
+| crash | 0 | **0** |
+| node_fail | 1 | 0 |
+| parity rate | 98.8 % | 98.8 % |
+| **status changes, compared per test** | — | **1, and it is the oracle's** |
+
+Compared from the two JSON reports test by test, not from the totals. The two
+runs share all 807 test ids, and exactly one differs:
+
+```
+STATUS CHANGES on the common set: 1
+   test_gap_9536_fetch_url_error: node_fail -> pass
+```
+
+`node_fail` means **Node** exited non-zero, not Perry — that fixture drives
+`fetch` at unreachable hosts and reads the `cause` diagnostics back, so it
+depends on the machine's resolver, and the base sweep caught it while the box
+was running two sweeps and three cargo builds. Re-run afterwards on the same
+box, the oracle passes 3/3 (`node --experimental-strip-types
+test_gap_9536_fetch_url_error.ts` → rc=0 each time). A compiler change cannot
+alter whether Node exits non-zero, so the change is environmental and it is in
+the arm's favour, which is the direction that cannot hide a regression.
+
+**Zero Perry-side status changes in either direction.** The nine parity
+failures are byte-identical sets:
+
+```
+2159_defineproperty_class_prototype   json_lazy_defineproperty_index
+2514_settracesigint                   perfhooks_3088_3008_3010_3011
+2899_2779_2777_static_helpers         prop_plan_cache_invalidation
+disposablestack_2875                  v8_2_3680plus
+iterator_prototype_next_patch
+```
+
+— the same nine P6 and P7 recorded, none of them this branch's. Both arms exit
+non-zero for the same reason: three of those nine (`…_static_helpers`,
+`disposablestack_2875`, `iterator_prototype_next_patch`) are expected to PASS
+by the committed snapshot and are red on the base commit before this branch
+changes anything.
 
 ### Probes
 
