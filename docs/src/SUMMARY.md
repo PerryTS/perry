@@ -156,6 +156,7 @@
 - [Test Registration (dark tests)](testing/test-registration.md)
 - [Geisterhand (UI Fuzzer)](testing/geisterhand.md)
 - [Node Compatibility Matrix](testing/node-compat-matrix.md)
+- [node:http2 Conformance Fixtures](testing/http2-conformance.md)
 - [CI Tiers (PR gate / sweep / full)](testing/ci-tiers.md)
 - [Claude Code Bundle Parity](testing/cc-parity.md)
 - [CI Gate Scheduling](testing/ci-gate-scheduling.md)
