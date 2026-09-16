@@ -608,6 +608,22 @@ $ python3 scripts/tokio_inventory.py --self-test
 tokio_inventory self-test: OK (7 planted changes, all caught)
 ```
 
+The self-test drives synthetic metadata, so it was also proved end to end
+against the real tree: adding `tokio = { workspace = true }` to
+`crates/perry-ext-qs/Cargo.toml` — a crate that has no tokio today —
+
+```
+tokio inventory gate FAILED:
+  - NEW tokio edge: perry-ext-qs -> tokio (kind=normal, optional=False, target=None).
+    Perry is migrating OFF tokio; adding an edge needs an entry in
+    scripts/tokio_inventory.json saying which JS surface reaches it and what
+    blocks its removal.
+exit=1
+```
+
+and reverting it returns the gate to green. A gate that has only ever been
+green is a gate nobody has seen fail.
+
 ### 2. `perry-stdlib`'s cron helpers no longer spawn a task that cannot fire
 
 `js_cron_set_interval` and `js_cron_set_timeout` each spawned a native task
