@@ -31,6 +31,13 @@ pub(crate) fn drain_aborted_requests() -> i32 {
     fired
 }
 
+/// An HTTP/2 stream died before its response was written: queue Node's
+/// `'aborted'` on the request, through the same queue P5's own aborted
+/// requests use and the same `drain_aborted_requests` tick.
+pub(crate) fn note_turnloop_request_aborted(request_handle: i64) {
+    crate::server::turnloop_serve::note_aborted_handle(request_handle);
+}
+
 /// Queue the `'connection'` event for a turnloop-accepted connection (P5).
 ///
 /// Shares `PENDING_CONNECTION_EVENTS` with the hyper accept loop, so the

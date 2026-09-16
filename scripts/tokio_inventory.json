@@ -100,8 +100,8 @@
       "optional": false,
       "target": null,
       "surface": "`http2.createSecureServer()` (server) and `http2.connect()` (client)",
-      "reached_when": "always, in any program that imports node:http2",
-      "blocker": "HTTP/2 is a second full surface (`server/http2_server/*`, its own stream handles, settings, ALPN and flow control) and the client spins up a private tokio runtime per session. `turnloop_http::http2::Connection` exists and is sans-I/O; wiring it is its own phase.",
+      "reached_when": "`http2.connect('https://…')` (the TLS client), and `http2.createServer` / `createSecureServer` on a thread that could not get a loop of its own or in a cluster worker. NOT the ordinary case any more: since the HTTP/2 turnloop lane, a cleartext or TLS **server** and a cleartext `http2.connect` on the primary agent are on `turnloop_http::http2` and never construct an `h2` connection.",
+      "blocker": "the TLS **client**: `perry_ext_net::turnloop_tls_io` exposes `install_server_session` publicly but only `begin_client_upgrade` (`pub(crate)`, takes perry-ext-net's own `TlsClientConfigData`, settles a `JsNativeAsyncCompletion`), so `http2.connect('https://…')` has no way to install a client session on a turnloop socket. Plus the same declining paths hyper keeps: a thread with no loop, and a cluster worker. Removing the edge means deleting HTTP/2 on those paths, not migrating it.",
       "issue": "#10327",
       "plan": "D"
     },

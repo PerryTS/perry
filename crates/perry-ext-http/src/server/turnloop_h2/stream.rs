@@ -60,10 +60,8 @@ use super::conn::{flush, H2Conn};
 use crate::server::response::{HyperResponseShape, ShapeBody};
 
 /// Node's `http2.constants.NGHTTP2_*` error codes used here.
-const NO_ERROR: u32 = 0;
 const INTERNAL_ERROR: u32 = 2;
 const REFUSED_STREAM: u32 = 7;
-const CANCEL: u32 = 8;
 
 /// `res.write()`'s boolean, and Node's default stream high-water mark.
 const HIGH_WATER_MARK: usize = 16 * 1024;
@@ -144,27 +142,32 @@ impl H2Stream {
 }
 
 /// A `session.request()` issued before the transport was ready.
+///
+/// The body travels with it: a `stream.end(body)` that races the TCP connect
+/// must produce HEADERS and DATA in that order on one stream, and holding the
+/// bytes here is the only way to guarantee it — the stream does not exist yet,
+/// so there is nowhere else to put them.
 pub(crate) struct QueuedOpen {
     pub(crate) stream_handle: i64,
     pub(crate) headers: Vec<(String, String)>,
-    pub(crate) end_stream: bool,
+    pub(crate) body: Vec<u8>,
 }
 
 fn index_of(conn: &H2Conn, h2_id: u32) -> Option<usize> {
     conn.streams.iter().position(|s| s.h2_id == h2_id)
 }
 
-fn index_of_handle(conn: &H2Conn, handle: i64) -> Option<usize> {
-    conn.streams.iter().position(|s| s.handle == handle)
-}
-
 // ── Inbound ─────────────────────────────────────────────────────────────────
 
 pub(crate) fn on_peer_settings(conn: &mut H2Conn) {
     let session = conn.session_handle;
-    if session != 0 {
-        crate::server::http2_server::queue_turnloop_remote_settings(session);
+    if session == 0 {
+        return;
     }
+    // `Event::Settings` is a unit variant, so the values came from the
+    // pre-scan in `conn.rs` rather than from the core.
+    let settings = conn.peer_settings.take().unwrap_or_default();
+    crate::server::http2_server::queue_turnloop_remote_settings(session, settings);
 }
 
 pub(crate) fn on_headers(conn: &mut H2Conn, h2_id: u32, headers: Vec<Header>, end_stream: bool) {
@@ -356,6 +359,7 @@ fn dispatch_request(conn: &mut H2Conn, i: usize) {
     let stream_handle = if has_stream_listener {
         crate::server::http2_server::register_turnloop_stream_handle(
             session_handle,
+            conn_id,
             h2_id as i64,
             headers_vec.clone(),
         )
@@ -372,7 +376,10 @@ fn dispatch_request(conn: &mut H2Conn, i: usize) {
             server_handle,
             request_handle,
             response_handle,
-            skip_default_response: false,
+            // A `'stream'` listener answers the request itself, exactly as it
+            // does on the hyper path; synthesizing a default response here as
+            // well would put two responses on one stream.
+            skip_default_response: has_stream_listener,
             h2_stream_handle: stream_handle,
             h2_stream_headers: headers_vec,
             is_check_continue: false,
@@ -426,10 +433,10 @@ pub(crate) fn on_reset(conn: &mut H2Conn, h2_id: u32, code: u32) {
     terminate(conn, h2_id, None);
 }
 
-pub(crate) fn on_goaway(conn: &mut H2Conn, last_stream: u32, code: u32) {
+pub(crate) fn on_goaway(conn: &mut H2Conn, last_stream: u32, code: u32, opaque: Vec<u8>) {
     let session = conn.session_handle;
     if session != 0 {
-        crate::server::http2_server::queue_turnloop_goaway(session, code, last_stream);
+        crate::server::http2_server::queue_turnloop_goaway(session, code, last_stream, opaque);
     }
     // Node lets streams at or below `lastStreamID` finish and fails the rest.
     let doomed: Vec<u32> = conn
@@ -511,7 +518,7 @@ fn retire(conn: &mut H2Conn, h2_id: u32) {
 /// the connection-specific headers in [`FORBIDDEN`] must be dropped: a handler
 /// that sets `Connection: close` on an HTTP/2 response is legal Node and would
 /// otherwise take the session down with a PROTOCOL_ERROR.
-fn response_headers(
+pub(crate) fn response_headers(
     status: u16,
     headers: &[(String, String)],
     body_len: Option<usize>,
@@ -527,7 +534,7 @@ fn response_headers(
         if lower == "content-length" {
             seen_length = true;
         }
-        out.push(Header::new(lower, value.clone()));
+        out.push(Header::new(&lower, value.clone()));
     }
     if !seen_length {
         if let Some(len) = body_len {
@@ -538,7 +545,7 @@ fn response_headers(
 }
 
 /// Whether a response of this status, on this request, may carry a body.
-fn body_forbidden(status: u16, head_request: bool) -> bool {
+pub(crate) fn body_forbidden(status: u16, head_request: bool) -> bool {
     head_request || status == 204 || status == 304 || (100..200).contains(&status)
 }
 
@@ -564,11 +571,17 @@ pub(crate) fn h2_send_response(conn_id: i64, h2_id: u32, shape: HyperResponseSha
         let headers = response_headers(shape.status, &shape.headers, advertised);
         let end_now = (body.is_empty() || forbidden) && shape.trailers.is_empty();
         if !send_head(conn, i, &headers, end_now) {
+            // `send_head` reset the stream; the RST_STREAM is in the core's
+            // output and still has to reach the peer.
+            flush(conn);
             return;
         }
         if forbidden {
             conn.streams[i].local_end = true;
             finish_stream(conn, h2_id);
+            // The HEADERS frame is the whole response. Without this the frame
+            // sits in `core.output()` and a 204 or a HEAD never answers.
+            flush(conn);
             return;
         }
         let stream = &mut conn.streams[i];
@@ -591,6 +604,7 @@ pub(crate) fn h2_begin_stream(conn_id: i64, h2_id: u32, shape: HyperResponseShap
         // A streaming response has no known length unless the handler set one.
         let headers = response_headers(shape.status, &shape.headers, None);
         if !send_head(conn, i, &headers, forbidden) {
+            flush(conn);
             return false;
         }
         if forbidden {
@@ -723,7 +737,7 @@ pub(crate) fn pump_outbox(conn: &mut H2Conn) {
                     let trailers: Vec<Header> = conn.streams[i]
                         .send_trailers
                         .iter()
-                        .map(|(k, v)| Header::new(k.to_ascii_lowercase(), v.clone()))
+                        .map(|(k, v)| Header::new(&k.to_ascii_lowercase(), v.clone()))
                         .collect();
                     if let Some(core) = conn.core.as_mut() {
                         let _ = core.send_headers(h2_id, &trailers, true);
@@ -753,7 +767,10 @@ fn finish_stream(conn: &mut H2Conn, h2_id: u32) {
     if !conn.streams[i].local_end {
         return;
     }
-    if conn.streams[i].remote_end || conn.role == Role::Server {
+    // Only when the peer has finished too. Retiring a half-closed(local)
+    // stream would drop the record its inbound DATA has to land on, and the
+    // bytes would be released as an orphan and thrown away.
+    if conn.streams[i].remote_end {
         retire(conn, h2_id);
     }
 }
@@ -768,10 +785,6 @@ pub(crate) fn writable_below_watermark(conn: &H2Conn, h2_id: u32) -> bool {
         .map(|i| conn.streams[i].outbox.len())
         .unwrap_or(0);
     stalled + tl::queued_bytes(conn.id) <= HIGH_WATER_MARK
-}
-
-pub(crate) fn below_watermark(conn_id: i64, h2_id: u32) -> bool {
-    super::conn::peek(conn_id, |conn| writable_below_watermark(conn, h2_id)).unwrap_or(false)
 }
 
 /// After a stream ends, a connection that was asked to close may now be drained.
@@ -791,10 +804,11 @@ pub(crate) fn open_client_stream(conn: &mut H2Conn, open: QueuedOpen) {
     let headers: Vec<Header> = open
         .headers
         .iter()
-        .map(|(k, v)| Header::new(k.clone(), v.clone()))
+        .map(|(k, v)| Header::new(k, v.clone()))
         .collect();
+    let end_stream = open.body.is_empty();
     let opened = match conn.core.as_mut() {
-        Some(core) => core.open(&headers, open.end_stream),
+        Some(core) => core.open(&headers, end_stream),
         None => {
             crate::server::http2_server::queue_turnloop_stream_error(
                 open.stream_handle,
@@ -808,13 +822,24 @@ pub(crate) fn open_client_stream(conn: &mut H2Conn, open: QueuedOpen) {
             let mut stream = H2Stream::new(h2_id);
             stream.handle = open.stream_handle;
             stream.headers_sent = true;
-            stream.local_end = open.end_stream;
+            stream.local_end = end_stream;
             stream.no_body = open
                 .headers
                 .iter()
                 .any(|(k, v)| k == ":method" && v.eq_ignore_ascii_case("HEAD"));
+            if !end_stream {
+                stream.outbox = open.body;
+                stream.outbox_end = true;
+            }
             conn.streams.push(stream);
-            crate::server::http2_server::bind_turnloop_stream_id(open.stream_handle, h2_id as i64);
+            crate::server::http2_server::bind_turnloop_stream_id(
+                open.stream_handle,
+                conn.id,
+                h2_id as i64,
+            );
+            if !end_stream {
+                pump_outbox(conn);
+            }
         }
         Err(err) => {
             let code = if err.code == "REFUSED_STREAM" {
@@ -833,60 +858,24 @@ pub(crate) fn request(
     conn_id: i64,
     stream_handle: i64,
     headers: Vec<(String, String)>,
-    end_stream: bool,
+    body: Vec<u8>,
 ) {
     super::conn::with_owned(conn_id, |conn| {
         let open = QueuedOpen {
             stream_handle,
             headers,
-            end_stream,
+            body,
         };
         if conn.core.is_some() && !conn.connecting && !conn.handshaking {
             open_client_stream(conn, open);
             flush(conn);
         } else {
+            // Before `NET_CONNECT` — Node lets `session.request()` be called
+            // on a session that is still connecting and opens the stream when
+            // the transport comes up.
             conn.queued_opens.push(open);
         }
     });
-}
-
-/// `stream.write(chunk)` / `stream.end(body)` on a client stream.
-pub(crate) fn client_send(conn_id: i64, stream_handle: i64, bytes: Vec<u8>, end_stream: bool) {
-    super::conn::with_owned(conn_id, |conn| {
-        if let Some(queued) = conn
-            .queued_opens
-            .iter_mut()
-            .find(|o| o.stream_handle == stream_handle)
-        {
-            // The stream has not opened yet: fold the body into the pending
-            // open so the HEADERS and the DATA go out in the right order.
-            let _ = queued;
-            // Body before open is rare; keep it simple and let the open happen
-            // first, then send below once the stream exists.
-        }
-        let Some(i) = index_of_handle(conn, stream_handle) else {
-            return;
-        };
-        let h2_id = conn.streams[i].h2_id;
-        conn.streams[i].outbox.extend_from_slice(&bytes);
-        if end_stream {
-            conn.streams[i].outbox_end = true;
-        }
-        pump_outbox(conn);
-        flush(conn);
-        let _ = h2_id;
-    });
-}
-
-/// `stream.close([code])` on a client stream.
-pub(crate) fn client_close(conn_id: i64, stream_handle: i64, code: u32) {
-    let h2_id = super::conn::peek(conn_id, |conn| {
-        index_of_handle(conn, stream_handle).map(|i| conn.streams[i].h2_id)
-    })
-    .flatten();
-    if let Some(h2_id) = h2_id {
-        destroy_stream(conn_id, h2_id, if code == 0 { NO_ERROR } else { code });
-    }
 }
 
 /// `session.close()` — Node's graceful GOAWAY.
@@ -903,94 +892,3 @@ pub(crate) fn session_close(conn_id: i64) {
         super::conn::graceful_close(conn_id);
     }
 }
-
-/// `session.goaway(code, lastStreamID, opaqueData)` — the explicit frame.
-///
-/// `Connection::shutdown` can only send NO_ERROR with its own `last_remote` and
-/// no opaque data, so this encodes the frame itself with the crate's public
-/// `encode_frame` and writes it through the same path the core's own output
-/// takes. The session is *not* marked draining: Node's `goaway()` sends a frame
-/// and leaves the session usable, unlike `close()`.
-pub(crate) fn session_goaway(conn_id: i64, code: u32, last_stream_id: u32, opaque: &[u8]) {
-    super::conn::with_owned(conn_id, |conn| {
-        let mut payload = Vec::with_capacity(8 + opaque.len());
-        payload.extend_from_slice(&last_stream_id.to_be_bytes());
-        payload.extend_from_slice(&code.to_be_bytes());
-        payload.extend_from_slice(opaque);
-        let mut frame = Vec::with_capacity(9 + payload.len());
-        if turnloop_http::http2::encode_frame(7, 0, 0, &payload, &mut frame).is_err() {
-            return;
-        }
-        if conn.secure {
-            let _ = perry_ext_net::turnloop_tls_io::write(conn.id, &frame, 0);
-        } else {
-            let _ = tl::write(conn.id, &frame, 0);
-        }
-    });
-}
-
-/// `session.ping(payload)`.
-pub(crate) fn session_ping(conn_id: i64, payload: [u8; 8]) -> bool {
-    super::conn::with_owned(conn_id, |conn| {
-        let sent = conn
-            .core
-            .as_mut()
-            .is_some_and(|core| core.ping(payload).is_ok());
-        if sent {
-            flush(conn);
-        }
-        sent
-    })
-    .unwrap_or(false)
-}
-
-/// `session.settings(obj)` — re-advertise our SETTINGS on the wire.
-///
-/// The core owns its own SETTINGS frame and offers no way to send another, so
-/// the frame is encoded here. The values that matter to the core itself
-/// (`MAX_CONCURRENT_STREAMS`, `MAX_FRAME_SIZE`) were fixed at construction; a
-/// later change is advertised to the peer but does not resize our own table,
-/// which is the documented limit of this surface.
-pub(crate) fn session_settings(
-    conn_id: i64,
-    settings: &crate::server::http2_session_settings::Http2SettingsState,
-) {
-    super::conn::with_owned(conn_id, |conn| {
-        let mut payload = Vec::with_capacity(6 * 5);
-        for (id, value) in [
-            (1u16, settings.header_table_size),
-            (3, settings.max_concurrent_streams),
-            (4, settings.initial_window_size),
-            (5, settings.max_frame_size),
-            (6, settings.max_header_list_size),
-        ] {
-            payload.extend_from_slice(&id.to_be_bytes());
-            payload.extend_from_slice(&value.to_be_bytes());
-        }
-        let mut frame = Vec::with_capacity(9 + payload.len());
-        if turnloop_http::http2::encode_frame(4, 0, 0, &payload, &mut frame).is_err() {
-            return;
-        }
-        if conn.secure {
-            let _ = perry_ext_net::turnloop_tls_io::write(conn.id, &frame, 0);
-        } else {
-            let _ = tl::write(conn.id, &frame, 0);
-        }
-    });
-}
-
-/// The stream id a `ServerResponse` / `Http2StreamHandle` is bound to.
-pub(crate) fn stream_id_of_handle(conn_id: i64, stream_handle: i64) -> Option<u32> {
-    super::conn::peek(conn_id, |conn| {
-        index_of_handle(conn, stream_handle).map(|i| conn.streams[i].h2_id)
-    })
-    .flatten()
-}
-
-/// Whether the transport is still live, for `res`'s peer-gone probe.
-pub(crate) fn is_live(conn_id: i64) -> bool {
-    super::conn::owns(conn_id) && tl::is_live(conn_id)
-}
-
-/// Node's `CANCEL` is the default code for an abandoned stream.
-pub(crate) const DEFAULT_CANCEL: u32 = CANCEL;

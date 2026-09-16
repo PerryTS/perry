@@ -58,15 +58,15 @@ use std::sync::{Mutex, OnceLock};
 
 use perry_ffi::turnloop_net as tl;
 
-pub(crate) mod client;
 pub(crate) mod conn;
+pub(crate) mod control;
 pub(crate) mod stream;
 
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
 
-pub(crate) use conn::{intercept, owns};
+pub(crate) use conn::{connect_client, intercept, intercept_listener_error, owns};
 pub(crate) use stream::{
     destroy_stream, h2_begin_stream, h2_finish_body, h2_send_body, h2_send_response,
 };
@@ -181,15 +181,6 @@ pub(crate) fn close_listener(id: i64) {
     let _ = tl::close(id);
 }
 
-pub(crate) fn listener_for_server(server_handle: i64) -> Option<i64> {
-    listeners()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .iter()
-        .find(|(_, l)| l.server_handle == server_handle)
-        .map(|(id, _)| *id)
-}
-
 // ── The request queue ───────────────────────────────────────────────────────
 
 /// Requests decoded and waiting for the main-thread pump, per JS server handle.
@@ -204,7 +195,9 @@ fn pending() -> &'static Mutex<HashMap<i64, VecDeque<crate::server::server::Http
     PENDING.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-pub(crate) fn take_pending(server_handle: i64) -> Option<crate::server::server::HttpPendingRequest> {
+pub(crate) fn take_pending(
+    server_handle: i64,
+) -> Option<crate::server::server::HttpPendingRequest> {
     pending()
         .lock()
         .unwrap_or_else(|e| e.into_inner())

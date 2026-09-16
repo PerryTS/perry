@@ -110,6 +110,21 @@ fn aborted() -> &'static Mutex<Vec<i64>> {
     ABORTED.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+/// Queue an `IncomingMessage` handle for Node's `'aborted'`.
+///
+/// Shared with the HTTP/2 transport, which reaches the same queue for the same
+/// reason: a stream reset or a dead connection leaves a request that will never
+/// be answered, and the sink cannot run its listeners itself.
+pub(crate) fn note_aborted_handle(handle: i64) {
+    if handle == 0 {
+        return;
+    }
+    aborted()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(handle);
+}
+
 /// Take the `IncomingMessage` handles whose connection died mid-request.
 pub(crate) fn take_aborted() -> Vec<i64> {
     let mut queue = aborted().lock().unwrap_or_else(|e| e.into_inner());
@@ -182,6 +197,12 @@ pub(crate) extern "C" fn sink(completion: *const tl::NetCompletion) {
     // SAFETY: the runtime passes a live completion for the duration of the
     // call, which is this function's body.
     let c = unsafe { &*completion };
+    // HTTP/2 shares this subsystem slot (see `turnloop_h2`'s module docs), and
+    // answers first by id. A completion it claims never reaches the HTTP/1.1
+    // state machine below.
+    if crate::server::turnloop_h2::intercept(c) {
+        return;
+    }
     match c.kind {
         tl::NET_ACCEPT => on_accept(c.id, c.conn),
         // SAFETY: same call; the pooled lease outlives it.
@@ -193,6 +214,9 @@ pub(crate) extern "C" fn sink(completion: *const tl::NetCompletion) {
         tl::NET_ERROR => {
             // SAFETY: same call; both point at `'static` string data.
             let (code, syscall) = unsafe { (c.code(), c.syscall()) };
+            if crate::server::turnloop_h2::intercept_listener_error(c.id, c.terminal != 0) {
+                return;
+            }
             on_error(c.id, code, syscall, c.terminal != 0);
         }
         _ => {}
@@ -249,6 +273,63 @@ fn on_accept(listener_id: i64, conn_id: i64) {
     if let Err(_err) = tl::read_start(conn_id) {
         destroy_connection(conn_id);
     }
+}
+
+/// Adopt a TLS connection whose ALPN chose `http/1.1` from the HTTP/2 listener
+/// (`http2.createSecureServer({ allowHTTP1: true })`).
+///
+/// The socket keeps its id, its installed TLS layer and its outstanding
+/// multishot read: only the owning table changes, because both halves live in
+/// the same subsystem slot. `leftover` is whatever plaintext the HTTP/2 side
+/// had buffered but not decoded — with ALPN there is normally none, but a
+/// client that pipelined its first request into the handshake's last flight
+/// would lose it otherwise.
+///
+/// Returns false when no `Conn` could be made, in which case the caller closes
+/// the socket rather than leaving an orphan.
+pub(crate) fn adopt_alpn_http1(
+    id: i64,
+    server_handle: i64,
+    peer_address: String,
+    peer_port: u16,
+    leftover: Vec<u8>,
+) -> bool {
+    // `id` is a connection, not a listener, so the idle deadline comes from the
+    // server the same way P5's own `listen` derived it.
+    let idle_close_ms =
+        with_base_server(server_handle, crate::server::server::idle_close_ms).unwrap_or(0);
+    let keep_alive_timeout_ms =
+        with_base_server(server_handle, |s| s.keep_alive_timeout).unwrap_or(5_000.0);
+    let mut input = Vec::with_capacity(8 * 1024);
+    input.extend_from_slice(&leftover);
+    conns().lock().unwrap_or_else(|e| e.into_inner()).insert(
+        id,
+        Conn {
+            id,
+            server_handle,
+            peer_address,
+            peer_port,
+            decoder: http1::Decoder::new(http1::Mode::Request, Default::default()),
+            input,
+            building: None,
+            active: None,
+            seq: 0,
+            requests: 0,
+            idle_close_ms,
+            keep_alive_timeout_ms,
+            paused: false,
+            read_eof: false,
+            closing: false,
+            destroyed: false,
+            secure: true,
+            // The handshake is already complete: that is what decided ALPN.
+            handshaking: false,
+        },
+    );
+    if !leftover.is_empty() {
+        decode(id);
+    }
+    true
 }
 
 fn on_data(id: i64, bytes: &[u8]) {
@@ -896,6 +977,21 @@ fn on_closed(id: i64) {
         .is_some();
     crate::server::server::turnloop_connection_closed(id);
     if owned {
+        // The rustls session has to go BEFORE the id does. `turnloop_tls_io`
+        // keys its layer table by connection id, and nothing on this
+        // subsystem's terminal path was dropping it — perry-ext-net's
+        // `emit_close_once` is the only caller of `forget`, and that is
+        // subsystem 0's socket path, not this one. So every HTTPS connection
+        // left a `Layer` (a rustls session plus its buffers) behind for the
+        // life of the process, and — worse — once `free_handle_id` handed the
+        // id back and the next accepted connection drew it, `install_server_
+        // session` answered "socket is already TLS" and the connection was
+        // closed before a byte was read.
+        //
+        // Found through the HTTP/2 `allowHTTP1` handoff, which routes an ALPN
+        // `http/1.1` connection here and then closes it: the next TLS
+        // connection to that server got EOF, every time.
+        perry_ext_net::turnloop_tls_io::forget(id);
         // The terminal completion: no completion can name this id again, and
         // unlike a `net.Socket` id there is no JS object still holding it, so
         // it goes back to the shared band instead of leaking one id per

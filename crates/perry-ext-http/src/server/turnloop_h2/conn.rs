@@ -31,6 +31,27 @@
 //! The third is that a `receive` that **errors** has already queued a GOAWAY
 //! into `core.output()`. Returning without flushing sends a peer nothing at
 //! all, and h2spec asks for that frame by error code on ~60 of its tests.
+//!
+//! ## The pre-scan, and the three things the core will not tell you
+//!
+//! Every frame is decoded **twice**: once by [`peek_frame`] here, once by the
+//! core. The second decode is the authoritative one; the first exists because
+//! three facts a `node:http2` session has to surface never leave `Connection`:
+//!
+//! * **a SETTINGS acknowledgement** — consumed with `event: None`, so
+//!   `session.settings(obj, cb)` has nothing to fire its callback on;
+//! * **GOAWAY's opaque data** — `Event::Goaway` carries `last_stream` and
+//!   `code` only, and Node's `'goaway'` listener receives the third argument;
+//! * **the peer's SETTINGS values** — `Event::Settings` is a unit variant, so
+//!   `session.remoteSettings` would stay at its defaults forever.
+//!
+//! The pre-scan also *withholds* one frame class from the core. `Connection`
+//! tracks exactly one outstanding SETTINGS (its own, from the constructor) and
+//! answers a second acknowledgement with `protocol("unsolicited SETTINGS
+//! ack")`, which is a **connection** error. A `session.settings()` frame is
+//! therefore acknowledged by the peer into a core that would kill the session
+//! for it, so this module counts the SETTINGS frames it sent out of band and
+//! eats exactly that many acks before the core sees them.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -39,6 +60,8 @@ use std::time::{Duration, Instant};
 use perry_ffi::turnloop_net as tl;
 use turnloop_http::http1::Header;
 use turnloop_http::http2::{self, Event, Role};
+
+use crate::server::http2_session_settings::Http2SettingsState;
 
 use super::stream::{self, H2Stream};
 
@@ -79,9 +102,7 @@ pub(crate) enum Owned {
         ack: bool,
         data: [u8; 8],
     },
-    WindowUpdate {
-        stream: u32,
-    },
+    WindowUpdate,
 }
 
 fn own_event(event: Event<'_>) -> Owned {
@@ -108,7 +129,7 @@ fn own_event(event: Event<'_>) -> Owned {
         Event::Reset { stream, code } => Owned::Reset { stream, code },
         Event::Goaway { last_stream, code } => Owned::Goaway { last_stream, code },
         Event::Ping { ack, data } => Owned::Ping { ack, data },
-        Event::WindowUpdate { stream } => Owned::WindowUpdate { stream },
+        Event::WindowUpdate { .. } => Owned::WindowUpdate,
     }
 }
 
@@ -145,7 +166,23 @@ pub(crate) struct H2Conn {
     pub(crate) queued_opens: Vec<stream::QueuedOpen>,
     /// `allowHTTP1` for a server connection that negotiates `http/1.1`.
     pub(crate) allow_http1: bool,
-    pub(crate) settings: crate::server::http2_session_settings::Http2SettingsState,
+    pub(crate) settings: Http2SettingsState,
+    /// Whether the client preface has been consumed, so [`peek_frame`] may
+    /// start reading frame headers out of the buffer. Always true for a client,
+    /// which never receives one.
+    pub(crate) preface_done: bool,
+    /// Whether the core's own constructor SETTINGS has been acknowledged. Until
+    /// it has, an ack belongs to the core and must not be eaten.
+    pub(crate) core_settings_acked: bool,
+    /// SETTINGS frames this module wrote out of band (`session.settings()`)
+    /// whose acknowledgement has not arrived. See the module docs.
+    pub(crate) owed_settings_acks: u32,
+    /// GOAWAY opaque data captured by the pre-scan, for the `'goaway'` event
+    /// the core's `Event::Goaway` cannot carry.
+    pub(crate) goaway_opaque: Vec<u8>,
+    /// The peer's SETTINGS values captured by the pre-scan, for the
+    /// `'remoteSettings'` event the core's unit `Event::Settings` cannot carry.
+    pub(crate) peer_settings: Option<Http2SettingsState>,
 }
 
 fn conns() -> &'static Mutex<HashMap<i64, H2Conn>> {
@@ -196,22 +233,26 @@ fn forget(id: i64) -> Option<H2Conn> {
 /// no risk of the non-reentrant mutex deadlocking. [`owns`] keeps answering
 /// true meanwhile, so a completion that arrives in the middle (it cannot: the
 /// sink is not re-entrant) would still route here rather than to P5.
+///
+/// A record that `f` marked `destroyed` is dropped — but the **id stays owned**
+/// until its `NET_CLOSED`. Releasing ownership here instead would hand the
+/// remaining completions of a socket this module still has open to P5's HTTP/1.1
+/// sink, which has never heard of the id: the terminal completion would reach
+/// nobody, the id would never go back to the shared band, and a `perry-ext-http`
+/// process that failed one write would leak a handle id per connection (the
+/// #6441 exhaustion class). [`forget`] is the only release, and [`on_closed`]
+/// is the only caller that can reach it for a live socket.
 pub(crate) fn with_owned<R>(id: i64, f: impl FnOnce(&mut H2Conn) -> R) -> Option<R> {
     let mut conn = conns()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .remove(&id)?;
     let result = f(&mut conn);
-    let gone = conn.destroyed;
-    let mut map = conns().lock().unwrap_or_else(|e| e.into_inner());
-    if !gone {
-        map.insert(id, conn);
-    } else {
-        drop(map);
-        owned_ids()
+    if !conn.destroyed {
+        conns()
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .remove(&id);
+            .insert(id, conn);
     }
     Some(result)
 }
@@ -220,27 +261,6 @@ pub(crate) fn with_owned<R>(id: i64, f: impl FnOnce(&mut H2Conn) -> R) -> Option
 pub(crate) fn peek<R>(id: i64, f: impl FnOnce(&H2Conn) -> R) -> Option<R> {
     let map = conns().lock().unwrap_or_else(|e| e.into_inner());
     map.get(&id).map(f)
-}
-
-/// Every live HTTP/2 connection of one JS server handle.
-pub(crate) fn connections_of(server_handle: i64) -> Vec<i64> {
-    conns()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .iter()
-        .filter(|(_, c)| c.server_handle == server_handle)
-        .map(|(id, _)| *id)
-        .collect()
-}
-
-/// The connection carrying a session handle, if it is on turnloop.
-pub(crate) fn connection_of_session(session_handle: i64) -> Option<i64> {
-    conns()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .iter()
-        .find(|(_, c)| c.session_handle == session_handle)
-        .map(|(id, _)| *id)
 }
 
 // ── Completion routing ──────────────────────────────────────────────────────
@@ -322,9 +342,11 @@ fn on_accept(listener_id: i64, conn_id: i64) {
     let peer = tl::peer_address(conn_id);
     let session_handle = crate::server::http2_server::register_turnloop_server_session(
         server_handle,
+        conn_id,
         peer.as_ref().map(|e| e.port).unwrap_or(0),
         secure,
         if secure { "h2" } else { "h2c" },
+        advertised_settings(&settings),
     );
     let mut conn = H2Conn {
         id: conn_id,
@@ -350,6 +372,11 @@ fn on_accept(listener_id: i64, conn_id: i64) {
         queued_opens: Vec::new(),
         allow_http1,
         settings,
+        preface_done: false,
+        core_settings_acked: false,
+        owed_settings_acks: 0,
+        goaway_opaque: Vec::new(),
+        peer_settings: None,
     };
     if !secure {
         // h2c with prior knowledge: the core starts immediately and the client
@@ -381,11 +408,78 @@ fn start_core(c: &mut H2Conn) -> bool {
     match http2::Connection::new(c.role, limits) {
         Ok(core) => {
             c.core = Some(core);
+            // Only a server reads a client preface; a client goes straight to
+            // frames, so the pre-scan may start immediately.
+            c.preface_done = c.role == Role::Client;
             arm_settings_timeout(c);
             true
         }
         Err(_) => false,
     }
+}
+
+/// The SETTINGS this connection's core actually advertises, after `Limits`
+/// clamping — what `session.localSettings` must report, rather than the
+/// unclamped option object JS passed in.
+pub(crate) fn advertised_settings(requested: &Http2SettingsState) -> Http2SettingsState {
+    let mut out = requested.clone();
+    out.max_concurrent_streams = clamp_streams(requested.max_concurrent_streams) as u32;
+    out.max_frame_size = requested.max_frame_size.clamp(16_384, 0xff_ffff);
+    out.max_header_list_size = requested.max_header_list_size.max(4_096);
+    out.max_header_size = out.max_header_list_size;
+    // The core never negotiates HPACK table size up and never offers push on a
+    // server connection.
+    out.header_table_size = out.header_table_size.min(4_096);
+    out.enable_push = false;
+    out
+}
+
+/// One frame header read out of the buffer without consuming it.
+///
+/// `None` for a partial frame, for input the preface has not cleared yet, and
+/// for a length the core's own `Limits` would reject — in every one of those
+/// the core is the authority and the pre-scan stays out of the way.
+fn peek_frame(conn: &H2Conn) -> Option<(u8, u8, u32, usize)> {
+    if !conn.preface_done || conn.input.len() < 9 {
+        return None;
+    }
+    let len =
+        ((conn.input[0] as usize) << 16) | ((conn.input[1] as usize) << 8) | conn.input[2] as usize;
+    if conn.input.len() < 9 + len {
+        return None;
+    }
+    let stream = u32::from_be_bytes([conn.input[5], conn.input[6], conn.input[7], conn.input[8]])
+        & 0x7fff_ffff;
+    Some((conn.input[3], conn.input[4], stream, len))
+}
+
+/// Decode a peer SETTINGS payload into the shape `session.remoteSettings`
+/// reports. Unknown identifiers are ignored, exactly as the core ignores them.
+fn decode_settings(payload: &[u8]) -> Http2SettingsState {
+    let mut out = Http2SettingsState {
+        // A peer that omits a setting is at the RFC 9113 default, which is what
+        // `Http2SettingsState::default` already carries — except
+        // MAX_CONCURRENT_STREAMS, whose protocol default is "unlimited".
+        ..Default::default()
+    };
+    for chunk in payload.chunks_exact(6) {
+        let id = u16::from_be_bytes([chunk[0], chunk[1]]);
+        let value = u32::from_be_bytes([chunk[2], chunk[3], chunk[4], chunk[5]]);
+        match id {
+            1 => out.header_table_size = value,
+            2 => out.enable_push = value != 0,
+            3 => out.max_concurrent_streams = value,
+            4 => out.initial_window_size = value,
+            5 => out.max_frame_size = value,
+            6 => {
+                out.max_header_list_size = value;
+                out.max_header_size = value;
+            }
+            8 => out.enable_connect_protocol = value != 0,
+            _ => {}
+        }
+    }
+    out
 }
 
 fn clamp_streams(requested: u32) -> usize {
@@ -410,10 +504,74 @@ fn arm_settings_timeout(c: &mut H2Conn) {
 
 // ── Client connect ──────────────────────────────────────────────────────────
 
+/// `http2.connect('http://host:port')` on the loop, in place of the private
+/// `current_thread` tokio runtime the `h2` client built **per session** — and
+/// the second one `start_client_request` built **per request** (perry#10327).
+///
+/// Cleartext only. A `https://` authority needs a TLS client session installed
+/// on the turnloop socket, and `perry_ext_net::turnloop_tls_io` exposes only
+/// `begin_client_upgrade`, which is `pub(crate)` and settles a
+/// `JsNativeAsyncCompletion` of its own; see the report.
+///
+/// Returns the connection id, or `None` when the caller must keep the `h2`
+/// path. The connect itself is asynchronous: `NET_CONNECT` starts the core.
+pub(crate) fn connect_client(session_handle: i64, host: &str, port: u16) -> Option<i64> {
+    let id = super::next_id();
+    if id == perry_ffi::INVALID_HANDLE {
+        return None;
+    }
+    insert(H2Conn {
+        id,
+        role: Role::Client,
+        server_handle: 0,
+        session_handle,
+        core: None,
+        input: Vec::with_capacity(16 * 1024),
+        streams: Vec::new(),
+        secure: false,
+        handshaking: false,
+        connecting: true,
+        alpn: None,
+        peer_address: String::new(),
+        peer_port: port,
+        buffered: 0,
+        // Node's `maxSessionMemory` default, in bytes.
+        max_session_memory: 10 * 1024 * 1024,
+        timer: Timer::None,
+        draining: false,
+        closing: false,
+        read_eof: false,
+        destroyed: false,
+        queued_opens: Vec::new(),
+        allow_http1: false,
+        // What this connection's core will actually advertise, so
+        // `clamp_to_core` in `control.rs` has something truthful to clamp a
+        // later `session.settings()` against.
+        settings: advertised_settings(&Http2SettingsState::default()),
+        preface_done: false,
+        core_settings_acked: false,
+        owed_settings_acks: 0,
+        goaway_opaque: Vec::new(),
+        peer_settings: None,
+    });
+    // Node sets TCP_NODELAY on an HTTP/2 client socket.
+    if tl::tcp_connect(id, super::SUBSYSTEM, host, port, true).is_err() {
+        forget(id);
+        perry_ffi::free_handle_id(id);
+        return None;
+    }
+    Some(id)
+}
+
 fn on_connect(id: i64) {
+    let local_port = tl::local_address(id).map(|e| e.port).unwrap_or(0);
     let ready = with_owned(id, |c| {
         c.connecting = false;
         c.peer_address = tl::peer_address(id).map(|e| e.address).unwrap_or_default();
+        // `local_server_session_event_ready` pairs a loopback client with its
+        // server session by the client's local port; without it the server's
+        // `'session'` event never fires on an in-process pair.
+        crate::server::http2_server::bind_turnloop_client_port(c.session_handle, local_port);
         if c.secure {
             // The TLS handshake starts now; the core waits for ALPN.
             return false;
@@ -462,43 +620,51 @@ fn client_transport_ready(id: i64) {
 // ── Data ────────────────────────────────────────────────────────────────────
 
 fn on_data(id: i64, bytes: &[u8]) {
-    let plaintext: Option<Vec<u8>> = if peek(id, |c| c.secure).unwrap_or(false) {
-        match perry_ext_net::turnloop_tls_io::receive(id, bytes) {
-            Some(received) => {
-                if received.peer_closed {
-                    let text = received.plaintext;
-                    if !text.is_empty() {
-                        feed(id, &text);
-                    }
-                    on_eof(id);
-                    return;
-                }
-                Some(received.plaintext)
-            }
-            None => return,
-        }
-    } else {
-        None
+    if !peek(id, |c| c.secure).unwrap_or(false) {
+        feed(id, bytes);
+        return;
+    }
+    let Some(received) = perry_ext_net::turnloop_tls_io::receive(id, bytes) else {
+        // The layer is gone (the handshake failed and destroyed the
+        // connection); there is nothing to decode.
+        return;
     };
+    let text = received.plaintext;
+    if received.peer_closed {
+        // A TLS close_notify is the readable EOF.
+        if !text.is_empty() {
+            feed(id, &text);
+        }
+        on_eof(id);
+        return;
+    }
     if peek(id, |c| c.handshaking).unwrap_or(false)
         && perry_ext_net::turnloop_tls_io::handshake_done(id)
     {
-        if !finish_handshake(id) {
+        // `text` is handed over, not dropped. The handshake's last flight and
+        // the peer's first application bytes routinely arrive in one read — a
+        // TLS 1.3 client sends `Finished` and its request back to back — and an
+        // ALPN handoff that kept only `conn.input` would lose the request that
+        // decided the handoff. Measured: `curl --http1.1` against
+        // `createSecureServer({ allowHTTP1: true })` hung, every time.
+        if !finish_handshake(id, &text) {
             return;
         }
     }
-    match plaintext {
-        Some(text) if !text.is_empty() => feed(id, &text),
-        Some(_) => {}
-        None => feed(id, bytes),
+    if !text.is_empty() {
+        feed(id, &text);
     }
 }
 
 /// ALPN has been decided. Either start the HTTP/2 core, hand the whole
 /// connection to P5's HTTP/1.1 server, or refuse it.
 ///
+/// `pending` is the plaintext decrypted by the same `NET_DATA` that completed
+/// the handshake; a handoff takes it with the connection, and an HTTP/2
+/// connection leaves it to the caller to feed.
+///
 /// Returns false when the connection is no longer ours.
-fn finish_handshake(id: i64) -> bool {
+fn finish_handshake(id: i64, pending: &[u8]) -> bool {
     let alpn = perry_ext_net::turnloop_tls_io::alpn_protocol(id);
     let decision = with_owned(id, |c| {
         c.handshaking = false;
@@ -533,7 +699,7 @@ fn finish_handshake(id: i64) -> bool {
             true
         }
         Some(Handshake::Http1) => {
-            hand_to_http1(id);
+            hand_to_http1(id, pending);
             false
         }
         Some(Handshake::Refuse) => {
@@ -554,9 +720,10 @@ enum Handshake {
 /// listener. The socket keeps its id, its TLS layer and its outstanding
 /// multishot read; only the owning table changes, because both halves are the
 /// same subsystem. That is the whole reason this module shares slot 1.
-fn hand_to_http1(id: i64) {
+fn hand_to_http1(id: i64, pending: &[u8]) {
     let Some(conn) = forget(id) else { return };
-    let leftover = conn.input;
+    let mut leftover = conn.input;
+    leftover.extend_from_slice(pending);
     if !crate::server::turnloop_serve::adopt_alpn_http1(
         id,
         conn.server_handle,
@@ -582,12 +749,56 @@ fn feed(id: i64, bytes: &[u8]) {
 
 // ── The receive loop ────────────────────────────────────────────────────────
 
+/// What the pre-scan did with the frame at the head of the input buffer.
+#[derive(PartialEq, Eq)]
+enum Prescan {
+    /// The frame was taken out of the stream entirely; the core never sees it.
+    Consumed,
+    /// Nothing was consumed; the core decodes the frame next.
+    Pass,
+}
+
+/// Read the frame at the head of the buffer for the three facts `Connection`
+/// does not surface, and withhold a SETTINGS acknowledgement that belongs to a
+/// `session.settings()` frame this module wrote out of band.
+///
+/// See the module docs for why the second decode is not redundant.
+fn prescan(conn: &mut H2Conn) -> Prescan {
+    let Some((kind, flags, _stream, len)) = peek_frame(conn) else {
+        return Prescan::Pass;
+    };
+    match kind {
+        // SETTINGS
+        4 if flags & 1 != 0 => {
+            if len == 0 && conn.core_settings_acked && conn.owed_settings_acks > 0 {
+                conn.owed_settings_acks -= 1;
+                conn.input.drain(..9);
+                crate::server::http2_server::complete_turnloop_settings(conn.session_handle);
+                return Prescan::Consumed;
+            }
+        }
+        4 => {
+            conn.peer_settings = Some(decode_settings(&conn.input[9..9 + len]));
+        }
+        // GOAWAY: everything past the 8-byte header is Node's `opaqueData`.
+        7 if len > 8 => {
+            conn.goaway_opaque = conn.input[9 + 8..9 + len].to_vec();
+        }
+        7 => conn.goaway_opaque.clear(),
+        _ => {}
+    }
+    Prescan::Pass
+}
+
 fn pump(id: i64) {
     let outcome = with_owned(id, |conn| {
         let mut fatal = None;
         loop {
             if conn.destroyed {
                 return Outcome::Gone;
+            }
+            if prescan(conn) == Prescan::Consumed {
+                continue;
             }
             let (consumed, event) = {
                 let H2Conn { core, input, .. } = &mut *conn;
@@ -610,6 +821,20 @@ fn pump(id: i64) {
             }
             if consumed > 0 {
                 conn.input.drain(..consumed);
+                if !conn.preface_done && conn.role == Role::Server {
+                    // The preface step is the only one that consumes with no
+                    // event before any frame has been read.
+                    conn.preface_done = true;
+                }
+            }
+            if !conn.core_settings_acked
+                && conn
+                    .core
+                    .as_ref()
+                    .is_some_and(|core| core.next_timeout().is_none())
+            {
+                conn.core_settings_acked = true;
+                crate::server::http2_server::mark_turnloop_settings_acked(conn.session_handle);
             }
             let progressed = consumed > 0 || event.is_some();
             if let Some(event) = event {
@@ -660,11 +885,15 @@ fn apply(conn: &mut H2Conn, event: Owned) {
         Owned::Reset { stream: id, code } => stream::on_reset(conn, id, code),
         Owned::Goaway { last_stream, code } => {
             conn.draining = true;
-            stream::on_goaway(conn, last_stream, code);
+            let opaque = std::mem::take(&mut conn.goaway_opaque);
+            stream::on_goaway(conn, last_stream, code, opaque);
         }
         Owned::Ping { ack, data } => stream::on_ping(conn, ack, data),
-        // A peer window opened: retry whatever stalled.
-        Owned::WindowUpdate { .. } => stream::pump_outbox(conn),
+        // A peer window opened: retry whatever stalled. Which window — the
+        // connection's or one stream's — does not matter, because
+        // `pump_outbox` walks every stream and `send_data` answers zero for
+        // any that is still shut.
+        Owned::WindowUpdate => stream::pump_outbox(conn),
     }
 }
 
@@ -732,6 +961,33 @@ pub(crate) fn flush(conn: &mut H2Conn) {
 
 pub(crate) fn flush_id(id: i64) {
     with_owned(id, flush);
+}
+
+/// Write a frame this module encoded itself, **after** everything the core has
+/// already queued.
+///
+/// `Connection` has no API for a second SETTINGS, for
+/// `goaway(code, last, opaque)`, or for a WINDOW_UPDATE the host chose, so
+/// those frames are hand-encoded (see `control.rs`). Order is the whole point:
+/// a raw frame written while `core.output()` still holds bytes would arrive
+/// *before* them and interleave two frame streams, which is a protocol error on
+/// the peer's side rather than a Perry-side bug that anything here would catch.
+pub(crate) fn write_raw(conn: &mut H2Conn, frame: &[u8]) {
+    if frame.is_empty() || conn.destroyed {
+        return;
+    }
+    flush(conn);
+    let written = if conn.secure {
+        perry_ext_net::turnloop_tls_io::write(conn.id, frame, 0)
+            .map(|_| ())
+            .map_err(|_| ())
+    } else {
+        tl::write(conn.id, frame, 0).map(|_| ()).map_err(|_| ())
+    };
+    if written.is_err() {
+        conn.destroyed = true;
+        let _ = tl::close(conn.id);
+    }
 }
 
 // ── Terminal paths ──────────────────────────────────────────────────────────
@@ -862,17 +1118,24 @@ fn on_eof(id: i64) {
 }
 
 fn on_closed(id: i64) {
-    let Some(mut conn) = forget(id) else {
-        return;
-    };
-    conn.destroyed = true;
-    let live: Vec<u32> = conn.streams.iter().map(|s| s.h2_id).collect();
-    for stream_id in live {
-        stream::terminate(&mut conn, stream_id, Some("ECONNRESET"));
-    }
-    crate::server::http2_server::mark_turnloop_session_closed(conn.session_handle);
-    if conn.server_handle != 0 {
-        crate::server::server::turnloop_connection_closed(id);
+    // `forget` may find nothing — an earlier failed write dropped the record
+    // and left only the ownership entry — and the cleanup below still has to
+    // run, because it is the ownership entry and the id itself that leak.
+    if let Some(mut conn) = forget(id) {
+        conn.destroyed = true;
+        let live: Vec<u32> = conn.streams.iter().map(|s| s.h2_id).collect();
+        for stream_id in live {
+            stream::terminate(&mut conn, stream_id, Some("ECONNRESET"));
+        }
+        crate::server::http2_server::mark_turnloop_session_closed(conn.session_handle);
+        if conn.server_handle != 0 {
+            crate::server::server::turnloop_connection_closed(id);
+        }
+    } else {
+        owned_ids()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&id);
     }
     perry_ext_net::turnloop_tls_io::forget(id);
     // The terminal completion: no completion can name this id again, so it goes
