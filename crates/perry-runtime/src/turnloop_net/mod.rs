@@ -290,6 +290,13 @@ pub fn tcp_listen(
         let opts = ListenOpts {
             reuse_port,
             backlog,
+            // turnloop 0.1.0-alpha.5 applies these to every accepted socket
+            // before the `Accepted` completion reaches the host. Perry sets
+            // per-socket options from JS after the fact (`setNoDelay`), so the
+            // listener imposes no defaults of its own and a socket keeps
+            // whatever the OS gave it until JS says otherwise -- which is
+            // Node's behaviour.
+            ..ListenOpts::default()
         };
         let handle = driver
             .tcp_listen(addr, &opts)
@@ -311,6 +318,7 @@ pub fn pipe_listen(id: i64, subsystem: u8, path: &Path, backlog: u32) -> NetResu
         let opts = ListenOpts {
             reuse_port: false,
             backlog,
+            ..ListenOpts::default()
         };
         let name = PipeName(path.to_path_buf());
         let handle = driver
