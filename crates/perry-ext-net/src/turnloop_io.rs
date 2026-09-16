@@ -347,7 +347,10 @@ pub(crate) fn connect_tcp(
 
 /// Bind, listen and start accepting on a TCP server.
 pub(crate) fn listen_tcp(id: i64, host: &str, port: u16, backlog: u32) -> Result<(), tl::NetError> {
-    tl::tcp_listen(id, SUBSYSTEM, host, port, backlog, false)?;
+    // `net.createServer({ noDelay })` defaults to FALSE in Node, unlike
+    // `http.createServer`'s, and Perry's `net` surface has never applied it —
+    // so this stays false and the behaviour is unchanged.
+    tl::tcp_listen(id, SUBSYSTEM, host, port, backlog, false, false)?;
     tl::accept_start(id)
 }
 

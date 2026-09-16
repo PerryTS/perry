@@ -145,7 +145,21 @@ pub(crate) fn listen(
     if id == perry_ffi::INVALID_HANDLE {
         return Err(tl::error_from_os(None, "listen"));
     }
-    tl::tcp_listen(id, SUBSYSTEM, host, port, backlog, no_delay)?;
+    // `reuse_port` is FALSE. It used to receive `no_delay`, which defaults to
+    // true (`http.createServer`'s Node default), so every turnloop HTTP and
+    // HTTPS listener bound with `SO_REUSEPORT` and a second `listen()` on the
+    // same port quietly succeeded where Node answers EADDRINUSE. `perry-ext-net`'s
+    // own `tcp_listen` call always passed `false` here; only this one drifted.
+    //
+    // Nothing on this path wants `SO_REUSEPORT`: the cluster worker that does
+    // declines the turnloop path in `turnloop_listen::try_listen_on_turnloop`
+    // and binds a `std::net::TcpListener`, which is one of the two reasons that
+    // decline exists.
+    // `no_delay` now reaches the option it names. Node's `http.createServer`
+    // defaults it to true and applies it to every accepted connection; the
+    // hyper path did that by hand and the turnloop path did not do it at all,
+    // because this argument was landing in `reuse_port` instead.
+    tl::tcp_listen(id, SUBSYSTEM, host, port, backlog, false, no_delay)?;
     tl::accept_start(id)?;
     let bound = tl::local_address(id);
     let bound_port = bound.as_ref().map(|e| e.port).unwrap_or(port);

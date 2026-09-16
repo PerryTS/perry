@@ -51,8 +51,11 @@ pub(crate) use in_flight::{
     reap_in_flight_requests, response_writable_ended,
 };
 mod deferred_events;
+pub use deferred_events::ListenError;
 use deferred_events::{drain_deferred_close_for, drain_deferred_listen_for, server_is_active};
-pub(crate) use deferred_events::{queue_deferred_close_emit, queue_deferred_listening_emit};
+pub(crate) use deferred_events::{
+    queue_deferred_close_emit, queue_deferred_listening_emit, queue_listen_error_parts,
+};
 mod io_activity;
 mod turnloop_listen;
 pub(crate) use io_activity::ReadActivity;
@@ -115,6 +118,8 @@ pub struct HttpServer {
     /// after `close()` observes it.
     pub pending_close_emit: bool,
     pub deferred_close_cbs: Vec<i64>,
+    /// A failed `listen()` waiting for its `'error'` emit on the pump's tick.
+    pub pending_error_emit: Option<ListenError>,
     /// Sent by `.close()` to wake the accept loop.
     pub shutdown_tx: Option<oneshot::Sender<()>>,
     /// Channel main thread drains in the event loop. Hyper service
@@ -194,6 +199,7 @@ impl HttpServer {
             deferred_listen_cbs: Vec::new(),
             pending_close_emit: false,
             deferred_close_cbs: Vec::new(),
+            pending_error_emit: None,
             shutdown_tx: None,
             request_rx: None,
             upgrade_rx: None,
@@ -918,7 +924,8 @@ pub(super) unsafe fn listen_http_server(
         let std_listener = match crate::server::cluster_bind::bind_listener(addr) {
             Ok(l) => l,
             Err(e) => {
-                eprintln!("[node:http] bind {}:{} failed: {}", host, bind_port, e);
+                // Node emits `'error'` on the server; it does not print.
+                deferred_events::queue_listen_error(server_handle, &host, bind_port as u16, &e);
                 return server_handle;
             }
         };

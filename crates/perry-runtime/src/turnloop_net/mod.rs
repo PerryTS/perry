@@ -277,6 +277,37 @@ fn with_driver<R>(f: impl FnOnce(&mut turnloop::Loop) -> R) -> Option<R> {
 /// Bind and listen on a TCP address. Synchronous, like `bind(2)`: a failure
 /// here is the `EADDRINUSE` / `EACCES` the caller must surface as `'error'`.
 ///
+/// The listener options, as a pure function of the three things a caller asks
+/// for, so the mapping from argument to field is testable without a driver.
+///
+/// It exists because that mapping is exactly what went wrong: `perry-ext-http`
+/// passed `server.noDelay` into the `reuse_port` position, which both set
+/// `SO_REUSEPORT` on every HTTP listener and left `TCP_NODELAY` unset on every
+/// accepted connection. Two defects, one misplaced argument, and nothing in
+/// between could observe it.
+pub(crate) fn listen_opts(backlog: u32, reuse_port: bool, nodelay: bool) -> ListenOpts {
+    ListenOpts {
+        reuse_port,
+        backlog,
+        // turnloop 0.1.0-alpha.5 applies these to every accepted socket before
+        // the `Accepted` completion reaches the host, which is where Node
+        // applies `noDelay`: a *server* option (`http.createServer({ noDelay })`,
+        // default true since v16.5.0) set on each incoming connection as it
+        // arrives, not something a program opts into per socket afterwards.
+        // Perry's own hyper path does the same by hand (`apply_accept_no_delay`
+        // on every accepted stream), so leaving this at `Default` made the
+        // turnloop transport the only one running with Nagle on.
+        //
+        // `keep_alive` stays absent: `server.keepAlive` /
+        // `keepAliveInitialDelay` are wired on neither transport, and inventing
+        // a default here would be a behaviour change no measurement asked for.
+        accept_defaults: turnloop::AcceptDefaults {
+            nodelay,
+            keep_alive: None,
+        },
+    }
+}
+
 /// Returns the *actual* local address, which is what `server.address()` must
 /// report after a `listen(0)` ephemeral bind.
 pub fn tcp_listen(
@@ -285,19 +316,10 @@ pub fn tcp_listen(
     addr: SocketAddr,
     backlog: u32,
     reuse_port: bool,
+    nodelay: bool,
 ) -> NetResult<SocketAddr> {
     with_driver(|driver| {
-        let opts = ListenOpts {
-            reuse_port,
-            backlog,
-            // turnloop 0.1.0-alpha.5 applies these to every accepted socket
-            // before the `Accepted` completion reaches the host. Perry sets
-            // per-socket options from JS after the fact (`setNoDelay`), so the
-            // listener imposes no defaults of its own and a socket keeps
-            // whatever the OS gave it until JS says otherwise -- which is
-            // Node's behaviour.
-            ..ListenOpts::default()
-        };
+        let opts = listen_opts(backlog, reuse_port, nodelay);
         let handle = driver
             .tcp_listen(addr, &opts)
             .map_err(|e| map_error(e, "listen"))?;
