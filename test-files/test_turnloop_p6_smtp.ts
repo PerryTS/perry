@@ -1,5 +1,19 @@
 // turnloop P6 — SMTP on turnloop handles.
 //
+// ⚠ THIS FIXTURE DOES NOT RUN TODAY, and that is what it documents.
+// `transporter.sendMail(...)` throws `TypeError: (number).sendMail is not a
+// function` before any native code is reached — on this branch AND on the base
+// commit — because `nodemailer.createTransport()` returns a bare handle NUMBER
+// (`NR_F64` in the native table), so codegen lowers the call on a primitive
+// receiver to a hard throw and the runtime's handle dispatch is never consulted.
+// P6 added the two missing dispatch rows (perry-stdlib's `method_dispatch.rs`
+// arm and perry-ext-nodemailer's extension); the other half — returning a
+// handle-band NaN-boxed pointer so the receiver is an object — belongs with
+// whoever owns that binding. See docs/turnloop/p6-report.md, "SMTP".
+//
+// It is kept because it is the exact reproducer, and because it is what should
+// run the moment that half lands.
+//
 // The server is a `net.Socket` SMTP responder written here rather than a real
 // relay, for the same reason P5's server tests drive a raw socket: the point is
 // the PROTOCOL — EHLO, AUTH, MAIL FROM, RCPT TO, DATA, dot-stuffing, QUIT — and

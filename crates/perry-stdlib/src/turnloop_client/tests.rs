@@ -80,8 +80,9 @@ fn the_end_event_arrives_from_a_step_that_consumes_nothing() {
          test has stopped discriminating"
     );
 
-    // The rule the engine uses: stop only when a step both consumed nothing
-    // and produced nothing.
+    // The rule the engine uses: keep asking while a step either consumed a byte
+    // or produced an event, and stop on `End` (which is what `Produced::End`
+    // does — the exchange is over and the connection goes back to the pool).
     let mut conn = start_get();
     let mut pos = 0;
     let mut saw_end_new = false;
@@ -90,12 +91,14 @@ fn the_end_event_arrives_from_a_step_that_consumes_nothing() {
         let step = conn.receive(&response[pos..]).expect("decodes");
         let consumed = step.consumed;
         let produced = step.event.is_some();
-        if matches!(step.event, Some(http1::Event::End)) {
+        let ended = matches!(step.event, Some(http1::Event::End));
+        pos += consumed;
+        if ended {
             saw_end_new = true;
             let _ = conn.poll_completion();
             reusable = conn.reusable();
+            break;
         }
-        pos += consumed;
         if consumed == 0 && !produced {
             break;
         }
@@ -280,7 +283,8 @@ fn every_supported_content_encoding_round_trips() {
     let mut out = Vec::new();
     let mut scratch = [0u8; 97];
     let mut pos = 0;
-    while pos < encoded.len() {
+    let mut finished = false;
+    while pos < encoded.len() && !finished {
         let end = (pos + 13).min(encoded.len());
         let mut chunk = pos;
         loop {
@@ -289,13 +293,17 @@ fn every_supported_content_encoding_round_trips() {
                 .expect("step");
             chunk += step.consumed;
             out.extend_from_slice(&scratch[..step.written]);
-            if step.finished || (step.consumed == 0 && step.written == 0) {
+            if step.finished {
+                finished = true;
+                break;
+            }
+            if step.consumed == 0 && step.written == 0 {
                 break;
             }
         }
         pos = end;
     }
-    loop {
+    while !finished {
         let step = decoder.process(&[], &mut scratch, true).expect("flush");
         out.extend_from_slice(&scratch[..step.written]);
         if step.finished || step.written == 0 {
@@ -303,6 +311,10 @@ fn every_supported_content_encoding_round_trips() {
         }
     }
     assert_eq!(out, payload, "chunked gzip decode");
+    assert!(
+        finished,
+        "a complete gzip member must report finished, or the loop above stopped          for the wrong reason and the assertion above was vacuous"
+    );
 
     // An encoding the crate does not implement is refused rather than
     // mis-decoded; the engine then leaves the body encoded, which is what the

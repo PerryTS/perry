@@ -280,6 +280,39 @@ have been false.
 
 Every command as run, on the shared Linux box, against Node **26.5.1**.
 
+### Unit tests — the codecs and the policy, driven with real bytes
+
+`turnloop_http::client`, `turnloop_http::http1`, `turnloop_http::compression`
+and `turnloop_smtp::Connection` are all sans-I/O, so the parts of this phase
+that decide *correctness* can be tested without a socket, and they are.
+
+```
+RUST_TEST_THREADS=1 cargo test --release -p perry-stdlib turnloop_client
+RUST_TEST_THREADS=1 cargo test --release -p perry-stdlib turnloop_smtp
+```
+
+`turnloop_client` (9): the id band proven disjoint from both handle registries
+and from the SMTP engine's; the `Event::End` regression test described below;
+the framing decision for a bodyless GET / bodyless POST / sized POST, checked
+against the bytes `Encoder::start` writes; the redirect policy (303 → GET with
+the body dropped, cross-origin credential stripping, `manual`, the hop limit);
+the pool reusing within an origin, refusing to overbook, and ageing a
+connection out; every `Content-Encoding` round-tripped by content — whole-body
+*and* chunk-by-chunk, because the chunked path is the one a real response takes;
+the error-code re-interning, including the degrade-to-generic case; the debug
+knob asserted OFF by default; and every URL shape that must DECLINE rather than
+fail.
+
+`turnloop_smtp` (7): a full delivery asserted command by command (EHLO, the
+capability parse, `AUTH PLAIN`, `MAIL FROM … SIZE=`, per-recipient `RCPT TO`,
+`DATA`, the terminated body, and the `Sent` event's token / `accepted` /
+`rejected` / `response` / envelope); dot-stuffing asserted on the bytes,
+including that the terminator cannot appear inside the body; a rejected
+recipient failing the delivery rather than reporting success; STARTTLS
+re-issuing EHLO on the secure channel and discarding the cleartext capability
+list; implicit TLS writing nothing in the clear; a `421` ending the session;
+and the id band and error-code interning.
+
 ### `fetch`, byte-for-byte against the oracle
 
 `test-files/test_gap_turnloop_fetch.ts` — a local `node:http` server and
@@ -455,6 +488,26 @@ codegen. That also makes `typeof transporter === "object"`, which is what Node
 reports. It is a two-sided change — the statically typed native-table rows take
 the receiver as a raw `Handle` today — and it belongs with whoever owns that
 binding rather than in a transport migration.
+
+### The full gap suite, against this branch's own base
+
+Both trees built identically — the harness's default package set plus the
+`perry-ext-*` wrappers this work links (`http`, `net`, `ws`, `zlib`, `events`,
+and `nodemailer` on the P6 arm, which links nothing extra into any gap test
+because no gap test imports it), in one cargo invocation, with **no**
+`external-*-pump` features — and run as
+`PERRY_SKIP_BUILD=1 ./scripts/run_gap_tests.sh`.
+
+<!--GAP-TABLE-->
+
+The base's nine, none of them touched by this work:
+`2159_defineproperty_class_prototype`, `2514_settracesigint`,
+`2899_2779_2777_static_helpers`, `disposablestack_2875`,
+`iterator_prototype_next_patch`, `json_lazy_defineproperty_index`,
+`perfhooks_3088_3008_3010_3011`, `prop_plan_cache_invalidation`,
+`v8_2_3680plus`. Three of those the committed snapshot expects to PASS, so the
+gate is red on the base commit before P6 changes anything — which is exactly why
+this comparison is against the base rather than against the snapshot.
 
 ### What was not run
 
