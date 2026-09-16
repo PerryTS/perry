@@ -40,6 +40,12 @@
       "why": "Monotonic backoff-state id counter (lib.rs:378). The closures live in STATES (BackoffState.task/outer/retry_cb), which scan_backoff_roots visits."
     },
     {
+      "file": "crates/perry-ext-fastify/src/server.rs",
+      "name": "DEFERRED",
+      "verdict": "not_a_gc_pointer",
+      "why": "turnloop fastify. The re-entrancy queue `js_fastify_process_pending` parks requests in when a dispatched handler's `await` re-drives the pump. It holds `(Handle, FastifyPendingRequest)`: a `Handle` is an integer id into perry-ffi's registry, and every field of the pending is Rust-owned (`String`, `Vec<u8>`, two `HashMap<String, String>`) plus a `Reply` \u2014 either the `(conn_id, seq)` pair naming a `perry_http_server` exchange, or a `oneshot::Sender<FastifyResponse>` whose payload is likewise Rust-owned. No NaN-boxed value and no heap pointer enters it. The handler closures this dispatch reaches ARE GC pointers, and they live in the `FastifyApp` handle that lib.rs's registered scanner visits \u2014 carrying ids here rather than closure addresses is what keeps a parked snapshot from going stale across a moving collection (#8082). Newly listed because the pending's response channel became an enum in the turnloop migration, which is what made rule S look at it."
+    },
+    {
       "file": "crates/perry-ext-http/src/server/https_server.rs",
       "name": "PENDING_TLS_CLIENT_ERRORS",
       "verdict": "not_a_gc_pointer",
@@ -1206,12 +1212,6 @@
       "name": "OBJECT_URL_REGISTRY",
       "verdict": "not_a_gc_pointer",
       "why": "blob: URL string -> Blob HANDLE ID (a fetch-band small integer), not an address."
-    },
-    {
-      "file": "crates/perry-stdlib/src/nodemailer/turnloop_bridge.rs",
-      "name": "MESSAGE_IDS",
-      "verdict": "not_a_gc_pointer",
-      "why": "turnloop P6. A HashMap<usize, String> holding the `messageId` promised to JS from submission to delivery. The key is the address of a promise created by js_promise_new_cross_thread, which pins it for the crossing (#9552); the value is a Rust String. No NaN-boxed value and no heap pointer enters it, so there is nothing for a moving collection to invalidate."
     },
     {
       "file": "crates/perry-stdlib/src/streams.rs",

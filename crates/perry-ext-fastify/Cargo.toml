@@ -20,7 +20,16 @@ perry-ffi.workspace = true
 # the rest of the perry-ext-ws FFI surface. Mirrors the proven
 # perry-ext-http (#577 Phase 4) dependency.
 perry-ext-ws = { path = "../perry-ext-ws" }
-hyper = { workspace = true, features = ["server", "http1", "http2"] }
+# turnloop: the shared HTTP/1.1 server core. See its lib.rs header for why the
+# core lives in a crate both this binding and perry-stdlib's bundled framework
+# server depend on, rather than this crate taking an edge to perry-ext-http.
+perry-http-server.workspace = true
+# Kept for exactly one case: an app with `app.server.on("upgrade", …)` handlers
+# declines the turnloop path at listen time, because the handshake ends in
+# `perry_ext_ws::register_external_ws_stream`, which needs an owned
+# `AsyncRead + AsyncWrite` stream a turnloop connection cannot produce. Every
+# other fastify app is served on turnloop and touches none of this.
+hyper = { workspace = true, features = ["server", "http1"] }
 hyper-util = { workspace = true, features = ["server", "server-auto", "tokio"] }
 http-body-util.workspace = true
 bytes.workspace = true

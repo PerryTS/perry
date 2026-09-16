@@ -51,10 +51,10 @@
       "kind": "normal",
       "optional": false,
       "target": null,
-      "surface": "`import Fastify from 'fastify'` \u2014 its HTTP server accept loop, and the hyper protocol switch behind `@fastify/websocket` (whose WebSocket protocol is perry-ext-ws's now)",
-      "reached_when": "always, in any program that imports fastify",
-      "blocker": "its own hyper accept loop, independent of perry-ext-http's. P5 migrated perry-ext-http's server; this crate has no dependency edge to it, so sharing that core needs either a new crate for the sans-I/O server or a new edge.",
-      "issue": "unfiled \u2014 P5 named it, P8 confirms it",
+      "surface": "`import Fastify from 'fastify'` \u2014 the `app.server.on('upgrade', \u2026)` WebSocket handshake only; the HTTP server itself is on turnloop",
+      "reached_when": "an app that registers an `app.server.on('upgrade', \u2026)` handler before `listen()`; every other fastify program is served on turnloop and links this only as dead weight",
+      "blocker": "perry-ext-ws. The accept loop moved to turnloop (`perry-http-server`, the shared HTTP/1.1 server core); what is left is the `app.server.on('upgrade', \u2026)` handshake, which ends in `perry_ext_ws::register_external_ws_stream` and needs an owned `AsyncRead + AsyncWrite` stream a turnloop connection cannot produce. An app with upgrade handlers therefore declines the turnloop path AT LISTEN TIME and keeps the whole hyper loop \u2014 the same blocker and the same decline P5 recorded for perry-ext-http's attached WebSocketServer. Two things would close it: a descriptor handoff (turnloop has `Driver::detach` + `Detached::into_fd`; nothing exposes it through `perry_ffi::turnloop_net`), or perry-ext-ws on `turnloop-websocket`.",
+      "issue": "unfiled \u2014 P5 named it, P8 confirms it, the fastify lane narrowed it to perry-ext-ws",
       "plan": "F"
     },
     {
@@ -63,10 +63,10 @@
       "kind": "normal",
       "optional": false,
       "target": null,
-      "surface": "`import Fastify from 'fastify'` \u2014 its HTTP server accept loop, and the hyper protocol switch behind `@fastify/websocket` (whose WebSocket protocol is perry-ext-ws's now)",
-      "reached_when": "always, in any program that imports fastify",
-      "blocker": "the `server-auto` connection builder behind that accept loop. P5 migrated perry-ext-http's server; this crate has no dependency edge to it, so sharing that core needs either a new crate for the sans-I/O server or a new edge.",
-      "issue": "unfiled \u2014 P5 named it, P8 confirms it",
+      "surface": "`import Fastify from 'fastify'` \u2014 the `app.server.on('upgrade', \u2026)` WebSocket handshake only; the HTTP server itself is on turnloop",
+      "reached_when": "an app that registers an `app.server.on('upgrade', \u2026)` handler before `listen()`; every other fastify program is served on turnloop and links this only as dead weight",
+      "blocker": "perry-ext-ws. The accept loop moved to turnloop (`perry-http-server`, the shared HTTP/1.1 server core); what is left is the `app.server.on('upgrade', \u2026)` handshake, which ends in `perry_ext_ws::register_external_ws_stream` and needs an owned `AsyncRead + AsyncWrite` stream a turnloop connection cannot produce. An app with upgrade handlers therefore declines the turnloop path AT LISTEN TIME and keeps the whole hyper loop \u2014 the same blocker and the same decline P5 recorded for perry-ext-http's attached WebSocketServer. Two things would close it: a descriptor handoff (turnloop has `Driver::detach` + `Detached::into_fd`; nothing exposes it through `perry_ffi::turnloop_net`), or perry-ext-ws on `turnloop-websocket`.",
+      "issue": "unfiled \u2014 P5 named it, P8 confirms it, the fastify lane narrowed it to perry-ext-ws",
       "plan": "F"
     },
     {
@@ -88,8 +88,8 @@
       "optional": false,
       "target": null,
       "surface": "`http2.createSecureServer()` (server) and `http2.connect()` (client)",
-      "reached_when": "`http2.createServer` / `createSecureServer` on a thread that could not get a loop of its own, or in a cluster worker. NOT `http2.connect` any more, in either scheme: a cleartext client went to turnloop with the HTTP/2 lane, and a `https://` one now installs a TLS client session with `h2` in ALPN.",
-      "blocker": "only the declining paths hyper keeps: a thread with no loop, and a cluster worker. The TLS client installer that blocked this is done \u2014 `perry_ext_net::turnloop_tls_io::install_client_session` is public and takes an ALPN list. Removing the edge now means DELETING HTTP/2 on those paths, not migrating it.",
+      "reached_when": "`http2.connect('https://\u2026')` (the TLS client), and `http2.createServer` / `createSecureServer` on a thread that could not get a loop of its own or in a cluster worker. NOT the ordinary case any more: since the HTTP/2 turnloop lane, a cleartext or TLS **server** and a cleartext `http2.connect` on the primary agent are on `turnloop_http::http2` and never construct an `h2` connection.",
+      "blocker": "the TLS **client**: `perry_ext_net::turnloop_tls_io` exposes `install_server_session` publicly but only `begin_client_upgrade` (`pub(crate)`, takes perry-ext-net's own `TlsClientConfigData`, settles a `JsNativeAsyncCompletion`), so `http2.connect('https://\u2026')` has no way to install a client session on a turnloop socket. Plus the same declining paths hyper keeps: a thread with no loop, and a cluster worker. Removing the edge means deleting HTTP/2 on those paths, not migrating it.",
       "issue": "#10327",
       "plan": "D"
     },
@@ -308,30 +308,6 @@
       "blocker": "the transport, and only the transport. The protocol left with `tokio-tungstenite`: the codec and the handshake are `turnloop_websocket`'s sans-I/O core (`codec.rs`, `handshake.rs`) and already drive both transports, so what remains is a turnloop connect (DNS + `tcp_connect` + a `turnloop_tls_io` client install for `wss://`) and a turnloop `tcp_listen`/`accept_start` for the standalone server. Both primitives exist. The tokio path then stays as the declining transport under the P1 coexistence rule, the way perry-ext-net's socket task did.",
       "issue": "unfiled \u2014 turnloop WS lane",
       "plan": "E"
-    },
-    {
-      "crate": "perry-stdlib",
-      "dep": "hyper",
-      "kind": "normal",
-      "optional": true,
-      "target": null,
-      "surface": "perry-stdlib is the bundled implementation. For every module below, the well-known flip compiles the bundled copy OUT and routes the import to the perry-ext-* wrapper \u2014 so these are reachable only under `PERRY_DISABLE_WELL_KNOWN=1`, when the wrapper's source is absent, or in a prebuilt release archive that ships `full`. `http.createServer()` through the bundled framework server.",
-      "reached_when": "`PERRY_DISABLE_WELL_KNOWN=1`, or a program whose http import does not route to perry-ext-http",
-      "blocker": "`framework/server.rs` is a hyper service Perry never migrated; P5 left it alone the way P1 left the bundled `net`.",
-      "issue": "unfiled \u2014 P5 named it, P8 confirms it",
-      "plan": "H"
-    },
-    {
-      "crate": "perry-stdlib",
-      "dep": "hyper-util",
-      "kind": "normal",
-      "optional": true,
-      "target": null,
-      "surface": "perry-stdlib is the bundled implementation. For every module below, the well-known flip compiles the bundled copy OUT and routes the import to the perry-ext-* wrapper \u2014 so these are reachable only under `PERRY_DISABLE_WELL_KNOWN=1`, when the wrapper's source is absent, or in a prebuilt release archive that ships `full`. as `hyper` above.",
-      "reached_when": "as `hyper` above",
-      "blocker": "goes with hyper.",
-      "issue": "unfiled \u2014 P8",
-      "plan": "H"
     },
     {
       "crate": "perry-stdlib",

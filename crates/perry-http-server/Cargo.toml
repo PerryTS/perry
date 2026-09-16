@@ -1,0 +1,20 @@
+[package]
+name = "perry-http-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The HTTP/1.1 server core on turnloop: one multishot accept, one multishot read, a sans-I/O codec and Node's framing rules — for bindings that serve HTTP but are not perry-ext-http."
+
+[lints]
+workspace = true
+
+[dependencies]
+perry-ffi.workspace = true
+turnloop-http.workspace = true
+http = "1"
+# Node sends `Date` on every response; this is the IMF-fixdate formatter
+# `perry-ext-http` already uses for the same header.
+httpdate = "1"
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }
