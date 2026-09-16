@@ -368,6 +368,11 @@ def verify_marker(arm, binary):
     if waits.get("arm") != ARM_WAITS[arm]:
         raise SystemExit(f"{arm}: wait metrics line missing or wrong arm: {waits}")
     marker_line = pick_marker(server.stderr_text, ARM_MARKER[arm])
+    if marker_line is None:
+        # Unreachable: the substring check above already proved a match exists.
+        # Explicit anyway, because `pick_marker` returning None where `next(...)`
+        # used to raise is exactly how a verification turns into a log line.
+        raise SystemExit(f"{arm}: marker present but not selectable; stderr={server.stderr_text!r}")
     log(f"verified {arm}: {marker_line}")
     return marker_line
 
