@@ -8,16 +8,22 @@
 //! flip that strips the bundled surface when `import 'nodemailer'` routes here
 //! leaves these symbols in place.
 //!
-//! The MIME half does not move: the message is still rendered by this crate's
-//! own `lettre` builder, byte for byte as before. Only the transport changes.
+//! The MIME half does not move: the message is still rendered by lettre's
+//! builder, byte for byte as before. It is reached through
+//! `turnloop_smtp::message`, which re-exports `Message` and `message::header`
+//! from a lettre pinned to the `builder` feature — so this crate no longer
+//! declares lettre (and therefore no longer pulls `tokio1`) while rendering the
+//! identical bytes.
 //!
-//! A decline — a worker agent with no loop, the `tokio-wait-driver` A/B arm, an
-//! unbuildable message — falls through to the `spawn_blocking` + lettre path,
-//! which is why that path is not deleted.
+//! There is no longer a second transport. A refusal — an agent with no loop,
+//! an unbuildable message, a rejected address — is returned to the caller as
+//! the message to reject the promise with, and `try_send` / `try_verify`
+//! therefore return `Result<(), String>` rather than a bool that meant "run the
+//! other path".
 
-use lettre::message::header::ContentType;
-use lettre::Message;
 use perry_ffi::{JsPromise, JsValue, Promise};
+use turnloop_smtp::message::header::ContentType;
+use turnloop_smtp::message::Message;
 
 use crate::{build_info_object, MailOptions, SmtpConfig};
 
@@ -113,10 +119,21 @@ fn write_draft(draft: i64, config: &SmtpConfig) {
     }
 }
 
-fn build(options: &MailOptions) -> Option<Message> {
+/// The message, or the error text to reject with. The three strings are the
+/// ones the deleted lettre path produced, so a program that logs the rejection
+/// sees what it saw before.
+fn build(options: &MailOptions) -> Result<Message, String> {
+    let from = options
+        .from
+        .parse()
+        .map_err(|e| format!("Invalid from address: {e}"))?;
+    let to = options
+        .to
+        .parse()
+        .map_err(|e| format!("Invalid to address: {e}"))?;
     let builder = Message::builder()
-        .from(options.from.parse().ok()?)
-        .to(options.to.parse().ok()?)
+        .from(from)
+        .to(to)
         .subject(options.subject.clone());
     let message = if let Some(html) = options.html.clone() {
         builder.header(ContentType::TEXT_HTML).body(html)
@@ -125,30 +142,39 @@ fn build(options: &MailOptions) -> Option<Message> {
     } else {
         builder.body(String::new())
     };
-    message.ok()
+    message.map_err(|e| format!("Failed to build email: {e}"))
 }
 
-/// `true` means the engine accepted the exchange and WILL settle `promise`
-/// exactly once; `false` means nothing was submitted.
-pub(crate) fn try_send(config: &SmtpConfig, options: &MailOptions, promise: *mut Promise) -> bool {
+/// What a thread with no `turnloop::Loop` now gets. Named once so `sendMail`
+/// and `verify` cannot drift apart.
+fn no_transport() -> String {
+    "SMTP transport unavailable: this agent has no event loop".to_string()
+}
+
+/// `Ok(())` means the engine accepted the exchange and WILL settle `promise`
+/// exactly once. `Err(message)` means nothing was submitted and the caller must
+/// reject with `message`.
+pub(crate) fn try_send(
+    config: &SmtpConfig,
+    options: &MailOptions,
+    promise: *mut Promise,
+) -> Result<(), String> {
     if !available() {
-        return false;
+        return Err(no_transport());
     }
-    let Some(message) = build(options) else {
-        return false;
-    };
+    let message = build(options)?;
     let envelope = message.envelope().clone();
     let Some(from) = envelope.from().map(ToString::to_string) else {
-        return false;
+        return Err("Invalid from address: no sender in envelope".to_string());
     };
     let recipients: Vec<String> = envelope.to().iter().map(ToString::to_string).collect();
     if recipients.is_empty() {
-        return false;
+        return Err("Invalid to address: no recipients in envelope".to_string());
     }
     // SAFETY: `begin` returns 0 when no draft could be made, which is checked.
     let draft = unsafe { js_perry_smtp_begin() };
     if draft == 0 {
-        return false;
+        return Err(no_transport());
     }
     write_draft(draft, config);
     let body = message.formatted();
@@ -178,18 +204,19 @@ pub(crate) fn try_send(config: &SmtpConfig, options: &MailOptions, promise: *mut
         MESSAGE_IDS.with(|ids| ids.borrow_mut().remove(&ctx));
         // SAFETY: the draft was never submitted, so nothing else holds it.
         unsafe { js_perry_smtp_cancel(draft) };
+        return Err(no_transport());
     }
-    accepted
+    Ok(())
 }
 
-pub(crate) fn try_verify(config: &SmtpConfig, promise: *mut Promise) -> bool {
+pub(crate) fn try_verify(config: &SmtpConfig, promise: *mut Promise) -> Result<(), String> {
     if !available() {
-        return false;
+        return Err(no_transport());
     }
     // SAFETY: as in `try_send`.
     let draft = unsafe { js_perry_smtp_begin() };
     if draft == 0 {
-        return false;
+        return Err(no_transport());
     }
     write_draft(draft, config);
     // SAFETY: `on_verify` is a plain `extern "C"` function called at most once.
@@ -197,8 +224,9 @@ pub(crate) fn try_verify(config: &SmtpConfig, promise: *mut Promise) -> bool {
     if !accepted {
         // SAFETY: never submitted.
         unsafe { js_perry_smtp_cancel(draft) };
+        return Err(no_transport());
     }
-    accepted
+    Ok(())
 }
 
 thread_local! {

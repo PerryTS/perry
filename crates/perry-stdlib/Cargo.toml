@@ -288,7 +288,9 @@ compression = ["compression-gzip", "compression-brotli", "compression-zstd"]
 # backwards-compat; v0.5.558's well-known flip toggles
 # `bundled-nodemailer` instead.
 email = ["bundled-nodemailer"]
-bundled-nodemailer = ["dep:lettre", "async-runtime", "turnloop-smtp-client"]
+# `async-runtime` stays: the surrounding binding still builds its promises
+# through `common::async_bridge`. The transport itself takes no tokio thread.
+bundled-nodemailer = ["async-runtime", "turnloop-smtp-client"]
 # turnloop P6: SMTP on turnloop (`src/turnloop_smtp/`). Kept OUT of the
 # `bundled-nodemailer` gate's strip path — it rides in `full` on its own so
 # the `js_smtp_*` entry points survive the well-known flip that strips
@@ -472,8 +474,11 @@ brotli = { version = "8.0.2", optional = true }
 # Zstd codecs — exposed by modern Node alongside gzip/deflate/Brotli.
 zstd = { version = "0.13.3", optional = true }
 
-# Email
-lettre = { version = "0.11", default-features = false, features = ["tokio1", "tokio1-rustls-tls", "smtp-transport", "builder", "hostname", "pool"], optional = true }
+# Email: no direct lettre edge. The MIME builder comes through
+# `turnloop_smtp::message`, which re-exports lettre's `Message` and
+# `message::header` from a dependency pinned to lettre's `builder` feature.
+# Declaring lettre here instead would drag `tokio1` / `tokio1-rustls-tls` /
+# `pool` back in, which is the whole tokio edge this crate's mail surface had.
 
 # Image
 image = { version = "0.25", optional = true }

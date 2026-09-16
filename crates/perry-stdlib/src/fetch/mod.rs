@@ -122,6 +122,17 @@ lazy_static::lazy_static! {
     /// prebuilt at install time so per-request cost stays a clone (Arc bump).
     static ref GLOBAL_PROXY_CLIENT: std::sync::RwLock<Option<reqwest::Client>> =
         std::sync::RwLock::new(None);
+
+    /// The same override as data, for the turnloop engine.
+    ///
+    /// The reqwest client above is a prebuilt object and nothing can read a URL
+    /// back out of it, which is precisely why P6 had to DECLINE a proxied fetch
+    /// — its blocker said "a CONNECT tunnel driven from a URL rather than from a
+    /// prebuilt `reqwest::Client`". Keeping the `(uri, token)` beside the client
+    /// is that URL. Written under the same lock order as the client (client
+    /// first, then this) so a reader that sees one sees the other.
+    static ref GLOBAL_PROXY_URI: std::sync::RwLock<Option<(String, Option<String>)>> =
+        std::sync::RwLock::new(None);
 }
 
 /// Shared builder options for every fetch client (direct or proxied).
@@ -157,17 +168,6 @@ fn apply_node_tls_environment(mut builder: reqwest::ClientBuilder) -> reqwest::C
         }
     }
     builder
-}
-
-/// Whether `undici.setGlobalDispatcher(new ProxyAgent(...))` installed a
-/// process-wide proxy. The turnloop engine declines such a request: the proxy
-/// surface here is a prebuilt `reqwest::Client`, not a URL the CONNECT tunnel
-/// could be driven from.
-pub(crate) fn global_proxy_installed() -> bool {
-    GLOBAL_PROXY_CLIENT
-        .read()
-        .map(|guard| guard.is_some())
-        .unwrap_or(false)
 }
 
 /// The client every fetch path must use: the proxied client when a global
@@ -216,6 +216,9 @@ pub unsafe extern "C" fn js_fetch_set_global_proxy(
     if uri_ptr.is_null() {
         if let Ok(mut guard) = GLOBAL_PROXY_CLIENT.write() {
             *guard = None;
+            if let Ok(mut uri) = GLOBAL_PROXY_URI.write() {
+                *uri = None;
+            }
             return 1.0;
         }
         return 0.0;
@@ -228,6 +231,9 @@ pub unsafe extern "C" fn js_fetch_set_global_proxy(
         Ok(client) => {
             if let Ok(mut guard) = GLOBAL_PROXY_CLIENT.write() {
                 *guard = Some(client);
+                if let Ok(mut stored) = GLOBAL_PROXY_URI.write() {
+                    *stored = Some((uri, token));
+                }
                 1.0
             } else {
                 0.0
@@ -235,6 +241,36 @@ pub unsafe extern "C" fn js_fetch_set_global_proxy(
         }
         Err(_) => 0.0,
     }
+}
+
+/// The installed dispatcher proxy as `(uri, token)`, for the turnloop engine.
+pub(crate) fn global_dispatcher_proxy() -> Option<(String, Option<String>)> {
+    GLOBAL_PROXY_URI.read().ok()?.clone()
+}
+
+/// Request headers `fetch` refuses outright, and the failure to reject with.
+///
+/// The Fetch standard's forbidden-header list is mostly *ignored* — a value is
+/// dropped and the request goes out — but `Expect` is different in undici: it
+/// throws, so `fetch()` rejects. Perry did neither thing consistently. On the
+/// reqwest path the header went on the wire and the request SUCCEEDED, which is
+/// a silent divergence from Node. On the turnloop path it reached
+/// `Http1Connection::start`, which read `expect: 100-continue` on a non-empty
+/// body as "park the upload until the server says 100" — `can_send_body()` went
+/// false and the very next `send_body` failed `UND_ERR_INVALID_ARG "request
+/// body is not writable"`, so the POST never left the process and the promise
+/// rejected with a message naming the body rather than the header.
+///
+/// So the same program gave three different answers depending on transport, and
+/// none of them was Node's. Deciding it here, before dispatch, is what makes the
+/// answer transport-independent.
+fn forbidden_header_failure(
+    headers: &HashMap<String, String>,
+) -> Option<transport_error::FetchFailure> {
+    headers
+        .keys()
+        .find(|name| name.eq_ignore_ascii_case("expect"))
+        .map(|_| transport_error::FetchFailure::forbidden_header("expect"))
 }
 
 fn alloc_fetch_handle_id() -> usize {
@@ -266,6 +302,44 @@ struct StreamState {
     http_status: u16,
     #[allow(dead_code)]
     error: String,
+}
+
+impl StreamState {
+    /// The line splitter, shared by both transports so the poll surface cannot
+    /// observe which one carried the stream. Bytes accumulate in `partial`
+    /// until a `\n`; empty lines are dropped, which is what the poll contract
+    /// has always done (an empty return from `js_fetch_stream_poll` means
+    /// "nothing pending", so an empty line could not be represented).
+    fn push_text(&mut self, text: &str) {
+        self.partial.push_str(text);
+        while let Some(pos) = self.partial.find('\n') {
+            let line = self.partial[..pos].to_string();
+            self.partial = self.partial[pos + 1..].to_string();
+            if !line.is_empty() {
+                self.pending_lines.push(line);
+            }
+        }
+    }
+
+    /// End of body: flush a trailing unterminated line and mark the stream
+    /// complete.
+    fn finish(&mut self) {
+        if !self.partial.is_empty() {
+            let rest = std::mem::take(&mut self.partial);
+            self.pending_lines.push(rest);
+        }
+        self.status = 2;
+    }
+}
+
+/// Run `f` against one live stream's state. A miss is a no-op: the JS side may
+/// have called `js_fetch_stream_close` while bytes were still arriving.
+fn with_stream(id: usize, f: impl FnOnce(&mut StreamState)) {
+    if let Ok(mut guard) = STREAM_HANDLES.lock() {
+        if let Some(state) = guard.get_mut(&id) {
+            f(state);
+        }
+    }
 }
 
 struct FetchResponse {
@@ -884,6 +958,14 @@ pub unsafe extern "C" fn js_fetch_with_options(
             .or_insert(content_type);
     }
 
+    // Refused before either transport is chosen, so the answer does not depend
+    // on which one would have carried it — which was the bug. See
+    // `forbidden_header_failure`.
+    if let Some(failure) = forbidden_header_failure(&inputs.custom_headers) {
+        queue_promise_resolution(promise_ptr, false, failure.into_js_bits());
+        return promise;
+    }
+
     // turnloop first: accepting here means no tokio task is created at all,
     // which is what makes `tokio_ticks=0` on a fetch-only workload true. The
     // watch is dropped on acceptance because the engine owns cancellation from
@@ -1178,6 +1260,22 @@ pub unsafe extern "C" fn js_fetch_stream_start(
         },
     );
     let sid = stream_id;
+    // turnloop P6's streaming sink. Until this lane the engine's
+    // `Sink::on_head` / `Sink::on_chunk` hooks existed and NOTHING called them
+    // — an unexercised mode, which CLAUDE.md's GC-knob kill policy calls a
+    // decision nobody has made. This is the caller.
+    if turnloop_bridge::try_dispatch_stream(
+        sid,
+        url.clone(),
+        method.clone(),
+        custom_headers
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+        body.clone().map(String::into_bytes),
+    ) {
+        return stream_id as f64;
+    }
     spawn(async move {
         let client = fetch_client();
         let mut request = match method.to_uppercase().as_str() {
@@ -1208,18 +1306,7 @@ pub unsafe extern "C" fn js_fetch_stream_start(
                             let text = String::from_utf8_lossy(&chunk).to_string();
                             let mut g = STREAM_HANDLES.lock().unwrap();
                             if let Some(s) = g.get_mut(&sid) {
-                                s.partial.push_str(&text);
-                                loop {
-                                    if let Some(pos) = s.partial.find('\n') {
-                                        let line = s.partial[..pos].to_string();
-                                        s.partial = s.partial[pos + 1..].to_string();
-                                        if !line.is_empty() {
-                                            s.pending_lines.push(line);
-                                        }
-                                    } else {
-                                        break;
-                                    }
-                                }
+                                s.push_text(&text);
                             } else {
                                 break;
                             }
@@ -1227,11 +1314,7 @@ pub unsafe extern "C" fn js_fetch_stream_start(
                         Ok(None) => {
                             let mut g = STREAM_HANDLES.lock().unwrap();
                             if let Some(s) = g.get_mut(&sid) {
-                                if !s.partial.is_empty() {
-                                    let r = std::mem::take(&mut s.partial);
-                                    s.pending_lines.push(r);
-                                }
-                                s.status = 2;
+                                s.finish();
                             }
                             break;
                         }

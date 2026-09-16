@@ -4248,26 +4248,14 @@ version = "0.11.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2c646bd5cc763b1087b15493e29a64be6147ba8f19342004fa52048ee596eae"
 dependencies = [
- "async-trait",
- "base64 0.23.1",
  "email-encoding",
  "email_address",
  "fastrand",
- "futures-io",
- "futures-util",
- "hostname",
  "httpdate",
  "idna",
  "mime",
  "nom 8.0.0",
- "percent-encoding",
  "quoted_printable",
- "rustls",
- "socket2",
- "tokio",
- "tokio-rustls",
- "url",
- "webpki-roots 1.0.9",
 ]
 
 [[package]]
@@ -6127,9 +6115,8 @@ dependencies = [
 name = "perry-ext-nodemailer"
 version = "0.5.1582"
 dependencies = [
- "lettre",
  "perry-ffi",
- "tokio",
+ "turnloop-smtp",
  "uuid",
 ]
 
@@ -6445,7 +6432,6 @@ dependencies = [
  "image",
  "jsonwebtoken",
  "lazy_static",
- "lettre",
  "libc",
  "lru",
  "md-5 0.11.0",

@@ -17,7 +17,7 @@ use turnloop_http::http1;
 
 use super::{
     deliver, Conn, Engine, Outcome, Req, ResponseOut, BODY_LIMIT, CONNECTED, DECODED, ENGINE,
-    REDIRECTS, REUSED, SUBSYSTEM,
+    REDIRECTS, REUSED, SUBSYSTEM, TUNNELS,
 };
 
 /// A transport failure in the shape `fetch` reports it: Node's `cause.code`,
@@ -80,8 +80,18 @@ macro_rules! trace {
     };
 }
 
-fn pool_key(request: &tlc::Request) -> PoolKey {
-    PoolKey::new(&request.url, None)
+fn pool_key(request: &tlc::Request, proxy: Option<&url::Url>) -> PoolKey {
+    PoolKey::new(&request.url, proxy)
+}
+
+/// The routing decision for one request: where to dial, and whether the socket
+/// has to be tunnelled before the request can go out.
+///
+/// `turnloop_http::client::Route` owns the policy (which form the request line
+/// takes, what the CONNECT head looks like, whether a 2xx means "upgrade now").
+/// This module owns only the transport.
+fn route_for(request: &tlc::Request, proxy: Option<&url::Url>) -> tlc::Route {
+    tlc::Route::new(request.url.clone(), proxy.cloned())
 }
 
 // ── Starting a request ─────────────────────────────────────────────────────
@@ -94,12 +104,30 @@ pub(super) fn start(id: u64) {
 fn start_locked(engine: &mut Engine, id: u64) {
     // Everything the pool decision needs is copied out first: `acquire` takes
     // `&mut Engine` and a live borrow of the request map would outlive it.
-    let Some((key, host, port, secure)) = engine.requests.get(&id).map(|req| {
+    let Some((key, host, port, secure, proxy, tunnelled)) = engine.requests.get(&id).map(|req| {
+        let proxy = req.proxy.clone();
+        // The socket's peer is the PROXY when one is configured. An `https`
+        // target behind one needs a CONNECT tunnel first; an `http` target does
+        // not — its request line just becomes absolute-form, which
+        // `Route::request_head` handles.
+        let (host, port) = match proxy.as_ref() {
+            Some(p) => (
+                p.host_str().unwrap_or("").to_string(),
+                p.port_or_known_default().unwrap_or(80),
+            ),
+            None => (
+                req.request.url.host_str().unwrap_or("").to_string(),
+                req.request.url.port_or_known_default().unwrap_or(80),
+            ),
+        };
+        let secure = req.request.url.scheme() == "https";
         (
-            pool_key(&req.request),
-            req.request.url.host_str().unwrap_or("").to_string(),
-            req.request.url.port_or_known_default().unwrap_or(80),
-            req.request.url.scheme() == "https",
+            pool_key(&req.request, proxy.as_ref()),
+            host,
+            port,
+            secure,
+            proxy,
+            secure && req.proxy.is_some(),
         )
     }) else {
         return;
@@ -183,6 +211,13 @@ fn start_locked(engine: &mut Engine, id: u64) {
                     idle_timer: None,
                     closing: false,
                     used: false,
+                    proxy,
+                    tunnel: tunnelled.then(|| {
+                        Box::new(super::Tunnel {
+                            http: tlc::Http1Connection::new(http1::Limits::default()),
+                            input: Vec::new(),
+                        })
+                    }),
                 },
             );
             if let Some(req) = engine.requests.get_mut(&id) {
@@ -250,7 +285,7 @@ fn send_head(engine: &mut Engine, conn_id: i64) {
         // check meaningful.
         return;
     }
-    let mut head = req.request.head(false);
+    let mut head = route_for(&req.request, conn.proxy.as_ref()).request_head(&req.request, None);
     // Perry's reqwest client has always set a default `User-Agent`
     // (`fetch_client_builder`), because endpoints that reject anonymous
     // requests are common — `api.github.com` is the canonical one, and it is
@@ -272,6 +307,15 @@ fn send_head(engine: &mut Engine, conn_id: i64) {
     head.headers.retain(|h| {
         !h.name.eq_ignore_ascii_case("content-length")
             && !h.name.eq_ignore_ascii_case("transfer-encoding")
+            // `expect` is refused by `fetch` before it reaches here
+            // (`fetch::forbidden_header_failure`), matching undici. Stripping it
+            // as a defence in depth would be wrong: `Http1Connection::start`
+            // reads `expect: 100-continue` on a non-empty body as "park the
+            // upload", `can_send_body()` goes false and the next `send_body`
+            // fails `UND_ERR_INVALID_ARG "request body is not writable"` — a
+            // failure whose message names the body, not the header, which is
+            // what made this hard to see. A `node:http` client must implement
+            // the real handshake instead; that is `continue_client.rs`.
     });
     let body = std::mem::take(&mut req.request.body);
     let length = body_length(&req.request.method, body.len());
@@ -453,19 +497,189 @@ fn on_connect(engine: &mut Engine, conn_id: i64) {
     if let Some(pool_id) = pool_id {
         let _ = engine.pool().connected(pool_id, tlc::Protocol::Http1, 1);
     }
+    if engine
+        .conns
+        .get(&conn_id)
+        .is_some_and(|c| c.tunnel.is_some())
+    {
+        // The peer is a proxy and the target is `https`: nothing of this
+        // request — not the head, not the TLS ClientHello — may go out until
+        // the proxy has answered 2xx to a CONNECT.
+        send_connect(engine, conn_id);
+        return;
+    }
     let secure = engine.conns.get(&conn_id).is_some_and(|c| c.tls.is_some());
     if secure {
         // Start the handshake: the first flight is produced by a pump with no
         // input, and `flush` carries it to the socket.
-        if let Some(conn) = engine.conns.get_mut(&conn_id) {
-            if let Some(session) = conn.tls.as_mut() {
-                session.pump();
-            }
-        }
-        flush_tls_only(engine, conn_id);
+        start_tls(engine, conn_id);
     } else {
         send_head(engine, conn_id);
     }
+}
+
+/// Produce the TLS first flight and put it on the socket.
+fn start_tls(engine: &mut Engine, conn_id: i64) {
+    if let Some(conn) = engine.conns.get_mut(&conn_id) {
+        if let Some(session) = conn.tls.as_mut() {
+            session.pump();
+        }
+    }
+    flush_tls_only(engine, conn_id);
+}
+
+/// Write the proxy `CONNECT` head. Always in the clear — TLS is what the tunnel
+/// exists to carry, so it cannot also wrap it.
+fn send_connect(engine: &mut Engine, conn_id: i64) {
+    let Engine {
+        conns, requests, ..
+    } = &mut *engine;
+    let Some(conn) = conns.get_mut(&conn_id) else {
+        return;
+    };
+    let Some(req_id) = conn.request else { return };
+    let Some(req) = requests.get(&req_id) else {
+        return;
+    };
+    let route = route_for(&req.request, conn.proxy.as_ref());
+    // `connect_head` returns `None` only when there is no proxy or the target is
+    // not `https`, and `Conn::tunnel` is set exactly when both hold — so a
+    // `None` here is this module contradicting itself, not a request shape.
+    let Some(head) = route.connect_head(None) else {
+        let Some(tunnel) = conn.tunnel.take() else {
+            return;
+        };
+        drop(tunnel);
+        send_head(engine, conn_id);
+        return;
+    };
+    let Some(tunnel) = conn.tunnel.as_mut() else {
+        return;
+    };
+    let result = tunnel
+        .http
+        .start(&head, http1::BodyLength::Empty, None, None)
+        .and_then(|()| tunnel.http.finish_body(&[]));
+    if let Err(e) = result {
+        let error = ClientError::new(e.code, e.message);
+        deliver(engine, req_id, Outcome::Err(error));
+        close_conn(engine, conn_id);
+        return;
+    }
+    flush_tunnel(engine, conn_id);
+}
+
+/// The tunnel's own flush: it must bypass `conn.tls`, which is the session the
+/// tunnel is being built *for*.
+fn flush_tunnel(engine: &mut Engine, conn_id: i64) {
+    let Some(conn) = engine.conns.get_mut(&conn_id) else {
+        return;
+    };
+    if conn.closing {
+        return;
+    }
+    let Some(tunnel) = conn.tunnel.as_mut() else {
+        return;
+    };
+    let out = tunnel.http.output().to_vec();
+    if out.is_empty() {
+        return;
+    }
+    let _ = tunnel.http.consume_output(out.len());
+    if let Err(err) = tl::write(conn_id, out, 0) {
+        fail_conn(engine, conn_id, from_node_error(err.code, err.syscall));
+    }
+}
+
+/// Read a CONNECT response's status out of whatever bytes have arrived.
+///
+/// Returns `(consumed, Some(status))` once the head is complete and
+/// `(consumed, None)` while it is not. Only the HEAD matters: a CONNECT
+/// response has no body to wait for — the socket becomes the tunnel — so
+/// waiting for `Event::End` here would hang against every correct proxy.
+///
+/// Pure, so the split-read hazard is testable without a socket. The loop obeys
+/// the same rule `feed` documents (PerryTS/turnloop#50): `Decoder` can raise an
+/// event from a step that consumed NOTHING, so a loop that stops at
+/// `consumed >= input.len()` never asks for it.
+fn decode_connect_status(
+    http: &mut tlc::Http1Connection,
+    input: &[u8],
+) -> Result<(usize, Option<u16>), turnloop_http::Error> {
+    let mut consumed = 0usize;
+    loop {
+        let step = http.receive(&input[consumed..])?;
+        let produced = step.event.is_some();
+        consumed += step.consumed;
+        if let Some(http1::Event::Head(head)) = step.event {
+            return Ok((consumed, Some(head.status)));
+        }
+        if !produced && step.consumed == 0 {
+            return Ok((consumed, None));
+        }
+    }
+}
+
+/// Feed the proxy's answer to the CONNECT.
+///
+/// Returns the bytes left over once the tunnel is up — a proxy is allowed to
+/// coalesce its `200` with nothing else, but a buffer that dropped a stray tail
+/// would lose the first TLS record, so the leftover is handed back rather than
+/// discarded. `None` means the tunnel is still pending (or the connection is
+/// gone) and the caller must stop.
+fn tunnel_data(engine: &mut Engine, conn_id: i64, bytes: &[u8]) -> Option<Vec<u8>> {
+    {
+        let conn = engine.conns.get_mut(&conn_id)?;
+        let tunnel = conn.tunnel.as_mut()?;
+        tunnel.input.extend_from_slice(bytes);
+    }
+    let status = {
+        let conn = engine.conns.get_mut(&conn_id)?;
+        let tunnel = conn.tunnel.as_mut()?;
+        let input = std::mem::take(&mut tunnel.input);
+        match decode_connect_status(&mut tunnel.http, &input) {
+            Ok((consumed, status)) => {
+                tunnel.input = input;
+                tunnel.input.drain(..consumed.min(tunnel.input.len()));
+                status
+            }
+            Err(e) => {
+                let error = ClientError::new(e.code, e.message);
+                fail_conn(engine, conn_id, error);
+                return None;
+            }
+        }
+    };
+    let status = status?;
+    // Ask the route, rather than testing `200` here: it owns the rule, and it
+    // is what flips its own `tunnel` flag.
+    let decision = {
+        let conn = engine.conns.get(&conn_id)?;
+        let req_id = conn.request?;
+        let req = engine.requests.get(&req_id)?;
+        let mut route = route_for(&req.request, conn.proxy.as_ref());
+        route.tunnel_response(status)
+    };
+    match decision {
+        Ok(_) => {}
+        Err(e) => {
+            let error = ClientError::new(e.code, format!("{} ({status})", e.message));
+            fail_conn(engine, conn_id, error);
+            return None;
+        }
+    }
+    let leftover = {
+        let conn = engine.conns.get_mut(&conn_id)?;
+        let tunnel = conn.tunnel.take()?;
+        tunnel.input
+    };
+    TUNNELS.fetch_add(1, Ordering::Relaxed);
+    trace!("tunnel established conn_id={conn_id} status={status}");
+    // The tunnel is the transport now. Everything past here is the ordinary
+    // path: an `https` target always has a TLS session, so hand it the first
+    // flight and let `on_data` carry the handshake.
+    start_tls(engine, conn_id);
+    Some(leftover)
 }
 
 /// Handshake flights have no `http.output()` behind them, so they get their own
@@ -486,12 +700,29 @@ fn flush_tls_only(engine: &mut Engine, conn_id: i64) {
 }
 
 fn on_data(engine: &mut Engine, conn_id: i64, bytes: &[u8]) {
-    let Some(conn) = engine.conns.get_mut(&conn_id) else {
+    let Some(conn) = engine.conns.get(&conn_id) else {
         return;
     };
     if conn.closing {
         return;
     }
+    if conn.tunnel.is_some() {
+        // Still building the CONNECT tunnel: these bytes are the proxy's, not
+        // the origin's, and they are in the clear even for an `https` target.
+        let Some(leftover) = tunnel_data(engine, conn_id, bytes) else {
+            return;
+        };
+        if leftover.is_empty() {
+            return;
+        }
+        // A proxy that coalesced its `200` with the origin's first TLS record:
+        // re-enter with the tail, now that `conn.tunnel` is gone.
+        on_data(engine, conn_id, &leftover);
+        return;
+    }
+    let Some(conn) = engine.conns.get_mut(&conn_id) else {
+        return;
+    };
     let plaintext = match conn.tls.as_mut() {
         Some(session) => {
             session.receive(bytes);
@@ -868,6 +1099,17 @@ fn on_end(engine: &mut Engine, conn_id: i64) {
                 req.redirected = true;
                 req.conn = None;
                 req.retried = false;
+                // Re-resolve the route for the NEW url. `HTTP_PROXY` and
+                // `HTTPS_PROXY` are different variables and `NO_PROXY` is
+                // per-host, so a redirect that changes scheme or host can change
+                // whether — and through what — this request is proxied. Carrying
+                // the original decision forward would tunnel a plaintext hop, or
+                // send an absolute-form request line straight at an origin.
+                // A refusal here (a proxy URL that stopped parsing) keeps the
+                // previous route rather than failing the redirect.
+                if let Ok(proxy) = super::proxy_for(&req.request.url) {
+                    req.proxy = proxy;
+                }
             }
             start_locked(engine, req_id);
         }
@@ -1222,6 +1464,14 @@ pub(super) fn intern_code_for_test(code: Option<&str>) -> &'static str {
 }
 
 #[cfg(test)]
+/// Test seam for [`decode_connect_status`].
+pub(super) fn decode_connect_status_for_test(
+    http: &mut tlc::Http1Connection,
+    input: &[u8],
+) -> Result<(usize, Option<u16>), turnloop_http::Error> {
+    decode_connect_status(http, input)
+}
+
 pub(super) fn intern_syscall_for_test(syscall: Option<&str>) -> &'static str {
     intern_syscall(syscall)
 }

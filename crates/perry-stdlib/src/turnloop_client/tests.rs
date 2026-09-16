@@ -454,3 +454,184 @@ fn a_closed_connection_frees_a_seat_exactly_as_a_released_one_does() {
         "a released keep-alive connection is reused"
     );
 }
+
+// ── The proxy CONNECT tunnel ───────────────────────────────────────────────
+//
+// P6 declined a proxied fetch outright, and P8's inventory named the reason: "a
+// CONNECT tunnel driven from a URL rather than from a prebuilt
+// `reqwest::Client`". These assert the two halves of what replaced it — the
+// routing decision, which is `turnloop_http::client::Route`'s, and the
+// transport's reading of the proxy's answer, which is this module's.
+
+/// An `https` target behind an `http` proxy must send `CONNECT host:443` first,
+/// and the request that follows must still use origin-form — a proxy that has
+/// tunnelled is transparent, so an absolute-form line would reach the ORIGIN
+/// and be a protocol error rather than a routing one.
+#[test]
+fn an_https_target_behind_a_proxy_tunnels_and_keeps_origin_form() {
+    let request = tlc::Request::new("https://origin.test/a/b?c=1", "GET").expect("url");
+    let proxy = url::Url::parse("http://proxy.test:8080").expect("proxy url");
+    let route = tlc::Route::new(request.url.clone(), Some(proxy));
+
+    let connect = route.connect_head(None).expect("an https target must tunnel");
+    assert_eq!(connect.method, "CONNECT");
+    assert_eq!(
+        connect.target, "origin.test:443",
+        "CONNECT names the ORIGIN authority, not the proxy and not a path"
+    );
+    assert!(
+        connect
+            .headers
+            .iter()
+            .any(|h| h.name.eq_ignore_ascii_case("host") && h.value == b"origin.test:443"),
+        "the CONNECT head carries the tunnel target as `host`"
+    );
+
+    let head = route.request_head(&request, None);
+    assert_eq!(
+        head.target, "/a/b?c=1",
+        "inside a tunnel the request line is origin-form"
+    );
+    assert!(
+        !head
+            .headers
+            .iter()
+            .any(|h| h.name.eq_ignore_ascii_case("proxy-authorization")),
+        "proxy credentials must never be forwarded inside the tunnel"
+    );
+}
+
+/// An `http` target behind the same proxy must NOT tunnel: it goes to the proxy
+/// as an ordinary request with an absolute-form line. Getting this wrong is
+/// invisible in a green build — the request still reaches somewhere.
+#[test]
+fn an_http_target_behind_a_proxy_uses_absolute_form_and_no_tunnel() {
+    let request = tlc::Request::new("http://origin.test/a/b", "GET").expect("url");
+    let proxy = url::Url::parse("http://user:pw@proxy.test:8080").expect("proxy url");
+    let route = tlc::Route::new(request.url.clone(), Some(proxy));
+
+    assert!(
+        route.connect_head(None).is_none(),
+        "a plaintext target through a proxy needs no tunnel"
+    );
+    let head = route.request_head(&request, None);
+    assert_eq!(
+        head.target, "http://origin.test/a/b",
+        "a proxied plaintext request line is absolute-form"
+    );
+    assert!(
+        head.headers
+            .iter()
+            .any(|h| h.name.eq_ignore_ascii_case("proxy-authorization")),
+        "the proxy URL's userinfo becomes Proxy-Authorization on the plaintext path"
+    );
+}
+
+/// A proxy that refuses the tunnel must FAIL the request. The failure mode this
+/// guards is the dangerous one: treating a non-2xx as "carry on" would run the
+/// TLS handshake against the proxy's error page.
+#[test]
+fn a_refused_connect_is_an_error_not_a_direct_connection() {
+    let request = tlc::Request::new("https://origin.test/", "GET").expect("url");
+    let proxy = url::Url::parse("http://proxy.test:8080").expect("proxy url");
+    for status in [403u16, 407, 502, 100, 300] {
+        let mut route = tlc::Route::new(request.url.clone(), Some(proxy.clone()));
+        assert!(
+            route.tunnel_response(status).is_err(),
+            "status {status} must not establish a tunnel"
+        );
+    }
+    let mut route = tlc::Route::new(request.url.clone(), Some(proxy));
+    assert!(
+        route.tunnel_response(200).is_ok(),
+        "a 2xx is what establishes the tunnel"
+    );
+}
+
+/// The CONNECT reader stops at the HEAD and reports what is left.
+///
+/// Two hazards in one test. A CONNECT response has NO body — the socket becomes
+/// the tunnel — so a reader that waits for `Event::End` hangs against every
+/// correct proxy. And a proxy is allowed to coalesce its `200` with the first
+/// bytes the origin sends back, so a reader that discards its buffer loses the
+/// first TLS record and the handshake stalls with no error.
+#[test]
+fn the_connect_reader_stops_at_the_head_and_hands_back_the_tail() {
+    let tail: &[u8] = &[0x16, 0x03, 0x03, 0x00, 0x2a];
+    let mut wire = b"HTTP/1.1 200 Connection established\r\nproxy-agent: t\r\n\r\n".to_vec();
+    wire.extend_from_slice(tail);
+
+    let mut http = tlc::Http1Connection::new(http1::Limits::default());
+    http.start(
+        &http1::Head {
+            method: "CONNECT".into(),
+            target: "origin.test:443".into(),
+            status: 0,
+            version: 1,
+            headers: vec![http1::Header::new("host", "origin.test:443")],
+            keep_alive: true,
+        },
+        http1::BodyLength::Empty,
+        None,
+        None,
+    )
+    .expect("start CONNECT");
+    http.finish_body(&[]).expect("finish CONNECT");
+
+    let (consumed, status) =
+        exchange::decode_connect_status_for_test(&mut http, &wire).expect("decode");
+    assert_eq!(status, Some(200));
+    assert_eq!(
+        &wire[consumed..],
+        tail,
+        "the bytes after the head are the origin's and must survive"
+    );
+}
+
+/// The proxy's answer arriving one byte at a time must still be read. This is
+/// the split-read shape that made the direct path fail against a real origin
+/// whose head spanned two TLS records, applied to the tunnel.
+#[test]
+fn a_connect_answer_split_across_reads_is_reassembled() {
+    let wire = b"HTTP/1.1 200 Connection established\r\n\r\n";
+    let mut http = tlc::Http1Connection::new(http1::Limits::default());
+    http.start(
+        &http1::Head {
+            method: "CONNECT".into(),
+            target: "origin.test:443".into(),
+            status: 0,
+            version: 1,
+            headers: vec![http1::Header::new("host", "origin.test:443")],
+            keep_alive: true,
+        },
+        http1::BodyLength::Empty,
+        None,
+        None,
+    )
+    .expect("start CONNECT");
+    http.finish_body(&[]).expect("finish CONNECT");
+
+    // Retain unconsumed input the way `Tunnel::input` does, and feed one more
+    // byte each turn.
+    let mut pending: Vec<u8> = Vec::new();
+    let mut status = None;
+    for byte in wire.iter() {
+        pending.push(*byte);
+        let (consumed, got) =
+            exchange::decode_connect_status_for_test(&mut http, &pending).expect("decode");
+        pending.drain(..consumed.min(pending.len()));
+        if let Some(got) = got {
+            status = Some(got);
+            break;
+        }
+    }
+    assert_eq!(
+        status,
+        Some(200),
+        "a head delivered one byte at a time must still produce its status"
+    );
+    assert!(
+        pending.is_empty(),
+        "nothing follows the head in this fixture"
+    );
+}
