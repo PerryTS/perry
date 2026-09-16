@@ -656,14 +656,19 @@ pub(crate) unsafe fn array_subclass_named_prefix_token_matches_class(
 /// spill path calls it against the owner because its physical store is noted
 /// on the child Array buffer instead.
 #[inline]
-pub(crate) unsafe fn clear_packed_subclass_numeric_proof(obj: *mut ObjectHeader) {
+/// Returns whether this call actually RETIRED a proof. A receiver that never
+/// carried one — or whose proof an earlier call already retired — is left
+/// untouched, and the `false` answer is what lets a caller skip an
+/// invalidation it would otherwise pay on every operation (see
+/// `array_subclass_fast_pop_validated`).
+pub(crate) unsafe fn clear_packed_subclass_numeric_proof(obj: *mut ObjectHeader) -> bool {
     let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
-        return;
+        return false;
     };
     if header.obj_type != crate::gc::GC_TYPE_OBJECT
         || header._reserved & crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF == 0
     {
-        return;
+        return false;
     }
     let header = std::ptr::from_ref(header).cast_mut();
     // Retire the authority first. A missing/moving meta then merely leaves an
@@ -673,6 +678,7 @@ pub(crate) unsafe fn clear_packed_subclass_numeric_proof(obj: *mut ObjectHeader)
     if !meta.is_null() {
         (*meta).flags &= !PACKED_NUMERIC_META_MASK;
     }
+    true
 }
 
 /// Owner-side invalidation for an object-owned spill write. The common
@@ -1459,8 +1465,20 @@ fn array_subclass_fast_pop_validated(receiver: ValidatedObjectReceiver) -> Optio
         number.is_finite() && *number >= 0.0 && *number <= i32::MAX as f64 && number.fract() == 0.0
     });
     let obj = obj as *mut ObjectHeader;
-    unsafe { clear_packed_subclass_numeric_proof(obj) };
-    crate::object::prop_plan::prop_plan_epoch_bump();
+    // Only a proof this call actually retired can invalidate a cached verdict.
+    // A pop loop retires one on its FIRST iteration and nothing afterwards,
+    // while the bump it used to pay unconditionally discarded every cached
+    // store plan in the program — per `pop()`.
+    //
+    // The shape-version install below needs no bump of its own: the sibling
+    // push path (`array_subclass_fast_push_one_validated`) performs the same
+    // `install_cache_carried_object_shape_version` and has never bumped. A
+    // per-object shape version is not an input to the store-plan verdict,
+    // which is keyed on (class_id, interned key) and invalidated by vtable
+    // mutation, descriptor/prototype changes and GC — see `object::prop_plan`.
+    if unsafe { clear_packed_subclass_numeric_proof(obj) } {
+        crate::object::prop_plan::prop_plan_epoch_bump();
+    }
     let installed = unsafe {
         crate::object::shapes::install_cache_carried_object_shape_version(
             obj,
