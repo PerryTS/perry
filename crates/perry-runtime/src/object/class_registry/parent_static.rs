@@ -5,6 +5,31 @@ use std::sync::atomic::Ordering;
 
 /// Register a class with its parent class ID in the global registry
 pub(crate) fn register_class(class_id: u32, parent_class_id: u32) {
+    // Re-registering an edge that is ALREADY registered with this same parent
+    // changes nothing: the chain a reader walks is identical, so there is no
+    // cached store plan to flush and no entry to publish.
+    //
+    // Every allocation of an inheriting class arrives here —
+    // `object_alloc_class_inline_keys_impl` calls `register_class` whenever
+    // `parent_class_id != 0`, and codegen ALSO emits one
+    // `js_register_class_parent` per inheriting class in the init prelude, so
+    // by the time user code allocates, the edge is always already there. The
+    // work being skipped is a process-global `prop_plan` epoch bump (which
+    // invalidates every cached store plan in the program) plus a write lock on
+    // `CLASS_REGISTRY` and a map insert, per `new`. Measured on `new Sub()`
+    // where `Sub extends Base`: 993 -> 901 instructions per allocation, and
+    // 1,197 -> 1,105 for a two-level chain. The epoch bump's own cost is not in
+    // those numbers: it is paid by every store site whose cached plan it threw
+    // away, which a microbenchmark that allocates and nothing else cannot see.
+    //
+    // The read is the same dense indexed load every parent-chain walk uses; an
+    // in-window child answers without touching the map at all. A genuinely new
+    // or CHANGED edge falls through to the full publication below, so
+    // re-parenting still flushes.
+    if crate::object::class_meta_registry::get_parent_class_id(class_id) == Some(parent_class_id) {
+        return;
+    }
+
     // Parent linking changes what a class chain can intercept — flush cached
     // store plans (`object::prop_plan`).
     crate::object::prop_plan::prop_plan_epoch_bump();
