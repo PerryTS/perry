@@ -269,6 +269,9 @@ thread_local! {
 #[cold]
 #[inline(never)]
 fn grow_for(s: &mut ShadowStackState, need: usize) {
+    // Before the first frame can exist on any thread: exception savepoints
+    // stop assuming the idle shadow state from here on.
+    crate::exception::note_catch_subsystem_used(crate::exception::catch_subsystem::SHADOW_FRAMES);
     // Arm the thread-exit free the first time this thread allocates.
     let _ = SHADOW_BUFFER_GUARD.try_with(|_| ());
     let want = s
@@ -741,12 +744,23 @@ pub(crate) struct ShadowSavepoint {
 /// region can push any callee frames.
 #[inline]
 pub(crate) fn shadow_stack_savepoint() -> ShadowSavepoint {
+    let temp_roots = super::temp_roots::temp_root_depth();
+    // Every frame push first reserves room through `grow_for`, which latches
+    // the subsystem. Until then each thread's state is the const initializer,
+    // so the (out-of-line on Darwin) thread-local read can be skipped.
+    if !crate::exception::catch_subsystem_used(crate::exception::catch_subsystem::SHADOW_FRAMES) {
+        return ShadowSavepoint {
+            frame_top: usize::MAX,
+            len: 0,
+            temp_roots,
+        };
+    }
     SHADOW.with(|cell| unsafe {
         let s = &*cell.get();
         ShadowSavepoint {
             frame_top: s.frame_top,
             len: s.len,
-            temp_roots: super::temp_roots::temp_root_depth(),
+            temp_roots,
         }
     })
 }

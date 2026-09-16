@@ -38,19 +38,23 @@ fn typeof_literal_tag(literal: &str) -> Option<u32> {
     }
 }
 
-/// Recognize the safe, high-value subset of literal `typeof` comparisons.
+/// Recognize literal `typeof` comparisons that can use the integer classifier.
 ///
-/// Restricting the operand to a local is intentional. `Expr::TypeOf` has
-/// compile-time representation corrections for namespace/class/native-module
-/// expressions in `literals_vars.rs`; intercepting those before ordinary
-/// lowering would bypass those corrections. A local already takes the runtime
-/// classifier today, so replacing its returned string with the same
+/// `Expr::TypeOf` folds some operand shapes to a compile-time answer (see
+/// `literals_vars::typeof_compile_time_answer`) because their runtime
+/// representation collides with another tag; those keep the string route.
+/// Every other operand is lowered exactly as `typeof` lowers it and then
+/// classified at runtime, so replacing the returned string with the same
 /// classifier's integer tag changes no semantic route.
-fn local_typeof_literal_pair<'a>(left: &'a Expr, right: &'a Expr) -> Option<(&'a Expr, u32)> {
+fn typeof_literal_pair<'a>(
+    ctx: &FnCtx<'_>,
+    left: &'a Expr,
+    right: &'a Expr,
+) -> Option<(&'a Expr, u32)> {
     match (left, right) {
         (Expr::TypeOf(operand), Expr::String(literal))
         | (Expr::String(literal), Expr::TypeOf(operand))
-            if matches!(operand.as_ref(), Expr::LocalGet(_)) =>
+            if super::literals_vars::typeof_compile_time_answer(ctx, operand).is_none() =>
         {
             typeof_literal_tag(literal).map(|tag| (operand.as_ref(), tag))
         }
@@ -187,12 +191,13 @@ pub(super) fn i8_literal(b: u8) -> String {
 /// can never be `===` a string (a boxed `new String("x")` is `POINTER_TAG`, and
 /// correctly unequal), and a heap string whose `byte_len` or whose first / last
 /// byte differs from the literal's is unequal without reading a byte the length
-/// check has not already proved the header owns. Only a same-length,
-/// same-endpoints heap string reaches `js_string_equals`, except that a
-/// three-byte literal is settled by checking its one remaining middle byte.
+/// check has not already proved the header owns. A three-byte literal is
+/// settled by its one remaining middle byte, and a 4..=16-byte literal by two
+/// overlapping word compares against compile-time constants; only a
+/// same-length heap string of a longer literal reaches `js_string_equals`.
 ///
 /// Returns an `i1` that is true iff the two operands are `===`.
-fn lower_string_literal_strict_eq(
+pub(crate) fn lower_string_literal_strict_eq(
     ctx: &mut FnCtx<'_>,
     val: &str,
     lit_box: &str,
@@ -207,13 +212,17 @@ fn lower_string_literal_strict_eq(
     // Blocks, in the order control flows through them. Only the ones this
     // literal's length needs are created — an empty block would have no
     // terminator and fail the LLVM verifier.
+    // Literals of 4..=16 bytes are compared as two overlapping little-endian
+    // words that together cover every byte the length check proved present.
+    let words = (4..=16).contains(&n);
     let sso_idx = sso_immediate(&bytes).map(|_| ctx.new_block("streqlit.sso"));
     let tag_idx = ctx.new_block("streqlit.tag");
     let len_idx = ctx.new_block("streqlit.len");
-    let b0_idx = (n >= 1).then(|| ctx.new_block("streqlit.b0"));
-    let bl_idx = (n >= 2).then(|| ctx.new_block("streqlit.bl"));
+    let words_idx = words.then(|| ctx.new_block("streqlit.words"));
+    let b0_idx = (n >= 1 && !words).then(|| ctx.new_block("streqlit.b0"));
+    let bl_idx = (n >= 2 && !words).then(|| ctx.new_block("streqlit.bl"));
     let bm_idx = (n == 3).then(|| ctx.new_block("streqlit.bm"));
-    let slow_idx = (n >= 4).then(|| ctx.new_block("streqlit.slow"));
+    let slow_idx = (n > 16).then(|| ctx.new_block("streqlit.slow"));
     let true_idx = ctx.new_block("streqlit.true");
     let false_idx = ctx.new_block("streqlit.false");
     let merge_idx = ctx.new_block("streqlit.merge");
@@ -269,8 +278,41 @@ fn lower_string_literal_strict_eq(
         .gep_inbounds(I8, &hdr_ptr, &[(I64, STRING_HEADER_BYTE_LEN_OFFSET)]);
     let blen = ctx.block().load(I32, &blen_ptr);
     let len_ok = ctx.block().icmp_eq(I32, &blen, &n.to_string());
-    let after_len = b0_l.clone().unwrap_or_else(|| true_l.clone());
+    let words_l = words_idx.map(|i| ctx.block_label(i));
+    let after_len = words_l
+        .clone()
+        .or_else(|| b0_l.clone())
+        .unwrap_or_else(|| true_l.clone());
     ctx.block().cond_br(&len_ok, &after_len, &false_l);
+
+    // 4..=16 bytes: the first and last word (4 or 8 bytes each, overlapping
+    // when `n` is not a multiple) are compile-time constants. Equal words
+    // cover every byte, so this decides the comparison without
+    // `js_string_equals`.
+    if let Some(idx) = words_idx {
+        ctx.current_block = idx;
+        let (ty, width) = if n >= 8 { (I64, 8) } else { (I32, 4) };
+        let word = |at: usize| -> String {
+            let mut buf = [0u8; 8];
+            buf[..width].copy_from_slice(&bytes[at..at + width]);
+            if width == 8 {
+                (u64::from_le_bytes(buf) as i64).to_string()
+            } else {
+                (u32::from_le_bytes(buf[..4].try_into().unwrap()) as i32).to_string()
+            }
+        };
+        let head_p =
+            ctx.block()
+                .gep_inbounds(I8, &hdr_ptr, &[(I64, &STRING_HEADER_SIZE.to_string())]);
+        let head = ctx.block().load_aligned(ty, &head_p, 1);
+        let head_ok = ctx.block().icmp_eq(ty, &head, &word(0));
+        let tail_off = (STRING_HEADER_SIZE + n - width).to_string();
+        let tail_p = ctx.block().gep_inbounds(I8, &hdr_ptr, &[(I64, &tail_off)]);
+        let tail = ctx.block().load_aligned(ty, &tail_p, 1);
+        let tail_ok = ctx.block().icmp_eq(ty, &tail, &word(n - width));
+        let ok = ctx.block().and(I1, &head_ok, &tail_ok);
+        ctx.block().cond_br(&ok, &true_l, &false_l);
+    }
 
     // First and last byte. Both sit inside the `n` bytes the length check just
     // proved this header owns, so the loads need no further guard. For n <= 2
@@ -1065,32 +1107,76 @@ fn lower_typeof_number_inline(ctx: &mut FnCtx<'_>, value: &str, negate: bool) ->
         .phi(I1, &[(fast_bit, &fast_end), (&slow_bit, &slow_end)])
 }
 
+/// `typeof value === <literal>` as an `i1`.
+///
+/// The classifier (`classify_value_typeof` in `perry-runtime/src/builtins/
+/// arithmetic.rs`) decides `undefined` (including the hole sentinel), the two
+/// booleans and both string tags with exact bit tests before any registry or
+/// heap lookup, so `"undefined"`, `"boolean"` and `"string"` never need the
+/// call, and `"number"` keeps its inline definitely-a-Number arm. `"object"`,
+/// `"function"`, `"symbol"` and `"bigint"` are usually asked of heap values the
+/// classifier must inspect anyway, so they keep the direct call: an inline
+/// primitive pre-test would only add instructions to that common case.
+fn lower_typeof_literal_inline(
+    ctx: &mut FnCtx<'_>,
+    value: &str,
+    expected_tag: u32,
+    negate: bool,
+) -> String {
+    let exact = {
+        let blk = ctx.block();
+        match expected_tag {
+            0 => {
+                let bits = blk.bitcast_double_to_i64(value);
+                let undefined = blk.icmp_eq(I64, &bits, crate::nanbox::TAG_UNDEFINED_I64);
+                let hole = blk.icmp_eq(I64, &bits, crate::nanbox::TAG_HOLE_I64);
+                Some(blk.or(I1, &undefined, &hole))
+            }
+            2 => Some(crate::codegen::emit_typed_i1_guard(blk, value)),
+            4 => Some(crate::codegen::emit_typed_string_guard(blk, value)),
+            _ => None,
+        }
+    };
+    if let Some(bit) = exact {
+        return if negate {
+            ctx.block().xor(I1, &bit, "true")
+        } else {
+            bit
+        };
+    }
+    if expected_tag == 3 {
+        return lower_typeof_number_inline(ctx, value, negate);
+    }
+    let tag = ctx
+        .block()
+        .call(I32, "js_value_typeof_tag", &[(crate::types::DOUBLE, value)]);
+    let expected = expected_tag.to_string();
+    if negate {
+        ctx.block().icmp_ne(I32, &tag, &expected)
+    } else {
+        ctx.block().icmp_eq(I32, &tag, &expected)
+    }
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::Compare { op, left, right } => {
-            if matches!(op, CompareOp::Eq | CompareOp::Ne) {
+            // `typeof` always yields a string, so loose and strict equality
+            // against a string literal are the same comparison.
+            if matches!(
+                op,
+                CompareOp::Eq | CompareOp::Ne | CompareOp::LooseEq | CompareOp::LooseNe
+            ) {
                 if let Some((operand, expected_tag)) =
-                    local_typeof_literal_pair(left.as_ref(), right.as_ref())
+                    typeof_literal_pair(ctx, left.as_ref(), right.as_ref())
                 {
                     // The literal has no evaluation side effects. Lower the
-                    // local operand exactly once, then compare the shared
+                    // operand exactly once, then compare the shared
                     // classifier's integer result instead of materializing a
                     // heap string and entering string equality.
+                    let negate = matches!(op, CompareOp::Ne | CompareOp::LooseNe);
                     let value = lower_expr(ctx, operand)?;
-                    let bit = if expected_tag == 3 {
-                        lower_typeof_number_inline(ctx, &value, matches!(op, CompareOp::Ne))
-                    } else {
-                        let tag = ctx.block().call(
-                            I32,
-                            "js_value_typeof_tag",
-                            &[(crate::types::DOUBLE, &value)],
-                        );
-                        if matches!(op, CompareOp::Ne) {
-                            ctx.block().icmp_ne(I32, &tag, &expected_tag.to_string())
-                        } else {
-                            ctx.block().icmp_eq(I32, &tag, &expected_tag.to_string())
-                        }
-                    };
+                    let bit = lower_typeof_literal_inline(ctx, &value, expected_tag, negate);
                     let tagged = ctx.block().select(
                         I1,
                         &bit,

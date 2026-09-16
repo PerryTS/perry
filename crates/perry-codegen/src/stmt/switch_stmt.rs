@@ -3,12 +3,6 @@
 use super::*;
 use crate::types::{DOUBLE, I1, I32, I64};
 
-/// Minimum number of UNIQUE numeric-literal case values before the
-/// binary-search dispatch tree replaces the linear test tower. Below this the
-/// tower's straight-line compare chain is already cheap and the tree's
-/// canonicalization prologue isn't worth its extra blocks.
-const NUMERIC_TREE_MIN_CASES: usize = 8;
-
 /// `switch (disc) { case A: ...; break; case B: ...; default: ... }`
 /// lowering. Each case gets a (test, body) block pair; bodies fall
 /// through to the next body block (not the next test) to honor JS
@@ -18,19 +12,21 @@ const NUMERIC_TREE_MIN_CASES: usize = 8;
 ///
 /// We don't use LLVM's `switch` instruction because the discriminant
 /// is a NaN-boxed double whose equality semantics differ from i32
-/// switch (NaN != NaN). The if-tower lowering uses fcmp oeq for each
-/// test which yields the right semantics.
+/// switch (NaN != NaN).
 ///
-/// Dense all-numeric switches take a faster path: when EVERY case test is a
-/// compile-time integer-valued numeric literal and there are at least
-/// [`NUMERIC_TREE_MIN_CASES`] unique values, the linear tower is replaced by
-/// a balanced binary-search tree over the sorted case values — O(log n)
-/// `fcmp` branches per dispatch instead of O(n) `js_switch_strict_equals`
-/// calls (babel-style AST/token-kind dispatch switches have 50–100+ arms).
-/// Only the DISPATCH changes: bodies keep source order and fall-through, the
-/// default body is still the no-match target, and duplicate case values still
-/// resolve to the first (source-order) clause. See
-/// [`numeric_literal_dispatch_plan`] for why this is unobservable.
+/// All-numeric switches: when EVERY case test is a compile-time
+/// integer-valued numeric literal, the discriminant is canonicalized once and
+/// dispatched through a balanced binary-search tree of `fcmp` branches —
+/// O(log n) compares instead of O(n) `js_switch_strict_equals` calls. Only the
+/// DISPATCH changes: bodies keep source order and fall-through, the default
+/// body is still the no-match target, and duplicate case values still resolve
+/// to the first (source-order) clause. See [`numeric_literal_dispatch_plan`]
+/// for why this is unobservable.
+///
+/// Every other switch keeps the in-order test tower, but a case whose test is
+/// a string, numeric, boolean, `null` or `undefined` literal is decided inline
+/// (see [`emit_literal_case_test`]); only other case expressions still call
+/// `js_switch_strict_equals`.
 pub(crate) fn lower_switch(
     ctx: &mut FnCtx<'_>,
     discriminant: &perry_hir::Expr,
@@ -39,6 +35,16 @@ pub(crate) fn lower_switch(
     let dv = lower_expr(ctx, discriminant)?;
 
     let tree_plan = numeric_literal_dispatch_plan(cases);
+    // Canonicalized numeric view of the discriminant, shared by every
+    // numeric-literal case of a tower lowering. Emitted here, in the
+    // discriminant's block, which dominates every test block.
+    let numeric_view = (tree_plan.is_none()
+        && cases.iter().any(|c| {
+            c.test
+                .as_ref()
+                .is_some_and(|t| integral_numeric_literal(t).is_some())
+        }))
+    .then(|| emit_canonical_numeric_view(ctx, &dv));
 
     // Allocate body blocks (and, for the tower lowering, test blocks) for
     // every case up front so we can wire up the fall-through edges before
@@ -131,14 +137,15 @@ pub(crate) fn lower_switch(
     }
 
     // Compile each test block (tower lowering only — the tree already emitted
-    // its dispatch blocks above). Each test compares dv against the case
-    // expression with fcmp oeq, jumps to the body on match, otherwise
-    // jumps to the next *case* test (or to no_match_target if this is the
-    // last). The default clause is NOT part of the test chain: per spec
-    // CaseBlockEvaluation, every case test — including ones written
-    // *after* `default:` — is tried first, and the default body only
-    // runs when no case matched. A non-match at the default's source
-    // position must therefore skip over it to the next case test.
+    // its dispatch blocks above). Each test decides `dv === test` (inline for
+    // literal tests, `js_switch_strict_equals` otherwise), jumps to the body
+    // on match, otherwise jumps to the next *case* test (or to
+    // no_match_target if this is the last). The default clause is NOT part of
+    // the test chain: per spec CaseBlockEvaluation, every case test —
+    // including ones written *after* `default:` — is tried first, and the
+    // default body only runs when no case matched. A non-match at the
+    // default's source position must therefore skip over it to the next case
+    // test.
     if tree_plan.is_none() {
         for (i, case) in cases.iter().enumerate() {
             ctx.current_block = test_blocks[i];
@@ -150,6 +157,16 @@ pub(crate) fn lower_switch(
             };
 
             if let Some(test_expr) = case.test.as_ref() {
+                if emit_literal_case_test(
+                    ctx,
+                    &dv,
+                    test_expr,
+                    numeric_view.as_ref(),
+                    &body_label,
+                    &next_label,
+                )? {
+                    continue;
+                }
                 let cv = lower_expr(ctx, test_expr)?;
                 // CaseClauseIsSelected is strict equality (`===`). One runtime
                 // helper covers every value-kind correctly: string content
@@ -226,20 +243,14 @@ pub(crate) fn lower_switch(
 /// - The default clause (test == None) is skipped: it is not part of the
 ///   test chain; the tree's no-match edge targets its body.
 fn numeric_literal_dispatch_plan(cases: &[perry_hir::SwitchCase]) -> Option<Vec<(f64, usize)>> {
-    use perry_hir::Expr;
     let mut vals: Vec<(f64, usize)> = Vec::with_capacity(cases.len());
     for (i, case) in cases.iter().enumerate() {
         let Some(test) = case.test.as_ref() else {
             continue;
         };
-        let v = match test {
-            Expr::Number(f) => *f,
-            Expr::Integer(n) => *n as f64,
-            _ => return None,
-        };
-        if !v.is_finite() || v.fract() != 0.0 {
+        let Some(v) = integral_numeric_literal(test) else {
             return None;
-        }
+        };
         vals.push((v, i));
     }
     vals.sort_by(|a, b| {
@@ -247,7 +258,7 @@ fn numeric_literal_dispatch_plan(cases: &[perry_hir::SwitchCase]) -> Option<Vec<
             .expect("case values are finite (checked above)")
     });
     vals.dedup_by(|later, first| later.0 == first.0);
-    if vals.len() < NUMERIC_TREE_MIN_CASES {
+    if vals.is_empty() {
         return None;
     }
     Some(vals)
@@ -275,24 +286,10 @@ fn emit_numeric_tree_dispatch(
     body_blocks: &[usize],
     no_match_label: &str,
 ) {
-    let bits = ctx.block().bitcast_double_to_i64(dv);
-    let int32_band = ctx.block().and(
-        I64,
-        &bits,
-        &crate::nanbox::i64_literal(!crate::nanbox::INT32_MASK),
-    );
-    let is_int32 = ctx.block().icmp_eq(
-        I64,
-        &int32_band,
-        &crate::nanbox::i64_literal(crate::nanbox::INT32_TAG),
-    );
-    let lo32 = ctx.block().trunc(I64, &bits, I32);
-    let int32_as_double = ctx.block().sitofp(I32, &lo32, DOUBLE);
-    let canonical = ctx
-        .block()
-        .select(I1, &is_int32, DOUBLE, &int32_as_double, dv);
-    let is_untagged_number = emit_js_value_is_number(ctx, dv);
-    let is_numeric = ctx.block().or(I1, &is_untagged_number, &is_int32);
+    let NumericView {
+        canonical,
+        is_numeric,
+    } = emit_canonical_numeric_view(ctx, dv);
     let root_idx = ctx.new_block("switch.bst");
     let root_label = ctx.block_label(root_idx);
     ctx.block()
@@ -377,4 +374,116 @@ fn emit_numeric_tree_range(
             no_match_label,
         );
     }
+}
+
+/// A compile-time integer-valued finite numeric literal, as the double
+/// `literals_vars::lower` materializes it.
+fn integral_numeric_literal(test: &perry_hir::Expr) -> Option<f64> {
+    use perry_hir::Expr;
+    let v = match test {
+        Expr::Number(f) => *f,
+        Expr::Integer(n) => *n as f64,
+        _ => return None,
+    };
+    (v.is_finite() && v.fract() == 0.0).then_some(v)
+}
+
+/// The discriminant as `js_switch_strict_equals`' numeric arm sees it.
+struct NumericView {
+    /// int32 boxes sign-extended to a double; every other value unchanged.
+    canonical: String,
+    /// The value is a Number (plain double or int32 box).
+    is_numeric: String,
+}
+
+/// Canonicalization mirrors `js_switch_strict_equals`' numeric arm exactly:
+///
+/// - int32-boxed (`(bits & !INT32_MASK) == INT32_TAG`) → sign-extend the low
+///   32 bits and `sitofp` (so int32-boxed 7 matches `case 7:`).
+/// - any other value whose top-16 tag lies outside Perry's tag band
+///   (`SHORT_STRING_TAG..=STRING_TAG`) is already a raw double — including
+///   real NaNs, which then fail every ordered `fcmp` and fall out at the
+///   no-match edge, exactly like NaN != NaN in the helper.
+/// - strings/bools/undefined/null/pointers (tagged, non-int32) can never
+///   strictly equal a number.
+fn emit_canonical_numeric_view(ctx: &mut FnCtx<'_>, dv: &str) -> NumericView {
+    let bits = ctx.block().bitcast_double_to_i64(dv);
+    let int32_band = ctx.block().and(
+        I64,
+        &bits,
+        &crate::nanbox::i64_literal(!crate::nanbox::INT32_MASK),
+    );
+    let is_int32 = ctx.block().icmp_eq(
+        I64,
+        &int32_band,
+        &crate::nanbox::i64_literal(crate::nanbox::INT32_TAG),
+    );
+    let lo32 = ctx.block().trunc(I64, &bits, I32);
+    let int32_as_double = ctx.block().sitofp(I32, &lo32, DOUBLE);
+    let canonical = ctx
+        .block()
+        .select(I1, &is_int32, DOUBLE, &int32_as_double, dv);
+    let is_untagged_number = emit_js_value_is_number(ctx, dv);
+    let is_numeric = ctx.block().or(I1, &is_untagged_number, &is_int32);
+    NumericView {
+        canonical,
+        is_numeric,
+    }
+}
+
+/// Emit an inline `===` case test for a literal case expression and branch to
+/// `body_label` on a match, `next_label` otherwise. Returns `false` (emitting
+/// nothing) for any other case expression, which keeps the runtime helper.
+///
+/// Each arm restates `js_switch_strict_equals` for its literal kind:
+/// - string literal: the same inline decision `x === "lit"` uses
+///   (`expr::lower_string_literal_strict_eq`: pooled identity, SSO
+///   immediate, heap length and bytes);
+/// - integer-valued numeric literal: `fcmp oeq` on the canonical numeric view
+///   (NaN never matches, `-0 === 0`, an int32 box equals its double);
+/// - `true`/`false`/`null`/`undefined`: singleton bit identity.
+///
+/// Literals have no evaluation side effects, so skipping their lowering is
+/// unobservable. `Expr::WtfString` stays on the helper (its pool bytes are
+/// WTF-8, not `str::as_bytes`).
+fn emit_literal_case_test(
+    ctx: &mut FnCtx<'_>,
+    dv: &str,
+    test: &perry_hir::Expr,
+    numeric_view: Option<&NumericView>,
+    body_label: &str,
+    next_label: &str,
+) -> Result<bool> {
+    use perry_hir::Expr;
+    let hit = match test {
+        Expr::String(lit) => {
+            let lit_box = lower_expr(ctx, test)?;
+            crate::expr::lower_string_literal_strict_eq(ctx, dv, &lit_box, lit)
+        }
+        Expr::Bool(_) | Expr::Null | Expr::Undefined => {
+            let tag = match test {
+                Expr::Bool(true) => crate::nanbox::TAG_TRUE_I64,
+                Expr::Bool(false) => crate::nanbox::TAG_FALSE_I64,
+                Expr::Null => crate::nanbox::TAG_NULL_I64,
+                _ => crate::nanbox::TAG_UNDEFINED_I64,
+            };
+            let blk = ctx.block();
+            let bits = blk.bitcast_double_to_i64(dv);
+            blk.icmp_eq(I64, &bits, tag)
+        }
+        _ => match (integral_numeric_literal(test), numeric_view) {
+            (Some(value), Some(view)) => {
+                let blk = ctx.block();
+                let eq = blk.fcmp(
+                    "oeq",
+                    &view.canonical,
+                    &crate::nanbox::double_literal(value),
+                );
+                blk.and(I1, &view.is_numeric, &eq)
+            }
+            _ => return Ok(false),
+        },
+    };
+    ctx.block().cond_br(&hit, body_label, next_label);
+    Ok(true)
 }

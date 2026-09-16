@@ -1043,11 +1043,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ctx,
                     &[&values[0], &values[1]],
                     |ctx, vals| {
-                        let blk = ctx.block();
-                        Ok(blk.call(
-                            DOUBLE,
+                        Ok(lower_math_minmax2(
+                            ctx,
+                            [&values[0], &values[1]],
+                            [&vals[0], &vals[1]],
+                            "llvm.minimum.f64",
                             "js_math_min2",
-                            &[(DOUBLE, &vals[0]), (DOUBLE, &vals[1])],
                         ))
                     },
                 );
@@ -1093,11 +1094,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ctx,
                     &[&values[0], &values[1]],
                     |ctx, vals| {
-                        let blk = ctx.block();
-                        Ok(blk.call(
-                            DOUBLE,
+                        Ok(lower_math_minmax2(
+                            ctx,
+                            [&values[0], &values[1]],
+                            [&vals[0], &vals[1]],
+                            "llvm.maximum.f64",
                             "js_math_max2",
-                            &[(DOUBLE, &vals[0]), (DOUBLE, &vals[1])],
                         ))
                     },
                 );
@@ -1624,4 +1626,51 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // a `this` parameter (unlike instance methods).
         _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
     }
+}
+
+/// Two-argument `Math.max` / `Math.min`. When both operands are plain doubles
+/// (proven by construction, or by one signed compare per unproven operand),
+/// the answer is `llvm.maximum` / `llvm.minimum`: both propagate NaN and order
+/// `-0` below `+0`, which is exactly the JS definition. Anything else (int32
+/// boxes, strings, objects, BigInt, Symbol) keeps the coercing runtime helper.
+fn lower_math_minmax2(
+    ctx: &mut FnCtx<'_>,
+    exprs: [&Expr; 2],
+    vals: [&str; 2],
+    intrinsic: &str,
+    helper: &str,
+) -> String {
+    let mut plain: Option<String> = None;
+    for (expr, val) in exprs.iter().zip(vals.iter()) {
+        if super::dispatch::math_operand_is_proven_number(ctx, expr) {
+            continue;
+        }
+        let test = crate::codegen::emit_plain_number_test(ctx.block(), val);
+        plain = Some(match plain {
+            Some(prev) => ctx.block().and(crate::types::I1, &prev, &test),
+            None => test,
+        });
+    }
+    let args = [(DOUBLE, vals[0]), (DOUBLE, vals[1])];
+    let Some(plain) = plain else {
+        return ctx.block().call(DOUBLE, intrinsic, &args);
+    };
+    let fast_idx = ctx.new_block("math.minmax.fast");
+    let slow_idx = ctx.new_block("math.minmax.slow");
+    let merge_idx = ctx.new_block("math.minmax.merge");
+    let fast_label = ctx.block_label(fast_idx);
+    let slow_label = ctx.block_label(slow_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    ctx.block().cond_br(&plain, &fast_label, &slow_label);
+    ctx.current_block = fast_idx;
+    let fast = ctx.block().call(DOUBLE, intrinsic, &args);
+    let fast_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+    ctx.current_block = slow_idx;
+    let slow = ctx.block().call(DOUBLE, helper, &args);
+    let slow_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+    ctx.current_block = merge_idx;
+    ctx.block()
+        .phi(DOUBLE, &[(&fast, &fast_end), (&slow, &slow_end)])
 }

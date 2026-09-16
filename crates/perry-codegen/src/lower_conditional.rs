@@ -47,6 +47,23 @@ pub(crate) fn lower_truthy(ctx: &mut FnCtx<'_>, cond_val: &str, cond_expr: &Expr
     {
         return ctx.block().fcmp("one", cond_val, "0.0");
     }
+    // A specialized body's Boolean-guarded parameter: the public entry admitted
+    // only `TAG_TRUE | TAG_FALSE`, and `stable_local_type_proof` answers only
+    // while no write anywhere in the body (nested closures included) can have
+    // replaced it. That is a runtime proof about the value in the slot, not
+    // the erased annotation #7846 excludes below.
+    if let Expr::LocalGet(id) = cond_expr {
+        if ctx.spec_bool_params.contains(id)
+            && matches!(
+                ctx.stable_local_type_proof(id),
+                Some(perry_hir::types::Type::Boolean)
+            )
+        {
+            let blk = ctx.block();
+            let bits = blk.bitcast_double_to_i64(cond_val);
+            return blk.icmp_eq(I64, &bits, crate::nanbox::TAG_TRUE_I64);
+        }
+    }
     if is_bool_expr(ctx, cond_expr) && !matches!(cond_expr, Expr::LocalGet(_)) {
         // The lowered cond_val is *normally* NaN-boxed TAG_TRUE or TAG_FALSE,
         // but for optional `boolean` parameters that the caller didn't pass,
@@ -97,17 +114,15 @@ pub(crate) fn lower_truthy(ctx: &mut FnCtx<'_>, cond_val: &str, cond_expr: &Expr
     ctx.block().br(&merge_l);
 
     ctx.current_block = tag_idx;
+    // `undefined`, `null`, `false`, `true` are the four consecutive singleton
+    // tags `TAG_UNDEFINED..=TAG_TRUE`: one unsigned range test decides all of
+    // them and only `true` among them is truthy. (Seven compares before.)
+    debug_assert_eq!(crate::nanbox::TAG_UNDEFINED + 3, crate::nanbox::TAG_TRUE);
     let is_true = ctx.block().icmp_eq(I64, &bits, crate::nanbox::TAG_TRUE_I64);
-    let is_false = ctx
+    let singleton_offset = ctx
         .block()
-        .icmp_eq(I64, &bits, crate::nanbox::TAG_FALSE_I64);
-    let is_undef = ctx
-        .block()
-        .icmp_eq(I64, &bits, crate::nanbox::TAG_UNDEFINED_I64);
-    let is_null = ctx.block().icmp_eq(I64, &bits, crate::nanbox::TAG_NULL_I64);
-    let falsy_a = ctx.block().or(I1, &is_false, &is_undef);
-    let falsy = ctx.block().or(I1, &falsy_a, &is_null);
-    let decided = ctx.block().or(I1, &is_true, &falsy);
+        .sub(I64, &bits, crate::nanbox::TAG_UNDEFINED_I64);
+    let decided = ctx.block().icmp_ult(I64, &singleton_offset, "4");
     let tag_pred = ctx.block().label.clone();
     let obj_idx = ctx.new_block("truthy.obj");
     let obj_l = ctx.block_label(obj_idx);

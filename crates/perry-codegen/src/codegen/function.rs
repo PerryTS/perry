@@ -29,6 +29,10 @@ use super::typed_abi::{
     typed_i1_function_name, typed_i32_function_name, typed_param_reps_for_params,
     typed_string_function_name, TypedFunctionTrampolineKind, TypedParamRep,
 };
+use super::typed_entry::{
+    emit_tiered_entry_dispatch, emit_typed_arg_to_raw_after_entry_tier, typed_entry_arg_guard,
+    EntryArgGuard,
+};
 
 /// Internal body name for a self-recursive allocator whose arena-state pointer
 /// is threaded through recursive calls (#8591).
@@ -215,7 +219,7 @@ fn emit_typed_public_trampoline_fast_value(
             let raw_args: Vec<String> = arg_names
                 .iter()
                 .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
+                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
                 .collect();
             let typed_args: Vec<(LlvmType, &str)> = raw_args
                 .iter()
@@ -228,7 +232,7 @@ fn emit_typed_public_trampoline_fast_value(
             let raw_args: Vec<String> = arg_names
                 .iter()
                 .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
+                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
                 .collect();
             let typed_args: Vec<(LlvmType, &str)> = raw_args
                 .iter()
@@ -242,7 +246,7 @@ fn emit_typed_public_trampoline_fast_value(
             let raw_args: Vec<String> = arg_names
                 .iter()
                 .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
+                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
                 .collect();
             let typed_args: Vec<(LlvmType, &str)> = raw_args
                 .iter()
@@ -257,7 +261,7 @@ fn emit_typed_public_trampoline_fast_value(
             let raw_args: Vec<String> = arg_names
                 .iter()
                 .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
+                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
                 .collect();
             let typed_args: Vec<(LlvmType, &str)> = raw_args
                 .iter()
@@ -302,56 +306,182 @@ fn emit_public_typed_function_trampoline(
     let wf = llmod.define_function(public_name, DOUBLE, params);
     let _ = wf.create_block("entry");
 
-    let mut guard: Option<String> = None;
-    {
+    let guards: Vec<EntryArgGuard> = {
         let blk = wf.block_mut(0).unwrap();
-        for (arg, rep) in arg_names.iter().zip(arg_reps.iter()) {
-            let ok = emit_typed_arg_guard(blk, *rep, arg);
-            guard = Some(match guard {
-                Some(prev) => blk.and(I1, &prev, &ok),
-                None => ok,
-            });
+        arg_names
+            .iter()
+            .zip(arg_reps.iter())
+            .map(|(arg, rep)| typed_entry_arg_guard(blk, *rep, arg))
+            .collect()
+    };
+    let call_args: Vec<(LlvmType, String)> =
+        arg_names.iter().map(|arg| (DOUBLE, arg.clone())).collect();
+    emit_tiered_entry_dispatch(
+        wf,
+        "typed_public",
+        &arg_names,
+        &guards,
+        None,
+        &mut |blk, values| {
+            emit_typed_public_trampoline_fast_value(blk, kind, &typed_name, values, &arg_reps)
+        },
+        &mut |blk| {
+            let args: Vec<(LlvmType, &str)> =
+                call_args.iter().map(|(ty, a)| (*ty, a.as_str())).collect();
+            blk.call(DOUBLE, generic_body_name, &args)
+        },
+    );
+}
+
+/// Upper 32 bits of this module's typed-feedback site ids (see
+/// `FnCtx::typed_feedback_site_id`), which differ between two otherwise
+/// identical bodies only by their local site counter.
+fn spec_site_hash(module_prefix: &str) -> u64 {
+    let mut h = 0x811c9dc5u32;
+    for b in module_prefix.bytes() {
+        h ^= b as u32;
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    (h & 0x7fff_ffff) as u64
+}
+
+/// Whether a declaration-guarded clone lowered to the same code as the generic
+/// body, i.e. no parameter proof its public guard establishes was consumed.
+///
+/// Such a guard is pure cost: `js_param_type_guard` re-parses its descriptor
+/// and walks the value on every call (O(elements) for arrays), then routes to
+/// one of two identical bodies. Only all-boxed plans are compared — a raw
+/// representation changes the ABI and is a use of the proof by itself. The
+/// comparison is textual after renaming what necessarily differs between two
+/// separately lowered copies: the symbol name and define attributes, inline
+/// cache globals and feedback site ids (renumbered in order of appearance).
+fn spec_clone_consumes_no_proof(
+    llmod: &LlModule,
+    public_name: &str,
+    generic_name: &str,
+    plan: &SpecFnPlan,
+    site_hash: &u64,
+) -> bool {
+    if !plan
+        .reps
+        .iter()
+        .all(|rep| matches!(rep, crate::collectors::SpecParamRep::Boxed))
+    {
+        return false;
+    }
+    let spec_name = spec_function_name(public_name, &plan.reps);
+    let (Some(spec), Some(generic)) = (
+        llmod.function_named(&spec_name),
+        llmod.function_named(generic_name),
+    ) else {
+        return false;
+    };
+    let spec_ir = normalize_clone_ir(&spec.to_ir(), *site_hash);
+    let generic_ir = normalize_clone_ir(&generic.to_ir(), *site_hash);
+    spec_ir == generic_ir
+}
+
+/// Per-site global families: each lowered copy of a body mints its own
+/// instance, so two identical bodies differ only in these names.
+const PER_SITE_GLOBAL_PREFIXES: &[&str] = &[
+    "@perry_ic_",
+    "@perry_concat_site_",
+    "@perry_regexp_site_",
+    "@perry_typed_feedback_",
+    "@perry_literal_",
+    "@perry_const_arr_",
+    "@perry_typed_obj_shape_",
+    "@perry_typed_parse_keys_",
+    "@perry_typed_shape_mask_",
+];
+
+/// Canonical text for [`spec_clone_consumes_no_proof`]: drop the `define`
+/// header line, rename per-site globals and feedback site ids by first
+/// appearance. Every other token — callees, module globals, constants, block
+/// labels — must match exactly.
+fn normalize_clone_ir(ir: &str, site_hash: u64) -> String {
+    let mut out = String::with_capacity(ir.len());
+    let mut names: HashMap<String, usize> = HashMap::new();
+    for line in ir.lines().skip(1) {
+        let mut rest = line;
+        loop {
+            let next = PER_SITE_GLOBAL_PREFIXES
+                .iter()
+                .filter_map(|prefix| rest.find(prefix))
+                .min();
+            let Some(pos) = next else {
+                out.push_str(rest);
+                break;
+            };
+            out.push_str(&rest[..pos]);
+            let tail = &rest[pos..];
+            let end = tail[1..]
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '$' || c == '.'))
+                .map_or(tail.len(), |e| e + 1);
+            let fresh = names.len();
+            let id = *names.entry(tail[..end].to_string()).or_insert(fresh);
+            out.push_str(&format!("@SITEGLOBAL{id}"));
+            rest = &tail[end..];
+        }
+        out.push('\n');
+    }
+    // Site ids are the only integer literals carrying this module's hash in
+    // their upper 32 bits.
+    let mut site_ids: HashMap<u64, usize> = HashMap::new();
+    let mut normalized = String::with_capacity(out.len());
+    let bytes = out.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let prev_is_word = i > 0
+            && (bytes[i - 1].is_ascii_alphanumeric()
+                || matches!(bytes[i - 1], b'%' | b'_' | b'.' | b'@' | b'$'));
+        if bytes[i].is_ascii_digit() && !prev_is_word {
+            let mut j = i;
+            while j < bytes.len() && bytes[j].is_ascii_digit() {
+                j += 1;
+            }
+            let digits = &out[i..j];
+            match digits.parse::<u64>() {
+                Ok(value) if site_hash != 0 && value >> 32 == site_hash => {
+                    let fresh = site_ids.len();
+                    let id = *site_ids.entry(value).or_insert(fresh);
+                    normalized.push_str(&format!("SITE{id}"));
+                }
+                _ => normalized.push_str(digits),
+            }
+            i = j;
+        } else {
+            let ch_len = out[i..].chars().next().map_or(1, char::len_utf8);
+            normalized.push_str(&out[i..i + ch_len]);
+            i += ch_len;
         }
     }
+    normalized
+}
 
-    let Some(guard) = guard else {
-        let value = emit_typed_public_trampoline_fast_value(
-            wf.block_mut(0).unwrap(),
-            kind,
-            &typed_name,
-            &arg_names,
-            &arg_reps,
-        );
-        wf.block_mut(0).unwrap().ret(DOUBLE, &value);
-        return;
-    };
-
-    let fast_idx = wf.num_blocks();
-    let fast_label = wf.create_block("typed_public.fast").label.clone();
-    let fallback_idx = wf.num_blocks();
-    let fallback_label = wf.create_block("typed_public.fallback").label.clone();
-    wf.block_mut(0)
-        .unwrap()
-        .cond_br(&guard, &fast_label, &fallback_label);
-
-    let fast_value = emit_typed_public_trampoline_fast_value(
-        wf.block_mut(fast_idx).unwrap(),
-        kind,
-        &typed_name,
-        &arg_names,
-        &arg_reps,
-    );
-    wf.block_mut(fast_idx).unwrap().ret(DOUBLE, &fast_value);
-
-    let call_args: Vec<(LlvmType, &str)> =
-        arg_names.iter().map(|arg| (DOUBLE, arg.as_str())).collect();
-    let fallback_value =
-        wf.block_mut(fallback_idx)
-            .unwrap()
-            .call(DOUBLE, generic_body_name, &call_args);
-    wf.block_mut(fallback_idx)
-        .unwrap()
-        .ret(DOUBLE, &fallback_value);
+/// Public entry that forwards every call to the generic body.
+fn emit_public_forwarder(
+    llmod: &mut LlModule,
+    f: &Function,
+    public_name: &str,
+    generic_body_name: &str,
+) {
+    let params: Vec<(LlvmType, String)> = f
+        .params
+        .iter()
+        .map(|p| (DOUBLE, format!("%arg{}", p.id)))
+        .collect();
+    let wf = llmod.define_function(public_name, DOUBLE, params);
+    let _ = wf.create_block("entry");
+    let args: Vec<(LlvmType, String)> = f
+        .params
+        .iter()
+        .map(|p| (DOUBLE, format!("%arg{}", p.id)))
+        .collect();
+    let call_args: Vec<(LlvmType, &str)> = args.iter().map(|(ty, a)| (*ty, a.as_str())).collect();
+    let blk = wf.block_mut(0).unwrap();
+    let value = blk.call(DOUBLE, generic_body_name, &call_args);
+    blk.ret(DOUBLE, &value);
 }
 
 /// Public JSValue entry for a declaration-guarded full-body clone. Unknown
@@ -379,123 +509,97 @@ fn emit_public_spec_function_trampoline(
     wf.no_inline = true;
     let _ = wf.create_block("entry");
 
-    let mut guard: Option<String> = None;
-    {
+    let guards: Vec<EntryArgGuard> = {
         let blk = wf.block_mut(0).unwrap();
-        for ((arg, rep), descriptor) in arg_names
+        arg_names
             .iter()
             .zip(plan.reps.iter())
             .zip(plan.guards.iter())
-        {
-            let rep_guard = match rep {
-                crate::collectors::SpecParamRep::I32 => {
-                    Some(emit_typed_arg_guard(blk, TypedParamRep::I32, arg))
+            .map(|((arg, rep), descriptor)| {
+                let mut guard = EntryArgGuard::default();
+                let mut exact: Vec<String> = Vec::new();
+                match rep {
+                    crate::collectors::SpecParamRep::I32 => {
+                        exact.push(emit_typed_arg_guard(blk, TypedParamRep::I32, arg))
+                    }
+                    crate::collectors::SpecParamRep::F64 => guard.number = true,
+                    crate::collectors::SpecParamRep::Boxed
+                    | crate::collectors::SpecParamRep::NumberArray => {}
+                    // Guarded plans never carry TaPtr: its raw pointer contract is
+                    // admitted only by construction at a direct call site.
+                    crate::collectors::SpecParamRep::TaPtr { .. } => {
+                        exact.push("false".to_string())
+                    }
                 }
-                crate::collectors::SpecParamRep::F64 => {
-                    Some(emit_typed_arg_guard(blk, TypedParamRep::F64, arg))
+                if let Some(descriptor) = descriptor {
+                    match super::param_guard::scalar_descriptor_rep(&descriptor.descriptor) {
+                        // A Number proof: plain doubles in tier 1; an int32 box
+                        // reaches the clone converted to the equal double, so a
+                        // body that consumes the proof never sees a tagged box.
+                        Some(TypedParamRep::F64) => guard.number = true,
+                        // (#8079) Scalar proof: the typed-abi leaf guard decides
+                        // the exact same predicate without the interpretive
+                        // validator's per-call descriptor parse + state init.
+                        Some(rep) => exact.push(emit_typed_arg_guard(blk, rep, arg)),
+                        None => {
+                            let raw = blk.call(
+                                I32,
+                                "js_param_type_guard",
+                                &[
+                                    (DOUBLE, arg.as_str()),
+                                    (PTR, &format!("@{}", descriptor.descriptor_name)),
+                                    (I32, &descriptor.descriptor.len().to_string()),
+                                ],
+                            );
+                            exact.push(blk.icmp_ne(I32, &raw, "0"));
+                        }
+                    }
                 }
-                crate::collectors::SpecParamRep::Boxed
-                | crate::collectors::SpecParamRep::NumberArray => None,
-                // Guarded plans never carry TaPtr: its raw pointer contract is
-                // admitted only by construction at a direct call site.
-                crate::collectors::SpecParamRep::TaPtr { .. } => Some("false".to_string()),
-            };
-            if let Some(ok) = rep_guard {
-                guard = Some(match guard {
-                    Some(prev) => blk.and(I1, &prev, &ok),
-                    None => ok,
-                });
-            }
-            if let Some(descriptor) = descriptor {
-                let ok = if let Some(rep) =
-                    super::param_guard::scalar_descriptor_rep(&descriptor.descriptor)
-                {
-                    // (#8079) Scalar proof: the typed-abi leaf guard decides
-                    // the exact same predicate without the interpretive
-                    // validator's per-call descriptor parse + state init.
-                    emit_typed_arg_guard(blk, rep, arg)
-                } else {
-                    let raw = blk.call(
-                        I32,
-                        "js_param_type_guard",
-                        &[
-                            (DOUBLE, arg.as_str()),
-                            (PTR, &format!("@{}", descriptor.descriptor_name)),
-                            (I32, &descriptor.descriptor.len().to_string()),
-                        ],
-                    );
-                    blk.icmp_ne(I32, &raw, "0")
-                };
-                guard = Some(match guard {
-                    Some(prev) => blk.and(I1, &prev, &ok),
-                    None => ok,
-                });
-            }
-        }
-    }
-
-    let Some(guard) = guard else {
-        // Plan construction requires either a raw scalar guard or an ordinary
-        // descriptor. Stay conservative if that invariant is ever weakened.
-        let call_args: Vec<(LlvmType, &str)> =
-            arg_names.iter().map(|arg| (DOUBLE, arg.as_str())).collect();
-        let value = wf
-            .block_mut(0)
-            .unwrap()
-            .call(DOUBLE, generic_body_name, &call_args);
-        wf.block_mut(0).unwrap().ret(DOUBLE, &value);
-        return;
+                guard.exact = exact.into_iter().reduce(|prev, ok| blk.and(I1, &prev, &ok));
+                guard
+            })
+            .collect()
     };
 
-    let fast_idx = wf.num_blocks();
-    let fast_label = wf.create_block("spec_public.fast").label.clone();
-    let fallback_idx = wf.num_blocks();
-    let fallback_label = wf.create_block("spec_public.fallback").label.clone();
-    wf.block_mut(0)
-        .unwrap()
-        .cond_br(&guard, &fast_label, &fallback_label);
-
-    let mut raw_args: Vec<(LlvmType, String)> = Vec::with_capacity(arg_names.len());
-    {
-        let blk = wf.block_mut(fast_idx).unwrap();
-        for (arg, rep) in arg_names.iter().zip(plan.reps.iter()) {
-            match rep {
-                crate::collectors::SpecParamRep::Boxed
-                | crate::collectors::SpecParamRep::NumberArray => {
-                    raw_args.push((DOUBLE, arg.clone()));
-                }
-                crate::collectors::SpecParamRep::I32 => {
-                    raw_args.push((I32, emit_typed_arg_to_raw(blk, TypedParamRep::I32, arg)))
-                }
-                crate::collectors::SpecParamRep::F64 => {
-                    raw_args.push((DOUBLE, emit_typed_arg_to_raw(blk, TypedParamRep::F64, arg)))
-                }
-                crate::collectors::SpecParamRep::TaPtr { .. } => {
-                    let bits = blk.bitcast_double_to_i64(arg);
-                    raw_args.push((I64, blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64)));
-                }
-            }
-        }
-    }
-    let fast_args: Vec<(LlvmType, &str)> = raw_args
-        .iter()
-        .map(|(ty, arg)| (*ty, arg.as_str()))
-        .collect();
-    let fast_value = wf
-        .block_mut(fast_idx)
-        .unwrap()
-        .call(DOUBLE, &spec_name, &fast_args);
-    wf.block_mut(fast_idx).unwrap().ret(DOUBLE, &fast_value);
-
-    let fallback_args: Vec<(LlvmType, &str)> =
-        arg_names.iter().map(|arg| (DOUBLE, arg.as_str())).collect();
-    let fallback_value =
-        wf.block_mut(fallback_idx)
-            .unwrap()
-            .call(DOUBLE, generic_body_name, &fallback_args);
-    wf.block_mut(fallback_idx)
-        .unwrap()
-        .ret(DOUBLE, &fallback_value);
+    let fallback_args: Vec<String> = arg_names.clone();
+    let reps = plan.reps.clone();
+    emit_tiered_entry_dispatch(
+        wf,
+        "spec_public",
+        &arg_names,
+        &guards,
+        None,
+        &mut |blk, values| {
+            let raw_args: Vec<(LlvmType, String)> = values
+                .iter()
+                .zip(reps.iter())
+                .map(|(value, rep)| match rep {
+                    crate::collectors::SpecParamRep::Boxed
+                    | crate::collectors::SpecParamRep::NumberArray
+                    | crate::collectors::SpecParamRep::F64 => (DOUBLE, value.clone()),
+                    crate::collectors::SpecParamRep::I32 => {
+                        (I32, emit_typed_arg_to_raw(blk, TypedParamRep::I32, value))
+                    }
+                    crate::collectors::SpecParamRep::TaPtr { .. } => {
+                        let bits = blk.bitcast_double_to_i64(value);
+                        (I64, blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64))
+                    }
+                })
+                .collect();
+            let fast_args: Vec<(LlvmType, &str)> = raw_args
+                .iter()
+                .map(|(ty, arg)| (*ty, arg.as_str()))
+                .collect();
+            blk.call(DOUBLE, &spec_name, &fast_args)
+        },
+        &mut |blk| {
+            let args: Vec<(LlvmType, &str)> = fallback_args
+                .iter()
+                .map(|arg| (DOUBLE, arg.as_str()))
+                .collect();
+            blk.call(DOUBLE, generic_body_name, &args)
+        },
+    );
 }
 
 /// Compile a single user function into the module.
@@ -884,6 +988,10 @@ pub(super) fn compile_function(
                 .collect()
         })
         .unwrap_or_default();
+    let spec_bool_params: HashSet<u32> = spec_param_proofs
+        .iter()
+        .filter_map(|(id, ty)| matches!(ty, perry_hir::types::Type::Boolean).then_some(*id))
+        .collect();
     let spec_numeric_params: HashSet<u32> = spec_param_proofs
         .iter()
         .filter_map(|(id, ty)| {
@@ -1177,6 +1285,7 @@ pub(super) fn compile_function(
         spec_ta_bindings: &cross_module.spec_ta_bindings,
         spec_ta_ready: std::collections::HashSet::new(),
         spec_i32_params: spec_i32_params.clone(),
+        spec_bool_params,
         i1_local_slots: HashMap::new(),
         index_used_locals: native_facts.index_used_locals(),
         strictly_i32_bounded_locals: native_facts.strictly_i32_bounded_locals(),
@@ -1448,6 +1557,7 @@ pub(super) fn compile_function(
             ctx.block().ret(DOUBLE, &undef);
         }
     }
+    let site_hash = spec_site_hash(ctx.strings.module_prefix());
     let ic_globals = std::mem::take(&mut ctx.ic_globals);
     let typed_parse_rodata = std::mem::take(&mut ctx.typed_parse_rodata);
     let ic_end = ctx.ic_site_counter;
@@ -1470,7 +1580,13 @@ pub(super) fn compile_function(
     if let Some(kind) = typed_public_trampoline {
         emit_public_typed_function_trampoline(llmod, f, &public_llvm_name, &llvm_name, kind);
     } else if let Some(plan) = guarded_public_plan.as_ref() {
-        emit_public_spec_function_trampoline(llmod, f, &public_llvm_name, &llvm_name, plan);
+        if spec_clone_consumes_no_proof(llmod, &public_llvm_name, &llvm_name, plan, &site_hash) {
+            // The guard would decide between two identical bodies: take the
+            // generic body unconditionally and skip the per-call validation.
+            emit_public_forwarder(llmod, f, &public_llvm_name, &llvm_name);
+        } else {
+            emit_public_spec_function_trampoline(llmod, f, &public_llvm_name, &llvm_name, plan);
+        }
     } else if arena_threaded {
         emit_public_arena_threaded_wrapper(llmod, f, &public_llvm_name, &llvm_name);
     }

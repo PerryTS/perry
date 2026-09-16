@@ -34,7 +34,10 @@ struct ActiveFactorySite {
 
 crate::perry_thread_local! {
     static SITE_TEST_HEADERS: RefCell<HashMap<usize, Entry>> = RefCell::new(HashMap::new());
-    static ACTIVE_FACTORY_SITES: RefCell<Vec<ActiveFactorySite>> = RefCell::new(Vec::new());
+    static ACTIVE_FACTORY_SITES: RefCell<crate::exception::CatchStack<ActiveFactorySite>> =
+        RefCell::new(crate::exception::CatchStack::new(
+            crate::exception::catch_subsystem::REGEX_FACTORY,
+        ));
 }
 
 const BUILTIN_TEST_MARKER: u64 = crate::value::TAG_MARKER;

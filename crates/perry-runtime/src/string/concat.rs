@@ -756,10 +756,7 @@ pub extern "C" fn js_string_concat_value(
                 // Fast itoa for common positive integers
                 num_len = fast_itoa_u32(n as u32, &mut num_buf);
             } else {
-                let s = format!("{}", n);
-                let len = s.len().min(num_buf.len());
-                num_buf[..len].copy_from_slice(&s.as_bytes()[..len]);
-                num_len = len;
+                num_len = fast_itoa_i64(n, &mut num_buf);
             }
         } else if value.is_nan() {
             num_buf[..3].copy_from_slice(b"NaN");
@@ -778,10 +775,7 @@ pub extern "C" fn js_string_concat_value(
         } else {
             // #3987: match ECMAScript NumberToString (scientific notation for
             // |n| >= 1e21 / < 1e-6) instead of Rust's full-decimal `{}`.
-            let s = super::format::js_format_f64(value);
-            let len = s.len().min(num_buf.len());
-            num_buf[..len].copy_from_slice(&s.as_bytes()[..len]);
-            num_len = len;
+            num_len = format_ryu_js_into(value, &mut num_buf);
         }
 
         // Single allocation for prefix + number string. `Some` from the
@@ -1357,10 +1351,7 @@ fn concat_chain_sized<const MAX_PARTS: usize>(parts: *const f64, n: usize) -> *m
                 if v >= 0 {
                     fast_itoa_u32(v as u32, buf)
                 } else {
-                    let s = format!("{}", v);
-                    let l = s.len().min(32);
-                    buf[..l].copy_from_slice(&s.as_bytes()[..l]);
-                    l
+                    fast_itoa_i64(v as i64, buf)
                 }
             };
             piece_ptrs[i] = num_bufs[i].as_ptr() as *const u8;
@@ -1424,10 +1415,7 @@ pub(crate) fn format_number_into(value: f64, buf: &mut [u8; 32]) -> usize {
         if (0..=999_999_999).contains(&n) {
             return fast_itoa_u32(n as u32, buf);
         }
-        let s = format!("{}", n);
-        let len = s.len().min(buf.len());
-        buf[..len].copy_from_slice(&s.as_bytes()[..len]);
-        return len;
+        return fast_itoa_i64(n, buf);
     }
     if value.is_nan() {
         buf[..3].copy_from_slice(b"NaN");
@@ -1447,10 +1435,7 @@ pub(crate) fn format_number_into(value: f64, buf: &mut [u8; 32]) -> usize {
     }
     // #3987: match ECMAScript NumberToString (scientific notation for
     // |n| >= 1e21 / < 1e-6) instead of Rust's full-decimal `{}`.
-    let s = super::format::js_format_f64(value);
-    let len = s.len().min(buf.len());
-    buf[..len].copy_from_slice(&s.as_bytes()[..len]);
-    len
+    format_ryu_js_into(value, buf)
 }
 
 /// Fused value + string concatenation (value on the LEFT, string on the RIGHT).
@@ -1489,10 +1474,7 @@ pub extern "C" fn js_value_concat_string(
             if (0..=999_999_999).contains(&n) {
                 num_len = fast_itoa_u32(n as u32, &mut num_buf);
             } else {
-                let s = format!("{}", n);
-                let len = s.len().min(num_buf.len());
-                num_buf[..len].copy_from_slice(&s.as_bytes()[..len]);
-                num_len = len;
+                num_len = fast_itoa_i64(n, &mut num_buf);
             }
         } else if value.is_nan() {
             num_buf[..3].copy_from_slice(b"NaN");
@@ -1511,10 +1493,7 @@ pub extern "C" fn js_value_concat_string(
         } else {
             // #3987: match ECMAScript NumberToString (scientific notation for
             // |n| >= 1e21 / < 1e-6) instead of Rust's full-decimal `{}`.
-            let s = super::format::js_format_f64(value);
-            let len = s.len().min(num_buf.len());
-            num_buf[..len].copy_from_slice(&s.as_bytes()[..len]);
-            num_len = len;
+            num_len = format_ryu_js_into(value, &mut num_buf);
         }
 
         let total_blen = num_len + suffix_blen as usize;
@@ -1605,6 +1584,44 @@ pub unsafe extern "C" fn js_value_add_string(l_value: f64, r_value: f64) -> f64 
         return crate::value::js_nanbox_string(out as i64);
     }
     crate::value::js_dynamic_string_or_number_add(l_value, r_value)
+}
+
+/// Signed decimal into a stack buffer; the concat paths' replacement for
+/// `format!("{}", n)`, which allocated and freed a heap `String` per piece.
+/// Every caller passes a value with `|n| < 1e15`, so 32 bytes always fit.
+#[inline]
+pub(crate) fn fast_itoa_i64(n: i64, buf: &mut [u8; 32]) -> usize {
+    if (0..=u32::MAX as i64).contains(&n) {
+        return fast_itoa_u32(n as u32, buf);
+    }
+    let negative = n < 0;
+    let mut v = n.unsigned_abs();
+    let digits = v.ilog10() as usize + 1;
+    let len = digits + usize::from(negative);
+    if negative {
+        buf[0] = b'-';
+    }
+    let mut pos = len;
+    while v > 0 {
+        pos -= 1;
+        buf[pos] = b'0' + (v % 10) as u8;
+        v /= 10;
+    }
+    len
+}
+
+/// ECMAScript `Number::toString` for a finite value outside the integer fast
+/// path, written straight into a stack buffer. `ryu-js` supplies the even
+/// tie-break and the fixed/scientific thresholds (#3987), exactly as
+/// `js_format_f64` does, without the intermediate heap `String`. Its longest
+/// output (sign, 17 digits, point, exponent) is 25 bytes.
+#[inline]
+pub(crate) fn format_ryu_js_into(value: f64, buf: &mut [u8; 32]) -> usize {
+    let mut ryu = ryu_js::Buffer::new();
+    let bytes = ryu.format_finite(value).as_bytes();
+    let len = bytes.len().min(buf.len());
+    buf[..len].copy_from_slice(&bytes[..len]);
+    len
 }
 
 /// Fast integer-to-ASCII formatting into a provided buffer.

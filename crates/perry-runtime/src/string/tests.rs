@@ -83,6 +83,90 @@ fn number_to_string_million_seeded_doubles_match_the_ecmascript_formatter() {
     }
 }
 
+/// The concat/`toString` paths format into a stack buffer instead of through
+/// `js_format_f64`'s heap `String`; both must print every value identically.
+#[test]
+fn stack_number_formatting_matches_js_format_f64() {
+    fn stack(value: f64) -> String {
+        let mut buf = [0u8; 32];
+        let len = super::concat::format_number_into(value, &mut buf);
+        String::from_utf8(buf[..len].to_vec()).expect("ASCII")
+    }
+    let edges = [
+        0.0,
+        -0.0,
+        1.0,
+        -1.0,
+        7.0,
+        999_999_999.0,
+        1_000_000_000.0,
+        4_294_967_295.0,
+        4_294_967_296.0,
+        -4_294_967_296.0,
+        -2_147_483_648.0,
+        999_999_999_999_999.0,
+        -999_999_999_999_999.0,
+        999_999_999_999_999.9,
+        1e15,
+        -1e15,
+        1e21,
+        1e-7,
+        1e-6,
+        0.5,
+        -0.5,
+        714_286.214_285_714_3,
+        f64::MAX,
+        -f64::MAX,
+        f64::MIN_POSITIVE,
+        f64::from_bits(1),
+        f64::EPSILON,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NAN,
+    ];
+    for value in edges {
+        assert_eq!(
+            stack(value),
+            js_format_f64(value),
+            "{:016x}",
+            value.to_bits()
+        );
+    }
+    let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+    for index in 0..200_000 {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        // Alternate raw bit patterns (every magnitude and subnormals) with
+        // integral values across the i64 fast path's whole admitted range.
+        let value = if index % 2 == 0 {
+            f64::from_bits(seed)
+        } else {
+            ((seed >> 14) as i64 - (1i64 << 49)) as f64
+        };
+        assert_eq!(
+            stack(value),
+            js_format_f64(value),
+            "index {index}, {:016x}",
+            value.to_bits()
+        );
+    }
+    let mut buf = [0u8; 32];
+    for n in [
+        0i64,
+        9,
+        -9,
+        10,
+        -10,
+        i32::MIN as i64,
+        u32::MAX as i64 + 1,
+        -999_999_999_999_999,
+    ] {
+        let len = super::concat::fast_itoa_i64(n, &mut buf);
+        assert_eq!(std::str::from_utf8(&buf[..len]).unwrap(), n.to_string());
+    }
+}
+
 #[test]
 fn test_string_create() {
     let data = b"hello";

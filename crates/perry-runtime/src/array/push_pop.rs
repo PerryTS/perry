@@ -680,6 +680,9 @@ pub extern "C" fn js_array_push_f64(arr: *mut ArrayHeader, value: f64) -> *mut A
     // proxy paths below (mirrors the object-field demote in
     // `runtime_store_jsvalue_slot`).
     crate::string::js_string_addref_if_heap_string(value);
+    if let Some(plain) = direct_plain_push_receiver(arr) {
+        return unsafe { js_array_push_f64_resolved(plain, value) };
+    }
     // #5135: a Proxy whose static type is an array (immer drafts) reaches here
     // with the masked proxy id. Perform the spec `Array.prototype.push` for a
     // single element directly through the proxy's `get`/`set` traps:
@@ -770,6 +773,32 @@ unsafe fn js_array_push_f64_resolved(arr: *mut ArrayHeader, value: f64) -> *mut 
     arr
 }
 
+/// A receiver an append can store into through [`js_array_push_f64_resolved`]
+/// without the tracked-allocation resolver or the complete exotic predicate:
+/// a live, non-forwarded, sane ordinary Array whose own header carries no
+/// indexed descriptors while no prototype index is installed anywhere (the
+/// sticky byte the generated element guards read). Those are exactly the
+/// conditions under which `push`'s observable `Set` equals the dense append,
+/// so both the internal CreateDataProperty append and the user-observable
+/// `Array.prototype.push` may take it. Everything else — forwarding stubs,
+/// lazy/external receivers, Proxies, subclasses, typed arrays — returns `None`
+/// and keeps its complete route.
+#[inline(always)]
+fn direct_plain_push_receiver(arr: *mut ArrayHeader) -> Option<*mut ArrayHeader> {
+    unsafe { crate::value::addr_class::try_read_gc_header(arr as usize) }
+        .filter(|header| {
+            header.obj_type == crate::gc::GC_TYPE_ARRAY
+                && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+                && header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS == 0
+                && super::PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed) == 0
+        })
+        .and_then(|_| unsafe {
+            let length = (*arr).length;
+            let capacity = (*arr).capacity;
+            (length <= capacity && length <= 100_000_000).then_some(arr)
+        })
+}
+
 /// Single-element push for a value constructively proved by generated code to
 /// be a nonnegative signed-i32 Number. Besides avoiding value classification,
 /// this entry returns the semantic push result through `new_length`, so the
@@ -811,19 +840,7 @@ pub extern "C" fn js_array_push_u31_with_length(
     // reads those conditions from the header word it already holds plus the
     // sticky prototype-invalidation byte the generated guards use; the
     // resolved arm asks the complete predicate.
-    let direct_plain = unsafe { crate::value::addr_class::try_read_gc_header(arr as usize) }
-        .filter(|header| {
-            header.obj_type == crate::gc::GC_TYPE_ARRAY
-                && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-                && header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS == 0
-                && super::PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed) == 0
-        })
-        .and_then(|_| unsafe {
-            let length = (*arr).length;
-            let capacity = (*arr).capacity;
-            (length <= capacity && length <= 100_000_000).then_some(arr)
-        });
-    if let Some(cleaned) = direct_plain {
+    if let Some(cleaned) = direct_plain_push_receiver(arr) {
         let pushed = unsafe { js_array_push_f64_resolved(cleaned, number) };
         if !new_length.is_null() {
             unsafe { *new_length = (*pushed).length };
@@ -874,6 +891,10 @@ static KEEP_JS_ARRAY_PUSH_U31_WITH_LENGTH: extern "C" fn(
 /// receiver or its prototype chain is exotic.
 #[no_mangle]
 pub extern "C" fn js_array_push_f64_spec(arr: *mut ArrayHeader, value: f64) -> *mut ArrayHeader {
+    if let Some(plain) = direct_plain_push_receiver(arr) {
+        crate::string::js_string_addref_if_heap_string(value);
+        return unsafe { js_array_push_f64_resolved(plain, value) };
+    }
     if array_ptr_as_proxy(arr).is_some() {
         return js_array_push_f64(arr, value);
     }

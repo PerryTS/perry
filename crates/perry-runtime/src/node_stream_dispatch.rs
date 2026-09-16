@@ -9,18 +9,18 @@ use crate::object::{
 };
 use crate::value::JSValue;
 
-pub(super) type StubFn = unsafe extern "C" fn();
+pub(crate) type StubFn = unsafe extern "C" fn();
 
 #[allow(clippy::missing_transmute_annotations)]
-pub(super) fn cast0(f: extern "C" fn(*const ClosureHeader) -> f64) -> StubFn {
+pub(crate) fn cast0(f: extern "C" fn(*const ClosureHeader) -> f64) -> StubFn {
     unsafe { std::mem::transmute(f) }
 }
 #[allow(clippy::missing_transmute_annotations)]
-pub(super) fn cast1(f: extern "C" fn(*const ClosureHeader, f64) -> f64) -> StubFn {
+pub(crate) fn cast1(f: extern "C" fn(*const ClosureHeader, f64) -> f64) -> StubFn {
     unsafe { std::mem::transmute(f) }
 }
 #[allow(clippy::missing_transmute_annotations)]
-pub(super) fn cast2(f: extern "C" fn(*const ClosureHeader, f64, f64) -> f64) -> StubFn {
+pub(crate) fn cast2(f: extern "C" fn(*const ClosureHeader, f64, f64) -> f64) -> StubFn {
     unsafe { std::mem::transmute(f) }
 }
 #[allow(clippy::missing_transmute_annotations)]
@@ -153,7 +153,7 @@ fn class_chain_overrides(class_id: u32, name: &str) -> bool {
     class_id != 0 && crate::object::method_owner_class_id(class_id, name).is_some()
 }
 
-pub(super) fn install_methods_on_existing_object(
+pub(crate) fn install_methods_on_existing_object(
     obj: *mut ObjectHeader,
     this_value: f64,
     methods: &[(&str, StubFn)],

@@ -86,6 +86,7 @@ pub(crate) enum NativeInstanceBase {
     Event,
     CustomEvent,
     DomException,
+    LruCache,
 }
 
 /// The native base a parent NAME denotes, if any.
@@ -111,6 +112,14 @@ pub(crate) fn native_instance_base(name: &str) -> Option<NativeInstanceBase> {
         "Event" => Some(NativeInstanceBase::Event),
         "CustomEvent" => Some(NativeInstanceBase::CustomEvent),
         "DOMException" => Some(NativeInstanceBase::DomException),
+        // #10293: `lru-cache`'s `LRUCache` is one of these too. It is a
+        // compile-time binding with no runtime class value, so `super(opts)`
+        // installs its surface onto `this` exactly like `EventEmitter` — and a
+        // subclass with NO constructor writes no `super()`, so without this arm
+        // `class C extends LRUCache {}` constructed bare and `c.set(...)` threw
+        // "set is not a function". The explicit-`super()` arm in
+        // `expr/this_super_call.rs` covers only the written-constructor case.
+        "LRUCache" => Some(NativeInstanceBase::LruCache),
         _ => None,
     }
 }
@@ -175,6 +184,16 @@ pub(crate) fn emit_native_instance_base_init(
             // The bare emitter seeds no state from its options bag, so the args
             // (already lowered for their side effects) are not forwarded.
             crate::expr::lower_event_emitter_subclass_init(ctx, this_box);
+        }
+        NativeInstanceBase::LruCache => {
+            // Unlike the emitter, the options bag IS load-bearing (`{ max }` is
+            // required by the binding), so forward the first argument — what a
+            // written `super(opts)` would have passed.
+            let options = lowered_args
+                .first()
+                .cloned()
+                .unwrap_or_else(|| undef.clone());
+            crate::expr::lower_lru_cache_subclass_init(ctx, this_box, &options);
         }
         NativeInstanceBase::Array => {
             let n = lowered_args.len();

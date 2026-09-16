@@ -1260,8 +1260,11 @@ crate::perry_thread_local! {
     /// method function. Each vtable call pushes one entry, including an
     /// `undefined` delimiter for ordinary classes, so a nested call never
     /// inherits its caller's private-name environment by accident.
-    static PRIVATE_LEXICAL_BRAND_STACK: std::cell::RefCell<Vec<u64>> =
-        const { std::cell::RefCell::new(Vec::new()) };
+    static PRIVATE_LEXICAL_BRAND_STACK: std::cell::RefCell<crate::exception::CatchStack<u64>> = const {
+        std::cell::RefCell::new(crate::exception::CatchStack::new(
+            crate::exception::catch_subsystem::PRIVATE_LEXICAL_BRAND,
+        ))
+    };
 }
 
 pub(crate) fn private_lexical_brand_push(value: f64) {

@@ -670,6 +670,28 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
                 raise CensusError(f"{name} emits a removed ObjectHeader fact")
             if forbidden_header_offsets(body):
                 raise CensusError(f"{name} emits a removed ObjectHeader fact")
+            if name == "emit_class_field_inline_precheck":
+                # The per-access guard reads the ObjectHeader's first WORD —
+                # `class_id` @0 and the ShapeId @4 in one little-endian i64 —
+                # and compares it with `expected_class_identity`, which puts
+                # the ShapeId in the high 32 bits. All three halves are
+                # required, so dropping the ShapeId from the compare fails.
+                require_code(
+                    body,
+                    r"load\s*\(\s*I64\s*,\s*&obj_ptr\s*\)",
+                    f"{name} loads the ObjectHeader identity word",
+                )
+                require_code(
+                    body,
+                    r"expected_class_identity\s*\(\s*blk\s*,\s*expected_class_id\s*,\s*expected_shape_id\s*\)",
+                    f"{name} compares the identity word with the expected ShapeId",
+                )
+                require_code(
+                    function_body(raw_class_guard, "expected_class_identity"),
+                    r"shl\s*\(\s*I64\s*,\s*&shape_bits\s*,\s*\"32\"\s*\)",
+                    "expected_class_identity places the ShapeId at header offset 4",
+                )
+                continue
             require_code(
                 body,
                 r"\(\s*I64\s*,\s*\"4\"\s*\)",

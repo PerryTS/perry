@@ -37,7 +37,7 @@ use crate::native_value::{
 };
 use crate::rooting;
 use crate::type_analysis::{is_array_expr, is_numeric_expr, is_string_expr, receiver_class_name};
-use crate::types::{DOUBLE, I32, I64};
+use crate::types::{DOUBLE, I1, I32, I64};
 
 use super::index_set_packed_loop::lower_packed_numeric_loop_index_set;
 use super::index_set_typed_array::lower_inline_dyn_typed_array_set;
@@ -284,6 +284,8 @@ fn lower_array_index_set_via_runtime_key(
     // so a rejected element write is a TypeError only in strict code.
     assignment_strict: bool,
 ) -> Result<String> {
+    let layout_note_needed = array_store_needs_layout_note(ctx, object, value);
+    let value_is_numeric = is_numeric_expr(ctx, value);
     // #7341, same hazard as the packed path: the receiver is live across both
     // `index` and `value` lowering, and an allocating RHS is a collection
     // point. Without this the store writes through a pre-evacuation address.
@@ -309,46 +311,116 @@ fn lower_array_index_set_via_runtime_key(
             Ok((idx_double, value_needs_barrier, val_double, val_bits))
         },
         |ctx, vals, (idx_double, value_needs_barrier, val_double, val_bits)| {
-            let arr_box = &vals[0];
-            let arr_handle = {
+            let arr_box = vals[0].clone();
+            // The key is only statically NUMERIC: a fractional, negative,
+            // non-finite or >i32 value names a property, not an element, so it
+            // must reach the exact helper. Recognize a canonical element index
+            // at runtime instead of sending every store out of line — the read
+            // side has done this since #7286 (`aidx.canonical`). A rejected key
+            // becomes index -1, which the guarded in-bounds store declines
+            // onto the same helper arm, so the helper is emitted once.
+            let guard_idx_i32 = {
                 let blk = ctx.block();
-                unbox_to_i64(blk, arr_box)
+                let raw_ge_zero = blk.fcmp("oge", &idx_double, "0.0");
+                let raw_le_i32_max = blk.fcmp("ole", &idx_double, "2147483647.0");
+                let raw_in_range = blk.and(I1, &raw_ge_zero, &raw_le_i32_max);
+                // `fptosi` is poison for NaN/out-of-range input: convert the
+                // range-sanitized value.
+                let safe_raw = blk.select(I1, &raw_in_range, DOUBLE, &idx_double, "0.0");
+                let raw_i32 = blk.fptosi(DOUBLE, &safe_raw, I32);
+                let raw_round_trip = blk.sitofp(I32, &raw_i32, DOUBLE);
+                let raw_is_integral = blk.fcmp("oeq", &raw_round_trip, &idx_double);
+                let raw_is_canonical = blk.and(I1, &raw_in_range, &raw_is_integral);
+                let bits = blk.bitcast_double_to_i64(&idx_double);
+                let top16 = blk.lshr(I64, &bits, "48");
+                let is_boxed_i32 = blk.icmp_eq(I64, &top16, crate::nanbox::INT32_TAG_TOP16_I64);
+                let boxed_i32 = blk.trunc(I64, &bits, I32);
+                let boxed_nonnegative = blk.icmp_sge(I32, &boxed_i32, "0");
+                let boxed_is_canonical = blk.and(I1, &is_boxed_i32, &boxed_nonnegative);
+                let canonical = blk.or(I1, &raw_is_canonical, &boxed_is_canonical);
+                let idx_i32 = blk.select(I1, &is_boxed_i32, I32, &boxed_i32, &raw_i32);
+                blk.select(I1, &canonical, I32, &idx_i32, "-1")
             };
-            let site_id = emit_typed_feedback_register_site(
+            super::index_set_guarded::emit_guarded_inbounds_array_store(
                 ctx,
-                TypedFeedbackKind::ArrayElement,
-                source_label,
-                TypedFeedbackContract::array_set_index_or_string(),
-            );
-            let strict_flag = if assignment_strict { "1" } else { "0" };
-            let new_handle = ctx.block().call(
-                I64,
-                "js_typed_feedback_array_set_index_or_string",
-                &[
-                    (I64, &site_id),
-                    (I64, &arr_handle),
-                    (DOUBLE, &idx_double),
-                    (DOUBLE, &val_double),
-                    (I32, strict_flag),
-                ],
-            );
-            if let Expr::LocalGet(id) = object {
-                if let Some(slot) = ctx.locals.get(id).cloned() {
-                    let new_box = nanbox_pointer_inline(ctx.block(), &new_handle);
-                    ctx.block().store(DOUBLE, &new_box, &slot);
-                } else if let Some(global_name) = ctx.module_globals.get(id).cloned() {
-                    let new_box = nanbox_pointer_inline(ctx.block(), &new_handle);
-                    let g_ref = format!("@{}", global_name);
-                    emit_root_nanbox_store_on_block(ctx.block(), &new_box, &g_ref);
-                }
-            }
-            if value_needs_barrier {
-                let arr_bits = ctx.block().bitcast_double_to_i64(arr_box);
-                emit_write_barrier(ctx, &arr_bits, &val_bits);
-            }
+                &arr_box,
+                &guard_idx_i32,
+                &val_double,
+                "idxset.runtime_key",
+                layout_note_needed,
+                value_needs_barrier,
+                value_is_numeric,
+                |ctx| {
+                    emit_array_runtime_key_store(
+                        ctx,
+                        object,
+                        &arr_box,
+                        &idx_double,
+                        &val_double,
+                        &val_bits,
+                        value_needs_barrier,
+                        source_label,
+                        assignment_strict,
+                    );
+                    Ok(())
+                },
+            )?;
             Ok(val_double)
         },
     )
+}
+
+/// The exact store for a numeric key the inline tier declined: the helper
+/// resolves `ToPropertyKey`, extends/reallocates, and returns the live head,
+/// which is written back to a local or module-global receiver.
+#[allow(clippy::too_many_arguments)]
+fn emit_array_runtime_key_store(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    arr_box: &str,
+    idx_double: &str,
+    val_double: &str,
+    val_bits: &str,
+    value_needs_barrier: bool,
+    source_label: &str,
+    assignment_strict: bool,
+) {
+    let arr_handle = {
+        let blk = ctx.block();
+        unbox_to_i64(blk, arr_box)
+    };
+    let site_id = emit_typed_feedback_register_site(
+        ctx,
+        TypedFeedbackKind::ArrayElement,
+        source_label,
+        TypedFeedbackContract::array_set_index_or_string(),
+    );
+    let strict_flag = if assignment_strict { "1" } else { "0" };
+    let new_handle = ctx.block().call(
+        I64,
+        "js_typed_feedback_array_set_index_or_string",
+        &[
+            (I64, &site_id),
+            (I64, &arr_handle),
+            (DOUBLE, idx_double),
+            (DOUBLE, val_double),
+            (I32, strict_flag),
+        ],
+    );
+    if let Expr::LocalGet(id) = object {
+        if let Some(slot) = ctx.locals.get(id).cloned() {
+            let new_box = nanbox_pointer_inline(ctx.block(), &new_handle);
+            ctx.block().store(DOUBLE, &new_box, &slot);
+        } else if let Some(global_name) = ctx.module_globals.get(id).cloned() {
+            let new_box = nanbox_pointer_inline(ctx.block(), &new_handle);
+            let g_ref = format!("@{}", global_name);
+            emit_root_nanbox_store_on_block(ctx.block(), &new_box, &g_ref);
+        }
+    }
+    if value_needs_barrier {
+        let arr_bits = ctx.block().bitcast_double_to_i64(arr_box);
+        emit_write_barrier(ctx, &arr_bits, val_bits);
+    }
 }
 
 /// #9459: the SLOPPY object-by-name tail for `Expr::IndexSet`.
@@ -571,13 +643,17 @@ pub(crate) fn lower(
                         ctx,
                         &[object, index, value],
                         |ctx, vals| {
-                            let blk = ctx.block();
-                            let arr_bits = blk.bitcast_double_to_i64(&vals[0]);
-                            let arr_i64 = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                            let result = blk.call(
-                                DOUBLE,
-                                "js_typed_array_index_set_dynamic",
-                                &[(I64, &arr_i64), (DOUBLE, &vals[1]), (DOUBLE, &vals[2])],
+                            // Same guarded inline store an `any` receiver takes
+                            // (#5525), instead of an unconditional
+                            // `js_typed_array_index_set_dynamic` call per store.
+                            // Its exit, `js_dyn_index_set`, is the complete
+                            // dynamic `[[Set]]`.
+                            let result = lower_inline_dyn_typed_array_set(
+                                ctx,
+                                &vals[0],
+                                &vals[1],
+                                &vals[2],
+                                assignment_strict,
                             );
                             let slow = LoweredValue::js_value(result.clone());
                             ctx.record_lowered_value_with_access_mode(
@@ -602,13 +678,16 @@ pub(crate) fn lower(
                 // Stores fall back for untracked views, unknown bounds, unsafe
                 // conversions, and Uint8ClampedArray's ToUint8Clamp semantics.
                 return rooting::with_operands_rooted(ctx, &[object, index, value], |ctx, vals| {
-                    let blk = ctx.block();
-                    let arr_bits = blk.bitcast_double_to_i64(&vals[0]);
-                    let arr_i64 = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                    let idx_i32 = blk.fptosi(DOUBLE, &vals[1], I32);
-                    blk.call_void(
-                        "js_typed_array_set",
-                        &[(I64, &arr_i64), (I32, &idx_i32), (DOUBLE, &vals[2])],
+                    // The guarded inline typed-array store (#5525) keeps an
+                    // owning numeric typed array out of line only on a guard
+                    // miss; `js_dyn_index_set` owns the rest (views, clamped
+                    // and BigInt kinds, out-of-bounds, a lying annotation).
+                    let _ = lower_inline_dyn_typed_array_set(
+                        ctx,
+                        &vals[0],
+                        &vals[1],
+                        &vals[2],
+                        assignment_strict,
                     );
                     let slow = LoweredValue::js_value(vals[2].clone());
                     ctx.record_lowered_value_with_access_mode(

@@ -17,11 +17,11 @@ use crate::type_analysis::{is_map_expr, is_set_expr, receiver_class_name};
 use crate::types::{DOUBLE, I32, I64};
 
 use super::{
-    can_lower_expr_as_i32_in_current_region, emit_root_nanbox_store_for_expr,
-    emit_root_nanbox_store_on_block, emit_shadow_slot_clear, emit_shadow_slot_update_for_expr,
-    emit_write_barrier, is_global_this_builtin_function_name, lower_expr, lower_expr_as_i32,
-    lower_pod_local_reassignment, materialize_pod_value_copy, nanbox_string_inline, FnCtx,
-    TrustedBoxCapturePtr,
+    can_lower_expr_as_i32_in_current_region, emit_gated_root_nanbox_store,
+    emit_root_nanbox_store_for_expr, emit_root_nanbox_store_on_block, emit_shadow_slot_clear,
+    emit_shadow_slot_update_for_expr, emit_write_barrier, is_global_this_builtin_function_name,
+    lower_expr, lower_expr_as_i32, lower_pod_local_reassignment, materialize_pod_value_copy,
+    nanbox_string_inline, FnCtx, TrustedBoxCapturePtr,
 };
 
 /// Only TDZ-capable source bindings need a named accessor. Ordinary boxes
@@ -275,172 +275,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             //     the namespace-member class case `Lib.A`) lower as
             //     INT32-tagged class ids → typeof reads "number". Emit
             //     "function" to match JS spec for class objects.
-            let typeof_short_circuit: Option<&'static str> = match operand.as_ref() {
-                Expr::ExternFuncRef { name, .. } if ctx.namespace_imports.contains(name) => {
-                    Some("object")
-                }
-                Expr::ExternFuncRef { name, .. } if ctx.class_ids.contains_key(name) => {
-                    Some("function")
-                }
-                Expr::ClassRef(_) => Some("function"),
-                Expr::NativeMethodCall {
-                    module,
-                    class_name: None,
-                    object: Some(_),
-                    method,
-                    ..
-                } if module == "Headers" && is_headers_method_name(method) => Some("function"),
-                // Issue #623: native-module default-imports (`import process
-                // from "node:process"`) lower as `NativeModuleRef`, which the
-                // codegen represents as a `0.0` stub double. `js_value_typeof`
-                // reads it as a number; per spec native-module bindings are
-                // objects.
-                Expr::NativeModuleRef(_) => Some("object"),
-                // Issue #623: bare `typeof globalThis` — perry models the
-                // global object as `GlobalGet(0)` lowering to `0.0`, same
-                // misclassification.
-                Expr::GlobalGet(_) => Some("object"),
-                Expr::PropertyGet {
-                    object, property, ..
-                } => {
-                    // #1380: `typeof set.has` / `typeof map.get` → "function".
-                    // Set/Map methods aren't materialized as real function
-                    // objects — a bare `set.has` read returns the (absent)
-                    // data property, so `js_value_typeof` would report
-                    // "undefined". The receiver type is known here via
-                    // `is_set_expr`/`is_map_expr` (the same routing that makes
-                    // `set.size` resolve to a number), so fold known method
-                    // names to "function". Covers
-                    // `process.allowedNodeEnvironmentFlags` (lowered to a Set)
-                    // whose `.has`/`.size` callers feature-detect with typeof.
-                    if (is_set_expr(ctx, object) && is_set_method_name(property))
-                        || (is_map_expr(ctx, object) && is_map_method_name(property))
-                    {
-                        Some("function")
-                    } else if is_headers_instance_method(ctx, object, property) {
-                        Some("function")
-                    } else if is_classic_stream_instance_method(ctx, object, property) {
-                        Some("function")
-                    } else if let Expr::ExternFuncRef { name, .. } = object.as_ref() {
-                        if ctx.namespace_imports.contains(name)
-                            && ctx.class_ids.contains_key(property)
-                        {
-                            Some("function")
-                        } else {
-                            None
-                        }
-                    } else if matches!(object.as_ref(), Expr::GlobalGet(_)) {
-                        // Issue #623: `(globalThis as any).process` /
-                        // `globalThis.console` — known Node globals that are
-                        // objects in spec. The codegen lowers
-                        // `globalThis.<name>` to a generic property read that
-                        // produces a stub double; typeof would read "number"
-                        // without this short-circuit. Function-shaped globals
-                        // (Buffer, Promise, URL, etc.) intentionally fall
-                        // through so `typeof Buffer === "function"` keeps
-                        // working through the existing class-ref path.
-                        //
-                        // lodash followup: built-in constructors exposed on
-                        // globalThis (`Array`, `Object`, `Function`, …) now
-                        // also lower the bare PropertyGet to a real value
-                        // (a backing-object pointer materialized by
-                        // `js_get_global_this`'s singleton populator).
-                        // Without the typeof short-circuit, `typeof
-                        // globalThis.Array` would read "object" (the value
-                        // is a real pointer); spec says "function". Math /
-                        // JSON / Reflect stay "object" — they're namespaces,
-                        // not constructors.
-                        match property.as_str() {
-                            "process" | "console" | "globalThis" | "performance" | "navigator"
-                            | "crypto" | "localStorage" | "sessionStorage" => Some("object"),
-                            "Math" | "JSON" | "Reflect" | "Atomics" | "Intl" | "Temporal" => {
-                                Some("object")
-                            }
-                            n if is_global_this_builtin_function_name(n) => Some("function"),
-                            _ => None,
-                        }
-                    } else if let Expr::NativeModuleRef(module) = object.as_ref() {
-                        // #1343: `typeof <nativeModule>.<member>` (e.g.
-                        // `typeof crypto.randomBytes`, `typeof process.cwd`).
-                        // A method is only addressable through the call-
-                        // dispatch arms, so reading it as a plain value yields
-                        // the module's `0.0` stub and `js_value_typeof` reports
-                        // "undefined"/"number". Short-circuit only methods and
-                        // exported classes to "function". Properties fall
-                        // through (`None`): their value is materialized for
-                        // real, so the generic typeof already reports the right
-                        // primitive/object kind (`process.pid` → "number",
-                        // `os.EOL` → "string", `crypto.constants` → "object").
-                        if matches!(module.as_str(), "fs" | "node:fs")
-                            && matches!(property.as_str(), "lchmod" | "lchmodSync")
-                            && !fs_lchmod_callable_on_target(ctx.target_triple)
-                        {
-                            None
-                        } else {
-                            match perry_api_manifest::module_has_symbol(module, property) {
-                                Some(e)
-                                    if matches!(
-                                        e.kind,
-                                        perry_api_manifest::ApiKind::Method { .. }
-                                            | perry_api_manifest::ApiKind::Class
-                                    ) =>
-                                {
-                                    Some("function")
-                                }
-                                _ => None,
-                            }
-                        }
-                    } else {
-                        // Refs #915 (gap 2 from #899): `typeof C.staticMethod`
-                        // where `C` is `Expr::ClassRef` or a `LocalGet`
-                        // aliased to a class. Without this fold, the
-                        // generic PropertyGet path returns `undefined`
-                        // for static methods (the runtime `class_has_own_method`
-                        // checks the prototype vtable, not the static
-                        // method registry), so `typeof Cls.pipe` reported
-                        // `"undefined"` instead of `"function"`. The actual
-                        // dispatch fix lives in `lower_call.rs`'s ClassRef
-                        // static-method arm — but a typeof read isn't a
-                        // call, so it needs its own fold here.
-                        let cls_opt: Option<String> = match object.as_ref() {
-                            Expr::ClassRef(cls_name) => Some(cls_name.clone()),
-                            Expr::LocalGet(id) => ctx
-                                .local_id_to_name
-                                .get(id)
-                                .and_then(|name| ctx.local_class_aliases.get(name).cloned()),
-                            _ => None,
-                        };
-                        if let Some(cls) = cls_opt {
-                            // Walk own static methods + extends chain.
-                            let mut cur = Some(cls);
-                            let mut found = false;
-                            while let Some(c) = cur {
-                                if let Some(class_info) = ctx.classes.get(&c) {
-                                    if class_info
-                                        .static_methods
-                                        .iter()
-                                        .any(|m| m.name == *property)
-                                    {
-                                        found = true;
-                                        break;
-                                    }
-                                    cur = class_info.extends_name.clone();
-                                } else {
-                                    break;
-                                }
-                            }
-                            if found {
-                                Some("function")
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    }
-                }
-                _ => None,
-            };
+            let typeof_short_circuit = typeof_compile_time_answer(ctx, operand.as_ref());
             if let Some(s) = typeof_short_circuit {
                 let idx = ctx.strings.intern(s);
                 let entry = ctx.strings.entry(idx);
@@ -1167,19 +1002,68 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // Soft fallback: silently increment a throwaway value.
                 return Ok(double_literal(0.0));
             };
-            let blk = ctx.block();
-            let old = blk.load(DOUBLE, &storage);
-            let old = coerce_old(blk, &old);
-            let new = step_new(blk, &old);
-            if storage_is_root {
-                // Module globals are registered mutable GC roots and route
-                // through the root helper; the raw store below is stack-only.
-                emit_root_nanbox_store_on_block(blk, &new, &storage);
+            let raw_old = ctx.block().load(DOUBLE, &storage);
+            let (old, new) = if needs_numeric_coerce {
+                // A plain double already is its own ToNumeric, and its step is
+                // `± 1.0`: decide that inline and keep `js_to_numeric` /
+                // `js_numeric_step` (BigInt, int32 boxes, objects with
+                // `valueOf`) for tagged values only. The fast result is a
+                // double, so its root store needs no barrier.
+                let plain = crate::codegen::emit_plain_number_test(ctx.block(), &raw_old);
+                let fast_idx = ctx.new_block("update.num.fast");
+                let slow_idx = ctx.new_block("update.num.slow");
+                let merge_idx = ctx.new_block("update.num.merge");
+                let fast_label = ctx.block_label(fast_idx);
+                let slow_label = ctx.block_label(slow_idx);
+                let merge_label = ctx.block_label(merge_idx);
+                ctx.block().cond_br(&plain, &fast_label, &slow_label);
+
+                ctx.current_block = fast_idx;
+                let fast_new = match op {
+                    UpdateOp::Increment => ctx.block().fadd(&raw_old, "1.0"),
+                    UpdateOp::Decrement => ctx.block().fsub(&raw_old, "1.0"),
+                };
+                // GC_STORE_AUDIT(ROOT): a plain double in a registered mutable
+                // root (or a function-local alloca) never needs shading.
+                ctx.block().store(DOUBLE, &fast_new, &storage);
+                let fast_end = ctx.block().label.clone();
+                ctx.block().br(&merge_label);
+
+                ctx.current_block = slow_idx;
+                let slow_old = coerce_old(ctx.block(), &raw_old);
+                let slow_new = step_new(ctx.block(), &slow_old);
+                if storage_is_root {
+                    emit_gated_root_nanbox_store(ctx, &slow_new, &storage);
+                } else {
+                    // GC_STORE_AUDIT(STACK): update writes a function-local
+                    // alloca; module globals use the root helper.
+                    ctx.block().store(DOUBLE, &slow_new, &storage);
+                }
+                let slow_end = ctx.block().label.clone();
+                ctx.block().br(&merge_label);
+
+                ctx.current_block = merge_idx;
+                let old = ctx
+                    .block()
+                    .phi(DOUBLE, &[(&raw_old, &fast_end), (&slow_old, &slow_end)]);
+                let new = ctx
+                    .block()
+                    .phi(DOUBLE, &[(&fast_new, &fast_end), (&slow_new, &slow_end)]);
+                (old, new)
             } else {
-                // GC_STORE_AUDIT(STACK): update writes a function-local alloca;
-                // module globals use the root helper.
-                blk.store(DOUBLE, &new, &storage);
-            }
+                let blk = ctx.block();
+                let new = step_new(blk, &raw_old);
+                if storage_is_root {
+                    // Module globals are registered mutable GC roots and route
+                    // through the root helper; the raw store below is stack-only.
+                    emit_root_nanbox_store_on_block(blk, &new, &storage);
+                } else {
+                    // GC_STORE_AUDIT(STACK): update writes a function-local alloca;
+                    // module globals use the root helper.
+                    blk.store(DOUBLE, &new, &storage);
+                }
+                (raw_old, new)
+            };
             // Keep the parallel i32 counter slot in sync (if active).
             // This costs one `add i32, 1` per iteration but saves a
             // `fptosi double → i32` on every IndexGet/IndexSet use.
@@ -1221,5 +1105,171 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         //   (the non-string side passes through `js_jsvalue_to_string`
         //   which dispatches on the NaN tag at runtime)
         _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
+    }
+}
+
+/// The `typeof` answer for operand shapes whose runtime value representation
+/// collides with a different tag (#574, #623, #1343, #1380, #915). `None`
+/// means the generic lowering applies: the operand's value classified at
+/// runtime. The literal-comparison lowering in `expr::compare` shares this
+/// decision so its integer-tag route can never disagree with `typeof`.
+pub(crate) fn typeof_compile_time_answer(ctx: &FnCtx<'_>, operand: &Expr) -> Option<&'static str> {
+    match operand {
+        Expr::ExternFuncRef { name, .. } if ctx.namespace_imports.contains(name) => Some("object"),
+        Expr::ExternFuncRef { name, .. } if ctx.class_ids.contains_key(name) => Some("function"),
+        Expr::ClassRef(_) => Some("function"),
+        Expr::NativeMethodCall {
+            module,
+            class_name: None,
+            object: Some(_),
+            method,
+            ..
+        } if module == "Headers" && is_headers_method_name(method) => Some("function"),
+        // Issue #623: native-module default-imports (`import process
+        // from "node:process"`) lower as `NativeModuleRef`, which the
+        // codegen represents as a `0.0` stub double. `js_value_typeof`
+        // reads it as a number; per spec native-module bindings are
+        // objects.
+        Expr::NativeModuleRef(_) => Some("object"),
+        // Issue #623: bare `typeof globalThis` — perry models the
+        // global object as `GlobalGet(0)` lowering to `0.0`, same
+        // misclassification.
+        Expr::GlobalGet(_) => Some("object"),
+        Expr::PropertyGet {
+            object, property, ..
+        } => {
+            // #1380: `typeof set.has` / `typeof map.get` → "function".
+            // Set/Map methods aren't materialized as real function
+            // objects — a bare `set.has` read returns the (absent)
+            // data property, so `js_value_typeof` would report
+            // "undefined". The receiver type is known here via
+            // `is_set_expr`/`is_map_expr` (the same routing that makes
+            // `set.size` resolve to a number), so fold known method
+            // names to "function". Covers
+            // `process.allowedNodeEnvironmentFlags` (lowered to a Set)
+            // whose `.has`/`.size` callers feature-detect with typeof.
+            if (is_set_expr(ctx, object) && is_set_method_name(property))
+                || (is_map_expr(ctx, object) && is_map_method_name(property))
+            {
+                Some("function")
+            } else if is_headers_instance_method(ctx, object, property) {
+                Some("function")
+            } else if is_classic_stream_instance_method(ctx, object, property) {
+                Some("function")
+            } else if let Expr::ExternFuncRef { name, .. } = object.as_ref() {
+                if ctx.namespace_imports.contains(name) && ctx.class_ids.contains_key(property) {
+                    Some("function")
+                } else {
+                    None
+                }
+            } else if matches!(object.as_ref(), Expr::GlobalGet(_)) {
+                // Issue #623: `(globalThis as any).process` /
+                // `globalThis.console` — known Node globals that are
+                // objects in spec. The codegen lowers
+                // `globalThis.<name>` to a generic property read that
+                // produces a stub double; typeof would read "number"
+                // without this short-circuit. Function-shaped globals
+                // (Buffer, Promise, URL, etc.) intentionally fall
+                // through so `typeof Buffer === "function"` keeps
+                // working through the existing class-ref path.
+                //
+                // lodash followup: built-in constructors exposed on
+                // globalThis (`Array`, `Object`, `Function`, …) now
+                // also lower the bare PropertyGet to a real value
+                // (a backing-object pointer materialized by
+                // `js_get_global_this`'s singleton populator).
+                // Without the typeof short-circuit, `typeof
+                // globalThis.Array` would read "object" (the value
+                // is a real pointer); spec says "function". Math /
+                // JSON / Reflect stay "object" — they're namespaces,
+                // not constructors.
+                match property.as_str() {
+                    "process" | "console" | "globalThis" | "performance" | "navigator"
+                    | "crypto" | "localStorage" | "sessionStorage" => Some("object"),
+                    "Math" | "JSON" | "Reflect" | "Atomics" | "Intl" | "Temporal" => Some("object"),
+                    n if is_global_this_builtin_function_name(n) => Some("function"),
+                    _ => None,
+                }
+            } else if let Expr::NativeModuleRef(module) = object.as_ref() {
+                // #1343: `typeof <nativeModule>.<member>` (e.g.
+                // `typeof crypto.randomBytes`, `typeof process.cwd`).
+                // A method is only addressable through the call-
+                // dispatch arms, so reading it as a plain value yields
+                // the module's `0.0` stub and `js_value_typeof` reports
+                // "undefined"/"number". Short-circuit only methods and
+                // exported classes to "function". Properties fall
+                // through (`None`): their value is materialized for
+                // real, so the generic typeof already reports the right
+                // primitive/object kind (`process.pid` → "number",
+                // `os.EOL` → "string", `crypto.constants` → "object").
+                if matches!(module.as_str(), "fs" | "node:fs")
+                    && matches!(property.as_str(), "lchmod" | "lchmodSync")
+                    && !fs_lchmod_callable_on_target(ctx.target_triple)
+                {
+                    None
+                } else {
+                    match perry_api_manifest::module_has_symbol(module, property) {
+                        Some(e)
+                            if matches!(
+                                e.kind,
+                                perry_api_manifest::ApiKind::Method { .. }
+                                    | perry_api_manifest::ApiKind::Class
+                            ) =>
+                        {
+                            Some("function")
+                        }
+                        _ => None,
+                    }
+                }
+            } else {
+                // Refs #915 (gap 2 from #899): `typeof C.staticMethod`
+                // where `C` is `Expr::ClassRef` or a `LocalGet`
+                // aliased to a class. Without this fold, the
+                // generic PropertyGet path returns `undefined`
+                // for static methods (the runtime `class_has_own_method`
+                // checks the prototype vtable, not the static
+                // method registry), so `typeof Cls.pipe` reported
+                // `"undefined"` instead of `"function"`. The actual
+                // dispatch fix lives in `lower_call.rs`'s ClassRef
+                // static-method arm — but a typeof read isn't a
+                // call, so it needs its own fold here.
+                let cls_opt: Option<String> = match object.as_ref() {
+                    Expr::ClassRef(cls_name) => Some(cls_name.clone()),
+                    Expr::LocalGet(id) => ctx
+                        .local_id_to_name
+                        .get(id)
+                        .and_then(|name| ctx.local_class_aliases.get(name).cloned()),
+                    _ => None,
+                };
+                if let Some(cls) = cls_opt {
+                    // Walk own static methods + extends chain.
+                    let mut cur = Some(cls);
+                    let mut found = false;
+                    while let Some(c) = cur {
+                        if let Some(class_info) = ctx.classes.get(&c) {
+                            if class_info
+                                .static_methods
+                                .iter()
+                                .any(|m| m.name == *property)
+                            {
+                                found = true;
+                                break;
+                            }
+                            cur = class_info.extends_name.clone();
+                        } else {
+                            break;
+                        }
+                    }
+                    if found {
+                        Some("function")
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+        }
+        _ => None,
     }
 }

@@ -23,7 +23,30 @@ pub(crate) fn replay_old_parent_slot_range_barriers(
     super::barrier::replay_old_parent_slot_range(parent_addr, slots, count);
 }
 
+/// `true` when [`decode_heap_addr`] answers 0 for `bits` from its shape alone:
+/// every double whose high 16 bits are nonzero and every non-pointer tag
+/// (int32, short string, primitive, handle). Such a store publishes no heap
+/// edge, so each slot barrier below would only decode the child, shade
+/// nothing and return — after two `OnceLock` probes and, on the GC-slot
+/// form, a page-map classification of the parent. Everything that can name
+/// a heap object still takes the full barrier.
+///
+/// The test is deliberately a bare shape compare: it is inlined into every
+/// runtime store site, and a `PERRY_GC_TRACE` probe here grew those sites
+/// enough to change LLVM's inlining of their callers. Under the trace the
+/// runtime-side scalar stores skipped here no longer bump `calls` or
+/// `non_pointer_child_skips` — equally, so `calls - non_pointer_child_skips`
+/// (the pointer-store count the counters exist to expose) is unchanged.
+#[inline(always)]
+pub(crate) fn barrier_scalar_child_skips(bits: u64) -> bool {
+    let tag = bits & TAG_MASK;
+    (bits >> 48) != 0 && tag != POINTER_TAG && tag != STRING_TAG && tag != BIGINT_TAG
+}
+
 pub(crate) fn runtime_write_barrier_slot(parent_addr: usize, slot_addr: usize, child_bits: u64) {
+    if barrier_scalar_child_skips(child_bits) {
+        return;
+    }
     if !write_barriers_enabled() {
         incremental_mark_barrier_value(child_bits);
         return;
@@ -136,6 +159,9 @@ pub(crate) fn runtime_write_barrier_external_slot(
     slot_addr: usize,
     child_bits: u64,
 ) {
+    if barrier_scalar_child_skips(child_bits) {
+        return;
+    }
     if !write_barriers_enabled() {
         incremental_mark_barrier_value(child_bits);
         return;
@@ -144,6 +170,9 @@ pub(crate) fn runtime_write_barrier_external_slot(
 }
 
 pub(crate) fn runtime_write_barrier_gc_slot(parent_addr: usize, slot_addr: usize, child_bits: u64) {
+    if barrier_scalar_child_skips(child_bits) {
+        return;
+    }
     if !write_barriers_enabled() {
         incremental_mark_barrier_value(child_bits);
         return;
@@ -370,7 +399,6 @@ pub(super) fn barrier_remembering_active() -> bool {
 /// validated) — the same contract `emit_parent_may_need_remembering_check`
 /// places on its caller.
 #[inline]
-#[cfg(test)]
 pub(crate) unsafe fn newborn_parent_needs_barrier(parent_addr: usize) -> bool {
     if !super::barrier::incremental_mark_barrier_globally_idle() {
         return true;

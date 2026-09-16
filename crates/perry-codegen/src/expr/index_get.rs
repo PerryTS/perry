@@ -1221,14 +1221,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         }
                     }
                     return rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
-                        let blk = ctx.block();
-                        let arr_bits = blk.bitcast_double_to_i64(&vals[0]);
-                        let arr_i64 = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                        let result = blk.call(
-                            DOUBLE,
-                            "js_typed_array_index_get_dynamic",
-                            &[(I64, &arr_i64), (DOUBLE, &vals[1])],
-                        );
+                        // An unproven index on a DECLARED typed array used to go
+                        // straight to `js_typed_array_index_get_dynamic` (a
+                        // registry kind lookup, receiver classification and
+                        // address extraction per read: 299 instructions), while
+                        // the same read through `any` takes the guarded inline
+                        // typed-array arm (60). Use that arm: its exit is the
+                        // complete dynamic `[[Get]]`, which covers views,
+                        // buffers, non-canonical keys and a lying annotation.
+                        let result =
+                            lower_inline_dyn_typed_array_get(ctx, &vals[0], &vals[1], false);
                         let slow = LoweredValue::js_value(result.clone());
                         ctx.record_lowered_value_with_access_mode(
                             "TypedArrayGet",

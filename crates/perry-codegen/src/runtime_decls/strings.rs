@@ -126,6 +126,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("llvm.ceil.f64", DOUBLE, &[DOUBLE]);
     module.declare_function("llvm.fabs.f64", DOUBLE, &[DOUBLE]);
     module.declare_function("llvm.copysign.f64", DOUBLE, &[DOUBLE, DOUBLE]);
+    // Two-argument Math.max / Math.min on plain doubles: NaN-propagating and
+    // ordering -0 below +0, exactly the JS semantics (one fmax/fmin on AArch64).
+    module.declare_function("llvm.maximum.f64", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("llvm.minimum.f64", DOUBLE, &[DOUBLE, DOUBLE]);
     // `llvm.assume` — used by Buffer index-set/get fast paths
     // (`crates/perry-codegen/src/expr.rs::Expr::BufferIndexSet/Get` etc.)
     // and the Buffer numeric-read intrinsics
@@ -1167,6 +1171,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         "js_gc_typed_shape_id_for_keys",
         I32,
         &[I32, I64, I32, PTR, I32, PTR, I32],
+    );
+    module.declare_function(
+        "js_register_imported_class_shape_slot",
+        VOID,
+        &[I32, I32, PTR, PTR, PTR],
     );
     // Inline bump-allocator state accessor + slow path. Ordinary allocation
     // kernels cache `js_inline_arena_state` at function entry. Self-recursive

@@ -133,16 +133,17 @@ pub(crate) use v8_interop::{
     try_static_class_name,
 };
 pub(crate) use write_barrier::{
-    emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_on_block,
-    emit_jsvalue_slot_store_pointer_tested, emit_jsvalue_slot_store_scalar_aware_on_block,
-    emit_jsvalue_slot_store_with_flags_on_block, emit_jsvalue_slot_store_with_value_bits_on_block,
-    emit_layout_note_slot_on_block, emit_may_carry_heap_pointer_check,
-    emit_root_heap_word_store_on_block, emit_root_nanbox_store_for_expr,
-    emit_root_nanbox_store_on_block, emit_scalar_aware_store_gated_on_pointerness,
-    emit_write_barrier, emit_write_barrier_slot_generation_tested,
-    emit_write_barrier_slot_on_block, emit_write_barrier_slot_value_and_generation_tested,
-    lower_array_super_init, lower_event_emitter_async_resource_subclass_init,
-    lower_event_emitter_subclass_init, lower_node_stream_super_init, lower_stream_super_init,
+    emit_array_numeric_write_note_on_block, emit_gated_root_nanbox_store,
+    emit_jsvalue_slot_store_on_block, emit_jsvalue_slot_store_pointer_tested,
+    emit_jsvalue_slot_store_scalar_aware_on_block, emit_jsvalue_slot_store_with_flags_on_block,
+    emit_jsvalue_slot_store_with_value_bits_on_block, emit_layout_note_slot_on_block,
+    emit_may_carry_heap_pointer_check, emit_root_heap_word_store_on_block,
+    emit_root_nanbox_store_for_expr, emit_root_nanbox_store_on_block,
+    emit_scalar_aware_store_gated_on_pointerness, emit_write_barrier,
+    emit_write_barrier_slot_generation_tested, emit_write_barrier_slot_on_block,
+    emit_write_barrier_slot_value_and_generation_tested, lower_array_super_init,
+    lower_event_emitter_async_resource_subclass_init, lower_event_emitter_subclass_init,
+    lower_lru_cache_subclass_init, lower_node_stream_super_init, lower_stream_super_init,
 };
 
 // Issue #1098 phase 3: the `FnCtx` definition stays in this trunk, but its
@@ -160,6 +161,8 @@ mod class_field_barrier_tests;
 #[cfg(test)]
 mod class_field_get_shape_tests;
 mod dispatch;
+#[cfg(test)]
+mod hit_path_access_tests;
 #[cfg(test)]
 mod index_set_barrier_tests;
 mod record_value;
@@ -1256,6 +1259,11 @@ pub(crate) struct FnCtx<'a> {
     /// a (typically self-recursive) call back into the same entry. Empty in
     /// the generic body, in module init, and in every closure.
     pub spec_i32_params: std::collections::HashSet<u32>,
+    /// Parameters of THIS specialized body whose public entry admitted only the
+    /// two boolean tags (a Boolean descriptor guard). While such a parameter
+    /// is never written, its truthiness is tag identity. Empty in the generic
+    /// body, in module init, in methods and in every closure.
+    pub spec_bool_params: std::collections::HashSet<u32>,
 
     /// Parallel `i1` slots for ordinary boolean locals that have stayed inside
     /// the representation-first subset. The generic `double` slot remains as a
@@ -2976,6 +2984,7 @@ pub(crate) mod calls;
 mod child_proc;
 mod closure;
 mod compare;
+pub(crate) use compare::lower_string_literal_strict_eq;
 #[cfg(test)]
 mod compare_tests;
 mod conditional;
@@ -2984,6 +2993,8 @@ mod dyn_extern_i18n;
 mod dynamic_add_tree_tests;
 mod env_clones;
 mod fs_await;
+#[cfg(test)]
+mod hit_path_tests;
 mod index_get;
 #[cfg(test)]
 mod index_get_claim_tests;

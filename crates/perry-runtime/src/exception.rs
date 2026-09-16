@@ -44,6 +44,9 @@ impl JmpBuf {
 
 mod savepoints;
 use savepoints::CatchSavepoint;
+pub(crate) use savepoints::{
+    catch_subsystem, catch_subsystem_used, note_catch_subsystem_used, CatchStack,
+};
 
 extern "C" {
     fn longjmp(env: *mut i32, val: i32) -> !;
@@ -151,10 +154,17 @@ fn try_push_with_kind(kind: HandlerKind) -> *mut i32 {
         }
         let depth = (*s).try_depth;
         let savepoint = CatchSavepoint::capture();
-        (*s).handler_kinds[depth] = kind;
-        (*s).savepoints[depth].write(savepoint);
-        (*s).try_depth += 1;
-        (*s).jump_buffers[depth].as_mut_ptr()
+        // SAFETY: all three slabs are allocated with exactly MAX_TRY_DEPTH
+        // entries in `ExceptionState::new`, and `depth < MAX_TRY_DEPTH` was
+        // checked above; this path runs on every `try` entry.
+        *(&mut (*s).handler_kinds).get_unchecked_mut(depth) = kind;
+        (&mut (*s).savepoints)
+            .get_unchecked_mut(depth)
+            .write(savepoint);
+        (*s).try_depth = depth + 1;
+        (&mut (*s).jump_buffers)
+            .get_unchecked_mut(depth)
+            .as_mut_ptr()
     })
 }
 

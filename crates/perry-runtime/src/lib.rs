@@ -119,6 +119,7 @@ pub mod hot_diag;
 pub mod intl;
 pub mod iter_result;
 pub mod iterator_helpers;
+pub mod lru_subclass;
 pub mod macos_bundle;
 pub mod map;
 pub mod math;
@@ -447,6 +448,7 @@ pub(crate) mod stdlib_pump {
 
     impl PumpDepthGuard {
         fn enter() -> (Self, bool) {
+            crate::exception::note_catch_subsystem_used(crate::exception::catch_subsystem::PUMP);
             PUMP_DEPTH.with(|depth| {
                 let current = depth.get();
                 depth.set(current.saturating_add(1));

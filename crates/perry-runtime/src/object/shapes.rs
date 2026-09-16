@@ -1820,7 +1820,13 @@ unsafe fn object_header_key_count(obj: *const crate::object::ObjectHeader) -> u3
 /// itself.
 #[inline]
 pub(crate) unsafe fn debug_assert_object_shape_parity(obj: *const crate::object::ObjectHeader) {
-    debug_assert_object_shape_parity_for_keys(obj, crate::object::object_keys_array(obj));
+    // The facts only feed a `debug_assert!`, but the descriptor probe and the
+    // out-of-line keys-length read are not provably pure to LLVM, so without
+    // this gate release builds executed both on every object birth and shape
+    // publish (~80 instructions per `new C()`).
+    if cfg!(debug_assertions) {
+        debug_assert_object_shape_parity_for_keys(obj, crate::object::object_keys_array(obj));
+    }
 }
 
 /// Parity against an EXPLICIT keys edge.
@@ -1833,6 +1839,9 @@ pub(crate) unsafe fn debug_assert_object_shape_parity_for_keys(
     obj: *const crate::object::ObjectHeader,
     keys: *mut ArrayHeader,
 ) {
+    if !cfg!(debug_assertions) {
+        return;
+    }
     let id = object_shape_stamp(obj);
     if id != 0 {
         let key_count = if keys.is_null() {

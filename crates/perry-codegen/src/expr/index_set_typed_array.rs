@@ -85,10 +85,22 @@ pub(super) fn lower_inline_dyn_typed_array_set(
         let kind_ok = blk.icmp_ule(I64, &kind, "7");
         let idx_ge0 = blk.fcmp("oge", idx_d, "0.0");
         let idx_lt = blk.fcmp("olt", idx_d, "4294967296.0");
+        // The store arms below apply ToNumber's identity only: a float kind
+        // writes the double's bits and the integer kinds ToInt32 them. Any
+        // NaN-boxed value — a string, boolean, null/undefined, object with
+        // `valueOf`, or an int32-boxed number — needs the runtime's full
+        // ToNumber first. Without this a warmed site stored the box's bits
+        // raw (`f64[i] = true` read back `true`) and truncated every one of
+        // them to 0 in an integer array. One signed compare admits every
+        // plain double, negative values and NaN included.
+        let val_bits = blk.bitcast_double_to_i64(val_double);
+        // 0x7FF9 << 48: the lowest NaN-box tag.
+        let val_is_plain_number = blk.icmp_slt(I64, &val_bits, "9221401712017801216");
         let g = blk.and(I1, &is_ptr, &vg_zero);
         let g = blk.and(I1, &g, &addr_match);
         let g = blk.and(I1, &g, &kind_ok);
         let g = blk.and(I1, &g, &idx_ge0);
+        let g = blk.and(I1, &g, &val_is_plain_number);
         blk.and(I1, &g, &idx_lt)
     };
     ctx.block().cond_br(&entry_guard, &fast_label, &slow_label);
@@ -130,9 +142,11 @@ pub(super) fn lower_inline_dyn_typed_array_set(
         blk.add(I64, &raw, "16")
     };
     // ToInt32 of the value once (shared by all integer kinds). For float kinds
-    // we use the raw double directly. `toint32` matches the runtime
-    // `to_uint32_bits` (NaN/±Inf/±0 → 0, else trunc-toward-zero mod 2^32).
-    let val_i32 = ctx.block().toint32(val_double);
+    // we use the raw double directly. `toint32_wrap` matches the runtime
+    // `to_uint32_bits` for EVERY finite value (NaN/±Inf/±0 → 0, else
+    // trunc-toward-zero mod 2^32); the unwrapped `toint32` is poison for
+    // |v| >= 2^63, so `u32[i] = 1e300` stored garbage instead of 0.
+    let val_i32 = ctx.block().toint32_wrap(val_double);
 
     let b_i8 = ctx.new_block("tav.s.i8");
     let b_u8 = ctx.new_block("tav.s.u8");

@@ -241,10 +241,22 @@ pub(super) fn ir() -> String {
 #[test]
 fn class_field_set_precheck_blocks_packed_numeric_proof_receivers() {
     let ir = ir();
+    // The precheck masks the GcHeader's first 32 bits in ONE compare, so the
+    // `_reserved` bits it demands are `bit << 16` of that constant.
+    const PACKED_NUMERIC_PROOF: u64 = 0x80 << 16;
+    const FROZEN: u64 = 0x01 << 16;
+    let masks: Vec<u64> = ir
+        .lines()
+        .filter_map(|line| line.split_once("= and i32 "))
+        .filter_map(|(_, rest)| rest.rsplit_once(", "))
+        .filter_map(|(_, constant)| constant.trim().parse::<u64>().ok())
+        .collect();
     assert!(
-        ir.lines()
-            .any(|line| line.contains("and i16") && line.trim_end().ends_with(", 128")),
-        "class-field set admission must mask OBJ_FLAG_PACKED_NUMERIC_PROOF (0x80)\n{ir}"
+        masks
+            .iter()
+            .any(|mask| mask & PACKED_NUMERIC_PROOF != 0 && mask & FROZEN != 0),
+        "class-field set admission must mask OBJ_FLAG_PACKED_NUMERIC_PROOF (0x80) and \
+         OBJ_FLAG_FROZEN (0x01) out of the header word\n{ir}"
     );
 }
 

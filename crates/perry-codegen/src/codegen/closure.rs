@@ -22,6 +22,10 @@ use super::typed_abi::{
     typed_param_reps_for_params, typed_string_closure_capture_reps, typed_string_closure_name,
     TypedFunctionTrampolineKind, TypedParamRep,
 };
+use super::typed_entry::{
+    emit_tiered_entry_dispatch, emit_typed_arg_to_raw_after_entry_tier, typed_entry_arg_guard,
+    EntryArgGuard,
+};
 
 fn emit_typed_closure_trampoline_fast_value(
     blk: &mut crate::block::LlBlock,
@@ -35,7 +39,7 @@ fn emit_typed_closure_trampoline_fast_value(
             let raw_args: Vec<String> = arg_names
                 .iter()
                 .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
+                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
                 .collect();
             let mut typed_args: Vec<(LlvmType, &str)> = Vec::with_capacity(raw_args.len() + 1);
             typed_args.push((I64, "%this_closure"));
@@ -51,7 +55,7 @@ fn emit_typed_closure_trampoline_fast_value(
             let raw_args: Vec<String> = arg_names
                 .iter()
                 .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
+                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
                 .collect();
             let mut typed_args: Vec<(LlvmType, &str)> = Vec::with_capacity(raw_args.len() + 1);
             typed_args.push((I64, "%this_closure"));
@@ -68,7 +72,7 @@ fn emit_typed_closure_trampoline_fast_value(
             let raw_args: Vec<String> = arg_names
                 .iter()
                 .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
+                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
                 .collect();
             let mut typed_args: Vec<(LlvmType, &str)> = Vec::with_capacity(raw_args.len() + 1);
             typed_args.push((I64, "%this_closure"));
@@ -86,7 +90,7 @@ fn emit_typed_closure_trampoline_fast_value(
             let raw_args: Vec<String> = arg_names
                 .iter()
                 .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
+                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
                 .collect();
             let mut typed_args: Vec<(LlvmType, &str)> = Vec::with_capacity(raw_args.len() + 1);
             typed_args.push((I64, "%this_closure"));
@@ -145,68 +149,34 @@ fn emit_public_typed_closure_trampoline(
     let wf = llmod.define_function(&public_name, DOUBLE, llvm_params);
     let _ = wf.create_block("entry");
 
-    let mut guard: Option<String> = None;
-    {
+    let (guards, capture_guard) = {
         let blk = wf.block_mut(0).unwrap();
-        for (arg, rep) in arg_names.iter().zip(arg_reps.iter()) {
-            let ok = emit_typed_arg_guard(blk, *rep, arg);
-            guard = Some(match guard {
-                Some(prev) => blk.and(I1, &prev, &ok),
-                None => ok,
-            });
-        }
-        if let Some(capture_guard) = emit_typed_capture_guard(blk, "%this_closure", capture_reps) {
-            guard = Some(match guard {
-                Some(prev) => blk.and(I1, &prev, &capture_guard),
-                None => capture_guard,
-            });
-        }
-    }
-
-    let Some(guard) = guard else {
-        let value = emit_typed_closure_trampoline_fast_value(
-            wf.block_mut(0).unwrap(),
-            kind,
-            &typed_name,
-            &arg_names,
-            &arg_reps,
-        );
-        wf.block_mut(0).unwrap().ret(DOUBLE, &value);
-        return Ok(());
+        let guards: Vec<EntryArgGuard> = arg_names
+            .iter()
+            .zip(arg_reps.iter())
+            .map(|(arg, rep)| typed_entry_arg_guard(blk, *rep, arg))
+            .collect();
+        let capture_guard = emit_typed_capture_guard(blk, "%this_closure", capture_reps);
+        (guards, capture_guard)
     };
-
-    let fast_idx = wf.num_blocks();
-    let fast_label = wf.create_block("typed_closure_public.fast").label.clone();
-    let fallback_idx = wf.num_blocks();
-    let fallback_label = wf
-        .create_block("typed_closure_public.fallback")
-        .label
-        .clone();
-    wf.block_mut(0)
-        .unwrap()
-        .cond_br(&guard, &fast_label, &fallback_label);
-
-    let fast_value = emit_typed_closure_trampoline_fast_value(
-        wf.block_mut(fast_idx).unwrap(),
-        kind,
-        &typed_name,
+    emit_tiered_entry_dispatch(
+        wf,
+        "typed_closure_public",
         &arg_names,
-        &arg_reps,
+        &guards,
+        capture_guard,
+        &mut |blk, values| {
+            emit_typed_closure_trampoline_fast_value(blk, kind, &typed_name, values, &arg_reps)
+        },
+        &mut |blk| {
+            let mut call_args: Vec<(LlvmType, &str)> = Vec::with_capacity(arg_names.len() + 1);
+            call_args.push((I64, "%this_closure"));
+            for arg in &arg_names {
+                call_args.push((DOUBLE, arg.as_str()));
+            }
+            blk.call(DOUBLE, generic_body_name, &call_args)
+        },
     );
-    wf.block_mut(fast_idx).unwrap().ret(DOUBLE, &fast_value);
-
-    let mut call_args: Vec<(LlvmType, &str)> = Vec::with_capacity(arg_names.len() + 1);
-    call_args.push((I64, "%this_closure"));
-    for arg in &arg_names {
-        call_args.push((DOUBLE, arg.as_str()));
-    }
-    let fallback_value =
-        wf.block_mut(fallback_idx)
-            .unwrap()
-            .call(DOUBLE, generic_body_name, &call_args);
-    wf.block_mut(fallback_idx)
-        .unwrap()
-        .ret(DOUBLE, &fallback_value);
     Ok(())
 }
 
@@ -222,31 +192,9 @@ fn load_typed_capture(
         &[(I64, "%this_closure"), (I32, &idx)],
     );
     let captured = blk.bitcast_i64_to_double(&captured_bits);
-    match rep {
-        TypedParamRep::F64 => blk.call(
-            DOUBLE,
-            "js_typed_f64_arg_to_raw",
-            &[(DOUBLE, captured.as_str())],
-        ),
-        TypedParamRep::I32 => blk.call(
-            I32,
-            "js_typed_i32_arg_to_raw",
-            &[(DOUBLE, captured.as_str())],
-        ),
-        TypedParamRep::I1 => {
-            let raw_i32 = blk.call(
-                I32,
-                "js_typed_i1_arg_to_raw",
-                &[(DOUBLE, captured.as_str())],
-            );
-            blk.icmp_ne(I32, &raw_i32, "0")
-        }
-        TypedParamRep::StringRef => blk.call(
-            I64,
-            "js_typed_string_arg_to_raw",
-            &[(DOUBLE, captured.as_str())],
-        ),
-    }
+    // The public entry's capture guard admitted this value, so the inline
+    // conversions are exact (string materialization stays a call).
+    emit_typed_arg_to_raw(blk, rep, &captured)
 }
 
 pub(crate) fn emit_typed_capture_guard(
@@ -1233,6 +1181,7 @@ pub(super) fn compile_closure(
         spec_ta_bindings: &cross_module.spec_ta_bindings,
         spec_ta_ready: std::collections::HashSet::new(),
         spec_i32_params: std::collections::HashSet::new(),
+        spec_bool_params: std::collections::HashSet::new(),
         i1_local_slots: HashMap::new(),
         index_used_locals: native_facts.index_used_locals(),
         strictly_i32_bounded_locals: native_facts.strictly_i32_bounded_locals(),

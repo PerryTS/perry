@@ -21,6 +21,39 @@ pub(crate) fn test_dense_move_layout_classified_slots() -> usize {
     DENSE_MOVE_LAYOUT_CLASSIFIED_SLOTS.with(std::cell::Cell::get)
 }
 
+/// Header bits that can make [`crate::gc::layout_note_slot`] do work for a
+/// NON-pointer store into a plain, forwarding-resolved array. With all of them
+/// clear except `GC_LAYOUT_POINTER_FREE`, the note provably returns without a
+/// state change: the element-shape hook is gated on `GC_ARRAY_ELEMENT_SHAPE`,
+/// the typed-descriptor probe on `GC_OBJ_TYPED_LAYOUT_INTACT`, the
+/// all-pointers append proof on `GC_LAYOUT_ALL_POINTERS`, and a non-pointer
+/// value in the `POINTER_FREE` state is its early return. Anything else (a
+/// side mask to clear, `UNKNOWN`, a descriptor to consult) keeps the note.
+const SCALAR_NOTE_ELIDABLE_MASK: u16 = crate::gc::GC_LAYOUT_STATE_MASK
+    | crate::gc::GC_LAYOUT_ALL_POINTERS
+    | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT
+    | crate::gc::GC_ARRAY_ELEMENT_SHAPE;
+
+/// Whether the layout note for storing `value_bits` into `arr` can be skipped.
+/// Reads the header LIVE — callers' flag snapshots predate
+/// `note_array_numeric_index_write` — and requires the header to still be a
+/// non-forwarded plain Array, so a stub or a foreign header keeps the note
+/// (which follows forwarding itself).
+///
+/// # Safety
+/// `arr` must be a live GC user pointer.
+#[inline(always)]
+unsafe fn array_scalar_store_note_is_noop(arr: *const ArrayHeader, value_bits: u64) -> bool {
+    if crate::gc::layout_pointer_bearing_bits(value_bits) {
+        return false;
+    }
+    crate::value::addr_class::try_read_gc_header(arr as usize).is_some_and(|header| {
+        header.obj_type == crate::gc::GC_TYPE_ARRAY
+            && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+            && header._reserved & SCALAR_NOTE_ELIDABLE_MASK == crate::gc::GC_LAYOUT_POINTER_FREE
+    })
+}
+
 #[inline]
 fn note_layout_classified_slots(count: usize) {
     #[cfg(test)]
@@ -137,7 +170,9 @@ pub(crate) unsafe fn store_array_slot_resolved(
     // below cover this resolved-head slot write.
     std::ptr::write(array_elements_ptr(arr).add(index), value_bits);
     note_array_numeric_index_write(arr, index, value_bits);
-    crate::gc::layout_note_slot(arr as usize, index, value_bits);
+    if !array_scalar_store_note_is_noop(arr, value_bits) {
+        crate::gc::layout_note_slot(arr as usize, index, value_bits);
+    }
     let slot = array_elements_ptr(arr).add(index) as usize;
     crate::gc::runtime_write_barrier_slot(arr as usize, slot, value_bits);
     value_bits
@@ -153,7 +188,9 @@ pub(crate) unsafe fn note_array_slot_layout_only(
     // GC_STORE_AUDIT(INIT): layout-only helper is restricted to fresh/suppressed caller sites.
     std::ptr::write(array_elements_ptr(arr).add(index), value_bits);
     note_array_numeric_index_write(arr, index, value_bits);
-    crate::gc::layout_note_slot(arr as usize, index, value_bits);
+    if !array_scalar_store_note_is_noop(arr, value_bits) {
+        crate::gc::layout_note_slot(arr as usize, index, value_bits);
+    }
     // "Fresh/suppressed caller" does NOT imply barrier-free: a BORN-OLD array
     // (>16KB, e.g. a >2048-element JSON.parse result) is old-gen from birth, so
     // storing a young child creates an old→young edge that later minors need in
@@ -165,7 +202,11 @@ pub(crate) unsafe fn note_array_slot_layout_only(
     // swept live on a later minor → "value is not a function". The old-gen
     // check hits the page-generation cache (same array → same cached range), so
     // young arrays pay ~one cached compare.
-    if crate::arena::pointer_in_old_gen(arr as usize) {
+    // A store the slot barrier would skip by shape anyway needs no old-gen
+    // classification first.
+    if !crate::gc::barrier_scalar_child_skips(value_bits)
+        && crate::arena::pointer_in_old_gen(arr as usize)
+    {
         let slot = array_elements_ptr(arr).add(index) as usize;
         crate::gc::runtime_write_barrier_slot(arr as usize, slot, value_bits);
     }

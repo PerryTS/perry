@@ -367,14 +367,16 @@ fn typed_array_runtime_key_read_roots_receiver_only_when_key_collects() {
     };
     let collecting = compile("ta_runtime_key_collecting", allocating_value());
     let inert = compile("ta_runtime_key_inert", Expr::Undefined);
-    let callee = "@js_typed_array_index_get_dynamic(";
+    // The runtime-key read takes the guarded inline typed-array arm, whose
+    // single out-of-line exit is the complete dynamic `[[Get]]`.
+    let callee = "@js_packed_arraylike_index_get(";
     assert!(
         collecting.contains(callee) && inert.contains(callee),
         "both fixtures must reach the typed-array runtime-key arm:\n{collecting}\n{inert}"
     );
     assert_call_operand_rooted_across_operand(
         &collecting,
-        "js_typed_array_index_get_dynamic",
+        "js_packed_arraylike_index_get",
         0,
         1,
         "the typed-array receiver",
@@ -549,9 +551,14 @@ fn collecting_native_view_operands_decline_the_cached_pointer_fast_path() {
         })),
     );
     assert!(
-        calls(&collecting_store, "js_typed_array_set"),
-        "a collecting RHS must not reuse a native view's cached raw data pointer:\n\
-         {collecting_store}"
+        !collecting_store
+            .lines()
+            .any(|line| line.trim_start().starts_with("store double")
+                && line.contains("!alias.scope"))
+            && (calls(&collecting_store, "js_typed_array_set")
+                || calls(&collecting_store, "js_dyn_index_set_strict")),
+        "a collecting RHS must not reuse a native view's cached raw data pointer, and must \
+         reach a dispatcher that re-resolves the receiver:\n{collecting_store}"
     );
 
     let collecting_index = Expr::Binary {

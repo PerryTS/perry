@@ -148,7 +148,19 @@ pub(crate) fn lower_member_tail(
                 || matches!(property.as_str(), "Math" | "JSON" | "Reflect"))
         {
             if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
-                if obj_ident.sym.as_ref() == property.as_str() && property != "globalThis" {
+                // `global` is globalThis under another name (a self-reference
+                // installed by `populate_global_this_builtins`), so it must be
+                // exempt from this undo exactly as `globalThis` is. Collapsing
+                // `global.<x>` to the intrinsic `GlobalGet(0).<x>` static
+                // surface answers `undefined` for every property USER CODE
+                // installed — `global.foo = 1; global.foo` read back undefined
+                // while `globalThis.foo` saw it, because only the read collapsed.
+                // @opentui/core does `global.window = {}` and then
+                // `global.window.requestAnimationFrame = …`, which threw
+                // "Cannot set properties of null or undefined".
+                if obj_ident.sym.as_ref() == property.as_str()
+                    && !matches!(property.as_str(), "globalThis" | "global")
+                {
                     // #2060 / #2142 / #2145: `<Ctor>.prototype` and
                     // `<Ctor>.__proto__` must keep reading the constructor
                     // closure's real proto / static-prototype. Each built-in

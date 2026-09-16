@@ -112,10 +112,19 @@ fn public_guard_routes_to_proof_clone_and_conservative_fallback() {
     let specialized = function_ir(&ir, "$spec_b(");
     let generic = function_ir(&ir, "$generic(");
 
-    assert!(public.lines().next().unwrap().contains(" noinline "));
-    assert!(public.contains("call i32 @js_param_type_guard("));
-    assert!(public.contains("$spec_b("));
-    assert!(public.contains("$generic("));
+    // Here the declaration-seeded generic body already lowers `payload.label`
+    // exactly like the clone (see the #8033 note below), so the clone consumes
+    // nothing the guard establishes. The public entry therefore forwards to
+    // the generic body without paying `js_param_type_guard` per call; the
+    // guard-kept contract is pinned by
+    // `a_class_parameter_is_guarded_by_identity_and_declared_fields`, whose
+    // clone and generic body differ.
+    assert!(
+        !public.contains("call i32 @js_param_type_guard("),
+        "{public}"
+    );
+    assert!(!public.contains("$spec_b("), "{public}");
+    assert!(public.contains("$generic("), "{public}");
     assert!(!generic.contains("js_param_type_guard"));
     assert!(!specialized.contains("js_param_type_guard"));
     assert!(
@@ -666,17 +675,20 @@ fn nonsuspending_async_function_needs_no_direct_call_site_for_its_guarded_clone(
     // same predicate, none of the interpretive validator's per-call cost.
     // The interpretive validator must not appear for a string/number tuple.
     assert!(!public.contains("call i32 @js_param_type_guard("));
-    assert_eq!(
-        public
-            .matches("call i32 @js_typed_string_arg_guard(")
-            .count(),
-        1
+    // Both legs are inline predicates now: the String leg tests the two
+    // string tags, the Number leg admits plain doubles with one signed compare
+    // (int32 boxes are converted on a second tier). No runtime guard call.
+    assert!(!public.contains("call i32 @js_typed_string_arg_guard("));
+    assert!(
+        public.contains(", 32767"),
+        "heap string tag test:\n{public}"
     );
-    // The Number leg is the inline `is_number || is_int32` predicate now
-    // (`emit_typed_f64_guard`): one band test against the Perry tag range,
-    // no runtime call.
     assert!(!public.contains("call i32 @js_typed_f64_arg_guard("));
-    assert_eq!(public.matches(", 32761").count(), 1, "{public}");
+    assert_eq!(
+        public.matches(", 9221401712017801215").count(),
+        1,
+        "{public}"
+    );
     assert!(public.contains("$spec_b_b("));
     assert!(public.contains("$generic("));
     let specialized = function_ir(&ir, "renderAsync$spec_b_b(");
