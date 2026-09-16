@@ -214,17 +214,19 @@ identity until the thread's first park, and from `LoopState` afterwards. On a
 `worker_threads` Worker the identity answer is wrong. Three probes, same
 branch, same box:
 
-| what the Worker does | Node 26.5.1 | integration branch |
-|---|---|---|
-| `fetch(url)` immediately | 200 | **`error: fetch failed`** |
-| `await setTimeout(50)` (a park), then `fetch(url)` | 200 | **hangs — never resolves, never rejects** |
-| `net.connect(...)` | OK | OK (on `main` too) |
+| what the Worker does | Node 26.5.1 | `main` @ `fcd108bfb` | integration @ `babc5f0d1f` | verdict |
+|---|---|---|---|---|
+| `fetch(url)` immediately | 200 | **200** | **`error: fetch failed`** | **regression** |
+| `await setTimeout(50)`, then `fetch(url)` | 200 | **hangs** (25 s cap, rc=124) | **hangs** | pre-existing |
+| `net.connect(...)` | OK | OK | OK | fine on both |
 
-A hang is worse than the failure: the promise is neither settled nor
-rejected, so a server that fetches from a Worker stops rather than erroring.
-And `net.connect` working is what says this is not "all network I/O in a
-Worker" — it is specific to the surfaces whose decline is decided before the
-thread's loop state has settled.
+Read that table carefully, because it says two different things. The *failure*
+is this branch's; the *hang* is not — a Worker that parks before fetching never
+settles its promise on `main` either, which is a separate pre-existing defect
+and a worse one (a server that fetches from a Worker stops rather than
+erroring). And `net.connect` working on both is what says this is not "all
+network I/O in a Worker": it is specific to the surfaces whose decline is
+decided before the thread's loop state has settled.
 
 So the "worker agents decline" story is right for `perry/thread` workers and
 **wrong for `node:worker_threads`**, which is the one a Node program actually
@@ -762,7 +764,7 @@ by one is evidence about the other for every subject in this report.
 | `nf_only.ts` | base | node-fetch alone: `r.status` is `undefined`, a bare-number handle |
 | `scripts/turnloop/apps/tokio_worker_agent_census.ts` | P8 **and** main | the Worker-agent regression: 200 on main, `fetch failed` on the branch, 3/3 each |
 | `netw_main.ts` | P8 **and** main | `net.connect` inside a Worker: OK on both — the regression is fetch-specific |
-| `race.ts` (park, then fetch, inside a Worker) | P8 | the fetch **hangs** — never settles, never rejects |
+| `race.ts` (park, then fetch, inside a Worker) | P8 **and** main | the fetch **hangs** on both — never settles, never rejects. Pre-existing, not this branch's |
 
 ### What was not run
 
@@ -785,6 +787,10 @@ Named precisely, because each is a hole rather than a preference.
   no gap-suite coverage, without the per-subsystem validation each of those
   lanes did for the primary agent, is exactly the kind of change that is
   discovered in production. It is a phase.
+* **It did not investigate the second Worker defect it uncovered** — a Worker
+  that parks before fetching never settles the promise, on `main` as well as on
+  this branch. It is named and measured, and it is not this branch's, so it
+  wants its own issue and its own lane.
 * **It did not fix the `worker_threads` agent-id defect** it found, for the
   same reason and with the added complication that there are two defensible
   fixes (see the defects section) and choosing between them needs an oracle run
