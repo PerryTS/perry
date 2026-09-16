@@ -1962,10 +1962,10 @@ pub extern "C" fn js_write_barrier_root_nanbox(value_bits: u64) {
 // `#[used]` statics pin retained reference edges so both survive every link mode.
 // Same pattern as `node_stream_keepalive.rs` / `typedarray.rs`.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_WRITE_BARRIER_ROOT_HEAP_WORD: extern "C" fn(u64) = js_write_barrier_root_heap_word;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_WRITE_BARRIER_ROOT_NANBOX: extern "C" fn(u64) = js_write_barrier_root_nanbox;
 
 mod runtime_stores;

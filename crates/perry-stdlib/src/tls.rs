@@ -1852,7 +1852,7 @@ struct KeepTlsFfi<const N: usize>(
 // SAFETY: the pointers are retained for linking only and are never read or
 // dereferenced, so sharing the static anchor between threads is sound.
 unsafe impl<const N: usize> Sync for KeepTlsFfi<N> {}
-#[used]
+#[used(compiler)]
 static KEEP_TLS_FFI: KeepTlsFfi<23> = KeepTlsFfi([
     js_tls_create_server as *const (),
     js_tls_tlssocket_constructor as *const (),

@@ -1340,25 +1340,25 @@ pub unsafe extern "C" fn js_object_own_method_cache_miss(
 mod keep_guard_symbols {
     use super::*;
     #[cfg(feature = "keepalive-anchors")]
-    #[used] static G0: extern "C" fn(u64, f64, u32, u32, *const crate::StringHeader, u32, i32) -> i32 = js_typed_feedback_class_field_get_guard;
+    #[used(compiler)] static G0: extern "C" fn(u64, f64, u32, u32, *const crate::StringHeader, u32, i32) -> i32 = js_typed_feedback_class_field_get_guard;
     #[cfg(feature = "keepalive-anchors")]
-    #[used] static G1: extern "C" fn(u64, f64, u32, u32, *const crate::StringHeader, u32, f64, i32) -> i32 = js_typed_feedback_class_field_set_guard;
+    #[used(compiler)] static G1: extern "C" fn(u64, f64, u32, u32, *const crate::StringHeader, u32, f64, i32) -> i32 = js_typed_feedback_class_field_set_guard;
     #[cfg(feature = "keepalive-anchors")]
-    #[used] static G1C: extern "C" fn(u64, u64, u64, f64) = js_class_field_set_fallback;
+    #[used(compiler)] static G1C: extern "C" fn(u64, u64, u64, f64) = js_class_field_set_fallback;
     #[cfg(feature = "keepalive-anchors")]
-    #[used] static G1D: extern "C" fn(u64, f64, u32, u32, *const crate::StringHeader, u32, f64, i32) = js_class_field_set_ic;
+    #[used(compiler)] static G1D: extern "C" fn(u64, f64, u32, u32, *const crate::StringHeader, u32, f64, i32) = js_class_field_set_ic;
     #[cfg(feature = "keepalive-anchors")]
-    #[used] static G1E: extern "C" fn(u64, f64, u32, u32, *const crate::StringHeader, u32, i32) -> f64 = js_class_field_get_ic;
+    #[used(compiler)] static G1E: extern "C" fn(u64, f64, u32, u32, *const crate::StringHeader, u32, i32) -> f64 = js_class_field_get_ic;
     #[cfg(feature = "keepalive-anchors")]
-    #[used] static G2: unsafe extern "C" fn(u64, f64, u32, u32, *const i8, usize, *const u8) -> i32 = js_typed_feedback_method_direct_call_guard;
+    #[used(compiler)] static G2: unsafe extern "C" fn(u64, f64, u32, u32, *const i8, usize, *const u8) -> i32 = js_typed_feedback_method_direct_call_guard;
     #[cfg(feature = "keepalive-anchors")]
-    #[used] static G3: extern "C" fn(u64, f64, *const u8, u32, u32) -> i32 = js_typed_feedback_closure_direct_call_guard;
+    #[used(compiler)] static G3: extern "C" fn(u64, f64, *const u8, u32, u32) -> i32 = js_typed_feedback_closure_direct_call_guard;
     #[cfg(feature = "keepalive-anchors")]
-    #[used] static G3B: extern "C" fn(f64, *const u8) -> u64 = js_closure_exact_func_guard;
+    #[used(compiler)] static G3B: extern "C" fn(f64, *const u8) -> u64 = js_closure_exact_func_guard;
     #[cfg(feature = "keepalive-anchors")]
-    #[used] static G3C: unsafe extern "C" fn(f64, u32, u32, *const i8, usize, *const u8, *mut MethodPicCacheSlot) -> u64 = js_object_own_method_cache_miss;
+    #[used(compiler)] static G3C: unsafe extern "C" fn(f64, u32, u32, *const i8, usize, *const u8, *mut MethodPicCacheSlot) -> u64 = js_object_own_method_cache_miss;
     #[cfg(feature = "keepalive-anchors")]
-    #[used] static G4: unsafe extern "C" fn(f64, u32, u32, u32) -> i32 = js_method_direct_shape_guard;
+    #[used(compiler)] static G4: unsafe extern "C" fn(f64, u32, u32, u32) -> i32 = js_method_direct_shape_guard;
     #[cfg(feature = "keepalive-anchors")]
-    #[used] static G4B: unsafe extern "C" fn(f64, *mut u32, u32) -> u32 = js_method_direct_shape_class;
+    #[used(compiler)] static G4B: unsafe extern "C" fn(f64, *mut u32, u32) -> u32 = js_method_direct_shape_class;
 }

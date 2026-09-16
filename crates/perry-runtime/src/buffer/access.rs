@@ -254,7 +254,7 @@ pub extern "C" fn js_buffer_index_get_value(buf_ptr: *const BufferHeader, index:
 // link is otherwise free to internalize and dead-strip it. The `#[used]`
 // anchor pins it (mirrors `KEEP_JS_TYPED_ARRAY_INDEX_GET_DYNAMIC`).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_BUFFER_INDEX_GET_VALUE: extern "C" fn(*const BufferHeader, i32) -> f64 =
     js_buffer_index_get_value;
 

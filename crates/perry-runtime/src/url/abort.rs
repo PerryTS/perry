@@ -681,14 +681,14 @@ pub extern "C" fn js_abort_signal_any(
 // entry points (see project_auto_optimize_keepalive_3320). These are only
 // referenced from generated `.o`, so without `#[used]` they vanish.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ABORT_SIGNAL_ABORT: extern "C" fn(f64) -> *mut ObjectHeader = js_abort_signal_abort;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ABORT_SIGNAL_ANY: extern "C" fn(*mut crate::array::ArrayHeader) -> *mut ObjectHeader =
     js_abort_signal_any;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ABORT_SIGNAL_THROW_IF_ABORTED: extern "C" fn(*mut ObjectHeader) -> f64 =
     js_abort_signal_throw_if_aborted;
 

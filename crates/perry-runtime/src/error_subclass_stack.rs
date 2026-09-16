@@ -306,7 +306,7 @@ pub extern "C" fn js_error_subclass_capture_stack(this_val: f64) {
 /// Generated-code-only callee (#9410): anchor against the auto-optimize LTO
 /// dead-strip.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_ERROR_SUBCLASS_CAPTURE_STACK: extern "C" fn(f64) = js_error_subclass_capture_stack;
 
 #[cfg(test)]

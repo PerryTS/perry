@@ -485,7 +485,7 @@ pub extern "C" fn js_process_emit_before_exit_pending() {
 // against the auto-optimize whole-program dead-strip (#4876), like the other
 // epilogue hooks.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_PROCESS_EMIT_BEFORE_EXIT_PENDING: extern "C" fn() = js_process_emit_before_exit_pending;
 
 crate::perry_thread_local! {

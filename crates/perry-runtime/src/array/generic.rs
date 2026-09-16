@@ -1314,7 +1314,7 @@ fn clamp_index(v: f64, len: i64) -> i64 {
 // (codegen-only reference) compile path (see #3320 — `#[no_mangle]` alone is
 // not enough once the bitcode is re-linked).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ARRAYLIKE_CB: [extern "C" fn(f64, f64, f64) -> f64; 9] = [
     js_arraylike_forEach,
     js_arraylike_map,
@@ -1327,24 +1327,24 @@ static KEEP_ARRAYLIKE_CB: [extern "C" fn(f64, f64, f64) -> f64; 9] = [
     js_arraylike_findLastIndex,
 ];
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ARRAYLIKE_REDUCE: [extern "C" fn(f64, f64, i32, f64) -> f64; 2] =
     [js_arraylike_reduce, js_arraylike_reduceRight];
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ARRAYLIKE_SEARCH: [extern "C" fn(f64, f64, f64, i32) -> f64; 3] = [
     js_arraylike_indexOf,
     js_arraylike_lastIndexOf,
     js_arraylike_includes,
 ];
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ARRAYLIKE_AT: extern "C" fn(f64, f64) -> f64 = js_arraylike_at;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ARRAYLIKE_JOIN: extern "C" fn(f64, f64) -> f64 = js_arraylike_join;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ARRAYLIKE_SLICE: extern "C" fn(f64, f64, i32, f64, i32) -> f64 = js_arraylike_slice;
 
 /// A receiver that reached a dense `ArrayHeader` entry point but is actually

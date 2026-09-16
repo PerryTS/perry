@@ -718,7 +718,7 @@ pub unsafe extern "C" fn js_function_bind(
 /// referenced from generated `.o` / other crates; this `#[used]` static
 /// survives the bitcode pipeline. See project_auto_optimize_keepalive_3320.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_FUNCTION_BIND: unsafe extern "C" fn(f64, *const f64, usize) -> f64 =
     js_function_bind;
 

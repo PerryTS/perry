@@ -187,7 +187,7 @@ pub(crate) fn array_get_property_by_key(
 /// `#[no_mangle]` C export AND survive dead-stripping even when no Rust caller
 /// keeps it referenced — mirroring the neighbouring `js_array_push`.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ARRAY_LENGTH: extern "C" fn(*const ArrayHeader) -> u32 = js_array_length;
 
 #[no_mangle]
@@ -745,11 +745,11 @@ pub extern "C" fn js_array_numeric_set_f64_unboxed(
 // These raw numeric-array helpers are called from generated code, so release/LTO
 // builds may otherwise internalize and strip the `#[no_mangle]` exports.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_ARRAY_NUMERIC_GET_F64_UNBOXED: extern "C" fn(*mut ArrayHeader, u32) -> f64 =
     js_array_numeric_get_f64_unboxed;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_ARRAY_NUMERIC_SET_F64_UNBOXED: extern "C" fn(*mut ArrayHeader, u32, f64) -> i32 =
     js_array_numeric_set_f64_unboxed;
 

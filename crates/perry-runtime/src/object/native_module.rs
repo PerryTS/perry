@@ -1462,7 +1462,7 @@ pub extern "C" fn js_class_method_bind_by_id(instance: f64, method_id: i64) -> f
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_CLASS_METHOD_BIND_BY_ID: extern "C" fn(f64, i64) -> f64 = js_class_method_bind_by_id;
 
 #[cfg(test)]

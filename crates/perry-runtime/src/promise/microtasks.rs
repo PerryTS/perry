@@ -132,7 +132,7 @@ pub extern "C" fn js_promise_run_before_exit_checkpoint() -> i32 {
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_PROMISE_RUN_BEFORE_EXIT_CHECKPOINT: extern "C" fn() -> i32 =
     js_promise_run_before_exit_checkpoint;
 
@@ -140,7 +140,7 @@ static KEEP_PROMISE_RUN_BEFORE_EXIT_CHECKPOINT: extern "C" fn() -> i32 =
 // references this symbol — anchor it like the other codegen-only hooks so the
 // auto-optimize internalize+dead-strip pass can't drop it (#4876).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_PROMISE_RUN_MICROTASKS_EVENT_LOOP: extern "C" fn() -> i32 =
     js_promise_run_microtasks_event_loop;
 

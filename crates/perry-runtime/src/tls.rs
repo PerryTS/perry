@@ -1459,45 +1459,45 @@ pub extern "C" fn js_tls_check_server_identity(hostname: f64, cert: f64) -> f64 
 // these codegen-emitted `#[no_mangle]` runtime helpers (referenced from the
 // native dispatch table in perry-codegen).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_TLS_GET_CIPHERS: extern "C" fn() -> f64 = js_tls_get_ciphers;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_TLS_GET_CERTIFICATE_COMPRESSION_ALGORITHMS: extern "C" fn() -> f64 =
     js_tls_get_certificate_compression_algorithms;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_TLS_PREPARE_CONNECT: extern "C" fn() = js_tls_prepare_connect;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_TLS_VALIDATE_CONNECT_OPTIONS: extern "C" fn(f64) = js_tls_validate_connect_options;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_TLS_VALIDATE_POSITIONAL_CONNECT_OPTIONS: extern "C" fn(f64) =
     js_tls_validate_positional_connect_options;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_TLS_CLIENT_CHECK_IDENTITY: extern "C" fn(i64, f64) -> f64 =
     js_tls_client_check_identity;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_TLS_CLIENT_CHECK_IDENTITY_FROM_METADATA: unsafe extern "C" fn(i64) -> f64 =
     js_tls_client_check_identity_from_metadata;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_TLS_GET_CA_CERTIFICATES: extern "C" fn(f64) -> f64 = js_tls_get_ca_certificates;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_TLS_SET_DEFAULT_CA_CERTIFICATES: extern "C" fn(f64) -> f64 =
     js_tls_set_default_ca_certificates;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_TLS_CREATE_SECURE_CONTEXT: extern "C" fn(f64) -> f64 = js_tls_create_secure_context;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_TLS_SECURE_CONTEXT_NEW: extern "C" fn(f64) -> f64 = js_tls_secure_context_new;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_TLS_CHECK_SERVER_IDENTITY: extern "C" fn(f64, f64) -> f64 =
     js_tls_check_server_identity;
 

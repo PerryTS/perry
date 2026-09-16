@@ -186,7 +186,7 @@ fn is_well_known_symbol_member_name(name: &str) -> bool {
 // so LTO / whole-program-bitcode link modes are free to internalize and
 // dead-strip it. The `#[used]` reference edge keeps the export alive.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_SYMBOL_COMPUTED_MEMBER: unsafe extern "C" fn(f64, f64) -> f64 =
     js_symbol_computed_member;
 

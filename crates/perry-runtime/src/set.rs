@@ -871,7 +871,7 @@ pub extern "C" fn js_set_find_value_index(set_boxed: f64, value: f64) -> f64 {
     unsafe { find_value_index(set, normalize_zero(value)) as f64 }
 }
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_SET_FIND_VALUE_INDEX: extern "C" fn(f64, f64) -> f64 = js_set_find_value_index;
 
 /// Members of a set this small are found faster by reading them than by
@@ -1062,7 +1062,7 @@ pub extern "C" fn js_set_cursor_next(set_boxed: f64, cursor: f64, epoch: f64) ->
     }
 }
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_SET_CURSOR_NEXT: extern "C" fn(f64, f64, f64) -> f64 = js_set_cursor_next;
 
 /// C-ABI companion: the header's compaction epoch the loop stores after
@@ -1076,7 +1076,7 @@ pub extern "C" fn js_set_compaction_epoch(set_boxed: f64) -> f64 {
     set_compaction_epoch(set) as f64
 }
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_SET_COMPACTION_EPOCH: extern "C" fn(f64) -> f64 = js_set_compaction_epoch;
 
 unsafe fn compact_set_elements(set: *mut SetHeader) {
@@ -1749,64 +1749,64 @@ pub extern "C" fn js_set_delete_bool(set: *mut SetHeader, value: i32) -> i32 {
 // generated LLVM IR. Keep roots prevent whole-program LTO/dead-strip from
 // removing the exported symbols when the Rust crate graph has no caller.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_SET_ADD_STRING: extern "C" fn(
     *mut SetHeader,
     *const StringHeader,
 ) -> *mut SetHeader = js_set_add_string;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_SET_ADD_NUMBER: extern "C" fn(*mut SetHeader, f64) -> *mut SetHeader =
     js_set_add_number;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_SET_HAS_STRING: extern "C" fn(*const SetHeader, *const StringHeader) -> i32 =
     js_set_has_string;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_SET_HAS_NUMBER: extern "C" fn(*const SetHeader, f64) -> i32 = js_set_has_number;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_SET_DELETE_STRING: extern "C" fn(*mut SetHeader, *const StringHeader) -> i32 =
     js_set_delete_string;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_SET_DELETE_NUMBER: extern "C" fn(*mut SetHeader, f64) -> i32 = js_set_delete_number;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_SET_ADD_I32: extern "C" fn(*mut SetHeader, i32) -> *mut SetHeader = js_set_add_i32;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_SET_HAS_I32: extern "C" fn(*const SetHeader, i32) -> i32 = js_set_has_i32;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_SET_DELETE_I32: extern "C" fn(*mut SetHeader, i32) -> i32 = js_set_delete_i32;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_SET_ADD_U32: extern "C" fn(*mut SetHeader, u32) -> *mut SetHeader = js_set_add_u32;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_SET_HAS_U32: extern "C" fn(*const SetHeader, u32) -> i32 = js_set_has_u32;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_SET_DELETE_U32: extern "C" fn(*mut SetHeader, u32) -> i32 = js_set_delete_u32;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_SET_ADD_F32: extern "C" fn(*mut SetHeader, f32) -> *mut SetHeader = js_set_add_f32;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_SET_HAS_F32: extern "C" fn(*const SetHeader, f32) -> i32 = js_set_has_f32;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_SET_DELETE_F32: extern "C" fn(*mut SetHeader, f32) -> i32 = js_set_delete_f32;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_SET_ADD_BOOL: extern "C" fn(*mut SetHeader, i32) -> *mut SetHeader = js_set_add_bool;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_SET_HAS_BOOL: extern "C" fn(*const SetHeader, i32) -> i32 = js_set_has_bool;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_SET_DELETE_BOOL: extern "C" fn(*mut SetHeader, i32) -> i32 = js_set_delete_bool;
 
 /// Clear all elements from the set
@@ -1942,7 +1942,7 @@ pub extern "C" fn js_set_value_raw_at(set: *const SetHeader, i: u32) -> f64 {
     }
 }
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_SET_VALUE_RAW_AT: extern "C" fn(*const SetHeader, u32) -> f64 = js_set_value_raw_at;
 
 /// Convert a Set to an Array (for Array.from(set))
@@ -2581,28 +2581,28 @@ pub extern "C" fn js_set_is_disjoint_from(set: *const SetHeader, other: f64) -> 
 // rebuild doesn't dead-strip these codegen-only `#[no_mangle]` entry points
 // (see project_auto_optimize_keepalive_3320 / PR #3320).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_SET_UNION: extern "C" fn(*const SetHeader, f64) -> *mut SetHeader = js_set_union;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_SET_INTERSECTION: extern "C" fn(*const SetHeader, f64) -> *mut SetHeader =
     js_set_intersection;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_SET_DIFFERENCE: extern "C" fn(*const SetHeader, f64) -> *mut SetHeader =
     js_set_difference;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_SET_SYMDIFF: extern "C" fn(*const SetHeader, f64) -> *mut SetHeader =
     js_set_symmetric_difference;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_SET_IS_SUBSET: extern "C" fn(*const SetHeader, f64) -> i32 = js_set_is_subset_of;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_SET_IS_SUPERSET: extern "C" fn(*const SetHeader, f64) -> i32 = js_set_is_superset_of;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_SET_IS_DISJOINT: extern "C" fn(*const SetHeader, f64) -> i32 = js_set_is_disjoint_from;
 
 #[cfg(test)]

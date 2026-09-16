@@ -127,11 +127,11 @@ pub extern "C" fn js_array_numeric_range_add_len(receiver: f64, start: f64, delt
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ARRAY_NUMERIC_RANGE_ADD: extern "C" fn(f64, f64, f64, f64) -> i64 =
     js_array_numeric_range_add;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ARRAY_NUMERIC_RANGE_ADD_LEN: extern "C" fn(f64, f64, f64) -> i64 =
     js_array_numeric_range_add_len;
 
@@ -242,6 +242,6 @@ pub unsafe extern "C" fn js_array_fill_range_strided_tagged(
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ARRAY_FILL_RANGE_STRIDED_TAGGED: unsafe extern "C" fn(f64, f64, f64, f64, u64) -> i64 =
     js_array_fill_range_strided_tagged;

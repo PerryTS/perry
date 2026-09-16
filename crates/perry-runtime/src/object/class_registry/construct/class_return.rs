@@ -17,7 +17,7 @@ pub unsafe extern "C" fn js_builtin_subclass_construct(
     js_new_function_construct_with_new_target(target, args_ptr, args_len, new_target)
 }
 
-#[used]
+#[used(compiler)]
 static KEEP_JS_BUILTIN_SUBCLASS_CONSTRUCT: unsafe extern "C" fn(
     u32,
     *const u8,

@@ -655,6 +655,6 @@ pub extern "C" fn js_arraylike_copy_within(
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ARRAYLIKE_COPY_WITHIN: extern "C" fn(f64, f64, f64, i32, f64) -> f64 =
     js_arraylike_copy_within;

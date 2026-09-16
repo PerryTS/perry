@@ -64,7 +64,7 @@ pub extern "C" fn js_module_top_this() -> f64 {
 /// rebuild would dead-strip it without this `#[used]` pin (see
 /// project_auto_optimize_keepalive_3320).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_MODULE_TOP_THIS: extern "C" fn() -> f64 = js_module_top_this;
 
 /// Issue #611: lazily allocate `globalThis` for computed global access.
@@ -527,11 +527,11 @@ pub extern "C" fn js_response_subclass_init(this_box: f64, body: f64, init: f64)
 // bitcode rebuild's dead-strip can't drop them (see
 // project_auto_optimize_keepalive_3320).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_REQUEST_SUBCLASS_INIT: extern "C" fn(f64, f64, f64) -> f64 =
     js_request_subclass_init;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_RESPONSE_SUBCLASS_INIT: extern "C" fn(f64, f64, f64) -> f64 =
     js_response_subclass_init;
 
@@ -1008,7 +1008,7 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_FETCH_OR_VALUE_SUPER: unsafe extern "C" fn(f64, f64, *const f64, usize) -> f64 =
     js_fetch_or_value_super;
 

@@ -66,7 +66,7 @@ pub extern "C" fn js_bigint_from_i128_parts(lo: u64, hi: i64) -> *mut BigIntHead
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_BIGINT_FROM_I128_PARTS: extern "C" fn(u64, i64) -> *mut BigIntHeader =
     js_bigint_from_i128_parts;
 

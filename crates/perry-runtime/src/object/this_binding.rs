@@ -128,7 +128,7 @@ pub(crate) fn static_this_disarm() {
 /// subclass-receiver).
 // #1561-style force-keep: only generated IR calls this.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_STATIC_THIS_ARM_CLASSREF: extern "C" fn(u32) = js_static_this_arm_classref;
 
 #[no_mangle]
@@ -144,7 +144,7 @@ pub extern "C" fn js_static_this_arm_classref(class_id: u32) {
 /// time) right before the direct call.
 // #1561-style force-keep: only generated IR calls this.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_STATIC_THIS_ARM_VALUE: extern "C" fn(f64) = js_static_this_arm_value;
 
 #[no_mangle]
@@ -156,7 +156,7 @@ pub extern "C" fn js_static_this_arm_value(value: f64) {
 /// else the lexical class-ref the codegen passes in.
 // #1561-style force-keep: only generated IR calls this.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_STATIC_THIS_RESOLVE: extern "C" fn(f64) -> f64 = js_static_this_resolve;
 
 #[no_mangle]

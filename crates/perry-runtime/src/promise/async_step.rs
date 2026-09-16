@@ -943,7 +943,7 @@ pub extern "C" fn js_async_generator_resume(
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_ASYNC_GENERATOR_RESUME: extern "C" fn(f64, f64, f64) -> f64 =
     js_async_generator_resume;
 

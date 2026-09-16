@@ -172,7 +172,7 @@ pub extern "C" fn js_typed_array_read_int32(ta: *const TypedArrayHeader, index: 
 // otherwise free to internalize and dead-strip it (it has no internal Rust
 // caller). The `#[used]` anchor pins it, mirroring the getter above.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_TYPED_ARRAY_READ_INT32: extern "C" fn(*const TypedArrayHeader, i32) -> i32 =
     js_typed_array_read_int32;
 
@@ -224,7 +224,7 @@ pub extern "C" fn js_typed_array_read_f64(ta: *const TypedArrayHeader, index: i3
 
 // Codegen-only export (see the i32 sibling above): pin under whole-program LTO.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_TYPED_ARRAY_READ_F64: extern "C" fn(*const TypedArrayHeader, i32) -> f64 =
     js_typed_array_read_f64;
 
@@ -248,7 +248,7 @@ pub extern "C" fn js_u8_buffer_read_f64(target: *const TypedArrayHeader, index: 
 
 // Codegen-only export: pin under whole-program LTO (mirrors the siblings).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_U8_BUFFER_READ_F64: extern "C" fn(*const TypedArrayHeader, i32) -> f64 =
     js_u8_buffer_read_f64;
 
@@ -279,7 +279,7 @@ pub extern "C" fn js_typed_array_index_get_dynamic(ta: *const TypedArrayHeader, 
 // `perry-codegen/src/expr/index_get.rs`), so a whole-program bitcode link is
 // free to internalize and dead-strip it. The `#[used]` anchor pins it.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_TYPED_ARRAY_INDEX_GET_DYNAMIC: extern "C" fn(*const TypedArrayHeader, f64) -> f64 =
     js_typed_array_index_get_dynamic;
 
@@ -723,7 +723,7 @@ pub extern "C" fn js_uint8array_index_get_value(
 // auto-optimize — it has zero internal Rust callers (codegen emits the only
 // call), so a whole-program bitcode link is otherwise free to dead-strip it.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_UINT8ARRAY_INDEX_GET_VALUE: extern "C" fn(*const TypedArrayHeader, i32) -> f64 =
     js_uint8array_index_get_value;
 

@@ -224,7 +224,7 @@ pub extern "C" fn js_value_to_string_with_encoding_or_radix(
 /// would internalize + dead-strip it without a `#[used]` reference (see
 /// project_auto_optimize_keepalive_3320).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_VALUE_TO_STRING_ENCODING_OR_RADIX: extern "C" fn(f64, i32, f64) -> *mut StringHeader =
     js_value_to_string_with_encoding_or_radix;
 

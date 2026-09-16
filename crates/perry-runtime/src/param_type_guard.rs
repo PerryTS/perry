@@ -809,7 +809,7 @@ pub extern "C" fn js_param_type_guard(value: f64, descriptor: *const u8, length:
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_PARAM_TYPE_GUARD: extern "C" fn(f64, *const u8, u32) -> i32 = js_param_type_guard;
 
 #[cfg(test)]

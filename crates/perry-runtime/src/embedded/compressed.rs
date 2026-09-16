@@ -119,7 +119,7 @@ pub unsafe extern "C" fn js_register_embedded_zstd_asset_lazy(
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_REGISTER_ZSTD_LAZY: unsafe extern "C" fn(
     *const u8,
     usize,
@@ -130,7 +130,7 @@ static KEEP_REGISTER_ZSTD_LAZY: unsafe extern "C" fn(
 ) -> i32 = js_register_embedded_zstd_asset_lazy;
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_REGISTER_ZSTD: unsafe extern "C" fn(
     *const u8,
     usize,

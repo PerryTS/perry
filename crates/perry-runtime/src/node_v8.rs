@@ -35,63 +35,63 @@ use crate::value::JSValue;
 // auto-optimize whole-program-LLVM build would dead-strip them without an
 // anchor (see node_stream_keepalive.rs). Pin each via a `#[used]` static.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_V8_SERIALIZE: extern "C" fn(f64) -> f64 = js_v8_serialize;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_V8_DESERIALIZE: extern "C" fn(f64) -> f64 = js_v8_deserialize;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_V8_HEAP_STATS: extern "C" fn() -> f64 = js_v8_get_heap_statistics;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_V8_CODE_STATS: extern "C" fn() -> f64 = js_v8_get_heap_code_statistics;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_V8_SPACE_STATS: extern "C" fn() -> f64 = js_v8_get_heap_space_statistics;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_V8_VERSION_TAG: extern "C" fn() -> f64 = js_v8_cached_data_version_tag;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_V8_GET_HEAP_SNAPSHOT: extern "C" fn(f64) -> f64 = js_v8_get_heap_snapshot;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_V8_WRITE_HEAP_SNAPSHOT: extern "C" fn(f64, f64) -> f64 = js_v8_write_heap_snapshot;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_V8_GC_PROFILER_NEW: extern "C" fn() -> f64 = js_v8_gc_profiler_new;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_V8_GC_PROFILER_START: extern "C" fn(f64) -> f64 = js_v8_gc_profiler_start;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_V8_GC_PROFILER_STOP: extern "C" fn(f64) -> f64 = js_v8_gc_profiler_stop;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_V8_GC_PROFILER_REPORT: extern "C" fn() -> f64 = js_v8_gc_profiler_report;
 // #3680: Serializer / Deserializer class constructors.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_V8_SERIALIZER_NEW: extern "C" fn(f64) -> f64 = js_v8_serializer_new;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_V8_DESERIALIZER_NEW: extern "C" fn(f64) -> f64 = js_v8_deserializer_new;
 // #3679: lifecycle / diagnostic-control surface.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_V8_NOOP_UNDEFINED: extern "C" fn() -> f64 = js_v8_noop_undefined;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_V8_IS_BUILDING_SNAPSHOT: extern "C" fn() -> f64 = js_v8_is_building_snapshot;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_V8_NAMESPACE: extern "C" fn(*const u8, usize) -> f64 = js_v8_namespace;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_V8_THROW_NOT_BUILDING: extern "C" fn() -> f64 = js_v8_throw_not_building_snapshot;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_V8_PROMISE_HOOK_REGISTER: extern "C" fn() -> f64 = js_v8_promise_hook_register;
 
 const TAG_UNDEFINED_BITS: u64 = 0x7FFC_0000_0000_0001;

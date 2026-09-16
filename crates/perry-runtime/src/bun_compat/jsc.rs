@@ -12,7 +12,7 @@ use crate::string::js_string_from_bytes;
 use crate::value::JSValue;
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_BUN_JSC_HEAP_STATS: extern "C" fn(f64) -> f64 = js_bun_jsc_heap_stats;
 
 fn object(scope: &RuntimeHandleScope, capacity: usize) -> RuntimeHandle<'_> {

@@ -828,12 +828,12 @@ pub extern "C" fn js_array_element_shape_check(
 // those two — and only those two — are anchored. The other four stay
 // unanchored and dead-strippable until something emits a call to them.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ARRAY_ENSURE_ELEMENT_SHAPE: extern "C" fn(*mut ArrayHeader) -> i32 =
     js_array_ensure_element_shape;
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ARRAY_ENSURE_ELEMENT_SHAPE_ORDINARY: extern "C" fn(*mut ArrayHeader) -> i32 =
     js_array_ensure_element_shape_ordinary;
 

@@ -240,23 +240,23 @@ pub extern "C" fn js_array_fill_f64_iota_len_extend(arr: *mut ArrayHeader) -> *m
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ARRAY_FILL_F64_CONST_EXTEND: extern "C" fn(
     *mut ArrayHeader,
     u32,
     f64,
 ) -> *mut ArrayHeader = js_array_fill_f64_const_extend;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ARRAY_FILL_F64_IOTA_EXTEND: extern "C" fn(*mut ArrayHeader, u32) -> *mut ArrayHeader =
     js_array_fill_f64_iota_extend;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ARRAY_FILL_F64_CONST_LEN_EXTEND: extern "C" fn(
     *mut ArrayHeader,
     f64,
 ) -> *mut ArrayHeader = js_array_fill_f64_const_len_extend;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ARRAY_FILL_F64_IOTA_LEN_EXTEND: extern "C" fn(*mut ArrayHeader) -> *mut ArrayHeader =
     js_array_fill_f64_iota_len_extend;

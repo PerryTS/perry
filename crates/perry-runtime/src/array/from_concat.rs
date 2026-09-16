@@ -197,7 +197,7 @@ pub extern "C" fn js_array_from_value(boxed: f64) -> *mut ArrayHeader {
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ARRAY_FROM_VALUE: extern "C" fn(f64) -> *mut ArrayHeader = js_array_from_value;
 
 /// `Array.from(source, mapFn, thisArg)` — the mapped form. Throws for nullish
@@ -223,7 +223,7 @@ pub extern "C" fn js_array_from_mapped(
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ARRAY_FROM_MAPPED: extern "C" fn(f64, f64, f64) -> *mut ArrayHeader =
     js_array_from_mapped;
 
@@ -342,7 +342,7 @@ pub extern "C" fn js_array_concat_variadic(
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ARRAY_CONCAT_VARIADIC: extern "C" fn(
     *const ArrayHeader,
     *const f64,

@@ -105,12 +105,12 @@ pub unsafe extern "C" fn js_string_suffix_char_code_at(
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_LENGTH: unsafe extern "C" fn(f64, *const SuffixCursor) -> f64 = js_string_suffix_length;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ADVANCE: unsafe extern "C" fn(f64, *mut SuffixCursor, i32) = js_string_suffix_advance;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_CHAR_CODE: unsafe extern "C" fn(f64, *const SuffixCursor, i32) -> f64 =
     js_string_suffix_char_code_at;

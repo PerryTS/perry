@@ -989,7 +989,7 @@ pub extern "C" fn js_shape_ordinary_inline_slot_for_key(shape_id: u32, key_bits:
 /// preheader), so the auto-optimize whole-program build would otherwise
 /// dead-strip it (see the FFI-symbol-link-break class).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_SHAPE_ORDINARY_INLINE_SLOT_FOR_KEY: extern "C" fn(u32, u64) -> i32 =
     js_shape_ordinary_inline_slot_for_key;
 
