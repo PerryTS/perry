@@ -235,6 +235,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 return crate::lower_call::lower_new_member_captured(ctx, name.as_ref(), args);
             }
 
+            // #10359: a global-object callee gets here only when the fold above
+            // declined it because a module binding shares the name. Build the
+            // intrinsic the unshadowed fold reaches, never the binding. A name no
+            // builtin arm owns falls through and reads the property at runtime.
+            if let Expr::PropertyGet {
+                object, property, ..
+            } = callee.as_ref()
+            {
+                if super::v8_interop::is_global_object_expr(object) {
+                    if let Some(value) =
+                        crate::lower_call::lower_global_intrinsic_new(ctx, property, args)?
+                    {
+                        return Ok(value);
+                    }
+                }
+            }
+
             // date-fns `constructFrom(date, value)`:
             //   return new date.constructor(value);
             // The callee is `PropertyGet { LocalGet(date), "constructor" }`

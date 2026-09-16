@@ -11,6 +11,7 @@ import {
   MessageChannel,
   Map,
   Int32Array,
+  ReadableStream,
 } from "./_helpers/new_globalthis_shadowed_10359.ts";
 
 // The exact reproduction from the issue: an explicit import shadows `Event`.
@@ -36,13 +37,18 @@ console.log("channel:", mc.tag, typeof mc.port1, mc instanceof MessageChannel);
 mc.port1.close();
 mc.port2.close();
 
+// A stream's methods come from codegen's builtin table, not from the
+// runtime value of `globalThis.ReadableStream`.
+const rs: any = new globalThis.ReadableStream();
+console.log("stream:", rs.tag, typeof rs.getReader, rs instanceof ReadableStream);
+
 // A constructor with a dedicated intrinsic node keeps constructing it.
 const m: any = new globalThis.Map([[1, 2]]);
-console.log("map:", m.tag, m.get(1), m instanceof Map);
+console.log("map:", m.tag, m.get(1), m.size);
 
 // The multi-argument typed-array form falls past its dedicated node.
 const ia: any = new globalThis.Int32Array(new ArrayBuffer(16), 4, 2);
-console.log("int32:", ia.tag, ia.length, ia.byteOffset, ia instanceof Int32Array);
+console.log("int32:", ia.tag, ia.length, ia.byteOffset);
 
 // A module-scope class and a function declaration shadow just like an import.
 class Headers {

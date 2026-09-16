@@ -16,3 +16,6 @@ export class Map {
 export class Int32Array {
   readonly tag = "user-Int32Array";
 }
+export class ReadableStream {
+  readonly tag = "user-ReadableStream";
+}

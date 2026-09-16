@@ -1843,6 +1843,23 @@ pub(super) fn lower_builtin_new<'a>(
     }
 }
 
+/// #10359: construct the global intrinsic `class_name` through the builtin
+/// table alone, for a `new globalThis.<name>()` whose name a module class,
+/// class alias or import shadows. `lower_new` resolves those bindings first,
+/// so it would construct the binding. `None` means no builtin arm owns the name
+/// and no argument was lowered; the caller then constructs the global
+/// property's runtime value.
+pub(crate) fn lower_global_intrinsic_new(
+    ctx: &mut FnCtx<'_>,
+    class_name: &str,
+    args: &[Expr],
+) -> Result<Option<String>> {
+    let mut group = rooting::open_rooted_group(args.len() + 1);
+    let result = lower_builtin_new(ctx, class_name, args, &mut group);
+    group.release(ctx);
+    result
+}
+
 /// Map a typed-array constructor name to its runtime `KIND_*` integer (mirrors
 /// `perry_runtime::typedarray::KIND_*`). Used by the `#4103` view-constructor
 /// arm to tell `js_typed_array_view` which element type to build.

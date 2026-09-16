@@ -399,11 +399,12 @@ pub(crate) fn global_name_has_user_binding(ctx: &LoweringContext, name: &str) ->
         || ctx.class_decl_names_any_depth.contains(name)
 }
 
-/// #10359: `new globalThis.<name>(args)` constructing the VALUE of the global
-/// property — the same construct the aliased `const X = globalThis.<name>;
-/// new X(args)` form performs, which was always correct. Codegen does not
-/// fold this callee back onto a same-named module class
-/// (`try_static_class_name`), so it reads the property and constructs it.
+/// #10359: `new globalThis.<name>(args)` constructing the global, not a
+/// same-named binding. Codegen's `try_static_class_name` declines to fold this
+/// callee onto a module class, class alias or import of that name, and builds
+/// the intrinsic through its builtin table (`lower_global_intrinsic_new`) —
+/// the construct the unshadowed form reaches. A name the table does not own
+/// reads the property and constructs its runtime value.
 pub(crate) fn global_property_new_dynamic(name: &str, args: Vec<Expr>, byte_offset: u32) -> Expr {
     Expr::NewDynamic {
         callee: Box::new(Expr::PropertyGet {
