@@ -654,6 +654,24 @@ rc=0
 on the final response, not once per redirect hop. `written == declared` says
 every byte arrived. `buffered=0` says nothing was held in memory.
 
+And the same probe against a release asset that does not exist, which is the
+ordering the review caught:
+
+```
+OK   .../v0.0.0-nope/missing.tar.gz -> 404
+     heads=0 declared=None written=0 buffered=9
+-rw-r--r-- 1 root root 0 /tmp/p11_stream404.bin
+```
+
+`written=0` and a **zero-byte file**: the 404 body never reached the sink, so
+`error_for_status()` sees it — with the error text, in `buffered=9` — before
+anything is on disk. That is `reqwest::send()`'s ordering, which returned on the
+head; an earlier draft here wrote the error page into the self-updater's staging
+file first and only then reported the status.
+
+Both re-run against the final code, with `turnloop`, `turnloop-http` and
+`turnloop-tls` pinned to the exact `=0.1.0-alpha.3` the workspace uses.
+
 **This probe caught a real bug in this lane's own code, and the file above is
 the case that would have failed.** The first version of `execute_streaming`
 followed the redirect chain with the sink *withheld* — buffering each hop to read
