@@ -975,9 +975,13 @@ fn on_eof(id: i64) {
         // An upgraded connection has no request in flight and no response to
         // finish; `ws` reports a missing close frame as 1006. Our own side is
         // closed here rather than by the ws layer, which owns the protocol and
-        // not the connection.
-        perry_ext_ws::turnloop_link::on_eof(id);
-        finish_and_close(id);
+        // not the connection — but only if the close handshake had not already
+        // finished. Shutting down twice answers `ENOTCONN`, and answering that
+        // with a destroy resets a connection whose answering close frame is
+        // still on the wire.
+        if perry_ext_ws::turnloop_link::on_eof(id) {
+            finish_and_close(id);
+        }
         return;
     }
     let state = with_conn(id, |c| {
@@ -1082,8 +1086,14 @@ fn on_error(id: i64, code: Option<&str>, syscall: Option<&str>, terminal: bool) 
     }
     if is_websocket(id) {
         let message = code.unwrap_or("WS_ERR_SOCKET");
-        perry_ext_ws::turnloop_link::on_error(id, message);
-        destroy_connection(id);
+        // Same rule, and the same reason P5 stopped reporting a rustls failure
+        // raised after the application had asked to close: an error on a
+        // connection this layer has already finished with is teardown noise,
+        // and destroying the handle for it cancels writes that are still going
+        // out.
+        if perry_ext_ws::turnloop_link::on_error(id, message) {
+            destroy_connection(id);
+        }
         return;
     }
     let _ = (code, syscall);

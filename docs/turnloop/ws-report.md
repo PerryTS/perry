@@ -313,3 +313,53 @@ finished. It is not.
   both stringify the same, but `Buffer.from(data)` does not.
 
 These are the binding's, not the transport's, and none of them changed here.
+
+## HTTPS, and one defect the fixtures could not see
+
+The attached path was claimed to be TLS-transparent because `write_raw` already
+is. That claim was **tested rather than asserted**, and testing it found a real
+defect — which is the whole argument for testing it.
+
+`https.createServer({key, cert})` + `new WebSocketServer({ server })`, driven by
+a **Node** `ws` client over `wss://` (so nothing on the client side is Perry's):
+
+```
+client: open
+client: message isBinary=false text=echo:over-tls
+--- perry said ---
+server: connection clients=1
+server: message isBinary=false text=over-tls
+server: close code=1000 reason=tls-done
+```
+
+The TLS handshake, the `101` over TLS, `wss.on('connection')`, `isBinary`, the
+echo and the peer's close code all work. **But the first run of this probe
+produced no server output at all** and the client hung after `open`: an
+`https.createServer()` never drained its `'upgrade'` queue, because the
+main-thread pump called `try_recv_upgrade` for every `HttpServer` handle and for
+none of the `HttpsServer` ones. Fixed here (`drain_upgrades`, now shared by both
+loops) — a pre-existing hole that only became reachable once an HTTPS server
+stopped declining the turnloop path.
+
+### Still open: an external client sees 1006 on a peer-initiated close
+
+In the exchange above the client reports `close code=1006` where Node would
+report `1000`. **This is not TLS-specific** — the identical probe over plain
+`http.createServer()` reproduces it exactly, so the TLS layer is exonerated:
+
+```
+client: close code=1006 reason=
+server: close code=1000 reason=tls-done
+```
+
+The server receives and reports the peer's code correctly; what the peer does
+not get back is the *answering* close frame. `Codec::receive` queues and flushes
+it and `turnloop_link::on_data` writes it before `finish`, so the suspect is the
+ordering between that write and the graceful shutdown that follows it.
+
+Note carefully why `test_gap_turnloop_ws_attached` is byte-identical to Node
+anyway: its client is **Perry's own** `ws` client, and that client does receive
+the echo and reports 1000. A fixture with both ends on the same engine cannot
+see this class of bug, which is exactly why the external-client probe exists and
+why it is reported here rather than quietly passing. Filed as remaining work,
+not as done.

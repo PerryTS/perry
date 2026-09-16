@@ -191,9 +191,16 @@ pub fn on_data(conn_id: i64, bytes: &[u8]) {
 }
 
 /// The peer half-closed.
-pub fn on_eof(conn_id: i64) {
+///
+/// Returns whether this layer still owned the connection. `false` means the
+/// close handshake already finished and the host has already shut its own side
+/// down — a second shutdown then answers `ENOTCONN`, which arrives as a
+/// `NET_ERROR` and used to be answered with `destroy_connection`, i.e. a reset.
+/// The reset raced the answering close frame still on the wire, so an external
+/// peer saw 1006 instead of the code it had just been echoed.
+pub fn on_eof(conn_id: i64) -> bool {
     let Some((ws_id, code)) = with_link(conn_id, |link| (link.ws_id, link.codec.eof())) else {
-        return;
+        return false;
     };
     if let Some(code) = code {
         crate::connection_closed(ws_id, code, String::new());
@@ -201,6 +208,7 @@ pub fn on_eof(conn_id: i64) {
     // The host owns the connection and closes its own side; this layer owns
     // only the protocol.
     forget(conn_id);
+    true
 }
 
 /// The connection is gone — the terminal completion, whatever caused it.
@@ -217,13 +225,20 @@ pub fn on_closed(conn_id: i64) {
 }
 
 /// A transport-level error.
-pub fn on_error(conn_id: i64, message: &str) {
+///
+/// Returns whether this layer still owned the connection. `false` means the
+/// error arrived after the close handshake finished — teardown noise on a
+/// socket nobody is reading, which Node does not report either, and which must
+/// NOT be answered by destroying a handle whose last write may still be in
+/// flight.
+pub fn on_error(conn_id: i64, message: &str) -> bool {
     let Some(ws_id) = with_link(conn_id, |link| link.ws_id) else {
-        return;
+        return false;
     };
     crate::connection_error(ws_id, message);
     crate::connection_closed(ws_id, crate::codec::CLOSE_ABNORMAL, String::new());
     forget(conn_id);
+    true
 }
 
 /// `ws.send(...)` on a turnloop-carried client.
