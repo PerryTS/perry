@@ -610,6 +610,35 @@ pub fn add_child_at(parent: i64, child: i64, index: i64) {
     });
 }
 
+/// Move an existing child without changing its native window or layout
+/// metadata. The Win32 backend owns the widget list whenever Fluent
+/// rendering is off, so this mirrors `perry_ui_windows::widgets::reorder_child`
+/// exactly — including its out-of-range / no-op guards. Needed here because
+/// `ffi/widget_layout_extras.rs` is `#[path]`-shared with perry-ui-windows and
+/// resolves `widgets::` against THIS module.
+pub fn reorder_child(parent: i64, from_index: i64, to_index: i64) {
+    // Win32 rejects a non-positive parent outright, and so must this: the
+    // Fluent arm reaches its node through `handle.saturating_sub(1)`, which
+    // would turn handle 0 into node 0 and reorder the wrong subtree.
+    if parent <= 0 {
+        return;
+    }
+    if !is_fluent() {
+        perry_ui_windows::widgets::reorder_child(parent, from_index, to_index);
+        return;
+    }
+    with_node_mut(parent, |node| {
+        let from = from_index as usize;
+        let to = to_index as usize;
+        let len = node.common.children.len();
+        if from >= len || to >= len || from == to {
+            return;
+        }
+        let child = node.common.children.remove(from);
+        node.common.children.insert(to, child);
+    });
+}
+
 pub fn remove_child(parent: i64, child: i64) {
     if !is_fluent() {
         perry_ui_windows::widgets::remove_child(parent, child);
