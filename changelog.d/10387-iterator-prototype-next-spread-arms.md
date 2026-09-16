@@ -36,3 +36,17 @@
   gained `Array.from(array)`, call-spread, multi-operand spread,
   `Array.from(set)`, `Array.from(map)`, `[...map]` and `Array.from(string)`
   cases under the same patches.
+
+The fixture also could not pass for a reason that was not Perry's: it called
+`console.log` while a built-in iterator prototype was patched. Node builds
+`SafeMap` out of `internal/per_context/primordials` lazily, and the parity
+harness runs the oracle under `FORCE_COLOR=0`, which is the path that defers
+that construction into the patched window — so the ORACLE died with
+
+    node:internal/per_context/primordials:449
+      class SafeMap extends Map {},
+
+leaving `Node exit: 1, Perry exit: 0` however the runtime behaved. Output is now
+buffered inside each patched window and flushed after the prototype is restored;
+every value is still computed inside the window, which is the subject, and the
+emitted text is byte-identical to the unbuffered run.
