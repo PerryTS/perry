@@ -15,6 +15,7 @@
     "crates/perry-ext-http/src/server/handle_dispatch.rs": 2,
     "crates/perry-ext-http/src/server/request.rs": 7,
     "crates/perry-ext-http/src/server/response.rs": 1,
+    "crates/perry-ext-http/src/server/server/deferred_events.rs": 1,
     "crates/perry-ext-http/src/server/types.rs": 1,
     "crates/perry-ext-ioredis/src/lib.rs": 1,
     "crates/perry-ext-jsonwebtoken/src/lib.rs": 1,
@@ -83,5 +84,5 @@
     "crates/perry-stdlib/src/zlib.rs": 2
   },
   "schema_version": 2,
-  "total": 539
+  "total": 540
 }
