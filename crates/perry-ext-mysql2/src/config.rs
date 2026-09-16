@@ -15,13 +15,12 @@ use crate::{jsvalue_to_string, object_field_by_name, MySqlConfig};
 // ── The `mysql://` URI form ───────────────────────────────────────
 
 /// Percent-decode a URI component (`%25` → `%`, `%40` → `@`, …). A lone `%`
-/// not followed by two hex digits is kept verbatim. Node's `mysql2` decodes the
-/// credentials it takes out of a connection URL, so a password written as
-/// `p%25ss` (a literal `%`) authenticates as `p%ss`. Perry used the raw
-/// substring and then RE-encoded it for sqlx, double-encoding every reserved
-/// character — so a `%`/`@`/`:` in the password produced a wrong password and
-/// the server rejected the connection with `1045 Access denied`. Decode here so
-/// the round-trip through `to_url` reproduces the real credential.
+/// not followed by two hex digits is kept verbatim.
+///
+/// Node's `mysql2` decodes the credentials it takes out of a connection URL, so
+/// a password written as `p%25ss` (a literal `%`) authenticates as `p%ss` —
+/// which is why the decode has to happen before `to_url` re-encodes them for
+/// the legacy transport. Moved here with `parse_mysql_uri`, unchanged.
 fn percent_decode(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
