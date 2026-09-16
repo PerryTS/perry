@@ -308,8 +308,8 @@ and `turnloop_smtp::Connection` are all sans-I/O, so the parts of this phase
 that decide *correctness* can be tested without a socket, and they are.
 
 ```
-RUST_TEST_THREADS=1 cargo test --release -p perry-stdlib turnloop_client
-RUST_TEST_THREADS=1 cargo test --release -p perry-stdlib turnloop_smtp
+RUST_TEST_THREADS=1 cargo test --release -p perry-stdlib --lib turnloop_client  -> 9 passed
+RUST_TEST_THREADS=1 cargo test --release -p perry-stdlib --lib turnloop_smtp    -> 8 passed
 ```
 
 `turnloop_client` (9): the id band proven disjoint from both handle registries
@@ -333,6 +333,15 @@ recipient failing the delivery rather than reporting success; STARTTLS
 re-issuing EHLO on the secure channel and discarding the cleartext capability
 list; implicit TLS writing nothing in the clear; a `421` ending the session;
 and the id band and error-code interning.
+
+Two of the seventeen failed on their first run, both because the *test* assumed
+something the protocol does not do: the gzip flush error a decoder that has
+already produced everything answers with, and — the more interesting one — that
+`MAIL FROM` / `RCPT TO` / `DATA` are four round trips. The server in that test
+advertises `PIPELINING`, so `turnloop_smtp` writes the first three as one block
+and holds `DATA` back until their replies arrive. Asserting per command was
+asserting the absence of pipelining; the test now asserts the block's contents
+and order, and that `DATA` is **not** in it.
 
 ### `fetch`, byte-for-byte against the oracle
 
@@ -706,8 +715,8 @@ the phase's own acceptance case depends on them; the rest are recorded.
 - Run, on a machine with the pinned oracle:
 
 ```bash
-RUST_TEST_THREADS=1 cargo test --release -p perry-stdlib turnloop_client
-RUST_TEST_THREADS=1 cargo test --release -p perry-stdlib turnloop_smtp
+RUST_TEST_THREADS=1 cargo test --release -p perry-stdlib --lib turnloop_client
+RUST_TEST_THREADS=1 cargo test --release -p perry-stdlib --lib turnloop_smtp
 PERRY_SKIP_BUILD=1 ./scripts/run_gap_tests.sh
 PERRY_SKIP_BUILD=1 ./run_parity_tests.sh --filter test_gap_turnloop_fetch
 PERRY_LOOP_STATS=1 ./p6_tls_remote      # needs the network
