@@ -838,10 +838,96 @@ crate::perry_thread_local! {
     static PENDING_REQUIRE_PARENT: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
 }
 
+crate::perry_thread_local! {
+    /// Memo for [`canonicalize_module_path`]. Module registration canonicalizes
+    /// one absolute path per module, and `std::fs::canonicalize` is a full
+    /// realpath: a `readlink` for EVERY component, every time.
+    ///
+    /// The components repeat massively. Compiling OpenCode 1.18.30 and running
+    /// `--version` issued 86,745 `readlink` calls over only 9,467 distinct
+    /// paths — 98% of every syscall the process made and 0.32s of system time.
+    /// `/root/.../oc` alone was resolved 7,501 times and
+    /// `node_modules/.bun` 5,580 times, because each of ~7,500 module paths
+    /// re-walked the same prefixes from the root down.
+    ///
+    /// Node caches realpath during module resolution for the same reason. The
+    /// memo is per path STRING, so a path that resolves once keeps its answer
+    /// for the life of the process; module paths are registered during startup
+    /// and are not expected to change underneath a running program.
+    static CANONICAL_MODULE_PATHS: std::cell::RefCell<
+        std::collections::HashMap<String, String>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+    /// Memo of canonicalized DIRECTORIES, which is what sibling modules share.
+    static CANONICAL_MODULE_DIRS: std::cell::RefCell<
+        std::collections::HashMap<String, std::path::PathBuf>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Canonicalize the DIRECTORY `dir`, memoized per directory.
+///
+/// This is where the redundancy lives: sibling modules share every ancestor,
+/// so resolving each module path independently re-walks the same prefixes
+/// thousands of times. Resolving a directory once makes each additional module
+/// in it cost one `readlink` for its own basename instead of one per component.
+fn canonical_dir(dir: &std::path::Path) -> std::path::PathBuf {
+    let key = dir.to_string_lossy().into_owned();
+    if let Some(hit) = CANONICAL_MODULE_DIRS.with(|memo| memo.borrow().get(&key).cloned()) {
+        return hit;
+    }
+    // Resolve the parent first (memoized), then this one component, so a deep
+    // tree costs one lookup per NEW directory rather than a full walk each time.
+    let resolved = match (dir.parent(), dir.file_name()) {
+        (Some(parent), Some(name)) if parent != dir => {
+            let base = canonical_dir(parent);
+            let joined = base.join(name);
+            match std::fs::read_link(&joined) {
+                // Not a symlink (the common case): the parent is already
+                // canonical, so the join is canonical too — no deeper walk.
+                Err(_) => joined,
+                // A symlink: hand it to the real resolver rather than
+                // re-implementing chain and relative-target semantics.
+                Ok(_) => std::fs::canonicalize(&joined).unwrap_or(joined),
+            }
+        }
+        _ => std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf()),
+    };
+    CANONICAL_MODULE_DIRS.with(|memo| {
+        memo.borrow_mut().insert(key, resolved.clone());
+    });
+    resolved
+}
+
 fn canonicalize_module_path(path: &str) -> String {
-    std::fs::canonicalize(path)
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| path.to_string())
+    if let Some(hit) = CANONICAL_MODULE_PATHS.with(|memo| memo.borrow().get(path).cloned()) {
+        return hit;
+    }
+    let candidate = std::path::Path::new(path);
+    // Only take the fast route for an absolute, already-normalized path: `..`
+    // and `.` change what a prefix means, and `canonicalize` resolves those.
+    let normal = candidate.is_absolute()
+        && !candidate.components().any(|c| {
+            matches!(
+                c,
+                std::path::Component::ParentDir | std::path::Component::CurDir
+            )
+        });
+    let resolved = match (normal, candidate.parent(), candidate.file_name()) {
+        (true, Some(parent), Some(name)) => {
+            let base = canonical_dir(parent);
+            let joined = base.join(name);
+            match std::fs::read_link(&joined) {
+                Err(_) => joined,
+                Ok(_) => std::fs::canonicalize(&joined).unwrap_or(joined),
+            }
+        }
+        _ => std::fs::canonicalize(candidate).unwrap_or_else(|_| candidate.to_path_buf()),
+    }
+    .to_string_lossy()
+    .into_owned();
+    CANONICAL_MODULE_PATHS.with(|memo| {
+        memo.borrow_mut().insert(path.to_string(), resolved.clone());
+    });
+    resolved
 }
 
 /// Codegen FFI: record that `<prefix>__init` (address `init_addr`) initializes
