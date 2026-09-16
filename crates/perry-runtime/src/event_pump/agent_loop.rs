@@ -137,8 +137,18 @@ fn wait_config() -> Config {
 /// pending, which is backpressure), but it would cost an extra turn per read.
 fn net_config() -> Config {
     Config {
-        max_handles: 4096,
-        max_operations: 8192,
+        // 4096 handles meant a server refused the 2,049th connection: a
+        // connection costs two handles, and the refusal was flat rather than
+        // backpressure (perry#10351). The number was small because turnloop
+        // used to ALLOCATE it -- `Table::new` built every slot and the whole
+        // free list up front, so the ceiling was paid whether or not it was
+        // used. Since turnloop 0.1.0-alpha.5 the slot tables are paged
+        // (turnloop#75): a loop's idle cost is one page and is byte-identical
+        // from 1K to 1M handles, so the ceiling is free and only the
+        // high-water mark costs anything. 64K handles is ~32K connections.
+        max_handles: 65_536,
+        // Two in-flight operations per connection (a read and a write).
+        max_operations: 131_072,
         events_per_turn: 64,
         pooled_buffers: 64,
         pooled_buffer_size: 16 * 1024,

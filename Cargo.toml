@@ -410,7 +410,7 @@ perex = "0.1.4"
 # reason; the exact version is pinned by Cargo.lock, locked once with the
 # owner-approved one-time publish-age override (published 2026-09-15T09:37:32Z,
 # sha256 c3370511f37b90dc5ba694566cb941f0e89c205c84b798277f17a05f13e4a8ab).
-turnloop = "0.1.0-alpha.3"
+turnloop = "0.1.0-alpha.5"
 # turnloop P5 (DESIGN §5b, §12 "P5"): the sans-I/O protocol crates that
 # replace hyper's HTTP/1.1 parser and framer on Perry's server path, and
 # `tokio_rustls` on every TLS path the loop owns. Default features only — the
@@ -419,14 +419,14 @@ turnloop = "0.1.0-alpha.3"
 # issue; Perry already owns a `turnloop::Loop` and routes P1/P2/P3 tokens
 # through it, so the codecs are driven sans-I/O over the P1 socket layer
 # instead (docs/turnloop/p5-report.md, "Why sans-I/O").
-turnloop-http = { version = "0.1.0-alpha.3", default-features = false }
-turnloop-tls = { version = "0.1.0-alpha.3", default-features = false }
+turnloop-http = { version = "0.1.0-alpha.5", default-features = false }
+turnloop-tls = { version = "0.1.0-alpha.5", default-features = false }
 # turnloop P6 (DESIGN §12 "P6"): the sans-I/O SMTP client and MIME builder that
 # replaces `lettre`'s tokio transport on the outbound mail path. Its `message`
 # module re-exports the same `lettre` 0.11 builder Perry's nodemailer surface
 # already uses, so only the transport changes
 # (docs/turnloop/p6-report.md).
-turnloop-smtp = { version = "0.1.0-alpha.3", default-features = false }
+turnloop-smtp = { version = "0.1.0-alpha.5", default-features = false }
 # turnloop P7 (docs/turnloop/p7-report.md): the sans-I/O database protocol
 # cores that replace sqlx, the `redis` crate and the `mongodb` driver on the
 # paths Perry's bindings own. Default features only, for the same reason as the
@@ -436,10 +436,10 @@ turnloop-smtp = { version = "0.1.0-alpha.3", default-features = false }
 # it is the release that gave MySQL and MongoDB one deflate state per
 # connection, each compressed message framed as its own zlib stream; alpha.3
 # re-created the state per message and is a wire-level regression to adopt.
-turnloop-mysql = { version = "0.1.0-alpha.4", default-features = false }
-turnloop-postgres = { version = "0.1.0-alpha.4", default-features = false }
-turnloop-redis = { version = "0.1.0-alpha.4", default-features = false }
-turnloop-mongodb = { version = "0.1.0-alpha.4", default-features = false }
+turnloop-mysql = { version = "0.1.0-alpha.5", default-features = false }
+turnloop-postgres = { version = "0.1.0-alpha.5", default-features = false }
+turnloop-redis = { version = "0.1.0-alpha.5", default-features = false }
+turnloop-mongodb = { version = "0.1.0-alpha.5", default-features = false }
 hex = "0.4"
 tempfile = "3"
 itoa = "1.0"
