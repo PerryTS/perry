@@ -290,7 +290,7 @@ fn send_head(engine: &mut Engine, conn_id: i64) {
     if let Err(e) = result {
         let error = ClientError::new(e.code, e.message);
         deliver(engine, req_id, Outcome::Err(error));
-        close_conn(engine, conn_id, false);
+        close_conn(engine, conn_id);
         return;
     }
     flush(engine, conn_id);
@@ -340,7 +340,7 @@ fn flush(engine: &mut Engine, conn_id: i64) {
         if let Some(req_id) = req_id {
             deliver(engine, req_id, Outcome::Err(error));
         }
-        close_conn(engine, conn_id, false);
+        close_conn(engine, conn_id);
     }
 }
 
@@ -925,21 +925,41 @@ fn release(engine: &mut Engine, conn_id: i64, reusable: bool) {
         let _ = tl::set_ref(conn_id, false);
         arm_idle_timer(engine, conn_id);
     } else {
-        close_conn(engine, conn_id, false);
+        close_conn(engine, conn_id);
     }
-    // Admit one waiter for this origin, if the pool will now take it.
+    admit_waiter(engine, &origin);
+}
+
+/// Start one request the pool parked at `Acquire::Wait`, if there is one.
+///
+/// This must run wherever an origin's capacity comes back — which is every
+/// place a pool seat is retired, **not** only the one happy path through
+/// [`release`].
+///
+/// It was `release`-only at first, and `release` is reached from exactly one
+/// place (`on_end`). Every failure path — a connect error, a TLS failure, a
+/// `NET_ERROR`, an EOF with no head, an idle close, an abort — goes straight to
+/// [`close_conn`]. So sixteen concurrent requests to one origin that all failed
+/// left the seventeenth parked forever: its sink was never called, and
+/// `has_pending_requests()` then kept the event loop alive on a promise that
+/// could not settle, so **the process never exited**. A later request to the
+/// same origin would meanwhile connect immediately and overtake it.
+/// `test_gap_turnloop_fetch_pool_wait.ts` is the regression test, and it
+/// asserts the exit rather than the callback: a fixture that only checked the
+/// rejection would pass while the loop still refused to drain.
+fn admit_waiter(engine: &mut Engine, origin: &str) {
     let next = engine
         .waiting
-        .get_mut(&origin)
-        .and_then(|queue| queue.pop_front());
+        .get_mut(origin)
+        .and_then(std::collections::VecDeque::pop_front);
+    if engine
+        .waiting
+        .get(origin)
+        .is_some_and(std::collections::VecDeque::is_empty)
+    {
+        engine.waiting.remove(origin);
+    }
     if let Some(next) = next {
-        if engine
-            .waiting
-            .get(&origin)
-            .is_some_and(std::collections::VecDeque::is_empty)
-        {
-            engine.waiting.remove(&origin);
-        }
         start_locked(engine, next);
     }
 }
@@ -950,7 +970,21 @@ fn arm_idle_timer(engine: &mut Engine, conn_id: i64) {
         if let Some(conn) = engine.conns.get_mut(&conn_id) {
             conn.idle_timer = Some(timer_id);
         }
+        return;
     }
+    // `timer_arm` fails only when this thread has no loop (impossible here — a
+    // connection exists) or when the driver refuses another handle, i.e. the
+    // net profile's 4096-handle table is full. That is reachable on a busy
+    // server, not a theoretical precondition.
+    //
+    // Nothing else would ever reclaim this connection: `release` has already
+    // unreferenced it, so it cannot keep the process alive, and with no
+    // deadline it would sit in `conns` — and on one of the origin's
+    // `max_per_host` pool seats — for the life of the process, reachable only
+    // if some later request happened to target the same origin. A socket that
+    // cannot be aged out is not worth pooling, and closing it is also what
+    // gives the seat back to a waiter.
+    close_conn(engine, conn_id);
 }
 
 fn cancel_idle_timer(engine: &mut Engine, conn_id: i64) {
@@ -971,13 +1005,22 @@ fn on_idle_timeout(engine: &mut Engine, timer_id: i64) {
         if let Some(conn) = engine.conns.get_mut(&conn_id) {
             conn.idle_timer = None;
         }
-        close_conn(engine, conn_id, true);
+        close_conn(engine, conn_id);
     }
 }
 
 /// Submit the close and mark the entry. The entry survives until `NET_CLOSED`,
 /// which is where it is dropped (DESIGN D4).
-fn close_conn(engine: &mut Engine, conn_id: i64, pooled: bool) {
+///
+/// Retiring the pool seat frees one of the origin's slots, so this also admits
+/// whatever the pool had parked behind it — see [`admit_waiter`] for why doing
+/// that only in [`release`] left requests undeliverable and the process unable
+/// to exit.
+///
+/// (There used to be a `pooled: bool` parameter whose two arms did exactly the
+/// same thing. A distinction no caller can observe is one a future change gets
+/// silently wrong, so it is gone.)
+fn close_conn(engine: &mut Engine, conn_id: i64) {
     let Some(conn) = engine.conns.get_mut(&conn_id) else {
         return;
     };
@@ -986,7 +1029,7 @@ fn close_conn(engine: &mut Engine, conn_id: i64, pooled: bool) {
     }
     conn.closing = true;
     trace!(
-        "close conn={conn_id} pooled={pooled} had_request={}",
+        "close conn={conn_id} had_request={}",
         conn.request.is_some()
     );
     if let Some(timer_id) = conn.idle_timer.take() {
@@ -1001,17 +1044,14 @@ fn close_conn(engine: &mut Engine, conn_id: i64, pooled: bool) {
         }
     }
     let pool_id = conn.pool_id;
-    if pooled {
-        // The pool already released it; this only marks the slot dead.
-        let _ = engine.pool().closed(pool_id);
-    } else {
-        let _ = engine.pool().closed(pool_id);
-    }
+    let origin = conn.key.origin.clone();
+    let _ = engine.pool().closed(pool_id);
     if tl::close(conn_id).is_err() {
         // The handle is already gone; run the terminal path now so the entry
         // and any attached request cannot be stranded.
         on_closed(engine, conn_id);
     }
+    admit_waiter(engine, &origin);
 }
 
 fn on_closed(engine: &mut Engine, conn_id: i64) {
@@ -1048,13 +1088,13 @@ fn on_eof(engine: &mut Engine, conn_id: i64) {
     let ended = conn.http.eof().is_ok();
     if had_head && ended {
         on_end(engine, conn_id);
-        close_conn(engine, conn_id, false);
+        close_conn(engine, conn_id);
         return;
     }
     let reused = conn.used;
     // Detached for the same reason as in `fail_conn`.
     let req_id = conn.request.take();
-    close_conn(engine, conn_id, false);
+    close_conn(engine, conn_id);
     if let Some(req_id) = req_id {
         fail_request(
             engine,
@@ -1083,7 +1123,7 @@ fn fail_conn(engine: &mut Engine, conn_id: i64, error: ClientError) {
         Some(conn) => (conn.request.take(), conn.used),
         None => (None, false),
     };
-    close_conn(engine, conn_id, false);
+    close_conn(engine, conn_id);
     if let Some(req_id) = req_id {
         fail_request(engine, req_id, reused, error);
     }
@@ -1139,12 +1179,14 @@ pub(super) fn abort(req_id: u64) {
                 // socket hang-up for a request that is being aborted.
                 conn.request = None;
             }
-            close_conn(&mut engine, conn_id, false);
+            close_conn(&mut engine, conn_id);
         } else {
-            // Still queued behind the pool's per-origin limit.
+            // Still queued behind the pool's per-origin limit. Drop an emptied
+            // queue too, so an origin nothing waits on stops being a key.
             for queue in engine.waiting.values_mut() {
                 queue.retain(|id| *id != req_id);
             }
+            engine.waiting.retain(|_, queue| !queue.is_empty());
         }
         deliver(&mut engine, req_id, Outcome::Err(ClientError::aborted()));
     });

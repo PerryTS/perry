@@ -405,3 +405,52 @@ fn an_unsupported_url_declines_rather_than_failing() {
     // A CONNECT is forbidden for fetch and must not reach the transport.
     assert!(tlc::Request::new("http://example.test/x", "CONNECT").is_err());
 }
+
+/// The pool parks a request past `max_per_host`, and something has to admit it
+/// again. This asserts the CONTRACT that made the admission bug possible: a
+/// seat comes back when a connection is *closed*, not only when one is
+/// released — so a host that admits waiters only on release is admitting them
+/// on the rarer of the two events.
+///
+/// The end-to-end half of this is `test_gap_turnloop_fetch_pool_wait.ts`, which
+/// asserts the process exits; this half pins the pool behaviour the engine
+/// reasons from, so a `turnloop-http` change that altered it would fail here
+/// rather than as a hang in a fixture.
+#[test]
+fn a_closed_connection_frees_a_seat_exactly_as_a_released_one_does() {
+    let mut pool = tlc::Pool::new(2, Duration::from_secs(90));
+    let key = PoolKey {
+        origin: "http://a.test".into(),
+        proxy: None,
+    };
+    let now = Instant::now();
+
+    let Acquire::Connect(first) = pool.acquire(&key, now) else {
+        panic!("first connects");
+    };
+    let Acquire::Connect(second) = pool.acquire(&key, now) else {
+        panic!("second is within max_per_host=2");
+    };
+    assert!(
+        matches!(pool.acquire(&key, now), Acquire::Wait),
+        "the third must park — without this the rest of the test proves nothing"
+    );
+
+    // CLOSING one — the failure path, which never calls `release` — must free a
+    // seat just as a release does.
+    pool.closed(first).expect("close");
+    assert!(
+        matches!(pool.acquire(&key, now), Acquire::Connect(_)),
+        "a closed connection frees the origin's seat; the engine must therefore \
+         admit a waiter from its close path, not only from its release path"
+    );
+
+    // And the released one behaves the same way, which is the case the engine
+    // already handled.
+    pool.connected(second, tlc::Protocol::Http1, 1).expect("up");
+    pool.release(second, true, now).expect("release");
+    assert!(
+        matches!(pool.acquire(&key, now), Acquire::Reuse(id) if id == second),
+        "a released keep-alive connection is reused"
+    );
+}

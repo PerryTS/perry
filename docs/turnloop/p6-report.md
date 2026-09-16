@@ -558,6 +558,66 @@ reports. It is a two-sided change — the statically typed native-table rows tak
 the receiver as a raw `Handle` today — and it belongs with whoever owns that
 binding rather than in a transport migration.
 
+### The exactly-once bug an independent review found, and the test that pins it
+
+The first build that passed everything above still had a **hang** in it, and no
+fixture in this report could see it. Admitting a request the pool had parked at
+`Acquire::Wait` lived only inside `release()`, and `release()` is reached from
+exactly one place — `on_end`, a response that completed normally. Every failure
+path (a connect error, a TLS failure, a `NET_ERROR`, an EOF with no head, an
+idle close, an abort) goes straight to `close_conn()`, which retires the pool
+seat and never looked at `engine.waiting`.
+
+So: sixteen concurrent requests to one origin that all **fail** leave the
+seventeenth parked forever. Its sink is never called, and
+`has_pending_requests()` then keeps Perry's event loop alive on a promise that
+can never settle — the process does not exit. Meanwhile a *later* request to the
+same origin connects immediately and overtakes it.
+
+`test-files/test_gap_turnloop_fetch_pool_wait.ts` fires twenty-four concurrent
+fetches at a port nothing listens on — a connect error, which is precisely the
+path `release()` never sees — and then a second round of twenty-four at the same
+origin. It **deliberately does not call `process.exit()`**: reaching the last
+line and returning is the assertion, because a fixture that only checked "all
+twenty-four rejected" would pass while the loop still refused to drain.
+
+| | unfixed build | fixed build |
+|---|---|---|
+| exit code, 45 s budget | **124 (timed out)** | **0** |
+| output | **none at all** | byte-identical to Node, 3 runs |
+| P6 counters | — | `http_submitted=48 declined=0 failed=48` |
+
+The unfixed build printed *nothing* — it hung before the first `console.log`,
+because `Promise.allSettled` over the first round never resolved.
+
+Two smaller defects from the same review are fixed with it: a connection whose
+idle timer could not be armed was pooled anyway, where nothing would ever
+reclaim it (it is closed now — `timer_arm` fails only with no loop, impossible
+there, or when the net profile's 4096-handle table is full, which is reachable
+on a busy server); and `close_conn`'s `pooled` parameter, whose two arms did
+exactly the same thing, is gone. `turnloop_smtp`'s `pump()` now *reports* an
+exhausted event budget as a failure with a live counter
+(`pump_exhausted=` on the stats line) instead of falling out of the loop
+silently, which would have stalled an exchange with no way to notice.
+
+`a_closed_connection_frees_a_seat_exactly_as_a_released_one_does` pins the pool
+contract the engine reasons from, so a `turnloop-http` change that altered it
+fails there rather than as a hang in a fixture.
+
+### GC stress, and one fixture that refused to be counted
+
+Re-run on the fixed build, unchanged from the table above: 105 copying minors,
+13,741 moved objects, 105 from-space quarantines, stdout byte-identical, on all
+three seeds.
+
+The pool-wait fixture was stressed too and **exited 70 with the instrument's own
+refusal**: `loop_polls=0`, "THIS RUN EXERCISED NOTHING WORTH TRUSTING … every
+collection came from an event-loop boundary and no loop body was covered."
+Its body is `Promise.allSettled` over an array map, a lowering codegen emits no
+back-edge poll for. That is the instrument working — it declined to let a clean
+exit be read as coverage — and it is why the GC evidence in this report rests on
+the fetch fixture (33 loop polls) rather than on this one.
+
 ### The full gap suite, against this branch's own base
 
 Both trees built identically — the harness's default package set plus the

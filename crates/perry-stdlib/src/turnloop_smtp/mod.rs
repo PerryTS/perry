@@ -77,16 +77,30 @@ static DECLINED: AtomicU64 = AtomicU64::new(0);
 static SENT: AtomicU64 = AtomicU64::new(0);
 static FAILED: AtomicU64 = AtomicU64::new(0);
 static UPGRADED: AtomicU64 = AtomicU64::new(0);
+static PUMP_EXHAUSTED: AtomicU64 = AtomicU64::new(0);
+
+/// Events one `pump` will drain before deciding the state machine is not
+/// converging. One exchange produces a handful.
+const PUMP_EVENT_BUDGET: usize = 64;
+
+/// How many exchanges were abandoned because [`pump`] ran out of budget. A
+/// nonzero value is a bug in this engine or in `turnloop-smtp`, never a
+/// workload property — which is why it is printed rather than logged.
+pub fn pump_exhausted() -> u64 {
+    PUMP_EXHAUSTED.load(Ordering::Relaxed)
+}
 
 /// `PERRY_LOOP_STATS`'s P6 SMTP line.
 pub fn stats_line() -> String {
     format!(
-        "[perry-loop] p6 smtp_submitted={} declined={} sent={} failed={} tls_upgrades={}",
+        "[perry-loop] p6 smtp_submitted={} declined={} sent={} failed={} tls_upgrades={} \
+         pump_exhausted={}",
         SUBMITTED.load(Ordering::Relaxed),
         DECLINED.load(Ordering::Relaxed),
         SENT.load(Ordering::Relaxed),
         FAILED.load(Ordering::Relaxed),
         UPGRADED.load(Ordering::Relaxed),
+        PUMP_EXHAUSTED.load(Ordering::Relaxed),
     )
 }
 
@@ -539,9 +553,19 @@ fn on_data(state: &mut EngineState, id: i64, bytes: &[u8]) {
 }
 
 /// Drain the connection's events and its output, repeatedly, until neither
-/// produces anything. Bounded by the state machine, which only ever advances.
+/// produces anything.
+///
+/// The iteration bound is a guard against a protocol state this code did not
+/// anticipate, not an expectation: sixty-four is far more events than one
+/// exchange produces. But *falling out of the loop* with events still queued
+/// would be a silent stall — nothing else calls `pump` until the next
+/// `NET_DATA`, and a state machine that has more to say without more bytes
+/// would never get another one, leaving the exchange undelivered and its
+/// `Exchange` in `conns` forever. So exhaustion is reported as a failure
+/// instead. `pump_exhausted()` is a live counter so a run can say this never
+/// happened rather than assume it.
 fn pump(state: &mut EngineState, id: i64) {
-    for _ in 0..64 {
+    for _ in 0..PUMP_EVENT_BUDGET {
         let event = state
             .conns
             .get_mut(&id)
@@ -571,10 +595,24 @@ fn pump(state: &mut EngineState, id: i64) {
                 return;
             }
             Some(Event::Reset) => {}
-            None => break,
+            None => {
+                flush(state, id);
+                return;
+            }
         }
     }
-    flush(state, id);
+    // The budget ran out with events still queued. Reporting it is the whole
+    // point: the alternative is an exchange nothing will ever settle.
+    PUMP_EXHAUSTED.fetch_add(1, Ordering::Relaxed);
+    fail(
+        state,
+        id,
+        SmtpError::transport(
+            "EPROTOCOL",
+            "SMTP event budget exhausted; the exchange was abandoned rather \
+             than left unsettled",
+        ),
+    );
 }
 
 fn on_ready(state: &mut EngineState, id: i64) -> bool {

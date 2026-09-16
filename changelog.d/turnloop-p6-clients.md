@@ -71,6 +71,25 @@ all invisible to every loopback fixture:
   request exited before the response arrived. The fetch gap fixture hid it by
   running a server of its own.
 
+An independent review of the exactly-once delivery paths then found a **hang**
+that none of the fixtures above could see, now fixed:
+
+- **A request the pool parked was never admitted when the connections ahead of
+  it failed.** Admitting a waiter lived only in `release()`, reached from
+  exactly one place — a response that completed normally. Every failure path
+  closes the connection directly. Sixteen concurrent requests to one origin that
+  all failed left the seventeenth parked forever: its sink was never called and
+  `has_pending_requests()` kept the event loop alive on a promise that could not
+  settle, so the process never exited. `test_gap_turnloop_fetch_pool_wait.ts`
+  pins it by asserting the **exit** (24 concurrent fetches at a dead port, no
+  `process.exit()`); the unfixed build times out having printed nothing.
+- **A connection whose idle timer could not be armed was pooled anyway**, where
+  nothing would reclaim it and its pool seat was occupied for the process's
+  life. It is closed instead.
+- **`turnloop_smtp::pump` fell out of its 64-event budget silently**, which
+  would leave an exchange unsettled forever. It now fails the exchange and
+  counts it (`pump_exhausted=` on the stats line).
+
 `turnloop-smtp 0.1.0-alpha.3` is added (default features: sans-I/O, no
 `turnloop-io`); it re-exports the same `lettre` 0.11 message builder the
 nodemailer surface already used, so the MIME bytes are produced by the same code
