@@ -17,6 +17,7 @@ mod census_block_windows;
 mod census_whole_block;
 mod concat_site;
 mod contract;
+mod copy_slot_hoists;
 mod copying;
 mod copying_side_tables;
 mod cycle_state;
