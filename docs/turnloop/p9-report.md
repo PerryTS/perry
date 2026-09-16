@@ -548,6 +548,39 @@ between them (20,350-20,358), which is the residual timing.
 The worker agent's own loop ran throughout: `[perry-loop] ... native_ticks=0 ...
 completions=13 agent=1`, with `p6 http_submitted=2 declined=0`.
 
+## Unit tests
+
+`RUST_TEST_THREADS=1 cargo test --release -p perry-runtime` (single-threaded
+because that crate's tests share process-global side tables, #1444):
+**4018 passed, 1 failed, 4 ignored.**
+
+The one failure is `gc::tests::heap_generation::a_free_or_move_outside_every_scope_is_caught_in_debug_builds`,
+and it is an artefact of running the suite in `--release`, not of this branch.
+The test asserts that `gc::heap_generation::debug_assert_heap_change_open()`
+panics with no scope open; that function's body is `#[cfg(debug_assertions)]`
+(`crates/perry-runtime/src/gc/heap_generation.rs:126-134`), so in a release build
+it is a no-op and nothing can fire. This branch touches no file under
+`crates/perry-runtime/src/gc/` at all -- `git diff 1edb5b7e8d..HEAD -- crates/perry-runtime/src/gc/`
+is empty.
+
+The fifteen tests this lane added or rewrote all pass, and they are the ones that
+assert the properties the design rests on:
+
+```
+a_worker_agent_gets_its_own_loop                         ... ok
+sibling_worker_agents_do_not_share_a_loop                ... ok
+a_second_thread_of_the_same_agent_is_declined            ... ok
+a_notify_wakes_a_parked_worker_agent                     ... ok
+another_thread_wakes_a_parked_turn_through_js_notify_main_thread ... ok
+install_shutdown_and_thread_exit_release_the_loop_and_route      ... ok
+native_work_in_flight_is_counted_as_a_tokio_tick_not_a_turn      ... ok
+an_armed_timer_deadline_does_not_keep_the_loop_alive     ... ok
+```
+
+plus the `turnloop_proc` id-banding test, which mints on three agents and asserts
+the bands are disjoint -- a property that is invisible in normal operation and
+only shows up the one time an id crosses.
+
 ## Defects found and NOT fixed
 
 Each of these is reproducible, has a named fixture on this branch, and is left
