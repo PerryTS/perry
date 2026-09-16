@@ -114,15 +114,15 @@ Four rules hold it together.
    data inside a `JsPromise::resolve_with` closure, which the resolution pump
    invokes there. That is the #1824 rule the `spawn_blocking` bindings already
    had to obey, now with no worker thread involved at all.
-2. **No JS value and no heap pointer reaches the driver.** Reads are copied out
+5. **No JS value and no heap pointer reaches the driver.** Reads are copied out
    of turnloop's pooled lease inside the dispatch call; writes are handed over
    as owned `Vec<u8>`. P1's rule, unchanged, which is why this module registers
    no GC root scanner of its own.
-3. **A transport is decided once, at client construction, and never changes.**
+6. **A transport is decided once, at client construction, and never changes.**
    P1's rule for sockets, for the same reason: whether a client is TLS or which
    agent owns it is not knowable later, and a client that switched mid-life
    would have two different connections to the same server.
-4. **Every accepted operation gets exactly one settlement.** Including the
+7. **Every accepted operation gets exactly one settlement.** Including the
    failure paths — a dropped `JsPromise` is a promise that never resolves and
    never rejects, which is the one outcome a caller cannot recover from.
 
@@ -397,9 +397,131 @@ which is correct: that fixture has no allocating loop. Reporting it as a pass
 would have been exactly the vacuous-gate failure the instrument exists to
 prevent.
 
-<!-- EVIDENCE:PG -->
-<!-- EVIDENCE:MYSQL -->
-<!-- EVIDENCE:MONGO -->
+### PostgreSQL, byte-for-byte against the oracle
+
+`scripts/turnloop/apps/pg_parity.ts`, against the **scram-sha-256** server:
+
+```
+=== diff (perry vs node) ===
+BYTE-IDENTICAL
+```
+
+That is also the only evidence the host-side SCRAM handshake works: the core
+asks for a `ScramSha256` because its constructor reads entropy, and the binding
+builds it. Seventeen lines covering DDL, three inserts including an all-NULL
+row, a `SELECT` of int4/text/bool/float8 with a multi-byte value, an empty
+`SELECT`, a 70 000-byte value that spans several reads, `UPDATE`, `DELETE`, a
+statement error that rejects and leaves the session usable, `BEGIN`/`ROLLBACK`,
+`BEGIN`/`COMMIT`, and the `Pool` surface.
+
+```
+[perry-db] subsystem=2 connect id=3298534883328 127.0.0.1:55432
+[perry-db] subsystem=2 connect id=3298534883329 127.0.0.1:55432
+[perry-db] subsystem=2 closed id=3298534883328 connects=2 reads=33 writes=25 …
+[perry-loop] driver=turnloop turns=70 os_waits=40 … native_ticks=0 … completions=72
+[perry-loop-waits] … tokio_ticks=0 …
+```
+
+**The base arm cannot run this fixture at all**, and that is a finding rather
+than a caveat. On `7f77cce3c6` every line reads
+
+```
+create: command=undefined rowCount=undefined rows=undefined
+```
+
+— the sqlx path's result object is unreadable from TypeScript — and the run then
+dies on the same parameter defect (below). So for `pg`, P7 is the first time the
+binding returns anything a program can use.
+
+Two divergences from node-postgres are deliberately outside the fixture, both
+reproduced on the base commit:
+
+| | Node | base | P7 |
+|---|---|---|---|
+| `client.query(sql, params)` | works | `bind message supplies 0 parameters, but prepared statement "sqlx_s_8" requires 1` | `…but prepared statement "" requires 1` |
+| `rowCount` on INSERT / UPDATE / DELETE | the affected count | `undefined` | `0` |
+| `rowCount` on DDL | `null` | `undefined` | `0` |
+
+The parameter defect is identical on both arms — the parameters never reach the
+`Bind` message — so it is a pre-existing Perry defect and not something the
+transport introduced. The `rowCount` row is a P7 improvement that does not go
+far enough; `turnloop_postgres` supplies the real `CommandComplete` row count
+and plumbing it through is a JS-visible change that belongs in its own commit.
+
+### PostgreSQL, the same headline measurement
+
+`scripts/turnloop/apps/pg_thread_census.ts`: twelve `pg` clients, each holding a
+200 ms `pg_sleep` at the same moment.
+
+| | base `7f77cce3c6` | P7 |
+|---|---|---|
+| idle threads | 1 | 1 |
+| after 12 `connect()`s | **13** — `tokio-rt-worker x12` | **1** |
+| 12 queries in flight | **13** | **1** |
+| results correct | *the run fails*: `rows` is `undefined` | **12 of 12** |
+| turnloop `turns` / `completions` | 0 / 0 | **42 / 108** |
+| `native_ticks` | 2 | **0** |
+
+Worth noting which row moved: the twelve threads on the base arm are consumed by
+the **connects**, not by the queries — `js_pg_client_connect` is itself a
+`spawn_blocking` — and they are still there after the connects have resolved.
+
+### MySQL, byte-for-byte against the oracle, on both authentication plugins
+
+`scripts/turnloop/apps/mysql_parity.ts`, run twice against MySQL 8.0.46:
+
+| user | plugin | result |
+|---|---|---|
+| `perrynat` | `mysql_native_password` | **byte-identical** |
+| `perry` | `caching_sha2_password` | **byte-identical** |
+
+Fourteen lines covering `affectedRows`, a `SELECT` of INT/VARCHAR/TINYINT/DOUBLE
+with an all-NULL row and a multi-byte value, an empty `SELECT`, **two prepared
+statements with parameters** (`execute`, the binary result protocol), a
+70 000-byte value, `UPDATE`, a statement error that leaves the connection
+usable, and `beginTransaction`/`rollback`/`commit`.
+
+The `caching_sha2` run was repeated after `FLUSH PRIVILEGES`, which clears the
+server's password cache and forces **full** authentication — the path that emits
+`RsaSeedNeeded` and needs 20 fresh random bytes from the host. It stays
+byte-identical, and the transport counters show the two extra round trips:
+
+```
+# fast path (cache warm)   … reads=33 writes=27 timer_arms=36
+# full path (cache flushed) … reads=33 writes=29 timer_arms=36
+[perry-loop] driver=turnloop turns=60 … native_ticks=0 … completions=112
+[perry-loop-waits] … tokio_ticks=0 …
+```
+
+### MongoDB, byte-for-byte against the base arm
+
+`scripts/turnloop/apps/mongo_parity.ts`:
+
+```
+BASE vs P7: BYTE-IDENTICAL
+```
+
+**Not** byte-identical to Node, and deliberately reported that way: Perry's
+MongoDB surface diverges from the npm driver's in ways that predate this change
+and are unaffected by it. `findOne` resolves a JSON *string* rather than a
+document; `find().toArray()` resolves `""`; `insertOne().acknowledged` is
+`false`; `updateOne().modifiedCount`, `deleteOne().deletedCount` and
+`insertMany().insertedCount` are `undefined`. Every one of those reads exactly
+the same on `7f77cce3c6`. The transport is what this lane changed, and the
+transport changed nothing:
+
+```
+[perry-db] subsystem=6 connect id=7696581394432 127.0.0.1:57017
+[perry-loop] driver=turnloop turns=39 os_waits=19 … native_ticks=0 … completions=41
+[perry-loop-waits] … tokio_ticks=0 …
+```
+
+The document *data* is right on both arms — `count`, `count-filtered`,
+`find-one`'s payload and `count-after-delete` all match Node — so the wire half
+works and the JS half is the pre-existing gap. `find().toArray()` resolving an
+empty string is the most serious of these and is worth its own issue: MongoDB's
+primary read API is unusable from TypeScript on either transport.
+
 <!-- EVIDENCE:GAP -->
 
 ## Unit tests
@@ -460,22 +582,22 @@ Reported here in the shape P5's were, for the coordinator to file.
    codec, here are the raw bytes". A host that matches on the `Value` variant
    rather than the OID will silently widen its JS type surface. A
    `Value::Unknown { oid, text }` would make the distinction visible.
-5. **`next_event()` returns `Ok(None)` in `State::Scram(_)`.** A host that
+8. **`next_event()` returns `Ok(None)` in `State::Scram(_)`.** A host that
    ignores `ScramNeeded` stalls silently rather than erroring.
-6. **`Connection::new` queues the StartupMessage before the host has a
+9. **`Connection::new` queues the StartupMessage before the host has a
    transport**, so `output()` is already non-empty at construction — convenient,
    but the README's step 1/2 ordering does not mention it.
 
 **`turnloop-mysql`**
 
-7. **`COM_STMT_CLOSE` and `COM_QUIT` cannot complete under a completion-driven
+10. **`COM_STMT_CLOSE` and `COM_QUIT` cannot complete under a completion-driven
    host.** `next_event()` performs `NoResponse → Completed` and
    `Closing → Closed` only on a *subsequent* call, after `output()` is
    acknowledged — but neither command produces a server reply, so nothing wakes
    the connection and the queue wedges. Worked around here with a 0 ms turnloop
    deadline. A `consume_output` return value, or a `poll_pending() -> bool`
    saying "call me again", would remove the workaround. **Highest-value fix.**
-8. **`Event::Ok` is overloaded**: it fires for a real OK packet (carrying
+11. **`Event::Ok` is overloaded**: it fires for a real OK packet (carrying
    `affected_rows`/`last_insert_id`) and for the EOF terminating a result set,
    where those fields are not row counts. The host must track whether a result
    set is open to tell them apart.
@@ -528,7 +650,20 @@ Reported here in the shape P5's were, for the coordinator to file.
 Each reproduced on the base commit, so each is pre-existing and wants its own
 issue rather than being folded into this change.
 
-1. **Seven `js_ioredis_*` entry points are unreachable from TypeScript.**
+1. **`client.query(sql, params)` never reaches the server with its parameters
+   in `pg`.** Both transports answer `bind message supplies 0 parameters, but
+   prepared statement … requires 1`. The whole parameterized-query surface of
+   Perry's `pg` binding is dead, and nothing in the repository tested it — there
+   is no `test-files/` fixture mentioning `pg` at all.
+2. **`pg`'s result object is unreadable from TypeScript on the sqlx path.**
+   `res.command`, `res.rowCount` and `res.rows` all read back `undefined` on the
+   base commit. *Fixed for clients that take the turnloop path.*
+3. **`find().toArray()` resolves an empty string in `mongodb`.** MongoDB's
+   primary read API returns nothing usable, on both transports —
+   `insertOne().acknowledged` is `false` and `updateOne().modifiedCount`,
+   `deleteOne().deletedCount` and `insertMany().insertedCount` are `undefined`
+   as well. The wire half works; the JS half does not.
+4. **Seven `js_ioredis_*` entry points are unreachable from TypeScript.**
    `setex`, `ping`, `hget`, `hset`, `hdel`, `hlen` and `hgetall` exist as
    `#[no_mangle]` symbols in *both* the stdlib and the ext binding, and the
    compiler's native-method table
@@ -537,34 +672,39 @@ issue rather than being folded into this change.
    Reproduced identically on base and on this branch:
    `setex: undefined … ping: undefined … hgetall → TypeError: Cannot convert
    undefined or null to object`. The whole Redis hash family is dead from JS.
-2. **A method call whose receiver is an array element does not reach the native
+5. **A method call whose receiver is an array element does not reach the native
    table.** `clients[0].set(…)` and `clients.map(c => c.get(…))` return
    `undefined` where `c0.set(…)` works, on both commits. Same class as
    `test_issue_536_user_pool_class`.
-3. **`new Redis()` defaults to TLS, which no Perry build can serve.**
+6. **`new Redis()` defaults to TLS, which no Perry build can serve.**
    `REDIS_TLS` unset means `true`, which builds a `rediss://` URL, and the
    `redis` dependency has no TLS backend compiled in. The default constructor
    cannot connect; every working program must set `REDIS_TLS=false`.
-4. **`js_ioredis_hgetall` built its result object on a tokio blocking-pool
+7. **`js_ioredis_hgetall` built its result object on a tokio blocking-pool
    thread** — `alloc_string` / `js_object_alloc_with_shape` inside the
    `spawn_blocking` closure, #1824's exact shape, in the binding that is live by
    default. The stdlib copy does it correctly. *Fixed for clients that take the
    turnloop path; the legacy path still has it.*
-5. **The sqlx `pg` path does the same.** `rows_to_pg_result` calls
+8. **The sqlx `pg` path does the same.** `rows_to_pg_result` calls
    `alloc_string`, `js_array_alloc` and `js_object_alloc_with_shape` inside the
    `spawn_blocking` closure in `js_pg_client_query`, `js_pg_client_query_params`
    and `js_pg_pool_query`. Same fix, same remaining exposure.
-6. **`get_handle_mut::<PgConnectionHandle>` hands out a `&'static mut` from a
+9. **`get_handle_mut::<PgConnectionHandle>` hands out a `&'static mut` from a
    blocking-pool thread while the main thread can `take_handle` the same
    handle** (`js_pg_client_end` does exactly that). A pre-existing aliasing
    hazard in the legacy path.
-7. **`perry-ext-pg` and `perry-ext-mysql2` use plain `spawn_blocking`, not
+10. **`perry-ext-pg` and `perry-ext-mysql2` use plain `spawn_blocking`, not
    `spawn_blocking_with_reactor`, for real socket I/O** — the exact shape
    `perry_ffi_async.rs:252-278` says panics with "there is no reactor running",
    and the reason that second shim was added for net/ws/http. It evidently works
    because `binding_needs_shared_tokio` forces a shared tokio compilation, but
    nothing states that this is what makes it safe.
-8. **A database handle is process-global while the turnloop connection is
+11. **`const { Client } = pg` does not work.** Destructuring a native module's
+    default export gives `undefined is not a constructor`; `import { Client }
+    from "pg"` does. Pre-existing and unrelated to the transport, but it is what
+    the documented snippet in `docs/examples/stdlib/database/snippets.ts` would
+    hit if it were ever run.
+12. **A database handle is process-global while the turnloop connection is
    thread-local**, so a handle created on the main agent and used from a
    `perry/thread` worker now rejects where sqlx would have worked. This is a
    consequence of the migration rather than a pre-existing defect; it applies to
@@ -619,9 +759,16 @@ PERRY_SKIP_BUILD=1 ./scripts/run_gap_tests.sh
 /root/claude-turnloop-p7/p7run.sh <tree> scripts/turnloop/apps/pg_parity.ts
 /root/claude-turnloop-p7/p7run.sh <tree> scripts/turnloop/apps/mysql_parity.ts
 /root/claude-turnloop-p7/p7run.sh <tree> scripts/turnloop/apps/mongo_parity.ts
+/root/claude-turnloop-p7/p7run.sh <tree> scripts/turnloop/apps/pg_thread_census.ts
 
 # the headline measurement, on both arms
 PERRY_LOOP_STATS=1 ./db_thread_census
+PERRY_LOOP_STATS=1 ./pg_thread_census
+
+# GC stress with replies in flight, several seeds
+PERRY_GC_DIAG=1 PERRY_GC_SCHEDULE_SEED=7 PERRY_GC_SCHEDULE_RATE=1 \
+  PERRY_GC_SCHEDULE_ALLOC_KB=0 PERRY_GC_PROTECT_FROMSPACE=1 \
+  PERRY_GC_PROTECT_FROMSPACE_DEPTH=800 PERRY_LOOP_STATS=1 ./redis_gc_stress
 ```
 
 Still to run, and **not** run here: a Windows arm, a macOS arm, the
