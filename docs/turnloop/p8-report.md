@@ -16,10 +16,24 @@ removable by a transport swap: every one is either a surface no lane has
 migrated at all, or the still-reachable fallback of a surface that was
 migrated only for the primary agent.
 
-The count is unchanged by this branch:
+The count is unchanged by this branch. Before and after, on
+`turnloop/integration` @ `babc5f0d1f` and on `turnloop/p8-detokio`:
+
+| `grep -c '^name = "X"' Cargo.lock` | before | after |
+|---|---|---|
+| `tokio` | 1 | 1 |
+| `hyper` / `hyper-util` / `hyper-rustls` | 1 / 1 / 1 | 1 / 1 / 1 |
+| `h2` | 1 | 1 |
+| `reqwest` | 1 | 1 |
+| `lettre` | 1 | 1 |
+| `sqlx` (+ `-core`, `-mysql`, `-postgres`) | 1 (+3) | 1 (+3) |
+| `redis` | 1 | 1 |
+| `mongodb` | 1 | 1 |
+| `tokio-rustls` / `-tungstenite` / `-util` / `-stream` | 1 each | 1 each |
+| `tungstenite` | 2 (0.24 and 0.29) | 2 |
+| `tower` / `tower-http` | 1 / 1 | 1 / 1 |
 
 ```
-$ grep -c '^name = "tokio"' Cargo.lock      # before and after: 1
 $ python3 scripts/tokio_inventory.py
 tokio inventory: 46 manifest edges across 16 workspace crates,
 20 tokio-family packages in Cargo.lock — unchanged.
@@ -768,6 +782,23 @@ by one is evidence about the other for every subject in this report.
 | `scripts/turnloop/apps/tokio_worker_agent_census.ts` | P8 **and** main | the Worker-agent regression: 200 on main, `fetch failed` on the branch, 3/3 each |
 | `netw_main.ts` | P8 **and** main | `net.connect` inside a Worker: OK on both — the regression is fetch-specific |
 | `race.ts` (park, then fetch, inside a Worker) | P8 **and** main | the fetch **hangs** on both — never settles, never rejects. Pre-existing, not this branch's |
+
+### The sweep does not exercise this branch's only runtime change — and that is the point
+
+The evidence standard asks for proof that the subject ran. Here it is the other
+way round, and saying so is more useful than a counter that would be zero
+either way: this branch's only runtime change removes two `spawn_native` calls
+from four symbols **nothing lowers to**. No gap fixture can reach them, and no
+`PERRY_LOOP_STATS` counter can show them running, because the whole argument
+for removing the spawn is that it was unreachable. What the sweep establishes
+is the complementary thing — that removing them changed nothing that *is*
+reachable.
+
+The two pieces of evidence that the removal is safe are static, and both are in
+"What this lane changed": no lowering path emits `js_cron_set_interval` /
+`js_cron_set_timeout` / their clear-counterparts, and `perry-ext-cron` — the
+copy `import 'cron'` actually links — already behaves exactly as the stdlib
+copy now does.
 
 ### What was not run
 
