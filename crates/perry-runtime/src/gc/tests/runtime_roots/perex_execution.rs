@@ -319,9 +319,32 @@ fn perex_host_failures_release_scratch_and_preserve_consumed_work() {
     }
     assert_eq!(memory.live_bytes(), 0);
     assert_eq!(external_side_live_bytes(), before);
-    // `[a]` under `v` compiles now that the engine implements the union
-    // grammar; its set *operators* are what remain unimplemented.
-    for (pattern, flags, work) in [("(", "", 100_000), ("[a--b]", "v", 100_000), ("a", "", 0)] {
+    // perex 0.1.7 completes the `v` grammar: set operators compile too, so
+    // `[a--b]` is a successful difference rather than an Unsupported witness.
+    {
+        let program = compile(&scope, "[a--b]", "v");
+        let input = subject(&scope, b"ba");
+        let result = host::find(
+            &program,
+            &input,
+            0,
+            CaptureMode::All,
+            &mut Budget::new(100_000),
+            &memory,
+            1,
+            &mut host::poll,
+        )
+        .unwrap()
+        .unwrap();
+        // `a` minus `b`: the `b` at 0 is not a member, the `a` at 1 is.
+        assert_eq!(result.full, Span::new(1, 2).unwrap());
+    }
+    assert_eq!(memory.live_bytes(), 0);
+    assert_eq!(external_side_live_bytes(), before);
+    // Compile failures still release scratch and keep the work they charged.
+    // Nothing in the `v` grammar reports Unsupported any more, so the arms
+    // left are a syntax error and an exhausted work budget.
+    for (pattern, flags, work) in [("(", "", 100_000), ("a", "", 0)] {
         let input = subject(&scope, pattern.as_bytes());
         let mut budget = Budget::new(work);
         let result = host::compile(
@@ -340,14 +363,6 @@ fn perex_host_failures_release_scratch_and_preserve_consumed_work() {
             assert!(matches!(
                 result,
                 Err(EngineError::Compile(CompileError::WorkLimit))
-            ));
-        } else if flags == "v" {
-            assert!(matches!(
-                result,
-                Err(EngineError::Compile(CompileError::Unsupported {
-                    feature: "Unicode sets",
-                    ..
-                }))
             ));
         } else {
             assert!(matches!(
