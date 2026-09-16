@@ -208,14 +208,23 @@ thread, so the Worker is marked `LoopState::Declined` — but that happens
 *after* the request was accepted, so the caller gets a failure rather than the
 fallback the design intends.
 
-The predicate is therefore **time-dependent**, which is the sharpest way to
-say what is wrong with it: `net_available()` answers from `LoopState::Unset`
-using agent identity until the thread's first park, and from `LoopState` after
-it. On a `worker_threads` Worker the identity answer is wrong and the post-park
-answer is right, so whether a surface works depends on whether that thread has
-parked yet. That is visible in the measurements: `net.connect` inside a Worker
-answers **OK on both arms** (this lane built and ran that probe too), while
-`fetch` — called before the Worker has parked — does not.
+The predicate is **time-dependent**, which is the sharpest way to say what is
+wrong with it: `net_available()` answers from `LoopState::Unset` using agent
+identity until the thread's first park, and from `LoopState` afterwards. On a
+`worker_threads` Worker the identity answer is wrong. Three probes, same
+branch, same box:
+
+| what the Worker does | Node 26.5.1 | integration branch |
+|---|---|---|
+| `fetch(url)` immediately | 200 | **`error: fetch failed`** |
+| `await setTimeout(50)` (a park), then `fetch(url)` | 200 | **hangs — never resolves, never rejects** |
+| `net.connect(...)` | OK | OK (on `main` too) |
+
+A hang is worse than the failure: the promise is neither settled nor
+rejected, so a server that fetches from a Worker stops rather than erroring.
+And `net.connect` working is what says this is not "all network I/O in a
+Worker" — it is specific to the surfaces whose decline is decided before the
+thread's loop state has settled.
 
 So the "worker agents decline" story is right for `perry/thread` workers and
 **wrong for `node:worker_threads`**, which is the one a Node program actually
@@ -683,6 +692,77 @@ them.
    compatibility shim or an explicit statement of the intended migration order
    would unblock three surfaces at once.
 
+## Test evidence
+
+All commands as run.
+
+### Local gates
+
+Run from the branch, on the macOS development host:
+
+| gate | result |
+|---|---|
+| `cargo fmt --all -- --check` | OK |
+| `./scripts/check_file_size.sh` | OK |
+| `python3 scripts/addr_class_inventory.py` | OK |
+| `python3 scripts/check_test_registration.py` | OK |
+| `python3 scripts/check_node_version_consistency.py` | OK |
+| `python3 scripts/tokio_inventory.py --self-test` | OK — 7 planted changes, all caught |
+| `python3 scripts/tokio_inventory.py` | OK |
+| `python3 scripts/gc_runtime_root_holders.py` | **FAIL — pre-existing, see defect 4** |
+| `bash scripts/run_lint_gates.sh --list` | picks up the new step: 81 lint commands from 46 run steps |
+| `bash scripts/run_lint_gates.sh --self-test` | OK |
+
+`cargo check -p perry-stdlib --no-default-features --features full` is clean,
+and the release build of the full package set below produced three warnings,
+all of them the pre-existing `redis v1.6.0` future-incompatibility note.
+
+### The gap suite, against a baseline built from this branch's own base
+
+Both arms were built from source in their own tree on the build box, from the
+same package set, and both sweeps ran against the pinned oracle Node 26.5.1:
+
+```
+cargo build --release --locked \
+  -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static \
+  -p perry-ext-http -p perry-ext-net -p perry-ext-ws -p perry-ext-zlib -p perry-ext-events
+PERRY_SKIP_BUILD=1 ./scripts/run_gap_tests.sh
+```
+
+The baseline is `babc5f0d1f` — this branch's own base — in its own clone
+(`/root/claude-turnloop-p8/base`), because the committed snapshot cannot be
+assumed to agree with it. Three tests
+(`2899_2779_2777_static_helpers`, `disposablestack_2875`,
+`iterator_prototype_next_patch`) are red against the committed snapshot on the
+base commit before this branch changes anything, which is exactly why the
+comparison is arm-against-arm.
+
+GAP_TABLE_PLACEHOLDER
+
+### Probes
+
+Every probe in this report was compiled by the arm it is attributed to, from
+that arm's own `target/release`, with `PERRY_RUNTIME_DIR` pointed at it:
+
+| probe | what it establishes |
+|---|---|
+| `fetch_only.ts` / `g0.ts` | the global `fetch` is on turnloop, `tokio_ticks=0`, one thread |
+| `fetch_with_axios.ts` | axios does not take the global fetch with it; both transports in one process |
+| `g1.ts` (= `g0.ts` + `import 'node-fetch'`) | SIGSEGV, 3/3, on **both** `main` and the integration branch |
+| `g1_nowk` (same file, `PERRY_DISABLE_WELL_KNOWN=1`) | correct — isolates the crash to the well-known routing |
+| `nf_only.ts` | node-fetch alone: `r.status` is `undefined`, a bare-number handle |
+| `scripts/turnloop/apps/tokio_worker_agent_census.ts` | the Worker-agent regression, 3/3 on each arm |
+| `netw_main.ts` | `net.connect` inside a Worker: OK on both arms — the regression is fetch-specific |
+| `race.ts` | a Worker that parks (a 50 ms timer) before fetching: the fetch **hangs**, never settling |
+
+### What was not run
+
+See "What P8 did not do". In particular: no Windows or macOS end-to-end run, no
+benchmark, no `cargo test --workspace`, and no GC-stress arm — this branch adds
+no code that holds a JS value across a thread or a completion, so there is no
+subject for `PERRY_GC_SCHEDULE_SEED` to stress. Saying that plainly is better
+than running the knob over a change it cannot reach and reporting a green.
+
 ## What P8 did not do
 
 Named precisely, because each is a hole rather than a preference.
@@ -699,7 +779,10 @@ Named precisely, because each is a hole rather than a preference.
 * **It did not fix the `worker_threads` agent-id defect** it found, for the
   same reason and with the added complication that there are two defensible
   fixes (see the defects section) and choosing between them needs an oracle run
-  this lane did not have time for.
+  this lane did not have time for. It also did not check the other readers of
+  the same predicate — the keep-alive accounting's `agent::owns`, and
+  `class_image.rs`, whose own comment already notes it keys around
+  `CURRENT_AGENT` defaulting to the primary.
 * **It did not build the `js_perry_http_*` C seam** that would move `axios` and
   `node-fetch`. P6 costed it as "a second ABI's worth of design"; P8 agrees, and
   adds that the duplicate-`js_fetch_*` defect has to be fixed first or the seam
