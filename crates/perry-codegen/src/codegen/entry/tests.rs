@@ -536,3 +536,26 @@ fn dylib_closures_keep_native_roots() {
         "dylib roots must not be demoted to the shadow stack:\n{closure}"
     );
 }
+
+/// #10360: `--platform bun` seeds `__perry_runtime.setBunPlatform()` into
+/// module init; it must lower to the runtime flag setter, which the fetch
+/// Response paths read to follow Bun's null-body-status leniency.
+#[test]
+fn set_bun_platform_marker_lowers_to_the_runtime_flag_setter() {
+    let mut module = empty_module();
+    module.init = vec![Stmt::Expr(Expr::NativeMethodCall {
+        module: "__perry_runtime".to_string(),
+        class_name: None,
+        object: None,
+        method: "setBunPlatform".to_string(),
+        args: Vec::new(),
+    })];
+    let ir = String::from_utf8(compile_module(&module, entry_opts("executable")).unwrap())
+        .expect("LLVM IR should be UTF-8");
+    assert!(
+        ir.contains("call void @js_set_bun_platform()"),
+        "expected the Bun platform marker call in module init:\n{ir}"
+    );
+    // Control: the default (node) platform never emits the call.
+    assert!(!emitted_ir("executable").contains("call void @js_set_bun_platform"));
+}

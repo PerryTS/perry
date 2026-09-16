@@ -18,6 +18,8 @@ extern "C" {
     fn js_typeerror_new(message: *mut StringHeader) -> *mut u8;
     fn js_rangeerror_new(message: *mut StringHeader) -> *mut u8;
     fn js_throw(value: f64) -> !;
+    // perry-runtime `bun_compat::platform` (#10360): 1 under `--platform bun`.
+    fn js_bun_platform_enabled() -> i32;
 }
 
 pub(crate) unsafe fn throw_type_error(msg: &str) -> ! {
@@ -44,6 +46,46 @@ pub(crate) fn is_valid_status_text(s: &str) -> bool {
 /// not carry a body.
 pub(crate) fn is_null_body_status(status: u16) -> bool {
     matches!(status, 101 | 103 | 204 | 205 | 304)
+}
+
+/// Validate a `ResponseInit` the way Node's `initializeResponse` does, in its
+/// order: status range, then statusText, then the body/null-body-status
+/// conflict. Shared by `new Response` and `Response.json` so the two
+/// construction paths cannot disagree (#10360). Returns (status, statusText).
+///
+/// NaN / 0.0 status are the codegen "no status field" sentinels → 200;
+/// anything else is truncated toward zero and range-checked (#2640). A
+/// missing statusText is "" (#2640). A body under a null-body status is a
+/// TypeError in Node but accepted by Bun, so `--platform bun` skips it.
+pub(crate) unsafe fn response_init(
+    status: f64,
+    status_text: Option<String>,
+    body_present: bool,
+) -> (u16, String) {
+    let status = if status.is_nan() || status == 0.0 {
+        200
+    } else {
+        let truncated = status.trunc();
+        if !(200.0..=599.0).contains(&truncated) {
+            throw_range_error("init[\"status\"] must be in the range of 200 to 599, inclusive.");
+        }
+        truncated as u16
+    };
+    let status_text = match status_text {
+        Some(s) => {
+            if !is_valid_status_text(&s) {
+                throw_type_error("Invalid statusText");
+            }
+            s
+        }
+        None => String::new(),
+    };
+    if body_present && is_null_body_status(status) && js_bun_platform_enabled() == 0 {
+        throw_type_error(&format!(
+            "Response constructor: Invalid response status code {status}"
+        ));
+    }
+    (status, status_text)
 }
 
 /// Web Fetch forbidden request methods — rejected by the Request ctor.

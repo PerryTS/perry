@@ -173,6 +173,13 @@
                     .block()
                     .call(DOUBLE, "js_has_path_module", &[(DOUBLE, &path)]));
             }
+            // #10360: seeded into every module init under `--platform bun`
+            // so the runtime can follow Bun where its Web APIs differ from
+            // Node's (e.g. the Response null-body-status check).
+            "setBunPlatform" => {
+                ctx.block().call_void("js_set_bun_platform", &[]);
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
             _ => {}
         }
     }
