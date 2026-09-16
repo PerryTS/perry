@@ -215,10 +215,12 @@ pub extern "C" fn js_native_work_submitted() {
 /// turnloop P1: run `f` against this agent's driver, creating or upgrading the
 /// loop to the net profile first.
 ///
-/// `None` means this thread has no loop — a worker agent before P3/P4, the
-/// `tokio-wait-driver` A/B arm, or a host where loop creation failed — and the
-/// caller must keep its legacy transport. That is the whole coexistence rule:
-/// a socket is either turnloop's or tokio's for its entire life, never both.
+/// `None` means this thread has no loop — the `tokio-wait-driver` A/B arm, a
+/// host where loop creation failed, or a second thread acting for an agent
+/// another thread already owns — and the caller must keep its legacy transport.
+/// That is the whole coexistence rule: a socket is either turnloop's or
+/// tokio's for its entire life, never both. Since turnloop P9 a worker agent is
+/// NOT in that list: it has a loop of its own.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn with_net_driver<R>(f: impl FnOnce(&mut turnloop::Loop) -> R) -> Option<R> {
     #[cfg(not(feature = "tokio-wait-driver"))]
@@ -811,9 +813,9 @@ pub extern "C" fn js_wait_for_event() {
         return;
     }
 
-    // turnloop P0: the primary agent parks on exact `Instant` deadlines in its
-    // own loop. Worker agents (no loop until P3/P4), a second thread acting for
-    // the primary agent, and the A/B arm fall through to the legacy park below.
+    // turnloop P0/P9: every JS agent parks on exact `Instant` deadlines in its
+    // own loop. A second thread acting for an agent another thread already owns
+    // (a host pump thread) and the A/B arm fall through to the legacy park.
     #[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
     if agent_loop::eligible() && precise_wait::park() {
         return;
@@ -822,9 +824,9 @@ pub extern "C" fn js_wait_for_event() {
     // turnloop P3: a queued `setImmediate`, or a native completion callback
     // awaiting its poll phase, must run on the very next turn — Node computes a
     // zero poll timeout while its immediate queue is non-empty. The precise park
-    // above says the same thing for the primary agent; this covers the threads
-    // that take the legacy park (a worker agent, a second thread acting for the
-    // primary agent, the A/B arm). It goes through the shared zero-budget
+    // above says the same thing for an agent with a loop; this covers the
+    // threads that take the legacy park (a second thread acting for an agent
+    // another thread owns, the A/B arm). It goes through the shared zero-budget
     // return, so the #1114 throttle still bounds a caller that never runs the
     // phase that would drain the queue.
     if crate::timer::js_immediate_has_pending() != 0 {

@@ -11,6 +11,10 @@
 // Two files because a Worker whose entry is its own module does not link
 // (P8's defect 3).
 import net from "node:net";
+// ioredis: the one driver whose plaintext path P7 migrated and whose server
+// needs no schema. REDIS_TLS must be the string "false" or the binding declines
+// at construction whatever this lane does (P7 defect 6).
+import Redis from "ioredis";
 import { parentPort } from "node:worker_threads";
 
 const url = process.env.P9_URL ?? "http://127.0.0.1:8099/";
@@ -43,10 +47,6 @@ function doConnect(): Promise<string> {
 
 async function doDatabase(): Promise<string> {
   try {
-    // ioredis: the one driver whose plaintext path P7 migrated and whose
-    // server needs no schema. REDIS_TLS must be the string "false" or the
-    // binding declines at construction whatever this lane does (P7 defect 6).
-    const { default: Redis } = await import("ioredis");
     const client = new Redis({ port: redisPort, host: "127.0.0.1" });
     const pong = await client.ping();
     const echoed = await client.echo("p9");

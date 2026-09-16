@@ -1,6 +1,7 @@
-//! turnloop P0: the primary agent's park, on `Instant` deadlines.
+//! turnloop P0: an agent's park, on `Instant` deadlines.
 //!
-//! Replaces, for the primary agent only, the legacy tail of
+//! Replaces, for every agent that owns a loop (P0: only the primary; P9: any),
+//! the legacy tail of
 //! `js_wait_for_event` that truncated every deadline to whole milliseconds
 //! (`d as u64`), so a deadline 0.4 ms away read as "due now" and the loop
 //! returned without waiting until it really was due — a spin that only the
@@ -46,6 +47,12 @@ pub(super) fn native_inflight() -> bool {
 /// The earliest wake across this agent's timer heap, the stdlib deadline
 /// provider, the agent loop's own deadlines, and the idle cap.
 ///
+/// P9 note: the JS timer component is already per-agent (`timer::store` keys
+/// its partitions on `AgentId`), but the stdlib provider is one process-wide
+/// hook. On a worker agent it can therefore report the PRIMARY agent's next
+/// deadline, which only ever shortens this park — a spurious early wake, never
+/// a missed one.
+///
 /// P3: the JS timer component is now one heap root (`next_timer_deadline`)
 /// instead of a scan of three queues, and the loop's own `next_deadline()` also
 /// carries it once armed — the two agree by construction (a unit test asserts
@@ -77,8 +84,8 @@ pub(super) fn next_deadline(now: Instant) -> Instant {
     deadline
 }
 
-/// Park the primary agent. Returns `false` only when this thread could not
-/// get a loop and nothing has happened yet, so the caller runs the legacy park.
+/// Park this agent. Returns `false` only when this thread could not get a loop
+/// and nothing has happened yet, so the caller runs the legacy park.
 pub(super) fn park() -> bool {
     // Node computes a zero poll timeout whenever the immediate queue is
     // non-empty, so a `setImmediate` queued by a check callback — or a native

@@ -352,6 +352,12 @@
       "why": "turnloop P0: the calling thread's `AgentLoop` \u2014 a `turnloop::Loop` (native poller descriptor, fixed operation/handle tables, notifier and poster `Arc`s), a `turnloop::Completions` buffer, a loop id and plain `u64` statistics. P0 submits no turnloop operation, so no token, completion payload or buffer ever names a JS value; the loop only ever blocks until an `Instant` deadline or a notifier wake. Nothing stored is a GC header address or a NaN-boxed value. When P1 starts routing JS work through tokens this verdict must be re-researched."
     },
     {
+      "file": "crates/perry-runtime/src/event_pump/agent_loop.rs",
+      "name": "CLAIM",
+      "verdict": "not_a_gc_pointer",
+      "why": "turnloop P9: this thread's claim on its agent's route slot in `ROUTES`. `ClaimGuard` holds exactly one field, an `Arc<AtomicBool>` \u2014 the flag a wake producer reads to decide whether a parked loop needs a syscall. No JS value, no NaN-boxed word and no arena pointer ever reaches it: the guard is written only by `claim_route` (which builds the `Arc`) and read only by `claimed_flag`/`release_route`, and its `Drop` removes the matching `ROUTES` entry by `Arc::ptr_eq`. The loop itself lives in the sibling `AGENT_LOOP`, whose completions are copied out of turnloop's pooled buffers before any JS sees them (P1's rule: no heap pointer reaches the driver)."
+    },
+    {
       "file": "crates/perry-runtime/src/fs/deferred.rs",
       "name": "PENDING_PATH_WRITES",
       "verdict": "not_a_gc_pointer",
