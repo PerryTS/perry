@@ -1385,84 +1385,8 @@ const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 
-#[derive(Clone, Default)]
-struct HeadersStore {
-    /// (lowercase_name, value) entries — insertion order preserved
-    entries: Vec<(String, String)>,
-}
-
-impl HeadersStore {
-    fn set(&mut self, key: &str, value: &str) {
-        let lk = key.to_ascii_lowercase();
-        self.entries.retain(|(k, _)| *k != lk);
-        self.entries.push((lk, value.to_string()));
-    }
-    /// Web Fetch `Headers.append` — combines repeated normal headers with
-    /// `", "`, but keeps `Set-Cookie` values as separate entries so
-    /// `getSetCookie()` can return them individually.
-    fn append(&mut self, key: &str, value: &str) {
-        let lk = key.to_ascii_lowercase();
-        if lk == "set-cookie" {
-            self.entries.push((lk, value.to_string()));
-            return;
-        }
-        for entry in self.entries.iter_mut() {
-            if entry.0 == lk {
-                entry.1.push_str(", ");
-                entry.1.push_str(value);
-                return;
-            }
-        }
-        self.entries.push((lk, value.to_string()));
-    }
-    fn get(&self, key: &str) -> Option<String> {
-        let lk = key.to_ascii_lowercase();
-        if lk == "set-cookie" {
-            let values: Vec<&str> = self
-                .entries
-                .iter()
-                .filter(|(k, _)| *k == lk)
-                .map(|(_, v)| v.as_str())
-                .collect();
-            if values.is_empty() {
-                None
-            } else {
-                Some(values.join(", "))
-            }
-        } else {
-            self.entries
-                .iter()
-                .find(|(k, _)| *k == lk)
-                .map(|(_, v)| v.clone())
-        }
-    }
-    fn has(&self, key: &str) -> bool {
-        let lk = key.to_ascii_lowercase();
-        self.entries.iter().any(|(k, _)| *k == lk)
-    }
-    fn delete(&mut self, key: &str) {
-        let lk = key.to_ascii_lowercase();
-        self.entries.retain(|(k, _)| *k != lk);
-    }
-    fn set_cookie_values(&self) -> Vec<String> {
-        self.entries
-            .iter()
-            .filter(|(k, _)| k == "set-cookie")
-            .map(|(_, v)| v.clone())
-            .collect()
-    }
-}
-
-fn headers_from_header_map(headers: &reqwest::header::HeaderMap) -> HeadersStore {
-    let mut store = HeadersStore::default();
-    for (key, value) in headers {
-        if let Ok(v) = value.to_str() {
-            store.append(key.as_str(), v);
-        }
-    }
-    store
-}
-
+mod headers_store;
+use headers_store::{headers_from_header_map, HeadersStore};
 #[derive(Clone)]
 struct RequestRecord {
     url: String,
