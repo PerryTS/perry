@@ -270,11 +270,23 @@ runtime-side fix described at the top: the hook is registered next to the fetch
 hook (`js_register_global_fetch_notify_abort`) rather than being a linked
 `extern` compiled in under a feature a default build does not carry.
 
-Per-phase deadlines (`connect`, `headers`, `body`) exist in
-`client::Lifecycle` and the engine wires `next_timeout`/`handle_timeout`, but
-**no deadline is armed by default**, because the reqwest fetch path set no
-`.timeout()` either — timeouts arrive only through `AbortSignal.timeout(ms)`,
-and arming one here would reject requests that previously succeeded.
+Per-phase deadlines (`connect`, `headers`, `body`) exist in `client::Lifecycle`
+and **this engine wires none of them** — not `next_timeout`, not
+`handle_timeout`, not `set_body_deadline`. `Http1Connection::start` is called
+with `None` for both deadline arguments. That is deliberate and it is a gap, not
+a design: the reqwest fetch path set no `.timeout()` either, so arming one here
+would reject requests that previously succeeded — but it also means a server
+that accepts a connection and then says nothing holds a socket until the peer or
+the OS gives up, where Node's undici would have raised
+`UND_ERR_HEADERS_TIMEOUT`. Wiring it wants its own change with its own oracle
+measurement, because every default it picks is observable.
+
+The pool's own deadline IS armed, as a `NET_TIMER` per connection
+(`arm_idle_timer`), rather than through `Pool::next_timeout` /
+`Pool::handle_timeout` — a per-connection turnloop deadline is what puts the
+close in `Loop::next_deadline()`, which a host-side scan of the pool would not.
+The Pool methods this engine uses are exactly `acquire`, `connected`, `release`
+and `closed`.
 
 ## The keep-alive gate, and the fixture that hid it needing one
 
@@ -587,9 +599,11 @@ path a real program still reaches.
   saying plainly.
 * **`AbortSignal` on the `perry-ext-fetch` route.** Fixed for the global
   `fetch`; that crate still has no wiring.
-* **Per-phase request deadlines.** `client::Lifecycle` is wired but nothing arms
-  a deadline, because the reqwest fetch path armed none either. Arming one would
-  reject requests that previously succeeded.
+* **Per-phase request deadlines.** `client::Lifecycle` exists and nothing in
+  this engine touches it — see "Abort and timeout semantics". A stalled server
+  therefore holds a socket until the OS gives up, where undici raises
+  `UND_ERR_HEADERS_TIMEOUT`. The reqwest path had the same hole, so this is not
+  a regression, but it is the most user-visible thing on this list.
 
 ## turnloop gaps found
 
@@ -610,12 +624,15 @@ Reported here in the shape P5's were; the coordinator files them.
    told) the host has to recover by releasing-and-closing the slot and retrying.
    A `Pool::contains(id)` or a `release_unknown` would make the recovery path
    expressible rather than improvised.
-3. **`client::Lifecycle`'s deadlines cannot be armed without a clock.** That is
-   correct sans-I/O design, but the crate offers no companion for "the deadline
-   the host should arm next" across a *set* of connections — `Pool::next_timeout`
-   exists and `Lifecycle::next_timeout` exists, and a host with N in-flight
-   requests must min() them itself every turn. A single `next_timeout` over a
-   client-wide structure would remove an O(N) scan per turn from every consumer.
+3. **There is no client-wide `next_timeout`.** `Pool::next_timeout` and
+   `Lifecycle::next_timeout` each answer for one structure, so a host with N
+   in-flight requests must `min()` across N connections every turn to decide
+   what deadline to arm. That cost is the reason this engine does not wire the
+   per-phase deadlines at all (see "Abort and timeout semantics") and arms only
+   a per-connection idle timer instead: one deadline per socket is expressible
+   with `turnloop_net::timer_arm`, an O(N) rescan per turn is not. A single
+   `next_timeout` over a client-wide structure would make the phase deadlines
+   affordable for every consumer.
 4. **`turnloop_tls::ClientConfig` hardcodes `rustls::crypto::ring`.** Perry's
    other TLS paths install `aws_lc_rs` as the process default (#6117), and both
    providers are in the final link. Naming the provider explicitly is what makes
