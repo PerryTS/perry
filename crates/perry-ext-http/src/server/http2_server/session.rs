@@ -264,6 +264,7 @@ pub unsafe extern "C" fn js_node_http2_connect(
     } else {
         closure_arg(Some(options_f64))
     };
+    let secure = authority.starts_with("https:");
     let (host, port, host_port) = parse_authority(&authority);
     let local_server_handle = h2_listening_server_for_authority(&host_port).unwrap_or(0);
     let sender_slot = Arc::new(Mutex::new(None));
@@ -281,7 +282,9 @@ pub unsafe extern "C" fn js_node_http2_connect(
         connect_event_emitted: false,
         session_type: 1,
         connected: false,
-        encrypted: false,
+        encrypted: secure,
+        // Replaced by whatever ALPN selected once the handshake completes; the
+        // placeholder is what a cleartext session keeps.
         alpn_protocol: "h2c".to_string(),
         connecting: true,
         closed: false,
@@ -299,17 +302,26 @@ pub unsafe extern "C" fn js_node_http2_connect(
         turnloop_conn: 0,
     });
 
-    // Cleartext `http://` goes on the loop. That removes **two** private
+    // Both schemes go on the loop now. That removes **two** private
     // `current_thread` tokio runtimes — one built here per session, one built
     // in `start_client_request` per request (perry#10327) — and makes
     // concurrent `session.request()` calls real multiplexed streams instead of
     // a race for a single `h2::client::SendRequest`.
     //
-    // `https://` keeps the `h2` path: a TLS client session on a turnloop socket
-    // needs an installer `perry-ext-net` does not expose yet.
-    if !authority.starts_with("https:") && crate::server::turnloop_h2::enabled() {
+    // `https://` used to keep the `h2` path for want of a public TLS client
+    // installer on a turnloop socket. It had never worked: `parse_authority`
+    // returned port 80 for every scheme and `connect_h2_stream` opened a
+    // CLEARTEXT socket, so the HTTP/2 preface went to an HTTPS listener and the
+    // peer answered `InvalidContentType`. It now installs a real client session
+    // with `h2` in ALPN.
+    if crate::server::turnloop_h2::enabled() {
+        let tls = secure.then(|| crate::server::turnloop_h2::ClientTls {
+            servername: host.clone(),
+            verify: client_reject_unauthorized(options_f64),
+            ca: client_ca_material(options_f64),
+        });
         if let Some(conn_id) =
-            crate::server::turnloop_h2::connect_client(session_handle, &host, port)
+            crate::server::turnloop_h2::connect_client(session_handle, &host, port, tls)
         {
             bind_turnloop_session(session_handle, conn_id);
             return session_handle;
@@ -380,7 +392,90 @@ pub unsafe extern "C" fn js_node_http2_connect(
     session_handle
 }
 
+/// `options.rejectUnauthorized` for `http2.connect`, defaulting to Node's own
+/// `true`.
+///
+/// `options` may not be an object at all: `http2.connect(authority, listener)`
+/// puts the callback in this argument, and a lookup on a function answers
+/// `undefined` — which is the same as "unset", so no special case is needed.
+unsafe fn client_reject_unauthorized(options: f64) -> bool {
+    let value = perry_ffi::object_field_by_name(
+        JsValue::from_bits(options.to_bits()),
+        "rejectUnauthorized",
+    );
+    if value.is_undefined() || value.is_null() {
+        return true;
+    }
+    value.to_bool()
+}
+
+/// `options.ca` — a PEM string, a Buffer, or an array of either.
+///
+/// Node's `ca` REPLACES the platform roots rather than adding to them, so an
+/// absent option has to stay an empty list here and mean "keep the defaults"
+/// downstream; returning a single empty blob would trust nothing.
+unsafe fn client_ca_material(options: f64) -> Vec<Vec<u8>> {
+    let value = perry_ffi::object_field_by_name(JsValue::from_bits(options.to_bits()), "ca");
+    if value.is_undefined() || value.is_null() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let array = value.as_pointer::<perry_ffi::ArrayHeader>();
+    if !array.is_null() && is_js_array(value) {
+        let len = perry_ffi::js_array_length(array);
+        for index in 0..len {
+            if let Some(pem) = pem_bytes(perry_ffi::js_array_get(array, index)) {
+                out.push(pem);
+            }
+        }
+        return out;
+    }
+    if let Some(pem) = pem_bytes(value) {
+        out.push(pem);
+    }
+    out
+}
+
+unsafe fn is_js_array(value: JsValue) -> bool {
+    extern "C" {
+        fn js_array_is_array(value: f64) -> f64;
+    }
+    JsValue::from_bits(js_array_is_array(f64::from_bits(value.bits())).to_bits()).to_bool()
+}
+
+/// One PEM blob, from a string or a Buffer.
+///
+/// The Buffer read goes through the **canonical runtime registry**: this crate
+/// is a separately linked archive and cannot see a Buffer the program runtime
+/// allocated, which is exactly what `fs.readFileSync` returns.
+unsafe fn pem_bytes(value: JsValue) -> Option<Vec<u8>> {
+    if let Some(text) = jsvalue_to_owned_string(f64::from_bits(value.bits())) {
+        return Some(text.into_bytes());
+    }
+    extern "C" {
+        fn js_value_buffer_or_typedarray_data(value: f64, out_len: *mut u32) -> *const u8;
+    }
+    let mut len = 0u32;
+    let data = js_value_buffer_or_typedarray_data(f64::from_bits(value.bits()), &mut len);
+    if data.is_null() || len == 0 {
+        None
+    } else {
+        Some(std::slice::from_raw_parts(data, len as usize).to_vec())
+    }
+}
+
+/// `(host, port, host:port)` for an `http2.connect` authority.
+///
+/// The default port follows the SCHEME. It used to be 80 unconditionally, which
+/// is why `http2.connect('https://example.com')` opened a cleartext socket to
+/// port 80 — the failure the h2c lane recorded as
+/// `received corrupt message of type InvalidContentType`.
 pub(crate) fn parse_authority(authority: &str) -> (String, u16, String) {
+    let default_port = if authority.starts_with("https://") {
+        443
+    } else {
+        80
+    };
     let without_scheme = authority
         .strip_prefix("http://")
         .or_else(|| authority.strip_prefix("https://"))
@@ -392,7 +487,7 @@ pub(crate) fn parse_authority(authority: &str) -> (String, u16, String) {
             let port = rest[end + 1..]
                 .strip_prefix(':')
                 .and_then(|p| p.parse::<u16>().ok())
-                .unwrap_or(80);
+                .unwrap_or(default_port);
             return (host, port, host_port.to_string());
         }
     }
@@ -402,7 +497,7 @@ pub(crate) fn parse_authority(authority: &str) -> (String, u16, String) {
     if let (Some(host), Ok(port)) = (maybe_host, maybe_port.parse::<u16>()) {
         (host.to_string(), port, host_port.to_string())
     } else {
-        (host_port.to_string(), 80, host_port.to_string())
+        (host_port.to_string(), default_port, host_port.to_string())
     }
 }
 

@@ -33,7 +33,7 @@
 use std::collections::VecDeque;
 use std::time::Instant;
 
-use perry_db_turnloop::DbCore;
+use perry_db_turnloop::{DbCore, TlsFacts};
 use perry_ffi::JsPromise;
 use turnloop_mongodb::uri::Options;
 use turnloop_mongodb::{Connection, ConnectionEvent, Error, ErrorKind};
@@ -89,6 +89,15 @@ pub(crate) struct MongoCore {
     /// connection that died during authentication settles its queue with
     /// "Connection closed", which hides the actual cause.
     last_error: Option<String>,
+    /// The URI asked for TLS, so `connected()` raises `UpgradeTls` instead of
+    /// sending the handshake. Kept here because `Connection` does not expose
+    /// its state and `transport_connected` has to know whether a reply is due:
+    /// in the upgrade state `receive` does not merely refuse a byte, it fails
+    /// the connection.
+    tls: bool,
+    /// The core has asked for the upgrade. Taken by the driver, which flushes,
+    /// installs the session and acknowledges it.
+    tls_requested: bool,
 }
 
 impl MongoCore {
@@ -98,6 +107,7 @@ impl MongoCore {
         } else {
             Instant::now().checked_add(options.connect_timeout)
         };
+        let tls = options.tls;
         Self {
             conn: Connection::new(options),
             staged: Vec::new(),
@@ -110,6 +120,8 @@ impl MongoCore {
             nonce,
             connect_deadline,
             last_error: None,
+            tls,
+            tls_requested: false,
         }
     }
 
@@ -195,10 +207,13 @@ impl MongoCore {
     fn on_event(&mut self, event: ConnectionEvent) -> Result<(), String> {
         match event {
             ConnectionEvent::UpgradeTls => {
-                // `classify` refuses a TLS URI, so reaching this means the core
-                // changed its mind mid-session. Fail loudly rather than carry on
-                // in plaintext where TLS was asked for.
-                return Err("MongoDB TLS is not available on the turnloop transport".to_string());
+                // MongoDB puts TLS underneath the whole protocol, so this
+                // arrives from `connected()` before the `hello` — and therefore
+                // before the speculative SCRAM the handshake carries when the
+                // URI has credentials. Answering here would be too early: the
+                // driver installs the session first and acknowledges it through
+                // `tls_established`.
+                self.tls_requested = true;
             }
             ConnectionEvent::Ready => {
                 self.ready = true;
@@ -333,7 +348,11 @@ impl DbCore for MongoCore {
         // copy for the SCRAM exchange, so drop this one rather than keep a
         // credential-adjacent secret alive for the life of the connection.
         self.nonce.clear();
-        self.expecting_reply = true;
+        // Only when the handshake actually went out. On a TLS connection
+        // `connected()` sent nothing and the core is in its upgrade state,
+        // where feeding it a byte fails the connection outright; the reply
+        // becomes due at `tls_established` instead.
+        self.expecting_reply = !self.tls;
         Ok(())
     }
 
@@ -342,6 +361,27 @@ impl DbCore for MongoCore {
             return Err("MongoDB server sent more data than a reply can contain".to_string());
         }
         self.staged.extend_from_slice(bytes);
+        Ok(())
+    }
+
+    fn take_tls_request(&mut self) -> bool {
+        std::mem::take(&mut self.tls_requested)
+    }
+
+    fn tls_established(&mut self, facts: &TlsFacts) -> Result<(), String> {
+        // `facts` is deliberately unread. Nothing in this protocol consumes
+        // any of it: no ALPN is offered (see `tls_options`), and MongoDB's
+        // SCRAM-SHA-256 has no channel-binding variant to feed the
+        // `tls-server-end-point` digest to the way PostgreSQL's
+        // SCRAM-SHA-256-PLUS does. The core's own acknowledgement takes no
+        // argument for the same reason.
+        let _ = facts;
+        self.conn
+            .tls_established()
+            .map_err(|e| format!("MongoDB connection error: {}", e))?;
+        // The `hello` is on the wire now, so a reply is due — the half of
+        // `transport_connected` a TLS connection skipped.
+        self.expecting_reply = true;
         Ok(())
     }
 

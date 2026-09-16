@@ -22,11 +22,21 @@
 //! reason: a client that switched mid-life would have two connections to the
 //! same server and no way to keep a transaction on one of them.
 //!
-//! **MySQL TLS is not supported on either transport**, and this change does not
-//! move that: `MySqlConfig::to_url` hardcodes `?ssl-mode=disabled`, so every
-//! MySQL connection Perry has opened has been plaintext. The core is given
-//! `tls: false` to match, and would otherwise ask this host for an upgrade it
-//! has no TLS layer to perform.
+//! # TLS
+//!
+//! A config carrying an `ssl` option — or a URI whose `ssl-mode` is anything
+//! but `DISABLED` — negotiates `CLIENT_SSL`. The upgrade is **mid-stream**: the
+//! server speaks first, the core answers its greeting with an `SSLRequest`
+//! packet and raises the upgrade request in the same step, the driver flushes
+//! that packet in the clear and installs a client session on the same turnloop
+//! handle, and the handshake response — which carries the credentials — is the
+//! first thing written encrypted. A server that does not offer `CLIENT_SSL`
+//! fails the connection instead of continuing in plaintext.
+//!
+//! The **legacy** sqlx path still has no TLS: `MySqlConfig::to_url` hardcodes
+//! `?ssl-mode=disabled` and this crate's sqlx dependency is built without a TLS
+//! backend. A client that declines to it — a `worker_threads` agent, the
+//! `tokio-wait-driver` arm — is plaintext exactly as it is today.
 //!
 //! # Threading and the GC
 //!
@@ -46,7 +56,7 @@ pub(crate) mod pool;
 #[cfg(test)]
 mod tests;
 
-use perry_db_turnloop::{subsystem, NetCompletion, Registry};
+use perry_db_turnloop::{subsystem, NetCompletion, Registry, TlsClientOptions};
 use perry_ffi::{register_handle, take_handle, with_handle, Handle, JsPromise, Promise};
 
 use crate::{MySqlConfig, MysqlPromiseError, QueryRequest};
@@ -110,11 +120,37 @@ fn abort(id: i64, reason: &str) {
     REGISTRY.with(|reg| reg.abort(id, reason));
 }
 
+/// The TLS options the driver installs when the core asks for the upgrade.
+///
+/// `None` for a plaintext config, which is what makes an `UpgradeTls` on such a
+/// connection a driver error rather than a silent plaintext continuation.
+fn tls_options(config: &MySqlConfig) -> Option<TlsClientOptions> {
+    let ssl = config.ssl.as_ref()?;
+    // The host is the name the certificate is checked against unless the caller
+    // named another — mysql2's `servername`, which is how a connection through
+    // a proxy or an IP literal says what it really expects to be talking to.
+    let servername = ssl
+        .servername
+        .clone()
+        .unwrap_or_else(|| config.host.clone());
+    let mut options = TlsClientOptions::from_node_environment(servername);
+    options.reject_unauthorized = ssl.reject_unauthorized;
+    options.ca_pem = ssl.ca.clone();
+    // No ALPN: MySQL's TLS carries the MySQL protocol and nothing else, so
+    // there is nothing to select, and offering a protocol list a server has no
+    // opinion about is how a middlebox learns to have one.
+    Some(options)
+}
+
 /// Open one connection. `tag` is the JS handle it belongs to, which the driver
 /// keeps only so a debugger can tell the two apart.
 fn open(config: &MySqlConfig, tag: u64) -> Result<i64, String> {
     let core = MysqlCore::new(config)?;
-    REGISTRY.with(|reg| reg.connect(&config.host, config.port, core, tag))
+    // Held by the driver rather than started here: the core decides the moment
+    // (after the greeting), and `tls_options` decides whether there is anything
+    // to install at all.
+    let tls = tls_options(config);
+    REGISTRY.with(|reg| reg.connect_with_tls(&config.host, config.port, core, tag, tls))
 }
 
 /// Hand one command to a live connection.

@@ -34,7 +34,11 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 
+mod config;
 mod turnloop_io;
+
+pub use config::MySqlSslConfig;
+use config::{parse_mysql_ssl, parse_mysql_uri};
 
 #[cfg(test)]
 mod test_async_shims;
@@ -57,6 +61,11 @@ pub struct MySqlConfig {
     pub user: String,
     pub password: String,
     pub database: Option<String>,
+    /// `None` is plaintext. `Some` makes the core negotiate `CLIENT_SSL` and
+    /// refuse a server that does not offer it — mysql2's own reading of
+    /// `ssl: true`, and the only safe one: a client that asked for TLS and
+    /// silently got none would send its password in the clear.
+    pub ssl: Option<MySqlSslConfig>,
 }
 
 impl Default for MySqlConfig {
@@ -67,6 +76,7 @@ impl Default for MySqlConfig {
             user: "root".to_string(),
             password: String::new(),
             database: None,
+            ssl: None,
         }
     }
 }
@@ -87,9 +97,24 @@ impl MySqlConfig {
                 c => format!("%{:02X}", c as u32),
             })
             .collect();
+        // `ssl-mode` is carried even though this crate's sqlx is built without
+        // a TLS backend, and precisely because of that: `REQUIRED` and above
+        // make sqlx answer "TLS upgrade required by connect options but SQLx
+        // was built without TLS support enabled" and REFUSE. Leaving
+        // `disabled` hardcoded would make a client that asked for `ssl` and
+        // then declined this transport — a thread with no loop of its own, the
+        // `tokio-wait-driver` arm — connect in PLAINTEXT and send its password
+        // in the clear. A silent downgrade is the one outcome worse than a
+        // refused connection, and it only became reachable when `ssl` became
+        // an option this binding parses at all.
+        let ssl_mode = match self.ssl.as_ref() {
+            None => "DISABLED",
+            Some(ssl) if ssl.reject_unauthorized => "VERIFY_IDENTITY",
+            Some(_) => "REQUIRED",
+        };
         format!(
-            "mysql://{}:{}@{}:{}{}?ssl-mode=disabled",
-            self.user, encoded_password, self.host, self.port, db_part
+            "mysql://{}:{}@{}:{}{}?ssl-mode={}",
+            self.user, encoded_password, self.host, self.port, db_part, ssl_mode
         )
     }
 }
@@ -113,75 +138,6 @@ unsafe fn jsvalue_to_string(value: JsValue) -> Option<String> {
     std::str::from_utf8(bytes).ok().map(String::from)
 }
 
-/// Percent-decode a URI component (`%25` → `%`, `%40` → `@`, …). A lone `%`
-/// not followed by two hex digits is kept verbatim. Node's `mysql2` decodes the
-/// credentials it takes out of a connection URL, so a password written as
-/// `p%25ss` (a literal `%`) authenticates as `p%ss`. Perry used the raw
-/// substring and then RE-encoded it for sqlx, double-encoding every reserved
-/// character — so a `%`/`@`/`:` in the password produced a wrong password and
-/// the server rejected the connection with `1045 Access denied`. Decode here so
-/// the round-trip through `to_url` reproduces the real credential.
-fn percent_decode(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    let hex = |b: u8| -> Option<u8> {
-        match b {
-            b'0'..=b'9' => Some(b - b'0'),
-            b'a'..=b'f' => Some(b - b'a' + 10),
-            b'A'..=b'F' => Some(b - b'A' + 10),
-            _ => None,
-        }
-    };
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 3 <= bytes.len() {
-            if let (Some(h), Some(l)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
-                out.push(h * 16 + l);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(bytes[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-fn parse_mysql_uri(uri: &str) -> Option<MySqlConfig> {
-    let uri = uri.strip_prefix("mysql://")?;
-    let (credentials, host_part) = if let Some(idx) = uri.rfind('@') {
-        (&uri[..idx], &uri[idx + 1..])
-    } else {
-        ("", uri)
-    };
-    let (user, password) = if let Some(idx) = credentials.find(':') {
-        (
-            percent_decode(&credentials[..idx]),
-            percent_decode(&credentials[idx + 1..]),
-        )
-    } else {
-        (percent_decode(credentials), String::new())
-    };
-    let (host_port, database) = if let Some(idx) = host_part.find('/') {
-        (&host_part[..idx], Some(host_part[idx + 1..].to_string()))
-    } else {
-        (host_part, None)
-    };
-    let (host, port) = if let Some(idx) = host_port.rfind(':') {
-        let port: u16 = host_port[idx + 1..].parse().unwrap_or(3306);
-        (host_port[..idx].to_string(), port)
-    } else {
-        (host_port.to_string(), 3306)
-    };
-    Some(MySqlConfig {
-        host,
-        port,
-        user,
-        password,
-        database,
-    })
-}
-
 /// Object layout — mysql2 uses a "first field is uri" or
 /// positional `host`/`port`/`user`/`password`/`database` shape.
 /// We resolve by positional index since perry-ffi's
@@ -201,10 +157,24 @@ unsafe fn parse_mysql_config(config: JsValue) -> MySqlConfig {
     // parsing — relies on the user declaring the keys in this order
     // in the object literal so perry-runtime's shape-ordered storage
     // puts them at these indices.
+    //
+    // `ssl` is read BY NAME rather than by position. The five fields above are
+    // positional because perry-stdlib's own `MySqlConfig` fixes their order, but
+    // `ssl` is optional and a config literal that omits `database` would put it
+    // at a different index. `object_field_by_name` goes through the runtime's
+    // own property lookup, which is what a user's `{ host, user, ssl }` needs.
+    let ssl_field = object_field_by_name(config, "ssl");
     let f0 = js_object_get_field(obj_ptr, 0);
     if let Some(s) = jsvalue_to_string(f0) {
         // First field is a string. Could be `host` or `uri`.
-        if let Some(parsed) = parse_mysql_uri(&s) {
+        if let Some(mut parsed) = parse_mysql_uri(&s) {
+            // A sibling `ssl` option overrides the URI's `ssl-mode`, and only
+            // when it is actually there: absent and `ssl: false` both parse to
+            // `None`, so testing the raw field is the only way to tell "said
+            // nothing" from "said no".
+            if !ssl_field.is_undefined() && !ssl_field.is_null() {
+                parsed.ssl = parse_mysql_ssl(ssl_field);
+            }
             return parsed;
         }
         result.host = s;
@@ -225,6 +195,7 @@ unsafe fn parse_mysql_config(config: JsValue) -> MySqlConfig {
             result.database = Some(s);
         }
     }
+    result.ssl = parse_mysql_ssl(ssl_field);
     result
 }
 
@@ -1685,6 +1656,55 @@ pub unsafe extern "C" fn js_mysql2_pool_connection_execute(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn an_ssl_config_makes_the_legacy_transport_refuse_rather_than_downgrade() {
+        // sqlx here is built with no TLS backend, so `REQUIRED` and above make
+        // it answer "TLS upgrade required by connect options but SQLx was built
+        // without TLS support enabled". That refusal is the point: a client
+        // that asked for `ssl`, declined this transport and connected anyway
+        // would have sent its password in plaintext. `ssl` only became
+        // parseable in this binding with the TLS lane, so the downgrade is a
+        // hazard this change created and has to close in the same commit.
+        let plain = crate::MySqlConfig {
+            host: "db".into(),
+            port: 3306,
+            user: "u".into(),
+            password: "p".into(),
+            database: Some("d".into()),
+            ssl: None,
+        };
+        assert!(plain.to_url().ends_with("?ssl-mode=DISABLED"));
+
+        let verified = crate::MySqlConfig {
+            ssl: Some(crate::MySqlSslConfig {
+                reject_unauthorized: true,
+                ca: Vec::new(),
+                servername: None,
+            }),
+            ..plain.clone()
+        };
+        assert!(
+            verified.to_url().ends_with("?ssl-mode=VERIFY_IDENTITY"),
+            "got {}",
+            verified.to_url()
+        );
+
+        // `rejectUnauthorized: false` still REQUIRES TLS — it only relaxes what
+        // is checked about the certificate, never whether there is one.
+        let unverified = crate::MySqlConfig {
+            ssl: Some(crate::MySqlSslConfig {
+                reject_unauthorized: false,
+                ca: Vec::new(),
+                servername: None,
+            }),
+            ..plain
+        };
+        assert!(
+            unverified.to_url().ends_with("?ssl-mode=REQUIRED"),
+            "got {}",
+            unverified.to_url()
+        );
+    }
 
     unsafe fn runtime_string(ptr: *const perry_runtime::StringHeader) -> String {
         assert!(!ptr.is_null());
@@ -1709,41 +1729,10 @@ mod tests {
             user: "u".into(),
             password: "p@s/s#".into(),
             database: None,
+            ssl: None,
         };
         let url = cfg.to_url();
         assert!(url.contains("p%40s%2Fs%23"));
-    }
-
-    #[test]
-    fn parse_uri_basic() {
-        let p = parse_mysql_uri("mysql://root:secret@db.example.com:3307/mydb").unwrap();
-        assert_eq!(p.host, "db.example.com");
-        assert_eq!(p.port, 3307);
-        assert_eq!(p.user, "root");
-        assert_eq!(p.password, "secret");
-        assert_eq!(p.database.as_deref(), Some("mydb"));
-    }
-
-    #[test]
-    fn percent_decode_credentials() {
-        // Reserved characters in a percent-encoded password round-trip to the
-        // literal value the server actually expects.
-        assert_eq!(percent_decode("p%40ss"), "p@ss");
-        assert_eq!(percent_decode("a%25b%2Fc%23"), "a%b/c#");
-        assert_eq!(percent_decode("plain"), "plain");
-        // A lone `%` (or one not followed by two hex digits) is kept verbatim.
-        assert_eq!(percent_decode("50%off"), "50%off");
-        assert_eq!(percent_decode("trailing%"), "trailing%");
-        assert_eq!(percent_decode("%zz"), "%zz");
-    }
-
-    #[test]
-    fn parse_uri_percent_encoded_password() {
-        // `@` inside the password is `%40`; the last `@` still splits creds/host.
-        let p = parse_mysql_uri("mysql://user:p%40ss%2Fword@db.example.com/mydb").unwrap();
-        assert_eq!(p.user, "user");
-        assert_eq!(p.password, "p@ss/word");
-        assert_eq!(p.host, "db.example.com");
     }
 
     #[test]

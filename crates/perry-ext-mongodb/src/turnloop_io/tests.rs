@@ -8,7 +8,7 @@
 
 use bson::doc;
 use bson::raw::RawDocumentBuf;
-use perry_db_turnloop::DbCore;
+use perry_db_turnloop::{DbCore, TlsFacts};
 use perry_ffi::JsPromise;
 use turnloop_mongodb::wire::{self, Message, DEFAULT_MAX_MESSAGE};
 
@@ -115,10 +115,13 @@ fn every_out_of_scope_uri_declines_to_the_legacy_transport() {
     for uri in [
         // SRV: needs DNS SRV + TXT resolution before there is an address.
         "mongodb+srv://cluster.example.com/app",
-        // TLS: the core asks the host to perform the upgrade; there is no TLS
-        // layer reachable from a database binding.
-        "mongodb://127.0.0.1:27017/app?tls=true",
-        "mongodb://127.0.0.1:27017/app?ssl=true",
+        // A per-connection trust store or verification override. `tls=true`
+        // itself is in scope now; these keys are not, and `Options::parse` is
+        // what refuses them — this path honours the process TLS environment
+        // and has nowhere to put a trust store belonging to one URI.
+        "mongodb://127.0.0.1:27017/app?tls=true&tlsCAFile=/etc/ca.pem",
+        "mongodb://127.0.0.1:27017/app?tls=true&tlsInsecure=true",
+        "mongodb://127.0.0.1:27017/app?tls=true&tlsAllowInvalidCertificates=true",
         // Several hosts: server selection.
         "mongodb://a.example.com:27017,b.example.com:27017/app",
         // A replica set: topology discovery and primary election.
@@ -137,6 +140,82 @@ fn every_out_of_scope_uri_declines_to_the_legacy_transport() {
             "{uri} is out of this slice's scope and must keep the legacy path"
         );
     }
+}
+
+#[test]
+fn a_tls_uri_is_in_scope_and_its_options_name_the_seed_host() {
+    // The decline this replaces was the reason a `tls=true` URI never reached
+    // this transport at all, however plain its topology.
+    let endpoint = classify_uri("mongodb://db.example.com:27017/app?tls=true")
+        .expect("a direct single-host TLS URI is in scope now");
+    assert_eq!(endpoint.host, "db.example.com");
+    assert!(
+        endpoint.options.tls,
+        "the core is what raises UpgradeTls; a false here never asks"
+    );
+
+    let options = tls_options(&endpoint).expect("a TLS URI configures the driver");
+    assert_eq!(
+        options.servername, "db.example.com",
+        "the certificate is checked against the host the URI named"
+    );
+    assert!(
+        options.alpn.is_empty(),
+        "OP_MSG is the only protocol on this socket, so nothing is offered"
+    );
+    // `reject_unauthorized` and the trust roots are deliberately not asserted:
+    // they are whatever the process TLS environment says, which is the point of
+    // building them with `from_node_environment`.
+
+    // `ssl=true` is the same option under its older name.
+    let aliased = classify_uri("mongodb://db.example.com:27017/app?ssl=true")
+        .expect("ssl= is tls= under its older name");
+    assert!(tls_options(&aliased).is_some());
+}
+
+#[test]
+fn a_plaintext_uri_carries_no_tls_options() {
+    // Not merely unused. `None` is what makes an `UpgradeTls` on a plaintext
+    // connection a driver error instead of a silent plaintext continuation, so
+    // the URI and the options must agree.
+    let endpoint =
+        classify_uri("mongodb://127.0.0.1:27017/app").expect("the plain case stays in scope");
+    assert!(!endpoint.options.tls);
+    assert!(tls_options(&endpoint).is_none());
+}
+
+#[test]
+fn a_tls_core_holds_the_hello_until_the_upgrade_is_acknowledged() {
+    // Driven through the real state machine. The handshake carries the client
+    // metadata and, on a URI with credentials, the speculative SCRAM — so a
+    // byte produced before the session exists is a byte sent in the clear: the
+    // driver flushes the core's output *before* it installs anything.
+    let endpoint = classify_uri("mongodb://db.example.com:27017/app?tls=true")
+        .expect("a direct single-host TLS URI is in scope now");
+    let mut core = MongoCore::new(endpoint.options, "0123456789abcdefghij".to_string());
+
+    core.transport_connected().expect("the transport came up");
+    assert!(
+        core.output().is_empty(),
+        "the hello must not precede the upgrade"
+    );
+    assert_eq!(
+        core.drain(),
+        Ok(false),
+        "an upgrade request is not a terminal event"
+    );
+    assert!(core.take_tls_request(), "the core asked for the upgrade");
+    assert!(
+        !core.take_tls_request(),
+        "the request is taken once, or the driver installs a second session"
+    );
+
+    core.tls_established(&TlsFacts::default())
+        .expect("the core accepts the acknowledgement in its TLS state");
+    assert!(
+        String::from_utf8_lossy(core.output()).contains("isMaster"),
+        "the hello goes out after the upgrade, encrypted by the session"
+    );
 }
 
 #[test]

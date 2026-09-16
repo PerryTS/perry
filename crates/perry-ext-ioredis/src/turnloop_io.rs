@@ -15,14 +15,13 @@
 //! # Which connections come here
 //!
 //! [`enabled`] is false on a `worker_threads` agent (no loop of its own) and in
-//! the `tokio-wait-driver` A/B arm. **A TLS connection also declines**:
-//! `turnloop_redis` asks the host to perform the upgrade and P7 has no TLS
-//! layer reachable from a database binding, so a `rediss://` client keeps the
-//! legacy path — where it fails exactly as it does today, because this crate's
-//! `redis` dependency has no TLS backend compiled in either. That is the
-//! default `new Redis()` configuration (`REDIS_TLS` defaults to `true`), and it
-//! is a pre-existing Perry defect rather than one this change introduces; see
-//! the P7 report.
+//! the `tokio-wait-driver` A/B arm. **A TLS connection no longer declines**:
+//! `turnloop_redis` asks the host to perform the upgrade and the driver now has
+//! one to give it ([`tls_options`]). That is the default `new Redis()`
+//! configuration (`REDIS_TLS` defaults to `true`), and while it declined it
+//! declined onto a path that cannot serve it either — this crate's `redis`
+//! dependency has no TLS backend compiled in — so every default client failed.
+//! TLS here is therefore a fix, not a new capability on top of a working one.
 //!
 //! # Threading and the GC
 //!
@@ -37,7 +36,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use perry_db_turnloop::{subsystem, DbCore, NetCompletion, Registry};
+use perry_db_turnloop::{subsystem, DbCore, NetCompletion, Registry, TlsClientOptions, TlsFacts};
 use perry_ffi::{
     alloc_string, build_object_shape, js_object_alloc_with_shape, js_object_set_field, Handle,
     JsPromise, JsValue,
@@ -101,6 +100,9 @@ pub(crate) struct RedisCore {
     /// died mid-handshake rejects with "Connection closed", which hides the
     /// actual cause (`NOAUTH`, a wrong database, a refused AUTH).
     last_error: Option<String>,
+    /// The core has asked for the transport to be upgraded. Taken by the
+    /// driver, which installs the session and acknowledges it.
+    tls_requested: bool,
 }
 
 impl RedisCore {
@@ -113,6 +115,7 @@ impl RedisCore {
             ready: false,
             finished: false,
             last_error: None,
+            tls_requested: false,
         }
     }
 
@@ -204,6 +207,22 @@ impl DbCore for RedisCore {
             .map_err(|e| format!("Redis protocol error: {}", e.message))
     }
 
+    fn take_tls_request(&mut self) -> bool {
+        std::mem::take(&mut self.tls_requested)
+    }
+
+    fn tls_established(&mut self, facts: &TlsFacts) -> Result<(), String> {
+        // `facts` is deliberately unread. Nothing in RESP consumes any of it:
+        // no ALPN is offered (see [`tls_options`]), and Redis has no
+        // channel-binding mechanism to feed the `tls-server-end-point` digest
+        // to the way PostgreSQL's SCRAM-SHA-256-PLUS does. The core's own
+        // acknowledgement takes no argument for the same reason.
+        let _ = facts;
+        self.conn
+            .tls_established()
+            .map_err(|e| format!("Redis connection error: {}", e.message))
+    }
+
     fn drain(&mut self) -> Result<bool, String> {
         while let Some(event) = self.conn.poll_event() {
             match event {
@@ -211,10 +230,13 @@ impl DbCore for RedisCore {
                 // the socket in the same call that produced this event.
                 Event::Connect => {}
                 Event::UpgradeTls => {
-                    // `enabled` refuses a TLS config, so reaching this means the
-                    // core changed its mind mid-session. Fail loudly rather
-                    // than send plaintext where TLS was asked for.
-                    return Err("Redis TLS is not available on the turnloop transport".to_string());
+                    // Redis puts TLS underneath the whole protocol, so this
+                    // arrives from `transport_connected`, before a single
+                    // protocol byte — which is exactly why the AUTH carrying
+                    // the password cannot precede it. Answering here would
+                    // still be too early: the driver flushes what the core owes
+                    // and installs the session, then acknowledges.
+                    self.tls_requested = true;
                 }
                 Event::Ready { .. } => {
                     self.ready = true;
@@ -424,8 +446,11 @@ fn register_only() -> bool {
 /// The protocol config for one client, and the endpoint to reach it at.
 ///
 /// Reads the same four environment variables the previous binding did, so a
-/// program that worked before sees the same server. `tls` is carried through
-/// only so [`endpoint`] can refuse it.
+/// program that worked before sees the same server. `tls` is what makes the
+/// core ask for the upgrade at all — it raises `Event::UpgradeTls` from
+/// `transport_connected` — and [`tls_options`] is what the driver then
+/// installs; both read the one endpoint, so they cannot disagree about whether
+/// a connection is encrypted.
 fn config_for(url: &crate::RedisEndpoint) -> Config {
     Config {
         username: url.username.clone(),
@@ -448,6 +473,35 @@ fn config_for(url: &crate::RedisEndpoint) -> Config {
     }
 }
 
+/// The TLS options the driver installs when the core asks for the upgrade.
+///
+/// `None` for a plaintext endpoint, which is what makes an `UpgradeTls` request
+/// on such a connection a driver error rather than a silent plaintext
+/// continuation.
+fn tls_options(endpoint: &crate::RedisEndpoint) -> Option<TlsClientOptions> {
+    if !endpoint.tls {
+        return None;
+    }
+    // The servername is the host the program asked to reach. `js_ioredis_new`
+    // builds the endpoint from `REDIS_HOST` and ioredis's own option surface
+    // here is those four `REDIS_*` variables — none of which names a
+    // certificate name to override it with.
+    //
+    // Everything else comes from the process TLS environment
+    // (`NODE_TLS_REJECT_UNAUTHORIZED`, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`),
+    // which is deliberate rather than a gap: inventing a `REDIS_TLS_*` knob
+    // would give this binding its own way to disable verification that
+    // `node:https` in the same process does not honour, and a second spelling
+    // of "trust this root" is how one of them ends up unaudited.
+    //
+    // No ALPN: a Redis connection carries RESP and nothing else, and offering
+    // a protocol list a server has no opinion about is how a middlebox learns
+    // to have one.
+    Some(TlsClientOptions::from_node_environment(
+        endpoint.host.clone(),
+    ))
+}
+
 /// Open the connection for `handle` if it has none, and return its driver id.
 fn open(handle: Handle) -> Result<i64, String> {
     if let Some(id) = OPEN.with(|open| open.borrow().get(&handle).copied()) {
@@ -459,6 +513,7 @@ fn open(handle: Handle) -> Result<i64, String> {
         });
     }
     let endpoint = crate::endpoint_for(handle).ok_or_else(|| "Invalid Redis handle".to_string())?;
+    let tls = tls_options(&endpoint);
     let mut core = RedisCore::new(config_for(&endpoint));
     core.conn
         .connect(Instant::now())
@@ -467,11 +522,12 @@ fn open(handle: Handle) -> Result<i64, String> {
     // drain does not see a stale one.
     let _ = core.conn.poll_event();
     let id = REGISTRY.with(|reg| {
-        reg.connect(
+        reg.connect_with_tls(
             &endpoint.host,
             endpoint.port,
             core,
             handle.try_into().unwrap_or(0),
+            tls,
         )
     })?;
     OPEN.with(|open| {
@@ -671,5 +727,91 @@ mod tests {
         assert_eq!(string_of(&Value::Null), "");
         assert_eq!(string_of(&Value::Integer(7)), "7");
         assert_eq!(string_of(&Value::Bulk(b"PONG".to_vec())), "PONG");
+    }
+
+    /// An endpoint the way `js_ioredis_new` builds one from the `REDIS_*`
+    /// environment.
+    fn endpoint(host: &str, tls: bool, password: Option<&str>) -> crate::RedisEndpoint {
+        crate::RedisEndpoint {
+            host: host.to_string(),
+            port: if tls { 6380 } else { 6379 },
+            username: None,
+            password: password.map(str::to_string),
+            tls,
+            turnloop: true,
+        }
+    }
+
+    #[test]
+    fn a_tls_endpoint_is_upgraded_rather_than_declined() {
+        // `REDIS_TLS` defaults to true, so this is the *default* client. While
+        // it declined it reached a legacy path with no TLS backend compiled in,
+        // which is why the decline was a defect rather than a fallback.
+        let endpoint = endpoint("cache.example.com", true, None);
+        assert!(
+            config_for(&endpoint).tls,
+            "the core is what raises UpgradeTls; a plaintext config never asks"
+        );
+        let options = tls_options(&endpoint).expect("a TLS endpoint configures the driver");
+        assert_eq!(
+            options.servername, "cache.example.com",
+            "the certificate is checked against the host the program asked for"
+        );
+        assert!(
+            options.alpn.is_empty(),
+            "RESP is the only protocol on this socket, so nothing is offered"
+        );
+        // `reject_unauthorized` and the trust roots are deliberately not
+        // asserted: they are whatever the process TLS environment says, which
+        // is the point of building them with `from_node_environment`.
+    }
+
+    #[test]
+    fn a_plaintext_endpoint_carries_no_tls_options() {
+        // Not merely unused. `None` is what makes an `UpgradeTls` on a
+        // plaintext connection a driver error instead of a silent plaintext
+        // continuation, so the config and the options must agree.
+        let endpoint = endpoint("127.0.0.1", false, None);
+        assert!(tls_options(&endpoint).is_none());
+        assert!(!config_for(&endpoint).tls);
+    }
+
+    #[test]
+    fn the_password_reaches_the_wire_only_after_the_upgrade() {
+        // The property TLS is here for, driven through the real state machine.
+        // `REDIS_PASSWORD` becomes an `AUTH` command in the handshake, and the
+        // core must hold it until the session exists: the driver flushes the
+        // core's output *before* it installs anything, so a byte produced too
+        // early is a byte sent in the clear.
+        let endpoint = endpoint("cache.example.com", true, Some("s3cret"));
+        let mut core = RedisCore::new(config_for(&endpoint));
+        core.conn
+            .connect(Instant::now())
+            .expect("a fresh core accepts connect");
+        // The `Connect` event `open` consumes before the driver's first drain.
+        let _ = core.conn.poll_event();
+
+        core.transport_connected().expect("the transport came up");
+        assert_eq!(
+            core.drain(),
+            Ok(false),
+            "an upgrade request is not a terminal event"
+        );
+        assert!(
+            core.output().is_empty(),
+            "no protocol byte, and above all no AUTH, may precede the handshake"
+        );
+        assert!(core.take_tls_request(), "the core asked for the upgrade");
+        assert!(
+            !core.take_tls_request(),
+            "the request is taken once, or the driver installs a second session"
+        );
+
+        core.tls_established(&TlsFacts::default())
+            .expect("the core accepts the acknowledgement in its TLS state");
+        assert!(
+            String::from_utf8_lossy(core.output()).contains("s3cret"),
+            "the AUTH goes out after the upgrade, encrypted by the session"
+        );
     }
 }

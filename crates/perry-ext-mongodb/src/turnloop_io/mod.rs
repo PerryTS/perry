@@ -8,17 +8,23 @@
 //! | the `mongodb` crate's connection pool and its background tokio tasks | one `turnloop_mongodb::Connection` driven over P1's `turnloop_net` |
 //! | the crate's own timers | the core's deadline, armed as a real turnloop deadline |
 //!
-//! # Scope: exactly one configuration
+//! # Scope: one topology, either transport security
 //!
-//! This slice migrates a **direct, single-server, plaintext** connection and
-//! nothing else. [`classify_uri`] accepts a `mongodb://host:port/...` URI with
-//! no `+srv`, no `tls=true`/`ssl=true`, no `replicaSet`, one host, and no
-//! compressor; every other URI **declines** and keeps the existing `mongodb`
-//! crate path, unchanged, including its SRV/DNS resolution, replica-set
-//! topology discovery with background monitors, rustls TLS and its own pool.
-//! None of that is reimplemented here and none of it is deleted — the declining
-//! cases are real configurations that still run, the way `perry-ext-ioredis`
-//! declines a TLS client.
+//! This slice migrates a **direct, single-server** connection and nothing else.
+//! [`classify_uri`] accepts a `mongodb://host:port/...` URI with no `+srv`, no
+//! `replicaSet`, one host, and no compressor; every other URI **declines** and
+//! keeps the existing `mongodb` crate path, unchanged, including its SRV/DNS
+//! resolution, replica-set topology discovery with background monitors and its
+//! own pool. None of that is reimplemented here and none of it is deleted — the
+//! declining cases are real configurations that still run.
+//!
+//! `tls=true`/`ssl=true` is no longer one of them: `turnloop_mongodb` asks its
+//! host to perform the upgrade and `perry-db-turnloop` now has a TLS client to
+//! give it ([`tls_options`]). The per-connection TLS *keys* still decline —
+//! `tlsCAFile`, `tlsInsecure`, `tlsAllowInvalidCertificates` and
+//! `tlsCertificateKeyFile` are rejected by `Options::parse`, so they never
+//! reach this decision — because this path honours the process TLS environment
+//! and has nowhere to put a trust store belonging to one URI.
 //!
 //! A URI that `turnloop_mongodb::uri::Options` cannot parse also declines,
 //! which is deliberate: the legacy path then produces its own
@@ -55,7 +61,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bson::oid::ObjectId;
 use bson::Document;
-use perry_db_turnloop::{subsystem, NetCompletion, Registry};
+use perry_db_turnloop::{subsystem, NetCompletion, Registry, TlsClientOptions};
 use perry_ffi::{Handle, JsPromise};
 use turnloop_mongodb::command::ObjectIdGenerator;
 use turnloop_mongodb::uri::Options;
@@ -139,18 +145,17 @@ pub(crate) fn classify(uri: &str) -> Option<Endpoint> {
 ///
 /// Split out so the accept/decline rules can be tested for what they are — a
 /// scope boundary — rather than only in combination with a live sink registry.
+///
+/// `tls=true` is *inside* that boundary: the driver installs the session the
+/// core asks for. Every other `tls*` key is outside it and declines one step
+/// earlier, in `Options::parse` — see the module docs for why that is the
+/// honest place for it rather than a check here.
 pub(crate) fn classify_uri(uri: &str) -> Option<Endpoint> {
     let mut options = Options::parse(uri).ok()?;
     // Each of these is a whole subsystem this slice does not implement.
     if options.srv.is_some() {
         // `mongodb+srv://` needs SRV and TXT resolution before there is an
         // address to connect to.
-        return None;
-    }
-    if options.tls {
-        // `turnloop_mongodb` asks its host to perform the upgrade, and a
-        // database binding has no TLS layer to hand it to. Note that this is
-        // the default for an SRV URI, which is already excluded above.
         return None;
     }
     if options.replica_set.is_some() {
@@ -284,6 +289,35 @@ extern "C" fn sink(completion: *const NetCompletion) {
     }
 }
 
+/// The TLS options the driver installs when the core asks for the upgrade.
+///
+/// `None` for a plaintext URI, which is what makes an `UpgradeTls` request on
+/// such a connection a driver error rather than a silent plaintext
+/// continuation.
+fn tls_options(endpoint: &Endpoint) -> Option<TlsClientOptions> {
+    if !endpoint.options.tls {
+        return None;
+    }
+    // The servername is the seed host, and there is only ever one: a
+    // multi-seed URI declines, and an SRV URI — whose resolved hosts differ
+    // from the name in the URI — declines before this. The key that would
+    // override it, `tlsAllowInvalidHostnames`, is one `Options::parse`
+    // refuses, so no configuration in scope wants a name other than the one
+    // the client dialled.
+    //
+    // Everything else comes from the process TLS environment
+    // (`NODE_TLS_REJECT_UNAUTHORIZED`, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`).
+    // That is not a gap left for later: the per-connection spellings are
+    // exactly the keys that decline, so a URI this path accepts is one whose
+    // only answer is the process answer, and the two can never disagree about
+    // a single connection.
+    //
+    // No ALPN: a MongoDB connection carries OP_MSG and nothing else.
+    Some(TlsClientOptions::from_node_environment(
+        endpoint.host.clone(),
+    ))
+}
+
 /// Open `client`'s connection if it has none, and return its driver id.
 fn open(client: Handle) -> Result<i64, String> {
     if let Some(id) = OPEN.with(|open| open.borrow().get(&client).copied()) {
@@ -296,13 +330,18 @@ fn open(client: Handle) -> Result<i64, String> {
     }
     let endpoint = crate::turnloop_endpoint(client).ok_or("Invalid client handle")?;
     let nonce = client_nonce().ok_or("No OS entropy for a SCRAM nonce")?;
+    // Read before `options` moves into the core: the endpoint carries the
+    // `tls` bool that decides this, and the core carries the one that makes it
+    // ask, so they are two readings of the same parsed URI.
+    let tls = tls_options(&endpoint);
     let core = MongoCore::new(endpoint.options, nonce);
     let id = REGISTRY.with(|reg| {
-        reg.connect(
+        reg.connect_with_tls(
             &endpoint.host,
             endpoint.port,
             core,
             client.try_into().unwrap_or(0),
+            tls,
         )
     })?;
     OPEN.with(|open| {

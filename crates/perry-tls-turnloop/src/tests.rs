@@ -152,7 +152,10 @@ fn handshake_alpn_and_channel_binding() {
             break;
         }
     }
-    assert!(done, "the handshake did not complete — the test proved nothing");
+    assert!(
+        done,
+        "the handshake did not complete — the test proved nothing"
+    );
 
     let facts = client.facts().expect("facts after the handshake");
     assert_eq!(facts.alpn.as_deref(), Some(&b"h2"[..]), "ALPN selection");
@@ -163,12 +166,10 @@ fn handshake_alpn_and_channel_binding() {
         "the server sent exactly its leaf"
     );
     assert_eq!(
-        hex(
-            facts
-                .channel_binding
-                .as_deref()
-                .expect("an RSA/SHA-256 leaf has a defined binding")
-        ),
+        hex(facts
+            .channel_binding
+            .as_deref()
+            .expect("an RSA/SHA-256 leaf has a defined binding")),
         EXPECTED_BINDING,
         "tls-server-end-point is SHA-256 over the verified leaf's DER"
     );

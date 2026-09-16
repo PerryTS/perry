@@ -66,7 +66,7 @@ pub(crate) mod stream;
 #[path = "tests.rs"]
 mod tests;
 
-pub(crate) use conn::{connect_client, intercept, intercept_listener_error, owns};
+pub(crate) use conn::{connect_client, intercept, intercept_listener_error, owns, ClientTls};
 pub(crate) use stream::{
     destroy_stream, h2_begin_stream, h2_finish_body, h2_send_body, h2_send_response,
 };
@@ -147,7 +147,11 @@ pub(crate) fn listen(
     }
     // `reuse_port` is false: two `http2.createServer().listen(p)` calls must
     // race to `EADDRINUSE` the way Node's do, not both succeed.
-    tl::tcp_listen(id, SUBSYSTEM, host, port, backlog, false)?;
+    // `nodelay` is false because that is what this call site meant before
+    // #7d9c2c9e1b split `reuse_port` and `noDelay` into separate arguments.
+    // The merge that brought the split onto this branch left this one call
+    // site unadjusted, so `perry-ext-http` did not compile at all.
+    tl::tcp_listen(id, SUBSYSTEM, host, port, backlog, false, false)?;
     tl::accept_start(id)?;
     let bound = tl::local_address(id);
     let bound_port = bound.as_ref().map(|e| e.port).unwrap_or(port);
