@@ -757,9 +757,49 @@ pub(crate) fn flatten_string_add_chain<'a>(
 /// One per-function buffer is shared across all chain call sites — fine
 /// because each chain call writes its parts and immediately calls into
 /// the runtime helper before any other call site can clobber the slots.
+/// Drop a `StringCoerce` wrapper the chain helper's own formatting makes
+/// redundant.
+///
+/// The template desugaring wraps every substitution in `StringCoerce` so it is
+/// toString-first rather than `+`'s valueOf-first (#6078). But
+/// `js_string_concat_chain` formats each part itself, and for two kinds of part
+/// its formatting IS `ToString`: a value already proven a string (the coercion
+/// is the identity) and a number that cannot be a heap pointer — the helper
+/// runs `format_number_into`, which `stack_number_formatting_matches_js_format_f64`
+/// pins to `js_format_f64`, i.e. `Number::toString` including the ryu-js
+/// tie-break and the exponent thresholds (#3987).
+///
+/// For those, the wrapper only mints an intermediate heap string for the helper
+/// to copy and immediately drop: `` `${s}:${n}` `` spent 338 instructions per
+/// call in `js_number_to_string` -> `js_string_from_bytes_with_capacity` ->
+/// `string_storage_alloc` doing exactly that.
+///
+/// The non-pointer proof is what keeps an object out: `String(obj)` and the
+/// helper's slow path can disagree on a value with both `valueOf` and
+/// `toString`, so an object-valued part — including one a lying annotation
+/// claims is a number — keeps its wrapper.
+fn chain_part_without_redundant_coerce<'a>(ctx: &FnCtx<'_>, part: &'a Expr) -> &'a Expr {
+    let Expr::StringCoerce(inner) = part else {
+        return part;
+    };
+    let is_string = crate::type_analysis::string_value_is_runtime_guaranteed(ctx, inner);
+    let is_plain_number = crate::type_analysis::is_numeric_expr(ctx, inner)
+        && crate::expr::expr_produces_non_pointer_bits_by_construction(ctx, inner);
+    if is_string || is_plain_number {
+        inner
+    } else {
+        part
+    }
+}
+
 pub(crate) fn lower_string_concat_chain(ctx: &mut FnCtx<'_>, parts: &[&Expr]) -> Result<String> {
     debug_assert!(parts.len() >= 2);
     debug_assert!(parts.len() <= CONCAT_CHAIN_MAX_PARTS);
+    let parts: Vec<&Expr> = parts
+        .iter()
+        .map(|part| chain_part_without_redundant_coerce(ctx, part))
+        .collect();
+    let parts = parts.as_slice();
 
     // Lower each part first (in source order); side effects must fire
     // left-to-right per JS spec. #6951: that ordering is exactly what makes
