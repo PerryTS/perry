@@ -580,7 +580,44 @@ verified end to end.
 [perry-loop-waits] … tokio_ticks=0 …
 ```
 
-<!-- EVIDENCE:GAP -->
+### The full gap suite, against this branch's own base
+
+Both arms built in their own tree with the harness's default package set plus
+the four `perry-ext-*` database wrappers, in one cargo invocation, and run as
+`PERRY_SKIP_BUILD=1 ./scripts/run_gap_tests.sh` against Node 26.5.1 on the same
+box.
+
+| | base `7f77cce3c6` | P7 |
+|---|---|---|
+| tests | 805 | 805 |
+| parity pass | 796 | 796 |
+| parity fail | 9 | **9 — the same nine** |
+| compile fail | 0 | 0 |
+| crash | 0 | 0 |
+| **status changes vs base** | — | **0** |
+
+The base's nine, none of them this lane's:
+`2159_defineproperty_class_prototype`, `2514_settracesigint`,
+`2899_2779_2777_static_helpers`, `disposablestack_2875`,
+`iterator_prototype_next_patch`, `json_lazy_defineproperty_index`,
+`perfhooks_3088_3008_3010_3011`, `prop_plan_cache_invalidation`,
+`v8_2_3680plus`. Three of those — `2899_…`, `disposablestack_2875` and
+`iterator_prototype_next_patch` — the committed snapshot expects to PASS, so the
+gate is **red on the base commit before this branch changes anything**, which is
+exactly why this comparison is against the base rather than against the
+snapshot.
+
+**Not one test changed status in either direction**, compared per test from the
+two runs' own journals rather than from the summary lines. That is the verdict:
+adding a workspace crate, raising `MAX_SUBSYSTEMS`, and rewriting the transport
+inside all four database bindings cost the existing suite nothing.
+
+No test in the suite opens a database connection, so this sweep is a regression
+gate on everything *around* the change — the four bindings' shared archives,
+the `MAX_SUBSYSTEMS` change in the runtime, and the new workspace crate — rather
+than coverage of the migration itself. The migration's own coverage is the
+fixtures above.
+
 
 ## Unit tests
 
