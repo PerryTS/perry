@@ -110,14 +110,11 @@ pub unsafe extern "C" fn js_response_static_json(
     } else {
         string_from_header(str_ptr).unwrap_or_else(|| "null".to_string())
     };
-    let status_u16 = if init_status.is_nan() || init_status == 0.0 {
-        200
-    } else {
-        init_status as u16
-    };
-    // Node's `Response.json` leaves statusText "" when not provided — it does
-    // not fall back to the status reason phrase.
-    let status_text = string_from_header(init_status_text_ptr).unwrap_or_default();
+    // Same init validation as `new Response` (#10360): Node range-checks the
+    // status, validates statusText (default "", not the reason phrase), and
+    // rejects the always-present JSON body under a null-body status.
+    let (status_u16, status_text) =
+        super::response_ctor::response_init(init_status, init_status_text_ptr, true);
     // Start from any user-provided headers, then add the default content-type
     // only if the init headers didn't already set one.
     let headers_id = handle_id(headers_handle);

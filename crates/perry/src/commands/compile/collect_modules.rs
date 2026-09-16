@@ -755,6 +755,19 @@ fn collect_module_one(
                 value: Box::new(perry_hir::Expr::NativeModuleRef("bun".to_string())),
             }),
         );
+        // #10360: tell the runtime too, for Web APIs whose Bun behavior
+        // differs from Node's. Same every-module seeding as above, so the
+        // flag is on before any dependency's top-level code runs.
+        hir_module.init.insert(
+            0,
+            perry_hir::Stmt::Expr(perry_hir::Expr::NativeMethodCall {
+                module: "__perry_runtime".to_string(),
+                class_name: None,
+                object: None,
+                method: "setBunPlatform".to_string(),
+                args: Vec::new(),
+            }),
+        );
     }
 
     // Preserve native result types before async lowering splits awaited values

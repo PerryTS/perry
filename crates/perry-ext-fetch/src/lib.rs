@@ -22,8 +22,8 @@ use std::sync::Mutex;
 mod gc;
 mod validation;
 use validation::{
-    is_forbidden_method, is_null_body_status, is_redirect_status, is_valid_status_text,
-    normalize_method, parse_redirect_location, redirect_status_from_value,
+    is_forbidden_method, is_redirect_status, normalize_method, parse_redirect_location,
+    redirect_status_from_value, response_init,
 };
 use validation::{throw_range_error, throw_type_error};
 
@@ -1224,31 +1224,7 @@ pub unsafe extern "C" fn js_response_new(
     let body_opt = read_str(body_ptr);
     let body_present = body_opt.is_some();
     let body = body_opt.unwrap_or_default().into_bytes();
-    // NaN/0.0 are the codegen "no status field" sentinels → default 200.
-    // Otherwise truncate toward zero + range-check 200..=599 (#2640).
-    let status = if status.is_nan() || status == 0.0 {
-        200
-    } else {
-        let truncated = status.trunc();
-        if !(200.0..=599.0).contains(&truncated) {
-            throw_range_error("init[\"status\"] must be in the range of 200 to 599, inclusive.");
-        }
-        truncated as u16
-    };
-    let status_text = match read_str(status_text_ptr) {
-        Some(s) => {
-            if !is_valid_status_text(&s) {
-                throw_type_error("Invalid statusText");
-            }
-            s
-        }
-        None => String::new(),
-    };
-    if body_present && is_null_body_status(status) {
-        throw_type_error(&format!(
-            "Response constructor: Invalid response status code {status}"
-        ));
-    }
+    let (status, status_text) = response_init(status, read_str(status_text_ptr), body_present);
     let headers_id = handle_id(headers_handle);
     let headers = if headers_id != 0 {
         HEADERS_HANDLES
@@ -1419,15 +1395,10 @@ pub unsafe extern "C" fn js_response_static_json(
 ) -> f64 {
     let v = JsValue::from_bits(value.to_bits());
     let body = perry_ffi::json_stringify(v).unwrap_or_default();
-    // #2638: honor `init.status` / `init.statusText` / `init.headers`.
-    let status = if init_status.is_nan() || init_status == 0.0 {
-        200
-    } else {
-        init_status as u16
-    };
-    // Node's `Response.json` leaves statusText "" when not provided — it does
-    // not fall back to the status reason phrase.
-    let status_text = read_str(init_status_text_ptr).unwrap_or_default();
+    // #2638: honor `init.status` / `init.statusText` / `init.headers`, with
+    // the same validation as `new Response` (#10360) — the JSON body is
+    // always present, so a null-body status throws outside Bun mode.
+    let (status, status_text) = response_init(init_status, read_str(init_status_text_ptr), true);
     // Start from any user-provided headers, then add the default content-type
     // only if the init headers didn't already set one.
     let headers_id = handle_id(headers_handle);
