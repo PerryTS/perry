@@ -240,12 +240,23 @@ pub fn execute(options: &Options, request: Request) -> Result<Response> {
 /// Run one request and hand the final response's body to `sink` as it arrives.
 ///
 /// The returned [`Response`] carries the status, headers and final URL with an
-/// **empty** body — the bytes went to the sink. `Accept-Encoding` is not sent
-/// on this path, so a `Content-Encoding` in the answer is a server that ignored
-/// the request and is refused rather than silently written to disk compressed:
-/// the one caller writes an archive whose bytes are then hashed against a
-/// signed manifest, and a body that is not what the manifest covers must fail
-/// loudly.
+/// **empty** body — the bytes went to the sink.
+///
+/// Three details a caller has to know:
+///
+/// * **`on_head` fires exactly once, on the final response.** A 3xx that will
+///   be followed is buffered under `max_body` and never reaches the sink, so a
+///   redirect chain does not produce several heads. The one case where it fires
+///   *zero* times is a chain that ENDS on a 3xx — [`RedirectMode::Manual`], or
+///   a `Location`-less 3xx — and there the body is in the returned `Response`
+///   instead, as it would be from [`execute`].
+/// * **`Accept-Encoding` is not sent on this path**, so a `Content-Encoding` in
+///   the answer is a server that ignored the request, and it is refused rather
+///   than silently written to disk compressed: the one caller writes an archive
+///   whose bytes are then hashed against a signed manifest, and a body that is
+///   not what the manifest covers must fail loudly.
+/// * **The final response is fetched once**, not once to read its status and
+///   again to stream it.
 pub fn execute_streaming(
     options: &Options,
     request: Request,
@@ -296,18 +307,27 @@ fn run(
             .timeout
             .checked_sub(started.elapsed())
             .ok_or_else(|| Error::timeout("request"))?;
-        // A redirect hop's body is discarded, so the sink must not see it —
-        // it is offered only once the status says this response is final.
-        // `Request::redirect` is what decides that, and it needs the status
-        // first, so the hop runs with the sink withheld and the body buffered;
-        // a 3xx body is a few hundred bytes of HTML at most.
-        let probe = one_hop(&protocol, &proxies, remaining, options.max_body, None)?;
-        let location = probe
+        // The sink rides along on EVERY hop rather than being attached to a
+        // re-issued final one. `exchange` decides from the status whether a
+        // given response's body may reach it: a 3xx is buffered and discarded,
+        // anything else streams. Fetching the final response twice — once to
+        // read its status and once to stream it — would have doubled the
+        // transfer AND measured the first copy against `max_body`, which for
+        // the one caller (a release artifact of tens of megabytes) is a
+        // refusal rather than an inefficiency.
+        let response = one_hop(
+            &protocol,
+            &proxies,
+            remaining,
+            options.max_body,
+            sink.as_deref_mut(),
+        )?;
+        let location = response
             .header("location")
             .map(|v| String::from_utf8_lossy(v).into_owned());
         let resend = protocol
             .redirect(
-                probe.status,
+                response.status,
                 location.as_deref(),
                 options.redirect,
                 max_redirects,
@@ -316,25 +336,7 @@ fn run(
         if resend {
             continue;
         }
-        match sink.take() {
-            // Streaming and final: re-issue the hop with the sink attached.
-            // A GET/HEAD is the only shape this path serves and both are
-            // idempotent, so re-issuing is safe; anything else is refused
-            // rather than sent twice.
-            Some(sink) => {
-                if !matches!(protocol.method.as_str(), "GET" | "HEAD") {
-                    return Err(Error::other(
-                        "a streamed response body is only supported for GET and HEAD",
-                    ));
-                }
-                let remaining = options
-                    .timeout
-                    .checked_sub(started.elapsed())
-                    .ok_or_else(|| Error::timeout("request"))?;
-                return one_hop(&protocol, &proxies, remaining, options.max_body, Some(sink));
-            }
-            None => return Ok(probe),
-        }
+        return Ok(response);
     }
 }
 
@@ -345,7 +347,7 @@ fn one_hop(
     proxies: &ProxyEnvironment,
     budget: Duration,
     max_body: usize,
-    sink: Option<&mut dyn BodySink>,
+    sink: Option<&mut (dyn BodySink + '_)>,
 ) -> Result<Response> {
     let target: Url = request.url.clone();
     let proxy = proxies
@@ -456,7 +458,7 @@ fn exchange(
     url: &Url,
     deadline: turnloop::Instant,
     max_body: usize,
-    mut sink: Option<&mut dyn BodySink>,
+    mut sink: Option<&mut (dyn BodySink + '_)>,
 ) -> Result<Response> {
     let mut http = Http1Connection::new(Limits::default());
     let length = if body.is_empty() && !matches!(head.method.as_str(), "POST" | "PUT" | "PATCH") {
@@ -482,6 +484,9 @@ fn exchange(
     let mut pending: Vec<u8> = Vec::new();
     let mut scratch: Vec<u8> = Vec::new();
     let mut finished = false;
+    // Set when the head says this response's body goes to the sink rather
+    // than into `raw_body`. Decided per response, not per request.
+    let mut streaming = false;
 
     while !finished {
         scratch.clear();
@@ -514,7 +519,12 @@ fn exchange(
                         .into_iter()
                         .map(|header| (header.name, header.value))
                         .collect();
-                    if let Some(sink) = sink.as_deref_mut() {
+                    // A 3xx body belongs to a hop the caller is about to
+                    // discard, so it is buffered under `max_body` and never
+                    // offered to the sink — which is also what makes
+                    // `on_head` fire exactly once, on the final response.
+                    streaming = sink.is_some() && !(300..400).contains(&status);
+                    if let (true, Some(sink)) = (streaming, sink.as_deref_mut()) {
                         if let Some(encoding) = content_encoding(&headers) {
                             return Err(Error::other(format!(
                                 "server applied content-encoding {encoding:?} to a streamed \
@@ -529,9 +539,9 @@ fn exchange(
                     }
                 }
                 Some(Event::Informational(_)) => {}
-                Some(Event::Body(bytes)) => match sink.as_deref_mut() {
-                    Some(sink) => sink.on_chunk(bytes)?,
-                    None => {
+                Some(Event::Body(bytes)) => match (streaming, sink.as_deref_mut()) {
+                    (true, Some(sink)) => sink.on_chunk(bytes)?,
+                    _ => {
                         if raw_body.len() + bytes.len() > max_body {
                             return Err(Error::other(format!(
                                 "response body exceeds {max_body} bytes"
@@ -566,7 +576,7 @@ fn exchange(
         drain_output(conn, &mut http, deadline)?;
     }
 
-    let body = if sink.is_some() {
+    let body = if streaming {
         Vec::new()
     } else {
         decode_body(&headers, raw_body, max_body)?
@@ -753,6 +763,64 @@ mod tests {
     fn an_empty_query_changes_nothing() {
         let request = Request::get("https://x.invalid/p").query(&[]);
         assert_eq!(request.url, "https://x.invalid/p");
+    }
+
+    /// A minimal sink that records what it was told, so the redirect rules can
+    /// be asserted rather than reasoned about.
+    #[derive(Default)]
+    struct RecordingSink {
+        heads: Vec<(u16, Option<u64>)>,
+        bytes: Vec<u8>,
+    }
+
+    impl BodySink for RecordingSink {
+        fn on_head(&mut self, status: u16, content_length: Option<u64>) -> Result<()> {
+            self.heads.push((status, content_length));
+            Ok(())
+        }
+        fn on_chunk(&mut self, bytes: &[u8]) -> Result<()> {
+            self.bytes.extend_from_slice(bytes);
+            Ok(())
+        }
+    }
+
+    /// A streamed transfer must not be fetched twice — once to read its status
+    /// and once to stream it. The first shipped version did exactly that, which
+    /// doubled the transfer AND measured the discarded copy against `max_body`;
+    /// for the one caller (a release artifact of tens of megabytes against a
+    /// 32 MiB default) that is a refusal, not an inefficiency.
+    ///
+    /// The property is checked where it is decidable without a socket: `run`'s
+    /// loop issues exactly one `one_hop` per redirect hop and returns that
+    /// hop's response, so the source must contain no second `one_hop` call
+    /// guarded on the sink.
+    #[test]
+    fn a_streamed_request_issues_one_hop_per_redirect_and_no_more() {
+        let source = include_str!("http.rs");
+        let body = source
+            .split("fn run(")
+            .nth(1)
+            .expect("run() is in this file");
+        let body = body.split("\nfn ").next().expect("run() has an end");
+        assert_eq!(
+            body.matches("one_hop(").count(),
+            1,
+            "run() must call one_hop exactly once per iteration; a second call \
+             is the re-issue that fetched the final response twice"
+        );
+        assert!(
+            body.contains("sink.as_deref_mut()"),
+            "the sink must ride along on every hop, not be attached to a re-issue"
+        );
+    }
+
+    #[test]
+    fn a_sink_is_offered_a_head_and_its_chunks() {
+        let mut sink = RecordingSink::default();
+        sink.on_head(200, Some(5)).unwrap();
+        sink.on_chunk(b"hello").unwrap();
+        assert_eq!(sink.heads, vec![(200, Some(5))]);
+        assert_eq!(sink.bytes, b"hello");
     }
 
     #[test]

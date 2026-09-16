@@ -570,6 +570,42 @@ Note the Node oracle cannot run either probe: `node-fetch` is not in the
 repository's `package.json`, which is the same reason P6 gave for its SMTP
 fixture. The comparison above is arm-against-arm.
 
+### The streamed download, and the bug it caught
+
+`perform_self_update` is the only streaming transfer in the tree and the only
+`BodySink` implementation, so `probe --stream <url> <path>` exercises the same
+shape: a real GitHub **release asset**, which is the exact case the self-updater
+hits — a `github.com/.../releases/download/...` URL that 302s to
+`release-assets.githubusercontent.com`.
+
+```
+$ probe --stream https://github.com/PerryTS/perry/releases/download/v0.5.1520/\
+    perry-cross-aarch64-apple-darwin.tar.gz  /tmp/p11_stream.bin
+     head #1 status=200 content-length=Some(47533003)
+OK   ... -> 200 final=https://release-assets.githubusercontent.com/...
+     heads=1 declared=Some(47533003) written=47533003 buffered=0
+rc=0
+-rw-r--r-- 1 root root 47533003 /tmp/p11_stream.bin
+```
+
+`heads=1` is the load-bearing number: the head was offered to the sink **once**,
+on the final response, not once per redirect hop. `written == declared` says
+every byte arrived. `buffered=0` says nothing was held in memory.
+
+**This probe caught a real bug in this lane's own code, and the file above is
+the case that would have failed.** The first version of `execute_streaming`
+followed the redirect chain with the sink *withheld* — buffering each hop to read
+its status — and then **re-issued the final hop** with the sink attached. That
+fetched the artifact twice, and the discarded first copy was measured against
+`max_body`, whose default is 32 MiB. A 45 MB release asset would have been
+refused with "response body exceeds 33554432 bytes" before a byte reached disk.
+
+The fix is to let the sink ride along on every hop and decide *per response*,
+from the status, whether its body may reach the sink: a 3xx is buffered and
+discarded, anything else streams. `a_streamed_request_issues_one_hop_per_redirect_and_no_more`
+pins it — it reads `run()`'s own source and fails if a second `one_hop` call
+appears, which is the only shape the re-issue can take.
+
 ### The WebSocket client, end to end
 
 `perry publish` and `perry run --remote` are the only WebSocket clients in the
@@ -789,13 +825,14 @@ Named precisely.
   multipart upload shape, the WebSocket and the artifact download with
   `perry publish`, which *was* run end to end on both arms; but the `run --remote`
   entry point itself was not driven.
-* **The self-update artifact download, end to end.** `perform_self_update` is
-  the only streaming transfer in the tree and the only `BodySink` implementation,
-  and it was not run: doing so means letting the CLI replace its own binary from
-  a real signed release. `perry update --check-only` (the release-info ladder,
-  the same client) ran on both arms and is identical. The streaming path itself
-  is covered by review and by `perry-http-client`'s own tests, and that is less
-  than it should be — it is the weakest evidence in this report.
+* **`perform_self_update` end to end** — that means letting the CLI replace its
+  own binary from a real signed release, and it was not done.
+  `perry update --check-only` (the release-info ladder, the same client) ran on
+  both arms and is identical, and the *streaming transport underneath it* is
+  exercised directly — see "The streamed download" below. What is untested is
+  the composition: the manifest verification, `ensure_complete_download`, the
+  extraction and the transactional install, all of which this lane did not
+  change.
 * **A benchmark.** The box was at load 30–70 with four other lanes running gap
   sweeps throughout, and the brief forbids timing there. No number in this
   report is a performance claim.
