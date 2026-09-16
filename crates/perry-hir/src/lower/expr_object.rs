@@ -644,6 +644,38 @@ fn accessor_key_expr(key: MethodKeyKind) -> Expr {
     }
 }
 
+/// The type a closed-shape literal's property contributes to the synthesized
+/// `__AnonShape_*` record — which is NOT merely a hint (#10348).
+///
+/// Codegen turns these field types into the class's compile-time GC masks
+/// (`typed_shape::typed_layout_from_fields`), `js_gc_typed_shape_id_for_keys`
+/// registers them against a dedicated ShapeId, and every allocation of the
+/// record then stamps `SIDE_MASK | TYPED_LAYOUT_INTACT` from the baked header
+/// image (#8405) — with no per-object validation and no downgrade. A field the
+/// pointer mask omits is a field the collector never scans: its child is
+/// neither marked nor rewritten.
+///
+/// `Type::Null` / `Type::Void` are the two types that say "this slot can never
+/// hold a heap pointer" while being trivially wrong about a *variable*. Perry
+/// infers `var head = null` as `Type::Null` and the later `head = { … }`
+/// repairs it only in the post-lowering widening pass
+/// (`lower::type_widening`), which runs long after this class is minted. So
+/// `{ next: head }` recorded `next: Null`, the mask dropped that slot, and the
+/// chain it pointed at was collected underneath a live object — #10348's
+/// silently truncated and cross-linked graphs.
+///
+/// The claim is therefore taken only from an expression that *is* the value: a
+/// literal `null` / `undefined`. Anything else contributes `Any`, which is what
+/// the property's provable type is. A literal keeps its exact type, so the
+/// ubiquitous `{ next: null }` record is unchanged — both its mask and its
+/// `POINTER_FREE` eligibility — and nothing that was already true gets slower.
+fn record_field_type(ty: &Type, value: &Expr) -> Type {
+    if matches!(ty, Type::Null | Type::Void) && !matches!(value, Expr::Null | Expr::Undefined) {
+        return Type::Any;
+    }
+    ty.clone()
+}
+
 pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> Result<Expr> {
     // A directly exported object is the producer boundary for #8775. Consume
     // the marker here so nested literals continue through their ordinary
@@ -913,7 +945,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         if !bail {
             let field_shapes: Vec<(String, Type)> = fields
                 .iter()
-                .map(|(name, ty, _)| (name.clone(), ty.clone()))
+                .map(|(name, ty, value)| (name.clone(), record_field_type(ty, value)))
                 .collect();
             let class_name = ctx.synthesize_anon_shape_class(&field_shapes);
             let args: Vec<Expr> = fields.into_iter().map(|(_, _, value)| value).collect();
