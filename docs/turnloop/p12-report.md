@@ -223,6 +223,32 @@ byte — above all no `AUTH` and no MySQL handshake response — may precede the
 session**. MySQL's asserts the output is exactly 36 bytes, a 4-byte header plus
 the 32-byte `SSLRequest`, with capability bit 11 set.
 
+### The gap suite
+
+837 tests on the pinned Node 26.5.1 oracle, one arm, compared against
+`test-parity/gap_snapshot.json`: **805 pass, and not one of the 32 that do not
+is attributable to this lane.** Nothing the snapshot records as failing now
+passes either, so no entry went stale.
+
+| not passing | how it was classified |
+|---|---|
+| 20 | already recorded in `gap_snapshot.json`, same status |
+| 4 | `compile_fail` — **the auto-optimize cache, not the code**: `target/perry-auto-*` held a `libperry_runtime.a` stamped with the PREVIOUS commit, and the compiler refuses a mismatched stamp. All four (`turnloop_http2_server`, `turnloop_http2_control`, `http2_settings`, `gc_http2_pending_event_callback_rooting`) PASS after `rm -rf target/perry-auto-*`. That they are the HTTP/2 four is a coincidence of nothing — they are the tests whose ext archive the auto-optimize path rebuilds |
+| 5 | the **oracle itself** fails them: `backoff_options`, `cron_cronjob`, `dayjs_factory_arg`, `moment_methods`, `ratelimiter_memory` need npm packages a fresh clone does not have, and `node --experimental-strip-types` exits non-zero |
+| 3 | pre-existing: `2899_2779_2777_static_helpers`, `disposablestack_2875`, `iterator_prototype_next_patch` reproduce **byte-identically** on a v0.5.1573 build, seven merge trains before this branch |
+
+Two things about how that verdict was reached, because both are traps this
+repository has a written rule about and both were walked into here first:
+
+* **`run_parity_tests.sh --filter test_gap_` does not run the snapshot gate.**
+  `run_gap_tests.sh` is the wrapper that does. The comparison above was made by
+  hand against `gap_snapshot.json` afterwards.
+* **The runner's exit code was `tail`'s, not the harness's** —
+  `./run_parity_tests.sh … | tail -80` followed by `$?` reports 0 whatever the
+  harness did. CLAUDE.md names this exact shape ("check the harness's exit code,
+  not a wrapper shell's") and it still got written. The classification above
+  comes from the report JSON, not from that exit code.
+
 ### Under the GC instruments
 
 `object_field_by_name` is the one thing in this lane that touches the collector,
