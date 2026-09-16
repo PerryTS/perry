@@ -406,7 +406,10 @@ pub extern "C" fn js_array_map(
                 ptr::write(result_elements.add(i), mapped);
                 let mapped_bits = mapped.to_bits();
                 if length <= 64 {
-                    note_array_slot_layout_only(result, i, mapped_bits);
+                    // The head was just re-derived from `result_rooted`, so the
+                    // per-element helpers' repeated ownership/forwarding proofs
+                    // are redundant: resolve the header once.
+                    super::header_gc_slots::fill_resolved_array_slot(result, i, mapped_bits);
                 } else {
                     note_array_slot(result, i, mapped_bits);
                 }
