@@ -217,3 +217,46 @@ console.log(`${b.k2} ${JSON.stringify(Object.keys(b))}`);
          undefined 1\n42 [\"k1\",\"k2\",\"k3\"]\n"
     );
 }
+
+/// The store-plan cache is vetted per KEY rather than per receiver (#10287),
+/// so a receiver carrying a descriptor can hold a plan for its other keys.
+/// A plan hit skips the own-accessor short-circuit, which is exactly what must
+/// NOT happen for a key the receiver does own an accessor on — so warm the
+/// plan for this class on many receivers first, then prove the accessor still
+/// dispatches and a non-writable data descriptor is still respected.
+/// Expectations verified against Node 26 first.
+#[test]
+fn a_warmed_store_plan_still_dispatches_an_own_accessor() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = run(
+        dir.path(),
+        r#"
+class C {}
+const make = (tag) => {
+  const o = new C();
+  Object.defineProperty(o, "_zod", { value: tag, enumerable: false });
+  const seen = [];
+  Object.defineProperty(o, "acc", {
+    set(v) { seen.push(v); }, get() { return seen.length; }, configurable: true,
+  });
+  o.__seen = seen;
+  return o;
+};
+for (let i = 0; i < 300; i++) { const w = make(i); w.plain = i; }
+const a = make("a");
+a.plain = 1;
+a.acc = "x"; a.acc = "y";
+console.log(JSON.stringify(a.__seen) + " " + a.acc + " " +
+  typeof Object.getOwnPropertyDescriptor(a, "acc").set);
+console.log(a.plain + " " + a._zod + " " + JSON.stringify(Object.keys(a)));
+const b = make("b");
+Object.defineProperty(b, "ro", { value: 1, writable: false, configurable: true });
+b.ro = 99;
+console.log(String(b.ro));
+"#,
+    );
+    assert_eq!(
+        out,
+        "[\"x\",\"y\"] 2 function\n1 a [\"__seen\",\"plain\"]\n1\n"
+    );
+}
