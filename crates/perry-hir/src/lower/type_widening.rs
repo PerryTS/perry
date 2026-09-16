@@ -81,9 +81,23 @@ struct WidenSets {
 /// widens a `null`/`undefined`-declared local, because that declared type is
 /// read as a GC fact and not just a codegen hint — see the `Type::Null` arm of
 /// [`widen_lets_stmt`].
+///
+/// The structural arms are [`rhs_certainly_object_like`]'s own list, answered
+/// the other way round, so this costs no extra `infer_expr_type` on any RHS
+/// that function already decided by shape.
 fn rhs_certainly_nullish(expr: &Expr, env: &HirTypeEnv) -> bool {
-    matches!(expr, Expr::Null | Expr::Undefined)
-        || matches!(infer_expr_type(expr, env), Type::Null | Type::Void)
+    match expr {
+        Expr::Null | Expr::Undefined => true,
+        Expr::This
+        | Expr::Object(_)
+        | Expr::ObjectSpread { .. }
+        | Expr::ObjectAssign { .. }
+        | Expr::Array(_)
+        | Expr::ArraySpread(_)
+        | Expr::Closure { .. }
+        | Expr::New { .. } => false,
+        _ => matches!(infer_expr_type(expr, env), Type::Null | Type::Void),
+    }
 }
 
 fn rhs_certainly_non_array_object(expr: &Expr) -> bool {
