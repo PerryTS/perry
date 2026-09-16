@@ -210,3 +210,128 @@ pub extern "C" fn js_lru_cache_subclass_init(this: f64, opts: f64) -> f64 {
     install_methods_on_existing_object(obj, this, &methods, &[]);
     this
 }
+
+/// Link-time default for the `js_lru_cache_*` ABI on MSVC, and nowhere else.
+///
+/// The extern block above is satisfied by whichever cache provider the PROGRAM
+/// links. A Rust binary that links perry-runtime without one still carries the
+/// references, and two of them are built in CI on every Windows leg: the
+/// `perry` compiler itself (`cargo build -p perry …`) and this crate's own
+/// `--lib` test harness (`cargo test --lib -p perry-runtime`). Neither wants an
+/// LRU cache; neither links a provider.
+///
+/// On every other target that is harmless, because the linker dead-strips
+/// before it reports: `ld64 -dead_strip` / `ld --gc-sections` drop the thunks
+/// above out of a binary that never calls them, and the references go with
+/// them. Verified on macOS — the linked `target/perry-dev/perry` contains no
+/// `js_lru_cache_subclass_init` symbol at all, and the build succeeds while the
+/// rlib it links still shows all seven as `U`. `link.exe` resolves symbols
+/// BEFORE `/OPT:REF`, so the same inputs are 7 × LNK2019 there.
+///
+/// A Cargo feature cannot express "this link has no provider". The Windows job
+/// builds `-p perry -p perry-runtime-static -p perry-stdlib-static` in ONE
+/// invocation, so perry-stdlib's `perry-runtime/stdlib` feature is unified onto
+/// the copy of perry-runtime that the `perry` binary links — even though
+/// perry-stdlib is not in that binary's link. Anything gated on `stdlib`
+/// (`crate::stdlib_stubs`, an `external-*-symbols` flag) is therefore compiled
+/// out in exactly the configuration that fails.
+///
+/// `/ALTERNATENAME` is MSVC's spelling of a weak default: link.exe substitutes
+/// the alternate only for a symbol still undefined after every input has been
+/// read. A program that does link `perry_stdlib.lib` or the ext archive binds
+/// the real implementation and never reaches these — so this cannot shadow a
+/// provider the way an unconditional definition would. They live in this module
+/// so that they share a codegen unit with the thunks whose references they
+/// answer.
+///
+/// `js_lru_cache_new` answering 0 is already the "no cache" path: the
+/// subclass-init returns `this` without installing any method, so a `.get()` on
+/// it throws `is not a function` at the call site — the same failure this
+/// module deliberately chooses for `forEach`/`dispose`/`fetch`.
+#[cfg(all(windows, target_env = "msvc"))]
+mod msvc_absent_provider {
+    use crate::stub_diag::perry_stub_warn;
+
+    const REASON: &str =
+        "no lru-cache provider (perry-ext-lru-cache / perry-stdlib bundled-lru-cache) \
+         is linked into this binary";
+
+    /// Emit one `/ALTERNATENAME:<symbol>=<fallback>` linker directive.
+    macro_rules! alternatename {
+        ($stat:ident, $bytes:literal) => {
+            #[used]
+            #[link_section = ".drectve"]
+            static $stat: [u8; $bytes.len()] = *$bytes;
+        };
+    }
+
+    alternatename!(
+        D_NEW,
+        b" /ALTERNATENAME:js_lru_cache_new=perry_lru_cache_absent_new"
+    );
+    alternatename!(
+        D_GET,
+        b" /ALTERNATENAME:js_lru_cache_get=perry_lru_cache_absent_get"
+    );
+    alternatename!(
+        D_SET,
+        b" /ALTERNATENAME:js_lru_cache_set=perry_lru_cache_absent_set"
+    );
+    alternatename!(
+        D_HAS,
+        b" /ALTERNATENAME:js_lru_cache_has=perry_lru_cache_absent_has"
+    );
+    alternatename!(
+        D_DELETE,
+        b" /ALTERNATENAME:js_lru_cache_delete=perry_lru_cache_absent_delete"
+    );
+    alternatename!(
+        D_CLEAR,
+        b" /ALTERNATENAME:js_lru_cache_clear=perry_lru_cache_absent_clear"
+    );
+    alternatename!(
+        D_PEEK,
+        b" /ALTERNATENAME:js_lru_cache_peek=perry_lru_cache_absent_peek"
+    );
+
+    #[no_mangle]
+    pub extern "C" fn perry_lru_cache_absent_new(_options: f64) -> i64 {
+        perry_stub_warn("js_lru_cache_new", REASON, None);
+        0
+    }
+
+    #[no_mangle]
+    pub extern "C" fn perry_lru_cache_absent_get(_handle: i64, _key: f64) -> f64 {
+        perry_stub_warn("js_lru_cache_get", REASON, None);
+        super::undefined_value()
+    }
+
+    #[no_mangle]
+    pub extern "C" fn perry_lru_cache_absent_set(handle: i64, _key: f64, _value: f64) -> i64 {
+        perry_stub_warn("js_lru_cache_set", REASON, None);
+        handle
+    }
+
+    #[no_mangle]
+    pub extern "C" fn perry_lru_cache_absent_has(_handle: i64, _key: f64) -> f64 {
+        perry_stub_warn("js_lru_cache_has", REASON, None);
+        super::bool_value(false)
+    }
+
+    #[no_mangle]
+    pub extern "C" fn perry_lru_cache_absent_delete(_handle: i64, _key: f64) -> f64 {
+        perry_stub_warn("js_lru_cache_delete", REASON, None);
+        super::bool_value(false)
+    }
+
+    #[no_mangle]
+    pub extern "C" fn perry_lru_cache_absent_clear(_handle: i64) {
+        perry_stub_warn("js_lru_cache_clear", REASON, None);
+    }
+
+    #[no_mangle]
+    pub extern "C" fn perry_lru_cache_absent_peek(_handle: i64, _key: f64) -> f64 {
+        perry_stub_warn("js_lru_cache_peek", REASON, None);
+        super::undefined_value()
+    }
+}
