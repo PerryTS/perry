@@ -65,7 +65,11 @@ pub(crate) fn lower_new_member_native(
                 // that never import `node:worker_threads`. The runtime global
                 // delegates to the full worker_threads factory whenever the
                 // stdlib has registered it, so no behavior is lost.
-                if is_worker_messaging_constructor_name(class_name) {
+                // #10359: `Expr::New` resolves by name, so a same-named user
+                // binding would capture it — fall through to the re-dispatch.
+                if is_worker_messaging_constructor_name(class_name)
+                    && !(obj_name == "globalThis" && global_name_has_user_binding(ctx, class_name))
+                {
                     return Ok(Some(Expr::New {
                         class_name: class_name.to_string(),
                         args: lower_optional_args(ctx, new_expr.args.as_deref())?,
@@ -83,6 +87,7 @@ pub(crate) fn lower_new_member_native(
             if obj_name == "globalThis"
                 && ctx.lookup_local("globalThis").is_none()
                 && is_fetch_constructor_name(prop_ident.sym.as_ref())
+                && !global_name_has_user_binding(ctx, prop_ident.sym.as_ref())
             {
                 ctx.uses_fetch = true;
                 return Ok(Some(Expr::New {

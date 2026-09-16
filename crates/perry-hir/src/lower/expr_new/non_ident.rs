@@ -258,6 +258,11 @@ pub(crate) fn lower_new_non_ident(
             if is_fetch_constructor_name(property) {
                 ctx.uses_fetch = true;
             }
+            // #10359: a same-named user binding would capture the by-name
+            // `Expr::New`; construct the global property's value instead.
+            if global_name_has_user_binding(ctx, property) {
+                return Ok(global_property_new_dynamic(property, args, new_byte_offset));
+            }
             return Ok(Expr::New {
                 class_name: property.clone(),
                 args,
