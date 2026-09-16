@@ -6,7 +6,31 @@ name: Scheduled Gate Failure Watch
 # update the same issue with the current rows and their delta; the next green
 # closes it.
 
-on:
+# zizmor flags `workflow_run` categorically -- "almost always used
+# insecurely", at Medium audit confidence. The two ways it IS used insecurely
+# are both closed here, in code, and each is checkable in one line:
+#
+#   1. It never runs for untrusted input. The `observe` job's `if:` admits only
+#      `schedule`, or `workflow_dispatch`/`repository_dispatch`/`push` whose
+#      head_branch is `main` or a `v*` tag. A fork PR's run satisfies none of
+#      those, so the write-capable token is never reachable from a
+#      contributor-controlled trigger.
+#   2. It never executes the triggering run's code. The checkout pins
+#      `ref: main` with `persist-credentials: false`, and the only thing run is
+#      `scripts/gate_failure_watch.py` out of that trusted default-branch
+#      checkout. Nothing is taken from the triggering run -- no artifact
+#      download, no `head_sha` checkout.
+#
+# Permissions are `actions: read`, `contents: read`, `issues: write`: enough to
+# read a run's conclusion and file one issue, nothing more.
+#
+# Dropping the trigger is not an alternative -- observing another workflow's
+# completion IS the feature (#9830 measured a correctly-failing scheduled
+# workflow staying red for nineteen days with nobody noticing).
+#
+# Ratchet: if this workflow ever gains an artifact download, a `head_sha`
+# checkout, or a looser `if:`, delete the marker and let the gate fail.
+on: # zizmor: ignore[dangerous-triggers]
   workflow_run:
     workflows:
       - Auto-Optimize App Patterns
