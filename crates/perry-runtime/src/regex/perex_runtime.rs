@@ -221,18 +221,23 @@ struct ScratchCell {
     undo: Vec<Undo>,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// Borrowed for one search. A nested regex — a replacer callback that runs
     /// its own match, or a poll that re-enters — finds the cell borrowed and
     /// takes the owned path, so two searches never share slots. This is the
     /// runtime half of the guarantee perex's `ScratchOwner for &mut O` makes at
     /// compile time within a single frame.
-    static LENT_SCRATCH: std::cell::RefCell<ScratchCell> =
+    ///
+    /// `perry_thread_local!` rather than the raw macro (#7469): every search on
+    /// this thread reads it, so the address belongs in the hot cache instead of
+    /// costing a `_tlv_get_addr` call — the opposite of what this change is for.
+    static LENT_SCRATCH: std::cell::RefCell<ScratchCell> = const {
         std::cell::RefCell::new(ScratchCell {
             registers: [0; LENT_REGISTERS],
             frames: Vec::new(),
             undo: Vec::new(),
-        });
+        })
+    };
 }
 
 /// What a lent attempt produced: an answer, or a reason to run the owned path.
