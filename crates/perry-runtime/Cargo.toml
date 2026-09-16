@@ -261,6 +261,19 @@ full = ["dep:hostname", "dep:dirs"]
 # symbol-suppression gate; it must NOT be confused
 # with the behavioral `external-fetch-symbols` (fetch dispatch routing) below.
 stdlib = []
+# `class X extends LRUCache` support (#10293). Compiles `src/lru_subclass.rs`,
+# which binds the `js_lru_cache_*` C ABI through a plain `extern "C"` block.
+# Enabled ONLY by a crate that LINKS a provider — perry-stdlib's
+# `bundled-lru-cache` or perry-ext-lru-cache — never directly, and never in
+# `default`.
+#
+# The module used to be unconditional, which made every feature-subset build
+# carry seven unresolvable externs. That is invisible on ELF/Mach-O, where the
+# linker skips an archive member nothing references, and fatal under MSVC
+# `link.exe`, which pulls the whole object: `perry.exe` itself stopped linking,
+# and so did every auto-optimized program whose feature set omitted
+# `bundled-lru-cache` (found validating #10385 on Windows).
+lru-subclass = []
 # turnloop P0 A/B arm. Enabled ONLY through `perry-stdlib/tokio-wait-driver`
 # (never directly): compiles the legacy whole-millisecond park — condvar, or the
 # stdlib's registered tokio tick — for every agent instead of the primary

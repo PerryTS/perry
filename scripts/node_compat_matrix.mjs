@@ -85,7 +85,20 @@ const MANIFEST_ENTRIES = path.join(
   'src',
   'entries.rs',
 )
-const PERRY_BIN = path.join(REPO_ROOT, 'target', 'release', 'perry')
+// The compiler binary. Two things the hardcoded `target/release/perry` got
+// wrong on Windows (#10385): the executable is `perry.exe` there, so the
+// matrix could never find it and died in its own precondition check; and
+// Windows CI builds `--profile perry-dev`, not `--release`, so even a correct
+// suffix would point at a path that job never produces. `PERRY_BIN` overrides
+// both, matching the env the parity harness already honours.
+const PERRY_BIN =
+  process.env.PERRY_BIN ||
+  path.join(
+    REPO_ROOT,
+    'target',
+    'release',
+    process.platform === 'win32' ? 'perry.exe' : 'perry',
+  )
 
 // Compile can be slow on the FIRST call (it builds the auto-optimized
 // runtime once), then warm calls are sub-second. Runs are tiny.
@@ -347,13 +360,21 @@ function perryFingerprint(probeFile, outBin) {
       env: compileEnv,
     })
   }
-  if (c.status !== 0 || !existsSync(outBin)) return null
-  const r = spawnSync(outBin, [], {
+  // `perry x.ts -o out` writes `out.exe` on Windows, so the produced path is
+  // not the one we asked for. Checking/ running `outBin` verbatim there made
+  // every probe look UNRESOLVED even when the compile and run were fine
+  // (#10385) — the matrix reported "claimed-but-broken" for modules that work.
+  const producedBin =
+    process.platform === 'win32' && !outBin.endsWith('.exe') && existsSync(`${outBin}.exe`)
+      ? `${outBin}.exe`
+      : outBin
+  if (c.status !== 0 || !existsSync(producedBin)) return null
+  const r = spawnSync(producedBin, [], {
     encoding: 'utf8',
     timeout: RUN_TIMEOUT_MS,
     env: { ...process.env, PERRY_STUB_DIAG: 'off' },
   })
-  rmSync(outBin, { force: true })
+  rmSync(producedBin, { force: true })
   if (r.status !== 0) return null
   return extractFp(`${r.stdout || ''}\n${r.stderr || ''}`)
 }
@@ -430,7 +451,9 @@ function loadSkip() {
 async function runMatrix(args) {
   if (!existsSync(PERRY_BIN)) {
     throw new Error(
-      `perry release binary missing at ${PERRY_BIN}\n  build it: cargo build --release -p perry`,
+      `perry release binary missing at ${PERRY_BIN}\n` +
+        `  build it: cargo build --release -p perry\n` +
+        `  or point at an existing build: PERRY_BIN=<path-to-perry> (e.g. target/perry-dev/perry.exe)`,
     )
   }
   const pin = loadNodePin()

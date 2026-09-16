@@ -46,7 +46,10 @@ bundled-dotenv = []
 # `default = ["full"]`; flipped to perry-ext-lru-cache by the
 # well-known table (#466 Phase 4). Pulls the `lru` crate dep so
 # both halves of the gate move in lockstep.
-bundled-lru-cache = ["dep:lru"]
+# Also turns on the runtime's `class X extends LRUCache` glue: that module
+# binds the `js_lru_cache_*` symbols THIS feature defines, so the two must be
+# on or off together or the link breaks (#10385).
+bundled-lru-cache = ["dep:lru", "perry-runtime/lru-subclass"]
 
 # Pure-Rust wrapper, no extra deps. Default-on through `full`.
 bundled-exponential-backoff = []

@@ -103,6 +103,8 @@ pub mod eh;
 #[cfg(windows)]
 #[path = "eh_windows.rs"]
 pub mod eh;
+/// The GCC-format LSDA decoder both personalities share (#7354).
+pub(crate) mod eh_lsda;
 #[cfg(not(windows))]
 pub(crate) mod eh_walker;
 pub mod embedded;
@@ -119,6 +121,11 @@ pub mod hot_diag;
 pub mod intl;
 pub mod iter_result;
 pub mod iterator_helpers;
+/// `class X extends LRUCache` (#10293). Gated because it binds the
+/// `js_lru_cache_*` C ABI by `extern "C"`: compiling it into a build that
+/// links no provider leaves seven undefined symbols, which MSVC `link.exe`
+/// turns into a hard failure (see the `lru-subclass` feature in Cargo.toml).
+#[cfg(feature = "lru-subclass")]
 pub mod lru_subclass;
 pub mod macos_bundle;
 pub mod map;

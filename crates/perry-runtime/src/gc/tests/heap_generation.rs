@@ -282,10 +282,27 @@ fn a_free_or_move_outside_every_scope_is_caught_in_debug_builds() {
     let caught = std::panic::catch_unwind(|| {
         crate::gc::heap_generation::debug_assert_heap_change_open();
     });
-    assert!(
-        caught.is_err(),
-        "the funnel assertion must fire with no scope open"
-    );
+    // The funnel assertion is `#[cfg(debug_assertions)]`, so which outcome is
+    // correct depends on the PROFILE, not the platform. `perry-dev` inherits
+    // `release`, where debug-assertions are off and the call is a no-op — this
+    // test asserted the debug outcome unconditionally and therefore failed by
+    // construction under the very profile CI runs on Windows
+    // (`cargo test --profile perry-dev -p perry-runtime`, test.yml). Found for
+    // #10385; it was invisible only because that job dies earlier.
+    //
+    // Both arms are asserted rather than skipping the release one, so this
+    // still says something true in each profile instead of going vacuous.
+    if cfg!(debug_assertions) {
+        assert!(
+            caught.is_err(),
+            "the funnel assertion must fire with no scope open"
+        );
+    } else {
+        assert!(
+            caught.is_ok(),
+            "with debug-assertions off the funnel check must compile out, not panic"
+        );
+    }
     let _scope = crate::gc::heap_generation::HeapChange::begin(HeapChangeKind::Sweep);
     crate::gc::heap_generation::debug_assert_heap_change_open();
 }

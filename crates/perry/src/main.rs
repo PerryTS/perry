@@ -2,6 +2,67 @@
 //!
 //! CLI driver for compiling TypeScript to native executables.
 
+// `perry-runtime::lru_subclass` (#10293) binds the `js_lru_cache_*` C ABI with
+// a plain `extern "C"` block. The module is feature-gated (`lru-subclass`,
+// added while validating #10385) so it is compiled only where a provider is
+// linked — which is the real fix, and is what keeps auto-optimized user
+// programs linking.
+//
+// It is not sufficient HERE, because of cargo feature unification. The
+// documented build is one invocation over the coherent package set
+// (`-p perry -p perry-runtime-static -p perry-stdlib-static ...`), and
+// perry-stdlib's `bundled-lru-cache` enables `perry-runtime/lru-subclass`.
+// Features unify across the graph, so perry.exe's copy of perry-runtime gets
+// the module too — with no provider, since perry.exe links no stdlib.
+// Measured: `cargo build -p perry` alone links; adding
+// `-p perry-stdlib-static` reintroduces all seven undefined symbols. Invisible
+// on ELF/Mach-O, where the linker skips an unreferenced archive member; fatal
+// under MSVC `link.exe`, which pulls the whole object.
+//
+// These definitions are confined to the compiler binary, which compiles
+// TypeScript and never executes JS, so none of them is reachable. They abort
+// rather than return a plausible value, so a wrong assumption fails loudly.
+//
+// The durable fix is to stop coupling these at link time at all: have the
+// provider register through a dispatch table at init (the pattern
+// `js_stdlib_init_dispatch` / `nm_dispatch_lookup` already use) so
+// `lru_subclass` calls through pointers and no feature set can strand it.
+#[cfg(windows)]
+mod lru_link_shim {
+    macro_rules! unreachable_in_compiler {
+        ($($name:ident($($arg:ident: $ty:ty),*) -> $ret:ty;)*) => {$(
+            #[no_mangle]
+            pub extern "C" fn $name($($arg: $ty),*) -> $ret {
+                $(let _ = $arg;)*
+                panic!(concat!(
+                    "perry.exe called ", stringify!($name), ": the compiler binary \
+                     does not execute JS, so the lru_subclass link shim was reached \
+                     unexpectedly. See the note in crates/perry/src/main.rs.",
+                ));
+            }
+        )*};
+    }
+
+    unreachable_in_compiler! {
+        js_lru_cache_new(options: f64) -> i64;
+        js_lru_cache_get(handle: i64, key: f64) -> f64;
+        js_lru_cache_set(handle: i64, key: f64, value: f64) -> i64;
+        js_lru_cache_has(handle: i64, key: f64) -> f64;
+        js_lru_cache_delete(handle: i64, key: f64) -> f64;
+        js_lru_cache_peek(handle: i64, key: f64) -> f64;
+    }
+
+    #[no_mangle]
+    pub extern "C" fn js_lru_cache_clear(handle: i64) {
+        let _ = handle;
+        panic!(
+            "perry.exe called js_lru_cache_clear: the compiler binary does not \
+             execute JS, so the lru_subclass link shim was reached unexpectedly. \
+             See the note in crates/perry/src/main.rs."
+        );
+    }
+}
+
 mod commands;
 mod compat_reports;
 mod install_channel;

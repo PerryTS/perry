@@ -618,6 +618,29 @@ pub fn remove_child(parent: i64, child: i64) {
     with_node_mut(parent, |node| node.common.children.retain(|h| *h != child));
 }
 
+/// Move an existing child within its parent without touching its native
+/// window or layout metadata. Mirrors `perry_ui_windows::widgets::reorder_child`
+/// for the Fluent tree; `ffi/widget_layout_extras.rs` is shared by both
+/// backends and calls this unconditionally, so its absence here was a
+/// Windows-only build break (E0425) that made `windows-build` red on `main`.
+pub fn reorder_child(parent: i64, from: i64, to: i64) {
+    if !is_fluent() {
+        perry_ui_windows::widgets::reorder_child(parent, from, to);
+        return;
+    }
+    with_node_mut(parent, |node| {
+        let (from, to) = (from as usize, to as usize);
+        let len = node.common.children.len();
+        // Out-of-range or a no-op move leaves the order untouched, matching
+        // the Win32 implementation rather than panicking on a stale index.
+        if from >= len || to >= len || from == to {
+            return;
+        }
+        let child = node.common.children.remove(from);
+        node.common.children.insert(to, child);
+    });
+}
+
 pub fn clear_children(handle: i64) {
     if !is_fluent() {
         perry_ui_windows::widgets::clear_children(handle);

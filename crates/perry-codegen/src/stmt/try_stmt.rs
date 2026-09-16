@@ -1,5 +1,5 @@
 //! `Stmt::Try` lowering — LLVM `invoke`/`landingpad` exception handling
-//! (#7302; SEH funclets on windows-msvc).
+//! (#7302), one shape on every target.
 //!
 //! The CFG pattern:
 //!   1. `js_eh_try_push()` arms the handler (savepoint recording only — no
@@ -30,17 +30,26 @@ use super::*;
 /// the exception into `exc_label`. Returns the unwind label; the caller
 /// pushes it as the EH scope around the protected body.
 ///
-/// Two per-triple shapes (same rule as the old setjmp-ABI selection: decided
-/// by the TARGET triple, not host `cfg!`):
+/// One shape on every target: a single landing-pad block —
+/// `landingpad {ptr,i32} catch ptr null` → `br %exc_label`. The pair is
+/// ignored; the thrown value is read back from the runtime's rooted TLS slot
+/// via `js_get_exception`.
 ///
-/// - Itanium (Mach-O/ELF): one landing-pad block —
-///   `landingpad {ptr,i32} catch ptr null` → `br %exc_label`. The pair is
-///   ignored; the thrown value is read back from the runtime's rooted TLS
-///   slot via `js_get_exception`.
-/// - SEH (windows-msvc): `catchswitch within none [pad] unwind to caller` →
-///   `catchpad [ptr @perry_seh_filter]` → `catchret to %exc_label`. The
-///   filter matches Perry's `RaiseException` code; foreign SEH exceptions
-///   (access violations etc.) keep unwinding past JS handlers.
+/// windows-msvc used to get a second, SEH shape here (`catchswitch` →
+/// `catchpad [ptr @perry_seh_filter]` → `catchret`). It was removed because it
+/// is fundamentally incompatible with precise moving-GC roots: LLVM's
+/// `rewrite-statepoints-for-gc` does not support funclet EH and crashes
+/// outright on `catchswitch`/`catchpad` (#7354, still reproducible on LLVM
+/// 22.1.8), so every Windows module containing a `try` had to choose between
+/// statepoints and compiling at all. Keeping the Itanium shape on windows-msvc
+/// is what buys Windows the same precise roots every other target gets.
+///
+/// This is sound on COFF because the personality is Perry's own, not a
+/// recognized MSVC one: LLVM therefore classifies the function as non-funclet
+/// EH and emits `.seh_handler perry_eh_personality, @unwind, @except` plus an
+/// Itanium-format `GCC_except_table` in `.xdata` — the same LSDA the
+/// ELF/Mach-O path already parses. The x64 unwinder calls whatever handler
+/// `.xdata` names, so a custom personality is a first-class citizen there.
 ///
 /// Savepoint restores run at throw time (`js_throw`), which is sound
 /// because the unwinder skips Rust cleanups exactly like `longjmp` did (the
@@ -51,58 +60,23 @@ use super::*;
 /// (`lower_async_rejecting_stmts_inner`) — same dispatch, different
 /// exception continuation.
 pub(super) fn emit_eh_dispatch(ctx: &mut FnCtx<'_>, exc_label: &str, normal_label: &str) -> String {
-    let msvc = ctx.target_triple.contains("-windows-");
-    ctx.func.personality = Some(if msvc {
-        "__C_specific_handler"
-    } else {
-        "perry_eh_personality"
-    });
+    ctx.func.personality = Some("perry_eh_personality");
 
     ctx.block().call_void("js_eh_try_push", &[]);
 
-    if msvc {
-        let cs_idx = ctx.new_block("eh.cs");
-        let pad_idx = ctx.new_block("eh.pad");
-        let cs_label = ctx.block_label(cs_idx);
-        let pad_label = ctx.block_label(pad_idx);
+    let lpad_idx = ctx.new_block("eh.lpad");
+    let lpad_label = ctx.block_label(lpad_idx);
 
-        ctx.block().br(normal_label);
+    ctx.block().br(normal_label);
 
-        let saved = ctx.current_block;
-        ctx.current_block = cs_idx;
-        let cs = ctx.block().next_reg();
-        ctx.block().emit_raw(format!(
-            "{} = catchswitch within none [label %{}] unwind to caller",
-            cs, pad_label
-        ));
-        ctx.block().mark_terminated();
-
-        ctx.current_block = pad_idx;
-        let pad = ctx.block().next_reg();
-        ctx.block().emit_raw(format!(
-            "{} = catchpad within {} [ptr @perry_seh_filter]",
-            pad, cs
-        ));
-        ctx.block()
-            .emit_raw(format!("catchret from {} to label %{}", pad, exc_label));
-        ctx.block().mark_terminated();
-        ctx.current_block = saved;
-        cs_label
-    } else {
-        let lpad_idx = ctx.new_block("eh.lpad");
-        let lpad_label = ctx.block_label(lpad_idx);
-
-        ctx.block().br(normal_label);
-
-        let saved = ctx.current_block;
-        ctx.current_block = lpad_idx;
-        let lp = ctx.block().next_reg();
-        ctx.block()
-            .emit_raw(format!("{} = landingpad {{ ptr, i32 }} catch ptr null", lp));
-        ctx.block().br(exc_label);
-        ctx.current_block = saved;
-        lpad_label
-    }
+    let saved = ctx.current_block;
+    ctx.current_block = lpad_idx;
+    let lp = ctx.block().next_reg();
+    ctx.block()
+        .emit_raw(format!("{} = landingpad {{ ptr, i32 }} catch ptr null", lp));
+    ctx.block().br(exc_label);
+    ctx.current_block = saved;
+    lpad_label
 }
 
 pub(crate) fn lower_try(
