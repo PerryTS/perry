@@ -299,19 +299,92 @@ cargo run --release
 
 ## Perry-side defects found (not this lane's regressions)
 
-1. **P5's `turnloop_serve::listen` passes `no_delay` where `tcp_listen` expects
-   `reuse_port`** (`turnloop_serve/mod.rs`, the `tl::tcp_listen(id, SUBSYSTEM,
-   host, port, backlog, no_delay)` call; the FFI's sixth parameter is
-   `reuse_port: bool`). `no_delay` defaults to `true`, so **every turnloop
-   HTTP/1.1 server binds with `SO_REUSEPORT`**, and two `http.createServer().listen(p)`
-   calls in one process can both succeed where Node's second gets `EADDRINUSE`.
-   Not fixed here — it is P5's, and changing it moves P5's behaviour, which this
-   branch has no sweep to measure against. The new HTTP/2 `listen` passes
-   `false` explicitly.
+### 1. Two bugs in P5's listen path that mask each other — found, **not fixed here**
 
-2. **The five `http2` items in the table at the top** — cleartext `https://`,
-   the unmultiplexed client, the per-request runtime, the fake `stream.id`, and
-   the loopback-only control frames — are each worth their own issue.
+`turnloop_serve::listen` passed `no_delay` into `tcp_listen`'s **sixth**
+parameter, which is `reuse_port: bool`. The value is not dropped on the floor —
+it is traced end to end: `perry-ffi`'s `tcp_listen` → `abi.rs:215` →
+`turnloop_net::tcp_listen` → `ListenOpts { reuse_port, .. }` → turnloop's
+`SO_REUSEPORT`. And `server.noDelay` defaults to **true**, so every turnloop
+HTTP/1.1 and HTTPS server has been binding with `SO_REUSEPORT` since P5.
+
+Measured, two `http.createServer().listen(47311)` calls in one process:
+
+```
+--- node 26.5.1 ---
+A listening
+B error: EADDRINUSE
+--- perry, base ce480bb208 (P5 turnloop path) ---
+A listening
+B listening TOO (both bound the same port)
+[perry-loop] driver=turnloop turns=2 ... native_ticks=0 completions=5
+[perry-loop-waits] arm=turnloop turnloop_waits=2 tokio_ticks=0
+```
+
+The liveness counters are there on purpose: `driver=turnloop` with
+`tokio_ticks=0` is what says the turnloop path — not hyper — produced that
+answer.
+
+The one-line fix is `false` in place of `no_delay` (with the parameter renamed
+`_no_delay`: turnloop's `ListenOpts` has no `TCP_NODELAY` field, and Perry sets
+per-socket options from JS afterwards, which is the runtime's own documented
+reasoning). **Nothing on the turnloop path wanted `SO_REUSEPORT`** — the cluster
+worker that genuinely needs it declines the turnloop path in
+`try_listen_on_turnloop` and binds a `std::net::TcpListener`, which is one of the
+two reasons that decline exists.
+
+**That fix was written, built and verified, and then reverted.** It must not
+land alone, because of the second bug it uncovers.
+
+#### The second bug: a failed bind never reaches JS
+
+`try_listen_on_turnloop`'s error arm `eprintln!`s and returns `Some(0)`. No
+`'error'` event is emitted, and there is no deferred-error machinery to emit one
+with — `server/deferred_events.rs` has `queue_deferred_listening_emit` and
+`queue_deferred_close_emit` and nothing else.
+
+This is **pre-existing and independent of the first bug**, which is worth
+establishing rather than assuming, because `SO_REUSEPORT` only helps when *both*
+sockets set it. Measured on the **base commit**, with the port held by a plain
+Python listener:
+
+```
+--- node 26.5.1 ---
+error event: EADDRINUSE
+--- perry BASE ce480bb208 (no fix), port held by python ---
+[node:http] bind 0.0.0.0:47399 failed: listen EADDRINUSE
+NO error event fired
+```
+
+So the two interact: with the `SO_REUSEPORT` fix applied and verified, a
+duplicate `listen()` correctly fails —
+
+```
+--- perry WITH the fix ---
+A listening
+[node:http] bind 0.0.0.0:47311 failed: listen EADDRINUSE
+```
+
+— but the program then **hangs**, because the `'error'` listener Node would have
+called never fires. Going from "silently returns the wrong answer" to "hangs" is
+not an improvement, so shipping the one-line fix by itself would be a
+regression.
+
+**The prescription**, for whoever takes it: land both together — `reuse_port:
+false`, plus a deferred `'error'` emit carrying Node's shape (`code`, `errno`,
+`syscall`, `address`, `port`) wired into the same pump that drains
+`'listening'`/`'close'`, ideally on the hyper path too — and run a full gap
+sweep, because this is P5's listen path and every `node:http` / `node:https` gap
+test goes through it. A gap test was written and is **not** included here
+because it would be a new failing test against the current tree; its assertions
+are `first: listening` / `second: error EADDRINUSE` / `other: listening
+port-matches=true` / `done`, which is Node 26.5.1's exact output.
+
+### 2. The `http2` surface itself
+
+**The five `http2` items in the table at the top** — cleartext `https://`,
+the unmultiplexed client, the per-request runtime, the fake `stream.id`, and
+the loopback-only control frames — are each worth their own issue.
 
 ---
 
@@ -366,7 +439,11 @@ Named precisely rather than left implied:
 
 * **No migration landed.** The transport is unwired; `createServer`,
   `createSecureServer` and `connect` are unchanged.
-* **No gap sweep**, either arm. There is no behaviour change to sweep.
+* **No gap sweep**, either arm — this branch changes no behaviour at all, so a
+  sweep would compare two identical binaries. The `SO_REUSEPORT` fix was built
+  and verified and then **reverted** (see defects, §1); landing it needs the
+  `'error'` emit beside it and a full sweep, because it touches P5's listen
+  path and every `node:http` / `node:https` gap test goes through that.
 * **No `PERRY_LOOP_STATS` / thread-count measurement**, for the same reason: the
   subject never ran, and a counter measured on an unchanged path is not
   evidence. (The baseline arm *is* built, at

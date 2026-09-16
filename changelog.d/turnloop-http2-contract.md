@@ -29,5 +29,19 @@ Node 26.5.1, including `http2.connect('https://…')` opening a cleartext socket
 to port 80, a client that cannot multiplex, a fresh tokio runtime per request,
 and `session.settings`/`goaway`/`ping` that never reach the wire.
 
+And two bugs in P5's already-landed listen path, found while reading it as the
+template and measured against Node 26.5.1 — **reported, not fixed**, because
+they have to land together and with a full gap sweep:
+
+- `turnloop_serve::listen` passes `server.noDelay` (default `true`) into
+  `tcp_listen`'s `reuse_port` parameter, traced end to end into turnloop's
+  `SO_REUSEPORT`, so **every turnloop HTTP/1.1 and HTTPS server binds with
+  `SO_REUSEPORT`** and a second `listen()` on the same port silently succeeds
+  where Node answers `EADDRINUSE`;
+- a bind that genuinely fails `eprintln!`s and returns, and **never emits
+  `'error'`** — reproduced on the base commit with the port held by a non-Perry
+  process, so it is independent of the first. Fixing only the first turns a
+  wrong answer into a hang, which is why neither is fixed here.
+
 Full writeup, the flow-control / multiplexing / GOAWAY design decisions, and
 what remains: `docs/turnloop/http2-report.md`.
